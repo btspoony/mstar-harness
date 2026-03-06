@@ -1,7 +1,6 @@
 ---
 description: 全栈开发工程师 - 实现前后端功能
 mode: subagent
-model: bailian-coding-plan/glm-5
 tools:
   write: true
   edit: true

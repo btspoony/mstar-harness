@@ -1,7 +1,6 @@
 ---
 description: 技术架构师 - 系统架构设计和技术决策
 mode: subagent
-model: zhipuai-coding-plan/glm-5
 tools:
   write: false
   edit: false

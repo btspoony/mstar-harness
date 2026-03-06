@@ -1,7 +1,6 @@
 ---
 description: 测试工程师 - 编写测试用例和自动化测试
 mode: subagent
-model: minimax-cn-coding-plan/MiniMax-M2.5
 tools:
   write: true
   edit: true

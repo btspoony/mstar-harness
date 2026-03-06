@@ -1,7 +1,6 @@
 ---
 description: 项目经理 - 协调开发团队，管理项目进度
 mode: primary
-model: zhipuai-coding-plan/glm-5
 tools:
   write: true
   edit: true

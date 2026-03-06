@@ -1,7 +1,6 @@
 ---
 description: 质量控制专家 - 代码审查和质量保证
 mode: subagent
-model: bailian-coding-plan/glm-5
 tools:
   write: false
   edit: false

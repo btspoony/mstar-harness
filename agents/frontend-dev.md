@@ -1,7 +1,6 @@
 ---
 description: 前端开发工程师 - UI/前端架构与体验优化
 mode: subagent
-model: kimi-for-coding/k2p5
 tools:
   write: true
   edit: true

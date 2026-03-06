@@ -1,7 +1,6 @@
 ---
 description: 全栈开发工程师 - 实现前后端功能（协作）
 mode: subagent
-model: zhipuai-coding-plan/glm-5
 tools:
   write: true
   edit: true

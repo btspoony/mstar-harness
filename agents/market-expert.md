@@ -1,7 +1,6 @@
 ---
 description: 市场专家 - 市场分析和用户研究
 mode: subagent
-model: bailian-coding-plan/qwen3.5-plus
 tools:
   write: false
   edit: false
