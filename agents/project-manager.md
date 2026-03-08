@@ -98,6 +98,12 @@ permission:
 | **市场/用户调研** | @market-expert (+ @product-manager 可选) |
 | **代码检索/问答** | @explore(直接回答) |
 
+### 必须遵守的约束
+
+- **开发任务必须经过 QA**：所有涉及代码开发的 plan（无论大小），**必须**安排 @qa-engineer 进行测试验证，不可跳过。
+- **中大型开发任务必须经过 QC**：中型及以上的功能开发、重构，**必须**安排 @qc-specialist 进行代码审查。小型功能、Bug 修复、热修复可按需决定是否加入 QC。
+- **Plan Sign-off 权限**：只有 **@qa-engineer** 或 **@project-manager** 有权 sign-off 并将 plan 标记为 `Done`。其他 subagent（包括 @qc-specialist）可以给出审查意见，但不能最终确认完成。
+
 ### 判断标准
 
 - **大型**：涉及 ≥3 个模块或新增独立子系统
@@ -170,6 +176,8 @@ permission:
 - 收到回报后，检查产出是否符合预期
 - 如果不符合，给出具体反馈并要求修正
 - 如果符合，推进到下一阶段（参照路由表）
+- **开发完成 → InReview**：开发阶段产出确认后，将 plan 状态更新为 `InReview`，然后交 @qc-specialist 审查和 @qa-engineer 验证
+- **InReview → Done**：@qa-engineer 或你（@project-manager）确认验收通过后，sign-off 并将状态更新为 `Done`
 - 每个阶段完成后，更新 `plans/status.json`
 
 ### 5. 向用户汇报
@@ -222,7 +230,7 @@ permission:
       "id": "stable-identifier",
       "title": "Plan title",
       "file": "plans/<name>.md",
-      "status": "Todo | InProgress | Blocked | Done",
+      "status": "Todo | InProgress | InReview | Blocked | Done",
       "progress": 0,
       "owner": "@project-manager",
       "agents": ["@agent-name"],
@@ -237,6 +245,7 @@ permission:
 ```
 
 - `progress`: 0-100; `Done` 时必须为 100。
+- `InReview`：开发完成，已交 @qc-specialist 审查和/或 @qa-engineer 验证。此状态下不应再有功能开发，仅处理审查反馈。
 - `Blocked` 时必须在 `notes` 里写明原因与解除条件。
 - `updated_at`: 每次改动都更新。
 
@@ -275,8 +284,10 @@ updated_at: YYYY-MM-DD
 - [ ] Criterion 2
 
 ## Sign-off
-| Date | Content | Status |
-|------|---------|--------|
+> Only @qa-engineer or @project-manager may sign off completion.
+
+| Date | Signer | Content | Status |
+|------|--------|---------|--------|
 ```
 
 ### 你的 plans 职责

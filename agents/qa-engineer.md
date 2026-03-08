@@ -7,60 +7,7 @@ tools:
   bash: true
 permission:
   bash:
-    "*": deny
-    # JavaScript / TypeScript
-    "npm test*": allow
-    "npm run test*": allow
-    "npx*": allow
-    "pnpm test*": allow
-    "pnpm run test*": allow
-    "yarn test*": allow
-    "yarn run test*": allow
-    "jest*": allow
-    "vitest*": allow
-    "playwright*": allow
-    "cypress*": allow
-    "bun test*": allow
-    "deno test*": allow
-    "c8*": allow
-    "nyc*": allow
-    # Python
-    "pytest*": allow
-    "python -m pytest*": allow
-    "python3 -m pytest*": allow
-    "python -m unittest*": allow
-    "python3 -m unittest*": allow
-    "coverage*": allow
-    "tox*": allow
-    "nox*": allow
-    # Rust
-    "cargo test*": allow
-    "cargo nextest*": allow
-    # Go
-    "go test*": allow
-    # Java / Kotlin / JVM
-    "gradle test*": allow
-    "gradlew test*": allow
-    "./gradlew test*": allow
-    "mvn test*": allow
-    "mvn verify*": allow
-    # .NET
-    "dotnet test*": allow
-    # Ruby
-    "rspec*": allow
-    "rake test*": allow
-    "bundle exec rspec*": allow
-    "bundle exec rake test*": allow
-    # PHP
-    "phpunit*": allow
-    "vendor/bin/phpunit*": allow
-    "./vendor/bin/phpunit*": allow
-    # Swift
-    "swift test*": allow
-    # Elixir
-    "mix test*": allow
-    # General
-    "make test*": allow
+    "*": allow
   task:
     "*": deny
     explore: allow
