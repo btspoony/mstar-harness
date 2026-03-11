@@ -10,7 +10,6 @@ permission:
     explore: allow
     general: allow
 name: prompt-engineer
-model: inherit
 description: 提示词工程师 - 设计与优化 Agent 提示词与技能。Use proactively when designing, refactoring, or debugging prompts, agents, and skills.
 ---
 

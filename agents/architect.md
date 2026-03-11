@@ -16,7 +16,6 @@ permission:
     "*": deny
     explore: allow
 name: architect
-model: inherit
 description: 技术架构师 - 系统架构设计和技术决策。Use proactively for system design, major refactors, and cross-cutting technical decisions.
 readonly: true
 ---

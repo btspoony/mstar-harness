@@ -13,7 +13,6 @@ permission:
     "*": deny
     explore: allow
 name: product-manager
-model: inherit
 description: 产品经理 - 需求分析和产品规划。Use proactively for requirements clarification, UX flows, scoping, and roadmap planning.
 readonly: true
 ---

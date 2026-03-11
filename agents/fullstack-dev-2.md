@@ -10,7 +10,6 @@ permission:
     explore: allow
     general: allow
 name: fullstack-dev-2
-model: inherit
 description: 全栈开发工程师 - 实现前后端功能（协作角色）。Use proactively as an additional full-stack implementer for parallelizing work on complex features.
 ---
 

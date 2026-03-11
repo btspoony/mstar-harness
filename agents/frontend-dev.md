@@ -10,7 +10,6 @@ permission:
     explore: allow
     general: allow
 name: frontend-dev
-model: inherit
 description: 前端开发工程师 - UI/前端架构与体验优化。Use proactively for frontend implementation, UI architecture, performance, and UX/a11y improvements.
 ---
 

@@ -10,7 +10,6 @@ permission:
     explore: allow
     general: allow
 name: ops-engineer
-model: inherit
 description: 运维工程师 - 部署、监控和基础设施。Use proactively for deployment, CI/CD, observability, and infrastructure tasks.
 ---
 
