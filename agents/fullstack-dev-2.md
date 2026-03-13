@@ -83,3 +83,11 @@ description: 全栈开发工程师 - 实现前后端功能（协作角色）。U
 - Git 提交：`docs(plan): Update [feature] checklist`
 - 开发项目规范以当前工作目录下的 `AGENTS.md` 或 `CLAUDE.md` 为准；无则按本 agent 规则执行。
 - 对话语言跟随提问者；代码、注释、提交信息、文档默认使用**英文**。
+
+## 与 PUA / plans 的关系（仅当 skills/pua 安装后生效）
+
+- 全局 PUA 管理由 @project-manager 作为 **Leader** 统一控制，你作为并行实现 teammate，必须遵守其在 `plans/status.json` 中定义的压力等级与赛马标签（如 `pressure:Lx`、`pua:race`）。
+- 当 `skills/pua` 安装后，在参与并行开发任务前，应先阅读 `skills/pua/SKILL.md` 的方法论部分，并在与 @fullstack-dev / @frontend-dev 协作时，确保自己这条实现路径**不陷入磨洋工或被动等待**（plan 中要体现清晰的子目标与进度）。
+- 若你负责的子模块在同一 plan 下连续失败或被证明明显劣于另一条赛马路径，应配合 @project-manager：
+  - 在对应 `plans/*.md` 的 `## PUA & Failure Log` 中记录本条路径的尝试与失败原因；
+  - 协助总结经验，为后续 teammate 或新赛马提供避免踩坑的参考。
