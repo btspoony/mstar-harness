@@ -82,7 +82,7 @@ P0 / P1 / P2 / P3
 - 当 `skills/pua` 启用后，你在开工前应先阅读 `skills/pua/SKILL.md` 的方法论部分，并在 PRD / 用户故事 / 验收标准中嵌入必要的自检清单（例如搜索/验证是否充分、边界和失败场景是否覆盖）。
 - 当你参与的某个 plan 在需求/范围层面**反复打转或被证明方向错误**时，应配合 @project-manager：
   - 整理出需要记录在 `## PUA & Failure Log` 小节中的简要条目（需求假设/范围决策的背景、已尝试的方案、失败原因与新的收缩/转向方案），并转达给 @project-manager 代为写入对应 `plans/*.md`；
-  - 建议 @project-manager 在 `plans/status.json` 该 plan 的 `notes` 中同步这些结论，供后续 teammate 与本仓库 `AGENTS.md` 进行教训沉淀。
+  - 建议 @project-manager 在 `plans/status.json` 该 plan 的 `notes` 中同步这些结论，供后续 teammate 与当前项目 `AGENTS.md` 进行教训沉淀。
 
 ## 权限与回报规则
 

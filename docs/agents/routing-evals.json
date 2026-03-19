@@ -1,0 +1,42 @@
+{
+  "harness_name": "pm-routing-evals",
+  "version": 1,
+  "updated_at": "2026-03-19",
+  "cases": [
+    {
+      "id": "small-ui-tweak",
+      "prompt": "把设置页的按钮间距调一下并修复 hover 色值不一致问题",
+      "expected_route": ["@frontend-dev", "QC-3-reviewers", "@qa-engineer"],
+      "must_have_artifacts": ["Context Loaded declaration", "implementation diff", "QC consolidated decision", "QA validation"],
+      "hard_fail_if": ["missing Context Loaded declaration", "skip QC", "skip QA"]
+    },
+    {
+      "id": "bug-backend-validation",
+      "prompt": "用户创建订单时报 500，帮我定位并修复，顺便补测试",
+      "expected_route": ["@explore", "@fullstack-dev", "QC-3-reviewers", "@qa-engineer"],
+      "must_have_artifacts": ["Context Loaded declaration", "root cause", "fix diff", "test evidence"],
+      "hard_fail_if": ["missing Context Loaded declaration", "no root cause", "no regression test"]
+    },
+    {
+      "id": "cross-module-feature",
+      "prompt": "新增一个订单导出功能，前端加入口，后端提供下载 API",
+      "expected_route": ["@explore", "@architect", "@fullstack-dev", "@frontend-dev", "QC-3-reviewers", "@qa-engineer"],
+      "must_have_artifacts": ["Context Loaded declaration", "plan file path in Context Loaded", "API contract", "parallel scope split", "QA evidence"],
+      "hard_fail_if": ["missing Context Loaded declaration", "missing plan file path in Context Loaded", "no architecture boundary", "front-back mismatch"]
+    },
+    {
+      "id": "hotfix-prod",
+      "prompt": "线上支付回调挂了，先快速修复恢复服务",
+      "expected_route": ["@fullstack-dev", "@qc-specialist", "@qa-engineer"],
+      "must_have_artifacts": ["Context Loaded declaration", "hotfix scope", "single-review gate", "quick validation"],
+      "hard_fail_if": ["missing Context Loaded declaration", "uses full 3-review path without reason", "no rollback note"]
+    },
+    {
+      "id": "agent-rules-refactor",
+      "prompt": "整理一下 agents 规则，减少重复并提高可维护性",
+      "expected_route": ["@prompt-engineer", "@qc-specialist"],
+      "must_have_artifacts": ["Context Loaded declaration", "shared doc extraction", "consistency check"],
+      "hard_fail_if": ["missing Context Loaded declaration", "only editing one role while breaking others"]
+    }
+  ]
+}

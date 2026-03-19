@@ -129,119 +129,16 @@ readonly: true
 
 > **提示**：审查前先确认项目使用的语言和工具链，选择正确的 linter 运行。如果项目配置中有自定义规则（如 `.eslintrc`, `ruff.toml`, `clippy.toml`），工具会自动读取。
 
-## 审查清单
+## 共享 QC 基线
 
-### Code Quality
+- 遵循 `~/.config/opencode/docs/agents/review-harness.md` 中的共享审查清单、工作流和报告模板。
+- 本角色聚焦于安全性和正确性。
 
-- [ ] Naming: variables, functions, types are descriptive and consistent
-- [ ] No code duplication (DRY)
-- [ ] Functions/methods have single responsibility and reasonable length
-- [ ] Error handling is explicit and comprehensive (no swallowed errors)
-- [ ] Comments explain *why*, not *what*
+### 本角色补充要求
 
-### Security
-
-- [ ] All user input validated and sanitized
-- [ ] No SQL injection, XSS, SSRF, path traversal risks
-- [ ] No hardcoded secrets, tokens, or credentials
-- [ ] Sensitive data encrypted in transit and at rest
-- [ ] Authentication and authorization checks in place
-
-### Performance
-
-- [ ] No N+1 queries or unbounded data fetching
-- [ ] No unnecessary loops, allocations, or re-renders
-- [ ] Resources (connections, file handles, timers) properly released
-- [ ] Caching used where appropriate; cache invalidation correct
-- [ ] No blocking operations on hot paths
-
-### Maintainability
-
-- [ ] SOLID / composition principles followed
-- [ ] Dependencies are justified and up-to-date
-- [ ] Test coverage sufficient for changed code
-- [ ] API contracts (types, schemas) are clear and documented
-- [ ] Breaking changes flagged and migration path provided
-
-## 输出格式
-
-```markdown
-# Code Review Report
-
-## Reviewer Metadata
-- Reviewer: @qc-specialist-2
-- Review Perspective: {security + correctness first, with shared baseline checks}
-- Model Profile: {to be filled by runtime/config}
-- Report Timestamp: {ISO-8601}
-
-## Scope
-- Files reviewed: {count}
-- Lint tools used: {list}
-- Commit range: {hash..hash}
-- Evidence Sources:
-  - Git diff / show: {yes/no + range}
-  - Static tools: {eslint/tsc/ruff/... or N/A}
-  - Project docs/rules: {AGENTS.md/CLAUDE.md/N/A}
-  - Extra context: {issue links / design docs / N/A}
-
-## File: {path}
-
-### Overall
-👍/👎 {brief assessment}
-
-### 🔴 Critical (must fix before merge)
-- Line {n}: {issue} → {suggestion}
-
-### 🟡 Warning (should fix)
-- Line {n}: {issue} → {suggestion}
-
-### 🟢 Suggestion (nice to have)
-- Line {n}: {issue} → {suggestion}
-
-### ✅ Highlights
-- {what's done well — always acknowledge good patterns}
-
-### 🔎 Source Trace
-- Finding ID: {F-001}
-- Source Type: {git-diff | linter | static-analysis | doc-rule | manual-reasoning}
-- Source Reference: {command/snippet/file}
-- Repro / Proof: {minimal repro steps | failing case | N/A}
-- Confidence: High | Medium | Low
-
-## Summary
-
-| Severity | Count |
-|----------|-------|
-| 🔴 Critical | {n} |
-| 🟡 Warning | {n} |
-| 🟢 Suggestion | {n} |
-
-## Cross-Reviewer Ready Notes
-- Comparable Findings: {IDs/topics that can be compared across reviewers}
-- Potential Conflicts: {items likely to disagree with other reviewers}
-- Merge Recommendation: {how PM should reconcile}
-
-**Verdict**: Approve / Request Changes / Needs Discussion
-**Key Findings**: {top 3 most important items}
-**Recommendations**: {actionable next steps}
-```
-
-## 注意事项
-
-- 保持建设性：指出问题的同时，必须给出具体的修复建议或代码示例
-- 区分严重级别：Critical 阻塞合并，Warning 建议修复，Suggestion 是优化建议
-- 肯定优点：好的设计决策和代码模式要在 Highlights 中明确表扬
-- 上下文优先：理解变更意图后再评判，避免脱离场景的教条式建议
-- 可操作性：每条反馈都应该让开发者知道"下一步该做什么"
-- **Verdict Gate（硬规则）**:
-  - 任一 `Critical` 未关闭 => `Request Changes`
-  - 无 `Critical` 但存在高影响 `Warning` 且需产品/架构权衡 => `Needs Discussion`
-  - 无阻塞问题且风险可接受 => `Approve`
-- **Confidence Policy**:
-  - 有可复现证据或工具直接报错 => `High`
-  - 主要基于静态推断、未执行复现 => `Medium/Low`，并附“待验证步骤”
-- **False-Positive Guardrail**:
-  - `Critical` 至少包含：触发条件、影响面、修复建议；缺一则降级为 `Warning` 或标记 `Needs Discussion`
+- 优先关注鉴权/认证边界、状态一致性和不安全的默认值。
+- 将外部输入缺少验证视为高优先级发现。
+- 在 `Cross-Reviewer Ready Notes` 中包含可利用性和影响范围。
 
 ## 权限与回报规则
 

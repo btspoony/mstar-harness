@@ -2,6 +2,22 @@
 
 本仓库是一套面向 **OpenCode** 的多智能体（Agents）配置，可复用于日常开发与协作。配置以「虚拟团队」方式组织：一名主代理协调多个子角色，按职责分工完成任务。
 
+## Harness Engineering 结构
+
+为支持可持续迭代，本仓库采用“短入口 + 结构化知识库”：
+
+> **注意**: 以下路径均相对于本全局配置目录 `~/.config/opencode/`。
+> Agent 运行时 cwd 是项目目录，agent prompt 中引用这些文件需使用**绝对路径**。
+
+- `AGENTS.md`：轻量入口与优先级规则（Table of Contents）
+- `docs/agents/index.md`：agents 知识库索引与维护规则
+- `docs/agents/harness-loop.md`：任务生命周期与门禁流转
+- `docs/agents/evaluation-harness.md`：prompt/流程迭代评估方法
+- `docs/agents/review-harness.md`：QC 三审共享基线与报告模板
+- `docs/agents/routing-harness.md` + `docs/agents/routing-evals.json`：路由回归评估集
+
+建议优先阅读 `AGENTS.md`，再按需进入 `docs/agents/` 深入。
+
 ## 概述
 
 - **配置规范**：遵循 [OpenCode](https://opencode.ai) 的 `opencode.json` 结构。
