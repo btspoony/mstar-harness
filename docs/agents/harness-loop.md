@@ -48,6 +48,20 @@
 
 **非热修缺陷的最低要求（RCA 门禁）**：在进入实质性代码修改前，应有一份可检验的**根因结论或带证据的假设**（复现步骤、日志/指标片段、相关调用链或数据路径）。禁止在“完全未知根因”的情况下堆叠猜测式补丁；若证据不足，应先缩小范围（加观测、最小复现）再改代码。热修复路径以保持服务为先，但仍须在 plan 或回报中补记事后 RCA。
 
+### Git 功能分支门禁（业务仓库）
+
+适用于 cwd 为 **Git 托管的业务/应用仓库** 且本轮会产生**仓库内可合并 diff** 的任务（代码、业务向测试与 fixture、影响构建或运行时的配置等）。**不**用于约束仅由用户本人维护的 `~/.config/opencode/` 全局配置（该目录对 agent 只读）。
+
+**默认规则**
+
+- 不得在**默认保护分支**（常见名：`main`、`master`；以项目约定为准）上直接实现功能改动，除非 Assignment 含显式例外。
+- 例外须在 Assignment 中写明一行：**`Branch policy: direct on <branch> — <reason>`**（典型：团队约定的热修直接打默认分支）。
+
+**角色职责**
+
+- **`@project-manager`**：向 `@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2`、以及会向仓库提交工件的 `@qa-engineer`、会改仓库内文件的 `@ops-engineer`、对**项目仓库**落盘的 `@prompt-engineer` 分派前，核对分支策略；在 Assignment 中写明 **`Working branch`**（沿用已有分支名，或「自 `<base>` 新建 `feature/...` / `fix/...`」）。若用户已指定分支，照抄进 Assignment。
+- **实现 / QA / 运维 / prompt（项目侧）**：在**首次**编辑仓库内文件或执行 `git commit` 前，核对当前分支与 Assignment；若未授权 `Branch policy` 且当前在默认分支，则**先**切到 PM 指定的 `Working branch` 或新建 `feature/<topic>` / `fix/<topic>`，再改动。不确定时回报 `@project-manager`，不得静默在默认分支上堆提交。
+
 ### 3) 实现
 
 负责人：最匹配的开发角色（`@frontend-dev`、`@fullstack-dev`、`@fullstack-dev-2`）

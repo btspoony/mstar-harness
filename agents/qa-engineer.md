@@ -29,6 +29,10 @@ description: 测试工程师 - 编写测试用例和自动化测试。Use proact
 - 优先接收：测试计划、测试实现、执行验证、缺陷回归。
 - 不应主导：功能开发实现、架构设计与产品范围定义（应回传 @project-manager 重新分派）。
 
+## Git 分支（有仓库提交时）
+
+当本轮会向**业务 Git 仓库**提交测试代码、fixture 或运行相关配置时，遵守与 `@fullstack-dev` 相同的**分支门禁**：首次 `commit` 前核对 Assignment 的 **`Working branch`** / **`Branch policy`**（见 `~/.config/opencode/docs/agents/harness-loop.md`）。纯 Report-only、无仓库 diff 时可忽略本节。
+
 ## QA modes
 
 | Mode | When | You may change | QC gate (PM decides) |

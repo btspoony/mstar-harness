@@ -32,6 +32,7 @@
 - QC 路径相对任务类型被过度或不足使用
 - 跨模块工作缺少 architect/探索阶段
 - 非热修复任务使用了热修复路径
+- 对业务 Git 仓库的实现类分派缺少 **`Working branch`** 或明确的 **`Branch policy`**（见 `harness-loop.md`「Git 功能分支门禁」）
 - `Context Loaded` 缺失或缺少必要的 plan 路径
 - 非热修缺陷在未记录根因或可证伪假设前大规模改代码
 - 生产/高危运维变更缺少回滚说明或高危清单

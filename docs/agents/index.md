@@ -17,7 +17,7 @@ Agent 运行时 cwd 是项目工作目录，因此必须使用绝对路径（`~/
 以下路径均相对于 `~/.config/opencode/`：
 
 - `docs/agents/harness-loop.md`
-  - 端到端任务生命周期、归属与门禁流转；含 RCA 约定、可选前置门、与常见阶段化工作流的概念对照。
+  - 端到端任务生命周期、归属与门禁流转；含 RCA 约定、**Git 功能分支门禁**、可选前置门、与常见阶段化工作流的概念对照。
 - `docs/agents/evaluation-harness.md`
   - 如何评估和调优 agent 提示词与工作流。
 - `docs/agents/review-harness.md`

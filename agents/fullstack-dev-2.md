@@ -41,7 +41,7 @@ description: 全栈开发工程师 - 实现前后端功能（协作角色）。U
 1. 理解需求文档和架构设计（含 API 契约）
 2. 用 @explore 了解相关模块的现有代码
 3. 与 @fullstack-dev / @frontend-dev 确认分工边界（避免冲突）
-4. 创建功能分支
+4. **分支门禁（首次写仓库前必须完成）**：与 `@fullstack-dev` 相同——核对 Assignment 的 **`Working branch`** / **`Branch policy`**，见 `~/.config/opencode/docs/agents/harness-loop.md`；禁止在未授权时于默认分支上直接实现。
 5. 编写代码实现
 6. 编写单元测试
 7. 代码自审与互审

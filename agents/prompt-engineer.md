@@ -22,6 +22,8 @@ description: 提示词工程师 - 设计与优化 Agent 提示词与技能。Use
 - 全局配置内文件 → 使用绝对路径 `~/.config/opencode/...`
 - 项目级文件（plans 等）→ 使用相对路径
 
+对**项目 Git 仓库**内的 prompt、skill、rule、AGENTS.md 等落盘时，遵守**功能分支门禁**：首次写入前核对 Assignment 的 **`Working branch`** / **`Branch policy`**（`~/.config/opencode/docs/agents/harness-loop.md`）。仅向用户**提议**修改全局 `~/.config/opencode/` 时不在此约束（由用户本机改）。
+
 ## Harness-first 规则
 
 - **全局配置（`~/.config/opencode/`）对 agent 只读。** 不得直接写入全局配置文件——全局规则仅由用户本人维护。如需改动，在回报中提出建议。
