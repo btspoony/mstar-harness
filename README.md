@@ -11,15 +11,20 @@
 > 全局配置（`~/.config/opencode/`）对 agent 只读：agent 只能读取和提出建议，实际写入由用户本人维护。
 
 - `AGENTS.md`：本配置仓库维护入口（边界与变更原则）
+- `agents/*.md`：各角色 OpenCode agent 提示词（frontmatter + 正文），由 `opencode.json` 的 `agent` 引用加载
 - `docs/agents/AGENTS.md`：共享规则入口（跨角色/跨项目复用）
 - `docs/agents/index.md`：agents 知识库索引与维护规则
-- `docs/agents/harness-loop.md`：任务生命周期与门禁流转
-- `docs/agents/evaluation-harness.md`：prompt/流程迭代评估方法
+- `docs/agents/harness-loop.md`：任务生命周期与门禁流转（含 RCA、Git 功能分支门禁）
+- `docs/agents/branch-collaboration.md`：分支协作契约（仅 PM 决策开枝、Assignment 话术）
+- `docs/agents/evaluation-harness.md`：prompt / 流程迭代评估方法
 - `docs/agents/review-harness.md`：QC 三审共享基线与报告模板
 - `docs/agents/routing-harness.md` + `docs/agents/routing-evals.json`：路由回归评估集
 - `docs/agents/plan-convention.md`：计划目录发现、初始化与 status.json 约定
+- `docs/agents/superpowers-skills.md`：Superpowers 与角色映射、与 harness 的对齐说明；未装插件时的上游安装指引
 
 建议优先阅读 `AGENTS.md`（仓库维护入口），再读 `docs/agents/AGENTS.md`（共享规则入口），最后按需进入 `docs/agents/` 专题文档。
+
+本仓库根目录还有 `opencode.json`（主配置）、`plugins/`（可选插件，如 OpenViking）、`package.json`（`@opencode-ai/plugin` 等本地依赖，按需安装）。
 
 ### 计划管理模式（兼容无 `plans/` 项目）
 
@@ -35,8 +40,9 @@
 ## 概述
 
 - **配置规范**：遵循 [OpenCode](https://opencode.ai) 的 `opencode.json` 结构。
+- **角色提示词**：`agents/<agent-id>.md` 与 `opencode.json` 中的 `agent` 键一一对应（如 `project-manager.md`）。
 - **默认主代理**：`project-manager`（项目经理），负责协调与进度管理。
-- **子代理**：产品、架构、前后端开发、测试、质量、运维、市场等角色，按需被主代理调度。
+- **子代理**：产品、架构、前后端开发、测试、质量、运维、市场、提示词工程等角色，按需被主代理调度。
 - **计划管理**：统一遵循 `docs/agents/plan-convention.md`，支持 `{PLAN_DIR}` 动态解析，而非仅绑定 `plans/`。
 
 ## Agent 角色说明
@@ -66,6 +72,16 @@
 - **汇总**：三审完成后由 **@project-manager** 做轻量汇总（去重、冲突按证据裁决），产出单一 gate 结论（Approve / Request Changes / Needs Discussion）。
 - **修复归属**：QC 只负责发现问题与建议；**修复工作默认分派给开发团队**（@fullstack-dev / @frontend-dev / @fullstack-dev-2），修复后再回流 QC/QA 复验。
 
+### Superpowers 插件（可选）
+
+在 `opencode.json` 的 `plugin` 中加入官方 Git 源即可（重启后由 OpenCode 安装并注册技能），例如：
+
+```json
+"plugin": ["superpowers@git+https://github.com/obra/superpowers.git"]
+```
+
+与虚拟团队流程的对齐、各角色建议加载的技能、以及与分支门禁等的**张力消解**，见 `docs/agents/superpowers-skills.md`。若当前未安装，可按该文档 **「未安装插件时」** 拉取上游 `INSTALL.md` 逐步操作（修改全局 `opencode.json` 前须用户同意）。
+
 ### OpenViking 记忆插件
 
 若在 `~/.config/opencode/plugins/` 中启用 **OpenViking Memory** 插件（`openviking-memory.ts`），各 agent 将具备需**主动调用**的语义记忆工具：`memsearch`（搜索记忆/资源）、`memread`（按 viking:// URI 读取）、`membrowse`（浏览目录）。各 agent 说明中均有「OpenViking 记忆工具」小节描述何时使用这三者。`memcommit`（会话沉淀）由插件按配置定时自动执行（见 `plugins/openviking-config.json` 的 `autoCommit.enabled` 与 `intervalMinutes`），agent 无需也不应主动调用。使用前请确保 OpenViking 服务已运行且配置中 `enabled: true`。
@@ -78,13 +94,17 @@
 {
     "$schema": "https://opencode.ai/config.json",
     "permission": {
-        "external_directory": { "~/workspace/**": "allow" },
+        "external_directory": {
+            "~/.config/opencode/docs/agents/**": "allow"
+        },
         "read": "allow",
         "grep": "allow",
         "glob": "allow"
     },
+    "model": "provider-id/default-model-id",
+    "small_model": "provider-id/light-model-id",
     "default_agent": "project-manager",
-    "plugin": [],
+    "plugin": ["superpowers@git+https://github.com/obra/superpowers.git"],
     "mcp": {},
     "provider": {},
     "agent": {
@@ -147,6 +167,11 @@
             "description": "市场专家 - 市场分析和用户研究",
             "mode": "subagent",
             "model": "provider-id/model-id"
+        },
+        "prompt-engineer": {
+            "description": "提示词工程师 - 设计与优化 Agent 提示词与技能",
+            "mode": "subagent",
+            "model": "provider-id/model-id"
         }
     }
 }
@@ -155,18 +180,21 @@
 ### Agent 配置要点
 
 - **`default_agent`**：入口主代理 ID，此处为 `project-manager`。
-- **`agent`**：每个键为 agent ID，值为 `description`、`mode`、`model`。
+- **`model` / `small_model`**（可选）：全局默认与轻量模型；也可仅在各 `agent` 上指定 `model`。
+- **`plugin`**：OpenCode 插件列表；不需要 Superpowers 时可设为 `[]`。
+- **`agent`**：每个键为 agent ID（通常对应 `agents/<id>.md`），值为 `description`、`mode`、`model`。
   - `mode: "primary"`：主代理，负责协调与派发任务。
   - `mode: "subagent"`：子代理，被主代理调度执行具体角色。
 - **`model`**：格式为 `provider-id/model-id`，需在 `provider` 中已配置对应服务与模型。
 
 ## 配置结构简介
 
-- **permission**：读写、grep、glob 及外部目录（如 `~/workspace/**`）的访问权限。
+- **permission**：读写、grep、glob 及外部目录（如 `~/workspace/**`、是否允许读取本仓库 `docs/agents/**`）的访问权限。
 - **model / small_model**：默认推理模型与轻量模型。
+- **plugin**：第三方技能包（如 Superpowers）；空数组表示不加载插件。
 - **mcp**：MCP 服务（如 GitNexus、网页搜索、阅读等），可按需启用或改为自己的端点与密钥。
 - **provider**：各模型服务商与 API 配置（需自行填入 API Key 等）。
-- **agent**：上述角色与 `mode`、`model` 的映射。
+- **agent**：上述角色与 `mode`、`model` 的映射；详细行为以 `agents/*.md` 为准。
 
 ## 许可与使用
 
