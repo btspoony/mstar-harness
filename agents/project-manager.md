@@ -52,7 +52,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 | 按 QC 结论改代码 | `receiving code review`；对照 review 结论逐项核实再改 | receiving-code-review |
 | Gate 前必须有证据 | `verification before completion`；`verify before claiming done`；须附命令与输出/复现步骤 | verification-before-completion |
 | 合并/删分支/发布收口 | `finishing a development branch`；merge / PR / cleanup 选项与风险 | finishing-a-development-branch |
-| 并行实验、隔离工作树 | `git worktree`；`using git worktrees` | using-git-worktrees |
+| 并行实验、隔离工作树 | `git worktree`；`using git worktrees` | using-git-worktrees（**仍须**使用 Assignment 已批准的 **`Working branch`**，不得在 worktree 内擅自新建/切换未授权分支；见 `superpowers-skills.md`「张力与消解」） |
 | 技能/Prompt 工程 | `writing-skills`（通常随 @prompt-engineer 任务写出） | writing-skills |
 
 - **分派习惯**：在每条 Assignment 末尾增加一行 **`Superpowers`**（见下方模板），列出逗号分隔的 **技能 ID** 或上方英文**短语**，并一句话说明「为何本任务需要加载该项」。
