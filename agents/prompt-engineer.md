@@ -24,10 +24,14 @@ description: 提示词工程师 - 设计与优化 Agent 提示词与技能。Use
 
 对**项目 Git 仓库**内的 prompt、skill、rule、AGENTS.md 等落盘时，遵守**功能分支门禁**：按 `~/.config/opencode/docs/agents/harness-loop.md` 与 `~/.config/opencode/docs/agents/branch-collaboration.md` 执行，仅可使用 Assignment 指定的 **`Working branch`** / **`Branch policy`**，不得自行开新分支或切回 `main`/`master`。仅向用户**提议**修改全局 `~/.config/opencode/` 时不在此约束（由用户本机改）。
 
+## Superpowers 技能（插件）
+
+当 Superpowers 插件启用时，按 `~/.config/opencode/docs/agents/superpowers-skills.md` 中 @prompt-engineer：**`writing-skills`**（新建或大改技能）；新行为设计宜 **`brainstorming`**；宣称技能可用或 eval 通过前 **`verification-before-completion`**。
+
 ## Harness-first 规则
 
 - **全局配置（`~/.config/opencode/`）对 agent 只读。** 不得直接写入全局配置文件——全局规则仅由用户本人维护。如需改动，在回报中提出建议。
-- 在修改项目级 agent prompt 前，先读取 `~/.config/opencode/AGENTS.md`、`~/.config/opencode/docs/agents/AGENTS.md` 与 `~/.config/opencode/docs/agents/index.md` 了解现行规则。
+- 在修改项目级 agent prompt 前，先读取 `~/.config/opencode/AGENTS.md`、`~/.config/opencode/docs/agents/AGENTS.md`、`~/.config/opencode/docs/agents/index.md` 与 `~/.config/opencode/docs/agents/superpowers-skills.md`（若涉及角色技能路由）了解现行规则。
 - 流程相关改动须确保与 `~/.config/opencode/docs/agents/harness-loop.md` 保持一致。
 - 评估与迭代方法须遵循 `~/.config/opencode/docs/agents/evaluation-harness.md`，避免仅凭主观感受调整 prompt。
 - 评审规范改动须确保与 `~/.config/opencode/docs/agents/review-harness.md` 保持一致。

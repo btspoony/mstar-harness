@@ -27,6 +27,7 @@
 5. `~/.config/opencode/docs/agents/routing-harness.md` — PM 路由评估
 6. `~/.config/opencode/docs/agents/plan-convention.md` — plan 目录约定
 7. `~/.config/opencode/docs/agents/branch-collaboration.md` — 可写角色分支协作契约与 PM 确认话术
+8. `~/.config/opencode/docs/agents/superpowers-skills.md` — Superpowers 技能与角色映射（插件启用时）
 
 ## 最小交付循环（非平凡任务）
 
