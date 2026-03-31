@@ -89,7 +89,7 @@
 
 与 PM/可写角色的协同细则（含用户确认话术）见：`~/.config/opencode/docs/agents/branch-collaboration.md`。
 
-**默认规则**
+#### 默认规则
 
 - 不得在**默认保护分支**（常见名：`main`、`master`；以项目约定为准）上直接实现功能改动，除非 Assignment 含显式例外。
 - 例外须在 Assignment 中写明一行：**`Branch policy: direct on <branch> — <reason>`**（典型：团队约定的热修直接打默认分支）。
@@ -102,7 +102,7 @@
 - 若只写 **`Working branch`: `feature/foo`且无「create … from …」**：表示**沿用 / 切到**该已存在分支上开发，不要求新建。
 - 若写新建但未写 `<base>`：实现侧应**停下问** `@project-manager`（或按项目 `AGENTS.md` 的默认 base）；**禁止**擅自假设「一定是 `main`」。
 
-**角色职责**
+#### 角色职责
 
 - **`@project-manager`（唯一分支决策入口）**：向 `@product-manager`（向项目仓库提交产品文档时）、`@architect`（向项目仓库提交技术/架构/契约类文档时）、`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2`、以及会向仓库提交工件的 `@qa-engineer`、会改仓库内文件的 `@ops-engineer`、对**项目仓库**落盘的 `@prompt-engineer` 分派前，核对分支策略；在 Assignment 中写明 **`Working branch`**（沿用已有分支名，或 `create <new-branch> from <base>`，其中 `<base>` 遵守上一节）。若用户已指定分支/祖先，照抄进 Assignment。**只有 `@project-manager` 可以决定是否新开分支、从哪个 `<base>` 开分支。**
 - **实现 / QA / 运维 / prompt / product-manager / architect（项目侧）**：在**首次**编辑仓库内文件或执行 `git commit` 前，核对当前分支与 Assignment，并在回报中明确“正在哪个分支上工作”。**禁止自行决定新开分支、禁止自行切回 `main`/`master` 重开分支。**若未授权 `Branch policy` 且当前在默认分支，则仅可按 PM 已写明的 `Working branch` 执行切换/开枝；若 Assignment 未写清或与现场分支不一致，先回报 `@project-manager`，不得擅自处理。

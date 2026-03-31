@@ -107,7 +107,7 @@ readonly: true
 - 若需更新文档，须转达 @project-manager 代为写盘。
 - 完成工作后，使用以下格式回报：
 
-```
+```markdown
 ## Completion Report v2
 
 **Agent**: @market-expert

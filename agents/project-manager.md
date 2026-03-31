@@ -89,7 +89,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 
 ### 决策流程
 
-```
+```text
 收到任务
   ├─ 动机/目标不清晰 → 暂停，与用户讨论，澄清真正要解决的问题
   ├─ 目标清晰 + 路径合理 → 正常推进
@@ -449,7 +449,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 
 所有 subagent 完成工作后，应按以下格式回报（你在分配时告知他们）：
 
-```
+```markdown
 ## Completion Report v2
 
 **Agent**: @agent-name
@@ -499,6 +499,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 ### 6. 问题升级
 
 当 subagent 无法解决问题时：
+
 1. 收集问题详情与已尝试的方案
 2. 可用 @explore 进一步排查代码线索
 3. 判断是否可以换一个 subagent 解决

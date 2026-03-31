@@ -20,6 +20,7 @@
 - `docs/agents/review-harness.md`：QC 三审共享基线与报告模板
 - `docs/agents/routing-harness.md` + `docs/agents/routing-evals.json`：路由回归评估集
 - `docs/agents/plan-convention.md`：计划目录发现、初始化与 status.json 约定
+- `docs/agents/phase-gate-playbook.md`：Phase Gate 执行手册（Prepare/Execute 的最小动作与证据）
 - `docs/agents/superpowers-skills.md`：Superpowers 与角色映射、与 harness 的对齐说明；未装插件时的上游安装指引
 
 建议优先阅读 `AGENTS.md`（仓库维护入口），再读 `docs/agents/AGENTS.md`（共享规则入口），最后按需进入 `docs/agents/` 专题文档。
@@ -44,6 +45,23 @@
 - **默认主代理**：`project-manager`（项目经理），负责协调与进度管理。
 - **子代理**：产品、架构、前后端开发、测试、质量、运维、市场、提示词工程等角色，按需被主代理调度。
 - **计划管理**：统一遵循 `docs/agents/plan-convention.md`，支持 `{PLAN_DIR}` 动态解析，而非仅绑定 `plans/`。
+- **Phase Gate 工作流**：默认采用 `specify -> clarify -> plan -> tasks -> implement`，并通过 PM 路由评估与回归场景检测“跳 gate”行为。
+
+## 新增能力（Spec-Driven 对齐）
+
+当前 harness engineering 已补齐以下能力：
+
+- **Prepare 阶段门禁**：`specify -> clarify -> plan`，避免“需求未收敛即开工”。
+- **Execute 阶段门禁**：`plan locked -> tasks -> implement`，避免“有 plan 无 tasks 直接开发”。
+- **角色级输入契约**：
+  - `@product-manager`、`@architect` 提供 Prepare/Plan 结构化产物模板；
+  - `@fullstack-dev`、`@fullstack-dev-2`、`@frontend-dev` 在缺失 gate 输入时必须 `Blocked`；
+  - `@qa-engineer` 在 sign-off 前强制核验 gate 完整性；
+  - `@qc-specialist`、`@ops-engineer` 将 gate 合规纳入审查/发布前置检查。
+- **可评估回归体系**：
+  - `docs/agents/routing-evals.json` 已覆盖 `skip clarify`、`skip tasks`、`plan drift`、`hotfix post-RCA` 等场景；
+  - `docs/agents/routing-harness.md` 提供 Phase Gate 评分细则与执行步骤；
+  - `docs/agents/evaluation-harness.md` 提供统一 `Routing Eval Report` 输出模板。
 
 ## Agent 角色说明
 
@@ -195,6 +213,24 @@
 - **mcp**：MCP 服务（如 GitNexus、网页搜索、阅读等），可按需启用或改为自己的端点与密钥。
 - **provider**：各模型服务商与 API 配置（需自行填入 API Key 等）。
 - **agent**：上述角色与 `mode`、`model` 的映射；详细行为以 `agents/*.md` 为准。
+
+## Markdown Lint（Baseline + 渐进收敛）
+
+本仓库已提供 `.markdownlint-cli2.jsonc` 作为当前基线，先覆盖核心维护范围：
+
+- `README.md`
+- `agents/*.md`
+- `docs/agents/*.md`
+
+执行命令：
+
+- `npx -y markdownlint-cli2`
+
+基线策略说明：
+
+- 先对历史噪音较大的规则做豁免（当前：`MD041`、`MD013`、`MD060`），保证流程文档改动可持续落地；
+- 后续按目录逐步收紧规则（建议先 `docs/agents/`，再 `agents/`）；
+- 每次收紧前，先在 PR 中说明“本次启用的规则”和“受影响文件范围”。
 
 ## 安装到 OpenCode
 

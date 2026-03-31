@@ -98,7 +98,7 @@ description: 提示词工程师 - 设计与优化 Agent 提示词与技能。Use
 
 - 完成工作后，使用以下格式回报：
 
-```
+```markdown
 ## Completion Report v2
 
 **Agent**: @prompt-engineer

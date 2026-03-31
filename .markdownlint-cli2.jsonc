@@ -1,0 +1,17 @@
+{
+  // Baseline scope for this repo's maintained docs.
+  "globs": [
+    "README.md",
+    "agents/*.md",
+    "docs/agents/*.md"
+  ],
+  "config": {
+    "default": true,
+    // Existing role prompts start with frontmatter before headings.
+    "MD041": false,
+    // Keep long Chinese/URL lines stable first; tighten later.
+    "MD013": false,
+    // Historical table alignment style differs across files.
+    "MD060": false
+  }
+}
