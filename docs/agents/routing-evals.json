@@ -19,7 +19,7 @@
     },
     {
       "id": "cross-module-feature",
-      "prompt": "新增一个订单导出功能，前端加入口，后端提供下载 API",
+      "prompt": "增加一个订单导出功能，前端加入口，后端提供下载 API",
       "expected_route": ["@explore", "@architect", "@fullstack-dev", "@frontend-dev", "QC-3-reviewers", "@qa-engineer"],
       "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "plan file path in Context Loaded", "API contract", "parallel scope split", "QA evidence in English"],
       "hard_fail_if": ["missing Context Loaded declaration", "missing plan file path in Context Loaded", "no architecture boundary", "front-back mismatch", "assignment uses non-English field keys", "report is non-English without user override"]

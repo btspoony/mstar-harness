@@ -26,7 +26,7 @@
 
 ## 阶段契约
 
-### Spec-Driven 双阶段门禁（新增）
+### Spec-Driven 双阶段门禁
 
 为减少“计划偏差导致返工”，默认采用下列两阶段串行门禁。除热修（hotfix）外，不应跳过。
 
@@ -173,10 +173,10 @@
 
 ### 调度防串扰（强制）
 
-- 只有 `@project-manager` 可以决定新增/并行 subagent；承接方默认不得二次分派。
+- 只有 `@project-manager` 可以决定增加/并行 subagent；承接方默认不得二次分派。
 - Assignment 未显式写 `Delegation: allowed (...)` 时，视为 `Delegation: forbidden`。
 - Assignment 正文中的 `@xxx` 默认按“文本引用”解释，不视为自动调用命令。
-- 承接方若判断必须新增 subagent 才能继续，应先回报 `Blocked` 并向 PM 申请重分派，禁止自行拉起。
+- 承接方若判断必须增加 subagent 才能继续，应先回报 `Blocked` 并向 PM 申请重分派，禁止自行拉起。
 - 并行拓扑与分支隔离只能由 PM 在 Assignment 明确声明；承接方不得自行扩展并行面。
 
 ## 升级触发条件

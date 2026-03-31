@@ -47,7 +47,7 @@
 - **计划管理**：统一遵循 `docs/agents/plan-convention.md`，支持 `{PLAN_DIR}` 动态解析，而非仅绑定 `plans/`。
 - **Phase Gate 工作流**：默认采用 `specify -> clarify -> plan -> tasks -> implement`，并通过 PM 路由评估与回归场景检测“跳 gate”行为。
 
-## 新增能力（Spec-Driven 对齐）
+## 能力概览（Spec-Driven 对齐）
 
 当前 harness engineering 已补齐以下能力：
 
@@ -230,7 +230,7 @@
 
 - 先对历史噪音较大的规则做豁免（当前：`MD041`、`MD013`、`MD060`），保证流程文档改动可持续落地；
 - 后续按目录逐步收紧规则（建议先 `docs/agents/`，再 `agents/`）；
-- 每次收紧前，先在 PR 中说明“本次启用的规则”和“受影响文件范围”。
+- 每次收紧前，先在变更说明中写明“本次启用的规则”和“受影响文件范围”。
 
 ## 安装到 OpenCode
 

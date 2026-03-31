@@ -63,7 +63,7 @@ Superpowers:
 | `using-git-worktrees` | 需要隔离环境时用 worktree 开枝 |
 | `requesting-code-review` | 重大改动或合并请求前发起规范审查 |
 | `receiving-code-review` | 处理审查意见时先核实再改 |
-| `finishing-a-development-branch` | 实现完毕后的合并 / PR / 清理选项 |
+| `finishing-a-development-branch` | 实现完毕后的合并 / 清理选项 |
 | `verification-before-completion` | 宣称完成、通过 gate、合并前必须有可核对证据 |
 | `writing-skills` | 编写、编辑、验证 Agent 技能文档 |
 
@@ -109,7 +109,7 @@ Superpowers:
 | 必用（缺陷） | `systematic-debugging` |
 | 宜用（功能/修复） | `test-driven-development`（项目允许 TDD 时） |
 | 必用（合并/宣称开发完成） | `verification-before-completion` |
-| 宜用（重大 PR） | `requesting-code-review`（与 QC 三审互补：作者侧自检与说明） |
+| 宜用（重大变更） | `requesting-code-review`（与 QC 三审互补：作者侧自检与说明） |
 | 宜用（按 QC 改代码） | `receiving-code-review` |
 | 可选 | `using-git-worktrees`（并行实验或隔离大重构） |
 

@@ -53,7 +53,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 | 大块合并前作者侧 | `requesting code review` | requesting-code-review |
 | 按 QC 结论改代码 | `receiving code review`；对照 review 结论逐项核实再改 | receiving-code-review |
 | Gate 前必须有证据 | `verification before completion`；`verify before claiming done`；须附命令与输出/复现步骤 | verification-before-completion |
-| 合并/删分支/发布收口 | `finishing a development branch`；merge / PR / cleanup 选项与风险 | finishing-a-development-branch |
+| 合并/删分支/发布收口 | `finishing a development branch`；merge / cleanup 选项与风险 | finishing-a-development-branch |
 | 并行实验、隔离工作树 | `git worktree`；`using git worktrees` | using-git-worktrees（**仍须**使用 Assignment 已批准的 **`Working branch`**，不得在 worktree 内擅自新建/切换未授权分支；见 `superpowers-skills.md`「张力与消解」） |
 | 技能/Prompt 工程 | `writing-skills`（通常随 @prompt-engineer 任务写出） | writing-skills |
 
@@ -199,7 +199,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 
 ### 必须遵守的约束
 
-- **开发任务必须经过 QA**：凡变更**业务仓库**内影响运行时行为或对外契约的代码，或为其新增/修改的行为级与回归测试，**必须**安排 @qa-engineer。下列情形**可不派** @qa-engineer，但须在 Assignment 与 Status Update 写明 `QA: skipped — <reason>` 或 `QA: self-check only — <what was verified>`：
+- **开发任务必须经过 QA**：凡变更**业务仓库**内影响运行时行为或对外契约的代码，或为其增加/修改的行为级与回归测试，**必须**安排 @qa-engineer。下列情形**可不派** @qa-engineer，但须在 Assignment 与 Status Update 写明 `QA: skipped — <reason>` 或 `QA: self-check only — <what was verified>`：
   - **@explore 代码检索/问答**且无仓库落地改动。
   - **@market-expert** 纯调研、文档化产出，无应用代码变更；**@product-manager** 仅产品向 Markdown（PRD/用户说明等）、**@architect** 仅技术规格/架构向 Markdown（ADR、API 契约说明等），**无**应用代码/测试/构建或运行时配置变更时，同等适用（与上列「纯文档」一致，须在 Status 标明责任方）。
   - **纯文档 / 静态说明**：仅 Markdown/注释/图片等，**且**不改变构建、启动与健康检查结果（若动到 CI/CD YAML、Dockerfile、环境变量默认值等，视为可能影响运行时，**不得**以此条跳过 QA）。**@product-manager** 落盘的产品文档通常不占开发类 QA，但仍须在 Assignment/Status 标明范围。
@@ -252,8 +252,8 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 
 ### 判断标准
 
-- **大型**：涉及 ≥3 个模块或新增独立子系统
-- **中型**：涉及 1-2 个模块、新增页面或 API
+- **大型**：涉及 ≥3 个模块或增加独立子系统
+- **中型**：涉及 1-2 个模块、增加页面或 API
 - **小型**：单文件或少量文件改动、UI 微调、配置更新
 - **热修复**：线上问题，需要最快速度修复
 
@@ -391,7 +391,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 - **唯一调度者**：只有 `@project-manager` 可以决定是否创建/并行新的 subagent。承接方默认**禁止**二次分派。
 - **默认禁转派**：除非 Assignment 明确写 `Delegation: allowed (to @agent-name, reason: ...)`，否则一律视为 `Delegation: forbidden`。
 - **`@` 仅作文本**：Assignment 的 `Task/Inputs/Context` 中出现的 `@xxx` 默认是引用名词（角色、文件、历史记录），**不是**“立即调用该 agent”的命令。
-- **冲突即停**：承接方一旦判断“需要新增 subagent 才能继续”，必须先回报 `Blocked` 并请求 PM 重新分派，禁止自行拉起。
+- **冲突即停**：承接方一旦判断“需要增加 subagent 才能继续”，必须先回报 `Blocked` 并请求 PM 重新分派，禁止自行拉起。
 - **并行主控权**：并行拓扑（谁和谁并行、分支如何隔离）仅由 PM 在 Assignment 中声明；承接方不得扩展并行面。
 - **写法降噪**：PM 在 Assignment 中引用角色时，优先使用反引号包裹（如 ``@frontend-dev``）或全角 `＠`，降低被误触发为工具调用的概率。
 
@@ -535,7 +535,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 
 ### PM 的 Plan 职责
 
-- **创建/登记**：新建 plan 文件时，同步在 `{PLAN_DIR}/status.json` 新增条目。
+- **创建/登记**：新建 plan 文件时，同步在 `{PLAN_DIR}/status.json` 写入条目。
 - **分配**：按任务路由表 + 开发分配规则分配给合适的 subagent。
 - **推进**：每阶段完成后更新 progress/status。
 - **Done 收口**：确保 Done 标记与 `status.json` 同步。

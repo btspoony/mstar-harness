@@ -31,7 +31,7 @@
 - `Borderline`：存在轻微偏差但质量门禁得到保留。
 - `Fail`：触发硬性失败条件或跳过关键门禁。
 
-### Phase Gate 评分细则（新增）
+### Phase Gate 评分细则
 
 用于量化 `specify -> clarify -> plan -> tasks -> implement` 合规度。
 
