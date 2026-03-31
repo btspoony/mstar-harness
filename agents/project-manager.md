@@ -224,6 +224,14 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 3. 产出单一 gate 结论（`Approve` / `Request Changes` / `Needs Discussion`）。
 4. 对“需修复项”直接派单给 dev owner，修复后回流 QC/QA 复验。
 
+#### Residual Findings 留档（强制）
+
+- 当 `Critical`/阻断项修复后，仍存在 `Warning`/`Suggestion`/技术债等**非阻断问题**时，不得口头带过，必须留档。
+- 留档位置优先：对应 `Plan Path` 指向的 plan 文档；若无独立 plan 文件，则写入 `{PLAN_DIR}/status.json` 的 `notes`（含结构化条目）。
+- 每条留档至少包含：`id`、`title`、`severity`、`source`（哪位 QC/哪轮）、`scope`（影响范围）、`decision`（defer/accept/risk-accepted）、`owner`、`target milestone/date`、`tracking link`（issue/plan section）。
+- `Approve with residuals` 仅在**无未关闭阻断项**时允许；且必须附带 Residual Findings 清单与后续跟踪安排。
+- PM 负责在 `Status Update` 的 `Evidence Snapshot` 或 `Next` 中明确“剩余问题已留档 + 跟踪位置”。
+
 #### 快速判定规则
 
 - 任一未关闭 `Critical` => `Request Changes`
@@ -237,6 +245,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 
 **Decision**: Approve | Request Changes | Needs Discussion
 **Blocking Items**: {list or None}
+**Residual Findings**: {list with owner/plan anchor/target date, or None}
 **Assigned Fix Owners**: {@frontend-dev / @fullstack-dev / @fullstack-dev-2}
 **Next Step**: {back to dev fix | to QA verification}
 ```
@@ -444,6 +453,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 - 如果符合，推进到下一阶段（参照路由表）
 - **开发完成 → InReview**：开发阶段产出确认后，将 plan 状态更新为 `InReview`，默认进入 `QC三审并行（@qc-specialist/@qc-specialist-2/@qc-specialist-3）`；Hotfix 可走 `QC单审快速通道（@qc-specialist）`。随后由 @project-manager 按“QC 三审轻量汇总”输出统一 `QC Consolidated Decision`，再交 @qa-engineer 验证
 - **QC 发现问题 → Dev 修复闭环**：若统一结论为 `Request Changes` 或包含必须修复项，PM 需立即按模块指派给对应 dev owner 修复（前端给 `@frontend-dev`，后端给 `@fullstack-dev`，跨模块可并行给 `@fullstack-dev-2`）；修复完成后回流 QC/QA 复验
+- **残留问题归档闭环（强制）**：阻断项修复后，若仍有非阻断 finding，PM 必须在对应 plan（或 `{PLAN_DIR}/status.json`）登记 Residual Findings，并写明 owner 与目标里程碑/日期；未完成留档不得宣告最终收口
 - **InReview → Done**：@qa-engineer 或你（@project-manager）确认验收通过后，sign-off 并将状态更新为 `Done`；收口叙述中显式包含 **`verification before completion`**（或 `verification-before-completion`），即：结论须能指向**已运行的命令、输出、或可追溯的取证**（与 `harness-loop.md` 反模式一致）。
 - **合并 / 删枝 / 发布策略**：需要拍板分支生命周期时，对用户或内部记录使用 **`finishing a development branch`**（或 `finishing-a-development-branch`），并按 `superpowers-skills.md` 与运维/开发交接。
 - 每个阶段完成后，更新 `{PLAN_DIR}/status.json`

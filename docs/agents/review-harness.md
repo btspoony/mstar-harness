@@ -110,6 +110,14 @@
 - 无 `Critical` 但有高影响的未解决取舍 → `Needs Discussion`
 - 否则 → `Approve`
 
+## Residual Findings 留档门禁
+
+- 当阻断项（`Critical`）修复后仍有未关闭 `Warning`/`Suggestion`/技术债，不得仅在对话中口头说明，必须留档。
+- 留档优先写入对应 plan 文档（`Plan Path`）；若无 plan，则写入 `{PLAN_DIR}/status.json` 的 `notes`（结构化条目）。
+- 每条 residual finding 至少包含：`id`、`title`、`severity`、`source`、`scope`、`decision`（defer/accept/risk-accepted）、`owner`、`target milestone/date`、`tracking link`。
+- `Approve with residuals` 仅在无未关闭 `Critical` 时允许，且 PM 汇总结论中必须包含 residual 清单与跟踪位置。
+- 未完成 residual 留档，不应进入最终 `Done` 收口。
+
 ## 证据规则
 
 - Critical 发现必须包含触发条件、影响范围和修复建议。
