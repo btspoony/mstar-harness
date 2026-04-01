@@ -1,0 +1,240 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "external_directory": {
+      "/private/tmp/**": "allow",
+      "/tmp/**": "allow",
+      "~/.cargo/**": "allow",
+      "~/.config/opencode/docs/agents/**": "allow"
+    },
+    "skill": {
+      "*": "allow",
+      "experimental-*": "ask"
+    },
+    "read": "allow",
+    "grep": "allow",
+    "glob": "allow"
+  },
+  "model": "bailian-coding-plan/glm-5",
+  "small_model": "minimax-cn-coding-plan/MiniMax-M2.7",
+  "default_agent": "project-manager",
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git"
+  ],
+  "mcp": {
+    "grep": {
+      "type": "remote",
+      "url": "https://mcp.grep.app"
+    },
+    "gitnexus": {
+      "type": "local",
+      "command": [
+        "gitnexus",
+        "mcp"
+      ]
+    },
+    "MiniMax": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "minimax-coding-plan-mcp",
+        "-y"
+      ],
+      "environment": {
+        "MINIMAX_API_KEY": "{env:MINIMAX_API_KEY}",
+        "MINIMAX_API_HOST": "https://api.minimaxi.com"
+      },
+      "enabled": true
+    },
+    "web-search-prime": {
+      "type": "remote",
+      "url": "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:Z_AI_API_KEY}"
+      }
+    },
+    "web-reader": {
+      "type": "remote",
+      "url": "https://open.bigmodel.cn/api/mcp/web_reader/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:Z_AI_API_KEY}"
+      }
+    },
+    "zread": {
+      "type": "remote",
+      "url": "https://open.bigmodel.cn/api/mcp/zread/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:Z_AI_API_KEY}"
+      }
+    },
+    "zai-mcp-server": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@z_ai/mcp-server"
+      ],
+      "environment": {
+        "Z_AI_MODE": "ZHIPU",
+        "Z_AI_API_KEY": "{env:Z_AI_API_KEY}"
+      }
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": true,
+      "headers": {
+        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
+      }
+    }
+  },
+  "provider": {
+    "zhipuai-coding-plan": {
+      "options": {
+        "apiKey": "{env:Z_AI_API_KEY}"
+      },
+      "models": {
+        "glm-5.1": {
+          "name": "GLM-5.1"
+        }
+      }
+    },
+    "bailian-coding-plan": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "Qwen Coding Plan",
+      "options": {
+        "baseURL": "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1",
+        "apiKey": "{env:DASHSCOPE_API_KEY}"
+      },
+      "models": {
+        "qwen3.5-plus": {
+          "name": "Qwen3.5 Plus",
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 1024
+            }
+          }
+        },
+        "qwen3-coder-next": {
+          "name": "Qwen3 Coder Next"
+        },
+        "qwen3-coder-plus": {
+          "name": "Qwen3 Coder Plus"
+        },
+        "MiniMax-M2.5": {
+          "name": "MiniMax M2.5",
+          "options": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 1024
+            }
+          }
+        },
+        "glm-5": {
+          "name": "GLM-5",
+          "options": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 1024
+            }
+          }
+        },
+        "kimi-k2.5": {
+          "name": "Kimi K2.5",
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 1024
+            }
+          }
+        }
+      }
+    }
+  },
+  "agent": {
+    "project-manager": {
+      "description": "项目经理 - 协调开发团队，管理项目进度",
+      "mode": "primary",
+      "model": "zhipuai-coding-plan/glm-5-turbo"
+    },
+    "product-manager": {
+      "description": "产品经理 - 需求分析、产品规划与产品向文档编写（PRD/用户说明等）",
+      "mode": "subagent",
+      "model": "bailian-coding-plan/qwen3.5-plus"
+    },
+    "architect": {
+      "description": "技术架构师 - 系统架构设计、技术决策与技术向文档编写（ADR/接口契约等）",
+      "mode": "subagent",
+      "model": "zhipuai-coding-plan/glm-5-turbo"
+    },
+    "fullstack-dev": {
+      "description": "全栈开发工程师 - 实现前后端功能",
+      "mode": "subagent",
+      "model": "zhipuai-coding-plan/glm-5-turbo"
+    },
+    "fullstack-dev-2": {
+      "description": "全栈开发工程师 - 实现前后端功能（协作）",
+      "mode": "subagent",
+      "model": "bailian-coding-plan/glm-5"
+    },
+    "frontend-dev": {
+      "description": "前端开发工程师 - UI/前端架构与体验优化",
+      "mode": "subagent",
+      "model": "bailian-coding-plan/kimi-k2.5"
+    },
+    "qa-engineer": {
+      "description": "测试工程师 - 编写测试用例和自动化测试",
+      "mode": "subagent",
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "qc-specialist": {
+      "description": "质量控制专家（Reviewer #1） - 代码审查和质量保证",
+      "mode": "subagent",
+      "model": "bailian-coding-plan/glm-5"
+    },
+    "qc-specialist-2": {
+      "description": "质量控制专家（Reviewer #2） - 代码审查和质量保证",
+      "mode": "subagent",
+      "model": "bailian-coding-plan/kimi-k2.5"
+    },
+    "qc-specialist-3": {
+      "description": "质量控制专家（Reviewer #3） - 代码审查和质量保证",
+      "mode": "subagent",
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "ops-engineer": {
+      "description": "运维工程师 - 部署、监控和基础设施",
+      "mode": "subagent",
+      "model": "bailian-coding-plan/kimi-k2.5"
+    },
+    "market-expert": {
+      "description": "市场专家 - 市场分析和用户研究",
+      "mode": "subagent",
+      "model": "bailian-coding-plan/qwen3.5-plus"
+    },
+    "prompt-engineer": {
+      "description": "提示词工程师 - 设计与优化 Agent 提示词与技能",
+      "mode": "subagent",
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    }
+  }
+}

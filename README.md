@@ -106,96 +106,17 @@
 
 若在 `~/.config/opencode/plugins/` 中启用 **OpenViking Memory** 插件（`openviking-memory.ts`），各 agent 将具备需**主动调用**的语义记忆工具：`memsearch`（搜索记忆/资源）、`memread`（按 viking:// URI 读取）、`membrowse`（浏览目录）。各 agent 说明中均有「OpenViking 记忆工具」小节描述何时使用这三者。`memcommit`（会话沉淀）由插件按配置定时自动执行（见 `plugins/openviking-config.json` 的 `autoCommit.enabled` 与 `intervalMinutes`），agent 无需也不应主动调用。使用前请确保 OpenViking 服务已运行且配置中 `enabled: true`。
 
-## 如何设置 Agents（opencode.json 示例）
+## 快速使用示例配置
 
-在 OpenCode 中，Agents 通过 `opencode.json` 的 `agent` 字段定义。每个 agent 需指定 `description`、`mode`（`primary` 主代理或 `subagent` 子代理）和 `model`（对应 `provider` 中配置的模型引用）。
+仓库已提供可直接复制的示例文件：`opencode.example.json`（来源于当前可用配置，保留 `{env:...}` 占位，便于安全注入密钥）。
 
-```json
-{
-    "$schema": "https://opencode.ai/config.json",
-    "permission": {
-        "external_directory": {
-            "~/.config/opencode/docs/agents/**": "allow"
-        },
-        "read": "allow",
-        "grep": "allow",
-        "glob": "allow"
-    },
-    "model": "provider-id/default-model-id",
-    "small_model": "provider-id/light-model-id",
-    "default_agent": "project-manager",
-    "plugin": ["superpowers@git+https://github.com/obra/superpowers.git"],
-    "mcp": {},
-    "provider": {},
-    "agent": {
-        "project-manager": {
-            "description": "项目经理 - 协调开发团队，管理项目进度",
-            "mode": "primary",
-            "model": "provider-id/model-id"
-        },
-        "product-manager": {
-            "description": "产品经理 - 需求分析和产品规划",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "architect": {
-            "description": "技术架构师 - 系统架构设计和技术决策",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "fullstack-dev": {
-            "description": "全栈开发工程师 - 实现前后端功能",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "fullstack-dev-2": {
-            "description": "全栈开发工程师 - 实现前后端功能（协作）",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "frontend-dev": {
-            "description": "前端开发工程师 - UI/前端架构与体验优化",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "qa-engineer": {
-            "description": "测试工程师 - 编写测试用例和自动化测试",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "qc-specialist": {
-            "description": "质量控制专家 - 代码审查，主审架构/可维护性",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "qc-specialist-2": {
-            "description": "质量控制专家（Reviewer #2）- 主审安全/正确性",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "qc-specialist-3": {
-            "description": "质量控制专家（Reviewer #3）- 主审性能/可靠性",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "ops-engineer": {
-            "description": "运维工程师 - 部署、监控和基础设施",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "market-expert": {
-            "description": "市场专家 - 市场分析和用户研究",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        },
-        "prompt-engineer": {
-            "description": "提示词工程师 - 设计与优化 Agent 提示词与技能",
-            "mode": "subagent",
-            "model": "provider-id/model-id"
-        }
-    }
-}
+在 `~/.config/opencode/` 下可直接执行：
+
+```bash
+cp opencode.example.json opencode.json
 ```
+
+然后按需修改 `opencode.json`（至少确认 `provider` 下 API Key 对应的环境变量已配置）。
 
 ### Agent 配置要点
 
@@ -209,12 +130,7 @@
 
 ## 配置结构简介
 
-- **permission**：读写、grep、glob 及外部目录（如 `~/workspace/**`、是否允许读取本仓库 `docs/agents/**`）的访问权限。
-- **model / small_model**：默认推理模型与轻量模型。
-- **plugin**：第三方技能包（如 Superpowers）；空数组表示不加载插件。
-- **mcp**：MCP 服务（如 GitNexus、网页搜索、阅读等），可按需启用或改为自己的端点与密钥。
-- **provider**：各模型服务商与 API 配置（需自行填入 API Key 等）。
-- **agent**：上述角色与 `mode`、`model` 的映射；详细行为以 `agents/*.md` 为准。
+本仓库不再重复维护字段级说明，以避免与上游文档漂移。请直接参考 OpenCode 官方配置文档：[`https://opencode.ai/docs/config/`](https://opencode.ai/docs/config/)。
 
 ## Markdown Lint（Baseline + 渐进收敛）
 
@@ -240,18 +156,27 @@
 
 仓库地址：[`https://github.com/btspoony/harness-opencode-team`](https://github.com/btspoony/harness-opencode-team)
 
-1. 备份你现有的 OpenCode 配置目录（可选但推荐）：
+1. 备份你现有配置（可选但推荐）：
    - `mv ~/.config/opencode ~/.config/opencode.backup.$(date +%Y%m%d-%H%M%S)`
-2. 克隆本仓库到 OpenCode 默认配置路径：
+2. 克隆仓库到默认目录：
    - `git clone https://github.com/btspoony/harness-opencode-team.git ~/.config/opencode`
-3. 安装依赖（如需本地插件依赖）：
+3. 进入目录并安装依赖（如需本地插件）：
    - `cd ~/.config/opencode && npm install`
-4. 按需编辑 `~/.config/opencode/opencode.json`：
-   - 配置 `provider`（填入你自己的 API Key/模型）
-   - 调整 `default_agent`、`agent`、`plugin`、`mcp` 等
-5. 重启 OpenCode（或重载配置）使新配置生效。
+4. 用示例配置快速生成本地配置文件：
+   - `cp opencode.example.json opencode.json`
+5. 配置你的密钥（推荐环境变量，不要写死）：
+   - 参考 `secrets.env.example` 创建你自己的本地密钥文件（例如 `.env.local`，并确保已加入忽略）
+   - 确认 `opencode.json` 中继续使用 `{env:...}` / `{file:...}` 占位
+6. 重启 OpenCode（或重载配置）使配置生效。
 
-如果你不想覆盖现有目录，也可以只拷贝关键文件（如 `opencode.json`、`agents/`、`docs/agents/`）到你当前的 `~/.config/opencode/` 中再手动合并。
+如果你不想覆盖现有目录，也可以只拷贝关键文件（如 `opencode.example.json`、`agents/`、`docs/agents/`）到你当前的 `~/.config/opencode/` 中再手动合并。
+
+### 隐私与密钥安全（必读）
+
+- 不要把真实 API Key 直接写入 `opencode.json`，始终使用 `{env:...}` 或 `{file:...}` 占位。
+- 不要提交任何包含明文密钥的文件（如 `.env`、`.env.local`、私有凭据文件）。
+- 分享配置时仅分享 `opencode.example.json`，不要分享你本地的 `opencode.json`（若已写入私有信息）。
+- 若怀疑泄露，立即轮换对应 provider/MCP 的密钥并更新本地环境变量。
 
 ## 许可与使用
 
