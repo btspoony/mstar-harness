@@ -24,7 +24,7 @@ OpenCode 不会自动加载本文件；agent 需在被指示时显式读取。
 ## 快速指引
 
 1. 先读 `~/.config/opencode/docs/agents/AGENTS.md`（共享入口）。
-2. 再按需读 `~/.config/opencode/docs/agents/index.md` 与具体 harness 文档。
+2. 再按需读 `~/.config/opencode/docs/agents/index.md` 与具体 harness 文档；若调整编排理念或选配工具，读 `docs/agents/open-harness-principles.md` 与 `docs/agents/optional-tooling-by-capability.md`。
 3. 若改动了路由/门禁规则，同步更新对应 docs 并做一致性检查。
 
 <!-- context7 -->

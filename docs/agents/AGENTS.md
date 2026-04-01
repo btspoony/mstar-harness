@@ -29,6 +29,8 @@
 7. `~/.config/opencode/docs/agents/phase-gate-playbook.md` — Phase Gate 执行手册（Prepare/Execute）
 8. `~/.config/opencode/docs/agents/branch-collaboration.md` — 可写角色分支协作契约与 PM 确认话术
 9. `~/.config/opencode/docs/agents/superpowers-skills.md` — Superpowers 技能与角色映射；未装 Superpowers 插件时见文内「未安装插件时」（改全局 `opencode.json` 须用户同意）
+10. `~/.config/opencode/docs/agents/open-harness-principles.md` — 开源 harness 理念在本仓库的落点索引（意图门禁、Task category、可验证编辑等）
+11. `~/.config/opencode/docs/agents/optional-tooling-by-capability.md` — 按能力可选的 MCP/skills（与 harness 理念对齐，非插件依赖）
 
 ## 最小交付循环（非平凡任务）
 
