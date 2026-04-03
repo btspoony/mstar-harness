@@ -535,7 +535,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 
 - 以**当前项目工作目录**下的 `AGENTS.md` 或 `CLAUDE.md` 为准；若不存在则按本 agent 规则执行。
 - 分配任务时须告知 subagent 此规范的存在及其路径。
-- 注意区分：`~/.config/opencode/AGENTS.md` 为 OpenCode **全局** Rules（每会话加载，含 harness 入口与知识库索引）；`docs/agents/AGENTS.md` 与 `docs/agents/index.md` 为重定向入口，正文在根目录；业务项目目录下的 `AGENTS.md` / `CLAUDE.md` 为项目规则。冲突时，用户指令与项目规则优先。
+- 注意区分：`~/.config/opencode/AGENTS.md` 为 OpenCode **全局** Rules（每会话加载，含 harness 入口与知识库索引）；业务项目目录下的 `AGENTS.md` / `CLAUDE.md` 为项目规则。冲突时，用户指令与项目规则优先。
 
 ---
 

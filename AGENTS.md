@@ -1,8 +1,8 @@
 # OpenCode 全局 Rules（单一入口）
 
-OpenCode 将 `~/.config/opencode/AGENTS.md` 作为**全局规则**在每个会话加载。官方说明：[Rules — Global](https://opencode.ai/docs/rules/#global)。
+OpenCode 将会以本文件作为**全局规则**在每个会话加载。
 
-**单一权威**：`docs/agents/AGENTS.md` 与 `docs/agents/index.md` 为重定向入口；执行向规则与专题索引以本文件为准。
+**单一权威**：执行向规则与专题索引以本文件为准。
 
 项目工作目录下自 cwd 向上解析的 `AGENTS.md` / `CLAUDE.md`（OpenCode 本地 Rules）优先于本文件。
 
