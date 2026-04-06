@@ -125,7 +125,7 @@
 
 - 代码变更
 - 自检证据
-- 已更新的计划清单
+- 已更新的计划清单（主 plan 与 `status.json`）
 
 ### 4) 审查门禁
 
@@ -136,6 +136,8 @@
 - QC 结论与可执行的发现
 - QA 验证证据
 - `@project-manager` 的合并决定
+
+**Plan 留档（启用 `{PLAN_DIR}` 时）**：架构评审与并行 QC 的**书面报告**默认写入 `{PLAN_DIR}/reports/<plan-id>/`（命名与只读约定见 `plan-convention.md`）；**residual findings** 登记在 `{PLAN_DIR}/status.json` 的 `metadata.residual_findings`，由 PM 与 `review-harness.md` 门禁对齐。
 
 ### 5) 经验沉淀
 

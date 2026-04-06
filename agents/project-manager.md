@@ -90,7 +90,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 若当前 **未** 加载 Superpowers：读同文件 **「未安装插件时」**；**在用户同意前不得擅自写入** `~/.config/opencode/opencode.json`。
 
 - **必加载（协调视角）**：`using-superpowers`（先流程技能、后实现技能的习惯）、`writing-plans`（非平凡多阶段任务）、`dispatching-parallel-agents`（多独立子任务时）、`verification-before-completion`（任何 Done / sign-off / 合并结论前须有可核对证据）、`finishing-a-development-branch`（分支与发布收口）。
-- **`writing-plans` 落盘门限**：技能正文若写 `docs/superpowers/plans/`，**忽略该路径**。计划文件必须写入 `plan-convention.md` 解析到的 **`{PLAN_DIR}`**（如 `YYYY-MM-DD-<feature>.md`）；handoff 与 Assignment 中写明实际 **`{PLAN_DIR}`**。
+- **`writing-plans` 落盘门限**：技能正文若写 `docs/superpowers/plans/`，**忽略该路径**。计划文件必须写入 `plan-convention.md` 解析到的 **`{PLAN_DIR}`**（推荐 `<plan-id>-<plan-name>.md`，或与项目既有命名一致）；handoff 与 Assignment 中写明实际 **`{PLAN_DIR}`** 与 **`plan-id`**（用于 `reports/<plan-id>/` 与 `metadata.residual_findings`）。
 - **按任务选用**：`subagent-driven-development`（本会话多子代理拆步）、`executing-plans`（书面计划约定跨会话继续时）、`brainstorming`（意图或范围模糊时推动澄清——可直接对用户或分派 @product-manager / @architect）。
 
 ### 触发词（编排时请多用，便于宿主/插件匹配技能）
@@ -497,7 +497,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
   - 若实现中发现新约束，先回写 plan（并必要时补 clarify）再继续 implement。
 - **开发完成 → InReview**：开发阶段产出确认后，将 plan 状态更新为 `InReview`，默认进入 `QC三审并行（@qc-specialist/@qc-specialist-2/@qc-specialist-3）`；Hotfix 可走 `QC单审快速通道（@qc-specialist）`。随后由 @project-manager 按“QC 三审轻量汇总”输出统一 `QC Consolidated Decision`，再交 @qa-engineer 验证
 - **QC 发现问题 → Dev 修复闭环**：若统一结论为 `Request Changes` 或包含必须修复项，PM 需立即按模块指派给对应 dev owner 修复（前端给 `@frontend-dev`，后端给 `@fullstack-dev`，跨模块可并行给 `@fullstack-dev-2`）；修复完成后回流 QC/QA 复验
-- **残留问题归档闭环（强制）**：阻断项修复后，若仍有非阻断 finding，PM 必须在对应 plan（或 `{PLAN_DIR}/status.json`）登记 Residual Findings，并写明 owner 与目标里程碑/日期；未完成留档不得宣告最终收口
+- **残留问题归档闭环（强制）**：阻断项修复后，若仍有非阻断 finding，PM 必须登记 Residual Findings（**优先** `{PLAN_DIR}/status.json` 的 `metadata.residual_findings[<plan-id>]`，见 `plan-convention.md`）；亦可辅以主 plan 小节；未完成留档不得宣告最终收口
 - **InReview → Done**：@qa-engineer 或你（@project-manager）确认验收通过后，sign-off 并将状态更新为 `Done`；收口叙述中显式包含 **`verification before completion`**（或 `verification-before-completion`），即：结论须能指向**已运行的命令、输出、或可追溯的取证**（与 `harness-loop.md` 反模式一致）。
 - **合并 / 删枝 / 发布策略**：需要拍板分支生命周期时，对用户或内部记录使用 **`finishing a development branch`**（或 `finishing-a-development-branch`），并按 `superpowers-skills.md` 与运维/开发交接。
 - 每个阶段完成后，更新 `{PLAN_DIR}/status.json`
@@ -551,15 +551,15 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 按优先级查找：`.agents/plans/` > `.plans/` > `plans/`。
 若均不存在且任务需要 plan 管理，按以下步骤初始化：
 
-1. 创建 `.agents/plans/` 及空 `status.json`。
-2. 确保 `.gitignore` 包含 `.agents/plans/` 条目。
-3. 若项目已有 `plans/` 或 `.plans/`，直接使用，不再创建。
+1. 创建 `.agents/plans/`、`status.json`（含 `metadata.residual_findings`）、`reports/README.md`（见 `plan-convention.md`）。
+2. **Git**：默认**跟踪** `{PLAN_DIR}` 以利 clone 后 handoff；仅当项目要求本地私密时再整体 ignore，且已提交文档不得依赖被 ignore 的路径（同 `plan-convention.md`「可到达性」）。
+3. 若项目已有 `plans/` 或 `.plans/`，直接使用，不再创建 `.agents/plans/`。
 
 若项目不需要 plan 管理，可跳过此步骤，通过对话和回报传递任务进度。
 
 ### PM 的 Plan 职责
 
-- **创建/登记**：新建 plan 文件时，同步在 `{PLAN_DIR}/status.json` 写入条目。
+- **创建/登记**：新建 plan 文件时，同步在 `{PLAN_DIR}/status.json` 写入条目；进入 `InReview` 时为该 `plan-id` 准备 `reports/<plan-id>/` 下的报告落盘路径并在 Assignment 中告知 QC。
 - **分配**：按任务路由表 + 开发分配规则分配给合适的 subagent。
 - **推进**：每阶段完成后更新 progress/status。
 - **Done 收口**：确保 Done 标记与 `status.json` 同步。

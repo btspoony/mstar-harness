@@ -167,6 +167,7 @@ readonly: true
 ## Plan 与文档规范
 
 - Plan 目录和 status.json 的约定详见 `~/.config/opencode/docs/agents/plan-convention.md`。
+- 若 Assignment 含 **`plan-id`** 且项目已启用 `{PLAN_DIR}`：将书面 QC 报告落盘到 `{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc#.md`（`#` 为本 reviewer 编号）；residual 条目由 @project-manager 汇总进 `status.json` 的 `metadata.residual_findings`。
 - Plan 目录由 @project-manager 在分派时告知实际路径（可能是 `.agents/plans/`、`.plans/` 或 `plans/`）。
 - 完成后提醒 @project-manager 同步 plan 状态。
 - 开发项目规范以当前工作目录下的 `AGENTS.md` 或 `CLAUDE.md` 为准；无则按本 agent 规则执行。

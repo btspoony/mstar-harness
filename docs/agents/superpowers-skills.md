@@ -186,7 +186,7 @@ Superpowers:
 | 缺陷与 RCA | `harness-loop.md`：非热修在进入**实质性代码修改**前须有可检验**根因结论或带证据的假设** | `systematic-debugging` | **一致**：技能是 RCA 门禁下的**调查方法**；承接方交付仍须满足 harness 的 RCA/证据要求。 |
 | 热修 | 热修以恢复服务为先，可事后补 RCA；Assignment 须标明 Hotfix / `Branch policy` | `systematic-debugging` 可能强调「查透再改」 | **消解**：热修路径以 **Assignment + `harness-loop`** 为准；技能用于**最小变更**与**事后根因**，不要求在长调查完成前强行停改。 |
 | 完成与证据 | `harness-loop.md` 反模式：无测试或行为证据即宣称完成 | `verification-before-completion` | **一致**：表述不同，目标相同（gate 前可核对证据）。 |
-| Plan 形态 | `plan-convention.md`：`{PLAN_DIR}`、status.json SSOT | `writing-plans` | **互补**：convention 管**存放位置与结构**；writing-plans 管**多步任务如何写成可执行计划**；PM 维护时两者同时满足。**路径门限**：提示词 + **`plan-convention.md`** 约束 **`{PLAN_DIR}`** 优先于技能默认的 `docs/superpowers/plans/`（无本地同名技能覆盖）。 |
+| Plan 形态 | `plan-convention.md`：`{PLAN_DIR}`、`status.json` SSOT（含 `metadata.residual_findings`）、`reports/<plan-id>/` | `writing-plans` | **互补**：convention 管**存放位置与结构**；writing-plans 管**多步任务如何写成可执行计划**；PM 维护时两者同时满足。**路径门限**：提示词 + **`plan-convention.md`** 约束 **`{PLAN_DIR}`** 优先于技能默认的 `docs/superpowers/plans/`（无本地同名技能覆盖）。 |
 | 并行开发 | `harness-loop.md`：独立模块可并行；**先锁接口契约**再并行编码 | `dispatching-parallel-agents`、`subagent-driven-development` | **叠加约束**：并行**不免除** `branch-collaboration.md` 分支门禁——每个**可写**承接方 Assignment 仍须含 PM 批准的 **`Working branch`** / **`Branch policy`**，禁止多人各自假设 base。 |
 | TDD | 全局流程**未**强制 TDD | `test-driven-development` | **项目/用户优先**：项目或用户禁止 TDD 时，不得因技能强行 TDD。 |
 | `git worktree` / 多工作目录 | `branch-collaboration.md`：仅 `@project-manager` 决定开枝、`Assignment` 须写明 **`Working branch`** / **`Branch policy`**；实现方不得擅自决定分支 | `using-git-worktrees` | **不冲突，但须叠同一门禁**：worktree 只是「同一仓库多个检出目录」；**检出哪条分支、是否新建分支**仍须与 PM 已写明的策略一致。若在 worktree 里 `checkout -b`、或使用的分支与 Assignment 不一致，即违反现有约定（与是否用 worktree 无关）。 |

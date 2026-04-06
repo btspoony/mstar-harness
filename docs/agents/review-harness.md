@@ -112,7 +112,8 @@
 ## Residual Findings 留档门禁
 
 - 当阻断项（`Critical`）修复后仍有未关闭 `Warning`/`Suggestion`/技术债，不得仅在对话中口头说明，必须留档。
-- 留档优先写入对应 plan 文档（`Plan Path`）；若无 plan，则写入 `{PLAN_DIR}/status.json` 的 `notes`（结构化条目）。
+- **启用 plan 管理且存在 `plan-id` 时**：优先将 residual 清单写入 `{PLAN_DIR}/status.json` 的 **`metadata.residual_findings[<plan-id>]`**（字段与严重等级见 `plan-convention.md`），与 QC 报告目录 `{PLAN_DIR}/reports/<plan-id>/` 交叉引用。
+- 备选：写入对应主 plan 文档（`Plan Path`）的固定小节；若无 `{PLAN_DIR}`，则写入项目认可的进度载体或 `notes`（结构化条目）。
 - 每条 residual finding 至少包含：`id`、`title`、`severity`、`source`、`scope`、`decision`（defer/accept/risk-accepted）、`owner`、`target milestone/date`、`tracking link`。
 - `Approve with residuals` 仅在无未关闭 `Critical` 时允许，且 PM 汇总结论中必须包含 residual 清单与跟踪位置。
 - 未完成 residual 留档，不应进入最终 `Done` 收口。

@@ -17,7 +17,7 @@
 - `docs/agents/evaluation-harness.md`：prompt / 流程迭代评估方法
 - `docs/agents/review-harness.md`：QC 三审共享基线与报告模板
 - `docs/agents/routing-harness.md` + `docs/agents/routing-evals.json`：路由回归评估集
-- `docs/agents/plan-convention.md`：计划目录发现、初始化与 status.json 约定
+- `docs/agents/plan-convention.md`：计划目录发现、初始化、`status.json`（含 residual_findings）、`reports/<plan-id>/` 审查留档
 - `docs/agents/phase-gate-playbook.md`：Phase Gate 执行手册（Prepare/Execute 的最小动作与证据）
 - `docs/agents/superpowers-skills.md`：Superpowers 与角色映射、与 harness 的对齐说明；未装插件时的上游安装指引
 - `docs/agents/library-docs-and-hosts.md`：库文档检索单一协议（Context7 MCP / ctx7 CLI、禁止双跑）、OpenCode 与 Cursor 宿主差异、大型插件注入降噪
@@ -32,8 +32,8 @@
 当前体系支持“有 plan 目录”和“无 plan 目录”两种项目形态：
 
 - **目录发现优先级**：`.agents/plans/` > `.plans/` > `plans/`
-- **默认低侵入**：若需主动启用，优先创建 `.agents/plans/`
-- **Git 忽略建议**：若由体系主动创建 `.agents/plans/`，应在项目 `.gitignore` 中加入 `.agents/plans/`
+- **默认低侵入**：若需主动启用，优先创建 `.agents/plans/`，并配套 `reports/README.md` 与按 `plan-id` 分目录的审查留档
+- **Git**：默认**跟踪** `{PLAN_DIR}` 以便 clone 后可达；仅本地私密场景再整体 ignore，且已提交文档勿引用被 ignore 的路径（与项目 `AGENTS.md` 可到达性要求对齐）
 - **无 plan 目录时**：不强制创建；@project-manager 通过对话与 Completion Report 维护进度，门禁（QC/QA）照常执行
 
 完整规则见 `docs/agents/plan-convention.md`。
