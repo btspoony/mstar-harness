@@ -17,7 +17,7 @@
 - `docs/agents/evaluation-harness.md`：prompt / 流程迭代评估方法
 - `docs/agents/review-harness.md`：QC 三审共享基线与报告模板
 - `docs/agents/routing-harness.md` + `docs/agents/routing-evals.json`：路由回归评估集
-- `docs/agents/plan-convention.md`：计划目录发现、初始化、`status.json`（open residual）、`archived/residuals/`、`reports/<plan-id>/`、`knowledge/` 与公开文档分工
+- `docs/agents/plan-convention.md`：计划目录发现、初始化、`status.json`（open residual、可选 `tech_debt_summary`）、`archived/residuals/`、`reports/<plan-id>/`、`knowledge/` 与公开文档分工
 - `docs/agents/phase-gate-playbook.md`：Phase Gate 执行手册（Prepare/Execute 的最小动作与证据）
 - `docs/agents/superpowers-skills.md`：Superpowers 与角色映射、与 harness 的对齐说明；未装插件时的上游安装指引
 - `docs/agents/library-docs-and-hosts.md`：库文档检索单一协议（Context7 MCP / ctx7 CLI、禁止双跑）、OpenCode 与 Cursor 宿主差异、大型插件注入降噪

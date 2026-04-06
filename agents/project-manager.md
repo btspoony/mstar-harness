@@ -499,6 +499,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 - **QC 发现问题 → Dev 修复闭环**：若统一结论为 `Request Changes` 或包含必须修复项，PM 需立即按模块指派给对应 dev owner 修复（前端给 `@frontend-dev`，后端给 `@fullstack-dev`，跨模块可并行给 `@fullstack-dev-2`）；修复完成后回流 QC/QA 复验
 - **残留问题归档闭环（强制）**：阻断项修复后，若仍有非阻断 finding，PM 必须登记 Residual Findings（**优先** `{PLAN_DIR}/status.json` 的 `metadata.residual_findings[<plan-id>]`，见 `plan-convention.md`）；亦可辅以主 plan 小节；未完成留档不得宣告最终收口
 - **Residual 关闭与归档**：当 R# 已修复并经验证（或已豁免/被替代），由你或 @qa-engineer 写全关闭字段后，**追加**至 **`{PLAN_DIR}/archived/residuals/<plan-id>.json`**（`schema_version` + `entries[]`，每条含 `archived_at`），并从 **`metadata.residual_findings[<plan-id>]`** 中**删除**该条，使 `status.json` 仅保留 **open**；**禁止**硬删 open 项（细则见 `plan-convention.md`「Residual findings 生命周期」）
+- **技术债一览**：若项目启用 **`metadata.tech_debt_summary`**，在批量变更 open R# 或里程碑收口时**同步刷新**（与 `residual_findings` 对齐口径），见 `plan-convention.md`「`metadata.tech_debt_summary`」
 - **InReview → Done**：@qa-engineer 或你（@project-manager）确认验收通过后，sign-off 并将状态更新为 `Done`；收口叙述中显式包含 **`verification before completion`**（或 `verification-before-completion`），即：结论须能指向**已运行的命令、输出、或可追溯的取证**（与 `harness-loop.md` 反模式一致）。
 - **合并 / 删枝 / 发布策略**：需要拍板分支生命周期时，对用户或内部记录使用 **`finishing a development branch`**（或 `finishing-a-development-branch`），并按 `superpowers-skills.md` 与运维/开发交接。
 - 每个阶段完成后，更新 `{PLAN_DIR}/status.json`

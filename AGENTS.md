@@ -36,7 +36,7 @@ OpenCode 将会以本文件作为**全局规则**在每个会话加载。
 2. `docs/agents/evaluation-harness.md` — 如何评估和调优 agent 提示词与工作流。
 3. `docs/agents/review-harness.md` — QC 共享审查清单、报告模板与门禁规则。
 4. `docs/agents/routing-harness.md` — 如何验证 project-manager 的路由行为；配套场景集 `docs/agents/routing-evals.json`。
-5. `docs/agents/plan-convention.md` — 计划目录发现、初始化、`status.json`（**open** residual）、**`{PLAN_DIR}/archived/residuals/<plan-id>.json`**（已关闭 residual 归档）、`reports/<plan-id>/`、`knowledge/` 与 `docs/` 分工、Git/可到达性策略。
+5. `docs/agents/plan-convention.md` — 计划目录发现、初始化、`status.json`（**open** residual、可选 **`metadata.tech_debt_summary`** 技术债一览）、**`{PLAN_DIR}/archived/residuals/<plan-id>.json`**、`reports/<plan-id>/`、`knowledge/` 与 `docs/` 分工、Git/可到达性策略。
 6. `docs/agents/phase-gate-playbook.md` — Phase Gate 执行手册：各阶段角色动作与最小证据要求。
 7. `docs/agents/branch-collaboration.md` — 可写角色的分支协作契约与统一确认话术模板。
 8. `docs/agents/superpowers-skills.md` — Superpowers 与角色映射、与 harness 的对齐说明；未装插件时见文内「未安装插件时」。
