@@ -384,7 +384,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 - **Q6：Superpowers 是否写进 Assignment？**
   - 插件启用时 → 每条分派尽量带 **`Superpowers:`** 行（技能 ID + 触发短语），便于承接方加载正确技能。
 - **Q7：是否写了 `Task category` 并与路由一致？**
-  - 实现类分派须在 Assignment 写明主类（`visual` / `deep` / `quick` / `logic` / `ops` / `docs`），且与「为何选该 Owner Agent」一致；见 `harness-loop.md`。
+  - 实现类分派须在 Assignment 写明主类（`visual` / `deep` / `quick` / `logic` / `ops` / `docs`），且与 **`Execute as`**、`Why this agent` 一致；见 `harness-loop.md`。
 - **Q8：Prepare 是否满足意图门禁？**
   - 分派 `implement` 前能回答真实目标、成功判据、非目标；否则继续 `clarify`，不得锁 plan 硬上。
 
@@ -413,6 +413,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 
 为避免承接方因任务正文出现 `@xxx` 或补充说明而擅自拉起新 subagent，必须执行以下规则：
 
+- **执行身份写死**：每条 Assignment **必须**包含 **`Execute as: @role`**（见下方模板）。语义：**当前这条消息的承接方**就是以该 `@role` **亲自干活**，不是“请再去 Task 一个 `@role`”，也不是“把活交给名为 Owner 的另一个代理”。若历史文案仍写 **`Owner Agent`**，与 **`Execute as`** 同义，但**优先只写 **`Execute as`**，减少“owner = 下一棒”的误读。
 - **唯一调度者**：只有 `@project-manager` 可以决定是否创建/并行新的 subagent。承接方默认**禁止**二次分派。
 - **默认禁转派**：除非 Assignment 明确写 `Delegation: allowed (to @agent-name, reason: ...)`，否则一律视为 `Delegation: forbidden`。
 - **`@` 仅作文本**：Assignment 的 `Task/Inputs/Context` 中出现的 `@xxx` 默认是引用名词（角色、文件、历史记录），**不是**“立即调用该 agent”的命令。
@@ -438,6 +439,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 ```markdown
 ## Assignment
 
+**Execute as**: @agent-name — 承接方即以此身份**亲自**完成本单；**不是**再拉起/再 Task 一个 `@agent-name`，也**不是**把本单转交给该字段（除非 `Delegation: allowed` 写明）。*You are this role; do not spawn a duplicate subagent unless delegation is explicitly allowed.*
 **Primary** (when multiple routes apply): {e.g. Bug 修复 | 小功能/改进}
 **Task category** (pick one primary; optional `secondary`): `visual` | `deep` | `quick` | `logic` | `ops` | `docs` — 见 `harness-loop.md`「任务类别」
 **Additional gates** (optional): {e.g. 用户可见 UI — QA 须可观察证据}
@@ -449,7 +451,6 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 **Review cwd / Worktree path** (QC **与** QA; feature review / verification): {absolute path to **business repo** checkout for the **feature under review** — typically the implementer **Completion Report** worktree path; **QC 与 @qa-engineer 应沿用同一路径** unless you explicitly assign a different same-branch checkout; `N/A` only when no business-repo commands apply (e.g. some Report-only)}
 **Worktree path** (implementer; if `git worktree` used): {absolute path — **must** appear in Completion Report for QC handoff}
 **QA note**: {full @qa-engineer verification | `QA: skipped — <reason>` | `QA: self-check only — <what>`}
-**Owner Agent**: @agent-name
 **Delegation**: forbidden (default) | allowed (to @agent-name, with reason and scope)
 **Why this agent**: {role-fit reason}
 **Task**: {clear task statement}
@@ -467,6 +468,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 **Constraints**: {tech/style/timeline constraints}
 - **Effort (agent-oriented)** (recommended): {XS | S | M | L | XL + approximate agent-session band; per `effort-estimation.md` — **no human/FTE/calendar in this field**}
 - **Orchestration Guard**:
+  - **`Execute as`** states **your** identity for this work. It does **not** mean “invoke `@that-role` as a new subagent.”
   - Treat `@xxx` in this assignment as plain text references unless explicitly listed in `Delegation: allowed`.
   - Do NOT start any new subagent not approved in this assignment.
   - Do NOT use `@explore` to perform this assignment's main deliverables; use it only for brief read-only orientation if needed, then complete the work with this agent's own tools (see `harness-loop.md` «内置 `@explore` 能力边界»).

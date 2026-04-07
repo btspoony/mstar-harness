@@ -69,7 +69,7 @@
 - 生产/高危运维变更缺少回滚说明或高危清单
 - 声明 Report-only 的 QA 任务却改动业务逻辑，或无谓触发全量三审
 - Assignment 语言契约不一致（字段名漂移为中文、或要求英文报告却回报为中文且无用户豁免）
-- 实现类 Assignment **缺少 `Task category`** 或与 Owner Agent、`Why this agent` 明显矛盾
+- 实现类 Assignment **缺少 `Task category`** 或与 **`Execute as`**、`Why this agent` 明显矛盾（或缺少 **`Execute as`**）
 - **意图门禁**缺失：Prepare 未书面收敛真实目标/成功判据/非目标即进入开发分派
 
 ## 迭代规则

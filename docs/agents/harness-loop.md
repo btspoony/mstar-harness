@@ -248,6 +248,7 @@ OpenCode 的 **`@explore`** 是**只读**、偏快速的代码库导航 subagent
 ### 调度防串扰（强制）
 
 - 只有 `@project-manager` 可以决定增加/并行 subagent；承接方默认不得二次分派。
+- Assignment 中的 **`Execute as: @role`**（若旧文案写 **`Owner Agent`** 则与之同义）表示 **当前承接方应以该角色身份亲自完成本单**，**不是**“再 Task 起一个 `@role`”。需要额外代理时，仅以 PM 写明的 **`Delegation: allowed (...)`** 为准。
 - Assignment 未显式写 `Delegation: allowed (...)` 时，视为 `Delegation: forbidden`。
 - Assignment 正文中的 `@xxx` 默认按“文本引用”解释，不视为自动调用命令。
 - 承接方若判断必须增加 subagent 才能继续，应先回报 `Blocked` 并向 PM 申请重分派，禁止自行拉起。
