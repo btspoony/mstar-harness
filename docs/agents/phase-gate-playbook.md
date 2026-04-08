@@ -55,7 +55,7 @@
 
 ## Plan 目录与审查报告（启用 `{PLAN_DIR}` 时）
 
-- 进入 `InReview` 后，QC 书面产出按 `plan-convention.md` 落入 `{PLAN_DIR}/reports/<plan-id>/`（如 `*-qc1.md` … `*-qc-consolidated.md`）；勿与主 plan 文件混写为「唯一草稿」后又删，保留可追溯历史。
+- 进入 `InReview` 后，QC 书面产出按 `plan-convention.md` 落入 `{PLAN_DIR}/reports/<plan-id>/`（如 `*-qc1.md` … `*-qc-consolidated.md`）；勿与主 plan 文件混写为「唯一草稿」后又删，保留可追溯历史。**多 batch 的同一 plan**：完整 QC 三审**默认在整 plan dev 完成后一次**（非每 batch），见 `plan-convention.md`「QC 三审触发时机」。
 - 非阻断项与后续技术债：PM 汇总后写入 `status.json` 的 `metadata.residual_findings[<plan-id>]`（**open**）；关闭后迁入 **`{PLAN_DIR}/archived/residuals/<plan-id>.json`**，与 `review-harness.md` 一致。
 
 ## 快速判定（PM）

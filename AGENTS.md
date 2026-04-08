@@ -32,7 +32,7 @@ OpenCode 将会以本文件作为**全局规则**在每个会话加载。
 
 ### **按任务深入阅读（推荐顺序）**
 
-1. `docs/agents/harness-loop.md` — 端到端任务生命周期、门禁流转；含 RCA、**Spec-Driven 双阶段门禁**、**Git 功能分支门禁**、**开发并发须 `git worktree` 隔离**、**QC / QA：`Review cwd`、同一 `plan_id` 与 `Review range` / `Diff basis`（三审逐字相同）**、**内置 `@explore` 能力边界**（禁止承接方用 explore 代做交付）、可选前置门、与常见阶段化工作流的对照。
+1. `docs/agents/harness-loop.md` — 端到端任务生命周期、门禁流转；含 RCA、**Spec-Driven 双阶段门禁**、**Git 功能分支门禁**、**开发并发须 `git worktree` 隔离**、**QC / QA：`Review cwd`、同一 `plan_id` 与 `Review range` / `Diff basis`（三审逐字相同）**、**多 batch 计划下 QC 三审默认在整 plan 完成后一次**（细则见 `plan-convention.md`）、**内置 `@explore` 能力边界**（禁止承接方用 explore 代做交付）、可选前置门、与常见阶段化工作流的对照。
 2. `docs/agents/evaluation-harness.md` — 如何评估和调优 agent 提示词与工作流。
 3. `docs/agents/review-harness.md` — QC 共享审查清单、报告模板与门禁规则。
 4. `docs/agents/routing-harness.md` — 如何验证 project-manager 的路由行为；配套场景集 `docs/agents/routing-evals.json`。
@@ -69,7 +69,7 @@ OpenCode 将会以本文件作为**全局规则**在每个会话加载。
 - 拒绝未记录的破坏性变更。
 - 对业务 Git 仓库的可合并改动，默认在功能分支上完成；默认分支直改需在 Assignment 显式写 `Branch policy` 例外。新开分支的**祖先**由 Assignment 写明（可从 `main`、已有 `feature/*`、或 `current` 叠分支；细则见 `harness-loop.md`）。
 - **同仓并行写入**：当 **≥2 个可写 subagent** 可能 **并发** 修改 **同一 Git 仓库** 时，**必须** 使用 **`git worktree`**（或等价独立检出）隔离目录，禁止多代理共用同一工作区 cwd；PM 须在 Assignment 写明分支策略与各流检出约定。细则见 `harness-loop.md`「同仓并发写入与 Git worktree」与 `superpowers-skills.md` 中 **`using-git-worktrees`**。
-- **QC / QA 与 feature 检出**：QC 三审与 QA 验证针对 **已完成的 feature**；须在 PM 写明的 **`Review cwd / Worktree path`**、**`Working branch`**、**`plan_id`** 与 **`Review range` / `Diff basis`** 上对齐（**三份 QC 与 QA 的 `plan_id`、`Review range` 须逐字相同**）。见 `harness-loop.md`「QC 三审、QA 验证与 feature 检出上下文」。
+- **QC / QA 与 feature 检出**：QC 三审与 QA 验证针对 **已完成的 feature**；须在 PM 写明的 **`Review cwd / Worktree path`**、**`Working branch`**、**`plan_id`** 与 **`Review range` / `Diff basis`** 上对齐（**三份 QC 与 QA 的 `plan_id`、`Review range` 须逐字相同**）。**同一 plan 多 batch 时**，完整三审**默认在整 plan dev 完成后一次**（非每 batch），见 `plan-convention.md`。见 `harness-loop.md`「QC 三审、QA 验证与 feature 检出上下文」。
 - 语言约定（PM 编排场景）：Assignment 字段名保持既定英文键名；字段值中的任务描述正文默认可用中文。所有执行产出与报告默认英文，除非用户明确要求其他语言。
 - 执行 Superpowers `writing-plans` 时，计划文件路径必须遵循 `plan-convention.md` 的 `{PLAN_DIR}` 解析结果；不得默认写入 `docs/superpowers/plans/`。
 - **工作量与工期表述**：做计划、写 PRD/架构文档、Assignment 或 Status Update 时，遵循 `effort-estimation.md`：**只写 agent-oriented 预估**；**不得**在同一字段或同一段「预估」中纳入人类时间、人天、FTE 或日历等待（人类排期若有需要，须与 Effort 字段分离撰写）。

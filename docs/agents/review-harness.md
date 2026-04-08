@@ -2,6 +2,11 @@
 
 本文档定义了所有 QC 审查员的共享基线。三份 QC 角色提示词（`agents/qc-specialist.md`、`agents/qc-specialist-2.md`、`agents/qc-specialist-3.md`）在流程、门禁与要点上应与本文一致且彼此对齐：**共用正文以 `agents/qc-specialist.md` 为准**；`-2` / `-3` 仅保留 frontmatter、开场白中的 Reviewer 编号、`## 并行审查时本 reviewer 的侧重` 一节，以及 Completion Report 模板里的 **Agent** 名。
 
+## 分派时机（与 plan / batch 对齐）
+
+- **默认**：@project-manager 在 **该 plan 的实现范围已由 dev team 全部交付**、准备进入预合并门禁时，分派完整 QC 三审。**同一 `plan_id` 下多 batch 滚动实现时，不默认每 batch 跑一轮全套三审**（避免 `reports/<plan-id>/` 多套报告与范围串线）；中间阶段靠自检与 PM 协调，**显式增量三审**须在 Assignment 写明（见 `plan-convention.md`「QC 三审触发时机」）。
+- **Request Changes 后**：再审为**新波次**，落盘用新文件名（如 `-rev2` / `wave2-`），PM 汇总时标明有效波次。
+
 ## 共享基线（所有审查员）
 
 每位 QC 审查员必须检查：

@@ -111,7 +111,7 @@ Superpowers:
 - 当任务进入 **gate / sign-off / merge decision**，若未出现 `verification-before-completion` 或等价证据要求，视为门禁不完整。
 - 当任务声明 **并行分派**，`Superpowers` 中应显式包含 `dispatching-parallel-agents`（或同义触发短语），并为每个可写承接方写清 `Working branch`。
 - 当 **并行分派** 且 **≥2 个可写承接方** 针对 **同一 Git 仓库** 可能并发落盘时，`Superpowers` 中还 **必须** 显式包含 **`using-git-worktrees`**（或同义触发短语），并在 Assignment 中写清各流 **检出路径约定**（或要求 Completion Report 回报实际 worktree 路径）；**禁止**依赖「多 subagent 共享同一工作目录」完成并发写入。
-- **QC 三审**：三份 Assignment 除 `Review cwd`、`Working branch` 外，**必须**含 **相同**的 **`plan_id`** 与 **`Review range` / `Diff basis`**（可复制粘贴）；**@qa-engineer** 同 feature 验证时 **照抄**同一组字符串。缺任一项视为 PM 分派不完整（`harness-loop.md`）。
+- **QC 三审**：三份 Assignment 除 `Review cwd`、`Working branch` 外，**必须**含 **相同**的 **`plan_id`** 与 **`Review range` / `Diff basis`**（可复制粘贴）；**@qa-engineer** 同 feature 验证时 **照抄**同一组字符串。缺任一项视为 PM 分派不完整（`harness-loop.md`）。**同一 plan 多 batch**：**默认仅在整 plan dev 完成后**派一轮完整三审；复验波次用新文件名；增量例外须 Assignment 写明（`plan-convention.md`）。
 
 ### @product-manager
 

@@ -306,7 +306,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 - @product-manager + @market-expert（需求分析与市场调研同步）
 - @frontend-dev + @fullstack-dev（前后端同步开发，需先由 @architect 定义接口契约）
 - @fullstack-dev + @fullstack-dev-2（按模块拆分后并行）
-- QC 三审组可在开发进行中做增量审查（不必等全部开发完成），最终仍需汇总为统一审查结论
+- **QC 三审**：同一 `plan_id` **默认仅在 dev team 完成该 plan 全部约定交付后**派**一轮**完整三审（见 `plan-convention.md`「QC 三审触发时机」）；**不在**各 batch 重复全套三审以免报告混乱。**Request Changes** 后复验可再派一轮（新文件名波次）。**显式增量三审**仅在 Assignment 写明 `QC gate: incremental — …` 时启用
 - 多个 @general 实例可以并行执行独立的小任务
 
 **同仓多可写并发（强制）**：凡 **≥2 个可写 subagent** 将 **同时** 对 **同一业务 Git 仓库** 落盘（代码、测试、配置、项目内文档等），**必须** 按 **`using-git-worktrees`** 为每条写流准备 **独立 `git worktree`（或等价独立检出）**，并在分派文案与各 Assignment 中写明 **`Working branch`** + **检出路径约定**。**禁止** 多个并行 subagent 默认共享 **同一工作目录** 作为写入 cwd（易导致互相覆盖、冲突或半写入）。只读并行（如多个 @market-expert）、或各写入者针对不同仓库根、或 **串行** 写入，不适用本条的 worktree 强制。
@@ -512,8 +512,8 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
   - 非 hotfix 任务必须先完成 `specify -> clarify -> plan`，才能分派实现类任务。
   - 进入实现前必须完成 `tasks` 拆解并在 Assignment 的 `Phase Gate Checklist` 标记为 done。
   - 若实现中发现新约束，先回写 plan（并必要时补 clarify）再继续 implement。
-- **开发完成 → InReview**：开发阶段产出确认后，将 plan 状态更新为 `InReview`，默认进入 `QC三审并行（@qc-specialist/@qc-specialist-2/@qc-specialist-3）`；Hotfix 可走 `QC单审快速通道（@qc-specialist）`。分派 QC 时须在 Assignment 写明 **`Review cwd / Worktree path`**、**`Working branch`**、**`plan_id`**、**`Review range` / `Diff basis`**，且 **三份 QC Assignment 中后两项须逐字相同**，使三审 **针对同一 plan/feature 与同一 diff 范围**、并在 **该 feature 的实现检出目录** 上审查。**随后**由 @project-manager 按“QC 三审轻量汇总”输出统一 `QC Consolidated Decision`，再交 @qa-engineer 验证；**分派 @qa-engineer 时须照抄（或仅在有理由时显式改写并说明）与 QC **完全相同**的 **`plan_id` + `Review range` / `Diff basis` + `Review cwd` + `Working branch`**，不得留空导致 QA 在错误 cwd 或错误变更范围上取证
-- **QC 发现问题 → Dev 修复闭环**：若统一结论为 `Request Changes` 或包含必须修复项，PM 需立即按模块指派给对应 dev owner 修复（前端给 `@frontend-dev`，后端给 `@fullstack-dev`，跨模块可并行给 `@fullstack-dev-2`）；修复完成后回流 QC/QA 复验
+- **开发完成 → InReview**：**该 plan 约定范围内的实现已全部交付**、且你确认可进入审查后，将 plan 状态更新为 `InReview`，默认进入 `QC三审并行（@qc-specialist/@qc-specialist-2/@qc-specialist-3）`；Hotfix 可走 `QC单审快速通道（@qc-specialist）`。**多 batch 滚动实现时**：在此之前**不**派完整 QC 三审（避免 `reports/<plan-id>/` 多套报告混乱；见 `plan-convention.md`「QC 三审触发时机」）。分派 QC 时须在 Assignment 写明 **`Review cwd / Worktree path`**、**`Working branch`**、**`plan_id`**、**`Review range` / `Diff basis`**，且 **三份 QC Assignment 中后两项须逐字相同**，使三审 **针对同一 plan/feature 与同一 diff 范围**、并在 **该 feature 的实现检出目录** 上审查。**随后**由 @project-manager 按“QC 三审轻量汇总”输出统一 `QC Consolidated Decision`，再交 @qa-engineer 验证；**分派 @qa-engineer 时须照抄（或仅在有理由时显式改写并说明）与 QC **完全相同**的 **`plan_id` + `Review range` / `Diff basis` + `Review cwd` + `Working branch`**，不得留空导致 QA 在错误 cwd 或错误变更范围上取证
+- **QC 发现问题 → Dev 修复闭环**：若统一结论为 `Request Changes` 或包含必须修复项，PM 需立即按模块指派给对应 dev owner 修复（前端给 `@frontend-dev`，后端给 `@fullstack-dev`，跨模块可并行给 `@fullstack-dev-2`）；修复完成后回流 QC/QA 复验；**再派三审**时用 **新波次文件名**（如 `-rev2`）并在汇总中标明有效波次（`plan-convention.md`）
 - **残留问题归档闭环（强制）**：阻断项修复后，若仍有非阻断 finding，PM 必须登记 Residual Findings（**优先** `{PLAN_DIR}/status.json` 的 `metadata.residual_findings[<plan-id>]`，见 `plan-convention.md`）；亦可辅以主 plan 小节；未完成留档不得宣告最终收口。**语义**：未登记等于**未向仓库声明**已知债与跟踪约定；下一会话无法把 QC 聊天当权威来源。
 - **Residual 关闭与归档**：当 R# 已修复并经验证（或已豁免/被替代），由你或 @qa-engineer 写全关闭字段后，**追加**至 **`{PLAN_DIR}/archived/residuals/<plan-id>.json`**（`schema_version` + `entries[]`，每条含 `archived_at`），并从 **`metadata.residual_findings[<plan-id>]`** 中**删除**该条，使 `status.json` 仅保留 **open**；**禁止**硬删 open 项（细则见 `plan-convention.md`「Residual findings 生命周期」）。**语义**：拖延归档会让 SSOT 与真实关闭状态长期错位，损害跨 agent handoff 与复盘时的**可引用性**。
 - **技术债一览**：若项目启用 **`metadata.tech_debt_summary`**，在批量变更 open R# 或里程碑收口时**同步刷新**（与 `residual_findings` 对齐口径），见 `plan-convention.md`「`metadata.tech_debt_summary`」

@@ -123,6 +123,7 @@ description: 质量控制专家（Reviewer #1）- 代码审查和质量保证。
 
 - 优先接收：代码审查、规范与安全/性能风险识别、审查结论产出；**将 QC 报告直接写入** `{PLAN_DIR}/reports/<plan-id>/` 下对应 **`.md`**（见「权限与回报规则」）。
 - 不应接收：直接改**业务**代码或测试、直接部署（只给出审查意见与修复建议）；不得改 `status.json` / `archived/` / 非 `reports/` 路径。
+- **Plan / batch 节奏**（`plan-convention.md`）：除非 Assignment 写明 **`QC gate: incremental`**，默认你是 **该 plan 全部 dev 交付完成后**那一轮 QC 三审的一员；**不要**假设每个中间 batch 都要各写一套 `-qc*.md`。复验波次的文件名以 Assignment 为准（如 `<plan-id>-qc1-rev2.md`）。
 
 ### OpenViking 记忆工具（插件启用时可用）
 
@@ -155,7 +156,7 @@ description: 质量控制专家（Reviewer #1）- 代码审查和质量保证。
 ## 权限与回报规则
 
 - **Write/Edit 白名单（宿主强制）**：仅允许 **`{PLAN_DIR}/reports/`** 树内的 **`.md`**（`permission.edit` 匹配仓库相对路径：`.agents/plans/reports/`、`.plans/reports/`、`plans/reports/`）。**禁止** `reports/` 外落盘、非 `.md`、`status.json`、`archived/`、业务源码；**禁止**用 bash 重定向绕行。
-- **QC 报告**：写入 **`{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc1.md`**（本 reviewer 为 #1）。文件**必须以 YAML frontmatter 开头**（必填键如下），随后接 `review-harness.md` 报告正文结构。
+- **QC 报告**：首轮默认 **`{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc1.md`**（本 reviewer 为 #1）；**Request Changes 后复验**等波次用 PM 在 Assignment 指定的文件名（如 `<plan-id>-qc1-rev2.md`）。文件**必须以 YAML frontmatter 开头**（必填键如下），随后接 `review-harness.md` 报告正文结构。
 
 ```yaml
 ---

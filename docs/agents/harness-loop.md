@@ -222,6 +222,7 @@ OpenCode 的 **`@explore`** 是**只读**、偏快速的代码库导航 subagent
 - 跨领域变更时，先锁定接口契约再并行编码。
 - QC 审查员并行运行，完成后统一汇总。
 - **QC 三审**在 **feature 开发完成之后**执行，审查对象仍是 **该 feature 在 `Working branch` 上的状态**；三名 reviewer 须在 **PM 指定的同一「待审检出」上下文**（通常为 **开发回报的实现用 worktree 路径**）上读 diff、跑检查，且 **三份 Assignment 的 `plan_id` 与 `Review range` / `Diff basis` 须逐字相同**（见下文「QC 三审、QA 验证与 feature 检出上下文」），**禁止**默认用错分支、未对齐 cwd 或不同 diff 范围代审。
+- **启用 `{PLAN_DIR}` 且同一 plan 分多 batch 实现时**：**默认只对「整 plan 交付完成」跑一轮完整 QC 三审**，**不在**每个 batch 重复全套三审（避免 `reports/<plan-id>/` 混乱）；中间阶段用自检与 PM 协调替代。**Request Changes** 后的再审视为**新波次**，落盘文件名与汇总口径见 `plan-convention.md`「QC 三审触发时机」。**显式增量三审**须 PM 在 Assignment 写明例外与范围。
 - **@qa-engineer** 做 **验证、跑测试、取证或向业务仓提交测试工件**时，须在 **与待验 feature 一致的检出与范围**进行：使用 Assignment 中的 **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`**、**`Review range` / `Diff basis`**（与 QC **照抄一致**），**禁止**在未核对路径、分支与审查范围时在错误目录上宣称通过或产出证据。细则见同下节。
 
 ### 同仓并发写入与 Git worktree（强制）
