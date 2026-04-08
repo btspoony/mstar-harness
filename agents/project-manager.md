@@ -597,7 +597,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 按优先级查找：`.agents/plans/` > `.plans/` > `plans/`。
 若均不存在且任务需要 plan 管理，按以下步骤初始化：
 
-1. 创建 `.agents/plans/`、`status.json`（含 `metadata.residual_findings`）、`reports/README.md`、`archived/residuals/`（及可选 `archived/residuals/README.md`）；若启用知识库则加 `knowledge/README.md`（见 `plan-convention.md`）。
+1. 创建 `.agents/plans/`、`status.json`（含 `metadata.residual_findings`）、`reports/README.md`、`archived/residuals/`（及可选 `archived/residuals/README.md`）；可选 `notes.json`；若启用知识库则加 `knowledge/README.md`（见 `plan-convention.md`）。
 2. **Git**：默认**跟踪** `{PLAN_DIR}` 以利 clone 后 handoff；仅当项目要求本地私密时再整体 ignore，且已提交文档不得依赖被 ignore 的路径（同 `plan-convention.md`「可到达性」）。
 3. 若项目已有 `plans/` 或 `.plans/`，直接使用，不再创建 `.agents/plans/`。
 
@@ -606,7 +606,7 @@ description: 项目经理 - 协调开发团队，管理项目进度。Use proact
 ### PM 的 Plan 职责
 
 - **创建/登记**：新建 plan 文件时，同步在 `{PLAN_DIR}/status.json` 写入条目；进入 `InReview` 时为该 `plan-id` 准备 `reports/<plan-id>/` 下的报告落盘路径并在 Assignment 中告知 QC。
-- **可选元数据**：在 `plans[].metadata` 中同步 **`working_branch` / `branch_policy` / `gates` / `phase` / `priority`** 等与 Assignment、程序路线图一致的字段，便于 `jq` 过滤与跨会话 handoff（键名与语义见 `plan-convention.md`「plans[].metadata 标准可选字段」）；根级 `metadata.notes` 数组可作程序里程碑日志。
+- **可选元数据**：在 `plans[].metadata` 中同步 **`working_branch` / `branch_policy` / `gates` / `phase` / `priority`** 等与 Assignment、程序路线图一致的字段，便于 `jq` 过滤与跨会话 handoff（键名与语义见 `plan-convention.md`「plans[].metadata 标准可选字段」）；程序里程碑日志**优先**写入 **`{PLAN_DIR}/notes.json`**（见 `plan-convention.md`），避免根级 `metadata.notes` 撑大 `status.json`。
 - **分配**：按任务路由表 + 开发分配规则分配给合适的 subagent。
 - **推进**：每阶段完成后更新 progress/status。
 - **Done 收口**：确保 Done 标记与 `status.json` 同步；若 Done 的前置条件包含「关闭某批 R#」，核对对应条目已**归档**至 **`archived/residuals/<plan-id>.json`** 且主列表中已无该项（或仍为 open 的已明确豁免并留档）。在关键节点（如进入 `Done`、重大 Status Update）若存在 open R#，应用一两句话点明**仍跟踪项与存放位置**（或 `metadata.residual_findings` 指针），避免「状态 Done 但债不可见」。
