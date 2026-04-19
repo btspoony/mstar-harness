@@ -47,20 +47,19 @@
 │   │   └── <plan-id>.json
 │   ├── plans-done.json           # 可选（Profile B）
 │   └── plans/_index.json         # 可选索引
-└── plans/                        # {PLAN_DIR} — 仅计划文件与审查报告
+└── plans/                        # {PLAN_DIR} — 主 plan、reports/，及可选 residuals/
     ├── <plan-id>-<plan-name>.md  # 主计划文件
-    └── reports/                  # 审查类补充报告（只读历史留档）
-        ├── README.md
+    ├── reports/                  # 审查类补充报告（只读历史留档）
+    │   ├── README.md
+    │   └── <plan-id>/ …
+    └── residuals/                # 可选：open residual 散文详情（与 SSOT 配套，见专节）
         └── <plan-id>/
-            ├── <plan-id>-review.md
-            ├── <plan-id>-qc1.md
-            ├── <plan-id>-qc2.md
-            ├── <plan-id>-qc3.md
-            └── <plan-id>-qc-consolidated.md
+            └── <finding-id>-<short-label>.md
 ```
 
 - **主计划**：技术方案、任务清单、Sign-off 仍以 **`{PLAN_DIR}/<plan-id>-<plan-name>.md`** 与 **`{HARNESS_DIR}/status.json`** 为权威。
 - **`{PLAN_DIR}/reports/`**：架构评审、QC 分报告、QC 汇总结论；**视为只读历史**，不在此反复改写同一结论（修正走新报告或回写主计划 / `status.json`）。
+- **`{PLAN_DIR}/residuals/<plan-id>/`**（可选）：对仍 **open** 的 residual 提供**长于 JSON 字段**的散文说明（defer 背景、代码锚点、后续接手提示）；**不替代** **`metadata.residual_findings`** 的 SSOT，见下文「open residual 散文详情」。
 - **`{HARNESS_DIR}/knowledge/`**：规格修订、架构评审产出、设计决策与 gap 分析等**实施上下文**；与面向用户的 `docs/` 分工见下节。
 - **`{HARNESS_DIR}/designs/`**（可选）：**冻结**、少变、可对外的规格或基线文档；与迭代中的 `knowledge/` 区分（团队自定是否启用）。
 - **residual findings（未关闭）**：**当前仍待跟踪**的条目写在 **`{HARNESS_DIR}/status.json`** 的 `metadata.residual_findings[<plan-id>]`（**仅 `open`**，见下文）；**已验证关闭**的条目应迁出至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**，避免 `status.json` 无限膨胀。
@@ -111,10 +110,11 @@
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新 README 中 **Status** 或 Description；版本迭代优先新文件名 `v<N+1>` 或保留旧版并标明 Superseded。
 4. **归档**：当文档内容已完全反映到已合并代码中时：**保留文件不删除**（保留设计考据）；将索引 **Status** 标为 `Superseded by implementation (...)` 或 `Archived`。**不要**把知识库产物搬进 **`{HARNESS_DIR}/archived/plans/`**（该处用于**计划行**冷快照）；知识库用索引状态表达生命周期即可。
 
-### 与 `reports/` 的区分
+### 与 `reports/`、`{PLAN_DIR}/residuals/` 的区分
 
 - **`reports/<plan-id>/`**：偏 **审查流程留档**（review、QC1/2/3、consolidated），只读历史。
-- **`knowledge/`**：偏 **可复用的设计上下文**（规格、决策、分析），可被后续 plan 或多会话反复引用；二者可互链，但职责不混写。
+- **`{PLAN_DIR}/residuals/<plan-id>/`**：偏 **仍 open 的 R# 长文补充**（与 **`metadata.residual_findings`** 配套）；见上文「open residual 散文详情」。
+- **`knowledge/`**：偏 **可复用的设计上下文**（规格、决策、分析），可被后续 plan 或多会话反复引用；三者可互链，但职责不混写。
 
 ## 初始化 Plan 目录
 
@@ -125,12 +125,13 @@
 3. 在 **`{HARNESS_DIR}/`** 下创建 **`status.json`**（见下文完整结构：含 `metadata.residual_findings`）。
 4. 可选：创建 **`{HARNESS_DIR}/notes.json`**（空 `entries: []` 或按专节模板），用于程序里程碑，避免日后向 `status.json` 堆日志。
 5. 创建 **`{PLAN_DIR}/reports/README.md`**，用途与命名约定与仓库内其它说明一致即可（可参考各业务仓库 `reports/README.md` 模板）。
-6. 若启用 **`{HARNESS_DIR}/knowledge/`**：创建目录及 **`knowledge/README.md`** 空索引表（见上文「knowledge 专节」）。
-7. 可选：创建 **`{HARNESS_DIR}/designs/`** 及简短 **`README.md`**，说明冻结规格与 `knowledge/` 的分工。
-8. **Git 策略（与项目 `AGENTS.md` 一致）**
+6. 可选：若采用 **`{PLAN_DIR}/residuals/<plan-id>/`** 散文详情（见下文专节），在**首次**需要长文补充某 open R# 时再创建对应 **`residuals/<plan-id>/`** 子目录；无需为空 plan 预建占位目录。
+7. 若启用 **`{HARNESS_DIR}/knowledge/`**：创建目录及 **`knowledge/README.md`** 空索引表（见上文「knowledge 专节」）。
+8. 可选：创建 **`{HARNESS_DIR}/designs/`** 及简短 **`README.md`**，说明冻结规格与 `knowledge/` 的分工。
+9. **Git 策略（与项目 `AGENTS.md` 一致）**
    - **推荐（团队交付 / agent handoff）**：**不要**将 **`{HARNESS_DIR}`** 整体加入 `.gitignore`，以便 clone 后计划与报告路径可达。
    - **仅本机私密**：若必须 ignore 整个 **`{HARNESS_DIR}`**，则按上文「可到达性」约束已提交文档；敏感片段另用密钥或私密渠道管理。
-9. 如果项目已有 **`.plans/`** 或 **`plans/`** 目录（遗留同目录布局），**不要再创建** **`.agents/`**，直接使用已有目录作为 **`{HARNESS_DIR} = {PLAN_DIR}`**，并视需要补建 **`reports/`**、**`knowledge/`**、**`archived/residuals/`**（可附 **`archived/residuals/README.md`** 一句说明）、可选 **`notes.json`** 与 `metadata` 结构。
+10. 如果项目已有 **`.plans/`** 或 **`plans/`** 目录（遗留同目录布局），**不要再创建** **`.agents/`**，直接使用已有目录作为 **`{HARNESS_DIR} = {PLAN_DIR}`**，并视需要补建 **`reports/`**、**`residuals/`**、**`knowledge/`**、**`archived/residuals/`**（可附 **`archived/residuals/README.md`** 一句说明）、可选 **`notes.json`** 与 `metadata` 结构。
 
 ## 与 Superpowers `writing-plans`（提示词门限）
 
@@ -206,7 +207,8 @@ Assignment 模板中的 **`Parallelism`** 行应与上表 **`Parallelism`** / **
           "decision": "defer | accept | risk-accepted",
           "owner": "@fullstack-dev",
           "target": "Before plan 02 / YYYY-MM-DD / milestone",
-          "tracking": "Issue URL or null"
+          "tracking": "Issue URL or null",
+          "detail_doc": "{PLAN_DIR}/residuals/plan-id/R1-short-label.md"
         }
       ]
     }
@@ -215,6 +217,8 @@ Assignment 模板中的 **`Parallelism`** 行应与上表 **`Parallelism`** / **
 ```
 
 **已关闭条目**在以上字段之外补充：`lifecycle`、`closed_at`、`closure_note`；可选 `closure_evidence`、`superseded_by`。语义见本节下「Residual findings 生命周期」。
+
+**Open 条目可选 `detail_doc`**：仓库内相对路径，指向 **`{PLAN_DIR}/residuals/<plan-id>/`** 下与该条 **`id`**（如 `R1`）配套的散文 `.md`（若启用下文「open residual 散文详情」）；未使用散文层则**省略**该键。
 
 ### Residual findings：severity（SSOT，机器字段）
 
@@ -268,6 +272,24 @@ QC 报告模板见 `review-harness.md`。把 finding 登记进 **`metadata.resid
 - **`plans[].id`** 与 **`metadata.residual_findings`** 的键应对齐（同一 `plan-id`），便于 `jq` 与报告目录 `reports/<plan-id>/` 一致。**不要**再存 `residual_findings_plan_id`（与 `id` 重复）。
 - **`metadata.residual_findings` 空键**：某 `plan-id` 下**已无 open 条目**时，应从 **`metadata.residual_findings`** 中 **删除该键**（勿保留 `"plan-id": []` 空数组），减少噪声与误读。**注意**：这仅指 residual 映射对象上的键；**`plans[]` 是否仍保留该 plan 行**由团队决定（Done 瘦行、冷快照与「滚动保留」见下文），二者独立。
 - **`residual_summary`（可选）**：单行人类可读摘要；**仅描述仍留在** `metadata.residual_findings[<plan-id>]` **中的 open 项**（已关闭项应在 **`{HARNESS_DIR}/archived/residuals/`** 与可选 **`{HARNESS_DIR}/notes.json`** 中体现）。
+
+### `{PLAN_DIR}/residuals/<plan-id>/`（可选·open residual 散文详情）
+
+当某条 open residual 需要**多于** `metadata.residual_findings[<plan-id>][]` 里结构化字段所能承载的叙述时，可在本目录增加 **Markdown 散文**，作为 **SSOT 的补充**（**不替代** JSON；**权威仍以** **`{HARNESS_DIR}/status.json`** 中的 open 条目为准）。
+
+| 与相邻目录的分工 | 典型内容 |
+|------------------|----------|
+| **`{PLAN_DIR}/reports/<plan-id>/`** | QC / review **流程留档**（`-qc*.md`、consolidated 等），只读历史链 |
+| **本目录 `{PLAN_DIR}/residuals/<plan-id>/`** | 针对**仍 open** 的某一 R#：defer 背景、遗留原因、代码锚点、后续接手提示等**长文** |
+| **`{HARNESS_DIR}/knowledge/`** | 可跨 plan 复用的**设计**上下文、规格修订、gap 分析（若文中顺带提到 residual，仍以 JSON + 本目录为跟踪权威） |
+
+**文件命名（推荐）**：`<finding-id>-<short-label>.md`，其中 **`finding-id`** 与该条在 **`metadata.residual_findings`** 中的 **`id`**（如 `R1`）或团队约定的 **`td-*` 等技术债编号**一致，便于 `detail_doc` 与目录互查。
+
+**登记**：在对应 open 条目中填写可选 **`detail_doc`**（仓库内相对路径，常形如 **`{PLAN_DIR}/residuals/<plan-id>/R1-….md`**）。**禁止**只写散文、不在 SSOT 中登记 open 行。
+
+**维护**：**@project-manager**（或与 Assignment 一致的可写角色）；**`@qc-specialist*`** 宿主白名单通常**不含**本目录——审查结论仍以 **`reports/`** 为准，散文由 PM/实现方据结论整理。
+
+**关闭与归档**：当该条从 **`metadata.residual_findings[<plan-id>]`** 移除并**追加**至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** 时，应将对应 **`.md`** 一并收口：可迁入 **`{HARNESS_DIR}/archived/knowledge/`**（若视为历史考据）、或团队约定的 **`{HARNESS_DIR}/archived/residuals/`** 子路径（与 **`.json`** 同批变更可追溯）；并在归档条目的 **`closure_evidence` / `closure_note`**（或团队约定字段）中**写明散文最终路径**。勿长期保留「JSON 已关闭而散文仍留在 `residuals/` 且声称仍 open」的状态。
 
 ### Residual findings 生命周期（关闭、归档、移除）
 
