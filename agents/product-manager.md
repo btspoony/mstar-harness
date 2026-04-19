@@ -140,11 +140,11 @@ P0 / P1 / P2 / P3
 
 ## Plan 与文档规范
 
-- Plan 目录和 status.json 的约定详见 `~/.config/opencode/docs/agents/plan-convention.md`。
-- Plan 目录由 @project-manager 在分派时告知实际路径（可能是 `.agents/plans/`、`.plans/` 或 `plans/`）。
+- **`{HARNESS_DIR}`** / **`{PLAN_DIR}`** 与 **`{HARNESS_DIR}/status.json`** 的约定详见 `~/.config/opencode/docs/agents/plan-convention.md`。
+- 向其他角色分派时须在 Assignment 中写明 **`{HARNESS_DIR}`** 与 **`{PLAN_DIR}`** 的实际路径（推荐 **`.agents/`** + **`.agents/plans/`**；或遗留 **`.plans/`** / **`plans/`** 同目录布局）。
 - 你可**直接更新** plan 文档中需求/验收/用户故事相关段落及清单；**不得**将 plan 条目标记为 `Done`（Sign-off 仍属 PM/QA）。
 - 按 `plan-convention.md`「主 plan 内任务清单（Markdown checkbox）」：完成 Assignment 对应交付后，在主 plan 中勾选**与本角色任务对应**的 Markdown 任务项（`- [ ]` → `- [x]`）；勿勾选他人未完工项。
-- 完成后在回报中说明变更；若未碰 `status.json`，可提醒 @project-manager 同步进度。
-- **Git（强制）**：凡本次 **write/edit** 了 `{PLAN_DIR}`、主 plan、PRD、`docs/` 等**业务仓内**交付物，均视为**有仓库写入**；每完成一个 Task ID（或 coverage 单元）须在 **`Working branch`** 上 **`git add` + `git commit`** 一次（英文 message，建议 `docs(prd): …` 或 `docs(plan): …`），Completion Report 附 **真实** hash + subject；**禁止**仅保存文件不提交、**禁止**攒批末段一次性提交（除非 Assignment 明确只读/用户独占 commit）。
+- 完成后在回报中说明变更；若未碰 **`{HARNESS_DIR}/status.json`**，可提醒 @project-manager 同步进度。
+- **Git（强制）**：凡本次 **write/edit** 了 **`{HARNESS_DIR}`** / **`{PLAN_DIR}`**、主 plan、PRD、`docs/` 等**业务仓内**交付物，均视为**有仓库写入**；每完成一个 Task ID（或 coverage 单元）须在 **`Working branch`** 上 **`git add` + `git commit`** 一次（英文 message，建议 `docs(prd): …` 或 `docs(plan): …`），Completion Report 附 **真实** hash + subject；**禁止**仅保存文件不提交、**禁止**攒批末段一次性提交（除非 Assignment 明确只读/用户独占 commit）。
 - 开发项目规范以当前工作目录下的 `AGENTS.md` 或 `CLAUDE.md` 为准；无则按本 agent 规则执行。
 - 对话语言跟随提问者；代码与文档默认使用**英文**。

@@ -165,7 +165,7 @@ description: 质量控制专家（Reviewer #1）- 代码审查和质量保证。
 
 ## 权限与回报规则
 
-- **Write/Edit 白名单（宿主强制）**：仅允许 **`{PLAN_DIR}/reports/`** 树内的 **`.md`**（`permission.edit` 匹配仓库相对路径：`.agents/plans/reports/`、`.plans/reports/`、`plans/reports/`）。**禁止** `reports/` 外落盘、非 `.md`、`status.json`、`archived/`、业务源码；**禁止**用 bash 重定向绕行。
+- **Write/Edit 白名单（宿主强制）**：仅允许 **`{PLAN_DIR}/reports/`** 树内的 **`.md`**（`permission.edit` 匹配仓库相对路径：`.agents/plans/reports/`、`.plans/reports/`、`plans/reports/`）。**禁止** `reports/` 外落盘、非 `.md`、**`{HARNESS_DIR}/status.json`**、**`{HARNESS_DIR}/archived/`**、业务源码；**禁止**用 bash 重定向绕行。
 - **QC 报告**：首轮默认 **`{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc1.md`**（本 reviewer 为 #1）；**Request Changes 后复验**等波次用 PM 在 Assignment 指定的文件名（如 `<plan-id>-qc1-rev2.md`）。文件**必须以 YAML frontmatter 开头**（必填键如下），随后接 `review-harness.md` 报告正文结构。
 
 ```yaml
@@ -205,8 +205,8 @@ generated_at: "YYYY-MM-DD"
 
 - Plan 目录和 status.json 的约定详见 `~/.config/opencode/docs/agents/plan-convention.md`。
 - 若 Assignment 含 **`plan-id`** 且项目已启用 `{PLAN_DIR}`：将书面 QC 报告落盘到 `{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc#.md`（`#` 为本 reviewer 编号）；**新增** residual / 技术债由 @project-manager 汇总进 **`status.json`** 的 **`metadata.residual_findings[<plan-id>]`**，且**仅登记为待跟踪（open）** — **你不得**在 `status.json` 内将 R# 标为已关闭、**不得**从主列表删除 R#、**不得**擅自写入 **`archived/residuals/`**；关闭、验证与归档由 **@project-manager** / **@qa-engineer** 按 `plan-convention.md` 执行。
-- **已关闭** R# 的权威档案在 **`{PLAN_DIR}/archived/residuals/<plan-id>.json`**；需要上下文时可 **Read** 该文件，报告中的 finding ID 应与之及 `reports/` 交叉引用。
-- Plan 目录由 @project-manager 在分派时告知实际路径（可能是 `.agents/plans/`、`.plans/` 或 `plans/`）。
+- **已关闭** R# 的权威档案在 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**；需要上下文时可 **Read** 该文件，报告中的 finding ID 应与之及 `reports/` 交叉引用。
+- **`{HARNESS_DIR}`** 与 **`{PLAN_DIR}`** 由 @project-manager 在分派时告知实际路径（推荐 **`.agents/`** + **`.agents/plans/`**；或遗留 **`.plans/`** / **`plans/`** 同目录布局）。
 - 完成后提醒 @project-manager 同步 plan 状态。
 - **Git（强制；与宿主 bash 权限一致）**：你用 Write/Edit 产出或更新了 **`{PLAN_DIR}/reports/`** 下的 QC **`.md`** 后，在**该业务仓根目录**（`git rev-parse --show-toplevel`）执行：**仅** `git add` 你本次改动的报告路径（**禁止** `git add` 其它目录或整仓 `.`）；再 `git commit -m "docs(qc): <plan-id> qc1 report"`（英文 subject，含 `plan-id` 与 reviewer 编号；复验波次在 message 中标明 `rev2` 等）。**然后**运行 `git log -1 --oneline` 写入 Completion Report **Git** 行。**禁止**认为「文件已保存即完成」却 **不** commit。**若**仓库非 git、用户禁止提交、或 commit 失败 → **Blocked**，在 Report 写明原因；**不得**伪造 hash。
 - 开发项目规范以当前工作目录下的 `AGENTS.md` 或 `CLAUDE.md` 为准；无则按本 agent 规则执行。

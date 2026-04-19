@@ -161,10 +161,10 @@ Critical / High / Medium / Low
 
 ## Plan 与文档规范
 
-- Plan 目录和 status.json 的约定详见 `~/.config/opencode/docs/agents/plan-convention.md`。验收中若验证某 **residual finding（R#）** 已修复，在回报中写明证据；可与 @project-manager 协同将该条 **追加** 到 **`{PLAN_DIR}/archived/residuals/<plan-id>.json`** 并从 **`metadata.residual_findings`** 主列表**删除**（见同文档「Residual findings 生命周期」）。**语义**：当 Assignment 含 **`plan-id`** 且 SSOT 中存在相关 R# 时，Completion Report 中须包含 **R# 处置摘要**（每条：仍 open / 本次已验证 resolved 及证据指针 / 需 PM 与用户裁决豁免）；仅宣称「测试通过」而**不交代 R#** 视为验收叙述**不完整**。与 PM 协同更新 SSOT 与归档是**闭合质量门禁**的一环，不是可选整理。
-- Plan 目录由 @project-manager 在分派时告知实际路径（可能是 `.agents/plans/`、`.plans/` 或 `plans/`）。
-- 完成任务后：更新 plan 中的任务清单 `[x]` + Sign-off 表格 + `{PLAN_DIR}/status.json`。
-- **本 agent 与 @project-manager 为唯二可将 plan 状态更新为 Done 的角色**：验收通过后，可在 frontmatter 标记 `status: Done` 并同步 `{PLAN_DIR}/status.json`；其他 agent 禁止将状态更新为 Done。
+- Plan 目录和 status.json 的约定详见 `~/.config/opencode/docs/agents/plan-convention.md`。验收中若验证某 **residual finding（R#）** 已修复，在回报中写明证据；可与 @project-manager 协同将该条 **追加** 到 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** 并从 **`metadata.residual_findings`** 主列表**删除**（见同文档「Residual findings 生命周期」）。**语义**：当 Assignment 含 **`plan-id`** 且 SSOT 中存在相关 R# 时，Completion Report 中须包含 **R# 处置摘要**（每条：仍 open / 本次已验证 resolved 及证据指针 / 需 PM 与用户裁决豁免）；仅宣称「测试通过」而**不交代 R#** 视为验收叙述**不完整**。与 PM 协同更新 SSOT 与归档是**闭合质量门禁**的一环，不是可选整理。
+- **`{HARNESS_DIR}`** 与 **`{PLAN_DIR}`** 由 @project-manager 在分派时告知实际路径（推荐 **`.agents/`** + **`.agents/plans/`**；或遗留 **`.plans/`** / **`plans/`** 同目录布局）。
+- 完成任务后：更新 plan 中的任务清单 `[x]` + Sign-off 表格 + `{HARNESS_DIR}/status.json`。
+- **本 agent 与 @project-manager 为唯二可将 plan 状态更新为 Done 的角色**：验收通过后，可在 frontmatter 标记 `status: Done` 并同步 `{HARNESS_DIR}/status.json`；其他 agent 禁止将状态更新为 Done。
 - **Git**：每完成 Assignment 内一个 Task ID（或 PM 标明的 coverage 单元）就 **commit** 一次；message 英文且含 task/plan 标识；plan 勾选可 `docs(plan): …`。**禁止**全部做完再一次性提交。
 - 开发项目规范以当前工作目录下的 `AGENTS.md` 或 `CLAUDE.md` 为准；无则按本 agent 规则执行。
 - 对话语言跟随提问者；代码与文档默认使用**英文**。

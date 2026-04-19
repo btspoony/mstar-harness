@@ -41,9 +41,9 @@
 
 | 内容 | 更合适的落点 |
 |------|----------------|
-| 详细计划状态、阻塞列表、当前 sprint 叙述 | `{PLAN_DIR}/status.json`（及可选 `{PLAN_DIR}/notes.json` 程序时间线） |
+| 详细计划状态、阻塞列表、当前 sprint 叙述 | `{HARNESS_DIR}/status.json`（及可选 `{HARNESS_DIR}/notes.json` 程序时间线） |
 | 规格正文、枚举定义、API 契约全文 | 项目约定的冻结规格目录（如 `docs/spec/`、`.agents/designs/...`，名称自定） |
-| 某一 plan 的评审稿、gap 分析、实施笔记 | `{PLAN_DIR}/knowledge/`（并维护索引 README，见 `plan-convention.md`） |
+| 某一 plan 的评审稿、gap 分析、实施笔记 | `{HARNESS_DIR}/knowledge/`（并维护索引 README，见 `plan-convention.md`） |
 | 临时 workaround、仅本轮有效的结论 | 主 plan 文件或 knowledge，收口后提炼再考虑进 `AGENTS.md` |
 
 ### 更新前自检（避免污染单一权威）
@@ -59,8 +59,8 @@
 
 1. **冻结规格 / 设计权威**（版本化、显式变更流程）
 2. **根 `AGENTS.md`** — 项目级规则与约定
-3. **`{PLAN_DIR}/status.json`** — 当前执行状态与 open residual 的 SSOT
-4. **`{PLAN_DIR}/knowledge/`** — 支撑实施的上下文文档
+3. **`{HARNESS_DIR}/status.json`** — 当前执行状态与 open residual 的 SSOT
+4. **`{HARNESS_DIR}/knowledge/`** — 支撑实施的上下文文档
 
 若 `AGENTS.md` 与冻结规格冲突，**以规格为准**，并修订 `AGENTS.md` 对齐。细节分工与可到达性要求见 `plan-convention.md`。
 

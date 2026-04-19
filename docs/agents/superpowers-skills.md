@@ -17,7 +17,7 @@
 
 - 各角色在对应任务阶段应 **显式加载并遵循** 相应技能的完整内容（在支持 `/skill-name` 或少样本名称的环境中，通过技能名调用；以**宿主客户端**实际能力为准，见 `host-opencode.md` / `host-cursor.md`）。
 - **优先级（本仓库强制）**：**用户显式指令**（含项目 `AGENTS.md` / `CLAUDE.md`）> `**~/.config/opencode/AGENTS.md` 与 `docs/agents/*.md` 中的 harness 不变量**（`harness-loop.md` 状态机与门禁、`plan-convention.md`、`review-harness.md`、`branch-collaboration.md` 等）> **Superpowers 技能正文中的流程、阶段划分与审查模型** > 一般惯例。当技能描述的顺序、谁可派 subagent、何时审查与 **harness 不一致**时，**以 harness 与 PM Assignment 为准**，技能仅保留**不冲突**的技巧（例如自检清单、模型分档、提问纪律）。若用户禁止 TDD，则不得强制 `test-driven-development`。
-- `**writing-plans` 保存路径（门限）**：`**plan-convention.md`** 中的 `**{PLAN_DIR}**` 优先于上游技能正文中的 `docs/superpowers/plans/`；执行该技能时仍须将计划落在 `**{PLAN_DIR}**`（见 `plan-convention.md`「与 Superpowers writing-plans」及 PM / product-manager / architect 提示词中的短门限）。
+- `**writing-plans` 保存路径（门限）**：`**plan-convention.md`** 中的 `**{PLAN_DIR}**`（主 plan Markdown；与 **`{HARNESS_DIR}`** 分层见同文档）优先于上游技能正文中的 `docs/superpowers/plans/`；执行该技能时仍须将计划落在 `**{PLAN_DIR}**`，**`status.json` / `notes.json` / `archived/` / `knowledge/`** 等仍按 **`{HARNESS_DIR}`**（见 `plan-convention.md`「与 Superpowers writing-plans」及 PM / product-manager / architect 提示词中的短门限）。
 - **与 harness 的关系**：不改变 `harness-loop.md` 的阶段顺序；技能规定的是**每个阶段内的做法**（例如排障前先走系统化调试、宣称完成前先有验证证据）——**但不得用技能覆盖 harness 的门禁**（见下节「`subagent-driven-development` 与上游模板」）。
 
 ## 最小技能声明契约（减少歧义）

@@ -124,7 +124,7 @@ readonly: true
 ## Plan 与文档规范
 
 - Plan 目录和 status.json 的约定详见 `~/.config/opencode/docs/agents/plan-convention.md`。
-- Plan 目录由 @project-manager 在分派时告知实际路径（可能是 `.agents/plans/`、`.plans/` 或 `plans/`）。
+- **`{HARNESS_DIR}`** 与 **`{PLAN_DIR}`** 由 @project-manager 在分派时告知实际路径（推荐 **`.agents/`** + **`.agents/plans/`**；或遗留 **`.plans/`** / **`plans/`** 同目录布局）。
 - 完成后提醒 @project-manager 同步 plan 状态。
 - 开发项目规范以当前工作目录下的 `AGENTS.md` 或 `CLAUDE.md` 为准；无则按本 agent 规则执行。
 - 对话语言跟随提问者；代码与文档默认使用**英文**。
