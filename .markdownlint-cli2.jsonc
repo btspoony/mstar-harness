@@ -3,7 +3,7 @@
   "globs": [
     "README.md",
     "agents/*.md",
-    "docs/agents/*.md"
+    "skills/mstar-*/**/*.md"
   ],
   "config": {
     "default": true,

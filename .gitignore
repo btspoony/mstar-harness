@@ -5,11 +5,9 @@ bun.lock
 opencode.json
 opencode.bak*.json
 skills/*
+!skills/mstar-*
 plugins/*
 secrets.env
 .secrets/
-# Cursor workspace noise; keep team-shared rules tracked
-.cursor/*
-!.cursor/rules/
 *.jsonc
 !.markdownlint-cli2.jsonc
