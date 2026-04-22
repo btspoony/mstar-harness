@@ -147,12 +147,13 @@ skills/mstar-<topic>/
 
 ### 修改 skill 后的同步清单（每次勾选）
 
-- [ ] **SKILL.md frontmatter `description`** 是否仍能准确触发新场景？
+- [ ] **SKILL.md frontmatter `description`**是否仍能准确触发新场景？
 - [ ] **`SKILL.md` 是否 ≤ 500 行**？若超，把新增内容拆到 `references/`，别让 SKILL.md 肥化。
 - [ ] **跨 skill 引用**：本次变更是否影响其它 `mstar-*` skill 的交叉引用？`grep -rn "mstar-<this-skill>" skills/ .cursor/skills/ agents/ AGENTS.md README.md`。
 - [ ] **`agents/*.md` 壳层参数**：本次变更是否需要更新 `Role reference` / `Role parameters`（而不是扩写正文）？
 - [ ] **`AGENTS.md` skill 索引表**：skill 职责描述一行是否需要更新？
 - [ ] **`README.md`「Morning Star Skill 结构」表**：一行摘要是否需要对齐？
+- [ ] **README 多语言同步**：若更新 `README.md`，必须同步更新所有语言版本（当前至少包括 `README_CN.md`）；并检查跨语言链接（如 `Other languages`）可用且互相指向正确文件。
 - [ ] **Lint**：`npx -y markdownlint-cli2`（glob 已覆盖 `skills/mstar-*/**/*.md`）。
 - [ ] **路由回归**：若本次变更涉及 PM 路由或门禁，跑 `mstar-routing-eval` 的 `assets/routing-evals.json` 场景集。
 - [ ] **Git 提交颗粒度**：skill 实体变更 + AGENTS.md 索引 + agent 壳层参数 + README 摘要 宜在同一 PR，避免 handoff 期间文档半同步。
@@ -171,11 +172,11 @@ skills/mstar-<topic>/
 - **提示词调优流程 / 路由回归** 变更时，优先更新 `skills/mstar-routing-eval/SKILL.md`；若场景集变更，同步 `skills/mstar-routing-eval/assets/routing-evals.json`。
 - **Superpowers 与 harness 对照** 变更时：只更新 `skills/mstar-superpowers-align/`（含 `references/per-role-matrix.md`、`tension-table.md`）与必要的角色短指针；勿在各 `agents/*.md` 内嵌长对照表。
 - **计划管理约定 / status.json / residual findings / knowledge/** 变更时，优先更新 `skills/mstar-plan-conventions/SKILL.md` 与对应 `references/`。
-- **工期 / 工作量口径** 变更时，优先更新 `skills/mstar-plan-conventions/references/effort-estimation.md`，并同步 PM / product-manager / architect 模板与根目录 **`AGENTS.md`** 中 Effort / 工期相关不变量或索引简述。
+- **工期 / 工作量口径** 变更时，优先更新 `skills/mstar-plan-conventions/references/effort-estimation.md`，并同步 PM / product-manager / architect 模板与根目录 **`AGENTS.md``** Effort / 工期相关不变量或索引简述。
 - **编码行为准则** 变更时，优先更新 `skills/mstar-coding-behavior/SKILL.md`；角色差异放在 `mstar-roles/references/`，不得回流到 `agents/*.md` 长正文。
-- **库文档协议或宿主说明** 变更时，先更新 `skills/mstar-harness-core/references/library-docs-protocol.md`（共享协议），再同步 `.opencode/skills/mstar-host/SKILL.md`、`.cursor/skills/mstar-host/SKILL.md` 与根目录 **`AGENTS.md`** 中的相关指针；核对 Cursor **Context7** 类规则（如 `~/.cursor/rules/context7.mdc`）是否一致。
+- **库文档协议或宿主说明** 变更时，先更新 `skills/mstar-harness-core/references/library-docs-protocol.md`（共享协议），再同步 `.opencode/skills/mstar-host/SKILL.md`、`.cursor/skills/mstar-host/SKILL.md` 与根目录 **`AGENTS.md`*`**相关指针；核对 Cursor **Context7** 类规则（如 `~/.cursor/rules/context7.mdc`）是否一致。
 - **密钥约定** 变更时，优先更新**本文件**「OpenCode 密钥与 `opencode.json` 维护」小节，并同步 `secrets.env.example` / `opencode.example.json`（若字段名或占位方式变更）。
-- **共享入口、优先级、skill 索引或不变量** 变更时：只改**根目录 `AGENTS.md`**；`mstar-*` skill 内部有独立 SKILL.md frontmatter `description`，同步更新触发语。
+- **共享入口、优先级、skill 索引或不变量** 变更时：只改**根目录 `AGENTS.md`**`**tar-*` skill 内部有独立 SKILL.md frontmatter `description`，同步更新触发语。
 - **本维护规则**（边界、更新规则、审查清单）变更时：同步本文件 `.cursor/rules/opencode-config-repo-maintenance.mdc`。
 
 ## Agent 设计变更审查清单

@@ -4,8 +4,8 @@
     "README.md",
     "agents/*.md",
     "skills/mstar-*/**/*.md",
-    ".opencode/skills/**/*.md",
-    ".cursor/skills/**/*.md"
+    ".opencode/skills/mstar-*/**/*.md",
+    ".cursor/skills/mstar-*/**/*.md"
   ],
   "config": {
     "default": true,
