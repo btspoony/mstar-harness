@@ -11,172 +11,103 @@ English / [中文](README_CN.md)
 
 </div>
 
-This repository contains the **Morning Star** multi-agent harness configuration for code agents. It is organized as a virtual team: one primary agent (`project-manager`) coordinates specialized subagents.
+This repository provides the **Morning Star** multi-agent code harness configuration.  
+It is primarily for users who already use OpenCode or Cursor, but are new to Morning Star.
 
-Execution rules are centralized in **`mstar-*` skills**. Roles load the required skills before work, instead of relying on scattered prose docs.
+Core value:
 
-## Entry Points
+- Start a usable multi-role workflow quickly
+- Run with unified `mstar-*` skills instead of scattered rules
+- Reuse one core process across OpenCode and Cursor
 
-| Host | Entry |
-|------|-------|
-| **OpenCode** | Root `AGENTS.md` is auto-loaded each session; host-specific behavior is in `.opencode/skills/mstar-host/SKILL.md` |
-| **Cursor** | Read root `AGENTS.md` manually, then `.cursor/skills/mstar-host/SKILL.md`; project-level rules take priority |
+## Quick Start (User Path)
 
-## Morning Star Skill Layout
+> The install section is still evolving. The steps below focus on the shortest runnable path.
 
-This repo uses a **single global entry** (`AGENTS.md`) plus a structured skill knowledge base under `skills/mstar-*/`.
+1. Prepare config directory (optional backup)
+   - `mv ~/.config/opencode ~/.config/opencode.backup.$(date +%Y%m%d-%H%M%S)`
+2. Clone repository
+   - `git clone https://github.com/btspoony/mstar-harness.git ~/.config/opencode`
+3. Create local config
+   - `cp ~/.config/opencode/opencode.example.json ~/.config/opencode/opencode.json`
+4. Configure secrets via `{env:...}` or `{file:...}` placeholders
+5. Restart OpenCode / Cursor session and verify entry files are readable
 
-> Paths below are relative to `~/.config/opencode/`. Runtime cwd is your project repo. In role/skill content, prefer **skill-name references** (for example, `mstar-harness-core` skill) instead of hard-coded absolute paths. The global config repo remains read-only for agents unless the user explicitly requests edits.
+If you prefer incremental adoption (without replacing the whole directory), merge these first:
 
-Core files:
+- `AGENTS.md`
+- `agents/`
+- `skills/mstar-*/`
+- `.opencode/skills/mstar-host/`
+- `.cursor/skills/mstar-host/`
 
-- `AGENTS.md` — global Morning Star entry (priority, invariants, skill index, guardrails)
-- `agents/*.md` — minimal role shells (frontmatter + `mstar-roles` binding/parameters)
+## Host Entry (OpenCode vs Cursor)
 
-Skill set:
+| Host | First thing to do |
+|------|-------------------|
+| **OpenCode** | Usually auto-injects `AGENTS.md`; then use `.opencode/skills/mstar-host/SKILL.md` for host-specific behavior |
+| **Cursor** | Read `AGENTS.md` manually first, then `.cursor/skills/mstar-host/SKILL.md` |
 
-| Skill | Scope |
-|-------|-------|
-| `skills/mstar-harness-core/` | State machine, Spec-Driven phase gates, task categories, explore boundaries, git branch/worktree guards, QC-QA alignment, dispatch anti-interference, escalation triggers, shared Context7 protocol |
-| `skills/mstar-plan-conventions/` | `{HARNESS_DIR}` / `{PLAN_DIR}` discovery, `status.json` SSOT, residual lifecycle, notes, reports naming, QC trigger timing, done profiles, agent-oriented effort sizing |
-| `skills/mstar-review-qc/` | QC baseline: workflow, checklist, report template, risk checks, gate policy, CI gate, residual tracking |
-| `skills/mstar-routing-eval/` | PM routing regression and prompt/rule iteration evaluation |
-| `skills/mstar-coding-behavior/` | Cross-role coding principles |
-| `skills/mstar-superpowers-align/` | Morning Star × Superpowers alignment and conflict resolution |
-| `skills/mstar-roles/` | Role prompt hub (full role content in `references/`, shell bindings in `agents/*.md`) |
-| `.opencode/skills/mstar-host/` | OpenCode host adapter |
-| `.cursor/skills/mstar-host/` | Cursor host adapter |
+Recommended sequence for both hosts:
 
-Recommended order:
+1. `AGENTS.md`
+2. Current host `mstar-host` skill
+3. `skills/mstar-roles/SKILL.md`
+4. Target role `Role reference`
+
+## Role and Skill Overview
+
+### Roles
+
+| Agent ID | Role | Responsibility |
+|----------|------|----------------|
+| `project-manager` | Project Manager | Routing, assignment, phase progression |
+| `product-manager` | Product Manager | Requirements and product-facing docs |
+| `architect` | Architect | Architecture and technical contracts |
+| `fullstack-dev` / `fullstack-dev-2` | Fullstack Dev | Backend-led implementation / second parallel track |
+| `frontend-dev` | Frontend Dev | UI, interaction, frontend performance |
+| `qa-engineer` | QA | Testing and acceptance validation |
+| `qc-specialist*` | QC Trio | Code quality gate (architecture/security/performance) |
+| `ops-engineer` | Ops | Deployment, monitoring, infrastructure |
+| `market-expert` | Market Expert | Market and user research |
+| `prompt-engineer` | Prompt Engineer | Prompt / skill / rule optimization |
+
+### Core Skills
+
+| Skill | Purpose |
+|-------|---------|
+| `mstar-harness-core` | Global entry, state machine, gates, invariants |
+| `mstar-plan-conventions` | Unified plan/status/residual conventions |
+| `mstar-review-qc` | QC review baseline and report template |
+| `mstar-routing-eval` | Routing regression and rule-iteration evaluation |
+| `mstar-coding-behavior` | Cross-role coding behavior baseline |
+| `mstar-superpowers-align` | Alignment and conflict handling with Superpowers |
+| `mstar-roles` | Role prompt bus (role bodies in `references/`) |
+| `mstar-host` (per host) | Host-specific capabilities (OpenCode / Cursor) |
+
+## Common Flows (Short)
+
+### I want to start a task now
 
 1. Read `AGENTS.md`
-2. Read current host `mstar-host` skill
-3. Read `skills/mstar-roles/SKILL.md`
-4. Read role reference mapped from `agents/<role>.md`
+2. Let `project-manager` establish context and route
+3. Execution roles work via `mstar-roles` + relevant skills
+4. Close through QC/QA gates
 
-## Plan Management Mode
+### I just need rule entry points
 
-The harness supports projects with or without a plan directory:
+- Global entry: `AGENTS.md`
+- Core workflow: `skills/mstar-harness-core/SKILL.md`
+- Role hub: `skills/mstar-roles/SKILL.md`
 
-- **Directory discovery**: prefer `.agents/` (`{HARNESS_DIR}`) + `.agents/plans/` (`{PLAN_DIR}`), fallback to legacy `.plans/` or `plans/`
-- **Low-intrusion default**: create only when needed
-- **Git**: track harness/plan dirs by default for reproducible handoff
-- **No-plan projects**: workflow can still run via conversation + completion reports
+## Deeper Docs
 
-See `skills/mstar-plan-conventions/SKILL.md` for full details.
+- `AGENTS.md`: global entry and index
+- `skills/mstar-harness-core/`: core execution rules
+- `skills/mstar-roles/`: role content and parameterization
+- `skills/mstar-plan-conventions/`: plan and state conventions
 
-## Overview
-
-- Follows [OpenCode config](https://opencode.ai) conventions
-- Role prompt files map to `agent` entries in `opencode.json`
-- Default primary agent: `project-manager`
-- Supports product, architecture, development, QA, QC, ops, market, and prompt-engineering roles
-- Default phase-gate workflow: `specify -> clarify -> plan -> tasks -> implement`
-
-## Agent Roles
-
-| Agent ID | Role | Mode | Purpose |
-|----------|------|------|---------|
-| `project-manager` | Project Manager | primary | Coordination and progress |
-| `product-manager` | Product Manager | subagent | Requirements and product docs |
-| `architect` | Architect | subagent | Architecture and technical docs |
-| `fullstack-dev` | Fullstack Dev | subagent | Backend-led implementation |
-| `fullstack-dev-2` | Fullstack Dev #2 | subagent | Parallel implementation track |
-| `frontend-dev` | Frontend Dev | subagent | UI, interaction, frontend performance |
-| `qa-engineer` | QA Engineer | subagent | Test planning and execution |
-| `qc-specialist` | QC Reviewer #1 | subagent | Architecture/maintainability focus |
-| `qc-specialist-2` | QC Reviewer #2 | subagent | Security/correctness focus |
-| `qc-specialist-3` | QC Reviewer #3 | subagent | Performance/reliability focus |
-| `ops-engineer` | Ops Engineer | subagent | Deployment and infrastructure |
-| `market-expert` | Market Expert | subagent | Market and user research |
-| `prompt-engineer` | Prompt Engineer | subagent | Prompt/skills/rules maintenance |
-
-## QC Three-Reviewer Baseline
-
-By default, code changes go through parallel QC by:
-
-- `qc-specialist`
-- `qc-specialist-2`
-- `qc-specialist-3`
-
-Hotfixes may use a single-review fast path.
-
-Shared baseline/report template is defined in `skills/mstar-review-qc/SKILL.md`, with PM producing a consolidated gate decision.
-
-## Optional Plugins
-
-### Superpowers
-
-Example:
-
-```json
-"plugin": ["superpowers@git+https://github.com/obra/superpowers.git"]
-```
-
-Alignment rules live in `skills/mstar-superpowers-align/SKILL.md`.
-
-### OpenViking Memory
-
-When enabled under `plugins/`, agents can use `memsearch`, `memread`, and `membrowse`. Session commit is handled automatically by plugin settings.
-
-## Quick Config Bootstrap
-
-Use the provided template:
-
-```bash
-cp opencode.example.json opencode.json
-```
-
-Then fill provider credentials using `{env:...}` / `{file:...}` placeholders.
-
-### Key Config Notes
-
-- `default_agent`: entry primary agent (`project-manager`)
-- `plugin`: plugin list (set `[]` if not needed)
-- `agent`: per-role model/mode mapping
-- `model`: use `provider-id/model-id`
-
-## Markdown Lint
-
-Run:
-
-```bash
-npx -y markdownlint-cli2
-```
-
-Current baseline covers:
-
-- `README.md`
-- `agents/*.md`
-- `skills/mstar-*/**/*.md`
-- `.opencode/skills/mstar-*/**/*.md`
-- `.cursor/skills/mstar-*/**/*.md`
-
-## Install to OpenCode
-
-Repository:
-
-- [https://github.com/btspoony/mstar-harness](https://github.com/btspoony/mstar-harness)
-
-Steps:
-
-1. (Optional) Backup existing config:
-   - `mv ~/.config/opencode ~/.config/opencode.backup.$(date +%Y%m%d-%H%M%S)`
-2. Clone:
-   - `git clone https://github.com/btspoony/mstar-harness.git ~/.config/opencode`
-3. Install local dependencies if needed:
-   - `cd ~/.config/opencode && npm install`
-4. Create local config:
-   - `cp opencode.example.json opencode.json`
-5. Configure secrets with env/file placeholders
-6. Restart OpenCode (or reload config)
-
-## Security Notes
-
-- Never hardcode real API keys in `opencode.json`
-- Never commit plain-text secrets (`.env`, `.env.local`, credential files)
-- Share `opencode.example.json`, not private local `opencode.json`
-- Rotate keys immediately if leakage is suspected
+> Maintainer workflows, cross-file sync rules, and lint/maintenance checklists are intentionally kept in maintainer rule docs, not in this user-facing README.
 
 ## License
 
