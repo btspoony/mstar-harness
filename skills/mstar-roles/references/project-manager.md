@@ -459,6 +459,13 @@
 
 ### 1.1 PM 分派前自检清单（每次任务必过）
 
+**`non_trivial_plan` 一眼启发式**（命中**任意一条** → 设 `non_trivial_plan=yes`；**禁止**把主类标为 `quick` 当作跳过 Prepare 的理由；`quick` 不豁免 `specify → clarify → plan`，见 `mstar-harness-core`「`Task category` 与 Prepare 门禁」）：
+
+- 新增或变更 **CLI 子命令 / 公共 API / 用户可见行为**
+- 新增或升级 **依赖**（如 `pyproject.toml`、`package.json`、锁文件）
+- 需要 **新测例** 且 **回归 / 全量测试** 门禁，或改动跨 **≥2 个顶层包/模块**
+- 引入或改变 **导出/渲染管道**、配置格式等 **持久化契约**
+
 在真正开始“自己写代码 / 写测试 / 改配置 / 查市场”之前，先逐条自问：
 
 - **Q1：这件事属于实现/测试/审查/部署/调研吗？**
@@ -476,6 +483,8 @@
   - 插件启用时 → 每条分派尽量带 `**Superpowers:`** 行（技能 ID + 触发短语），便于承接方加载正确技能。
 - **Q7：是否写了 `Task category` 并与路由一致？**
   - 实现类分派须在 Assignment 写明主类（`visual` / `deep` / `quick` / `logic` / `ops` / `docs`），且与 `**Execute as`**、`Why this agent` 一致；见 `mstar-harness-core` skill。
+- **Q7b：`quick` 是否误用？**
+  - 若上节启发式给出 `non_trivial_plan=yes`，则主类 **不得** 为 `quick`（应改为 `logic` / `deep` / `visual` / `ops` 等真实类别）。**即使**主类为 `quick`，非 hotfix 仍须完整 Prepare；`quick` 只影响 Owner 选型。
 - **Q8：Prepare 是否满足意图门禁？**
   - 分派 `implement` 前能回答真实目标、成功判据、非目标；否则继续 `clarify`，不得锁 plan 硬上。
 - **Q9：若分派 QC 三审，三份 Assignment 是否含相同的 `plan_id` 与 `Review range` / `Diff basis`（可复制粘贴级一致）？**
@@ -493,6 +502,11 @@
 ```markdown
 Pre-implement Gate Check:
 - plan_id: <id>
+- non_hotfix: yes|no
+- harness_active: yes|no  # yes = 业务仓已解析到 {HARNESS_DIR}（见 mstar-plan-conventions）
+- plan_path: {<PLAN_DIR>/...md 或 N/A>}
+- plan_file_on_disk: yes|no|n/a
+- status_json_has_plan_id: yes|no|n/a  # harness_active=no 时 n/a
 - non_trivial_plan: yes|no
 - PM_Task_Board_published: yes|no
 - batch_strategy_defined: yes|no
@@ -505,7 +519,11 @@ Decision:
 - GO | BLOCKED
 ```
 
-**BLOCKED** 若：`non_trivial_plan=yes` 且上表任一为 `no`；或 `per_task_comment_gate=no`；或 **Assignment / Status 正文出现** `Dev routing: single-stream`（或等价）但 `single_stream_justified != yes`。若采用 **串行 round-robin**（`fullstack-dev` / `fullstack-dev-2` 分批交替）且**未**声明 `single-stream`，`single_stream_justified` 填 `**n/a`**。
+**BLOCKED** 若：`non_trivial_plan=yes` 且上表任一为 `no`；或 `per_task_comment_gate=no`；或 **Assignment / Status 正文出现** `Dev routing: single-stream`（或等价）但 `single_stream_justified != yes`。若采用 **串行 round-robin**（`fullstack-dev` / `fullstack-dev-2` 分批交替）且**未**声明 `single-stream`，`single_stream_justified` 填 **n/a**。
+
+**BLOCKED（plan 产物门禁）** 若：`non_hotfix=yes` **且** `harness_active=yes` **且**（`plan_file_on_disk != yes` **或** `status_json_has_plan_id != yes`）。含义：已启用 plan 管理的仓库上，**不得**在仅有对话 Todo、无主 plan 文件或未登记 `plan_id` 时 invoke 实现类 subagent；须先创建/更新 `{PLAN_DIR}` 主 plan、`{HARNESS_DIR}/status.json`，并使 Assignment **`Plan Path`** 与之一致。
+
+**BLOCKED（`quick` 误标）** 若：`non_trivial_plan=yes` **且** 本条 Assignment 主 **`Task category` 为 `quick`** — 先更正类别再填 Gate Check。
 
 ### 1.1.1 最小 Phase Gate 决策树（强制）
 
@@ -518,6 +536,8 @@ Decision:
 5. 执行中发现新约束？先回写 `plan`（必要时回开 `clarify`）再继续。
 
 若为 hotfix，可走压缩路径，但必须在 Assignment 或回报中写明事后 `clarify/RCA` 补记安排。
+
+**用户仅探询能力（例如「有没有现成命令」「能否加某功能」）时**：首轮回复须区分 **字面请求** 与 **推断的真实目标**，并声明本轮处于 **Prepare**（从 `specify` 起）还是 **仅 explore-only**；**禁止**在未完成 `specify → clarify → plan`（非 hotfix）时直接派发 **implement**。
 
 ### 1.2 分派降噪与去歧义（强制）
 

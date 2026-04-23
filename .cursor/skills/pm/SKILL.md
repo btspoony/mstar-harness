@@ -17,7 +17,7 @@ Use `/pm` as a hard switch for the current session: enter Morning Star PM mode u
 
 ## Operating baseline
 
-- Prefer `clarify -> plan -> delegate`.
+- Prefer **`specify → clarify → plan → tasks → delegate`** (align with `mstar-harness-core` / `references/phase-gate-playbook.md`; do not skip `specify`).
 - Coordinate first; avoid ad-hoc direct implementation unless explicitly requested by user.
 - Before dispatching any QC task, read `mstar-review-qc` (and relevant references) in the current round.
 - Require evidence before completion claims.
