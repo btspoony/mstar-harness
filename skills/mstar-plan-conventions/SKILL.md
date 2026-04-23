@@ -9,10 +9,19 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
 
 ## Harness 与 Plan 目录发现
 
-引入 **Harness 根目录** `{HARNESS_DIR}` 与 **计划文件目录** `{PLAN_DIR}` 两层概念：
+引入 **Harness 根目录** `{HARNESS_DIR}`、**计划文件目录** `{PLAN_DIR}` 与 **规格目录别名** `{SPECS_DIR}` 三层概念：
 
 - **`{HARNESS_DIR}`**：agent 计划与编排产物的根（默认 **`.agents/`**）。承载 SSOT、时间线、知识库、归档、冻结规格等**非「单文件 plan 正文 + 审查报告」**类资产。
 - **`{PLAN_DIR}`**：**仅**存放主 plan Markdown、按 `plan-id` 分目录的 **`reports/`** 等**计划与审查留档**；**默认** `{PLAN_DIR} = {HARNESS_DIR}/plans/`。
+- **`{SPECS_DIR}`**：规格文档目录别名。用于统一表示 `{HARNESS_DIR}/specs` 与 `{HARNESS_DIR}/designs` 两种标准，减少规则与模板中的硬编码路径。
+
+### `{SPECS_DIR}` 解析规则
+
+1. 若存在 `{HARNESS_DIR}/specs/`：`{SPECS_DIR} = {HARNESS_DIR}/specs/`（优先）。
+2. 否则若存在 `{HARNESS_DIR}/designs/`：`{SPECS_DIR} = {HARNESS_DIR}/designs/`（兼容旧标准）。
+3. 若两者都不存在：默认建议新建 `{HARNESS_DIR}/specs/`，并令 `{SPECS_DIR} = {HARNESS_DIR}/specs/`。
+
+> 并存兼容：当 `specs/` 与 `designs/` 同时存在时，`primary_spec` 推荐挂到 `{SPECS_DIR}`（即 `specs/`）；`spec_refs` 可同时引用两处路径。
 
 ### 解析顺序（找到 harness 即停止）
 
@@ -41,7 +50,8 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
 {HARNESS_DIR}/                   # 默认 .agents/
 ├── status.json                   # SSOT：plans[] + open residual（已关闭见 archived/residuals/）
 ├── notes.json                    # 可选：程序里程碑 / 时间线（减轻 status.json 体积）
-├── designs/                      # 可选：冻结规格 / 对外基线（与 knowledge 分工见 references/knowledge-and-designs.md）
+├── specs/                        # 可选：规格主目录（推荐）；若存在则作为 {SPECS_DIR}
+├── designs/                      # 可选：兼容旧目录；当 specs/ 不存在时可作为 {SPECS_DIR}
 ├── knowledge/                    # 可选：开发过程知识库（见 references/knowledge-and-designs.md）
 │   └── README.md
 ├── archived/                     # 可选：已关闭 residual、Done 计划行冷快照
@@ -65,7 +75,7 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
 - **`{PLAN_DIR}/reports/`**：架构评审、QC 分报告、QC 汇总结论；**视为只读历史**，不在此反复改写同一结论（修正走新报告或回写主计划 / `status.json`）。
 - **`{PLAN_DIR}/residuals/<plan-id>/`**（可选）：对仍 **open** 的 residual 提供**长于 JSON 字段**的散文说明；**不替代** **`metadata.residual_findings`** 的 SSOT，见 `references/knowledge-and-designs.md`「open residual 散文详情」。
 - **`{HARNESS_DIR}/knowledge/`**：规格修订、架构评审产出、设计决策与 gap 分析等**实施上下文**；与面向用户的 `docs/` 分工见 `references/knowledge-and-designs.md`。
-- **`{HARNESS_DIR}/designs/`**（可选）：**冻结**、少变、可对外的规格或基线文档；与迭代中的 `knowledge/` 区分。
+- **`{SPECS_DIR}`**（可选）：规格目录别名，支持 `{HARNESS_DIR}/specs/` 与 `{HARNESS_DIR}/designs/`；用于冻结规格、少变基线或可对外参考文档（具体分工见 `references/knowledge-and-designs.md`）。
 - **residual findings（未关闭）**：**当前仍待跟踪**的条目写在 **`{HARNESS_DIR}/status.json`** 的 `metadata.residual_findings[<plan-id>]`（**仅 `open`**）；**已验证关闭**的条目迁出至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**，避免 `status.json` 无限膨胀。详见 `references/status-and-residuals.md`。
 
 ### 已提交文档与计划产物的可到达性（强制建议）
@@ -88,7 +98,7 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
 5. 创建 **`{PLAN_DIR}/reports/README.md`**，用途与命名约定与仓库内其它说明一致即可。
 6. 可选：若采用 **`{PLAN_DIR}/residuals/<plan-id>/`** 散文详情，在**首次**需要长文补充某 open R# 时再创建对应 **`residuals/<plan-id>/`** 子目录；无需为空 plan 预建占位目录。
 7. 若启用 **`{HARNESS_DIR}/knowledge/`**：创建目录及 **`knowledge/README.md`** 空索引表（见 `references/knowledge-and-designs.md`）。
-8. 可选：创建 **`{HARNESS_DIR}/designs/`** 及简短 **`README.md`**，说明冻结规格与 `knowledge/` 的分工。
+8. 可选：创建 **`{HARNESS_DIR}/specs/`**（推荐）或 **`{HARNESS_DIR}/designs/`**（兼容），并维护简短 **`README.md`**；后续统一按 `{SPECS_DIR}` 引用。
 9. **Git 策略（与项目 `AGENTS.md` 一致）**
    - **推荐（团队交付 / agent handoff）**：**不要**将 **`{HARNESS_DIR}`** 整体加入 `.gitignore`，以便 clone 后计划与报告路径可达。
    - **仅本机私密**：若必须 ignore 整个 **`{HARNESS_DIR}`**，则按上文「可到达性」约束已提交文档；敏感片段另用密钥或私密渠道管理。
@@ -167,7 +177,7 @@ Assignment 模板中的 **`Parallelism`** 行应与上表 **`Parallelism`** / **
 ## 各角色与 Plan 的关系
 
 - **`@project-manager`**：负责发现 plan 目录、创建/登记 plan、分配任务、推进状态、Done 收口。分配时须告知 subagent plan 目录的实际路径；涉及业务 Git 仓库写操作时须在 Assignment 中写明 **`Working branch`** 或 **`Branch policy`**（见 `mstar-harness-core` `references/branch-and-worktree.md`）。启用 **`knowledge/`** 时维护索引 README，并在 Assignment 中点名 **`primary_spec` / `spec_refs`**（若本轮依赖知识库）。
-- **`@architect`** / **`@product-manager`**：产出规格或评审结论若适合跨会话复用，写入 **`{HARNESS_DIR}/knowledge/`**（或团队约定的 **`{HARNESS_DIR}/designs/`**）并更新对应 **README**，建议由 PM 在 `plans[].metadata` 挂接路径。
+- **`@architect`** / **`@product-manager`**：产出规格或评审结论若适合跨会话复用，写入 **`{HARNESS_DIR}/knowledge/`**（或 `{SPECS_DIR}`）并更新对应 **README**，建议由 PM 在 `plans[].metadata` 挂接路径。
 - **可写盘 agent**（dev / qa / ops）：完成任务后更新主 plan 中**本人负责**的任务 checkbox（见 `references/plan-files-and-reports.md`）、相关 Sign-off 栏位，并更新 `status.json`（权限见上）。**实现前**若 `plans[].metadata` 含 `primary_spec` / `spec_refs`，须先阅读对应文件（见 `references/knowledge-and-designs.md`）。
 - **`@product-manager`**：可更新 plan 文档中需求/验收/用户故事等产品负责部分，并在交付后勾选**与之对应**的主 plan 任务 checkbox；**不得**将 `status.json` 中计划状态设为 `Done`；如需改 `progress`/`notes`，以 Assignment 为准或交由 PM 收口。
 - **`@architect`**：可更新 plan 文档中架构、接口契约、技术里程碑等章节，并在交付后勾选**与之对应**的主 plan 任务 checkbox；**不得**将 `status.json` 中计划状态设为 `Done`；一般不擅自将整条计划改为 `InReview`（与 PM 对齐）。
@@ -178,7 +188,7 @@ Assignment 模板中的 **`Parallelism`** 行应与上表 **`Parallelism`** / **
 ## References
 
 - `references/status-and-residuals.md` — `{HARNESS_DIR}/status.json` SSOT 结构、`plans[].metadata` 标准字段、根级 `metadata` 字段、residual findings 的 **severity** 枚举（SSOT）、生命周期（open → closed → archived）、`notes.json` 程序时间线、`tech_debt_summary` 技术债一览、常用 jq 查询。
-- `references/knowledge-and-designs.md` — `{HARNESS_DIR}/knowledge/` 开发过程知识库（目录、索引、命名、维护）、`{HARNESS_DIR}/designs/` 冻结规格、`{PLAN_DIR}/residuals/<plan-id>/` open residual 散文详情、与 `reports/` 的分工。
+- `references/knowledge-and-designs.md` — `{HARNESS_DIR}/knowledge/` 开发过程知识库（目录、索引、命名、维护）、`{SPECS_DIR}`（`specs/` or `designs/`）规格目录、`{PLAN_DIR}/residuals/<plan-id>/` open residual 散文详情、与 `reports/` 的分工。
 - `references/plan-files-and-reports.md` — 主 plan 文件命名、审查报告命名表、QC 分报告与 consolidated 保留原则、**QC 三审触发时机（单 plan · 多 batch）**、residual findings 权威位置与顺序、主 plan Markdown checkbox 规则、Done 标记方式、QC 落盘宿主权限。
 - `references/done-compaction.md` — `Done` 计划行冷快照（`{HARNESS_DIR}/archived/plans/`）、Profile A（瘦 Done 行）/ Profile B（不留 Done 行）、原子更新约束、仓库级采用声明模板、合并前 SSOT 与事实一致门禁。
 - `references/effort-estimation.md` — Agent-oriented 工期与工作量预估（T 恤尺码 + agent 会话带）；**禁止**混入人天 / FTE / 人类日历；Assignment / PRD / 架构文档字段名建议。

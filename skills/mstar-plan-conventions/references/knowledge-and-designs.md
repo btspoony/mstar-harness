@@ -1,4 +1,4 @@
-# `{HARNESS_DIR}/knowledge/` 开发过程知识库与 `designs/` / `residuals/` 散文（Morning Star）
+# `{HARNESS_DIR}/knowledge/` 开发过程知识库与 `{SPECS_DIR}` / `residuals/` 散文（Morning Star）
 
 本节将「用户文档」与「agent / 实施用知识」分开，**与具体业务仓库无关**；项目可在根目录 `AGENTS.md` 用一小段指向本 reference 或复述分界关键词，避免重复维护长文。
 
@@ -9,12 +9,14 @@
 | -------------------------------- | ----------------------------------------------- | ---------------------------------------- |
 | `**docs/`**（或项目约定的用户文档根）         | 安装/quickstart、稳定架构概览、贡献指南、对外 API 说明             | 人类贡献者与终端用户；clone 后应可读                    |
 | `**{HARNESS_DIR}/knowledge/**`   | 架构评审报告、规格修订稿、gap 分析、约束清单、**某一 plan 的输入/输出设计材料** | Agent handoff、跨会话连续；**不**默认当作对外产品文档      |
-| `**{HARNESS_DIR}/designs/`**（可选） | 冻结规格、对外基线、少变的参考稿                                | 与 `knowledge/` 分工由团队定义；**不**默认替代 `docs/` |
+| `**{SPECS_DIR}`**（可选）             | 规格主目录（支持 `{HARNESS_DIR}/specs/` 或 `{HARNESS_DIR}/designs/`） | 与 `knowledge/` 分工由团队定义；**不**默认替代 `docs/` |
 
 
-**不应**放入用户文档树的内容（宜放 `knowledge/`、`designs/` 或主 plan）：作为**特定 plan 的输入/输出**的评审结论、实施笔记、未稳定的规格草案。
+**不应**放入用户文档树的内容（宜放 `knowledge/`、`{SPECS_DIR}` 或主 plan）：作为**特定 plan 的输入/输出**的评审结论、实施笔记、未稳定的规格草案。
 
 ## 目录与索引
+
+- `{SPECS_DIR}` 定义：优先 `{HARNESS_DIR}/specs/`，否则 `{HARNESS_DIR}/designs/`；若两者都不存在，建议新建 `{HARNESS_DIR}/specs/`。
 
 - 知识库物理路径：`**{HARNESS_DIR}/knowledge/`**（推荐布局下常为 `**.agents/knowledge/**`，与 `**{PLAN_DIR}**` 并列）。
 - **必须**维护 `**{HARNESS_DIR}/knowledge/README.md`** 作为**目录索引**：至少包含表格列 **Document（链接）**、**Source Plan（`plans[].id`）**、**Description**、**Status**（如 `Active` / `Superseded by implementation (<plan-id>)` / `Archived`）。
@@ -27,7 +29,7 @@
 
 ## 与 `status.json` 的链接
 
-- 某 plan 的**权威设计输入**在知识库中时，在 `**plans[].metadata`** 中登记路径，推荐使用已列标准键：`**primary_spec**`（单文件）或 `**spec_refs**`（`string[]`）。路径为**仓库内相对路径**（推荐布局下常写作 `**.agents/knowledge/....md`**；遗留同目录布局下可能为 `**plans/knowledge/....md**` 等，视解析结果而定）。
+- 某 plan 的**权威设计输入**在知识库或规格目录中时，在 `**plans[].metadata`** 中登记路径，推荐使用已列标准键：`**primary_spec**`（单文件）或 `**spec_refs**`（`string[]`）。路径为**仓库内相对路径**（推荐布局下常写作 `**.agents/knowledge/....md`** 或 `**.agents/specs/....md`**；兼容旧目录时也可为 `**.agents/designs/....md**`）。
 - 执行方在 **implement 前**须按 metadata 读取这些文件，并与主 plan 核对；不得在未读链接文档的情况下**静默偏离**其中已写明的决策（若需偏离，先回写 knowledge 或 plan 并走 PM/architect 门禁）。
 
 ## 维护规则
