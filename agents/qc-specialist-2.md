@@ -12,8 +12,10 @@ permission:
     ".agents/plans/reports/**/*.md": allow
     ".plans/reports/*.md": allow
     ".plans/reports/**/*.md": allow
-    "plans/reports/*.md": allow
-    "plans/reports/**/*.md": allow
+    ".worktree/**/.agents/plans/reports/*.md": allow
+    ".worktree/**/.agents/plans/reports/**/*.md": allow
+    ".worktree/**/.plans/reports/*.md": allow
+    ".worktree/**/.plans/reports/**/*.md": allow
   bash:
     "*": deny
     # Git inspection (read-only)
