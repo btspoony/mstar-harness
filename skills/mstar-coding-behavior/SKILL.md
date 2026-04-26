@@ -3,6 +3,12 @@ name: mstar-coding-behavior
 description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（显式假设、不静默猜测）、Simplicity First（最小实现、拒绝投机抽象）、Surgical Changes（只改与任务直接相关的行、不顺手重构、不 piggyback）、Goal-Driven Execution（把模糊请求转为可验证结果、Step → verify 微模板、证据驱动的完成声明）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
 ---
 
+## Load order（必读顺序）
+
+**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md）。** 本 skill 只约束 **编码与改动风格**（Think / Simplicity / Surgical / Goal-Driven）；**分支、`Working branch`、QC-QA 字段、Done 所有权、调度防串扰** 等仍以 **`mstar-harness-core`** 为准。冲突时 **以 `mstar-harness-core` 为准**。
+
+**摘要**：`mstar-harness-core` — 不变量与门禁；本 skill — 实现与审查时的工程习惯，不替代 harness。
+
 # Morning Star Coding Behavior Guidelines
 
 This skill captures lightweight, host-agnostic coding behavior principles that reduce common agent mistakes. It complements the other Morning Star skills and does not override stage gates or role routing.

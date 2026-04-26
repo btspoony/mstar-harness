@@ -3,6 +3,12 @@ name: mstar-roles
 description: Morning Star (启明星) 的角色提示词总线。把 `agents/*.md` 的正文完全 skill 化：所有角色的完整行为定义都在 `references/`，`agents/*.md` 只保留 frontmatter 与 role 参数绑定。任何一个 Morning Star 角色（`project-manager` / `product-manager` / `architect` / `fullstack-dev` / `fullstack-dev-2` / `frontend-dev` / `qa-engineer` / `qc-specialist*` / `ops-engineer` / `market-expert` / `prompt-engineer`）开工前，都先加载本 skill，再按角色的 `Role parameters` 查参数表并 Read 对应 `references/*.md`。重复角色（`fullstack-dev` 与 `fullstack-dev-2`、`qc-specialist*`）共享同一 reference，参数不同行为不同，绝不复制多份正文。
 ---
 
+## Load order（必读顺序）
+
+**在同一会话或任务中首次经本 skill 承担 Morning Star 角色时：必须先 Read `mstar-harness-core` skill（SKILL.md，以及本任务将涉及的 `mstar-harness-core/references/`）。** 本 skill 只提供 **角色正文与参数表**；状态机、门禁、路由与 QC-QA 对齐以 **`mstar-harness-core`** 为准。冲突时 **以 `mstar-harness-core` 为准**。
+
+**摘要**：`mstar-harness-core` — 全局 SSOT；`mstar-roles` — `agents/*.md` → `references/<role>.md` 的单一正文入口。
+
 # Morning Star Roles Hub
 
 本 skill 是 Morning Star 的 **角色提示词单一入口**。`agents/*.md` 仅承担 frontmatter 与参数绑定；角色正文权威在本目录 `references/`。
@@ -10,9 +16,10 @@ description: Morning Star (启明星) 的角色提示词总线。把 `agents/*.m
 ## 使用顺序（每次角色接任务时）
 
 1. 读取当前 `agents/<role>.md` 的 frontmatter 与正文中的 `Role reference` / `Role parameters`。
-2. 先读取本 SKILL.md，把下面的 **Skill dependencies** 与 **参数表** 解析到上下文。
-3. Read 对应的 `references/<file>.md`；把正文中的 `{placeholder}` 用你的 `Role parameters` 原地替换。
-4. 若 agent 壳层与 reference 冲突，以 **reference** 为准（壳层只定 permission / tools / 身份与参数）。
+2. **Read `mstar-harness-core` skill**（本会话尚未加载 harness 核心时**必须先完成**；含本轮任务相关的 `references/`）。
+3. 读取本 SKILL.md，把下面的 **Skill dependencies** 与 **参数表** 解析到上下文。
+4. Read 对应的 `references/<file>.md`；把正文中的 `{placeholder}` 用你的 `Role parameters` 原地替换。
+5. 若 agent 壳层与 reference 冲突，以 **reference** 为准（壳层只定 permission / tools / 身份与参数）。
 
 ## Role Reference Mapping
 
@@ -34,7 +41,7 @@ description: Morning Star (启明星) 的角色提示词总线。把 `agents/*.m
 
 ## Skill dependencies（所有角色默认适用）
 
-所有角色在开工前都应把以下 skills 视为 **已加载依赖**，按需 Read 对应 SKILL.md 与 `references/`。具体哪一条在哪个阶段被用到，由各 reference 自己说明。
+所有角色在开工前都应把以下 skills 视为 **已加载依赖**，按需 Read 对应 SKILL.md 与 `references/`。**`mstar-harness-core` 已在「使用顺序」第 2 步作为全局前置**；下表中其余 skill 按任务阶段 Read。具体哪一条在哪个阶段被用到，由各 reference 自己说明。
 
 | 依赖 skill | 当你的任务涉及… |
 |---|---|

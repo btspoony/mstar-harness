@@ -1,5 +1,7 @@
 # Plan 文件与 Reports 留档（Morning Star）
 
+> **Load order（与其它 `mstar-*` skill 一致）**：依赖本 reference 排 reports / QC 波次前，须已 Read **`mstar-harness-core`** skill（SKILL.md；多 worktree 与 QC 单一 `HEAD` 见 `mstar-harness-core/references/branch-and-worktree.md`）。冲突以 **`mstar-harness-core`** 为准。
+
 ## Plan 文件（`{PLAN_DIR}/<name>.md`）
 
 每个 plan 的详细内容（任务清单、决策、Sign-off）。

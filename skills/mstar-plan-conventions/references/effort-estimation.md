@@ -1,5 +1,7 @@
 # 工期与工作量预估（Agent 语境 · Morning Star）
 
+> **Load order（与其它 `mstar-*` skill 一致）**：写 Effort 字段前须已 Read **`mstar-harness-core`** skill（SKILL.md）以对齐「仅 agent-oriented、禁止人天/日历」的全局不变量；本 reference 为口径细则展开。
+
 在 OpenCode / Cursor 等多角色 agent 编排下，**所有「工期 / 工作量 / Effort」类预估只描述 agent 实施量级**：在规格与验收已就绪、上下文可加载的前提下，**agent 连续或少量会话内**完成实现与基础自证（跑通命令/单测等）需要多少**agent 工作量**。
 
 ## 硬性规则（不得混入人工时间）

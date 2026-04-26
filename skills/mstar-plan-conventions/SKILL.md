@@ -3,6 +3,12 @@ name: mstar-plan-conventions
 description: Morning Star (启明星) harness 的计划目录约定 —— {HARNESS_DIR} 与 {PLAN_DIR} 的发现与初始化、status.json 的 SSOT 结构与状态权限、residual findings 登记/归档/生命周期、severity 枚举（SSOT，机器字段）、notes.json 程序时间线、tech_debt_summary 技术债一览、knowledge/ 开发过程知识库、reports/ 审查留档命名、QC 三审触发时机、主 plan Done 标记、archived/plans Profile A/B、工期预估（仅 agent-oriented）。任何角色在读写 .agents/、创建/更新 plan 文件、登记 residual finding、QC/QA 报告入库、Done 收口、写工期预估时必读；`@project-manager` 编排任一含 plan 的任务前必读；实现角色开工前须读本 skill 以对齐 metadata.primary_spec/spec_refs 与 knowledge 目录。
 ---
 
+## Load order（必读顺序）
+
+**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md，以及本任务将涉及的 `mstar-harness-core/references/`，尤其是并行 / worktree / QC-QA 检出时读 `references/branch-and-worktree.md`）。** 本 skill 只约定 `{HARNESS_DIR}` / `{PLAN_DIR}`、`status.json`、residuals、reports 等**计划资产**形态；**不得**突破 harness 的状态机、门禁与路由。冲突时 **以 `mstar-harness-core` 为准**。
+
+**摘要**：`mstar-harness-core` — 全局 SSOT 与「Morning Star Skill 索引」；本 skill — plan 目录、SSOT JSON、归档与工期口径的专题展开。
+
 # Morning Star Plan Conventions（计划管理约定）
 
 本 skill 定义 Morning Star harness 中**计划（plan）目录的发现、初始化和使用规范**，所有 agent 共享此约定；角色提示词中不再重复描述，仅引用本 skill 与其 `references/`。

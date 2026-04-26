@@ -3,6 +3,12 @@ name: mstar-review-qc
 description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 三名 QC reviewer 的共享审查工作流、代码质量/安全正确性/性能可靠/可维护性清单、标准审查报告 Markdown 模板（YAML frontmatter + Findings 三档 + Source Trace + Summary + Verdict）、QC 三审分派时机（与 plan-batch 对齐）、高危变更（运维/数据/生产）最小检查、门禁规则（Approve / Request Changes / Needs Discussion）、CI 门禁补充、Residual Findings 留档门禁与关闭验证。`@qc-specialist` / `@qc-specialist-2` / `@qc-specialist-3` 开工审查前必读；`@qa-engineer` 对同 feature 做验证前必读；`@project-manager` 派发 QC 三审或 high-risk 变更审查前必读；所有涉及 QC 报告、Residual 登记或门禁判定的角色都应该优先 Read 本 skill。
 ---
 
+## Load order（必读顺序）
+
+**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md，以及 `mstar-harness-core/references/branch-and-worktree.md` 中与 `Review cwd` / `Working branch` / `Review range` 相关的章节）。** 本 skill 只定义 QC/QA **工作流与报告形态**；**谁可派 subagent**、**三审字段逐字对齐**、**同仓 worktree 与单一待审 `HEAD`** 等不变量以 **`mstar-harness-core`** 为准。冲突时 **以 `mstar-harness-core` 为准**。
+
+**摘要**：`mstar-harness-core` — QC-QA 检出与并行门禁；本 skill — 审查清单、报告模板、verdict 与 residual 留档契约。
+
 # Morning Star QC Review Baseline（QC 审查基线）
 
 本 skill 定义所有 QC 审查员的共享基线。三份 QC 角色提示词在流程、门禁与要点上应与本 skill 一致且彼此对齐：**共用正文以`mstar-roles` skill 的 `qc-specialist-shared`为准**；`-2` / `-3` 仅保留 frontmatter、开场白中的 Reviewer 编号、`## 并行审查时本 reviewer 的侧重` 一节，以及 Completion Report 模板里的 **Agent** 名。

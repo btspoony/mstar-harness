@@ -1,5 +1,7 @@
 # `{HARNESS_DIR}/knowledge/` 开发过程知识库与 `{SPECS_DIR}` / `residuals/` 散文（Morning Star）
 
+> **Load order（与其它 `mstar-*` skill 一致）**：依赖本 reference 维护知识库 / 规格挂接前，须已 Read **`mstar-harness-core`** skill（SKILL.md；仓库写操作与分支门禁见 `mstar-harness-core/references/branch-and-worktree.md`）。冲突以 **`mstar-harness-core`** 为准。
+
 本节将「用户文档」与「agent / 实施用知识」分开，**与具体业务仓库无关**；项目可在根目录 `AGENTS.md` 用一小段指向本 reference 或复述分界关键词，避免重复维护长文。
 
 ## 与公开文档目录的分工（典型为 `docs/`）

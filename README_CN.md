@@ -84,6 +84,8 @@
 | `mstar-roles` | 角色提示词总线（角色正文在 `references/`） |
 | `mstar-host`（按宿主） | 宿主能力差异（OpenCode / Cursor） |
 
+**Morning Star 加载顺序：** 任意会话或任务中，**须先 Read `skills/mstar-harness-core/SKILL.md`**，再读其它 `skills/mstar-*/SKILL.md`。各非核心 skill 正文开头的 **「Load order」** 小节重复此要求；冲突以 **`mstar-harness-core`** 为准。详见该文件「与其它 `mstar-*` skill 的加载契约」。
+
 ## 常见使用流（最短）
 
 ### 我想马上开工

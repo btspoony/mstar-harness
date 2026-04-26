@@ -3,6 +3,12 @@ name: mstar-routing-eval
 description: Morning Star (启明星) 路由与 prompt 迭代评估体系 —— (1) PM 路由回归：用 routing-evals.json 验证 `@project-manager` 是否把任务分派给正确的 agent、是否经过正确门禁、是否满足 `must_have_artifacts`、是否触发 `hard_fail_if`；(2) Prompt/规则迭代评估：在不过拟合单次对话的前提下迭代调优 `mstar-roles` skill 的各角色 与 `mstar-*` skills，含测试集设计、评分维度、Prompt 变更最低接受标准、回归记录；(3) Routing Eval Report 输出模板（含 phase_gate_compliance_rate）。`@project-manager` 回归本轮路由合规时必读；`@prompt-engineer` 设计/修改提示词、规则或 skill 前必读；任何评估、打分或回归场景引用 routing-evals.json 时必读。场景集数据见本 skill 的 assets/routing-evals.json。
 ---
 
+## Load order（必读顺序）
+
+**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md，以及评估路由与门禁时需要的 `mstar-harness-core/references/`）。** 本 skill 的 `routing-evals.json` 场景**校验的是对 harness 的遵守情况**；若未建立 harness 上下文，评估易与真实门禁脱节。冲突时 **以 `mstar-harness-core` 为准**。
+
+**摘要**：`mstar-harness-core` — 期望路由与 phase gate；本 skill — 场景集、`Routing Eval Report` 模板与回归方法。
+
 # Morning Star Routing & Evaluation Harness
 
 ## 1. PM 路由评估

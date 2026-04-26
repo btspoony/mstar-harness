@@ -1,6 +1,6 @@
 ## Morning Star Skills（必读 / Required reading）
 
-开工前（或**接到 Assignment** 的首次读取时），**必须** Read 下列 Morning Star skill 的 `SKILL.md`（及其 `references/` 中与当前任务相关的文件），不得凭角色提示词残留处理门禁或状态机：
+开工前（或**接到 Assignment** 的首次读取时），**必须** Read 下列 Morning Star skill 的 `SKILL.md`（及其 `references/` 中与当前任务相关的文件），不得凭角色提示词残留处理门禁或状态机。**Read 顺序（强制）**：**须先完成 `mstar-harness-core`**，再按本轮任务 Read 下列其余 skill（与 `mstar-roles` SKILL.md「Load order / 使用顺序」一致）。
 
 - `mstar-harness-core` skill — 状态机、Spec-Driven 双阶段门禁、Task category、分支 / worktree、QC-QA 检出对齐、调度防串扰
 - `mstar-plan-conventions` skill — `{HARNESS_DIR}` / `{PLAN_DIR}` 发现与初始化、`status.json` SSOT、residual findings 登记/归档、Done 瘦身 Profile、工期预估

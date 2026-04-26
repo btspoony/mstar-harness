@@ -1,5 +1,7 @@
 # Done 计划行冷快照与 status.json 瘦身（Morning Star）
 
+> **Load order（与其它 `mstar-*` skill 一致）**：依赖本 reference 做 Done 瘦身 / 归档前，须已 Read **`mstar-harness-core`** skill（SKILL.md）与 **`mstar-plan-conventions`** SKILL.md（plan SSOT 总线）。合并与分支事实仍受 **`mstar-harness-core`** `references/branch-and-worktree.md` 约束。
+
 ## 可选：`Done` 计划行冷快照（`{HARNESS_DIR}/archived/plans/`）
 
 **背景**：多条 `Done` 的 `plans[]` 行常带大块 `metadata`（`gates`、QC 摘要、`tests`、`commits`、长 `scope`/`description`），`status.json` 会无限膨胀；而 **`metadata.residual_findings` 中 open 项**宜保持有界（已关闭项应迁出至 **`{HARNESS_DIR}/archived/residuals/`**，见 `status-and-residuals.md`）。

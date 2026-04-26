@@ -1,5 +1,7 @@
 # `{HARNESS_DIR}/status.json` 与 Residual Findings（Morning Star）
 
+> **Load order（与其它 `mstar-*` skill 一致）**：依赖本 reference 改 SSOT / residual 前，须已 Read **`mstar-harness-core`** skill（SKILL.md；同仓分支与 worktree 见 `mstar-harness-core/references/branch-and-worktree.md`）。冲突以 **`mstar-harness-core`** 为准；专题索引见该 SKILL.md「Morning Star Skill 索引」。
+
 `status.json` 位于 `**{HARNESS_DIR}/status.json**`，是 `**plans[]` 行状态**与 **仍处 `open` 的 residual findings** 的**单一事实来源（SSOT）**。  
 **已关闭**的 residual **不应长期堆在**本文件中；权威档案见 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（见「Residual findings 生命周期」）。
 

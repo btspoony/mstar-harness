@@ -1,5 +1,7 @@
 # Morning Star × Superpowers：张力与消解表
 
+> **Load order（与其它 `mstar-*` skill 一致）**：使用本表前须已 Read **`mstar-harness-core`** skill（SKILL.md）；本表是 harness 与 Superpowers 的**对照索引**，不替代 harness 全文。
+
 下列对照用于避免「harness 一套、Superpowers 一套」在执行时打架。**若仍不可裁决**：**用户显式指令** > **项目级 `AGENTS.md` / `CLAUDE.md`** > **`mstar-*` skills 中的不变量（以 `mstar-harness-core` 为权威：状态机、门禁、路由）** > **Superpowers 技能的默认做法**。
 
 | 主题 | Morning Star 约定 | Superpowers 相关技能 | 结论 |

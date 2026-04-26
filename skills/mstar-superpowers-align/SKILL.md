@@ -3,6 +3,12 @@ name: mstar-superpowers-align
 description: Morning Star (启明星) harness 与 Superpowers 技能的对齐与消解契约 —— 未装插件时的加载方式（Read SKILL.md 执行）、优先级（harness > 技能正文）、最小技能声明契约（Superpowers 行需含 Trigger + Expected evidence）、`Delegation` 与 `subagent-driven-development` 的互斥规则（默认 forbidden 不得叠该技能）、编排触发短语表（`dispatching-parallel-agents` / `using-git-worktrees` / `systematic-debugging` / `verification-before-completion` 等）、`subagent-driven-development` 上游 implementer-prompt / reviewer 模板降权为可选技巧、per-task 双审禁用 `@qc-specialist*`（改用 `@general` / `generalPurpose` / informal `@qa-engineer`）、QC 三审与 `using-git-worktrees` 的叠用约束、与 @explore 的关系、快速去歧义规则。`@project-manager` 在 Assignment 写 `Superpowers` 行前必读；任何承接方遇到 Superpowers 技能名前必读以判定是否冲突；`@prompt-engineer` 修改技能相关规则前必读。按角色必用/宜用详表与张力/消解对照见 references/。
 ---
 
+## Load order（必读顺序）
+
+**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md，以及与本任务相关的 `mstar-harness-core/references/`）。** 本 skill 只定义 **Superpowers × harness 的优先级与触发短语**；阶段顺序、谁可派 subagent、QC 三审与 `using-git-worktrees` 叠用等 **不变量** 以 **`mstar-harness-core`**（及 `mstar-plan-conventions` / `mstar-review-qc` 中已被 harness 索引的专题）为准。冲突时 **以 `mstar-harness-core` 为准**。
+
+**摘要**：`mstar-harness-core` — 状态机与调度防串扰；本 skill — `Delegation` / `subagent-driven-development` 互斥、per-role 必用技能短语与张力消解表。
+
 # Morning Star × Superpowers 对齐契约
 
 本 skill 将 **Superpowers** 插件中的技能（`opencode.json` 中 `plugin` 已启用时）映射到 `mstar-roles` skill 的各角色 业务流程，并定义冲突时的消解规则。

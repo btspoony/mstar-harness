@@ -1,5 +1,7 @@
 # 按角色的 Superpowers 必用 / 宜用矩阵（Morning Star）
 
+> **Load order（与其它 `mstar-*` skill 一致）**：使用本矩阵前须已 Read **`mstar-harness-core`** skill（SKILL.md）与 **`mstar-superpowers-align`** SKILL.md；矩阵中的「必用」**叠在** harness 门禁之上，不减免 `mstar-harness-core` 中的分支 / worktree / QC 字段要求。
+
 下列"必用"表示：**只要任务落在该列场景，且用户未禁止，即应先加载对应技能再动手**。
 
 ## @project-manager（primary）
