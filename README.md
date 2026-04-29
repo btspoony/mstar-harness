@@ -21,48 +21,21 @@ Core value:
 
 ## Quick Start (Recommended)
 
-Use a single source checkout and install via symlinks:
-
 1. Clone repository to a stable source path:
    - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar-harness`
-2. Install for OpenCode (symlink config root):
-   - `ln -s ~/.mstar-harness ~/.config/opencode`
-   - If target exists, recreate safely:
-   - `rm -rf ~/.config/opencode && ln -s ~/.mstar-harness ~/.config/opencode`
-3. Install for Cursor local plugin (symlink plugin root):
-   - `mkdir -p ~/.cursor/plugins/local`
-   - `ln -s ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-   - If link exists, recreate safely:
-   - `rm -f ~/.cursor/plugins/local/mstar-harness && ln -s ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-   - Or force update:
-   - `ln -sfn ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-4. Create local config:
-   - `cp ~/.config/opencode/opencode.example.json ~/.config/opencode/opencode.json`
-5. Configure secrets via `{env:...}` or `{file:...}` placeholders
-6. Restart OpenCode / Cursor session and verify entry files are readable
+2. Install to target code agents:
+   - **Cursor (local plugin directory)**
+     - `mkdir -p ~/.cursor/plugins/local`
+     - `ln -sfn ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
+   - **OpenCode (symlink contents, not the whole directory)**
+     - `mkdir -p ~/.config/opencode/agents ~/.config/opencode/skills`
+     - `ln -sfn ~/.mstar-harness/agents/*.md ~/.config/opencode/agents/`
+     - `ln -sfn ~/.mstar-harness/skills ~/.config/opencode/skills`
+     - `ln -sfn ~/.mstar-harness/.opencode/skills/* ~/.config/opencode/skills/`
 
-If you prefer incremental adoption (without replacing the whole directory), merge these first:
+That completes installation.
 
-- `AGENTS.md`
-- `agents/`
-- `skills/mstar-*/`
-- `.opencode/skills/mstar-host/`
-- `.cursor-plugin/skills/mstar-host/`
-
-## Cursor Local Plugin Install (Symlink)
-
-If you already cloned to `~/.mstar-harness`, install Cursor plugin via:
-
-1. Create local plugin folder:
-   - `mkdir -p ~/.cursor/plugins/local`
-2. Create symlink:
-   - `ln -s ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-   - If the link already exists, recreate it safely:
-   - `rm -f ~/.cursor/plugins/local/mstar-harness && ln -s ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-   - Or use force update:
-   - `ln -sfn ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-3. Restart Cursor or run `Developer: Reload Window`.
-4. Verify plugin components are loaded (rules, skills, agents).
+You can assign different models per agent in `opencode.json`. Refer to `opencode.example.json` for structure and examples; no need to overwrite your existing `opencode.json`.
 
 ## Host Entry (OpenCode vs Cursor)
 

@@ -21,48 +21,21 @@
 
 ## 快速开始（推荐方式）
 
-建议使用统一源码目录 + 软链接安装：
-
 1. 克隆仓库到固定源码目录：
    - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar-harness`
-2. 安装 OpenCode（软链接配置根目录）：
-   - `ln -s ~/.mstar-harness ~/.config/opencode`
-   - 若目标已存在，可安全重建：
-   - `rm -rf ~/.config/opencode && ln -s ~/.mstar-harness ~/.config/opencode`
-3. 安装 Cursor 本地插件（软链接插件目录）：
-   - `mkdir -p ~/.cursor/plugins/local`
-   - `ln -s ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-   - 若软链接已存在，可安全重建：
-   - `rm -f ~/.cursor/plugins/local/mstar-harness && ln -s ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-   - 或使用强制更新：
-   - `ln -sfn ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-4. 生成本地配置：
-   - `cp ~/.config/opencode/opencode.example.json ~/.config/opencode/opencode.json`
-5. 配置密钥（使用 `{env:...}` 或 `{file:...}` 占位，不要写死）
-6. 重启 OpenCode / Cursor 会话并验证入口是否可读
+2. 安装到目标 code agent：
+   - **Cursor（本地插件目录）**
+     - `mkdir -p ~/.cursor/plugins/local`
+     - `ln -sfn ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
+   - **OpenCode（软链接内容，不软链接整个目录）**
+     - `mkdir -p ~/.config/opencode/agents ~/.config/opencode/skills`
+     - `ln -sfn ~/.mstar-harness/agents/*.md ~/.config/opencode/agents/`
+     - `ln -sfn ~/.mstar-harness/skills ~/.config/opencode/skills`
+     - `ln -sfn ~/.mstar-harness/.opencode/skills/* ~/.config/opencode/skills/`
 
-如果你只想增量接入，不覆盖现有目录，可手动合并这些关键内容：
+完成以上两步即安装完成。
 
-- `AGENTS.md`
-- `agents/`
-- `skills/mstar-*/`
-- `.opencode/skills/mstar-host/`
-- `.cursor-plugin/skills/mstar-host/`
-
-## Cursor 本地插件安装（软链接）
-
-如果你已经克隆到 `~/.mstar-harness`，可按以下方式安装 Cursor 插件：
-
-1. 创建本地插件目录：
-   - `mkdir -p ~/.cursor/plugins/local`
-2. 建立软链接：
-   - `ln -s ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-   - 如果软链接已存在，可安全重建：
-   - `rm -f ~/.cursor/plugins/local/mstar-harness && ln -s ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-   - 或使用强制更新：
-   - `ln -sfn ~/.mstar-harness ~/.cursor/plugins/local/mstar-harness`
-3. 重启 Cursor，或执行 `Developer: Reload Window`。
-4. 验证插件组件已生效（rules、skills、agents）。
+你可以在 `opencode.json` 里为不同 agent 指定 model。配置结构可参考 `opencode.example.json`，仅作为参考，不需要覆盖你现有的 `opencode.json`。
 
 ## 宿主入口（OpenCode vs Cursor）
 
