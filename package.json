@@ -1,0 +1,14 @@
+{
+  "name": "morning-star-harness",
+  "version": "0.1.0",
+  "type": "module",
+  "main": ".opencode/plugins/mstar.ts",
+  "scripts": {
+    "typecheck": "bunx tsc --pretty false"
+  },
+  "packageManager": "bun@1.2.17",
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.4.8",
+    "@types/node": "^25.6.0"
+  }
+}

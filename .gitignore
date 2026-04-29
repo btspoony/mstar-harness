@@ -1,7 +1,4 @@
 node_modules
-package.json
-package-lock.json
-bun.lock
 opencode.json
 opencode.bak*.json
 skills/*
