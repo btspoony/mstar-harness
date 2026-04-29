@@ -62,6 +62,11 @@
 3. 让 Morning Star 自动完成 core + host adapter 加载。
 4. 按正常角色协作方式工作。
 
+建议从 PM 角色启动：
+
+- **OpenCode**：以 `agents/project-manager.md` 对应的 PM 角色开始聊天（即 `opencode.json` 配置的 `agent.project-manager`）。
+- **Cursor**：优先使用 `/pm`，强制启用 PM 角色后再做任务编排。
+
 ## 角色与技能总览
 
 ### 角色分工（Who does what）

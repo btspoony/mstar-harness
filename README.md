@@ -62,6 +62,11 @@ From a user perspective, the practical flow is:
 3. Let Morning Star core + host adapter load automatically.
 4. Work with roles as normal.
 
+Recommended PM-first start:
+
+- **OpenCode**: start the conversation with the Project Manager role (primary agent) defined by `agents/project-manager.md`.
+- **Cursor**: prefer `/pm` to force-enable the Project Manager role before task orchestration.
+
 ## Role and Skill Overview
 
 ### Roles
