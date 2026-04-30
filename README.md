@@ -17,7 +17,7 @@ Core value:
 
 - Start a usable multi-role workflow quickly
 - Run with unified `mstar-*` skills instead of scattered rules
-- Reuse one core process across OpenCode and Cursor
+- Reuse one core process across OpenCode, Cursor, and Codex
 
 ## Quick Start
 
@@ -42,6 +42,12 @@ Core value:
     ```
   - Restart OpenCode
 
+### Codex Installation
+
+- Marketplace install (recommended):
+  - `codex plugin marketplace add https://github.com/btspoony/mstar-harness.git --sparse .codex/`
+  - Install **Morning Star Harness** from the added marketplace.
+
 That completes installation.
 
 You can assign different models per agent in `opencode.json` without replacing your existing file. For detailed OpenCode setup and migration, see `.opencode/INSTALL.md`.
@@ -50,6 +56,7 @@ You can assign different models per agent in `opencode.json` without replacing y
 
 - **OpenCode**: start with the `Project Manager` role (`agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`).
 - **Cursor**: use `/pm` to force-start with the `Project Manager` role.
+- **Codex**: use `/pm` to force-start with the `Project Manager` role after installing the plugin.
 
 ## Role and Skill Overview
 
@@ -74,6 +81,7 @@ You can assign different models per agent in `opencode.json` without replacing y
 |-------|---------|
 | `mstar-harness-core` | Global entry, state machine, gates, invariants |
 | `mstar-host` (per host) | Host-specific capabilities (OpenCode / Cursor) |
+| `pm` | Shared `/pm` shortcut for Cursor and Codex PM entry |
 | `mstar-roles` | Role prompt bus (role bodies in `references/`) |
 | `mstar-plan-conventions` | Unified plan/status/residual conventions |
 | `mstar-review-qc` | QC review baseline and report template |

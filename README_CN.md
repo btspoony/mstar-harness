@@ -17,7 +17,7 @@
 
 - 快速启动一套可用的多角色协作流
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
-- 在 OpenCode / Cursor 下复用同一套核心流程
+- 在 OpenCode / Cursor / Codex 下复用同一套核心流程
 
 ## 快速开始（推荐方式）
 
@@ -42,6 +42,12 @@
     ```
   - 重启 OpenCode
 
+### Codex 安装方式
+
+- Marketplace 安装（推荐）：
+  - `codex plugin marketplace add https://github.com/btspoony/mstar-harness.git --sparse .codex/`
+  - 从新增的 marketplace 中安装 **Morning Star Harness**。
+
 完成以上两步即安装完成。
 
 你可以在 `opencode.json` 里为不同 agent 指定 model，而不需要覆盖你现有配置。OpenCode 的详细安装与迁移说明见 `.opencode/INSTALL.md`。
@@ -50,6 +56,7 @@
 
 - **OpenCode**：以 `Project Manager` 角色开局（对应 `agents/project-manager.md`，通常是 `opencode.json` 里的 `agent.project-manager`）。
 - **Cursor**：使用 `/pm` 强制以 `Project Manager` 角色启动。
+- **Codex**：安装插件后，使用 `/pm` 强制以 `Project Manager` 角色启动。
 
 ## 角色与技能总览
 
@@ -79,6 +86,7 @@
 | `mstar-superpowers-align` | 与 Superpowers 的对齐与冲突消解 |
 | `mstar-roles` | 角色提示词总线（角色正文在 `references/`） |
 | `mstar-host`（按宿主） | 宿主能力差异（OpenCode / Cursor） |
+| `pm` | Cursor 与 Codex 共享的 `/pm` 强制入口 |
 
 ## Harness Workflow（统一流程）
 

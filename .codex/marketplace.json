@@ -1,0 +1,20 @@
+{
+  "name": "morning-star-harness",
+  "interface": {
+    "displayName": "Morning Star Harness"
+  },
+  "plugins": [
+    {
+      "name": "morning-star-harness",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

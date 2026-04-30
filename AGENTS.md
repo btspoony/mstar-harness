@@ -25,9 +25,9 @@ Use this document as the primary maintenance contract for contributors and agent
 - **Surgical edits**: only change what the task requires; avoid opportunistic refactors.
 - **Read before edit**: inspect current content before patching; verify after patching.
 
-## Cursor + OpenCode Sync Policy
+## Cursor + OpenCode + Codex Sync Policy
 
-When a change affects shared harness behavior, treat Cursor and OpenCode as two host surfaces of one system.
+When a change affects shared harness behavior, treat OpenCode, Cursor, and Codex as host surfaces of one system.
 
 - Update shared semantics first (core harness contract), then host-specific adapters.
 - Keep host wording consistent on:
@@ -119,6 +119,8 @@ If one of these checks fails, stop and report why.
 - Host adapters:
   - OpenCode -> `.opencode/skills/mstar-host/*`
   - Cursor -> `.cursor/skills/mstar-host/*`
+- Codex plugin manifest -> `.codex-plugin/plugin.json`
+- Codex marketplace catalog -> `.codex/marketplace.json`
 - Maintenance policy (this file) -> `AGENTS.md`
 
 ## Skill Sync Rules
