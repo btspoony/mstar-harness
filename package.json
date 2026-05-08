@@ -1,10 +1,18 @@
 {
   "name": "morning-star",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "private": true,
   "type": "module",
   "main": ".opencode/plugins/mstar.ts",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "typecheck": "bunx tsc --pretty false"
+    "typecheck": "bunx tsc --pretty false",
+    "cli:dev": "MSTAR_CLI_PROJECT_ROOT=$PWD bun run --cwd packages/cli dev",
+    "cli:build": "bun run --cwd packages/cli build",
+    "cli:publish:dry-run": "npm publish --workspace packages/cli --dry-run",
+    "cli:publish": "npm publish --workspace packages/cli"
   },
   "packageManager": "bun@1.2.17",
   "devDependencies": {

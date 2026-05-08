@@ -21,12 +21,26 @@
 
 ## 快速开始（推荐方式）
 
-### OpenCode(推荐) 安装方式
+### OpenCode（推荐）：使用 CLI 安装
+
+- 使用 `mstar-harness` CLI：
+  - `npx mstar-harness init`
+  - 或 `bunx mstar-harness init`
+- CLI 会自动：
+  - 确保 `opencode.json` 包含 `"$schema": "https://opencode.ai/config.json"`
+  - 确保并去重 Morning Star 插件配置
+  - 配置角色模型映射（交互或非交互）
+  - 写入后执行按目标 agent 的自检
+
+完整 CLI 用法和高级参数（`--yes`、`--dry-run`、`--output`、`doctor`）见 [`docs/cli.md`](docs/cli.md)。
+
+### OpenCode：手动安装（备选）
 
 - 推荐使用 plugin 安装：
   - 在 `opencode.json` 增加插件配置：
     ```json
     {
+      "$schema": "https://opencode.ai/config.json",
       "plugin": [
         "superpowers@git+https://github.com/obra/superpowers.git",
         "morning-star@git+https://github.com/btspoony/mstar-harness.git"
