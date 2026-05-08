@@ -129,6 +129,37 @@ QC 报告模板见 `mstar-review-qc`。把 finding 登记进 `**metadata.residua
 | `qc_status` / `tests` / `commits` | string                    | **InReview / Done** 前后的可验证快照（结论摘要、测试统计、commit 提示），**非**替代正式报告文件                                                                                    |
 
 
+### 建议补充：交付型状态账本（phase + batches + verification）
+
+当 plan 包含多批次推进或多角色协作时，推荐采用以下三组字段，减少“只知道状态，不知道为什么”的信息损失：
+
+| 键 | 类型 | 用途 |
+| --- | --- | --- |
+| `phase` | string | 当前交付阶段标签（如 `spec-drafting`、`batches-done-pending-merge`、`awaiting-qa`） |
+| `batches` | array<object> | 批次执行账本：每批覆盖任务、owner、状态、commit 证据、自检结论 |
+| `verification` | object | 与该批次相关的命令级验证快照（如 `cargo_check_workspace: ok`） |
+
+**`batches[]` 推荐子字段**（按需）：
+
+- `index`: number，批次序号（1-based）。
+- `covers`: string[]，覆盖的任务 ID（如 `T3`、`T4`）。
+- `status`: `planned | in_progress | done | blocked`。
+- `owner`: string，负责角色。
+- `commits`: string[]，commit 短哈希 + 一行摘要（便于审计）。
+- `a2_self_audit`（或同义键）：string，规则自检结论。
+- `verification`: object，批次级验证结果（可覆盖全局 verification）。
+
+> 约束：`batches`/`verification` 是证据索引，不替代 `{PLAN_DIR}/reports/` 正式审查文档，也不替代 `metadata.residual_findings` 的风险追踪。
+
+### `plans[].notes` 与 `{HARNESS_DIR}/notes.json` 的协同
+
+推荐保留双层日志语义，避免把所有轨迹塞进单条字符串：
+
+- `plans[].notes`：该 plan 的关键时间线（可用字符串数组，按时间追加）。
+- `{HARNESS_DIR}/notes.json`：跨 plan 程序里程碑。
+
+若仓库历史上 `plans[].notes` 是字符串，也可保留；新项目建议从一开始使用字符串数组，记录“时间 + 事件 + 证据锚点（commit/PR/report）”。
+
 ## 根级 `metadata` 标准可选字段
 
 除 `**residual_findings`**（SSOT）外，推荐可选：
@@ -333,6 +364,16 @@ jq '.metadata.tech_debt_summary' .agents/status.json
 - 关闭或新增 R# 后 `**tech_debt_summary` 未刷新**（`total_open`、`by_severity` 与 open 列表脱节）。
 - 仅在 `**plans[].notes`** 或对话中描述 finding，**未**写入 `**metadata.residual_findings[<plan-id>]`**（open 条目的权威位置）。
 - 团队若用 `**notes.json**`（或遗留 `**metadata.notes**`）作程序时间线：重大合并或批量归档后**未**追加条目，导致后续 agent 缺少上下文。
+
+## 兼容性与键名映射（推荐）
+
+不同仓库可能使用 `id` 或 `plan_id` 作为计划键名。建议新仓统一用 `id`，并在迁移期遵循：
+
+- 读取时允许 `id` / `plan_id` 双兼容；
+- 写回时只写一种（推荐 `id`）；
+- 与目录键（如 `reports/<plan-id>/`、`residual_findings[<plan-id>]`）保持同一 canonical 值。
+
+若短期不迁移，至少在仓库的 `.agents/AGENTS.md` 写清“canonical key 使用哪一个”，避免多 agent 混写。
 
 ## 常用查询示例
 

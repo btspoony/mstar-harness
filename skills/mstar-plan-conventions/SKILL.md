@@ -110,6 +110,37 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
    - **仅本机私密**：若必须 ignore 整个 **`{HARNESS_DIR}`**，则按上文「可到达性」约束已提交文档；敏感片段另用密钥或私密渠道管理。
 10. 如果项目已有 **`.plans/`** 或 **`plans/`** 目录（遗留同目录布局），**不要再创建** **`.agents/`**，直接使用已有目录作为 **`{HARNESS_DIR} = {PLAN_DIR}`**，并视需要补建 **`reports/`**、**`residuals/`**、**`knowledge/`**、**`archived/residuals/`**、可选 **`notes.json`** 与 `metadata` 结构。
 
+## Harness 初始化蓝图（含 `AGENTS.md` 分层策略）
+
+当仓库从 0 到 1 启用 harness，建议按下面顺序初始化，避免后续出现规则散落与双轨 SSOT：
+
+1. 建 `{HARNESS_DIR}`（默认 `.agents/`）与 `{PLAN_DIR}`（默认 `.agents/plans/`），并初始化 `status.json`、可选 `notes.json`、`reports/README.md`。
+2. 在 `{HARNESS_DIR}` 下新增 **`.agents/AGENTS.md`**（harness 子树规则），只放 **harness 资产约束**：目录语义、状态机映射、QC/QA 落盘门禁、residual 生命周期、归档策略。
+3. 在仓库根保留 **`AGENTS.md`**（项目级规则），只放 **代码库约束**：技术栈边界、构建/测试入口、安全与分支约束、规范文档路由，不复制 harness 细则。
+4. 当子目录存在显著边界（如 `contracts/`、`gateway/`、`sdk/`、`examples/`）时，再新增目录级 `AGENTS.md`，仅覆盖该目录的增量规则，禁止重复根规则或 `.agents/AGENTS.md` 细则。
+5. 每个目录级 `AGENTS.md` 必须显式写 `Source Priority`，确保冲突裁决可预测（用户指令 > 根规则 > 本目录规则 > `.agents/AGENTS.md`）。
+
+### `.agents/AGENTS.md` 应保存什么
+
+- harness 结构与路径契约：`{HARNESS_DIR}`、`{PLAN_DIR}`、`{SPECS_DIR}` 的实际路径约定。
+- plan/status 生命周期门禁：`Todo/InProgress/InReview/Blocked/Done` 的推进与角色权限映射。
+- QC/QA 证据契约：三审独立性、同一 `plan_id` + `Review range` 对齐、报告落盘目录与命名。
+- residual 管理契约：severity 枚举、open/closed/archived 流转、归档路径。
+- profile 选择（如 Done 压缩 Profile A/B）与仓库级采纳声明。
+
+### 根/分目录 `AGENTS.md` 不应保存什么
+
+- 动态状态：里程碑日志、当前进度、commit 列表、PR 号（应进 `status.json` / `notes.json`）。
+- 单次计划细节：某一 plan 的临时决策与实施笔记（应进主 plan、reports 或 knowledge）。
+- 与 harness SSOT 重复的完整规则正文（应引用 `.agents/AGENTS.md` 或 `mstar-*` skills）。
+
+### 分目录 `AGENTS.md` 何时创建（最小策略）
+
+- **创建**：目录有独立技术边界、独立发布面或独立风险模型（例如合约、网关、SDK）。
+- **不创建**：目录仅是实现细分且无新增约束（沿用根规则即可）。
+- **拆分深度**：默认只到一级业务边界目录；除非出现稳定且长期的二级差异，不继续下钻。
+- **体积控制**：目录级文件目标 60-150 行，强调“边界 + 禁区 + 接口命令”，避免复制大段通用规范。
+
 ## 与 Superpowers `writing-plans`（提示词门限）
 
 上游 **Superpowers** 插件自带的 `writing-plans` 技能默认将计划保存到 `docs/superpowers/plans/`，与本 skill `{PLAN_DIR}` 约定冲突。
@@ -210,3 +241,4 @@ Assignment 模板中的 **`Parallelism`** 行应与上表 **`Parallelism`** / **
 - `references/plan-files-and-reports.md` — 主 plan 文件命名、审查报告命名表、QC 分报告与 consolidated 保留原则、**QC 三审触发时机（单 plan · 多 batch）**、**多 `plan_id` 同时 `InReview` 的 QC 编排**、residual findings 权威位置与顺序、主 plan Markdown checkbox 规则、Done 标记方式、QC 落盘宿主权限。
 - `references/done-compaction.md` — `Done` 计划行冷快照（`{HARNESS_DIR}/archived/plans/`）、Profile A（瘦 Done 行）/ Profile B（不留 Done 行）、原子更新约束、仓库级采用声明模板、合并前 SSOT 与事实一致门禁。
 - `references/effort-estimation.md` — Agent-oriented 工期与工作量预估（T 恤尺码 + agent 会话带）；**禁止**混入人天 / FTE / 人类日历；Assignment / PRD / 架构文档字段名建议。
+- `references/harness-bootstrap-and-agents-layering.md` — 新仓初始化蓝图：`{HARNESS_DIR}` 建立步骤、根与 `.agents/AGENTS.md` 职责切分、分目录 `AGENTS.md` 触发条件与模板。
