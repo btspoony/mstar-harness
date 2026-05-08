@@ -21,12 +21,26 @@ Core value:
 
 ## Quick Start
 
-### OpenCode(Recommended) Installation
+### OpenCode (Recommended): CLI Install
+
+- Use the `mstar-harness` CLI:
+  - `npx mstar-harness init`
+  - or `bunx mstar-harness init`
+- The CLI will:
+  - ensure `"$schema": "https://opencode.ai/config.json"` in `opencode.json`
+  - ensure and deduplicate the Morning Star plugin entry
+  - configure role model mapping with interactive or non-interactive flows
+  - run target-aware self-check after writing
+
+For full CLI usage and advanced options (`--yes`, `--dry-run`, `--output`, `doctor`), see [`docs/cli.md`](docs/cli.md).
+
+### OpenCode: Manual Install (Alternative)
 
 - Plugin install:
   - Add plugin config in `opencode.json`:
     ```json
     {
+      "$schema": "https://opencode.ai/config.json",
       "plugin": [
         "superpowers@git+https://github.com/obra/superpowers.git",
         "morning-star@git+https://github.com/btspoony/mstar-harness.git"

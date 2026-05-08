@@ -1,0 +1,21 @@
+{
+  "name": "mstar-harness",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "mstar-harness": "./dist/mstar-harness.js"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --target node --outfile dist/mstar-harness.js",
+    "check": "bun run src/index.ts --help"
+  },
+  "engines": {
+    "bun": ">=1.2.17"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.4.2",
+    "commander": "^14.0.3",
+    "picocolors": "^1.1.1"
+  }
+}
