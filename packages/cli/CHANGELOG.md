@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `mstar-harness` CLI are documented in this file.
+All notable changes to the `@mstar-harness/cli` package are documented in this file.
 
 ## 0.2.0
 

@@ -6,7 +6,20 @@ import type { AgentAdapter, Scope } from "../types";
 import { ensureObject, normalizeModelList, resolveProjectRoot } from "../utils";
 
 const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
-const MORNING_STAR_PLUGIN = "morning-star@git+https://github.com/btspoony/mstar-harness.git";
+const MSTAR_OPENCODE_PLUGIN = "@mstar-harness/opencode@latest";
+
+function isLegacyMorningStarGitPlugin(plugin: string): boolean {
+  return plugin.startsWith("morning-star@git+https://github.com/btspoony/mstar-harness.git");
+}
+
+function isMstarHarnessOpencodePlugin(plugin: string): boolean {
+  const p = plugin.trim();
+  return p === "@mstar-harness/opencode" || p.startsWith("@mstar-harness/opencode@");
+}
+
+function isAnyMstarHarnessOpencodeSlot(plugin: string): boolean {
+  return isLegacyMorningStarGitPlugin(plugin) || isMstarHarnessOpencodePlugin(plugin);
+}
 
 function getOpencodeModels() {
   const raw = execFileSync("opencode", ["models"], { encoding: "utf8" });
@@ -34,22 +47,14 @@ function updatePluginList(config: Record<string, unknown>) {
   const next = ensureObject(config);
   const existing = Array.isArray(next.plugin) ? next.plugin : [];
   const result: string[] = [];
-  let hasMorningStar = false;
   for (const item of existing) {
     if (typeof item !== "string") continue;
     const plugin = item.trim();
     if (!plugin) continue;
-    const isMorningStar = plugin.startsWith("morning-star@git+https://github.com/btspoony/mstar-harness.git");
-    if (isMorningStar) {
-      if (!hasMorningStar) {
-        result.push(plugin);
-        hasMorningStar = true;
-      }
-      continue;
-    }
+    if (isAnyMstarHarnessOpencodeSlot(plugin)) continue;
     if (!result.includes(plugin)) result.push(plugin);
   }
-  if (!hasMorningStar) result.push(MORNING_STAR_PLUGIN);
+  if (!result.includes(MSTAR_OPENCODE_PLUGIN)) result.push(MSTAR_OPENCODE_PLUGIN);
   next.plugin = result;
   return next;
 }
@@ -73,10 +78,10 @@ function validateSetup(config: Record<string, unknown>) {
   }
 
   const plugins = Array.isArray(config.plugin) ? config.plugin : [];
-  const hasMorningStar = plugins.some(
-    (item) => typeof item === "string" && item.startsWith("morning-star@git+https://github.com/btspoony/mstar-harness.git"),
+  const hasMstarOpencode = plugins.some(
+    (item) => typeof item === "string" && isAnyMstarHarnessOpencodeSlot(item.trim()),
   );
-  if (!hasMorningStar) errors.push("Missing morning-star plugin entry in `plugin`.");
+  if (!hasMstarOpencode) errors.push("Missing @mstar-harness/opencode plugin entry in `plugin` (or legacy morning-star git plugin).");
 
   const agent = ensureObject(config.agent);
   for (const roleId of ALL_ROLES) {
@@ -101,6 +106,6 @@ export const opencodeAdapter: AgentAdapter = {
   validateConfig: (config) => validateSetup(config),
   printPostSetupSummary: () => {
     console.log(`Schema: ${OPENCODE_CONFIG_SCHEMA} (ensured)`);
-    console.log(`Plugin: ${MORNING_STAR_PLUGIN} (ensured, deduplicated)`);
+    console.log(`Plugin: ${MSTAR_OPENCODE_PLUGIN} (ensured; legacy git morning-star entries removed)`);
   },
 };

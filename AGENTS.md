@@ -6,7 +6,7 @@ Use this document as the primary maintenance contract for contributors and agent
 ## Scope
 
 - Default intent in this workspace: maintain Morning Star harness behavior, docs, and host adapters.
-- Repository layout uses a monorepo-style split: root package for OpenCode plugin runtime, `packages/cli` for standalone CLI implementation.
+- Repository layout uses a monorepo-style split: `packages/opencode` for the publishable OpenCode plugin (`@mstar-harness/opencode`), `packages/cli` (`@mstar-harness/cli`) for the standalone CLI.
 - Do not treat this repo like a product feature/codebase task unless explicitly requested.
 - Runtime execution rules for users/agents live in `mstar-*` skills; this file defines **maintenance behavior**.
 
@@ -43,7 +43,7 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, and Codex
 
 - Do align changes with the current harness invariants before editing downstream docs/prompts.
 - Do update bilingual docs together when user-facing behavior changes.
-- Do keep CLI implementation changes inside `packages/cli` and keep plugin runtime changes in root plugin paths.
+- Do keep CLI implementation changes inside `packages/cli` and OpenCode plugin packaging inside `packages/opencode`.
 - Do keep role shells thin and maintain richer role behavior in role-skill references.
 - Do keep commit scope coherent (one concern per commit when possible).
 - Do verify any changed command/config snippets are still runnable.
@@ -119,9 +119,9 @@ If one of these checks fails, stop and report why.
 - Superpowers alignment contract -> `skills/mstar-superpowers-align/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:
-  - OpenCode -> `.opencode/skills/mstar-host/*`
+  - OpenCode -> `packages/opencode/skills/mstar-host/*` (npm: `@mstar-harness/opencode`)
   - Cursor -> `.cursor/skills/mstar-host/*`
-- CLI package -> `packages/cli/*` (own package scope and local `AGENTS.md`)
+- CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
 - Codex plugin manifest -> `.codex-plugin/plugin.json`
 - Codex marketplace catalog -> `.codex/marketplace.json`
 - Maintenance policy (this file) -> `AGENTS.md`

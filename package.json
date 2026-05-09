@@ -3,7 +3,6 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "main": ".opencode/plugins/mstar.ts",
   "workspaces": [
     "packages/*"
   ],
@@ -11,12 +10,14 @@
     "typecheck": "bunx tsc --pretty false",
     "cli:dev": "MSTAR_CLI_PROJECT_ROOT=$PWD bun run --cwd packages/cli dev",
     "cli:build": "bun run --cwd packages/cli build",
-    "cli:publish:dry-run": "npm publish --workspace packages/cli --dry-run",
-    "cli:publish": "npm publish --workspace packages/cli"
+    "cli:publish:dry-run": "npm publish --workspace @mstar-harness/cli --dry-run",
+    "cli:publish": "npm publish --workspace @mstar-harness/cli",
+    "opencode:build": "bun run --cwd packages/opencode build",
+    "opencode:publish:dry-run": "npm publish --workspace @mstar-harness/opencode --dry-run",
+    "opencode:publish": "npm publish --workspace @mstar-harness/opencode"
   },
   "packageManager": "bun@1.2.17",
   "devDependencies": {
-    "@opencode-ai/plugin": "1.4.8",
     "@types/node": "^25.6.0"
   }
 }

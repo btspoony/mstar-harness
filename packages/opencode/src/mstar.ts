@@ -2,8 +2,8 @@
  * MorningStarHarness plugin for OpenCode.
  *
  * - Injects one-time harness bootstrap into first user message.
- * - Registers skill paths for both repo-level and .opencode skills.
- * - Loads agent definitions from agents/*.md into runtime config.
+ * - Registers skill paths for workspace `skills/` and packaged host skills.
+ * - Loads agent definitions from workspace `agents/*.md` into runtime config.
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import fs from "node:fs";
@@ -21,13 +21,14 @@ type MessagePart = { type: string; text?: string };
 type ChatMessage = { info: { role: string }; parts: MessagePart[] };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../..");
-const skillsDirs = [
-  path.join(repoRoot, "skills"),
-  path.join(repoRoot, ".opencode", "skills"),
-];
-const agentsDir = path.join(repoRoot, "agents");
-const bootstrapAgentsPath = path.join(repoRoot, ".opencode", "AGENTS.md");
+/** Published layout: `dist/mstar.js` -> package root is one level up. */
+const packageRoot = path.resolve(__dirname, "..");
+/** OpenCode project root (skills/agents live in the user's repo). */
+const workspaceRoot = process.cwd();
+
+const skillsDirs = [path.join(workspaceRoot, "skills"), path.join(packageRoot, "skills")];
+const agentsDir = path.join(workspaceRoot, "agents");
+const bootstrapAgentsPath = path.join(packageRoot, "AGENTS.md");
 const BOOTSTRAP_MARKER = "IMPORTANT_FOR_HARNESS";
 
 const extractFrontmatterAndBody = (content: string): FrontmatterAndBody => {

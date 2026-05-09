@@ -1,6 +1,13 @@
 {
-  "name": "mstar-harness",
+  "name": "@mstar-harness/cli",
   "version": "0.2.0",
+  "description": "Morning Star harness installer CLI (OpenCode, Cursor).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/btspoony/mstar-harness.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "files": [
     "dist"
@@ -21,5 +28,8 @@
     "@inquirer/prompts": "^8.4.2",
     "commander": "^14.0.3",
     "picocolors": "^1.1.1"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

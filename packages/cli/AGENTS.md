@@ -1,6 +1,6 @@
 # mstar-harness CLI Package Guide
 
-This `packages/cli` directory hosts the standalone `mstar-harness` CLI package.
+This `packages/cli` directory hosts the standalone `@mstar-harness/cli` package (binary: `mstar-harness`).
 
 ## Scope
 

@@ -4,20 +4,26 @@
     "": {
       "name": "morning-star",
       "devDependencies": {
-        "@opencode-ai/plugin": "1.4.8",
         "@types/node": "^25.6.0",
       },
     },
     "packages/cli": {
-      "name": "mstar-harness",
-      "version": "0.1.0",
+      "name": "@mstar-harness/cli",
+      "version": "0.2.0",
       "bin": {
-        "mstar-harness": "./dist/mstar-harness.js",
+        "mstar-harness": "dist/mstar-harness.js",
       },
       "dependencies": {
         "@inquirer/prompts": "^8.4.2",
         "commander": "^14.0.3",
         "picocolors": "^1.1.1",
+      },
+    },
+    "packages/opencode": {
+      "name": "@mstar-harness/opencode",
+      "version": "0.2.0",
+      "dependencies": {
+        "@opencode-ai/plugin": "1.4.8",
       },
     },
   },
@@ -66,6 +72,10 @@
 
     "@msgpackr-extract/msgpackr-extract-win32-x64": ["@msgpackr-extract/msgpackr-extract-win32-x64@3.0.3", "", { "os": "win32", "cpu": "x64" }, "sha512-x0fWaQtYp4E6sktbsdAqnehxDgEc/VwM7uLsRCYWaiGu0ykYdZPiS8zCWdnjHwyiumousxfBm4SO31eXqwEZhQ=="],
 
+    "@mstar-harness/cli": ["@mstar-harness/cli@workspace:packages/cli"],
+
+    "@mstar-harness/opencode": ["@mstar-harness/opencode@workspace:packages/opencode"],
+
     "@opencode-ai/plugin": ["@opencode-ai/plugin@1.4.8", "", { "dependencies": { "@opencode-ai/sdk": "1.4.8", "effect": "4.0.0-beta.48", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.1.100", "@opentui/solid": ">=0.1.100" }, "optionalPeers": ["@opentui/core", "@opentui/solid"] }, "sha512-arbggGAwR7vE6d5a/Ra8A7yECXYcOAPyRbJHzkofLLiVzyclsThFaL2SSCZw/UNJJTtt3L7JGl95phFodJq8tQ=="],
 
     "@opencode-ai/sdk": ["@opencode-ai/sdk@1.4.8", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-DTN0TwRxuBxdm2JvJO3Dg7Vp9/j8PFpTS/26qD6Mzi6UPI5+NBxgcDVkozKygi55Goj3AAQGJPp63qzbdc+8ag=="],
@@ -107,8 +117,6 @@
     "msgpackr": ["msgpackr@1.11.10", "", { "optionalDependencies": { "msgpackr-extract": "^3.0.2" } }, "sha512-iCZNq+HszvF+fC3anCm4nBmWEnbeIAfpDs6IStAEKhQ2YSgkjzVG2FF9XJqwwQh5bH3N9OUTUt4QwVN6MLMLtA=="],
 
     "msgpackr-extract": ["msgpackr-extract@3.0.3", "", { "dependencies": { "node-gyp-build-optional-packages": "5.2.2" }, "optionalDependencies": { "@msgpackr-extract/msgpackr-extract-darwin-arm64": "3.0.3", "@msgpackr-extract/msgpackr-extract-darwin-x64": "3.0.3", "@msgpackr-extract/msgpackr-extract-linux-arm": "3.0.3", "@msgpackr-extract/msgpackr-extract-linux-arm64": "3.0.3", "@msgpackr-extract/msgpackr-extract-linux-x64": "3.0.3", "@msgpackr-extract/msgpackr-extract-win32-x64": "3.0.3" }, "bin": { "download-msgpackr-prebuilds": "bin/download-prebuilds.js" } }, "sha512-P0efT1C9jIdVRefqjzOQ9Xml57zpOXnIuS+csaB4MdZbTdmGDLo8XhzBG1N7aO11gKDDkJvBLULeFTo46wwreA=="],
-
-    "mstar-harness": ["mstar-harness@workspace:packages/cli"],
 
     "multipasta": ["multipasta@0.2.7", "", {}, "sha512-KPA58d68KgGil15oDqXjkUBEBYc00XvbPj5/X+dyzeo/lWm9Nc25pQRlf1D+gv4OpK7NM0J1odrbu9JNNGvynA=="],
 

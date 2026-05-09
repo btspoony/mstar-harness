@@ -23,9 +23,9 @@
 
 ### CLI Install
 
-- 使用 `mstar-harness` CLI：
-  - `npx mstar-harness init`
-  - 或 `bunx mstar-harness init`
+- 使用 `mstar-harness` CLI（npm 包名 `@mstar-harness/cli`）：
+  - `npx @mstar-harness/cli init`
+  - 或 `bunx @mstar-harness/cli init`
 - `init` 提供按 target 的引导式安装流程，将安装与基础配置一步完成。
 - CLI 当前支持的 target：
   - `opencode`
@@ -50,13 +50,13 @@
       "$schema": "https://opencode.ai/config.json",
       "plugin": [
         "superpowers@git+https://github.com/obra/superpowers.git",
-        "morning-star@git+https://github.com/btspoony/mstar-harness.git"
+        "@mstar-harness/opencode@latest"
       ]
     }
     ```
   - 重启 OpenCode
 
-OpenCode 的详细安装与迁移说明见 `.opencode/INSTALL.md`。
+OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 
 #### Cursor
 
