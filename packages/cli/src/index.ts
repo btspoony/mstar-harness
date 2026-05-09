@@ -198,6 +198,11 @@ function runDoctor(options: DoctorOptions) {
   const errors = adapter.validateConfig?.(config) || [];
   console.log(`Config file: ${configPath}`);
   if (!errors.length) {
+    const warnings = adapter.getDoctorWarnings?.(config) || [];
+    if (warnings.length) {
+      console.log(pc.yellow(`Doctor: ${warnings.length} recommendation(s) (still healthy):`));
+      for (const line of warnings) console.log(`  - ${line}`);
+    }
     console.log(pc.green("Doctor result: healthy"));
     return;
   }

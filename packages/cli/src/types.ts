@@ -39,6 +39,8 @@ export type AgentAdapter = {
     assignments: Record<string, string>,
   ) => Record<string, unknown>;
   validateConfig?: (config: Record<string, unknown>) => string[];
+  /** Non-fatal notices printed after doctor validation passes (e.g. migration hints). */
+  getDoctorWarnings?: (config: Record<string, unknown>) => string[];
   runInstallInit?: (scope: Scope, dryRun: boolean) => { location: string; notes: string[] };
   runInstallDoctor?: (scope: Scope) => { location: string; errors: string[] };
   printPostSetupSummary?: (config: Record<string, unknown>) => void;

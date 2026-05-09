@@ -63,7 +63,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 - 本地插件安装（直接 clone）：
   - `mkdir -p ~/.cursor/plugins/local`
   - `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/mstar-harness`
-  - 重启 Cursor or 运行 `Developer: Reload Window`
+  - 重启 Cursor 或运行 `Developer: Reload Window`
 
 #### Codex
 

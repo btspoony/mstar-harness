@@ -81,8 +81,13 @@ If validation fails, `doctor` exits with a non-zero status code.
 OpenCode `init` enforces these baseline requirements in `opencode.json`:
 
 - `"$schema": "https://opencode.ai/config.json"`
-- `plugin` contains `@mstar-harness/opencode@latest` (legacy `morning-star@git+…` entries are removed on init)
+- `plugin` contains `@mstar-harness/opencode@latest` (legacy `morning-star@git+…` lines for `btspoony/mstar-harness` are stripped on init, including URLs without `.git`, `ssh://`, or `#tag`)
 - all Morning Star roles have `agent.<role>.model`
+
+## What `doctor` Checks (OpenCode)
+
+- Same schema, role models, and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
+- If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
 
 ## Options Reference
 

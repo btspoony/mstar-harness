@@ -8,8 +8,20 @@ import { ensureObject, normalizeModelList, resolveProjectRoot } from "../utils";
 const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
 const MSTAR_OPENCODE_PLUGIN = "@mstar-harness/opencode@latest";
 
+/**
+ * Historical git-based `morning-star@git+…` plugin lines for this harness repo.
+ * Covers https / ssh / scp-style URLs, with or without `.git`, optional #fragment.
+ */
 function isLegacyMorningStarGitPlugin(plugin: string): boolean {
-  return plugin.startsWith("morning-star@git+https://github.com/btspoony/mstar-harness.git");
+  const raw = plugin.trim();
+  const match = /^morning-star@git\+(.+)$/i.exec(raw);
+  if (!match) return false;
+  const spec = match[1].split("#")[0].trim().toLowerCase();
+  return (
+    /^https?:\/\/github\.com\/btspoony\/mstar-harness(\.git)?(\/.*)?$/.test(spec) ||
+    /^ssh:\/\/git@github\.com\/btspoony\/mstar-harness(\.git)?(\/.*)?$/.test(spec) ||
+    /^git@github\.com:btspoony\/mstar-harness(\.git)?$/.test(spec)
+  );
 }
 
 function isMstarHarnessOpencodePlugin(plugin: string): boolean {
@@ -93,6 +105,27 @@ function validateSetup(config: Record<string, unknown>) {
   return errors;
 }
 
+function getDoctorWarnings(config: Record<string, unknown>): string[] {
+  const plugins = Array.isArray(config.plugin) ? config.plugin : [];
+  const strings = plugins
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const hasNpm = strings.some(isMstarHarnessOpencodePlugin);
+  const hasLegacy = strings.some(isLegacyMorningStarGitPlugin);
+  if (hasLegacy && !hasNpm) {
+    return [
+      "Plugin list uses legacy `morning-star@git+…` for this harness; run `mstar-harness init --target opencode` (or `--yes` with model flags) to rewrite to `@mstar-harness/opencode@latest`.",
+    ];
+  }
+  if (hasLegacy && hasNpm) {
+    return [
+      "Both legacy `morning-star@git+…` and `@mstar-harness/opencode` appear in `plugin`; run `init` again to dedupe and keep a single npm plugin line.",
+    ];
+  }
+  return [];
+}
+
 export const opencodeAdapter: AgentAdapter = {
   target: "opencode",
   mode: "config",
@@ -104,6 +137,7 @@ export const opencodeAdapter: AgentAdapter = {
     return applyAssignments(withPlugin, assignments);
   },
   validateConfig: (config) => validateSetup(config),
+  getDoctorWarnings: (config) => getDoctorWarnings(config),
   printPostSetupSummary: () => {
     console.log(`Schema: ${OPENCODE_CONFIG_SCHEMA} (ensured)`);
     console.log(`Plugin: ${MSTAR_OPENCODE_PLUGIN} (ensured; legacy git morning-star entries removed)`);
