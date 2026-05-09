@@ -58,7 +58,7 @@
 ## Plan 目录与审查报告（启用 `{PLAN_DIR}` 时）
 
 - 进入 `InReview` 后，QC 书面产出按 `mstar-plan-conventions` 落入 `{PLAN_DIR}/reports/<plan-id>/`（如 `*-qc1.md` … `*-qc-consolidated.md`）；勿与主 plan 文件混写为「唯一草稿」后又删，保留可追溯历史。**多 batch 的同一 plan**：完整 QC 三审**默认在整 plan dev 完成后一次**（非每 batch），见 `mstar-plan-conventions`「QC 三审触发时机」。
-- 非阻断项与后续技术债：PM 汇总后写入 `{HARNESS_DIR}/status.json` 的 `metadata.residual_findings[<plan-id>]`（**open**）；关闭后迁入 `{HARNESS_DIR}/archived/residuals/<plan-id>.json`，与 `mstar-review-qc` 一致。每条 **`severity`** 遵守 `mstar-plan-conventions`「Residual findings：severity（SSOT，机器字段）」。
+- 非阻断项与后续技术债：PM 汇总后写入 `{HARNESS_DIR}/status.json` 根级 `residual_findings[<plan-id>]`（**open**，与 `plans` 平级；canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）；关闭后迁入 `{HARNESS_DIR}/archived/residuals/<plan-id>.json`，与 `mstar-review-qc` 一致。每条 **`severity`** 遵守 `mstar-plan-conventions`「Residual findings：severity（SSOT，机器字段）」。
 
 ## 快速判定（PM）
 

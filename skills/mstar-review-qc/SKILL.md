@@ -45,7 +45,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 3. 检查 `git diff` 及相关历史；若 Assignment 启用功能分支策略，再次核对当前分支与 **`Working branch` / `Branch policy`** 一致（无授权则不应在默认分支上堆功能改动）。
 4. 运行对应语言的 lint 和静态分析。
 5. 按本 skill 审查清单进行人工审查。
-6. 产出带严重等级和证据的结构化发现。写入 **`{HARNESS_DIR}/status.json`** 的 **`metadata.residual_findings[].severity` 时**，**仅允许** `mstar-plan-conventions` `references/status-and-residuals.md` 中 **「Residual findings：severity（SSOT，机器字段）」** 的枚举与映射表（报告小节 **Critical / Warning / Suggestion** → JSON 档位）；**不要**把报告标题字符串直接当作 `severity`。
+6. 产出带严重等级和证据的结构化发现。PM 将条目写入 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>][]`**（canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）时，其 **`severity`** **仅允许** `mstar-plan-conventions` `references/status-and-residuals.md` 中 **「Residual findings：severity（SSOT，机器字段）」** 的枚举与映射表（报告小节 **Critical / Warning / Suggestion** → JSON 档位）；**不要**把报告标题字符串直接当作 `severity`。
 7. **报告入库（Git）**：将 QC 报告 **`.md`** 写入 `{PLAN_DIR}/reports/<plan-id>/` 后，在业务仓根执行 **`git add`**（**仅**本次报告路径）与 **`git commit`**，并在 Completion Report 给出 **真实** `git log -1 --oneline`。**禁止**仅完成 Write/Edit 而不提交（权限与例外见各 `agents/qc-specialist*.md`）。
 8. **禁止收尾套话**：报告与 commit 成功后，**不得**向终端用户追问「是否要交付报告」「下一步是否通知 PM」等；须在同一轮内输出完整 **Completion Report v2** 结束（见各 `agents/qc-specialist*.md` **「回合结束方式」**）。
 
@@ -82,7 +82,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 
 ## 标准输出模板
 
-落盘到 **`{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc#.md`** 时：文件**最上方**须为 YAML frontmatter（`report_kind`、`reviewer`、`reviewer_index`、`plan_id`、`verdict`、`generated_at` 等，见 `agents/qc-specialist*.md`），**紧接着**再写下列 Markdown 正文（可将 **Reviewer Metadata** 与 frontmatter 对齐，避免矛盾）。**Findings 下三节标题**（Critical / Warning / Suggestion）为**人类可读分类**；PM 将条目写入 `metadata.residual_findings` 时的 **`severity` 机器字段**以 `mstar-plan-conventions` `references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」** 为准。
+落盘到 **`{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc#.md`** 时：文件**最上方**须为 YAML frontmatter（`report_kind`、`reviewer`、`reviewer_index`、`plan_id`、`verdict`、`generated_at` 等，见 `agents/qc-specialist*.md`），**紧接着**再写下列 Markdown 正文（可将 **Reviewer Metadata** 与 frontmatter 对齐，避免矛盾）。**Findings 下三节标题**（Critical / Warning / Suggestion）为**人类可读分类**；PM 将条目写入根级 **`residual_findings`**（见 `mstar-plan-conventions` **SKILL.md** 开篇）时的 **`severity` 机器字段**以 `mstar-plan-conventions` `references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」** 为准。
 
 ```markdown
 # Code Review Report
@@ -156,7 +156,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 ## Residual Findings 留档门禁
 
 - 当阻断项（`Critical`）修复后仍有未关闭 **Warning / Suggestion** 类问题或技术债，不得仅在对话中口头说明，必须留档；登记 **`severity`** 时遵守 `mstar-plan-conventions` `references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」**。
-- **启用 plan 管理且存在 `plan-id` 时**：**待跟踪（open）** residual 的 **SSOT** 为 **`{HARNESS_DIR}/status.json`** → **`metadata.residual_findings[<plan-id>]`**；PM 在 consolidated 决策中分配 **稳定 `id`（R1…）** 后须**写入该数组**（`source` 指回 `-qc*.md` 等）。**已关闭**条目归档至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（字段与严重等级见 `mstar-plan-conventions`），与 **`{PLAN_DIR}/reports/<plan-id>/`** 交叉引用。
+- **启用 plan 管理且存在 `plan-id` 时**：**待跟踪（open）** residual 的 **SSOT** 为 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）；PM 在 consolidated 决策中分配 **稳定 `id`（R1…）** 后须**写入该数组**（`source` 指回 `-qc*.md` 等）。**已关闭**条目归档至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（字段与严重等级见 `mstar-plan-conventions`），与 **`{PLAN_DIR}/reports/<plan-id>/`** 交叉引用。
 - **主 plan**：仅作**人类可读索引**（可选）——复述 `id` 与摘要并指向 **`{HARNESS_DIR}/status.json`**；**不得**作为与 SSOT 脱钩的唯一登记处（见 `mstar-plan-conventions` `references/plan-files-and-reports.md`「Residual findings：权威在哪」）。
 - 可选：`@project-manager` 维护 **`metadata.tech_debt_summary`** 作为跨 plan 聚合视图（与 `residual_findings` 互补，见 `mstar-plan-conventions`）。
 - 若无 `{PLAN_DIR}`：写入项目认可的进度载体或根级 `notes`（结构化条目），仍须含 `id` 与跟踪字段。
@@ -166,7 +166,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 
 ### Residual 关闭与验证（与 `mstar-plan-conventions` 对齐）
 
-- 后续轮次中若某 R# 已修复：审查/QA 结论应**指向**可复核证据（diff、测试、复现步骤）；**`@project-manager`** 或 **`@qa-engineer`** 补全关闭字段后，将条目 **追加**至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**，并从 **`metadata.residual_findings[<plan-id>]`** 中**移除**（主列表仅保留 **open**）。
+- 后续轮次中若某 R# 已修复：审查/QA 结论应**指向**可复核证据（diff、测试、复现步骤）；**`@project-manager`** 或 **`@qa-engineer`** 补全关闭字段后，将条目 **追加**至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**，并从 **open 列表**（根级 **`residual_findings[<plan-id>]`**；若仅存 legacy 侧则从该处）中**移除**（主列表仅保留 **open**）。
 - **`waived` / `superseded` / `duplicate`** 须在 `closure_note`（及必要时 `superseded_by`）中写清依据；豁免类应与产品/风险口径一致，不得由执行方单方面静默关闭。
 - **不得**从主列表删除仍为 **open** 的项；**不推荐**把已关闭项长期留在 **`{HARNESS_DIR}/status.json`**（应用文件归档减负，见 `mstar-plan-conventions`）。
 

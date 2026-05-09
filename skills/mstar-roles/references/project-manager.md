@@ -93,7 +93,7 @@
 - **条件加载（避免技能名当背景噪音）**：
   - `**dispatching-parallel-agents**`：**仅当**本调度轮次存在 **≥2 条可并行实现轨**（`1.1` **Q5** 为是、`Dev routing` 写明 parallel、或 `tasks` 中已标并行且无串行依赖）时，须在 **Status Update** 与（插件启用时）**每条相关实现 Assignment 的 `Superpowers**` 中显式写入 `**dispatching parallel agents**` 或技能 ID。**单轨串行实现不要**为凑字段强写该项。
   - `**using-git-worktrees**`：**仅当** **≥2 个可写承接方** 可能 **并发** 修改 **同一业务 Git 仓库** 时与上一项 **叠用**，并写明各流 **检出路径约定**；否则不写。
-- `**writing-plans` 落盘门限**：技能正文若写 `docs/superpowers/plans/`，**忽略该路径**。计划文件必须写入 `mstar-plan-conventions` skill 解析到的 `**{PLAN_DIR}**`（推荐 `<plan-id>-<plan-name>.md`，或与项目既有命名一致）；handoff 与 Assignment 中写明实际 `**{HARNESS_DIR}**`、`**{PLAN_DIR}**` 与 `**plan-id**`（用于 `reports/<plan-id>/`、`metadata.residual_findings` 与 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json**`）。
+- `**writing-plans` 落盘门限**：技能正文若写 `docs/superpowers/plans/`，**忽略该路径**。计划文件必须写入 `mstar-plan-conventions` skill 解析到的 `**{PLAN_DIR}**`（推荐 `<plan-id>-<plan-name>.md`，或与项目既有命名一致）；handoff 与 Assignment 中写明实际 `**{HARNESS_DIR}**`、`**{PLAN_DIR}**` 与 `**plan-id**`（用于 `reports/<plan-id>/`、根级 **`residual_findings`**（见 `mstar-plan-conventions` **SKILL.md** 开篇）与 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json**`）。
 - **按任务选用**：`executing-plans`（锁 plan、检查点；跨会话续跑）；`brainstorming`（范围模糊）；`subagent-driven-development` **仅当**本会话由你顺序多代理 **或** 已 `Delegation: allowed` 覆盖 informal 子步——**禁止**与默认 `Delegation: forbidden` 同条 Superpowers 混写；替代组合与 per-task 子审门限见 `**mstar-superpowers-align` skill「Delegation 与 Superpowers 清单一致」**及 **「subagent-driven-development 与上游 … 模板」**。
 
 ### 触发词（编排时请多用，便于宿主/插件匹配技能）
@@ -259,11 +259,11 @@
 #### Residual Findings 留档（强制）
 
 - 当 `Critical`/阻断项修复后，仍存在 QC 报告 **Warning / Suggestion** 节中的发现或技术债等**非阻断问题**时，不得口头带过，必须留档。每条 `**severity`** **仅允许** `mstar-plan-conventions` skill 小节 **「Residual findings：severity（SSOT，机器字段）」** 中的五档枚举；**Warning 节 → `high`/`medium`、Suggestion 节 → `low`/`nit`** 按该节表格执行，**禁止**写入 `warning` 等非法值。
-- **权威落盘（与 `mstar-plan-conventions` skill / `mstar-review-qc` skill 一致）**：**优先**写入 `**{HARNESS_DIR}/status.json`** 的 `**metadata.residual_findings[<plan-id>]**`（open 列表 SSOT）。在汇总中**分配稳定 `id`（R1…）后，同一轮次内写入该 JSON**，`source` 须能指回具体 QC 报告文件名或 reviewer。
-- **主 plan 文档**：**可选**——在 `Plan Path` 对应主 plan 增加「Residual findings（索引）」小节，**复述** `id` + 标题 + 一句摘要，并**显式指向** `**{HARNESS_DIR}/status.json`** 中的同键；**禁止**仅写 plan、不写 `metadata.residual_findings`（会导致 SSOT 缺失）。若无结构化 `**{HARNESS_DIR}` / `{PLAN_DIR}`**，再退化为项目认可的进度载体或根级 `notes`（仍须含同等字段意图）。
+- **权威落盘（与 `mstar-plan-conventions` skill / `mstar-review-qc` skill 一致）**：写入 `**{HARNESS_DIR}/status.json`** 根级 `**residual_findings[<plan-id>]**`（与 `plans` 平级；canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）。在汇总中**分配稳定 `id`（R1…）后，同一轮次内写入该 JSON**，`source` 须能指回具体 QC 报告文件名或 reviewer。
+- **主 plan 文档**：**可选**——在 `Plan Path` 对应主 plan 增加「Residual findings（索引）」小节，**复述** `id` + 标题 + 一句摘要，并**显式指向** `**{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**；**禁止**仅写 plan、不写根级 **`residual_findings`**（会导致 SSOT 缺失）。若无结构化 `**{HARNESS_DIR}` / `{PLAN_DIR}`**，再退化为项目认可的进度载体或根级 `notes`（仍须含同等字段意图）。
 - 每条留档至少包含：`id`、`title`、`severity`、`source`（哪位 QC/哪轮）、`scope`（影响范围）、`decision`（defer/accept/risk-accepted）、`owner`、`target milestone/date`、`tracking link`（issue/plan section）。
-- `Approve with residuals` 仅在**无未关闭阻断项**时允许；且必须附带 Residual Findings 清单与后续跟踪安排（清单与 `**metadata.residual_findings[<plan-id>]`** 一致或可解析对齐）。
-- PM 负责在 `Status Update` 的 `Evidence Snapshot` 或 `Next` 中明确「剩余问题已写入 `**metadata.residual_findings**`（及可选主 plan 索引）」。
+- `Approve with residuals` 仅在**无未关闭阻断项**时允许；且必须附带 Residual Findings 清单与后续跟踪安排（清单与根级 `**residual_findings[<plan-id>]`** 一致或可解析对齐）。
+- PM 负责在 `Status Update` 的 `Evidence Snapshot` 或 `Next` 中明确「剩余问题已写入根级 `**residual_findings**`（及可选主 plan 索引）」。
 
 #### 快速判定规则
 
@@ -686,8 +686,8 @@ Decision:
   - 若实现中发现新约束，先回写 plan（并必要时补 clarify）再继续 implement。
 - **开发完成 → InReview**：**该 plan 约定范围内的实现已全部交付**、且你确认可进入审查后，将 plan 状态更新为 `InReview`，默认进入 `QC三审并行（@qc-specialist/@qc-specialist-2/@qc-specialist-3）`；Hotfix 可走 `QC单审快速通道（@qc-specialist）`。**多 batch 滚动实现时**：在此之前**不**派完整 QC 三审（避免 `reports/<plan-id>/` 多套报告混乱；见 `mstar-plan-conventions` skill「QC 三审触发时机」）。分派 QC 时须在 Assignment 写明 `**Review cwd / Worktree path`**、`**Working branch**`、`**plan_id**`、`**Review range` / `Diff basis**`，且 **三份 QC Assignment 中后两项须逐字相同**，使三审 **针对同一 plan/feature 与同一 diff 范围**、并在 **该 feature 的实现检出目录** 上审查。**随后**由 @project-manager 按“QC 三审轻量汇总”输出统一 `QC Consolidated Decision`，再交 @qa-engineer 验证；**分派 @qa-engineer 时须照抄（或仅在有理由时显式改写并说明）与 QC **完全相同**的 `**plan_id` + `Review range` / `Diff basis` + `Review cwd` + `Working branch`**，不得留空导致 QA 在错误 cwd 或错误变更范围上取证
 - **QC 发现问题 → Dev 修复闭环**：若统一结论为 `Request Changes` 或包含必须修复项，PM 需立即按模块指派给对应 dev owner 修复（前端给 `@frontend-dev`，后端给 `@fullstack-dev`，跨模块可并行给 `@fullstack-dev-2`）；修复完成后回流 QC/QA 复验；**再派三审**时用 **新波次文件名**（如 `-rev2`）并在汇总中标明有效波次（`mstar-plan-conventions` skill）
-- **残留问题归档闭环（强制）**：阻断项修复后，若仍有非阻断 finding，PM 必须登记 Residual Findings（**优先** `**{HARNESS_DIR}/status.json`** 的 `metadata.residual_findings[<plan-id>]`，见 `mstar-plan-conventions` skill）；亦可辅以主 plan 小节；未完成留档不得宣告最终收口。**语义**：未登记等于**未向仓库声明**已知债与跟踪约定；下一会话无法把 QC 聊天当权威来源。
-- **Residual 关闭与归档**：当 R# 已修复并经验证（或已豁免/被替代），由你或 @qa-engineer 写全关闭字段后，**追加**至 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（`schema_version` + `entries[]`，每条含 `archived_at`），并从 `**metadata.residual_findings[<plan-id>]**` 中**删除**该条，使 `**{HARNESS_DIR}/status.json`** 仅保留 **open**；**禁止**硬删 open 项（细则见 `mstar-plan-conventions` skill「Residual findings 生命周期」）。**语义**：拖延归档会让 SSOT 与真实关闭状态长期错位，损害跨 agent handoff 与复盘时的**可引用性**。
+- **残留问题归档闭环（强制）**：阻断项修复后，若仍有非阻断 finding，PM 必须登记 Residual Findings（**canonical**：`**{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**，见 `mstar-plan-conventions` **SKILL.md** 开篇）；亦可辅以主 plan 小节；未完成留档不得宣告最终收口。**语义**：未登记等于**未向仓库声明**已知债与跟踪约定；下一会话无法把 QC 聊天当权威来源。
+- **Residual 关闭与归档**：当 R# 已修复并经验证（或已豁免/被替代），由你或 @qa-engineer 写全关闭字段后，**追加**至 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（`schema_version` + `entries[]`，每条含 `archived_at`），并从 **open 列表**（根级 **`residual_findings[<plan-id>]`**；条目若仅存 legacy 侧则从该处）**删除**该条，使 `**{HARNESS_DIR}/status.json`** 仅保留 **open**；**禁止**硬删 open 项（细则见 `mstar-plan-conventions` `references/status-and-residuals.md`）。**语义**：拖延归档会让 SSOT 与真实关闭状态长期错位，损害跨 agent handoff 与复盘时的**可引用性**。
 - **技术债一览**：若项目启用 `**metadata.tech_debt_summary`**，在批量变更 open R# 或里程碑收口时**同步刷新**（与 `residual_findings` 对齐口径），见 `mstar-plan-conventions` skill「`metadata.tech_debt_summary`」
 - **InReview → Done**：@qa-engineer 或你（@project-manager）确认验收通过后，sign-off 并将状态更新为 `Done`；收口叙述中显式包含 `**verification before completion`**（或 `verification-before-completion`），即：结论须能指向**已运行的命令、输出、或可追溯的取证**（与 `mstar-harness-core` skill 反模式一致）。
 - **合并 / 删枝 / 发布策略**：需要拍板分支生命周期时，对用户或内部记录使用 `**finishing a development branch`**（或 `finishing-a-development-branch`），并按 `mstar-superpowers-align` skill 与运维/开发交接。
@@ -743,7 +743,7 @@ Decision:
 按 `mstar-plan-conventions` skill 解析 `**{HARNESS_DIR}`** 与 `**{PLAN_DIR}**`（优先 `**.agents/**` + `**.agents/plans/**`；否则遗留 `**.plans/**` 或 `**plans/**` 同目录布局）。
 若均不存在且任务需要 plan 管理，按以下步骤初始化：
 
-1. 创建 `**.agents/**`（`**{HARNESS_DIR}**`）、`**.agents/plans/**`（`**{PLAN_DIR}**`）；在 `**{HARNESS_DIR}/**` 下创建 `**status.json**`（含 `metadata.residual_findings`）；在 `**{PLAN_DIR}/**` 下创建 `**reports/README.md**`；在 `**{HARNESS_DIR}/**` 下创建 `**archived/residuals/**`（及可选 `**archived/residuals/README.md**`）；可选 `**{HARNESS_DIR}/notes.json**`；若启用知识库则加 `**{HARNESS_DIR}/knowledge/README.md**`（见 `mstar-plan-conventions` skill）。
+1. 创建 `**.agents/**`（`**{HARNESS_DIR}**`）、`**.agents/plans/**`（`**{PLAN_DIR}**`）；在 `**{HARNESS_DIR}/**` 下创建 `**status.json**`（推荐复制 **`mstar-plan-conventions/templates/status.empty.json`**；residual canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇；说明见 **`templates/README.md`**）；在 `**{PLAN_DIR}/**` 下创建 `**reports/README.md**`；在 `**{HARNESS_DIR}/**` 下创建 `**archived/residuals/**`（及可选 `**archived/residuals/README.md**`）；可选 `**{HARNESS_DIR}/notes.json**`（可复制 **`mstar-plan-conventions/templates/notes.empty.json`**）；若启用知识库则加 `**{HARNESS_DIR}/knowledge/README.md**`（见 `mstar-plan-conventions` skill）。
 2. **Git 跟踪策略**：默认**跟踪** `**{HARNESS_DIR}`**（含 `**{PLAN_DIR}**`）以利 clone 后 handoff；仅当项目要求本地私密时再整体 ignore，且已提交文档不得依赖被 ignore 的路径（同 `mstar-plan-conventions` skill「可到达性」）。
 3. **提交（业务 Git 仓库内强制）**：若本步在**项目仓库**内创建或修改了 `**{HARNESS_DIR}`** / `**{PLAN_DIR}**` 下文件，须在 Assignment 已批准的 `**Working branch**`（无则先与用户确认分支再操作）上立即 `**git add**` 相关路径并 `**git commit**`（英文 message，例如 `docs(agents): init harness for <plan-id>`）。随后 **Status Update** 的 **Evidence** 中附上 `git log -1 --oneline`。**禁止**只落盘不提交（用户独占 commit 或 Assignment 声明只读时除外，须在 Status 说明）。
 4. 若项目已有 `**.plans/`** 或 `**plans/**`（遗留同目录布局），直接使用，**不要**再创建 `**.agents/`**。
@@ -757,7 +757,7 @@ Decision:
 - **可选元数据**：在 `plans[].metadata` 中同步 `**working_branch` / `branch_policy` / `gates` / `phase` / `priority`** 等与 Assignment、程序路线图一致的字段，便于 `jq` 过滤与跨会话 handoff（键名与语义见 `mstar-plan-conventions` skill「plans[].metadata 标准可选字段」）；程序里程碑日志**优先**写入 `**{HARNESS_DIR}/notes.json`**（见 `mstar-plan-conventions` skill），避免根级 `metadata.notes` 撑大 `**{HARNESS_DIR}/status.json**`。
 - **分配**：按任务路由表 + 开发分配规则分配给合适的 subagent。
 - **推进**：每阶段完成后更新 progress/status。
-- **Done 收口**：确保 Done 标记与 `**{HARNESS_DIR}/status.json`** 同步；若 Done 的前置条件包含「关闭某批 R#」，核对对应条目已**归档**至 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json`** 且主列表中已无该项（或仍为 open 的已明确豁免并留档）。在关键节点（如进入 `Done`、重大 Status Update）若存在 open R#，应用一两句话点明**仍跟踪项与存放位置**（或 `metadata.residual_findings` 指针），避免「状态 Done 但债不可见」。
+- **Done 收口**：确保 Done 标记与 `**{HARNESS_DIR}/status.json`** 同步；若 Done 的前置条件包含「关闭某批 R#」，核对对应条目已**归档**至 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json`** 且主列表中已无该项（或仍为 open 的已明确豁免并留档）。在关键节点（如进入 `Done`、重大 Status Update）若存在 open R#，应用一两句话点明**仍跟踪项与存放位置**（根级 `residual_findings`，见 `mstar-plan-conventions` **SKILL.md** 开篇），避免「状态 Done 但债不可见」。
 - **分配时告知 subagent**：`**{HARNESS_DIR}`** 与 `**{PLAN_DIR}**` 的实际路径、完成后需更新主 plan 内**本人负责**的任务 checkbox + 相关段落 + `**{HARNESS_DIR}/status.json`**（细则见 `mstar-plan-conventions` skill「主 plan 内任务清单」）。
 
 ### PM 补充说明

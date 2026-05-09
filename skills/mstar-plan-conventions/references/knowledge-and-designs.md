@@ -44,14 +44,14 @@
 ## 与 `reports/`、`{PLAN_DIR}/residuals/` 的区分
 
 - `**reports/<plan-id>/`**：偏 **审查流程留档**（review、QC1/2/3、consolidated），只读历史。
-- `**{PLAN_DIR}/residuals/<plan-id>/`**：偏 **仍 open 的 R# 长文补充**（与 `**residual_findings`**，兼容 `metadata.residual_findings` 配套）；见下文「open residual 散文详情」。
+- `**{PLAN_DIR}/residuals/<plan-id>/`**：偏 **仍 open 的 R# 长文补充**（与根级 `**residual_findings**` 配套，canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）；见下文「open residual 散文详情」。
 - `**knowledge/**`：偏 **可复用的设计上下文**（规格、决策、分析），可被后续 plan 或多会话反复引用；三者可互链，但职责不混写。
 
 ---
 
 ## `{PLAN_DIR}/residuals/<plan-id>/`（可选·open residual 散文详情）
 
-当某条 open residual 需要**多于** `residual_findings[<plan-id>][]`（兼容 `metadata.residual_findings[<plan-id>][]`）里结构化字段所能承载的叙述时，可在本目录增加 **Markdown 散文**，作为 **SSOT 的补充**（**不替代** JSON；**权威仍以** `**{HARNESS_DIR}/status.json`** 中的 open 条目为准）。
+当某条 open residual 需要**多于** open 列表（根级 `residual_findings[<plan-id>][]`；若仅存 legacy 侧则同口径）里结构化字段所能承载的叙述时，可在本目录增加 **Markdown 散文**，作为 **SSOT 的补充**（**不替代** JSON；**权威仍以** `**{HARNESS_DIR}/status.json`** 中的 open 条目为准）。
 
 
 | 与相邻目录的分工                                  | 典型内容                                                                  |
@@ -61,10 +61,10 @@
 | `**{HARNESS_DIR}/knowledge/`**            | 可跨 plan 复用的**设计**上下文、规格修订、gap 分析（若文中顺带提到 residual，仍以 JSON + 本目录为跟踪权威） |
 
 
-**文件命名（推荐）**：`<finding-id>-<short-label>.md`，其中 `**finding-id`** 与该条在 `**residual_findings`**（兼容 `metadata.residual_findings`）中的 `**id**`（如 `R1`）或团队约定的 `**td-*` 等技术债编号**一致，便于 `detail_doc` 与目录互查。
+**文件命名（推荐）**：`<finding-id>-<short-label>.md`，其中 `**finding-id`** 与该条在 **open 列表**（根级 `**residual_findings**`，见 `mstar-plan-conventions` **SKILL.md** 开篇）中的 `**id**`（如 `R1`）或团队约定的 `**td-*` 等技术债编号**一致，便于 `detail_doc` 与目录互查。
 
 **登记**：在对应 open 条目中填写可选 `**detail_doc`**（仓库内相对路径，常形如 `**{PLAN_DIR}/residuals/<plan-id>/R1-….md**`）。**禁止**只写散文、不在 SSOT 中登记 open 行。
 
 **维护**：`**@project-manager`**（或与 Assignment 一致的可写角色）；`**@qc-specialist***` 宿主白名单通常**不含**本目录——审查结论仍以 `**reports/`** 为准，散文由 PM/实现方据结论整理。
 
-**关闭与归档**：当该条从 `**residual_findings[<plan-id>]`**（兼容 `metadata.residual_findings[<plan-id>]`）移除并**追加**至 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json`** 时，应将对应 `**.md**` 一并收口：可迁入 `**{HARNESS_DIR}/archived/knowledge/**`（若视为历史考据）、或团队约定的 `**{HARNESS_DIR}/archived/residuals/**` 子路径（与 `**.json**` 同批变更可追溯）；并在归档条目的 `**closure_evidence` / `closure_note**`（或团队约定字段）中**写明散文最终路径**。勿长期保留「JSON 已关闭而散文仍留在 `residuals/` 且声称仍 open」的状态。
+**关闭与归档**：当该条从 **open 列表**（根级 **`residual_findings[<plan-id>]`**；若仅存 legacy 侧则从该处）移除并**追加**至 `**{HARNESS_DIR}/archived/residuals/<plan-id>.json`** 时，应将对应 `**.md**` 一并收口：可迁入 `**{HARNESS_DIR}/archived/knowledge/**`（若视为历史考据）、或团队约定的 `**{HARNESS_DIR}/archived/residuals/**` 子路径（与 `**.json**` 同批变更可追溯）；并在归档条目的 `**closure_evidence` / `closure_note**`（或团队约定字段）中**写明散文最终路径**。勿长期保留「JSON 已关闭而散文仍留在 `residuals/` 且声称仍 open」的状态。

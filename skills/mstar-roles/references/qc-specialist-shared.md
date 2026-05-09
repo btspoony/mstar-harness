@@ -146,7 +146,7 @@ generated_at: "YYYY-MM-DD"
 ## Plan 与文档规范
 
 - Plan 目录和 status.json 的约定详见 `mstar-plan-conventions` skill。
-- 若 Assignment 含 **`plan-id`** 且项目已启用 `{PLAN_DIR}`：将书面 QC 报告落盘到 `{PLAN_DIR}/reports/<plan-id>/<plan-id>-{report_suffix}.md`；**新增** residual / 技术债由 @project-manager 汇总进 **`status.json`** 的 **`metadata.residual_findings[<plan-id>]`**，且**仅登记为待跟踪（open）** — **你不得**在 `status.json` 内将 R# 标为已关闭、**不得**从主列表删除 R#、**不得**擅自写入 **`archived/residuals/`**；关闭、验证与归档由 **@project-manager** / **@qa-engineer** 按 `mstar-plan-conventions` skill 执行。
+- 若 Assignment 含 **`plan-id`** 且项目已启用 `{PLAN_DIR}`：将书面 QC 报告落盘到 `{PLAN_DIR}/reports/<plan-id>/<plan-id>-{report_suffix}.md`；**新增** residual / 技术债由 @project-manager 汇总进 **`status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇），且**仅登记为待跟踪（open）** — **你不得**在 `status.json` 内将 R# 标为已关闭、**不得**从主列表删除 R#、**不得**擅自写入 **`archived/residuals/`**；关闭、验证与归档由 **@project-manager** / **@qa-engineer** 按 `mstar-plan-conventions` skill 执行。
 - **已关闭** R# 的权威档案在 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**；需要上下文时可 **Read** 该文件，报告中的 finding ID 应与之及 `reports/` 交叉引用。
 - **`{HARNESS_DIR}`** 与 **`{PLAN_DIR}`** 由 @project-manager 在分派时告知实际路径（推荐 **`.agents/`** + **`.agents/plans/`**；或遗留 **`.plans/`** / **`plans/`** 同目录布局）。
 - 完成后提醒 @project-manager 同步 plan 状态。

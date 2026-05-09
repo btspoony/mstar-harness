@@ -40,14 +40,6 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
 
 > **约定**：下文凡写 **`{HARNESS_DIR}/…`**、**`{PLAN_DIR}/…`** 均指上表解析后的实际路径。推荐布局下 **`{PLAN_DIR}` 绝不等于** 仓库根，而是 **`{HARNESS_DIR}` 下的 `plans/` 子目录**。
 
-### 从「全在 plans 下」迁移（推荐）
-
-若仓库曾把 **`status.json`、`notes.json`、`archived/`、`knowledge/`** 放在 **`{PLAN_DIR}/`**（例如旧版 `.agents/plans/`）：
-
-- 将上述文件/目录 **上移到 `{HARNESS_DIR}/`**（例如 `.agents/status.json`、`.agents/knowledge/`）。
-- **`{PLAN_DIR}/`** 仅保留 **`<plan-id>-*.md`** 与 **`reports/`**（及 `reports/README.md`）。
-- 更新文档内引用、`plans[].metadata` 中的 **`primary_spec` / `spec_refs`** 路径、以及脚本中的 `jq` 路径。
-
 ## 目录布局（推荐）
 
 与审查留档、并行 QC、归档分层的典型布局如下（**推荐**：`{HARNESS_DIR}` 常为 **`.agents/`**，`{PLAN_DIR}` 常为 **`.agents/plans/`**）：
@@ -79,12 +71,17 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
 
 - **主计划**：技术方案、任务清单、Sign-off 仍以 **`{PLAN_DIR}/<plan-id>-<plan-name>.md`** 与 **`{HARNESS_DIR}/status.json`** 为权威。
 - **`{PLAN_DIR}/reports/`**：架构评审、QC 分报告、QC 汇总结论；**视为只读历史**，不在此反复改写同一结论（修正走新报告或回写主计划 / `status.json`）。
-- **`{PLAN_DIR}/residuals/<plan-id>/`**（可选）：对仍 **open** 的 residual 提供**长于 JSON 字段**的散文说明；**不替代** `residual_findings`（兼容 `metadata.residual_findings`）的 SSOT，见 `references/knowledge-and-designs.md`「open residual 散文详情」。
+- **`{PLAN_DIR}/residuals/<plan-id>/`**（可选）：对仍 **open** 的 residual 提供**长于 JSON 字段**的散文说明；**不替代**根级 `residual_findings` 的 SSOT（见上文「`status.json` 与 open residual」），见 `references/knowledge-and-designs.md`「open residual 散文详情」。
 - **`{HARNESS_DIR}/knowledge/`**：规格修订、架构评审产出、设计决策与 gap 分析等**实施上下文**；与面向用户的 `docs/` 分工见 `references/knowledge-and-designs.md`。
 - **`{SPECS_DIR}`**（可选）：规格目录别名，支持 `{HARNESS_DIR}/specs/` 与 `{HARNESS_DIR}/designs/`；用于冻结规格、少变基线或可对外参考文档（具体分工见 `references/knowledge-and-designs.md`）。
-- **residual findings（未关闭）**：**当前仍待跟踪**的条目写在 **`{HARNESS_DIR}/status.json`** 的 `residual_findings[<plan-id>]`（优先；兼容 `metadata.residual_findings`，仅 `open`）；**已验证关闭**的条目迁出至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**，避免 `status.json` 无限膨胀。详见 `references/status-and-residuals.md`。
+- **residual findings（未关闭）**：**当前仍待跟踪**的条目写在 **`{HARNESS_DIR}/status.json`** 根级 `residual_findings[<plan-id>]`（canonical 见上文）；**已验证关闭**的条目迁出至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**，避免 `status.json` 无限膨胀。详见 `references/status-and-residuals.md`。
 
-### 已提交文档与计划产物的可到达性（强制建议）
+## `status.json` 与 open residual（canonical）
+
+- **Canonical**：**`{HARNESS_DIR}/status.json`** 根级 **`residual_findings`**（`plan-id` → open 条目数组），与 **`plans`** **平级**；**新写入**只维护此处。
+- **`metadata.residual_findings`**：仅**未迁移的旧文件**上的**读取 fallback**，**不是**第二套 SSOT；**不要**为新工作再建一套嵌套映射。读取可先根级、再 fallback；关闭/迁移时勿与根级**双写**长期并存（操作与 `jq` 见 `references/status-and-residuals.md`）。
+
+## 已提交文档与计划产物的可到达性（强制建议）
 
 凡是**会进入 Git**且用于贡献者阅读或 **agent handoff** 的文档（例如根目录 `README`、`docs/`、`AGENTS.md`、主 plan 正文），以及落在 **`{HARNESS_DIR}` / `{PLAN_DIR}` 且被跟踪**的计划与报告，应满足：
 
@@ -99,8 +96,8 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
 
 1. 创建 **`.agents/`** 作为 **`{HARNESS_DIR}`**（首选，对原有项目结构侵入小）。
 2. 创建 **`{PLAN_DIR}`** = **`.agents/plans/`**（子目录）。
-3. 在 **`{HARNESS_DIR}/`** 下创建 **`status.json`**（完整结构见 `references/status-and-residuals.md`：含平级 `residual_findings`；兼容 `metadata.residual_findings`）。
-4. 可选：创建 **`{HARNESS_DIR}/notes.json`**（空 `entries: []` 或按模板），用于程序里程碑，避免日后向 `status.json` 堆日志。
+3. 在 **`{HARNESS_DIR}/`** 下创建 **`status.json`**：可复制本仓库 **`templates/status.empty.json`**；字段与 residual 生命周期见 `references/status-and-residuals.md`（canonical 见本 SKILL 开篇）。
+4. 可选：创建 **`{HARNESS_DIR}/notes.json`**：可复制 **`templates/notes.empty.json`**（或空 `entries: []`），用于程序里程碑，避免日后向 `status.json` 堆日志。模板索引见 **`templates/README.md`**。
 5. 创建 **`{PLAN_DIR}/reports/README.md`**，用途与命名约定与仓库内其它说明一致即可。
 6. 可选：若采用 **`{PLAN_DIR}/residuals/<plan-id>/`** 散文详情，在**首次**需要长文补充某 open R# 时再创建对应 **`residuals/<plan-id>/`** 子目录；无需为空 plan 预建占位目录。
 7. 若启用 **`{HARNESS_DIR}/knowledge/`**：创建目录及 **`knowledge/README.md`** 空索引表（见 `references/knowledge-and-designs.md`）。
@@ -114,7 +111,7 @@ description: Morning Star (启明星) harness 的计划目录约定 —— {HARN
 
 当仓库从 0 到 1 启用 harness，建议按下面顺序初始化，避免后续出现规则散落与双轨 SSOT：
 
-1. 建 `{HARNESS_DIR}`（默认 `.agents/`）与 `{PLAN_DIR}`（默认 `.agents/plans/`），并初始化 `status.json`、可选 `notes.json`、`reports/README.md`。
+1. 建 `{HARNESS_DIR}`（默认 `.agents/`）与 `{PLAN_DIR}`（默认 `.agents/plans/`），并初始化 `status.json`（见 **`templates/status.empty.json`**）、可选 `notes.json`（**`templates/notes.empty.json`**）、`reports/README.md`。
 2. 在 `{HARNESS_DIR}` 下新增 **`.agents/AGENTS.md`**（harness 子树规则），只放 **harness 资产约束**：目录语义、状态机映射、QC/QA 落盘门禁、residual 生命周期、归档策略。
 3. 在仓库根保留 **`AGENTS.md`**（项目级规则），只放 **代码库约束**：技术栈边界、构建/测试入口、安全与分支约束、规范文档路由，不复制 harness 细则。
 4. 当子目录存在显著边界（如 `contracts/`、`gateway/`、`sdk/`、`examples/`）时，再新增目录级 `AGENTS.md`，仅覆盖该目录的增量规则，禁止重复根规则或 `.agents/AGENTS.md` 细则。
@@ -212,7 +209,7 @@ Assignment 模板中的 **`Parallelism`** 行应与上表 **`Parallelism`** / **
 | `Todo` | 已登记，未开工 | 主 plan 文件 + `status.json` 条目 |
 | `InProgress` | 实现或准备阶段进行中 | 更新的主 plan、`tasks` 勾选；编码前已读 `metadata` 指向的 **`knowledge/`** 文档（若有） |
 | `InReview` | 审查与验证中 | `{PLAN_DIR}/reports/<plan-id>/` 下 `*-review.md`、`*-qc*.md`、`*-qc-consolidated.md`（见 `references/plan-files-and-reports.md`） |
-| `Done` | 已合并/收口 | 主 plan Sign-off、**`{HARNESS_DIR}/status.json`** 的 `done_at`；仍 open 的 R# 留在 `residual_findings`（兼容 `metadata.residual_findings`），已关闭的已迁入 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** |
+| `Done` | 已合并/收口 | 主 plan Sign-off、**`{HARNESS_DIR}/status.json`** 的 `done_at`；仍 open 的 R# 留在根级 `residual_findings`（见本 SKILL 开篇），已关闭的已迁入 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** |
 | `Blocked` | 等待外部输入或决策 | 顶层 `notes` + 建议填 `plans[].metadata.blocked_*` / `blocked_by_plan_id` |
 
 ## InReview 与 QC+QA：多 plan 编排硬门禁（`@project-manager`）

@@ -13,8 +13,8 @@
 ## Bootstrap 最小步骤
 
 1. 创建 `{HARNESS_DIR}`（推荐 `.agents/`）与 `{PLAN_DIR}`（推荐 `.agents/plans/`）。
-2. 初始化 `status.json`（含 `version`、`updated_at`、`plans`、平级 `residual_findings`；兼容 `metadata.residual_findings`）。
-3. 初始化可选 `notes.json`（程序时间线）与 `plans/reports/README.md`。
+2. 初始化 `status.json`：推荐从 **`mstar-plan-conventions/templates/status.empty.json`** 复制；residual canonical 见 **`mstar-plan-conventions` SKILL.md** 开篇，字段与生命周期见 `status-and-residuals.md`。
+3. 初始化可选 `notes.json`（可复制 **`mstar-plan-conventions/templates/notes.empty.json`**）与 `plans/reports/README.md`。
 4. 创建 `.agents/AGENTS.md`（harness 子树规则）。
 5. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `.agents/AGENTS.md` 作为 harness SSOT。
 6. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。

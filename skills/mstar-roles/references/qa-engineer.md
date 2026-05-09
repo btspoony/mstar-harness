@@ -163,7 +163,7 @@ Critical / High / Medium / Low
 
 ## Plan 与文档规范
 
-- Plan 目录和 status.json 的约定详见 `mstar-plan-conventions` skill。验收中若验证某 **residual finding（R#）** 已修复，在回报中写明证据；可与 @project-manager 协同将该条 **追加** 到 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** 并从 **`metadata.residual_findings`** 主列表**删除**（见同文档「Residual findings 生命周期」）。**语义**：当 Assignment 含 **`plan-id`** 且 SSOT 中存在相关 R# 时，Completion Report 中须包含 **R# 处置摘要**（每条：仍 open / 本次已验证 resolved 及证据指针 / 需 PM 与用户裁决豁免）；仅宣称「测试通过」而**不交代 R#** 视为验收叙述**不完整**。与 PM 协同更新 SSOT 与归档是**闭合质量门禁**的一环，不是可选整理。
+- Plan 目录和 status.json 的约定详见 `mstar-plan-conventions` skill。验收中若验证某 **residual finding（R#）** 已修复，在回报中写明证据；可与 @project-manager 协同将该条 **追加** 到 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** 并从 **open 列表**（根级 **`residual_findings[<plan-id>]`**；若仅存 legacy 侧则从该处）**删除**（流程见 `mstar-plan-conventions` `references/status-and-residuals.md`「Residual findings 生命周期」）。**语义**：当 Assignment 含 **`plan-id`** 且 SSOT 中存在相关 R# 时，Completion Report 中须包含 **R# 处置摘要**（每条：仍 open / 本次已验证 resolved 及证据指针 / 需 PM 与用户裁决豁免）；仅宣称「测试通过」而**不交代 R#** 视为验收叙述**不完整**。与 PM 协同更新 SSOT 与归档是**闭合质量门禁**的一环，不是可选整理。
 - **`{HARNESS_DIR}`** 与 **`{PLAN_DIR}`** 由 @project-manager 在分派时告知实际路径（推荐 **`.agents/`** + **`.agents/plans/`**；或遗留 **`.plans/`** / **`plans/`** 同目录布局）。
 - 完成任务后：更新 plan 中的任务清单 `[x]` + Sign-off 表格 + `{HARNESS_DIR}/status.json`。
 - **本 agent 与 @project-manager 为唯二可将 plan 状态更新为 Done 的角色**：验收通过后，可在 frontmatter 标记 `status: Done` 并同步 `{HARNESS_DIR}/status.json`；其他 agent 禁止将状态更新为 Done。
