@@ -24,13 +24,22 @@ Restart OpenCode. The plugin installs from npm and registers Morning Star runtim
 ## Usage
 
 - Keep your role models and permissions in `opencode.json`.
-- Morning Star plugin loads **skills** in this order:
-  - If `<cwd>/skills/` exists, that tree is used (your harness checkout or custom skills).
-  - Otherwise the npm package ships **`harness-skills/`** (a copy of Morning Star `skills/` from the release build) plus packaged **`skills/`** (OpenCode host adapter, e.g. `mstar-host`).
-- **Agents**: `<cwd>/agents/*.md` overlays **`harness-agents/`** from the package (same id in workspace wins).
+- The plugin loads **only paths inside the `@mstar-harness/opencode` package**:
+  - **`harness-skills/`** — copy of Morning Star `skills/` from the release build (`prepublishOnly` runs `bundle-assets` before `bun build`).
+  - **`skills/`** — packaged OpenCode host adapter (e.g. `mstar-host`).
+  - **`harness-agents/`** — copy of repo `agents/` from the same build.
+- It does **not** read `<cwd>/skills` or `<cwd>/agents`, so OpenCode’s `process.cwd()` (your app project root) does not affect harness resolution.
 - Bootstrap prompt entry is injected once with `<IMPORTANT_FOR_HARNESS>`.
 
-For **npm-only** installs you do not need a separate harness clone: bundled `harness-skills` / `harness-agents` are enough if OpenCode’s cwd is not a repo that already provides its own `skills/` / `agents/`.
+## Monorepo / git checkout of this repository
+
+After `bun install` or `npm install` at the repo root, **`postinstall`** runs `packages/opencode`’s `bundle-assets` so `harness-skills/` and `harness-agents/` exist for the plugin entry `main` → `packages/opencode/src/mstar.ts`.
+
+If you use `npm install --ignore-scripts`, run once manually:
+
+`bun run opencode:bundle-assets`
+
+(or `bun run --cwd packages/opencode bundle-assets`).
 
 ## Updating
 
@@ -64,4 +73,4 @@ The `@mstar-harness/cli` package (`npx @mstar-harness/cli init`) migrates that e
 
 1. Use `skill` tool to list what's discovered
 2. Check that the plugin is loading (see above)
-3. If you rely on workspace `skills/`, confirm `process.cwd()` is the directory that contains them; otherwise ensure you installed a published `@mstar-harness/opencode` build (not a raw `src/` entry without running `bun run bundle-assets` in the package)
+3. For **npm** installs, use a published build (tarball includes `harness-skills`). For **git** checkout, ensure install scripts ran (`postinstall` / `bun run opencode:bundle-assets`)

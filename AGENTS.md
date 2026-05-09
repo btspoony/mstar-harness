@@ -119,7 +119,7 @@ If one of these checks fails, stop and report why.
 - Superpowers alignment contract -> `skills/mstar-superpowers-align/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:
-  - OpenCode -> `packages/opencode/skills/mstar-host/*`; publish build copies repo `skills/` + `agents/` into `harness-skills/` + `harness-agents/` (npm: `@mstar-harness/opencode`)
+  - OpenCode -> `packages/opencode/skills/mstar-host/*`; `harness-skills/` + `harness-agents/` come from `bundle-assets` (npm publish prepublish + root `postinstall`); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
   - Cursor -> `.cursor/skills/mstar-host/*`
 - CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
 - Codex plugin manifest -> `.codex-plugin/plugin.json`

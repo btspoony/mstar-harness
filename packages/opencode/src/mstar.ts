@@ -2,8 +2,8 @@
  * MorningStarHarness plugin for OpenCode.
  *
  * - Injects one-time harness bootstrap into first user message.
- * - Registers skill paths: workspace `skills/`, else bundled `harness-skills/`, plus packaged host `skills/`.
- * - Loads agents from workspace `agents/` merged over bundled `harness-agents/` (workspace wins on id).
+ * - Registers skill paths only inside this package: `harness-skills/` (synced at build / repo postinstall) then `skills/` (host adapter).
+ * - Loads agents from `harness-agents/` only (same sync). Does not use `process.cwd()` so OpenCode project cwd does not matter.
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import fs from "node:fs";
@@ -21,29 +21,19 @@ type MessagePart = { type: string; text?: string };
 type ChatMessage = { info: { role: string }; parts: MessagePart[] };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-/** Published layout: `dist/mstar.js` -> package root is one level up. */
+/** Published layout: `dist/mstar.js` (or `src/mstar.ts`) -> package root is one level up. */
 const packageRoot = path.resolve(__dirname, "..");
-/** OpenCode project root (optional workspace skills/agents override). */
-const workspaceRoot = process.cwd();
 
-const workspaceSkillsDir = path.join(workspaceRoot, "skills");
 const bundledSkillsDir = path.join(packageRoot, "harness-skills");
 const hostSkillsDir = path.join(packageRoot, "skills");
 const bundledAgentsDir = path.join(packageRoot, "harness-agents");
-const workspaceAgentsDir = path.join(workspaceRoot, "agents");
 const bootstrapAgentsPath = path.join(packageRoot, "AGENTS.md");
 const BOOTSTRAP_MARKER = "IMPORTANT_FOR_HARNESS";
 
 function resolveSkillPathCandidates(): string[] {
   const out: string[] = [];
-  if (fs.existsSync(workspaceSkillsDir)) {
-    out.push(workspaceSkillsDir);
-  } else if (fs.existsSync(bundledSkillsDir)) {
-    out.push(bundledSkillsDir);
-  }
-  if (fs.existsSync(hostSkillsDir)) {
-    out.push(hostSkillsDir);
-  }
+  if (fs.existsSync(bundledSkillsDir)) out.push(bundledSkillsDir);
+  if (fs.existsSync(hostSkillsDir)) out.push(hostSkillsDir);
   return out;
 }
 
@@ -159,11 +149,7 @@ const loadAgentsFromDir = (agentsDirPath: string): Record<string, JsonObject> =>
   return result;
 };
 
-/** Bundled agents first; workspace `agents/` overlays the same ids. */
-const loadAgentsMerged = (): Record<string, JsonObject> => ({
-  ...loadAgentsFromDir(bundledAgentsDir),
-  ...loadAgentsFromDir(workspaceAgentsDir),
-});
+const loadBundledAgents = (): Record<string, JsonObject> => loadAgentsFromDir(bundledAgentsDir);
 
 export const MorningStarHarnessPlugin: Plugin = async () => {
   const homeDir = os.homedir();
@@ -187,7 +173,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
         }
       }
 
-      const markdownAgents = loadAgentsMerged();
+      const markdownAgents = loadBundledAgents();
       runtimeConfig.agent = runtimeConfig.agent || {};
       for (const [agentId, definition] of Object.entries(markdownAgents)) {
         runtimeConfig.agent[agentId] = {

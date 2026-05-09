@@ -55,6 +55,7 @@
     }
     ```
   - 重启 OpenCode
+- OpenCode 插件**只从 `@mstar-harness/opencode` 包内路径**解析 skills/agents（**不**依赖 `process.cwd()`）。发布包内含 `harness-skills/`、`harness-agents/`。若在本仓库 **git 工作区**开发，请在**仓库根**执行 **`bun install` / `npm install`**，以便 `postinstall` 执行 `opencode:bundle-assets`，在 `packages/opencode/` 下生成上述目录。
 
 OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 

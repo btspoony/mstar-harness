@@ -55,6 +55,7 @@ Manual install targets currently include:
     }
     ```
   - Restart OpenCode
+- The OpenCode plugin resolves **skills and agents only inside `@mstar-harness/opencode`** (not `process.cwd()`). Published builds ship `harness-skills/` and `harness-agents/`. If you work from a **git checkout** of this repo, run **`bun install` / `npm install` at the repo root** so `postinstall` runs `opencode:bundle-assets` and populates those directories under `packages/opencode/`.
 
 For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
 
