@@ -139,10 +139,6 @@ You can assign different models per agent in `opencode.json` without replacing y
 | `mstar-coding-behavior` | Cross-role coding behavior baseline |
 | `mstar-superpowers-align` | Alignment and conflict handling with Superpowers |
 
-### Plan bootstrap templates
-
-When enabling plan management, copy the empty harness starters from [`skills/mstar-plan-conventions/templates/`](./skills/mstar-plan-conventions/templates/) into `{HARNESS_DIR}` (commonly `.agents/`): `status.empty.json` → `status.json`, and optionally `notes.empty.json` → `notes.json`. Residual canonical vs legacy fallback is defined once in [`skills/mstar-plan-conventions/SKILL.md`](./skills/mstar-plan-conventions/SKILL.md) (opening section). See also [`skills/mstar-plan-conventions/templates/README.md`](./skills/mstar-plan-conventions/templates/README.md).
-
 ## License
 
 This project is licensed under MIT. See [LICENSE](./LICENSE).

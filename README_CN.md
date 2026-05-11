@@ -137,10 +137,6 @@ flowchart TD
     Q --> R["PM: 标记 done 并归档上下文"]
 ```
 
-### Plan 初始化模板
-
-启用 plan 管理时，可将本仓库 [`skills/mstar-plan-conventions/templates/`](./skills/mstar-plan-conventions/templates/) 下的空文件复制到 `{HARNESS_DIR}`（常见为 `.agents/`）：`status.empty.json` → `status.json`；可选 `notes.empty.json` → `notes.json`。residual 的 canonical 与 legacy fallback **只在** [`skills/mstar-plan-conventions/SKILL.md`](./skills/mstar-plan-conventions/SKILL.md) **开篇**定义一次。另见 [`skills/mstar-plan-conventions/templates/README.md`](./skills/mstar-plan-conventions/templates/README.md)。
-
 ## 许可
 
 本项目采用 MIT License，详见 [LICENSE](./LICENSE)。
