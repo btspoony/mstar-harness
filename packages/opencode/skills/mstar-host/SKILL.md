@@ -78,6 +78,10 @@ Post-dispatch validation (mandatory for QC tri-review):
 2. Verify runtime model mapping matches host config intent for each reviewer.
 3. If any role/model mismatch is observed, mark dispatch as invalid, do not enter QC consolidation, and re-dispatch with corrected role/model targeting.
 
+### Prepare phase (`specify` / `plan`) — serial roles still require invoke
+
+Routing in `mstar-roles` **project-manager** may read `@explore → @product-manager → @architect` **sequentially**. That does **not** waive **no tool = no dispatch**: each handoff still needs a real **host invoke** carrying the Assignment for that `agent.<id>` (often **`N = 1`** per dispatch turn). Writing PRD / acceptance / product specify prose, or architecture / contract sections, only in the primary `project-manager` chat — then claiming “plan directory maintenance” — is **not** a substitute when the routing table assigns those bodies to **`product-manager`** or **`architect`**. Cross-check before advancing phases: `mstar-roles` → `references/project-manager.md` → **§1.1.1a Phase routing pre-flight**.
+
 ## Gotchas
 
 - `question` availability is host-config dependent; if unavailable, fall back to structured Markdown clarify flow.

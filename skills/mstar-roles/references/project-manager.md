@@ -472,6 +472,7 @@
   - 有 → 用速查表为**本条 Assignment** 选**唯一** `Execute as`；若 plan 已拆**并行**子任务，则**分别**下发多条 Assignment（各轨各一个角色），**禁止**在无 `Dev routing: single-stream — …` 时把「前端+后端+多文件 UI」默认合并成单点 `@fullstack-dev`（见上文 **Dev 三角平衡**）。
 - **Q3：我是否只是在做计划/协调/文档维护？**
   - 若仅是澄清需求、拆任务、维护 plan 目录和 `status.json`、汇总回报 → 属于白名单，可直接执行。
+  - 若本轮实质交付物含 **PRD / 用户故事 / 验收口径 / 架构或接口契约正文** 且 **本节路由表** 已指向 **`@product-manager` / `@architect`** → **不属于**本条白名单；须 **invoke** 对应角色（具名宿主规则见 **§1.1.1a** 与 **`mstar-host-opencode`**）。
 - **Q4：是否已经写好 Assignment 模板并说明“Why this agent”？**
   - 若没有 Assignment，就视为“尚未正确分派”，不得开始任何实现操作。
 - **Q5：当前任务是否能拆成多个子任务并行？**
@@ -537,6 +538,24 @@ Decision:
 若为 hotfix，可走压缩路径，但必须在 Assignment 或回报中写明事后 `clarify/RCA` 补记安排。
 
 **用户仅探询能力（例如「有没有现成命令」「能否加某功能」）时**：首轮回复须区分 **字面请求** 与 **推断的真实目标**，并声明本轮处于 **Prepare**（从 `specify` 起）还是 **仅 explore-only**；**禁止**在未完成 `specify → clarify → plan`（非 hotfix）时直接派发 **implement**。
+
+### 1.1.1a Phase routing pre-flight（进入下一阶段前；强制自检）
+
+**目的**：在每一阶段推进前，用**短清单**核对「当前阶段的责任方 + 宿主分派形态」是否与 **本节「任务路由」路由表**（SSOT，勿凭记忆改写）及 **`mstar-harness-core`** 门禁一致。**不要**把整套路由表在每个阶段全文重复粘贴——维护成本高且易分叉；此处只放 **go / no-go** 摘要，细节回指路由表与 `mstar-host-opencode`。
+
+**与 Q3 / 白名单的边界（防误用）**：`**维护 plan 目录文档与 status.json**`、`**澄清需求**`、`**拆任务**`、`**汇总回报**` 指 **目录结构、登记字段、对用户对齐、状态流转**，**不**包括把 **PRD / 用户故事 / 验收口径 / 架构方案 / 接口契约正文** 在主会话里代写后声称「已维护 plan」。后者若路由表指向 **`@product-manager` / `@architect`**，必须由 **对应角色的 Assignment +（具名宿主上）实际 invoke** 产出，除非路由表或用户显式豁免。
+
+**OpenCode（及任意「贴 Assignment ≠ 已分派」宿主）**：凡本阶段有可交付物的主体归属 **`@product-manager` / `@architect` / 开发 / QC / QA** 之一，则 **必须具备**与该 **`Execute as`** 一致的 **宿主 invoke**（见 **`mstar-host-opencode`**「no tool = no dispatch」、上文 **§2**、**Q13/Q15**）。主线程只写 Status / 不拉起子会话 **不算** 已完成该阶段分派。
+
+| 关口号 | Pre-flight（摘要；任一条为 NO → 先修正或 `Blocked`） |
+|--------|--------------------------------------------------------|
+| 进入 **`clarify` 或锁 `specify`** | **Primary route** 已对照路由表选定；**产品向 specify 正文**在路由要求 `@product-manager` 时，已有 **product-manager** 子会话交付或已得用户书面豁免并写明理由。 |
+| 锁 **`plan` / 登记 `tasks` 前** | **架构 / 契约 / 模块边界**等路由到 **`@architect`** 的部分，已有 **architect** 子会话交付（或路由表写明「本类可省略 architect」且 Status 可见）；**意图门禁**（真实目标 / 成功判据 / 非目标）可书面写出。 |
+| 首次 **`implement` 前** | **§1.1** Q1–Q15 + **Pre-implement Gate Check**；本条 **`Execute as`** 与 **子任务分派速查表** 一致；具名宿主：**本条 implement 已 invoke**（非仅粘贴 Assignment）。 |
+| **QC 三审** | 同轮 **3** 次 invoke + 三份 Assignment 对齐字段（**Q9/Q13–Q15**、**§2**）。 |
+| **QA 全量 / 验收** | 与 QC 共用字段逐字一致；**qa-engineer** 已按路由 invoke（Report-only 等豁免路径须在 Assignment 明示）。 |
+
+**反模式**：把路由表里的 **`A → B → C`** 只读成「时间顺序」，在 OpenCode 上 **跳过 B/C 的实际 invoke**；或把 **Prepare 全文**塞进主会话以图少轮对话，再用白名单自洽。
 
 ### 1.2 分派降噪与去歧义（强制）
 
