@@ -119,8 +119,8 @@ If one of these checks fails, stop and report why.
 - Superpowers alignment contract -> `skills/mstar-superpowers-align/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:
-  - OpenCode -> `packages/opencode/skills/mstar-host/*`; `harness-skills/` + `harness-agents/` come from `bundle-assets` (npm publish prepublish + root `postinstall`); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
-  - Cursor -> `.cursor/skills/mstar-host/*`
+  - OpenCode -> `mstar-host-opencode` (in-repo: `packages/opencode/skills/mstar-host/*`); `harness-skills/` + `harness-agents/` come from `bundle-assets` (npm publish prepublish + root `postinstall`); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
+  - Cursor -> `mstar-host-cursor` (in-repo: `skills-cursor/mstar-host/*`; bundled via `.cursor-plugin/`)
 - CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
 - Codex plugin manifest -> `.codex-plugin/plugin.json`
 - Codex marketplace catalog -> `.codex/marketplace.json`
