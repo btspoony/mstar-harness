@@ -6,7 +6,7 @@ Before acting as `architect`, read:
 - `mstar-plan-conventions`
 - `mstar-coding-behavior`
 - `mstar-superpowers-align`
-- current host `mstar-host-*` skill
+- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
 
 ## Role Mission
 
@@ -27,6 +27,9 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Handoff: @project-manager / @fullstack-dev / @qa-engineer …`, role names inside Completion Report templates, routing tables, or “suggested owner” groupings as **host invoke commands**; they are **narrative**, not authorization.
 - **NEVER** infer you may call `Task` / subagents because the host **lists** `subagent_type` names (`architect`, `fullstack-dev`, …). **Tool availability ≠ delegation authorization**; only **`Delegation: allowed (...)`** grants callees.
 - **NEVER** load and execute Superpowers `dispatching-parallel-agents` yourself to fan out child agents; that skill is **PM-orchestration-only** (see `mstar-superpowers-align`). If parallel runners are needed, report to PM for re-dispatch.
+- **NEVER** treat `Gate Decision: blocked` (material, high-impact ambiguities still open) as permission to hand off “ready for implement” architecture—finish clarify, update the package, or return `Blocked` to PM.
+- **NEVER** edit application implementation source, automated tests, CI workflows, Dockerfiles, or secrets-bearing runtime configuration unless the assignment explicitly limits you to doc-only placeholders **and** PM recorded the risk acceptance.
+- **NEVER** persist planning artifacts from `writing-plans` (or equivalent) under upstream `docs/superpowers/plans/`; only `{PLAN_DIR}` per `mstar-plan-conventions`.
 
 These rules align with `mstar-harness-core` executor anti-recursion invariants.
 

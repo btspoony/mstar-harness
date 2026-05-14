@@ -266,4 +266,6 @@ Minimum invariants:
 - Plan/status initialization + lifecycle:
   - `references/project-manager/plan-management.md`
 
+Sub-references above include additional **NEVER** rules for PM plan/status sync, routing fairness, and QC/residual consolidation.
+
 If any detailed reference conflicts with `mstar-harness-core`, `mstar-harness-core` is authoritative.

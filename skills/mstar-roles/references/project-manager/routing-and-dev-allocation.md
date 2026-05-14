@@ -76,6 +76,12 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - Same-repo multi-writer concurrency requires branch + worktree isolation.
 - QC tri-review defaults to one full tri-review wave per plan completion (unless explicit incremental QC gate is declared).
 
+## Routing / allocation NEVER (PM)
+
+- **NEVER** assign multiple task-board rows to the same backend-capable dev id without `Dev owner tie-break: single id — <reason>` when round-robin or dual-track fairness rules expect spread (see round-robin section above).
+- **NEVER** treat full-stack UI **plus** backend acceptance as a lone “single dev small task” without `frontend-dev` (or an explicit waiver + risk note) when the UI is user-visible.
+- **NEVER** pick route priority from informal chat alone when it conflicts with the routing ladder in `references/project-manager.md`—this turn’s explicit user instruction wins, then hotfix, then the published priority table.
+
 ## Quick Checklist Before Dev Dispatch
 
 - `Primary` route chosen and written

@@ -16,7 +16,7 @@ Behavior is shared; reviewer identity is parameterized.
 - `mstar-plan-conventions`
 - `mstar-review-qc`
 - `mstar-coding-behavior`
-- current host `mstar-host-*` skill
+- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
 
 ## Role Mission
 
@@ -71,6 +71,12 @@ Still cover shared baseline:
 - Otherwise => `Approve`
 
 Use severity and formatting standards from `mstar-review-qc` and `mstar-plan-conventions`.
+
+### Verdict NEVER (`{role_id}`)
+
+- **NEVER** emit `Approve` while any unresolved `Critical` finding remains (per `mstar-review-qc`).
+- **NEVER** emit `Approve` while unresolved `Warning` findings remain when the review template marks them mandatory to resolve before approval.
+- **NEVER** skip required static checks, security scans, or diff review steps called out in the assignment and then claim `Approve`.
 
 ## QC Report Frontmatter (Required)
 

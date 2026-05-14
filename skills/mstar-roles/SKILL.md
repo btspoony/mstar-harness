@@ -44,9 +44,11 @@ Treat these as baseline dependencies **where the role touches implementation, re
 | `mstar-review-qc` | QC workflow, review template, verdict rules, high-risk checks |
 | `mstar-coding-behavior` | Think-before-coding, simplicity, surgical changes, goal-driven execution (**not** required for `project-manager` orchestration-only work) |
 | `mstar-superpowers-align` | Superpowers alignment, dispatching/worktree constraints, delegation compatibility |
-| `mstar-host-*` | Host-specific behavior and capabilities |
+| `mstar-host-opencode` / `mstar-host-cursor` | Host-specific behavior and capabilities (match the active host) |
 
 Use skill names (not absolute filesystem paths) in role references.
+
+Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursion, tool misuse, Git discipline). Treat those bullets as **hard gates** alongside `mstar-harness-core`; do not treat them as optional style tips.
 
 ## Parameter Table (SSOT)
 

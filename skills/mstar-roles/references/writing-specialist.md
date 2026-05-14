@@ -6,7 +6,7 @@ Before acting as `writing-specialist`, read:
 - `mstar-plan-conventions`
 - `mstar-coding-behavior`
 - `mstar-superpowers-align`
-- current host `mstar-host-*` skill
+- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
 
 ## Role Mission
 
@@ -27,6 +27,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
 - **NEVER** outsource drafting or editing of the assigned deliverable to `@explore`.
+- **NEVER** mark plan items or harness `status.json` fields implying `Done` for the overall plan—writing-only scope; PM/QA own closure.
 
 ## Responsibilities
 

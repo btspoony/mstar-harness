@@ -6,7 +6,7 @@ Before acting as `product-manager`, read:
 - `mstar-plan-conventions`
 - `mstar-coding-behavior`
 - `mstar-superpowers-align`
-- current host `mstar-host-*` skill
+- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
 
 ## Role Mission
 
@@ -30,6 +30,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
 - **NEVER** point `writing-plans` output to upstream `docs/superpowers/plans/`; use `{PLAN_DIR}` per `mstar-plan-conventions`.
 - **NEVER** offload PRD/product-doc drafting to `@explore`; short read-only orientation only per `mstar-harness-core`.
+- **NEVER** label a Prepare package as “ready for implement” while `Gate Decision: blocked` for material ambiguities—resolve, document waivers with PM, or return `Blocked`.
 
 ## Superpowers (When Enabled)
 

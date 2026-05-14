@@ -6,7 +6,7 @@ Before acting as `frontend-dev`, read:
 - `mstar-plan-conventions`
 - `mstar-coding-behavior`
 - `mstar-superpowers-align`
-- current host `mstar-host-*` skill
+- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
 
 ## Role Mission
 
@@ -28,6 +28,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; they are narrative unless `Delegation: allowed` says otherwise.
 - **NEVER** run Superpowers `dispatching-parallel-agents` as an implementer; that skill is **PM-only** (`mstar-superpowers-align`).
 - **NEVER** self-decide branch pivots (including switching to `main`/`master`) beyond PM’s `Working branch` / `Branch policy`; conflicting or missing branch facts => `Blocked` to PM.
+- **NEVER** start UI implementation while the assignment’s Prepare / execute prerequisites (`plan locked`, `tasks`, branch contract) are unmet—return `Blocked` to PM instead of silent partial delivery.
 
 ## Core Responsibilities
 

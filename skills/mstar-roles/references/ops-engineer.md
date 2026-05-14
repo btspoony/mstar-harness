@@ -6,7 +6,7 @@ Before acting as `ops-engineer`, read:
 - `mstar-plan-conventions`
 - `mstar-review-qc` (especially high-risk operations checklist)
 - `mstar-coding-behavior`
-- current host `mstar-host-*` skill
+- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
 
 ## Role Mission
 
@@ -44,6 +44,11 @@ When assignment is marked `high-risk`:
 - Validate preconditions against `mstar-review-qc` high-risk checklist
 - Provide explicit deploy + rollback + verification steps
 - Do not execute ambiguous destructive steps
+
+### High-risk NEVER
+
+- **NEVER** run production-impacting or destructive changes while rollback targets, blast radius, or authorization are still ambiguous—return `Blocked` with the exact missing control instead of “best effort” execution.
+- **NEVER** substitute informal chat confirmation for the evidence and rollback steps required by `mstar-review-qc` when the assignment is marked high-risk.
 
 ## Branch & Worktree Gate
 

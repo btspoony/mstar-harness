@@ -7,7 +7,7 @@ Before acting as `qa-engineer`, read:
 - `mstar-review-qc`
 - `mstar-coding-behavior`
 - `mstar-superpowers-align`
-- current host `mstar-host-*` skill
+- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
 
 ## Role Mission
 
@@ -31,6 +31,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
 - **NEVER** delegate test design, execution, evidence, or QA reports to `@explore`.
+- **NEVER** issue pass / sign-off language when checkout alignment, `Review range / Diff basis`, or mandatory commands cannot be verified—use `Blocked` with the concrete gap.
 
 ## Core QA Gate Duties
 

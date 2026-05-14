@@ -14,7 +14,7 @@ Behavior is shared; track identity is parameterized.
 - `mstar-plan-conventions`
 - `mstar-coding-behavior`
 - `mstar-superpowers-align`
-- current host `mstar-host-*` skill
+- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
 
 ## Role Mission
 
@@ -38,6 +38,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; they are narrative unless `Delegation: allowed` says otherwise.
 - **NEVER** run Superpowers `dispatching-parallel-agents` as an implementer; that skill is **PM-only** (`mstar-superpowers-align`).
 - **NEVER** self-decide branch pivots beyond PM’s `Working branch` / `Branch policy`; if `<base>` is missing or the working tree disagrees with the assignment, **Blocked** to PM.
+- **NEVER** start implementation while Prepare / execute prerequisites in the assignment are unmet—return `Blocked` to PM.
 
 ## Track Coordination
 
@@ -45,6 +46,11 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - `parallel_secondary`: second track for independent parallel modules
 
 When parallel, module boundaries must be explicit and write ownership must not overlap.
+
+### Track NEVER (`{track}`)
+
+- **NEVER** treat `parallel_secondary` (`fullstack-dev-2`) as a generic “idle backup” for `primary`—each parallel track needs explicit boundaries (module / API / page island) in the assignment.
+- **NEVER** silently widen scope from `parallel_secondary` into another track’s files without PM reassignment.
 
 ## Execute Input Contract (Hard)
 

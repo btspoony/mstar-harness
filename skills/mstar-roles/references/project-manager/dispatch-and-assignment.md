@@ -26,6 +26,7 @@ For assignees (non-PM):
 - **NEVER** assume exposed `Task` / subagent menus imply you may call them; **tool availability ≠ delegation authorization**.
 - **NEVER** execute Superpowers `dispatching-parallel-agents` as a leaf assignee; that skill is **PM-orchestration-only** (`mstar-superpowers-align`).
 - **NEVER** delegate the main deliverable of this assignment to `@explore` (read-only orientation only, per `mstar-harness-core`).
+- **NEVER** claim `Done` / pass in **Completion Report v2** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
 
 ## Assignment Template (Canonical)
 

@@ -16,6 +16,14 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 5. Emit one consolidated gate decision.
 6. Assign fix owners when needed; send back to dev -> QC/QA revalidation.
 
+## QC / Residual NEVER (PM)
+
+- **NEVER** consolidate tri-review into `Approve` when any QC report’s `plan_id`, `Review range / Diff basis`, `Review cwd / Worktree path`, or `Working branch` **differs** from the PM Assignment text (character-level mismatch).
+- **NEVER** register or rewrite residual `severity` values outside the machine enum in `mstar-plan-conventions`.
+- **NEVER** drop residual tracking to chat-only when `Approve with residuals` applies—canonical open list lives under `{HARNESS_DIR}/status.json` `residual_findings[<plan-id>]`.
+- **NEVER** archive or delete open residual rows from `status.json` without the documented close + `{HARNESS_DIR}/archived/residuals/` workflow.
+- **NEVER** treat “two of three QC reports arrived” as sufficient for a parallel tri-review wave—missing reviewer => `Blocked` or explicit PM decision, not silent `Approve`.
+
 ## Consolidated Decision Template
 
 ```markdown

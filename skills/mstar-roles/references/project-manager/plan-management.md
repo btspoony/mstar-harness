@@ -38,6 +38,11 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 - On entering `InReview`: ensure QC report path and aligned review metadata are set.
 - On `Done`: ensure residual lifecycle state is consistent (open vs archived).
 
+## PM Plan / Status NEVER
+
+- **NEVER** let `status.json` and on-disk plan truth drift within the same coordination round—update both or mark `Blocked` until reconciled.
+- **NEVER** skip the `report-to-status` sync after a Completion Report when the next dispatch or gate depends on that state.
+
 ## Stage Transitions
 
 - Non-hotfix path: `specify -> clarify -> plan -> tasks -> implement -> InReview -> Done`
