@@ -2,6 +2,12 @@
 
 All notable changes to the `@mstar-harness/cli` package are documented in this file.
 
+The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
+
+## 0.3.0
+
+- Version alignment with monorepo **0.3.0** (no CLI API change in this bump; see root changelog for harness/docs).
+
 ## 0.2.0
 
 - add target adapter architecture for CLI flows
