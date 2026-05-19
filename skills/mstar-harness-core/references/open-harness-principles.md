@@ -10,6 +10,7 @@
 |------|------|----------------|
 | **意图优先于字面** | 先弄清「用户真正要达成什么」，再分类与分派 | `mstar-harness-core` SKILL.md「意图门禁」；PM「第一性原理」与 `clarify` |
 | **先准备再实现** | 访谈式规划、锁范围、再写代码 | Prepare：`specify -> clarify -> plan`；Execute：`plan locked -> tasks -> implement` |
+| **`clarify` 核心纪律** | 逐方面核对至共享理解；沿设计树逐枝、一次一决；能探索代码库则先探索；每问带推荐答案 | `mstar-harness-core` SKILL.md Prepare · `clarify`；`phase-gate-playbook.md` |
 | **按任务类别选能力与模型** | 视觉/深读/快改/硬逻辑等用不同强项 | `mstar-harness-core` SKILL.md「Task category」；Assignment 字段 **`Task category`**；宿主侧按角色配置 model（如 OpenCode 的 `opencode.json`） |
 | **可验证编辑** | 减少「凭记忆 Patch」导致的漂移与损坏 | `mstar-harness-core` SKILL.md「可验证编辑与上下文纪律」：读后再改、失败则重读 |
 | **持续推进与可核对完成** | 长任务有清单、有关门证据，避免空转 | `mstar-superpowers-align` 的 `verification-before-completion`；PM 对 `tasks`/Phase Gate 的拉回 |
@@ -44,7 +45,8 @@
 |------|----------------|
 | 详细计划状态、阻塞列表、当前 sprint 叙述 | `{HARNESS_DIR}/status.json`（及可选 `{HARNESS_DIR}/notes.json` 程序时间线） |
 | 规格正文、枚举定义、API 契约全文 | 项目约定的冻结规格目录（如 `docs/spec/`、`.agents/designs/...`，名称自定） |
-| 某一 plan 的评审稿、gap 分析、实施笔记 | `{HARNESS_DIR}/knowledge/`（并维护索引 README，见 `mstar-plan-conventions`） |
+| 迭代/版本级 delivery compass、program 范围快照 | `{ITERATION_DIR}`（并维护索引 README，见 `mstar-plan-conventions`） |
+| 某一 plan 的评审稿、gap 分析、跨版本实施 SSOT | `{KNOWLEDGE_DIR}`（并维护索引 README，见 `mstar-plan-conventions`） |
 | 临时 workaround、仅本轮有效的结论 | 主 plan 文件或 knowledge，收口后提炼再考虑进 `AGENTS.md` |
 
 ### 更新前自检（避免污染单一权威）
@@ -61,7 +63,8 @@
 1. **冻结规格 / 设计权威**（版本化、显式变更流程）
 2. **根 `AGENTS.md`** — 项目级规则与约定
 3. **`{HARNESS_DIR}/status.json`** — 当前执行状态与 open residual 的 SSOT
-4. **`{HARNESS_DIR}/knowledge/`** — 支撑实施的上下文文档
+4. **`{ITERATION_DIR}`** — 迭代/版本级 compass（可选）
+5. **`{KNOWLEDGE_DIR}`** — 支撑实施的上下文文档（可选）
 
 若 `AGENTS.md` 与冻结规格冲突，**以规格为准**，并修订 `AGENTS.md` 对齐。细节分工与可到达性要求见 `mstar-plan-conventions`。
 

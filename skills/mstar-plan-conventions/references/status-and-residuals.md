@@ -128,7 +128,9 @@ QC 报告模板见 `mstar-review-qc`。把 finding 登记进根级 `**residual_f
 | `blocked_by_plan_id`              | string                    | 若阻塞来自另一计划，填对方 `**plans[].id`**                                                                                                                     |
 | `dependency`                      | string                    | 其它依赖说明（接口、外部团队）；与 `blocked_by_plan_id` 互补                                                                                                          |
 | `next_action`                     | string                    | 当前解锁后或审查后的下一步（给谁、做什么）                                                                                                                              |
-| `primary_spec`                    | string                    | 主规格/设计文档路径（仓库内相对路径；**常为** `{HARNESS_DIR}/knowledge/...` 或 `{SPECS_DIR}/...`，其中 `{SPECS_DIR}` 支持 `specs/` 与 `designs/`）；多文档可用 `spec_refs`（string[]） |
+| `primary_spec`                    | string                    | 主规格/设计文档路径（仓库内相对路径；**常为** `{KNOWLEDGE_DIR}/...` 或 `{SPECS_DIR}/...`，其中 `{SPECS_DIR}` 支持 `specs/` 与 `designs/`）；多文档可用 `spec_refs`（string[]） |
+| `iteration_compass`               | string                    | 可选：本轮依赖的迭代/版本 compass（`{ITERATION_DIR}/...`） |
+| `iteration_refs`                  | string[]                  | 可选：多个迭代 compass 或 program 快照路径 |
 | `qc_status` / `tests` / `commits` | string                    | **InReview / Done** 前后的可验证快照（结论摘要、测试统计、commit 提示），**非**替代正式报告文件                                                                                    |
 
 
