@@ -4,6 +4,17 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.4.0
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- **Topic skill split**: `mstar-phase-gates`, `mstar-dispatch-gates`, `mstar-branch-worktree`, `mstar-status-residuals`, `mstar-plan-artifacts`; slimmer `mstar-harness-core` and `mstar-plan-conventions`.
+- **`mstar-roles`**: Per-role required skill lists; host adapters updated for on-demand topic loading.
+- **`mstar-plan-conventions`**: `{ITERATION_DIR}`, `{KNOWLEDGE_DIR}`, content boundaries; optional `iteration_compass` / `iteration_refs`.
+- **`mstar-phase-gates`**: Prepare **`clarify` core discipline** (shared understanding, explore before asking, recommended answers).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) for full release notes.
+
 ## 0.3.2
 
 ### Bundled harness skills (`harness-skills/` at publish)

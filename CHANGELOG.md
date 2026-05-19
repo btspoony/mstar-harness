@@ -2,28 +2,36 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.3.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.4.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.3.2** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.3.1** (unchanged; no npm publish this release) |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.3.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.3.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.3.2** |
+| Monorepo root | `morning-star` (`package.json`) | **0.4.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.3.1** (unchanged) |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.4.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.4.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.4.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
-## [0.3.2] - 2026-05-19
+## [0.4.0] - 2026-05-19
 
 ### Harness (skills / agents)
 
+- **Topic skill split** (on-demand loading): Add `mstar-phase-gates`, `mstar-dispatch-gates`, `mstar-branch-worktree`, `mstar-status-residuals`, and `mstar-plan-artifacts`; slim `mstar-harness-core` and `mstar-plan-conventions` to entry + pointers; legacy reference paths stub to topic skills.
+- **Roles** (`mstar-roles`): Per-role **Required Skill Dependencies** in every `references/<role>.md`; hub matrix in `mstar-roles` SKILL.md; PM sub-refs use `mstar-status-residuals` for severity SSOT.
+- **Hosts** (`mstar-host-cursor`, `mstar-host-opencode`): Load-order wording and QC/worktree pointers aligned with topic skills.
 - **Plan directories** (`mstar-plan-conventions`): Formalize `{ITERATION_DIR}` (`{HARNESS_DIR}/iterations/`) and `{KNOWLEDGE_DIR}` (`{HARNESS_DIR}/knowledge/`); document `docs/` vs harness subtree content boundaries (Nexus-aligned); optional `iteration_compass` / `iteration_refs` in `status.json` metadata.
-- **Prepare clarify** (`mstar-harness-core`): Core discipline for `clarify` — walk the design decision tree to shared understanding, explore the codebase before asking the user, provide a recommended answer per question.
+- **Prepare clarify** (now primarily `mstar-phase-gates`; summary in `mstar-harness-core`): `clarify` discipline — shared understanding, explore before asking, recommended answer per question.
+
+### Docs
+
+- **README.md** / **README_CN.md**: Expanded core skill table; note `.harness/` as gitignored maint workspace for specs/plans (not published skills).
+- **AGENTS.md**: `.harness/` maint workspace; topic skill routing table; post-change cross-reference check.
 
 ### Version alignment
 
-- Bump **0.3.1 → 0.3.2** for monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests. **`@mstar-harness/cli` remains 0.3.1** (no CLI package publish this cycle).
+- Bump **0.3.2 → 0.4.0** for monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests. **`@mstar-harness/cli` remains 0.3.1**.
 
 ## [0.3.1] - 2026-05-15
 

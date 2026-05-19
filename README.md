@@ -128,16 +128,25 @@ You can assign different models per agent in `opencode.json` without replacing y
 
 ### Core Skills
 
+Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar-roles` for per-role lists).
+
 | Skill | Purpose |
 |-------|---------|
-| `mstar-harness-core` | Global entry, state machine, gates, invariants |
+| `mstar-harness-core` | Global entry, state machine, Task category, skill index |
+| `mstar-phase-gates` | Prepare/Execute gates, clarify, hotfix |
+| `mstar-dispatch-gates` | PM dispatch, Delegation, anti-recursion, parallel invoke |
+| `mstar-branch-worktree` | Feature branches, worktrees, QC/QA checkout alignment |
+| `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |
+| `mstar-status-residuals` | `status.json`, residual lifecycle, severity SSOT |
+| `mstar-plan-artifacts` | Main plan, `reports/`, knowledge, Done compaction |
 | `mstar-host` (per host) | Host-specific capabilities (OpenCode / Cursor) |
 | `pm` | Shared `/pm` shortcut for Cursor and Codex PM entry |
-| `mstar-roles` | Role prompt bus (role bodies in `references/`) |
-| `mstar-plan-conventions` | Unified plan/status/residual conventions |
+| `mstar-roles` | Role prompt bus + per-role skill load lists |
 | `mstar-review-qc` | QC review baseline and report template |
 | `mstar-coding-behavior` | Cross-role coding behavior baseline |
 | `mstar-superpowers-align` | Alignment and conflict handling with Superpowers |
+
+Maintainers: in-repo design notes under **`.harness/`** (gitignored) for specs/plans during harness work — not the published skill tree.
 
 ## License
 

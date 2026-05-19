@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/opencode",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Morning Star harness OpenCode plugin (skills bootstrap and agent loading).",
   "license": "MIT",
   "repository": {

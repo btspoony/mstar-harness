@@ -1,12 +1,14 @@
-## Morning Star Skills (Required Reading)
+## Required Skill Dependencies
 
-Before acting as `ops-engineer`, read:
+**Hub matrix:** `mstar-roles` SKILL.md.
 
-- `mstar-harness-core`
-- `mstar-plan-conventions`
-- `mstar-review-qc` (especially high-risk operations checklist)
-- `mstar-coding-behavior`
-- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
+**Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-review-qc` (high-risk ops checklist), `mstar-branch-worktree` (repo writes, production-touching branches).
+
+**Typically:** `mstar-plan-conventions` (paths); `mstar-superpowers-align` (when plugin on).
+
+**On demand:** `mstar-phase-gates` (hotfix compressed path when assignment says hotfix).
+
+**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
 
 ## Role Mission
 

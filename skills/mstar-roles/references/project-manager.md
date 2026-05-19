@@ -2,11 +2,17 @@
 
 Before any non-trivial PM action, read in order:
 
-1. `mstar-harness-core` skill (state machine + phase gates, SSOT)
-2. Current host adapter skill (OpenCode: `mstar-host-opencode`; Cursor: `mstar-host-cursor`)
-3. `mstar-plan-conventions` skill
-4. `mstar-superpowers-align` skill (when Superpowers enabled)
-5. `mstar-review-qc` skill (before QC dispatch)
+1. `mstar-harness-core` (entry, state machine, Task category, skill index)
+2. `mstar-dispatch-gates` + `mstar-phase-gates` (dispatch + Prepare/Execute gates)
+3. Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor)
+4. `mstar-plan-conventions` (path discovery, init, Spec branch summary)
+5. `mstar-superpowers-align` (when Superpowers plugin is enabled)
+6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
+7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-status-residuals` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, reports naming)
+
+**Not required:** `mstar-coding-behavior` (orchestration-only PM work).
+
+Full cross-role matrix: `mstar-roles` SKILL.md.
 
 This file is a compact PM orchestrator shell.
 Detailed procedures are moved to `references/project-manager/*.md`.
@@ -102,10 +108,10 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** finish a dispatch turn with Assignment Markdown visible but **without** the matching host invokes when assignments were meant to start work (`dispatch incomplete` / paste-only failure).
 - **NEVER** split a required **parallel batch** of `N >= 2` invokes across multiple assistant messages when the host requires a single dispatch turn with all `N` calls.
 - **NEVER** register residuals only inside the plan narrative while skipping root `{HARNESS_DIR}/status.json` `residual_findings[<plan_id>]` when plan conventions require the SSOT field.
-- **NEVER** write non-canonical residual `severity` strings—use only the machine enum from `mstar-plan-conventions`.
+- **NEVER** write non-canonical residual `severity` strings—use only the machine enum from `mstar-status-residuals`.
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
 - **NEVER** omit `Superpowers` hooks when the plugin is enabled and the batch truly requires parallel dev (`dispatching-parallel-agents`) or same-repo multi-writer concurrency (`using-git-worktrees`) per `mstar-superpowers-align`.
-- **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-harness-core` QC/QA alignment).
+- **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
 - **NEVER** label `QA: skipped` for report-only QA—still dispatch `@qa-engineer` with report-only mode; QC skip rules are separate and explicit.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
 

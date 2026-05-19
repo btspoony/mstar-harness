@@ -99,16 +99,25 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 
 ### 核心技能（What drives behavior）
 
+先读 **`mstar-harness-core`**，再按角色与任务 **按需** 加载专题 skill（详见 `mstar-roles` 各角色必读清单）。
+
 | Skill | 作用 |
 |-------|------|
-| `mstar-harness-core` | 全局入口、状态机、门禁与不变量 |
-| `mstar-plan-conventions` | plan / status / residual 的统一约定 |
+| `mstar-harness-core` | 全局入口、状态机、Task category、skill 索引 |
+| `mstar-phase-gates` | Prepare/Execute 门禁、clarify、hotfix |
+| `mstar-dispatch-gates` | PM 派发、Delegation、反递归、并行 invoke |
+| `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
+| `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支摘要 |
+| `mstar-status-residuals` | `status.json`、residual 生命周期、severity SSOT |
+| `mstar-plan-artifacts` | 主 plan、`reports/`、knowledge、Done 归档 |
 | `mstar-review-qc` | QC 审查标准与报告模板 |
 | `mstar-coding-behavior` | 通用编码行为基线 |
 | `mstar-superpowers-align` | 与 Superpowers 的对齐与冲突消解 |
-| `mstar-roles` | 角色提示词总线（角色正文在 `references/`） |
+| `mstar-roles` | 角色提示词总线 + 各角色 skill 加载清单 |
 | `mstar-host`（按宿主） | 宿主能力差异（OpenCode / Cursor） |
 | `pm` | Cursor 与 Codex 共享的 `/pm` 强制入口 |
+
+维护者：进行中的 spec/plan 可放在 **`.harness/`**（gitignore，非发布 skill 树）。
 
 ## Harness Workflow（统一流程）
 

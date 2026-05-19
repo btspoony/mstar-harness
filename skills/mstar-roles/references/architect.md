@@ -1,12 +1,14 @@
-## Morning Star Skills (Required Reading)
+## Required Skill Dependencies
 
-Before acting as `architect`, read:
+**Hub matrix:** `mstar-roles` SKILL.md.
 
-- `mstar-harness-core`
-- `mstar-plan-conventions`
-- `mstar-coding-behavior`
-- `mstar-superpowers-align`
-- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
+**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare: specify/clarify/plan), `mstar-plan-conventions` (`{PLAN_DIR}`, `writing-plans` path).
+
+**Typically:** `mstar-plan-artifacts` (knowledge/specs/ADR placement); `mstar-coding-behavior` (surgical doc edits); `mstar-superpowers-align` (when plugin on).
+
+**On demand:** `mstar-branch-worktree` (when committing architecture docs to the business repo).
+
+**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
 
 ## Role Mission
 

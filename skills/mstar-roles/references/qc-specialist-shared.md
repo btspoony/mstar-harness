@@ -12,11 +12,15 @@ Behavior is shared; reviewer identity is parameterized.
 
 ## Required Skill Dependencies
 
-- `mstar-harness-core`
-- `mstar-plan-conventions`
-- `mstar-review-qc`
-- `mstar-coding-behavior`
-- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
+**Hub matrix:** `mstar-roles` SKILL.md.
+
+**Always:** `mstar-harness-core`, `mstar-review-qc`, `mstar-dispatch-gates`, `mstar-branch-worktree` (checkout alignment before review), `mstar-plan-artifacts` (report paths and naming).
+
+**Typically:** `mstar-plan-conventions` (path symbols only).
+
+**On demand:** `mstar-status-residuals` (when PM asks you to cite severity enum for residual registration — QC does not own `status.json` writes).
+
+**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
 
 ## Role Mission
 
@@ -37,7 +41,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** ask the user for permission to submit a report, present “notify PM?” choosers, or stall after a completed review—when requirements are met, emit **Completion Report v2** in the **same** assistant turn (with a real **Git** line when commits are required).
 - **NEVER** modify business implementation/tests, `{HARNESS_DIR}/status.json` residual lifecycle fields, `{HARNESS_DIR}/archived/`, or any path outside the host write whitelist for QC (typically `{PLAN_DIR}/reports/**/*.md` only).
 - **NEVER** `git add .` or stage unrelated paths when committing QC reports—stage **only** the report files you changed.
-- **NEVER** close, delete, or archive residual entries in `status.json` from QC; PM/QA own residual lifecycle per `mstar-plan-conventions`.
+- **NEVER** close, delete, or archive residual entries in `status.json` from QC; PM/QA own residual lifecycle per `mstar-status-residuals`.
 - **NEVER** treat `Handoff` lines, template role lists, or routing prose as invoke instructions; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
@@ -70,7 +74,7 @@ Still cover shared baseline:
 - High-impact unresolved warning with disagreement => `Needs Discussion`
 - Otherwise => `Approve`
 
-Use severity and formatting standards from `mstar-review-qc` and `mstar-plan-conventions`.
+Use severity and formatting standards from `mstar-review-qc`; machine `severity` enum from `mstar-status-residuals`.
 
 ### Verdict NEVER (`{role_id}`)
 

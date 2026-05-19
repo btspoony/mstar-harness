@@ -5,7 +5,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 
 ## Load order（必读顺序）
 
-**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md，以及 `mstar-harness-core/references/branch-and-worktree.md` 中与 `Review cwd` / `Working branch` / `Review range` 相关的章节）。** 本 skill 只定义 QC/QA **工作流与报告形态**；**谁可派 subagent**、**三审字段逐字对齐**、**同仓 worktree 与单一待审 `HEAD`** 等不变量以 **`mstar-harness-core`** 为准。冲突时 **以 `mstar-harness-core` 为准**。
+**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md），并按需 Read **`mstar-branch-worktree`**（`Review cwd` / `Working branch` / `Review range`）。** 本 skill 只定义 QC/QA **工作流与报告形态**；派发与三审同消息规则见 **`mstar-dispatch-gates`**；**同仓 worktree 与单一待审 `HEAD`** 以 **`mstar-branch-worktree`** 为准。冲突时 **以 `mstar-harness-core` 为准**。
 
 **摘要**：`mstar-harness-core` — QC-QA 检出与并行门禁；本 skill — 审查清单、报告模板、verdict 与 residual 留档契约。
 
@@ -16,7 +16,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 ## 分派时机（与 plan / batch 对齐）
 
 - **默认**：`@project-manager` 在 **该 plan 的实现范围已由 dev team 全部交付**、准备进入预合并门禁时，分派完整 QC 三审。**同一 `plan_id` 下多 batch 滚动实现时，不默认每 batch 跑一轮全套三审**（避免 `reports/<plan-id>/` 多套报告与范围串线）；中间阶段靠自检与 PM 协调，**显式增量三审**须在 Assignment 写明（见 `mstar-plan-conventions` `references/plan-files-and-reports.md`「QC 三审触发时机」）。
-- **同仓多 worktree 并行开发**：一轮 QC 三审仍只对应 **一套** `Review cwd` + `Working branch` + `Review range` / `Diff basis`（三票逐字相同）。若成果曾分布在 **未合并** 的多条分支或多个 `HEAD`，PM **须先**完成 Git 归并到 **单一**待审分支再派 QC；**不得**指望 reviewer 自行在多个开发 worktree 之间拼凑审查范围。**推荐** PM 在并行开发开始前已建立 **plan 集成分支** 作为各轨 merge 靶（见 `mstar-harness-core` `references/branch-and-worktree.md` 同节 **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**）。细则见 `mstar-harness-core` `references/branch-and-worktree.md` **「多 worktree 并行开发与 QC / QA 的门禁衔接」**。
+- **同仓多 worktree 并行开发**：一轮 QC 三审仍只对应 **一套** `Review cwd` + `Working branch` + `Review range` / `Diff basis`（三票逐字相同）。若成果曾分布在 **未合并** 的多条分支或多个 `HEAD`，PM **须先**完成 Git 归并到 **单一**待审分支再派 QC；**不得**指望 reviewer 自行在多个开发 worktree 之间拼凑审查范围。**推荐** PM 在并行开发开始前已建立 **plan 集成分支** 作为各轨 merge 靶（见 `mstar-branch-worktree` 同节 **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**）。细则见 `mstar-branch-worktree` **「多 worktree 并行开发与 QC / QA 的门禁衔接」**。
 - **Request Changes 后**：再审为**新波次**，落盘用新文件名（如 `-rev2` / `wave2-`），PM 汇总时标明有效波次。
 
 ## 三审身份与模型独立性门禁（PM 强制）
@@ -35,17 +35,17 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 - 行为回归是否已被显式确认
 - 阻塞级安全或数据一致性风险是否已被识别
 - 变更行为的测试覆盖是否充分
-- 若启用功能分支策略：变更分支与 Assignment 的 **`Working branch` / `Branch policy`** 是否一致；且审查在 Assignment 写明的 **`Review cwd` / `Worktree path`**（feature 检出上下文）上执行，而非未核对的默认 cwd；若曾同仓多流并行开发，还须核对 **`HEAD` 是否已含本 scope 全部待审提交**（见 `mstar-harness-core` `references/branch-and-worktree.md` **「多 worktree 并行开发与 QC / QA 的门禁衔接」**）
+- 若启用功能分支策略：变更分支与 Assignment 的 **`Working branch` / `Branch policy`** 是否一致；且审查在 Assignment 写明的 **`Review cwd` / `Worktree path`**（feature 检出上下文）上执行，而非未核对的默认 cwd；若曾同仓多流并行开发，还须核对 **`HEAD` 是否已含本 scope 全部待审提交**（见 `mstar-branch-worktree` **「多 worktree 并行开发与 QC / QA 的门禁衔接」**）
 - **三审对齐**：Assignment 已写明 **`plan_id`**（或 `N/A` + **Feature / scope label**）与 **`Review range` / `Diff basis`**；报告 **Scope** 须 **逐字回写** PM 下发的这两字段，**禁止**与同伴 reviewer 使用不同范围或不同 plan 锚点
 
 ## 标准审查工作流
 
-1. **对齐待审检出（feature 上下文）**：在动手审查前，按 Assignment 进入 **`Review cwd` / `Worktree path`**（若已写明）；执行 `git rev-parse --show-toplevel`、`git branch --show-current`（或等价）确认 **当前目录即待审 feature 的检出**，且分支与 **`Working branch`** 一致。核对 Assignment 中的 **`plan_id`**（或 `N/A` + **Feature / scope label**）与 **`Review range` / `Diff basis`** 已填写；缺任一项应向 `@project-manager` 申请补全，**禁止**自行假设审查范围。后续 **`git diff` / `git log`** 必须 **按 `Review range` / `Diff basis` 可复现地覆盖待审变更**（若与本地 `HEAD` 不一致，先回报 `Blocked`）。若 Assignment 未写 `Review cwd` / `Worktree path` 但开发回报了实现用 worktree，应先向 `@project-manager` 申请补全 Assignment，**禁止**在未核对路径与分支的情况下假设在审 `main` 或其它提交。细则见 `mstar-harness-core` `references/branch-and-worktree.md`「QC 三审、QA 验证与 feature 检出上下文」。**`@qa-engineer`** 对同一 feature 做验证时须使用 Assignment 中 **同一 `Review cwd` / `Worktree path`** 及 **同一 `plan_id` + `Review range` / `Diff basis`**（见该节 QA 条款）。
+1. **对齐待审检出（feature 上下文）**：在动手审查前，按 Assignment 进入 **`Review cwd` / `Worktree path`**（若已写明）；执行 `git rev-parse --show-toplevel`、`git branch --show-current`（或等价）确认 **当前目录即待审 feature 的检出**，且分支与 **`Working branch`** 一致。核对 Assignment 中的 **`plan_id`**（或 `N/A` + **Feature / scope label**）与 **`Review range` / `Diff basis`** 已填写；缺任一项应向 `@project-manager` 申请补全，**禁止**自行假设审查范围。后续 **`git diff` / `git log`** 必须 **按 `Review range` / `Diff basis` 可复现地覆盖待审变更**（若与本地 `HEAD` 不一致，先回报 `Blocked`）。若 Assignment 未写 `Review cwd` / `Worktree path` 但开发回报了实现用 worktree，应先向 `@project-manager` 申请补全 Assignment，**禁止**在未核对路径与分支的情况下假设在审 `main` 或其它提交。细则见 `mstar-branch-worktree`「QC 三审、QA 验证与 feature 检出上下文」。**`@qa-engineer`** 对同一 feature 做验证时须使用 Assignment 中 **同一 `Review cwd` / `Worktree path`** 及 **同一 `plan_id` + `Review range` / `Diff basis`**（见该节 QA 条款）。
 2. 用 `git diff` / `git show` 与内置 `glob` / `grep` / `read` 构建变更上下文；仅在跨模块或陌生路径需要快速导航时**可选**短调用 `@explore`。**禁止**把审查步骤、结论或清单执行外包给 `@explore`（见 `mstar-harness-core` SKILL.md「内置 `@explore` 能力边界」）。
 3. 检查 `git diff` 及相关历史；若 Assignment 启用功能分支策略，再次核对当前分支与 **`Working branch` / `Branch policy`** 一致（无授权则不应在默认分支上堆功能改动）。
 4. 运行对应语言的 lint 和静态分析。
 5. 按本 skill 审查清单进行人工审查。
-6. 产出带严重等级和证据的结构化发现。PM 将条目写入 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>][]`**（canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）时，其 **`severity`** **仅允许** `mstar-plan-conventions` `references/status-and-residuals.md` 中 **「Residual findings：severity（SSOT，机器字段）」** 的枚举与映射表（报告小节 **Critical / Warning / Suggestion** → JSON 档位）；**不要**把报告标题字符串直接当作 `severity`。
+6. 产出带严重等级和证据的结构化发现。PM 将条目写入 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>][]`**（canonical 见 `mstar-status-residuals` **SKILL.md** 开篇）时，其 **`severity`** **仅允许** `mstar-status-residuals` `references/status-and-residuals.md` 中 **「Residual findings：severity（SSOT，机器字段）」** 的枚举与映射表（报告小节 **Critical / Warning / Suggestion** → JSON 档位）；**不要**把报告标题字符串直接当作 `severity`。
 7. **报告入库（Git）**：将 QC 报告 **`.md`** 写入 `{PLAN_DIR}/reports/<plan-id>/` 后，在业务仓根执行 **`git add`**（**仅**本次报告路径）与 **`git commit`**，并在 Completion Report 给出 **真实** `git log -1 --oneline`。**禁止**仅完成 Write/Edit 而不提交（权限与例外见各 `agents/qc-specialist*.md`）。
 8. **禁止收尾套话**：报告与 commit 成功后，**不得**向终端用户追问「是否要交付报告」「下一步是否通知 PM」等；须在同一轮内输出完整 **Completion Report v2** 结束（见各 `agents/qc-specialist*.md` **「回合结束方式」**）。
 
@@ -82,7 +82,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 
 ## 标准输出模板
 
-落盘到 **`{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc#.md`** 时：文件**最上方**须为 YAML frontmatter（`report_kind`、`reviewer`、`reviewer_index`、`plan_id`、`verdict`、`generated_at` 等，见 `agents/qc-specialist*.md`），**紧接着**再写下列 Markdown 正文（可将 **Reviewer Metadata** 与 frontmatter 对齐，避免矛盾）。**Findings 下三节标题**（Critical / Warning / Suggestion）为**人类可读分类**；PM 将条目写入根级 **`residual_findings`**（见 `mstar-plan-conventions` **SKILL.md** 开篇）时的 **`severity` 机器字段**以 `mstar-plan-conventions` `references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」** 为准。
+落盘到 **`{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc#.md`** 时：文件**最上方**须为 YAML frontmatter（`report_kind`、`reviewer`、`reviewer_index`、`plan_id`、`verdict`、`generated_at` 等，见 `agents/qc-specialist*.md`），**紧接着**再写下列 Markdown 正文（可将 **Reviewer Metadata** 与 frontmatter 对齐，避免矛盾）。**Findings 下三节标题**（Critical / Warning / Suggestion）为**人类可读分类**；PM 将条目写入根级 **`residual_findings`**（见 `mstar-status-residuals` **SKILL.md** 开篇）时的 **`severity` 机器字段**以 `mstar-status-residuals/references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」** 为准。
 
 ```markdown
 # Code Review Report
@@ -155,8 +155,8 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 
 ## Residual Findings 留档门禁
 
-- 当阻断项（`Critical`）修复后仍有未关闭 **Warning / Suggestion** 类问题或技术债，不得仅在对话中口头说明，必须留档；登记 **`severity`** 时遵守 `mstar-plan-conventions` `references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」**。
-- **启用 plan 管理且存在 `plan-id` 时**：**待跟踪（open）** residual 的 **SSOT** 为 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）；PM 在 consolidated 决策中分配 **稳定 `id`（R1…）** 后须**写入该数组**（`source` 指回 `-qc*.md` 等）。**已关闭**条目归档至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（字段与严重等级见 `mstar-plan-conventions`），与 **`{PLAN_DIR}/reports/<plan-id>/`** 交叉引用。
+- 当阻断项（`Critical`）修复后仍有未关闭 **Warning / Suggestion** 类问题或技术债，不得仅在对话中口头说明，必须留档；登记 **`severity`** 时遵守 `mstar-status-residuals` `references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」**。
+- **启用 plan 管理且存在 `plan-id` 时**：**待跟踪（open）** residual 的 **SSOT** 为 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-status-residuals` **SKILL.md** 开篇）；PM 在 consolidated 决策中分配 **稳定 `id`（R1…）** 后须**写入该数组**（`source` 指回 `-qc*.md` 等）。**已关闭**条目归档至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（字段与严重等级见 `mstar-plan-conventions`），与 **`{PLAN_DIR}/reports/<plan-id>/`** 交叉引用。
 - **主 plan**：仅作**人类可读索引**（可选）——复述 `id` 与摘要并指向 **`{HARNESS_DIR}/status.json`**；**不得**作为与 SSOT 脱钩的唯一登记处（见 `mstar-plan-conventions` `references/plan-files-and-reports.md`「Residual findings：权威在哪」）。
 - 可选：`@project-manager` 维护 **`metadata.tech_debt_summary`** 作为跨 plan 聚合视图（与 `residual_findings` 互补，见 `mstar-plan-conventions`）。
 - 若无 `{PLAN_DIR}`：写入项目认可的进度载体或根级 `notes`（结构化条目），仍须含 `id` 与跟踪字段。

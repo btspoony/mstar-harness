@@ -5,7 +5,7 @@ description: Morning Star (启明星) 跨角色通用编码行为准则 —— T
 
 ## Load order（必读顺序）
 
-**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md）。** 本 skill 只约束 **编码与改动风格**（Think / Simplicity / Surgical / Goal-Driven）；**分支、`Working branch`、QC-QA 字段、Done 所有权、调度防串扰** 等仍以 **`mstar-harness-core`** 为准。冲突时 **以 `mstar-harness-core` 为准**。
+**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md）。** 本 skill 只约束 **编码与改动风格**（Think / Simplicity / Surgical / Goal-Driven）；**Done 所有权、状态机** 仍以 **`mstar-harness-core`** 为准；**分支 / worktree / QC-QA 检出字段** → **`mstar-branch-worktree`**；**调度防串扰** → **`mstar-dispatch-gates`**。冲突时 **以 `mstar-harness-core` 为准**。
 
 **摘要**：`mstar-harness-core` — 不变量与门禁；本 skill — 实现与审查时的工程习惯，不替代 harness。
 

@@ -10,11 +10,15 @@ Behavior is shared; track identity is parameterized.
 
 ## Required Skill Dependencies
 
-- `mstar-harness-core`
-- `mstar-plan-conventions`
-- `mstar-coding-behavior`
-- `mstar-superpowers-align`
-- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
+**Hub matrix:** `mstar-roles` SKILL.md.
+
+**Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates` (leaf anti-recursion before any Task/subagent).
+
+**Typically:** `mstar-plan-conventions` (path symbols + `metadata.primary_spec` / `spec_refs`); `mstar-superpowers-align` (when plugin on).
+
+**On demand:** `mstar-branch-worktree` (repo writes, `Working branch`); `mstar-phase-gates` (Execute / hotfix sections when gate fields are in the assignment).
+
+**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
 
 ## Role Mission
 

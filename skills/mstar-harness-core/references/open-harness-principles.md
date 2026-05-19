@@ -8,16 +8,16 @@
 
 | 理念 | 含义 | 在本仓库的落点 |
 |------|------|----------------|
-| **意图优先于字面** | 先弄清「用户真正要达成什么」，再分类与分派 | `mstar-harness-core` SKILL.md「意图门禁」；PM「第一性原理」与 `clarify` |
+| **意图优先于字面** | 先弄清「用户真正要达成什么」，再分类与分派 | `mstar-phase-gates` SKILL.md Prepare · `clarify` / `plan` 意图门禁；PM「第一性原理」 |
 | **先准备再实现** | 访谈式规划、锁范围、再写代码 | Prepare：`specify -> clarify -> plan`；Execute：`plan locked -> tasks -> implement` |
-| **`clarify` 核心纪律** | 逐方面核对至共享理解；沿设计树逐枝、一次一决；能探索代码库则先探索；每问带推荐答案 | `mstar-harness-core` SKILL.md Prepare · `clarify`；`phase-gate-playbook.md` |
+| **`clarify` 核心纪律** | 逐方面核对至共享理解；沿设计决策树逐枝、一次一决；能探索代码库则先探索；每问带推荐答案 | **`mstar-phase-gates`** SKILL.md；`mstar-phase-gates/references/phase-gate-playbook.md` |
 | **按任务类别选能力与模型** | 视觉/深读/快改/硬逻辑等用不同强项 | `mstar-harness-core` SKILL.md「Task category」；Assignment 字段 **`Task category`**；宿主侧按角色配置 model（如 OpenCode 的 `opencode.json`） |
-| **可验证编辑** | 减少「凭记忆 Patch」导致的漂移与损坏 | `mstar-harness-core` SKILL.md「可验证编辑与上下文纪律」：读后再改、失败则重读 |
+| **可验证编辑** | 减少「凭记忆 Patch」导致的漂移与损坏 | `mstar-phase-gates` SKILL.md「可验证编辑与上下文纪律」：读后再改、失败则重读 |
 | **持续推进与可核对完成** | 长任务有清单、有关门证据，避免空转 | `mstar-superpowers-align` 的 `verification-before-completion`；PM 对 `tasks`/Phase Gate 的拉回 |
 | **编码行为约束（轻量）** | 降低静默假设、过度设计与无关改动 | `mstar-coding-behavior`：Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution |
-| **并行与边界** | 多线任务不踩同一写归属、不绕过分支门禁；**开发**阶段同仓多可写并发须独立 **`git worktree`**；**QC / QA** 在 **同一检出**（`Review cwd`）与 **同一 `plan_id` + `Review range` / `Diff basis`** 上审查与验证，保证三票同一功能 | `mstar-harness-core` SKILL.md「并行规则」与 `references/branch-and-worktree.md`；`mstar-review-qc`；`mstar-superpowers-align` 的 **`using-git-worktrees`** |
+| **并行与边界** | 多线任务不踩同一写归属、不绕过分支门禁；**开发**阶段同仓多可写并发须独立 **`git worktree`**；**QC / QA** 在 **同一检出**（`Review cwd`）与 **同一 `plan_id` + `Review range` / `Diff basis`** 上审查与验证，保证三票同一功能 | `mstar-branch-worktree`；`mstar-review-qc`；`mstar-superpowers-align` **`using-git-worktrees`** |
 | **分层上下文（可选）** | 大仓库用目录级 `AGENTS.md` 降噪；根 `AGENTS.md` 维护边界见下文专节 | `mstar-harness-core` SKILL.md「分层上下文」；由业务项目维护者按需添加 |
-| **结构化澄清（按宿主）** | 向用户澄清/抉择时，**有 `question` 类能力则优先**；否则结构化正文；长问兜底 | `mstar-harness-core` SKILL.md「Spec-Driven」下 `clarify`；当前宿主的 `mstar-host` skill；`mstar-roles` skill 的 `project-manager` 角色 |
+| **结构化澄清（按宿主）** | 向用户澄清/抉择时，**有 `question` 类能力则优先**；否则结构化正文；长问兜底 | `mstar-phase-gates` SKILL.md Prepare · `clarify`；当前宿主的 `mstar-host` skill；`mstar-roles` · `project-manager` |
 
 ## 与常见 harness 说法的对照（帮助理解角色分工）
 

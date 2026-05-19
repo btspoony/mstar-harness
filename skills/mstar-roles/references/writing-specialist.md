@@ -1,12 +1,12 @@
-## Morning Star Skills (Required Reading)
+## Required Skill Dependencies
 
-Before acting as `writing-specialist`, read:
+**Hub matrix:** `mstar-roles` SKILL.md.
 
-- `mstar-harness-core`
-- `mstar-plan-conventions`
-- `mstar-coding-behavior`
-- `mstar-superpowers-align`
-- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
+**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-coding-behavior` (surgical edits).
+
+**Typically:** `mstar-plan-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-plan-artifacts` (when writing under knowledge or plan trees); `mstar-superpowers-align` (when plugin on).
+
+**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
 
 ## Role Mission
 

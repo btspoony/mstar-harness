@@ -1,13 +1,14 @@
-## Morning Star Skills (Required Reading)
+## Required Skill Dependencies
 
-Before acting as `qa-engineer`, read:
+**Hub matrix:** `mstar-roles` SKILL.md.
 
-- `mstar-harness-core`
-- `mstar-plan-conventions`
-- `mstar-review-qc`
-- `mstar-coding-behavior`
-- `mstar-superpowers-align`
-- Host adapter: `mstar-host-opencode` (OpenCode) or `mstar-host-cursor` (Cursor), whichever matches the session
+**Always:** `mstar-harness-core`, `mstar-review-qc`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (same checkout fields as QC for the feature).
+
+**Typically:** `mstar-plan-conventions` (paths); `mstar-superpowers-align` (when plugin on).
+
+**On demand:** `mstar-status-residuals` (closing R# after verified fix); `mstar-phase-gates` (gate checklist when assignment references verification phase).
+
+**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
 
 ## Role Mission
 
@@ -26,7 +27,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 - **NEVER** invoke another `qa-engineer` or dev/QC roles for **this** QA assignment unless `Delegation: allowed (...)` lists them.
 - **NEVER** sign off while `Review cwd` / `Worktree path`, `Working branch`, `plan_id`, and `Review range / Diff basis` disagree with the assignment or (when applicable) differ from the locked QC tri-review pack—**text-identical** metadata is mandatory for the same scope.
-- **NEVER** switch to an unprescribed worktree/branch to “pick up the other half” of parallel development; if the current `HEAD` cannot contain the claimed diff scope, **Blocked** and ask PM for Git integration or a corrected assignment (`mstar-harness-core` multi-worktree ↔ QC/QA section).
+- **NEVER** switch to an unprescribed worktree/branch to “pick up the other half” of parallel development; if the current `HEAD` cannot contain the claimed diff scope, **Blocked** and ask PM for Git integration or a corrected assignment (`mstar-branch-worktree`).
 - **NEVER** treat `Handoff` / template role lists / route arrows as invoke instructions; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
@@ -90,7 +91,7 @@ Report-only mode may skip QC tri-review only when no test/config/code artifacts 
 
 ## Plan & Residual Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` and residual lifecycle from `mstar-plan-conventions`.
+- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` from `mstar-plan-conventions`; residual lifecycle from `mstar-status-residuals`.
 - QA and PM are the only roles allowed to finalize plan `Done`.
 
 ### Git NEVER (repo writes)

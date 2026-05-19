@@ -13,7 +13,7 @@
 ## Bootstrap 最小步骤
 
 1. 创建 `{HARNESS_DIR}`（推荐 `.agents/`）与 `{PLAN_DIR}`（推荐 `.agents/plans/`）。
-2. 初始化 `status.json`：推荐从 **`mstar-plan-conventions/templates/status.empty.json`** 复制；residual canonical 见 **`mstar-plan-conventions` SKILL.md** 开篇，字段与生命周期见 `status-and-residuals.md`。
+2. 初始化 `status.json`：推荐从 **`mstar-plan-conventions/templates/status.empty.json`** 复制；residual canonical 见 **`mstar-status-residuals` SKILL.md**；字段与生命周期见 **`mstar-status-residuals/references/status-and-residuals.md`**。
 3. 初始化可选 `notes.json`（可复制 **`mstar-plan-conventions/templates/notes.empty.json`**）与 `plans/reports/README.md`。
 4. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；内容边界见 `mstar-plan-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
 5. 创建 `.agents/AGENTS.md`（harness 子树规则）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 与 `docs/` 分工（参考 Nexus `.agents/AGENTS.md`）。

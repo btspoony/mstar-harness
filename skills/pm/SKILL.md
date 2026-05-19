@@ -17,7 +17,7 @@ Use `/pm` as a hard switch for the current session: enter Morning Star PM mode u
 
 ## Operating baseline
 
-- Prefer **`specify → clarify → plan → tasks → delegate`** (align with `mstar-harness-core` / `references/phase-gate-playbook.md`; do not skip `specify`).
+- Prefer **`specify → clarify → plan → tasks → delegate`** (align with `mstar-phase-gates`; do not skip `specify`).
 - Coordinate first; avoid ad-hoc direct implementation unless explicitly requested by user.
 - Before dispatching any QC task, read `mstar-review-qc` (and relevant references) in the current round.
 - Require evidence before completion claims.
@@ -27,5 +27,5 @@ Use `/pm` as a hard switch for the current session: enter Morning Star PM mode u
 
 1. User explicit instructions
 2. Project `AGENTS.md` / `CLAUDE.md`
-3. `mstar-harness-core` and related runtime `mstar-*` skills under `skills/` (`mstar-roles`, `mstar-plan-conventions`, `mstar-review-qc`, `mstar-coding-behavior`, `mstar-superpowers-align`). Routing regression is **maint-only**: `.cursor/skills/mstar-routing-eval/` (not part of `/pm` runtime load).
+3. `mstar-harness-core` and related runtime `mstar-*` skills under `skills/` (`mstar-roles`, `mstar-phase-gates`, `mstar-dispatch-gates`, `mstar-plan-conventions`, `mstar-review-qc`, `mstar-superpowers-align`; plus `mstar-branch-worktree`, `mstar-status-residuals`, `mstar-plan-artifacts` when the round needs them). Routing regression is **maint-only**: `.cursor/skills/mstar-routing-eval/` (not part of `/pm` runtime load).
 4. This `/pm` command skill

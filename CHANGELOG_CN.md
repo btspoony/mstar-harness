@@ -1,27 +1,35 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.3.2**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.4.0**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.3.2** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.3.1**（本轮不发布 npm） |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.3.2** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.3.2** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.3.2** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.4.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.3.1**（保持不变） |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.4.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.4.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.4.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
-## [0.3.2] - 2026-05-19
+## [0.4.0] - 2026-05-19
 
 ### Harness（skills / agents）
 
-- **计划目录**（`mstar-plan-conventions`）：正式约定 `{ITERATION_DIR}`（`{HARNESS_DIR}/iterations/`）与 `{KNOWLEDGE_DIR}`（`{HARNESS_DIR}/knowledge/`）；补充 `docs/` 与 harness 子树内容边界（对齐 Nexus）；`status.json` 可选 `iteration_compass` / `iteration_refs`。
-- **Prepare · clarify**（`mstar-harness-core`）：`clarify` 核心纪律 — 沿设计决策树达成共享理解、能查代码库先探索、每问附推荐答案。
+- **专题 skill 拆分**（按需加载）：新增 `mstar-phase-gates`、`mstar-dispatch-gates`、`mstar-branch-worktree`、`mstar-status-residuals`、`mstar-plan-artifacts`；瘦身 `mstar-harness-core` 与 `mstar-plan-conventions`；旧 reference 路径改为指向专题 skill 的 stub。
+- **角色**（`mstar-roles`）：各 `references/<role>.md` 增加 **Required Skill Dependencies**；hub 矩阵在 `mstar-roles` SKILL.md；PM 子文档 severity SSOT 指向 `mstar-status-residuals`。
+- **宿主**（`mstar-host-cursor`、`mstar-host-opencode`）：加载顺序与 QC/worktree 引用对齐专题 skill。
+- **计划目录**（`mstar-plan-conventions`）：正式约定 `{ITERATION_DIR}` 与 `{KNOWLEDGE_DIR}`；`docs/` 与 harness 子树边界；`status.json` 可选 `iteration_compass` / `iteration_refs`。
+- **Prepare · clarify**（主文 **`mstar-phase-gates` SKILL.md**）：`clarify` 核心纪律 — 共享理解、设计决策树逐枝、先探索、每问推荐答案、收口摘要。
+
+### 文档
+
+- **README.md** / **README_CN.md**：扩展核心 skill 表；说明 `.harness/` 为 gitignore 的维护工作区（spec/plan，非发布用 skill 树）。
+- **AGENTS.md**：`.harness/` 维护约定；专题 skill 路由表。
 
 ### 版本对齐
 
-- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.3.1 → 0.3.2**。**`@mstar-harness/cli` 保持 0.3.1**（本轮不发布 CLI npm 包）。
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.3.2 → 0.4.0**。**`@mstar-harness/cli` 保持 0.3.1**。
 
 ## [0.3.1] - 2026-05-15
 

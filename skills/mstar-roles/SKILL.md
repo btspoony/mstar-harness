@@ -1,19 +1,19 @@
 ---
 name: mstar-roles
-description: Morning Star role prompt hub. This skill is the single entry for role-specific behavior text: `agents/*.md` remain lightweight shells (frontmatter + role parameters), while full role behavior lives in `references/*.md`. Always load this skill for any Morning Star role (`project-manager`, `product-manager`, `architect`, `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, `qa-engineer`, `qc-specialist*`, `ops-engineer`, `writing-specialist`, `prompt-engineer`) before execution.
+description: Morning Star role prompt hub — `agents/*.md` shells plus full behavior in `references/*.md`, each with a **Required Skill Dependencies** list (which `mstar-*` topic skills to load after `mstar-harness-core`). Always load for any Morning Star role (`project-manager`, `product-manager`, `architect`, `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, `qa-engineer`, `qc-specialist*`, `ops-engineer`, `writing-specialist`, `prompt-engineer`). Cross-role summary table in this SKILL.md; per-role lists are authoritative for that role's session.
 ---
 
 ## Load Order (Required)
 
 When a Morning Star role starts work in a session:
 
-1. Read `mstar-harness-core` first (SKILL.md + task-relevant references).
+1. Read `mstar-harness-core` first (SKILL.md), then **only** the topic `mstar-*` skills required for this role/task (see matrix below — do not read all topic skills by default).
 2. Read this `mstar-roles` skill.
 3. Resolve role mapping and parameter table below.
-4. Read the corresponding `references/<role>.md` file.
+4. Read the corresponding `references/<role>.md` file — each role file lists **Required Skill Dependencies** for that role (canonical per-role load list).
 5. Expand placeholders from role parameters before execution.
 
-If any conflict appears, `mstar-harness-core` remains the authoritative source for lifecycle, gates, routing, and invariants.
+If any conflict appears, `mstar-harness-core` remains the authoritative source for lifecycle, gates, routing, and invariants. The table below is the cross-role summary; when a role file lists different **on-demand** skills, follow the role file for that session.
 
 ## Role Reference Mapping
 
@@ -35,16 +35,33 @@ If any conflict appears, `mstar-harness-core` remains the authoritative source f
 
 ## Shared Skill Dependencies
 
-Treat these as baseline dependencies **where the role touches implementation, review, verification, or ops execution** (see `mstar-harness-core` load contract).
+Treat these as baseline dependencies **where the role touches implementation, review, verification, or ops execution** (see `mstar-harness-core` load contract). Load **on demand**, not as a fixed bundle.
 
 | Skill | Use when task involves |
 | --- | --- |
-| `mstar-harness-core` | State machine, phase gates, task category, branch/worktree policy, dispatch anti-recursion |
-| `mstar-plan-conventions` | `{HARNESS_DIR}` / `{PLAN_DIR}`, `status.json`, residual lifecycle, plan metadata |
-| `mstar-review-qc` | QC workflow, review template, verdict rules, high-risk checks |
-| `mstar-coding-behavior` | Think-before-coding, simplicity, surgical changes, goal-driven execution (**not** required for `project-manager` orchestration-only work) |
-| `mstar-superpowers-align` | Superpowers alignment, dispatching/worktree constraints, delegation compatibility |
-| `mstar-host-opencode` / `mstar-host-cursor` | Host-specific behavior and capabilities (match the active host) |
+| `mstar-harness-core` | **Always** (non-trivial work): entry, state machine, Task category, explore boundary, skill index |
+| `mstar-phase-gates` | Prepare/Execute gates, clarify, hotfix path, intention gate |
+| `mstar-dispatch-gates` | PM dispatch; **all leaf executors** before any Task/subagent call |
+| `mstar-branch-worktree` | Git write, parallel worktrees, QC/QA checkout fields |
+| `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch naming, `writing-plans` path |
+| `mstar-status-residuals` | `status.json`, open/archived residual, severity enum |
+| `mstar-plan-artifacts` | Main plan, `reports/`, knowledge/iteration indexes, Done compaction |
+| `mstar-review-qc` | QC workflow, template, verdict, high-risk checks |
+| `mstar-coding-behavior` | Implementation/debug/refactor (**not** PM orchestration-only) |
+| `mstar-superpowers-align` | Superpowers plugin on; Assignment `Superpowers` lines |
+| `mstar-host-opencode` / `mstar-host-cursor` | Host-specific behavior (match active host) |
+
+### Role → typical topic skills (after `mstar-harness-core`)
+
+| Role | Typical adds |
+| --- | --- |
+| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-superpowers-align`, `mstar-roles` ref; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-status-residuals` / `mstar-plan-artifacts` as the round requires |
+| `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-plan-conventions` (minimal) |
+| `qc-specialist*` | `mstar-review-qc`, `mstar-branch-worktree`, `mstar-plan-artifacts` (report paths) |
+| `qa-engineer` | `mstar-review-qc`, `mstar-branch-worktree`, `mstar-status-residuals` (closing R#) |
+| `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-plan-artifacts` (knowledge/specs) |
+| `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree` |
+| `prompt-engineer` | All topic skills when editing harness text |
 
 Use skill names (not absolute filesystem paths) in role references.
 

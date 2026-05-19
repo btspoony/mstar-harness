@@ -110,10 +110,27 @@ If one of these checks fails, stop and report why.
   - Add/update trigger phrases when scenarios expand.
 - If a change alters behavior (not just wording), include evaluation evidence.
 
+## Local maintenance workspace (`.harness/`, gitignored)
+
+Use **`.harness/`** only for **in-progress maint work** on this repo (not published runtime skills):
+
+| Path | Purpose |
+|------|---------|
+| `.harness/docs/` | Design specs, decomposition notes, ADRs for harness changes |
+| `.harness/specs/` | Spec drafts while iterating |
+| `.harness/plans/` | Implementation plans, task boards, maint status notes |
+
+**Runtime SSOT** for `mstar-*` skills stays in repo-root **`skills/`** (bundled via `packages/opencode` `bundle-assets`). Do not treat `.harness/skills/` as the publish path.
+
 ## Where To Edit (Minimal Routing)
 
-- Core harness invariants and shared protocol -> `skills/mstar-harness-core/*`
-- Plan/status/residual conventions -> `skills/mstar-plan-conventions/*`
+- Core harness entry, state machine, Task category, skill index -> `skills/mstar-harness-core/*`
+- Phase gates (Prepare/Execute, hotfix) -> `skills/mstar-phase-gates/*`
+- Dispatch, Delegation, anti-recursion, parallel invoke -> `skills/mstar-dispatch-gates/*`
+- Git branches, worktrees, QC/QA checkout alignment -> `skills/mstar-branch-worktree/*`
+- Plan directory discovery, init, Spec branch summary -> `skills/mstar-plan-conventions/*`
+- `status.json`, residual lifecycle, severity SSOT -> `skills/mstar-status-residuals/*`
+- Main plan, reports/, knowledge, Done compaction -> `skills/mstar-plan-artifacts/*`
 - QC baseline and review template -> `skills/mstar-review-qc/*`
 - Cross-role coding behavior -> `skills/mstar-coding-behavior/*`
 - Superpowers alignment contract -> `skills/mstar-superpowers-align/*`
@@ -143,6 +160,21 @@ Use `.cursor/skills/mstar-routing-eval/` only for Cursor maintenance and regress
 
 Do not treat routing-eval as a runtime skill for normal implementation tasks.
 
+## Topic skill load matrix (runtime)
+
+After `mstar-harness-core`, load **only** what the role and round need (see `skills/mstar-roles/SKILL.md`):
+
+| Skill | Typical readers |
+|-------|-----------------|
+| `mstar-phase-gates` | PM; product/architect in Prepare |
+| `mstar-dispatch-gates` | PM; **all leaf executors** before Task/subagent |
+| `mstar-branch-worktree` | PM, dev*, QC*, QA, ops when Git/write or QC checkout |
+| `mstar-plan-conventions` | PM; dev* for path symbols / metadata |
+| `mstar-status-residuals` | PM, QC*, QA when touching `status.json` / R# |
+| `mstar-plan-artifacts` | PM (InReview/QC waves), architect, product-manager, QC* (report paths) |
+
+Legacy stub files under `mstar-harness-core/references/` and `mstar-plan-conventions/references/` point to these topic skills — edit the topic skill only.
+
 ## Post-Skill-Change Sync Checklist
 
 - [ ] `description` still matches trigger scope and intent.
@@ -151,3 +183,4 @@ Do not treat routing-eval as a runtime skill for normal implementation tasks.
 - [ ] Cursor routing-eval updated if routing/gate behavior changed.
 - [ ] User-facing docs updated in both `README.md` and `README_CN.md` if onboarding changed.
 - [ ] Validation evidence included for behavior-shaping changes.
+- [ ] Stale cross-references updated (`mstar-branch-worktree`, not old `references/branch-and-worktree.md` paths).

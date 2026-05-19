@@ -12,7 +12,8 @@ Process rules and gates remain authoritative in `mstar-*` skills; this file only
 
 At session start, the agent must **first** read `mstar-harness-core`, then load other `mstar-*` skills according to its index.
 
-- Load timing for other skills (`mstar-plan-conventions`, `mstar-review-qc`, `mstar-coding-behavior`, `mstar-superpowers-align`) is governed by the `mstar-harness-core` skill index. Routing-eval lives under `.cursor/skills/` for **Cursor maint** only (see `repo-maintenance.mdc`).
+- After core, load topic skills **on demand** per `mstar-roles` (role file + hub matrix): e.g. `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-branch-worktree`, `mstar-plan-conventions`, `mstar-status-residuals`, `mstar-plan-artifacts`, `mstar-review-qc`, `mstar-coding-behavior`, `mstar-superpowers-align`. Do not read every topic skill by default.
+- Routing-eval lives under `.cursor/skills/` for **Cursor maint** only (see `repo-maintenance.mdc`).
 - Role prompts are centralized in `mstar-roles`; in Cursor, `/pm` routes the main agent to the `project-manager` role in `mstar-roles`.
 
 ## Default path (recommended)
@@ -51,7 +52,7 @@ In Cursor, the main agent can use the **Task tool** to spawn subagents in parall
 - **Prerequisite vs dispatch (same as OpenCode harness intent)**: one assistant message may run **`bash` / `read` / `glob`** only to pin `Review range`, merge-base, or cwd — **no** QC/dev Task dispatches for the batch in that message (unless `N = 1`). The **next** message that emits **any** Task for that batch must emit **all `N`** Tasks (**3** for tri-review) in **one** message. **Emit zero** Task dispatches until all `N` payloads are ready; **do not** send QC1 alone then QC2 after return.
 - **Paste-only failure mode**: writing `## Assignment` in the main chat **without** issuing the matching **Task** calls means **dispatch did not happen**. **N** Assignments ⇒ **N** Task invocations in the dispatch turn (parallel QC ⇒ **3** Tasks in **one** assistant message when supported).
 - Use `subagent_type`: `qc-specialist`, `qc-specialist-2`, `qc-specialist-3`, matching PM-issued **three independent Assignments**.
-- Required alignment fields across all three QC Tasks: **`plan_id`**, **`Review cwd` / Worktree path**, **`Review range` / Diff basis`** must be text-identical to harness requirements (see `mstar-harness-core` `references/branch-and-worktree.md`, `mstar-plan-conventions`, `mstar-review-qc`).
+- Required alignment fields across all three QC Tasks: **`plan_id`**, **`Review cwd` / Worktree path**, **`Review range` / Diff basis`** must be text-identical (see `mstar-branch-worktree`, `mstar-dispatch-gates`, `mstar-review-qc`).
 - If prior implementation used multiple worktrees in one repo: parallel QC solves reviewer concurrency only; it does **not** mean each reviewer should inspect a different dev worktree. Keep review fields identical, and review against one branch/HEAD that contains the full review scope. If multi-track commits are not integrated yet, integrate or split scope first.
 - Cursor/OpenCode differences are host capability differences (tooling, clarify interaction, artifact/report conventions), not process downgrades.
 
@@ -76,7 +77,7 @@ Put one Assignment into a new chat, paste the Assignment in the first turn, and 
 
 ### Mode C — Worktree and concurrent writes
 
-Even with Task parallelism, follow `mstar-harness-core` `references/branch-and-worktree.md`: if **two or more writers** modify the same repo concurrently, use `git worktree` (or equivalent isolation) and explicit branch/path conventions in Assignment. Do not confuse parallel QC capability with shared writable cwd safety, and do not assign different review cwd values for tri-review by default.
+Even with Task parallelism, follow **`mstar-branch-worktree`** and **`mstar-dispatch-gates`**: if **two or more writers** modify the same repo concurrently, use `git worktree` (or equivalent isolation) and explicit branch/path conventions in Assignment. Do not confuse parallel QC capability with shared writable cwd safety, and do not assign different review cwd values for tri-review by default.
 
 ### No recursive Task inside implement subagents (aligned with `Execute as`)
 
