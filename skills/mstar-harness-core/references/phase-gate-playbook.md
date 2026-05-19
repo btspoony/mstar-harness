@@ -21,6 +21,7 @@
   - 最小产物：歧义清单 + 结论；若未收敛则 `blocked`。
   - **意图**：区分字面请求与真实目标；手段/目标混淆须在此收敛（见本 skill `SKILL.md` Intent gate）。
   - **结构化澄清**：与用户核对歧义或决策时，`@project-manager`（及直接与用户对话的角色）在**宿主支持**时优先用 `question` 类能力拉齐输入；否则用等价结构化正文。宿主差异细则见当前宿主的 `mstar-host` skill。
+  - **`clarify` 核心纪律**（见 `mstar-harness-core` SKILL.md Prepare · `clarify`）：逐方面核对至共享理解；沿设计树逐枝、一次一决；能探索代码库则先探索；每问附推荐答案；阶段末汇总已决与仍 open 假设。
 - `plan`
   - 目标：给出可执行技术方案与风险控制。
   - 最小产物：方案、模块边界/接口契约、风险与回滚、验证计划。
@@ -42,7 +43,7 @@
   - 最小产物：实现 diff、自检证据、回报与 handoff。
   - **行为准则**：执行中遵循 `mstar-coding-behavior`（不静默假设、优先简单方案、只做与任务直接相关的手术式改动、按 `Step -> verify` 推进）。
   - **编辑纪律**：改文件前以磁盘为准重读；Patch 失败则重读、缩小步长，禁止盲试（见 `SKILL.md`「可验证编辑与上下文纪律」）。
-  - **知识库**：若项目启用 `{HARNESS_DIR}/knowledge/` 且当前计划在 `{HARNESS_DIR}/status.json` 的 `plans[].metadata` 中登记了 `primary_spec` / `spec_refs`，**开工前**须阅读并在回报中说明已对齐；规则见 `mstar-plan-conventions`「`{HARNESS_DIR}/knowledge/` 开发过程知识库」。
+  - **知识库 / 迭代 compass**：若项目在 `plans[].metadata` 中登记了 `primary_spec` / `spec_refs` / `iteration_compass` / `iteration_refs`，**开工前**须阅读并在回报中说明已对齐；规则见 `mstar-plan-conventions` 与 `references/knowledge-and-designs.md`（`{KNOWLEDGE_DIR}`、`{ITERATION_DIR}`）。
 
 ## 角色职责
 

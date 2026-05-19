@@ -1,16 +1,27 @@
 # 更新日志
 
-本仓库各发布面的版本与根目录 [CHANGELOG.md](CHANGELOG.md) 中的 **0.3.1** 对齐。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.3.2**（CLI 包除外，见下表）。
 
-| 发布面 | 位置 |
-| --- | --- |
-|  monorepo 根 | `morning-star`（`package.json`） |
-| CLI | `@mstar-harness/cli`（`packages/cli`） |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） |
-| Cursor 插件 | `.cursor-plugin/plugin.json` |
-| Codex 插件 | `.codex-plugin/plugin.json` |
+| 发布面 | 位置 | 版本 |
+| --- | --- | --- |
+| monorepo 根 | `morning-star`（`package.json`） | **0.3.2** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.3.1**（本轮不发布 npm） |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.3.2** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.3.2** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.3.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.3.2] - 2026-05-19
+
+### Harness（skills / agents）
+
+- **计划目录**（`mstar-plan-conventions`）：正式约定 `{ITERATION_DIR}`（`{HARNESS_DIR}/iterations/`）与 `{KNOWLEDGE_DIR}`（`{HARNESS_DIR}/knowledge/`）；补充 `docs/` 与 harness 子树内容边界（对齐 Nexus）；`status.json` 可选 `iteration_compass` / `iteration_refs`。
+- **Prepare · clarify**（`mstar-harness-core`）：`clarify` 核心纪律 — 沿设计决策树达成共享理解、能查代码库先探索、每问附推荐答案。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.3.1 → 0.3.2**。**`@mstar-harness/cli` 保持 0.3.1**（本轮不发布 CLI npm 包）。
 
 ## [0.3.1] - 2026-05-15
 
