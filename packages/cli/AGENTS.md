@@ -23,4 +23,5 @@ This `packages/cli` directory hosts the standalone `@mstar-harness/cli` package 
 ## Safety
 
 - Do not modify user secrets or credential files.
-- For config writes, only touch target `opencode.json` chosen by user input.
+- For config writes, only touch the target-specific install/config file chosen by user input
+  (`opencode.json`, Cursor plugin paths, or Codex personal marketplace metadata).

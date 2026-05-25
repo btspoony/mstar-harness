@@ -28,10 +28,13 @@ Core value:
   - or `bunx @mstar-harness/cli init`
 - `init` provides a target-aware guided setup so installation and baseline config happen in one flow.
 - CLI target support currently includes:
-  - `opencode`
-  - `cursor`
+  - OpenCode: `npx @mstar-harness/cli init --target opencode`
+  - Cursor: `npx @mstar-harness/cli init --target cursor`
+  - Codex:
+    - `npx @mstar-harness/cli init --target codex`
+    - `codex plugin add morning-star-harness --marketplace personal`
 
-For full CLI usage and advanced options (`--yes`, `--dry-run`, `--output`, `doctor`) including Cursor target install modes, see [`docs/cli.md`](docs/cli.md).
+For full CLI usage and advanced options (`--yes`, `--dry-run`, `--output`, `doctor`) including Cursor and Codex target install modes, see [`docs/cli.md`](docs/cli.md).
 
 ### Manual Install
 
@@ -68,9 +71,36 @@ For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
 
 #### Codex
 
-- Marketplace install:
-  - `codex plugin marketplace add https://github.com/btspoony/mstar-harness.git --sparse .codex/`
-  - Install **Morning Star Harness** from the added marketplace.
+- Personal marketplace install (without the CLI):
+  - Create or update `~/.agents/plugins/marketplace.json`:
+    ```json
+    {
+      "name": "personal",
+      "interface": {
+        "displayName": "Personal"
+      },
+      "plugins": [
+        {
+          "name": "morning-star-harness",
+          "source": {
+            "source": "url",
+            "url": "https://github.com/btspoony/mstar-harness.git",
+            "ref": "main"
+          },
+          "policy": {
+            "installation": "AVAILABLE",
+            "authentication": "ON_INSTALL"
+          },
+          "category": "Productivity"
+        }
+      ]
+    }
+    ```
+  - Install the plugin:
+    - `codex plugin add morning-star-harness --marketplace personal`
+- This repository is also the **Morning Star Harness Codex plugin source**:
+  - Plugin manifest: `.codex-plugin/plugin.json`
+  - Runtime skills: `skills/`
 
 That completes installation.
 

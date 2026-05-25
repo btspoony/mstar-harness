@@ -1,7 +1,6 @@
 ---
 name: pm
-description: Force the current session into pure Morning Star flow: load `mstar-harness-core`, execute as `mstar-roles` `project-manager` (`/pm`), and require reading `mstar-review-qc` before dispatching any QC tasks.
-disable-model-invocation: true
+description: "Force the current session into pure Morning Star flow: load `mstar-harness-core`, execute as `mstar-roles` `project-manager` (`/pm`), and require reading `mstar-review-qc` before dispatching any QC tasks."
 ---
 
 # Project-Manager Force Entry (`/pm`)
