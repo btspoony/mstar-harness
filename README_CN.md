@@ -28,10 +28,13 @@
   - 或 `bunx @mstar-harness/cli init`
 - `init` 提供按 target 的引导式安装流程，将安装与基础配置一步完成。
 - CLI 当前支持的 target：
-  - `opencode`
-  - `cursor`
+  - OpenCode：`npx @mstar-harness/cli init --target opencode`
+  - Cursor：`npx @mstar-harness/cli init --target cursor`
+  - Codex：
+    - `npx @mstar-harness/cli init --target codex`
+    - `codex plugin add morning-star-harness --marketplace personal`
 
-完整 CLI 用法和高级参数（`--yes`、`--dry-run`、`--output`、`doctor`），以及 Cursor target 的安装模式说明，见 [`docs/cli.md`](docs/cli.md)。
+完整 CLI 用法和高级参数（`--yes`、`--dry-run`、`--output`、`doctor`），以及 Cursor / Codex target 的安装模式说明，见 [`docs/cli.md`](docs/cli.md)。
 
 ### Manual Install
 
@@ -68,9 +71,36 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 
 #### Codex
 
-- Marketplace 安装：
-  - `codex plugin marketplace add https://github.com/btspoony/mstar-harness.git --sparse .codex/`
-  - 从新增的 marketplace 中安装 **Morning Star Harness**。
+- Personal marketplace 安装（不使用 CLI）：
+  - 创建或更新 `~/.agents/plugins/marketplace.json`：
+    ```json
+    {
+      "name": "personal",
+      "interface": {
+        "displayName": "Personal"
+      },
+      "plugins": [
+        {
+          "name": "morning-star-harness",
+          "source": {
+            "source": "url",
+            "url": "https://github.com/btspoony/mstar-harness.git",
+            "ref": "main"
+          },
+          "policy": {
+            "installation": "AVAILABLE",
+            "authentication": "ON_INSTALL"
+          },
+          "category": "Productivity"
+        }
+      ]
+    }
+    ```
+  - 安装插件：
+    - `codex plugin add morning-star-harness --marketplace personal`
+- 本仓库也是 **Morning Star Harness Codex 插件源码**：
+  - 插件 manifest：`.codex-plugin/plugin.json`
+  - 运行时 skills：`skills/`
 
 ## 使用方式
 

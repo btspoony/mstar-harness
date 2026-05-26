@@ -1,6 +1,6 @@
 # mstar-harness CLI Guide
 
-This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode and Cursor bootstrap.
+This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, and Codex bootstrap.
 
 ## Fast Path
 
@@ -29,6 +29,20 @@ Use this sequence for the quickest user flow.
 2) Verify project install:
 
 - `npx @mstar-harness/cli doctor --target cursor`
+
+### Codex
+
+1) Add Morning Star to the personal Codex marketplace metadata:
+
+- `npx @mstar-harness/cli init --target codex`
+
+2) Install from that marketplace:
+
+- `codex plugin add morning-star-harness --marketplace personal`
+
+3) Verify marketplace metadata:
+
+- `npx @mstar-harness/cli doctor --target codex`
 
 ## Install
 
@@ -65,6 +79,13 @@ Cursor install:
 - Project install (git submodule at `.cursor/plugins/mstar-harness`):
   - `npx @mstar-harness/cli init --target cursor --scope project`
 
+Codex install:
+
+- Personal marketplace metadata:
+  - `npx @mstar-harness/cli init --target codex`
+- Then install the plugin:
+  - `codex plugin add morning-star-harness --marketplace personal`
+
 ### `mstar-harness doctor`
 
 Check an existing config:
@@ -73,6 +94,7 @@ Check an existing config:
 - `npx @mstar-harness/cli doctor --output ./opencode.json`
 - `npx @mstar-harness/cli doctor --target cursor --scope global`
 - `npx @mstar-harness/cli doctor --target cursor --scope project`
+- `npx @mstar-harness/cli doctor --target codex`
 
 If validation fails, `doctor` exits with a non-zero status code.
 
@@ -84,10 +106,21 @@ OpenCode `init` enforces these baseline requirements in `opencode.json`:
 - `plugin` contains `@mstar-harness/opencode@latest` (legacy `morning-star@git+…` lines for `btspoony/mstar-harness` are stripped on init, including URLs without `.git`, `ssh://`, or `#tag`)
 - all Morning Star roles have `agent.<role>.model`
 
-## What `doctor` Checks (OpenCode)
+Codex `init` writes or updates the personal marketplace metadata at
+`~/.agents/plugins/marketplace.json` with a URL-source entry:
+
+- `name`: `morning-star-harness`
+- `source.source`: `url`
+- `source.url`: `https://github.com/btspoony/mstar-harness.git`
+- `source.ref`: `main`
+- `policy.installation`: `AVAILABLE`
+- `policy.authentication`: `ON_INSTALL`
+
+## What `doctor` Checks
 
 - Same schema, role models, and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
+- For Codex, `doctor` checks that the personal marketplace file exists and contains the Morning Star URL-source entry.
 
 ## Options Reference
 
@@ -98,7 +131,7 @@ OpenCode `init` enforces these baseline requirements in `opencode.json`:
 ### `init` options
 
 - `--yes`: non-interactive mode
-- `--target <opencode|cursor>`
+- `--target <opencode|cursor|codex>`
 - `--scope <global|project>` (default: `project`)
 - `--dry-run`
 - `--pm-model <model>`
@@ -127,6 +160,7 @@ The CLI uses a target adapter layer so new code agents can be added without rewr
 - Adapter registry: `packages/cli/src/adapters/index.ts`
 - OpenCode adapter: `packages/cli/src/adapters/opencode.ts`
 - Cursor adapter: `packages/cli/src/adapters/cursor.ts`
+- Codex adapter: `packages/cli/src/adapters/codex.ts`
 - Shared contracts: `packages/cli/src/types.ts`
 
 To add a new agent target, implement a new adapter with:
