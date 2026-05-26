@@ -139,7 +139,7 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
   - Cursor -> `mstar-host-cursor` (in-repo: `skills-cursor/mstar-host/*`; bundled via `.cursor-plugin/`)
 - CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
 - Codex plugin manifest -> `.codex-plugin/plugin.json`
-- Codex marketplace catalog -> `.codex/marketplace.json`
+- Codex install metadata generation -> `packages/cli/src/adapters/codex.ts`
 - Maintenance policy (this file) -> `AGENTS.md`
 
 ## Skill Sync Rules
