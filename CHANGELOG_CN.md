@@ -1,16 +1,33 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.4.1**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.5.0**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.4.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.3.1**（保持不变） |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.4.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.4.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.4.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.5.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.4.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.5.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.5.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.5.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.5.0] - 2026-05-26
+
+### Codex 集成
+
+- 将已过时的仓库内 `.codex/marketplace.json` 路径替换为当前支持的个人 marketplace：`~/.agents/plugins/marketplace.json`，并使用指向本仓库的 `"source": "url"` 条目。
+- `@mstar-harness/cli` 增加 Codex 支持：`init --target codex` 写入个人 marketplace 条目，`doctor --target codex` 校验该配置。
+- 更新英文 / 中文安装文档，覆盖 Codex CLI 安装与手工 personal marketplace 配置。
+
+### Harness（skills / agents）
+
+- 修复 `/pm` skill frontmatter，使 Codex 插件可从仓库根目录通过校验。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.4.1 -> 0.5.0**。
+- `@mstar-harness/cli`：**0.3.1 -> 0.4.0**。
 
 ## [0.4.1] - 2026-05-19
 

@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.4.0
+
+- add `codex` target support in `init` and `doctor`
+- write/update `~/.agents/plugins/marketplace.json` with a `"source": "url"` personal marketplace entry for Codex
+- validate Codex personal marketplace metadata in `doctor --target codex`
+
 ## 0.3.1
 
 - Version alignment with monorepo **0.3.1** (no CLI API change in this bump; see root changelog for harness/docs).

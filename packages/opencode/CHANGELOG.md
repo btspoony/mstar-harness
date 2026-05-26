@@ -4,6 +4,14 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.5.0
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- Align bundled assets with the 0.5.0 harness release, including Codex plugin validation fixes in shared skill metadata.
+
+See root [CHANGELOG.md](../../CHANGELOG.md).
+
 ## 0.4.1
 
 ### Bundled harness skills (`harness-skills/` at publish)

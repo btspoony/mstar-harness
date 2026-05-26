@@ -2,17 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.4.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.5.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.4.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.3.1** (unchanged) |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.4.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.4.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.4.1** |
+| Monorepo root | `morning-star` (`package.json`) | **0.5.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.5.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.5.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.5.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.5.0] - 2026-05-26
+
+### Codex integration
+
+- Replace the obsolete checked-in `.codex/marketplace.json` path with the supported personal marketplace flow: `~/.agents/plugins/marketplace.json` using a `"source": "url"` entry for this repository.
+- Add Codex support to `@mstar-harness/cli`: `init --target codex` writes the personal marketplace entry and `doctor --target codex` validates it.
+- Update English and Chinese install docs for Codex CLI install and manual personal-marketplace setup.
+
+### Harness (skills / agents)
+
+- Fix the `/pm` skill frontmatter so the Codex plugin validates cleanly from the repository root.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.4.1 -> 0.5.0**.
+- Bump `@mstar-harness/cli`: **0.3.1 -> 0.4.0**.
 
 ## [0.4.1] - 2026-05-19
 
