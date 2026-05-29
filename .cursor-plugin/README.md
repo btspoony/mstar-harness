@@ -23,7 +23,3 @@ Provide Morning Star harness capabilities in Cursor with:
 - `agents`: `./agents/`
 - `skills`: `./skills/`, `./skills-cursor/`
 - `rules`: `./rules/`
-
-## Validation
-
-Use `.cursor-plugin/LOCAL-VALIDATION.md` as the pre-release checklist.

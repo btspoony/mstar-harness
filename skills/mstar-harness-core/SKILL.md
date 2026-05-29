@@ -91,7 +91,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | 宿主 | 要点 |
 |------|------|
 | OpenCode | 根 `AGENTS.md` → 本 skill；`question`、`@explore` |
-| Cursor | 会话先 Read 本 skill；Task 并行 QC |
+| Cursor | 会话先 Read 本 skill；Task 并行 QC；Plan 模式双写 → `mstar-host-cursor` · `references/cursor-plan-mode-bridge.md` |
 | 其它 | 初始化时强制 Read 本 skill |
 
 ## 护栏（不变量）
@@ -123,6 +123,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
 | 角色文件塞流程长文 | 用专题 skill |
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |
+| CreatePlan 不落盘 / 无 `.agents` mirror | `mstar-host-cursor` · `cursor-plan-mode-bridge` |
 
 ## 可选：OpenViking Memory
 

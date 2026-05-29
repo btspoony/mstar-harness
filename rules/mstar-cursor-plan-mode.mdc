@@ -1,0 +1,39 @@
+---
+description: When using Cursor Plan mode with Morning Star, dual-write CreatePlan to .agents/ harness artifacts and require per-task commits
+alwaysApply: true
+---
+
+# Morning Star × Cursor Plan mode
+
+When the Morning Star harness plugin or `/pm` is active and Cursor **Plan mode** applies (CreatePlan / built-in plan todos):
+
+## SSOT vs CreatePlan
+
+- **SSOT** for plans and status: **`{HARNESS_DIR}`** (default `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json`, specs under `{SPECS_DIR}` when used.
+- **CreatePlan** is a **session mirror** only; do not treat the Cursor plan file URI as the only plan record.
+
+## CreatePlan todos (mandatory prefix)
+
+Before any implement/code todo, CreatePlan **must** list these three bootstrap todos (in order) and complete them on disk:
+
+1. **`harness-init`** — create harness dirs + initialize `status.json` from template when missing
+2. **`spec-register`** — add `plans[]` row with `plan_id` and `file` path
+3. **`mirror-plan`** — write the SSOT main plan markdown under `.agents/plans/` (or resolved `{PLAN_DIR}`)
+
+## Implement todo done gate
+
+Do **not** mark an implement todo complete until:
+
+- `git commit` on the authorized Working branch for that **task id** (no end-of-plan batch commit unless PM allowed)
+- matching checkbox `- [x]` in the SSOT plan file
+- `status.json` updated when the coordination round requires it
+- evidence: real `git log -1 --oneline`
+
+## Drift and paths
+
+- Keep CreatePlan body and SSOT plan file aligned when scope changes.
+- Use SSOT paths in **Plan Path** / **Context Loaded**, not only the Cursor plan URI.
+
+## Detail
+
+Read `skills-cursor/mstar-host/references/cursor-plan-mode-bridge.md` (via `mstar-host-cursor` skill) for templates and checklists. Conflict with harness invariants → **`mstar-harness-core`** wins.

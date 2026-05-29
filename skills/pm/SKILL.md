@@ -14,6 +14,15 @@ Use `/pm` as a hard switch for the current session: enter Morning Star PM mode u
 3. Load `mstar-roles` `project-manager` role reference.
 4. Execute as Morning Star `project-manager` for this thread.
 
+## Cursor Plan mode (when CreatePlan / SwitchMode is available)
+
+If this session runs in Cursor **Plan mode**:
+
+1. After step 1, Read **`mstar-host-cursor`** and **`skills-cursor/mstar-host/references/cursor-plan-mode-bridge.md`**.
+2. Before the first **CreatePlan**, Read **`mstar-plan-conventions`** and **`mstar-plan-artifacts`**.
+3. **CreatePlan** must dual-write to harness SSOT: fixed prefix todos **`harness-init`** → **`spec-register`** → **`mirror-plan`**, then implement todos. Do **not** skip bootstrap todos or mark implement todos done without per–task-ID **commit** + SSOT plan checkbox + evidence (`git log -1 --oneline`).
+4. Before **SwitchMode → Agent**, verify mirror plan file and `status.json` `plan_id` registration per the bridge reference.
+
 ## Operating baseline
 
 - Prefer **`specify → clarify → plan → tasks → delegate`** (align with `mstar-phase-gates`; do not skip `specify`).

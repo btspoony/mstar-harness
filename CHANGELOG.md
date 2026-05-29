@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.5.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.5.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.5.0** |
+| Monorepo root | `morning-star` (`package.json`) | **0.5.1** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.5.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.5.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.5.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.5.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.5.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.5.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.5.1] - 2026-05-29
+
+### Cursor Plan mode × Harness (Cursor plugin)
+
+- **Dual-write bridge**: CreatePlan mirrors to `{HARNESS_DIR}` / `{PLAN_DIR}` SSOT (`.agents/plans/`, `status.json`); fixed bootstrap todos `harness-init`, `spec-register`, `mirror-plan`; per–task-ID commit gate on implement todos. See `skills-cursor/mstar-host/references/cursor-plan-mode-bridge.md`, updates to `mstar-host-cursor`, `pm`, and `mstar-harness-core`.
+- **Rules**: Add `rules/mstar-cursor-plan-mode.mdc` (`alwaysApply`); register `"rules": ["rules/"]` in `.cursor-plugin/plugin.json` so plugin rules (including `mstar-entry`) load reliably.
+- **Maintainers**: Move pre-release checklist to `.cursor/LOCAL-VALIDATION.md` (removed from `.cursor-plugin/`).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.5.0 → 0.5.1**. **`@mstar-harness/cli` remains 0.4.0**.
 
 ## [0.5.0] - 2026-05-26
 
