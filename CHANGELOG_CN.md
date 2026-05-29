@@ -1,16 +1,28 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.5.0**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.5.1**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.5.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.5.1** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.4.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.5.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.5.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.5.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.5.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.5.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.5.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.5.1] - 2026-05-29
+
+### Cursor Plan 模式 × Harness（Cursor 插件）
+
+- **双写桥接**：CreatePlan 须同步落盘至 `{HARNESS_DIR}` / `{PLAN_DIR}` SSOT（`.agents/plans/`、`status.json`）；固定前缀 todo：`harness-init`、`spec-register`、`mirror-plan`；implement todo 完成前须 per–task-ID commit。详见 `skills-cursor/mstar-host/references/cursor-plan-mode-bridge.md`，及 `mstar-host-cursor`、`pm`、`mstar-harness-core` 更新。
+- **Rules**：新增 `rules/mstar-cursor-plan-mode.mdc`（`alwaysApply`）；`.cursor-plugin/plugin.json` 注册 `"rules": ["rules/"]`，确保插件 rules（含 `mstar-entry`）可被加载。
+- **维护者**：发版前自检清单迁至 `.cursor/LOCAL-VALIDATION.md`（自 `.cursor-plugin/` 移除）。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.5.0 → 0.5.1**。**`@mstar-harness/cli` 保持 0.4.0**。
 
 ## [0.5.0] - 2026-05-26
 
