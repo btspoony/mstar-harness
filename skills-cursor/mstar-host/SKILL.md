@@ -1,6 +1,6 @@
 ---
 name: mstar-host-cursor
-description: Cursor host adapter for Morning Star harness. Use this skill whenever working in Cursor with `mstar-*` flows, especially when handling `/pm`, Task-based parallel QC tri-review, host-specific clarify behavior (no `question` tool), or preventing recursive Task misuse inside implement sessions. Always load this after `mstar-harness-core` to align Cursor behavior with harness gates and routing.
+description: Cursor host adapter for Morning Star harness. Use this skill whenever working in Cursor with `mstar-*` flows, especially when handling `/pm`, Cursor Plan mode (CreatePlan / SwitchMode dual-write to `.agents/`), Task-based parallel QC tri-review, host-specific clarify behavior (no `question` tool), or preventing recursive Task misuse inside implement sessions. Always load this after `mstar-harness-core` to align Cursor behavior with harness gates and routing.
 ---
 
 # Morning Star × Cursor Host Adapter
@@ -24,6 +24,26 @@ Use this default sequence unless a project rule explicitly overrides it:
 2. Read current host adapter (`mstar-host-cursor`)
 3. Load role via `mstar-roles`
 4. Execute with evidence-first completion checks
+
+## Cursor Plan mode × Harness dual-write (critical)
+
+When Cursor **Plan mode** is active (CreatePlan / SwitchMode available), **CreatePlan is session UX only**; durable SSOT is **`{HARNESS_DIR}`** (default `.agents/`) — especially **`{PLAN_DIR}/<plan-id>-<name>.md`** and **`{HARNESS_DIR}/status.json`**.
+
+**Before the first CreatePlan**, Read `mstar-plan-conventions` and `mstar-plan-artifacts` (and Prepare gates from `mstar-phase-gates` when not hotfix). Full procedure: **`references/cursor-plan-mode-bridge.md`**.
+
+**CreatePlan todos — fixed prefix (complete before any implement todo):**
+
+| Todo ID | Purpose |
+|---------|---------|
+| `harness-init` | Init `{HARNESS_DIR}`, `{PLAN_DIR}`, `reports/`, `archived/residuals/`, `status.json` |
+| `spec-register` | Register `plan_id` in `status.json.plans[]` + spec stub if applicable |
+| `mirror-plan` | Write SSOT main plan under `{PLAN_DIR}/` |
+
+**Each implement todo** must embed: per–task-ID **git commit** on Working branch → SSOT plan checkbox `- [x]` → optional `status.json` sync → real `git log -1 --oneline` evidence. Do **not** mark implement todos done without commit when tracked files changed.
+
+**Before SwitchMode → Agent**: mirror plan file exists; `status.json` lists `plan_id`; bootstrap todos done. **NEVER** use only the Cursor plan URI as **Plan Path**.
+
+Enforcement also in `rules/mstar-cursor-plan-mode.mdc` when the plugin is active.
 
 ## Gotchas
 

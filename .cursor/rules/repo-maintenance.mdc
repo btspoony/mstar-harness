@@ -30,6 +30,7 @@ This rule applies when maintaining the Morning Star harness repository in Cursor
 
 ## Quick Validation
 
+- Before publishing the Cursor plugin: `.cursor/LOCAL-VALIDATION.md`.
 - Lint/typecheck as relevant to edited files.
 - Confirm docs and install snippets remain runnable.
 - If either README changed, verify both `README.md` and `README_CN.md` were reviewed and updated for parity.

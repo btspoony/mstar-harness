@@ -27,5 +27,8 @@
   "skills": [
     "skills-cursor/",
     "skills/"
+  ],
+  "rules": [
+    "rules/"
   ]
 }
