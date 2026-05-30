@@ -118,4 +118,4 @@ For assignees (non-PM):
 ## OpenCode-Specific Note
 
 For OpenCode host behavior details (dispatch turn shape, paste-only failure mode, invoke-count discipline),
-read the `mstar-host-opencode` skill as the host SSOT.
+read `mstar-host` → `references/opencode.md` and `references/parallel-dispatch.md` as host SSOT for dispatch.

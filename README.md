@@ -168,7 +168,7 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-branch-worktree` | Feature branches, worktrees, QC/QA checkout alignment |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |
 | `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residual, knowledge, Done compaction |
-| `mstar-host` (per host) | Host-specific capabilities (OpenCode / Cursor) |
+| `mstar-host` | Host adapter (OpenCode / Cursor / Codex); auto-detect + `references/` |
 | `pm` | Shared `/pm` shortcut for Cursor and Codex PM entry |
 | `mstar-roles` | Role prompt bus + per-role skill load lists |
 | `mstar-review-qc` | QC review baseline and report template |

@@ -143,7 +143,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 | `mstar-coding-behavior` | 通用编码行为基线 |
 | `mstar-superpowers-align` | 与 Superpowers 的对齐与冲突消解 |
 | `mstar-roles` | 角色提示词总线 + 各角色 skill 加载清单 |
-| `mstar-host`（按宿主） | 宿主能力差异（OpenCode / Cursor） |
+| `mstar-host` | 宿主适配（OpenCode / Cursor / Codex）；自动识别 + `references/` |
 | `pm` | Cursor 与 Codex 共享的 `/pm` 强制入口 |
 
 维护者：进行中的 spec/plan 可放在 **`.harness/`**（gitignore，非发布 skill 树）。

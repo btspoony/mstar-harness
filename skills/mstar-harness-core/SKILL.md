@@ -85,14 +85,17 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-coding-behavior` | Think / Simplicity / Surgical / Goal-Driven |
 | `mstar-superpowers-align` | Superpowers × harness 优先级与短语 |
 | `mstar-roles` | 角色正文 hub |
+| `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `parallel-dispatch.md`） |
 
 ## 宿主 `mstar-host`
 
+Read **`mstar-host`** after this skill; detect host per its table, then Read the matching reference.
+
 | 宿主 | 要点 |
 |------|------|
-| OpenCode | 根 `AGENTS.md` → 本 skill；`question`、`@explore` |
-| Cursor | 会话先 Read 本 skill；Task 并行 QC；Plan 模式双写 → `mstar-host-cursor` · `references/cursor-plan-mode-bridge.md` |
-| 其它 | 初始化时强制 Read 本 skill |
+| OpenCode | `question`、`@explore`、named-role invoke → `references/opencode.md` |
+| Cursor | Task 并行 QC；Plan 双写 → `references/cursor.md` · `cursor-plan-mode-bridge.md` |
+| Codex / 其它 | 同 `mstar-host` skill；按工具信号选 reference |
 
 ## 护栏（不变量）
 
@@ -123,7 +126,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
 | 角色文件塞流程长文 | 用专题 skill |
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |
-| CreatePlan 不落盘 / 无 `.agents` mirror | `mstar-host-cursor` · `cursor-plan-mode-bridge` |
+| CreatePlan 不落盘 / 无 `.agents` mirror | `mstar-host` · `cursor-plan-mode-bridge` |
 
 ## 可选：OpenViking Memory
 

@@ -48,7 +48,7 @@ Treat these as baseline dependencies **where the role touches implementation, re
 | `mstar-review-qc` | QC workflow, template, verdict, high-risk checks |
 | `mstar-coding-behavior` | Implementation/debug/refactor (**not** PM orchestration-only) |
 | `mstar-superpowers-align` | Superpowers plugin on; Assignment `Superpowers` lines |
-| `mstar-host-opencode` / `mstar-host-cursor` | Host-specific behavior (match active host) |
+| `mstar-host` | Host-specific behavior (auto-detect; `references/opencode.md` / `cursor.md`) |
 
 ### Role → typical topic skills (after `mstar-harness-core`)
 

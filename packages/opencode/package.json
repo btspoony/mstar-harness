@@ -12,7 +12,6 @@
   "main": "./dist/mstar.js",
   "files": [
     "dist",
-    "skills",
     "harness-skills",
     "harness-agents",
     "AGENTS.md",

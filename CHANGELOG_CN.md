@@ -12,6 +12,14 @@
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
+## [未发布]
+
+### 统一宿主 skill
+
+- **破坏性变更**：将 `mstar-host-opencode` 与 `mstar-host-cursor` 合并为 **`mstar-host`**（`skills/mstar-host/`，自动识别宿主 + `references/`）。
+- 删除 `skills-cursor/` 与 `packages/opencode/skills/`；OpenCode 仅注册 `harness-skills/`；Cursor 插件仅挂载 `./skills/`。
+- 同步角色/专题引用与 Plan 规则路径。
+
 ## [0.5.1] - 2026-05-29
 
 ### Cursor Plan 模式 × Harness（Cursor 插件）

@@ -135,8 +135,8 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 - Superpowers alignment contract -> `skills/mstar-superpowers-align/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:
-  - OpenCode -> `mstar-host-opencode` (in-repo: `packages/opencode/skills/mstar-host/*`); `harness-skills/` + `harness-agents/` come from `bundle-assets` (npm publish prepublish + root `postinstall`); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
-  - Cursor -> `mstar-host-cursor` (in-repo: `skills-cursor/mstar-host/*`; bundled via `.cursor-plugin/`)
+  - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex via `.cursor-plugin/` / `.codex-plugin` `skills/`)
+  - OpenCode package: `harness-skills/` + `harness-agents/` from `bundle-assets` (npm publish prepublish + root `postinstall`); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
 - CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
 - Codex plugin manifest -> `.codex-plugin/plugin.json`
 - Codex install metadata generation -> `packages/cli/src/adapters/codex.ts`

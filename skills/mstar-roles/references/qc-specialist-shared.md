@@ -20,7 +20,7 @@ Behavior is shared; reviewer identity is parameterized.
 
 **On demand:** `mstar-plan-artifacts` (when PM asks you to cite severity enum for residual registration — QC does not own `status.json` writes).
 
-**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
+**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md`).
 
 ## Role Mission
 

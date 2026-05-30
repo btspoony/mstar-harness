@@ -25,8 +25,7 @@ Restart OpenCode. The plugin installs from npm and registers Morning Star runtim
 
 - Keep your role models and permissions in `opencode.json`.
 - The plugin loads **only paths inside the `@mstar-harness/opencode` package**:
-  - **`harness-skills/`** — copy of Morning Star `skills/` from the release build (`prepublishOnly` runs `bundle-assets` before `bun build`).
-  - **`skills/`** — packaged OpenCode host adapter (e.g. `mstar-host`).
+  - **`harness-skills/`** — copy of repo `skills/` from the release build (`prepublishOnly` runs `bundle-assets` before `bun build`), including **`mstar-host`**.
   - **`harness-agents/`** — copy of repo `agents/` from the same build.
 - It does **not** read `<cwd>/skills` or `<cwd>/agents`, so OpenCode’s `process.cwd()` (your app project root) does not affect harness resolution.
 - Bootstrap prompt entry is injected once with `<IMPORTANT_FOR_HARNESS>`.

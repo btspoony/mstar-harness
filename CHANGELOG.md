@@ -14,6 +14,14 @@ All notable changes to this repository are documented here. Published harness su
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
+## [Unreleased]
+
+### Unified host skill
+
+- **Breaking**: Merge `mstar-host-opencode` and `mstar-host-cursor` into single **`mstar-host`** at `skills/mstar-host/` (platform auto-detect + `references/opencode.md`, `cursor.md`, `parallel-dispatch.md`, `cursor-plan-mode-bridge.md`).
+- Remove `skills-cursor/` and `packages/opencode/skills/`; OpenCode plugin registers only `harness-skills/`. Cursor plugin `skills` array is `./skills/` only.
+- Update role/topic references and `rules/mstar-cursor-plan-mode.mdc` paths.
+
 ## [0.5.1] - 2026-05-29
 
 ### Cursor Plan mode × Harness (Cursor plugin)

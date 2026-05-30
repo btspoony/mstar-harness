@@ -12,7 +12,7 @@ Use before publishing or sharing the Morning Star Cursor plugin from this repo.
 
 - Agent files are discoverable from `./agents/`.
 - Morning Star skills are discoverable from `./skills/mstar-*/SKILL.md`.
-- Cursor host skills are discoverable from `./skills-cursor/mstar-host/SKILL.md`.
+- Host skill is discoverable from `./skills/mstar-host/SKILL.md`.
 - Plugin rules are discoverable from `./rules/*.mdc` (registered as `"rules": ["rules/"]` in `plugin.json`).
 - Routing eval (maint only, not plugin runtime): `./.cursor/skills/mstar-routing-eval/`.
 
@@ -20,7 +20,7 @@ Use before publishing or sharing the Morning Star Cursor plugin from this repo.
 
 - Open a new chat with the local plugin loaded.
 - Trigger a role-routed task (for example, PM-style routing).
-- Confirm one `mstar-*` skill and host skill from `skills-cursor/` can load.
+- Confirm one `mstar-*` skill and `mstar-host` from `skills/` can load.
 - Confirm one `./rules/*.mdc` rule is applied during execution.
 
 ## 4) Packaging guardrails
