@@ -101,12 +101,14 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 - 本仓库也是 **Morning Star Harness Codex 插件源码**：
   - 插件 manifest：`.codex-plugin/plugin.json`
   - 运行时 skills：`skills/`
+  - Codex 运行时适配：`skills/mstar-host/references/codex.md`
 
 ## 使用方式
 
 - **OpenCode**：以 `Project Manager` 角色开局（对应 `agents/project-manager.md`，通常是 `opencode.json` 里的 `agent.project-manager`）。
 - **Cursor**：使用 `/pm` 强制以 `Project Manager` 角色启动。
 - **Codex**：安装插件后，使用 `/pm` 强制以 `Project Manager` 角色启动。
+  Codex 会加载共享 skills，但角色派发取决于当前会话实际可用的工具；不要默认假设存在 OpenCode 式 named role invoke。
 
 ## 角色与技能总览
 

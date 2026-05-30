@@ -18,7 +18,7 @@ Behavior is shared; track identity is parameterized.
 
 **On demand:** `mstar-branch-worktree` (repo writes, `Working branch`); `mstar-phase-gates` (Execute / hotfix sections when gate fields are in the assignment).
 
-**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md`).
+**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 

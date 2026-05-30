@@ -101,6 +101,7 @@ For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
 - This repository is also the **Morning Star Harness Codex plugin source**:
   - Plugin manifest: `.codex-plugin/plugin.json`
   - Runtime skills: `skills/`
+  - Codex runtime adaptation: `skills/mstar-host/references/codex.md`
 
 That completes installation.
 
@@ -109,6 +110,7 @@ That completes installation.
 - **OpenCode**: start with the `Project Manager` role (`agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`).
 - **Cursor**: use `/pm` to force-start with the `Project Manager` role.
 - **Codex**: use `/pm` to force-start with the `Project Manager` role after installing the plugin.
+  Codex loads shared skills, but role dispatch depends on the tools available in the active session; no OpenCode-style named role invoke is assumed.
 
 ## Harness Workflow
 

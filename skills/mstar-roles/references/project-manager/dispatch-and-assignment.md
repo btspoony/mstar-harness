@@ -7,7 +7,7 @@ The concise gate summary remains in `references/project-manager.md`.
 
 - Only `project-manager` dispatches subagents.
 - Each independent Assignment requires one matching host invoke.
-- In tool hosts (OpenCode/Cursor Task), Markdown-only Assignment is not dispatch.
+- In tool hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools), Markdown-only Assignment is not dispatch.
 - For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
 
 ## Executor Anti-Recursion Rules
@@ -115,7 +115,7 @@ For assignees (non-PM):
 **Effort note (agent-oriented)**: ...
 ```
 
-## OpenCode-Specific Note
+## Host-Specific Note
 
-For OpenCode host behavior details (dispatch turn shape, paste-only failure mode, invoke-count discipline),
-read `mstar-host` → `references/opencode.md` and `references/parallel-dispatch.md` as host SSOT for dispatch.
+For host behavior details (dispatch turn shape, paste-only failure mode, invoke-count discipline),
+read `mstar-host` → the active host reference and `references/parallel-dispatch.md` as host SSOT for dispatch.

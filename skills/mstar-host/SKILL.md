@@ -1,6 +1,6 @@
 ---
 name: mstar-host
-description: Morning Star host adapter (OpenCode, Cursor, Codex). Use after mstar-harness-core whenever host entry, clarify, dispatch, or plan UX differs by platform — OpenCode question/@agent-id invoke, Cursor /pm and CreatePlan/SwitchMode dual-write and Task parallel QC, Codex skills from ./skills/. Auto-detect host from session tools; then Read references/<host>.md. Always load after mstar-harness-core.
+description: Morning Star host adapter (OpenCode, Cursor, Codex). Use after mstar-harness-core whenever host entry, clarify, dispatch, or plan UX differs by platform - OpenCode question/@agent-id invoke, Cursor /pm and CreatePlan/SwitchMode dual-write and Task parallel QC, Codex plugin skills plus sandboxed tools/tool discovery. Auto-detect host from session tools; then Read references/<host>.md. Always load after mstar-harness-core.
 ---
 
 # Morning Star Host Adapter
@@ -30,11 +30,12 @@ Use **capability signals** (not filesystem paths):
 | **CreatePlan** / **SwitchMode** available | `cursor` | `references/cursor.md`; Plan mode also `references/cursor-plan-mode-bridge.md` |
 | **`question`** tool or PM **`@<agent-id>`** subagent invoke | `opencode` | `references/opencode.md` |
 | **Task** + `subagent_type`, no CreatePlan | `cursor` | `references/cursor.md` |
-| Still ambiguous | — | Read sections in **both** `cursor.md` and `opencode.md` that match tools you have; **`mstar-harness-core` wins** on conflict |
+| **Codex app/CLI/plugin context**, `functions.*`, `codex_app.*`, `tool_search`, Browser plugin tools | `codex` | `references/codex.md` |
+| Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, and **`codex.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
 
-## Parallel dispatch (all hosts)
+## Parallel dispatch (invoke-capable hosts)
 
-When PM dispatches **N ≥ 2** concurrent assignees (QC tri-review, dual-track implement, etc.), read **`references/parallel-dispatch.md`** in the dispatch round (shared with `mstar-dispatch-gates`).
+When PM dispatches **N >= 2** concurrent assignees (QC tri-review, dual-track implement, etc.) and the host exposes actual invoke / Task / subagent tools, read **`references/parallel-dispatch.md`** in the dispatch round (shared with `mstar-dispatch-gates`). Without a callable invoke tool, Assignment Markdown is not dispatch.
 
 ## Library docs (Context7)
 

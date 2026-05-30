@@ -8,7 +8,7 @@
 
 **On demand:** `mstar-phase-gates` (hotfix compressed path when assignment says hotfix).
 
-**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md`).
+**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 

@@ -85,6 +85,9 @@ Codex install:
   - `npx @mstar-harness/cli init --target codex`
 - Then install the plugin:
   - `codex plugin add morning-star-harness --marketplace personal`
+- Runtime host behavior after install:
+  - `/pm` enters the shared PM flow.
+  - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in `skills/mstar-host/references/codex.md`.
 
 ### `mstar-harness doctor`
 

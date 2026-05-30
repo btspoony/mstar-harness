@@ -4,7 +4,7 @@ Before any non-trivial PM action, read in order:
 
 1. `mstar-harness-core` (entry, state machine, Task category, skill index)
 2. `mstar-dispatch-gates` + `mstar-phase-gates` (dispatch + Prepare/Execute gates)
-3. Host adapter: `mstar-host` (detect host; Read `references/opencode.md` or `cursor.md`)
+3. Host adapter: `mstar-host` (detect host; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
 4. `mstar-plan-conventions` (path discovery, init, Spec branch summary)
 5. `mstar-superpowers-align` (when Superpowers plugin is enabled)
 6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
@@ -87,14 +87,14 @@ Detailed conflict priority and dev allocation:
 
 ## Host Dispatch Rule (Critical)
 
-In invoke-based hosts (OpenCode/Task-style):
+In invoke-based hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools):
 
 - Assignment markdown alone is not dispatch.
 - Each independent Assignment needs one matching invoke.
 - For parallel `N >= 2`, emit all `N` invokes in one dispatch turn when host supports it.
 - Do not claim dispatch completion without matching invokes.
 
-OpenCode invoke/dispatch details: `mstar-host` → `references/opencode.md` and `references/parallel-dispatch.md`.
+Host invoke/dispatch details: `mstar-host` → active host reference and `references/parallel-dispatch.md`.
 
 Dispatch mechanics and templates:
 `references/project-manager/dispatch-and-assignment.md`.
