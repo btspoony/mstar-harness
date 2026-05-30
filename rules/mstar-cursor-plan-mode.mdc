@@ -36,4 +36,4 @@ Do **not** mark an implement todo complete until:
 
 ## Detail
 
-Read `skills-cursor/mstar-host/references/cursor-plan-mode-bridge.md` (via `mstar-host-cursor` skill) for templates and checklists. Conflict with harness invariants → **`mstar-harness-core`** wins.
+Read `skills/mstar-host/references/cursor-plan-mode-bridge.md` (via `mstar-host` skill) for templates and checklists. Conflict with harness invariants → **`mstar-harness-core`** wins.

@@ -8,7 +8,7 @@
 
 **On demand:** `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment).
 
-**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
+**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 

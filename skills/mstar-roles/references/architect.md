@@ -8,7 +8,7 @@
 
 **On demand:** `mstar-branch-worktree` (when committing architecture docs to the business repo).
 
-**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
+**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 

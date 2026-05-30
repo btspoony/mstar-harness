@@ -1,0 +1,56 @@
+# Codex host reference
+
+Load when **`mstar-host`** detection resolves **codex** (Codex app/CLI session, Codex plugin installed from `.codex-plugin/plugin.json`, or Codex tool namespaces such as `functions.*`, `codex_app.*`, `tool_search`, `image_gen`, or Browser plugin tools).
+
+Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an actual multi-agent / Task-style invocation tool. If no callable invoke tool exists, Assignment Markdown is coordination text only; do **not** claim subagent dispatch.
+
+## Codex-only context
+
+- Plugin source: `.codex-plugin/plugin.json`.
+- Runtime skills: repo `skills/` mounted by the Codex plugin (`"skills": "./skills/"`).
+- `/pm`: shared force entry via the `pm` skill; after that, role behavior comes from `mstar-roles`.
+- Role files under `agents/` are for hosts that load agent shells; Codex role execution should load `mstar-roles` references directly.
+- Tool and plugin availability can be lazy-loaded or session-dependent. Use the tools actually present in the current session; do not infer capability from documentation alone.
+
+## Skill loading
+
+1. Read `mstar-harness-core`.
+2. Read `mstar-host` and this Codex reference.
+3. Load `mstar-roles` and the active role reference.
+4. Load topic skills on demand per the role reference.
+
+Use skill names in prompts and references. Avoid absolute local paths unless the user is maintaining this repository or the skill is not installed and must be read from the checkout.
+
+## Clarify
+
+- Codex does not imply an OpenCode-style `question` tool.
+- If a structured user-input tool is available in the active mode, use it for concise 1-3 choice decisions.
+- Otherwise ask one concise Markdown question only after codebase exploration cannot answer it.
+- `update_plan` / local todo UI is session progress only; it does not replace `{PLAN_DIR}` plans or `{HARNESS_DIR}/status.json`.
+
+## Dispatch and role execution
+
+- **No invoke tool = no dispatch**: printing `## Assignment` does not start another Codex worker.
+- If Codex exposes multi-agent tools, PM may dispatch through those tools and must follow `parallel-dispatch.md`.
+- If no invoke tool is present, use single-session role execution: state the active role, load that role reference, complete the assignment, and return Completion Report v2.
+- QC tri-review is only "parallel" when three distinct callable reviewer sessions are actually launched in one dispatch turn. Without that, run a clearly labeled serial/manual review path or return `Blocked` for PM rerouting.
+- Leaf executors still follow `mstar-dispatch-gates`: no recursive Task/subagent calls unless Assignment says `Delegation: allowed (...)`.
+
+## Files, shell, and approvals
+
+- Prefer `rg` / `rg --files` for search and `apply_patch` for manual edits.
+- Respect Codex sandbox and approval prompts. If a required command fails because of sandbox or network restrictions, request escalation through the host approval mechanism.
+- Do not edit global Codex plugin metadata, marketplace files, credentials, secrets, or user config without explicit user consent.
+- Browser, image, document, spreadsheet, presentation, and automation capabilities are host tools. Use them only when the user request or verification need calls for them.
+
+## Git and final evidence
+
+- Git work still follows `mstar-branch-worktree` and the Assignment `Working branch` / `Branch policy`.
+- Codex app git directives, when available, are audit annotations only. Emit them only after the underlying git action succeeds; never use a directive as a substitute for staging, committing, pushing, or PR creation evidence.
+- Completion reports should cite concrete commands, artifacts, and commit lines when required by the Assignment.
+
+## Gotchas
+
+- Codex plugin install gives skills, not automatic OpenCode-style named role invocations.
+- Tool discovery (`tool_search`) can reveal capabilities, but availability is not authorization; Assignment `Delegation` still controls use.
+- Session plans, chat summaries, and UI todos are not durable harness SSOT unless mirrored to `{HARNESS_DIR}`.

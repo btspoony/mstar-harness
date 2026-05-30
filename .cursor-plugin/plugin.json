@@ -1,7 +1,7 @@
 {
   "name": "morning-star-harness",
   "displayName": "Morning Star Harness",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Morning Star harness engineering framework as a Cursor plugin.",
   "author": {
     "name": "Bohao Tang",
@@ -25,7 +25,6 @@
     "quality-gates"
   ],
   "skills": [
-    "skills-cursor/",
     "skills/"
   ],
   "rules": [

@@ -18,7 +18,7 @@ Cursor **Plan mode** uses **CreatePlan** and built-in plan todos for session UX.
 ## When this applies
 
 - Cursor **Plan mode** is active (system guidance to use **CreatePlan** / **SwitchMode**).
-- Morning Star plugin or `/pm` is in use (`mstar-host-cursor`, `pm` skill, or `rules/mstar-cursor-plan-mode.mdc`).
+- Morning Star plugin or `/pm` is in use (`mstar-host`, `pm` skill, or `rules/mstar-cursor-plan-mode.mdc`).
 
 ## Before the first CreatePlan
 
@@ -152,7 +152,7 @@ If any item fails → **Blocked**; finish harness sync before implement.
 
 When `/pm` runs under Plan mode:
 
-- Load this reference via **`mstar-host-cursor`** after `mstar-harness-core`.
+- Load this reference via **`mstar-host`** (Cursor detection) after `mstar-harness-core`.
 - **CreatePlan** todos **must** include the three bootstrap prefix items.
 - Prepare phase (`specify → clarify → plan`) still applies; `mirror-plan` is the harness **`plan`** artifact, not a substitute for clarify.
 - Before QC dispatch, read **`mstar-review-qc`** (unchanged).

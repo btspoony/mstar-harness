@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.5.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.5.1** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.0** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.5.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.5.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.5.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.0] - 2026-05-30
+
+### Unified host skill
+
+- **Breaking**: Merge `mstar-host-opencode` and `mstar-host-cursor` into single **`mstar-host`** at `skills/mstar-host/` (platform auto-detect + `references/opencode.md`, `cursor.md`, `codex.md`, `parallel-dispatch.md`, `cursor-plan-mode-bridge.md`).
+- Add `references/codex.md` with Codex-specific runtime adaptation for plugin skills, clarify behavior, sandboxed file/shell work, tool discovery, and dispatch limits when no callable multi-agent tool exists.
+- Remove `skills-cursor/` and `packages/opencode/skills/`; OpenCode plugin registers only `harness-skills/`. Cursor plugin `skills` array is `./skills/` only.
+- Update role/topic references and `rules/mstar-cursor-plan-mode.mdc` paths.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.5.1 → 0.6.0**. **`@mstar-harness/cli` remains 0.4.0**.
 
 ## [0.5.1] - 2026-05-29
 

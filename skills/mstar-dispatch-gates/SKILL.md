@@ -1,6 +1,6 @@
 ---
 name: mstar-dispatch-gates
-description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、同条消息 N 次 invoke、QC 三审禁止串行 rollout、Assignment 文案≠派发（invoke 条数须对齐）、未齐不发（emit zero until batch-ready）。**必须**在 `@project-manager` 每轮派发、QC 三审并发、双轨 implement、或 leaf 角色疑惑能否 Task 时 Read；所有非 PM 承接方动手前必读反递归与自检。同仓 worktree 与 QC 检出对齐见 `mstar-branch-worktree`。Superpowers 并行短语见 `mstar-superpowers-align`。宿主细则见 `mstar-host-opencode` / `mstar-host-cursor`。
+description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、同条消息 N 次 invoke、QC 三审禁止串行 rollout、Assignment 文案≠派发（invoke 条数须对齐）、未齐不发（emit zero until batch-ready）。**必须**在 `@project-manager` 每轮派发、QC 三审并发、双轨 implement、或 leaf 角色疑惑能否 Task 时 Read；所有非 PM 承接方动手前必读反递归与自检。同仓 worktree 与 QC 检出对齐见 `mstar-branch-worktree`。Superpowers 并行短语见 `mstar-superpowers-align`。宿主细则见 `mstar-host`（`references/parallel-dispatch.md` 与各宿主 reference）。
 ---
 
 ## Load order（必读顺序）
@@ -43,7 +43,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - **QC 三审硬门禁**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 须**同一条消息**全部发起；只发其中一个 = **`dispatch incomplete`**，不得写「三审已并行启动」。
 - **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
 - **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
-- **未齐不发（emit zero until batch-ready）**：需并发 `N≥2` 而当前只能发 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。OpenCode 见 **`mstar-host-opencode`**「OpenCode PM: dispatch order」。
+- **未齐不发（emit zero until batch-ready）**：需并发 `N≥2` 而当前只能发 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
 
 ### 具名 subagent 宿主：文案分派 ≠ 调度完成
 

@@ -6,7 +6,7 @@
 
 **Typically:** `mstar-plan-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-plan-artifacts` (when writing under knowledge or plan trees); `mstar-superpowers-align` (when plugin on).
 
-**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
+**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 

@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.5.1**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.0**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.5.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.0** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.4.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.5.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.5.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.5.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.0] - 2026-05-30
+
+### 统一宿主 skill
+
+- **破坏性变更**：将 `mstar-host-opencode` 与 `mstar-host-cursor` 合并为 **`mstar-host`**（`skills/mstar-host/`，自动识别宿主 + `references/opencode.md`、`cursor.md`、`codex.md`、`parallel-dispatch.md`、`cursor-plan-mode-bridge.md`）。
+- 新增 `references/codex.md`，覆盖 Codex 插件 skills、clarify 行为、沙箱文件/命令、工具发现，以及没有真实 multi-agent invoke 工具时的派发边界。
+- 删除 `skills-cursor/` 与 `packages/opencode/skills/`；OpenCode 仅注册 `harness-skills/`；Cursor 插件仅挂载 `./skills/`。
+- 同步角色/专题引用与 Plan 规则路径。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.5.1 → 0.6.0**。**`@mstar-harness/cli` 保持 0.4.0**。
 
 ## [0.5.1] - 2026-05-29
 

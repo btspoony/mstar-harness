@@ -8,7 +8,7 @@
 
 **Typically:** `mstar-plan-conventions` (path symbols in examples).
 
-**Host:** `mstar-host-opencode` | `mstar-host-cursor`.
+**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 

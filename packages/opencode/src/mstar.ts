@@ -2,7 +2,7 @@
  * MorningStarHarness plugin for OpenCode.
  *
  * - Injects one-time harness bootstrap into first user message.
- * - Registers skill paths only inside this package: `harness-skills/` (synced at build / repo postinstall) then `skills/` (host adapter).
+ * - Registers skill paths only inside this package: `harness-skills/` (synced at build / repo postinstall; includes `mstar-host`).
  * - Loads agents from `harness-agents/` only (same sync). Does not use `process.cwd()` so OpenCode project cwd does not matter.
  */
 import type { Plugin } from "@opencode-ai/plugin";
@@ -25,16 +25,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
 
 const bundledSkillsDir = path.join(packageRoot, "harness-skills");
-const hostSkillsDir = path.join(packageRoot, "skills");
 const bundledAgentsDir = path.join(packageRoot, "harness-agents");
 const bootstrapAgentsPath = path.join(packageRoot, "AGENTS.md");
 const BOOTSTRAP_MARKER = "IMPORTANT_FOR_HARNESS";
 
 function resolveSkillPathCandidates(): string[] {
-  const out: string[] = [];
-  if (fs.existsSync(bundledSkillsDir)) out.push(bundledSkillsDir);
-  if (fs.existsSync(hostSkillsDir)) out.push(hostSkillsDir);
-  return out;
+  if (fs.existsSync(bundledSkillsDir)) return [bundledSkillsDir];
+  return [];
 }
 
 const extractFrontmatterAndBody = (content: string): FrontmatterAndBody => {

@@ -70,7 +70,7 @@
 
 ## 延伸阅读
 
-- 按能力选配 MCP/skills：当前宿主的 `mstar-host` skill 的「按能力选配」章节
+- 按能力选配 MCP/skills：OpenCode → `mstar-host` `references/opencode.md`；其它宿主见 `mstar-host` 检测表
 - Superpowers 与门禁对齐：`mstar-superpowers-align`
 - 库文档检索共享协议：`mstar-harness-core` `references/library-docs-protocol.md`
 - 跨角色编码行为准则（轻量、可复用）：`mstar-coding-behavior`
