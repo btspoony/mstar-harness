@@ -4,9 +4,11 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
-## Unreleased
+## 0.6.0
 
 - Unified **`mstar-host`** in bundled `harness-skills/`; removed separate package `skills/` host path.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.0**.
 
 ## 0.5.1
 
