@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.3
+
+- Bundled skills: slim `/pm` with dispatch-first + `/pm`-only rules; PM shell pointer.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.3**.
+
 ## 0.6.2
 
 - Bundled skills: `/pm` Autonomous Execute push (iteration driver, multi-plan); PM shell cross-reference.

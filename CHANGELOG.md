@@ -2,17 +2,28 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.3** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.2** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.3** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.2** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.3** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.3** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.3** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.3] - 2026-06-03
+
+### Harness (skills / agents)
+
+- **`pm` (`/pm`)**: Slim entry skill (~60 lines) with **`/pm`-only rules** — **dispatch-first** (Assignment + invoke per implement batch; parent agent must not write product code; no Task skip for in-thread context), **Autonomous Execute push** as dispatch loops across one iteration (multi-plan), **branch truth** (no silent cwd vs plan/`status.json`). Detailed gates/routing defer to `mstar-dispatch-gates`, `mstar-host`, and `project-manager` references.
+- **`mstar-roles` (PM shell)**: `/pm` sessions point at `skills/pm` § `/pm`-only rules` instead of duplicating long prose.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.2 → 0.6.3**. **`@mstar-harness/cli` remains 0.4.0**.
 
 ## [0.6.2] - 2026-06-02
 

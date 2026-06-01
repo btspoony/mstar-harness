@@ -1,16 +1,27 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.2**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.3**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.2** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.3** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.4.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.2** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.2** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.3** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.3** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.3** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.3] - 2026-06-03
+
+### Harness（skills / agents）
+
+- **`pm`（`/pm`）**：精简入口（约 60 行），以 **`/pm`-only rules** 为 SSOT — **dispatch-first**（implement 须 Assignment + invoke，禁止父代理写产品代码、禁止以会话上下文跳过 Task）、**Autonomous Execute push** 定义为派发循环（单迭代可多 plan）、**branch truth**（禁止 plan/`status.json` 与 cwd 静默不一致）。细则指向 `mstar-dispatch-gates`、`mstar-host` 与 `project-manager` 引用。
+- **`mstar-roles`（PM 壳）**：`/pm` 会话改为指向 `skills/pm` § `/pm`-only rules`，避免重复长文。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.2 → 0.6.3**。**`@mstar-harness/cli` 保持 0.4.0**。
 
 ## [0.6.2] - 2026-06-02
 
