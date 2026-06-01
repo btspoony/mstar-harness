@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.0** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.1** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.1] - 2026-06-01
+
+### Harness (skills / agents)
+
+- **`mstar-plan-artifacts`**: Add read-only `scripts/tech-debt-rollup.sh` (jq) to compute `metadata.tech_debt_summary` from open `residual_findings` with PASS/DRIFT check; document as canonical rollup path in `references/status-and-residuals.md` (English).
+- **`mstar-roles` (PM)**: Default spread across `fullstack-dev` and `fullstack-dev-2` when **>=2 independent** backend/fullstack units (parallel dual-track or sequential round-robin); single-id collapse requires `single_stream_justified` and documented override.
+- **Cursor routing-eval**: New `sequential-backend-batches-rotation` case; tighten `two-parallel-backend-modules` hard_fail for single-dev without justification.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.0 → 0.6.1**. **`@mstar-harness/cli` remains 0.4.0**.
 
 ## [0.6.0] - 2026-05-30
 

@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.1
+
+- Bundled skills: `tech-debt-rollup.sh`, PM dual fullstack spread defaults, routing-eval v6.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.1**.
+
 ## 0.6.0
 
 - Unified **`mstar-host`** in bundled `harness-skills/`; removed separate package `skills/` host path.
