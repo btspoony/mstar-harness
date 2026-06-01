@@ -1,6 +1,6 @@
 # Plan harness file templates
 
-Copy these into `{HARNESS_DIR}` when bootstrapping a project. Path symbols (`{HARNESS_DIR}`, `{PLAN_DIR}`, …) → **`mstar-plan-conventions`**. Field semantics and residual lifecycle → **`mstar-plan-artifacts/references/status-and-residuals.md`**.
+Copy these into `{HARNESS_DIR}` when bootstrapping a project. Path symbols (`{HARNESS_DIR}`, `{PLAN_DIR}`, …) → **`mstar-plan-conventions`**. Field semantics and residual lifecycle → **`mstar-plan-artifacts/references/status-and-residuals.md`**. Optional rollup: **`../scripts/tech-debt-rollup.sh`** (read-only; see that reference).
 
 | File | Copy to | Notes |
 |------|---------|--------|

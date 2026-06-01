@@ -37,35 +37,41 @@ When multiple routes apply, set one `Primary` route in Assignment and treat othe
 
 ## Dev Triangle Balance (`fullstack-dev` / `fullstack-dev-2` / `frontend-dev`)
 
+### Default: spread backend/fullstack work across both tracks
+
+When **>=2 independent** backend/fullstack units exist (on the task board or across sequential batches):
+
+- **Parallel (preferred)** when units are parallelizable: dispatch **`fullstack-dev` + `fullstack-dev-2`** with explicit module boundaries and branch/worktree isolation.
+- **Sequential rotation** when work is not concurrent: alternate `Execute as` between `fullstack-dev` and `fullstack-dev-2` by task/batch order (round-robin).
+
+**Independence gate:** do **not** split genuinely dependent or sequential work across two dev IDs just to use both tracks.
+
+**Single-id path needs justification:** collapsing >=2 independent units onto one backend-capable dev id requires `Dev owner tie-break: single id — <reason>` and Pre-Implement `single_stream_justified: yes` with that reason.
+
 ### When `frontend-dev` is required
 
 - Task category is `visual`, or acceptance depends on page/component/interaction/a11y/frontend performance.
 - UI-bearing fullstack work defaults to split ownership (`frontend-dev` for UI, `fullstack-dev` for API/domain).
 
-### When `fullstack-dev-2` is required
+### When `fullstack-dev-2` is required (concurrent dual-track)
 
 Use a second implementation track when **any** applies:
 
 - Task board has >=2 independently parallelizable implementation units.
 - Medium+ fullstack scope and PM/user expects wall-clock acceleration.
-- Existing flow overloaded on one fullstack track while another independent module exists.
+- One fullstack track is overloaded while another independent module exists.
 
 ### `single-stream` clarification
 
-`Dev routing: single-stream` means no concurrent multi-write dev tracks in this round.
+`Dev routing: single-stream` means no concurrent multi-write dev tracks **in this round**.
 It does **not** force all future batches to one fixed developer ID.
 
-### Round-robin default for equivalent backend/fullstack units
-
-If multiple equivalent non-UI units can be assigned to either `fullstack-dev` or `fullstack-dev-2`,
-default owner tie-break is round-robin by task order unless there is a documented override reason.
-
-Allowed override reasons:
+### Allowed override to single backend-capable dev id
 
 - User explicitly locks owner
-- Module ownership/continuity constraint
+- Module ownership / continuity on one track
 - Hotfix stop-bleeding
-- Only one active write track in this round
+- Only one active write track in this round (true dependency, not preference)
 
 Document override as `Dev owner tie-break: single id — <reason>`.
 

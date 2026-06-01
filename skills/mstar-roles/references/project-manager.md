@@ -73,6 +73,8 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 Detailed conflict priority and dev allocation:
 `references/project-manager/routing-and-dev-allocation.md`.
 
+**Dev spread default:** when the task board has **>=2 independent** backend/fullstack units, prefer **`fullstack-dev` + `fullstack-dev-2`** (parallel with boundaries) or **round-robin** owners across sequential batches. Using a single backend-capable dev id for multiple independent units requires documented justification (`single_stream_justified` in Pre-Implement Gate Check).
+
 ---
 
 ## Non-Bypass Constraints
@@ -170,6 +172,7 @@ Anti-patterns:
 - Q10: Is Delegation consistent with Superpowers usage?
 - Q11: For non-trivial plan, is PM Task Board published with coverage?
 - Q12: In invoke-based hosts, were matching invokes actually issued?
+- Q13: With **>=2 independent** backend/fullstack units, are owners spread across `fullstack-dev` and `fullstack-dev-2` (parallel or rotated), or is `single_stream_justified: yes` recorded with a real reason?
 
 ---
 
@@ -202,6 +205,7 @@ Hard block when:
 - Non-trivial plan has required field = `no`
 - Harness-active non-hotfix flow lacks on-disk main plan or status registration
 - `Task category: quick` is used on non-trivial work
+- **>=2 independent** backend/fullstack units on the task board but `single_stream_justified: no` with no spread across `fullstack-dev` / `fullstack-dev-2` and no documented single-id override
 
 ---
 

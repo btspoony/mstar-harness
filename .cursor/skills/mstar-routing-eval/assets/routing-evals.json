@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 5,
-  "updated_at": "2026-04-08",
+  "version": 6,
+  "updated_at": "2026-06-01",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -98,8 +98,15 @@
       "id": "two-parallel-backend-modules",
       "prompt": "并行开发两块独立功能：用户通知 API 和活动审计日志 API，模块之间无共享状态",
       "expected_route": ["@explore", "@architect", "@fullstack-dev", "@fullstack-dev-2", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "parallel split across two implementers or explicit single-stream reason", "Status Update or implement Assignments include dispatching-parallel-agents skill ID or synonym phrase when Superpowers workflow applies", "using-git-worktrees or synonym plus checkout path convention when two concurrent writers same business repo", "distinct Working branch or worktree per concurrent writer if same repo", "QA evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "two parallel modules collapsed into one dev without single-stream justification", "parallel implement round without explicit dispatching-parallel-agents (or synonym) in Superpowers/Status Update when plugin workflow applies", "two concurrent writers on same business repo without worktree or equivalent checkout isolation called out in Assignments", "assignment uses non-English field keys", "report is non-English without user override"]
+      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "parallel split: @fullstack-dev and @fullstack-dev-2 with explicit module boundaries OR Dev owner tie-break: single id with Pre-Implement single_stream_justified", "Status Update or implement Assignments include dispatching-parallel-agents skill ID or synonym phrase when Superpowers workflow applies", "using-git-worktrees or synonym plus checkout path convention when two concurrent writers same business repo", "distinct Working branch or worktree per concurrent writer if same repo", "QA evidence in English"],
+      "hard_fail_if": ["missing Context Loaded declaration", "two independent parallel modules assigned only to @fullstack-dev without Dev owner tie-break: single id and single_stream_justified reason", "parallel implement round without explicit dispatching-parallel-agents (or synonym) in Superpowers/Status Update when plugin workflow applies", "two concurrent writers on same business repo without worktree or equivalent checkout isolation called out in Assignments", "assignment uses non-English field keys", "report is non-English without user override"]
+    },
+    {
+      "id": "sequential-backend-batches-rotation",
+      "prompt": "分三批串行做三个独立后端模块：计费、通知、审计日志，每批做完再开下一批，可以轮流派不同开发",
+      "expected_route": ["@explore", "@architect", "@fullstack-dev", "@fullstack-dev-2", "QC-3-reviewers", "@qa-engineer"],
+      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "PM Task Board with >=2 independent backend units", "Execute as alternates between fullstack-dev and fullstack-dev-2 across batches (round-robin) OR Pre-Implement Gate Check single_stream_justified: yes with documented reason", "Dev routing documents rotation or parallel intent per batch", "QA evidence in English"],
+      "hard_fail_if": ["missing Context Loaded declaration", "all independent backend batches assigned only to @fullstack-dev without single_stream_justified and Dev owner tie-break reason", "claims rotation but every batch uses same Execute as without continuity override", "assignment uses non-English field keys", "report is non-English without user override"]
     },
     {
       "id": "hotfix-exception-with-post-rca",
