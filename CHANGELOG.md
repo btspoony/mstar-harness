@@ -2,17 +2,28 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.2** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.1** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.2** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.2** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.2** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.2** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.2] - 2026-06-02
+
+### Harness (skills / agents)
+
+- **`pm` (`/pm`)**: **Autonomous Execute push** — after Execute starts (`plan` locked, Pre-implement **GO**), continuously drive the active **iteration** backlog (possibly **multiple** `plan_id`s) through implement → InReview → Done without routine basic yes/no prompts; use PM-recommended defaults; resolve process gates from `mstar-*` skills (`Blocked` only on true conflicts or irreversible scope gaps).
+- **`mstar-roles` (PM shell)**: Pointer to `skills/pm` § Autonomous Execute for sessions entered via `/pm`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.1 → 0.6.2**. **`@mstar-harness/cli` remains 0.4.0**.
 
 ## [0.6.1] - 2026-06-01
 

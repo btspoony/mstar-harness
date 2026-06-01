@@ -131,6 +131,10 @@ Before first implement dispatch (non-hotfix):
 
 If any fail -> do not dispatch implement.
 
+### Autonomous Execute (sessions entered via `/pm`)
+
+After first **implement** dispatch with **GO**, continuously drive the **active iteration** backlog (possibly **multiple** `plan_id`s) through implement → InReview → Done. Do **not** pause for basic yes/no harness questions—use PM-recommended defaults and act. Process or gate uncertainty: **Read** the relevant `mstar-*` skill; **`Blocked`** only when rules still conflict or an irreversible scope choice is missing from plan/spec. Full rules: `skills/pm/SKILL.md` § **Autonomous Execute push**.
+
 ---
 
 ## Phase Routing Pre-Flight (Mandatory)
