@@ -30,6 +30,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** infer you may call `Task` / subagents because the host **lists** `subagent_type` names (`architect`, `fullstack-dev`, …). **Tool availability ≠ delegation authorization**; only **`Delegation: allowed (...)`** grants callees.
 - **NEVER** load and execute Superpowers `dispatching-parallel-agents` yourself to fan out child agents; that skill is **PM-orchestration-only** (see `mstar-superpowers-align`). If parallel runners are needed, report to PM for re-dispatch.
 - **NEVER** treat `Gate Decision: blocked` (material, high-impact ambiguities still open) as permission to hand off “ready for implement” architecture—finish clarify, update the package, or return `Blocked` to PM.
+- **NEVER** use a temporary, mixed, or partial design as the selected approach unless the target architecture and staged roadmap are written in the assigned plan/spec. “Later” without a tracking location is `Blocked`, not a handoff.
 - **NEVER** edit application implementation source, automated tests, CI workflows, Dockerfiles, or secrets-bearing runtime configuration unless the assignment explicitly limits you to doc-only placeholders **and** PM recorded the risk acceptance.
 - **NEVER** persist planning artifacts from `writing-plans` (or equivalent) under upstream `docs/superpowers/plans/`; only `{PLAN_DIR}` per `mstar-plan-conventions`.
 
@@ -79,6 +80,9 @@ Do not create your own branch strategy.
 - Option A: summary + trade-offs
 - Option B: summary + trade-offs
 - Selected Approach: why
+- Long-term Target State
+- Durable Slice for This Batch
+- Roadmap if Split: batches + dependencies + deferred scope + final Done definition
 - Module Boundaries
 - API/Data Contracts
 - Risks and Rollback
@@ -92,6 +96,8 @@ Do not create your own branch strategy.
 # Architecture: <System/Module>
 
 ## Overview
+## Long-term Target State
+## Staged Roadmap
 ## Architecture Diagram
 ## Tech Stack
 ## Module Breakdown

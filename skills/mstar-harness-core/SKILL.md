@@ -71,6 +71,8 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 
 可追踪清单（plan `tasks` 或 Todo）；偏离时 PM 拉回；完成前须可核对证据（**`mstar-superpowers-align`** · `verification-before-completion`）。
 
+**Durable Roadmap Gate**：凡声明“分批 / 后续 / next plan / later / temporary workaround”的非热修任务，必须在 `{PLAN_DIR}` 主 plan、CreatePlan mirror、`status.json`/residual、或 PM Task Board 中写清后续路线（批次、依赖、owner/触发条件、完成定义）。只在对话或 Completion Report 里说“以后做”不算可追踪，不能进入 implement GO 或 Done。
+
 ## 专题 skill 索引
 
 | Skill | 职责 |
@@ -128,6 +130,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 角色文件塞流程长文 | 用专题 skill |
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |
 | CreatePlan 不落盘 / 无 `.agents` mirror | `mstar-host` · `cursor-plan-mode-bridge` |
+| 临时方案 / 后续计划只写在对话里 | `mstar-phase-gates` · Durable Roadmap Gate |
 
 ## 可选：OpenViking Memory
 

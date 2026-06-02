@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.4** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.5** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.4** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.5** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.4** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.4** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.4** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.5** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.5** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.5** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.5] - 2026-06-03
+
+### Harness (skills / agents)
+
+- **Durable Roadmap Gate**: Strengthen `mstar-harness-core`, `mstar-phase-gates`, PM gates, Cursor Plan mode bridge, and product/architecture templates so staged, partial, or temporary work must record a target state and roadmap before implement GO / Done.
+- **Coding behavior**: Redefine `Simplicity First` as the smallest durable slice, not a temporary workaround; deferred items must be tracked in plan/status artifacts rather than only in chat.
+- **Cursor routing-eval**: Bump routing evals to v8 with `durable-roadmap-required-for-staged-work`, guarding against “do half now, later plan” failures.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.4 → 0.6.5**. **`@mstar-harness/cli` remains 0.4.0**.
 
 ## [0.6.4] - 2026-06-03
 

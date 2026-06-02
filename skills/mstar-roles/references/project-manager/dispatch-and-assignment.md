@@ -53,6 +53,7 @@ For assignees (non-PM):
 **Delegation**: forbidden | allowed (...)
 **Why this agent**: <role-fit>
 **PM Task Board coverage**: <task ids>
+**Roadmap / deferred scope**: <required when staged, partial, or temporary; otherwise N/A>
 **Task**: <concrete work aligned with coverage>
 **Checkpoint Comment Rule**: commit -> Completion Report v2 -> PM Status Update -> next batch
 **Why batching is safe**: <required when batching >=3 IDs>

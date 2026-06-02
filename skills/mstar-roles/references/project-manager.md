@@ -116,6 +116,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
 - **NEVER** label `QA: skipped` for report-only QA—still dispatch `@qa-engineer` with report-only mode; QC skip rules are separate and explicit.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
+- **NEVER** accept “temporary workaround”, “follow-up later”, “next plan”, or “split into batches” as narrative-only scope management. If work is deferred or staged, write the roadmap/tracking location before implement GO or Done.
 
 ---
 
@@ -127,7 +128,8 @@ Before first implement dispatch (non-hotfix):
 2. `clarify` done (no unresolved high-impact ambiguity)
 3. `plan` done and referenceable
 4. `tasks` + PM Task Board ready for non-trivial plan
-5. New constraints discovered are written back to plan first
+5. Roadmap written when delivery is split, deferred, or temporary
+6. New constraints discovered are written back to plan first
 
 If any fail -> do not dispatch implement.
 
@@ -177,6 +179,7 @@ Anti-patterns:
 - Q11: For non-trivial plan, is PM Task Board published with coverage?
 - Q12: In invoke-based hosts, were matching invokes actually issued?
 - Q13: With **>=2 independent** backend/fullstack units, are owners spread across `fullstack-dev` and `fullstack-dev-2` (parallel or rotated), or is `single_stream_justified: yes` recorded with a real reason?
+- Q14: If this is partial/staged/temporary, is the roadmap/tracking location written in the plan/status artifacts rather than only in prose?
 
 ---
 
@@ -195,6 +198,8 @@ Pre-implement Gate Check:
 - non_trivial_plan: yes|no
 - PM_Task_Board_published: yes|no
 - batch_strategy_defined: yes|no
+- roadmap_written: yes|no|n/a
+- roadmap_location: <Plan section / PM Task Board / status.json / residual id / n/a>
 - assignment_batch_index: <e.g. 1/3>
 - coverage_ids: <e.g. T1,T2>
 - reason_if_single_assignment: <required when only one batch>
@@ -208,6 +213,8 @@ Hard block when:
 
 - Non-trivial plan has required field = `no`
 - Harness-active non-hotfix flow lacks on-disk main plan or status registration
+- `assignment_batch_index` is not `1/1` but `roadmap_written` is not `yes`
+- Any temporary workaround or deferred scope lacks a durable tracking location
 - `Task category: quick` is used on non-trivial work
 - **>=2 independent** backend/fullstack units on the task board but `single_stream_justified: no` with no spread across `fullstack-dev` / `fullstack-dev-2` and no documented single-id override
 
@@ -218,6 +225,7 @@ Hard block when:
 Before first implement dispatch:
 
 - Publish PM Task Board with ID/owner/deps/parallel/coverage mapping
+- If delivery spans batches, include the full roadmap: batch order, deferred scope, dependencies, owner/trigger, and final Done definition
 - Every implement Assignment declares `PM Task Board coverage`
 - Default batch size 1-2 IDs; `>=3` requires `Why batching is safe`
 - Completion rhythm: commit -> Completion Report v2 -> PM Status Update -> next dispatch

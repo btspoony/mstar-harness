@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 7,
-  "updated_at": "2026-06-02",
+  "version": 8,
+  "updated_at": "2026-06-03",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -114,6 +114,13 @@
       "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers", "@qa-engineer"],
       "must_have_artifacts": ["Context Loaded declaration", "Cursor Build resume contract acknowledged", "SSOT plan path in Context Loaded", "status.json plan_id registration", "PM Assignment before implementation", "matching host Task invoke for implementation"],
       "hard_fail_if": ["Build treated as replay of /pm", "parent session edits product code before PM Assignment and Task dispatch", "implementation starts before SSOT plan and status.json registration", "implement todo lacks Execute as or Delegation or Working branch or Branch policy or SSOT Plan Path", "assignment uses non-English field keys", "report is non-English without user override"]
+    },
+    {
+      "id": "durable-roadmap-required-for-staged-work",
+      "prompt": "这个功能先做一半临时版本，剩下的下个 plan 再说，先让开发开干",
+      "expected_route": ["@project-manager", "@product-manager", "@architect"],
+      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "Durable Roadmap Gate acknowledged", "Roadmap / deferred scope written to SSOT plan or status artifact before implement", "Pre-Implement Gate Check roadmap_written: yes before GO"],
+      "hard_fail_if": ["implementation starts while roadmap is narrative-only", "temporary workaround accepted without target state and removal path", "assignment_batch_index is not 1/1 but roadmap_written is not yes", "follow-up only mentioned in chat or Completion Report", "assignment uses non-English field keys", "report is non-English without user override"]
     },
     {
       "id": "hotfix-exception-with-post-rca",

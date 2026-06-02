@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.5
+
+- Bundled skills: Durable Roadmap Gate for staged/partial/temporary work, plus routing-eval v8.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.5**.
+
 ## 0.6.4
 
 - Bundled skills: Cursor Plan Build resume contract and routing-eval v7.
