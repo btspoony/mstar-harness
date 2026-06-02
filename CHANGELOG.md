@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.3** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.4** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.3** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.4** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.3** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.3** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.3** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.4** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.4** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.4** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.4] - 2026-06-03
+
+### Cursor Plan mode × Harness
+
+- **Build resume contract**: Cursor Build is treated as plan resume, not `/pm` replay. Morning Star plans must reload harness context, resume PM orchestration, and dispatch implementation instead of letting the parent Build session edit product code.
+- **Cursor routing-eval**: Add `cursor-plan-build-resume` to guard against parent-session implementation before SSOT plan registration, PM Assignment, and host Task dispatch.
+- **Cursor plugin manifest**: Register `agents/` in `.cursor-plugin/plugin.json`, matching plugin docs and validation checks.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.3 → 0.6.4**. **`@mstar-harness/cli` remains 0.4.0**.
 
 ## [0.6.3] - 2026-06-03
 

@@ -34,6 +34,16 @@ Do **not** mark an implement todo complete until:
 - Keep CreatePlan body and SSOT plan file aligned when scope changes.
 - Use SSOT paths in **Plan Path** / **Context Loaded**, not only the Cursor plan URI.
 
+## Build resume contract
+
+When the user clicks **Build** or Cursor switches from Plan mode to Agent mode:
+
+- Treat Build as **resume**, not as a replay of `/pm`.
+- Before editing product files, reload the Morning Star entry: `mstar-harness-core` → `mstar-host` Cursor reference → `cursor-plan-mode-bridge`.
+- If the plan belongs to Morning Star, default to `project-manager` orchestration: plan/status upkeep is allowed; implementation, tests, review, and ops execution must be dispatched.
+- Do not start an implement/code todo until the SSOT plan exists, `status.json` contains the `plan_id`, and the task has a PM Assignment with `Execute as`, `Delegation`, `Working branch` or `Branch policy`, and SSOT `Plan Path`.
+- If any field is missing, report **Blocked** and restore the harness state before implementation.
+
 ## Detail
 
 Read `skills/mstar-host/references/cursor-plan-mode-bridge.md` (via `mstar-host` skill) for templates and checklists. Conflict with harness invariants → **`mstar-harness-core`** wins.
