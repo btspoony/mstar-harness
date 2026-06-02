@@ -24,6 +24,9 @@
     "workflow",
     "quality-gates"
   ],
+  "agents": [
+    "agents/"
+  ],
   "skills": [
     "skills/"
   ],

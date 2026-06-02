@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 6,
-  "updated_at": "2026-06-01",
+  "version": 7,
+  "updated_at": "2026-06-02",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -107,6 +107,13 @@
       "expected_route": ["@explore", "@architect", "@fullstack-dev", "@fullstack-dev-2", "QC-3-reviewers", "@qa-engineer"],
       "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "PM Task Board with >=2 independent backend units", "Execute as alternates between fullstack-dev and fullstack-dev-2 across batches (round-robin) OR Pre-Implement Gate Check single_stream_justified: yes with documented reason", "Dev routing documents rotation or parallel intent per batch", "QA evidence in English"],
       "hard_fail_if": ["missing Context Loaded declaration", "all independent backend batches assigned only to @fullstack-dev without single_stream_justified and Dev owner tie-break reason", "claims rotation but every batch uses same Execute as without continuity override", "assignment uses non-English field keys", "report is non-English without user override"]
+    },
+    {
+      "id": "cursor-plan-build-resume",
+      "prompt": "In Cursor Plan mode, create a Morning Star plan, then click Build to start execution.",
+      "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers", "@qa-engineer"],
+      "must_have_artifacts": ["Context Loaded declaration", "Cursor Build resume contract acknowledged", "SSOT plan path in Context Loaded", "status.json plan_id registration", "PM Assignment before implementation", "matching host Task invoke for implementation"],
+      "hard_fail_if": ["Build treated as replay of /pm", "parent session edits product code before PM Assignment and Task dispatch", "implementation starts before SSOT plan and status.json registration", "implement todo lacks Execute as or Delegation or Working branch or Branch policy or SSOT Plan Path", "assignment uses non-English field keys", "report is non-English without user override"]
     },
     {
       "id": "hotfix-exception-with-post-rca",

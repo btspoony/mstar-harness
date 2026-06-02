@@ -22,6 +22,7 @@ Use before publishing or sharing the Morning Star Cursor plugin from this repo.
 - Trigger a role-routed task (for example, PM-style routing).
 - Confirm one `mstar-*` skill and `mstar-host` from `skills/` can load.
 - Confirm one `./rules/*.mdc` rule is applied during execution.
+- In Plan mode, create a Morning Star plan, click Build, and confirm the first Agent-mode step resumes PM/harness context before any product-code edit.
 
 ## 4) Packaging guardrails
 

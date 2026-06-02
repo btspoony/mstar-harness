@@ -148,6 +148,22 @@ Before switching from Plan to Agent for implementation (or declaring Plan phase 
 
 If any item fails → **Blocked**; finish harness sync before implement.
 
+## Build resume contract
+
+Cursor **Build** resumes the current plan in Agent mode. Do not assume it replays `/pm` or re-enters a role skill automatically.
+
+First action after Build, before product-code edits:
+
+1. Reload the harness entry: `mstar-harness-core` → `mstar-host` Cursor reference → this bridge.
+2. If the plan is a Morning Star plan, resume as `project-manager` for coordination and dispatch only.
+3. Read the SSOT plan and `status.json`; use them as the source of truth over the Cursor plan URI.
+4. For each implement/code todo, require a PM Assignment with `Execute as`, `Delegation`, `Working branch` or `Branch policy`, and SSOT `Plan Path`.
+5. If the Assignment or SSOT state is missing, report **Blocked** and repair the harness state before implementation.
+
+Allowed in the parent Build session: plan/status maintenance, routing decisions, Assignment writing, and host Task dispatch.
+
+Not allowed in the parent Build session by default: product implementation, test implementation, QC execution, QA execution, deployment, or ops changes. Those follow the normal PM dispatch rules unless the user explicitly overrides the harness.
+
 ## PM in Plan mode (`/pm`)
 
 When `/pm` runs under Plan mode:
@@ -166,6 +182,7 @@ When `/pm` runs under Plan mode:
 | Drift between CreatePlan and SSOT plan | Update both in same round |
 | Cursor plan URI as Plan Path | Use `{PLAN_DIR}/...` path |
 | Skip `spec-register` | Add `plans[]` row before implement |
+| Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
 
 ## Related skills
 

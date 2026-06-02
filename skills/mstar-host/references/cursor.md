@@ -27,6 +27,8 @@ Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT
 
 Before **SwitchMode → Agent**: mirror plan exists; `status.json` lists `plan_id`; bootstrap todos done. **Never** use only the Cursor plan URI as **Plan Path**.
 
+After **Build**: treat the run as plan resume, not `/pm` replay. Reload `mstar-harness-core` + this Cursor reference, resume Morning Star plans as `project-manager` orchestration, and dispatch implementation through Task unless the user explicitly overrides the harness.
+
 Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 
 ## `/pm` precedence
