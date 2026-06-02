@@ -33,6 +33,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** point `writing-plans` output to upstream `docs/superpowers/plans/`; use `{PLAN_DIR}` per `mstar-plan-conventions`.
 - **NEVER** offload PRD/product-doc drafting to `@explore`; short read-only orientation only per `mstar-harness-core`.
 - **NEVER** label a Prepare package as “ready for implement” while `Gate Decision: blocked` for material ambiguities—resolve, document waivers with PM, or return `Blocked`.
+- **NEVER** split delivery by saying “later / follow-up / next phase” without writing the product roadmap, deferred scope, and final completion definition in the assigned plan/spec.
 
 ## Superpowers (When Enabled)
 
@@ -69,6 +70,8 @@ If writing files to business repo, use only PM-assigned `Working branch` / `Bran
 - User Value
 - Scope
 - Non-goals
+- Target State
+- Roadmap if Split
 - Draft DoD
 
 ### Clarify
@@ -86,6 +89,9 @@ If writing files to business repo, use only PM-assigned `Working branch` / `Bran
 ## Target Users
 ## User Stories
 ## Acceptance Criteria
+## Target State
+## Roadmap / Release Slices
+## Deferred Scope and Tracking
 ## Priority
 ## Effort (agent-oriented)
 ```

@@ -1,6 +1,6 @@
 ---
 name: mstar-phase-gates
-description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`）、意图门禁、clarify 核心纪律（共享理解 / 先探索 / 每问推荐答案）、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。**必须**在 PM 判定 gate、首次 implement 派单前、产品/架构参与 Prepare、或解释为何不能跳过 plan/clarify 时 Read；`@project-manager` 每轮编排非 hotfix 任务必读；`@product-manager` / `@architect` 写规格与锁 plan 时必读 Prepare 节；实现角色 Read Execute 与 hotfix 例外即可。Task category 与 `quick` 禁豁免规则仍在 `mstar-harness-core`。并行 Superpowers 短语见 `mstar-superpowers-align`。
+description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`）、意图门禁、长期目标优先、分批 roadmap 强制落盘、clarify 核心纪律（共享理解 / 先探索 / 每问推荐答案）、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。**必须**在 PM 判定 gate、首次 implement 派单前、产品/架构参与 Prepare、或解释为何不能跳过 plan/clarify 时 Read；`@project-manager` 每轮编排非 hotfix 任务必读；`@product-manager` / `@architect` 写规格与锁 plan 时必读 Prepare 节；实现角色 Read Execute 与 hotfix 例外即可。Task category 与 `quick` 禁豁免规则仍在 `mstar-harness-core`。并行 Superpowers 短语见 `mstar-superpowers-align`。
 ---
 
 ## Load order（必读顺序）
@@ -19,13 +19,15 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
     1. **能查库则查库**：若问题可通过探索代码库（实现、配置、`{SPECS_DIR}`、`{KNOWLEDGE_DIR}`、`{ITERATION_DIR}` 等）得到答案，**先探索、不向用户提问**。
     2. **每问带推荐**：每个仍需用户确认的问题，须给出**推荐答案**（及简短理由），便于快速对齐。
     3. **收口摘要**：`clarify` 结束前列出：已决事项、仍 open 的假设、对 `plan` 的约束。
-- **`plan`** — 技术方案、模块边界/接口契约、风险与回滚点、验证计划。
+- **`plan`** — 技术方案、长期目标状态、模块边界/接口契约、风险与回滚点、验证计划。
   - **意图门禁**：锁 plan 前须能书面写清**真实目标 / 成功判据 / 非目标**三项；否则 Prepare 未通过。
+  - **长期方案优先**：默认先设计目标状态，再裁剪本轮可交付切片；不得以“临时方案 / 混合方案 / 以后再说”替代目标设计。
+  - **Durable Roadmap Gate**：若本轮只做部分范围，plan 必须写明 roadmap（批次、依赖、暂缓项、owner/触发条件、最终完成定义）。只有一句“后续再做 / next plan”视为未通过 plan gate。
 
 ### B. Execute：`plan(locked) → tasks → implement`
 
 - **`plan(locked)`** — 冻结基线；实现中出现新约束时**先回写 plan 再继续**。
-- **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan 与验收标准。
+- **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。
   - **并行标签**：若 PM 将 ≥2 条实现轨 **同时** 分派，须在 `Superpowers` 中写入 `dispatching-parallel-agents`；同仓 ≥2 可写并发时叠 `using-git-worktrees`（见 **`mstar-superpowers-align`** 与 **`mstar-branch-worktree`**）。
 - **`implement`** — 按 tasks 顺序执行并提交自检证据；完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
 
@@ -65,8 +67,9 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
   - **`clarify` 核心纪律**（见 **`mstar-phase-gates` SKILL.md** Prepare · `clarify`）：逐方面核对至共享理解；沿设计决策树逐枝、一次一决；能探索代码库则先探索；每问附推荐答案；阶段末汇总已决与仍 open 假设。
 - `plan`
   - 目标：给出可执行技术方案与风险控制。
-  - 最小产物：方案、模块边界/接口契约、风险与回滚、验证计划。
+  - 最小产物：目标状态、方案、模块边界/接口契约、风险与回滚、验证计划。
   - **准入**：能书面写出真实目标、成功判据、非目标后再锁 plan（同 `SKILL.md`）。
+  - **分批准入**：若计划不是一次性交付完整范围，须写 `Roadmap / Batch Plan`：本批做什么、后续批次做什么、依赖顺序、暂缓项、owner/触发条件、最终 Done 定义；缺失则 `blocked`。
 
 ### B. Execute
 
@@ -77,7 +80,7 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
   - 最小动作：在 plan 或 notes 记录当前锁定版本（日期或 hash）。
 - `tasks`
   - 目标：把 plan 拆成可执行任务与依赖顺序。
-  - 最小产物：任务列表、并行标记、完成判据、映射到验收标准。
+  - 最小产物：任务列表、并行标记、完成判据、映射到验收标准与 roadmap 批次。
   - **PM**：若并行标记对应「多轨同时 implement」，在对外 **Status Update** 与实现 Assignment 的 **`Superpowers`** 中写入 **`dispatching-parallel-agents`**（或同义短语）；同仓多可写并发时叠 **`using-git-worktrees`**（见 `mstar-superpowers-align`）。
 - `implement`
   - 目标：按任务执行并提交证据，进入审查。
@@ -108,10 +111,11 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 2. `clarify` 是否完成（高影响歧义是否收敛）？
 3. 意图门禁是否满足（真实目标 / 成功判据 / 非目标已写明）？
 4. `plan` 是否完成并可引用？
-5. `tasks` 是否完成？
-6. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
-7. 若中途出现 plan drift，是否先回写再继续？
-8. 实现说明中是否体现"最小解法 + 手术式改动 + 可验证检查"？
+5. 若分批/暂缓/临时绕行，roadmap 是否落在 plan/status 中，而不是只在对话里？
+6. `tasks` 是否完成？
+7. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
+8. 若中途出现 plan drift，是否先回写再继续？
+9. 实现说明中是否体现"最小耐久切片 + 手术式改动 + 可验证检查"？
 
 任一项为「否」时，`Gate decision` 必须是 `blocked`。
 

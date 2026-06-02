@@ -72,6 +72,7 @@ Set `updated_at` on `status.json` to today (`YYYY-MM-DD`). Commit harness files 
 
 - YAML or markdown frontmatter with `plan_id`, title, status (`Todo` / `InProgress` — not `Done` unless PM/QA authority).
 - **Task list** as markdown checkboxes (`- [ ]` / `- [x]`) matching CreatePlan implement todos.
+- **Roadmap / deferred scope** section when delivery is staged, partial, or uses a temporary workaround.
 - Link: “SSOT status: `{HARNESS_DIR}/status.json` → `plans[]` / `residual_findings`.”
 
 After **CreatePlan**, keep CreatePlan body and mirror file **in sync** when scope changes (update both in the same coordination round).
@@ -93,6 +94,14 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 - specify: [done|n/a]
 - clarify: [done|n/a]
 - plan: [done|in progress]
+
+## Roadmap / deferred scope
+
+- Target state: <complete outcome>
+- Current slice: <what this plan/batch delivers>
+- Later slices: <batch/order/owner or trigger>
+- Deferred scope / temporary workaround removal: <tracking location or N/A>
+- Final Done definition: <condition for full completion>
 
 ## Tasks (mirror as checkboxes in SSOT plan file)
 
@@ -144,6 +153,7 @@ Before switching from Plan to Agent for implementation (or declaring Plan phase 
 - [ ] `status.json` contains `plans[]` entry with matching `id` and `file`
 - [ ] Bootstrap todos `harness-init`, `spec-register`, `mirror-plan` are **done**
 - [ ] CreatePlan implement todos reference **task ids** traceable to SSOT plan checkboxes
+- [ ] If staged/partial/temporary, CreatePlan and SSOT plan both contain `Roadmap / deferred scope`
 - [ ] **Plan Path** for any Assignment uses the SSOT path, not the Cursor plan URI
 
 If any item fails → **Blocked**; finish harness sync before implement.
@@ -183,6 +193,7 @@ When `/pm` runs under Plan mode:
 | Cursor plan URI as Plan Path | Use `{PLAN_DIR}/...` path |
 | Skip `spec-register` | Add `plans[]` row before implement |
 | Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
+| Follow-up only in chat / no roadmap section | Add `Roadmap / deferred scope` to CreatePlan and SSOT plan before implement |
 
 ## Related skills
 

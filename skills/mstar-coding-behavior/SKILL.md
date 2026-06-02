@@ -1,6 +1,6 @@
 ---
 name: mstar-coding-behavior
-description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（显式假设、不静默猜测）、Simplicity First（最小实现、拒绝投机抽象）、Surgical Changes（只改与任务直接相关的行、不顺手重构、不 piggyback）、Goal-Driven Execution（把模糊请求转为可验证结果、Step → verify 微模板、证据驱动的完成声明）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
+description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（显式假设、不静默猜测）、Simplicity First（最小耐久切片，拒绝未登记临时方案）、Surgical Changes（只改与任务直接相关的行、不顺手重构、不 piggyback）、Goal-Driven Execution（把模糊请求转为可验证结果、Step → verify 微模板；分批必须留 roadmap）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
 ---
 
 ## Load order（必读顺序）
@@ -43,16 +43,24 @@ Quick check:
 
 ## 2) Simplicity First
 
-Core idea: implement the minimum that satisfies the request and acceptance criteria.
+Core idea: implement the smallest durable slice that satisfies the request and acceptance criteria.
 
 - Do not add features, flags, or configurability that were not requested.
 - Avoid introducing new abstractions for single-use logic.
-- Prefer straightforward local fixes over framework-level reshaping.
+- Prefer straightforward local fixes over framework-level reshaping **only when they fit the target design**.
 - Reject speculative error handling for impossible paths unless required by project policy.
+- Do not confuse "minimum" with "temporary." A small implementation must still align with the long-term target state, stable interfaces, and known follow-up plan.
+- If a workaround is necessary, label it as `temporary`, explain why it is unavoidable, and record the removal path in the plan/status artifact before claiming the task is complete.
 
 Default rule:
 
-- If 200 lines can be 50 with the same behavior and clarity, prefer the smaller solution.
+- If 200 lines can be 50 with the same behavior, clarity, and durable architecture, prefer the smaller solution.
+
+Durability check:
+
+- Can this slice be extended by the next batch without undoing its core shape?
+- Are deferred items captured in an existing roadmap / task board / residual tracker, not just mentioned in chat?
+- Would a reviewer understand whether this is the final approach, a staged slice, or a temporary workaround?
 
 ## 3) Surgical Changes
 
@@ -74,8 +82,10 @@ Core idea: convert vague requests into verifiable outcomes and iterate until ver
 
 - Define concrete success criteria before major edits.
 - For multi-step tasks, use brief `Step -> verify` checkpoints.
+- For split delivery, maintain a durable roadmap: current slice, later slices, dependencies, owner/trigger, and completion condition.
 - Prefer evidence-backed completion claims (tests, command output, reproducible checks).
 - If verification fails, loop on diagnosis and fix before declaring completion.
+- Do not finish with "next plan / later / follow-up" only in prose. If the work is not fully complete, the remaining work must be written to the plan/status artifact or the task must report `Partial` / `Blocked`.
 
 Micro template:
 

@@ -1,16 +1,28 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.4**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.5**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.4** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.5** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.4.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.4** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.4** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.4** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.5** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.5** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.5** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.5] - 2026-06-03
+
+### Harness（skills / agents）
+
+- **Durable Roadmap Gate**：强化 `mstar-harness-core`、`mstar-phase-gates`、PM 门禁、Cursor Plan 模式桥接，以及产品/架构模板；凡分批、部分交付或临时 workaround，都必须在 implement GO / Done 前写清目标状态与 roadmap。
+- **编码行为**：将 `Simplicity First` 明确定义为“最小耐久切片”，不是临时补丁；暂缓项必须进入 plan/status 工件，不能只写在对话里。
+- **Cursor routing-eval**：路由评估升至 v8，新增 `durable-roadmap-required-for-staged-work`，防止“先做一半，后续 plan 再说”的失败模式。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.4 → 0.6.5**。**`@mstar-harness/cli` 保持 0.4.0**。
 
 ## [0.6.4] - 2026-06-03
 
