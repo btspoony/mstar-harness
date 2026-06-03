@@ -22,10 +22,10 @@
 
 ## `{ITERATION_DIR}`（可选·迭代/版本级 compass）
 
-- **物理路径**：`**{ITERATION_DIR}/**`（推荐布局下常为 `**.agents/iterations/**`，与 `{KNOWLEDGE_DIR}`、`{PLAN_DIR}` 并列）。
+- **物理路径**：`**{ITERATION_DIR}/**`（推荐布局下常为 `**.mstar/iterations/**`，与 `{KNOWLEDGE_DIR}`、`{PLAN_DIR}` 并列；legacy 项目可继续为 `.agents/iterations/`）。
 - **放什么**：某一**交付版本或迭代**的范围、里程碑、验收、风险、program 备注；命名示例 `v1.15-delivery-compass-v1.md`、`*-program-compass-*.md`；遗留非标准 `v1.*` 规划快照可保留于此并列入索引。
 - **不放什么**：可跨版本复用的实现 SSOT（进 `{KNOWLEDGE_DIR}`）；冻结产品/API 规范（进 `{SPECS_DIR}`）；单 plan 的 QC 留档（进 `{PLAN_DIR}/reports/`）。
-- **索引**：**必须**维护 `**{ITERATION_DIR}/README.md**`：至少 **Document**、**Version / iteration**、**Description**；可按「Delivery compasses」与「Legacy artifacts」分表（参考 Nexus `.agents/iterations/README.md`）。
+- **索引**：**必须**维护 `**{ITERATION_DIR}/README.md**`：至少 **Document**、**Version / iteration**、**Description**；可按「Delivery compasses」与「Legacy artifacts」分表。
 - **与 plan 的链接**：在 `**plans[].metadata**` 中可用 `**iteration_compass**`（单文件）或 `**iteration_refs**`（`string[]`）登记仓库内相对路径；PM 在 Assignment 点名本轮须读的 compass。
 - **维护**：`@product-manager` / `@architect` 起草；`**@project-manager**` 维护 README 与 metadata 挂接；compass 定稿后**少改多版本**（新版本优先新文件名 `v<N>` 或新 compass 文件）。
 
@@ -44,7 +44,7 @@
 
 ## 与 `status.json` 的链接
 
-- 某 plan 的**权威设计输入**在知识库、迭代 compass 或规格目录中时，在 `**plans[].metadata**` 中登记路径，推荐使用已列标准键：`**primary_spec**`（单文件）、`**spec_refs**`（`string[]`）、`**iteration_compass**` / `**iteration_refs**`（迭代级，可选）。路径为**仓库内相对路径**（推荐布局下常写作 `**.agents/knowledge/....md**`、`**.agents/iterations/....md**` 或 `**.agents/specs/....md**`；兼容旧目录时也可为 `**.agents/designs/....md**`）。
+- 某 plan 的**权威设计输入**在知识库、迭代 compass 或规格目录中时，在 `**plans[].metadata**` 中登记路径，推荐使用已列标准键：`**primary_spec**`（单文件）、`**spec_refs**`（`string[]`）、`**iteration_compass**` / `**iteration_refs**`（迭代级，可选）。路径为**仓库内相对路径**（推荐布局下常写作 `**.mstar/knowledge/....md**`、`**.mstar/iterations/....md**` 或 `**.mstar/specs/....md**`；兼容旧目录时也可为 `.agents/...`）。
 - 执行方在 **implement 前**须按 metadata 读取这些文件，并与主 plan 核对；不得在未读链接文档的情况下**静默偏离**其中已写明的决策（若需偏离，先回写 knowledge 或 plan 并走 PM/architect 门禁）。
 
 ## 维护规则

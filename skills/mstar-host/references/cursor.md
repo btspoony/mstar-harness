@@ -11,7 +11,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 
 ## Plan mode × harness dual-write
 
-When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json`.
+When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json`.
 
 Before first **CreatePlan**: Read `mstar-plan-conventions`, `mstar-plan-artifacts`, Prepare gates from `mstar-phase-gates` when not hotfix. Full procedure: **`cursor-plan-mode-bridge.md`**.
 

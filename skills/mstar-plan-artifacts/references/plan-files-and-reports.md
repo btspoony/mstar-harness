@@ -44,7 +44,7 @@
 - **并行 vs 串行**：不同 `plan_id` **相互独立**时，可 **并行**派发多组三审（每组各自的 Assignment 与 `reports/<plan-id>/`）；若 PM 选择串行，须在 Status Update 写明顺序——**每组仍须完整三审 + QA**，不是「一个大 QC」混审。
 - **读 skill**：书写或派发 QC 相关 Assignment 前，PM **必须** Read **`mstar-review-qc`** skill（`mstar-plan-conventions` 不重复 QC 清单与 verdict 规则）。见 `mstar-plan-conventions` SKILL.md **QC pre-dispatch gate** 与 **InReview 与 QC+QA** 小节。
 
-**QC 落盘与宿主权限**：`@qc-specialist` / `@qc-specialist-2` / `@qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），**仅可** Write/Edit **`{PLAN_DIR}/reports/`** 下 **`.md`**（全局 agent 提示词中已配置 `.agents/plans/reports/**`、`.plans/reports/**`、`plans/reports/**` 相对路径）。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。**若** 项目的 `{PLAN_DIR}` 不落在上述三种根下，须在**项目级**宿主配置（如 OpenCode）中为 QC 角色追加对应的 `edit` allow 规则。
+**QC 落盘与宿主权限**：`@qc-specialist` / `@qc-specialist-2` / `@qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），**仅可** Write/Edit **`{PLAN_DIR}/reports/`** 下 **`.md`**（全局 agent 提示词中已配置 `.mstar/plans/reports/**`、`.agents/plans/reports/**`、`.plans/reports/**`、`plans/reports/**` 相对路径）。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。**若** 项目的 `{PLAN_DIR}` 不落在上述根下，须在**项目级**宿主配置（如 OpenCode）中为 QC 角色追加对应的 `edit` allow 规则。
 
 **QC 报告与 Git**：报告落盘后，各 QC 角色须在业务仓内对**本次报告文件**执行 **`git add` + `git commit`**（细则与 bash 权限见 `agents/qc-specialist*.md`）；**禁止**仅落盘不提交导致 `clone` 后不可见。**PM / architect / product-manager** 对 **`{HARNESS_DIR}`** / **`{PLAN_DIR}`** 与主 plan 的创建与更新亦须在业务仓内 **commit**（见 `agents/project-manager.md` Plan 初始化与 PM 职责、`agents/architect.md` / `agents/product-manager.md` Git 小节）。
 

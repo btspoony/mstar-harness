@@ -1,6 +1,6 @@
 ---
 name: mstar-plan-conventions
-description: Morning Star (启明星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` 发现与初始化、`docs/` 与 harness 子树边界、未启用 plan 时的工作方式、Spec 集成分支与多 Plan 实现分支（merge 靶与 PR 合 main）、Superpowers `writing-plans` 落盘门限、工期预估（agent-oriented）。**必须**在读写 `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / reports / knowledge → **`mstar-plan-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
+description: Morning Star (启明星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` 发现与初始化（默认 `.mstar/`，兼容 `.agents/`）、`docs/` 与 harness 子树边界、未启用 plan 时的工作方式、Spec 集成分支与多 Plan 实现分支（merge 靶与 PR 合 main）、Superpowers `writing-plans` 落盘门限、工期预估（agent-oriented）。**必须**在读写 `.mstar/` / `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / reports / knowledge → **`mstar-plan-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
 ---
 
 ## Load order（必读顺序）
@@ -17,7 +17,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 | 符号 | 默认 |
 |------|------|
-| `{HARNESS_DIR}` | `.agents/` |
+| `{HARNESS_DIR}` | `.mstar/` |
 | `{PLAN_DIR}` | `{HARNESS_DIR}/plans/` |
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/` |
@@ -25,11 +25,12 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 ### 解析顺序（找到即停）
 
-1. `.agents/` → `{HARNESS_DIR}=.agents/`, `{PLAN_DIR}=.agents/plans/`
-2. 否则 `.plans/` 或 `plans/` → 遗留同目录 `{HARNESS_DIR}={PLAN_DIR}`
-3. 皆无 → 未启用 plan；进度走对话与 Completion Report
+1. `.mstar/` → `{HARNESS_DIR}=.mstar/`, `{PLAN_DIR}=.mstar/plans/`
+2. 否则 `.agents/` → legacy `{HARNESS_DIR}=.agents/`, `{PLAN_DIR}=.agents/plans/`
+3. 否则 `.plans/` 或 `plans/` → 遗留同目录 `{HARNESS_DIR}={PLAN_DIR}`
+4. 皆无 → 未启用 plan；进度走对话与 Completion Report
 
-并存时 **`.agents/` 优先**。
+并存时 **`.mstar/` 优先**；仅当项目已有 `.agents/` 且无 `.mstar/` 时继续沿用 `.agents/`。
 
 `{SPECS_DIR}`：有 `specs/` 用之；否则 `designs/`；皆无则建议新建 `specs/`。
 
@@ -49,11 +50,11 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 PM 在需要持久化追踪时：
 
-1. 建 `.agents/`、`plans/`、`status.json`（空模板见 **`mstar-plan-artifacts/templates/status.empty.json`**）
+1. 建 `.mstar/`、`plans/`、`status.json`（空模板见 **`mstar-plan-artifacts/templates/status.empty.json`**）
 2. 可选 `notes.json`（模板 **`mstar-plan-artifacts/templates/notes.empty.json`**）、`reports/README.md`、`knowledge/`、`iterations/`、`specs/`
 3. Git：团队交付 **勿** ignore 整个 `{HARNESS_DIR}`（handoff 需 clone 可达）
 
-步骤与 `.agents/AGENTS.md` 分层 → **`references/harness-bootstrap-and-agents-layering.md`**。
+步骤与 `{HARNESS_DIR}/AGENTS.md` 分层 → **`references/harness-bootstrap-and-agents-layering.md`**。
 
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 

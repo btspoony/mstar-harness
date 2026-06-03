@@ -5,13 +5,17 @@ tools:
   edit: true
   bash: true
 permission:
-  # `edit` covers write/patch/multiedit. Only `.md` under resolved `{PLAN_DIR}/reports/` (three possible roots — match project layout).
+  # `edit` covers write/patch/multiedit. Only `.md` under resolved `{PLAN_DIR}/reports/` (default + legacy roots).
   edit:
     "*": deny
+    ".mstar/plans/reports/*.md": allow
+    ".mstar/plans/reports/**/*.md": allow
     ".agents/plans/reports/*.md": allow
     ".agents/plans/reports/**/*.md": allow
     ".plans/reports/*.md": allow
     ".plans/reports/**/*.md": allow
+    ".worktrees/**/.mstar/plans/reports/*.md": allow
+    ".worktrees/**/.mstar/plans/reports/**/*.md": allow
     ".worktrees/**/.agents/plans/reports/*.md": allow
     ".worktrees/**/.agents/plans/reports/**/*.md": allow
     ".worktrees/**/.plans/reports/*.md": allow

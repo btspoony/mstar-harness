@@ -3,7 +3,7 @@
 # Does not write status.json — PM applies output manually.
 set -euo pipefail
 
-STATUS_FILE="${1:-.agents/status.json}"
+STATUS_FILE="${1:-.mstar/status.json}"
 
 if [[ ! -f "$STATUS_FILE" ]]; then
   echo "error: status file not found: $STATUS_FILE" >&2

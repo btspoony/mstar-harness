@@ -1,5 +1,5 @@
 ---
-description: When using Cursor Plan mode with Morning Star, dual-write CreatePlan to .agents/ harness artifacts and require per-task commits
+description: When using Cursor Plan mode with Morning Star, dual-write CreatePlan to .mstar/ harness artifacts and require per-task commits
 alwaysApply: true
 ---
 
@@ -9,7 +9,7 @@ When the Morning Star harness plugin or `/pm` is active and Cursor **Plan mode**
 
 ## SSOT vs CreatePlan
 
-- **SSOT** for plans and status: **`{HARNESS_DIR}`** (default `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json`, specs under `{SPECS_DIR}` when used.
+- **SSOT** for plans and status: **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json`, specs under `{SPECS_DIR}` when used.
 - **CreatePlan** is a **session mirror** only; do not treat the Cursor plan file URI as the only plan record.
 
 ## CreatePlan todos (mandatory prefix)
@@ -18,7 +18,7 @@ Before any implement/code todo, CreatePlan **must** list these three bootstrap t
 
 1. **`harness-init`** — create harness dirs + initialize `status.json` from template when missing
 2. **`spec-register`** — add `plans[]` row with `plan_id` and `file` path
-3. **`mirror-plan`** — write the SSOT main plan markdown under `.agents/plans/` (or resolved `{PLAN_DIR}`)
+3. **`mirror-plan`** — write the SSOT main plan markdown under `.mstar/plans/` (or resolved `{PLAN_DIR}`)
 
 ## Implement todo done gate
 

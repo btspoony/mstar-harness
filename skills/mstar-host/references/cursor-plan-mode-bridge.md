@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Cursor **Plan mode** uses **CreatePlan** and built-in plan todos for session UX. Morning Star **SSOT** lives on disk under **`{HARNESS_DIR}`** (default `.agents/`). This reference defines **dual-write**: mirror every durable plan artifact to the repo; never treat the Cursor plan URI alone as the handoff surface.
+Cursor **Plan mode** uses **CreatePlan** and built-in plan todos for session UX. Morning Star **SSOT** lives on disk under **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`). This reference defines **dual-write**: mirror every durable plan artifact to the repo; never treat the Cursor plan URI alone as the handoff surface.
 
 ## Priority (hard)
 
@@ -23,7 +23,7 @@ Cursor **Plan mode** uses **CreatePlan** and built-in plan todos for session UX.
 ## Before the first CreatePlan
 
 1. **Read** (minimum): `mstar-plan-conventions`, `mstar-plan-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
-2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions` (prefer `.agents/` + `.agents/plans/`).
+2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
 3. **Initialize** if absent (see checklist below).
 
 ### Harness initialization checklist
@@ -58,7 +58,7 @@ Add one object to `status.json` → `plans[]`:
 {
   "id": "<plan-id>",
   "status": "Todo",
-  "file": ".agents/plans/<plan-id>-<short-name>.md",
+        "file": ".mstar/plans/<plan-id>-<short-name>.md",
   "metadata": {
     "primary_spec": "<spec-id or path if known>",
     "description": "<one-line summary>"
@@ -66,7 +66,7 @@ Add one object to `status.json` → `plans[]`:
 }
 ```
 
-Set `updated_at` on `status.json` to today (`YYYY-MM-DD`). Commit harness files in the **business repo** when the project tracks `.agents/` (default).
+Set `updated_at` on `status.json` to today (`YYYY-MM-DD`). Commit harness files in the **business repo** when the project tracks `{HARNESS_DIR}` (default).
 
 ### `mirror-plan` minimum content
 
@@ -85,9 +85,9 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 # Plan: <title>
 
 **plan_id**: <plan-id>
-**HARNESS_DIR**: .agents/
-**Plan file (SSOT)**: .agents/plans/<plan-id>-<short-name>.md
-**status.json**: .agents/status.json
+**HARNESS_DIR**: .mstar/
+**Plan file (SSOT)**: .mstar/plans/<plan-id>-<short-name>.md
+**status.json**: .mstar/status.json
 
 ## Prepare gates
 
@@ -107,9 +107,9 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 ### Bootstrap (fixed prefix — complete before implement)
 
-1. harness-init — init .agents/, status.json, reports/, archived/residuals/
+1. harness-init — init .mstar/, status.json, reports/, archived/residuals/
 2. spec-register — register plan_id in status.json; spec stub if applicable
-3. mirror-plan — write .agents/plans/<plan-id>-<short-name>.md
+3. mirror-plan — write .mstar/plans/<plan-id>-<short-name>.md
 
 ### Implement
 
@@ -187,7 +187,7 @@ When `/pm` runs under Plan mode:
 
 | Anti-pattern | Fix |
 |--------------|-----|
-| CreatePlan only, no `.agents/` files | Run bootstrap todos; Write mirror plan + status.json |
+| CreatePlan only, no `{HARNESS_DIR}` files | Run bootstrap todos; Write mirror plan + status.json |
 | Todo done, no commit | Commit per task; paste `git log -1` evidence |
 | Drift between CreatePlan and SSOT plan | Update both in same round |
 | Cursor plan URI as Plan Path | Use `{PLAN_DIR}/...` path |

@@ -7,8 +7,8 @@ Use this reference for `{HARNESS_DIR}` / `{PLAN_DIR}` initialization, status syn
 Follow `mstar-plan-conventions` for canonical discovery.
 Preferred layout:
 
-- `{HARNESS_DIR}`: `.agents/`
-- `{PLAN_DIR}`: `.agents/plans/`
+- `{HARNESS_DIR}`: `.mstar/` by default; existing `.agents/` projects remain valid.
+- `{PLAN_DIR}`: `.mstar/plans/` by default; existing `.agents/plans/` projects remain valid.
 
 Legacy fallbacks:
 

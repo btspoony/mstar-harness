@@ -12,12 +12,12 @@
 
 ## Bootstrap 最小步骤
 
-1. 创建 `{HARNESS_DIR}`（推荐 `.agents/`）与 `{PLAN_DIR}`（推荐 `.agents/plans/`）。
+1. 创建 `{HARNESS_DIR}`（推荐 `.mstar/`）与 `{PLAN_DIR}`（推荐 `.mstar/plans/`）。
 2. 初始化 `status.json`：从 **`mstar-plan-artifacts/templates/status.empty.json`** 复制；residual canonical 见 **`mstar-plan-artifacts` SKILL.md**；字段与生命周期见 **`mstar-plan-artifacts/references/status-and-residuals.md`**。
 3. 初始化可选 `notes.json`（**`mstar-plan-artifacts/templates/notes.empty.json`**）与 `plans/reports/README.md`。
 4. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；内容边界见 `mstar-plan-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
-5. 创建 `.agents/AGENTS.md`（harness 子树规则）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 与 `docs/` 分工（参考 Nexus `.agents/AGENTS.md`）。
-6. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `.agents/AGENTS.md` 作为 harness SSOT。
+5. 创建 `{HARNESS_DIR}/AGENTS.md`（harness 子树规则）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 与 `docs/` 分工；新项目推荐 `.mstar/AGENTS.md`，已有项目可继续使用 `.agents/AGENTS.md`。
+6. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `{HARNESS_DIR}/AGENTS.md` 作为 harness SSOT。
 7. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。
 
 ## 三层 `AGENTS.md` 职责切分
@@ -27,7 +27,7 @@
 - 放：仓库身份、技术边界、构建/测试接口、安全与分支策略、规格路由表。
 - 不放：动态状态、当前批次进展、R# 明细、QC 单次结论。
 
-### `.agents/AGENTS.md`（harness 层）
+### `{HARNESS_DIR}/AGENTS.md`（harness 层）
 
 - 放：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}` 契约、`docs/` 与 harness 子树内容边界、状态推进门禁、QC/QA 对齐规则、residual 生命周期、Done compaction profile。
 - 不放：语言/框架编码细节、业务模块实现约束。
@@ -56,7 +56,7 @@
 1. Current user instruction
 2. Root `AGENTS.md`
 3. This file
-4. `.agents/AGENTS.md`
+4. `{HARNESS_DIR}/AGENTS.md`
 
 ## Boundary Rules
 - ...
@@ -74,7 +74,7 @@
   修正：迁移到 `status.json` 的 `plans[].metadata` 与 `notes.json`。
 
 - 反模式：每个子目录复制一份完整 harness 规则。  
-  修正：保留一行引用 `.agents/AGENTS.md`，仅写本目录增量约束。
+  修正：保留一行引用 `{HARNESS_DIR}/AGENTS.md`，仅写本目录增量约束。
 
 - 反模式：目录级规则未声明 Source Priority，冲突时不可裁决。  
   修正：统一四级优先级模板并在每个目录级文件开头声明。

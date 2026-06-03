@@ -129,7 +129,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
 | 角色文件塞流程长文 | 用专题 skill |
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |
-| CreatePlan 不落盘 / 无 `.agents` mirror | `mstar-host` · `cursor-plan-mode-bridge` |
+| CreatePlan 不落盘 / 无 `{HARNESS_DIR}` mirror | `mstar-host` · `cursor-plan-mode-bridge` |
 | 临时方案 / 后续计划只写在对话里 | `mstar-phase-gates` · Durable Roadmap Gate |
 
 ## 可选：OpenViking Memory
