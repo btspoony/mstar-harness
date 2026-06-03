@@ -2,19 +2,19 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.5** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.6** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.5** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.5** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.5** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.5** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.6** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.6** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.6** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.6** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
-## [Unreleased]
+## [0.6.6] - 2026-06-03
 
 ### Harness (skills / agents)
 
@@ -25,6 +25,11 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 - Change Cursor and Codex install flows to maintain a shared local repo at `~/.mstar/harness` and create host-specific symlinks instead of Cursor project submodules or Codex URL-source marketplace entries.
 - Link Codex custom agents from `codex/agents/*.toml` into global or project Codex agent directories during `init`, and validate them in `doctor`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.5 → 0.6.6**.
+- Bump `@mstar-harness/cli`: **0.4.0 → 0.5.0**.
 
 ## [0.6.5] - 2026-06-03
 

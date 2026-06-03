@@ -4,7 +4,7 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
-## Unreleased
+## 0.5.0
 
 - maintain a shared local harness checkout at `~/.mstar/harness` for Cursor and Codex install flows
 - change Cursor global/project installs to symlink host plugin paths to `~/.mstar/harness`

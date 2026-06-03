@@ -1,18 +1,18 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.5**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.6**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.5** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.4.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.5** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.5** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.5** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.6** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.6** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.6** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.6** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
-## [未发布]
+## [0.6.6] - 2026-06-03
 
 ### Harness（skills / agents）
 
@@ -23,6 +23,11 @@
 
 - Cursor 与 Codex 安装流程改为维护共享本地仓库 `~/.mstar/harness`，再创建宿主侧软链接；不再默认使用 Cursor project submodule 或 Codex URL-source marketplace 条目。
 - `init` 会将 `codex/agents/*.toml` 链接到全局或项目 Codex agents 目录，`doctor` 同步校验这些链接。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.5 → 0.6.6**。
+- `@mstar-harness/cli`：**0.4.0 → 0.5.0**。
 
 ## [0.6.5] - 2026-06-03
 
