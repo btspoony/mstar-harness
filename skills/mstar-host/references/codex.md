@@ -2,6 +2,8 @@
 
 Load when **`mstar-host`** detection resolves **codex** (Codex app/CLI session, Codex plugin installed from `.codex-plugin/plugin.json`, Codex custom agents linked from `codex/agents/*.toml`, or Codex tool namespaces such as `functions.*`, `codex_app.*`, `tool_search`, `image_gen`, or Browser plugin tools).
 
+Plan / Goal Mode: read **`codex-plan-goal-mode-bridge.md`** when Codex Plan Mode (`/plan`) or Goal Mode (`/goal`, goal tools, or goal progress controls) is active. Codex session plans, UI todos, and goal text are not durable harness SSOT.
+
 Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an actual multi-agent / Task-style invocation tool. If no callable invoke tool exists, Assignment Markdown is coordination text only; do **not** claim subagent dispatch.
 
 ## Codex-only context
@@ -17,8 +19,9 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an
 
 1. Read `mstar-harness-core`.
 2. Read `mstar-host` and this Codex reference.
-3. Load `mstar-roles` and the active role reference.
-4. Load topic skills on demand per the role reference.
+3. If Plan Mode or Goal Mode is active, read `codex-plan-goal-mode-bridge.md`.
+4. Load `mstar-roles` and the active role reference.
+5. Load topic skills on demand per the role reference.
 
 Use skill names in prompts and references. Avoid absolute local paths unless the user is maintaining this repository or the skill is not installed and must be read from the checkout.
 
@@ -28,6 +31,7 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 - If a structured user-input tool is available in the active mode, use it for concise 1-3 choice decisions.
 - Otherwise ask one concise Markdown question only after codebase exploration cannot answer it.
 - `update_plan` / local todo UI is session progress only; it does not replace `{PLAN_DIR}` plans or `{HARNESS_DIR}/status.json`.
+- Codex Goal Mode objective is completion criteria for the host thread, not Morning Star Done authority; mirror it into the SSOT plan when the work is implementation-sized.
 
 ## Dispatch and role execution
 
@@ -54,4 +58,4 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 
 - Codex plugin install gives skills; Morning Star role subagents require custom agent TOML files linked from `codex/agents/`.
 - Tool discovery (`tool_search`) can reveal capabilities, but availability is not authorization; Assignment `Delegation` still controls use.
-- Session plans, chat summaries, and UI todos are not durable harness SSOT unless mirrored to `{HARNESS_DIR}`.
+- Session plans, Goal Mode text, chat summaries, and UI todos are not durable harness SSOT unless mirrored to `{HARNESS_DIR}`.

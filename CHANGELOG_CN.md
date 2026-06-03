@@ -1,16 +1,26 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.6**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.7**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.6** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.7** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.6** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.6** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.6** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.7** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.7** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.7** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.7] - 2026-06-03
+
+### Harness（skills / agents）
+
+- 新增 Codex Plan / Goal Mode bridge reference，明确 `/plan`、`update_plan`、`/goal`、goal progress 与 thread summary 不能替代 `.mstar/` SSOT 或 Morning Star Done 权限。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.6 → 0.6.7**。**`@mstar-harness/cli` 保持 0.5.0**。
 
 ## [0.6.6] - 2026-06-03
 

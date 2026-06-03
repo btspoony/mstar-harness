@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.7
+
+- Bundled skills: Codex Plan / Goal Mode bridge for keeping `/plan`, `update_plan`, `/goal`, and goal progress aligned with `.mstar/` SSOT.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.7**.
+
 ## 0.6.6
 
 - Bundled skills/agents: Codex custom-agent source files, `.mstar/` harness defaults, and updated host install docs.

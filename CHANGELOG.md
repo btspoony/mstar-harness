@@ -2,17 +2,27 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.6** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.7** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.6** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.7** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.6** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.6** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.6** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.7** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.7** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.7** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.7] - 2026-06-03
+
+### Harness (skills / agents)
+
+- Add a Codex Plan / Goal Mode bridge reference so `/plan`, `update_plan`, `/goal`, goal progress, and thread summaries cannot replace `.mstar/` SSOT or Morning Star Done authority.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.6 → 0.6.7**. **`@mstar-harness/cli` remains 0.5.0**.
 
 ## [0.6.6] - 2026-06-03
 
