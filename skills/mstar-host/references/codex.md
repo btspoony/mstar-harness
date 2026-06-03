@@ -1,6 +1,6 @@
 # Codex host reference
 
-Load when **`mstar-host`** detection resolves **codex** (Codex app/CLI session, Codex plugin installed from `.codex-plugin/plugin.json`, or Codex tool namespaces such as `functions.*`, `codex_app.*`, `tool_search`, `image_gen`, or Browser plugin tools).
+Load when **`mstar-host`** detection resolves **codex** (Codex app/CLI session, Codex plugin installed from `.codex-plugin/plugin.json`, Codex custom agents linked from `codex/agents/*.toml`, or Codex tool namespaces such as `functions.*`, `codex_app.*`, `tool_search`, `image_gen`, or Browser plugin tools).
 
 Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an actual multi-agent / Task-style invocation tool. If no callable invoke tool exists, Assignment Markdown is coordination text only; do **not** claim subagent dispatch.
 
@@ -8,8 +8,9 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an
 
 - Plugin source: `.codex-plugin/plugin.json`.
 - Runtime skills: repo `skills/` mounted by the Codex plugin (`"skills": "./skills/"`).
+- Custom agent source: repo `codex/agents/*.toml`; CLI/manual install links these into `~/.codex/agents/` or project `.codex/agents/`.
 - `/pm`: shared force entry via the `pm` skill; after that, role behavior comes from `mstar-roles`.
-- Role files under `agents/` are for hosts that load agent shells; Codex role execution should load `mstar-roles` references directly.
+- Role files under root `agents/` are for hosts that load OpenCode/Cursor-style agent shells; Codex uses `codex/agents/*.toml` and still loads `mstar-roles` references directly.
 - Tool and plugin availability can be lazy-loaded or session-dependent. Use the tools actually present in the current session; do not infer capability from documentation alone.
 
 ## Skill loading
@@ -30,8 +31,8 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 
 ## Dispatch and role execution
 
-- **No invoke tool = no dispatch**: printing `## Assignment` does not start another Codex worker.
-- If Codex exposes multi-agent tools, PM may dispatch through those tools and must follow `parallel-dispatch.md`.
+- **No invoke tool / no linked custom agent = no dispatch**: printing `## Assignment` does not start another Codex worker.
+- If Codex exposes custom-agent / multi-agent tools and matching Morning Star agents are linked, PM may dispatch through those tools and must follow `parallel-dispatch.md`.
 - If no invoke tool is present, use single-session role execution: state the active role, load that role reference, complete the assignment, and return Completion Report v2.
 - QC tri-review is only "parallel" when three distinct callable reviewer sessions are actually launched in one dispatch turn. Without that, run a clearly labeled serial/manual review path or return `Blocked` for PM rerouting.
 - Leaf executors still follow `mstar-dispatch-gates`: no recursive Task/subagent calls unless Assignment says `Delegation: allowed (...)`.
@@ -51,6 +52,6 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 
 ## Gotchas
 
-- Codex plugin install gives skills, not automatic OpenCode-style named role invocations.
+- Codex plugin install gives skills; Morning Star role subagents require custom agent TOML files linked from `codex/agents/`.
 - Tool discovery (`tool_search`) can reveal capabilities, but availability is not authorization; Assignment `Delegation` still controls use.
 - Session plans, chat summaries, and UI todos are not durable harness SSOT unless mirrored to `{HARNESS_DIR}`.
