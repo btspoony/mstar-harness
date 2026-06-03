@@ -22,7 +22,7 @@ Use this sequence for the quickest user flow.
 
 ### Cursor
 
-1) Install plugin to project (default scope):
+1) Install plugin to project (default scope). The CLI maintains `~/.mstar/harness` and symlinks `.cursor/plugins/mstar-harness` to it:
 
 - `npx @mstar-harness/cli init --target cursor`
 
@@ -32,15 +32,15 @@ Use this sequence for the quickest user flow.
 
 ### Codex
 
-1) Add Morning Star to the personal Codex marketplace metadata:
+1) Add Morning Star to the Codex marketplace metadata and link Codex custom agents. The CLI maintains `~/.mstar/harness`:
 
-- `npx @mstar-harness/cli init --target codex`
+- `npx @mstar-harness/cli init --target codex --scope global`
 
 2) Install from that marketplace:
 
 - `codex plugin add morning-star-harness --marketplace personal`
 
-3) Verify marketplace metadata:
+3) Verify marketplace metadata and agent symlinks:
 
 - `npx @mstar-harness/cli doctor --target codex`
 
@@ -74,19 +74,22 @@ Dry-run preview (no file write):
 
 Cursor install:
 
-- Global install (clone to `~/.cursor/plugins/local/mstar-harness`):
+- Global install (symlink at `~/.cursor/plugins/local/mstar-harness`; shared checkout at `~/.mstar/harness`):
   - `npx @mstar-harness/cli init --target cursor --scope global`
-- Project install (git submodule at `.cursor/plugins/mstar-harness`):
+- Project install (symlink at `.cursor/plugins/mstar-harness`; the CLI adds it to `.gitignore`):
   - `npx @mstar-harness/cli init --target cursor --scope project`
 
 Codex install:
 
-- Personal marketplace metadata:
-  - `npx @mstar-harness/cli init --target codex`
+- Global personal marketplace + custom agents:
+  - `npx @mstar-harness/cli init --target codex --scope global`
+- Project marketplace + custom agents:
+  - `npx @mstar-harness/cli init --target codex --scope project`
 - Then install the plugin:
   - `codex plugin add morning-star-harness --marketplace personal`
 - Runtime host behavior after install:
   - `/pm` enters the shared PM flow.
+  - Codex custom agents are linked from `~/.mstar/harness/codex/agents/*.toml`.
   - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in `skills/mstar-host/references/codex.md`.
 
 ### `mstar-harness doctor`
@@ -109,21 +112,28 @@ OpenCode `init` enforces these baseline requirements in `opencode.json`:
 - `plugin` contains `@mstar-harness/opencode@latest` (legacy `morning-star@git+…` lines for `btspoony/mstar-harness` are stripped on init, including URLs without `.git`, `ssh://`, or `#tag`)
 - all Morning Star roles have `agent.<role>.model`
 
-Codex `init` writes or updates the personal marketplace metadata at
-`~/.agents/plugins/marketplace.json` with a URL-source entry:
+Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/harness`, then create target-specific symlinks.
+
+Cursor `init`:
+
+- global: `~/.cursor/plugins/local/mstar-harness -> ~/.mstar/harness`
+- project: `.cursor/plugins/mstar-harness -> ~/.mstar/harness` and `.gitignore` entry
+
+Codex `init` writes or updates marketplace metadata with a local-source entry:
 
 - `name`: `morning-star-harness`
-- `source.source`: `url`
-- `source.url`: `https://github.com/btspoony/mstar-harness.git`
-- `source.ref`: `main`
+- `source.source`: `local`
+- `source.path`: `./.mstar/harness` for global scope, `./.codex/plugins/mstar-harness` for project scope
 - `policy.installation`: `AVAILABLE`
 - `policy.authentication`: `ON_INSTALL`
+
+Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope also links `.codex/plugins/mstar-harness -> ~/.mstar/harness` and adds `.codex/plugins/mstar-harness` plus `.codex/agents/*.toml` to `.gitignore`.
 
 ## What `doctor` Checks
 
 - Same schema, role models, and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
-- For Codex, `doctor` checks that the personal marketplace file exists and contains the Morning Star URL-source entry.
+- For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks.
 
 ## Options Reference
 

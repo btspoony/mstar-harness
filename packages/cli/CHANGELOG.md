@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## Unreleased
+
+- maintain a shared local harness checkout at `~/.mstar/harness` for Cursor and Codex install flows
+- change Cursor global/project installs to symlink host plugin paths to `~/.mstar/harness`
+- change Codex installs to local-source marketplace entries and symlink `codex/agents/*.toml` into global/project Codex agent directories
+- validate the local repo, marketplace entry, and Codex agent symlinks in `doctor --target codex`
+
 ## 0.4.0
 
 - add `codex` target support in `init` and `doctor`

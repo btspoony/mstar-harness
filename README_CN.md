@@ -33,6 +33,7 @@
   - Codex：
     - `npx @mstar-harness/cli init --target codex`
     - `codex plugin add morning-star-harness --marketplace personal`
+- Cursor 与 Codex 安装共享长期维护的本地 checkout：`~/.mstar/harness`；各宿主的 plugin / agent 入口通过软链接指向该目录。
 
 完整 CLI 用法和高级参数（`--yes`、`--dry-run`、`--output`、`doctor`），以及 Cursor / Codex target 的安装模式说明，见 [`docs/cli.md`](docs/cli.md)。
 
@@ -64,14 +65,17 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 
 #### Cursor
 
-- 本地插件安装（直接 clone）：
+- 本地插件安装：
+  - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
   - `mkdir -p ~/.cursor/plugins/local`
-  - `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/mstar-harness`
+  - `ln -s ~/.mstar/harness ~/.cursor/plugins/local/mstar-harness`
   - 重启 Cursor 或运行 `Developer: Reload Window`
 
 #### Codex
 
 - Personal marketplace 安装（不使用 CLI）：
+  - clone 或更新长期本地 checkout：
+    - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
   - 创建或更新 `~/.agents/plugins/marketplace.json`：
     ```json
     {
@@ -83,9 +87,8 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
         {
           "name": "morning-star-harness",
           "source": {
-            "source": "url",
-            "url": "https://github.com/btspoony/mstar-harness.git",
-            "ref": "main"
+            "source": "local",
+            "path": "./.mstar/harness"
           },
           "policy": {
             "installation": "AVAILABLE",
@@ -98,9 +101,13 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
     ```
   - 安装插件：
     - `codex plugin add morning-star-harness --marketplace personal`
+  - 链接 Codex custom agents：
+    - `mkdir -p ~/.codex/agents`
+    - `ln -s ~/.mstar/harness/codex/agents/*.toml ~/.codex/agents/`
 - 本仓库也是 **Morning Star Harness Codex 插件源码**：
   - 插件 manifest：`.codex-plugin/plugin.json`
   - 运行时 skills：`skills/`
+  - Codex custom agents：`codex/agents/`
   - Codex 运行时适配：`skills/mstar-host/references/codex.md`
 
 ## 使用方式
@@ -108,7 +115,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 - **OpenCode**：以 `Project Manager` 角色开局（对应 `agents/project-manager.md`，通常是 `opencode.json` 里的 `agent.project-manager`）。
 - **Cursor**：使用 `/pm` 强制以 `Project Manager` 角色启动。
 - **Codex**：安装插件后，使用 `/pm` 强制以 `Project Manager` 角色启动。
-  Codex 会加载共享 skills，但角色派发取决于当前会话实际可用的工具；不要默认假设存在 OpenCode 式 named role invoke。
+  CLI / 手动安装链接 `codex/agents/` 后，Codex 可通过 custom agents 执行 Morning Star 角色派发。
 
 ## 角色与技能总览
 
@@ -149,6 +156,8 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 | `pm` | Cursor 与 Codex 共享的 `/pm` 强制入口 |
 
 维护者：进行中的 spec/plan 可放在 **`.harness/`**（gitignore，非发布 skill 树）。
+
+项目计划工件默认使用 **`.mstar/`**（`{HARNESS_DIR}`），同时继续识别既有 `.agents/` / `.plans/` / `plans/` 布局。
 
 ## Harness Workflow（统一流程）
 

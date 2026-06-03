@@ -33,6 +33,7 @@ Core value:
   - Codex:
     - `npx @mstar-harness/cli init --target codex`
     - `codex plugin add morning-star-harness --marketplace personal`
+- Cursor and Codex installs share a maintained local checkout at `~/.mstar/harness`; target-specific plugin and agent paths are symlinked to that checkout.
 
 For full CLI usage and advanced options (`--yes`, `--dry-run`, `--output`, `doctor`) including Cursor and Codex target install modes, see [`docs/cli.md`](docs/cli.md).
 
@@ -64,14 +65,17 @@ For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
 
 #### Cursor
 
-- Local plugin install (direct clone):
+- Local plugin install:
+  - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
   - `mkdir -p ~/.cursor/plugins/local`
-  - `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/mstar-harness`
+  - `ln -s ~/.mstar/harness ~/.cursor/plugins/local/mstar-harness`
   - Restart Cursor or run `Developer: Reload Window`
 
 #### Codex
 
 - Personal marketplace install (without the CLI):
+  - Clone or update the maintained local checkout:
+    - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
   - Create or update `~/.agents/plugins/marketplace.json`:
     ```json
     {
@@ -83,9 +87,8 @@ For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
         {
           "name": "morning-star-harness",
           "source": {
-            "source": "url",
-            "url": "https://github.com/btspoony/mstar-harness.git",
-            "ref": "main"
+            "source": "local",
+            "path": "./.mstar/harness"
           },
           "policy": {
             "installation": "AVAILABLE",
@@ -98,9 +101,13 @@ For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
     ```
   - Install the plugin:
     - `codex plugin add morning-star-harness --marketplace personal`
+  - Link Codex custom agents:
+    - `mkdir -p ~/.codex/agents`
+    - `ln -s ~/.mstar/harness/codex/agents/*.toml ~/.codex/agents/`
 - This repository is also the **Morning Star Harness Codex plugin source**:
   - Plugin manifest: `.codex-plugin/plugin.json`
   - Runtime skills: `skills/`
+  - Codex custom agents: `codex/agents/`
   - Codex runtime adaptation: `skills/mstar-host/references/codex.md`
 
 That completes installation.
@@ -110,7 +117,7 @@ That completes installation.
 - **OpenCode**: start with the `Project Manager` role (`agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`).
 - **Cursor**: use `/pm` to force-start with the `Project Manager` role.
 - **Codex**: use `/pm` to force-start with the `Project Manager` role after installing the plugin.
-  Codex loads shared skills, but role dispatch depends on the tools available in the active session; no OpenCode-style named role invoke is assumed.
+  Codex loads shared skills and custom agents from `codex/agents/` when linked by the CLI/manual install.
 
 ## Harness Workflow
 
@@ -178,6 +185,8 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-superpowers-align` | Alignment and conflict handling with Superpowers |
 
 Maintainers: in-repo design notes under **`.harness/`** (gitignored) for specs/plans during harness work — not the published skill tree.
+
+Project plan artifacts default to **`.mstar/`** (`{HARNESS_DIR}`), with existing `.agents/` / `.plans/` / `plans/` layouts still recognized for compatibility.
 
 ## License
 
