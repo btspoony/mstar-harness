@@ -79,9 +79,11 @@ Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursi
 
 | role_id | reviewer_index | focus | report_suffix |
 | --- | --- | --- | --- |
-| `qc-specialist` | `1` | Architecture coherence and maintainability risk | `qc1` |
-| `qc-specialist-2` | `2` | Security and correctness risk | `qc2` |
-| `qc-specialist-3` | `3` | Performance and reliability risk | `qc3` |
+| `qc-specialist` | `1` | Architecture coherence and maintainability risk | `qc1` → `{PLAN_DIR}/reports/<plan-id>/qc1.md` |
+| `qc-specialist-2` | `2` | Security and correctness risk | `qc2` → `…/qc2.md` |
+| `qc-specialist-3` | `3` | Performance and reliability risk | `qc3` → `…/qc3.md` |
+
+PM consolidated: `…/qc-consolidated.md` (same folder; no `<plan-id>` basename prefix). Naming SSOT: `mstar-plan-artifacts/references/plan-files-and-reports.md`.
 
 ## Maintenance Rules
 

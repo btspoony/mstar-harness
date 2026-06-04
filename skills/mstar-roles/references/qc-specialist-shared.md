@@ -37,7 +37,7 @@ Your output is a structured QC report plus completion report.
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of improvising:
 
-- **NEVER** invoke another QC seat (`qc-specialist` / `qc-specialist-2` / `qc-specialist-3`) or `{role_id}` again, nor `qa-engineer` / dev / `architect` / `project-manager`, to “split” **this** review unless `Delegation: allowed (...)` lists them. PM launches tri-review with **three** separate assignments/invokes.
+- **NEVER** invoke another QC seat (`qc-specialist` / `qc-specialist-2` / `qc-specialist-3`) or `{role_id}` again, nor `qa-engineer` / dev / `architect` / `project-manager`, to “split” **this** review unless `Delegation: allowed (...)` lists them. PM launches **initial** tri-review with **three** separate assignments/invokes; **targeted re-review** lists only the seats PM assigned.
 - **NEVER** ask the user for permission to submit a report, present “notify PM?” choosers, or stall after a completed review—when requirements are met, emit **Completion Report v2** in the **same** assistant turn (with a real **Git** line when commits are required).
 - **NEVER** modify business implementation/tests, `{HARNESS_DIR}/status.json` residual lifecycle fields, `{HARNESS_DIR}/archived/`, or any path outside the host write whitelist for QC (typically `{PLAN_DIR}/reports/**/*.md` only).
 - **NEVER** `git add .` or stage unrelated paths when committing QC reports—stage **only** the report files you changed.
@@ -81,6 +81,21 @@ Use severity and formatting standards from `mstar-review-qc`; machine `severity`
 - **NEVER** emit `Approve` while any unresolved `Critical` finding remains (per `mstar-review-qc`).
 - **NEVER** emit `Approve` while unresolved `Warning` findings remain when the review template marks them mandatory to resolve before approval.
 - **NEVER** skip required static checks, security scans, or diff review steps called out in the assignment and then claim `Approve`.
+
+## Report path (required)
+
+Write under **`{PLAN_DIR}/reports/<plan-id>/`** using basename **`{report_suffix}.md`** (e.g. `qc1.md`, `qc2.md`, `qc3.md`). **Do not** prefix the filename with `<plan-id>` — the folder already scopes the plan. PM consolidated report: **`qc-consolidated.md`** in the same directory.
+
+## Targeted re-review (same report file)
+
+When Assignment includes **`QC re-review: targeted`** (or lists you among targeted reviewers after a fix round):
+
+- **Edit the same** `{PLAN_DIR}/reports/<plan-id>/{report_suffix}.md` — do **not** create `qc1-rev2.md` siblings on this path.
+- Add **`## Revalidation`**: what was re-checked, evidence (diff/tests), per-finding disposition (resolved / still open).
+- Update frontmatter **`verdict`** and **`generated_at`**; keep **`reviewer_index`** unchanged.
+- Commit **only** that report path; Completion Report cites the same artifact path as wave 1.
+
+Full tri re-review (`QC re-review: full tri-review`) uses **new** filenames per `mstar-plan-artifacts/references/plan-files-and-reports.md`.
 
 ## QC Report Frontmatter (Required)
 

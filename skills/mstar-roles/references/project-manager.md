@@ -238,7 +238,7 @@ PM must:
 
 - Dispatch QC with aligned scope fields
 - Consolidate to one gate verdict
-- Assign fixes and run revalidation loop
+- Assign fixes; default **targeted QC re-review** (same `qcN.md` under `reports/<plan-id>/`); full tri only when Assignment says `QC re-review: full tri-review`
 - Record non-blocking leftovers as residual findings
 - Keep open vs archived residual state coherent at closure
 - Sync plan/status in the same coordination round

@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.7** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.8** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.7** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.8** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.7** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.7** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.7** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.8** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.8** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.8** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.8] - 2026-06-04
+
+### Harness (skills / agents)
+
+- **QC fix-round revalidation (default)**: After dev fixes blocking findings, PM dispatches only the QC seat(s) that raised each item (**targeted re-review**), not a blind full tri-review. Reviewers update the **same** report file in place (`## Revalidation`); PM updates the same `qc-consolidated.md`. Full tri re-review requires explicit Assignment `QC re-review: full tri-review` and new `qcN-rev2.md` basenames.
+- **QC report naming**: Under `{PLAN_DIR}/reports/<plan-id>/`, use short basenames `qc1.md`, `qc2.md`, `qc3.md`, and `qc-consolidated.md` (no `<plan-id>` prefix in filenames; `plan_id` stays in frontmatter and the directory). SSOT: `mstar-plan-artifacts/references/plan-files-and-reports.md`.
+- **Dispatch**: `mstar-dispatch-gates` and `mstar-host` parallel-dispatch allow **N = 1–3** invokes for targeted re-review in one message; initial tri-review remains **N = 3**.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.7 → 0.6.8**. **`@mstar-harness/cli` remains 0.5.0**.
 
 ## [0.6.7] - 2026-06-03
 
