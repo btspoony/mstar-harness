@@ -27,16 +27,22 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 - Dual-track implement: **`N = 2` ⇒ two invocations in one message** when parallel is required.
 - Status Update on dispatch turns: **`Subagent invokes issued: N`** (must match Assignment count). If Assignments were written but `N = 0` → **`dispatch failed — paste-only`**; fix next message.
 
-## QC tri-review
+## QC tri-review (initial wave)
 
-- Launch `qc-specialist`, `qc-specialist-2`, `qc-specialist-3` in **one** dispatch turn (**3** invocations, one message).
+- Launch `qc-specialist`, `qc-specialist-2`, `qc-specialist-3` in **one** dispatch turn (**N=3** invocations, one message).
 - Do not claim parallel QC unless all three were issued in that turn.
 - Post-dispatch: verify three distinct agent IDs and intended model mapping; on mismatch → invalid dispatch, re-dispatch before consolidation.
+
+## QC targeted re-review (after fixes)
+
+- Assignment: **`QC re-review: targeted — reviewers: <role-ids>`** → **N** = listed seats only (1–3), **one** dispatch turn with **N** invocations.
+- Do **not** default to three invocations after a routine fix round.
+- Post-dispatch: verify only **dispatched** seats returned; PM updates same `qc-consolidated.md` (see `mstar-plan-artifacts/references/plan-files-and-reports.md`).
 
 ## Self-check before send
 
 1. Required assignments this turn? (`N`)
 2. Prerequisite-only message? → **zero** batch dispatches unless `N = 1`.
 3. Dispatch message contains **exactly `N`** invocation calls?
-4. QC tri-review → **exactly 3** in one dispatch message?
+4. QC initial tri-review → **exactly 3** in one dispatch message? Targeted re-review → **N** = Assignment reviewer count?
 5. Previous message was prerequisite-only → this message must include **all `N`** (not “QC1 first”).

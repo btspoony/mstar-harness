@@ -102,7 +102,7 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 
 ## Plan 目录与审查报告（启用 `{PLAN_DIR}` 时）
 
-- 进入 `InReview` 后，QC 书面产出按 `mstar-plan-conventions` 落入 `{PLAN_DIR}/reports/<plan-id>/`（如 `*-qc1.md` … `*-qc-consolidated.md`）；勿与主 plan 文件混写为「唯一草稿」后又删，保留可追溯历史。**多 batch 的同一 plan**：完整 QC 三审**默认在整 plan dev 完成后一次**（非每 batch），见 `mstar-plan-conventions`「QC 三审触发时机」。
+- 进入 `InReview` 后，QC 书面产出落入 `{PLAN_DIR}/reports/<plan-id>/`（如 `qc1.md` … `qc-consolidated.md`）；**fix 后默认 targeted re-review**（原位更新同文件，不默认 `-rev2`），见 **`mstar-plan-artifacts/references/plan-files-and-reports.md`**。**多 batch**：完整三审**默认在整 plan dev 完成后一次**（非每 batch）。
 - 非阻断项与后续技术债：PM 汇总后写入 `{HARNESS_DIR}/status.json` 根级 `residual_findings[<plan-id>]`（**open**，与 `plans` 平级；canonical 见 **`mstar-plan-artifacts` SKILL.md**）；关闭后迁入 `{HARNESS_DIR}/archived/residuals/<plan-id>.json`，与 `mstar-review-qc` 一致。每条 **`severity`** 遵守 **`mstar-plan-artifacts/references/status-and-residuals.md`**「Residual findings：severity（SSOT，机器字段）」。
 
 ## 快速判定（PM）

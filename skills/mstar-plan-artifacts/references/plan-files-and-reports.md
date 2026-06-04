@@ -10,16 +10,18 @@
 
 **审查报告文件**（置于 `{PLAN_DIR}/reports/<plan-id>/`）：
 
-| 类型 | 文件名 |
+**QC basename rule**：目录名已是 `<plan-id>` — **do not** repeat it in report filenames. Put `plan_id` in YAML frontmatter only.
+
+| 类型 | 文件名（相对 `reports/<plan-id>/`） |
 |------|--------|
-| 架构/设计评审 | `<plan-id>-review.md` |
-| QC 并行报告 | `<plan-id>-qc1.md`、`-qc2.md`、`-qc3.md` |
-| QC 汇总结论 | `<plan-id>-qc-consolidated.md` |
+| 架构/设计评审 | `<plan-id>-review.md`（或团队约定的 `review.md`） |
+| QC 并行报告 | `qc1.md`、`qc2.md`、`qc3.md`（与 `mstar-roles` `{report_suffix}` 一致） |
+| QC 汇总结论 | `qc-consolidated.md` |
 
 ## QC 分报告与 consolidated：可否只留一份？
 
-- **不要删除** `<plan-id>-qc1.md`、`-qc2.md`、`-qc3.md`**只因为**已写入 `<plan-id>-qc-consolidated.md`。`reports/` 在此约定下是**只读历史 / 审计链**：分 reviewer 原文保留**证据出处、分歧与独立视角**；**consolidated** 是 PM 的**门控摘要**，二者**叠加**，**不互为替代**。
-- **极窄例外**（须团队显式采纳并承担审计缺口）：例如仓库体积极敏感时，仅保留 consolidated + 指向外部归档的链接——**不在**本默认 harness 中推荐；默认仍保留三份 `-qc*.md`。
+- **不要删除** `qc1.md`、`qc2.md`、`qc3.md` **只因为**已写入 `qc-consolidated.md`。`reports/<plan-id>/` 是**审计链**：分 reviewer 原文保留**证据出处、分歧与独立视角**；**consolidated** 是 PM 的**门控摘要**，二者**叠加**，**不互为替代**。
+- **极窄例外**（须团队显式采纳并承担审计缺口）：例如仓库体积极敏感时，仅保留 consolidated + 指向外部归档的链接——**不在**本默认 harness 中推荐；默认仍保留三份 `qc*.md`。
 
 ## Residual findings（R#）：权威在哪、和主 plan 谁先谁后？
 
@@ -34,8 +36,9 @@
 
 - **默认（推荐）**：同一 **`plan_id`** 下，**完整 QC 三审**（`qc1` + `qc2` + `qc3` 并行）**仅在 dev team 按该 plan 约定范围全部交付之后**执行**一次**，再进入 `@project-manager` 汇总与 `@qa-engineer` 验证。**不要**在每个中间 **batch** / 子里程碑都跑全套三审：否则 `reports/<plan-id>/` 会堆积多套并列报告，**`Review range` / `Diff basis` 与结论**易混淆，handoff 成本高。
 - **batch 之间**：依赖实现方 **`verification-before-completion`**、主 plan 任务勾选与 PM 协调；需要书面中间意见时，用对话、主 plan 批注或**非三审**的定向检查（如单审、架构 review），**不**默认等同「又一轮完整三审」。
-- **Request Changes 后复验**：若须再跑一轮完整三审，使用**新文件名**落盘，避免覆盖首轮报告，例如 `<plan-id>-qc1-rev2.md` … `<plan-id>-qc3-rev2.md`（或团队约定的 `wave2-` 前缀）；`@project-manager` 在 `QC Consolidated Decision` 中写明**当前以哪一波次为准**。
-- **显式例外**：仅当用户与 PM 书面同意**中间门禁**时，在 Assignment 写清 **`QC gate: incremental — <scope>`**（或等价），并仍须保证该次三审的 **`plan_id` + `Review range` / `Diff basis`** 三份一致；**优先**用子范围专用标签或子目录，避免与「整 plan 终局」那套 `-qc*.md` 混名。
+- **After `Request Changes` (default — targeted re-review)**：PM maps each **blocking** finding to the QC seat that raised it (`source` on R#, consolidated table, or the originating `qcN.md` / `F-###`). Dispatch **only** those reviewers (`QC re-review: targeted — reviewers: qc-specialist, qc-specialist-2, …`). Each re-reviewing QC **updates the same** `qc1.md` / `qc2.md` / `qc3.md` in place (add `## Revalidation`, refresh verdict / `generated_at`); **do not** add `qc1-rev2.md` siblings on this path. PM **updates the same** `qc-consolidated.md` in place. Git history is the audit trail.
+- **Full tri re-review (exception)**：Only when Assignment states **`QC re-review: full tri-review`**. Run **three** parallel reviews again; use **new basenames** (`qc1-rev2.md` … `qc3-rev2.md`, `qc-consolidated-rev2.md`) so wave-1 files stay immutable; PM states **active wave** in consolidated decision. See `mstar-review-qc` · `mstar-dispatch-gates`.
+- **显式例外**：仅当用户与 PM 书面同意**中间门禁**时，在 Assignment 写清 **`QC gate: incremental — <scope>`**（或等价），并仍须保证该次三审的 **`plan_id` + `Review range` / `Diff basis`** 三份一致；**优先**用子范围子目录，避免与终局 `qc1..3.md` 混名。
 - **同仓多 worktree 并行 dev**：**推荐**在排各 batch / 各轨 worktree 前确立 **plan 集成分支** 与各轨 topic 线及 **merge 靶**（见 `mstar-branch-worktree` **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**）。**多 `plan_id` 同属一条 `primary_spec`（Spec 文档）时**：该「集成分支」在计划语义上即 **Spec 集成分支**；各 Plan 的 topic 分支 **merge 回 Spec 集成分支**，**全部 Plans 完成后** 合入 `main`/`master` **须走 PR**，见 `mstar-plan-conventions` SKILL.md **「Spec 文档驱动的分支模型」**。终局（或增量）三审派单前，PM 仍须满足 **单一待审 `Working branch` / `HEAD`** 或已按上条 **拆 scope**；**不得**假设「整 plan 一次三审」可只靠某一个开发 worktree 路径覆盖未合并的其他并行轨。
 
 ### 多 `plan_id` 同时 `InReview`（PM 编排）

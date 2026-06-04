@@ -71,7 +71,7 @@
 
 | 与相邻目录的分工                                  | 典型内容                                                                  |
 | ----------------------------------------- | --------------------------------------------------------------------- |
-| `**{PLAN_DIR}/reports/<plan-id>/**`       | QC / review **流程留档**（`-qc*.md`、consolidated 等），只读历史链                  |
+| `**{PLAN_DIR}/reports/<plan-id>/**`       | QC / review **流程留档**（`qc1.md` … `qc-consolidated.md` 等），只读历史链                  |
 | **本目录 `{PLAN_DIR}/residuals/<plan-id>/`** | 针对**仍 open** 的某一 R#：defer 背景、遗留原因、代码锚点、后续接手提示等**长文**                  |
 | `**{KNOWLEDGE_DIR}/**`            | 可跨 plan 复用的**实现向**设计上下文、规格修订、gap 分析（若文中顺带提到 residual，仍以 JSON + residuals 为跟踪权威） |
 | `**{ITERATION_DIR}/**`            | 迭代/版本级 compass；**不**替代 `{KNOWLEDGE_DIR}` 中的跨版本 SSOT |

@@ -123,6 +123,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 反模式 | 详见 |
 |--------|------|
 | QC 串行 rollout / dispatch incomplete | `mstar-dispatch-gates` |
+| fix 后无脑重派三审 / 用 `-rev2` 代替原位复验 | `mstar-plan-artifacts` · `mstar-review-qc` |
 | 递归误派 / 误读 Handoff | `mstar-dispatch-gates` |
 | `quick` 跳过 Prepare | 上表 + `mstar-phase-gates` |
 | 多 worktree 未归并就 QC | `mstar-branch-worktree` |

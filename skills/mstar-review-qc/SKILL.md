@@ -1,6 +1,6 @@
 ---
 name: mstar-review-qc
-description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 三名 QC reviewer 的共享审查工作流、代码质量/安全正确性/性能可靠/可维护性清单、标准审查报告 Markdown 模板（YAML frontmatter + Findings 三档 + Source Trace + Summary + Verdict）、QC 三审分派时机（与 plan-batch 对齐）、高危变更（运维/数据/生产）最小检查、门禁规则（Approve / Request Changes / Needs Discussion）、CI 门禁补充、Residual Findings 留档门禁与关闭验证。`@qc-specialist` / `@qc-specialist-2` / `@qc-specialist-3` 开工审查前必读；`@qa-engineer` 对同 feature 做验证前必读；`@project-manager` 派发 QC 三审或 high-risk 变更审查前必读；所有涉及 QC 报告、Residual 登记或门禁判定的角色都应该优先 Read 本 skill。
+description: Morning Star QC/QA review baseline — tri-review workflow, checklists, report template (YAML frontmatter + Findings + Verdict), reports at `reports/<plan-id>/qc1.md` (no plan-id prefix in basename), targeted re-review after fixes, full-tri `qcN-rev2.md` exception, residual gate. Use when `@qc-specialist*` review, `@qa-engineer` verifies, or `@project-manager` dispatches/consolidates QC.
 ---
 
 ## Load order（必读顺序）
@@ -17,16 +17,16 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 
 - **默认**：`@project-manager` 在 **该 plan 的实现范围已由 dev team 全部交付**、准备进入预合并门禁时，分派完整 QC 三审。**同一 `plan_id` 下多 batch 滚动实现时，不默认每 batch 跑一轮全套三审**（避免 `reports/<plan-id>/` 多套报告与范围串线）；中间阶段靠自检与 PM 协调，**显式增量三审**须在 Assignment 写明（见 `mstar-plan-conventions` `references/plan-files-and-reports.md`「QC 三审触发时机」）。
 - **同仓多 worktree 并行开发**：一轮 QC 三审仍只对应 **一套** `Review cwd` + `Working branch` + `Review range` / `Diff basis`（三票逐字相同）。若成果曾分布在 **未合并** 的多条分支或多个 `HEAD`，PM **须先**完成 Git 归并到 **单一**待审分支再派 QC；**不得**指望 reviewer 自行在多个开发 worktree 之间拼凑审查范围。**推荐** PM 在并行开发开始前已建立 **plan 集成分支** 作为各轨 merge 靶（见 `mstar-branch-worktree` 同节 **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**）。细则见 `mstar-branch-worktree` **「多 worktree 并行开发与 QC / QA 的门禁衔接」**。
-- **Request Changes 后**：再审为**新波次**，落盘用新文件名（如 `-rev2` / `wave2-`），PM 汇总时标明有效波次。
+- **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only QC seats that **raised** blocking findings for this fix round; each updates **the same** `{PLAN_DIR}/reports/<plan-id>/qcN.md` (e.g. `qc1.md` — no `<plan-id>` prefix in basename) (add `## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` files on this path. Artifact naming and PM consolidated updates → **`mstar-plan-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
+- **Full tri re-review (exception)**：Assignment must say **`QC re-review: full tri-review`**; then new basenames (`qc1-rev2.md` … `qc-consolidated-rev2.md`); PM marks **active wave** in consolidated decision.
 
 ## 三审身份与模型独立性门禁（PM 强制）
 
-在 PM 发出 QC 三审后、进入汇总前，必须先完成以下校验：
+在 PM 发出 **initial** QC 三审后、进入汇总前，必须先完成以下校验（**targeted re-review** 仅校验 Assignment 列出的席位）：
 
-- 三个实际运行会话的角色 ID 必须分别为 `qc-specialist`、`qc-specialist-2`、`qc-specialist-3`。
-- 三个会话的运行模型应与 `opencode.json` 的对应角色配置一致。
-- 若出现“Assignment 写的是 #2/#3，但实际拉起仍为 `qc-specialist`”或模型映射不符，判定为 `dispatch invalid`，不得进入 consolidated 结论，必须重派。
-- 若宿主故障导致三审退化为同模型且无法即时修复，需在 Status Update 明确标记 `degraded tri-review` 并请求用户确认是否继续（默认不放行）。
+- **Initial wave**：三个会话角色 ID 须分别为 `qc-specialist`、`qc-specialist-2`、`qc-specialist-3`；运行模型与 `opencode.json` 对应配置一致。
+- **Targeted re-review**：仅校验 Assignment 列出的席位；缺席或角色/模型映射错误 → `dispatch invalid`，重派。
+- 若宿主故障导致并行 QC 退化为同模型且无法即时修复，Status Update 标记 `degraded tri-review` 并请用户确认（默认不放行）。
 
 ## 共享基线（所有审查员）
 
@@ -82,7 +82,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 
 ## 标准输出模板
 
-落盘到 **`{PLAN_DIR}/reports/<plan-id>/<plan-id>-qc#.md`** 时：文件**最上方**须为 YAML frontmatter（`report_kind`、`reviewer`、`reviewer_index`、`plan_id`、`verdict`、`generated_at` 等，见 `agents/qc-specialist*.md`），**紧接着**再写下列 Markdown 正文（可将 **Reviewer Metadata** 与 frontmatter 对齐，避免矛盾）。**Findings 下三节标题**（Critical / Warning / Suggestion）为**人类可读分类**；PM 将条目写入根级 **`residual_findings`**（见 `mstar-plan-artifacts` **SKILL.md** 开篇）时的 **`severity` 机器字段**以 `mstar-plan-artifacts/references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」** 为准。
+落盘到 **`{PLAN_DIR}/reports/<plan-id>/qc#.md`**（`qc1.md` … `qc3.md`；目录已含 `plan_id`，文件名勿再加前缀）时：文件**最上方**须为 YAML frontmatter（`report_kind`、`reviewer`、`reviewer_index`、`plan_id`、`verdict`、`generated_at` 等，见 `agents/qc-specialist*.md`），**紧接着**再写下列 Markdown 正文（可将 **Reviewer Metadata** 与 frontmatter 对齐，避免矛盾）。**Findings 下三节标题**（Critical / Warning / Suggestion）为**人类可读分类**；PM 将条目写入根级 **`residual_findings`**（见 `mstar-plan-artifacts` **SKILL.md** 开篇）时的 **`severity` 机器字段**以 `mstar-plan-artifacts/references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」** 为准。
 
 ```markdown
 # Code Review Report
@@ -156,7 +156,7 @@ description: Morning Star (启明星) QC 审查基线与 QA 验证契约 —— 
 ## Residual Findings 留档门禁
 
 - 当阻断项（`Critical`）修复后仍有未关闭 **Warning / Suggestion** 类问题或技术债，不得仅在对话中口头说明，必须留档；登记 **`severity`** 时遵守 `mstar-plan-artifacts` `references/status-and-residuals.md` **「Residual findings：severity（SSOT，机器字段）」**。
-- **启用 plan 管理且存在 `plan-id` 时**：**待跟踪（open）** residual 的 **SSOT** 为 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-plan-artifacts` **SKILL.md** 开篇）；PM 在 consolidated 决策中分配 **稳定 `id`（R1…）** 后须**写入该数组**（`source` 指回 `-qc*.md` 等）。**已关闭**条目归档至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（字段与严重等级见 `mstar-plan-conventions`），与 **`{PLAN_DIR}/reports/<plan-id>/`** 交叉引用。
+- **启用 plan 管理且存在 `plan-id` 时**：**待跟踪（open）** residual 的 **SSOT** 为 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-plan-artifacts` **SKILL.md** 开篇）；PM 在 consolidated 决策中分配 **稳定 `id`（R1…）** 后须**写入该数组**（`source` 指回 `qc1.md` 等）。**已关闭**条目归档至 **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**（字段与严重等级见 `mstar-plan-conventions`），与 **`{PLAN_DIR}/reports/<plan-id>/`** 交叉引用。
 - **主 plan**：仅作**人类可读索引**（可选）——复述 `id` 与摘要并指向 **`{HARNESS_DIR}/status.json`**；**不得**作为与 SSOT 脱钩的唯一登记处（见 `mstar-plan-conventions` `references/plan-files-and-reports.md`「Residual findings：权威在哪」）。
 - 可选：`@project-manager` 维护 **`metadata.tech_debt_summary`** 作为跨 plan 聚合视图（与 `residual_findings` 互补，见 `mstar-plan-conventions`）。
 - 若无 `{PLAN_DIR}`：写入项目认可的进度载体或根级 `notes`（结构化条目），仍须含 `id` 与跟踪字段。

@@ -14,7 +14,11 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 3. Verify runtime identity/model mapping for three distinct QC roles.
 4. De-duplicate findings and resolve conflicts by evidence strength.
 5. Emit one consolidated gate decision.
-6. Assign fix owners when needed; send back to dev -> QC/QA revalidation.
+6. After dev fixes blocking items:
+   - **Default**: **Targeted QC re-review** — dispatch only QC seats that **raised** blocking findings (consolidated table, R# `source` e.g. `QC-#2` → `qc-specialist-2`, or originating `qcN.md` / `F-###`). Assignment: `QC re-review: targeted — reviewers: <role-ids>`. Same `plan_id` + `Review range` / `Diff basis` unless PM narrows to fix commits (must still be copy-pasteable for QA).
+   - Each targeted QC **edits the same** `qc1.md` / `qc2.md` / `qc3.md` (per seat); PM **edits the same** `qc-consolidated.md`. **Do not** re-dispatch all three by default.
+   - **Exception**: `QC re-review: full tri-review` → three parallel QC again + new `qc1-rev2.md` … files (see `mstar-plan-artifacts/references/plan-files-and-reports.md`).
+   - Then **QA** when the gate requires sign-off (same checkout fields as initial review).
 
 ## QC / Residual NEVER (PM)
 
@@ -22,7 +26,9 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 - **NEVER** register or rewrite residual `severity` values outside the machine enum in `mstar-plan-artifacts`.
 - **NEVER** drop residual tracking to chat-only when `Approve with residuals` applies—canonical open list lives under `{HARNESS_DIR}/status.json` `residual_findings[<plan-id>]`.
 - **NEVER** archive or delete open residual rows from `status.json` without the documented close + `{HARNESS_DIR}/archived/residuals/` workflow.
-- **NEVER** treat “two of three QC reports arrived” as sufficient for a parallel tri-review wave—missing reviewer => `Blocked` or explicit PM decision, not silent `Approve`.
+- **NEVER** treat “two of three QC reports arrived” as sufficient for a **full parallel tri-review wave**—missing reviewer => `Blocked` or explicit PM decision, not silent `Approve`.
+- **NEVER** re-dispatch all three QC reviewers after a routine fix round when only one or two seats had blocking findings—use **targeted re-review** unless Assignment declares **`QC re-review: full tri-review`**.
+- **NEVER** create `qc1-rev2.md` (etc.) for **targeted** re-review; update the original `qcN.md` in place.
 
 ## Consolidated Decision Template
 

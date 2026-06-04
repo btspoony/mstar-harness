@@ -40,7 +40,8 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**：
 
 - **工具并发**：同一调度轮次内，多个 subagent 调用须在**同一条 assistant 消息**里一次性发出（宿主允许时）。
-- **QC 三审硬门禁**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 须**同一条消息**全部发起；只发其中一个 = **`dispatch incomplete`**，不得写「三审已并行启动」。
+- **QC 三审硬门禁（initial wave）**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 须**同一条消息**全部发起（**N=3**）；只发其中一个 = **`dispatch incomplete`**，不得写「三审已并行启动」。
+- **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），仍须**同一条消息**发满 **N**；不得默认补满三人。
 - **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
 - **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
 - **未齐不发（emit zero until batch-ready）**：需并发 `N≥2` 而当前只能发 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
@@ -53,7 +54,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 - 独立模块可并行；避免写操作归属重叠；跨领域变更先锁接口契约再并行编码。
 - **QC 三审**在 feature 开发完成后执行；三名 reviewer 共用同一组 `Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`（**`mstar-branch-worktree`**）。
-- **同一 plan 多 batch**：默认整 plan 交付完成跑一轮完整三审；复验波次用新文件名（**`mstar-plan-artifacts`**、**`mstar-review-qc`**）。
+- **同一 plan 多 batch**：默认整 plan 交付完成跑一轮完整三审；**fix 后默认 targeted re-review**（N = 被指派的 QC 席位数，同条消息发满 N）；**仅** Assignment 写明 **`QC re-review: full tri-review`** 时复跑三审且用新文件名（**`mstar-plan-artifacts/references/plan-files-and-reports.md`**、**`mstar-review-qc`**）。
 
 ## 反模式（派发）
 
