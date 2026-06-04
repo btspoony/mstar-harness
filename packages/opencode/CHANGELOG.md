@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.8
+
+- Bundled skills: targeted QC re-review after fixes (owner seat only, in-place reports), short QC report basenames under `reports/<plan-id>/` (`qc1.md` …).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.8**.
+
 ## 0.6.7
 
 - Bundled skills: Codex Plan / Goal Mode bridge for keeping `/plan`, `update_plan`, `/goal`, and goal progress aligned with `.mstar/` SSOT.
