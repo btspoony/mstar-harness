@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.8** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.9** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.8** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.9** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.8** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.8** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.8** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.9** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.9** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.9** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.9] - 2026-06-09
+
+### Harness (skills / agents)
+
+- **`pm` (PM orchestration entry)**: Generalize beyond Cursor/Codex `/pm` only — **Cursor/Codex** use `/pm` as `project-manager` launcher and autonomous Execute driver; **OpenCode** switches to PM orchestration when the active agent is not `project-manager`.
+- **Autonomous Execute driver**: After Pre-implement **GO**, read `{HARNESS_DIR}/status.json` backlog, checkout the iteration **`spec_integration_branch`**, run per-plan **`create <plan-feature> from integration` → implement → QC/QA → merge back to integration** until all plans are `Done`; set host todos (Cursor `TodoWrite`, Codex `update_plan`, OpenCode UI) before each wave so session scope does not drift.
+- **`mstar-roles` (PM shell)**: Cross-reference updated to point at the new `pm` skill sections (host entry, Execute driver, dispatch-first).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.8 → 0.6.9**. **`@mstar-harness/cli` remains 0.5.0**.
 
 ## [0.6.8] - 2026-06-04
 
