@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.9** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.10** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.9** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.10** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.9** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.9** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.9** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.10** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.10** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.10** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.10] - 2026-06-11
+
+### Harness (skills / agents)
+
+- **Profile B Done compaction (`plans-done.json`)**: Canonical schema is now **`{ "plans": [<plan-id>, ...] }` only** — no rich catalog objects (`title`, `done_at`, `plan_file`, `archived_record`, etc.). Per-plan detail stays in `archived/plans/<plan-id>.json` (a single `plans[]` row snapshot). SSOT: `mstar-plan-artifacts/references/done-compaction.md`.
+- **Templates & bootstrap**: Add `templates/plans-done.empty.json`; document Profile B init in `mstar-plan-conventions` harness bootstrap and PM `plan-management.md`.
+- **Profile B constraints**: Disallow parallel indexes (`_index.json`, object-array catalogs); migrate legacy `plans-done.json` by rewriting to id list only.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.9 → 0.6.10**. **`@mstar-harness/cli` remains 0.5.0**.
 
 ## [0.6.9] - 2026-06-09
 

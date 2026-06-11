@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.10
+
+- Bundled skills: Profile B `archived/plans-done.json` schema is `{ "plans": [<plan-id>, ...] }` only; add `plans-done.empty.json` template and bootstrap/PM init notes.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.10**.
+
 ## 0.6.9
 
 - Bundled skills: universal `pm` orchestration entry (Cursor/Codex `/pm`, OpenCode PM role switch) and Autonomous Execute driver (`status.json` backlog, `spec_integration_branch`, per-plan feature branches, host todos).
