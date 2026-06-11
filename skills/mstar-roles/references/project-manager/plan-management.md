@@ -21,7 +21,8 @@ Legacy fallbacks:
 2. Initialize `{HARNESS_DIR}/status.json` from template if available.
 3. Initialize reports path: `{PLAN_DIR}/reports/`.
 4. Initialize residual archive path: `{HARNESS_DIR}/archived/residuals/`.
-5. Optional: `{HARNESS_DIR}/notes.json`, `{HARNESS_DIR}/knowledge/README.md`.
+5. **Profile B** only: `{HARNESS_DIR}/archived/plans/` and `archived/plans-done.json` from `mstar-plan-artifacts/templates/plans-done.empty.json` (`{ "plans": [] }` only; see `done-compaction.md`).
+6. Optional: `{HARNESS_DIR}/notes.json`, `{HARNESS_DIR}/knowledge/README.md`.
 
 If legacy plan directories already exist, reuse them; avoid dual-structure duplication.
 

@@ -15,10 +15,11 @@
 1. 创建 `{HARNESS_DIR}`（推荐 `.mstar/`）与 `{PLAN_DIR}`（推荐 `.mstar/plans/`）。
 2. 初始化 `status.json`：从 **`mstar-plan-artifacts/templates/status.empty.json`** 复制；residual canonical 见 **`mstar-plan-artifacts` SKILL.md**；字段与生命周期见 **`mstar-plan-artifacts/references/status-and-residuals.md`**。
 3. 初始化可选 `notes.json`（**`mstar-plan-artifacts/templates/notes.empty.json`**）与 `plans/reports/README.md`。
-4. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；内容边界见 `mstar-plan-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
-5. 创建 `{HARNESS_DIR}/AGENTS.md`（harness 子树规则）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 与 `docs/` 分工；新项目推荐 `.mstar/AGENTS.md`，已有项目可继续使用 `.agents/AGENTS.md`。
-6. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `{HARNESS_DIR}/AGENTS.md` 作为 harness SSOT。
-7. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。
+4. **Profile B**（统一 Done 压缩）时另建 `{HARNESS_DIR}/archived/plans/` 与 `archived/plans-done.json`（自 **`mstar-plan-artifacts/templates/plans-done.empty.json`** 复制；schema 仅 `{ "plans": [] }`，见 **`mstar-plan-artifacts/references/done-compaction.md`**）。
+5. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；内容边界见 `mstar-plan-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
+6. 创建 `{HARNESS_DIR}/AGENTS.md`（harness 子树规则）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 与 `docs/` 分工；新项目推荐 `.mstar/AGENTS.md`，已有项目可继续使用 `.agents/AGENTS.md`。
+7. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `{HARNESS_DIR}/AGENTS.md` 作为 harness SSOT。
+8. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。
 
 ## 三层 `AGENTS.md` 职责切分
 
@@ -29,7 +30,7 @@
 
 ### `{HARNESS_DIR}/AGENTS.md`（harness 层）
 
-- 放：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}` 契约、`docs/` 与 harness 子树内容边界、状态推进门禁、QC/QA 对齐规则、residual 生命周期、Done compaction profile。
+- 放：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}` 契约、`docs/` 与 harness 子树内容边界、状态推进门禁、QC/QA 对齐规则、residual 生命周期、Done compaction profile（Profile B 时声明 `archived/plans-done.json` 仅为 `{ "plans": [<plan-id>, ...] }`，细则见 **`mstar-plan-artifacts/references/done-compaction.md`**）。
 - 不放：语言/框架编码细节、业务模块实现约束。
 
 ### `<subdir>/AGENTS.md`（边界层）

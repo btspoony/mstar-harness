@@ -6,3 +6,4 @@ Copy these into `{HARNESS_DIR}` when bootstrapping a project. Path symbols (`{HA
 |------|---------|--------|
 | `status.empty.json` | `{HARNESS_DIR}/status.json` | Root `residual_findings` only (see **`mstar-plan-artifacts` SKILL.md**). Replace `updated_at` with the real date. |
 | `notes.empty.json` | `{HARNESS_DIR}/notes.json` | Optional program timeline. Replace `updated_at` when first edited. |
+| `plans-done.empty.json` | `{HARNESS_DIR}/archived/plans-done.json` | **Profile B only** — `{ "plans": [<plan-id>, ...] }` **only** (`references/done-compaction.md`). Append id on each `Done` compaction; no other keys or object elements. |

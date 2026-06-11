@@ -15,7 +15,7 @@ description: Morning Star plan harness artifacts — `{PLAN_DIR}` main plans and
 | knowledge / iterations / specs boundaries and indexes | `references/knowledge-and-designs.md` |
 | Done row compaction Profile A/B | `references/done-compaction.md` |
 | `status.json`, residual severity, lifecycle, `jq` | `references/status-and-residuals.md` |
-| Empty-repo `status.json` / `notes.json` templates | `templates/status.empty.json`, `templates/notes.empty.json` (`templates/README.md`) |
+| Empty-repo `status.json` / `notes.json` / Profile B `plans-done.json` templates | `templates/status.empty.json`, `templates/notes.empty.json`, `templates/plans-done.empty.json` (`templates/README.md`) |
 | Tech-debt rollup (read-only) | `scripts/tech-debt-rollup.sh` |
 
 **Out of scope:** branch and QC/QA checkout alignment → **`mstar-branch-worktree`**; QC checklist and verdict → **`mstar-review-qc`**; `{HARNESS_DIR}` discovery and init → **`mstar-plan-conventions`**.
