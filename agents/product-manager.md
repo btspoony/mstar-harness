@@ -1,4 +1,9 @@
 ---
+name: product-manager
+description: |-
+  产品经理 - 需求分析、产品规划、市场/用户研究与产品向文档编写。
+  Product Manager - requirements analysis, product planning, market/user research, and product-facing documentation.
+model: inherit
 mode: subagent
 tools:
   write: true
@@ -10,10 +15,6 @@ permission:
   task:
     "*": deny
     explore: allow
-name: product-manager
-description: |-
-  产品经理 - 需求分析、产品规划、市场/用户研究与产品向文档编写。
-  Product Manager - requirements analysis, product planning, market/user research, and product-facing documentation.
 ---
 
 ## Morning Star Role Binding

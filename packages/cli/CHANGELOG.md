@@ -29,8 +29,8 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 - add target adapter architecture for CLI flows
 - add `cursor` target support in `init` and `doctor`
-  - `global`: install plugin via clone into `~/.cursor/plugins/local/mstar-harness`
-  - `project`: install plugin as git submodule at `.cursor/plugins/mstar-harness`
+  - `global`: install plugin via symlink at `~/.cursor/plugins/local/morning-star-harness`
+  - `project`: install plugin via symlink at `.cursor/plugins/morning-star-harness`
 - keep `opencode` model-driven init flow with schema/plugin/model validation
 - default `--scope` behavior to `project` when not provided
 - add standalone CLI docs at `docs/cli.md` and document target-based usage

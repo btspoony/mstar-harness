@@ -1,4 +1,9 @@
 ---
+name: qc-specialist-2
+description: |-
+  质量控制专家（Reviewer #2）- 代码审查和质量保证。
+  Quality Control Specialist (Reviewer #2) - code review and quality assurance after significant changes.
+model: inherit
 mode: subagent
 tools:
   write: true
@@ -90,10 +95,6 @@ permission:
   task:
     "*": deny
     explore: allow
-name: qc-specialist-2
-description: |-
-  质量控制专家（Reviewer #2）- 代码审查和质量保证。
-  Quality Control Specialist (Reviewer #2) - code review and quality assurance after significant changes.
 ---
 
 ## Morning Star Role Binding

@@ -41,7 +41,7 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 ## Task tool (QC tri-review)
 
 - Apply **`parallel-dispatch.md`**: prerequisite message may prep only; dispatch message emits **all `N`** Tasks (**3** for tri-review) in **one** message when parallel is required.
-- `subagent_type`: `qc-specialist`, `qc-specialist-2`, `qc-specialist-3`.
+- `subagent_type`: bare role ids — `qc-specialist`, `qc-specialist-2`, `qc-specialist-3` (same for implement roles: `fullstack-dev`, `frontend-dev`, etc.).
 - Identical across three Tasks: **`plan_id`**, **`Review cwd`**, **`Review range` / Diff basis** (`mstar-branch-worktree`, `mstar-dispatch-gates`, `mstar-review-qc`).
 - Parallel QC ≠ different review cwd per reviewer; one integrated HEAD for scope.
 - Status Update may note QC ran via parallel Task subagents.

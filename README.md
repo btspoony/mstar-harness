@@ -65,10 +65,13 @@ For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
 
 #### Cursor
 
-- Local plugin install:
+- Recommended:
+  - `npx @mstar-harness/cli init --target cursor --scope global`
+  - Restart Cursor or run `Developer: Reload Window`
+- Manual install (same paths the CLI uses):
   - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
   - `mkdir -p ~/.cursor/plugins/local`
-  - `ln -s ~/.mstar/harness ~/.cursor/plugins/local/mstar-harness`
+  - `ln -s ~/.mstar/harness ~/.cursor/plugins/local/morning-star-harness`
   - Restart Cursor or run `Developer: Reload Window`
 
 #### Codex

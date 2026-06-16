@@ -22,7 +22,7 @@ Use this sequence for the quickest user flow.
 
 ### Cursor
 
-1) Install plugin to project (default scope). The CLI maintains `~/.mstar/harness` and symlinks `.cursor/plugins/mstar-harness` to it:
+1) Install plugin to project (default scope). The CLI maintains `~/.mstar/harness` and symlinks `.cursor/plugins/morning-star-harness` to it:
 
 - `npx @mstar-harness/cli init --target cursor`
 
@@ -74,9 +74,9 @@ Dry-run preview (no file write):
 
 Cursor install:
 
-- Global install (symlink at `~/.cursor/plugins/local/mstar-harness`; shared checkout at `~/.mstar/harness`):
+- Global install (symlink at `~/.cursor/plugins/local/morning-star-harness`; shared checkout at `~/.mstar/harness`):
   - `npx @mstar-harness/cli init --target cursor --scope global`
-- Project install (symlink at `.cursor/plugins/mstar-harness`; the CLI adds it to `.gitignore`):
+- Project install (symlink at `.cursor/plugins/morning-star-harness`; the CLI adds it to `.gitignore`):
   - `npx @mstar-harness/cli init --target cursor --scope project`
 
 Codex install:
@@ -116,8 +116,8 @@ Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/h
 
 Cursor `init`:
 
-- global: `~/.cursor/plugins/local/mstar-harness -> ~/.mstar/harness`
-- project: `.cursor/plugins/mstar-harness -> ~/.mstar/harness` and `.gitignore` entry
+- global: `~/.cursor/plugins/local/morning-star-harness -> ~/.mstar/harness`
+- project: `.cursor/plugins/morning-star-harness -> ~/.mstar/harness` and `.gitignore` entry for the plugin link
 
 Codex `init` writes or updates marketplace metadata with a local-source entry:
 
@@ -133,6 +133,7 @@ Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` 
 
 - Same schema, role models, and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
+- For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, the plugin symlink, and that plugin `agents/*.md` files use Cursor-first frontmatter.
 - For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks.
 
 ## Options Reference

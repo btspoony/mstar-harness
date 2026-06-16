@@ -65,10 +65,13 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 
 #### Cursor
 
-- 本地插件安装：
+- 推荐：
+  - `npx @mstar-harness/cli init --target cursor --scope global`
+  - 重启 Cursor 或运行 `Developer: Reload Window`
+- 手动安装（与 CLI 使用相同路径）：
   - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
   - `mkdir -p ~/.cursor/plugins/local`
-  - `ln -s ~/.mstar/harness ~/.cursor/plugins/local/mstar-harness`
+  - `ln -s ~/.mstar/harness ~/.cursor/plugins/local/morning-star-harness`
   - 重启 Cursor 或运行 `Developer: Reload Window`
 
 #### Codex
