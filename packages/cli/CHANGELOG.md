@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.5.1
+
+- align Cursor global/project plugin symlinks to `morning-star-harness` (matching plugin manifest `name`)
+- validate plugin `agents/*.md` use Cursor-first frontmatter in `doctor --target cursor`
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.11**.
+
 ## 0.5.0
 
 - maintain a shared local harness checkout at `~/.mstar/harness` for Cursor and Codex install flows

@@ -2,17 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.10** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.11** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.10** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.10** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.10** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.10** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.11** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.11** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.11** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.11** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.11] - 2026-06-16
+
+### Cursor plugin / agents
+
+- **Subagent registration**: Reorder all `agents/*.md` frontmatter to Cursor-first schema (`name`, `description`, `model: inherit` before OpenCode `mode`/`tools`/`permission`) so plugin manifest `agents/` are discovered as Task subagents without a separate `~/.cursor/agents/` install step.
+- **CLI Cursor install path**: Align global/project plugin symlinks to `morning-star-harness` (matching `.cursor-plugin/plugin.json` `name`).
+- **CLI doctor**: Validate plugin agent files exist and use Cursor-first frontmatter.
+- **Docs**: Update README (EN/CN), CLI guide, plugin README, LOCAL-VALIDATION subagent smoke test, and `mstar-host` Cursor reference.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.10 → 0.6.11**.
+- Bump `@mstar-harness/cli`: **0.5.0 → 0.5.1**.
 
 ## [0.6.10] - 2026-06-11
 

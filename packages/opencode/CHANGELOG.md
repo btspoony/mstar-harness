@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.11
+
+- Bundled agents: Cursor-first frontmatter on all role shells so hosts that share `agents/*.md` parse `name`/`description`/`model` before OpenCode fields.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.11**.
+
 ## 0.6.10
 
 - Bundled skills: Profile B `archived/plans-done.json` schema is `{ "plans": [<plan-id>, ...] }` only; add `plans-done.empty.json` template and bootstrap/PM init notes.

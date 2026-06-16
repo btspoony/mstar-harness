@@ -1,16 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.10**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.11**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.10** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.10** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.10** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.10** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.11** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.11** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.11** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.11** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.11] - 2026-06-16
+
+### Cursor 插件 / agents
+
+- **Subagent 注册**：全部 `agents/*.md` frontmatter 改为 Cursor 优先（`name`、`description`、`model: inherit` 置于 OpenCode `mode`/`tools`/`permission` 之前），使插件 manifest 中的 `agents/` 可被 Task 识别，**无需**额外安装到 `~/.cursor/agents/`。
+- **CLI Cursor 安装路径**：global/project 插件软链统一为 `morning-star-harness`（与 `.cursor-plugin/plugin.json` 的 `name` 一致）。
+- **CLI doctor**：校验 plugin agent 文件存在且使用 Cursor 优先 frontmatter。
+- **文档**：更新 README（中英）、CLI 指南、插件 README、LOCAL-VALIDATION subagent 冒烟测试及 `mstar-host` Cursor 参考。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.10 → 0.6.11**。
+- `@mstar-harness/cli`：**0.5.0 → 0.5.1**。
 
 ## [0.6.10] - 2026-06-11
 
