@@ -3,7 +3,6 @@ name: qc-specialist-3
 description: |-
   质量控制专家（Reviewer #3）- 代码审查和质量保证。
   Quality Control Specialist (Reviewer #3) - code review and quality assurance after significant changes.
-model: inherit
 mode: subagent
 tools:
   write: true

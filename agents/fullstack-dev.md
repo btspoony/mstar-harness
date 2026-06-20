@@ -3,7 +3,6 @@ name: fullstack-dev
 description: |-
   全栈开发工程师 - 后端主导的全栈实现（API/业务/数据层）。UI 重或新页面多时由 PM 拆给 `@frontend-dev`；第二并行实现轨用 `@fullstack-dev-2`。Hotfix/单流小改可一人完成。
   Fullstack Developer - backend-led fullstack implementation (API/business/data). PM should split UI-heavy or new-page work to `@frontend-dev`, and use `@fullstack-dev-2` for the second parallel track. One developer can handle hotfixes or small single-stream updates.
-model: inherit
 mode: subagent
 tools:
   write: true

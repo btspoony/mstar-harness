@@ -3,7 +3,6 @@ name: architect
 description: |-
   技术架构师 - 系统设计、技术决策与技术向文档编写（架构说明、ADR、接口契约等）。
   Architect - system design, technical decisions, and technical documentation (architecture notes, ADRs, interface contracts).
-model: inherit
 mode: subagent
 tools:
   write: true

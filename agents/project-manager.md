@@ -3,7 +3,6 @@ name: project-manager
 description: |-
   项目经理 - 协调开发团队，管理项目进度。
   Project Manager - coordinate the team, track progress, and orchestrate execution across roles.
-model: inherit
 mode: primary
 tools:
   write: true
