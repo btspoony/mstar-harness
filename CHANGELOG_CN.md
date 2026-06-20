@@ -1,16 +1,26 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.12**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.13**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.12** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.13** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.12** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.12** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.12** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.13** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.13** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.13** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.13] - 2026-06-20
+
+### Harness（agents）
+
+- **移除 `model: inherit`**：清除全部 13 个 `agents/*.md` 文件中的 `model: inherit` 行。这些 agent 通过插件 manifest 继承默认模型，无需逐个显式覆盖，减少 frontmatter 噪音并避免与模型固定混淆。（Cursor frontmatter 清理。）
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.12 → 0.6.13**。**`@mstar-harness/cli` 保持 0.5.1**。
 
 ## [0.6.12] - 2026-06-20
 
