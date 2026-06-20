@@ -1,6 +1,8 @@
 # Leaf executor dispatch checklist
 
 > Load **`mstar-harness-core`** first, then **`mstar-dispatch-gates`** SKILL.md.
+>
+> **First**: read the `**You are a leaf executor. You MUST NOT:**` block at the top of your Assignment. Those anti-patterns are customized for your specific role+context and are the authoritative dispatch boundaries for this assignment.
 
 Before any Task/subagent call:
 

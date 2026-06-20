@@ -1,16 +1,28 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.11**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.12**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.11** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.12** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.11** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.11** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.11** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.12** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.12** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.12** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.12] - 2026-06-20
+
+### Harness（skills / dispatch gates）
+
+- **Assignment 反模式头部**：每个 PM Assignment 开头新增 `**You are a leaf executor. You MUST NOT:**` 块，针对该分配的角色+上下文列出最易发生的派发违规。PM 在通用底线（禁止递归派发、禁止将路由叙事当 invoke、工具可用≠授权）之上追加具体反模式。`Orchestration Guard` 节引用此新顶部块。（`mstar-roles/references/project-manager/dispatch-and-assignment.md`）
+- **Leaf executor 自检清单**：更新为要求每次收到 Assignment 时首先阅读 `**You are a leaf executor. You MUST NOT:**` 块。（`mstar-dispatch-gates/references/leaf-executor-checklist.md`）
+- **派发门禁**：在反递归红线节追加了对新 Assignment 级反模式块的引用。（`mstar-dispatch-gates/SKILL.md`）
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.11 → 0.6.12**。**`@mstar-harness/cli` 保持 0.5.1**。
 
 ## [0.6.11] - 2026-06-16
 

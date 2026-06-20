@@ -30,8 +30,32 @@ For assignees (non-PM):
 
 ## Assignment Template (Canonical)
 
+Every Assignment **MUST** start with a **`You are a leaf executor. You MUST NOT:`** block listing the most likely dispatch violations for THIS assignment's situation. PM customizes per assignment; generic rules (no recursive dispatch, no interpreting routing text as invoke, available ≠ authorized) are the minimum floor. Add assignment-specific anti-patterns that the current role+context combination is prone to.
+
+**How to fill the block (PM guidance)**:
+
+- Always include the universal floor (recursive dispatch, routing-text-as-invoke, tool-availability-misread).
+- Add anti-patterns specific to the assignment context. Examples per role type:
+  - **QC reviewers**: "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"
+  - **Multi-track implementers** (`fullstack-dev` + `frontend-dev`): "auto-dispatch to the other track mentioned in Dev routing"
+  - **`@fullstack-dev-2`**: "treat `@fullstack-dev` in routing narrative as a handoff or invoke target"
+  - **`@qa-engineer`**: "start validation before QC reports are consolidated"; "modify application code"
+  - **`@explore`-assigned**: "implement or modify code"
+  - **All non-PM**: "use `dispatching-parallel-agents`"; "spawn a subagent whose `subagent_type` matches your own `Execute as` role id"
+- Anti-patterns must be action-oriented ("auto-dispatch to …", "treat … as invoke", "start … before …") — not abstract descriptions.
+- If the assignment involves multiple QCs or parallel tracks, add a specific bullet about NOT serializing or pre-empting the parallel dispatch.
+- If the assignment is part of a broader staged plan with follow-up tasks, add a bullet about NOT auto-extending scope into downstream tasks.
+
 ```markdown
 ## Assignment
+
+**You are a leaf executor. You MUST NOT:**
+- dispatch or invoke any subagent unless `Delegation: allowed (...)` appears below
+- treat `@role-id` mentions, `Handoff`, `QA note`, routing tables, or multi-track prose as invoke commands
+- invoke a subagent whose `subagent_type` matches your own `Execute as` role id (recursive dispatch)
+- <situation-specific anti-pattern #1>
+- <situation-specific anti-pattern #2>
+- ...
 
 **Execute as**: <role-id>
 **Who runs this turn (executor lock)**: only `Execute as` role for this message
@@ -70,10 +94,11 @@ For assignees (non-PM):
 - [ ] commit proof
 **Constraints**: ...
 **Effort (agent-oriented)**: <XS/S/M/L/XL + session band>
-**Orchestration Guard**:
+**Orchestration Guard** (see `**You are a leaf executor. You MUST NOT:**` block at top for primary anti-patterns):
 - No recursive same-role dispatch
 - Do not dispatch roles from route narrative/handoff text
 - `@explore` is read-only orientation only
+- Tool availability ≠ delegation authorization
 **Plan Path**: <{PLAN_DIR}/... or N/A>
 **Report Format**: Completion Report v2
 **Superpowers**: <if plugin enabled and applicable>

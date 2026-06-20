@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.11** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.12** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.11** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.12** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.11** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.11** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.11** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.12** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.12** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.12** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.12] - 2026-06-20
+
+### Harness (skills / dispatch gates)
+
+- **Assignment anti-pattern header**: Every PM Assignment now opens with a `**You are a leaf executor. You MUST NOT:**` block containing the most likely dispatch violations for the assignment's situation. PM fills it with context-specific anti-patterns on top of the universal floor (no recursive dispatch, no interpreting routing text as invoke, available ≠ authorized). The `Orchestration Guard` section references this new top block. (`mstar-roles/references/project-manager/dispatch-and-assignment.md`)
+- **Leaf executor checklist**: Updated to require reading the `**You are a leaf executor. You MUST NOT:**` block first on every assignment. (`mstar-dispatch-gates/references/leaf-executor-checklist.md`)
+- **Dispatch gates**: Added a reference to the new assignment-level anti-pattern block in the anti-recursion section. (`mstar-dispatch-gates/SKILL.md`)
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.11 → 0.6.12**. **`@mstar-harness/cli` remains 0.5.1**.
 
 ## [0.6.11] - 2026-06-16
 
