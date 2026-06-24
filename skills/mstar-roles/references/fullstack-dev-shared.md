@@ -16,7 +16,7 @@ Behavior is shared; track identity is parameterized.
 
 **Typically:** `mstar-plan-conventions` (path symbols + `metadata.primary_spec` / `spec_refs`); `mstar-superpowers-align` (when plugin on).
 
-**On demand:** `mstar-branch-worktree` (repo writes, `Working branch`); `mstar-phase-gates` (Execute / hotfix sections when gate fields are in the assignment).
+**On demand:** `mstar-branch-worktree` (repo writes, `Working branch`); `mstar-phase-gates` (Execute / hotfix sections when gate fields are in the assignment); `mstar-design-md` (when task includes UI implementation — read DESIGN.md for design tokens).
 
 **Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 

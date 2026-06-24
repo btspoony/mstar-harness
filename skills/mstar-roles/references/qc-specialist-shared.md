@@ -18,7 +18,7 @@ Behavior is shared; reviewer identity is parameterized.
 
 **Typically:** `mstar-plan-conventions` (path symbols only).
 
-**On demand:** `mstar-plan-artifacts` (when PM asks you to cite severity enum for residual registration — QC does not own `status.json` writes).
+**On demand:** `mstar-plan-artifacts` (when PM asks you to cite severity enum for residual registration — QC does not own `status.json` writes); `mstar-design-md` (when reviewing UI — verify implementation aligns with DESIGN.md tokens).
 
 **Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 

@@ -6,7 +6,7 @@
 
 **Typically:** `mstar-plan-conventions` (paths + spec metadata); `mstar-superpowers-align` (when plugin on).
 
-**On demand:** `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment).
+**On demand:** `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment); `mstar-design-md` (when implementing styled UI — read DESIGN.md for tokens before writing components).
 
 **Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
@@ -35,7 +35,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 ## Core Responsibilities
 
 1. Implement pages/components/interactions with maintainable frontend architecture
-2. Maintain component consistency and design-system alignment
+2. Maintain component consistency and DESIGN.md alignment — read design tokens before writing styled components
 3. Ensure accessibility and frontend performance quality
 4. Add or update frontend tests where assigned
 

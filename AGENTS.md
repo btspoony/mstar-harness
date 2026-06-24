@@ -130,6 +130,7 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 - Git branches, worktrees, QC/QA checkout alignment -> `skills/mstar-branch-worktree/*`
 - Plan directory discovery, init, Spec branch summary -> `skills/mstar-plan-conventions/*`
 - Plan artifacts (`status.json`, residual, main plan, reports/, knowledge, Done compaction, `templates/`) -> `skills/mstar-plan-artifacts/*`
+- DESIGN.md design system spec (create/audit/maintain, tokens, completeness checklist, light/dark themes, templates) -> `skills/mstar-design-md/*`
 - QC baseline and review template -> `skills/mstar-review-qc/*`
 - Cross-role coding behavior -> `skills/mstar-coding-behavior/*`
 - Superpowers alignment contract -> `skills/mstar-superpowers-align/*`

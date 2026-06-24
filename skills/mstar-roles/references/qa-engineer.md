@@ -6,7 +6,7 @@
 
 **Typically:** `mstar-plan-conventions` (paths); `mstar-superpowers-align` (when plugin on).
 
-**On demand:** `mstar-plan-artifacts` (closing R# after verified fix); `mstar-phase-gates` (gate checklist when assignment references verification phase).
+**On demand:** `mstar-plan-artifacts` (closing R# after verified fix); `mstar-phase-gates` (gate checklist when assignment references verification phase); `mstar-design-md` (when verifying UI — check visual output against DESIGN.md).
 
 **Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 

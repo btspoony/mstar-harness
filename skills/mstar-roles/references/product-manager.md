@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare / clarify), `mstar-plan-conventions` (`{PLAN_DIR}`, `writing-plans` path).
 
-**Typically:** `mstar-plan-artifacts` (specs, knowledge index); `mstar-coding-behavior` (surgical doc edits); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-artifacts` (specs, knowledge index); `mstar-design-md` (DESIGN.md design intent and requirements for UI planning); `mstar-coding-behavior` (surgical doc edits); `mstar-superpowers-align` (when plugin on).
 
 **On demand:** `mstar-branch-worktree` (when committing product docs to the business repo).
 

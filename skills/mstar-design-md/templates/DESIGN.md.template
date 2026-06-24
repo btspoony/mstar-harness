@@ -1,0 +1,273 @@
+<!-- COMPLETENESS_LEVEL: 1 — last audited [DATE] -->
+
+# [Design System Name]
+
+## Overview
+
+[Design System Name] is a [adjective, e.g., minimal, playful, bold] design system for [project/product name].
+[Aesthetic principles — one sentence describing the visual identity: e.g., "Prioritize readability and clarity with plenty of whitespace and restrained color."]
+
+This is the Light theme.
+<!-- LEVEL2_PLACEHOLDER: When ready for dark theme, create DESIGN.dark.md with same token names and different values. See references/completeness-checklist.md § Level 3. -->
+<!-- Uncomment when dark theme exists: The Dark theme uses the same token names with different values and lives at /DESIGN.dark.md. -->
+
+## Colors
+
+### Background
+
+<!-- Level 1 — Fill in at least background-100. Level 2 adds background-200 and background-300. -->
+
+| Token | Value |
+|-------|-------|
+| background-100 | #[primary page/card surface] |
+
+<!-- LEVEL2_PLACEHOLDER: Add background-200 and background-300 for subtle surface separation. See references/completeness-checklist.md § Level 2/Colors. -->
+<!--
+| background-200 | #[secondary surface] |
+| background-300 | #[active surface] |
+-->
+
+### Gray (text and fills)
+
+<!-- Level 1 — Fill in at least gray-1000 (primary text) and gray-900 (secondary text). -->
+
+| Token | Value |
+|-------|-------|
+| gray-1000 | #[primary text] |
+| gray-900 | #[secondary text] |
+
+<!-- LEVEL2_PLACEHOLDER: Complete the full 10-step scale (gray-100 through gray-1000). See references/design-md-spec.md § Colors. -->
+<!--
+| gray-100 | #[lightest fill] |
+| gray-200 | #[hover fill] |
+| gray-300 | #[active fill] |
+| gray-400 | #[border] |
+| gray-500 | #[hover border] |
+| gray-600 | #[active border] |
+| gray-700 | #[solid fill / disabled text] |
+| gray-800 | #[solid hover] |
+| gray-900 | #[secondary text] |
+| gray-1000 | #[primary text] |
+-->
+
+<!-- LEVEL2_PLACEHOLDER: Add gray-alpha scale for translucent borders, overlays, and hover states. See references/design-md-spec.md § Colors. -->
+<!--
+### Gray Alpha (translucent overlays)
+
+| Token | Value |
+|-------|-------|
+| gray-alpha-100 | rgba(0, 0, 0, 0.04) |
+| gray-alpha-200 | rgba(0, 0, 0, 0.06) |
+| gray-alpha-300 | rgba(0, 0, 0, 0.08) |
+| gray-alpha-400 | rgba(0, 0, 0, 0.12) |
+| gray-alpha-500 | rgba(0, 0, 0, 0.16) |
+| gray-alpha-600 | rgba(0, 0, 0, 0.24) |
+-->
+
+### Accent
+
+<!-- Level 1 — Fill in at least one accent (blue or brand color) for links/actions, plus red for errors and amber for warnings. -->
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| blue-700 | #[links, focus, primary actions] | Interactive elements |
+| red-700 | #[errors, destructive actions] | Errors, delete buttons |
+| amber-700 | #[warnings, alerts] | Warning states |
+
+<!-- LEVEL2_PLACEHOLDER: Complete all accent scales (blue, red, amber, green, teal, purple, pink). Add at minimum 700/800/900/1000 steps per scale. See references/completeness-checklist.md § Level 2/Colors. -->
+<!--
+| green | Success states |
+| teal | Info, secondary brand |
+| purple | Special emphasis |
+| pink | Highlights, badges |
+-->
+
+## Typography
+
+<!-- Level 1 — Fill in at least one body token (copy-*) and one heading token (heading-*). -->
+<!-- Token naming: {role}-{size}. Roles: heading, label, copy, button. Size: approximate font size in px. -->
+
+### Body text
+
+| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
+|-------|------------|------|--------|-------------|----------------|
+| copy-16 | [font-family] | 16px | 400 | 1.6 | 0 |
+
+### Headings
+
+| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
+|-------|------------|------|--------|-------------|----------------|
+| heading-32 | [font-family] | 32px | 600 | 1.2 | -0.02em |
+
+<!-- LEVEL2_PLACEHOLDER: Complete the typography scale. Add at least 3 heading levels, 1 label token, and 1 button typography token. See references/completeness-checklist.md § Level 2/Typography. -->
+<!--
+### Labels (single-line, scannable)
+
+| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
+|-------|------------|------|--------|-------------|----------------|
+| label-14 | [font-family] | 14px | 500 | 1.3 | 0 |
+
+### Buttons
+
+| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
+|-------|------------|------|--------|-------------|----------------|
+| button-14 | [font-family] | 14px | 500 | 1.3 | 0 |
+
+### Additional headings
+| heading-24 | [font-family] | 24px | 600 | 1.3 | -0.01em |
+| heading-20 | [font-family] | 20px | 600 | 1.3 | 0 |
+-->
+
+## Spacing & Layout
+
+### Spacing scale
+
+<!-- Level 1 — Declare base unit and at least 5 scale steps. Base unit is typically 4px or 8px. -->
+
+Base unit: [4px or 8px]
+
+| Step | Value |
+|------|-------|
+| 1x | [base × 1] |
+| 2x | [base × 2] |
+| 3x | [base × 3] |
+| 4x | [base × 4] |
+| 6x | [base × 6] |
+
+<!-- LEVEL2_PLACEHOLDER: Complete the full 9-step scale and add three-step rhythm rules. See references/design-md-spec.md § Spacing & Layout. -->
+<!--
+| 8x | [base × 8] |
+| 10x | [base × 10] |
+| 16x | [base × 16] |
+| 24x | [base × 24] |
+
+### Rhythm
+
+- [small]: inside a group (label + input, icon + text)
+- [medium]: between related groups
+- [large]: between sections
+-->
+
+### Breakpoints
+
+<!-- Level 1 — At least 2 breakpoints for responsive layout. -->
+
+| Name | Min Width | Target |
+|------|-----------|--------|
+| sm | 401px | Mobile landscape |
+| lg | 961px | Desktop |
+
+<!-- LEVEL2_PLACEHOLDER: Add intermediate breakpoints (md, xl, 2xl). See references/completeness-checklist.md § Level 2/Breakpoints. -->
+<!--
+| md | 601px | Tablet |
+| xl | 1200px | Large desktop |
+| 2xl | 1400px | Ultra-wide |
+-->
+
+<!-- LEVEL2_PLACEHOLDER: Add Components section — at minimum Button (primary, secondary) and Input tokens with size variants and all states. See references/design-md-spec.md § Components. -->
+<!--
+## Components
+
+### Button
+
+| Variant | Background | Text | Border | Radius | Height |
+|---------|-----------|------|--------|--------|--------|
+| primary | gray-1000 | background-100 | — | 6px | 40px |
+| secondary | background-100 | gray-1000 | gray-alpha-400 | 6px | 40px |
+
+**Size variants:**
+| Size | Height | Typography |
+|------|--------|------------|
+| small | 32px | button-12 |
+| default | 40px | button-14 |
+| large | 48px | button-16 |
+
+**States:** Fill steps up: 100→200 (hover), 100→300 (active). Border steps up: 400→500→600. Disabled: gray-100 fill, gray-700 text, not-allowed cursor. Focus: 0 0 0 2px background-100, 0 0 0 4px blue-700.
+
+### Input
+
+| Variant | Background | Text | Border | Radius | Height |
+|---------|-----------|------|--------|--------|--------|
+| default | background-100 | gray-1000 | gray-alpha-400 | 6px | 40px |
+
+**Size variants:** Same as Button (32px/40px/48px).
+
+**States:** Same state progression as Button. Error: border red-700, add error message below.
+-->
+
+<!-- LEVEL3_PLACEHOLDER: Add Elevation & Depth, Motion, Shapes, Voice & Content, and full Component library. See references/completeness-checklist.md § Level 3. -->
+<!--
+## Elevation & Depth
+
+Hierarchy comes from tonal surfaces and borders first; shadows stay subtle.
+
+### Shadows (light theme)
+
+| Element | Value |
+|---------|-------|
+| Card | 0 2px 2px rgba(0, 0, 0, 0.04) |
+| Popover | 0 1px 1px rgba(0, 0, 0, 0.02), 0 4px 8px -4px rgba(0, 0, 0, 0.04), 0 16px 24px -8px rgba(0, 0, 0, 0.06) |
+| Modal | 0 1px 1px rgba(0, 0, 0, 0.02), 0 8px 16px -4px rgba(0, 0, 0, 0.04), 0 24px 32px -8px rgba(0, 0, 0, 0.06) |
+
+Pair each elevation with the matching radius below.
+
+## Motion
+
+Motion clarifies change, never decorates. Default 0ms is often the best choice.
+
+### Easing
+
+Default: cubic-bezier(0.175, 0.885, 0.32, 1.1)
+
+### Durations
+
+| Context | Duration |
+|---------|----------|
+| State change | 150ms |
+| Popover/Tooltip | 200ms |
+| Modal/Overlay | 300ms |
+
+Honor prefers-reduced-motion: drop nonessential motion.
+
+## Shapes
+
+### Border Radius
+
+| Context | Value |
+|---------|-------|
+| Surface, Input, Button | 6px |
+| Menu, Modal, Popover | 12px |
+| Fullscreen | 16px |
+| Pill, Avatar | 9999px |
+
+Keep one radius family per view; never mix rounded and sharp corners.
+
+## Components — Extended
+
+Add Card, Modal, Tooltip, Menu/Dropdown, Badge tokens following the same pattern as Button/Input.
+
+## Voice & Content
+
+- Use Title Case for labels, buttons, titles, and tabs
+- Sentence case for body, helper text, and toasts
+- Name actions with a verb and a noun: [Create Project], [Delete Item]
+- Write errors as what happened + what to do: [Error description. Suggested fix.]
+- Toasts name the specific thing, no trailing period, no "successfully": [Item deleted]
+- Empty states point to the first action: [No items yet. Create one to get started.]
+- In-progress states: present participle + ellipsis: [Saving…], [Loading…]
+- Use numerals, curly quotes, the ellipsis character
+- Skip "please" and marketing superlatives
+-->
+
+## Do's and Don'ts
+
+<!-- Fill in with rules specific to this design system. Examples to customize: -->
+
+- Use [gray-1000] for primary text, [gray-900] for secondary.
+- Keep accent color for state and the single most important action on a view.
+- Hold WCAG AA contrast (4.5:1 for body text).
+- Show focus ring on every interactive element at :focus-visible.
+- Apply typography tokens instead of setting font properties by hand.
+- Don't signal state with color alone; pair it with an icon or text label.
+- Don't use more than two font weights in one view.
+- Don't mix rounded and sharp corners in one view.

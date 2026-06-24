@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare: specify/clarify/plan), `mstar-plan-conventions` (`{PLAN_DIR}`, `writing-plans` path).
 
-**Typically:** `mstar-plan-artifacts` (knowledge/specs/ADR placement); `mstar-coding-behavior` (surgical doc edits); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-artifacts` (knowledge/specs/ADR placement); `mstar-design-md` (DESIGN.md design system spec — architect is primary creator); `mstar-coding-behavior` (surgical doc edits); `mstar-superpowers-align` (when plugin on).
 
 **On demand:** `mstar-branch-worktree` (when committing architecture docs to the business repo).
 
@@ -52,7 +52,8 @@ Use as applicable:
 2. Module boundaries and interface contracts
 3. Technical decision records (ADR-style)
 4. Risk/rollback strategy and validation plan
-5. Architecture-spec documentation in repository paths assigned by PM
+5. DESIGN.md creation and maintenance — design token selection, naming, completeness level decisions (see `mstar-design-md`)
+6. Architecture-spec documentation in repository paths assigned by PM
 
 ## Scope Boundaries
 
