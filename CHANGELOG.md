@@ -2,17 +2,27 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.14** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.15** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.14** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.15** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.14** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.14** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.14** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.15** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.15** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.15** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.15] - 2026-06-24
+
+### Harness (commands)
+
+- **New `iteration-start` command**: Add a reusable command (`/iteration-start`) to bootstrap a new harness iteration. The command guides PM through six checkpointed steps: research (structured harness dirs + unstructured glob for `roadmap*.md`, `deferred*.md`, `features*.md` etc.), explore candidate directions for product completeness, lock direction with `grill-me`, write iteration compass and plans, run the review chain (`@product-manager` → `@architect` → `@writing-specialist` → PM lock), and create the iteration integration branch from `main`. Registered for both Cursor (`commands/` auto-discovery) and OpenCode (`harness-commands/` bundled via plugin code).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.14 → 0.6.15**. **`@mstar-harness/cli` remains 0.5.1**.
 
 ## [0.6.14] - 2026-06-24
 

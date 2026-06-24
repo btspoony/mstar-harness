@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.15
+
+- Bundled commands: New `harness-commands/` directory bundle and `loadBundledCommands()` registration in the config hook. Adds `/iteration-start` command that guides PM through iteration bootstrap (research, explore, lock, compass/plans, review chain, integration branch).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.15**.
+
 ## 0.6.11
 
 - Bundled agents: Cursor-first frontmatter on all role shells so hosts that share `agents/*.md` parse `name`/`description`/`model` before OpenCode fields.
