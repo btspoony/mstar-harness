@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.13** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.14** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.13** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.14** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.13** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.13** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.13** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.14** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.14** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.14** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.14] - 2026-06-24
+
+### Harness (skills / design-md)
+
+- **New `mstar-design-md` skill**: Add a specialized skill for creating, auditing, and maintaining project-level `DESIGN.md` design system specifications. Three-level completeness checklist (MVP/Standard/Production) defines progressively what an agent needs from a design system to generate consistent UI without guessing tokens. Includes Vercel Geist as annotated reference, light/dark dual-theme support (`DESIGN.md` + `DESIGN.dark.md` with same token names, different values), and built-in `LEVEL*_PLACEHOLDER` markers for iterative maturity upgrades. Skill ships with full references (`design-md-spec.md` norm, `completeness-checklist.md`, `vercel-example.md`) and templates (`DESIGN.md.template`, `DESIGN.dark.md.template`).
+- **Phase gate: DESIGN.md check**: PM Prepare quick-check adds "if plan involves UI work, does DESIGN.md exist and meet the declared completeness level."
+- **Role integration**: `mstar-design-md` registered in all relevant role dependencies — architect as primary creator, product-manager for design intent/requirements, frontend-dev and fullstack-dev as consumers (read tokens before implementing styled UI), qc-specialist as verifier (check UI alignment with DESIGN.md), qa-engineer for visual output verification.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.13 → 0.6.14**. **`@mstar-harness/cli` remains 0.5.1**.
 
 ## [0.6.13] - 2026-06-20
 

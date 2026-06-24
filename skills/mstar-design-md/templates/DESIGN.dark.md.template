@@ -1,0 +1,133 @@
+<!-- COMPLETENESS_LEVEL: 3 — dark theme companion to DESIGN.md -->
+
+# [Design System Name] — Dark
+
+## Overview
+
+[Design System Name] Dark is the dark theme companion to [Design System Name]. Use the same token names as DESIGN.md; only the values change. Every token defined in DESIGN.md must have a corresponding entry in this file.
+
+This file uses the same structure as DESIGN.md. When DESIGN.md is updated, update this file with the dark-equivalent values.
+
+<!-- 
+  IMPORTANT: Switch to dark mode by loading this file's values in place of DESIGN.md values.
+  Consumers reference tokens by name, not by value — the switch is transparent.
+-->
+
+## Colors
+
+### Background
+
+<!-- Dark backgrounds are dark grays instead of whites. background-100 is the primary dark surface. -->
+
+| Token | Value |
+|-------|-------|
+| background-100 | #[dark page/card surface, e.g., #111111] |
+
+<!-- LEVEL2_PLACEHOLDER: Match DESIGN.md Level 2 background tokens -->
+<!--
+| background-200 | #[slightly lighter dark surface] |
+| background-300 | #[active dark surface] |
+-->
+
+### Gray (text and fills)
+
+<!-- Dark text colors are light grays. Invert the scale: gray-1000 is light (primary text on dark), gray-100 is dark. -->
+
+| Token | Value |
+|-------|-------|
+| gray-1000 | #[primary text on dark, e.g., #eeeeee] |
+| gray-900 | #[secondary text on dark, e.g., #999999] |
+
+<!-- LEVEL2_PLACEHOLDER: Match DESIGN.md Level 2 gray scale with dark-appropriate values -->
+<!--
+| gray-100 | #[darkest fill, e.g., #1a1a1a] |
+| gray-200 | #[hover fill, e.g., #222222] |
+| gray-300 | #[active fill, e.g., #333333] |
+| gray-400 | #[border, e.g., #444444] |
+| gray-500 | #[hover border, e.g., #555555] |
+| gray-600 | #[active border, e.g., #666666] |
+| gray-700 | #[disabled text, e.g., #777777] |
+| gray-800 | #[solid hover, e.g., #888888] |
+-->
+
+<!-- LEVEL2_PLACEHOLDER: Add gray-alpha scale with white-based transparency for dark backgrounds -->
+<!--
+### Gray Alpha (translucent overlays)
+
+| Token | Value |
+|-------|-------|
+| gray-alpha-100 | rgba(255, 255, 255, 0.04) |
+| gray-alpha-200 | rgba(255, 255, 255, 0.06) |
+| gray-alpha-300 | rgba(255, 255, 255, 0.08) |
+| gray-alpha-400 | rgba(255, 255, 255, 0.12) |
+| gray-alpha-500 | rgba(255, 255, 255, 0.16) |
+| gray-alpha-600 | rgba(255, 255, 255, 0.24) |
+-->
+
+### Accent
+
+<!-- Accent colors may shift to maintain contrast on dark backgrounds. Same token names, adjusted values. -->
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| blue-700 | #[adjusted for dark, typically lighter to maintain contrast] | Interactive elements |
+| red-700 | #[adjusted for dark, typically lighter] | Errors |
+| amber-700 | #[adjusted for dark, typically lighter] | Warnings |
+
+<!-- LEVEL2_PLACEHOLDER: Match all accent scales from DESIGN.md with dark-appropriate values -->
+
+## Typography
+
+<!-- Typography tokens typically remain the same in dark mode. Copy verbatim from DESIGN.md. -->
+
+| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
+|-------|------------|------|--------|-------------|----------------|
+| copy-16 | [same as DESIGN.md] | 16px | 400 | 1.6 | 0 |
+| heading-32 | [same as DESIGN.md] | 32px | 600 | 1.2 | -0.02em |
+
+## Spacing & Layout
+
+<!-- Spacing and breakpoints are identical to DESIGN.md. Copy verbatim. -->
+
+Base unit: [same as DESIGN.md]
+
+| Step | Value |
+|------|-------|
+| 1x | [base × 1] |
+| 2x | [base × 2] |
+| 3x | [base × 3] |
+| 4x | [base × 4] |
+| 6x | [base × 6] |
+
+| Name | Min Width | Target |
+|------|-----------|--------|
+| sm | 401px | Mobile landscape |
+| lg | 961px | Desktop |
+
+<!-- LEVEL3_PLACEHOLDER: Add dark-mode Elevation, Components tokens, and full dark theme parity with DESIGN.md -->
+<!--
+## Elevation & Depth
+
+Shadows on dark backgrounds use lighter, more subtle values. Hierarchy still comes from tonal surfaces first.
+
+### Shadows (dark theme)
+
+| Element | Value |
+|---------|-------|
+| Card | 0 2px 2px rgba(0, 0, 0, 0.12) |
+| Popover | 0 1px 1px rgba(0, 0, 0, 0.08), 0 4px 8px -4px rgba(0, 0, 0, 0.12), 0 16px 24px -8px rgba(0, 0, 0, 0.16) |
+| Modal | 0 1px 1px rgba(0, 0, 0, 0.08), 0 8px 16px -4px rgba(0, 0, 0, 0.12), 0 24px 32px -8px rgba(0, 0, 0, 0.16) |
+
+## Components
+
+Button tokens reference dark color values. Same structure as DESIGN.md, different color references.
+
+### Button
+
+| Variant | Background | Text | Border | Radius | Height |
+|---------|-----------|------|--------|--------|--------|
+| primary | gray-100 (dark value) | background-100 (dark value) | — | 6px | 40px |
+| secondary | background-100 | gray-1000 | gray-alpha-400 | 6px | 40px |
+
+States, sizes, and focus follow the same rules as DESIGN.md.
+-->

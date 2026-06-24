@@ -111,11 +111,12 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 2. `clarify` 是否完成（高影响歧义是否收敛）？
 3. 意图门禁是否满足（真实目标 / 成功判据 / 非目标已写明）？
 4. `plan` 是否完成并可引用？
-5. 若分批/暂缓/临时绕行，roadmap 是否落在 plan/status 中，而不是只在对话里？
-6. `tasks` 是否完成？
-7. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
-8. 若中途出现 plan drift，是否先回写再继续？
-9. 实现说明中是否体现"最小耐久切片 + 手术式改动 + 可验证检查"？
+5. 若 plan 涉及 UI 工作：`DESIGN.md` 是否存在且满足声明的 completeness level（见 `mstar-design-md`）？
+6. 若分批/暂缓/临时绕行，roadmap 是否落在 plan/status 中，而不是只在对话里？
+7. `tasks` 是否完成？
+8. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
+9. 若中途出现 plan drift，是否先回写再继续？
+10. 实现说明中是否体现"最小耐久切片 + 手术式改动 + 可验证检查"？
 
 任一项为「否」时，`Gate decision` 必须是 `blocked`。
 
