@@ -4,6 +4,7 @@
  * - Injects one-time harness bootstrap into first user message.
  * - Registers skill paths only inside this package: `harness-skills/` (synced at build / repo postinstall; includes `mstar-host`).
  * - Loads agents from `harness-agents/` only (same sync). Does not use `process.cwd()` so OpenCode project cwd does not matter.
+ * - Loads custom commands from `harness-commands/` only (same sync).
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import fs from "node:fs";
@@ -26,6 +27,7 @@ const packageRoot = path.resolve(__dirname, "..");
 
 const bundledSkillsDir = path.join(packageRoot, "harness-skills");
 const bundledAgentsDir = path.join(packageRoot, "harness-agents");
+const bundledCommandsDir = path.join(packageRoot, "harness-commands");
 const bootstrapAgentsPath = path.join(packageRoot, "AGENTS.md");
 const BOOTSTRAP_MARKER = "IMPORTANT_FOR_HARNESS";
 
@@ -148,6 +150,41 @@ const loadAgentsFromDir = (agentsDirPath: string): Record<string, JsonObject> =>
 
 const loadBundledAgents = (): Record<string, JsonObject> => loadAgentsFromDir(bundledAgentsDir);
 
+const loadBundledCommands = (): Record<string, JsonObject> => {
+  if (!fs.existsSync(bundledCommandsDir)) return {};
+
+  const files = fs
+    .readdirSync(bundledCommandsDir)
+    .filter((name: string) => /\.(?:md|mdc|markdown|txt)$/.test(name))
+    .sort((a, b) => a.localeCompare(b));
+
+  const result: Record<string, JsonObject> = {};
+  for (const file of files) {
+    const filePath = path.join(bundledCommandsDir, file);
+    const content = fs.readFileSync(filePath, "utf8");
+    const { frontmatter, body } = extractFrontmatterAndBody(content);
+    const parsed = parseSimpleFrontmatter(frontmatter);
+    const parsedName = typeof parsed.name === "string" ? parsed.name : file.replace(/\.(?:md|mdc|markdown|txt)$/, "");
+
+    const commandDef: JsonObject = {
+      template: body.trim(),
+    };
+    if (typeof parsed.description === "string") {
+      commandDef.description = parsed.description;
+    }
+    if (typeof parsed.agent === "string") {
+      commandDef.agent = parsed.agent;
+    }
+    if (typeof parsed.model === "string") {
+      commandDef.model = parsed.model;
+    }
+
+    result[parsedName] = commandDef;
+  }
+
+  return result;
+};
+
 export const MorningStarHarnessPlugin: Plugin = async () => {
   const homeDir = os.homedir();
   const envConfigDir = normalizePath(process.env.OPENCODE_CONFIG_DIR, homeDir);
@@ -161,6 +198,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       const runtimeConfig = config as JsonObject & {
         skills?: { paths?: string[] };
         agent?: Record<string, JsonObject>;
+        command?: Record<string, JsonObject>;
       };
       runtimeConfig.skills = runtimeConfig.skills || {};
       runtimeConfig.skills.paths = runtimeConfig.skills.paths || [];
@@ -175,6 +213,15 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       for (const [agentId, definition] of Object.entries(markdownAgents)) {
         runtimeConfig.agent[agentId] = {
           ...(runtimeConfig.agent[agentId] || {}),
+          ...definition,
+        };
+      }
+
+      const markdownCommands = loadBundledCommands();
+      runtimeConfig.command = runtimeConfig.command || {};
+      for (const [commandId, definition] of Object.entries(markdownCommands)) {
+        runtimeConfig.command[commandId] = {
+          ...(runtimeConfig.command[commandId] || {}),
           ...definition,
         };
       }

@@ -1,16 +1,26 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.14**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.15**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.14** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.15** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.14** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.14** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.14** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.15** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.15** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.15** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.15] - 2026-06-24
+
+### Harness（commands）
+
+- **新增 `iteration-start` 命令**：添加可复用的命令（`/iteration-start`）用于启动新一轮 harness 迭代。命令引导 PM 完成六个检查站步骤：调研（结构化 harness 目录 + 非结构化 glob 搜索 `roadmap*.md`、`deferred*.md`、`features*.md` 等）、探索产品完备性候选方向、使用 `grill-me` 锁定方向、编写迭代 compass 与 plans、运行审查链（`@product-manager` → `@architect` → `@writing-specialist` → PM 锁定）、从 `main` 创建迭代集成分支。同时注册到 Cursor（`commands/` 自动发现）和 OpenCode（通过插件代码捆绑 `harness-commands/`）。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.14 → 0.6.15**。**`@mstar-harness/cli` 保持 0.5.1**。
 
 ## [0.6.14] - 2026-06-24
 
