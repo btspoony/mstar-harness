@@ -2,17 +2,27 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.15** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.16** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.15** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.16** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.15** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.15** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.15** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.16** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.16** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.16** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.16] - 2026-06-25
+
+### Harness (commands)
+
+- **New `/iteration-drive` command**: Add a command that invokes the PM Autonomous Execute driver (`skills/pm/SKILL.md` § Autonomous Execute driver) to drive all non-`Done` plans to completion. The command checks the three precondition gates first; if Prepare is incomplete, it directs the user to `/iteration-start`. Otherwise, it runs the full implement → QC → QA → Done per-plan loop until every plan is `Done`, then optionally creates a PR from the integration branch to `main`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.15 → 0.6.16**. **`@mstar-harness/cli` remains 0.5.1**.
 
 ## [0.6.15] - 2026-06-24
 

@@ -1,16 +1,26 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.15**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.16**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.15** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.16** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.15** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.15** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.15** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.16** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.16** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.16** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.16] - 2026-06-25
+
+### Harness（commands）
+
+- **新增 `/iteration-drive` 命令**：添加调用 PM Autonomous Execute driver（`skills/pm/SKILL.md` § Autonomous Execute driver）的命令，将全部非 `Done` plans 推进至完成。命令首先检查三个前置条件门禁；若 Prepare 未完成，则引导用户使用 `/iteration-start`。否则执行完整的 implement → QC → QA → Done 逐 plan 循环，直到所有 plans 完成，最后可选从集成分支向 `main` 提交 PR。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.15 → 0.6.16**。**`@mstar-harness/cli` 保持 0.5.1**。
 
 ## [0.6.15] - 2026-06-24
 
