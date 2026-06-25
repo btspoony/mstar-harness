@@ -2,17 +2,27 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.17** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.18** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.17** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.18** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.17** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.17** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.17** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.18** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.18** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.18** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.18] - 2026-06-26
+
+### Harness (commands)
+
+- **`/iteration-start` Boot section**: Add explicit `## 0. Boot` section aligned with `/iteration-drive`. Loads `mstar-harness-core`, `mstar-roles` → `references/project-manager.md`, `skills/pm/SKILL.md` (Host entry + Boot), `mstar-phase-gates` (Prepare), and `mstar-plan-conventions` / `mstar-plan-artifacts` before starting research.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.17 → 0.6.18**. **`@mstar-harness/cli` remains 0.5.2**.
 
 ## [0.6.17] - 2026-06-26
 

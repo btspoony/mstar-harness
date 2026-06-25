@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.18
+
+- Bundled commands: `/iteration-start` now includes explicit `## 0. Boot` section aligned with `/iteration-drive`, loading core harness entry and PM role identity before research.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.18**.
+
 ## 0.6.17
 
 - Bundled commands: `/iteration-drive` PR target now resolved from iteration metadata (`target_branch` in `status.json`), defaulting to `main` when not set.

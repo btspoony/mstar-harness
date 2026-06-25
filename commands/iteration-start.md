@@ -8,6 +8,14 @@ agent: project-manager
 
 Start a new Morning Star harness iteration. Follow Prepare gates from `mstar-phase-gates` (specify → clarify → plan).
 
+## 0. Boot
+
+1. `mstar-harness-core`
+2. `mstar-roles` → `references/project-manager.md`
+3. `skills/pm/SKILL.md` → **§ Host entry** (PM role identity) + **§ Boot** (load order)
+4. `mstar-phase-gates` → Prepare (specify → clarify → plan)
+5. `mstar-plan-conventions`, `mstar-plan-artifacts`
+
 ## 1. Research
 
 Load harness entry, then survey structured and unstructured sources:

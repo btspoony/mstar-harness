@@ -1,16 +1,26 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.17**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.18**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.17** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.18** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.17** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.17** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.17** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.18** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.18** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.18** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.18] - 2026-06-26
+
+### Harness（commands）
+
+- **`/iteration-start` Boot 节**：新增显式 `## 0. Boot` 节，与 `/iteration-drive` 对齐。在开始调研前加载 `mstar-harness-core`、`mstar-roles` → `references/project-manager.md`、`skills/pm/SKILL.md`（Host entry + Boot）、`mstar-phase-gates`（Prepare）以及 `mstar-plan-conventions` / `mstar-plan-artifacts`。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.17 → 0.6.18**。**`@mstar-harness/cli` 保持 0.5.2**。
 
 ## [0.6.17] - 2026-06-26
 
