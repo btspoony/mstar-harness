@@ -1,16 +1,26 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.16**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.17**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.16** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.16** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.16** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.16** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.17** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.17** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.17** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.17** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.17] - 2026-06-26
+
+### Harness（commands）
+
+- **`/iteration-drive` PR 目标修复**：最终 PR 的目标分支改为从迭代元数据（`status.json` → `target_branch`）解析，而非硬编码 `main`。未设置 `target_branch` 时默认 `main`。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.16 → 0.6.17**。**`@mstar-harness/cli` 保持 0.5.2**。
 
 ## [0.6.16] - 2026-06-25
 

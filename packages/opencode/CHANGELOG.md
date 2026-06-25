@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.17
+
+- Bundled commands: `/iteration-drive` PR target now resolved from iteration metadata (`target_branch` in `status.json`), defaulting to `main` when not set.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.17**.
+
 ## 0.6.16
 
 - Bundled commands: Add `/iteration-drive` command that invokes the PM Autonomous Execute driver to push all non-`Done` plans to completion (implement → QC → QA → Done loop, then optional PR to `main`).

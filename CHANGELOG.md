@@ -2,17 +2,27 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.16** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.17** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.16** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.16** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.16** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.16** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.17** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.2** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.17** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.17** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.17** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.17] - 2026-06-26
+
+### Harness (commands)
+
+- **`/iteration-drive` PR target fix**: Resolve the final PR target branch from iteration metadata (`status.json` → `target_branch`) instead of hardcoding `main`. Defaults to `main` when `target_branch` is not set.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.16 → 0.6.17**. **`@mstar-harness/cli` remains 0.5.2**.
 
 ## [0.6.16] - 2026-06-25
 
