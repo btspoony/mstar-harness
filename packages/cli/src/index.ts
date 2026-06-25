@@ -35,6 +35,12 @@ async function pickTargetInteractive() {
   });
 }
 
+const ASCII_ICONS = {
+  checked: "(*)",
+  unchecked: "( )",
+  cursor: ">",
+} as const;
+
 async function pickModelsInteractive(params: {
   title: string;
   hint: string;
@@ -44,12 +50,17 @@ async function pickModelsInteractive(params: {
 }) {
   const choices = params.models.map((model) => ({ name: model, value: model }));
   if (params.single) {
-    const picked = await select<string>({ message: `${params.title} (${params.hint})`, choices });
+    const picked = await select<string>({
+      message: `${params.title} (${params.hint})`,
+      choices,
+      theme: { icon: { cursor: ASCII_ICONS.cursor } },
+    });
     return [picked];
   }
   return checkbox<string>({
     message: `${params.title} (${params.hint})`,
     choices,
+    theme: { icon: ASCII_ICONS },
     validate: (picked) => {
       if (picked.length < 1) return "Pick at least one model.";
       if (picked.length > params.maxCount) return `Pick at most ${params.maxCount} models.`;
