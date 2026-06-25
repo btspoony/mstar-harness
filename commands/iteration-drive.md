@@ -1,6 +1,6 @@
 ---
 name: iteration-drive
-description: Drive the active iteration to completion — run the PM Autonomous Execute loop (implement → QC → QA → Done) until all plans are Done, then optionally create PR to main
+description: Drive the active iteration to completion — run the PM Autonomous Execute loop (implement → QC → QA → Done) until all plans are Done, then optionally create PR to target branch (default main)
 agent: project-manager
 ---
 
@@ -46,5 +46,6 @@ Follow **§ Autonomous Execute driver** from the PM skill exactly:
 
 When every plan is `Done` in `status.json`:
 
-- Create a PR from `spec_integration_branch` to `main`
-- Report a summary: plans completed, branch names, PR link
+- Resolve the PR target branch from iteration metadata: `status.json` → `target_branch`. Default to `main` if not set.
+- Create a PR from `spec_integration_branch` to the resolved `target_branch`
+- Report a summary: plans completed, branch names, target branch, PR link
