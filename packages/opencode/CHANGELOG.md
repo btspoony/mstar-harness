@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.19
+
+- Bundled skills: `mstar-coding-behavior` strengthened with distilled Ponytail principles — YAGNI gate, The Ladder (7-level decision hierarchy), "deletion over addition / boring over clever", `simplify:` marker discipline, "bug fix = root cause", and "minimal check for non-trivial logic".
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.19**.
+
 ## 0.6.18
 
 - Bundled commands: `/iteration-start` now includes explicit `## 0. Boot` section aligned with `/iteration-drive`, loading core harness entry and PM role identity before research.

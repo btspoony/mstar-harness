@@ -1,6 +1,6 @@
 ---
 name: mstar-coding-behavior
-description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（显式假设、不静默猜测）、Simplicity First（最小耐久切片，拒绝未登记临时方案）、Surgical Changes（只改与任务直接相关的行、不顺手重构、不 piggyback）、Goal-Driven Execution（把模糊请求转为可验证结果、Step → verify 微模板；分批必须留 roadmap）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
+description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（先读懂再改、显式假设、不静默猜测）、Simplicity First（YAGNI 优先不写代码、The Ladder 决策层级、删除优于添加、简洁优于聪明、`simplify:` 标记天花板与升级路径、最小耐久切片）、Surgical Changes（改动可追溯、Bug 修根因先 grep 所有调用点、不顺手重构、不 piggyback）、Goal-Driven Execution（非平凡逻辑必留一个可运行检查、模糊请求转可验证结果、Step → verify 微模板、分批留 roadmap）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
 ---
 
 ## Load order（必读顺序）
@@ -41,16 +41,43 @@ Quick check:
 - Can another reviewer see what assumptions were made?
 - If assumptions are wrong, will the user detect it before large edits happen?
 
+**Never lazy about understanding.** Shorten the solution, never the reading. Read the task and every file the change touches fully first; trace the actual flow end to end. A small diff in the wrong place is not efficiency — it is a second bug shipped with confidence.
+
 ## 2) Simplicity First
 
 Core idea: implement the smallest durable slice that satisfies the request and acceptance criteria.
+
+**Question the need (YAGNI).** Before writing code, ask: does this task need code at all? Can the goal be achieved by deletion, reusing existing logic, or a configuration change? If a path requires no code, take it and explain in one line.
+
+**The Ladder.** A reflex hierarchy for every decision — stop at the first rung that holds:
+
+1. **Does this need code at all?** Speculative need → skip it (YAGNI).
+2. **Already in this codebase?** A helper, util, type, or pattern that already lives here → reuse it. Look before you write.
+3. **Stdlib / built-in covers it?** Use it.
+4. **Native platform feature covers it?** CSS over JS, DB constraint over app code, OS primitive over a library.
+5. **Already-installed dependency solves it?** Use it. Never add a new dependency for what a few lines can do.
+6. **Can it be one line?** One line.
+7. **Only then:** the minimum durable code that works.
+
+The ladder runs after understanding, not instead of it. Two rungs work → take the higher one and move on.
+
+**Deletion over addition. Boring over clever.** Removing unnecessary code is a feature. Cleverness is what someone decodes at 3am — prefer a boring, obvious solution that a tired reviewer can verify in seconds.
 
 - Do not add features, flags, or configurability that were not requested.
 - Avoid introducing new abstractions for single-use logic.
 - Prefer straightforward local fixes over framework-level reshaping **only when they fit the target design**.
 - Reject speculative error handling for impossible paths unless required by project policy.
+
+**Simplification markers.** When a deliberate shortcut has a known ceiling (global lock, O(n²) scan, naive heuristic), mark it with a `simplify:` comment that names the ceiling and the upgrade path:
+
+```text
+// simplify: global lock on cache misses. Replace with per-key lock if throughput matters.
+```
+
+This signals intent — the simplicity is deliberate, not an oversight — and gives the next person the upgrade path without research.
+
 - Do not confuse "minimum" with "temporary." A small implementation must still align with the long-term target state, stable interfaces, and known follow-up plan.
-- If a workaround is necessary, label it as `temporary`, explain why it is unavoidable, and record the removal path in the plan/status artifact before claiming the task is complete.
+- If a workaround is unavoidable, label it as `simplify:` / `temporary`, explain why, and record the removal path in the plan/status artifact before claiming the task is complete.
 
 Default rule:
 
@@ -60,7 +87,7 @@ Durability check:
 
 - Can this slice be extended by the next batch without undoing its core shape?
 - Are deferred items captured in an existing roadmap / task board / residual tracker, not just mentioned in chat?
-- Would a reviewer understand whether this is the final approach, a staged slice, or a temporary workaround?
+- Would a reviewer understand whether this is the final approach, a staged slice, or a deliberate simplification?
 
 ## 3) Surgical Changes
 
@@ -76,6 +103,8 @@ Traceability test:
 
 - Each hunk should map to a user requirement, acceptance criterion, or required fix-up.
 
+**Bug fix = root cause, not symptom.** A bug report names a symptom, not the cause. Before editing, grep every caller of the function or code path you are about to touch. The fix belongs where all callers route through — one guard in the shared function is smaller than a guard in every caller. Patching only the path the ticket names leaves every sibling caller still broken. Fix it once, at the narrowest shared point.
+
 ## 4) Goal-Driven Execution
 
 Core idea: convert vague requests into verifiable outcomes and iterate until verified.
@@ -86,6 +115,8 @@ Core idea: convert vague requests into verifiable outcomes and iterate until ver
 - Prefer evidence-backed completion claims (tests, command output, reproducible checks).
 - If verification fails, loop on diagnosis and fix before declaring completion.
 - Do not finish with "next plan / later / follow-up" only in prose. If the work is not fully complete, the remaining work must be written to the plan/status artifact or the task must report `Partial` / `Blocked`.
+
+**Minimal check for non-trivial logic.** Any non-trivial change (a branch, a loop, a parser, a data transformation, a money or security path) must leave behind ONE runnable check — the smallest thing that fails if the logic breaks. An inline self-check, a quick `assert`-based demo, or one minimal test. No frameworks, no fixtures, no per-function suites unless asked. Trivial one-liners need none — YAGNI applies to tests too.
 
 Micro template:
 

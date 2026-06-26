@@ -1,16 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.18**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.19**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.18** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.19** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.18** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.18** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.18** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.19** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.19** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.19** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.19] - 2026-06-26
+
+### Harness（skills / coding-behavior）
+
+- **将 Ponytail 编程守则蒸馏入 `mstar-coding-behavior`**：四节均加强：
+  - **§1 Think Before Coding**: 新增"先读懂再偷懒"——先完整阅读任务和每个涉及文件再动手；小 diff 改错地方是第二个 bug，不是效率。
+  - **§2 Simplicity First**: 新增 YAGNI 门禁（"是否需要写代码？"）、The Ladder（7 级决策层级：不写→复用已有→stdlib→原生平台→已安装依赖→一行→最少代码）、"删除优于添加 / 简洁优于聪明"、`simplify:` 标记规范（有意简化时标注天花板和升级路径）。
+  - **§3 Surgical Changes**: 新增"Bug 修根因，不休症状"——编辑前 grep 所有调用点；在共享入口修一次，不只修 ticket 提到的那条路径。
+  - **§4 Goal-Driven Execution**: 新增"非平凡逻辑的最小检查"——任何非平凡改动须留下一个可运行检查（assert/最小 demo/单个 test）；YAGNI 同样适用于测试。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.18 → 0.6.19**。**`@mstar-harness/cli` 保持 0.5.2**。
 
 ## [0.6.18] - 2026-06-26
 

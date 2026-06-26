@@ -2,17 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.18** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.19** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.18** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.19** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.18** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.18** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.18** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.19** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.19** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.19** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.19] - 2026-06-26
+
+### Harness (skills / coding-behavior)
+
+- **Distill Ponytail principles into `mstar-coding-behavior`**: Strengthened all four sections with distilled concepts from the Ponytail coding discipline:
+  - **§1 Think Before Coding**: Added "Never lazy about understanding" — read the full task and every touched file before editing; a small diff in the wrong place is a second bug, not efficiency.
+  - **§2 Simplicity First**: Added YAGNI gate ("does this need code at all?"), The Ladder (7-level decision hierarchy: YAGNI → reuse existing → stdlib → native platform → installed dep → one line → minimal code), "Deletion over addition / Boring over clever", and `simplify:` marker discipline (name the ceiling and upgrade path for deliberate shortcuts).
+  - **§3 Surgical Changes**: Added "Bug fix = root cause, not symptom" — before editing, grep every caller; fix once at the narrowest shared point, not only the path the ticket names.
+  - **§4 Goal-Driven Execution**: Added "Minimal check for non-trivial logic" — any non-trivial change must leave behind ONE runnable check (assert, minimal demo, or single test); YAGNI applies to tests too.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.18 → 0.6.19**. **`@mstar-harness/cli` remains 0.5.2**.
 
 ## [0.6.18] - 2026-06-26
 
