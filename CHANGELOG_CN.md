@@ -1,16 +1,26 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.19**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.20**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.19** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.20** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.19** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.19** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.19** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.20** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.20** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.20** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.20] - 2026-06-26
+
+### Harness（commands）
+
+- **`/iteration-start` Review & Edit 链**：§5 从"Review Chain"改为"Review & Edit Chain"。product-manager、architect、writing-specialist 三个角色现在 review 后直接编辑文档，而非仅标记问题。PM 只做最终 review 和 lock，不再承担汇总其他 reviewer 修订的工作。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、Cursor / Codex 插件 manifest：**0.6.19 → 0.6.20**。**`@mstar-harness/cli` 保持 0.5.2**。
 
 ## [0.6.19] - 2026-06-26
 

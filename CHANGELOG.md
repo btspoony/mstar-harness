@@ -2,17 +2,27 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.19** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.20** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.19** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.20** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.19** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.19** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.19** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.20** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.20** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.20** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.20] - 2026-06-26
+
+### Harness (commands)
+
+- **`/iteration-start` Review & Edit Chain**: Changed §5 from "Review Chain" to "Review & Edit Chain". Each role (product-manager, architect, writing-specialist) now reviews AND directly edits the documents rather than only flagging issues. PM only steps in for the final review and lock, no longer burdened with aggregating edits from other reviewers.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, and Cursor / Codex plugin manifests: **0.6.19 → 0.6.20**. **`@mstar-harness/cli` remains 0.5.2**.
 
 ## [0.6.19] - 2026-06-26
 
