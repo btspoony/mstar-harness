@@ -30,6 +30,10 @@
     "developerName": "Bohao Tang",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
+    "brandColor": "#E6B450",
+    "composerIcon": "./assets/logo.svg",
+    "logo": "./assets/logo.svg",
+    "logoDark": "./assets/logo-dark.svg",
     "defaultPrompt": [
       "Start a new project with PM routing and role assignment.",
       "Run a QC review on recent changes.",

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Morning Star Harness logo</title>
+  <desc id="desc">A minimal two-color morning star icon.</desc>
+  <rect width="512" height="512" rx="112" fill="#10243F"/>
+  <path fill="#E6B450" d="M256 72l36 140 140 36-140 36-36 156-36-156-140-36 140-36 36-140z"/>
+</svg>

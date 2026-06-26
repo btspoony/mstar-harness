@@ -11,6 +11,10 @@
   "repository": "https://github.com/btspoony/mstar-harness.git",
   "license": "MIT",
   "category": "developer-tools",
+  "brandColor": "#E6B450",
+  "icon": "assets/logo.svg",
+  "logo": "assets/logo.svg",
+  "logoDark": "assets/logo-dark.svg",
   "keywords": [
     "cursor-plugin",
     "morning-star",

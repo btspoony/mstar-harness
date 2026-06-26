@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Morning Star Harness dark logo</title>
+  <desc id="desc">A minimal light tile morning star icon for dark themes.</desc>
+  <rect width="512" height="512" rx="112" fill="#F7F4EC"/>
+  <path fill="#10243F" d="M256 72l36 140 140 36-140 36-36 156-36-156-140-36 140-36 36-140z"/>
+</svg>
