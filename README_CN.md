@@ -1,6 +1,10 @@
 <div align="center">
 
-### Morning Star (启明星) — 编码智能体 Harness 框架
+<img src="assets/logo.svg" alt="Morning Star Harness" width="96">
+
+# Morning Star (启明星)
+
+编码智能体 Harness 框架
 
 [English](README.md) / 中文
 
@@ -119,6 +123,19 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 - **Cursor**：使用 `/pm` 强制以 `Project Manager` 角色启动。
 - **Codex**：安装插件后，使用 `/pm` 强制以 `Project Manager` 角色启动。
   CLI / 手动安装链接 `codex/agents/` 后，Codex 可通过 custom agents 执行 Morning Star 角色派发。
+
+### Iteration Commands
+
+共享的 `commands/` 目录目前提供两个由 PM 驱动的迭代命令：
+
+| Command | 可用宿主 | 使用场景 |
+|---------|----------|----------|
+| `/iteration-start` | Cursor、OpenCode | 启动新的 harness iteration：调研 backlog、锁定方向、产出 compass/plans、执行 review chain，并创建 integration branch。 |
+| `/iteration-drive` | Cursor、OpenCode | 推进已有 iteration：实现、QC、QA、Done，并按需创建 PR。 |
+
+在 OpenCode 中，安装或更新 `@mstar-harness/opencode` 后重启 OpenCode；插件会从 `harness-commands/` 打包注册这些 markdown commands。
+
+在 Cursor 中，安装或更新 Cursor plugin 链接后 reload window；这些 commands 会与共享 agents、skills、rules 一起从本仓库 `commands/` 目录发现。
 
 ## 角色与技能总览
 

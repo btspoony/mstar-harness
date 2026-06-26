@@ -1,6 +1,10 @@
 <div align="center">
 
-### Morning Star — Code Agent Harness Framework
+<img src="assets/logo.svg" alt="Morning Star Harness" width="96">
+
+# Morning Star
+
+Code Agent Harness Framework
 
 English / [中文](README_CN.md)
 
@@ -121,6 +125,19 @@ That completes installation.
 - **Cursor**: use `/pm` to force-start with the `Project Manager` role.
 - **Codex**: use `/pm` to force-start with the `Project Manager` role after installing the plugin.
   Codex loads shared skills and custom agents from `codex/agents/` when linked by the CLI/manual install.
+
+### Iteration Commands
+
+The shared `commands/` directory currently provides two PM-led iteration commands:
+
+| Command | Available in | Use when |
+|---------|--------------|----------|
+| `/iteration-start` | Cursor, OpenCode | Start a new harness iteration: research backlog, lock direction, write compass/plans, run the review chain, and create the integration branch. |
+| `/iteration-drive` | Cursor, OpenCode | Continue an active iteration through implementation, QC, QA, Done, and optional PR creation. |
+
+In OpenCode, install or update `@mstar-harness/opencode` and restart OpenCode; the plugin bundles these markdown commands from `harness-commands/`.
+
+In Cursor, install or update the Cursor plugin link and reload the window; the commands are discovered from this repository's `commands/` directory alongside the shared agents, skills, and rules.
 
 ## Harness Workflow
 
