@@ -1,6 +1,6 @@
 ---
 name: iteration-start
-description: Start a new harness iteration — research backlog, lock direction with grill-me, produce compass/plans, run review chain (product-manager → architect → writing-specialist → PM lock), submit to integration branch
+description: Start a new harness iteration — research backlog, lock direction with grill-me, produce compass/plans, run edit chain (product-manager → architect → writing-specialist each review-and-edit, then PM final review and lock), submit to integration branch
 agent: project-manager
 ---
 
@@ -59,11 +59,13 @@ Produce harness artifacts:
 - `{PLAN_DIR}/<plan-id>-<name>.md` for each plan in this iteration
 - Register all plans in `{HARNESS_DIR}/status.json`
 
-## 5. Review Chain
+## 5. Review & Edit Chain
 
-1. **@product-manager** — review compass; adjust scope and user-facing details; write or update specs in `{SPECS_DIR}/`
-2. **@architect** — review compass and specs; adjust technical architecture, interface contracts, and module boundaries
-3. **@writing-specialist** — full review of all documents for clarity, consistency, and completeness
+Each role below **reviews and directly edits** the documents. Do not just flag issues — apply the fixes yourself. PM only steps in for the final lock.
+
+1. **@product-manager** — review and edit the compass; adjust scope, priorities, and user-facing details; write or update specs in `{SPECS_DIR}/`
+2. **@architect** — review and edit the compass and specs; adjust technical architecture, interface contracts, module boundaries, and trade-off reasoning
+3. **@writing-specialist** — review and edit all documents for clarity, consistency, completeness, and bilingual parity; tighten prose, unify terminology, and remove ambiguity
 4. **PM** — final review; lock all documents; confirm Prepare phase gates pass
 
 ## 6. Integration Branch

@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.20
+
+- Bundled commands: `/iteration-start` §5 changed to "Review & Edit Chain" — each reviewer now directly edits documents rather than only flagging issues. PM only does the final lock.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.20**.
+
 ## 0.6.19
 
 - Bundled skills: `mstar-coding-behavior` strengthened with distilled Ponytail principles — YAGNI gate, The Ladder (7-level decision hierarchy), "deletion over addition / boring over clever", `simplify:` marker discipline, "bug fix = root cause", and "minimal check for non-trivial logic".
