@@ -1,16 +1,40 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.20**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.22**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.20** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.20** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.20** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.20** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.6.21** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.3** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.22** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.21** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.21** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.6.22] - 2026-06-27
+
+### Harness（skills / dispatch-gates, roles）
+
+- **反递归：身份剥夺框架替代纯禁止规则**：leaf executor（QC reviewer、dev、QA）仍然进入"考虑 dispatch"的意图窗口，因为 `NEVER` / `MUST NOT` 禁止规则要求模型先激活被禁止行为再抑制。本次修复将语义从"你不能用 Task"（禁止）转为"你就是 leaf executor，Task 不是你的工具"（身份 + 能力剥夺）。
+  - Assignment 模板（`dispatch-and-assignment.md`）：在 `**You MUST NOT:**` 列表之前新增 **IDENTITY** + **CAPABILITY BOUNDARY** 块。`Delegation` 字段移至 `Execute as` 之后，提升可见性。
+  - `mstar-dispatch-gates/SKILL.md`：在 Load order 与 NEVER 列表之间插入 leaf-executor 身份前言，并显式回指 Assignment 的 IDENTITY 块。
+  - `qc-specialist-shared`：`Non-Recursive Dispatch Rule` 改为第一人称身份断言，附带递归 dispatch 陷阱识别（"If you ever think 'this would be more efficient if I dispatched X' — stop"）。
+  - `leaf-executor-checklist`：checklist 项之前增加第一人称前言。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`：**0.6.21 → 0.6.22**。**`@mstar-harness/cli` 保持 0.5.3**，Cursor / Codex 插件 manifest 保持 **0.6.21**。
+
+## [0.6.21] - 2026-06-26
+
+### Harness（skills / design-md）
+
+- **DESIGN.md YAML frontmatter 作为 SSOT**：`mstar-design-md` 模板和规范现在使用 YAML frontmatter 作为 token 值的唯一数据源。模板格式版本升至 0.1.0。明暗双主题模板（`DESIGN.md.template`、`DESIGN.dark.md.template`）、规范参考、完整性检查清单以及 Vercel 示例均已更新。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor / Codex 插件 manifest：**0.6.20 → 0.6.21**。CLI：**0.5.2 → 0.5.3**。
 
 ## [0.6.20] - 2026-06-26
 
