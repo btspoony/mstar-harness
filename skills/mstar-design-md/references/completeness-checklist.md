@@ -5,10 +5,12 @@ Three-level progressive checklist for evaluating whether a `DESIGN.md` is suffic
 ## How to use
 
 1. Read `DESIGN.md` (and `DESIGN.dark.md` if exists)
-2. Check each item in the target level (and all lower levels)
-3. An item is **complete** only when concrete values exist — placeholder comments do not count
-4. A `DESIGN.md` is at **Level N** when all items in Level N and below are complete
-5. Record the result in a comment at the top of DESIGN.md:
+2. **Parse the YAML frontmatter** for structured token values — the frontmatter is the SSOT for colors, typography, spacing, rounded, and components
+3. Review the Markdown body for documented rules, rhythm, and usage intent
+4. Check each item in the target level (and all lower levels)
+5. An item is **complete** only when concrete values exist in the frontmatter (uncommented keys with non-placeholder values) — YAML comments and `[LEVEL*]` placeholder values do not count
+6. A `DESIGN.md` is at **Level N** when all items in Level N and below are complete
+7. Record the result in a comment at the top of DESIGN.md:
 
 ```
 <!-- COMPLETENESS_LEVEL: N — last audited YYYY-MM-DD -->
@@ -20,15 +22,19 @@ The minimum bar for an agent to produce UI without hallucinating colors and typo
 
 ### Checklist
 
-- [ ] **Overview** — design system name and aesthetic principles stated
-- [ ] **Colors — Background** — at least one surface color (`background-100`)
-- [ ] **Colors — Text** — at least one text color (`gray-1000` or equivalent)
-- [ ] **Colors — Accent** — at least one accent color for links/actions (`blue*` or brand equivalent)
-- [ ] **Colors — Semantic** — at least one error color (`red*`) and warning color (`amber*`)
-- [ ] **Typography — Body** — at least one body text token with font family, size, weight, line height
-- [ ] **Typography — Heading** — at least one heading token
-- [ ] **Spacing** — base unit declared (4px or 8px) and at least 5 scale steps
-- [ ] **Breakpoints** — at least 2 responsive breakpoints defined
+- [ ] **Frontmatter exists** — YAML frontmatter block with `---` delimiters present and parseable
+- [ ] **Frontmatter `version`** — `version: alpha` declared
+- [ ] **Frontmatter `name` and `description`** — design system name and description filled (non-placeholder)
+- [ ] **Overview** — design system name and aesthetic principles stated in body
+- [ ] **Colors — Background** — frontmatter has `colors.background-100` with a concrete hex value (not `"[LEVEL*]"` placeholder)
+- [ ] **Colors — Text** — frontmatter has `colors.gray-1000` and `colors.gray-900` with concrete hex values
+- [ ] **Colors — Accent** — frontmatter has `colors.blue-700` (or brand equivalent) with a concrete hex value
+- [ ] **Colors — Semantic** — frontmatter has `colors.red-700` (error) and `colors.amber-700` (warning) with concrete hex values
+- [ ] **Typography — Body** — frontmatter has at least one `typography.copy-*` token with all five properties filled
+- [ ] **Typography — Heading** — frontmatter has at least one `typography.heading-*` token with all five properties filled
+- [ ] **Spacing** — frontmatter has `spacing.base` declared and at least 5 numbered steps with pixel values
+- [ ] **Rounded** — frontmatter has `rounded.sm` with a concrete pixel value
+- [ ] **Breakpoints** — at least 2 responsive breakpoints documented in body
 
 ### What an agent CAN do at Level 1
 
@@ -48,7 +54,7 @@ The minimum bar for an agent to produce UI without hallucinating colors and typo
 
 ### Verdict
 
-- **All 9 items checked → Level 1 complete**
+- **All 13 items checked → Level 1 complete**
 - **Missing items → below Level 1 (insufficient for agent UI generation)**
 
 ## Level 2 — Standard (consistent components)
@@ -60,17 +66,18 @@ Prerequisite: Level 1 complete.
 ### Checklist
 
 - All Level 1 items complete
-- [ ] **Colors — Full background scale** — `background-100` through at least `background-300`
-- [ ] **Colors — Full gray solid scale** — `gray-100` through `gray-1000` (10 steps)
-- [ ] **Colors — Gray alpha scale** — at least `gray-alpha-100` through `gray-alpha-600`
-- [ ] **Colors — All accent scales** — `blue`, `red`, `amber`, `green`, `teal`, `purple`, `pink` with at least `700`/`800`/`900`/`1000` steps each
-- [ ] **Typography — Headings** — at least 3 heading levels (e.g., `heading-32`, `heading-24`, `heading-20`)
-- [ ] **Typography — Labels** — at least one label token
-- [ ] **Typography — Buttons** — at least one button typography token
-- [ ] **Spacing** — full 9-step scale (4, 8, 12, 16, 24, 32, 40, 64, 96px) and three-step rhythm documented
-- [ ] **Breakpoints** — at least 4 breakpoints
-- [ ] **Components — Button** — at least primary and secondary variants with size variants (default 40px, small 32px), plus hover/active/disabled/focus states
-- [ ] **Components — Input** — at least default variant with size variants, plus hover/active/disabled/focus/error states
+- [ ] **Colors — Full background scale** — frontmatter has `colors.background-100`, `background-200`, `background-300` active (uncommented, filled)
+- [ ] **Colors — Full gray solid scale** — frontmatter has `colors.gray-100` through `gray-1000` (10 steps) all active
+- [ ] **Colors — Gray alpha scale** — frontmatter has `colors.gray-alpha-100` through at least `gray-alpha-600` all active
+- [ ] **Colors — All accent scales** — frontmatter has `blue`, `red`, `amber`, `green`, `teal`, `purple`, `pink` scales, each with at least `700`/`800`/`900`/`1000` steps active
+- [ ] **Typography — Headings** — frontmatter has at least 3 heading levels active (e.g., `heading-32`, `heading-24`, `heading-20`)
+- [ ] **Typography — Labels** — frontmatter has at least one `label-*` token active
+- [ ] **Typography — Buttons** — frontmatter has at least one `button-*` token active
+- [ ] **Spacing** — frontmatter `spacing:` has full 9-step scale active; three-step rhythm documented in body
+- [ ] **Rounded** — frontmatter `rounded:` has `sm`, `md`, `lg`, `full` all active
+- [ ] **Breakpoints** — at least 4 breakpoints documented in body
+- [ ] **Components — Button** — frontmatter `components:` has `button-primary` and `button-secondary` with all properties filled, plus `button-small` size variant; body documents hover/active/disabled/focus states
+- [ ] **Components — Input** — frontmatter `components:` has `input` with all properties filled; body documents states
 
 ### What an agent CAN do at Level 2
 
@@ -105,15 +112,14 @@ Prerequisite: Level 2 complete.
 ### Checklist
 
 - All Level 1 and Level 2 items complete
-- [ ] **DESIGN.dark.md exists** — dark theme file with same token names, dark-appropriate values
-- [ ] **Dark theme covers all tokens** — every token in DESIGN.md has a corresponding entry in DESIGN.dark.md
-- [ ] **Elevation — Shadows** — at least 3 elevation levels (card, popover, modal) with explicit `box-shadow` values
-- [ ] **Motion — Easing** — easing curve declared
-- [ ] **Motion — Durations** — at least state change, popover, modal durations
-- [ ] **Motion — Reduced motion** — `prefers-reduced-motion` rule declared
-- [ ] **Shapes — Border radius** — at least 4 radius tokens (surface/input, menu/modal, fullscreen, pill)
-- [ ] **Components — Full library** — at least Card, Modal, Tooltip, Menu/Dropdown tokens
-- [ ] **Voice & Content** — writing rules documented: casing conventions, action naming, error format, toast format, empty state format
+- [ ] **DESIGN.dark.md exists** — dark theme file with `---` YAML frontmatter present, same key structure as DESIGN.md
+- [ ] **Dark theme frontmatter parity** — every token in DESIGN.md frontmatter (`colors`, `typography`, `spacing`, `rounded`, `components`) has a corresponding active entry in DESIGN.dark.md frontmatter with dark-appropriate values
+- [ ] **Elevation — Shadows** — at least 3 elevation levels (card, popover, modal) with explicit `box-shadow` values in body
+- [ ] **Motion — Easing** — easing curve declared in body
+- [ ] **Motion — Durations** — at least state change, popover, modal durations in body
+- [ ] **Motion — Reduced motion** — `prefers-reduced-motion` rule declared in body
+- [ ] **Components — Full library** — frontmatter `components:` has at least Card, Modal, Tooltip, Menu/Dropdown variants
+- [ ] **Voice & Content** — writing rules documented in body: casing conventions, action naming, error format, toast format, empty state format
 
 ### What an agent CAN do at Level 3
 

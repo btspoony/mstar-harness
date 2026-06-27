@@ -9,10 +9,71 @@ This is Vercel's Geist design system as published at `vercel.com/design.md`, pre
 - It defines a complete Level 3 design system covering all sections
 - The token naming conventions (100-1000 step scale with intent encoding) are widely adopted
 - Light/Dark dual-theme pattern shows how to split same-name tokens across two files
+- The YAML frontmatter + Markdown body split is the standard DESIGN.md file structure
 
 ---
 
-# Geist
+## YAML Frontmatter: Structured Token Store
+
+Vercel Geist DESIGN.md uses a YAML frontmatter block (`---` ... `---`) as the **single source of truth for token values**. The Markdown body below is human-readable documentation. Every DESIGN.md file must follow this pattern.
+
+### Frontmatter structure
+
+```yaml
+---
+version: alpha
+name: Geist
+description: Vercel's Geist design system, Light theme.
+colors:
+  background-100: "#ffffff"
+  gray-1000: "#171717"
+  blue-700: "#006bff"
+  # … all color tokens as flat map …
+typography:
+  copy-16:
+    fontFamily: Geist Sans
+    fontSize: 16px
+    fontWeight: 400
+    lineHeight: 1.6
+    letterSpacing: 0
+  # … all typography tokens with 5 properties each …
+spacing:
+  base: 4px
+  1: 4px
+  2: 8px
+  # … full scale …
+rounded:
+  sm: 6px
+  md: 12px
+  lg: 16px
+  full: 9999px
+components:
+  button-primary:
+    backgroundColor: "{colors.gray-1000}"
+    textColor: "{colors.background-100}"
+    typography: "{typography.button-14}"
+    rounded: "{rounded.sm}"
+    padding: "0 10px"
+    height: 40px
+  # … all component variants referencing other frontmatter keys …
+---
+```
+
+> **Design note:** The frontmatter-body split is fundamental to the DESIGN.md format. The frontmatter is structured, parseable data; the body is prose documentation. This is the same pattern used by Jekyll, Hugo, and many static site generators — it's well-understood by tooling and agents. The `{colors.X}` reference syntax in components enables single-point-of-change: update `colors.gray-1000` in one place and all components that reference it automatically follow.
+
+### Key design decisions in the frontmatter
+
+1. **Flat color map, not nested by family** — `gray-100: "#…"` not `gray: {100: "#…"}`. This allows flat lookups and avoids deep nesting.
+2. **10-step color scale encodes intent** — `400 = border`, `700 = solid fill`, `1000 = primary text`. Agent reads the step number and knows the role.
+3. **All 5 typography properties per token** — no defaults assumed; every token is self-contained.
+4. **Reference syntax for components** — `"{colors.gray-1000}"` keeps components declarative and avoids value duplication.
+5. **Full frontmatter even for dark theme** — `design.dark.md` has the exact same frontmatter keys with different values.
+
+---
+
+## Markdown Body (documentation)
+
+Below the frontmatter, the body provides human/agent-readable documentation:
 
 ## Overview
 
@@ -130,9 +191,10 @@ Copy is part of the design; keep it precise and free of filler.
 
 ## Key takeaways for creating your own DESIGN.md
 
-1. **Encode intent in token names**, not just values — `gray-400 = border`, `copy-14 = body text`
-2. **State rules, not just values** — "three-step spacing rhythm" is more useful than a raw scale
-3. **Give negative examples** — agents need to know what NOT to do as much as what to do
-4. **Make state derivable** — "100 → 200 → 300 on hover" means the agent can compute any component's state
-5. **Tie tokens to concrete UI elements** — "card shadow", not "level-1 shadow"
-6. **Voice rules should be mechanical** — fill-in-the-blank templates, not vague principles
+1. **Use YAML frontmatter as the token SSOT** — structured colors, typography, spacing, rounded, and components in parseable form; the body is documentation
+2. **Encode intent in token names**, not just values — `gray-400 = border`, `copy-14 = body text`
+3. **State rules, not just values** — "three-step spacing rhythm" is more useful than a raw scale
+4. **Give negative examples** — agents need to know what NOT to do as much as what to do
+5. **Make state derivable** — "100 → 200 → 300 on hover" means the agent can compute any component's state
+6. **Tie tokens to concrete UI elements** — "card shadow", not "level-1 shadow"
+7. **Voice rules should be mechanical** — fill-in-the-blank templates, not vague principles

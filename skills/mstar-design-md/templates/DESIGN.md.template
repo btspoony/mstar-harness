@@ -1,3 +1,300 @@
+---
+version: alpha
+name: "[Design System Name]"
+description: "[Design System Name] is a [adjective — e.g., minimal, high-contrast, playful] design system for [project/product name]. This is the Light theme."
+
+colors:
+  # ── Background surfaces ──
+  # Level 1 — primary page/card surface (REQUIRED)
+  background-100: "[#ffffff]"
+
+  # LEVEL2_PLACEHOLDER: secondary surface, active surface — uncomment and fill when upgrading to Level 2
+  # background-200: "[#f5f5f5]"
+  # background-300: "[#e5e5e5]"
+
+  # ── Gray (solid — text and opaque fills) ──
+  # Level 1 — primary and secondary text (REQUIRED)
+  gray-1000: "[#111111]"
+  gray-900: "[#666666]"
+
+  # LEVEL2_PLACEHOLDER: full 10-step gray scale — uncomment and fill values for steps 100–800
+  # gray-100: "[#f2f2f2]"
+  # gray-200: "[#ebebeb]"
+  # gray-300: "[#e6e6e6]"
+  # gray-400: "[#eaeaea]"
+  # gray-500: "[#c9c9c9]"
+  # gray-600: "[#a8a8a8]"
+  # gray-700: "[#8f8f8f]"
+  # gray-800: "[#7d7d7d]"
+
+  # LEVEL2_PLACEHOLDER: gray alpha (translucent) scale — uncomment and fill
+  # gray-alpha-100: "#0000000d"
+  # gray-alpha-200: "#00000015"
+  # gray-alpha-300: "#0000001a"
+  # gray-alpha-400: "#00000014"
+  # gray-alpha-500: "#00000036"
+  # gray-alpha-600: "#0000003d"
+  # gray-alpha-700: "#00000070"
+  # gray-alpha-800: "#00000082"
+  # gray-alpha-900: "#000000b3"
+  # gray-alpha-1000: "#000000e8"
+
+  # ── Accent — Blue (links, focus, primary actions) ──
+  # Level 1 — at minimum blue-700 for interactive elements (REQUIRED)
+  blue-700: "[#0066ff]"
+
+  # LEVEL2_PLACEHOLDER: full blue scale — uncomment and fill
+  # blue-100: "[#f0f7ff]"
+  # blue-200: "[#e9f4ff]"
+  # blue-300: "[#dfefff]"
+  # blue-400: "[#cae7ff]"
+  # blue-500: "[#94ccff]"
+  # blue-600: "[#48aeff]"
+  # blue-700: "[#006bff]"
+  # blue-800: "[#0059ec]"
+  # blue-900: "[#005ff2]"
+  # blue-1000: "[#002359]"
+
+  # ── Accent — Red (errors, destructive actions) ──
+  # Level 1 — at minimum red-700 for errors (REQUIRED)
+  red-700: "[#e60000]"
+
+  # LEVEL2_PLACEHOLDER: full red scale — uncomment and fill
+  # red-100: "[#ffeeef]"
+  # red-200: "[#ffe8ea]"
+  # red-300: "[#ffe3e4]"
+  # red-400: "[#ffd7d6]"
+  # red-500: "[#ffb1b3]"
+  # red-600: "[#ff676d]"
+  # red-700: "[#fc0035]"
+  # red-800: "[#ea001d]"
+  # red-900: "[#d8001b]"
+  # red-1000: "[#47000c]"
+
+  # ── Accent — Amber (warnings) ──
+  # Level 1 — at minimum amber-700 for warnings (REQUIRED)
+  amber-700: "[#ffaa00]"
+
+  # LEVEL2_PLACEHOLDER: full amber scale — uncomment and fill
+  # amber-100: "[#fff6de]"
+  # amber-200: "[#fff4cf]"
+  # amber-300: "[#fff1c1]"
+  # amber-400: "[#ffdc73]"
+  # amber-500: "[#ffc543]"
+  # amber-600: "[#ffa600]"
+  # amber-700: "[#ffae00]"
+  # amber-800: "[#ff9300]"
+  # amber-900: "[#aa4d00]"
+  # amber-1000: "[#561900]"
+
+  # LEVEL2_PLACEHOLDER: additional accent scales — uncomment and fill
+  # green-100: "[#ecfdec]"
+  # green-200: "[#e5fce7]"
+  # green-300: "[#d3fad1]"
+  # green-400: "[#b9f5bc]"
+  # green-500: "[#82eb8d]"
+  # green-600: "[#4ce15e]"
+  # green-700: "[#28a948]"
+  # green-800: "[#279141]"
+  # green-900: "[#107d32]"
+  # green-1000: "[#003a00]"
+
+  # teal-100: "[#defffb]"
+  # teal-200: "[#ddfef6]"
+  # teal-300: "[#ccf9f1]"
+  # teal-400: "[#b1f7ec]"
+  # teal-500: "[#52f0db]"
+  # teal-600: "[#00e3c4]"
+  # teal-700: "[#00ac96]"
+  # teal-800: "[#00927f]"
+  # teal-900: "[#007f70]"
+  # teal-1000: "[#003f34]"
+
+  # purple-100: "[#faf0ff]"
+  # purple-200: "[#f9f0ff]"
+  # purple-300: "[#f6e8ff]"
+  # purple-400: "[#f2d9ff]"
+  # purple-500: "[#dfa7ff]"
+  # purple-600: "[#c979ff]"
+  # purple-700: "[#a000f8]"
+  # purple-800: "[#8500d1]"
+  # purple-900: "[#7d00cc]"
+  # purple-1000: "[#2f004e]"
+
+  # pink-100: "[#ffe8f6]"
+  # pink-200: "[#ffe8f3]"
+  # pink-300: "[#ffdfeb]"
+  # pink-400: "[#ffd3e1]"
+  # pink-500: "[#fdb3cc]"
+  # pink-600: "[#f97ea7]"
+  # pink-700: "[#f22782]"
+  # pink-800: "[#e4106e]"
+  # pink-900: "[#c41562]"
+  # pink-1000: "[#460523]"
+
+  # LEVEL3_PLACEHOLDER: wide-gamut P3 equivalents — uncomment and fill for Display P3 screens
+  # blue-100-p3: "oklch(…)"
+  # blue-200-p3: "oklch(…)"
+  # …
+
+typography:
+  # ── Body text (multi-line, taller line-height) ──
+  # Level 1 — at minimum one body token (REQUIRED)
+  copy-16:
+    fontFamily: "[font-family]"
+    fontSize: 16px
+    fontWeight: 400
+    lineHeight: 1.6
+    letterSpacing: 0
+
+  # LEVEL2_PLACEHOLDER: additional body sizes — uncomment and fill
+  # copy-24:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 24px
+  #   fontWeight: 400
+  #   lineHeight: 36px
+  # copy-20:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 20px
+  #   fontWeight: 400
+  #   lineHeight: 36px
+  # copy-14:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 14px
+  #   fontWeight: 400
+  #   lineHeight: 20px
+
+  # ── Headings ──
+  # Level 1 — at minimum one heading token (REQUIRED)
+  heading-32:
+    fontFamily: "[font-family]"
+    fontSize: 32px
+    fontWeight: 600
+    lineHeight: 1.2
+    letterSpacing: -0.02em
+
+  # LEVEL2_PLACEHOLDER: full heading scale — uncomment and fill
+  # heading-72:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 72px
+  #   fontWeight: 600
+  #   lineHeight: 72px
+  #   letterSpacing: -0.04em
+  # heading-48:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 48px
+  #   fontWeight: 600
+  #   lineHeight: 56px
+  #   letterSpacing: -0.03em
+  # heading-24:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 24px
+  #   fontWeight: 600
+  #   lineHeight: 32px
+  #   letterSpacing: -0.01em
+  # heading-20:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 20px
+  #   fontWeight: 600
+  #   lineHeight: 26px
+  #   letterSpacing: -0.005em
+
+  # LEVEL2_PLACEHOLDER: label typography (single-line, scannable) — uncomment and fill
+  # label-14:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 14px
+  #   fontWeight: 400
+  #   lineHeight: 20px
+
+  # LEVEL2_PLACEHOLDER: button typography — uncomment and fill
+  # button-14:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 14px
+  #   fontWeight: 500
+  #   lineHeight: 20px
+
+spacing:
+  base: 4px
+  # Level 1 — at minimum 5 scale steps (REQUIRED)
+  1: 4px
+  2: 8px
+  3: 12px
+  4: 16px
+  6: 24px
+
+  # LEVEL2_PLACEHOLDER: full 9-step scale — uncomment and fill
+  # 8: 32px
+  # 10: 40px
+  # 16: 64px
+  # 24: 96px
+
+rounded:
+  # Level 1 — at minimum one radius for everyday controls (REQUIRED)
+  sm: 6px
+
+  # LEVEL2_PLACEHOLDER: additional radius tokens — uncomment and fill
+  # md: 12px
+  # lg: 16px
+  # full: 9999px
+
+# LEVEL2_PLACEHOLDER: component tokens — uncomment full section when upgrading to Level 2
+# components:
+#   button-primary:
+#     backgroundColor: "{colors.gray-1000}"
+#     textColor: "{colors.background-100}"
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 10px"
+#     height: 40px
+#   button-secondary:
+#     backgroundColor: "{colors.background-100}"
+#     textColor: "{colors.gray-1000}"
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 10px"
+#     height: 40px
+#   button-tertiary:
+#     textColor: "{colors.gray-1000}"
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 10px"
+#     height: 40px
+#   button-error:
+#     backgroundColor: "{colors.red-800}"
+#     textColor: "#ffffff"
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 10px"
+#     height: 40px
+#   button-small:
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 6px"
+#     height: 32px
+#   button-large:
+#     typography: "{typography.button-16}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 14px"
+#     height: 48px
+#   input:
+#     backgroundColor: "{colors.background-100}"
+#     textColor: "{colors.gray-1000}"
+#     typography: "{typography.label-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 12px"
+#     height: 40px
+#   input-small:
+#     typography: "{typography.label-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 12px"
+#     height: 32px
+#   input-large:
+#     typography: "{typography.label-16}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 12px"
+#     height: 48px
+---
+
 <!-- COMPLETENESS_LEVEL: 1 — last audited [DATE] -->
 
 # [Design System Name]
@@ -7,146 +304,59 @@
 [Design System Name] is a [adjective, e.g., minimal, playful, bold] design system for [project/product name].
 [Aesthetic principles — one sentence describing the visual identity: e.g., "Prioritize readability and clarity with plenty of whitespace and restrained color."]
 
+All concrete token values live in the YAML frontmatter above (colors, typography, spacing, rounded, components). The sections below explain usage rules, design intent, and agent guidance.
+
 This is the Light theme.
 <!-- LEVEL2_PLACEHOLDER: When ready for dark theme, create DESIGN.dark.md with same token names and different values. See references/completeness-checklist.md § Level 3. -->
 <!-- Uncomment when dark theme exists: The Dark theme uses the same token names with different values and lives at /DESIGN.dark.md. -->
 
 ## Colors
 
-### Background
+Token values are defined in the frontmatter `colors:` map. Each non-background scale runs 10 steps (`100`–`1000`), and the step encodes intent, not just lightness:
 
-<!-- Level 1 — Fill in at least background-100. Level 2 adds background-200 and background-300. -->
+- `100` default background
+- `200` hover background
+- `300` active background
+- `400` default border
+- `500` hover border
+- `600` active border
+- `700` solid fill, high contrast
+- `800` solid fill, hover
+- `900` secondary text and icons
+- `1000` primary text and icons
 
-| Token | Value |
-|-------|-------|
-| background-100 | #[primary page/card surface] |
+`background-100` is the primary page and card surface. The `gray-alpha-*` tokens are translucent, so they layer over any background; use them for borders, dividers, overlays, and hover states. Solid `gray-*` holds its contrast on any surface, so use it for text and opaque fills. Accent scales carry meaning: `blue` for links and focus; `red` for errors; `amber` for warnings; plus `green`, `teal`, `purple`, and `pink`.
 
-<!-- LEVEL2_PLACEHOLDER: Add background-200 and background-300 for subtle surface separation. See references/completeness-checklist.md § Level 2/Colors. -->
-<!--
-| background-200 | #[secondary surface] |
-| background-300 | #[active surface] |
--->
-
-### Gray (text and fills)
-
-<!-- Level 1 — Fill in at least gray-1000 (primary text) and gray-900 (secondary text). -->
-
-| Token | Value |
-|-------|-------|
-| gray-1000 | #[primary text] |
-| gray-900 | #[secondary text] |
-
-<!-- LEVEL2_PLACEHOLDER: Complete the full 10-step scale (gray-100 through gray-1000). See references/design-md-spec.md § Colors. -->
-<!--
-| gray-100 | #[lightest fill] |
-| gray-200 | #[hover fill] |
-| gray-300 | #[active fill] |
-| gray-400 | #[border] |
-| gray-500 | #[hover border] |
-| gray-600 | #[active border] |
-| gray-700 | #[solid fill / disabled text] |
-| gray-800 | #[solid hover] |
-| gray-900 | #[secondary text] |
-| gray-1000 | #[primary text] |
--->
-
+<!-- LEVEL2_PLACEHOLDER: Complete the full 10-step gray scale and add all accent scales to the frontmatter. See references/completeness-checklist.md § Level 2/Colors. -->
 <!-- LEVEL2_PLACEHOLDER: Add gray-alpha scale for translucent borders, overlays, and hover states. See references/design-md-spec.md § Colors. -->
-<!--
-### Gray Alpha (translucent overlays)
-
-| Token | Value |
-|-------|-------|
-| gray-alpha-100 | rgba(0, 0, 0, 0.04) |
-| gray-alpha-200 | rgba(0, 0, 0, 0.06) |
-| gray-alpha-300 | rgba(0, 0, 0, 0.08) |
-| gray-alpha-400 | rgba(0, 0, 0, 0.12) |
-| gray-alpha-500 | rgba(0, 0, 0, 0.16) |
-| gray-alpha-600 | rgba(0, 0, 0, 0.24) |
--->
-
-### Accent
-
-<!-- Level 1 — Fill in at least one accent (blue or brand color) for links/actions, plus red for errors and amber for warnings. -->
-
-| Token | Value | Usage |
-|-------|-------|-------|
-| blue-700 | #[links, focus, primary actions] | Interactive elements |
-| red-700 | #[errors, destructive actions] | Errors, delete buttons |
-| amber-700 | #[warnings, alerts] | Warning states |
-
-<!-- LEVEL2_PLACEHOLDER: Complete all accent scales (blue, red, amber, green, teal, purple, pink). Add at minimum 700/800/900/1000 steps per scale. See references/completeness-checklist.md § Level 2/Colors. -->
-<!--
-| green | Success states |
-| teal | Info, secondary brand |
-| purple | Special emphasis |
-| pink | Highlights, badges |
--->
+<!-- LEVEL3_PLACEHOLDER: Add wide-gamut P3 equivalents (`*-p3`) in oklch() to the frontmatter. -->
 
 ## Typography
 
-<!-- Level 1 — Fill in at least one body token (copy-*) and one heading token (heading-*). -->
-<!-- Token naming: {role}-{size}. Roles: heading, label, copy, button. Size: approximate font size in px. -->
+Token values are defined in the frontmatter `typography:` map. Token naming: `{role}-{size}` where role is `heading`, `label`, `copy`, or `button` and size is approximate font size in px.
 
-### Body text
+- **Headings** (`heading-72` through `heading-14`): title pages and sections; `letterSpacing` tightens as the size grows.
+- **Labels** (`label-20` through `label-12`): single-line, scannable text — navigation, form labels, table headers, metadata.
+- **Copy** (`copy-24` through `copy-13`): multi-line body text with a taller `lineHeight`.
+- **Buttons** (`button-16` through `button-12`): medium-weight labels for buttons and compact controls.
+- **Mono tokens** (`-mono` suffix): same metrics with a monospace font for code and data; prefer tabular figures when numbers need to align.
 
-| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
-|-------|------------|------|--------|-------------|----------------|
-| copy-16 | [font-family] | 16px | 400 | 1.6 | 0 |
-
-### Headings
-
-| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
-|-------|------------|------|--------|-------------|----------------|
-| heading-32 | [font-family] | 32px | 600 | 1.2 | -0.02em |
-
-<!-- LEVEL2_PLACEHOLDER: Complete the typography scale. Add at least 3 heading levels, 1 label token, and 1 button typography token. See references/completeness-checklist.md § Level 2/Typography. -->
-<!--
-### Labels (single-line, scannable)
-
-| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
-|-------|------------|------|--------|-------------|----------------|
-| label-14 | [font-family] | 14px | 500 | 1.3 | 0 |
-
-### Buttons
-
-| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
-|-------|------------|------|--------|-------------|----------------|
-| button-14 | [font-family] | 14px | 500 | 1.3 | 0 |
-
-### Additional headings
-| heading-24 | [font-family] | 24px | 600 | 1.3 | -0.01em |
-| heading-20 | [font-family] | 20px | 600 | 1.3 | 0 |
--->
+<!-- LEVEL2_PLACEHOLDER: Complete the typography scale in the frontmatter. Add at least 3 heading levels, 1 label token, and 1 button typography token. See references/completeness-checklist.md § Level 2/Typography. -->
 
 ## Spacing & Layout
 
+Token values are defined in the frontmatter `spacing:` and `rounded:` maps.
+
 ### Spacing scale
 
-<!-- Level 1 — Declare base unit and at least 5 scale steps. Base unit is typically 4px or 8px. -->
+Keep a three-step rhythm:
+- [small, e.g., 8px] inside a group (label + input, icon + text)
+- [medium, e.g., 16px] between related groups
+- [large, e.g., 32-40px] between sections
 
-Base unit: [4px or 8px]
+Cards use 24px padding, 16px when compact and 32px for hero areas. Center content in a responsive column with side padding that grows at wider breakpoints.
 
-| Step | Value |
-|------|-------|
-| 1x | [base × 1] |
-| 2x | [base × 2] |
-| 3x | [base × 3] |
-| 4x | [base × 4] |
-| 6x | [base × 6] |
-
-<!-- LEVEL2_PLACEHOLDER: Complete the full 9-step scale and add three-step rhythm rules. See references/design-md-spec.md § Spacing & Layout. -->
-<!--
-| 8x | [base × 8] |
-| 10x | [base × 10] |
-| 16x | [base × 16] |
-| 24x | [base × 24] |
-
-### Rhythm
-
-- [small]: inside a group (label + input, icon + text)
-- [medium]: between related groups
-- [large]: between sections
--->
+<!-- LEVEL2_PLACEHOLDER: Complete the full 9-step spacing scale in the frontmatter. See references/completeness-checklist.md § Level 2/Spacing. -->
 
 ### Breakpoints
 
@@ -164,38 +374,30 @@ Base unit: [4px or 8px]
 | 2xl | 1400px | Ultra-wide |
 -->
 
-<!-- LEVEL2_PLACEHOLDER: Add Components section — at minimum Button (primary, secondary) and Input tokens with size variants and all states. See references/design-md-spec.md § Components. -->
+<!-- LEVEL2_PLACEHOLDER: Add Components section — at minimum Button (primary, secondary, tertiary, error) and Input tokens in the frontmatter `components:` map with size variants and all states. See references/design-md-spec.md § Components. -->
 <!--
 ## Components
 
+Component tokens are defined in the frontmatter `components:` map. They reference other frontmatter keys via `{colors.*}` and `{typography.*}` syntax.
+
 ### Button
 
-| Variant | Background | Text | Border | Radius | Height |
-|---------|-----------|------|--------|--------|--------|
-| primary | gray-1000 | background-100 | — | 6px | 40px |
-| secondary | background-100 | gray-1000 | gray-alpha-400 | 6px | 40px |
+**Variants** are defined in frontmatter as `button-primary`, `button-secondary`, `button-tertiary`, `button-error`.
 
-**Size variants:**
-| Size | Height | Typography |
-|------|--------|------------|
-| small | 32px | button-12 |
-| default | 40px | button-14 |
-| large | 48px | button-16 |
+**Size variants** (`button-small`, `button-large`) inherit variant properties and override only typography, padding, and height.
 
-**States:** Fill steps up: 100→200 (hover), 100→300 (active). Border steps up: 400→500→600. Disabled: gray-100 fill, gray-700 text, not-allowed cursor. Focus: 0 0 0 2px background-100, 0 0 0 4px blue-700.
+**States:** Fill steps up: 100→200 (hover), 100→300 (active). Border steps up: 400→500→600. Disabled: 100 fill, 700 text, not-allowed cursor. Focus: `0 0 0 2px {colors.background-100}, 0 0 0 4px {colors.blue-700}`.
 
 ### Input
 
-| Variant | Background | Text | Border | Radius | Height |
-|---------|-----------|------|--------|--------|--------|
-| default | background-100 | gray-1000 | gray-alpha-400 | 6px | 40px |
+**Variants** are defined in frontmatter as `input`.
 
-**Size variants:** Same as Button (32px/40px/48px).
+**Size variants** (`input-small`, `input-large`) same pattern as Button.
 
-**States:** Same state progression as Button. Error: border red-700, add error message below.
+**States:** Same state progression as Button. Error: border `red-700`, add error message below.
 -->
 
-<!-- LEVEL3_PLACEHOLDER: Add Elevation & Depth, Motion, Shapes, Voice & Content, and full Component library. See references/completeness-checklist.md § Level 3. -->
+<!-- LEVEL3_PLACEHOLDER: Add Elevation & Depth, Motion, Shapes, Voice & Content, and extended Component library. See references/completeness-checklist.md § Level 3. -->
 <!--
 ## Elevation & Depth
 
@@ -209,7 +411,7 @@ Hierarchy comes from tonal surfaces and borders first; shadows stay subtle.
 | Popover | 0 1px 1px rgba(0, 0, 0, 0.02), 0 4px 8px -4px rgba(0, 0, 0, 0.04), 0 16px 24px -8px rgba(0, 0, 0, 0.06) |
 | Modal | 0 1px 1px rgba(0, 0, 0, 0.02), 0 8px 16px -4px rgba(0, 0, 0, 0.04), 0 24px 32px -8px rgba(0, 0, 0, 0.06) |
 
-Pair each elevation with the matching radius below.
+Pair each elevation with the matching radius from `rounded:` frontmatter.
 
 ## Motion
 
@@ -231,22 +433,15 @@ Honor prefers-reduced-motion: drop nonessential motion.
 
 ## Shapes
 
-### Border Radius
-
-| Context | Value |
-|---------|-------|
-| Surface, Input, Button | 6px |
-| Menu, Modal, Popover | 12px |
-| Fullscreen | 16px |
-| Pill, Avatar | 9999px |
-
-Keep one radius family per view; never mix rounded and sharp corners.
+Border radius values are defined in the frontmatter `rounded:` map. Keep one radius family per view; never mix rounded and sharp corners.
 
 ## Components — Extended
 
-Add Card, Modal, Tooltip, Menu/Dropdown, Badge tokens following the same pattern as Button/Input.
+Add Card, Modal, Tooltip, Menu/Dropdown, Badge tokens to the frontmatter `components:` map following the same structure as Button/Input.
 
 ## Voice & Content
+
+Copy is part of the design; keep it precise and free of filler.
 
 - Use Title Case for labels, buttons, titles, and tabs
 - Sentence case for body, helper text, and toasts
@@ -263,11 +458,12 @@ Add Card, Modal, Tooltip, Menu/Dropdown, Badge tokens following the same pattern
 
 <!-- Fill in with rules specific to this design system. Examples to customize: -->
 
-- Use [gray-1000] for primary text, [gray-900] for secondary.
+- Use `gray-1000` for primary text, `gray-900` for secondary.
 - Keep accent color for state and the single most important action on a view.
 - Hold WCAG AA contrast (4.5:1 for body text).
-- Show focus ring on every interactive element at :focus-visible.
-- Apply typography tokens instead of setting font properties by hand.
+- Show focus ring on every interactive element at `:focus-visible`.
+- Use token values from the frontmatter — never set font size, line height, or color by hand.
 - Don't signal state with color alone; pair it with an icon or text label.
 - Don't use more than two font weights in one view.
 - Don't mix rounded and sharp corners in one view.
+- Don't swap `gray-*` for `background-*`; they are separate scales.

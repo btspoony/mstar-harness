@@ -18,11 +18,13 @@ description: DESIGN.md design system specification for Morning Star projects. Cr
 
 | Topic | See |
 |-------|-----|
-| Normative spec: section definitions, token naming, light/dark rules | `references/design-md-spec.md` |
+| Normative spec: section definitions, token naming, light/dark rules, **YAML frontmatter structure** | `references/design-md-spec.md` |
 | Three-level completeness checklist (MVP / Standard / Production) | `references/completeness-checklist.md` |
 | Vercel Geist DESIGN.md as annotated reference | `references/vercel-example.md` |
-| Full template with Level 2/3 placeholders | `templates/DESIGN.md.template` |
+| Full template with YAML frontmatter and Level 2/3 placeholders | `templates/DESIGN.md.template` |
 | Dark theme template (same token names, different values) | `templates/DESIGN.dark.md.template` |
+
+**YAML frontmatter is the SSOT for token values.** Colors, typography, spacing, rounded, and components live in the frontmatter as structured, machine-readable data. The Markdown body is supplementary documentation (rules, intent, usage guidance). When reading DESIGN.md, always parse the YAML frontmatter first; when writing, keep frontmatter and body in sync.
 
 **Out of scope:** rendered UI artifacts (use Open Design MCP `user-open-design`); frontend implementation that consumes DESIGN.md tokens (use `@frontend-dev` / `@fullstack-dev`); QC review verdict rules (→ **`mstar-review-qc`**).
 
@@ -74,25 +76,26 @@ Full checklist → `references/completeness-checklist.md`.
 
 ### Workflow 1: Create DESIGN.md (Prepare phase)
 
-1. Read `references/design-md-spec.md` for section definitions
-2. Copy `templates/DESIGN.md.template` to `{PROJECT_ROOT}/DESIGN.md`
+1. Read `references/design-md-spec.md` for section definitions and YAML frontmatter structure
+2. Copy `templates/DESIGN.md.template` to `{PROJECT_ROOT}/DESIGN.md` — the template includes the full YAML frontmatter skeleton
 3. Interview `@product-manager` for brand colors, typography preferences, must-have patterns
-4. Fill Level 1 sections; leave Level 2/3 as-is (commented placeholders)
-5. If plan requires Level 2+ out of the gate, fill those sections too
-6. Run the completeness audit workflow below to confirm level
-7. Report to PM: path created, level achieved, what's needed for next level
+4. Fill Level 1 frontmatter tokens (uncomment and replace `"[placeholder]"` values with concrete hex/px values)
+5. If plan requires Level 2+ out of the gate, uncomment and fill those sections too
+6. Update the body prose to match the frontmatter values (target audience, aesthetic principles, rhythm rules)
+7. Run the completeness audit workflow below to confirm level
+8. Report to PM: path created, level achieved, what's needed for next level
 
 ### Workflow 2: Audit DESIGN.md completeness
 
-1. Read `DESIGN.md` and `DESIGN.dark.md` (if exists)
+1. Read `DESIGN.md` and `DESIGN.dark.md` (if exists) — **parse the YAML frontmatter** for structured token values
 2. Load `references/completeness-checklist.md`
-3. Check each checklist item; note gaps
+3. Check each checklist item; note gaps in both frontmatter (missing/uncommented keys, placeholder values) and body (missing rules/documentation)
 4. Report:
    - Current completeness level
-   - Gaps preventing next level
-   - Presence of upgrade placeholders (`LEVEL2_PLACEHOLDER`, `LEVEL3_PLACEHOLDER`)
+   - Gaps preventing next level (frontmatter gaps vs. body gaps, tagged separately)
+   - Presence of upgrade placeholders (`LEVEL2_PLACEHOLDER`, `LEVEL3_PLACEHOLDER` in both frontmatter comments and body HTML comments)
    - Recommendation: whether to upgrade now or defer
-5. Update DESIGN.md level tag (e.g., `<!-- COMPLETENESS_LEVEL: 1 -->`) if changed
+5. Update DESIGN.md level tag (e.g., `<!-- COMPLETENESS_LEVEL: 1 — last audited YYYY-MM-DD -->`) if changed
 
 ### Workflow 3: Add dark theme
 
@@ -106,9 +109,11 @@ Full checklist → `references/completeness-checklist.md`.
 
 Before writing styled UI code:
 1. Read `DESIGN.md` (and `DESIGN.dark.md` if exists)
-2. Extract tokens into implementation layer (CSS custom properties, Tailwind config, theme object, etc.)
-3. Follow DESIGN.md Voice & Content rules for copy text
-4. If DESIGN.md is missing or incomplete, report to PM — do not guess tokens
+2. **Parse the YAML frontmatter** for token values — this is the SSOT for colors, typography, spacing, rounded, and components
+3. Resolve component `{colors.X}`, `{typography.X}`, `{rounded.X}` references by tracing back to the corresponding frontmatter keys
+4. Extract tokens into implementation layer (CSS custom properties, Tailwind config, theme object, etc.)
+5. Follow DESIGN.md body Voice & Content rules for copy text
+6. If DESIGN.md is missing, has no frontmatter, or is incomplete, report to PM — do not guess tokens
 
 ## Light/Dark dual-theme rules
 

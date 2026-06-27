@@ -1,133 +1,349 @@
+---
+version: alpha
+name: "[Design System Name]"
+description: "[Design System Name] is a [adjective] design system for [project/product name]. This is the Dark theme. The Light theme uses the same token names with different values and lives at /DESIGN.md."
+
+colors:
+  # ── Background surfaces (dark) ──
+  # Level 1 — primary dark page/card surface (REQUIRED)
+  background-100: "[#000000]"
+
+  # LEVEL2_PLACEHOLDER: secondary surface, active surface — uncomment and fill when upgrading to Level 2
+  # background-200: "[#0a0a0a]"
+  # background-300: "[#141414]"
+
+  # ── Gray (solid — text and opaque fills on dark) ──
+  # Level 1 — primary and secondary text for dark surfaces (REQUIRED)
+  gray-1000: "[#ededed]"
+  gray-900: "[#a0a0a0]"
+
+  # LEVEL2_PLACEHOLDER: full 10-step gray scale (dark-inverted) — uncomment and fill values for steps 100–800
+  # gray-100: "[#1a1a1a]"
+  # gray-200: "[#1f1f1f]"
+  # gray-300: "[#292929]"
+  # gray-400: "[#2e2e2e]"
+  # gray-500: "[#454545]"
+  # gray-600: "[#878787]"
+  # gray-700: "[#8f8f8f]"
+  # gray-800: "[#7d7d7d]"
+
+  # LEVEL2_PLACEHOLDER: gray alpha (white-based translucent) scale — uncomment and fill
+  # gray-alpha-100: "#ffffff12"
+  # gray-alpha-200: "#ffffff17"
+  # gray-alpha-300: "#ffffff21"
+  # gray-alpha-400: "#ffffff24"
+  # gray-alpha-500: "#ffffff3d"
+  # gray-alpha-600: "#ffffff82"
+  # gray-alpha-700: "#ffffff8a"
+  # gray-alpha-800: "#ffffff78"
+  # gray-alpha-900: "#ffffff9c"
+  # gray-alpha-1000: "#ffffffeb"
+
+  # ── Accent — Blue (links, focus, primary actions on dark) ──
+  # Level 1 — at minimum blue-700, typically lighter on dark for contrast (REQUIRED)
+  blue-700: "[#006efe]"
+
+  # LEVEL2_PLACEHOLDER: full blue scale (dark-adjusted) — uncomment and fill
+  # blue-100: "[#06193a]"
+  # blue-200: "[#022248]"
+  # blue-300: "[#002f62]"
+  # blue-400: "[#003674]"
+  # blue-500: "[#00418b]"
+  # blue-600: "[#0090ff]"
+  # blue-700: "[#006efe]"
+  # blue-800: "[#005be7]"
+  # blue-900: "[#47a8ff]"
+  # blue-1000: "[#eaf6ff]"
+
+  # ── Accent — Red (errors on dark) ──
+  # Level 1 — at minimum red-700, typically lighter on dark (REQUIRED)
+  red-700: "[#f13242]"
+
+  # LEVEL2_PLACEHOLDER: full red scale (dark-adjusted) — uncomment and fill
+  # red-100: "[#330a11]"
+  # red-200: "[#440d13]"
+  # red-300: "[#5d0e17]"
+  # red-400: "[#6f101b]"
+  # red-500: "[#88151f]"
+  # red-600: "[#f32e40]"
+  # red-700: "[#f13242]"
+  # red-800: "[#e2162a]"
+  # red-900: "[#ff565f]"
+  # red-1000: "[#ffe9ed]"
+
+  # ── Accent — Amber (warnings on dark) ──
+  # Level 1 — at minimum amber-700 (REQUIRED)
+  amber-700: "[#ffae00]"
+
+  # LEVEL2_PLACEHOLDER: full amber scale (dark-adjusted) — uncomment and fill
+  # amber-100: "[#2a1700]"
+  # amber-200: "[#361900]"
+  # amber-300: "[#502800]"
+  # amber-400: "[#5b3000]"
+  # amber-500: "[#703e00]"
+  # amber-600: "[#ed9a00]"
+  # amber-700: "[#ffae00]"
+  # amber-800: "[#ff9300]"
+  # amber-900: "[#ff9300]"
+  # amber-1000: "[#fff3d5]"
+
+  # LEVEL2_PLACEHOLDER: additional accent scales (dark-adjusted) — uncomment and fill
+  # green-100: "[#002608]"
+  # green-200: "[#00320b]"
+  # green-300: "[#003a0e]"
+  # green-400: "[#004615]"
+  # green-500: "[#006717]"
+  # green-600: "[#00952d]"
+  # green-700: "[#00ac3a]"
+  # green-800: "[#009432]"
+  # green-900: "[#00ca50]"
+  # green-1000: "[#d8ffe4]"
+
+  # teal-100: "[#00231b]"
+  # teal-200: "[#002b22]"
+  # teal-300: "[#003d34]"
+  # teal-400: "[#004035]"
+  # teal-500: "[#006354]"
+  # teal-600: "[#009e86]"
+  # teal-700: "[#00aa95]"
+  # teal-800: "[#00927f]"
+  # teal-900: "[#00cfb7]"
+  # teal-1000: "[#cbfff5]"
+
+  # purple-100: "[#290c33]"
+  # purple-200: "[#341142]"
+  # purple-300: "[#47185e]"
+  # purple-400: "[#541a76]"
+  # purple-500: "[#642290]"
+  # purple-600: "[#9440d5]"
+  # purple-700: "[#9440d5]"
+  # purple-800: "[#7d2bba]"
+  # purple-900: "[#c472fb]"
+  # purple-1000: "[#fbecff]"
+
+  # pink-100: "[#310d1e]"
+  # pink-200: "[#420c25]"
+  # pink-300: "[#571032]"
+  # pink-400: "[#5d0c34]"
+  # pink-500: "[#76063f]"
+  # pink-600: "[#ba0056]"
+  # pink-700: "[#f12b82]"
+  # pink-800: "[#e7006d]"
+  # pink-900: "[#ff4d8d]"
+  # pink-1000: "[#ffe9f4]"
+
+typography:
+  # ── Body text (multi-line, taller line-height) ──
+  # Level 1 — at minimum one body token; typography tokens are typically unchanged in dark mode (REQUIRED)
+  copy-16:
+    fontFamily: "[font-family]"
+    fontSize: 16px
+    fontWeight: 400
+    lineHeight: 1.6
+    letterSpacing: 0
+
+  # LEVEL2_PLACEHOLDER: additional body sizes; same as DESIGN.md unless font weight needs adjustment
+  # copy-24:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 24px
+  #   fontWeight: 400
+  #   lineHeight: 36px
+  # copy-20:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 20px
+  #   fontWeight: 400
+  #   lineHeight: 36px
+  # copy-14:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 14px
+  #   fontWeight: 400
+  #   lineHeight: 20px
+
+  # ── Headings ──
+  # Level 1 — at minimum one heading token (REQUIRED)
+  heading-32:
+    fontFamily: "[font-family]"
+    fontSize: 32px
+    fontWeight: 600
+    lineHeight: 1.2
+    letterSpacing: -0.02em
+
+  # LEVEL2_PLACEHOLDER: full heading scale; same as DESIGN.md
+  # heading-72:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 72px
+  #   fontWeight: 600
+  #   lineHeight: 72px
+  #   letterSpacing: -0.04em
+  # heading-48:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 48px
+  #   fontWeight: 600
+  #   lineHeight: 56px
+  #   letterSpacing: -0.03em
+  # heading-24:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 24px
+  #   fontWeight: 600
+  #   lineHeight: 32px
+  #   letterSpacing: -0.01em
+  # heading-20:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 20px
+  #   fontWeight: 600
+  #   lineHeight: 26px
+  #   letterSpacing: -0.005em
+
+  # LEVEL2_PLACEHOLDER: label and button typography; same as DESIGN.md
+  # label-14:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 14px
+  #   fontWeight: 400
+  #   lineHeight: 20px
+  # button-14:
+  #   fontFamily: "[font-family]"
+  #   fontSize: 14px
+  #   fontWeight: 500
+  #   lineHeight: 20px
+
+spacing:
+  base: 4px
+  # Level 1 — same spacing scale as DESIGN.md (REQUIRED)
+  1: 4px
+  2: 8px
+  3: 12px
+  4: 16px
+  6: 24px
+
+  # LEVEL2_PLACEHOLDER: full 9-step scale; same as DESIGN.md
+  # 8: 32px
+  # 10: 40px
+  # 16: 64px
+  # 24: 96px
+
+rounded:
+  # Level 1 — same radii as DESIGN.md (REQUIRED)
+  sm: 6px
+
+  # LEVEL2_PLACEHOLDER: additional radius tokens; same as DESIGN.md
+  # md: 12px
+  # lg: 16px
+  # full: 9999px
+
+# LEVEL2_PLACEHOLDER: component tokens — uncomment and fill; values reference dark `colors.*` and `typography.*`
+# components:
+#   button-primary:
+#     backgroundColor: "{colors.gray-1000}"
+#     textColor: "{colors.background-100}"
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 10px"
+#     height: 40px
+#   button-secondary:
+#     backgroundColor: "{colors.background-100}"
+#     textColor: "{colors.gray-1000}"
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 10px"
+#     height: 40px
+#   button-tertiary:
+#     textColor: "{colors.gray-1000}"
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 10px"
+#     height: 40px
+#   button-error:
+#     backgroundColor: "{colors.red-800}"
+#     textColor: "#ffffff"
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 10px"
+#     height: 40px
+#   button-small:
+#     typography: "{typography.button-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 6px"
+#     height: 32px
+#   button-large:
+#     typography: "{typography.button-16}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 14px"
+#     height: 48px
+#   input:
+#     backgroundColor: "{colors.background-100}"
+#     textColor: "{colors.gray-1000}"
+#     typography: "{typography.label-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 12px"
+#     height: 40px
+#   input-small:
+#     typography: "{typography.label-14}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 12px"
+#     height: 32px
+#   input-large:
+#     typography: "{typography.label-16}"
+#     rounded: "{rounded.sm}"
+#     padding: "0 12px"
+#     height: 48px
+---
+
 <!-- COMPLETENESS_LEVEL: 3 — dark theme companion to DESIGN.md -->
 
 # [Design System Name] — Dark
 
 ## Overview
 
-[Design System Name] Dark is the dark theme companion to [Design System Name]. Use the same token names as DESIGN.md; only the values change. Every token defined in DESIGN.md must have a corresponding entry in this file.
+[Design System Name] Dark is the dark theme companion to [Design System Name]. Token names are identical to DESIGN.md; only the values change. Every token in the YAML frontmatter above must have a corresponding entry in DESIGN.md.
 
 This file uses the same structure as DESIGN.md. When DESIGN.md is updated, update this file with the dark-equivalent values.
 
-<!-- 
+<!--
   IMPORTANT: Switch to dark mode by loading this file's values in place of DESIGN.md values.
   Consumers reference tokens by name, not by value — the switch is transparent.
 -->
 
 ## Colors
 
-### Background
+Token values are defined in the frontmatter `colors:` map. Dark theme inverts the scale: background-100 is dark (`#000000`), gray-1000 is light text (`#ededed`). Accent colors shift lighter to maintain contrast on dark surfaces. Gray-alpha tokens use white-based transparency (`rgba(255,255,255,…)`) instead of black-based.
 
-<!-- Dark backgrounds are dark grays instead of whites. background-100 is the primary dark surface. -->
-
-| Token | Value |
-|-------|-------|
-| background-100 | #[dark page/card surface, e.g., #111111] |
-
-<!-- LEVEL2_PLACEHOLDER: Match DESIGN.md Level 2 background tokens -->
-<!--
-| background-200 | #[slightly lighter dark surface] |
-| background-300 | #[active dark surface] |
--->
-
-### Gray (text and fills)
-
-<!-- Dark text colors are light grays. Invert the scale: gray-1000 is light (primary text on dark), gray-100 is dark. -->
-
-| Token | Value |
-|-------|-------|
-| gray-1000 | #[primary text on dark, e.g., #eeeeee] |
-| gray-900 | #[secondary text on dark, e.g., #999999] |
-
-<!-- LEVEL2_PLACEHOLDER: Match DESIGN.md Level 2 gray scale with dark-appropriate values -->
-<!--
-| gray-100 | #[darkest fill, e.g., #1a1a1a] |
-| gray-200 | #[hover fill, e.g., #222222] |
-| gray-300 | #[active fill, e.g., #333333] |
-| gray-400 | #[border, e.g., #444444] |
-| gray-500 | #[hover border, e.g., #555555] |
-| gray-600 | #[active border, e.g., #666666] |
-| gray-700 | #[disabled text, e.g., #777777] |
-| gray-800 | #[solid hover, e.g., #888888] |
--->
-
-<!-- LEVEL2_PLACEHOLDER: Add gray-alpha scale with white-based transparency for dark backgrounds -->
-<!--
-### Gray Alpha (translucent overlays)
-
-| Token | Value |
-|-------|-------|
-| gray-alpha-100 | rgba(255, 255, 255, 0.04) |
-| gray-alpha-200 | rgba(255, 255, 255, 0.06) |
-| gray-alpha-300 | rgba(255, 255, 255, 0.08) |
-| gray-alpha-400 | rgba(255, 255, 255, 0.12) |
-| gray-alpha-500 | rgba(255, 255, 255, 0.16) |
-| gray-alpha-600 | rgba(255, 255, 255, 0.24) |
--->
-
-### Accent
-
-<!-- Accent colors may shift to maintain contrast on dark backgrounds. Same token names, adjusted values. -->
-
-| Token | Value | Usage |
-|-------|-------|-------|
-| blue-700 | #[adjusted for dark, typically lighter to maintain contrast] | Interactive elements |
-| red-700 | #[adjusted for dark, typically lighter] | Errors |
-| amber-700 | #[adjusted for dark, typically lighter] | Warnings |
-
-<!-- LEVEL2_PLACEHOLDER: Match all accent scales from DESIGN.md with dark-appropriate values -->
+<!-- LEVEL2_PLACEHOLDER: Complete all color scales in the frontmatter to match DESIGN.md. See references/completeness-checklist.md § Level 3. -->
 
 ## Typography
 
-<!-- Typography tokens typically remain the same in dark mode. Copy verbatim from DESIGN.md. -->
-
-| Token | Font Family | Size | Weight | Line Height | Letter Spacing |
-|-------|------------|------|--------|-------------|----------------|
-| copy-16 | [same as DESIGN.md] | 16px | 400 | 1.6 | 0 |
-| heading-32 | [same as DESIGN.md] | 32px | 600 | 1.2 | -0.02em |
+Token values are defined in the frontmatter `typography:` map. Typography tokens are typically identical to DESIGN.md — copy verbatim from the light theme unless a font weight adjustment is needed for dark backgrounds.
 
 ## Spacing & Layout
 
-<!-- Spacing and breakpoints are identical to DESIGN.md. Copy verbatim. -->
+Token values are defined in the frontmatter `spacing:` and `rounded:` maps. Spacing and breakpoints are identical to DESIGN.md. Copy verbatim.
 
-Base unit: [same as DESIGN.md]
+### Breakpoints
 
-| Step | Value |
-|------|-------|
-| 1x | [base × 1] |
-| 2x | [base × 2] |
-| 3x | [base × 3] |
-| 4x | [base × 4] |
-| 6x | [base × 6] |
+Refer to DESIGN.md breakpoints; do not duplicate here. The dark theme inherits all layout tokens from the light theme.
 
-| Name | Min Width | Target |
-|------|-----------|--------|
-| sm | 401px | Mobile landscape |
-| lg | 961px | Desktop |
-
-<!-- LEVEL3_PLACEHOLDER: Add dark-mode Elevation, Components tokens, and full dark theme parity with DESIGN.md -->
+<!-- LEVEL3_PLACEHOLDER: Add dark-mode Elevation, extended Components tokens, and full dark theme parity with DESIGN.md -->
 <!--
 ## Elevation & Depth
 
-Shadows on dark backgrounds use lighter, more subtle values. Hierarchy still comes from tonal surfaces first.
+Shadows on dark backgrounds use lighter, deeper values. Hierarchy still comes from tonal surfaces first.
 
 ### Shadows (dark theme)
 
 | Element | Value |
 |---------|-------|
-| Card | 0 2px 2px rgba(0, 0, 0, 0.12) |
+| Card | 0 1px 2px rgba(0, 0, 0, 0.16) |
 | Popover | 0 1px 1px rgba(0, 0, 0, 0.08), 0 4px 8px -4px rgba(0, 0, 0, 0.12), 0 16px 24px -8px rgba(0, 0, 0, 0.16) |
 | Modal | 0 1px 1px rgba(0, 0, 0, 0.08), 0 8px 16px -4px rgba(0, 0, 0, 0.12), 0 24px 32px -8px rgba(0, 0, 0, 0.16) |
 
 ## Components
 
-Button tokens reference dark color values. Same structure as DESIGN.md, different color references.
+Component tokens are defined in the frontmatter `components:` map. Button tokens reference dark `colors.*` values. Same structure as DESIGN.md, different color references. States, sizes, and focus follow the same rules as DESIGN.md.
 
-### Button
+## Motion
 
-| Variant | Background | Text | Border | Radius | Height |
-|---------|-----------|------|--------|--------|--------|
-| primary | gray-100 (dark value) | background-100 (dark value) | — | 6px | 40px |
-| secondary | background-100 | gray-1000 | gray-alpha-400 | 6px | 40px |
+Same as DESIGN.md — motion rules are theme-independent.
 
-States, sizes, and focus follow the same rules as DESIGN.md.
+## Shapes
+
+Same as DESIGN.md — border radius tokens are theme-independent.
 -->
