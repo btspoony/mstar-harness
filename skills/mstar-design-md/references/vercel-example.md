@@ -21,7 +21,7 @@ Vercel Geist DESIGN.md uses a YAML frontmatter block (`---` ... `---`) as the **
 
 ```yaml
 ---
-version: alpha
+version: 0.1.0
 name: Geist
 description: Vercel's Geist design system, Light theme.
 colors:

@@ -1,5 +1,5 @@
 ---
-version: alpha
+version: 0.1.0
 name: "[Design System Name]"
 description: "[Design System Name] is a [adjective] design system for [project/product name]. This is the Dark theme. The Light theme uses the same token names with different values and lives at /DESIGN.md."
 

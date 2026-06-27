@@ -23,7 +23,7 @@ The minimum bar for an agent to produce UI without hallucinating colors and typo
 ### Checklist
 
 - [ ] **Frontmatter exists** — YAML frontmatter block with `---` delimiters present and parseable
-- [ ] **Frontmatter `version`** — `version: alpha` declared
+- [ ] **Frontmatter `version`** — `version: 0.1.0` declared
 - [ ] **Frontmatter `name` and `description`** — design system name and description filled (non-placeholder)
 - [ ] **Overview** — design system name and aesthetic principles stated in body
 - [ ] **Colors — Background** — frontmatter has `colors.background-100` with a concrete hex value (not `"[LEVEL*]"` placeholder)

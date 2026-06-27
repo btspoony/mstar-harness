@@ -17,10 +17,10 @@ The YAML frontmatter is the **single source of truth** for token values. The Mar
 ### Version field
 
 ```yaml
-version: alpha
+version: 0.1.0
 ```
 
-Format version identifier. Current value: `alpha`.
+Format version identifier. Current value: `0.1.0`.
 
 ### Name and description
 
