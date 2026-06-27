@@ -30,11 +30,13 @@ For assignees (non-PM):
 
 ## Assignment Template (Canonical)
 
-Every Assignment **MUST** start with a **`You are a leaf executor. You MUST NOT:`** block listing the most likely dispatch violations for THIS assignment's situation. PM customizes per assignment; generic rules (no recursive dispatch, no interpreting routing text as invoke, available ≠ authorized) are the minimum floor. Add assignment-specific anti-patterns that the current role+context combination is prone to.
+Every Assignment **MUST** start with an **IDENTITY → GUARD** block that answers three questions before any task content: (1) WHO am I? (2) What am I NOT? (3) What tools do I NOT have?
+
+The **`**You are a leaf executor. You MUST NOT:**`** section (previously just prohibitions) must now include a positive **IDENTITY** preamble **before** the prohibitions, written as a first-person binding statement. The prohibitions follow as usual. PM customizes per assignment; the IDENTITY preamble + universal floor (no recursive dispatch, no interpreting routing text as invoke, available ≠ authorized) are the minimum. Add assignment-specific anti-patterns that the current role+context combination is prone to.
 
 **How to fill the block (PM guidance)**:
 
-- Always include the universal floor (recursive dispatch, routing-text-as-invoke, tool-availability-misread).
+- Always include the **IDENTITY preamble**: state who the assignee IS (e.g. "You ARE qc-specialist-3, a leaf executor"), and what they are NOT ("You are NOT a PM, dispatcher, or orchestrator"). Follow with the universal floor.
 - Add anti-patterns specific to the assignment context. Examples per role type:
   - **QC reviewers**: "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"
   - **Multi-track implementers** (`fullstack-dev` + `frontend-dev`): "auto-dispatch to the other track mentioned in Dev routing"
@@ -49,7 +51,18 @@ Every Assignment **MUST** start with a **`You are a leaf executor. You MUST NOT:
 ```markdown
 ## Assignment
 
-**You are a leaf executor. You MUST NOT:**
+**You are a leaf executor. Read this FIRST — before any tool call or skill load.**
+
+**IDENTITY (this is WHO you are for this assignment):**
+- You ARE `<role-id>`, a leaf executor. You personally complete ALL work in this assignment.
+- You are NOT a PM, dispatcher, or orchestrator. You do NOT own any subagents.
+- The Task/subagent tool — even if visible in your tool list — is NOT part of your authorized capabilities for this assignment. Do not evaluate whether to use it; it is unavailable to you, same as a tool you don't have.
+
+**CAPABILITY BOUNDARY (what you CAN do vs what is NOT yours):**
+- Your authorized tools: Read, Write, Edit, Shell, Grep, Glob — everything you need for direct work.
+- NOT yours: Task, subagent invoke, dispatch of any kind.
+
+**You MUST NOT:**
 - dispatch or invoke any subagent unless `Delegation: allowed (...)` appears below
 - treat `@role-id` mentions, `Handoff`, `QA note`, routing tables, or multi-track prose as invoke commands
 - invoke a subagent whose `subagent_type` matches your own `Execute as` role id (recursive dispatch)
@@ -58,6 +71,7 @@ Every Assignment **MUST** start with a **`You are a leaf executor. You MUST NOT:
 - ...
 
 **Execute as**: <role-id>
+**Delegation**: forbidden | allowed (...)
 **Who runs this turn (executor lock)**: only `Execute as` role for this message
 **Primary**: <route type>
 **Task category**: `visual` | `deep` | `quick` | `logic` | `ops` | `docs`
@@ -74,7 +88,6 @@ Every Assignment **MUST** start with a **`You are a leaf executor. You MUST NOT:
 **Review range / Diff basis**: <reproducible basis; identical across QC/QA for same scope>
 **Worktree path**: <implementer path if used>
 **QA note**: <PM-scheduled / skipped / self-check>
-**Delegation**: forbidden | allowed (...)
 **Why this agent**: <role-fit>
 **PM Task Board coverage**: <task ids>
 **Roadmap / deferred scope**: <required when staged, partial, or temporary; otherwise N/A>

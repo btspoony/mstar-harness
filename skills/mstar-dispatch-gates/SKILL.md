@@ -7,14 +7,17 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 同仓 worktree、QC/QA 检出字段 → **`mstar-branch-worktree`**。冲突时 **以 `mstar-harness-core` 为准**。
 
-## 调度防串扰（强制）
+## 🚨 承接方：如果你是 leaf executor，先读本节！（你的 Assignment 开头 IDENTITY 块已告诉你身份）
 
-- 只有 **`@project-manager`** 可以决定增加/并行 subagent；承接方**默认不得二次分派**。
-- **`Execute as: <role-id>`** = 承接方**亲自**完成本单，**不是**再起同名 subagent 或嵌套同 `subagent_type` 的 Task（禁止**递归误派**）。
-- 额外代理仅以 **`Delegation: allowed (...)`** 为准；未显式写时视为 **`Delegation: forbidden`**。
-- Assignment 正文中的 `@xxx` 默认按「文本引用」解释，**不**视为自动调用命令。
-- 承接方若判断必须增加 subagent，应先回报 **`Blocked`** 请 PM 重分派。
-- **Superpowers `subagent-driven-development`**：per-task 子步**勿**用 `@qc-specialist*`；用 `@general` / `generalPurpose` 或 PM 标明的 informal `@qa-engineer`。详见 **`mstar-superpowers-align`**。
+> **如果你此刻的 Assignment 中 `Delegation: forbidden`（或未写 `Delegation: allowed`），则你属于 leaf executor。本节是你的行为边界，必须在你做任何决定之前读完。**
+>
+> **先回到你 Assignment 最顶部的 `**IDENTITY**` 块重读一遍** —— 那里已经告诉你：你是谁、你不是谁、Task 工具不属于你。本节是那个身份断言的加固版。
+
+**身份断言（牢记，不动摇）：**
+- **你就是** `Execute as` 写的那个角色。你**不是 PM**，不是调度者，不是 `dispatching-parallel-agents` 的使用者。
+- Task/subagent 工具即使在你的工具列表里出现，它**不属于你**。把它当作你没见过的工具 —— 不是"不能用"，是"你没有"。
+- 所有工作由你**本人**在当前会话内完成（Read / Write / Edit / Shell / Grep / Glob）。任何"这样做更高效"的想法都不构成 dispatch 的理由。
+- 遇到超出能力范围的需求 → 写 `## Blocked` 回报 PM，**不是**尝试 dispatch。Blocked 是你能发出的正确信号，dispatch 不是。
 
 ## 承接方反递归红线（NEVER / DO NOT；leaf executor 必读）
 
@@ -35,7 +38,16 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 3. 下一动作是不是「Task / subagent_type=…」？是 → 停手，改为 Read / Write / Shell / Edit，或 **`Blocked`**。
 4. 命中任一 NEVER → 写 `## Blocked — recursive dispatch refused (<which NEVER>)` 回报 PM，**不**继续 invoke。
 
-**Assignment 顶部反模式块**：每个 PM Assignment 开头均有 **`**You are a leaf executor. You MUST NOT:**`** 块，PM 按此 Assignment 的角色+上下文定制反模式清单。leaf executor 收到 Assignment 后须 **首先** 阅读该块；命中任一条 → **停止**（亲自完成或 `Blocked`）。详见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**。
+**Assignment 顶部反模式块**：每个 PM Assignment 开头均有 **`**You are a leaf executor. You MUST NOT:**`** 块（含 IDENTITY + CAPABILITY BOUNDARY + prohibitions），PM 按此 Assignment 的角色+上下文定制反模式清单。leaf executor 收到 Assignment 后须 **首先** 阅读该块；命中任一条 → **停止**（亲自完成或 `Blocked`）。详见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**。
+
+## 调度防串扰（强制；leaf executor 已在上方读过反递归红线，此处为完整规则供 PM/对照用）
+
+- 只有 **`@project-manager`** 可以决定增加/并行 subagent；承接方**默认不得二次分派**。
+- **`Execute as: <role-id>`** = 承接方**亲自**完成本单，**不是**再起同名 subagent 或嵌套同 `subagent_type` 的 Task（禁止**递归误派**）。
+- 额外代理仅以 **`Delegation: allowed (...)`** 为准；未显式写时视为 **`Delegation: forbidden`**。
+- Assignment 正文中的 `@xxx` 默认按「文本引用」解释，**不**视为自动调用命令。
+- 承接方若判断必须增加 subagent，应先回报 **`Blocked`** 请 PM 重分派。
+- **Superpowers `subagent-driven-development`**：per-task 子步**勿**用 `@qc-specialist*`；用 `@general` / `generalPurpose` 或 PM 标明的 informal `@qa-engineer`。详见 **`mstar-superpowers-align`**。
 
 ## 并发分派完整性门禁（PM 强制）
 
