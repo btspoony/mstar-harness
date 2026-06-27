@@ -85,7 +85,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-plan-artifacts` | 主 plan、reports、`status.json`、residual、knowledge、Done 归档 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | QC 工作流、模板、verdict、residual 留档 |
-| `mstar-coding-behavior` | Think / Simplicity / Surgical / Goal-Driven |
+| `mstar-coding-behavior` | Think / Simplicity / Surgical / Debugging / Goal-Driven / Communication |
 | `mstar-superpowers-align` | Superpowers × harness 优先级与短语 |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `parallel-dispatch.md`） |

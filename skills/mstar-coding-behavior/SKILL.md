@@ -1,11 +1,11 @@
 ---
 name: mstar-coding-behavior
-description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（先读懂再改、显式假设、不静默猜测）、Simplicity First（YAGNI 优先不写代码、The Ladder 决策层级、删除优于添加、简洁优于聪明、`simplify:` 标记天花板与升级路径、最小耐久切片）、Surgical Changes（改动可追溯、Bug 修根因先 grep 所有调用点、不顺手重构、不 piggyback）、Goal-Driven Execution（非平凡逻辑必留一个可运行检查、模糊请求转可验证结果、Step → verify 微模板、分批留 roadmap）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
+description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（先读懂再改、显式假设、不静默猜测、读 imports/test/项目模式）、Simplicity First（YAGNI 优先不写代码、The Ladder 决策层级含依赖评估、删除优于添加、简洁优于聪明、5 项具名反模式速查、`simplify:` 标记天花板与升级路径、最小耐久切片）、Surgical Changes（改动可追溯、Bug 修根因先 grep 所有调用点、不顺手重构、不 piggyback）、Debugging（读完整报错与栈追踪、先复现、一步一测、根因分析、Bug 修复前先写复现测试、卡住时坦白）、Goal-Driven Execution（非平凡逻辑必留一个可运行检查、模糊请求转可验证结果、测行为不测实现、已有测试前后对比、不能测试说理由、Step → verify 微模板、分批留 roadmap）、Communication（说做了什么及为什么、标记顾虑、精确表达不确定性、不解释已知的、commit message 质量）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
 ---
 
 ## Load order（必读顺序）
 
-**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md）。** 本 skill 只约束 **编码与改动风格**（Think / Simplicity / Surgical / Goal-Driven）；**Done 所有权、状态机** 仍以 **`mstar-harness-core`** 为准；**分支 / worktree / QC-QA 检出字段** → **`mstar-branch-worktree`**；**调度防串扰** → **`mstar-dispatch-gates`**。冲突时 **以 `mstar-harness-core` 为准**。
+**在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md）。** 本 skill 只约束 **编码与改动风格**（Think / Simplicity / Surgical / Debugging / Goal-Driven / Communication）；**Done 所有权、状态机** 仍以 **`mstar-harness-core`** 为准；**分支 / worktree / QC-QA 检出字段** → **`mstar-branch-worktree`**；**调度防串扰** → **`mstar-dispatch-gates`**。冲突时 **以 `mstar-harness-core` 为准**。
 
 **摘要**：`mstar-harness-core` — 不变量与门禁；本 skill — 实现与审查时的工程习惯，不替代 harness。
 
@@ -43,6 +43,16 @@ Quick check:
 
 **Never lazy about understanding.** Shorten the solution, never the reading. Read the task and every file the change touches fully first; trace the actual flow end to end. A small diff in the wrong place is not efficiency — it is a second bug shipped with confidence.
 
+**Read before you write.** Before generating code in an existing project:
+
+- Inspect the imports at the top of each file you are about to modify. They tell you which libraries the project actually uses — do not introduce a different library for the same purpose.
+- Look at nearby test files. They document expected behavior more precisely than comments or your own assumptions.
+- Follow existing project patterns. If there is a convention for API routes, file structure, or error handling, match it. Do not silently introduce a different pattern.
+- If you cannot find a precedent for something, say so. "I do not see a pattern for X in the codebase — should I follow approach Y?" is always better than guessing.
+- If you are not 100% sure a method signature or parameter exists, check the actual source code or docs before using it. Confidently calling a non-existent API is one of the costliest agent mistakes — it may compile, then fail at runtime.
+
+The failure mode: you generate "correct" code that is alien to the codebase it lives in. It works but looks like a different person wrote it. The human then has to either rewrite it to match or live with inconsistency forever.
+
 ## 2) Simplicity First
 
 Core idea: implement the smallest durable slice that satisfies the request and acceptance criteria.
@@ -55,7 +65,7 @@ Core idea: implement the smallest durable slice that satisfies the request and a
 2. **Already in this codebase?** A helper, util, type, or pattern that already lives here → reuse it. Look before you write.
 3. **Stdlib / built-in covers it?** Use it.
 4. **Native platform feature covers it?** CSS over JS, DB constraint over app code, OS primitive over a library.
-5. **Already-installed dependency solves it?** Use it. Never add a new dependency for what a few lines can do.
+5. **Already-installed dependency solves it?** Use it. Never add a new dependency for what a few lines of code can do. When a new dependency appears necessary, evaluate: (a) can this be done with what is already in the project? (b) can the standard library do it? (c) is the package maintained (check last commit date and issue tracker) and reasonably sized? If you add it, state why in one sentence — silently adding packages is not acceptable.
 6. **Can it be one line?** One line.
 7. **Only then:** the minimum durable code that works.
 
@@ -78,6 +88,16 @@ This signals intent — the simplicity is deliberate, not an oversight — and g
 
 - Do not confuse "minimum" with "temporary." A small implementation must still align with the long-term target state, stable interfaces, and known follow-up plan.
 - If a workaround is unavoidable, label it as `simplify:` / `temporary`, explain why, and record the removal path in the plan/status artifact before claiming the task is complete.
+
+**Simplicity anti-patterns — stop and reconsider when you spot these:**
+
+| Anti-pattern | Signal |
+|---|---|
+| **Premature abstraction** | You are writing a class / interface / strategy pattern where a single function suffices. |
+| **Speculative error handling** | You are wrapping code in try/catch for errors that cannot happen. |
+| **Unnecessary configurability** | You are making a value configurable (env var, parameter) that will never change. Hardcode it until there is a real reason not to. |
+| **Dead flexibility** | You have an interface with one implementation, or a generic type with one instantiation — cost with zero benefit until a second use exists. |
+| **"In case we need to"** | Your justification for abstraction includes a guess about future requirements. "In case we need to" is not a requirement — it is a guess, and guesses about the future are usually wrong. |
 
 Default rule:
 
@@ -105,7 +125,19 @@ Traceability test:
 
 **Bug fix = root cause, not symptom.** A bug report names a symptom, not the cause. Before editing, grep every caller of the function or code path you are about to touch. The fix belongs where all callers route through — one guard in the shared function is smaller than a guard in every caller. Patching only the path the ticket names leaves every sibling caller still broken. Fix it once, at the narrowest shared point.
 
-## 4) Goal-Driven Execution
+## 4) Debugging
+
+Core idea: when something does not work, investigate. Do not guess.
+
+- **Read the error message entirely** — including the full stack trace. A `TypeError` can mean a hundred different things; the message and trace tell you which one.
+- **Reproduce before fixing.** If you cannot reproduce the problem, you cannot verify your fix. "I think this should fix it" is gambling, not debugging.
+- **Change one thing at a time.** Changing three things and seeing the bug disappear tells you nothing about which change fixed it — or what new bugs the other two introduced. Change one, test, change the next, test.
+- **Fix the root cause, not the symptom.** If a value is unexpectedly null, do not just add a null check and move on. Figure out why it is null. The null check might prevent a crash, but the underlying bug will manifest differently later. Before patching, grep every caller of the affected code path and fix at the narrowest shared point (see Surgical Changes · Bug fix = root cause).
+- **Write a reproduction test before fixing a bug.** Before changing any code, write a minimal test that reproduces the reported behavior. Run it — watch it fail. Then apply the fix. Run it — watch it pass. This is the only way to prove you fixed the actual problem and did not merely suppress symptoms.
+- **Run existing tests before and after your changes.** If tests passed before and fail after, you broke something. If tests were already failing before, say so — do not let your changes get blamed for pre-existing failures.
+- **If you are stuck, say so.** "I have tried X and Y and neither worked. Here is what I am seeing. I think the issue might be Z but I am not sure." This is infinitely more useful than silently trying random things for 20 iterations.
+
+## 5) Goal-Driven Execution
 
 Core idea: convert vague requests into verifiable outcomes and iterate until verified.
 
@@ -128,6 +160,21 @@ Micro template:
 3. [Step]
    Verify: [specific check]
 ```
+
+**Verification discipline:**
+
+- **Test behavior, not implementation.** A test that checks whether a constructor sets properties is worthless. A test that checks whether validation actually rejects bad input is valuable. Focus on the interesting cases.
+- **If you cannot write a test, say why.** "I cannot easily test this because the database calls are tightly coupled to the business logic" is useful information that may signal a need for restructuring. Do not skip testing without an explanation.
+
+## 6) Communication
+
+Core idea: how you communicate about code matters as much as the code itself.
+
+- **Say what you did and why.** Do not just dump a code block. "I moved the validation into a separate function because it was duplicated in three places and this makes it testable independently" — now the reviewer understands the change without reading every line.
+- **Flag concerns proactively.** If you implemented what was asked but see a problem, say so. "This works but it makes a database call per item — if the list grows large this will be slow. Want me to batch it?" saves hours later.
+- **Be precise about uncertainty.** "I am not sure if this library supports streaming responses" is useful. "I think this should work" is not. Tell the reviewer exactly what to verify.
+- **Match your explanation to context.** If they asked for a REST endpoint, do not explain what REST is. If they asked for a database index, do not explain what indexes do.
+- **Write specific commit messages.** "Fix bug" is useless. "Fix null pointer in user lookup when email contains uppercase chars" tells the next person exactly what happened.
 
 ## Integration Notes
 
