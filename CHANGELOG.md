@@ -2,17 +2,41 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.20** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.6.22** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.20** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.20** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.20** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.20** |
+| Monorepo root | `morning-star` (`package.json`) | **0.6.21** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.3** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.22** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.21** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.6.21** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.6.22] - 2026-06-27
+
+### Harness (skills / dispatch-gates, roles)
+
+- **Anti-recursion: identity-deprivation framework replaces prohibition-only rules**: Leaf executors (QC reviewers, devs, QA) were still entering a "consider dispatch" intent window because `NEVER` / `MUST NOT` prohibitions require the model to first activate the forbidden action before suppressing it. Fix shifts semantics from "you must NOT use Task" (prohibition) to "you ARE a leaf executor; Task is NOT your tool" (identity + capability deprivation).
+  - Assignment template (`dispatch-and-assignment.md`): new **IDENTITY** + **CAPABILITY BOUNDARY** blocks before the `**You MUST NOT:**` list. `Delegation` field moved immediately after `Execute as` for earlier visibility.
+  - `mstar-dispatch-gates/SKILL.md`: leaf-executor identity preamble placed between Load order and NEVER list, with explicit cross-reference back to the Assignment's IDENTITY block.
+  - `qc-specialist-shared`: `Non-Recursive Dispatch Rule` rewritten as a first-person identity assertion with recursive-dispatch trap recognition ("If you ever think 'this would be more efficient if I dispatched X' — stop").
+  - `leaf-executor-checklist`: first-person preamble before checklist items.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`: **0.6.21 → 0.6.22**. **`@mstar-harness/cli` remains 0.5.3**, Cursor / Codex plugin manifests remain **0.6.21**.
+
+## [0.6.21] - 2026-06-26
+
+### Harness (skills / design-md)
+
+- **DESIGN.md YAML frontmatter as SSOT**: `mstar-design-md` templates and spec now use YAML frontmatter as the single source of truth for token values. Template format bumped to 0.1.0. Both light (`DESIGN.md.template`) and dark (`DESIGN.dark.md.template`) templates, the spec reference, completeness checklist, and the Vercel example updated.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, and Cursor / Codex plugin manifests: **0.6.20 → 0.6.21**. CLI: **0.5.2 → 0.5.3**.
 
 ## [0.6.20] - 2026-06-26
 

@@ -4,6 +4,18 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.6.22
+
+- Bundled skills: `mstar-dispatch-gates`, `mstar-roles` (qc-specialist-shared, dispatch-and-assignment) — replace prohibition-based anti-recursion with identity-deprivation framework. Assignment template gains IDENTITY + CAPABILITY BOUNDARY blocks before prohibitions, shifting from "I must not dispatch" (negation) to "I am a leaf executor; Task is not my tool" (capability deprivation).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.22**.
+
+## 0.6.21
+
+- Bundled skills: `mstar-design-md` — add YAML frontmatter as SSOT for token values in templates and spec. Bump template format version to 0.1.0.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.21**.
+
 ## 0.6.20
 
 - Bundled commands: `/iteration-start` §5 changed to "Review & Edit Chain" — each reviewer now directly edits documents rather than only flagging issues. PM only does the final lock.
