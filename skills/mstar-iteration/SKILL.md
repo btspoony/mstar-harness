@@ -115,7 +115,7 @@ plans: []
 
 ## Phase 2: Autonomous Execute（per-plan 派发驱动）
 
-**本 Phase 是本 skill 的核心**——吸收 `skills/pm/SKILL.md` 中原有的执行循环逻辑。PM role 不再重复描述此流程。
+**本 Phase 是本 skill 的核心**——定义 per-plan 派发循环的完整流程：前置条件检查、session todos、backlog 读取、integration 分支管理、per-plan dispatch 循环（分支→实现→QC→QA→Done→合并）、dispatch-first 约束、push 纪律。PM 读取本 Phase 即可执行迭代。
 
 ### 2.0 前置条件（三道闸）
 
