@@ -81,7 +81,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 |-------|------|
 | `mstar-harness-core` | 本文件：入口、状态机、Task category、explore、索引、护栏 |
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
-| `mstar-iteration` | 迭代管理：iteration-start（锁定范围/Roadmap）、iteration-drive（跨 plan 追踪）、iteration-close（收口 compound、更新 roadmap） |
+| `mstar-iteration` | 迭代管理：iteration-start（锁定范围/Roadmap）、Phase 2 Autonomous Execute（per-plan 派发循环：分支→实现→QC→QA→Done→合并）、iteration-close（收口 compound、更新 roadmap） |
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、并行 invoke、QC 同消息三审 |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |

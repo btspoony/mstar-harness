@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: Morning Star 迭代管理 —— iteration-start（锁定迭代范围与 roadmap）、iteration-drive（跨 plan 进度追踪）、iteration-close（收口知识结晶 `mstar-compound`、更新 roadmap、标记迭代完成）。触发：PM 启动新迭代、跨 plan 编排时、或迭代内所有 plan Done 后。迭代 compass 落盘 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`；compound 状态记录在 compass 中。适用于一次迭代锁定几个 spec 点（specify+clarify）、多个 plan、每个 plan 多个 tasks 的实践模式。
+description: Morning Star 迭代管理 —— iteration-start（锁定迭代范围与 roadmap）、Autonomous Execute（per-plan 派发循环：分支→实现→QC→QA→Done→合并，含跨 plan 进度追踪与 push 纪律）、iteration-close（收口知识结晶 `mstar-compound`、更新 roadmap、标记迭代完成）。触发：PM 启动新迭代、跨 plan 编排时、或迭代内所有 plan Done 后。迭代 compass 落盘 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`；per-plan 状态 SSOT 仍为 `{HARNESS_DIR}/status.json`。适用于一次迭代锁定几个 spec 点（specify+clarify）、多个 plan、每个 plan 多个 tasks 的实践模式。
 ---
 
 # mstar-iteration（迭代管理）
@@ -113,42 +113,82 @@ plans: []
 
 ---
 
-## Phase 2: iteration-drive（跨 plan 进度追踪）
+## Phase 2: Autonomous Execute（per-plan 派发驱动）
 
-PM 在迭代进行中定期执行（每次 Status Update 或 plan 状态变更时）。
+**本 Phase 是本 skill 的核心**——吸收 `skills/pm/SKILL.md` 中原有的执行循环逻辑。PM role 不再重复描述此流程。
 
-### 2.1 同步 plan 状态
+### 2.0 前置条件（三道闸）
 
-1. 读 `{ITERATION_DIR}/<current-iteration-id>-delivery-compass.md`
-2. 对 compass 中列出的每个 plan_id，检查 `status.json` 中的实际状态
-3. 更新 compass 中的 `## Plans` 表格状态列
+进入 Autonomous Execute 前必须满足：
 
-### 2.2 检查跨 plan 协调
+1. `{HARNESS_DIR}/status.json` 中至少一条 plan `status` ≠ `Done`
+2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
+3. 用户意图为 **continue Execute**（`/pm`、"推进 iteration"、"继续 plans" 等）
 
-- 是否有 plan 之间的依赖被阻塞？
-- 是否有 plan 需要拆分为多条或合并？
-- 是否有新的 plan 需要加入本次迭代？
-- 里程碑是否需要调整？
+任一 false → **stop**。Prepare 未完成 → 引导先跑 `/iteration-start`。
 
-### 2.3 更新 compass
+### 2.1 Session todos（派发前设护栏）
 
-对 compass 做最小增量更新：
-- 状态字段
-- 新 plan 加入
-- 里程碑状态
-- Notes 列中记录阻塞或偏离
+每个 plan wave 启动前设定 host todos，防止范围漂移：
 
-### 2.4 不在 iteration-drive 中做的事
+| Host | 工具 | 最小集合 |
+|------|------|---------|
+| **Cursor** | `TodoWrite` / CreatePlan todos | 当前 `plan_id`；下一批 gates（implement/QC/QA）；分支 checkpoint |
+| **Codex** | `update_plan` / Goal UI | 同上 |
+| **OpenCode** | host todo/plan UI（如有） | 同上 |
 
-- **不**触发 compound（留给 iteration-close）
-- **不**修改 per-plan gate 判定（那是 PM 在 per-plan 层面的活）
-- **不**替代 `status.json` 作为 SSOT——compass 是摘要视图
+SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一步。
+
+### 2.2 Read backlog
+
+1. 读 `mstar-plan-artifacts` + `{HARNESS_DIR}/status.json`
+2. 列出 `status` ∈ `{Todo, InProgress, InReview, Blocked}` 的 plan（优先级：`InProgress` → `InReview` → `Todo` → unblock `Blocked`）
+3. 读 `metadata.spec_integration_branch` / `merge_target` / `primary_spec` 链接
+
+### 2.3 Integration branch
+
+1. 从 `status.json` 解析 `spec_integration_branch`
+2. **checkout 或创建**该分支；`git branch --show-current` 确认
+3. 若 metadata 缺失 → **stop**，读 `mstar-plan-conventions` + 用户确认（`mstar-branch-worktree`）；同轮写入 plan + status
+
+此分支是本迭代内所有 plan feature branch 的 merge target。
+
+### 2.4 Per-plan loop（直到全部 Done）
+
+对每个 active `plan_id`：
+
+1. **Plan start — feature branch**：Assignment 用 `Working branch: create <plan-feature-branch> from <spec_integration_branch>`。一个 plan 一条专用实现分支；内部并行 → topic branches + worktrees（`mstar-branch-worktree`）
+2. **Implement → InReview**：dispatch-only 循环（`§ 2.5`）；每次 Completion Report v2 后更新 `status.json` + 主 plan
+3. **QC → QA → Done**：三审 + QA（`mstar-review-qc`）；gate 全部通过后 PM 标记 `Done`
+4. **Plan complete — merge back**：合并 plan feature branch → `spec_integration_branch`；在下一 plan 或 QC 前解决冲突
+5. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 的 `## Plans` 表状态列
+6. **Next plan** 从步骤 1 继续
+
+全部 plan `Done` → 停止循环，进入 **Phase 3: iteration-close**。
+
+### 2.5 Dispatch-first（implement 派发约束）
+
+| Do | Don't |
+|----|------|
+| **Loop:** `## Assignment` → invoke → Completion Report v2 → 更新 status → next | PM 亲自 Write/Edit/Shell 产品代码 |
+| 1 Assignment ⇒ 1 invoke | Assignment 只写 markdown 不 invoke |
+| merge/branch/handoff 写入 Assignment | 因"上下文已有"而跳过 subagent |
+
+- **NEVER** implement while staying PM — 实现一律 delegate dev 角色
+- Delegate scope：`mstar-roles` → PM Execution Boundary
+- 例外：用户显式要求 PM thread 实现；hotfix（`mstar-phase-gates`）
+
+### 2.6 Push 纪律
+
+- 不因 harness 基础问题常问"是否继续"—— 决策、记录、**dispatch**
+- 未知 → 读 `mstar-*`；**`Blocked`** 或仅对 stop/secrets/不可逆范围缺口/冲突后升级
+- 实际 Git ≠ `working_branch` → **同轮**更新 plan + status
 
 ---
 
 ## Phase 3: iteration-close（收口迭代）
 
-PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行，在 iteration-drive 命令中作为创建 PR 前的最后一步**。产出物（compass、knowledge docs、CONCEPTS.md）commit 到 integration 分支，随 PR 合入 main。
+PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 main。触发方：`commands/iteration-drive.md`（在 Autonomous Execute loop 全部 Done 后自动进入）。
 
 ### 3.1 前置检查
 
@@ -214,13 +254,15 @@ git push origin <spec_integration_branch>
 
 | 技能 | 关系 |
 |------|------|
-| `mstar-harness-core` | 状态机、护栏——per-plan 生命周期不因迭代而改变 |
-| `mstar-phase-gates` | per-plan 门禁——迭代不覆盖 per-plan gate |
-| `mstar-plan-conventions` | 路径符号（`{ITERATION_DIR}`） |
-| `mstar-plan-artifacts` | `status.json` / `{ITERATION_DIR}` 维护规则 |
+| `mstar-dispatch-gates` | Dispatch rules — per-plan loop 引用 |
+| `mstar-phase-gates` | per-plan gate 判定 |
+| `mstar-plan-conventions` | 路径符号（`{ITERATION_DIR}`、`{HARNESS_DIR}`） |
+| `mstar-plan-artifacts` | `status.json` SSOT、`{ITERATION_DIR}` 索引维护 |
+| `mstar-review-qc` | QC 三审 — per-plan loop 引用 |
+| `mstar-branch-worktree` | 分支/merge/worktree 隔离 |
 | `mstar-compound` | iteration-close 中触发知识结晶 |
 | `mstar-compound-refresh` | iteration-close 后可触发知识维护 |
-| `mstar-strategy` | 迭代启动时读 `STRATEGY.md` 对齐方向 |
+| `mstar-strategy` | iteration-start 时读 `STRATEGY.md` 对齐方向 |
 
 ## NOT to do
 

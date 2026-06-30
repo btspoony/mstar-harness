@@ -51,7 +51,7 @@ Treat these as baseline dependencies **where the role touches implementation, re
 | `mstar-superpowers-align` | Superpowers plugin on; Assignment `Superpowers` lines |
 | `mstar-compound` | Capturing solved problems as structured knowledge in `{KNOWLEDGE_DIR}`; Discoverability check; CONCEPTS.md synergy |
 | `mstar-compound-refresh` | Auditing/updating/consolidating knowledge docs; maintaining `{KNOWLEDGE_DIR}` accuracy |
-| `mstar-iteration` | Iteration lifecycle: iteration-start (scope/roadmap lock), iteration-drive (cross-plan tracking), iteration-close (compound + roadmap update) |
+| `mstar-iteration` | Iteration lifecycle: iteration-start (scope/roadmap lock), Autonomous Execute (per-plan dispatch loop), iteration-close (compound + roadmap update) |
 | `mstar-strategy` | Creating/maintaining `STRATEGY.md`; project vision, principles, technology direction |
 | `mstar-host` | Host-specific behavior (auto-detect; `references/opencode.md` / `cursor.md` / `codex.md`) |
 
