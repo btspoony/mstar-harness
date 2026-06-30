@@ -84,5 +84,6 @@ PM 在需要持久化追踪时：
 
 - `references/harness-bootstrap-and-agents-layering.md` — 新仓 harness + AGENTS 分层
 - `references/effort-estimation.md` — agent-oriented 工期（禁人天/FTE）
+- `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-compound`、`mstar-compound-refresh`、`mstar-strategy` 等技能引用此表，不得本地重定义）
 
 **Plan 工件细则**（主 plan、reports、`status.json`、residual、knowledge、Done 归档、**`templates/`**）→ skill **`mstar-plan-artifacts`**（`references/` 与 `templates/`）。

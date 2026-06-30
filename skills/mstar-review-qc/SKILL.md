@@ -49,6 +49,17 @@ description: Morning Star QC/QA review baseline — tri-review workflow, checkli
 7. **报告入库（Git）**：将 QC 报告 **`.md`** 写入 `{PLAN_DIR}/reports/<plan-id>/` 后，在业务仓根执行 **`git add`**（**仅**本次报告路径）与 **`git commit`**，并在 Completion Report 给出 **真实** `git log -1 --oneline`。**禁止**仅完成 Write/Edit 而不提交（权限与例外见各 `agents/qc-specialist*.md`）。
 8. **禁止收尾套话**：报告与 commit 成功后，**不得**向终端用户追问「是否要交付报告」「下一步是否通知 PM」等；须在同一轮内输出完整 **Completion Report v2** 结束（见各 `agents/qc-specialist*.md` **「回合结束方式」**）。
 
+### Deep Review 模式（可选）
+
+当 PM 在 Assignment 中标注 `QC mode: deep`，各 QC reviewer 可派发 1-3 个子 persona（只读 Task subagent）从更多角度审查：
+
+- **QC1**（架构）可追加：模块化、API 契约、数据迁移 reviewer
+- **QC2**（安全）可追加：认证授权、输入验证、错误处理 reviewer
+- **QC3**（性能）可追加：数据库查询、内存/资源、并发 reviewer
+- **跨角色**：测试充分性、历史 comment 跟进、项目规范一致性 reviewer
+
+Persona 目录与派发规则 → **`references/deep-review-personas.md`**。Deep review 为可选增强，**默认 QC 仍为单 reviewer 模式**。Persona 发现须归源到主报告 Findings 中。
+
 ## 共享审查清单
 
 ### 代码质量

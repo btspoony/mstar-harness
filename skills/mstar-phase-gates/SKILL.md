@@ -100,6 +100,17 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 - `@qa-engineer`
   - 在 `InReview` 阶段验证实现与验收映射是否一致。
 
+### C. 知识结晶（Compound）：`Done → compound`（推荐）
+
+`Done` 后，若本轮工作产出了可复用的洞察、模式、或值得沉淀的诊断，由 PM 触发 `mstar-compound`：
+
+- **触发条件**：非平凡 bug 修复、新架构模式、新约定、工具链决策、有意义的排错经验。
+- **产物**：`{KNOWLEDGE_DIR}/<category>/<slug>.md` + 可选 `CONCEPTS.md` / `AGENTS.md` 更新。
+- **跳过条件**：纯机械性工作（格式化、依赖升级）、修复仅为打字错误。
+- **知识维护**：定期或知识库明显膨胀时，PM 触发 `mstar-compound-refresh` 审查/合并/清理过期文档。
+
+细则 → **`mstar-compound`** 与 **`mstar-compound-refresh`**。
+
 ## Plan 目录与审查报告（启用 `{PLAN_DIR}` 时）
 
 - 进入 `InReview` 后，QC 书面产出落入 `{PLAN_DIR}/reports/<plan-id>/`（如 `qc1.md` … `qc-consolidated.md`）；**fix 后默认 targeted re-review**（原位更新同文件，不默认 `-rev2`），见 **`mstar-plan-artifacts/references/plan-files-and-reports.md`**。**多 batch**：完整三审**默认在整 plan dev 完成后一次**（非每 batch）。
@@ -117,8 +128,9 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 8. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
 9. 若中途出现 plan drift，是否先回写再继续？
 10. 实现说明中是否体现"最小耐久切片 + 手术式改动 + 可验证检查"？
+11. `Done` 后，是否产出可复用的知识/模式？若是，是否已触发 `mstar-compound` 沉淀？
 
-任一项为「否」时，`Gate decision` 必须是 `blocked`。
+任一项为「否」时，`Gate decision` 必须是 `blocked`（第 11 项为推荐项，不影响 gate）。
 
 ## Hotfix 例外
 
