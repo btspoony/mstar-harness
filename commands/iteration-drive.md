@@ -13,9 +13,10 @@ Drive the active Morning Star iteration forward. The canonical flow is in **`mst
 1. `mstar-harness-core`
 2. `mstar-roles` → `references/project-manager.md`
 3. `skills/pm/SKILL.md` → **§ Host entry** + **§ Boot**（PM role identity + dispatch-first rules）
-4. `mstar-iteration` → **§ Phase 2: Autonomous Execute**（per-plan dispatch loop）+ **§ Phase 3: iteration-close**（compound + compass）
-5. `mstar-dispatch-gates` + host reference
-6. `mstar-plan-artifacts`, `mstar-plan-conventions`, `mstar-branch-worktree`
+4. `mstar-iteration` → **§ Phase 2** + **§ Phase 3**（close 为独立 gate，§3.0–§3.5）
+5. `mstar-compound` — Phase 3 §3.2 前加载（含 Phase 6 索引登记）
+6. `mstar-dispatch-gates` + host reference
+7. `mstar-plan-artifacts`, `mstar-plan-conventions`, `mstar-branch-worktree`
 
 ## Phase 2: Autonomous Execute
 
@@ -39,18 +40,24 @@ Execute **`mstar-iteration` § Phase 2** exactly. Summary:
 
 ## Phase 3: iteration-close
 
-When every plan is `Done`, execute **`mstar-iteration` § Phase 3**:
+当 **every** plan 为 `Done` 时，**STOP** per-plan loop，打印 `## Phase 3: iteration-close`，按 **`mstar-iteration` § Phase 3** 逐步执行。final plan 的 closure 只能提供输入，不能替代 close gate。
 
-1. **前置检查** (§ 3.1) — all plans Done, residuals closed, compass synced
-2. **Compound 轮** (§ 3.2) — 收集素材 → 自检清单（Q1-Q8）→ `mstar-compound` → CONCEPTS.md
-3. **更新 compass** (§ 3.3-3.4) — status → completed, roadmap, compound summary, retrospective, index
-4. **Commit** to integration branch:
+| Step | Section | 要点 |
+|------|---------|------|
+| 1 | §3.0 / §3.0.5 | Phase 边界；legacy compass 规范化（frontmatter + `## Roadmap Position`） |
+| 2 | §3.1 | 打印 close entry checklist，全部 `[x]` |
+| 3 | §3.2 | Compound；新增 doc 完成 `mstar-compound` Phase 6（`{KNOWLEDGE_DIR}/README.md`） |
+| 4 | §3.3 | `## Roadmap Position` current iteration → `delivered`；STRATEGY/tracker 按需更新 |
+| 5 | §3.4 | frontmatter `status: completed` + `end_date`；Compound Summary + Retrospective |
+| 6 | §3.5 | 打印 close exit checklist → commit → push |
 
 ```bash
 git add {ITERATION_DIR}/ {KNOWLEDGE_DIR}/ CONCEPTS.md
 git commit -m "chore(iteration): close <iteration-id> — compound round, roadmap update"
 git push origin <spec_integration_branch>
 ```
+
+**Not Done until**: §3.5 checklist `[x]` + compass frontmatter `completed`.
 
 ## Completion: Create PR
 

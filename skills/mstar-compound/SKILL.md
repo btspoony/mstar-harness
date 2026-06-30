@@ -211,6 +211,8 @@ If `CONCEPTS.md` doesn't exist yet, ask whether to seed it. A seed populates the
 
 2. If `plan_id` was provided, optionally update `status.json` metadata to reference this doc under `knowledge_refs`.
 
+**iteration-close gate**: `mstar-iteration` §3.2 #5 — **each** new doc in the compound round must complete this phase; do not skip for lightweight captures.
+
 ## Phase 7: Refresh trigger
 
 After capturing, check if the new learning suggests an older doc may now be stale (contradicted, superseded, or in a refactored domain). If so, recommend:

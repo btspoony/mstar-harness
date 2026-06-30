@@ -51,6 +51,15 @@ After grill-me + draft compass/plans（**`mstar-iteration` § Phase 1**）:
 
 Before §6 Integration Branch, print **`iteration-start` pre-commit checklist**（command §5）; all items must be `[x]`。
 
+## iteration-close（drive / 全部 plan Done 后）
+
+**`mstar-iteration` § Phase 3** 为独立 Phase；final plan closure 只能作为输入。
+
+- 全部 plan `Done` 后 **STOP** loop，打印 Phase 3 入场，从 §3.0 执行至 §3.5。
+- §3.1 close entry checklist 与 §3.5 close exit checklist 必须在对话中打印；全部为 `[x]` 方可 commit / PR。
+- 每篇新增 compound doc 必须完成 `mstar-compound` Phase 6（`{KNOWLEDGE_DIR}/README.md`）。
+- compass 完成形式：frontmatter `status: completed` + `end_date` + `## Roadmap Position` current iteration `delivered`——prose completion status 不算。
+
 ## Cursor Plan mode
 
 CreatePlan / SwitchMode: Read **`mstar-host/references/cursor-plan-mode-bridge.md`**. Bootstrap todos `harness-init` → `spec-register` → `mirror-plan` before implement todos; evidence on **subagent** work.

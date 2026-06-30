@@ -129,14 +129,15 @@ That completes installation.
 - **Codex**: use `/pm` to force-start with the `Project Manager` role after installing the plugin.
   Codex loads shared skills and custom agents from `codex/agents/` when linked by the CLI/manual install.
 
-### Iteration Commands
+### Harness Commands
 
-The shared `commands/` directory currently provides two PM-led iteration commands:
+The shared `commands/` directory currently provides these PM-led harness commands:
 
 | Command | Available in | Use when |
 |---------|--------------|----------|
+| `/mstar-bootstrap` | Cursor, OpenCode | Bootstrap or refresh project knowledge scaffolding: `STRATEGY.md`, `CONCEPTS.md`, `{KNOWLEDGE_DIR}`, and related indexes. |
 | `/iteration-start` | Cursor, OpenCode | Start a new harness iteration: research backlog, lock direction, write compass/plans, run the review chain, and create the integration branch. |
-| `/iteration-drive` | Cursor, OpenCode | Continue an active iteration through implementation, QC, QA, Done, and optional PR creation. |
+| `/iteration-drive` | Cursor, OpenCode | Continue an active iteration through the per-plan execute loop; after all plans are `Done`, run the independent iteration-close gate before PR creation. |
 
 In OpenCode, install or update `@mstar-harness/opencode` and restart OpenCode; the plugin bundles these markdown commands from `harness-commands/`.
 
@@ -149,25 +150,33 @@ flowchart TD
     A["PM: entry and intent clarification"] --> B{"PM: spec and context ready"}
     B -->|No| C["PM: clarify and refine requirements"]
     C --> B
-    B -->|Yes| D["PM: initialize or load HARNESS_DIR and PLAN_DIR"]
-    D --> E["PM: create or select active plan and update status.json SSOT"]
-    E --> F["PM: task routing and assignment"]
-    F --> G{"PM: work type"}
-    G -->|Large or high-ambiguity| H["Explore, Product Manager, Architect pre-work"]
-    H --> I["Dev team: implementation tracks"]
-    G -->|Medium, small, or bugfix| I
-    I --> J["Dev owners and PM: record notes and findings"]
-    J --> K["QC specialists: QC review gate (default: QC trio parallel review)"]
-    K --> L{"PM: consolidated QC decision"}
-    L -->|Request Changes| M["PM: assign fixes to dev owners"]
-    M --> I
-    L -->|Approve or discussion resolved| N["QA engineer: verification"]
-    N --> O{"PM and QA: residual findings remain"}
-    O -->|Yes| P["PM: register residuals in status.json and schedule follow-up"]
-    P --> Q["QA or PM: sign-off with traceable evidence"]
-    O -->|No| Q
-    Q --> R["PM: mark done and archive context"]
+    B -->|Yes| D["PM: initialize/load HARNESS_DIR and PLAN_DIR"]
+    D --> E{"Iteration scope needed"}
+    E -->|Yes| F["iteration-start: create compass, plans, and review chain"]
+    F --> G["PM: lock compass and create integration branch"]
+    E -->|No| H["PM: select active plan from status.json"]
+    G --> H
+    H --> I{"Any plan not Done"}
+    I -->|Yes| J["PM: dispatch one plan on a feature branch"]
+    J --> K["Dev roles: implement and report"]
+    K --> L["PM: update plan and status.json"]
+    L --> M["QC trio: review gate"]
+    M --> N{"QC decision"}
+    N -->|Request Changes| J
+    N -->|Approve| O["QA engineer: verification"]
+    O --> P{"Residual findings remain"}
+    P -->|Yes| Q["PM/QA: register or accept residuals in status.json"]
+    Q --> R["PM: mark plan Done and merge to integration branch"]
+    P -->|No| R
+    R --> S["PM: sync compass plan status"]
+    S --> I
+    I -->|No| T["iteration-close: close entry checklist"]
+    T --> U["PM: compound round and knowledge index"]
+    U --> V["PM: update roadmap and compass completed frontmatter"]
+    V --> W["PM: close exit checklist, commit, and PR"]
 ```
+
+For single-plan or non-iteration work, use the same per-plan gates (`Prepare → Execute → QC → QA → Done`) without the iteration-start / iteration-close wrapper.
 
 ## Role and Skill Overview
 
@@ -196,16 +205,21 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 |-------|---------|
 | `mstar-harness-core` | Global entry, state machine, Task category, skill index |
 | `mstar-phase-gates` | Prepare/Execute gates, clarify, hotfix |
+| `mstar-iteration` | Iteration lifecycle: iteration-start, per-plan execute loop, iteration-close |
 | `mstar-dispatch-gates` | PM dispatch, Delegation, anti-recursion, parallel invoke |
 | `mstar-branch-worktree` | Feature branches, worktrees, QC/QA checkout alignment |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |
-| `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residual, knowledge, Done compaction |
-| `mstar-host` | Host adapter (OpenCode / Cursor / Codex); auto-detect + `references/` |
-| `pm` | Shared `/pm` shortcut for Cursor and Codex PM entry |
-| `mstar-roles` | Role prompt bus + per-role skill load lists |
+| `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residuals, knowledge/iteration indexes, Done compaction |
+| `mstar-design-md` | DESIGN.md design-system gate for UI-bearing plans |
 | `mstar-review-qc` | QC review baseline and report template |
 | `mstar-coding-behavior` | Cross-role coding behavior baseline |
+| `mstar-compound` | Knowledge crystallization into `{KNOWLEDGE_DIR}` |
+| `mstar-compound-refresh` | Knowledge maintenance: refresh, merge, archive, or remove stale docs |
+| `mstar-strategy` | STRATEGY.md alignment for long-running direction and decisions |
 | `mstar-superpowers-align` | Alignment and conflict handling with Superpowers |
+| `mstar-roles` | Role prompt bus + per-role skill load lists |
+| `mstar-host` | Host adapter (OpenCode / Cursor / Codex); auto-detect + `references/` |
+| `pm` | Shared `/pm` shortcut for Cursor and Codex PM entry |
 
 Maintainers: in-repo design notes under **`.harness/`** (gitignored) for specs/plans during harness work — not the published skill tree.
 

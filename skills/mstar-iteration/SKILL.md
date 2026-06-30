@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: Morning Star 迭代管理 —— iteration-start（锁定迭代范围与 roadmap、§1.6 Review & Edit chain 强制门控）、Autonomous Execute（per-plan 派发循环：分支→实现→QC→QA→Done→合并，含跨 plan 进度追踪与 push 纪律）、iteration-close（收口知识结晶 `mstar-compound`、更新 roadmap、标记迭代完成）。触发：PM 启动新迭代、跨 plan 编排时、或迭代内所有 plan Done 后。迭代 compass 落盘 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`；per-plan 状态 SSOT 仍为 `{HARNESS_DIR}/status.json`。适用于一次迭代锁定几个 spec 点（specify+clarify）、多个 plan、每个 plan 多个 tasks 的实践模式。
+description: Morning Star 迭代管理 —— iteration-start（锁定范围、Review & Edit chain 硬门禁）、Autonomous Execute（per-plan 派发循环）、iteration-close（独立 Phase：close gate、compound、roadmap、compass completed）。触发：PM 启动新迭代、跨 plan 编排、或全部 plan Done 后收口。compass：`{ITERATION_DIR}/<iteration-id>-delivery-compass.md`；per-plan SSOT：`{HARNESS_DIR}/status.json`。
 ---
 
 # mstar-iteration（迭代管理）
@@ -58,11 +58,11 @@ PM 在新迭代启动时执行。
 | **里程碑** | 关键节点与日期 |
 | **验收标准** | 迭代级别的 Done 定义 |
 | **非目标** | 明确排除在本次迭代外的事项 |
-| **Roadmap 上下文** | 本迭代在整体 roadmap 中的位置（本批做什么 / 下批做什么） |
+| **Roadmap 上下文** | 本迭代在整体 roadmap 中的位置（current iteration / next iteration） |
 
 ### 1.3 创建迭代 compass
 
-写入 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`：
+写入 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`。**必须**使用 `references/iteration-compass-template.md` 完整结构（YAML frontmatter + `## Roadmap Position` + close 占位节）。`end_date` 仅在 iteration-close 填入；禁止用正文 completion prose 替代 frontmatter `status`。
 
 ```markdown
 ---
@@ -95,8 +95,8 @@ plans: []
 - <明确排除的事项>
 
 ## Roadmap Position
-- 本批：<what this iteration delivers>
-- 下批：<what comes next, owner, trigger>
+- Current iteration: <what this iteration delivers>
+- Next iteration: <what comes next, owner, trigger>
 ```
 
 ### 1.4 更新索引
@@ -179,7 +179,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 5. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 的 `## Plans` 表状态列
 6. **Next plan** 从步骤 1 继续
 
-全部 plan `Done` → 停止循环，进入 **Phase 3: iteration-close**。
+全部 plan `Done` → **STOP** per-plan loop（§2.4 结束），打印 **`## Phase 3: iteration-close`**，按 §3.0 起独立执行。final plan 的 Assignment / closure 可以提供素材，但不能替代 Phase 3 gate。
 
 ### 2.5 Dispatch-first（implement 派发约束）
 
@@ -203,16 +203,40 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 ## Phase 3: iteration-close（收口迭代）
 
-PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 main。触发方：`commands/iteration-drive.md`（在 Autonomous Execute loop 全部 Done 后自动进入）。
+PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 main。触发方：`commands/iteration-drive.md`（Autonomous Execute 全部 Done 后进入）。
 
-### 3.1 前置检查
+**Close Done 定义**：§3.1→§3.5 全部完成；compass frontmatter 写入 `status: completed` + `end_date`；每篇新增 knowledge doc 已登记 `{KNOWLEDGE_DIR}/README.md`。只在 final plan 中写了 compound / roadmap / PR 说明，不算 iteration-close 完成。
 
-确认以下条件全部满足后，方可进入 iteration-close：
+### 3.0 Phase boundary（HARD）
 
-- [ ] 所有 compass 中登记的 plan 状态均为 `Done`
-- [ ] 所有 plan 的 residual findings 已收口（closed 或 accepted）
-- [ ] `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 各 plan 状态已同步到最新
-- [ ] 迭代验收标准已达成或显式豁免
+- Phase 3 是 iteration 级收口，不是任一 plan 的子任务。
+- final plan closure、plan notes、plan compaction 可作为输入，但不能替代 §3.1→§3.5。
+- 读过 `mstar-iteration` / `mstar-compound` 不等于执行 gate；必须打印 checklist 并写入产物。
+
+### 3.0.5 Compass shape normalization（legacy 漂移修复）
+
+进入 §3.1 前，先确认 compass 具有 close 可写入的结构。若缺失，PM 在本 thread 做最小规范化，不委派、不重写无关内容。
+
+| 检查 | 缺则补齐 |
+|------|----------|
+| YAML frontmatter：`iteration_id`, `start_date`, `status` | 从文件名 / 正文提取；收口前 `status` 保持 `active` 或 `locked` |
+| `## Roadmap Position` | 从 general context / roadmap prose 迁移为本节 |
+| `## Compound Round Summary` | 按模板补占位，§3.4 填写 |
+| `## Iteration Retrospective (minimal)` | 按模板补占位，§3.4 填写 |
+
+正文 completion status 只能作为历史注释；最终状态必须写入 frontmatter `status: completed` + `end_date`。
+
+### 3.1 Close entry checklist（HARD GATE）
+
+**STOP**: 打印下方 checklist，且全部为 `[x]` 后，才可进入 §3.2 Compound。
+
+- [ ] 所有 compass 中登记的 plan 在 `{HARNESS_DIR}/status.json` 均为 `Done`
+- [ ] 所有 plan 的 residual findings 已收口（closed 或 accepted；见 `mstar-plan-artifacts`）
+- [ ] compass `## Plans` 表状态列已与 `status.json` 同步
+- [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
+- [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + close 占位节）
+
+PM **必须**在对话中打印本 checklist；不得默认同过。
 
 ### 3.2 知识结晶（Compound）—— 迭代级核心收口
 
@@ -227,27 +251,44 @@ PM 触发 `mstar-compound`（可批量）：
    - 跨 plan 重复出现的模式
    - 有价值的排错经验
 
-2. **逐条结晶**：对每条识别出的知识，调用 `mstar-compound` 写入 `{KNOWLEDGE_DIR}/<category>/<slug>.md`
+2. **逐条判定**：对每条候选知识，回答 `mstar-compound` 的 Q1-Q8 自检；跳过项要在 compass `## Compound Round Summary` 记录原因。
 
-3. **是否值得结晶**：PM 使用 `mstar-compound` 中的「是否值得结晶」自检清单逐条评估（见 `mstar-compound` § 是否值得结晶）。
+3. **写入或更新**：值得结晶的条目按 `mstar-compound` Phase 1-7 写入 `{KNOWLEDGE_DIR}/<category>/<slug>.md`，或在高重叠时更新已有文档。
 
-4. **CONCEPTS.md 协同**：若迭代中引入了新的领域词汇，更新 `<repo-root>/CONCEPTS.md`
+4. **CONCEPTS.md 协同**：若迭代中引入了新的领域词汇，更新 `<repo-root>/CONCEPTS.md`（`mstar-compound` Phase 5）
+
+5. **索引登记（强制）**：每新增一篇 knowledge doc，必须完成 `mstar-compound` Phase 6，在 `{KNOWLEDGE_DIR}/README.md` 登记一行。Lightweight compound 不豁免 Phase 6。
+
+若本轮没有值得结晶的知识，仍须在 `## Compound Round Summary` 写明 `无可结晶知识` 及原因。
 
 ### 3.3 更新 roadmap
 
-1. 更新 compass 中的 `## Roadmap Position`：
-   - 本批状态标记为 `delivered`
-   - 下批更新为即将开始的内容
+1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：
+   - current iteration 行标记为 **`delivered`**（或等价明确措辞）
+   - next iteration 更新为即将开始的内容、触发条件、owner
 2. 若 `status.json` 中有 `plans[].metadata.roadmap` 字段，同步更新
-3. 若 `STRATEGY.md` 存在，可建议更新 `## Decision Log`（若有重大架构决策）
+3. 若存在 deferred-features / roadmap tracker 类文档，按项目惯例刷新
+4. 若 `STRATEGY.md` 存在，可更新 `## Decision Log`（重大架构决策时）
 
-### 3.4 标记迭代完成 + Commit
+### 3.4 标记迭代完成
 
-1. 将 compass frontmatter `status` 更新为 `completed`，添加 `end_date`
-2. 更新 `{ITERATION_DIR}/README.md` 索引中该迭代行的 Status 为 `completed`
-3. compass 正文末尾追加 Compound Round Summary 和 Retrospective（见 compass 模板）
+1. compass **YAML frontmatter**：`status: completed`，`end_date: YYYY-MM-DD`（必须；见 §3.0.5）
+2. 更新 `{ITERATION_DIR}/README.md` 索引中该迭代行 Status 为 `completed`
+3. 填充 compass `## Compound Round Summary` 与 `## Iteration Retrospective (minimal)`（见模板）
 
-**Commit 到 integration 分支**：iteration-close 产出的所有 harness 制品必须 commit 到当前 integration 分支，随迭代 PR 合入 main：
+### 3.5 Close exit checklist + commit
+
+**Precondition**: §3.1 checklist `[x]`；§3.4 frontmatter `completed` + `end_date` 已写。
+
+PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit` / 开 PR：
+
+- [ ] §3.1 前置 gate 已打印并满足
+- [ ] §3.2 compound 完成；新增 knowledge doc 均已登记 `{KNOWLEDGE_DIR}/README.md`（或已记录无可结晶原因）
+- [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；tracker / STRATEGY 已按需更新
+- [ ] §3.4 frontmatter `status: completed` + `end_date`；Compound Summary + Retrospective 已填
+- [ ] 当前分支是 `spec_integration_branch`
+
+**Commit 到 integration 分支**：
 
 ```bash
 git add {ITERATION_DIR}/<id>-delivery-compass.md {ITERATION_DIR}/README.md {KNOWLEDGE_DIR}/ CONCEPTS.md
@@ -255,7 +296,7 @@ git commit -m "chore(iteration): close <iteration-id> — compound round, roadma
 git push origin <spec_integration_branch>
 ```
 
-### 3.5 可选：触发 compound-refresh
+### 3.6 可选：触发 compound-refresh
 
 若本轮 compound 新增了较多知识文档，或 compass 标记了可能过时的旧知识，触发 `mstar-compound-refresh` 对有重叠的知识文档做维护。
 
@@ -285,4 +326,7 @@ git push origin <spec_integration_branch>
 - 不要在 iteration-drive 中修改 per-plan gate 判定
 - 不要用 compass 替代 `status.json` 作为 plan 状态 SSOT
 - 不要在没有完成 per-plan 前置检查的情况下进入 iteration-close
-- 不要跳过 compound——如果本迭代确实没有可结晶的知识，在 compass 中写 `Compound Round Summary: 无可结晶知识（原因：<简述>）`
+- 不要将 Phase 3 折叠进 final plan closure——须显式 §3.0→§3.5
+- 不要用 prose completion status 替代 compass frontmatter `status: completed` + `end_date`
+- 不要跳过 compound Phase 6（`{KNOWLEDGE_DIR}/README.md` 索引）——即使只结晶一篇文档
+- 不要跳过 compound——如果本迭代确实没有可结晶的知识，在 compass `## Compound Round Summary` 写 `无可结晶知识（原因：<简述>）`

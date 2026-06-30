@@ -127,14 +127,15 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 - **Codex**：安装插件后，使用 `/pm` 强制以 `Project Manager` 角色启动。
   CLI / 手动安装链接 `codex/agents/` 后，Codex 可通过 custom agents 执行 Morning Star 角色派发。
 
-### Iteration Commands
+### Harness Commands
 
-共享的 `commands/` 目录目前提供两个由 PM 驱动的迭代命令：
+共享的 `commands/` 目录目前提供这些由 PM 驱动的 harness commands：
 
 | Command | 可用宿主 | 使用场景 |
 |---------|----------|----------|
+| `/mstar-bootstrap` | Cursor、OpenCode | 初始化或刷新项目知识脚手架：`STRATEGY.md`、`CONCEPTS.md`、`{KNOWLEDGE_DIR}` 及相关索引。 |
 | `/iteration-start` | Cursor、OpenCode | 启动新的 harness iteration：调研 backlog、锁定方向、产出 compass/plans、执行 review chain，并创建 integration branch。 |
-| `/iteration-drive` | Cursor、OpenCode | 推进已有 iteration：实现、QC、QA、Done，并按需创建 PR。 |
+| `/iteration-drive` | Cursor、OpenCode | 推进已有 iteration 的 per-plan execute loop；所有 plan `Done` 后，先执行独立 iteration-close gate，再创建 PR。 |
 
 在 OpenCode 中，安装或更新 `@mstar-harness/opencode` 后重启 OpenCode；插件会从 `harness-commands/` 打包注册这些 markdown commands。
 
@@ -167,12 +168,17 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 |-------|------|
 | `mstar-harness-core` | 全局入口、状态机、Task category、skill 索引 |
 | `mstar-phase-gates` | Prepare/Execute 门禁、clarify、hotfix |
+| `mstar-iteration` | 迭代生命周期：iteration-start、per-plan execute loop、iteration-close |
 | `mstar-dispatch-gates` | PM 派发、Delegation、反递归、并行 invoke |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支摘要 |
-| `mstar-plan-artifacts` | 主 plan、`reports/`、`status.json`、residual、knowledge、Done 归档 |
+| `mstar-plan-artifacts` | 主 plan、`reports/`、`status.json`、residual、knowledge/iteration 索引、Done 归档 |
+| `mstar-design-md` | UI 相关 plan 的 DESIGN.md 设计系统门禁 |
 | `mstar-review-qc` | QC 审查标准与报告模板 |
 | `mstar-coding-behavior` | 通用编码行为基线 |
+| `mstar-compound` | 知识结晶，写入 `{KNOWLEDGE_DIR}` |
+| `mstar-compound-refresh` | 知识维护：刷新、合并、归档或移除过期文档 |
+| `mstar-strategy` | STRATEGY.md 长期方向与决策对齐 |
 | `mstar-superpowers-align` | 与 Superpowers 的对齐与冲突消解 |
 | `mstar-roles` | 角色提示词总线 + 各角色 skill 加载清单 |
 | `mstar-host` | 宿主适配（OpenCode / Cursor / Codex）；自动识别 + `references/` |
@@ -190,24 +196,32 @@ flowchart TD
     B -->|否| C["PM: 继续澄清并补齐需求约束"]
     C --> B
     B -->|是| D["PM: 初始化或加载 HARNESS_DIR 与 PLAN_DIR"]
-    D --> E["PM: 创建或选择 active plan 并更新 status.json SSOT"]
-    E --> F["PM: 任务路由与角色分派"]
-    F --> G{"PM: 任务类型"}
-    G -->|大型或高歧义| H["Explore、产品经理、架构师前置产出"]
-    H --> I["开发团队: 开发轨实现"]
-    G -->|中小型或常规 Bug| I
-    I --> J["开发责任人与 PM: 持续记录 notes 与 findings"]
-    J --> K["QC 审查员: QC 审查门禁 (默认: QC 三审并行)"]
-    K --> L{"PM: 汇总后的 QC 结论"}
-    L -->|Request Changes| M["PM: 分派给开发责任人修复"]
-    M --> I
-    L -->|Approve 或讨论已消解| N["QA 工程师: QA 验证"]
-    N --> O{"PM 与 QA: 是否仍有 residual findings"}
-    O -->|是| P["PM: 写入 status.json 并安排后续跟踪"]
-    P --> Q["QA 或 PM: 基于可追溯证据完成签收"]
-    O -->|否| Q
-    Q --> R["PM: 标记 done 并归档上下文"]
+    D --> E{"是否需要 iteration scope"}
+    E -->|是| F["iteration-start: 创建 compass、plans 并执行 review chain"]
+    F --> G["PM: 锁定 compass 并创建 integration branch"]
+    E -->|否| H["PM: 从 status.json 选择 active plan"]
+    G --> H
+    H --> I{"是否仍有 plan 未 Done"}
+    I -->|是| J["PM: 在 feature branch 分派一个 plan"]
+    J --> K["开发角色: 实现并回报"]
+    K --> L["PM: 更新 plan 与 status.json"]
+    L --> M["QC 三审: review gate"]
+    M --> N{"QC 结论"}
+    N -->|Request Changes| J
+    N -->|Approve| O["QA 工程师: 验证"]
+    O --> P{"是否仍有 residual findings"}
+    P -->|是| Q["PM/QA: 在 status.json 登记或接受 residuals"]
+    Q --> R["PM: 标记 plan Done 并合并到 integration branch"]
+    P -->|否| R
+    R --> S["PM: 同步 compass plan 状态"]
+    S --> I
+    I -->|否| T["iteration-close: close entry checklist"]
+    T --> U["PM: compound round 与 knowledge index"]
+    U --> V["PM: 更新 roadmap 与 compass completed frontmatter"]
+    V --> W["PM: close exit checklist、commit、PR"]
 ```
+
+单 plan 或非 iteration 工作使用同一套 per-plan gate（`Prepare → Execute → QC → QA → Done`），但不需要 iteration-start / iteration-close 外层。
 
 ## 许可
 
