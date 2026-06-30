@@ -28,6 +28,7 @@
 |------|----------|-----------|
 | **CONCEPTS.md** | `<repo-root>/CONCEPTS.md` | `mstar-compound`（写/协同）、`mstar-compound-refresh`（reconciliation/bootstrapping） |
 | **STRATEGY.md** | `<repo-root>/STRATEGY.md` | `mstar-strategy`（读写） |
+| **opencode.json** | `<repo-root>/opencode.json` | `mstar-bootstrap`（初始化创建，含 `@mstar-harness/opencode` 插件配置）。**NOT** `.opencode/opencode.json`。 |
 | **AGENTS.md 更新** | `<repo-root>/AGENTS.md`（或 `CLAUDE.md`） | `mstar-compound`（可发现性检查编辑）、`mstar-strategy`（索引编辑） |
 
 ## 禁止操作区域
@@ -37,6 +38,7 @@
 | 路径 | 说明 |
 |------|------|
 | `docs/` | 人类文档（安装、贡献指南等），知识产物不放此处 |
+| `.opencode/` | OpenCode 内部缓存目录，**禁止**手动创建 `opencode.json` 在此。`opencode.json` 应放在仓库根目录。 |
 | `{ITERATION_DIR}/` | 仅限迭代 compass，知识文档不放此处 |
 | `{SPECS_DIR}/` | 仅限冻结规格/ADR，运行时知识不放此处 |
 | `{PLAN_DIR}/reports/` | 仅限 QC 报告，知识文档不放此处 |
