@@ -49,6 +49,15 @@ description: Morning Star QC/QA review baseline — tri-review workflow, checkli
 7. **报告入库（Git）**：将 QC 报告 **`.md`** 写入 `{PLAN_DIR}/reports/<plan-id>/` 后，在业务仓根执行 **`git add`**（**仅**本次报告路径）与 **`git commit`**，并在 Completion Report 给出 **真实** `git log -1 --oneline`。**禁止**仅完成 Write/Edit 而不提交（权限与例外见各 `agents/qc-specialist*.md`）。
 8. **禁止收尾套话**：报告与 commit 成功后，**不得**向终端用户追问「是否要交付报告」「下一步是否通知 PM」等；须在同一轮内输出完整 **Completion Report v2** 结束（见各 `agents/qc-specialist*.md` **「回合结束方式」**）。
 
+### Deep Review 模式（自动触发，透镜制）
+
+QC reviewer 在开工时按 `references/deep-review-personas.md` § 触发规则自行判定是否启用 deep review（≥2 条信号即触发）。**不派发子代理**，不依赖 PM 显式标注 mode。
+
+- **触发信号**：变更规模、敏感模块、新领域、数据结构变更、plan 高风险声明、多模块耦合 —— 达 2 条即触发。
+- **审查方式**：单人加载**透镜（lens）**——结构化检查表，逐项覆盖（如 Security Lens、Auth Lens、Data Migration Lens），不派发 persona subagent（反递归红线）。
+- **透镜选择**：默认透镜 + 按触发信号追加。详见 `references/deep-review-personas.md`。
+- **报告中体现**：`## Scope` 写 `Deep review: triggered (<signals>)` + `Lenses applied: <list>`；发现归入主报告 Findings，`Source Type` 标注为 `deep-lens: <lens-name>`。
+
 ## 共享审查清单
 
 ### 代码质量

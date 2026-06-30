@@ -53,6 +53,7 @@
 2. **阅读**：开发类 agent 在开始编码前，**必须**阅读当前 plan 在 `metadata` 中指向的 knowledge 文档（若存在）；`@project-manager` 在 Assignment 中可再次点名路径。
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新 README 中 **Status** 或 Description；版本迭代优先新文件名 `v<N+1>` 或保留旧版并标明 Superseded。
 4. **归档**：当文档内容已完全反映到已合并代码中时：**保留文件不删除**（保留设计考据）；将索引 **Status** 标为 `Superseded by implementation (...)` 或 `Archived`。**不要**把知识库产物搬进 `**{HARNESS_DIR}/archived/plans/`**（该处用于**计划行**冷快照）；知识库用索引状态表达生命周期即可。
+5. **结晶（Compound）**：PM 在迭代收口时（`mstar-iteration` § iteration-close）批量触发 `mstar-compound`，将整轮迭代的经验沉淀为结构化知识文档（`{KNOWLEDGE_DIR}/<category>/<slug>.md`，YAML frontmatter + 双轨模板）。compound 是迭代级活动，不在 per-plan Done 后单独执行。定期维护由 `mstar-compound-refresh` 执行。详见 **`mstar-compound`**、**`mstar-iteration`** 与 **`mstar-compound-refresh`**。
 
 ## 与 `reports/`、`{PLAN_DIR}/residuals/` 的区分
 

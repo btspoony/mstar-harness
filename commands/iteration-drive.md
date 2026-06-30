@@ -1,51 +1,63 @@
 ---
 name: iteration-drive
-description: Drive the active iteration to completion — run the PM Autonomous Execute loop (implement → QC → QA → Done) until all plans are Done, then optionally create PR to target branch (default main)
+description: Drive the active iteration to completion — run the Autonomous Execute loop (Phase 2 of mstar-iteration) until all plans are Done, then run iteration-close (Phase 3: compound + compass + roadmap update) on the integration branch, then create PR to target branch (default main)
 agent: project-manager
 ---
 
 # Drive Iteration
 
-Drive the active Morning Star iteration forward. Run the **Autonomous Execute driver** from `skills/pm/SKILL.md` (`§ Autonomous Execute driver`) to advance all non-`Done` plans to completion.
+Drive the active Morning Star iteration forward. The canonical flow is in **`mstar-iteration`** — this command loads it and executes its phases.
 
 ## Boot
 
 1. `mstar-harness-core`
 2. `mstar-roles` → `references/project-manager.md`
-3. `skills/pm/SKILL.md` → focus on **§ When to activate autonomous Execute** and **§ Autonomous Execute driver**
-4. `mstar-dispatch-gates` + host reference
-5. `mstar-plan-artifacts`, `mstar-plan-conventions`, `mstar-branch-worktree`
+3. `skills/pm/SKILL.md` → **§ Host entry** + **§ Boot**（PM role identity + dispatch-first rules）
+4. `mstar-iteration` → **§ Phase 2: Autonomous Execute**（per-plan dispatch loop）+ **§ Phase 3: iteration-close**（compound + compass）
+5. `mstar-dispatch-gates` + host reference
+6. `mstar-plan-artifacts`, `mstar-plan-conventions`, `mstar-branch-worktree`
 
-## Precondition Gate
+## Phase 2: Autonomous Execute
 
-Check the three conditions from **§ When to activate autonomous Execute**:
+Execute **`mstar-iteration` § Phase 2** exactly. Summary:
 
-1. `{HARNESS_DIR}/status.json` exists with at least one plan **not** `Done`
-2. **Pre-implement gate = GO** (`plan` locked, tasks ready)
-3. User intent is **continue Execute**
-
-If any is **false** → stop. If Prepare is incomplete → tell the user to run `/iteration-start` first.
-
-## Execute Loop
-
-Follow **§ Autonomous Execute driver** from the PM skill exactly:
-
-1. **Session todos** — set host todos for current `plan_id` + next gates
-2. **Read backlog** — `status.json`, active plans, `primary_spec` / `spec_integration_branch`
-3. **Checkout integration branch** — resolve or create from `status.json` metadata
-4. **Per-plan loop** — for each non-`Done` plan:
-   - Create plan feature branch from integration branch
-   - Dispatch implement subagents (dispatch-first, no parent agent implementation)
-   - Update `status.json` + main plan after each Completion Report
+1. **Precondition gate** (§ 2.0) — three checks before entering
+2. **Session todos** (§ 2.1) — set host todos per plan wave
+3. **Read backlog** (§ 2.2) — `status.json` + `spec_integration_branch`
+4. **Integration branch** (§ 2.3) — checkout/create
+5. **Per-plan loop** (§ 2.4) — for each non-`Done` plan:
+   - Create plan feature branch from integration
+   - Dispatch implement subagents (dispatch-first)
+   - Update `status.json` + main plan after each Completion Report v2
    - QC tri-review + QA per `mstar-review-qc`
    - Merge plan branch → integration branch
-   - Move to next plan
-5. Repeat until **all** plans in the iteration are `Done`
+   - Cross-plan progress sync → compass
+   - Next plan
+6. Repeat until **all** plans `Done` → exit loop, enter Phase 3
 
-## Completion
+**Dispatch-first constraint** (§ 2.5): PM never implements directly; `1 Assignment ⇒ 1 invoke`.
 
-When every plan is `Done` in `status.json`:
+## Phase 3: iteration-close
 
-- Resolve the PR target branch from iteration metadata: `status.json` → `target_branch`. Default to `main` if not set.
-- Create a PR from `spec_integration_branch` to the resolved `target_branch`
-- Report a summary: plans completed, branch names, target branch, PR link
+When every plan is `Done`, execute **`mstar-iteration` § Phase 3**:
+
+1. **前置检查** (§ 3.1) — all plans Done, residuals closed, compass synced
+2. **Compound 轮** (§ 3.2) — 收集素材 → 自检清单（Q1-Q8）→ `mstar-compound` → CONCEPTS.md
+3. **更新 compass** (§ 3.3-3.4) — status → completed, roadmap, compound summary, retrospective, index
+4. **Commit** to integration branch:
+
+```bash
+git add {ITERATION_DIR}/ {KNOWLEDGE_DIR}/ CONCEPTS.md
+git commit -m "chore(iteration): close <iteration-id> — compound round, roadmap update"
+git push origin <spec_integration_branch>
+```
+
+## Completion: Create PR
+
+All iteration-close changes committed to integration branch:
+
+- Resolve PR target branch from `status.json` → `target_branch`（default `main`）
+- Create PR from `spec_integration_branch` to target
+- Report summary: plans completed, compound round（结晶文档数）, target branch, PR link
+
+PR 合并后（babysit loop 或手动），本次迭代完整结束。

@@ -6,15 +6,16 @@ agent: project-manager
 
 # Start Iteration
 
-Start a new Morning Star harness iteration. Follow Prepare gates from `mstar-phase-gates` (specify → clarify → plan).
+Start a new Morning Star harness iteration. Detailed workflow → **`mstar-iteration` § Phase 1: iteration-start**；per-plan Prepare gates → **`mstar-phase-gates`**（specify → clarify → plan）。
 
 ## 0. Boot
 
 1. `mstar-harness-core`
 2. `mstar-roles` → `references/project-manager.md`
-3. `skills/pm/SKILL.md` → **§ Host entry** (PM role identity) + **§ Boot** (load order)
-4. `mstar-phase-gates` → Prepare (specify → clarify → plan)
-5. `mstar-plan-conventions`, `mstar-plan-artifacts`
+3. `skills/pm/SKILL.md` → **§ Host entry** + **§ Boot**
+4. `mstar-iteration` → **§ Phase 1: iteration-start**（迭代范围、compass 模板、状态初始化）
+5. `mstar-phase-gates` → Prepare（specify → clarify → plan）
+6. `mstar-plan-conventions`, `mstar-plan-artifacts`
 
 ## 1. Research
 
@@ -35,6 +36,8 @@ Load harness entry, then survey structured and unstructured sources:
 
 Identify deferred or incomplete items from prior iterations as priority candidates for this iteration.
 
+Also read `STRATEGY.md`（if exists）for strategic alignment.
+
 ## 2. Explore Directions
 
 Explore candidate directions targeting **product completeness**:
@@ -53,11 +56,12 @@ Run the **grill-me skill** to stress-test candidate directions with the user:
 
 ## 4. Write Compass & Plans
 
-Produce harness artifacts:
+Produce harness artifacts per **`mstar-iteration` § 1.3 创建迭代 compass**（template: `mstar-iteration/references/iteration-compass-template.md`）：
 
-- `{ITERATION_DIR}/<iteration-id>-compass.md` — iteration vision, scope, roadmap batches, deferred items
+- `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` — iteration scope, plans table, milestones, acceptance criteria, non-goals, roadmap position
 - `{PLAN_DIR}/<plan-id>-<name>.md` for each plan in this iteration
-- Register all plans in `{HARNESS_DIR}/status.json`
+- Register all plans in `{HARNESS_DIR}/status.json`（per `mstar-plan-artifacts`）
+- Update `{ITERATION_DIR}/README.md` index（per `mstar-iteration` § 1.4）
 
 ## 5. Review & Edit Chain
 
