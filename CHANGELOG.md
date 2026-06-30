@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.0** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.1** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.3** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.1] - 2026-06-30
+
+### Harness (skills / iteration-start)
+
+- **`/iteration-start` Review & Edit chain hard gate**: Step 5 is mandatory before integration branch commit — dispatch `@product-manager`, `@architect`, and `@writing-specialist` via Task (parallel when independent); PM thread must not substitute by performing all specialist edits itself. Done = edited compass/plans/specs + compass `status: locked`, not draft artifacts on disk.
+- **`mstar-iteration` §1.6**: Documents the review chain as an integration-branch precondition (skill SSOT); no separate `reports/<iteration-id>/` review files — unlike per-plan QC, iteration review has no downstream audit chain.
+- **`skills/pm`**, **`mstar-dispatch-gates`**, **`mstar-harness-core`**: iteration-start dispatch-first rules, anti-patterns, and pre-commit checklist aligned with command §5.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.0 → 0.7.1**. **`@mstar-harness/cli` remains 0.5.3**.
 
 ## [0.7.0] - 2026-06-30
 

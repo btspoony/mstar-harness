@@ -40,6 +40,17 @@ Prepare/Execute gates, routing, Assignment templates, Task Board, QC tri-review,
 
 **Exceptions:** user explicitly asks PM thread to implement; hotfix per `mstar-phase-gates`.
 
+## iteration-start dispatch
+
+After grill-me + draft compass/plans（**`mstar-iteration` § Phase 1**）:
+
+- **Do not** commit to `iteration/<iteration-id>` until Review & Edit chain completes（§1.6）。
+- Dispatch **@product-manager**, **@architect**, **@writing-specialist** via host Task — **one invoke per role minimum**（parallel when independent）。
+- PM final lock is PM-whitelist work（compass `status: locked`, merge conflicts, Prepare gate confirmation）。
+- **Not** PM-whitelist: performing all three specialist document edits without subagent Task.
+
+Before §6 Integration Branch, print **`iteration-start` pre-commit checklist**（command §5）; all items must be `[x]`。
+
 ## Cursor Plan mode
 
 CreatePlan / SwitchMode: Read **`mstar-host/references/cursor-plan-mode-bridge.md`**. Bootstrap todos `harness-init` → `spec-register` → `mirror-plan` before implement todos; evidence on **subagent** work.

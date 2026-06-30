@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.7.1
+
+- Bundled commands/skills: `/iteration-start` §5 Review & Edit chain is a hard gate before integration branch commit — Task dispatch for product-manager, architect, writing-specialist; evidence is edited docs + locked compass (no iteration `reports/` artifacts). Synced in `mstar-iteration` §1.6, `pm`, `mstar-dispatch-gates`, `mstar-harness-core`.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.1**.
+
 ## 0.6.22
 
 - Bundled skills: `mstar-dispatch-gates`, `mstar-roles` (qc-specialist-shared, dispatch-and-assignment) — replace prohibition-based anti-recursion with identity-deprivation framework. Assignment template gains IDENTITY + CAPABILITY BOUNDARY blocks before prohibitions, shifting from "I must not dispatch" (negation) to "I am a leaf executor; Task is not my tool" (capability deprivation).
