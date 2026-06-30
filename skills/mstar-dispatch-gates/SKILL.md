@@ -70,11 +70,20 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - **QC 三审**在 feature 开发完成后执行；三名 reviewer 共用同一组 `Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`（**`mstar-branch-worktree`**）。
 - **同一 plan 多 batch**：默认整 plan 交付完成跑一轮完整三审；**fix 后默认 targeted re-review**（N = 被指派的 QC 席位数，同条消息发满 N）；**仅** Assignment 写明 **`QC re-review: full tri-review`** 时复跑三审且用新文件名（**`mstar-plan-artifacts/references/plan-files-and-reports.md`**、**`mstar-review-qc`**）。
 
+## iteration-start Review & Edit chain
+
+与 QC 三审同理：**dispatch-first** 适用于文档审查角色，不限于 implement/QC。
+
+- PM 写 compass/plans **初稿**；**@product-manager**、**@architect**、**@writing-specialist** 各通过 Task **直接编辑** compass / plans / specs（**不**另写 `reports/` 审查报告）。
+- PM 线程跳过派发、自行完成三角色全部编辑 = **反模式**（见 **`mstar-harness-core`** 反模式索引、`mstar-iteration` §1.6）。
+- Steps 5.1–5.3 须 **Task**（可并行）；PM lock（5.4）在 PM 线程完成。**不得**在 review chain 完成前 commit integration 分支。
+
 ## 反模式（派发）
 
 - QC 三审拆在多条消息或等 #1 返回再发 #2/#3。
 - 仅 1 次 invoke 却声称「并行三审已启动」。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
+- iteration-start 在 Review & Edit chain 完成前 commit；PM 代做三角色全部编辑而不派发 Task。
 
 ## References
 

@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: Morning Star 迭代管理 —— iteration-start（锁定迭代范围与 roadmap）、Autonomous Execute（per-plan 派发循环：分支→实现→QC→QA→Done→合并，含跨 plan 进度追踪与 push 纪律）、iteration-close（收口知识结晶 `mstar-compound`、更新 roadmap、标记迭代完成）。触发：PM 启动新迭代、跨 plan 编排时、或迭代内所有 plan Done 后。迭代 compass 落盘 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`；per-plan 状态 SSOT 仍为 `{HARNESS_DIR}/status.json`。适用于一次迭代锁定几个 spec 点（specify+clarify）、多个 plan、每个 plan 多个 tasks 的实践模式。
+description: Morning Star 迭代管理 —— iteration-start（锁定迭代范围与 roadmap、§1.6 Review & Edit chain 强制门控）、Autonomous Execute（per-plan 派发循环：分支→实现→QC→QA→Done→合并，含跨 plan 进度追踪与 push 纪律）、iteration-close（收口知识结晶 `mstar-compound`、更新 roadmap、标记迭代完成）。触发：PM 启动新迭代、跨 plan 编排时、或迭代内所有 plan Done 后。迭代 compass 落盘 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`；per-plan 状态 SSOT 仍为 `{HARNESS_DIR}/status.json`。适用于一次迭代锁定几个 spec 点（specify+clarify）、多个 plan、每个 plan 多个 tasks 的实践模式。
 ---
 
 # mstar-iteration（迭代管理）
@@ -19,7 +19,7 @@ mstar 实践模式通常是：一次迭代锁定几个 spec 点（`specify + cla
 iteration-start → [per-plan lifecycle × N] → iteration-close → PR → merge
      │                                               │
      │ 锁定范围、创建 compass                        │ compound、更新 roadmap
-     │ 登记 plans 到 compass                         │ 标记迭代完成
+     │ Review & Edit chain → PM lock                 │ 标记迭代完成
      │ 创建 integration 分支                          │ commit 到 integration 分支
      │                                               │
      └──────── iteration-drive（跨 plan 追踪）────────┘
@@ -110,6 +110,21 @@ plans: []
 ### 1.5 登记到 status.json（可选）
 
 若使用 `status.json`，在 `plans[].metadata` 中为受影响的 plan 设置 `iteration_refs`。
+
+### 1.6 Review & Edit chain（integration 分支前强制）
+
+**iteration-start 在 PM lock 前不算完成**——compass/plans 初稿落盘 ≠ Done。
+
+与 host 命令 `iteration-start` §5 对齐：产物 SSOT 在本节；派发机制 SSOT 在命令 + **`mstar-dispatch-gates`**。
+
+PM **不得**将迭代 harness 文档 commit 到 `spec_integration_branch`，直到：
+
+1. **@product-manager**、**@architect**、**@writing-specialist** 已通过宿主 Task（或等价角色 invoke）**直接编辑**（非仅评论）compass、plans 及受影响 specs
+2. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
+
+**完成证据** = 磁盘上的 compass / plans / specs 修订 + compass `status: locked`。**不**要求 `reports/<iteration-id>/` 审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
+
+**反模式**：PM 线程代替三角色完成全部编辑而不派发 Task —— 见 **`mstar-harness-core`** 反模式索引。
 
 ---
 

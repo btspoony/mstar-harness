@@ -139,6 +139,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |
 | CreatePlan 不落盘 / 无 `{HARNESS_DIR}` mirror | `mstar-host` · `cursor-plan-mode-bridge` |
 | 临时方案 / 后续计划只写在对话里 | `mstar-phase-gates` · Durable Roadmap Gate |
+| iteration-start commit before review chain | `mstar-iteration` §1.6；PM 模拟三角色编辑而不派发 Task |
 
 ## 可选：OpenViking Memory
 
