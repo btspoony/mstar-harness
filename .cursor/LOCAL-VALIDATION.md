@@ -36,3 +36,4 @@ Use before publishing or sharing the Morning Star Cursor plugin from this repo.
 - Do not use absolute paths in `plugin.json`.
 - Do not reference files outside this repository root.
 - Ensure all referenced directories exist in the current branch.
+- Cursor **cannot load symlinked plugin roots** — local/global install must be a real directory (see `docs/cli.md` § Install path layout).

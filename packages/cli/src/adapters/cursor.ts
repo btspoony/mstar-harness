@@ -4,11 +4,11 @@ import path from "node:path";
 import type { AgentAdapter, Scope } from "../types";
 import { resolveProjectRoot } from "../utils";
 import {
-  HARNESS_REPO_PATH,
+  REPO_URL,
   ensureLocalHarnessRepo,
-  ensureSymlink,
+  ensureGitCheckout,
   validateLocalHarnessRepo,
-  validateSymlink,
+  validateGitCheckout,
   appendGitignore,
 } from "./shared-install";
 
@@ -25,9 +25,9 @@ function projectInstallPath() {
   return path.join(resolveProjectRoot(), CURSOR_PLUGIN_LINK);
 }
 
-function validatePluginAgents() {
+function validatePluginAgents(pluginRoot: string) {
   const errors: string[] = [];
-  const agentsDir = path.join(HARNESS_REPO_PATH, "agents");
+  const agentsDir = path.join(pluginRoot, "agents");
   if (!fs.existsSync(agentsDir)) {
     errors.push(`Missing plugin agents directory: ${agentsDir}`);
     return errors;
@@ -48,10 +48,14 @@ function validatePluginAgents() {
   return errors;
 }
 
+function ensureCursorPluginCheckout(location: string, dryRun: boolean) {
+  return ensureGitCheckout(REPO_URL, location, dryRun);
+}
+
 function globalInit(dryRun: boolean) {
   const location = globalInstallPath();
   const notes = ensureLocalHarnessRepo(dryRun);
-  notes.push(ensureSymlink(HARNESS_REPO_PATH, location, dryRun));
+  notes.push(...ensureCursorPluginCheckout(location, dryRun));
   return { location, notes };
 }
 
@@ -59,7 +63,7 @@ function projectInit(dryRun: boolean) {
   const projectRoot = resolveProjectRoot();
   const location = projectInstallPath();
   const notes = ensureLocalHarnessRepo(dryRun);
-  notes.push(ensureSymlink(HARNESS_REPO_PATH, location, dryRun));
+  notes.push(...ensureCursorPluginCheckout(location, dryRun));
   notes.push(...appendGitignore(projectRoot, [CURSOR_PLUGIN_LINK], dryRun));
   return { location, notes };
 }
@@ -67,12 +71,8 @@ function projectInit(dryRun: boolean) {
 function globalDoctor() {
   const location = globalInstallPath();
   const errors = validateLocalHarnessRepo();
-  errors.push(...validateSymlink(HARNESS_REPO_PATH, location));
-  const marker = path.join(location, CURSOR_PLUGIN_MARKER);
-  if (!fs.existsSync(marker)) {
-    errors.push(`Missing Cursor plugin marker file: ${marker}`);
-  }
-  errors.push(...validatePluginAgents());
+  errors.push(...validateGitCheckout(location, CURSOR_PLUGIN_MARKER));
+  errors.push(...validatePluginAgents(location));
   return { location, errors };
 }
 
@@ -80,17 +80,13 @@ function projectDoctor() {
   const projectRoot = resolveProjectRoot();
   const location = projectInstallPath();
   const errors = validateLocalHarnessRepo();
-  errors.push(...validateSymlink(HARNESS_REPO_PATH, location));
-  const marker = path.join(location, CURSOR_PLUGIN_MARKER);
-  if (!fs.existsSync(marker)) {
-    errors.push(`Missing Cursor plugin marker file: ${marker}`);
-  }
+  errors.push(...validateGitCheckout(location, CURSOR_PLUGIN_MARKER));
   const gitignorePath = path.join(projectRoot, ".gitignore");
   const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
   if (!gitignore.split(/\r?\n/).includes(CURSOR_PLUGIN_LINK)) {
     errors.push(`Missing .gitignore entry: ${CURSOR_PLUGIN_LINK}`);
   }
-  errors.push(...validatePluginAgents());
+  errors.push(...validatePluginAgents(location));
   return { location, errors };
 }
 

@@ -22,7 +22,7 @@ Use this sequence for the quickest user flow.
 
 ### Cursor
 
-1) Install plugin to project (default scope). The CLI maintains `~/.mstar/harness` and symlinks `.cursor/plugins/morning-star-harness` to it:
+1) Install plugin to project (default scope). The CLI maintains `~/.mstar/harness` and clones a **real directory** at `.cursor/plugins/morning-star-harness` (not a symlink — Cursor cannot load symlinked plugin roots):
 
 - `npx @mstar-harness/cli init --target cursor`
 
@@ -74,9 +74,9 @@ Dry-run preview (no file write):
 
 Cursor install:
 
-- Global install (symlink at `~/.cursor/plugins/local/morning-star-harness`; shared checkout at `~/.mstar/harness`):
+- Global install (git checkout at `~/.cursor/plugins/local/morning-star-harness`; shared Codex/OpenCode checkout at `~/.mstar/harness`):
   - `npx @mstar-harness/cli init --target cursor --scope global`
-- Project install (symlink at `.cursor/plugins/morning-star-harness`; the CLI adds it to `.gitignore`):
+- Project install (git checkout at `.cursor/plugins/morning-star-harness`; the CLI adds it to `.gitignore`):
   - `npx @mstar-harness/cli init --target cursor --scope project`
 
 Codex install:
@@ -112,12 +112,12 @@ OpenCode `init` enforces these baseline requirements in `opencode.json`:
 - `plugin` contains `@mstar-harness/opencode@latest` (legacy `morning-star@git+…` lines for `btspoony/mstar-harness` are stripped on init, including URLs without `.git`, `ssh://`, or `#tag`)
 - all Morning Star roles have `agent.<role>.model`
 
-Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/harness`, then create target-specific symlinks.
+Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/harness`. Codex then creates agent symlinks from that checkout. Cursor clones a **separate real git checkout** at the plugin path (see [Install path layout](#install-path-layout)).
 
 Cursor `init`:
 
-- global: `~/.cursor/plugins/local/morning-star-harness -> ~/.mstar/harness`
-- project: `.cursor/plugins/morning-star-harness -> ~/.mstar/harness` and `.gitignore` entry for the plugin link
+- global: `git clone` / `git pull` at `~/.cursor/plugins/local/morning-star-harness`
+- project: `git clone` / `git pull` at `.cursor/plugins/morning-star-harness` and `.gitignore` entry for the plugin directory
 
 Codex `init` writes or updates marketplace metadata with a local-source entry:
 
@@ -133,8 +133,28 @@ Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` 
 
 - Same schema, role models, and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
-- For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, the plugin symlink, and that plugin `agents/*.md` files use Cursor-first frontmatter.
+- For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, that the Cursor plugin path is a **real git directory** (not a symlink), and that `agents/*.md` files use Cursor-first frontmatter.
 - For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks.
+
+## Install path layout
+
+Cursor **does not discover symlinked plugin directories**. Use real directories at the plugin paths below.
+
+| Path | Host | Layout | Notes |
+| --- | --- | --- | --- |
+| `~/.mstar/harness` | Codex (marketplace `local` source), OpenCode dev bundle | git checkout | Codex agent `.toml` files are **symlinked** from here into `~/.codex/agents/` |
+| `~/.cursor/plugins/local/morning-star-harness` | Cursor global plugin | **git checkout (real dir)** | **Not** a symlink to `~/.mstar/harness`; `init` clones or `git pull`s here |
+| `.cursor/plugins/morning-star-harness` | Cursor project plugin | **git checkout (real dir)** | gitignored; same clone/pull behavior as global |
+
+`init --target cursor` maintains **two** checkouts: `~/.mstar/harness` (shared with Codex) and the Cursor plugin path (independent clone, kept in sync via `git pull` on each init).
+
+**Maintainers** editing this repository in a separate workspace should refresh the Cursor plugin checkout after merging:
+
+```bash
+cd ~/.cursor/plugins/local/morning-star-harness && git pull --ff-only
+```
+
+Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 
 ## Options Reference
 

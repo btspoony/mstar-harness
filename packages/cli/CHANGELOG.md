@@ -4,6 +4,14 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.5.4
+
+- **Layout fix**: Cursor global/project plugin paths are **real git checkouts** (`git clone` / `git pull`), not symlinks to `~/.mstar/harness`. Cursor does not discover symlinked plugin directories.
+- `doctor --target cursor` fails if the plugin path is a symlink; `init` removes an existing symlink and clones.
+- `~/.mstar/harness` remains the shared checkout for Codex marketplace local source and agent symlinks.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.2**.
+
 ## 0.5.1
 
 - align Cursor global/project plugin symlinks to `morning-star-harness` (matching plugin manifest `name`)

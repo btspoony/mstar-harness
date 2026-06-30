@@ -37,7 +37,7 @@ Core value:
   - Codex:
     - `npx @mstar-harness/cli init --target codex`
     - `codex plugin add morning-star-harness --marketplace personal`
-- Cursor and Codex installs share a maintained local checkout at `~/.mstar/harness`; target-specific plugin and agent paths are symlinked to that checkout.
+- Cursor and Codex installs maintain a shared checkout at `~/.mstar/harness` (Codex marketplace + agent sources). **Cursor** installs a separate **real git checkout** at the plugin path — Cursor does not discover symlinked plugin directories (see [`docs/cli.md`](docs/cli.md#install-path-layout)).
 
 For full CLI usage and advanced options (`--yes`, `--dry-run`, `--output`, `doctor`) including Cursor and Codex target install modes, see [`docs/cli.md`](docs/cli.md).
 
@@ -72,11 +72,14 @@ For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
 - Recommended:
   - `npx @mstar-harness/cli init --target cursor --scope global`
   - Restart Cursor or run `Developer: Reload Window`
-- Manual install (same paths the CLI uses):
+- Manual install (same layout the CLI uses; **do not symlink** the Cursor plugin path):
   - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
   - `mkdir -p ~/.cursor/plugins/local`
-  - `ln -s ~/.mstar/harness ~/.cursor/plugins/local/morning-star-harness`
+  - `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`
   - Restart Cursor or run `Developer: Reload Window`
+- **Maintainers**: develop in your workspace; refresh the Cursor plugin checkout after merge:
+  - `cd ~/.cursor/plugins/local/morning-star-harness && git pull --ff-only`
+  - or re-run `npx @mstar-harness/cli init --target cursor --scope global`
 
 #### Codex
 

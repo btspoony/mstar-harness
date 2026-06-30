@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.7.2
+
+- Docs only at package level: root **0.7.2** documents CLI Cursor install layout (real git checkout at plugin path, not symlink). Re-bundle on publish if CLI dist changed.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.2**.
+
 ## 0.7.1
 
 - Bundled commands/skills: `/iteration-start` §5 Review & Edit chain is a hard gate before integration branch commit — Task dispatch for product-manager, architect, writing-specialist; evidence is edited docs + locked compass (no iteration `reports/` artifacts). Synced in `mstar-iteration` §1.6, `pm`, `mstar-dispatch-gates`, `mstar-harness-core`.

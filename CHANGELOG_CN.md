@@ -1,16 +1,28 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.1**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.2**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.3** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.2** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.2** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.2** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.2] - 2026-06-30
+
+### CLI / Cursor 安装
+
+- **Cursor 插件路径布局**：`mstar-harness init --target cursor` 在 Cursor 插件路径安装**真实 git checkout**（`git clone` / `git pull`），不再软链接到 `~/.mstar/harness`。Cursor **无法发现**软链接形式的插件目录。
+- **`doctor --target cursor`**：插件路径为 symlink 时报错；`init` 会删除已有 symlink 并 clone。
+- **文档**：`docs/cli.md` § Install path layout；README/CN 手动安装与维护者刷新说明已更新。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.1 → 0.7.2**。**`@mstar-harness/cli`**：**0.5.3 → 0.5.4**。
 
 ## [0.7.1] - 2026-06-30
 

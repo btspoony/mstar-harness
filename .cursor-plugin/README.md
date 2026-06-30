@@ -20,9 +20,9 @@ Recommended:
 
 Manual install:
 
-1. `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
+1. `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness` (optional; used by Codex)
 2. `mkdir -p ~/.cursor/plugins/local`
-3. `ln -s ~/.mstar/harness ~/.cursor/plugins/local/morning-star-harness`
+3. `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness` (**real directory** — do not symlink)
 4. Restart Cursor or run `Developer: Reload Window`.
 
 After agent file changes, reload Cursor before smoke-testing Task `subagent_type` names.
