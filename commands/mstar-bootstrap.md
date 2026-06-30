@@ -1,5 +1,5 @@
 ---
-name: bootstrap
+name: mstar-bootstrap
 description: Bootstrap or refresh a project's knowledge scaffolding — distill STRATEGY.md, CONCEPTS.md, and baseline knowledge docs from the existing codebase and any docs. Use when a project has no knowledge infrastructure, stale/partial docs, or needs a fresh distillation.
 agent: project-manager
 ---

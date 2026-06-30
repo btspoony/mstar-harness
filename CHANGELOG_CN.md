@@ -1,18 +1,18 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.6.23**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.0**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.6.23** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.0** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.3** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.6.23** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.6.23** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.6.23** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
-## [0.6.23] - 2026-06-30
+## [0.7.0] - 2026-06-30
 
 ### Harness（skills / iteration, compound, strategy, qc, commands）
 
@@ -20,14 +20,14 @@
 - **新增 `mstar-compound-refresh` 技能**：知识维护——对照当前代码库审查/更新/合并/替换/删除知识文档，CONCEPTS.md reconciliation。
 - **新增 `mstar-strategy` 技能**：STRATEGY.md 创建与维护，作为项目上游锚点（愿景、技术方向、指导原则、决策日志）。
 - **新增 `mstar-iteration` 技能**：完整迭代生命周期管理——Phase 1 iteration-start（范围/Roadmap 锁定、compass 创建），Phase 2 Autonomous Execute（per-plan 派发循环：分支→实现→QC→QA→Done→合并，跨 plan 进度同步），Phase 3 iteration-close（compound 轮、roadmap 更新、回顾、commit）。Autonomous Execute driver 从 `skills/pm/SKILL.md` 移入此处；PM skill 精简为角色身份、host 入口与 dispatch-first 规则。
-- **新增 `/bootstrap` 命令**：为空白/残旧知识项目从代码库提炼 STRATEGY.md、CONCEPTS.md 与基线知识文档（7 阶段流程）。
+- **新增 `/mstar-bootstrap` 命令**：为空白/残旧知识项目从代码库提炼 STRATEGY.md、CONCEPTS.md 与基线知识文档（7 阶段流程）。
 - **新增 `artifact-storage-paths.md`**：产物路径集中 SSOT，位于 `mstar-plan-conventions` 下，所有产出技能引用此表，防止路径漂移。
 - **QC deep review 透镜**：以自检透镜清单（12 个透镜、6 个触发信号）替代 persona subagent 派发。不派发子代理，解决与 `mstar-dispatch-gates` 的反递归冲突。
 - **索引更新**：`mstar-harness-core` 拆分为 per-plan 与迭代级周期；全部 skill 索引表、`mstar-roles` 依赖矩阵、`mstar-phase-gates` per-plan 门禁均已更新。
 
 ### 版本对齐
 
-- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.6.22 → 0.6.23**。**`@mstar-harness/cli` 保持 0.5.3**。
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.6.22 → 0.7.0**。**`@mstar-harness/cli` 保持 0.5.3**。
 
 ## [0.6.22] - 2026-06-27
 

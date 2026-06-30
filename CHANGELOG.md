@@ -2,19 +2,19 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.6.23** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.6.23** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.0** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.3** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.6.23** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.6.23** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.6.23** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
-## [0.6.23] - 2026-06-30
+## [0.7.0] - 2026-06-30
 
 ### Harness (skills / iteration, compound, strategy, qc, commands)
 
@@ -22,14 +22,14 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 - **New `mstar-compound-refresh` skill**: Knowledge maintenance — audit/update/consolidate/replace/delete knowledge docs against current codebase, CONCEPTS.md reconciliation.
 - **New `mstar-strategy` skill**: STRATEGY.md creation and maintenance as project upstream anchor (vision, technology direction, guiding principles, decision log).
 - **New `mstar-iteration` skill**: Full iteration lifecycle management — Phase 1 iteration-start (scope/roadmap lock, compass creation), Phase 2 Autonomous Execute (per-plan dispatch loop: branch → implement → QC → QA → Done → merge, cross-plan progress sync), Phase 3 iteration-close (compound round, roadmap update, retrospective, commit). Autonomous Execute driver moved here from `skills/pm/SKILL.md`; PM skill thinned to role identity, host entry, and dispatch-first rules only.
-- **New `/bootstrap` command**: Distills STRATEGY.md, CONCEPTS.md, and baseline knowledge docs from existing codebase for projects with no/stale knowledge infrastructure (7-phase flow).
+- **New `/mstar-bootstrap` command**: Distills STRATEGY.md, CONCEPTS.md, and baseline knowledge docs from existing codebase for projects with no/stale knowledge infrastructure (7-phase flow).
 - **New `artifact-storage-paths.md`**: Single SSOT for all harness artifact paths under `mstar-plan-conventions`, referenced by all producing skills to prevent path drift.
 - **QC deep review lenses**: Replaced persona subagent dispatch with self-applied lens checklists (12 lenses, 6 trigger signals). No subagent dispatch — resolves anti-recursion violation with `mstar-dispatch-gates`.
 - **Updated index**: `mstar-harness-core` split lifecycle into per-plan and iteration-level cycles; all skill index tables, `mstar-roles` dependency matrix, and `mstar-phase-gates` per-plan gates updated.
 
 ### Version alignment
 
-- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.6.22 → 0.6.23**. **`@mstar-harness/cli` remains 0.5.3**.
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.6.22 → 0.7.0**. **`@mstar-harness/cli` remains 0.5.3**.
 
 ## [0.6.22] - 2026-06-27
 
