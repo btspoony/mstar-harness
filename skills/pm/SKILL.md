@@ -76,7 +76,7 @@ For each active `plan_id`:
 4. **Plan complete — merge back:** merge **plan feature branch** (and any integrated topic heads) **into `spec_integration_branch`**; resolve conflicts **before** next plan or QC on shared scope
 5. **Next plan** from step 1 on updated integration branch
 
-When **every** plan in the iteration is `Done` → optional PR from `spec_integration_branch` to `main` per `mstar-plan-conventions` (unless Assignment `Branch policy` says otherwise).
+When **every** plan in the iteration is `Done` → stop the per-plan loop. The **iteration-close** phase（compound + compass update + PR）is handled by `mstar-iteration` § Phase 3 and the `/iteration-drive` command, not by the Autonomous Execute driver itself. Do **not** create the PR directly from here.
 
 ### 4. Push discipline
 
