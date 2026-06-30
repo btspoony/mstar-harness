@@ -1,16 +1,28 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.0**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.1**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.1** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.3** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.1] - 2026-06-30
+
+### Harness（skills / iteration-start）
+
+- **`/iteration-start` Review & Edit chain 硬门禁**：§5 在 integration 分支 commit 前强制完成——通过 Task 派发 `@product-manager`、`@architect`、`@writing-specialist`（可并行）；PM 线程不得代做全部专业角色编辑。Done = 已修订的 compass/plans/specs + compass `status: locked`，而非初稿落盘即完成。
+- **`mstar-iteration` §1.6**：将 review chain 记为 integration 分支前置条件（skill SSOT）；**不**要求 `reports/<iteration-id>/` 审查报告——与 per-plan QC 不同，迭代审查无后续审计链，SSOT 为被编辑的文档本身。
+- **`skills/pm`**、**`mstar-dispatch-gates`**、**`mstar-harness-core`**：iteration-start dispatch-first 规则、反模式与 pre-commit checklist 与命令 §5 对齐。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.0 → 0.7.1**。**`@mstar-harness/cli` 保持 0.5.3**。
 
 ## [0.7.0] - 2026-06-30
 
