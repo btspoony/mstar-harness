@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.2** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.3** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.1** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.2** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.2** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.2** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.2** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.2] - 2026-06-30
+
+### CLI / Cursor install
+
+- **Cursor plugin path layout**: `mstar-harness init --target cursor` now installs a **real git checkout** at the Cursor plugin path (`git clone` / `git pull`), not a symlink to `~/.mstar/harness`. Cursor does not discover symlinked plugin directories.
+- **`doctor --target cursor`**: fails if the plugin path is a symlink; `init` removes an existing symlink and clones.
+- **Docs**: `docs/cli.md` § Install path layout; README/CN manual install and maintainer refresh notes updated.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.1 → 0.7.2**. **`@mstar-harness/cli`**: **0.5.3 → 0.5.4**.
 
 ## [0.7.1] - 2026-06-30
 
