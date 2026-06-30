@@ -104,9 +104,9 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 
 per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 per-plan gate）：
 
-- **迭代启动**（`mstar-iteration` § iteration-start）：锁定迭代范围（本迭代包含哪些 plan）、里程碑、验收标准，产出 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`。
-- **迭代驱动**（`mstar-iteration` § iteration-drive）：跨 plan 进度追踪，更新 compass 中各 plan 状态。
-- **迭代收口**（`mstar-iteration` § iteration-close）：迭代内所有 plan Done 后，执行一轮知识结晶（`mstar-compound`）沉淀迭代经验，更新 roadmap，标记迭代完成。
+- **迭代启动**（`mstar-iteration` § Phase 1 iteration-start）：锁定迭代范围（本迭代包含哪些 plan）、里程碑、验收标准，产出 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`。
+- **迭代驱动**（`mstar-iteration` § Phase 2 Autonomous Execute）：per-plan 派发循环（分支→实现→QC→QA→Done→合并），跨 plan 进度追踪，更新 compass 中各 plan 状态。
+- **迭代收口**（`mstar-iteration` § Phase 3 iteration-close）：迭代内所有 plan Done 后，执行一轮知识结晶（`mstar-compound`）沉淀迭代经验，更新 roadmap，标记迭代完成。
 
 per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。
 

@@ -43,7 +43,7 @@ PM 在新迭代启动时执行。
 ### 1.1 收集上下文
 
 1. 读 `{ITERATION_DIR}/README.md`（若存在），了解历史迭代
-2. 读 `STRATEGY.md`（若存在），对齐战略方向
+2. 读 `STRATEGY.md`（若存在），对齐战略方向（见 `mstar-strategy`）
 3. 如果有未完成的 roadmap 残余（上一迭代标记为 `next` 的 plan），纳入本次迭代范围候选
 
 ### 1.2 定义迭代范围
