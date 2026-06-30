@@ -58,6 +58,63 @@ export function validateLocalHarnessRepo() {
   return errors;
 }
 
+/** Cursor cannot load symlinked plugin roots — use a materialized git checkout. */
+export function ensureGitCheckout(repoUrl: string, checkoutPath: string, dryRun: boolean) {
+  const notes: string[] = [];
+  const parentDir = path.dirname(checkoutPath);
+
+  if (pathOrSymlinkExists(checkoutPath)) {
+    const stat = fs.lstatSync(checkoutPath);
+    if (stat.isSymbolicLink()) {
+      notes.push(
+        dryRun
+          ? `Would remove symlink at ${checkoutPath} and clone ${repoUrl}`
+          : `Removed symlink at ${checkoutPath} (Cursor requires a real directory)`,
+      );
+      if (dryRun) return notes;
+      fs.unlinkSync(checkoutPath);
+    } else if (fs.existsSync(path.join(checkoutPath, ".git"))) {
+      if (!dryRun) {
+        runCommand(["git", "-C", checkoutPath, "pull", "--ff-only"], checkoutPath, dryRun);
+      }
+      notes.push(`Updated git checkout at ${checkoutPath}`);
+      return notes;
+    } else {
+      throw new Error(`Path exists but is not a git checkout: ${checkoutPath}`);
+    }
+  }
+
+  ensureDir(parentDir, dryRun);
+  if (!dryRun) {
+    runCommand(["git", "clone", repoUrl, checkoutPath], parentDir, dryRun);
+  }
+  notes.push(`${dryRun ? "Would clone" : "Cloned"} ${repoUrl} to ${checkoutPath}`);
+  return notes;
+}
+
+export function validateGitCheckout(checkoutPath: string, markerRelativePath: string) {
+  const errors: string[] = [];
+  if (!pathOrSymlinkExists(checkoutPath)) {
+    errors.push(`Missing checkout directory: ${checkoutPath}`);
+    return errors;
+  }
+  const stat = fs.lstatSync(checkoutPath);
+  if (stat.isSymbolicLink()) {
+    errors.push(
+      `Path must be a real directory, not a symlink: ${checkoutPath}. Run: mstar-harness init --target cursor`,
+    );
+    return errors;
+  }
+  if (!fs.existsSync(path.join(checkoutPath, ".git"))) {
+    errors.push(`Path is not a git checkout: ${checkoutPath}`);
+  }
+  const marker = path.join(checkoutPath, markerRelativePath);
+  if (!fs.existsSync(marker)) {
+    errors.push(`Missing marker file: ${marker}`);
+  }
+  return errors;
+}
+
 export function ensureSymlink(target: string, linkPath: string, dryRun: boolean) {
   if (pathOrSymlinkExists(linkPath)) {
     const stat = fs.lstatSync(linkPath);

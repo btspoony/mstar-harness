@@ -37,7 +37,7 @@
   - Codex：
     - `npx @mstar-harness/cli init --target codex`
     - `codex plugin add morning-star-harness --marketplace personal`
-- Cursor 与 Codex 安装共享长期维护的本地 checkout：`~/.mstar/harness`；各宿主的 plugin / agent 入口通过软链接指向该目录。
+- Cursor 与 Codex 共享 `~/.mstar/harness` 长期 checkout（Codex marketplace 与 agent 源）。**Cursor** 在插件路径使用**独立的 git 实目录**——Cursor **无法发现**软链接形式的插件目录（见 [`docs/cli.md`](docs/cli.md#install-path-layout)）。
 
 完整 CLI 用法和高级参数（`--yes`、`--dry-run`、`--output`、`doctor`），以及 Cursor / Codex target 的安装模式说明，见 [`docs/cli.md`](docs/cli.md)。
 
@@ -72,11 +72,14 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 - 推荐：
   - `npx @mstar-harness/cli init --target cursor --scope global`
   - 重启 Cursor 或运行 `Developer: Reload Window`
-- 手动安装（与 CLI 使用相同路径）：
+- 手动安装（与 CLI 相同布局；Cursor 插件路径**不要用软链接**）：
   - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
   - `mkdir -p ~/.cursor/plugins/local`
-  - `ln -s ~/.mstar/harness ~/.cursor/plugins/local/morning-star-harness`
+  - `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`
   - 重启 Cursor 或运行 `Developer: Reload Window`
+- **维护者**：在 workspace 开发后，更新 Cursor 插件 checkout：
+  - `cd ~/.cursor/plugins/local/morning-star-harness && git pull --ff-only`
+  - 或重新运行 `npx @mstar-harness/cli init --target cursor --scope global`
 
 #### Codex
 
