@@ -19,31 +19,76 @@ Knowledge that isn't captured evaporates when the session ends. Knowledge that i
 
 **SSOT**: `mstar-plan-conventions/references/artifact-storage-paths.md`。本 skill 不重定义路径；知识文档 → `{HARNESS_DIR}/knowledge/<category>/<slug>.md`，CONCEPTS.md → `<repo-root>/CONCEPTS.md`。`<category>` 取值见 `references/category-mapping.md`。
 
-## When to use
+## 是否值得结晶（自检清单 · 必须逐条回答）
 
-## When to use
+在调用本 skill 前，PM（或触发方）**必须**逐条回答以下问题。得分仅用于辅助决策，不替代判断。
 
-- PM declares a plan `Done` and the work yielded reusable insight
-- A non-trivial bug was fixed and the diagnosis is worth preserving
-- A pattern, convention, or tooling decision was established that others should follow
-- Any problem took meaningful investigation (not a typo or one-liner)
+### 自检问题（每条回答 Yes / No / Not sure）
 
-**Skip when:** the fix is trivial (typo, formatting, dep bump), the solution is already well-documented, or the problem is still in-progress.
+| # | 问题 | 说明 |
+|---|------|------|
+| Q1 | 这个问题的诊断过程耗时是否 ≥ 15 分钟（或 ≥ 3 次尝试）？ | 若只是 1-2 次尝试就找到答案，可能太琐碎 |
+| Q2 | 解决方案是否涉及**非显而易见**的知识（隐含假设、框架行为、workaround）？ | 显而易见的知识无需文档化（如"少了个分号"） |
+| Q3 | 同一个开发者在未来遇到类似问题时，是否可能**再次花费相似的时间**来诊断？ | 核心问题：知识能否复用？ |
+| Q4 | 问题的**根因**是否是项目特定的（不是通用语言/框架问题）？ | 通用问题可搜索到，项目特定问题必须自己记录 |
+| Q5 | `{KNOWLEDGE_DIR}` 中是否**已有**与此高度重叠的文档？ | 若有 → 更新已有文档，不新建（见 Phase 2 重叠检测） |
+| Q6 | 此解决方案是否可能**引导未来架构决策**或成为约定？ | Knowledge track 的典型触发条件 |
+| Q7 | 此解决方案中的"**什么没起作用**"部分是否有价值？ | 失败的尝试往往是最有教学价值的部分 |
+| Q8 | 问题是否涉及** ≥ 2 个模块/组件**的交互？ | 跨模块问题最难排查，最值得记录 |
+
+### 决策矩阵
+
+| 得分 | 行动 |
+|------|------|
+| **Yes ≥ 4**（含 Q5=No） | **强烈建议结晶**。执行完整 Phase 1-7。 |
+| **Yes = 3** | **建议结晶**。使用 Lightweight 模式（Phase 1 单遍）。 |
+| **Yes ≤ 2** | **跳过**。在 conversation/Completion Report 中注明"跳过结晶（<简述原因>）"。 |
+| **Q5 = Yes（高重叠）** | 无论其它得分如何，**不要新建**。执行 Phase 2 重叠检测，更新已有文档即可。 |
+| **任一 Not sure** | 倾向于回答者的默认判断。若 Q1-Q4 有 ≥ 2 个 Yes，仍建议结晶。 |
+
+### 示例判定
+
+```
+Q1: Yes — debug 了 40 分钟
+Q2: Yes — ActiveRecord 的 counter_cache 在 after_destroy 回调中的时序问题
+Q3: Yes — 下次遇到类似时序问题仍会踩坑
+Q4: Yes — 是项目特有 model 结构导致的
+Q5: No  — grep 了 knowledge/ 无匹配
+Q6: No  — 纯 bug 修复
+Q7: Yes — 第一次尝试了手动更新 counter 导致数据不一致
+Q8: No  — 只涉及一个 model
+→ Yes = 5 → 强烈建议结晶（Bug track）
+```
 
 ## Integration with mstar lifecycle
 
+Compound 在迭代收口时触发（`mstar-iteration` § iteration-close），不在 per-plan Done 后单独执行：
+
 ```
-specify → clarify → plan → plan(locked) → tasks → implement → QC → QA → Done
-                                                                          │
-                                                                    ┌─────┘
-                                                                    ▼
-                                                              mstar-compound
-                                                                    │
-                                                                    ▼
-                                                              {KNOWLEDGE_DIR}
-                                                                    │
-                                                    feeds back into future specify / plan
+iteration-start → [plan lifecycle × N: specify→...→Done] → iteration-close
+                                                                  │
+                                                             mstar-compound
+                                                             (per-iteration round)
+                                                                  │
+                                                             {KNOWLEDGE_DIR}
+                                                                  │
+                                               feeds back into next iteration's specify / plan
 ```
+
+迭代内所有 plan Done 后，PM 回顾整轮迭代中产生的可结晶知识，批量 compound。per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动。
+
+## When to use (trigger)
+
+- **迭代收口时**（`mstar-iteration` § iteration-close）：PM 批量回顾所有 plan 的产物
+- **独立触发**（非迭代模式或紧急情况）：任何非平凡问题解决后，PM 或开发者手动触发
+- **Debug 后**：`mstar-iteration` 尚未启用时，重大 bug 修复后手动触发
+
+### Skip when
+
+- 自检清单判定 ≤ 2 个 Yes
+- Q5 高重叠（应更新已有文档而非新建）
+- 纯机械性工作：格式化、依赖升级、typo 修复
+- 问题仍在进行中或方案未经验证
 
 Compound can also be invoked standalone at any point where a meaningful learning occurred outside a formal plan.
 

@@ -51,6 +51,7 @@ Treat these as baseline dependencies **where the role touches implementation, re
 | `mstar-superpowers-align` | Superpowers plugin on; Assignment `Superpowers` lines |
 | `mstar-compound` | Capturing solved problems as structured knowledge in `{KNOWLEDGE_DIR}`; Discoverability check; CONCEPTS.md synergy |
 | `mstar-compound-refresh` | Auditing/updating/consolidating knowledge docs; maintaining `{KNOWLEDGE_DIR}` accuracy |
+| `mstar-iteration` | Iteration lifecycle: iteration-start (scope/roadmap lock), iteration-drive (cross-plan tracking), iteration-close (compound + roadmap update) |
 | `mstar-strategy` | Creating/maintaining `STRATEGY.md`; project vision, principles, technology direction |
 | `mstar-host` | Host-specific behavior (auto-detect; `references/opencode.md` / `cursor.md` / `codex.md`) |
 
@@ -58,7 +59,7 @@ Treat these as baseline dependencies **where the role touches implementation, re
 
 | Role | Typical adds |
 | --- | --- |
-| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-superpowers-align`, `mstar-roles` ref; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-plan-artifacts` as the round requires; + `mstar-compound` after Done or post-debug; + `mstar-strategy` for strategic alignment; + `mstar-compound-refresh` for periodic knowledge maintenance |
+| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-superpowers-align`, `mstar-roles` ref; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-plan-artifacts` as the round requires; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
 | `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-plan-conventions` (minimal); `mstar-design-md` when implementing styled UI |
 | `qc-specialist*` | `mstar-review-qc`, `mstar-branch-worktree`, `mstar-plan-artifacts` (report paths); `mstar-design-md` when reviewing UI |
 | `qa-engineer` | `mstar-review-qc`, `mstar-branch-worktree`, `mstar-plan-artifacts` (closing R#); `mstar-design-md` when verifying visual output |

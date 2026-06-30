@@ -1,6 +1,6 @@
 ---
 name: mstar-phase-gates
-description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`）、意图门禁、长期目标优先、分批 roadmap 强制落盘、clarify 核心纪律（共享理解 / 先探索 / 每问推荐答案）、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。**必须**在 PM 判定 gate、首次 implement 派单前、产品/架构参与 Prepare、或解释为何不能跳过 plan/clarify 时 Read；`@project-manager` 每轮编排非 hotfix 任务必读；`@product-manager` / `@architect` 写规格与锁 plan 时必读 Prepare 节；实现角色 Read Execute 与 hotfix 例外即可。Task category 与 `quick` 禁豁免规则仍在 `mstar-harness-core`。并行 Superpowers 短语见 `mstar-superpowers-align`。
+description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`）、意图门禁、长期目标优先、分批 roadmap 强制落盘、clarify 核心纪律（共享理解 / 先探索 / 每问推荐答案）、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。**必须**在 PM 判定 gate、首次 implement 派单前、产品/架构参与 Prepare、或解释为何不能跳过 plan/clarify 时 Read；`@project-manager` 每轮编排非 hotfix 任务必读；`@product-manager` / `@architect` 写规格与锁 plan 时必读 Prepare 节；实现角色 Read Execute 与 hotfix 例外即可。Task category 与 `quick` 禁豁免规则仍在 `mstar-harness-core`。并行 Superpowers 短语见 `mstar-superpowers-align`。迭代级活动（iteration-start / iteration-close / compound）见 `mstar-iteration`。
 ---
 
 ## Load order（必读顺序）
@@ -50,7 +50,7 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 - 非热修（non-hotfix）任务默认强制执行全链路门禁。
 - 热修可走压缩路径，但必须补事后 `clarify/RCA` 记录。
 
-## 两阶段门禁
+## 两阶段门禁（per-plan Playbook）
 
 ### A. Prepare
 
@@ -100,16 +100,15 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 - `@qa-engineer`
   - 在 `InReview` 阶段验证实现与验收映射是否一致。
 
-### C. 知识结晶（Compound）：`Done → compound`（推荐）
+## 迭代级活动
 
-`Done` 后，若本轮工作产出了可复用的洞察、模式、或值得沉淀的诊断，由 PM 触发 `mstar-compound`：
+per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 per-plan gate）：
 
-- **触发条件**：非平凡 bug 修复、新架构模式、新约定、工具链决策、有意义的排错经验。
-- **产物**：`{KNOWLEDGE_DIR}/<category>/<slug>.md` + 可选 `CONCEPTS.md` / `AGENTS.md` 更新。
-- **跳过条件**：纯机械性工作（格式化、依赖升级）、修复仅为打字错误。
-- **知识维护**：定期或知识库明显膨胀时，PM 触发 `mstar-compound-refresh` 审查/合并/清理过期文档。
+- **迭代启动**（`mstar-iteration` § iteration-start）：锁定迭代范围（本迭代包含哪些 plan）、里程碑、验收标准，产出 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`。
+- **迭代驱动**（`mstar-iteration` § iteration-drive）：跨 plan 进度追踪，更新 compass 中各 plan 状态。
+- **迭代收口**（`mstar-iteration` § iteration-close）：迭代内所有 plan Done 后，执行一轮知识结晶（`mstar-compound`）沉淀迭代经验，更新 roadmap，标记迭代完成。
 
-细则 → **`mstar-compound`** 与 **`mstar-compound-refresh`**。
+per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。
 
 ## Plan 目录与审查报告（启用 `{PLAN_DIR}` 时）
 
@@ -128,9 +127,10 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 8. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
 9. 若中途出现 plan drift，是否先回写再继续？
 10. 实现说明中是否体现"最小耐久切片 + 手术式改动 + 可验证检查"？
-11. `Done` 后，是否产出可复用的知识/模式？若是，是否已触发 `mstar-compound` 沉淀？
 
-任一项为「否」时，`Gate decision` 必须是 `blocked`（第 11 项为推荐项，不影响 gate）。
+**任一项为「否」时，`Gate decision` 必须是 `blocked`**。
+
+> 迭代级活动（compound / iteration-close）见 `mstar-iteration`；不属于 per-plan gate 判定项。
 
 ## Hotfix 例外
 

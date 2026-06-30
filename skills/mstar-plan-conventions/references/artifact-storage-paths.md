@@ -15,7 +15,8 @@
 | **主 plan** | `.mstar/plans/<plan-id>-<name>.md` | PM / `mstar-plan-artifacts` |
 | **QC 报告** | `.mstar/plans/reports/<plan-id>/qcN.md` | `mstar-review-qc` |
 | **status.json** | `.mstar/status.json` | `mstar-plan-artifacts` |
-| **迭代 compass** | `.mstar/iterations/<name>.md` | `mstar-plan-artifacts` |
+| **迭代 compass** | `.mstar/iterations/<iteration-id>-delivery-compass.md` | `mstar-iteration`（读写） |
+| **迭代索引** | `.mstar/iterations/README.md` | `mstar-iteration`（读写） |
 | **规格** | `specs/`（优先），否则 `designs/` | `mstar-plan-artifacts` |
 | **archived residuals** | `.mstar/archived/residuals/<plan-id>.json` | `mstar-plan-artifacts` |
 
