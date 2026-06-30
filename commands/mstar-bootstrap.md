@@ -154,37 +154,14 @@ If `{HARNESS_DIR}/` does not exist:
 1. Initialize per `mstar-plan-conventions`（`.mstar/` + subdirectories）
 2. Create empty `status.json` from template (`mstar-plan-artifacts/templates/status.empty.json`)
 
-### 6.1 Create `opencode.json`（if absent）
-
-Check whether `<repo-root>/opencode.json` exists:
-
-- **If absent** → create it with the standard plugin config. **Path is `<repo-root>/opencode.json`**（与 `.git/` 同级），**NOT** `<repo-root>/.opencode/opencode.json`。
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git",
-    "@mstar-harness/opencode@latest"
-  ]
-}
-```
-
-- **If already exists** → skip creation. Do NOT modify or overwrite an existing `opencode.json`.
-- **If user declines** → skip, note in report.
-
-**Hard rule**: `opencode.json` lives at the **repository root** (same level as `.git/` and `AGENTS.md`). Never create it inside `.opencode/`, `.mstar/`, or any subdirectory.
-
 ## Phase 7: Commit
 
 All bootstrap artifacts must be committed:
 
 ```bash
-git add STRATEGY.md CONCEPTS.md AGENTS.md opencode.json {HARNESS_DIR}/ {KNOWLEDGE_DIR}/
+git add STRATEGY.md CONCEPTS.md AGENTS.md {HARNESS_DIR}/ {KNOWLEDGE_DIR}/
 git commit -m "chore: bootstrap project knowledge — STRATEGY.md, CONCEPTS.md, baseline knowledge docs"
 ```
-
-Omit `opencode.json` from the commit if it was skipped or already existed but was not modified.
 
 Report a summary:
 - STRATEGY.md: created / updated / skipped
