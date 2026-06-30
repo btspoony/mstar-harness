@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.2**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.3**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.2** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.3** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.2** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.2** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.3** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.3** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.3** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.3] - 2026-06-30
+
+### Harness（iteration-close / commands / docs）
+
+- **`mstar-iteration` Phase 3 收口门禁**：iteration-close 明确为所有 plan `Done` 后的独立 phase；final plan closure 只能提供输入，不能替代 close。收口要求按需规范化 compass 结构，打印 close entry / close exit checklist，执行 compound round，更新 roadmap，写入 compass frontmatter `status: completed` + `end_date`，并在 PR 前 commit 到 integration 分支。
+- **Compass 模板加固**：新 compass 模板不再预填 `end_date`；`## Roadmap Position`、`## Compound Round Summary`、`## Iteration Retrospective (minimal)` 是 close 阶段的预期写入位置。历史正文 completion status 必须在 close 时规范化为 YAML frontmatter。
+- **Compound 索引门禁**：iteration-close compound round 中每篇新增 knowledge doc 都必须完成 `mstar-compound` Phase 6，并登记到 `{KNOWLEDGE_DIR}/README.md`；lightweight capture 不豁免。
+- **README / README_CN**：Harness Commands 列出 `/mstar-bootstrap`、`/iteration-start`、`/iteration-drive`；Harness Workflow 更新为 `iteration-start → per-plan execute loop → iteration-close → PR`；Core Skills 表补齐 iteration、design、compound、compound-refresh、strategy 等专题技能。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.2 → 0.7.3**。**`@mstar-harness/cli` 保持 0.5.4**。
 
 ## [0.7.2] - 2026-06-30
 

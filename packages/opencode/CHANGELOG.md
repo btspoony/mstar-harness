@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.7.3
+
+- Bundled commands/skills: `mstar-iteration` Phase 3 close is now an explicit gate after all plans are `Done`; close requires compass normalization when needed, compound Phase 6 knowledge indexing, roadmap update, completed frontmatter, and close checklists before PR.
+- Bundled docs: README command table now includes `/mstar-bootstrap`; workflow and skill overview now match the iteration lifecycle.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.3**.
+
 ## 0.7.2
 
 - Docs only at package level: root **0.7.2** documents CLI Cursor install layout (real git checkout at plugin path, not symlink). Re-bundle on publish if CLI dist changed.

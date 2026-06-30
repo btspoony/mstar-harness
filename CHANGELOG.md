@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.3** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.2** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.3** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.2** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.3** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.3** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.3** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.3] - 2026-06-30
+
+### Harness (iteration-close / commands / docs)
+
+- **`mstar-iteration` Phase 3 close gate**: iteration-close is now an explicit independent phase after all plans are `Done`; final plan closure can provide input but does not satisfy close. Close requires compass shape normalization when needed, close entry/exit checklists, compound round, roadmap update, compass frontmatter `status: completed` + `end_date`, and integration-branch commit before PR.
+- **Compass template hardening**: New compass templates no longer prefill `end_date`; `## Roadmap Position`, `## Compound Round Summary`, and `## Iteration Retrospective (minimal)` are the expected close-write targets. Legacy prose completion status must be normalized into YAML frontmatter during close.
+- **Compound indexing gate**: Each new knowledge doc created in an iteration-close compound round must complete `mstar-compound` Phase 6 and be registered in `{KNOWLEDGE_DIR}/README.md`, including lightweight captures.
+- **README / README_CN**: Harness Commands now list `/mstar-bootstrap`, `/iteration-start`, and `/iteration-drive`; Harness Workflow now reflects `iteration-start → per-plan execute loop → iteration-close → PR`; Core Skills table now includes iteration, design, compound, compound-refresh, and strategy skills.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.2 → 0.7.3**. **`@mstar-harness/cli` remains 0.5.4**.
 
 ## [0.7.2] - 2026-06-30
 
