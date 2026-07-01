@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.4**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.5**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.4** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.5** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.4** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.4** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.4** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.5** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.5** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.5** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.5] - 2026-07-01
+
+### Harness（iteration / 分支策略）
+
+- **显式迭代分支策略**：正式 iteration 必须在 compass frontmatter 与 `status.json` metadata 中登记 `iteration_base_branch`、`spec_integration_branch`、`target_branch`。禁止静默默认 `main` / `master` 作为集成分支起点或最终 PR 目标。
+- **`iteration-start` / `iteration-drive`**：grill-me 分支确认、pre-commit checklist 分支项、§2.0 branch metadata 门禁、创建 integration 分支时显式 `git checkout -b <spec_integration_branch> <iteration_base_branch>`。
+- **`mstar-iteration` §2.3**：metadata 解析链（`status.json` → compass frontmatter → 询问用户）；QC `Review range` merge-base 使用 `target_branch` 或 PM 指定 ref。
+- **Compass 模板**：新增 `## Delivery Branch Policy`；`status-and-residuals.md` 补充 metadata 示例 JSON。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.4 → 0.7.5**。**`@mstar-harness/cli` 保持 0.5.4**。
 
 ## [0.7.4] - 2026-07-01
 
