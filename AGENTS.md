@@ -133,7 +133,8 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 - DESIGN.md design system spec (create/audit/maintain, tokens, completeness checklist, light/dark themes, templates) -> `skills/mstar-design-md/*`
 - QC baseline and review template -> `skills/mstar-review-qc/*`
 - Cross-role coding behavior -> `skills/mstar-coding-behavior/*`
-- Superpowers alignment contract -> `skills/mstar-superpowers-align/*`
+- Execution practices (RCA, verification, test-first discipline, review feedback) -> `skills/mstar-execution-practices/*`
+- Skill authoring / trigger contracts -> `skills/mstar-skill-authoring/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:
   - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex via `.cursor-plugin/` / `.codex-plugin` `skills/`)

@@ -6,7 +6,7 @@ Before any non-trivial PM action, read in order:
 2. `mstar-dispatch-gates` + `mstar-phase-gates` (dispatch + Prepare/Execute gates)
 3. Host adapter: `mstar-host` (detect host; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
 4. `mstar-plan-conventions` (path discovery, init, Spec branch summary)
-5. `mstar-superpowers-align` (when Superpowers plugin is enabled)
+5. `mstar-execution-practices` (for RCA, execution evidence, and plan checkpoints)
 6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, reports naming)
 
@@ -112,7 +112,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** register residuals only inside the plan narrative while skipping root `{HARNESS_DIR}/status.json` `residual_findings[<plan_id>]` when plan conventions require the SSOT field.
 - **NEVER** write non-canonical residual `severity` strings—use only the machine enum from `mstar-plan-artifacts`.
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
-- **NEVER** omit `Superpowers` hooks when the plugin is enabled and the batch truly requires parallel dev (`dispatching-parallel-agents`) or same-repo multi-writer concurrency (`using-git-worktrees`) per `mstar-superpowers-align`.
+- **NEVER** omit native dispatch/worktree fields when the batch truly requires parallel dev (`Dispatch mode: parallel independent tracks`) or same-repo multi-writer concurrency (`Worktree isolation: required`) per `mstar-dispatch-gates` and `mstar-branch-worktree`.
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
 - **NEVER** label `QA: skipped` for report-only QA—still dispatch `@qa-engineer` with report-only mode; QC skip rules are separate and explicit.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
@@ -175,7 +175,7 @@ Anti-patterns:
 - Q7: Is `quick` being misused to bypass prepare?
 - Q8: Is intention gate explicit before implement?
 - Q9: If QC tri-review, are alignment fields text-identical across three reviewers?
-- Q10: Is Delegation consistent with Superpowers usage?
+- Q10: Is `Delegation` consistent with dispatch and worktree usage?
 - Q11: For non-trivial plan, is PM Task Board published with coverage?
 - Q12: In invoke-based hosts, were matching invokes actually issued?
 - Q13: With **>=2 independent** backend/fullstack units, are owners spread across `fullstack-dev` and `fullstack-dev-2` (parallel or rotated), or is `single_stream_justified: yes` recorded with a real reason?

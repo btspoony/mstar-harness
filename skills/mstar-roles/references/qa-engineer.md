@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-review-qc`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (same checkout fields as QC for the feature).
 
-**Typically:** `mstar-plan-conventions` (paths); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-conventions` (paths); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
 
 **On demand:** `mstar-plan-artifacts` (closing R# after verified fix); `mstar-phase-gates` (gate checklist when assignment references verification phase); `mstar-design-md` (when verifying UI — check visual output against DESIGN.md).
 
@@ -30,7 +30,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** switch to an unprescribed worktree/branch to “pick up the other half” of parallel development; if the current `HEAD` cannot contain the claimed diff scope, **Blocked** and ask PM for Git integration or a corrected assignment (`mstar-branch-worktree`).
 - **NEVER** treat `Handoff` / template role lists / route arrows as invoke instructions; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
-- **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
+- **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate test design, execution, evidence, or QA reports to `@explore`.
 - **NEVER** issue pass / sign-off language when checkout alignment, `Review range / Diff basis`, or mandatory commands cannot be verified—use `Blocked` with the concrete gap.
 

@@ -1,6 +1,6 @@
 ---
 name: mstar-phase-gates
-description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`）、意图门禁、长期目标优先、分批 roadmap 强制落盘、clarify 核心纪律（共享理解 / 先探索 / 每问推荐答案）、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。**必须**在 PM 判定 gate、首次 implement 派单前、产品/架构参与 Prepare、或解释为何不能跳过 plan/clarify 时 Read；`@project-manager` 每轮编排非 hotfix 任务必读；`@product-manager` / `@architect` 写规格与锁 plan 时必读 Prepare 节；实现角色 Read Execute 与 hotfix 例外即可。Task category 与 `quick` 禁豁免规则仍在 `mstar-harness-core`。并行 Superpowers 短语见 `mstar-superpowers-align`。迭代级活动（iteration-start / iteration-close / compound）见 `mstar-iteration`。
+description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`）、意图门禁、长期目标优先、分批 roadmap 强制落盘、clarify 核心纪律（共享理解 / 先探索 / 每问推荐答案）、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。**必须**在 PM 判定 gate、首次 implement 派单前、产品/架构参与 Prepare、或解释为何不能跳过 plan/clarify 时 Read；`@project-manager` 每轮编排非 hotfix 任务必读；`@product-manager` / `@architect` 写规格与锁 plan 时必读 Prepare 节；实现角色 Read Execute 与 hotfix 例外即可。Task category 与 `quick` 禁豁免规则仍在 `mstar-harness-core`。执行证据与计划检查点见 `mstar-execution-practices`。迭代级活动（iteration-start / iteration-close / compound）见 `mstar-iteration`。
 ---
 
 ## Load order（必读顺序）
@@ -28,7 +28,7 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 
 - **`plan(locked)`** — 冻结基线；实现中出现新约束时**先回写 plan 再继续**。
 - **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。
-  - **并行标签**：若 PM 将 ≥2 条实现轨 **同时** 分派，须在 `Superpowers` 中写入 `dispatching-parallel-agents`；同仓 ≥2 可写并发时叠 `using-git-worktrees`（见 **`mstar-superpowers-align`** 与 **`mstar-branch-worktree`**）。
+  - **并行标签**：若 PM 将 ≥2 条实现轨 **同时** 分派，须在 Assignment 写明 `Dispatch mode: parallel independent tracks`；同仓 ≥2 可写并发时写明 `Worktree isolation: required`（见 **`mstar-dispatch-gates`** 与 **`mstar-branch-worktree`**）。
 - **`implement`** — 按 tasks 顺序执行并提交自检证据；完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
 
 ### 可验证编辑与上下文纪律
@@ -81,7 +81,7 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 - `tasks`
   - 目标：把 plan 拆成可执行任务与依赖顺序。
   - 最小产物：任务列表、并行标记、完成判据、映射到验收标准与 roadmap 批次。
-  - **PM**：若并行标记对应「多轨同时 implement」，在对外 **Status Update** 与实现 Assignment 的 **`Superpowers`** 中写入 **`dispatching-parallel-agents`**（或同义短语）；同仓多可写并发时叠 **`using-git-worktrees`**（见 `mstar-superpowers-align`）。
+  - **PM**：若并行标记对应「多轨同时 implement」，在对外 **Status Update** 与实现 Assignment 写入 **`Dispatch mode: parallel independent tracks`**；同仓多可写并发时叠 **`Worktree isolation: required`**（见 `mstar-dispatch-gates` 与 `mstar-branch-worktree`）。
 - `implement`
   - 目标：按任务执行并提交证据，进入审查。
   - 最小产物：实现 diff、自检证据、回报与 handoff。

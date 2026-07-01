@@ -2,9 +2,9 @@
 
 **Hub matrix:** `mstar-roles` SKILL.md.
 
-**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare / clarify), `mstar-plan-conventions` (`{PLAN_DIR}`, `writing-plans` path).
+**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare / clarify), `mstar-plan-conventions` (`{PLAN_DIR}`, plan-writing path).
 
-**Typically:** `mstar-plan-artifacts` (specs, knowledge index); `mstar-design-md` (DESIGN.md design intent and requirements for UI planning); `mstar-coding-behavior` (surgical doc edits); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-artifacts` (specs, knowledge index); `mstar-design-md` (DESIGN.md design intent and requirements for UI planning); `mstar-coding-behavior` (surgical doc edits); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
 
 **On demand:** `mstar-branch-worktree` (when committing product docs to the business repo).
 
@@ -29,19 +29,17 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** invoke `architect`, dev, QA, or other roles to author **your** PRD/spec/clarify body unless `Delegation: allowed (...)` explicitly lists them—their names in templates are **not** automatic callees.
 - **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer you may call subagents because the host lists `subagent_type` names; **tool availability ≠ authorization**.
-- **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
-- **NEVER** point `writing-plans` output to upstream `docs/superpowers/plans/`; use `{PLAN_DIR}` per `mstar-plan-conventions`.
+- **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
+- **NEVER** point planning output to external default plan directories; use `{PLAN_DIR}` per `mstar-plan-conventions`.
 - **NEVER** offload PRD/product-doc drafting to `@explore`; short read-only orientation only per `mstar-harness-core`.
 - **NEVER** label a Prepare package as “ready for implement” while `Gate Decision: blocked` for material ambiguities—resolve, document waivers with PM, or return `Blocked`.
 - **NEVER** split delivery by saying “later / follow-up / next phase” without writing the product roadmap, deferred scope, and final completion definition in the assigned plan/spec.
 
-## Superpowers (When Enabled)
+## Mstar Execution Practices
 
-- `brainstorming` for ambiguity-heavy discovery
-- `writing-plans` for executable product planning
-- `using-git-worktrees` for same-repo concurrent writers
+Use `mstar-execution-practices` for ambiguity-heavy discovery, executable plan checkpoints, review feedback, and completion evidence. Same-repo concurrent writers are governed by `mstar-branch-worktree`.
 
-`writing-plans` outputs must follow `{PLAN_DIR}` from `mstar-plan-conventions`.
+Plan artifacts must follow `{PLAN_DIR}` from `mstar-plan-conventions`.
 
 ## Responsibilities
 

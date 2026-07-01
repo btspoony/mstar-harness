@@ -13,9 +13,9 @@
 | **`clarify` 核心纪律** | 逐方面核对至共享理解；沿设计决策树逐枝、一次一决；能探索代码库则先探索；每问带推荐答案 | **`mstar-phase-gates`** SKILL.md（含 Phase Gate Playbook） |
 | **按任务类别选能力与模型** | 视觉/深读/快改/硬逻辑等用不同强项 | `mstar-harness-core` SKILL.md「Task category」；Assignment 字段 **`Task category`**；宿主侧按角色配置 model（如 OpenCode 的 `opencode.json`） |
 | **可验证编辑** | 减少「凭记忆 Patch」导致的漂移与损坏 | `mstar-phase-gates` SKILL.md「可验证编辑与上下文纪律」：读后再改、失败则重读 |
-| **持续推进与可核对完成** | 长任务有清单、有关门证据，避免空转 | `mstar-superpowers-align` 的 `verification-before-completion`；PM 对 `tasks`/Phase Gate 的拉回 |
+| **持续推进与可核对完成** | 长任务有清单、有关门证据，避免空转 | `mstar-execution-practices`；PM 对 `tasks`/Phase Gate 的拉回 |
 | **编码行为约束（轻量）** | 降低静默假设、过度设计与无关改动 | `mstar-coding-behavior`：Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution |
-| **并行与边界** | 多线任务不踩同一写归属、不绕过分支门禁；**开发**阶段同仓多可写并发须独立 **`git worktree`**；**QC / QA** 在 **同一检出**（`Review cwd`）与 **同一 `plan_id` + `Review range` / `Diff basis`** 上审查与验证，保证三票同一功能 | `mstar-branch-worktree`；`mstar-review-qc`；`mstar-superpowers-align` **`using-git-worktrees`** |
+| **并行与边界** | 多线任务不踩同一写归属、不绕过分支门禁；**开发**阶段同仓多可写并发须独立 **`git worktree`**；**QC / QA** 在 **同一检出**（`Review cwd`）与 **同一 `plan_id` + `Review range` / `Diff basis`** 上审查与验证，保证三票同一功能 | `mstar-branch-worktree`；`mstar-review-qc`；`mstar-dispatch-gates` |
 | **分层上下文（可选）** | 大仓库用目录级 `AGENTS.md` 降噪；根 `AGENTS.md` 维护边界见下文专节 | `mstar-harness-core` SKILL.md「分层上下文」；由业务项目维护者按需添加 |
 | **结构化澄清（按宿主）** | 向用户澄清/抉择时，**有 `question` 类能力则优先**；否则结构化正文；长问兜底 | `mstar-phase-gates` SKILL.md Prepare · `clarify`；当前宿主的 `mstar-host` skill；`mstar-roles` · `project-manager` |
 
@@ -71,6 +71,6 @@
 ## 延伸阅读
 
 - 按能力选配 MCP/skills：OpenCode → `mstar-host` `references/opencode.md`；其它宿主见 `mstar-host` 检测表
-- Superpowers 与门禁对齐：`mstar-superpowers-align`
+- Execution practice evidence and checkpoints: `mstar-execution-practices`
 - 库文档检索共享协议：`mstar-harness-core` `references/library-docs-protocol.md`
 - 跨角色编码行为准则（轻量、可复用）：`mstar-coding-behavior`

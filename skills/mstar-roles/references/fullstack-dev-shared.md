@@ -14,7 +14,7 @@ Behavior is shared; track identity is parameterized.
 
 **Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates` (leaf anti-recursion before any Task/subagent).
 
-**Typically:** `mstar-plan-conventions` (path symbols + `metadata.primary_spec` / `spec_refs`); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-conventions` (path symbols + `metadata.primary_spec` / `spec_refs`); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
 
 **On demand:** `mstar-branch-worktree` (repo writes, `Working branch`); `mstar-phase-gates` (Execute / hotfix sections when gate fields are in the assignment); `mstar-design-md` (when task includes UI implementation — read DESIGN.md for design tokens).
 
@@ -40,7 +40,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** invoke `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, or other roles to perform **this** assignment body unless `Delegation: allowed (...)` explicitly lists them.
 - **NEVER** offload implementation, tests, or evidence to `@explore`; use glob/grep/read first—short read-only `@explore` only per `mstar-harness-core` explore boundaries.
 - **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; they are narrative unless `Delegation: allowed` says otherwise.
-- **NEVER** run Superpowers `dispatching-parallel-agents` as an implementer; that skill is **PM-only** (`mstar-superpowers-align`).
+- **NEVER** run parallel-agent dispatch as an implementer; this is **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** self-decide branch pivots beyond PM’s `Working branch` / `Branch policy`; if `<base>` is missing or the working tree disagrees with the assignment, **Blocked** to PM.
 - **NEVER** start implementation while Prepare / execute prerequisites in the assignment are unmet—return `Blocked` to PM.
 

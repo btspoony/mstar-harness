@@ -178,7 +178,7 @@ Core idea: how you communicate about code matters as much as the code itself.
 
 ## Integration Notes
 
-- This skill is additive to `verification-before-completion` (见 `mstar-superpowers-align`) and other Morning Star controls.
+- This skill is additive to `mstar-execution-practices` and other Morning Star controls.
 - It must not be used to bypass:
   - branch constraints,
   - QC/QA gate definitions,

@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates`.
 
-**Typically:** `mstar-plan-conventions` (paths + spec metadata); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-conventions` (paths + spec metadata); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
 
 **On demand:** `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment); `mstar-design-md` (when implementing styled UI — read DESIGN.md for tokens before writing components).
 
@@ -28,7 +28,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** invoke `frontend-dev`, `fullstack-dev`, `fullstack-dev-2`, or other roles to perform **this** assignment unless `Delegation: allowed (...)` explicitly lists them.
 - **NEVER** offload UI implementation, tests, or evidence to `@explore`; use glob/grep/read first—short read-only `@explore` only per `mstar-harness-core` explore boundaries.
 - **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; they are narrative unless `Delegation: allowed` says otherwise.
-- **NEVER** run Superpowers `dispatching-parallel-agents` as an implementer; that skill is **PM-only** (`mstar-superpowers-align`).
+- **NEVER** run parallel-agent dispatch as an implementer; this is **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** self-decide branch pivots (including switching to `main`/`master`) beyond PM’s `Working branch` / `Branch policy`; conflicting or missing branch facts => `Blocked` to PM.
 - **NEVER** start UI implementation while the assignment’s Prepare / execute prerequisites (`plan locked`, `tasks`, branch contract) are unmet—return `Blocked` to PM instead of silent partial delivery.
 

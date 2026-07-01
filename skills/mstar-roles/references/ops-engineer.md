@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-review-qc` (high-risk ops checklist), `mstar-branch-worktree` (repo writes, production-touching branches).
 
-**Typically:** `mstar-plan-conventions` (paths); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-conventions` (paths); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
 
 **On demand:** `mstar-phase-gates` (hotfix compressed path when assignment says hotfix).
 
@@ -29,7 +29,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** read multi-phase / “N rollout tracks” **plan narrative** as “I must invoke N subagents now”; scheduling parallel work is **PM-owned** after your plan exists.
 - **NEVER** treat `Handoff` lines, template role names, or routing tables as **invoke commands**; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure (`Task`, subagent menus) implies authorization; **tool availability ≠ delegation**.
-- **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
+- **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate deploy/config changes, verification runs, or evidence capture to `@explore`.
 
 ## Responsibilities

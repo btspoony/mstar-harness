@@ -8,7 +8,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 
 - **Role shell**: `agents/<id>.md` referenced by `opencode.json` `agent.<id>` (frontmatter + role binding only).
 - **Role body**: `mstar-roles` `references/<id>.md` (or shared references + parameters).
-- Superpowers conflicts: `mstar-superpowers-align`.
+- Execution practice evidence: `mstar-execution-practices`.
 
 ## OpenCode-specific capabilities
 
@@ -48,7 +48,7 @@ Aligned with `mstar-harness-core` `references/open-harness-principles.md`. Editi
 | **Repo graph** | Impact / PR risk | e.g. GitNexus |
 | **Browser / E2E** | Observable QA evidence | agent-browser, Playwright |
 | **Git workflow** | Atomic commits, branch closure | git-commit, finishing-a-development-branch |
-| **Systematic debugging** | RCA before fix | `mstar-superpowers-align` |
+| **Systematic debugging** | RCA before fix | `mstar-execution-practices` |
 | **OpenViking memory** | Long-term memory tools | Only if `memsearch` present; `openviking-memory-plugin.md` |
 
 **Not recommended**: overlapping search MCPs; extra tools to mask missing harness baseline.

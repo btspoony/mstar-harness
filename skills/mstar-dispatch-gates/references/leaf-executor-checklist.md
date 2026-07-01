@@ -16,7 +16,7 @@ Before any Task/subagent call (if I somehow forget the preamble):
 4. Is `subagent_type` equal to my `Execute as`? If yes → **forbidden** (recursive dispatch).
 5. Am I treating `@roles`, Handoff, QA note, Completion Report roles, or multi-plan/multi-track **design text** as invoke commands? If yes → **stop**; deliver in-session.
 6. Am I invoking because the tool exists? **Available ≠ authorized.**
-7. Need parallel work or PM-only `dispatching-parallel-agents`? → **`Blocked`**; PM dispatches on the next round.
+7. Need parallel work or PM-only dispatch? → **`Blocked`**; PM dispatches on the next round.
 
 If blocked, report: `## Blocked — recursive dispatch refused (<which NEVER or reason>)`
 

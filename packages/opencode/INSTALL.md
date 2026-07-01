@@ -6,14 +6,11 @@
 
 ## Installation
 
-Add Morning Star to the `plugin` array in your `opencode.json` (global or project-level).
-
-If you use Superpowers together, use:
+Add Morning Star to the `plugin` array in your `opencode.json` (global or project-level):
 
 ```json
 {
   "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git",
     "@mstar-harness/opencode@latest"
   ]
 }
@@ -64,7 +61,7 @@ The `@mstar-harness/cli` package (`npx @mstar-harness/cli init`) migrates that e
 
 ### Plugin not loading
 
-1. Check logs: `opencode run --print-logs "hello" 2>&1 | grep -i superpowers`
+1. Check logs: `opencode run --print-logs "hello" 2>&1 | grep -i mstar`
 2. Verify the plugin line in your `opencode.json`
 3. Make sure you're running a recent version of OpenCode
 

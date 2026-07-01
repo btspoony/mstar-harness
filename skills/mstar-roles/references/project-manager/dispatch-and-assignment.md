@@ -24,7 +24,7 @@ For assignees (non-PM):
 
 - **NEVER** treat `Handoff: …`, Completion Report template role names, routing tables, or “suggested owners” as **host invoke commands**; they are narrative unless `Delegation: allowed` authorizes callees.
 - **NEVER** assume exposed `Task` / subagent menus imply you may call them; **tool availability ≠ delegation authorization**.
-- **NEVER** execute Superpowers `dispatching-parallel-agents` as a leaf assignee; that skill is **PM-orchestration-only** (`mstar-superpowers-align`).
+- **NEVER** execute parallel-agent dispatch as a leaf assignee; dispatch is **PM-orchestration-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate the main deliverable of this assignment to `@explore` (read-only orientation only, per `mstar-harness-core`).
 - **NEVER** claim `Done` / pass in **Completion Report v2** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
 
@@ -43,7 +43,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
   - **`@fullstack-dev-2`**: "treat `@fullstack-dev` in routing narrative as a handoff or invoke target"
   - **`@qa-engineer`**: "start validation before QC reports are consolidated"; "modify application code"
   - **`@explore`-assigned**: "implement or modify code"
-  - **All non-PM**: "use `dispatching-parallel-agents`"; "spawn a subagent whose `subagent_type` matches your own `Execute as` role id"
+  - **All non-PM**: "dispatch parallel agents"; "spawn a subagent whose `subagent_type` matches your own `Execute as` role id"
 - Anti-patterns must be action-oriented ("auto-dispatch to …", "treat … as invoke", "start … before …") — not abstract descriptions.
 - If the assignment involves multiple QCs or parallel tracks, add a specific bullet about NOT serializing or pre-empting the parallel dispatch.
 - If the assignment is part of a broader staged plan with follow-up tasks, add a bullet about NOT auto-extending scope into downstream tasks.
@@ -114,7 +114,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Tool availability ≠ delegation authorization
 **Plan Path**: <{PLAN_DIR}/... or N/A>
 **Report Format**: Completion Report v2
-**Superpowers**: <if plugin enabled and applicable>
+**Execution practices**: <RCA/test-first/review feedback/evidence expectations, if applicable>
 ```
 
 ## Completion Report v2 Template

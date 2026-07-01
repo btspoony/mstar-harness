@@ -49,7 +49,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** close, delete, or archive residual entries in `status.json` from QC; PM/QA own residual lifecycle per `mstar-plan-artifacts`.
 - **NEVER** treat `Handoff` lines, template role lists, or routing prose as invoke instructions; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
-- **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
+- **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** outsource review steps, verdict rationale, checklist execution, or report drafting to `@explore`.
 
 ## Review Context Gate (Hard)
