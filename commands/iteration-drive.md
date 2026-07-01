@@ -1,6 +1,6 @@
 ---
 name: iteration-drive
-description: Drive the active iteration to completion — run the Autonomous Execute loop (Phase 2 of mstar-iteration) until all plans are Done, then run iteration-close (Phase 3: compound + compass + roadmap update) on the integration branch, then create PR to target branch (default main)
+description: Drive the active iteration to completion — run the Autonomous Execute loop (Phase 2 of mstar-iteration) until all plans are Done, then run iteration-close (Phase 3: compound + compass + roadmap update) on the integration branch, then create PR to the recorded target branch
 agent: project-manager
 ---
 
@@ -20,12 +20,20 @@ Drive the active Morning Star iteration forward. The canonical flow is in **`mst
 
 ## Phase 2: Autonomous Execute
 
+**Branch policy first** — before any plan dispatch（`mstar-iteration` §2.3）:
+
+| Field | SSOT | If missing |
+|-------|------|------------|
+| `iteration_base_branch` | `status.json` `metadata` → compass frontmatter | **STOP** — ask user; **never** default `main` |
+| `spec_integration_branch` | plan `metadata` | backfill from iteration-start / compass |
+| `target_branch` | `status.json` `metadata` → compass frontmatter | **STOP** — ask user |
+
 Execute **`mstar-iteration` § Phase 2** exactly. Summary:
 
-1. **Precondition gate** (§ 2.0) — three checks before entering
+1. **Precondition gate** (§ 2.0) — **four** checks（含 branch metadata #4）
 2. **Session todos** (§ 2.1) — set host todos per plan wave
-3. **Read backlog** (§ 2.2) — `status.json` + `spec_integration_branch`
-4. **Integration branch** (§ 2.3) — checkout/create
+3. **Read backlog** (§ 2.2) — `status.json` + branch metadata
+4. **Integration branch** (§ 2.3) — `git checkout -b <spec_integration_branch> <iteration_base_branch>` when creating（**not** implicit `main`）
 5. **Per-plan loop** (§ 2.4) — for each non-`Done` plan:
    - Create plan feature branch from integration
    - Dispatch implement subagents (dispatch-first)
@@ -63,8 +71,9 @@ git push origin <spec_integration_branch>
 
 All iteration-close changes committed to integration branch:
 
-- Resolve PR target branch from `status.json` → `target_branch`（default `main`）
-- Create PR from `spec_integration_branch` to target
+- Resolve PR target: `status.json` → `metadata.target_branch`（fallback：compass frontmatter `target_branch`）
+- If missing → **stop and ask**; never default `main` / `master`
+- Create PR: `spec_integration_branch` → `target_branch`
 - Report summary: plans completed, compound round（结晶文档数）, target branch, PR link
 
 PR 合并后（babysit loop 或手动），本次迭代完整结束。

@@ -134,7 +134,7 @@ If any fail -> do not dispatch implement.
 
 ### PM entry sessions (`/pm` or OpenCode PM switch)
 
-When the session entered via **`/pm`**, **`pm` skill**, or OpenCode PM orchestration, follow **`skills/pm/SKILL.md`** — especially **Host entry**, **Autonomous Execute driver** (status.json backlog, `spec_integration_branch`, per-plan feature branches), and **Dispatch-first**. Routing, gates, Task Board, QC, and templates remain in this file and topic `mstar-*` skills.
+When the session entered via **`/pm`**, **`pm` skill**, or OpenCode PM orchestration, follow **`skills/pm/SKILL.md`** — especially **Host entry**, **iteration branch policy**（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）, **Autonomous Execute**（status.json backlog, per-plan feature branches）, and **Dispatch-first**. Routing, gates, Task Board, QC, and templates remain in this file and topic `mstar-*` skills.
 
 ---
 

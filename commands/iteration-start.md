@@ -1,6 +1,6 @@
 ---
 name: iteration-start
-description: Start a new harness iteration — research backlog, lock direction with grill-me, produce compass/plans, run mandatory Review & Edit chain via Task dispatch (product-manager → architect → writing-specialist each review-and-edit, then PM final lock), then integration branch. Not Done until review chain completes and compass is locked.
+description: Start a new harness iteration — research backlog, lock direction with grill-me, produce compass/plans, run mandatory Review & Edit chain via Task dispatch (product-manager → architect → writing-specialist each review-and-edit, then PM final lock), then create the integration branch from an explicit base. Not Done until review chain completes, compass is locked, and base/target branches are recorded.
 agent: project-manager
 ---
 
@@ -56,14 +56,18 @@ Run the **grill-me skill** to stress-test candidate directions with the user:
 - Walk through trade-offs for each candidate
 - Converge on a **single iteration direction** with shared understanding
 - Document: locked direction, success criteria, non-goals
+- Confirm delivery branch policy:
+  - `iteration_base_branch`: branch/ref used to create `spec_integration_branch`
+  - `target_branch`: PR target after iteration-close
+  - If either is not explicit, inspect the current branch and ask. **Do not default to `main` / `master` just because those names exist.**
 
 ## 4. Write Compass & Plans
 
-Produce harness artifacts per **`mstar-iteration` § 1.3 创建迭代 compass**（template: `mstar-iteration/references/iteration-compass-template.md`）：
+Produce harness artifacts per **`mstar-iteration` § 1.3**（template: `mstar-iteration/references/iteration-compass-template.md`）：
 
-- `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` — iteration scope, plans table, milestones, acceptance criteria, non-goals, roadmap position
+- `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` — YAML frontmatter **must** include `iteration_base_branch`, `target_branch`, `status: active`
 - `{PLAN_DIR}/<plan-id>-<name>.md` for each plan in this iteration
-- Register all plans in `{HARNESS_DIR}/status.json`（per `mstar-plan-artifacts`）
+- Register all plans in `{HARNESS_DIR}/status.json`（per `mstar-plan-artifacts` §1.5：root `metadata` + plan `spec_integration_branch`）
 - Update `{ITERATION_DIR}/README.md` index（per `mstar-iteration` § 1.4）
 
 ## 5. Review & Edit Chain（HARD GATE — do not commit before this）
@@ -103,12 +107,22 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 - [ ] @architect Task completed — compass / specs edited
 - [ ] @writing-specialist Task completed — iteration docs edited
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
+- [ ] Branch policy locked: `iteration_base_branch`, `spec_integration_branch`, and `target_branch` recorded in compass / `status.json`
 - [ ] **THEN**: git commit + push `iteration/<iteration-id>`
 
 ## 6. Integration Branch
 
 **Precondition**: §5 complete — compass `status: locked`; specialist Tasks returned; Prepare gates confirmed.
 
-- Create `iteration/<iteration-id>` from `main`
-- Register `spec_integration_branch` in `{HARNESS_DIR}/status.json`
+- Create `spec_integration_branch` (e.g. `iteration/<iteration-id>`) **from** the locked `iteration_base_branch`:
+
+```bash
+git fetch origin   # if needed
+git checkout -b <spec_integration_branch> <iteration_base_branch>
+# or: git checkout <spec_integration_branch>  if it already exists
+```
+
+- Register `iteration_base_branch`, `spec_integration_branch`, and `target_branch` in compass frontmatter **and** `{HARNESS_DIR}/status.json` root `metadata`
 - Commit all documents to the integration branch and push to remote
+
+**STOP** if `iteration_base_branch` or `target_branch` is missing. Ask the user or derive only from an already documented project/iteration policy; never silently substitute `main`.

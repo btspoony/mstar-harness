@@ -82,10 +82,10 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Prepare: `specify` [done|n/a], `clarify` [done|n/a], `plan` [done|n/a]
 - Execute: `plan locked` [done|n/a], `tasks` [done|n/a], `implement` [this assignment|done]
 - Gate decision: `go` | `blocked` (<reason>)
-**Working branch**: <branch policy or create-from policy>
+**Working branch**: <branch policy or create-from policy> — formal iteration: from `metadata.spec_integration_branch`; integration cut from `metadata.iteration_base_branch` (`mstar-iteration` §2.3)
 **Review cwd / Worktree path**: <absolute path or N/A>
 **plan_id**: <plan-id or N/A + scope label>
-**Review range / Diff basis**: <reproducible basis; identical across QC/QA for same scope>
+**Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
 **Worktree path**: <implementer path if used>
 **QA note**: <PM-scheduled / skipped / self-check>
 **Why this agent**: <role-fit>

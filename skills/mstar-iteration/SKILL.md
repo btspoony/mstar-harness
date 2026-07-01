@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: Morning Star 迭代管理 —— iteration-start（锁定范围、Review & Edit chain 硬门禁）、Autonomous Execute（per-plan 派发循环）、iteration-close（独立 Phase：close gate、compound、roadmap、compass completed）。触发：PM 启动新迭代、跨 plan 编排、或全部 plan Done 后收口。compass：`{ITERATION_DIR}/<iteration-id>-delivery-compass.md`；per-plan SSOT：`{HARNESS_DIR}/status.json`。
+description: Morning Star 迭代管理 —— iteration-start（显式 `iteration_base_branch` / `target_branch`、Review & Edit chain 硬门禁）、Autonomous Execute（per-plan 派发；禁止默认 `main`）、iteration-close（独立 Phase gate）。compass：`{ITERATION_DIR}/`；分支 SSOT：`status.json` metadata + compass frontmatter。
 ---
 
 # mstar-iteration（迭代管理）
@@ -25,10 +25,11 @@ iteration-start → [per-plan lifecycle × N] → iteration-close → PR → mer
      └──────── iteration-drive（跨 plan 追踪）────────┘
 ```
 
-**关键定位**：iteration-close 是 iteration-drive 命令的**最后一个 Phase**，在 integration 分支上执行，**完成后再创建 PR**。所有 compound 产物（knowledge docs、compass 更新、CONCEPTS.md）作为迭代交付的一部分随 PR 合入 main。一次迭代 = 一个 PR。
+**关键定位**：iteration-close 是 iteration-drive 命令的**最后一个 Phase**，在 integration 分支上执行，**完成后再创建 PR**。所有 compound 产物（knowledge docs、compass 更新、CONCEPTS.md）作为迭代交付的一部分随 PR 合入已记录的 `target_branch`。一次迭代 = 一个 PR。
 
 **per-plan 状态 SSOT**：`{HARNESS_DIR}/status.json`（per-plan Todo/InProgress/InReview/Done）。
 **迭代状态 SSOT**：`{ITERATION_DIR}/<id>-delivery-compass.md` frontmatter `status` + `{ITERATION_DIR}/README.md` 索引。
+**迭代分支 SSOT**：root `metadata.iteration_base_branch` + `metadata.target_branch`（`status.json`）；compass frontmatter 镜像同名字段。解析顺序见 §2.3。**禁止**因仓库存在 `main`/`master` 就假定 base 或 PR 目标。
 
 ## 产物存储位置
 
@@ -59,6 +60,9 @@ PM 在新迭代启动时执行。
 | **验收标准** | 迭代级别的 Done 定义 |
 | **非目标** | 明确排除在本次迭代外的事项 |
 | **Roadmap 上下文** | 本迭代在整体 roadmap 中的位置（current iteration / next iteration） |
+| **Delivery branch policy** | `iteration_base_branch`（integration 分支从何处分出）、`spec_integration_branch`、`target_branch`（最终 PR 目标） |
+
+**Branch policy gate**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR。
 
 ### 1.3 创建迭代 compass
 
@@ -69,6 +73,8 @@ PM 在新迭代启动时执行。
 iteration_id: <id>
 start_date: YYYY-MM-DD
 status: active
+iteration_base_branch: <branch-or-ref>
+target_branch: <branch>
 plans: []
 ---
 
@@ -97,6 +103,14 @@ plans: []
 ## Roadmap Position
 - Current iteration: <what this iteration delivers>
 - Next iteration: <what comes next, owner, trigger>
+
+## Delivery Branch Policy
+
+| Field | Value |
+|-------|-------|
+| iteration_base_branch | <branch-or-ref> |
+| spec_integration_branch | iteration/<iteration-id> |
+| target_branch | <PR target> |
 ```
 
 ### 1.4 更新索引
@@ -107,9 +121,15 @@ plans: []
 |----------|-----------|-------------|--------|
 | `<iteration-id>-delivery-compass.md` | `<iteration-id>` | `<简短描述>` | `active` |
 
-### 1.5 登记到 status.json（可选）
+### 1.5 登记到 status.json（formal iteration 必填）
 
-若使用 `status.json`，在 `plans[].metadata` 中为受影响的 plan 设置 `iteration_refs`。
+iteration-start / iteration-drive 正式流程**必须**写入 `{HARNESS_DIR}/status.json`：
+
+- root `metadata.iteration_base_branch` — 创建 `spec_integration_branch` 的祖先 ref（**不是**隐式 `main`）
+- root `metadata.target_branch` — iteration-close 后 PR 的目标分支
+- 各 plan `metadata.iteration_refs`、`spec_integration_branch`、`merge_target`（`merge_target` 通常为 `spec_integration_branch`）
+
+compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** `status.json` 一致；若仅写在 compass 而 status 缺失，§2.3 同轮 backfill。
 
 ### 1.6 Review & Edit chain（integration 分支前强制）
 
@@ -132,13 +152,14 @@ PM **不得**将迭代 harness 文档 commit 到 `spec_integration_branch`，直
 
 **本 Phase 是本 skill 的核心**——定义 per-plan 派发循环的完整流程：前置条件检查、session todos、backlog 读取、integration 分支管理、per-plan dispatch 循环（分支→实现→QC→QA→Done→合并）、dispatch-first 约束、push 纪律。PM 读取本 Phase 即可执行迭代。
 
-### 2.0 前置条件（三道闸）
+### 2.0 前置条件（四道闸）
 
 进入 Autonomous Execute 前必须满足：
 
 1. `{HARNESS_DIR}/status.json` 中至少一条 plan `status` ≠ `Done`
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
-3. 用户意图为 **continue Execute**（`/pm`、"推进 iteration"、"继续 plans" 等）
+3. 用户意图为 **continue Execute**（`/pm`、`/iteration-drive`、"推进 iteration" 等）
+4. **Branch metadata gate**：root `metadata.iteration_base_branch`、`metadata.target_branch` 已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
 
 任一 false → **stop**。Prepare 未完成 → 引导先跑 `/iteration-start`。
 
@@ -158,15 +179,26 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 1. 读 `mstar-plan-artifacts` + `{HARNESS_DIR}/status.json`
 2. 列出 `status` ∈ `{Todo, InProgress, InReview, Blocked}` 的 plan（优先级：`InProgress` → `InReview` → `Todo` → unblock `Blocked`）
-3. 读 `metadata.spec_integration_branch` / `merge_target` / `primary_spec` 链接
+3. 读 root `metadata.iteration_base_branch` / `metadata.target_branch`，以及 plan `metadata.spec_integration_branch` / `merge_target` / `primary_spec` 链接
 
 ### 2.3 Integration branch
 
-1. 从 `status.json` 解析 `spec_integration_branch`
-2. **checkout 或创建**该分支；`git branch --show-current` 确认
-3. 若 metadata 缺失 → **stop**，读 `mstar-plan-conventions` + 用户确认（`mstar-branch-worktree`）；同轮写入 plan + status
+**Metadata 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`）：
 
-此分支是本迭代内所有 plan feature branch 的 merge target。
+1. `{HARNESS_DIR}/status.json` → `metadata.iteration_base_branch`、`metadata.target_branch`；plan → `metadata.spec_integration_branch`
+2. 若 (1) 缺字段 → 读当前迭代 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` frontmatter 同名键
+3. 若 compass 有值而 `status.json` 无 → **同轮 backfill** `status.json`
+4. 仍缺 → 向用户确认 base / PR target；**不得**因 `git symbolic-ref refs/remotes/origin/HEAD` 指向 `main` 就自动采用
+
+**Git 操作**：
+
+1. `git fetch`（按需）确认 `iteration_base_branch` 存在
+2. **checkout 或创建** `spec_integration_branch`：
+   - 已存在 → `git checkout <spec_integration_branch>`
+   - 不存在 → `git checkout -b <spec_integration_branch> <iteration_base_branch>`（**必须**从记录的 base 创建，不是从当前未记录的 `main` 检出）
+3. `git branch --show-current` 确认在 `spec_integration_branch`
+
+此分支是本迭代内所有 plan feature branch 的 merge target。QC **`Review range` / `Diff basis`** 的 merge-base 参照优先用 `metadata.target_branch`（或 PM 书面指定的 base ref），**禁止**无 Assignment 依据写死 `origin/main`。
 
 ### 2.4 Per-plan loop（直到全部 Done）
 
@@ -203,7 +235,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 ## Phase 3: iteration-close（收口迭代）
 
-PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 main。触发方：`commands/iteration-drive.md`（Autonomous Execute 全部 Done 后进入）。
+PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 root `metadata.target_branch`。触发方：`commands/iteration-drive.md`（Autonomous Execute 全部 Done 后进入）。
 
 **Close Done 定义**：§3.1→§3.5 全部完成；compass frontmatter 写入 `status: completed` + `end_date`；每篇新增 knowledge doc 已登记 `{KNOWLEDGE_DIR}/README.md`。只在 final plan 中写了 compound / roadmap / PR 说明，不算 iteration-close 完成。
 
@@ -287,6 +319,7 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 - [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；tracker / STRATEGY 已按需更新
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Compound Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
+- [ ] PR base = `metadata.target_branch`（与 compass frontmatter 一致）；**不是**未记录的 `main`
 
 **Commit 到 integration 分支**：
 
@@ -295,6 +328,8 @@ git add {ITERATION_DIR}/<id>-delivery-compass.md {ITERATION_DIR}/README.md {KNOW
 git commit -m "chore(iteration): close <iteration-id> — compound round, roadmap update"
 git push origin <spec_integration_branch>
 ```
+
+PR 目标使用 root `metadata.target_branch`；缺失时停止并补齐，不得默认 `main`。
 
 ### 3.6 可选：触发 compound-refresh
 
@@ -326,6 +361,7 @@ git push origin <spec_integration_branch>
 - 不要在 iteration-drive 中修改 per-plan gate 判定
 - 不要用 compass 替代 `status.json` 作为 plan 状态 SSOT
 - 不要在没有完成 per-plan 前置检查的情况下进入 iteration-close
+- 不要在缺少 `iteration_base_branch` / `target_branch` 时默认使用 `main` / `master`
 - 不要将 Phase 3 折叠进 final plan closure——须显式 §3.0→§3.5
 - 不要用 prose completion status 替代 compass frontmatter `status: completed` + `end_date`
 - 不要跳过 compound Phase 6（`{KNOWLEDGE_DIR}/README.md` 索引）——即使只结晶一篇文档
