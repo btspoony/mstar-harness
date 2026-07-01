@@ -142,6 +142,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | iteration-start commit before review chain | `mstar-iteration` §1.6；PM 模拟三角色编辑而不派发 Task |
 | Phase 3 折叠进 final plan closure / 跳过 §3.1 gate | `mstar-iteration` §3.0–§3.5；`iteration-drive` Phase 3 |
 | iteration-close 无 frontmatter completed / 漏 compound Phase 6 | `mstar-iteration` §3.0.5、§3.4、§3.2 #5 |
+| iteration 默认 `main` 作 base 或 PR 目标 | `mstar-iteration` §1.2、§2.3；`mstar-plan-conventions` Spec 分支模型 |
 
 ## 可选：OpenViking Memory
 

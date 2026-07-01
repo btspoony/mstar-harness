@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.4** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.5** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.4** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.5** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.4** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.4** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.4** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.5** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.5** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.5** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.5] - 2026-07-01
+
+### Harness (iteration / branch policy)
+
+- **Explicit iteration branch policy**: Formal iterations require recorded `iteration_base_branch`, `spec_integration_branch`, and `target_branch` in compass frontmatter and `status.json` metadata. Agents must not silently default to `main` / `master` for integration branch creation or final PR targets.
+- **`iteration-start` / `iteration-drive`**: Grill-me branch confirmation, pre-commit checklist branch fields, §2.0 branch metadata gate, and explicit `git checkout -b <spec_integration_branch> <iteration_base_branch>` when creating the integration branch.
+- **`mstar-iteration` §2.3**: Metadata resolution chain (`status.json` → compass frontmatter → ask user); QC `Review range` merge-base uses `target_branch` or PM-specified ref.
+- **Compass template**: Add `## Delivery Branch Policy` section; `status-and-residuals.md` documents example metadata JSON.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.4 → 0.7.5**. **`@mstar-harness/cli` remains 0.5.4**.
 
 ## [0.7.4] - 2026-07-01
 

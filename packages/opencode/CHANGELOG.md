@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.7.5
+
+- Bundled commands/skills: explicit iteration branch policy — `iteration_base_branch`, `spec_integration_branch`, and `target_branch` required in compass/status metadata; no silent default to `main` for integration branch or PR target. Hardened `iteration-start` / `iteration-drive` gates and QC merge-base rules.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.5**.
+
 ## 0.7.4
 
 - Bundled skills/docs: remove Superpowers runtime dependency from Morning Star guidance and host docs; assignments now rely on native mstar dispatch, worktree, plan, review, and evidence contracts.

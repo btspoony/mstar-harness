@@ -8,7 +8,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 1. Dispatch three independent QC assignments.
 2. Collect reports and verify alignment fields:
    - `plan_id`
-   - `Review range / Diff basis`
+   - `Review range / Diff basis` — use `metadata.target_branch` or PM-specified base ref for merge-base; **do not** assume `origin/main` in formal iterations (`mstar-iteration` §2.3)
    - `Review cwd / Worktree path`
    - `Working branch`
 3. Verify runtime identity/model mapping for three distinct QC roles.

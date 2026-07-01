@@ -7,6 +7,8 @@ Copy this template when creating a new iteration compass in `{ITERATION_DIR}/`.
 iteration_id: <id>
 start_date: YYYY-MM-DD
 status: active
+iteration_base_branch: <branch-or-ref>
+target_branch: <branch>
 plans: []
 ---
 
@@ -53,6 +55,16 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 - **Next iteration**：<what comes next>，触发条件：<condition>，owner：<who>
 - **最终目标**：<the long-term Done definition this iteration contributes to>
 
+## Delivery Branch Policy
+
+> Mirror of frontmatter; keep in sync with `{HARNESS_DIR}/status.json` `metadata`.
+
+| Field | Value |
+|-------|-------|
+| `iteration_base_branch` | <branch-or-ref integration branch is cut from> |
+| `spec_integration_branch` | <e.g. iteration/<iteration-id>> |
+| `target_branch` | <PR target after iteration-close> |
+
 ## Risk Register
 
 | Risk | Likelihood | Impact | Mitigation |
@@ -84,6 +96,8 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 | `start_date` | Yes | iteration-start |
 | `end_date` | No | Add at iteration-close §3.4 only |
 | `status` | Yes | iteration-start → `active` / `locked`（§1.6 PM lock）；iteration-close §3.4 → **`completed`**（YAML frontmatter，非 prose completion status） |
+| `iteration_base_branch` | Yes | iteration-start; integration branch must be created from this ref |
+| `target_branch` | Yes | iteration-start; final PR target after iteration-close |
 | `plans` (frontmatter) | Recommended | iteration-start (initial), iteration-drive (add new) |
 | `## Plans` table | Yes | iteration-drive (sync status), iteration-close (final) |
 | `## Milestones` | Recommended | iteration-start, iteration-drive (update) |

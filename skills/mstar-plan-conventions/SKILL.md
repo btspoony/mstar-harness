@@ -1,6 +1,6 @@
 ---
 name: mstar-plan-conventions
-description: Morning Star (启明星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` 发现与初始化（默认 `.mstar/`，兼容 `.agents/`）、`docs/` 与 harness 子树边界、未启用 plan 时的工作方式、Spec 集成分支与多 Plan 实现分支（merge 靶与 PR 合 main）、Morning Star plan-writing path gate、工期预估（agent-oriented）。**必须**在读写 `.mstar/` / `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / reports / knowledge → **`mstar-plan-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
+description: Morning Star (启明星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` 发现与初始化（默认 `.mstar/`，兼容 `.agents/`）、`docs/` 与 harness 子树边界、未启用 plan 时的工作方式、Spec 集成分支与多 Plan 实现分支（显式 base / merge 靶 / PR target）、Morning Star plan-writing path gate、工期预估（agent-oriented）。**必须**在读写 `.mstar/` / `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / reports / knowledge → **`mstar-plan-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
 ---
 
 ## Load order（必读顺序）
@@ -58,11 +58,14 @@ PM 在需要持久化追踪时：
 
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
-- **Spec 集成分支**：各 Plan 实现 merge 回此线后再视为 Spec 在代码侧集成。
+- **Iteration base branch**：创建 Spec/iteration 集成分支的祖先分支或 ref；必须显式记录，不能默认 `main` / `master`。
+- **Spec 集成分支**：从 `iteration_base_branch` 创建；各 Plan 实现 merge 回此线后再视为 Spec 在代码侧集成。
 - **Plan 实现分支**：每 `plan_id` 一条（PM 书面）。
-- **合入 `main`**：全部 Plans 完成后 **必须 PR**（窄例外见 Assignment `Branch policy`）。
+- **PR target**：全部 Plans 与 iteration-close 完成后，向显式 `target_branch` 提 PR（窄例外见 Assignment `Branch policy`）。
 - Git 操作与 QC 单一 `HEAD` → **`mstar-branch-worktree`**。
-- `status.json` 登记 `spec_integration_branch` / `merge_target` → **`mstar-plan-artifacts`**。
+- `status.json` 登记 root `metadata.iteration_base_branch` / `metadata.target_branch`，以及 plan `metadata.spec_integration_branch` / `merge_target` → **`mstar-plan-artifacts`**。
+
+**解析顺序**（`mstar-iteration` §2.3）：`status.json` metadata → compass frontmatter → 向用户确认。**禁止**因仓库默认分支名为 `main`/`master` 就自动采用。
 
 ## Plan-Writing Path Gate
 

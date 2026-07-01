@@ -109,8 +109,8 @@ In old JSON, **`"severity": "warning"`** is read and rolled up as **`low`**. **F
 | Key | Type | Purpose |
 | --- | --- | --- |
 | `working_branch` | string | Implementation branch; aligns with Assignment **`Working branch`** (SSOT) |
-| `spec_integration_branch` | string | (Multi-plan same **Spec**) integration branch name; plan branches merge here before `main` (`mstar-plan-conventions`) |
-| `merge_target` | string | Next merge target; multi-plan + Spec → usually `spec_integration_branch`; `main` via PR |
+| `spec_integration_branch` | string | (Multi-plan same **Spec**) integration branch name; created from root `metadata.iteration_base_branch`; plan branches merge here before final PR (`mstar-plan-conventions`) |
+| `merge_target` | string | Next merge target; multi-plan + Spec → usually `spec_integration_branch`; final PR target is root `metadata.target_branch` |
 | `branch_policy` | string | One-line policy per `mstar-harness-core` |
 | `phase` | string | Program/roadmap label |
 | `priority` | `high` \| `medium` \| `low` | PM scheduling |
@@ -152,9 +152,30 @@ Legacy string `plans[].notes` is OK; new repos should use arrays with time + eve
 | Key | Type | Purpose |
 | --- | --- | --- |
 | `versioning` | object | Cross-plan conventions (team-defined) |
+| `iteration_base_branch` | string | Branch/ref used to create `spec_integration_branch`; required for formal iterations |
+| `target_branch` | string | Final PR target after iteration-close; required for formal iterations |
 | `notes` | array | **Legacy** — prefer **`{HARNESS_DIR}/notes.json`** |
 | `residual_findings_history` | object | **Legacy** — prefer **`archived/residuals/<plan-id>.json`** |
 | `tech_debt_summary` | object | Optional rollup over open R#; maintain via script (below) |
+
+**Formal iteration example** (root `metadata`; values are project-specific — **do not** copy `main` by default):
+
+```json
+"metadata": {
+  "iteration_base_branch": "release/1.76",
+  "target_branch": "release/1.77"
+}
+```
+
+Plan row (per active iteration plan):
+
+```json
+"metadata": {
+  "spec_integration_branch": "iteration/v1.77-live-teels",
+  "merge_target": "iteration/v1.77-live-teels",
+  "iteration_refs": ["v1.77"]
+}
+```
 
 ## General constraints
 
