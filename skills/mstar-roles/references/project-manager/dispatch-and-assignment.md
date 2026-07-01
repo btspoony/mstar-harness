@@ -114,7 +114,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Tool availability ≠ delegation authorization
 **Plan Path**: <{PLAN_DIR}/... or N/A>
 **Report Format**: Completion Report v2
-**Execution practices**: <RCA/test-first/review feedback/evidence expectations, if applicable>
+**Execution evidence**: <RCA/test-first/review feedback/evidence expectations for the assignee, if applicable>
 ```
 
 ## Completion Report v2 Template

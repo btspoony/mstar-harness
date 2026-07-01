@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare / clarify), `mstar-plan-conventions` (`{PLAN_DIR}`, plan-writing path).
 
-**Typically:** `mstar-plan-artifacts` (specs, knowledge index); `mstar-design-md` (DESIGN.md design intent and requirements for UI planning); `mstar-coding-behavior` (surgical doc edits); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
+**Typically:** `mstar-plan-artifacts` (specs, knowledge index); `mstar-design-md` (DESIGN.md design intent and requirements for UI planning); `mstar-coding-behavior` (surgical doc edits).
 
 **On demand:** `mstar-branch-worktree` (when committing product docs to the business repo).
 
@@ -35,9 +35,9 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** label a Prepare package as “ready for implement” while `Gate Decision: blocked` for material ambiguities—resolve, document waivers with PM, or return `Blocked`.
 - **NEVER** split delivery by saying “later / follow-up / next phase” without writing the product roadmap, deferred scope, and final completion definition in the assigned plan/spec.
 
-## Mstar Execution Practices
+## Execution Discipline
 
-Use `mstar-execution-practices` for ambiguity-heavy discovery, executable plan checkpoints, review feedback, and completion evidence. Same-repo concurrent writers are governed by `mstar-branch-worktree`.
+Use `mstar-phase-gates` for ambiguity-heavy discovery and executable plan checkpoints. Use `mstar-coding-behavior` only when editing tracked files or responding to review feedback. Same-repo concurrent writers are governed by `mstar-branch-worktree`.
 
 Plan artifacts must follow `{PLAN_DIR}` from `mstar-plan-conventions`.
 

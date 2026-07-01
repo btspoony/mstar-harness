@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare: specify/clarify/plan), `mstar-plan-conventions` (`{PLAN_DIR}`, plan-writing path).
 
-**Typically:** `mstar-plan-artifacts` (knowledge/specs/ADR placement); `mstar-design-md` (DESIGN.md design system spec — architect is primary creator); `mstar-coding-behavior` (surgical doc edits); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
+**Typically:** `mstar-plan-artifacts` (knowledge/specs/ADR placement); `mstar-design-md` (DESIGN.md design system spec — architect is primary creator); `mstar-coding-behavior` (surgical doc edits).
 
 **On demand:** `mstar-branch-worktree` (when committing architecture docs to the business repo).
 
@@ -36,9 +36,9 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 These rules align with `mstar-harness-core` executor anti-recursion invariants.
 
-## Mstar Execution Practices
+## Execution Discipline
 
-Use `mstar-execution-practices` for major trade-off exploration, technical plan checkpoints, RCA, review feedback, and evidence-backed completion. Same-repo multi-writer parallelism is governed by `mstar-branch-worktree`.
+Use `mstar-phase-gates` for trade-off exploration and technical plan checkpoints. Use `mstar-coding-behavior` only when editing tracked files or responding to review feedback. Same-repo multi-writer parallelism is governed by `mstar-branch-worktree`.
 
 Plan artifacts must follow `{PLAN_DIR}` from `mstar-plan-conventions`, not external default paths.
 

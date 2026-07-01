@@ -132,8 +132,7 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 - Plan artifacts (`status.json`, residual, main plan, reports/, knowledge, Done compaction, `templates/`) -> `skills/mstar-plan-artifacts/*`
 - DESIGN.md design system spec (create/audit/maintain, tokens, completeness checklist, light/dark themes, templates) -> `skills/mstar-design-md/*`
 - QC baseline and review template -> `skills/mstar-review-qc/*`
-- Cross-role coding behavior -> `skills/mstar-coding-behavior/*`
-- Execution practices (RCA, verification, test-first discipline, review feedback) -> `skills/mstar-execution-practices/*`
+- Cross-role coding behavior (RCA, verification, test-first discipline, review feedback) -> `skills/mstar-coding-behavior/*`
 - Skill authoring / trigger contracts -> `skills/mstar-skill-authoring/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:

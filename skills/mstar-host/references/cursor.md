@@ -61,9 +61,9 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 - No `question` tool: structured Markdown or Cursor UI.
 - “Question asked” ≠ clarify done; high-impact ambiguity → `Blocked` or escalation.
 
-## Execution Practices
+## Execution Discipline
 
-Use `mstar-execution-practices` for RCA, test-first work, plan checkpoints, review feedback, and completion evidence. Do not require external skill plugins.
+Implementation roles use `mstar-coding-behavior` for RCA, test-first checks, review feedback, and completion evidence. Plan checkpoints remain in `mstar-phase-gates`; external skill plugins are not required.
 
 ## Gotchas
 

@@ -14,7 +14,7 @@ Behavior is shared; track identity is parameterized.
 
 **Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates` (leaf anti-recursion before any Task/subagent).
 
-**Typically:** `mstar-plan-conventions` (path symbols + `metadata.primary_spec` / `spec_refs`); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
+**Typically:** `mstar-plan-conventions` (path symbols + `metadata.primary_spec` / `spec_refs`).
 
 **On demand:** `mstar-branch-worktree` (repo writes, `Working branch`); `mstar-phase-gates` (Execute / hotfix sections when gate fields are in the assignment); `mstar-design-md` (when task includes UI implementation — read DESIGN.md for design tokens).
 

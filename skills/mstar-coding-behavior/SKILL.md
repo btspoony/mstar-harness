@@ -1,6 +1,6 @@
 ---
 name: mstar-coding-behavior
-description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（先读懂再改、显式假设、不静默猜测、读 imports/test/项目模式）、Simplicity First（YAGNI 优先不写代码、The Ladder 决策层级含依赖评估、删除优于添加、简洁优于聪明、5 项具名反模式速查、`simplify:` 标记天花板与升级路径、最小耐久切片）、Surgical Changes（改动可追溯、Bug 修根因先 grep 所有调用点、不顺手重构、不 piggyback）、Debugging（读完整报错与栈追踪、先复现、一步一测、根因分析、Bug 修复前先写复现测试、卡住时坦白）、Goal-Driven Execution（非平凡逻辑必留一个可运行检查、模糊请求转可验证结果、测行为不测实现、已有测试前后对比、不能测试说理由、Step → verify 微模板、分批留 roadmap）、Communication（说做了什么及为什么、标记顾虑、精确表达不确定性、不解释已知的、commit message 质量）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
+description: Morning Star (启明星) 跨角色通用编码行为准则 —— Think Before Coding（先读懂再改、显式假设、不静默猜测、读 imports/test/项目模式）、Simplicity First（YAGNI 优先不写代码、The Ladder 决策层级含依赖评估、删除优于添加、简洁优于聪明、5 项具名反模式速查、`simplify:` 标记天花板与升级路径、最小耐久切片）、Surgical Changes（改动可追溯、Bug 修根因先 grep 所有调用点、不顺手重构、不 piggyback）、Debugging（读完整报错与栈追踪、先复现、一步一测、根因分析、Bug 修复前先写复现测试、卡住时坦白）、Review Feedback Handling（先核实反馈再改、逐项处理、可用证据反驳错误建议）、Goal-Driven Execution（非平凡逻辑必留一个可运行检查、模糊请求转可验证结果、测行为不测实现、已有测试前后对比、不能测试说理由、Step → verify 微模板、分批留 roadmap）、Communication（说做了什么及为什么、标记顾虑、精确表达不确定性、不解释已知的、commit message 质量）。任何实现、调试、重构、审查任务都应优先 Read 本 skill；`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2` / `@architect` / `@qa-engineer` / `@ops-engineer` / `@prompt-engineer` 动手前必读；QC 审查员核对变更是否只做了该做的手术时必读。本 skill 不覆盖分支门禁、QC/QA 路由、Assignment 权限、Done 所有权等不变量（那些以 `mstar-harness-core` 为准）。
 ---
 
 ## Load order（必读顺序）
@@ -166,7 +166,31 @@ Micro template:
 - **Test behavior, not implementation.** A test that checks whether a constructor sets properties is worthless. A test that checks whether validation actually rejects bad input is valuable. Focus on the interesting cases.
 - **If you cannot write a test, say why.** "I cannot easily test this because the database calls are tightly coupled to the business logic" is useful information that may signal a need for restructuring. Do not skip testing without an explanation.
 
-## 6) Communication
+## 6) Review Feedback Handling
+
+Core idea: review feedback is technical input, not an order to perform unverified edits.
+
+When receiving code review, QA, CI, or human feedback:
+
+1. Read all feedback before editing.
+2. Clarify ambiguous items before partial implementation.
+3. Verify each suggestion against codebase reality.
+4. Apply technically correct feedback one item at a time.
+5. Test each fix individually where practical.
+6. Push back with evidence when feedback is incorrect, obsolete, risky, out of scope, or violates YAGNI.
+
+Feedback priority:
+
+| Feedback type | Handling |
+|---|---|
+| Security, correctness, data loss, build/test failure | Fix or escalate before proceeding. |
+| Scope mismatch, reviewer misunderstanding, obsolete assumption | Verify and push back with evidence. |
+| Style-only suggestion | Apply only if it matches project conventions or is requested by the user/PM. |
+| New feature disguised as review | Route through PM/plan unless explicitly in scope. |
+
+Do not perform agreement. State the technical action, the verification result, or the technical reason for disagreement.
+
+## 7) Communication
 
 Core idea: how you communicate about code matters as much as the code itself.
 
@@ -178,8 +202,7 @@ Core idea: how you communicate about code matters as much as the code itself.
 
 ## Integration Notes
 
-- This skill is additive to `mstar-execution-practices` and other Morning Star controls.
-- It must not be used to bypass:
+- This skill must not be used to bypass:
   - branch constraints,
   - QC/QA gate definitions,
   - assignment authority,

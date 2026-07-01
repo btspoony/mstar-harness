@@ -6,9 +6,8 @@ Before any non-trivial PM action, read in order:
 2. `mstar-dispatch-gates` + `mstar-phase-gates` (dispatch + Prepare/Execute gates)
 3. Host adapter: `mstar-host` (detect host; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
 4. `mstar-plan-conventions` (path discovery, init, Spec branch summary)
-5. `mstar-execution-practices` (for RCA, execution evidence, and plan checkpoints)
-6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
-7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, reports naming)
+5. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
+6. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, reports naming)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 

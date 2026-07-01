@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`.
 
-**When editing harness text:** read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, `mstar-execution-practices`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules.
+**When editing harness text:** read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules.
 
 **When creating a new skill, making a major skill rewrite, or changing trigger descriptions:** MUST read `mstar-skill-authoring` before editing.
 
@@ -32,7 +32,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** outsource prompt/skill/rule design, edits, or validation evidence to `@explore`.
-- **NEVER** merge prompt/skill/rule text that contradicts `mstar-harness-core`, `mstar-review-qc`, or `mstar-execution-practices` without an explicit documented exception approved by PM (harness SSOT wins by default).
+- **NEVER** merge prompt/skill/rule text that contradicts `mstar-harness-core`, `mstar-review-qc`, or `mstar-coding-behavior` without an explicit documented exception approved by PM (harness SSOT wins by default).
 
 ## Responsibilities
 
@@ -58,7 +58,7 @@ When creating a new skill, making a major skill rewrite, changing frontmatter `d
 
 - Trigger conditions and non-goals are explicit
 - Output/evidence expectations are testable
-- No conflict with `mstar-harness-core`, `mstar-review-qc`, `mstar-execution-practices`, or `mstar-skill-authoring`
+- No conflict with `mstar-harness-core`, `mstar-review-qc`, or `mstar-skill-authoring`
 - Redundancy removed before adding new constraints
 - At least one replayable scenario exists for regression check
 

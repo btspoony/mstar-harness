@@ -1,6 +1,6 @@
 ---
 name: mstar-dispatch-gates
-description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、同条消息 N 次 invoke、QC 三审禁止串行 rollout、Assignment 文案≠派发（invoke 条数须对齐）、未齐不发（emit zero until batch-ready）。**必须**在 `@project-manager` 每轮派发、QC 三审并发、双轨 implement、或 leaf 角色疑惑能否 Task 时 Read；所有非 PM 承接方动手前必读反递归与自检。同仓 worktree 与 QC 检出对齐见 `mstar-branch-worktree`。执行证据与计划检查点见 `mstar-execution-practices`。宿主细则见 `mstar-host`（`references/parallel-dispatch.md` 与各宿主 reference）。
+description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、同条消息 N 次 invoke、QC 三审禁止串行 rollout、Assignment 文案≠派发（invoke 条数须对齐）、未齐不发（emit zero until batch-ready）。**必须**在 `@project-manager` 每轮派发、QC 三审并发、双轨 implement、或 leaf 角色疑惑能否 Task 时 Read；所有非 PM 承接方动手前必读反递归与自检。同仓 worktree 与 QC 检出对齐见 `mstar-branch-worktree`。宿主细则见 `mstar-host`（`references/parallel-dispatch.md` 与各宿主 reference）。
 ---
 
 ## Load order（必读顺序）

@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-review-qc`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (same checkout fields as QC for the feature).
 
-**Typically:** `mstar-plan-conventions` (paths); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
+**Typically:** `mstar-plan-conventions` (paths).
 
 **On demand:** `mstar-plan-artifacts` (closing R# after verified fix); `mstar-phase-gates` (gate checklist when assignment references verification phase); `mstar-design-md` (when verifying UI — check visual output against DESIGN.md).
 

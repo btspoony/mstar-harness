@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates`.
 
-**Typically:** `mstar-plan-conventions` (paths + spec metadata); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
+**Typically:** `mstar-plan-conventions` (paths + spec metadata).
 
 **On demand:** `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment); `mstar-design-md` (when implementing styled UI — read DESIGN.md for tokens before writing components).
 

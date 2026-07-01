@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-review-qc` (high-risk ops checklist), `mstar-branch-worktree` (repo writes, production-touching branches).
 
-**Typically:** `mstar-plan-conventions` (paths); `mstar-execution-practices` (RCA, test-first work, review feedback, completion evidence).
+**Typically:** `mstar-plan-conventions` (paths).
 
 **On demand:** `mstar-phase-gates` (hotfix compressed path when assignment says hotfix).
 
