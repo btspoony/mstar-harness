@@ -72,12 +72,14 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 ## Specialist review-and-edit dispatch
 
-当 PM 派发**文档编辑类**专业角色（如 product-manager、architect、writing-specialist）直接修订 harness 产物时，与 implement / QC **同一派发契约**：
+当 PM 派发**文档编辑类**专业角色（如 product-manager、architect、writing-specialist）直接修订 harness 产物时：
 
 - PM 写初稿；各角色通过宿主 invoke **直接编辑**目标文件（**不**另写仅评论式 `reports/` 替代修订）。
-- **1 Assignment ⇒ 1 invoke**；彼此独立时可并行（同条消息发满 N）。
+- **1 Assignment ⇒ 1 invoke**。
+- **Phase 1 Review & Edit chain**（`mstar-iteration` §1.6）：**顺序** `product-manager` → `architect` → `writing-specialist`；上一角色落盘修订完成后再派发下一角色。**禁止**本链并行 batch（与 QC 三审不同）。
+- 其他彼此独立、无先后依赖的文档编辑任务：可并行（同条消息发满 N），见 **`parallel-dispatch.md`**。
 - PM 线程代做全部专业编辑 = **反模式**（`mstar-iteration` §1.6、`mstar-harness-core` 反模式索引）。
-- PM merge / lock（如 compass `status: locked`）在 subagent 返回后于 PM 线程完成。**不得**在 review-and-edit 链完成前 commit integration 分支。
+- PM merge / lock（如 compass `status: locked`）在链末 subagent 返回后于 PM 线程完成。**不得**在 review-and-edit 链完成前 commit integration 分支。
 
 ## 反模式（派发）
 
@@ -85,6 +87,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - 仅 1 次 invoke 却声称「并行三审已启动」。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
+- Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。
 - 全部 plan `Done` 后跳过 Phase 3 直接 PR；final plan closure 替代 `mstar-iteration` §3.1–§3.5。
 - Assignment 已写、invoke 为零（paste-only）却进入下一 gate。
 

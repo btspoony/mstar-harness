@@ -33,7 +33,7 @@ iteration-start → [per-plan lifecycle × N] → iteration-close → PR → mer
 |------|------|------|------|
 | **→ Phase 3** | `status.json` 中 compass 登记的全部 plan 均为 `Done` | 打印 `## Phase 3: iteration-close`；执行 §3.0→§3.5；host todo `phase-3-iteration-close` 保持 open 直至 §3.5 | 开 PR；宣称 iteration 完成；仅依赖 final plan closure |
 | **→ PR** | §3.5 exit checklist 全 `[x]`；frontmatter `status: completed` + `end_date` | commit integration 分支 → PR 到 `metadata.target_branch` | 跳过 §3.1 entry checklist 或 compound Phase 6 |
-| **iteration-start → integration branch** | §1.6 Review & Edit chain | 三角色 Task 返回 + compass `status: locked` | PM 线程代做三角色编辑；review 前 commit |
+| **iteration-start → integration branch** | §1.6 Review & Edit chain | 三角色 **按序** invoke 完成 + compass `status: locked` | PM 线程代做三角色编辑；并行三角色；review 前 commit |
 
 **误判信号**：对话里出现 compound 摘要、roadmap 更新、或「所有 plan 已完成」但 **未** 打印 §3.1 / §3.5 checklist → 视为 **Phase 3 未执行**，回到 §3.0。
 
@@ -145,14 +145,16 @@ compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** 
 
 **Phase 1 在 PM lock 前不算完成**——compass/plans 初稿落盘 ≠ Done。
 
-派发机制 → **`mstar-dispatch-gates`**（含 specialist review-and-edit dispatch）。PM **不得**将迭代 harness 文档 commit 到 `spec_integration_branch`，直到：
+派发机制 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch，**顺序链**）。PM **不得**将迭代 harness 文档 commit 到 `spec_integration_branch`，直到：
 
-1. **@product-manager**、**@architect**、**@writing-specialist** 已通过宿主 Task（或等价角色 invoke）**直接编辑**（非仅评论）compass、plans 及受影响 specs
+1. **@product-manager** → **@architect** → **@writing-specialist** 已按序通过宿主 invoke **直接编辑**（非仅评论）compass、plans 及受影响 specs；每一环基于上一环落盘修订
 2. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
+
+**顺序理由**：产品范围与优先级 → 架构与契约 → 术语与行文；并行会导致后手重复劳动或覆盖前手未定稿内容。
 
 **完成证据** = 磁盘上的 compass / plans / specs 修订 + compass `status: locked`。**不**要求 `reports/<iteration-id>/` 审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
 
-**反模式**：PM 线程代替三角色完成全部编辑而不派发 Task —— 见 **`mstar-harness-core`** 反模式索引。
+**反模式**：PM 线程代替三角色完成全部编辑而不 invoke；或将本链三角色并行派发 —— 见 **`mstar-harness-core`** 反模式索引。
 
 ---
 

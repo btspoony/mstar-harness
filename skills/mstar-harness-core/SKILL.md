@@ -139,7 +139,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |
 | CreatePlan 不落盘 / 无 `{HARNESS_DIR}` mirror | `mstar-host` · `cursor-plan-mode-bridge` |
 | 临时方案 / 后续计划只写在对话里 | `mstar-phase-gates` · Durable Roadmap Gate |
-| Phase 1 review chain 未完成即 commit | `mstar-iteration` §1.6；PM 模拟专业角色编辑而不 invoke |
+| Phase 1 review chain 未完成即 commit | `mstar-iteration` §1.6；PM 代做专业角色编辑；或三角色并行派发 |
 | Phase 2 paste-only / PM 自实现 | `mstar-dispatch-gates` |
 | Phase 3 折叠进 final plan closure / 跳过 §3.1 gate | `mstar-iteration` §3.0–§3.5 |
 | iteration-close 无 frontmatter completed / 漏 compound Phase 6 | `mstar-iteration` §3.0.5、§3.4、§3.2 #5 |
