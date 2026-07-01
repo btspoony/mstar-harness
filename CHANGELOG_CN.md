@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.3**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.4**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.3** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.4** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.3** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.3** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.3** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.4** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.4** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.4** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.4] - 2026-07-01
+
+### Harness（skills / docs）
+
+- **移除 Morning Star 运行时对 Superpowers 的依赖**：删除 Superpowers 安装引导与对齐表述；Morning Star assignment 改为依赖 mstar-native 的 dispatch、worktree、plan、review 与 evidence 契约。
+- **将 execution practices 并回 `mstar-coding-behavior`**：删除 `mstar-execution-practices`；将 review feedback handling 并入 `mstar-coding-behavior`；RCA、测试优先检查、完成证据留在编码行为基线，PM 门禁证据仍由 `mstar-phase-gates` / `mstar-review-qc` 承担。
+- **新增 `mstar-skill-authoring`**：提供 Morning Star-native 的 skill 编写指导，覆盖 trigger contract、渐进披露、pressure scenarios 与行为变更证据。`prompt-engineer` 在新建 skill、重大重写或修改触发描述前必须读取该技能。
+- **文档与宿主适配同步**：README / README_CN、OpenCode 安装说明、角色引用与 host references 不再要求外部 skill 插件。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.3 → 0.7.4**。**`@mstar-harness/cli` 保持 0.5.4**。
 
 ## [0.7.3] - 2026-06-30
 

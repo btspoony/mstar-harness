@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.7.4
+
+- Bundled skills/docs: remove Superpowers runtime dependency from Morning Star guidance and host docs; assignments now rely on native mstar dispatch, worktree, plan, review, and evidence contracts.
+- Bundled skills: add `mstar-skill-authoring`, delete `mstar-execution-practices`, and fold review feedback handling into `mstar-coding-behavior`.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.4**.
+
 ## 0.7.3
 
 - Bundled commands/skills: `mstar-iteration` Phase 3 close is now an explicit gate after all plans are `Done`; close requires compass normalization when needed, compound Phase 6 knowledge indexing, roadmap update, completed frontmatter, and close checklists before PR.
