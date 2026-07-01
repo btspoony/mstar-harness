@@ -23,7 +23,7 @@ Detect host → Read `mstar-host` → `references/cursor.md` | `opencode.md` | `
 3. Before first **implement** dispatch: `mstar-dispatch-gates` + host reference
 4. Before **QC**: `mstar-review-qc`
 5. **Iteration flow** (start / Execute / close): **`mstar-iteration`** — canonical SSOT for per-plan dispatch loop, integration branch, compound round. Do **not** re-describe the flow in this skill.
-6. **On demand:** `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-branch-worktree`, `mstar-superpowers-align`
+6. **On demand:** `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-branch-worktree`, `mstar-skill-authoring` for skill work
 
 Prepare/Execute gates, routing, Assignment templates, Task Board, QC tri-review, residuals, compound → topic skills + PM references (not repeated here).
 

@@ -197,7 +197,7 @@ When `/pm` runs under Plan mode:
 
 ## Related skills
 
-- `mstar-plan-conventions` — discovery, init, `writing-plans` path gate
+- `mstar-plan-conventions` — discovery, init, plan-writing path gate
 - `mstar-plan-artifacts` — `status.json`, reports, checkboxes, residual
 - `mstar-phase-gates` — Prepare / Execute order
 - `mstar-roles/references/project-manager/dispatch-and-assignment.md` — Checkpoint: commit → Completion Report → Status Update

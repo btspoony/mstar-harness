@@ -43,12 +43,12 @@ Treat these as baseline dependencies **where the role touches implementation, re
 | `mstar-phase-gates` | Prepare/Execute gates, clarify, hotfix path, intention gate |
 | `mstar-dispatch-gates` | PM dispatch; **all leaf executors** before any Task/subagent call |
 | `mstar-branch-worktree` | Git write, parallel worktrees, QC/QA checkout fields |
-| `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch naming, `writing-plans` path |
+| `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch naming, plan-writing path gate |
 | `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residual, knowledge/iteration, Done compaction |
 | `mstar-design-md` | DESIGN.md design system spec — create/audit/maintain tokens, completeness checklist, light/dark dual-theme |
 | `mstar-review-qc` | QC workflow, template, verdict, high-risk checks |
-| `mstar-coding-behavior` | Implementation/debug/refactor (**not** PM orchestration-only) |
-| `mstar-superpowers-align` | Superpowers plugin on; Assignment `Superpowers` lines |
+| `mstar-coding-behavior` | Implementation/debug/refactor/review-feedback handling (**not** PM orchestration-only) |
+| `mstar-skill-authoring` | New skills, major skill rewrites, trigger descriptions, behavior-shaping skill validation |
 | `mstar-compound` | Capturing solved problems as structured knowledge in `{KNOWLEDGE_DIR}`; Discoverability check; CONCEPTS.md synergy |
 | `mstar-compound-refresh` | Auditing/updating/consolidating knowledge docs; maintaining `{KNOWLEDGE_DIR}` accuracy |
 | `mstar-iteration` | Iteration lifecycle: iteration-start (scope/roadmap lock), Autonomous Execute (per-plan dispatch loop), iteration-close (compound + roadmap update) |
@@ -59,7 +59,7 @@ Treat these as baseline dependencies **where the role touches implementation, re
 
 | Role | Typical adds |
 | --- | --- |
-| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-superpowers-align`, `mstar-roles` ref; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-plan-artifacts` as the round requires; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
+| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-roles` ref; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-plan-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
 | `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-plan-conventions` (minimal); `mstar-design-md` when implementing styled UI |
 | `qc-specialist*` | `mstar-review-qc`, `mstar-branch-worktree`, `mstar-plan-artifacts` (report paths); `mstar-design-md` when reviewing UI |
 | `qa-engineer` | `mstar-review-qc`, `mstar-branch-worktree`, `mstar-plan-artifacts` (closing R#); `mstar-design-md` when verifying visual output |

@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.3** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.4** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.3** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.4** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.3** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.3** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.3** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.4** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.4** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.4** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.4] - 2026-07-01
+
+### Harness (skills / docs)
+
+- **Remove Superpowers dependency from Morning Star runtime**: removed Superpowers install guidance and alignment wording; Morning Star assignments now rely on native dispatch, worktree, plan, review, and evidence contracts.
+- **Consolidate execution practices into `mstar-coding-behavior`**: deleted `mstar-execution-practices`; moved review feedback handling into `mstar-coding-behavior`; RCA, test-first checks, and completion evidence now stay in coding behavior while PM gate evidence remains in `mstar-phase-gates` / `mstar-review-qc`.
+- **Add `mstar-skill-authoring`**: new Morning Star-native skill authoring guidance for trigger contracts, progressive disclosure, pressure scenarios, and behavior-change evidence. The prompt-engineer role must read it before creating skills, major rewrites, or trigger-description changes.
+- **Docs and host adapters**: README / README_CN, OpenCode install docs, role references, and host references no longer require external skill plugins.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.3 → 0.7.4**. **`@mstar-harness/cli` remains 0.5.4**.
 
 ## [0.7.3] - 2026-06-30
 

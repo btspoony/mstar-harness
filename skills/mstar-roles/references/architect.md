@@ -2,9 +2,9 @@
 
 **Hub matrix:** `mstar-roles` SKILL.md.
 
-**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare: specify/clarify/plan), `mstar-plan-conventions` (`{PLAN_DIR}`, `writing-plans` path).
+**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare: specify/clarify/plan), `mstar-plan-conventions` (`{PLAN_DIR}`, plan-writing path).
 
-**Typically:** `mstar-plan-artifacts` (knowledge/specs/ADR placement); `mstar-design-md` (DESIGN.md design system spec — architect is primary creator); `mstar-coding-behavior` (surgical doc edits); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-artifacts` (knowledge/specs/ADR placement); `mstar-design-md` (DESIGN.md design system spec — architect is primary creator); `mstar-coding-behavior` (surgical doc edits).
 
 **On demand:** `mstar-branch-worktree` (when committing architecture docs to the business repo).
 
@@ -28,23 +28,19 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat document-level parallelism (“split into N plans”, “Plan 002–010”, “Phase X ∥ Phase Y”, “N parallel tracks”) as permission to **invoke N subagents** in this session. The **plan/spec/ADR artifacts** are your deliverable; **scheduling** parallel execution is **PM’s next round**, not part of this assignment unless `Delegation: allowed (...)` explicitly lists callees.
 - **NEVER** treat `Handoff: @project-manager / @fullstack-dev / @qa-engineer …`, role names inside Completion Report templates, routing tables, or “suggested owner” groupings as **host invoke commands**; they are **narrative**, not authorization.
 - **NEVER** infer you may call `Task` / subagents because the host **lists** `subagent_type` names (`architect`, `fullstack-dev`, …). **Tool availability ≠ delegation authorization**; only **`Delegation: allowed (...)`** grants callees.
-- **NEVER** load and execute Superpowers `dispatching-parallel-agents` yourself to fan out child agents; that skill is **PM-orchestration-only** (see `mstar-superpowers-align`). If parallel runners are needed, report to PM for re-dispatch.
+- **NEVER** execute parallel-agent dispatch yourself to fan out child agents; dispatch is **PM-orchestration-only** (see `mstar-dispatch-gates`). If parallel runners are needed, report to PM for re-dispatch.
 - **NEVER** treat `Gate Decision: blocked` (material, high-impact ambiguities still open) as permission to hand off “ready for implement” architecture—finish clarify, update the package, or return `Blocked` to PM.
 - **NEVER** use a temporary, mixed, or partial design as the selected approach unless the target architecture and staged roadmap are written in the assigned plan/spec. “Later” without a tracking location is `Blocked`, not a handoff.
 - **NEVER** edit application implementation source, automated tests, CI workflows, Dockerfiles, or secrets-bearing runtime configuration unless the assignment explicitly limits you to doc-only placeholders **and** PM recorded the risk acceptance.
-- **NEVER** persist planning artifacts from `writing-plans` (or equivalent) under upstream `docs/superpowers/plans/`; only `{PLAN_DIR}` per `mstar-plan-conventions`.
+- **NEVER** persist planning artifacts under external default plan directories; only `{PLAN_DIR}` per `mstar-plan-conventions`.
 
 These rules align with `mstar-harness-core` executor anti-recursion invariants.
 
-## Superpowers (When Enabled)
+## Execution Discipline
 
-Use as applicable:
+Use `mstar-phase-gates` for trade-off exploration and technical plan checkpoints. Use `mstar-coding-behavior` only when editing tracked files or responding to review feedback. Same-repo multi-writer parallelism is governed by `mstar-branch-worktree`.
 
-- `brainstorming` for major trade-off exploration
-- `writing-plans` for technical planning documentation
-- `using-git-worktrees` for same-repo multi-writer parallelism
-
-`writing-plans` outputs must follow `{PLAN_DIR}` from `mstar-plan-conventions`, not external default paths.
+Plan artifacts must follow `{PLAN_DIR}` from `mstar-plan-conventions`, not external default paths.
 
 ## Responsibilities
 

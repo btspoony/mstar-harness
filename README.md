@@ -57,7 +57,6 @@ Manual install targets currently include:
     {
       "$schema": "https://opencode.ai/config.json",
       "plugin": [
-        "superpowers@git+https://github.com/obra/superpowers.git",
         "@mstar-harness/opencode@latest"
       ]
     }
@@ -212,11 +211,11 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residuals, knowledge/iteration indexes, Done compaction |
 | `mstar-design-md` | DESIGN.md design-system gate for UI-bearing plans |
 | `mstar-review-qc` | QC review baseline and report template |
-| `mstar-coding-behavior` | Cross-role coding behavior baseline |
+| `mstar-coding-behavior` | Cross-role coding behavior: RCA, test-first checks, review feedback, completion evidence |
 | `mstar-compound` | Knowledge crystallization into `{KNOWLEDGE_DIR}` |
 | `mstar-compound-refresh` | Knowledge maintenance: refresh, merge, archive, or remove stale docs |
 | `mstar-strategy` | STRATEGY.md alignment for long-running direction and decisions |
-| `mstar-superpowers-align` | Alignment and conflict handling with Superpowers |
+| `mstar-skill-authoring` | Skill authoring, trigger contracts, progressive disclosure, and behavior-change evidence |
 | `mstar-roles` | Role prompt bus + per-role skill load lists |
 | `mstar-host` | Host adapter (OpenCode / Cursor / Codex); auto-detect + `references/` |
 | `pm` | Shared `/pm` shortcut for Cursor and Codex PM entry |

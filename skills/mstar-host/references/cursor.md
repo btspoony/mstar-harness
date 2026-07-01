@@ -61,9 +61,9 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 - No `question` tool: structured Markdown or Cursor UI.
 - “Question asked” ≠ clarify done; high-impact ambiguity → `Blocked` or escalation.
 
-## Superpowers
+## Execution Discipline
 
-If no Skill invocation tool: `mstar-superpowers-align` “plugin not installed”; **Read** upstream `SKILL.md` before execution.
+Implementation roles use `mstar-coding-behavior` for RCA, test-first checks, review feedback, and completion evidence. Plan checkpoints remain in `mstar-phase-gates`; external skill plugins are not required.
 
 ## Gotchas
 

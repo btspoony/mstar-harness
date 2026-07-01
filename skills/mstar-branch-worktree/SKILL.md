@@ -105,16 +105,16 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 
 当 **`@project-manager` 在同一调度轮次内并发启动多个** subagent（含宿主侧「并行 Task / 并行 subagent」），且 **≥2 个承接方**可能对 **同一 Git 仓库的同一工作区（同一 cwd 检出目录）**产生写文件或 `git commit` 级改动时：
 
-- **必须**为每条并发写流使用 **独立检出目录**：以 **`git worktree`** 隔离（流程与目录安全要求见 Superpowers **`using-git-worktrees`**；未安装插件时仍须达到同等隔离效果，可 Read 该技能文件并按 `git worktree` 手册执行）。
+- **必须**为每条并发写流使用 **独立检出目录**：优先使用宿主原生 worktree/checkout 隔离能力；没有原生能力时使用 `git worktree`，并按本 skill 的目录、分支和 QC/QA 对齐规则执行。
 - **必须**与既有分支门禁一致：每个可写承接方的 Assignment 仍须含 PM 已批准的 **`Working branch`** / **`Branch policy`**；在某一 worktree 内 **不得**擅自 `checkout` 到未授权分支或私自新建分支。
-- **PM 须在 Assignment 中写清**各并发写流的 **检出约定**（例如预期 **`Worktree path`** / 命名规则，或「由承接方按 `using-git-worktrees` 创建并在 Completion Report 回报路径」），避免多代理默认共享同一目录导致互相覆盖、冲突或半写入状态。
+- **PM 须在 Assignment 中写清**各并发写流的 **检出约定**（例如预期 **`Worktree path`** / 命名规则，或「由承接方创建/使用隔离 worktree 并在 Completion Report 回报路径」），避免多代理默认共享同一目录导致互相覆盖、冲突或半写入状态。
 - **同仓、同一 plan、≥2 可写并行轨**：**推荐**在首次向各轨下发实现 Assignment **之前**，先由 PM 与用户确认 **`Branch policy`**，并 **明确 plan 集成分支与各轨 topic 分支的关系**（见下节 **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**），再为各轨约定 **`git worktree`**。这样 QC 前可把各轨 **自然归并**到同一条 **`HEAD`**，减少「多头分支、无合并靶」导致的误派。
 
 **可不强制新开 worktree** 的情形包括：并发流 **全部为只读**；各写入者针对 **不同 Git 仓库根**；或写入 **串行**（同一时刻仅一个代理持有该仓工作区）。
 
 ### 并发 subagent 与同仓工作树（对齐）
 
-当多个可写 subagent **并发**修改 **同一仓库** 时，**不得**共用同一检出目录作为写入 cwd。PM 在分派前应规划 **`git worktree`** 隔离（Superpowers **`using-git-worktrees`**），并在各承接方 Assignment 中写明 **`Working branch`** / **`Branch policy`** 及 **检出路径约定**（或要求回报实际 worktree 路径）。单分支决策权仍仅属 PM；worktree 只解决「目录与工作区隔离」，不替代分支授权。
+当多个可写 subagent **并发**修改 **同一仓库** 时，**不得**共用同一检出目录作为写入 cwd。PM 在分派前应规划 worktree/checkout 隔离，并在各承接方 Assignment 中写明 **`Working branch`** / **`Branch policy`** 及 **检出路径约定**（或要求回报实际 worktree 路径）。单分支决策权仍仅属 PM；worktree 只解决「目录与工作区隔离」，不替代分支授权。
 
 **同仓、同一 plan、多可写并行轨（推荐）**：在挂齐各轨 `git worktree` **之前**，先与用户确认并写明 **plan 集成分支**（从商定 `<base>` 创建）及各轨 **topic 分支** 如何从该线分出或如何 **merge 回** 该线；QC 前再将待一并验收的提交 **全部归并**到 PM 指定为 QC **`Working branch`** 的那条分支的 **`HEAD`**。分步说明与示例命名边界见下节 **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**。
 
@@ -137,7 +137,7 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 
 开发在 **feature 分支**上完成（往往在 **独立 worktree** 中实现）后，**QC 审查与 QA 验证针对的都是这份 feature**，而不是 `main` 或任意未对齐的默认 cwd。
 
-- **`@project-manager`** 分派 **QC** 时须在 Assignment 写明与待审实现一致的 **`Working branch`**，并写明 **`Review cwd` / `Worktree path`**：**优先**沿用开发 **Completion Report** 中回报的业务仓 **实现检出路径**（即「该 feature 的 worktree」）**当且仅当**该路径上的检出分支 **`HEAD` 已包含本轮待审的全部提交**（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则 **必须**改用 **集成完成后的** `Working branch` 与对应检出路径（或按 **`using-git-worktrees`** 在该分支上 **另开** 审查专用目录）。若开发未用 worktree，则写明单一明确的业务仓根路径。若审查需与开发目录 **物理分离** 但仍审 **同一分支**，可指示按 **`using-git-worktrees`** 在 **`Working branch`** 上 **另加** 一个 worktree 专供审查（只读使用业务仓）。**多流并行开发**时的前置归并、**推荐默认编排（plan 集成分支先行）** 与误派禁令见上一小节。
+- **`@project-manager`** 分派 **QC** 时须在 Assignment 写明与待审实现一致的 **`Working branch`**，并写明 **`Review cwd` / `Worktree path`**：**优先**沿用开发 **Completion Report** 中回报的业务仓 **实现检出路径**（即「该 feature 的 worktree」）**当且仅当**该路径上的检出分支 **`HEAD` 已包含本轮待审的全部提交**（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则 **必须**改用 **集成完成后的** `Working branch` 与对应检出路径（或在该分支上 **另开** 审查专用 worktree）。若开发未用 worktree，则写明单一明确的业务仓根路径。若审查需与开发目录 **物理分离** 但仍审 **同一分支**，可指示在 **`Working branch`** 上 **另加** 一个 worktree 专供审查（只读使用业务仓）。**多流并行开发**时的前置归并、**推荐默认编排（plan 集成分支先行）** 与误派禁令见上一小节。
 - **三票审同一功能（强制对齐）**：分派 **QC 三审**时，除上述字段外，**必须**在 **三份 Assignment 中逐字写入相同**的 **`plan_id`** 与 **`Review range` / `Diff basis`**：
   - **`plan_id`**：与 `{PLAN_DIR}/reports/<plan-id>/` 及主 **Plan Path** 一致；无 `{PLAN_DIR}` 流程时写 **`plan_id: N/A`**，并另给一行 **`Feature / scope label`**（不可歧义，足以与并行其它 feature 区分）。
   - **`Review range` / `Diff basis`**：明确本次审查所针对的 **diff/提交范围**（例如 `merge-base: origin/main` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。**三名 reviewer 的 Assignment 间该字段必须完全一致**；**@qa-engineer** 验证同一 feature 时 **复用同一 `plan_id` 与同一 `Review range` / `Diff basis`**。**热修 / QC 单审**路径也须含 **同一组字段**，仅承接方份数为 1。

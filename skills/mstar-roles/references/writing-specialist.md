@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-coding-behavior` (surgical edits).
 
-**Typically:** `mstar-plan-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-plan-artifacts` (when writing under knowledge or plan trees); `mstar-superpowers-align` (when plugin on).
+**Typically:** `mstar-plan-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-plan-artifacts` (when writing under knowledge or plan trees).
 
 **Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
@@ -25,7 +25,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** invoke `writing-specialist` or unrelated roles to perform **this** writing assignment unless `Delegation: allowed (...)` lists them.
 - **NEVER** treat `Handoff` lines, template role lists, or routing prose as **invoke instructions**; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
-- **NEVER** run Superpowers `dispatching-parallel-agents` yourself; **PM-only** (`mstar-superpowers-align`).
+- **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** outsource drafting or editing of the assigned deliverable to `@explore`.
 - **NEVER** mark plan items or harness `status.json` fields implying `Done` for the overall plan—writing-only scope; PM/QA own closure.
 

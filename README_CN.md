@@ -57,7 +57,6 @@
     {
       "$schema": "https://opencode.ai/config.json",
       "plugin": [
-        "superpowers@git+https://github.com/obra/superpowers.git",
         "@mstar-harness/opencode@latest"
       ]
     }
@@ -175,11 +174,11 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 | `mstar-plan-artifacts` | 主 plan、`reports/`、`status.json`、residual、knowledge/iteration 索引、Done 归档 |
 | `mstar-design-md` | UI 相关 plan 的 DESIGN.md 设计系统门禁 |
 | `mstar-review-qc` | QC 审查标准与报告模板 |
-| `mstar-coding-behavior` | 通用编码行为基线 |
+| `mstar-coding-behavior` | 通用编码行为：RCA、测试优先检查、审查反馈、完成证据 |
 | `mstar-compound` | 知识结晶，写入 `{KNOWLEDGE_DIR}` |
 | `mstar-compound-refresh` | 知识维护：刷新、合并、归档或移除过期文档 |
 | `mstar-strategy` | STRATEGY.md 长期方向与决策对齐 |
-| `mstar-superpowers-align` | 与 Superpowers 的对齐与冲突消解 |
+| `mstar-skill-authoring` | Skill 编写、触发契约、渐进披露与行为变更证据 |
 | `mstar-roles` | 角色提示词总线 + 各角色 skill 加载清单 |
 | `mstar-host` | 宿主适配（OpenCode / Cursor / Codex）；自动识别 + `references/` |
 | `pm` | Cursor 与 Codex 共享的 `/pm` 强制入口 |
