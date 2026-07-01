@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.7.6
+
+- Bundled commands/skills: commands–skills layering for iteration (`iteration-start` / `iteration-drive` orchestration vs `mstar-iteration` / `mstar-dispatch-gates` SSOT); hardened dispatch gates, Phase 2→3→PR transitions, canonical host dispatch (no Mode A/B/C fallbacks); Phase 1 Review & Edit chain is **sequential** product-manager → architect → writing-specialist.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.6**.
+
 ## 0.7.5
 
 - Bundled commands/skills: explicit iteration branch policy — `iteration_base_branch`, `spec_integration_branch`, and `target_branch` required in compass/status metadata; no silent default to `main` for integration branch or PR target. Hardened `iteration-start` / `iteration-drive` gates and QC merge-base rules.

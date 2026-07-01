@@ -1,16 +1,32 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.5**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.6**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.5** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.6** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.5** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.5** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.5** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.6** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.6** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.6** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.6] - 2026-07-01
+
+### Harness（iteration 派发 / commands–skills 分层）
+
+- **Commands 与 skills 分层**：`iteration-start`、`iteration-drive` 负责编排（Boot、phase 状态机、步骤 checklist）；`mstar-iteration`、`mstar-dispatch-gates` 保持与 command 名无关的 SSOT。移除 skill ↔ command 循环引用。
+- **`iteration-start` / `iteration-drive`**：PM invariants、Phase 2→3→PR 过渡门禁、派发回合纪律、Phase 3 开 PR 前置条件；仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close` host todo。
+- **`mstar-iteration`**：Phase transition gates 表；§2.5 派发回合规则；compass 模板字段按 Phase 1–3 标注（不再用 command 名）。
+- **`mstar-dispatch-gates`**：**Specialist review-and-edit dispatch**（通用）；Phase 1 链为**顺序**派发；paste-only 与跳过 Phase 3 反模式。
+- **`mstar-host`**：删除 Mode A/B/C 补充执行路径；统一 canonical invoke 派发；无可用工具时 **`Blocked`**；`codex.md`、`parallel-dispatch.md` 对齐。
+- **`pm` skill**：迭代段落去重，仅指向 `mstar-iteration`。
+- **Phase 1 Review & Edit chain**：改为**顺序** `product-manager` → `architect` → `writing-specialist`（上一角色落盘后再 invoke 下一角色）；本链禁止并行 batch。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.5 → 0.7.6**。**`@mstar-harness/cli` 保持 0.5.4**。
 
 ## [0.7.5] - 2026-07-01
 

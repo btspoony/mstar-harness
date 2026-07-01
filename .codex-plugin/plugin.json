@@ -1,6 +1,6 @@
 {
   "name": "morning-star-harness",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, and Codex.",
   "author": {
     "name": "Bohao Tang",
