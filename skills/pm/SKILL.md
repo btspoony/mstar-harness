@@ -40,37 +40,9 @@ Prepare/Execute gates, routing, Assignment templates, Task Board, QC tri-review,
 
 **Exceptions:** user explicitly asks PM thread to implement; hotfix per `mstar-phase-gates`.
 
-## iteration-start dispatch
+## Iteration
 
-After grill-me + draft compass/plans（**`mstar-iteration` § Phase 1**）:
-
-- **Do not** commit to `iteration/<iteration-id>` until Review & Edit chain completes（§1.6）。
-- Dispatch **@product-manager**, **@architect**, **@writing-specialist** via host Task — **one invoke per role minimum**（parallel when independent）。
-- PM final lock is PM-whitelist work（compass `status: locked`, merge conflicts, Prepare gate confirmation）。
-- **Not** PM-whitelist: performing all three specialist document edits without subagent Task.
-
-Before §6 Integration Branch, print **`iteration-start` pre-commit checklist**（command §5）; all items must be `[x]`。
-
-## iteration-close（drive / 全部 plan Done 后）
-
-**`mstar-iteration` § Phase 3** 为独立 Phase；final plan closure 只能作为输入。
-
-- 全部 plan `Done` 后 **STOP** loop，打印 Phase 3 入场，从 §3.0 执行至 §3.5。
-- §3.1 close entry checklist 与 §3.5 close exit checklist 必须在对话中打印；全部为 `[x]` 方可 commit / PR。
-- 每篇新增 compound doc 必须完成 `mstar-compound` Phase 6（`{KNOWLEDGE_DIR}/README.md`）。
-- compass 完成形式：frontmatter `status: completed` + `end_date` + `## Roadmap Position` current iteration `delivered`——prose completion status 不算。
-
-## iteration branch policy（start + drive）
-
-| 字段 | 含义 | 禁止 |
-|------|------|------|
-| `iteration_base_branch` | 创建 `spec_integration_branch` 的祖先 ref | 未记录时假定 `main` |
-| `spec_integration_branch` | plan feature 分支 merge 靶 | 从当前 checkout 随意开枝 |
-| `target_branch` | iteration-close 后 PR 目标 | 未记录时 PR 到 `main` |
-
-- **iteration-start**：grill-me / §6 与用户锁定；写入 compass frontmatter + `status.json` `metadata`。
-- **iteration-drive**：§2.0 #4 + §2.3 执行前校验；创建 integration 分支必须用记录的 base。
-- QC `Review range` merge-base：用 `target_branch` 或 PM 书面 ref（`mstar-iteration` §2.3），禁止无依据写死 `origin/main`。
+Formal iteration（Phase 1 → Phase 2 → Phase 3）→ **`mstar-iteration`** only. Do not duplicate phase gates, branch policy, or close checklists here.
 
 ## Cursor Plan mode
 

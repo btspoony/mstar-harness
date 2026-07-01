@@ -70,20 +70,26 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - **QC 三审**在 feature 开发完成后执行；三名 reviewer 共用同一组 `Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`（**`mstar-branch-worktree`**）。
 - **同一 plan 多 batch**：默认整 plan 交付完成跑一轮完整三审；**fix 后默认 targeted re-review**（N = 被指派的 QC 席位数，同条消息发满 N）；**仅** Assignment 写明 **`QC re-review: full tri-review`** 时复跑三审且用新文件名（**`mstar-plan-artifacts/references/plan-files-and-reports.md`**、**`mstar-review-qc`**）。
 
-## iteration-start Review & Edit chain
+## Specialist review-and-edit dispatch
 
-与 QC 三审同理：**dispatch-first** 适用于文档审查角色，不限于 implement/QC。
+当 PM 派发**文档编辑类**专业角色（如 product-manager、architect、writing-specialist）直接修订 harness 产物时：
 
-- PM 写 compass/plans **初稿**；**@product-manager**、**@architect**、**@writing-specialist** 各通过 Task **直接编辑** compass / plans / specs（**不**另写 `reports/` 审查报告）。
-- PM 线程跳过派发、自行完成三角色全部编辑 = **反模式**（见 **`mstar-harness-core`** 反模式索引、`mstar-iteration` §1.6）。
-- Steps 5.1–5.3 须 **Task**（可并行）；PM lock（5.4）在 PM 线程完成。**不得**在 review chain 完成前 commit integration 分支。
+- PM 写初稿；各角色通过宿主 invoke **直接编辑**目标文件（**不**另写仅评论式 `reports/` 替代修订）。
+- **1 Assignment ⇒ 1 invoke**。
+- **Phase 1 Review & Edit chain**（`mstar-iteration` §1.6）：**顺序** `product-manager` → `architect` → `writing-specialist`；上一角色落盘修订完成后再派发下一角色。**禁止**本链并行 batch（与 QC 三审不同）。
+- 其他彼此独立、无先后依赖的文档编辑任务：可并行（同条消息发满 N），见 **`parallel-dispatch.md`**。
+- PM 线程代做全部专业编辑 = **反模式**（`mstar-iteration` §1.6、`mstar-harness-core` 反模式索引）。
+- PM merge / lock（如 compass `status: locked`）在链末 subagent 返回后于 PM 线程完成。**不得**在 review-and-edit 链完成前 commit integration 分支。
 
 ## 反模式（派发）
 
 - QC 三审拆在多条消息或等 #1 返回再发 #2/#3。
 - 仅 1 次 invoke 却声称「并行三审已启动」。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
-- iteration-start 在 Review & Edit chain 完成前 commit；PM 代做三角色全部编辑而不派发 Task。
+- Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
+- Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。
+- 全部 plan `Done` 后跳过 Phase 3 直接 PR；final plan closure 替代 `mstar-iteration` §3.1–§3.5。
+- Assignment 已写、invoke 为零（paste-only）却进入下一 gate。
 
 ## References
 

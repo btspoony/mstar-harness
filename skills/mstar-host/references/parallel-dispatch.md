@@ -2,7 +2,7 @@
 
 Shared PM dispatch contract for **any** host that uses subagent / Task / named-role invoke (OpenCode, Cursor Task, Codex only when a callable multi-agent / Task tool is actually available). Process SSOT also in `mstar-dispatch-gates`.
 
-If the active host has no callable invoke tool, this reference does not create delegation capability: use single-session execution, multi-window handoff, or mark dispatch `Blocked`.
+If the active host has no callable invoke tool, this reference does not create delegation capability — mark dispatch **`Blocked`** and report to the user. Do not substitute PM-thread or single-session role execution unless the user explicitly overrides harness dispatch for this turn.
 
 ## Paste-only failure
 

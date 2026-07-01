@@ -46,15 +46,16 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 - Parallel QC ≠ different review cwd per reviewer; one integrated HEAD for scope.
 - Status Update may note QC ran via parallel Task subagents.
 
-## Supplemental execution modes
+## Dispatch execution（canonical）
 
-**Mode A — Single session, multiple roles:** PM writes Assignment; executor states `Acting as role: …` and loads `mstar-roles` reference. QC/QA without Task: same field alignment rules.
+Cursor PM dispatch = **`Task`** with `subagent_type` matching the Assignment `Execute as` role.
 
-**Mode B — Multi-window:** One Assignment per chat; first turn loads role via `mstar-roles`; PM consolidates in main thread.
-
-**Mode C — Worktrees:** `mstar-branch-worktree` + `mstar-dispatch-gates` for concurrent writers; do not assign different tri-review cwd by default.
-
-**No recursive Task in implement subagents:** Task recipient is already `Execute as`; must not re-spawn same dev role. Assignment wins over conflicting outer messages (`Delegation: forbidden`).
+- **1 Assignment ⇒ 1 Task**; parallel batches ⇒ **N Tasks in one message** (`parallel-dispatch.md`, `mstar-dispatch-gates`).
+- Assignment Markdown **does not** start work. PM thread **must not** implement, review, or edit specialist deliverables by loading another role reference in the same session (`Acting as role: …` is **not** dispatch).
+- No callable `Task` / subagent for required work → **`Blocked`** — report to user; do not substitute in-thread execution.
+- **Only exception:** user explicitly overrides harness dispatch for this turn (document the override).
+- Concurrent writers / QC cwd alignment → **`mstar-branch-worktree`** (not a separate “mode”).
+- Implement subagents: recipient is already `Execute as`; **no** recursive Task with same `subagent_type`. Assignment wins (`Delegation: forbidden` unless stated).
 
 ## Clarify
 

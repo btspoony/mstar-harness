@@ -1,12 +1,26 @@
 ---
 name: iteration-start
-description: Start a new harness iteration — research backlog, lock direction with grill-me, produce compass/plans, run mandatory Review & Edit chain via Task dispatch (product-manager → architect → writing-specialist each review-and-edit, then PM final lock), then create the integration branch from an explicit base. Not Done until review chain completes, compass is locked, and base/target branches are recorded.
+description: Start a new harness iteration — research backlog, lock direction with grill-me, produce compass/plans, run mandatory Review & Edit chain via sequential Task dispatch (product-manager → architect → writing-specialist, each review-and-edit, then PM final lock), then create the integration branch from an explicit base. Not Done until review chain completes, compass is locked, and base/target branches are recorded.
 agent: project-manager
 ---
 
 # Start Iteration
 
 Start a new Morning Star harness iteration. **Not Done until the Review & Edit chain runs via dispatched roles and PM lock — not when compass files are first written.**
+
+## PM invariants（本命令全程有效 — 读完再动手）
+
+你是 **`project-manager` 编排者**，不是三专业角色的合并替身。
+
+| 禁止（PM 线程） | 必须（宿主有 Task 时） |
+|-----------------|------------------------|
+| 自己 Edit compass/plans/specs 冒充 @product-manager / @architect / @writing-specialist 的审查编辑 | §5.1 → §5.2 → §5.3 **顺序**各 **1 次 invoke**；上一角色返回后再派发下一角色 |
+| 只写 `## Assignment` 或 checklist 就声称 review chain 完成 | **几条角色 ⇒ 几条 invoke**；零 invoke = `dispatch incomplete`（`mstar-dispatch-gates`） |
+| §5 完成前 commit / 创建 integration 分支 | 5.4 PM lock 在 subagent 返回且磁盘产物已修订之后（`mstar-iteration` §1.6） |
+
+派发细则 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch）+ **`mstar-host`**（宿主 invoke 能力）。**不得**在 PM 线程加载其他 role reference 代劳。
+
+**完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-commit checklist 全 `[x]` — 不是初稿落盘。
 
 Detailed workflow → **`mstar-iteration` § Phase 1: iteration-start**（含 §1.6 Review & Edit chain）；per-plan Prepare gates → **`mstar-phase-gates`**（specify → clarify → plan）。
 
@@ -16,9 +30,10 @@ Detailed workflow → **`mstar-iteration` § Phase 1: iteration-start**（含 §
 2. `mstar-roles` → `references/project-manager.md`
 3. `skills/pm/SKILL.md` → **§ Host entry** + **§ Boot**
 4. `mstar-iteration` → **§ Phase 1: iteration-start**（迭代范围、compass 模板、§1.6 Review & Edit chain、状态初始化）
-5. `mstar-dispatch-gates` → iteration-start review chain + implement dispatch
+5. `mstar-dispatch-gates`
 6. `mstar-phase-gates` → Prepare（specify → clarify → plan）
 7. `mstar-plan-conventions`, `mstar-plan-artifacts`
+8. `mstar-host` → active host reference（invoke 能力）
 
 ## 1. Research
 
@@ -74,20 +89,27 @@ Produce harness artifacts per **`mstar-iteration` § 1.3**（template: `mstar-it
 
 **STOP**: Do not run §6 Integration Branch until **all** rows below are true.
 
+**顺序（HARD）**：`product-manager` → `architect` → `writing-specialist` → PM lock。后一角色基于前一角色已落盘的修订继续编辑；**禁止**三角色并行 invoke。
+
 Each role below **reviews and directly edits** the documents. Do not just flag issues — apply the fixes yourself. PM only steps in for the final lock.
 
-| # | Role | Required action |
-|---|------|-----------------|
-| 5.1 | **@product-manager** | Task subagent: **edit** compass, plans, `{SPECS_DIR}/`; scope, UX, priorities |
-| 5.2 | **@architect** | Task subagent: **edit** compass, plans, specs; contracts, SQL, module boundaries |
-| 5.3 | **@writing-specialist** | Task subagent: **edit** all iteration docs; terminology, structure, clarity |
-| 5.4 | **@project-manager** | Merge subagent edits; resolve conflicts; **lock** compass (`status: locked`); confirm Prepare gates |
+| # | Role | Required action | Gate |
+|---|------|-----------------|------|
+| 5.1 | **@product-manager** | invoke: **edit** compass, plans, `{SPECS_DIR}/`; scope, UX, priorities | 完成后方可 5.2 |
+| 5.2 | **@architect** | invoke: **edit** compass, plans, specs（含 5.1 修订后版本）; contracts, SQL, module boundaries | 5.1 返回后；完成后方可 5.3 |
+| 5.3 | **@writing-specialist** | invoke: **edit** all iteration docs（含 5.1–5.2 修订后版本）; terminology, structure, clarity | 5.2 返回后 |
+| 5.4 | **@project-manager** | Merge subagent edits; resolve conflicts; **lock** compass (`status: locked`); confirm Prepare gates | 5.3 返回后 |
 
 **Evidence of done** = edited compass / plans / specs on disk + compass `status: locked`. **No** separate iteration review reports under `reports/` — unlike per-plan QC, there is no downstream audit chain to preserve.
 
-**Tool rule (Cursor / hosts with Task)**:
-- Steps 5.1–5.3: **MUST** use `Task` (parallel when independent). See **`mstar-dispatch-gates`** · iteration-start review chain.
-- PM thread **MUST NOT** substitute by performing all three specialist edits itself.
+**Tool rule (hosts with invoke)** — per **`mstar-dispatch-gates`** · specialist review-and-edit dispatch（**顺序链**，非 parallel batch）：
+
+1. 为当前角色写好 Assignment（含须直接编辑的文件路径；5.2/5.3 注明基于上一角色已落盘修订）。
+2. **派发 1 次 invoke** → 等待 Completion Report / 磁盘修订完成。
+3. 按序重复下一角色：**5.1 → 5.2 → 5.3**（每步一条派发消息、一次 invoke）。
+4. 本条链 **禁止** PM 线程代做专业编辑；**禁止** 同条消息并行三角色；**禁止** 未等 5.1 返回就发 5.2/5.3。
+5. 5.3 返回后，PM 线程再做 5.4 merge + lock。
+
 - Exception: user explicitly waives subagent dispatch ("PM-only review").
 
 **Prepare gate (per plan in compass)**:

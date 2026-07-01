@@ -2,17 +2,33 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.5** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.6** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.5** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.6** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.5** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.5** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.5** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.6** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.6** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.6** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.6] - 2026-07-01
+
+### Harness (iteration dispatch / commands–skills layering)
+
+- **Commands vs skills layering**: `iteration-start` and `iteration-drive` own orchestration (boot order, phase state machine, step checklists); `mstar-iteration` and `mstar-dispatch-gates` stay command-agnostic. Removed circular skill ↔ command references.
+- **`iteration-start` / `iteration-drive`**: PM invariants, Phase 2→3→PR transition gates, dispatch-turn discipline, Phase 3 PR precondition; `phase-3-iteration-close` host todo when one plan remains.
+- **`mstar-iteration`**: Phase transition gates table; §2.5 dispatch-turn rules; compass template fields keyed by Phase 1–3 (not command names).
+- **`mstar-dispatch-gates`**: **Specialist review-and-edit dispatch** (generic); Phase 1 chain is **sequential**; anti-patterns for paste-only dispatch and skipped Phase 3.
+- **`mstar-host`**: Removed Mode A/B/C supplemental execution paths; canonical invoke dispatch with **`Blocked`** when no callable tool; `codex.md` and `parallel-dispatch.md` aligned.
+- **`pm` skill**: Iteration sections deduplicated — single pointer to `mstar-iteration`.
+- **Phase 1 Review & Edit chain**: **Sequential** `product-manager` → `architect` → `writing-specialist` (each invoke after prior role’s disk revisions); parallel batch forbidden for this chain.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.5 → 0.7.6**. **`@mstar-harness/cli` remains 0.5.4**.
 
 ## [0.7.5] - 2026-07-01
 
