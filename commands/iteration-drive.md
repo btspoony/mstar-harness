@@ -6,7 +6,34 @@ agent: project-manager
 
 # Drive Iteration
 
-Drive the active Morning Star iteration forward. The canonical flow is in **`mstar-iteration`** — this command loads it and executes its phases.
+Drive the active Morning Star iteration forward. **Boot loads skills; this command sequences Phase 2 → Phase 3 → PR.** Domain SSOT → **`mstar-iteration`**.
+
+## Phase state machine（禁止跳步）
+
+```
+Phase 2: Autonomous Execute  →  Phase 3: iteration-close  →  Completion: PR
+   (per-plan dispatch loop)        (独立 gate，非 final plan)      (close 之后)
+```
+
+| 当前状态 | 允许 | 禁止 |
+|----------|------|------|
+| 存在非 `Done` plan | Phase 2：dispatch implement / QC / QA | 进入 Phase 3 或开 PR |
+| **全部** plan `Done` | **立刻** `## Phase 3: iteration-close`（§3.0→§3.5） | 宣称 iteration 完成、写 PR、结束会话 |
+| Phase 3 exit checklist 全 `[x]` + compass `status: completed` | `git commit` → push → PR | 跳过 compound / roadmap / frontmatter |
+
+**常见误判**：final plan 的 closure notes、compound 草稿、roadmap 口头更新 **≠** iteration-close。必须打印 §3.1 entry + §3.5 exit checklist。
+
+## PM invariants（Phase 2 全程有效）
+
+| 禁止（PM 线程） | 必须 |
+|-----------------|------|
+| Write/Edit/Shell 产品代码、写测试、跑 QC 审查 | 每条 implement/QC/QA Assignment ⇒ **1 次 `Task`** |
+| 只写 Assignment 就进入下一 gate | 同轮 dispatch：`Subagent invokes issued: N`（N = Assignment 条数） |
+| 最后一个 plan `Done` 后直接 PR / 汇报结束 | **先** Phase 3（`mstar-iteration` §3），**再** PR（见 Completion） |
+
+派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration` §3** + **`mstar-compound`**。
+
+**Session todos**：进入 Phase 2 时设 plan-wave todos；当仅剩 1 个非 `Done` plan 时 **追加** `phase-3-iteration-close`（`mstar-iteration` §2.1）；§3.5 完成前不得勾掉。
 
 ## Boot
 
@@ -42,13 +69,18 @@ Execute **`mstar-iteration` § Phase 2** exactly. Summary:
    - Merge plan branch → integration branch
    - Cross-plan progress sync → compass
    - Next plan
-6. Repeat until **all** plans `Done` → exit loop, enter Phase 3
+6. Repeat until **all** plans `Done` → **STOP**（见 Phase state machine）→ 打印 `## Phase 3: iteration-close` → 执行 **`mstar-iteration` §3**；**不得**开 PR
 
-**Dispatch-first constraint** (§ 2.5): PM never implements directly; `1 Assignment ⇒ 1 invoke`.
+派发回合纪律 → **`mstar-dispatch-gates`** + **`mstar-iteration` §2.5**。
 
 ## Phase 3: iteration-close
 
-当 **every** plan 为 `Done` 时，**STOP** per-plan loop，打印 `## Phase 3: iteration-close`，按 **`mstar-iteration` § Phase 3** 逐步执行。final plan 的 closure 只能提供输入，不能替代 close gate。
+当 **every** plan 为 `Done` 时：
+
+1. **STOP** per-plan loop — 不得合并 plan 分支、写 PR、或输出「迭代完成」摘要。
+2. 打印标题 **`## Phase 3: iteration-close`**（用户可见的 phase 边界）。
+3. 按 **`mstar-iteration` § Phase 3** 逐步执行 §3.0→§3.5。final plan 的 closure 只能提供输入，不能替代 close gate。
+4. §3.5 exit checklist 全 `[x]` 且 compass frontmatter `status: completed` 后，才进入下方 **Completion: Create PR**。
 
 | Step | Section | 要点 |
 |------|---------|------|
@@ -68,6 +100,8 @@ git push origin <spec_integration_branch>
 **Not Done until**: §3.5 checklist `[x]` + compass frontmatter `completed`.
 
 ## Completion: Create PR
+
+**Precondition（HARD）**: Phase 3 complete — §3.5 exit checklist 全 `[x]`；compass YAML `status: completed` + `end_date`；compound Phase 6 索引已登记（或已记录无可结晶原因）。**不满足 → 禁止开 PR。**
 
 All iteration-close changes committed to integration branch:
 

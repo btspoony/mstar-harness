@@ -8,6 +8,20 @@ agent: project-manager
 
 Start a new Morning Star harness iteration. **Not Done until the Review & Edit chain runs via dispatched roles and PM lock — not when compass files are first written.**
 
+## PM invariants（本命令全程有效 — 读完再动手）
+
+你是 **`project-manager` 编排者**，不是三专业角色的合并替身。
+
+| 禁止（PM 线程） | 必须（宿主有 Task 时） |
+|-----------------|------------------------|
+| 自己 Edit compass/plans/specs 冒充 @product-manager / @architect / @writing-specialist 的审查编辑 | §5.1–5.3 各 **1 次 `Task` invoke**（可同条消息并行 **3** 次） |
+| 只写 `## Assignment` 或 checklist 就声称 review chain 完成 | **几条角色 ⇒ 几条 invoke**；零 invoke = `dispatch incomplete`（`mstar-dispatch-gates`） |
+| §5 完成前 commit / 创建 integration 分支 | 5.4 PM lock 在 subagent 返回且磁盘产物已修订之后（`mstar-iteration` §1.6） |
+
+派发细则 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch）+ **`mstar-host`**（宿主 invoke 能力）。**不得**在 PM 线程加载其他 role reference 代劳。
+
+**完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-commit checklist 全 `[x]` — 不是初稿落盘。
+
 Detailed workflow → **`mstar-iteration` § Phase 1: iteration-start**（含 §1.6 Review & Edit chain）；per-plan Prepare gates → **`mstar-phase-gates`**（specify → clarify → plan）。
 
 ## 0. Boot
@@ -16,9 +30,10 @@ Detailed workflow → **`mstar-iteration` § Phase 1: iteration-start**（含 §
 2. `mstar-roles` → `references/project-manager.md`
 3. `skills/pm/SKILL.md` → **§ Host entry** + **§ Boot**
 4. `mstar-iteration` → **§ Phase 1: iteration-start**（迭代范围、compass 模板、§1.6 Review & Edit chain、状态初始化）
-5. `mstar-dispatch-gates` → iteration-start review chain + implement dispatch
+5. `mstar-dispatch-gates`
 6. `mstar-phase-gates` → Prepare（specify → clarify → plan）
 7. `mstar-plan-conventions`, `mstar-plan-artifacts`
+8. `mstar-host` → active host reference（invoke 能力）
 
 ## 1. Research
 
@@ -85,9 +100,13 @@ Each role below **reviews and directly edits** the documents. Do not just flag i
 
 **Evidence of done** = edited compass / plans / specs on disk + compass `status: locked`. **No** separate iteration review reports under `reports/` — unlike per-plan QC, there is no downstream audit chain to preserve.
 
-**Tool rule (Cursor / hosts with Task)**:
-- Steps 5.1–5.3: **MUST** use `Task` (parallel when independent). See **`mstar-dispatch-gates`** · iteration-start review chain.
-- PM thread **MUST NOT** substitute by performing all three specialist edits itself.
+**Tool rule (hosts with invoke)** — per **`mstar-dispatch-gates`** · specialist review-and-edit dispatch + **`mstar-host`** · `parallel-dispatch.md`：
+
+1. 写完三份 Assignment payload（可放在上一条仅含 read 的消息）。
+2. **下一条派发消息的第一动作**：发出 **3 次 invoke**（`product-manager`、`architect`、`writing-specialist`），宿主允许时**同一条消息并行**。
+3. 本条消息 **禁止** PM 线程代做三角色编辑；**禁止** 只打印 checklist 而不 invoke。
+4. Subagent 全部返回后，PM 线程再做 5.4 merge + lock。
+
 - Exception: user explicitly waives subagent dispatch ("PM-only review").
 
 **Prepare gate (per plan in compass)**:

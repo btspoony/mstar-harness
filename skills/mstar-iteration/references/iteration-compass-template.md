@@ -92,25 +92,25 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 | Field | Required | When to fill |
 |-------|----------|-------------|
-| `iteration_id` | Yes | iteration-start |
-| `start_date` | Yes | iteration-start |
-| `end_date` | No | Add at iteration-close §3.4 only |
-| `status` | Yes | iteration-start → `active` / `locked`（§1.6 PM lock）；iteration-close §3.4 → **`completed`**（YAML frontmatter，非 prose completion status） |
-| `iteration_base_branch` | Yes | iteration-start; integration branch must be created from this ref |
-| `target_branch` | Yes | iteration-start; final PR target after iteration-close |
-| `plans` (frontmatter) | Recommended | iteration-start (initial), iteration-drive (add new) |
-| `## Plans` table | Yes | iteration-drive (sync status), iteration-close (final) |
-| `## Milestones` | Recommended | iteration-start, iteration-drive (update) |
-| `## Acceptance Criteria` | Yes | iteration-start |
-| `## Non-Goals` | Yes | iteration-start |
-| `## Roadmap Position` | **Yes** | iteration-start（必填节，非散落于 general context prose）；iteration-close §3.3（current iteration → `delivered`） |
-| `## Risk Register` | Optional | iteration-start, iteration-drive (update) |
-| `## Compound Round Summary` | Yes | iteration-close §3.4 |
-| `## Iteration Retrospective` | Recommended | iteration-close §3.4 |
+| `iteration_id` | Yes | Phase 1 |
+| `start_date` | Yes | Phase 1 |
+| `end_date` | No | Phase 3 §3.4 only |
+| `status` | Yes | Phase 1 → `active` / `locked`（§1.6 PM lock）；Phase 3 §3.4 → **`completed`**（YAML frontmatter，非 prose completion status） |
+| `iteration_base_branch` | Yes | Phase 1; integration branch must be created from this ref |
+| `target_branch` | Yes | Phase 1; final PR target after Phase 3 |
+| `plans` (frontmatter) | Recommended | Phase 1 (initial), Phase 2 (add new) |
+| `## Plans` table | Yes | Phase 2 (sync status), Phase 3 (final) |
+| `## Milestones` | Recommended | Phase 1, Phase 2 (update) |
+| `## Acceptance Criteria` | Yes | Phase 1 |
+| `## Non-Goals` | Yes | Phase 1 |
+| `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
+| `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
+| `## Compound Round Summary` | Yes | Phase 3 §3.4 |
+| `## Iteration Retrospective` | Recommended | Phase 3 §3.4 |
 
 ## Legacy compass drift
 
 若仓库中已有 compass **无** YAML frontmatter、**无** `## Roadmap Position`，或只有 prose completion status：
 
-- **新迭代**：iteration-start 必须按本模板重写，不延续 prose-only 惯例。
-- **收口时**：`mstar-iteration` §3.0.5 在 iteration-close 入口规范化，再执行 §3.3–§3.4。
+- **新迭代**：Phase 1 必须按本模板重写，不延续 prose-only 惯例。
+- **收口时**：`mstar-iteration` §3.0.5 在 Phase 3 入口规范化，再执行 §3.3–§3.4。

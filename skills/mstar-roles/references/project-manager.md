@@ -116,6 +116,9 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** label `QA: skipped` for report-only QA—still dispatch `@qa-engineer` with report-only mode; QC skip rules are separate and explicit.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
 - **NEVER** accept “temporary workaround”, “follow-up later”, “next plan”, or “split into batches” as narrative-only scope management. If work is deferred or staged, write the roadmap/tracking location before implement GO or Done.
+- **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration` §1.6).
+- **NEVER** mark the last plan `Done` and then create a PR or declare the iteration complete without **`## Phase 3: iteration-close`** and `mstar-iteration` §3.1–§3.5 checklists.
+- **NEVER** treat final plan closure prose as iteration-close — compound, roadmap `delivered`, and compass `status: completed` require Phase 3.
 
 ---
 
