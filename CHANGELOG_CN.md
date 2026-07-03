@@ -1,16 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.6**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.7**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.6** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.7** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.6** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.6** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.6** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.7** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.7** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.7** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.7] - 2026-07-04
+
+### Harness（`mstar-*` 自洽 / 解耦第三方 runtime）
+
+- **Standalone harness 护栏**（`mstar-harness-core`）：`mstar-*` load order 不得依赖仓库外 skills、CLI、MCP；库文档/API 问题优先 Read/Grep 项目内文档与源码。
+- **bundled `grill-me` 仅 `/iteration-start`**：新增 `skills/grill-me/SKILL.md`；仅 command §3 引用，不进入 `mstar-*` 索引或 load matrix。`mstar-iteration` §1.2 增加通用 **Direction lock**（不点名 grill-me）。
+- **移除 runtime 路径中的第三方耦合**：删除 `library-docs-protocol.md`（Context7）、`openviking-memory-plugin.md`（OpenViking）；`mstar-host` 去掉 Context7 节；`mstar-design-md` 去掉 Open Design 集成；`mstar-host/references/opencode.md` 去掉 Optional MCPs 表。
+- **`open-harness-principles.md` 蒸馏**：harness 术语对照并入 `mstar-harness-core`；`AGENTS.md` 分层 → `mstar-plan-conventions/references/harness-bootstrap-and-agents-layering.md`；原文件删除。
+- **`mstar-roles`**：保留 **Role → typical topic skills** 跨角色矩阵；专题索引仍在 `mstar-harness-core`。**`prompt-engineer`** 保留新建/大改 skill 时的 **`skill-creator`** 要求（`AGENTS.md` 记录 standalone 例外）。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.6 → 0.7.7**。**`@mstar-harness/cli` 保持 0.5.4**。
 
 ## [0.7.6] - 2026-07-01
 

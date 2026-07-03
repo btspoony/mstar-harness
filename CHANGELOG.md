@@ -2,17 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.6** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.7** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.6** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.7** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.6** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.6** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.6** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.7** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.7** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.7** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.7] - 2026-07-04
+
+### Harness (standalone `mstar-*` / decouple third-party runtime)
+
+- **Standalone harness invariant** (`mstar-harness-core`): `mstar-*` skills must not require external skills, CLIs, or MCPs in load order; library/API questions use in-repo Read/Grep first.
+- **Bundled `grill-me` for `/iteration-start` only**: added `skills/grill-me/SKILL.md`; command §3 is the sole reference — not in `mstar-*` index or load matrix. `mstar-iteration` §1.2 adds generic **Direction lock** without naming grill-me.
+- **Removed third-party coupling from runtime paths**: deleted `library-docs-protocol.md` (Context7), `openviking-memory-plugin.md` (OpenViking); removed Context7 section from `mstar-host`; Open Design integration from `mstar-design-md`; optional MCP table from `mstar-host/references/opencode.md`.
+- **`open-harness-principles.md` distilled**: harness terminology table moved into `mstar-harness-core`; AGENTS.md layering → `mstar-plan-conventions/references/harness-bootstrap-and-agents-layering.md`; file removed.
+- **`mstar-roles`**: keep **Role → typical topic skills** cross-role matrix; topic index remains in `mstar-harness-core`. **`prompt-engineer`** retains **`skill-creator`** requirement for new/major skill work (`AGENTS.md` documents standalone exception).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.6 → 0.7.7**. **`@mstar-harness/cli` remains 0.5.4**.
 
 ## [0.7.6] - 2026-07-01
 
