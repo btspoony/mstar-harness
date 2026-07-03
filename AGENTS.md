@@ -99,6 +99,7 @@ If one of these checks fails, stop and report why.
 - Use default-first guidance (primary path first, exceptions second) to reduce agent ambiguity.
 - Preserve role shell minimalism: role binding stays thin; reusable behavior stays in skill references.
 - When changing behavior-shaping skill text, require evidence (evals, regressions, or concrete outcomes), not wording preference.
+- **`mstar-*` standalone**: runtime `mstar-*` skills must not require external skills, CLIs, or MCPs in load order; commands may reference bundled non-`mstar-*` assets under `skills/` (e.g. `grill-me` for `/iteration-start` only). **`prompt-engineer`** may additionally follow the repository **`skill-creator`** requirement for new/major skill work (`AGENTS.md`).
 
 ## Skill-Creator Requirement
 

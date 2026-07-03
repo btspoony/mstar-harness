@@ -26,7 +26,7 @@ description: DESIGN.md design system specification for Morning Star projects. Cr
 
 **YAML frontmatter is the SSOT for token values.** Colors, typography, spacing, rounded, and components live in the frontmatter as structured, machine-readable data. The Markdown body is supplementary documentation (rules, intent, usage guidance). When reading DESIGN.md, always parse the YAML frontmatter first; when writing, keep frontmatter and body in sync.
 
-**Out of scope:** rendered UI artifacts (use Open Design MCP `user-open-design`); frontend implementation that consumes DESIGN.md tokens (use `@frontend-dev` / `@fullstack-dev`); QC review verdict rules (→ **`mstar-review-qc`**).
+**Out of scope:** rendered UI preview tooling outside the repo; frontend implementation that consumes DESIGN.md tokens (use `@frontend-dev` / `@fullstack-dev`); QC review verdict rules (→ **`mstar-review-qc`**).
 
 ## Location
 
@@ -128,14 +128,6 @@ gray-1000: #000   gray-1000: #eee
 
 - Token names are the **SSOT interface** — consumers reference tokens by name, not raw values
 - `references/design-md-spec.md` § Light/Dark rules defines the contract
-
-## Open Design integration
-
-If `user-open-design` MCP is available:
-- DESIGN.md is the **design intent** (tokens + rules)
-- Open Design manages **rendered artifacts** (HTML/CSS/JSX previews)
-- When DESIGN.md is updated, recommend syncing the Open Design project to reflect new tokens
-- DESIGN.md does not replace Open Design; they are complementary
 
 ## References
 

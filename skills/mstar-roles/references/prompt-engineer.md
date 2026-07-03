@@ -51,7 +51,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 When creating a new skill, making a major skill rewrite, changing frontmatter `description`, or changing behavior-shaping skill text:
 
 1. MUST read `mstar-skill-authoring` before editing.
-2. MUST follow the repository `skill-creator` requirement when the change is a new skill or major rewrite.
+2. MUST follow the repository **`skill-creator`** requirement when the change is a new skill or major rewrite (`AGENTS.md` → Skill-Creator Requirement).
 3. MUST include validation evidence for behavior-shaping changes, or explicitly state why only manual/search validation is practical.
 
 ## Prompt Change Minimal Checklist

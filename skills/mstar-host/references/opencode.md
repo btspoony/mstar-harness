@@ -36,22 +36,9 @@ Use host subagent / Task / equivalent per **`parallel-dispatch.md`**. OpenCode P
 - Large unrelated platform injections (e.g. long ecosystem prompts): prefer on-demand / `alwaysApply: false` when not stack-relevant.
 - One default channel per capability class (search, docs).
 
-## Optional MCPs / skills (user-enabled)
+## Standalone harness note
 
-Aligned with `mstar-harness-core` `references/open-harness-principles.md`. Editing global `opencode.json` requires explicit user consent.
-
-| Capability | Purpose | Notes |
-|------|------|------|
-| **Current docs** | Versioned API/libs | Context7-like MCP or equivalent |
-| **Web search** | Time-sensitive / migrations | Avoid duplicate search MCPs |
-| **Code pattern search** | Cross-repo references | e.g. grep.app MCP |
-| **Repo graph** | Impact / PR risk | e.g. GitNexus |
-| **Browser / E2E** | Observable QA evidence | agent-browser, Playwright |
-| **Git workflow** | Atomic commits, branch closure | git-commit, finishing-a-development-branch |
-| **Systematic debugging** | RCA before fix | `mstar-coding-behavior` |
-| **OpenViking memory** | Long-term memory tools | Only if `memsearch` present; `openviking-memory-plugin.md` |
-
-**Not recommended**: overlapping search MCPs; extra tools to mask missing harness baseline.
+Bundled **`mstar-*` skills** are self-contained in this repository. User-installed host MCPs, external skills, or CLIs are **outside harness SSOT** — do not add them to `mstar-*` load order or treat them as required for gates.
 
 ## Maintenance boundary
 

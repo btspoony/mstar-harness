@@ -1,6 +1,6 @@
 ---
 name: mstar-roles
-description: Morning Star role prompt hub — `agents/*.md` shells plus full behavior in `references/*.md`, each with a **Required Skill Dependencies** list (which `mstar-*` topic skills to load after `mstar-harness-core`). Always load for any Morning Star role (`project-manager`, `product-manager`, `architect`, `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, `qa-engineer`, `qc-specialist*`, `ops-engineer`, `writing-specialist`, `prompt-engineer`). Cross-role summary table in this SKILL.md; per-role lists are authoritative for that role's session.
+description: Morning Star role prompt hub — `agents/*.md` shells plus full behavior in `references/*.md`, each with a **Required Skill Dependencies** list (which `mstar-*` topic skills to load after `mstar-harness-core`). Always load for any Morning Star role (`project-manager`, `product-manager`, `architect`, `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, `qa-engineer`, `qc-specialist*`, `ops-engineer`, `writing-specialist`, `prompt-engineer`). Cross-role **Role → typical topic skills** summary in this SKILL.md; per-role lists in `references/*.md` are authoritative for that role's session. Full topic skill index → **`mstar-harness-core`**.
 ---
 
 ## Load Order (Required)
@@ -32,28 +32,6 @@ If any conflict appears, `mstar-harness-core` remains the authoritative source f
 | `ops-engineer` | `references/ops-engineer.md` | — |
 | `writing-specialist` | `references/writing-specialist.md` | — |
 | `prompt-engineer` | `references/prompt-engineer.md` | — |
-
-## Shared Skill Dependencies
-
-Treat these as baseline dependencies **where the role touches implementation, review, verification, or ops execution** (see `mstar-harness-core` load contract). Load **on demand**, not as a fixed bundle.
-
-| Skill | Use when task involves |
-| --- | --- |
-| `mstar-harness-core` | **Always** (non-trivial work): entry, state machine, Task category, explore boundary, skill index |
-| `mstar-phase-gates` | Prepare/Execute gates, clarify, hotfix path, intention gate |
-| `mstar-dispatch-gates` | PM dispatch; **all leaf executors** before any Task/subagent call |
-| `mstar-branch-worktree` | Git write, parallel worktrees, QC/QA checkout fields |
-| `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch naming, plan-writing path gate |
-| `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residual, knowledge/iteration, Done compaction |
-| `mstar-design-md` | DESIGN.md design system spec — create/audit/maintain tokens, completeness checklist, light/dark dual-theme |
-| `mstar-review-qc` | QC workflow, template, verdict, high-risk checks |
-| `mstar-coding-behavior` | Implementation/debug/refactor/review-feedback handling (**not** PM orchestration-only) |
-| `mstar-skill-authoring` | New skills, major skill rewrites, trigger descriptions, behavior-shaping skill validation |
-| `mstar-compound` | Capturing solved problems as structured knowledge in `{KNOWLEDGE_DIR}`; Discoverability check; CONCEPTS.md synergy |
-| `mstar-compound-refresh` | Auditing/updating/consolidating knowledge docs; maintaining `{KNOWLEDGE_DIR}` accuracy |
-| `mstar-iteration` | Iteration lifecycle: iteration-start (scope/roadmap lock), Autonomous Execute (per-plan dispatch loop), iteration-close (compound + roadmap update) |
-| `mstar-strategy` | Creating/maintaining `STRATEGY.md`; project vision, principles, technology direction |
-| `mstar-host` | Host-specific behavior (auto-detect; `references/opencode.md` / `cursor.md` / `codex.md`) |
 
 ### Role → typical topic skills (after `mstar-harness-core`)
 

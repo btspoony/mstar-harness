@@ -74,6 +74,8 @@ PM 在新迭代启动时执行。
 
 **Branch policy gate**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR。
 
+**Direction lock**：compass/plans 初稿落盘前，PM 须与用户逐问收敛**单一**迭代方向、成功标准、非目标，并确认 delivery branch policy；决策写入 compass `## Scope` / `## Acceptance Criteria` / `## Non-Goals` 与 Delivery Branch Policy。
+
 ### 1.3 创建迭代 compass
 
 写入 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`。**必须**使用 `references/iteration-compass-template.md` 完整结构（YAML frontmatter + `## Roadmap Position` + close 占位节）。`end_date` 仅在 iteration-close 填入；禁止用正文 completion prose 替代 frontmatter `status`。
