@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.8**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.9**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.8** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.9** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.8** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.8** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.8** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.9** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.9** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.9** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.9] - 2026-07-06
+
+### Harness（Assignment plain role id / OpenCode `@` 卫生）
+
+- **Assignment SSOT**：`dispatch-and-assignment.md` 模板、PM 路由表、`project-manager.md` Language 规则 — Assignment **正文**角色引用一律 **plain role id**（无 `@`）；宿主派发用 task tool **`subagent`** 对齐 `Execute as`。
+- **`mstar-dispatch-gates`** 与 **leaf-executor checklist**：反递归 NEVER 改为 `role-id` 提及表述（避免 `@<role>` 字面量）。
+- **`mstar-host/references/opencode.md`**：Role-mention hygiene — Assignment 正文 vs task-tool 派发；警告文案不含会触发 OpenCode 自动派发的 `@` 字面量。
+- **iteration commands**、**`mstar-branch-worktree`**、**`mstar-plan-artifacts`**（plan 勾选职责）、**`pm` skill**、各 **role NEVER** 引用已对齐 plain id。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.8 → 0.7.9**。**`@mstar-harness/cli` 保持 0.5.4**。
 
 ## [0.7.8] - 2026-07-06
 

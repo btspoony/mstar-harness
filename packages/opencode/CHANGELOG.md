@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.7.9
+
+- Bundled commands/skills: Assignment plain role ids across PM templates, dispatch gates, branch-worktree, iteration commands, opencode host hygiene, and role NEVER rules — avoids OpenCode `@` auto-dispatch in harness prose.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.9**.
+
 ## 0.7.8
 
 - Bundled commands/skills: `mstar-iteration` Phase 4–5 (PR delivery + merge-ready loop); `iteration-drive` sequences through Phase 5 with optional greploop/babysit helpers; core index and anti-patterns updated.

@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.8** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.9** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.8** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.9** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.8** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.8** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.8** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.9** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.9** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.9** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.9] - 2026-07-06
+
+### Harness (Assignment plain role ids / OpenCode `@` hygiene)
+
+- **Assignment SSOT**: `dispatch-and-assignment.md` template, PM routing table, and `project-manager.md` Language rule — all role references in Assignment **body** use **plain role ids** (no `@`); host invoke uses task tool **`subagent`** matching `Execute as`.
+- **`mstar-dispatch-gates`** and **leaf-executor checklist**: anti-recursion NEVER rules reworded to `role-id` mentions (not `@<role>` literals).
+- **`mstar-host/references/opencode.md`**: Role-mention hygiene — Assignment prose vs task-tool dispatch; warnings avoid `@` literals that trigger OpenCode auto-dispatch.
+- **Iteration commands**, **`mstar-branch-worktree`**, **`mstar-plan-artifacts`** (plan checkbox duties), **`pm` skill**, and **role NEVER** references aligned on plain ids.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.8 → 0.7.9**. **`@mstar-harness/cli` remains 0.5.4**.
 
 ## [0.7.8] - 2026-07-06
 
