@@ -136,7 +136,7 @@ The shared `commands/` directory currently provides these PM-led harness command
 |---------|--------------|----------|
 | `/mstar-bootstrap` | Cursor, OpenCode | Bootstrap or refresh project knowledge scaffolding: `STRATEGY.md`, `CONCEPTS.md`, `{KNOWLEDGE_DIR}`, and related indexes. |
 | `/iteration-start` | Cursor, OpenCode | Start a new harness iteration: research backlog, lock direction, write compass/plans, run the review chain, and create the integration branch. |
-| `/iteration-drive` | Cursor, OpenCode | Continue an active iteration through the per-plan execute loop; after all plans are `Done`, run the independent iteration-close gate before PR creation. |
+| `/iteration-drive` | Cursor, OpenCode | Drive an active iteration (Phase 2 execute loop → Phase 3 iteration-close → Phase 4 create PR → Phase 5 merge-ready loop until CI green and reviews resolved). |
 
 In OpenCode, install or update `@mstar-harness/opencode` and restart OpenCode; the plugin bundles these markdown commands from `harness-commands/`.
 
@@ -172,7 +172,9 @@ flowchart TD
     I -->|No| T["iteration-close: close entry checklist"]
     T --> U["PM: compound round and knowledge index"]
     U --> V["PM: update roadmap and compass completed frontmatter"]
-    V --> W["PM: close exit checklist, commit, and PR"]
+    V --> W["PM: close exit checklist and commit"]
+    W --> X["Phase 4: create PR"]
+    X --> Y["Phase 5: merge-ready loop until CI green and reviews resolved"]
 ```
 
 For single-plan or non-iteration work, use the same per-plan gates (`Prepare → Execute → QC → QA → Done`) without the iteration-start / iteration-close wrapper.
@@ -204,7 +206,7 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 |-------|---------|
 | `mstar-harness-core` | Global entry, state machine, Task category, skill index |
 | `mstar-phase-gates` | Prepare/Execute gates, clarify, hotfix |
-| `mstar-iteration` | Iteration lifecycle: iteration-start, per-plan execute loop, iteration-close |
+| `mstar-iteration` | Iteration lifecycle: Phase 1–5 (start, execute loop, iteration-close, PR delivery, merge-ready loop) |
 | `mstar-dispatch-gates` | PM dispatch, Delegation, anti-recursion, parallel invoke |
 | `mstar-branch-worktree` | Feature branches, worktrees, QC/QA checkout alignment |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |

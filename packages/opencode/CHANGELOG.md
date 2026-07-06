@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 0.7.8
+
+- Bundled commands/skills: `mstar-iteration` Phase 4–5 (PR delivery + merge-ready loop); `iteration-drive` sequences through Phase 5 with optional greploop/babysit helpers; core index and anti-patterns updated.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **0.7.8**.
+
 ## 0.7.7
 
 - Bundled commands/skills: standalone `mstar-*` invariant; bundle `grill-me` for `/iteration-start` only; remove Context7/OpenViking/Open Design from runtime load paths; distill `open-harness-principles.md` into core and plan-conventions references; keep Role → typical topic skills matrix in `mstar-roles`.

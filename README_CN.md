@@ -134,7 +134,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 |---------|----------|----------|
 | `/mstar-bootstrap` | Cursor、OpenCode | 初始化或刷新项目知识脚手架：`STRATEGY.md`、`CONCEPTS.md`、`{KNOWLEDGE_DIR}` 及相关索引。 |
 | `/iteration-start` | Cursor、OpenCode | 启动新的 harness iteration：调研 backlog、锁定方向、产出 compass/plans、执行 review chain，并创建 integration branch。 |
-| `/iteration-drive` | Cursor、OpenCode | 推进已有 iteration 的 per-plan execute loop；所有 plan `Done` 后，先执行独立 iteration-close gate，再创建 PR。 |
+| `/iteration-drive` | Cursor、OpenCode | 推进已有 iteration：Phase 2 execute loop → Phase 3 iteration-close → Phase 4 开 PR → Phase 5 merge-ready loop（直至 CI 全绿且 reviews resolved）。 |
 
 在 OpenCode 中，安装或更新 `@mstar-harness/opencode` 后重启 OpenCode；插件会从 `harness-commands/` 打包注册这些 markdown commands。
 
@@ -167,7 +167,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 |-------|------|
 | `mstar-harness-core` | 全局入口、状态机、Task category、skill 索引 |
 | `mstar-phase-gates` | Prepare/Execute 门禁、clarify、hotfix |
-| `mstar-iteration` | 迭代生命周期：iteration-start、per-plan execute loop、iteration-close |
+| `mstar-iteration` | 迭代生命周期：Phase 1–5（start、execute loop、iteration-close、PR 交付、merge-ready loop） |
 | `mstar-dispatch-gates` | PM 派发、Delegation、反递归、并行 invoke |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支摘要 |
@@ -217,7 +217,9 @@ flowchart TD
     I -->|否| T["iteration-close: close entry checklist"]
     T --> U["PM: compound round 与 knowledge index"]
     U --> V["PM: 更新 roadmap 与 compass completed frontmatter"]
-    V --> W["PM: close exit checklist、commit、PR"]
+    V --> W["PM: close exit checklist 与 commit"]
+    W --> X["Phase 4: 开 PR"]
+    X --> Y["Phase 5: merge-ready loop 直至 CI 全绿且 reviews resolved"]
 ```
 
 单 plan 或非 iteration 工作使用同一套 per-plan gate（`Prepare → Execute → QC → QA → Done`），但不需要 iteration-start / iteration-close 外层。
