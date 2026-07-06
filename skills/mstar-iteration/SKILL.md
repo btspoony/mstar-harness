@@ -159,10 +159,10 @@ compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** 
 
 派发机制 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch，**顺序链**）。PM **不得**将迭代 harness 文档 commit 到 `spec_integration_branch`，直到：
 
-1. **@product-manager** → **@architect** → **@writing-specialist** 已按序通过宿主 invoke **直接编辑**（非仅评论）compass、plans 及受影响 specs；每一环基于上一环落盘修订
+1. **product-manager** → **architect** → **writing-specialist** 已按序通过宿主 invoke **直接编辑**（非仅评论）compass、plans 及受影响 specs；每一环基于上一环落盘修订
 2. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
 
-**顺序理由**：产品范围与优先级 → 架构与契约 → 术语与行文；并行会导致后手重复劳动或覆盖前手未定稿内容。
+**顺序理由**：产品范围与优先级 → 架构与契约 → 术语与行文；并行会导致后手重复劳动或覆盖前手未定稿内容。OpenCode：plain role id — **`mstar-host/references/opencode.md`** § Role-mention hygiene。
 
 **完成证据** = 磁盘上的 compass / plans / specs 修订 + compass `status: locked`。**不**要求 `reports/<iteration-id>/` 审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
 

@@ -31,7 +31,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** infer you may call subagents because the host lists `subagent_type` names; **tool availability ≠ authorization**.
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** point planning output to external default plan directories; use `{PLAN_DIR}` per `mstar-plan-conventions`.
-- **NEVER** offload PRD/product-doc drafting to `@explore`; short read-only orientation only per `mstar-harness-core`.
+- **NEVER** offload PRD/product-doc drafting to `explore`; short read-only orientation only per `mstar-harness-core`.
 - **NEVER** label a Prepare package as “ready for implement” while `Gate Decision: blocked` for material ambiguities—resolve, document waivers with PM, or return `Blocked`.
 - **NEVER** split delivery by saying “later / follow-up / next phase” without writing the product roadmap, deferred scope, and final completion definition in the assigned plan/spec.
 

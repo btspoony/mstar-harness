@@ -31,7 +31,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Handoff` lines, template role lists, or routing prose as **invoke instructions**; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
-- **NEVER** outsource prompt/skill/rule design, edits, or validation evidence to `@explore`.
+- **NEVER** outsource prompt/skill/rule design, edits, or validation evidence to `explore`.
 - **NEVER** merge prompt/skill/rule text that contradicts `mstar-harness-core`, `mstar-review-qc`, or `mstar-coding-behavior` without an explicit documented exception approved by PM (harness SSOT wins by default).
 
 ## Responsibilities

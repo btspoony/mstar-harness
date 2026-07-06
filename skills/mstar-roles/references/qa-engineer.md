@@ -31,7 +31,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Handoff` / template role lists / route arrows as invoke instructions; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
-- **NEVER** delegate test design, execution, evidence, or QA reports to `@explore`.
+- **NEVER** delegate test design, execution, evidence, or QA reports to `explore`.
 - **NEVER** issue pass / sign-off language when checkout alignment, `Review range / Diff basis`, or mandatory commands cannot be verified—use `Blocked` with the concrete gap.
 
 ## Core QA Gate Duties

@@ -56,18 +56,18 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 
 | Task type | Default route |
 | --- | --- |
-| Large feature | `@explore -> @product-manager -> @architect -> dev -> QC tri-review -> @qa-engineer -> @ops-engineer` |
-| Medium feature | `@explore -> (@architect optional) -> dev -> QC tri-review -> @qa-engineer` |
-| Small feature | `dev -> QC tri-review -> @qa-engineer` |
-| Bug fix | `@explore -> RCA brief -> dev -> QC tri-review -> @qa-engineer` |
-| High-ambiguity bug | `@explore -> RCA -> (@architect optional) -> dev -> QC tri-review -> @qa-engineer` |
-| Hotfix | `single dev -> QC single-review -> @qa-engineer fast verify` |
-| Product docs only | `@product-manager` (QC may be skipped with explicit reason) |
-| Tech spec only | `@architect` (QC may be skipped with explicit reason) |
-| Prompt/rules/skills | `@prompt-engineer` |
-| Market/user research | `@product-manager` |
-| QA report-only | `@qa-engineer` (`QA mode: report-only`) |
-| High-risk ops | `@ops-engineer` (+QC/QA by risk) |
+| Large feature | `explore -> product-manager -> architect -> dev -> QC tri-review -> qa-engineer -> ops-engineer` |
+| Medium feature | `explore -> (architect optional) -> dev -> QC tri-review -> qa-engineer` |
+| Small feature | `dev -> QC tri-review -> qa-engineer` |
+| Bug fix | `explore -> RCA brief -> dev -> QC tri-review -> qa-engineer` |
+| High-ambiguity bug | `explore -> RCA -> (architect optional) -> dev -> QC tri-review -> qa-engineer` |
+| Hotfix | `single dev -> QC single-review -> qa-engineer fast verify` |
+| Product docs only | `product-manager` (QC may be skipped with explicit reason) |
+| Tech spec only | `architect` (QC may be skipped with explicit reason) |
+| Prompt/rules/skills | `prompt-engineer` |
+| Market/user research | `product-manager` |
+| QA report-only | `qa-engineer` (`QA mode: report-only`) |
+| High-risk ops | `ops-engineer` (+QC/QA by risk) |
 
 Detailed conflict priority and dev allocation:
 `references/project-manager/routing-and-dev-allocation.md`.
@@ -82,7 +82,7 @@ Detailed conflict priority and dev allocation:
 - Runtime/behavior change requires QA by default.
 - Report-only QA may skip QC tri-review only when no implementation/test/config artifact is committed.
 - Product-docs-only and tech-spec-only can skip QC tri-review only with explicit `QC: skipped — <reason>`.
-- Plan `Done` sign-off authority: `@project-manager` or `@qa-engineer` only.
+- Plan `Done` sign-off authority: `project-manager` or `qa-engineer` only.
 
 ---
 
@@ -113,7 +113,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
 - **NEVER** omit native dispatch/worktree fields when the batch truly requires parallel dev (`Dispatch mode: parallel independent tracks`) or same-repo multi-writer concurrency (`Worktree isolation: required`) per `mstar-dispatch-gates` and `mstar-branch-worktree`.
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
-- **NEVER** label `QA: skipped` for report-only QA—still dispatch `@qa-engineer` with report-only mode; QC skip rules are separate and explicit.
+- **NEVER** label `QA: skipped` for report-only QA—still dispatch `qa-engineer` with report-only mode; QC skip rules are separate and explicit.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
 - **NEVER** accept “temporary workaround”, “follow-up later”, “next plan”, or “split into batches” as narrative-only scope management. If work is deferred or staged, write the roadmap/tracking location before implement GO or Done.
 - **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration` §1.6).
@@ -147,7 +147,7 @@ Use short go/no-go checks before moving phases:
 
 - Do not duplicate full route table in each phase note.
 - "Plan directory maintenance" means indexing/progression, not specialist content authoring.
-- If artifact body belongs to `@product-manager`/`@architect`, delegation is required unless explicit waiver.
+- If artifact body belongs to `product-manager`/`architect`, delegation is required unless explicit waiver.
 
 ### Pre-flight checks
 
@@ -275,7 +275,7 @@ Minimum invariants:
 - User conversation follows user language.
 - PM Assignment body can be Chinese by default.
 - Technical artifacts/reports/code/config/commit messages default to English unless user asks otherwise.
-- Keep `Execute as` as plain role ID (no `@`) in Assignment body.
+- Keep **all role references** as plain role id (no `@`) in Assignment body — including `Execute as`, routing narrative, `QA note`, and anti-pattern examples. Host invoke uses task tool `subagent` matching `Execute as` per `mstar-host` (OpenCode: `opencode.md` § Role-mention hygiene).
 
 ---
 

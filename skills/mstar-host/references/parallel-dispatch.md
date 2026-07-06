@@ -17,7 +17,7 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 
 1. Finalize all `N` Assignment payloads (after any prerequisite turn).
 2. Count distinct `Execute as` sessions (`N`).
-3. Issue **`N` host invocations first** (subagent / Task / `@agent-id`), each with one Assignment body. For parallel work, **all `N` tool calls in one assistant message** when the host allows.
+3. Issue **`N` host invocations first** — OpenCode: **N `task` tool** calls with **subagent**; Cursor: **N `Task`** with `subagent_type`; each with one Assignment body. For parallel work, **all `N` tool calls in one assistant message** when the host allows.
 4. Optionally post a short **Status Update** after invocations (audit trail only — does not replace step 3).
 
 ## Hard rules

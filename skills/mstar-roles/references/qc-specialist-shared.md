@@ -50,7 +50,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Handoff` lines, template role lists, or routing prose as invoke instructions; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
-- **NEVER** outsource review steps, verdict rationale, checklist execution, or report drafting to `@explore`.
+- **NEVER** outsource review steps, verdict rationale, checklist execution, or report drafting to `explore`.
 
 ## Review Context Gate (Hard)
 

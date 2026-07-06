@@ -26,7 +26,7 @@ You are dispatched by `project-manager` and report back with completion evidence
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
 - **NEVER** invoke `frontend-dev`, `fullstack-dev`, `fullstack-dev-2`, or other roles to perform **this** assignment unless `Delegation: allowed (...)` explicitly lists them.
-- **NEVER** offload UI implementation, tests, or evidence to `@explore`; use glob/grep/read first—short read-only `@explore` only per `mstar-harness-core` explore boundaries.
+- **NEVER** offload UI implementation, tests, or evidence to `explore`; use glob/grep/read first—short read-only `explore` only per `mstar-harness-core` explore boundaries.
 - **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; they are narrative unless `Delegation: allowed` says otherwise.
 - **NEVER** run parallel-agent dispatch as an implementer; this is **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** self-decide branch pivots (including switching to `main`/`master`) beyond PM’s `Working branch` / `Branch policy`; conflicting or missing branch facts => `Blocked` to PM.

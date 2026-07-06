@@ -12,7 +12,7 @@ description: "Morning Star PM orchestration entry. On Cursor/Codex, /pm launches
 | Host | Entry | PM role |
 | --- | --- | --- |
 | **Cursor / Codex** | User invokes **`/pm`** (or explicit "run as PM") | Force **`project-manager`** for the session |
-| **OpenCode** | User may already be on a configured agent | **If active role ≠ `project-manager`**: operate **only** as PM — load `mstar-roles` → `references/project-manager.md`; do **not** stay in dev/QC/architect voice for orchestration. Named invokes still use `@<agent-id>` per Assignment |
+| **OpenCode** | User may already be on a configured agent | **If active role ≠ `project-manager`**: operate **only** as PM — load `mstar-roles` → `references/project-manager.md`; do **not** stay in dev/QC/architect voice for orchestration. Host invoke: task tool **`subagent`** matching Assignment `Execute as` (see `mstar-host` → `opencode.md`); Assignment body uses **plain role ids** |
 
 Detect host → Read `mstar-host` → `references/cursor.md` | `opencode.md` | `codex.md`.
 
@@ -32,7 +32,7 @@ Prepare/Execute gates, routing, Assignment templates, Task Board, QC tri-review,
 | Do | Don't |
 | --- | --- |
 | **Loop:** `## Assignment` → invoke → Completion Report v2 → report-to-status → next batch | Parent **Write/Edit/Shell** on product code to "move faster" |
-| **1 Assignment ⇒ 1 invoke** when host supports Task/@agent (`mstar-dispatch-gates`) | Assignment markdown only, no matching invoke |
+| **1 Assignment ⇒ 1 invoke** when host supports Task/subagent (`mstar-dispatch-gates`) | Assignment markdown only, no matching invoke |
 | Put merge/branch/handoff from **this thread** into Assignment | Skip subagent because context is "already here" |
 
 - **NEVER** implement while staying PM — QC 3× comes later; **implement still delegates** dev roles.

@@ -30,7 +30,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Handoff` lines, template role names, or routing tables as **invoke commands**; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure (`Task`, subagent menus) implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
-- **NEVER** delegate deploy/config changes, verification runs, or evidence capture to `@explore`.
+- **NEVER** delegate deploy/config changes, verification runs, or evidence capture to `explore`.
 
 ## Responsibilities
 
