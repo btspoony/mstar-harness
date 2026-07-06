@@ -1,16 +1,28 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.7**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.8**（CLI 包除外，见下表）。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.7** |
+| monorepo 根 | `morning-star`（`package.json`） | **0.7.8** |
 | CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.7** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.7** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.7** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.8** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.8** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.8** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [0.7.8] - 2026-07-06
+
+### Harness（iteration Phase 4–5 / PR merge-ready loop）
+
+- **`mstar-iteration` Phase 4–5**：生命周期扩展为 **PR 交付**（Phase 4）与 **PR merge-ready loop**（Phase 5）——验证—修复—再验证，直至 mergeable、required CI 全绿、review threads resolved（修复后须 per-thread comment + resolve）。Loop SSOT 留在 `mstar-*`；不反向引用 host command。
+- **`iteration-drive`**：编排 Phase 2 → 3 → 4 → 5；**Done** 仅以 Phase 5 exit checklist 为准。Phase 5 可按环境发现 **non-`mstar-*`** helper（`greploop`、`babysit`）；fallback 与 babysit 同级（CI + reviews）。
+- **`mstar-harness-core`**：迭代 lifecycle 索引与「开 PR 后跳过 Phase 5」反模式；PM load contract 覆盖 `mstar-iteration` Phase 1–5。
+
+### 版本对齐
+
+- monorepo 根、`@mstar-harness/opencode`、`.cursor-plugin/plugin.json`、`.codex-plugin/plugin.json`：**0.7.7 → 0.7.8**。**`@mstar-harness/cli` 保持 0.5.4**。
 
 ## [0.7.7] - 2026-07-04
 

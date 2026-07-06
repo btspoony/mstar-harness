@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.7** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **0.7.8** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.7** |
+| Monorepo root | `morning-star` (`package.json`) | **0.7.8** |
 | CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.7** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.7** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.7** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.8** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.8** |
+| Codex plugin | `.codex-plugin/plugin.json` | **0.7.8** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [0.7.8] - 2026-07-06
+
+### Harness (iteration Phase 4–5 / PR merge-ready loop)
+
+- **`mstar-iteration` Phase 4–5**: Extend lifecycle to **PR delivery** (Phase 4) and **PR merge-ready loop** (Phase 5) — verify/fix/re-verify until mergeable, required CI green, and review threads resolved (with per-thread comment + resolve after fixes). Loop SSOT stays in `mstar-*`; no back-reference to host commands.
+- **`iteration-drive`**: Sequences Phase 2 → 3 → 4 → 5; **Done** only after Phase 5 exit checklist. Optionally discovers **non-`mstar-*`** helper skills (`greploop`, `babysit`) for Phase 5; fallback mode matches babysit gates (CI + reviews).
+- **`mstar-harness-core`**: Iteration lifecycle index and anti-pattern for skipping Phase 5 after PR creation; PM load contract covers `mstar-iteration` Phase 1–5.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`: **0.7.7 → 0.7.8**. **`@mstar-harness/cli` remains 0.5.4**.
 
 ## [0.7.7] - 2026-07-04
 
