@@ -26,7 +26,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Handoff` lines, template role lists, or routing prose as **invoke instructions**; only `Delegation: allowed` authorizes callees.
 - **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
-- **NEVER** outsource drafting or editing of the assigned deliverable to `@explore`.
+- **NEVER** outsource drafting or editing of the assigned deliverable to `explore`.
 - **NEVER** mark plan items or harness `status.json` fields implying `Done` for the overall plan—writing-only scope; PM/QA own closure.
 
 ## Responsibilities

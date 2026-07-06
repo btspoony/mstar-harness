@@ -14,7 +14,7 @@ Start a new Morning Star harness iteration. **Not Done until the Review & Edit c
 
 | 禁止（PM 线程） | 必须（宿主有 Task 时） |
 |-----------------|------------------------|
-| 自己 Edit compass/plans/specs 冒充 @product-manager / @architect / @writing-specialist 的审查编辑 | §5.1 → §5.2 → §5.3 **顺序**各 **1 次 invoke**；上一角色返回后再派发下一角色 |
+| 自己 Edit compass/plans/specs 冒充 product-manager / architect / writing-specialist 的审查编辑 | §5.1 → §5.2 → §5.3 **顺序**各 **1 次 invoke**；上一角色返回后再派发下一角色 |
 | 只写 `## Assignment` 或 checklist 就声称 review chain 完成 | **几条角色 ⇒ 几条 invoke**；零 invoke = `dispatch incomplete`（`mstar-dispatch-gates`） |
 | §5 完成前 commit / 创建 integration 分支 | 5.4 PM lock 在 subagent 返回且磁盘产物已修订之后（`mstar-iteration` §1.6） |
 
@@ -93,16 +93,16 @@ Produce harness artifacts per **`mstar-iteration` § 1.3**（template: `mstar-it
 
 **STOP**: Do not run §6 Integration Branch until **all** rows below are true.
 
-**顺序（HARD）**：`product-manager` → `architect` → `writing-specialist` → PM lock。后一角色基于前一角色已落盘的修订继续编辑；**禁止**三角色并行 invoke。
+**顺序（HARD）**：`product-manager` → `architect` → `writing-specialist` → PM lock。后一角色基于前一角色已落盘的修订继续编辑；**禁止**三角色并行 invoke。OpenCode：正文用 plain role id — **`mstar-host/references/opencode.md`** § Role-mention hygiene。
 
 Each role below **reviews and directly edits** the documents. Do not just flag issues — apply the fixes yourself. PM only steps in for the final lock.
 
 | # | Role | Required action | Gate |
 |---|------|-----------------|------|
-| 5.1 | **@product-manager** | invoke: **edit** compass, plans, `{SPECS_DIR}/`; scope, UX, priorities | 完成后方可 5.2 |
-| 5.2 | **@architect** | invoke: **edit** compass, plans, specs（含 5.1 修订后版本）; contracts, SQL, module boundaries | 5.1 返回后；完成后方可 5.3 |
-| 5.3 | **@writing-specialist** | invoke: **edit** all iteration docs（含 5.1–5.2 修订后版本）; terminology, structure, clarity | 5.2 返回后 |
-| 5.4 | **@project-manager** | Merge subagent edits; resolve conflicts; **lock** compass (`status: locked`); confirm Prepare gates | 5.3 返回后 |
+| 5.1 | **product-manager** | invoke: **edit** compass, plans, `{SPECS_DIR}/`; scope, UX, priorities | 完成后方可 5.2 |
+| 5.2 | **architect** | invoke: **edit** compass, plans, specs（含 5.1 修订后版本）; contracts, SQL, module boundaries | 5.1 返回后；完成后方可 5.3 |
+| 5.3 | **writing-specialist** | invoke: **edit** all iteration docs（含 5.1–5.2 修订后版本）; terminology, structure, clarity | 5.2 返回后 |
+| 5.4 | **project-manager** | Merge subagent edits; resolve conflicts; **lock** compass (`status: locked`); confirm Prepare gates | 5.3 返回后 |
 
 **Evidence of done** = edited compass / plans / specs on disk + compass `status: locked`. **No** separate iteration review reports under `reports/` — unlike per-plan QC, there is no downstream audit chain to preserve.
 
@@ -129,9 +129,9 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 
 - [ ] grill-me decisions recorded in compass
 - [ ] Draft compass + plans + `status.json` registered
-- [ ] @product-manager Task completed — compass / plans / specs edited
-- [ ] @architect Task completed — compass / specs edited
-- [ ] @writing-specialist Task completed — iteration docs edited
+- [ ] product-manager invoke completed — compass / plans / specs edited
+- [ ] architect invoke completed — compass / specs edited
+- [ ] writing-specialist invoke completed — iteration docs edited
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch`, `spec_integration_branch`, and `target_branch` recorded in compass / `status.json`
 - [ ] **THEN**: git commit + push `iteration/<iteration-id>`

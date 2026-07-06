@@ -108,7 +108,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 
 | 宿主 | 要点 |
 |------|------|
-| OpenCode | `question`、`@explore`、named-role invoke → `references/opencode.md` |
+| OpenCode | `question`、**task tool**（**subagent** 参数）→ `references/opencode.md` |
 | Cursor | Task 并行 QC；Plan 双写 → `references/cursor.md` · `cursor-plan-mode-bridge.md` |
 | Codex | plugin skills、sandbox/apply_patch/tool discovery；无 invoke 工具时不声称 subagent dispatch → `references/codex.md` |
 | 其它 | 同 `mstar-host` skill；按工具信号选 reference |
@@ -146,6 +146,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | CreatePlan 不落盘 / 无 `{HARNESS_DIR}` mirror | `mstar-host` · `cursor-plan-mode-bridge` |
 | 临时方案 / 后续计划只写在对话里 | `mstar-phase-gates` · Durable Roadmap Gate |
 | Phase 1 review chain 未完成即 commit | `mstar-iteration` §1.6；PM 代做专业角色编辑；或三角色并行派发 |
+| OpenCode prompt 含多个 prefix-style role mention | `mstar-host/references/opencode.md` § Role-mention hygiene |
 | Phase 2 paste-only / PM 自实现 | `mstar-dispatch-gates` |
 | Phase 3 折叠进 final plan closure / 跳过 §3.1 gate | `mstar-iteration` §3.0–§3.5 |
 | Phase 4 开 PR 后跳过 merge-ready loop | `mstar-iteration` §5 |

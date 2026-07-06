@@ -33,7 +33,7 @@ Phase 2: Autonomous Execute  →  Phase 3: iteration-close  →  Phase 4: Create
 | 只写 Assignment 就进入下一 gate | 同轮 dispatch：`Subagent invokes issued: N`（N = Assignment 条数） |
 | 最后一个 plan `Done` 后直接开 PR / 汇报结束 | **Phase 3 → 4 → 5** 顺序执行 |
 | Phase 4 开 PR 后停止 | Phase 5 loop 至 merge-ready；**禁止**未过 §5.5 就结束会话 |
-| Phase 5 自己改产品代码 | 需改产品代码时 **dispatch** `@fullstack-dev` / `@ops-engineer` |
+| Phase 5 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
 
 派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration` §3** + **`mstar-compound`**。
 

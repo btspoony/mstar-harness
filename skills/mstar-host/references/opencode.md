@@ -1,6 +1,6 @@
 # OpenCode host reference
 
-Load when **`mstar-host`** detection resolves **opencode** (`question` tool, `@<agent-id>` invoke, or OpenCode session).
+Load when **`mstar-host`** detection resolves **opencode** (`question` tool, **task tool** with **subagent** parameter, or OpenCode session).
 
 Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 
@@ -12,23 +12,50 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 
 ## OpenCode-specific capabilities
 
-- **Structured clarify**: prefer `question` tool (title, prompt, options, optional custom text). Requires `permission.question` in config (user-maintained; do not edit global config without consent).
-- **Built-in subagents**: `@explore` (read-only), `@general`; subject to `mstar-harness-core` explore boundaries.
-- **Named roles (`@<agent-id>`)**: configured in `opencode.json` `agent.<id>` must be **actually invoked** by PM. Assignment Markdown alone does not open sessions.
+- **Structured clarify**: prefer **`question`** tool (title, prompt, options, optional custom text). Requires `permission.question` in config (user-maintained; do not edit global config without consent).
+- **Built-in subagents** (via **task tool**): **explore** (read-only), **general**; subject to `mstar-harness-core` explore boundaries.
+- **Named role subagents**: Morning Star roles configured under `opencode.json` `agent.<id>` — PM must **call the task tool** with **`subagent`** set to that agent id. Assignment Markdown alone does not open subagent sessions.
 - **Per-role models**: configurable per subagent in `opencode.json`.
 
-## Invoke entry
+## PM dispatch (task tool + subagent)
 
-Use host subagent / Task / equivalent per **`parallel-dispatch.md`**. OpenCode PM typically uses **`@<agent-id>`** or the host’s subagent entry — same **no tool = no dispatch** rule.
+Harness **dispatch** on OpenCode = **one or more `task` tool calls**, each with **`subagent: <agent-id>`** (read the tool schema every session).
+
+| Harness | OpenCode |
+|---------|----------|
+| `Execute as: <role-id>` | **`subagent`** on **task tool** = same agent id |
+| 1 Assignment ⇒ 1 invoke | **1 task tool** call with matching **subagent** + prompt from Assignment |
+| Parallel batch **N** | **N task tool** calls in **one assistant message** when the host allows (`parallel-dispatch.md`) |
+| No task tool call | **Not dispatched** — paste-only / `dispatch incomplete` |
+
+PM workflow: finalize Assignment → **call task tool** with **subagent** + generated prompt → wait for subagent Completion Report → update plan / status.
+
+## Role-mention hygiene (OpenCode)
+
+OpenCode may **auto-append** system lines when prompt text stacks multiple agent-id **prefix mentions**. Typical boilerplate (host-generated — **not** harness Assignment):
+
+```text
+Use the above message and context to generate a prompt and call the task tool with subagent: <agent-id>
+```
+
+(Same sentence repeated with different **subagent** values — mechanical template, not user prose.)
+
+| Do | Don't |
+|----|-------|
+| Use **plain role ids** (`product-manager`) in skill / command / Assignment prose | Stack prefix-style role mentions that trigger multi-**subagent** boilerplate |
+| Sequential chains: **one task tool / one subagent per dispatch turn** | Treat auto-appended **task tool + subagent** lines as authorized parallel batch |
+| Real dispatch: PM **calls task tool** with explicit Assignment + **`Delegation`** rules | Confuse boilerplate with **`Delegation: allowed`** |
+
+When documenting this in harness text, avoid embedding prefix-style role examples in the warning — that can re-trigger the host.
 
 ## Prepare phase — serial roles still require invoke
 
-`mstar-roles` **project-manager** may route `@explore → @product-manager → @architect` **sequentially**. Each handoff still needs a real **host invoke** with Assignment (often **`N = 1`** per dispatch turn). Writing PRD / architecture only in the PM chat when routing assigns **`product-manager`** or **`architect`** is **not** a substitute. Cross-check: `mstar-roles` → `references/project-manager.md` → **§1.1.1a Phase routing pre-flight**.
+`mstar-roles` **project-manager** may route `explore → product-manager → architect` **sequentially**. Each handoff still needs a real **task tool** call with the matching **subagent** and Assignment (**`N = 1`** per dispatch turn). Writing PRD / architecture only in the PM chat is **not** a substitute.
 
 ## Gotchas
 
 - `question` availability is config-dependent; if unavailable, structured Markdown clarify.
-- `@explore` is orientation only, not role-owned implementation or review deliverables.
+- **explore** subagent (via task tool) is orientation only — not role-owned implementation or review deliverables.
 - More MCPs do not replace phase gates or evidence rules.
 
 ## Session noise control

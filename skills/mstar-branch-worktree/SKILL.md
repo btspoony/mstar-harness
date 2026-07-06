@@ -1,6 +1,6 @@
 ---
 name: mstar-branch-worktree
-description: Morning Star business-repo Git feature branches, same-repo concurrent `git worktree` isolation, plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `@project-manager` parallel implement or pre-QC orchestration; `@fullstack-dev*` / `@frontend-dev` / `@qa-engineer` / `@ops-engineer` on repo writes; `@qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`).
+description: Morning Star business-repo Git feature branches, same-repo concurrent `git worktree` isolation, plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `project-manager` parallel implement or pre-QC orchestration; `fullstack-dev*` / `frontend-dev` / `qa-engineer` / `ops-engineer` on repo writes; `qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`).
 ---
 
 ## Load order（必读顺序）
@@ -33,23 +33,23 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 - 当需要**从已有功能分支继续拆新分支**时，Assignment 应写清**祖先分支** `<base>`，例如：`create feature/foo-part2 from feature/foo`。
 - **`<base>` 可取**：`main` / `master`（或项目默认分支名）、任意已存在的 `feature/*` / `fix/*`、远程跟踪分支名、或 **`current`**（表示以执行者检出时的 `HEAD` 为祖先，用于「就在当前分支上再拉一枝」）。
 - 若只写 **`Working branch`: `feature/foo`且无「create … from …」**：表示**沿用 / 切到**该已存在分支上开发，不要求新建。
-- 若写新建但未写 `<base>`：实现侧应**停下问** `@project-manager`（或按项目 `AGENTS.md` 的默认 base）；**禁止**擅自假设「一定是 `main`」。
+- 若写新建但未写 `<base>`：实现侧应**停下问** `project-manager`（或按项目 `AGENTS.md` 的默认 base）；**禁止**擅自假设「一定是 `main`」。
 
 ### 角色职责
 
-- **`@project-manager`（唯一分支决策入口）**：向 `@product-manager`（向项目仓库提交产品文档时）、`@architect`（向项目仓库提交技术/架构/契约类文档时）、`@fullstack-dev` / `@frontend-dev` / `@fullstack-dev-2`、以及会向仓库提交工件的 `@qa-engineer`、会改仓库内文件的 `@ops-engineer`、对**项目仓库**落盘的 `@prompt-engineer` 分派前，核对分支策略；在 Assignment 中写明 **`Working branch`**（沿用已有分支名，或 `create <new-branch> from <base>`，其中 `<base>` 遵守上一节）。若用户已指定分支/祖先，照抄进 Assignment。**只有 `@project-manager` 可以决定是否新开分支、从哪个 `<base>` 开分支。**
-- **实现 / QA / 运维 / prompt / product-manager / architect（项目侧）**：在**首次**编辑仓库内文件或执行 `git commit` 前，核对当前分支与 Assignment，并在回报中明确"正在哪个分支上工作"。**禁止自行决定新开分支、禁止自行切回 `main`/`master` 重开分支。**若未授权 `Branch policy` 且当前在默认分支，则仅可按 PM 已写明的 `Working branch` 执行切换/开枝；若 Assignment 未写清或与现场分支不一致，先回报 `@project-manager`，不得擅自处理。
+- **`project-manager`（唯一分支决策入口）**：向 `product-manager`（向项目仓库提交产品文档时）、`architect`（向项目仓库提交技术/架构/契约类文档时）、`fullstack-dev` / `frontend-dev` / `fullstack-dev-2`、以及会向仓库提交工件的 `qa-engineer`、会改仓库内文件的 `ops-engineer`、对**项目仓库**落盘的 `prompt-engineer` 分派前，核对分支策略；在 Assignment 中写明 **`Working branch`**（沿用已有分支名，或 `create <new-branch> from <base>`，其中 `<base>` 遵守上一节）。若用户已指定分支/祖先，照抄进 Assignment。**只有 `project-manager` 可以决定是否新开分支、从哪个 `<base>` 开分支。**
+- **实现 / QA / 运维 / prompt / product-manager / architect（项目侧）**：在**首次**编辑仓库内文件或执行 `git commit` 前，核对当前分支与 Assignment，并在回报中明确"正在哪个分支上工作"。**禁止自行决定新开分支、禁止自行切回 `main`/`master` 重开分支。**若未授权 `Branch policy` 且当前在默认分支，则仅可按 PM 已写明的 `Working branch` 执行切换/开枝；若 Assignment 未写清或与现场分支不一致，先回报 `project-manager`，不得擅自处理。
 
 ## 分支协作契约（Branch Collaboration Contract）
 
 ### 适用范围
 
 - 当任务会在项目 Git 仓库产生可合并 diff 时适用。
-- 适用于 `@project-manager`、`@product-manager`、`@architect`、`@fullstack-dev`、`@frontend-dev`、`@fullstack-dev-2`、`@qa-engineer`、`@ops-engineer`、`@prompt-engineer`（项目侧写入）。
+- 适用于 `project-manager`、`product-manager`、`architect`、`fullstack-dev`、`frontend-dev`、`fullstack-dev-2`、`qa-engineer`、`ops-engineer`、`prompt-engineer`（项目侧写入）。
 
 ### 唯一分支决策者
 
-- 只有 `@project-manager` 可以决定分支策略：
+- 只有 `project-manager` 可以决定分支策略：
   - 继续在现有分支开发，或
   - 使用 `create <new-branch> from <base>` 新开分支，或
   - 使用 `Branch policy: direct on <branch> — <reason>`。
@@ -103,7 +103,7 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 
 **首要场景是开发阶段**：多条可写流 **并发** 改 **同一仓库** 时，用 worktree 做 **写入侧目录隔离**。下列规则针对该类开发并发；**QC / QA 阶段的检出约定**见下一小节。
 
-当 **`@project-manager` 在同一调度轮次内并发启动多个** subagent（含宿主侧「并行 Task / 并行 subagent」），且 **≥2 个承接方**可能对 **同一 Git 仓库的同一工作区（同一 cwd 检出目录）**产生写文件或 `git commit` 级改动时：
+当 **`project-manager` 在同一调度轮次内并发启动多个** subagent（含宿主侧「并行 Task / 并行 subagent」），且 **≥2 个承接方**可能对 **同一 Git 仓库的同一工作区（同一 cwd 检出目录）**产生写文件或 `git commit` 级改动时：
 
 - **必须**为每条并发写流使用 **独立检出目录**：优先使用宿主原生 worktree/checkout 隔离能力；没有原生能力时使用 `git worktree`，并按本 skill 的目录、分支和 QC/QA 对齐规则执行。
 - **必须**与既有分支门禁一致：每个可写承接方的 Assignment 仍须含 PM 已批准的 **`Working branch`** / **`Branch policy`**；在某一 worktree 内 **不得**擅自 `checkout` 到未授权分支或私自新建分支。
@@ -137,11 +137,11 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 
 开发在 **feature 分支**上完成（往往在 **独立 worktree** 中实现）后，**QC 审查与 QA 验证针对的都是这份 feature**，而不是 `main` 或任意未对齐的默认 cwd。
 
-- **`@project-manager`** 分派 **QC** 时须在 Assignment 写明与待审实现一致的 **`Working branch`**，并写明 **`Review cwd` / `Worktree path`**：**优先**沿用开发 **Completion Report** 中回报的业务仓 **实现检出路径**（即「该 feature 的 worktree」）**当且仅当**该路径上的检出分支 **`HEAD` 已包含本轮待审的全部提交**（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则 **必须**改用 **集成完成后的** `Working branch` 与对应检出路径（或在该分支上 **另开** 审查专用 worktree）。若开发未用 worktree，则写明单一明确的业务仓根路径。若审查需与开发目录 **物理分离** 但仍审 **同一分支**，可指示在 **`Working branch`** 上 **另加** 一个 worktree 专供审查（只读使用业务仓）。**多流并行开发**时的前置归并、**推荐默认编排（plan 集成分支先行）** 与误派禁令见上一小节。
+- **`project-manager`** 分派 **QC** 时须在 Assignment 写明与待审实现一致的 **`Working branch`**，并写明 **`Review cwd` / `Worktree path`**：**优先**沿用开发 **Completion Report** 中回报的业务仓 **实现检出路径**（即「该 feature 的 worktree」）**当且仅当**该路径上的检出分支 **`HEAD` 已包含本轮待审的全部提交**（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则 **必须**改用 **集成完成后的** `Working branch` 与对应检出路径（或在该分支上 **另开** 审查专用 worktree）。若开发未用 worktree，则写明单一明确的业务仓根路径。若审查需与开发目录 **物理分离** 但仍审 **同一分支**，可指示在 **`Working branch`** 上 **另加** 一个 worktree 专供审查（只读使用业务仓）。**多流并行开发**时的前置归并、**推荐默认编排（plan 集成分支先行）** 与误派禁令见上一小节。
 - **三票审同一功能（强制对齐）**：分派 **QC 三审**时，除上述字段外，**必须**在 **三份 Assignment 中逐字写入相同**的 **`plan_id`** 与 **`Review range` / `Diff basis`**：
   - **`plan_id`**：与 `{PLAN_DIR}/reports/<plan-id>/` 及主 **Plan Path** 一致；无 `{PLAN_DIR}` 流程时写 **`plan_id: N/A`**，并另给一行 **`Feature / scope label`**（不可歧义，足以与并行其它 feature 区分）。
-  - **`Review range` / `Diff basis`**：明确本次审查所针对的 **diff/提交范围**（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。**三名 reviewer 的 Assignment 间该字段必须完全一致**；**@qa-engineer** 验证同一 feature 时 **复用同一 `plan_id` 与同一 `Review range` / `Diff basis`**。**热修 / QC 单审**路径也须含 **同一组字段**，仅承接方份数为 1。
+  - **`Review range` / `Diff basis`**：明确本次审查所针对的 **diff/提交范围**（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。**三名 reviewer 的 Assignment 间该字段必须完全一致**；**`qa-engineer`** 验证同一 feature 时 **复用同一 `plan_id` 与同一 `Review range` / `Diff basis`**。**热修 / QC 单审**路径也须含 **同一组字段**，仅承接方份数为 1。
 - **三审并行**时，三名 reviewer **共用同一组 `Review cwd` / `Worktree path` + `Working branch` + `plan_id` + `Review range` / `Diff basis`**（对业务仓只读分析）；**一般不必**为每位 reviewer 各开一个 worktree，除非宿主或执行环境要求进程级隔离。
 - QC 的 **报告落盘**仍仅限 `{PLAN_DIR}/reports/`；上述约定保证 `git diff`、`git log`、lint 与所读文件与 **待合并 feature** 一致。
-- **`@project-manager`** 分派 **`@qa-engineer`** 做 **本 feature 的验证**（跑测试、复现、可观察取证、或向业务仓提交测试/配置）时，须在 Assignment 中写明 **同一套** **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`** 与 **`Review range` / `Diff basis`**（与 QC 三审 **逐字相同**；若 QC 已写清，QA **照抄**）。**@qa-engineer** 在执行业务仓命令前须核对当前目录与分支与 Assignment 一致；**Report-only**、且本轮 **不涉及** 业务仓内命令/路径依赖时，若 Assignment 未写 `Review cwd`，须在回报中说明验证所基于的检出或环境，缺失则 `Blocked` 并请 PM 补全。
+- **`project-manager`** 分派 **`qa-engineer`** 做 **本 feature 的验证**（跑测试、复现、可观察取证、或向业务仓提交测试/配置）时，须在 Assignment 中写明 **同一套** **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`** 与 **`Review range` / `Diff basis`**（与 QC 三审 **逐字相同**；若 QC 已写清，QA **照抄**）。**`qa-engineer`** 在执行业务仓命令前须核对当前目录与分支与 Assignment 一致；**Report-only**、且本轮 **不涉及** 业务仓内命令/路径依赖时，若 Assignment 未写 `Review cwd`，须在回报中说明验证所基于的检出或环境，缺失则 `Blocked` 并请 PM 补全。
 - 若 **QA 与同仓其他可写角色并发**提交测试代码，仍须遵守上文「同仓并发写入」的 **worktree** 规则（可为 QA 单开一条写入 worktree，**同一 `Working branch`**，由 PM 在 Assignment 写明）。

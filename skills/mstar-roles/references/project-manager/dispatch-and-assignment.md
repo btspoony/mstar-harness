@@ -25,7 +25,7 @@ For assignees (non-PM):
 - **NEVER** treat `Handoff: …`, Completion Report template role names, routing tables, or “suggested owners” as **host invoke commands**; they are narrative unless `Delegation: allowed` authorizes callees.
 - **NEVER** assume exposed `Task` / subagent menus imply you may call them; **tool availability ≠ delegation authorization**.
 - **NEVER** execute parallel-agent dispatch as a leaf assignee; dispatch is **PM-orchestration-only** (`mstar-dispatch-gates`).
-- **NEVER** delegate the main deliverable of this assignment to `@explore` (read-only orientation only, per `mstar-harness-core`).
+- **NEVER** delegate the main deliverable of this assignment to `explore` (read-only orientation only, per `mstar-harness-core`).
 - **NEVER** claim `Done` / pass in **Completion Report v2** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
 
 ## Assignment Template (Canonical)
@@ -40,9 +40,9 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Add anti-patterns specific to the assignment context. Examples per role type:
   - **QC reviewers**: "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"
   - **Multi-track implementers** (`fullstack-dev` + `frontend-dev`): "auto-dispatch to the other track mentioned in Dev routing"
-  - **`@fullstack-dev-2`**: "treat `@fullstack-dev` in routing narrative as a handoff or invoke target"
-  - **`@qa-engineer`**: "start validation before QC reports are consolidated"; "modify application code"
-  - **`@explore`-assigned**: "implement or modify code"
+  - **`fullstack-dev-2`**: "treat `fullstack-dev` in routing narrative as a handoff or invoke target"
+  - **`qa-engineer`**: "start validation before QC reports are consolidated"; "modify application code"
+  - **`explore`-assigned**: "implement or modify code"
   - **All non-PM**: "dispatch parallel agents"; "spawn a subagent whose `subagent_type` matches your own `Execute as` role id"
 - Anti-patterns must be action-oriented ("auto-dispatch to …", "treat … as invoke", "start … before …") — not abstract descriptions.
 - If the assignment involves multiple QCs or parallel tracks, add a specific bullet about NOT serializing or pre-empting the parallel dispatch.
@@ -64,7 +64,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 
 **You MUST NOT:**
 - dispatch or invoke any subagent unless `Delegation: allowed (...)` appears below
-- treat `@role-id` mentions, `Handoff`, `QA note`, routing tables, or multi-track prose as invoke commands
+- treat plain `role-id` mentions, `Handoff`, `QA note`, routing tables, or multi-track prose as invoke commands
 - invoke a subagent whose `subagent_type` matches your own `Execute as` role id (recursive dispatch)
 - <situation-specific anti-pattern #1>
 - <situation-specific anti-pattern #2>
@@ -110,7 +110,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Orchestration Guard** (see `**You are a leaf executor. You MUST NOT:**` block at top for primary anti-patterns):
 - No recursive same-role dispatch
 - Do not dispatch roles from route narrative/handoff text
-- `@explore` is read-only orientation only
+- `explore` is read-only orientation only
 - Tool availability ≠ delegation authorization
 **Plan Path**: <{PLAN_DIR}/... or N/A>
 **Report Format**: Completion Report v2
