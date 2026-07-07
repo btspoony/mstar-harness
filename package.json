@@ -15,9 +15,13 @@
     "cli:build": "bun run --cwd packages/cli build",
     "cli:publish:dry-run": "npm publish --workspace @mstar-harness/cli --dry-run",
     "cli:publish": "npm publish --workspace @mstar-harness/cli",
+    "cli:pack": "npm pack --workspace @mstar-harness/cli",
     "opencode:build": "bun run --cwd packages/opencode build",
     "opencode:publish:dry-run": "npm publish --workspace @mstar-harness/opencode --dry-run",
-    "opencode:publish": "npm publish --workspace @mstar-harness/opencode"
+    "opencode:publish": "npm publish --workspace @mstar-harness/opencode",
+    "opencode:pack": "npm pack --workspace @mstar-harness/opencode",
+    "release:validate": "bun run scripts/validate-release-version.ts",
+    "release:check": "bun run typecheck && bun run cli:pack && bun run opencode:pack"
   },
   "packageManager": "bun@1.2.17",
   "devDependencies": {
