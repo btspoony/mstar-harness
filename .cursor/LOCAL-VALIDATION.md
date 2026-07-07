@@ -42,9 +42,9 @@ skills/mstar-sdd/scripts/task-brief .harness/plans/10-sdd-1-0-0-release.md 1
 git rev-parse HEAD | xargs -I{} skills/mstar-sdd/scripts/review-package {} {}
 ```
 
-- Confirm outputs land under `.harness/sdd/<plan-id>/` (or printed `SDD_DIR`) when this repo has no `.mstar/`.
-- `git status` must **not** list `.harness/` files (directory is gitignored).
-- PM-style routing: default QC dispatch is **N=1** `qc-specialist` with branch review-package path; SDD implement/reviewer dispatches are **serial**.
+- Confirm outputs land under `{SDD_DIR}` printed by `sdd-workspace` (default `.mstar/sdd/<plan-id>/`).
+- `git status` must **not** list `{HARNESS_DIR}/sdd/` scratch files (directory should be gitignored).
+- PM-style routing: **`Execution mode: sdd`** → plan QC **N=3** tri + branch review-package; **`inline`/hotfix** → **N=1** `qc.md`. SDD implement/reviewer dispatches are **serial**.
 
 ## 4) Packaging guardrails
 
