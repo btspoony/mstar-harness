@@ -2,17 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.0.3** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.0.4** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.0.3** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.3** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.3** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.3** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.0.3** |
+| Monorepo root | `morning-star` (`package.json`) | **1.0.4** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.4** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.4** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.4** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.0.4** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.0.4] - 2026-07-07
+
+### Harness (parallel implement worktree gate)
+
+- **New `mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**: SSOT pre-dispatch checklist for same-repo **≥2 concurrent writable implement** tracks — `git worktree add`, absolute **`Worktree path`**, PM stays on integration branch, emit-zero until ready.
+- **`mstar-dispatch-gates`**: **Dual-gate table** — tool concurrency (N invokes in one message) vs same-repo write isolation; clarifies **N invoke ≠ worktree compliance**.
+- **`mstar-branch-worktree`**, **`mstar-iteration`**, **`mstar-phase-gates`**, **`project-manager`**, **`dispatch-and-assignment`**, **`fullstack-dev-shared`**: thin pointers to the reference; deduped repeated checklist prose.
+- **`mstar-harness-core`**: anti-pattern index entry for parallel implement without worktree.
+- **Routing eval v16**: hard-fail parallel implement batches missing per-track **`Worktree path`**; strengthen worktree assertions on parallel dev cases.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.0.4**.
 
 ## [1.0.3] - 2026-07-07
 

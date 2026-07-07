@@ -1,16 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.3**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.4**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.0.3** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.3** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.3** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.3** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.3** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.0.4** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.4** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.4** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.4** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.4** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.0.4] - 2026-07-07
+
+### Harness（并行 implement worktree 门禁）
+
+- **新增 `mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**：同仓 **≥2 可写 implement 并发** 的派发前 SSOT 清单 — `git worktree add`、绝对路径 **`Worktree path`**、PM 留在集成分支、未就绪则 emit-zero。
+- **`mstar-dispatch-gates`**：**双门禁表** — 工具并发（同条消息 N 次 invoke）与同仓写隔离；明确 **N invoke ≠ worktree 合规**。
+- **`mstar-branch-worktree`**、`mstar-iteration`、`mstar-phase-gates`、`project-manager`、`dispatch-and-assignment`、`fullstack-dev-shared`：瘦身为指向 reference 的短链；去除重复清单正文。
+- **`mstar-harness-core`**：反模式索引新增「并行 implement 无 worktree」。
+- **Routing eval v16**：并行 implement 缺 per-track **`Worktree path`** 硬失败；强化并行开发场景的 worktree 断言。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.0.4**。
 
 ## [1.0.3] - 2026-07-07
 

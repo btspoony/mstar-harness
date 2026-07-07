@@ -4,13 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.0.4
+
+- Bundled skills: parallel writable pre-dispatch SSOT (`parallel-writable-pre-dispatch.md`); dispatch-gates dual-gate table (N invoke vs worktree); deduped skill pointers; routing-eval v16.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.4**.
+
 ## 1.0.3
-
-- Bundled skills/commands: iteration continuous execution (Phase 2–5 HARD push discipline in `iteration-drive` + `mstar-iteration` §2.6); skills command-agnostic cleanup; `pm` Autonomous Execute push rule; routing-eval v15.
-
-See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.3**.
-
-## 1.0.2
 
 - Bundled skills/commands: iteration artifact boundaries (`{ITERATION_DIR}/<id>/` workspace, specs-first start, compound workspace promotion at close); new iteration references; corpus hygiene aligned.
 
