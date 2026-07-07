@@ -6,7 +6,7 @@
 Canonical vs legacy residual definitions → **`mstar-plan-artifacts` SKILL.md** (“`status.json` and open residual (summary)”); this file covers **fields, severity, lifecycle, archive, and `jq` examples**.  
 **Closed** residuals should not accumulate here long-term; authoritative archive → **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** (see “Residual findings lifecycle”).
 
-**Why this matters:** The open list and `archived/residuals/` are the **cross-session handoff surface** for risk and decisions. Non-blocking conclusions that stay only in chat or a single QC report **without SSOT** cannot be inherited reliably; `Done` drifts from visible known debt. **`@project-manager`** should register trackable open items soon after review closure; **`@qa-engineer`** and PM should close and archive after verification or explicit waiver — flexible timing, but **not** “said in chat is enough.”
+**Why this matters:** The open list and `archived/residuals/` are the **cross-session handoff surface** for risk and decisions. Non-blocking conclusions that stay only in chat or a single QC report **without SSOT** cannot be inherited reliably; `Done` drifts from visible known debt. **`@project-manager`** should register trackable open items soon after review closure; close/archive after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist).
 
 ## Basic structure
 
@@ -209,7 +209,7 @@ Plan row (per active iteration plan):
 | Action | Owner | When |
 | ------ | ----- | ---- |
 | Implement fix | `@fullstack-dev` / assignee | Completion Report cites R# + evidence |
-| Verify | `@qa-engineer` | Regression / acceptance |
+| Verify | `@qa-engineer` when **`QA gate: mandatory`**; else PM per acceptance checklist | Regression / acceptance; open R# close requires verify before archive |
 | Write `status.json` | **`@project-manager`** or **`@qa-engineer`** | After verification; waivers after PM + user/architect alignment |
 
 Do not claim “R3 fixed” in chat/plan only without SSOT update.

@@ -141,7 +141,7 @@ Embed this checklist **inside each implement todo description** in CreatePlan (a
 
 - Mark implement todos done without a commit when tracked files changed.
 - Batch all work into one closing commit unless PM documented an exception.
-- Mark plan-level `Done` in `status.json` without PM/QA authority.
+- Mark plan-level `Done` in `status.json` without PM/QA authority and without recorded **`QA gate`** (`mandatory` fulfilled or `pm-acceptance` checklist per `qa-trigger-matrix.md`).
 
 Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/references/fullstack-dev-shared.md` (Git NEVER).
 

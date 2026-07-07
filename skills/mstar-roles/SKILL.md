@@ -37,10 +37,10 @@ If any conflict appears, `mstar-harness-core` remains the authoritative source f
 
 | Role | Typical adds |
 | --- | --- |
-| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-roles` ref; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-plan-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
+| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-roles` ref; + `references/project-manager/qa-trigger-matrix.md` for QA gate tiers; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-plan-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
 | `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-plan-conventions` (minimal); `mstar-design-md` when implementing styled UI |
-| `qc-specialist*` | `mstar-review-qc`, `mstar-branch-worktree`, `mstar-plan-artifacts` (report paths); `mstar-design-md` when reviewing UI |
-| `qa-engineer` | `mstar-review-qc`, `mstar-branch-worktree`, `mstar-plan-artifacts` (closing R#); `mstar-design-md` when verifying visual output |
+| `qc-specialist*` | `mstar-branch-worktree`, `mstar-plan-artifacts` (report paths); `references/qc-specialist/` (workflow, checklist, template, lenses); `mstar-design-md` when reviewing UI |
+| `qa-engineer` | `mstar-branch-worktree`, `mstar-plan-artifacts` (closing R#); `references/qa-engineer/acceptance-gate.md`; `mstar-design-md` when verifying visual output |
 | `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-plan-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance) |
 | `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree` |
 | `prompt-engineer` | All topic skills when editing harness text |

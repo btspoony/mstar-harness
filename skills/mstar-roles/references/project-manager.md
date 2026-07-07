@@ -57,18 +57,20 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 
 | Task type | Default route |
 | --- | --- |
-| Large feature | `explore -> product-manager -> architect -> dev (SDD) -> QC tri-review -> qa-engineer -> ops-engineer` |
-| Medium feature | `explore -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer` |
-| Small feature | `dev (SDD) -> QC tri-review -> qa-engineer` |
-| Bug fix | `explore -> RCA brief -> dev (SDD) -> QC tri-review -> qa-engineer` |
-| High-ambiguity bug | `explore -> RCA -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer` |
-| Hotfix | `single dev -> QC single-review -> qa-engineer fast verify` |
+| Large feature | `explore -> product-manager -> architect -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory) -> ops-engineer` |
+| Medium feature | `explore -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
+| Small feature | `dev (SDD) -> QC tri-review -> pm-acceptance` (non-UI, no open R#, clean QC Approve) **or** `qa-engineer (mandatory)` when UI/residual/risk applies |
+| Bug fix | `explore -> RCA brief -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
+| High-ambiguity bug | `explore -> RCA -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
+| Hotfix | `single dev -> QC single-review -> pm-acceptance` |
 | Product docs only | `product-manager` (QC may be skipped with explicit reason) |
 | Tech spec only | `architect` (QC may be skipped with explicit reason) |
 | Prompt/rules/skills | `prompt-engineer` |
 | Market/user research | `product-manager` |
-| QA report-only | `qa-engineer` (`QA mode: report-only`) |
+| QA report-only | `qa-engineer` (`QA gate: report-only`, `QA mode: report-only`) |
 | High-risk ops | `ops-engineer` (+QC/QA by risk) |
+
+**QA gate matrix (tier defaults):** `references/project-manager/qa-trigger-matrix.md`.
 
 Detailed conflict priority and dev allocation:
 `references/project-manager/routing-and-dev-allocation.md`.
@@ -82,7 +84,7 @@ Detailed conflict priority and dev allocation:
 - Code-development plans with **`Execution mode: sdd`** (default for multi-task): **mandatory plan QC tri-review** (`qc1`…`qc3` + consolidated) after all task reviewers complete.
 - **`Execution mode: inline`**: hotfix single-seat QC (`qc.md`) or explicit skip rules unchanged.
 - Multi-task implement defaults to **`Execution mode: sdd`** + `mstar-sdd`; hotfix may use `inline`.
-- Runtime/behavior change requires QA by default.
+- Runtime/behavior change requires a recorded **`QA gate`** decision by default (`mandatory` or `pm-acceptance` per `qa-trigger-matrix.md`).
 - Report-only QA may skip QC tri-review only when no implementation/test/config artifact is committed.
 - Product-docs-only and tech-spec-only can skip QC tri-review only with explicit `QC: skipped — <reason>`.
 - Plan `Done` sign-off authority: `project-manager` or `qa-engineer` only.
@@ -116,7 +118,10 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
 - **NEVER** dispatch same-repo **≥2 concurrent writable implement** tracks without **`references/parallel-writable-pre-dispatch.md`**（per-track worktree + absolute **`Worktree path`**；**N invokes ≠ isolation** — also `mstar-dispatch-gates` dual-gate table).
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
-- **NEVER** label `QA: skipped` for report-only QA—still dispatch `qa-engineer` with report-only mode; QC skip rules are separate and explicit.
+- **NEVER** skip `qa-engineer` on `QA gate: report-only` primary routes—still dispatch with `QA mode: report-only`; QC skip rules are separate and explicit.
+- **NEVER** use `QA gate: pm-acceptance` when open R# exist, UI observable gate is unmet, or QC verdict is not clean `Approve`.
+- **NEVER** mark plan `Done` on runtime/behavior change without `QA gate: mandatory` fulfilled or completed PM acceptance checklist (`qa-trigger-matrix.md`).
+- **NEVER** run tests/repro in the PM orchestration thread to substitute for `QA gate: mandatory` dispatch.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
 - **NEVER** accept “temporary workaround”, “follow-up later”, “next plan”, or “split into batches” as narrative-only scope management. If work is deferred or staged, write the roadmap/tracking location before implement GO or Done.
 - **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration` §1.6).
@@ -166,7 +171,7 @@ Use short go/no-go checks before moving phases:
 | Lock `plan` / register `tasks` | If architecture/contracts are in scope, delegated architect output exists or justified exception is recorded; intention gate is explicit. |
 | First `implement` | Pre-implement gate check passes; owner matches route/task board; invoke exists in invoke-based hosts. |
 | QC dispatch | Tri-review invoke and alignment fields pass hard checks. |
-| QA dispatch | QA scope aligns with QC scope (or explicit justified difference). |
+| QA dispatch / PM acceptance | `QA gate` set per `qa-trigger-matrix.md`; if `mandatory`, QA scope aligns with QC scope; if `pm-acceptance`, checklist complete before `Done`. |
 
 Anti-patterns:
 
@@ -284,7 +289,7 @@ Minimum invariants:
 - User conversation follows user language.
 - PM Assignment body can be Chinese by default.
 - Technical artifacts/reports/code/config/commit messages default to English unless user asks otherwise.
-- Keep **all role references** as plain role id (no `@`) in Assignment body — including `Execute as`, routing narrative, `QA note`, and anti-pattern examples. Host invoke uses task tool `subagent` matching `Execute as` per `mstar-host` (OpenCode: `opencode.md` § Role-mention hygiene).
+- Keep **all role references** as plain role id (no `@`) in Assignment body — including `Execute as`, routing narrative, `QA gate`, and anti-pattern examples. Host invoke uses task tool `subagent` matching `Execute as` per `mstar-host` (OpenCode: `opencode.md` § Role-mention hygiene).
 
 ---
 
@@ -298,6 +303,8 @@ Minimum invariants:
   - `references/project-manager/qc-and-residuals.md`
 - Plan/status initialization + lifecycle:
   - `references/project-manager/plan-management.md`
+- QA gate tier matrix + PM acceptance checklist:
+  - `references/project-manager/qa-trigger-matrix.md`
 
 Sub-references above include additional **NEVER** rules for PM plan/status sync, routing fairness, and QC/residual consolidation.
 

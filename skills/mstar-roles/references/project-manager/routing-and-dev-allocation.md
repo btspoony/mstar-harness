@@ -81,7 +81,7 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - `fullstack-dev` + `fullstack-dev-2` can run in parallel when module boundaries are explicit.
 - Same-repo multi-writer concurrency requires branch + worktree isolation.
 - **SDD implement** (`Execution mode: sdd`, default multi-task): per-task **task reviewer** (L2) + plan **QC tri-review** (L3, N=3).
-- **Inline / hotfix**: single-seat QC or skip per routing table.
+- **Inline / hotfix**: single-seat QC; default **`QA gate: pm-acceptance`** after QC — tier table in `references/project-manager/qa-trigger-matrix.md`.
 
 ## Routing / allocation NEVER (PM)
 
@@ -95,4 +95,5 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - `Task category` matches route
 - `Dev routing` matches task board ownership
 - Parallel intent and branch/worktree policy align
-- If UI-visible changes: QA observable evidence gate present
+- **`QA gate`** and **`QA gate reason`** set per `qa-trigger-matrix.md`
+- If UI-visible changes: `QA gate: mandatory` and observable evidence gate planned

@@ -126,7 +126,7 @@ Do not create your own branch strategy.
 
 - Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-plan-conventions`.
 - Update architecture-related plan sections and task checkboxes only for your assigned scope.
-- Do not mark overall plan `Done`; that authority belongs to PM/QA gate ownership.
+- Do not mark overall plan `Done`; that authority belongs to `project-manager` or `qa-engineer` only (`mstar-harness-core`).
 
 ### Git NEVER (when you touched tracked repo files)
 

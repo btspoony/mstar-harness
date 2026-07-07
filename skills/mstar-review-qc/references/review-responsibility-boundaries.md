@@ -7,7 +7,9 @@
 | **L1** Implementer | dev subagent | Per task | Write code + TDD evidence | `task-N-brief.md` |
 | **L2** Task reviewer | PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** | brief, report, **task-level** diff |
 | **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | Integration, regression, contract drift — **independent lenses, same branch diff** | Branch `review-package` MERGE_BASE..HEAD |
-| **L4** QA | `qa-engineer` | After QC gate | Acceptance, residual, Done | QC reports + plan + `status.json` |
+| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, Done recommendation — **not** default full re-run | QC reports + plan + `status.json` |
+
+PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-matrix.md`. L4 execution when dispatched → `mstar-roles/references/qa-engineer/acceptance-gate.md`.
 
 **SDD rule:** Layers L1–L2 run **per task** (serial). Layer L3 is **mandatory full tri-review** (`N=3`) whenever **`Execution mode: sdd`** — single-plan **and** iteration **and** multi-plan iteration. Layer L3 is **not** optional “final single review”.
 

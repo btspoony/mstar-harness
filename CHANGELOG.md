@@ -2,17 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.0.4** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.0.5** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.0.4** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.4** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.4** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.0.4** |
+| Monorepo root | `morning-star` (`package.json`) | **1.0.5** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.5** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.5** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.5** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.0.5** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.0.5] - 2026-07-07
+
+### Harness (tiered QA gate + role-scoped QC/QA refs)
+
+- **Tiered QA gate** (`mandatory` | `pm-acceptance` | `report-only`) with PM dispatch matrix (`qa-trigger-matrix.md`); hotfix/small clean backend defaults to `pm-acceptance`; medium+, UI, and residual work still requires mandatory QA.
+- **L4 acceptance narrowing** (`qa-engineer/acceptance-gate.md`): evidence reuse from QC consolidated output; no default full test re-run when `QA mode: acceptance-only`.
+- **Role-scoped execution refs**: leaf QC → `mstar-roles/references/qc-specialist/`; L4 QA → `qa-engineer/`; **`mstar-review-qc`** slimmed to PM orchestration only.
+- **Positive-only skill load lists** per role (what to read) — avoid priming leaf agents to load `mstar-review-qc`.
+- **Routing eval v17**: hotfix/small-backend `pm-acceptance`; UI remains `mandatory`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.0.5**.
 
 ## [1.0.4] - 2026-07-07
 

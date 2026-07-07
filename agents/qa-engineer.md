@@ -1,8 +1,8 @@
 ---
 name: qa-engineer
 description: |-
-  测试工程师 - 编写测试用例和自动化测试。
-  QA Engineer - test planning, automated tests, coverage improvements, and regression protection.
+  测试工程师 - L4 验收席（分级派发）：DoD 映射、residual 验证、report-only 调查。
+  QA Engineer - tiered L4 acceptance (DoD mapping, residual verify, report-only); dispatched when PM sets QA gate mandatory.
 mode: subagent
 tools:
   write: true

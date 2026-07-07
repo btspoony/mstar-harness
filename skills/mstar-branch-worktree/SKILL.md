@@ -143,7 +143,7 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
   - **`Review range` / `Diff basis`**：明确本次审查所针对的 **diff/提交范围**（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。**三名 reviewer 的 Assignment 间该字段必须完全一致**；**`qa-engineer`** 验证同一 feature 时 **复用同一 `plan_id` 与同一 `Review range` / `Diff basis`**。**热修 / QC 单审**路径也须含 **同一组字段**，仅承接方份数为 1。
 - **三审并行**时，三名 reviewer **共用同一组 `Review cwd` / `Worktree path` + `Working branch` + `plan_id` + `Review range` / `Diff basis`**（对业务仓只读分析）；**一般不必**为每位 reviewer 各开一个 worktree，除非宿主或执行环境要求进程级隔离。
 - QC 的 **报告落盘**仍仅限 `{PLAN_DIR}/reports/`；上述约定保证 `git diff`、`git log`、lint 与所读文件与 **待合并 feature** 一致。
-- **`project-manager`** 分派 **`qa-engineer`** 做 **本 feature 的验证**（跑测试、复现、可观察取证、或向业务仓提交测试/配置）时，须在 Assignment 中写明 **同一套** **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`** 与 **`Review range` / `Diff basis`**（与 QC 三审 **逐字相同**；若 QC 已写清，QA **照抄**）。**`qa-engineer`** 在执行业务仓命令前须核对当前目录与分支与 Assignment 一致；**Report-only**、且本轮 **不涉及** 业务仓内命令/路径依赖时，若 Assignment 未写 `Review cwd`，须在回报中说明验证所基于的检出或环境，缺失则 `Blocked` 并请 PM 补全。
+- **`project-manager`** 分派 **`qa-engineer`** 时（仅 **`QA gate: mandatory`**），Assignment 须与 QC **逐字相同**的 **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`**、**`Review range` / `Diff basis`**（QC 已写清则 QA 照抄）。**`qa-engineer`** 执行业务仓命令前须核对检出与分支；Report-only 且无路径依赖时，回报须说明验证环境，否则 `Blocked`。
 - 若 **QA 与同仓其他可写角色并发**提交测试代码，仍须遵守上文「同仓并发写入」的 **worktree** 规则（可为 QA 单开一条写入 worktree，**同一 `Working branch`**，由 PM 在 Assignment 写明）。
 
 派发前清单与常见反模式 → **`references/parallel-writable-pre-dispatch.md`**。

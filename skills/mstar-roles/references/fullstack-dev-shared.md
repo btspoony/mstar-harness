@@ -101,7 +101,7 @@ If plan drift appears, request plan update before continuing.
 
 - Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-plan-conventions`.
 - Update assigned task checkboxes and plan notes for your scope.
-- Do not mark full plan `Done` (PM/QA authority).
+- Do not mark full plan `Done` (only `project-manager` or `qa-engineer` per `mstar-harness-core`).
 
 ### Git NEVER (repo writes)
 

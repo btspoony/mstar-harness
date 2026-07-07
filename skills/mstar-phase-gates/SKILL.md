@@ -62,15 +62,14 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 - 开发角色（`@frontend-dev` / `@fullstack-dev` / `@fullstack-dev-2`）
   - 仅在 Execute gate 放行后开始实现。
   - 发现新约束时先回报并请求回写 plan。
-- `@qa-engineer`
-  - 在 `InReview` 阶段验证实现与验收映射是否一致。
+- `@qa-engineer` — when **`QA gate: mandatory`**, L4 per `mstar-roles/references/qa-engineer/acceptance-gate.md`; `pm-acceptance` is PM-only (`qa-trigger-matrix.md`).
 
 ## 迭代级活动
 
 per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 per-plan gate）：
 
 - **迭代启动**（`mstar-iteration` § Phase 1）：锁定迭代范围、**显式 branch policy**（`iteration_base_branch` / `target_branch`）、产出 compass。
-- **迭代驱动**（`mstar-iteration` § Phase 2 Autonomous Execute）：per-plan 派发循环（分支→实现→QC→QA→Done→合并），跨 plan 进度追踪，更新 compass 中各 plan 状态。
+- **迭代驱动**（`mstar-iteration` § Phase 2 Autonomous Execute）：per-plan 派发循环（分支→实现→QC→**QA gate**→Done→合并），跨 plan 进度追踪，更新 compass 中各 plan 状态。
 - **迭代收口**（`mstar-iteration` § Phase 3 iteration-close）：迭代内所有 plan Done 后，执行一轮知识结晶（`mstar-compound`）沉淀迭代经验，更新 roadmap，标记迭代完成。
 
 per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。

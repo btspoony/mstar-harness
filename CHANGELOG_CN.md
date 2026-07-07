@@ -1,16 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.4**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.5**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.0.4** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.4** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.4** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.4** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.0.5** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.5** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.5** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.5** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.5** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.0.5] - 2026-07-07
+
+### Harness（分层 QA gate + 角色域 QC/QA 引用）
+
+- **分层 QA gate**（`mandatory` | `pm-acceptance` | `report-only`）与 PM 派发矩阵（`qa-trigger-matrix.md`）；hotfix/小型干净后端默认 `pm-acceptance`；中型+、UI、residual 仍须 mandatory QA。
+- **L4 验收收窄**（`qa-engineer/acceptance-gate.md`）：复用 QC consolidated 证据；`QA mode: acceptance-only` 时默认不全量重跑测试。
+- **角色域执行引用**：leaf QC → `mstar-roles/references/qc-specialist/`；L4 QA → `qa-engineer/`；**`mstar-review-qc`** 收窄为 PM 编排层。
+- **正面加载列表**：各角色只写「该读什么」，避免 leaf agent 被反向引导去读 `mstar-review-qc`。
+- **Routing eval v17**：hotfix/small-backend → `pm-acceptance`；UI 仍 `mandatory`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.0.5**。
 
 ## [1.0.4] - 2026-07-07
 

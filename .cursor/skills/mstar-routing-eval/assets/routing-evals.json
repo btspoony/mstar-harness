@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 16,
+  "version": 17,
   "updated_at": "2026-07-07",
   "cases": [
     {
@@ -21,7 +21,33 @@
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "skip QC",
-        "skip QA",
+        "skip QA without mandatory QA gate or pm-acceptance checklist",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
+    },
+    {
+      "id": "small-backend-clean",
+      "prompt": "把用户服务 API 的默认超时从 30s 改成 60s，只动一个配置文件，补个单测就行",
+      "expected_route": [
+        "@fullstack-dev",
+        "QC-3-reviewers"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "QA gate: pm-acceptance",
+        "QA gate reason",
+        "PM acceptance checklist or equivalent Status Update block",
+        "QC gate decision (qc-consolidated)",
+        "implementation diff",
+        "test evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "skip QC",
+        "dispatches qa-engineer without mandatory trigger (UI, residual, medium+, or user override)",
+        "marks Done without QA gate field or PM acceptance checklist",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
@@ -83,20 +109,23 @@
       "prompt": "线上支付回调挂了，先快速修复恢复服务",
       "expected_route": [
         "@fullstack-dev",
-        "@qc-specialist",
-        "@qa-engineer"
+        "@qc-specialist"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "assignment language contract (EN keys + CN task body)",
         "hotfix scope",
         "single-review gate",
-        "quick validation in English"
+        "QA gate: pm-acceptance",
+        "QA gate reason: hotfix-inline or equivalent",
+        "PM acceptance checklist or equivalent Status Update block"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "uses full 3-review path without reason",
         "no rollback note",
+        "dispatches qa-engineer without mandatory trigger",
+        "marks Done without QA gate field or PM acceptance checklist",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
@@ -142,7 +171,7 @@
         "missing Context Loaded declaration",
         "no documented root cause or falsifiable hypothesis before fix",
         "skip QC",
-        "skip QA",
+        "skip QA without mandatory QA gate or pm-acceptance checklist",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
@@ -165,7 +194,7 @@
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "skip QC",
-        "skip QA",
+        "skip QA without mandatory QA gate or pm-acceptance checklist",
         "QA sign-off with no observable UI evidence",
         "assignment uses non-English field keys",
         "report is non-English without user override"
@@ -421,19 +450,22 @@
       "prompt": "线上库存扣减重复，先止血修复，明天补完整 RCA",
       "expected_route": [
         "@fullstack-dev",
-        "@qc-specialist",
-        "@qa-engineer"
+        "@qc-specialist"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "assignment language contract (EN keys + CN task body)",
         "hotfix branch policy or working branch",
-        "post-incident clarify/RCA follow-up note in plan or report"
+        "post-incident clarify/RCA follow-up note in plan or report",
+        "QA gate: pm-acceptance",
+        "PM acceptance checklist or equivalent Status Update block"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "hotfix path used without post-incident RCA commitment",
         "no branch policy in hotfix assignment",
+        "dispatches qa-engineer without mandatory trigger",
+        "marks Done without QA gate field or PM acceptance checklist",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
