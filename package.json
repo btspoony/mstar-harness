@@ -1,6 +1,6 @@
 {
   "name": "morning-star",
-  "version": "0.7.9",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "packages/opencode/src/mstar.ts",

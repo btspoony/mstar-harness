@@ -19,7 +19,7 @@ Read **`mstar-harness-core`** before this skill (even when the host injects proj
 4. Load role via `mstar-roles`
 5. Execute with evidence-first completion checks
 
-Load topic skills **on demand** per `mstar-roles` (do not read every `mstar-*` skill by default). Cursor maint routing-eval: `.cursor/skills/mstar-routing-eval/` only.
+Load topic skills **on demand** per `mstar-roles` (do not read every `mstar-*` skill by default). Cursor routing-eval (`.cursor/skills/mstar-routing-eval/`) is regression tooling only — not part of runtime load order.
 
 ## Detect active host
 

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Resolve and ensure {SDD_DIR} for Morning Star SDD artifacts.
+# Usage: sdd-workspace PLAN_ID
+# Prints absolute path to {HARNESS_DIR}/sdd/<plan-id>/ (or legacy .agents/sdd/).
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: sdd-workspace PLAN_ID" >&2
+  exit 2
+fi
+
+plan_id=$1
+root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+if [ -d "$root/.mstar" ]; then
+  harness="$root/.mstar"
+elif [ -d "$root/.agents" ]; then
+  harness="$root/.agents"
+else
+  harness="$root/.mstar"
+fi
+
+dir="$harness/sdd/$plan_id"
+mkdir -p "$dir"
+printf '*\n' > "$dir/.gitignore"
+cd "$dir" && pwd

@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.0.0
+
+- Bundle `mstar-sdd` skill + scripts; SDD mandatory plan QC tri-review (`Execution mode: sdd`); inline/hotfix single-seat; plan template and SDD metadata fields.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.0**.
+
 ## 0.7.9
 
 - Bundled commands/skills: Assignment plain role ids across PM templates, dispatch gates, branch-worktree, iteration commands, opencode host hygiene, and role NEVER rules — avoids OpenCode `@` auto-dispatch in harness prose.

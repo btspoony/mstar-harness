@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Write commit list, stat summary, and diff to a file for reviewer Read.
+# Usage: review-package BASE HEAD [OUTFILE]
+# Never use HEAD~1 as BASE for multi-commit tasks.
+set -euo pipefail
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: review-package BASE HEAD [OUTFILE]" >&2
+  exit 2
+fi
+
+base=$1
+head=$2
+
+git rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
+git rev-parse --verify --quiet "$head" >/dev/null || { echo "bad HEAD: $head" >&2; exit 2; }
+
+if [ $# -eq 3 ]; then
+  out=$3
+else
+  if [ -z "${SDD_DIR:-}" ]; then
+    echo "review-package: set SDD_DIR or pass OUTFILE" >&2
+    exit 2
+  fi
+  mkdir -p "$SDD_DIR"
+  out="$SDD_DIR/review-$(git rev-parse --short "$base")..$(git rev-parse --short "$head").diff"
+fi
+
+{
+  echo "# Review package: ${base}..${head}"
+  echo
+  echo "## Commits"
+  git log --oneline "${base}..${head}"
+  echo
+  echo "## Files changed"
+  git diff --stat "${base}..${head}"
+  echo
+  echo "## Diff"
+  git diff -U10 "${base}..${head}"
+} > "$out"
+
+commits=$(git rev-list --count "${base}..${head}" 2>/dev/null || echo 0)
+echo "wrote ${out}: ${commits} commit(s), $(wc -c < "$out" | tr -d ' ') bytes"

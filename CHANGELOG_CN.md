@@ -1,16 +1,44 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**0.7.9**（CLI 包除外，见下表）。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **0.7.9** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **0.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **0.7.9** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **0.7.9** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **0.7.9** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.0.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.0.0] - 2026-07-07
+
+### Harness（SDD + plan QC 三审）
+
+- **新增 `mstar-sdd`**：文件交接、per-task implementer + **task reviewer**（L2）、`progress.md` 账本。
+- **SDD 路径 plan QC**：**强制 tri-review**（QC#1/#2/#3 交叉审整分支，**N=3**）— 单 plan 与 iteration 均适用；**不是**仅一次单席 final review。
+- **单席 `qc.md`**：仅 `Execution mode: inline` / hotfix 或用户 override。
+- **Plan 模板**：Global Constraints、Interfaces、自检门；`status.json` 可选 `sdd_dir`、`task_commits[]`。
+- **PM Assignment**：`Execution mode`、`SDD dir`、`Model tier`；多 task 默认 SDD。
+- **CLI**：`init`/`doctor` 追加/检查 `.mstar/sdd/` gitignore。
+- **Routing eval v11**：SDD + 强制 tri-review；inline/hotfix 单席。
+
+### Breaking changes
+
+1. 多 task 实现默认 **`Execution mode: sdd`**。
+2. **SDD 下 plan QC 强制三审**；per-task 由 **task reviewer** 负责，不是单席 QC 代替。
+3. **单席 `qc.md`** 仅 inline/hotfix 或 override。
+4. 新 plan 须含 Global Constraints + Interfaces。
+5. `.mstar/sdd/` 须 gitignore。
+
+### 与 Superpowers v6
+
+L2 task reviewer + L3 **tri 交叉审**（非 v6 仅 single final reviewer）。详见 `.harness/specs/sdd-1.0.0-design.md`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.0.0**。
 
 ## [0.7.9] - 2026-07-06
 

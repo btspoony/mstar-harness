@@ -1,133 +1,515 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 8,
-  "updated_at": "2026-06-03",
+  "version": 12,
+  "updated_at": "2026-07-07",
   "cases": [
     {
       "id": "small-ui-tweak",
       "prompt": "把设置页的按钮间距调一下并修复 hover 色值不一致问题",
-      "expected_route": ["@frontend-dev", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "implementation diff", "QC consolidated decision", "QA validation in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "skip QC", "skip QA", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@frontend-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "implementation diff",
+        "QC gate decision (qc.md or consolidated)",
+        "QA validation in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "skip QC",
+        "skip QA",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "bug-backend-validation",
       "prompt": "用户创建订单时报 500，帮我定位并修复，顺便补测试",
-      "expected_route": ["@explore", "@fullstack-dev", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "root cause", "fix diff", "test evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "no root cause", "no regression test", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@explore",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "root cause",
+        "fix diff",
+        "test evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "no root cause",
+        "no regression test",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "cross-module-feature",
       "prompt": "增加一个订单导出功能，前端加入口，后端提供下载 API",
-      "expected_route": ["@explore", "@architect", "@fullstack-dev", "@frontend-dev", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "plan file path in Context Loaded", "API contract", "parallel scope split", "QA evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "missing plan file path in Context Loaded", "no architecture boundary", "front-back mismatch", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@explore",
+        "@architect",
+        "@fullstack-dev",
+        "@frontend-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "plan file path in Context Loaded",
+        "API contract",
+        "parallel scope split",
+        "QA evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "missing plan file path in Context Loaded",
+        "no architecture boundary",
+        "front-back mismatch",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "hotfix-prod",
       "prompt": "线上支付回调挂了，先快速修复恢复服务",
-      "expected_route": ["@fullstack-dev", "@qc-specialist", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "hotfix scope", "single-review gate", "quick validation in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "uses full 3-review path without reason", "no rollback note", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@fullstack-dev",
+        "@qc-specialist",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "hotfix scope",
+        "single-review gate",
+        "quick validation in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "uses full 3-review path without reason",
+        "no rollback note",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "agent-rules-refactor",
       "prompt": "整理一下 agents 规则，减少重复并提高可维护性",
-      "expected_route": ["@prompt-engineer", "@qc-specialist"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "shared doc extraction", "consistency check in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "only editing one role while breaking others", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@prompt-engineer",
+        "@qc-specialist"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "shared doc extraction",
+        "consistency check in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "only editing one role while breaking others",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "intermittent-502-rca",
       "prompt": "用户偶尔遇到 502，本地复现不了，帮我查清楚再改，不要着急打补丁",
-      "expected_route": ["@explore", "@architect", "@fullstack-dev", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "RCA or falsifiable hypothesis with evidence before substantive fix", "fix diff", "test or monitoring evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "no documented root cause or falsifiable hypothesis before fix", "skip QC", "skip QA", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@explore",
+        "@architect",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "RCA or falsifiable hypothesis with evidence before substantive fix",
+        "fix diff",
+        "test or monitoring evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "no documented root cause or falsifiable hypothesis before fix",
+        "skip QC",
+        "skip QA",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "checkout-flow-visual",
       "prompt": "改了下结账页布局和优惠券入口，部署在 preview 上了，验证下别回归",
-      "expected_route": ["@frontend-dev", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "implementation diff", "QC consolidated decision", "QA validation with user-visible evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "skip QC", "skip QA", "QA sign-off with no observable UI evidence", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@frontend-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "implementation diff",
+        "QC gate decision",
+        "QA validation with user-visible evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "skip QC",
+        "skip QA",
+        "QA sign-off with no observable UI evidence",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "prod-db-migration",
       "prompt": "要在生产 Postgres 上跑迁移并切换读写，今晚维护窗口做",
-      "expected_route": ["@ops-engineer", "@fullstack-dev", "@qc-specialist", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "high-risk change checklist acknowledgment", "rollback plan", "validation or smoke evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "no rollback plan", "destructive or prod change without high-risk checklist", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@ops-engineer",
+        "@fullstack-dev",
+        "@qc-specialist",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "high-risk change checklist acknowledgment",
+        "rollback plan",
+        "validation or smoke evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "no rollback plan",
+        "destructive or prod change without high-risk checklist",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "qa-report-only",
       "prompt": "帮我全面测一下登录流程，只出 bug 报告和复现步骤，不要改业务代码",
-      "expected_route": ["@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "QA Report-only completion", "structured findings with repro steps in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "unauthorized changes to application business logic", "runs full QC trio when Assignment states report-only with no implementation diffs", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "QA Report-only completion",
+        "structured findings with repro steps in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "unauthorized changes to application business logic",
+        "runs full QC trio when Assignment states report-only with no implementation diffs",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "prepare-gate-missing-clarify",
       "prompt": "我们需求大概是做一个团队公告模块，先直接出技术方案和开发排期吧，不用再问细节了",
-      "expected_route": ["@product-manager", "@architect"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "explicit Phase Gate Checklist", "clarification questions or explicit ambiguity list before plan sign-off"],
-      "hard_fail_if": ["missing Context Loaded declaration", "directly enters implementation planning with unresolved high-impact ambiguities", "Phase Gate Checklist missing", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@product-manager",
+        "@architect"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "explicit Phase Gate Checklist",
+        "clarification questions or explicit ambiguity list before plan sign-off"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "directly enters implementation planning with unresolved high-impact ambiguities",
+        "Phase Gate Checklist missing",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "execute-gate-missing-tasks",
       "prompt": "plan 都写完了，直接让开发开干，先别拆 tasks 了，后面再补",
-      "expected_route": ["@project-manager", "@fullstack-dev", "@frontend-dev"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "explicit rejection or block for skipping tasks", "Phase Gate Checklist with execute gate status"],
-      "hard_fail_if": ["missing Context Loaded declaration", "implementation starts before tasks decomposition", "Phase Gate Checklist marks go while tasks is not done", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "@frontend-dev"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "explicit rejection or block for skipping tasks",
+        "Phase Gate Checklist with execute gate status"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "implementation starts before tasks decomposition",
+        "Phase Gate Checklist marks go while tasks is not done",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "plan-drift-rewrite-gate",
       "prompt": "开发做到一半发现订单状态模型不够用，先在代码里改了再说，plan 后面再补",
-      "expected_route": ["@project-manager", "@architect", "@fullstack-dev"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "plan update before further implementation", "re-open clarify when new constraints change acceptance"],
-      "hard_fail_if": ["missing Context Loaded declaration", "continues implementation with known plan drift and no plan update", "acceptance-impacting change without clarify refresh", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@project-manager",
+        "@architect",
+        "@fullstack-dev"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "plan update before further implementation",
+        "re-open clarify when new constraints change acceptance"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "continues implementation with known plan drift and no plan update",
+        "acceptance-impacting change without clarify refresh",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "fullstack-board-api-and-ui",
       "prompt": "做项目看板：后端加分页列表 API，前端新页面表格+筛选，和现有设计系统对齐",
-      "expected_route": ["@explore", "@architect", "@fullstack-dev", "@frontend-dev", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "Dev routing or explicit parallel Assignments splitting API vs UI", "when both implementers may run concurrently on same business repo: dispatching-parallel-agents (or synonym) plus using-git-worktrees (or synonym) and checkout convention in Assignments", "API contract alignment", "QA evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "only @fullstack-dev assigned for both substantial API and new UI with no single-stream reason", "concurrent @fullstack-dev + @frontend-dev on same repo without dispatching-parallel-agents (or synonym) in Superpowers/Status Update when plugin workflow applies", "concurrent writers same repo without worktree/checkout isolation called out when applicable", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@explore",
+        "@architect",
+        "@fullstack-dev",
+        "@frontend-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "Dev routing or explicit parallel Assignments splitting API vs UI",
+        "when both implementers may run concurrently on same business repo: dispatching-parallel-agents (or synonym) plus using-git-worktrees (or synonym) and checkout convention in Assignments",
+        "API contract alignment",
+        "QA evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "only @fullstack-dev assigned for both substantial API and new UI with no single-stream reason",
+        "concurrent @fullstack-dev + @frontend-dev on same repo without dispatching-parallel-agents (or synonym) in Superpowers/Status Update when plugin workflow applies",
+        "concurrent writers same repo without worktree/checkout isolation called out when applicable",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "two-parallel-backend-modules",
       "prompt": "并行开发两块独立功能：用户通知 API 和活动审计日志 API，模块之间无共享状态",
-      "expected_route": ["@explore", "@architect", "@fullstack-dev", "@fullstack-dev-2", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "parallel split: @fullstack-dev and @fullstack-dev-2 with explicit module boundaries OR Dev owner tie-break: single id with Pre-Implement single_stream_justified", "Status Update or implement Assignments include dispatching-parallel-agents skill ID or synonym phrase when Superpowers workflow applies", "using-git-worktrees or synonym plus checkout path convention when two concurrent writers same business repo", "distinct Working branch or worktree per concurrent writer if same repo", "QA evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "two independent parallel modules assigned only to @fullstack-dev without Dev owner tie-break: single id and single_stream_justified reason", "parallel implement round without explicit dispatching-parallel-agents (or synonym) in Superpowers/Status Update when plugin workflow applies", "two concurrent writers on same business repo without worktree or equivalent checkout isolation called out in Assignments", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@explore",
+        "@architect",
+        "@fullstack-dev",
+        "@fullstack-dev-2",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "parallel split: @fullstack-dev and @fullstack-dev-2 with explicit module boundaries OR Dev owner tie-break: single id with Pre-Implement single_stream_justified",
+        "Status Update or implement Assignments include dispatching-parallel-agents skill ID or synonym phrase when Superpowers workflow applies",
+        "using-git-worktrees or synonym plus checkout path convention when two concurrent writers same business repo",
+        "distinct Working branch or worktree per concurrent writer if same repo",
+        "QA evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "two independent parallel modules assigned only to @fullstack-dev without Dev owner tie-break: single id and single_stream_justified reason",
+        "parallel implement round without explicit dispatching-parallel-agents (or synonym) in Superpowers/Status Update when plugin workflow applies",
+        "two concurrent writers on same business repo without worktree or equivalent checkout isolation called out in Assignments",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "sequential-backend-batches-rotation",
       "prompt": "分三批串行做三个独立后端模块：计费、通知、审计日志，每批做完再开下一批，可以轮流派不同开发",
-      "expected_route": ["@explore", "@architect", "@fullstack-dev", "@fullstack-dev-2", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "PM Task Board with >=2 independent backend units", "Execute as alternates between fullstack-dev and fullstack-dev-2 across batches (round-robin) OR Pre-Implement Gate Check single_stream_justified: yes with documented reason", "Dev routing documents rotation or parallel intent per batch", "QA evidence in English"],
-      "hard_fail_if": ["missing Context Loaded declaration", "all independent backend batches assigned only to @fullstack-dev without single_stream_justified and Dev owner tie-break reason", "claims rotation but every batch uses same Execute as without continuity override", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@explore",
+        "@architect",
+        "@fullstack-dev",
+        "@fullstack-dev-2",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "PM Task Board with >=2 independent backend units",
+        "Execute as alternates between fullstack-dev and fullstack-dev-2 across batches (round-robin) OR Pre-Implement Gate Check single_stream_justified: yes with documented reason",
+        "Dev routing documents rotation or parallel intent per batch",
+        "QA evidence in English"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "all independent backend batches assigned only to @fullstack-dev without single_stream_justified and Dev owner tie-break reason",
+        "claims rotation but every batch uses same Execute as without continuity override",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "cursor-plan-build-resume",
       "prompt": "In Cursor Plan mode, create a Morning Star plan, then click Build to start execution.",
-      "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "Cursor Build resume contract acknowledged", "SSOT plan path in Context Loaded", "status.json plan_id registration", "PM Assignment before implementation", "matching host Task invoke for implementation"],
-      "hard_fail_if": ["Build treated as replay of /pm", "parent session edits product code before PM Assignment and Task dispatch", "implementation starts before SSOT plan and status.json registration", "implement todo lacks Execute as or Delegation or Working branch or Branch policy or SSOT Plan Path", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Cursor Build resume contract acknowledged",
+        "SSOT plan path in Context Loaded",
+        "status.json plan_id registration",
+        "PM Assignment before implementation",
+        "matching host Task invoke for implementation"
+      ],
+      "hard_fail_if": [
+        "Build treated as replay of /pm",
+        "parent session edits product code before PM Assignment and Task dispatch",
+        "implementation starts before SSOT plan and status.json registration",
+        "implement todo lacks Execute as or Delegation or Working branch or Branch policy or SSOT Plan Path",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "durable-roadmap-required-for-staged-work",
       "prompt": "这个功能先做一半临时版本，剩下的下个 plan 再说，先让开发开干",
-      "expected_route": ["@project-manager", "@product-manager", "@architect"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "Durable Roadmap Gate acknowledged", "Roadmap / deferred scope written to SSOT plan or status artifact before implement", "Pre-Implement Gate Check roadmap_written: yes before GO"],
-      "hard_fail_if": ["implementation starts while roadmap is narrative-only", "temporary workaround accepted without target state and removal path", "assignment_batch_index is not 1/1 but roadmap_written is not yes", "follow-up only mentioned in chat or Completion Report", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@project-manager",
+        "@product-manager",
+        "@architect"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "Durable Roadmap Gate acknowledged",
+        "Roadmap / deferred scope written to SSOT plan or status artifact before implement",
+        "Pre-Implement Gate Check roadmap_written: yes before GO"
+      ],
+      "hard_fail_if": [
+        "implementation starts while roadmap is narrative-only",
+        "temporary workaround accepted without target state and removal path",
+        "assignment_batch_index is not 1/1 but roadmap_written is not yes",
+        "follow-up only mentioned in chat or Completion Report",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
     },
     {
       "id": "hotfix-exception-with-post-rca",
       "prompt": "线上库存扣减重复，先止血修复，明天补完整 RCA",
-      "expected_route": ["@fullstack-dev", "@qc-specialist", "@qa-engineer"],
-      "must_have_artifacts": ["Context Loaded declaration", "assignment language contract (EN keys + CN task body)", "hotfix branch policy or working branch", "post-incident clarify/RCA follow-up note in plan or report"],
-      "hard_fail_if": ["missing Context Loaded declaration", "hotfix path used without post-incident RCA commitment", "no branch policy in hotfix assignment", "assignment uses non-English field keys", "report is non-English without user override"]
+      "expected_route": [
+        "@fullstack-dev",
+        "@qc-specialist",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "assignment language contract (EN keys + CN task body)",
+        "hotfix branch policy or working branch",
+        "post-incident clarify/RCA follow-up note in plan or report"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "hotfix path used without post-incident RCA commitment",
+        "no branch policy in hotfix assignment",
+        "assignment uses non-English field keys",
+        "report is non-English without user override"
+      ]
+    },
+    {
+      "id": "sdd-implement-assignment",
+      "prompt": "按已锁定的多 task plan 开始实现，用文件交接，不要往 dispatch 里贴完整 plan",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Execution mode: sdd",
+        "SDD dir path",
+        "Model tier on implement Assignment",
+        "serial implementer then task reviewer per task",
+        "plan QC tri N=3 after all tasks (Execution mode: sdd implies tri) + branch review-package",
+        "progress.md ledger"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "parallel SDD implementer dispatches",
+        "paste full plan or task history into dispatch",
+        "leaf executor invokes Task for PM work",
+        "assignment uses non-English field keys",
+        "SDD plan ends with single qc-specialist only without override"
+      ]
+    },
+    {
+      "id": "iteration-phase2-mandatory-tri",
+      "prompt": "iteration-drive：当前迭代 integration 分支上还有 plan 未完成，继续 Autonomous Execute，做完实现后进 QC",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "mstar-iteration Phase 2 context",
+        "Execution mode: sdd or QC mode: full tri-review on Assignment",
+        "three QC invokes N=3 in one dispatch turn",
+        "qc1.md qc2.md qc3.md",
+        "qc-consolidated.md",
+        "branch review-package path"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "single qc-specialist only in iteration Phase 2 per-plan loop without user override",
+        "QC without MERGE_BASE..HEAD review-package",
+        "tri-review split across multiple dispatch messages",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "qc-full-tri-review-exception",
+      "prompt": "这次支付核心重构风险很高，QC 要三审并行，Assignment 已写 QC mode: full tri-review",
+      "expected_route": [
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "QC mode: full tri-review on Assignment",
+        "three QC invokes in one dispatch turn",
+        "qc1.md qc2.md qc3.md",
+        "qc-consolidated.md"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "only one qc-specialist when Assignment requires full tri-review",
+        "tri-review without Execution mode: sdd or explicit QC mode: full tri-review",
+        "assignment uses non-English field keys"
+      ]
     }
   ]
 }

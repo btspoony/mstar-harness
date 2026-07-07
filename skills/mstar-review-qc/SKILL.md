@@ -1,22 +1,22 @@
 ---
 name: mstar-review-qc
-description: Morning Star QC/QA review baseline — tri-review workflow, checklists, report template (YAML frontmatter + Findings + Verdict), reports at `reports/<plan-id>/qc1.md` (no plan-id prefix in basename), targeted re-review after fixes, full-tri `qcN-rev2.md` exception, residual gate. Use when `@qc-specialist*` review, `@qa-engineer` verifies, or `@project-manager` dispatches/consolidates QC.
+description: Morning Star QC/QA review baseline — **SDD plans: mandatory plan QC tri-review** (`qc1`…`qc3` + consolidated); inline/hotfix single-seat (`qc.md`); checklists, report template, targeted re-review, residual gate. Per-task review is **`mstar-sdd`** task reviewers (L2). Use when `qc-specialist*` review, `qa-engineer` verifies, or `project-manager` dispatches/consolidates QC.
 ---
 
 ## Load order（必读顺序）
 
 **在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md），并按需 Read **`mstar-branch-worktree`**（`Review cwd` / `Working branch` / `Review range`）。** 本 skill 只定义 QC/QA **工作流与报告形态**；派发与三审同消息规则见 **`mstar-dispatch-gates`**；**同仓 worktree 与单一待审 `HEAD`** 以 **`mstar-branch-worktree`** 为准。冲突时 **以 `mstar-harness-core` 为准**。
 
-**摘要**：`mstar-harness-core` — QC-QA 检出与并行门禁；本 skill — 审查清单、报告模板、verdict 与 residual 留档契约。
+**摘要**：`mstar-harness-core` — QC-QA 检出与派发门禁；本 skill — 审查清单、报告模板、verdict 与 residual 留档契约。职责分层 → **`references/review-responsibility-boundaries.md`**。
 
 # Morning Star QC Review Baseline（QC 审查基线）
 
-本 skill 定义所有 QC 审查员的共享基线。三份 QC 角色提示词在流程、门禁与要点上应与本 skill 一致且彼此对齐：**共用正文以`mstar-roles` skill 的 `qc-specialist-shared`为准**；`-2` / `-3` 仅保留 frontmatter、开场白中的 Reviewer 编号、`## 并行审查时本 reviewer 的侧重` 一节，以及 Completion Report 模板里的 **Agent** 名。
+本 skill 定义所有 QC 审查员的共享基线。**`Execution mode: sdd` 时：plan 级强制 tri-review**（QC#1/#2/#3 交叉审整分支 → `qc1`…`qc3` + `qc-consolidated.md`）。**`inline` / hotfix** 可用单席 `qc.md`。三审共用正文以 **`mstar-roles`** `qc-specialist-shared` 为准。
 
 ## 分派时机（与 plan / batch 对齐）
 
-- **默认**：`@project-manager` 在 **该 plan 的实现范围已由 dev team 全部交付**、准备进入预合并门禁时，分派完整 QC 三审。**同一 `plan_id` 下多 batch 滚动实现时，不默认每 batch 跑一轮全套三审**（避免 `reports/<plan-id>/` 多套报告与范围串线）；中间阶段靠自检与 PM 协调，**显式增量三审**须在 Assignment 写明（见 `mstar-plan-conventions` `references/plan-files-and-reports.md`「QC 三审触发时机」）。
-- **同仓多 worktree 并行开发**：一轮 QC 三审仍只对应 **一套** `Review cwd` + `Working branch` + `Review range` / `Diff basis`（三票逐字相同）。若成果曾分布在 **未合并** 的多条分支或多个 `HEAD`，PM **须先**完成 Git 归并到 **单一**待审分支再派 QC；**不得**指望 reviewer 自行在多个开发 worktree 之间拼凑审查范围。**推荐** PM 在并行开发开始前已建立 **plan 集成分支** 作为各轨 merge 靶（见 `mstar-branch-worktree` 同节 **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**）。细则见 `mstar-branch-worktree` **「多 worktree 并行开发与 QC / QA 的门禁衔接」**。
+- **`Execution mode: sdd`**（单 plan 与 iteration 均适用）：全部 task + L2 task reviewers 完成后 → **强制 tri-review**（`QC mode: full tri-review`，**N=3**）。Assignment 须含 **branch review-package** 路径。PM 汇总 `qc-consolidated.md`。
+- **`Execution mode: inline`**：单席 `qc-specialist` → `qc.md`（**N=1**），或按 hotfix 路由跳过。
 - **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only QC seats that **raised** blocking findings for this fix round; each updates **the same** `{PLAN_DIR}/reports/<plan-id>/qcN.md` (e.g. `qc1.md` — no `<plan-id>` prefix in basename) (add `## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` files on this path. Artifact naming and PM consolidated updates → **`mstar-plan-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
 - **Full tri re-review (exception)**：Assignment must say **`QC re-review: full tri-review`**; then new basenames (`qc1-rev2.md` … `qc-consolidated-rev2.md`); PM marks **active wave** in consolidated decision.
 

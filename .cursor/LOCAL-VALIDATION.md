@@ -13,6 +13,7 @@ Use before publishing or sharing the Morning Star Cursor plugin from this repo.
 - Agent files are discoverable from `./agents/`.
 - Morning Star skills are discoverable from `./skills/mstar-*/SKILL.md`.
 - Host skill is discoverable from `./skills/mstar-host/SKILL.md`.
+- SDD skill: `./skills/mstar-sdd/SKILL.md` + `scripts/` (bundled in OpenCode as `harness-skills/mstar-sdd/`).
 - Plugin rules are discoverable from `./rules/*.mdc` (registered as `"rules": ["rules/"]` in `plugin.json`).
 - Routing eval (maint only, not plugin runtime): `./.cursor/skills/mstar-routing-eval/`.
 
@@ -30,6 +31,20 @@ Use before publishing or sharing the Morning Star Cursor plugin from this repo.
 - Open a new **Agent-mode** chat with the local plugin loaded.
 - Confirm Task `subagent_type` includes Morning Star roles such as `fullstack-dev` and `qc-specialist`.
 - If missing: verify `agents/*.md` use Cursor-first frontmatter; run `mstar-harness doctor --target cursor --scope global`; reload Cursor.
+
+## 3c) SDD smoke (1.0.0+)
+
+From repo root with a fixture plan:
+
+```bash
+skills/mstar-sdd/scripts/sdd-workspace test-plan-id
+skills/mstar-sdd/scripts/task-brief .harness/plans/10-sdd-1-0-0-release.md 1
+git rev-parse HEAD | xargs -I{} skills/mstar-sdd/scripts/review-package {} {}
+```
+
+- Confirm outputs land under `{SDD_DIR}` printed by `sdd-workspace` (default `.mstar/sdd/<plan-id>/`).
+- `git status` must **not** list `{HARNESS_DIR}/sdd/` scratch files (directory should be gitignored).
+- PM-style routing: **`Execution mode: sdd`** → plan QC **N=3** tri + branch review-package; **`inline`/hotfix** → **N=1** `qc.md`. SDD implement/reviewer dispatches are **serial**.
 
 ## 4) Packaging guardrails
 

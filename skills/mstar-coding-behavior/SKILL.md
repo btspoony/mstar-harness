@@ -202,6 +202,7 @@ Core idea: how you communicate about code matters as much as the code itself.
 
 ## Integration Notes
 
+- **SDD implementer reports** (`mstar-sdd`): completion evidence must include TDD triple — test file(s), command, output — in `task-N-report.md`; fix rounds add the same for new/changed tests.
 - This skill must not be used to bypass:
   - branch constraints,
   - QC/QA gate definitions,

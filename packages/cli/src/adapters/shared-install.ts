@@ -160,6 +160,8 @@ export function validateSymlink(target: string, linkPath: string) {
   return errors;
 }
 
+export const SDD_SCRATCH_GITIGNORE = [".mstar/sdd/", ".agents/sdd/"];
+
 export function appendGitignore(projectRoot: string, entries: string[], dryRun: boolean) {
   const gitignorePath = path.join(projectRoot, ".gitignore");
   const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
@@ -171,6 +173,10 @@ export function appendGitignore(projectRoot: string, entries: string[], dryRun: 
     fs.appendFileSync(gitignorePath, `${prefix}${missing.join("\n")}\n`, "utf8");
   }
   return missing.map((entry) => `Added ${entry} to .gitignore`);
+}
+
+export function appendHarnessProjectGitignore(projectRoot: string, dryRun: boolean) {
+  return appendGitignore(projectRoot, SDD_SCRATCH_GITIGNORE, dryRun);
 }
 
 export function homeRelativeSourcePath(targetPath: string) {

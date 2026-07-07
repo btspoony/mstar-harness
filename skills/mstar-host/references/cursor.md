@@ -7,7 +7,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 ## Cursor-only context
 
 - Role prompts: `mstar-roles`; **`/pm`** → `project-manager` via `pm` skill + `mstar-roles`.
-- Routing-eval: `.cursor/skills/mstar-routing-eval/` — maint only.
+- Routing-eval: `.cursor/skills/mstar-routing-eval/` — regression tooling only; not runtime load order.
 
 ## Plan mode × harness dual-write
 
@@ -38,13 +38,11 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 3. `mstar-harness-core` and `mstar-*` skills
 4. `mstar-host` + this reference
 
-## Task tool (QC tri-review)
+## Task tool (QC: SDD → N=3)
 
-- Apply **`parallel-dispatch.md`**: prerequisite message may prep only; dispatch message emits **all `N`** Tasks (**3** for tri-review) in **one** message when parallel is required.
-- `subagent_type`: bare role ids — `qc-specialist`, `qc-specialist-2`, `qc-specialist-3` (same for implement roles: `fullstack-dev`, `frontend-dev`, etc.).
-- Identical across three Tasks: **`plan_id`**, **`Review cwd`**, **`Review range` / Diff basis** (`mstar-branch-worktree`, `mstar-dispatch-gates`, `mstar-review-qc`).
-- Parallel QC ≠ different review cwd per reviewer; one integrated HEAD for scope.
-- Status Update may note QC ran via parallel Task subagents.
+- **`Execution mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path.
+- **`inline`**: **N=1** per `parallel-dispatch.md`.
+- SDD implement/reviewer: **serial** — see **`mstar-sdd`**.
 
 ## Dispatch execution（canonical）
 
@@ -68,8 +66,20 @@ Implementation roles use `mstar-coding-behavior` for RCA, test-first checks, rev
 
 ## Gotchas
 
-- Tri-review needs identical `plan_id` and review scope fields.
+- Single-seat and tri-review need identical `plan_id` and review scope fields.
 - Task parallelism does not relax branch/worktree isolation.
+
+## Model tier (SDD + QC)
+
+Map Assignment **`Model tier`** to Task `model` (host-specific slugs):
+
+| Tier | Typical use |
+|------|-------------|
+| `fast` | Transcription tasks; 1–2 file mechanical edits |
+| `standard` | SDD prose implementer; task reviewer floor; plan QC tri seats |
+| `capable` | Large branch QC diff; integration judgment |
+
+**Turn count beats token price** — reviewers and prose implementers use `standard` floor minimum. See `mstar-sdd` SKILL.
 
 ## Project rules
 

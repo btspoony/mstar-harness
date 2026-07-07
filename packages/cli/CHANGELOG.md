@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.0.0
+
+- Project `init`/`doctor`: append/check `.mstar/sdd/` and `.agents/sdd/` gitignore entries for SDD scratch.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.0**.
+
 ## 0.5.4
 
 - **Layout fix**: Cursor global/project plugin paths are **real git checkouts** (`git clone` / `git pull`), not symlinks to `~/.mstar/harness`. Cursor does not discover symlinked plugin directories.
