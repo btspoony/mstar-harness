@@ -1,16 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.2**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.3**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.0.2** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.2** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.2** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.2** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.0.3** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.3** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.3** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.3** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.3** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.0.3] - 2026-07-07
+
+### Harness（iteration 连续推进）
+
+- **`iteration-drive`**：新增 Phase 2–5 **Continuous execution（HARD）** — 进度汇报后禁止例行 yes/no；turn 须以 in-flight dispatch 收束；per-plan 串行 implement；明确合法 STOP 边界。
+- **`mstar-iteration` §2.6**：扩展 **Push 纪律（Autonomous Execute）** — Phase 5 merge-ready exit 前连续编排；task/plan/phase 间禁止确认问句。
+- **`pm` skill**：恢复 **Autonomous Execute push** 为第 4 条规则；迭代语义 SSOT 仅 **`mstar-iteration`**（runtime skills 不引用 command 名）。
+- **Skills 与 command 分层**：自 runtime `mstar-*` skills 移除 `iteration-drive` 反向引用（host、project-manager、sticky implementer、dispatch-and-assignment）。
+- **Routing eval v15**：mid-execute 向用户 check-in 硬失败；新增 `iteration-drive-continuous-after-plan-wave` 场景。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.0.3**。
 
 ## [1.0.2] - 2026-07-07
 

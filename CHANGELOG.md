@@ -2,17 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.0.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.0.3** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.0.2** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.0.2** |
+| Monorepo root | `morning-star` (`package.json`) | **1.0.3** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.3** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.3** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.3** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.0.3** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.0.3] - 2026-07-07
+
+### Harness (iteration continuous execution)
+
+- **`iteration-drive`**: Add **Continuous execution (HARD)** for Phase 2–5 — no routine yes/no check-ins after progress reports; turn must end with in-flight dispatch; per-plan serial implement loop; explicit legal STOP boundaries.
+- **`mstar-iteration` §2.6**: Expand **Push discipline (Autonomous Execute)** — continuous execution through Phase 5 merge-ready exit; no confirmation questions between tasks, plans, or phases.
+- **`pm` skill**: Restore **Autonomous Execute push** as rule 4; iteration semantics SSOT → **`mstar-iteration`** only (no command names in runtime skills).
+- **Skills command-agnostic cleanup**: Remove `iteration-drive` references from runtime `mstar-*` skills (host refs, project-manager, sticky implementer, dispatch-and-assignment).
+- **Routing eval v15**: Hard-fail mid-execute user check-ins; new `iteration-drive-continuous-after-plan-wave` case.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.0.3**.
 
 ## [1.0.2] - 2026-07-07
 
