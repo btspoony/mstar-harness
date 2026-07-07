@@ -28,7 +28,7 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 
 - **`plan(locked)`** — 冻结基线；实现中出现新约束时**先回写 plan 再继续**。
 - **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。
-  - **并行标签**：若 PM 将 ≥2 条实现轨 **同时** 分派，须在 Assignment 写明 `Dispatch mode: parallel independent tracks`；同仓 ≥2 可写并发时写明 `Worktree isolation: required`（见 **`mstar-dispatch-gates`** 与 **`mstar-branch-worktree`**）。
+  - **并行标签**：≥2 条实现轨同时分派 → `Dispatch mode: parallel independent tracks`；同仓可写并发 → `Worktree isolation: required`（清单 **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**）。
 - **`implement`** — 按 tasks 顺序执行；多 task plan **默认** `Execution mode: sdd`（`mstar-sdd`）；hotfix 可 `inline`。完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
 
 ### 可验证编辑与上下文纪律

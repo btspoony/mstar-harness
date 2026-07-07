@@ -142,6 +142,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 递归误派 / 误读 Handoff | `mstar-dispatch-gates` |
 | `quick` 跳过 Prepare | 上表 + `mstar-phase-gates` |
 | 多 worktree 未归并就 QC | `mstar-branch-worktree` |
+| 并行 implement：N invoke 无 worktree | `mstar-branch-worktree` → `references/parallel-writable-pre-dispatch.md` |
 | residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
 | 角色文件塞流程长文 | 用专题 skill |
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |

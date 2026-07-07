@@ -114,7 +114,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** register residuals only inside the plan narrative while skipping root `{HARNESS_DIR}/status.json` `residual_findings[<plan_id>]` when plan conventions require the SSOT field.
 - **NEVER** write non-canonical residual `severity` strings—use only the machine enum from `mstar-plan-artifacts`.
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
-- **NEVER** omit native dispatch/worktree fields when the batch truly requires parallel dev (`Dispatch mode: parallel independent tracks`) or same-repo multi-writer concurrency (`Worktree isolation: required`) per `mstar-dispatch-gates` and `mstar-branch-worktree`.
+- **NEVER** dispatch same-repo **≥2 concurrent writable implement** tracks without **`references/parallel-writable-pre-dispatch.md`**（per-track worktree + absolute **`Worktree path`**；**N invokes ≠ isolation** — also `mstar-dispatch-gates` dual-gate table).
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
 - **NEVER** label `QA: skipped` for report-only QA—still dispatch `qa-engineer` with report-only mode; QC skip rules are separate and explicit.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.

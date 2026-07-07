@@ -1,19 +1,19 @@
 ---
 name: mstar-branch-worktree
-description: Morning Star business-repo Git feature branches, same-repo concurrent `git worktree` isolation, plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `project-manager` parallel implement or pre-QC orchestration; `fullstack-dev*` / `frontend-dev` / `qa-engineer` / `ops-engineer` on repo writes; `qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`).
+description: Morning Star business-repo Git feature branches, same-repo concurrent `git worktree` isolation (N parallel Task invokes do NOT satisfy isolation — worktrees must exist before writable dispatch), plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, dispatches ≥2 concurrent writable implement tracks on one repo, `Worktree isolation: required`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `project-manager` parallel implement or pre-QC orchestration; `fullstack-dev*` / `frontend-dev` / `qa-engineer` / `ops-engineer` on repo writes; `qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`).
 ---
 
 ## Load order（必读顺序）
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 冲突时 **以 `mstar-harness-core` 为准**。
 
-**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-plan-conventions`**。下文为 **Git 操作与 QC/QA 检出对齐** 全文（无单独 reference 层）。
+**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-plan-conventions`**。同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；下文为分支与 QC/QA 检出对齐主文。
 
 ## Scope（摘要）
 
 - **仅 PM 决定分支**；其他可写角色不得自行新开分支或切回 `main`。
 - **Assignment 须含其一**：`Working branch: <existing>` | `create <new> from <base>` | `Branch policy: direct on <branch> — <reason>`。
-- **同仓 ≥2 可写并发**：须 `git worktree`（或等价隔离）；PM 写明各流 **Worktree path**。
+- **同仓 ≥2 可写并发**：派发 **前** 完成 **`references/parallel-writable-pre-dispatch.md`**（含 `git worktree`、绝对 **`Worktree path`**；**N 次并行 invoke ≠ 已隔离**）。
 - **QC/QA 前**：待审提交归并到 **单一 `Working branch` `HEAD`**；三审 + QA 共用一套 **`Review cwd` + `plan_id` + `Review range` / `Diff basis`**（逐字相同）。
 
 ## Git 功能分支、同仓并发与 Worktree 对齐
@@ -101,14 +101,14 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 
 ## 同仓并发写入与 Git worktree（强制）
 
-**首要场景是开发阶段**：多条可写流 **并发** 改 **同一仓库** 时，用 worktree 做 **写入侧目录隔离**。下列规则针对该类开发并发；**QC / QA 阶段的检出约定**见下一小节。
+**首要场景是开发阶段**：多条可写流 **并发** 改 **同一仓库** 时，用 worktree 做 **写入侧目录隔离**。派发前清单 → **`references/parallel-writable-pre-dispatch.md`**。下列规则针对该类开发并发；**QC / QA 阶段的检出约定**见下一小节。
 
 当 **`project-manager` 在同一调度轮次内并发启动多个** subagent（含宿主侧「并行 Task / 并行 subagent」），且 **≥2 个承接方**可能对 **同一 Git 仓库的同一工作区（同一 cwd 检出目录）**产生写文件或 `git commit` 级改动时：
 
 - **必须**为每条并发写流使用 **独立检出目录**：优先使用宿主原生 worktree/checkout 隔离能力；没有原生能力时使用 `git worktree`，并按本 skill 的目录、分支和 QC/QA 对齐规则执行。
 - **必须**与既有分支门禁一致：每个可写承接方的 Assignment 仍须含 PM 已批准的 **`Working branch`** / **`Branch policy`**；在某一 worktree 内 **不得**擅自 `checkout` 到未授权分支或私自新建分支。
 - **PM 须在 Assignment 中写清**各并发写流的 **检出约定**（例如预期 **`Worktree path`** / 命名规则，或「由承接方创建/使用隔离 worktree 并在 Completion Report 回报路径」），避免多代理默认共享同一目录导致互相覆盖、冲突或半写入状态。
-- **同仓、同一 plan、≥2 可写并行轨**：**推荐**在首次向各轨下发实现 Assignment **之前**，先由 PM 与用户确认 **`Branch policy`**，并 **明确 plan 集成分支与各轨 topic 分支的关系**（见下节 **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**），再为各轨约定 **`git worktree`**。这样 QC 前可把各轨 **自然归并**到同一条 **`HEAD`**，减少「多头分支、无合并靶」导致的误派。
+- **同仓、同一 plan、≥2 可写并行轨**：派发各轨实现 Assignment **之前** 确认 **`Branch policy`** 与 plan 集成分支 / topic 分支关系（见下节 **「默认编排」**），并完成 reference 清单中的 worktree 步骤。
 
 **可不强制新开 worktree** 的情形包括：并发流 **全部为只读**；各写入者针对 **不同 Git 仓库根**；或写入 **串行**（同一时刻仅一个代理持有该仓工作区）。
 
@@ -116,14 +116,14 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 
 当多个可写 subagent **并发**修改 **同一仓库** 时，**不得**共用同一检出目录作为写入 cwd。PM 在分派前应规划 worktree/checkout 隔离，并在各承接方 Assignment 中写明 **`Working branch`** / **`Branch policy`** 及 **检出路径约定**（或要求回报实际 worktree 路径）。单分支决策权仍仅属 PM；worktree 只解决「目录与工作区隔离」，不替代分支授权。
 
-**同仓、同一 plan、多可写并行轨（推荐）**：在挂齐各轨 `git worktree` **之前**，先与用户确认并写明 **plan 集成分支**（从商定 `<base>` 创建）及各轨 **topic 分支** 如何从该线分出或如何 **merge 回** 该线；QC 前再将待一并验收的提交 **全部归并**到 PM 指定为 QC **`Working branch`** 的那条分支的 **`HEAD`**。分步说明与示例命名边界见下节 **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**。
+**同仓、同一 plan、多可写并行轨**：挂齐各轨 worktree **之前** 先确认 plan 集成分支与各轨 topic 分支及 merge 靶；QC 前归并到单一 **`Working branch` `HEAD`**。分步见下节 **「默认编排」**。
 
 **QC / QA 与 feature**：开发常在 **feature 分支的 worktree** 中完成；进入 **QC 三审**与随后的 **QA 验证**时，PM 须在 Assignment 中写明 **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`**（无 plan 流程时 `N/A` + 不可歧义 **Feature / scope label**）与 **`Review range` / `Diff basis`**；**三份 QC Assignment 与 QA Assignment 中 `plan_id` 与 `Review range` / `Diff basis` 须逐字相同**，保证三票审 **同一 plan/feature 与同一 diff 范围**。
 
 ## 多 worktree 并行开发与 QC / QA 的门禁衔接（强制；避免误派）
 
 - **语义区分（必须理解）**：开发阶段可以存在 **多个** `Worktree path`（每条约流一条检出目录）；**一轮**正式 QC 三审及与之 **逐字对齐** 的 QA 验证，在 harness 中仍只对应 **一套** `Review cwd` / `Worktree path` + **`Working branch`** + **`Review range` / `Diff basis`**（三票 QC 与 QA **共用且逐字相同**）。**不要**把「多个开发 worktree」误解成「QC 应轮流进多个目录各审一半」。
-- **推荐默认编排：先建 plan 集成分支，再挂各 worktree（PM；强推荐）**：在 **同仓**、**同一 plan** 且 **≥2 条可写并行轨** 时，按下列顺序编排可最大幅度降低 QC/QA 误用单一开发目录的风险。**此为推荐套路，不是唯一合法 Git 拓扑**；若采用其它拓扑，仍须满足本节下文 **强制**条款（派 QC 前 **单一**待审 `HEAD` + 一套对齐字段）。
+- **默认编排：先建 plan 集成分支，再挂各 worktree（PM）**：在 **同仓**、**同一 plan** 且 **≥2 条可写并行轨** 时，按下列顺序编排可最大幅度降低 QC/QA 误用单一开发目录的风险。**不是唯一合法 Git 拓扑**；若采用其它拓扑，仍须满足本节下文 **强制**条款（派发前 worktree 隔离 + 派 QC 前 **单一**待审 `HEAD` + 一套对齐字段）。
   1. **先起集成分支（再挂 worktree）**：在派发各轨 **实现** Assignment 之前，PM 与用户确认 **`Branch policy`**，并建立 **plan 集成分支**（Assignment 使用 **`Working branch: create <plan-integration-branch> from <base>`** 或等价明确写法；`<base>` 必须是 PM 明确记录的 base，例如 root `metadata.iteration_base_branch`、现有 feature 分支、远程跟踪分支或团队既定主线，**不得**未授权假设）。**分支名由 PM 指定**；下文 **`feature/<plan-id>-integrate`**、**`integrate/<plan-id>`** 仅为命名示例，**非强制**。**多 `plan_id` 同源一条 `primary_spec`（Spec 文档）时**：该集成分支在计划语义上即 **Spec 集成分支**；各 Plan 的 feature 线 merge 回此线，**全部 Plans 完成后** 向显式 `target_branch` **走 PR**（见 `mstar-plan-conventions` SKILL.md「Spec 驱动的分支模型」）。
   2. **再挂各轨 worktree**：为每条并行轨分配 **独立** `git worktree` + **`Worktree path`**；各轨 **`Working branch`** 一般为 **从集成分支出** 的 topic 分支（`create <topic-i> from <plan-integration-branch>`）或 PM 书面约定的等价结构（例如从同一 `<base>` 出 topic、但 **书面指定** 合并时 **以集成分支为靶**）。**禁止**承接方擅自把未授权功能提交直接堆在 `main`/`master`。
   3. **进 QC 之前**：将全部 **须同一轮三审覆盖** 的提交 **merge / rebase / cherry-pick**（以 PM 指定的团队方式）**归并**到 **同一条** PM 将作为 QC **`Working branch`** 的分支的 **`HEAD`**（**通常即 plan 集成分支**；若 PM 已将集成分支重命名或快进为最终 `feature/*`，以 Assignment 为准）。**在此**解决冲突；**勿**在 QC Assignment 仍指向「只含部分轨」的旧 `HEAD` 时派三审。
@@ -145,3 +145,5 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 - QC 的 **报告落盘**仍仅限 `{PLAN_DIR}/reports/`；上述约定保证 `git diff`、`git log`、lint 与所读文件与 **待合并 feature** 一致。
 - **`project-manager`** 分派 **`qa-engineer`** 做 **本 feature 的验证**（跑测试、复现、可观察取证、或向业务仓提交测试/配置）时，须在 Assignment 中写明 **同一套** **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`** 与 **`Review range` / `Diff basis`**（与 QC 三审 **逐字相同**；若 QC 已写清，QA **照抄**）。**`qa-engineer`** 在执行业务仓命令前须核对当前目录与分支与 Assignment 一致；**Report-only**、且本轮 **不涉及** 业务仓内命令/路径依赖时，若 Assignment 未写 `Review cwd`，须在回报中说明验证所基于的检出或环境，缺失则 `Blocked` 并请 PM 补全。
 - 若 **QA 与同仓其他可写角色并发**提交测试代码，仍须遵守上文「同仓并发写入」的 **worktree** 规则（可为 QA 单开一条写入 worktree，**同一 `Working branch`**，由 PM 在 Assignment 写明）。
+
+派发前清单与常见反模式 → **`references/parallel-writable-pre-dispatch.md`**。

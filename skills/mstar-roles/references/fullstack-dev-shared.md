@@ -70,6 +70,8 @@ If plan drift appears, request plan update before continuing.
 
 - Use PM-defined `Working branch` / `Branch policy` only
 - Same-repo concurrent writers must use isolated worktrees
+- When Assignment includes **`Worktree path`**: `cd` there **before** first repo write; do not use PM integration checkout or default repo root
+- Completion Report must state **`Worktree path used`** (absolute) when assigned
 
 ## Responsibilities
 

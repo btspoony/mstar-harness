@@ -9,6 +9,7 @@ The concise gate summary remains in `references/project-manager.md`.
 - Each independent Assignment requires one matching host invoke.
 - In tool hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools), Markdown-only Assignment is not dispatch.
 - For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
+- **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
 
 ## Executor Anti-Recursion Rules
 
@@ -39,7 +40,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Always include the **IDENTITY preamble**: state who the assignee IS (e.g. "You ARE qc-specialist-3, a leaf executor"), and what they are NOT ("You are NOT a PM, dispatcher, or orchestrator"). Follow with the universal floor.
 - Add anti-patterns specific to the assignment context. Examples per role type:
   - **QC reviewers**: "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"
-  - **Multi-track implementers** (`fullstack-dev` + `frontend-dev`): "auto-dispatch to the other track mentioned in Dev routing"
+  - **Multi-track implementers** (`fullstack-dev` + `frontend-dev` / `fullstack-dev-2`): "auto-dispatch to the other track mentioned in Dev routing"; "implement in repo root when Assignment names a different `Worktree path`"
   - **`fullstack-dev-2`**: "treat `fullstack-dev` in routing narrative as a handoff or invoke target"
   - **`qa-engineer`**: "start validation before QC reports are consolidated"; "modify application code"
   - **`explore`-assigned**: "implement or modify code"

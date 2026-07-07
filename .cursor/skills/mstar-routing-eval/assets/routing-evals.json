@@ -295,7 +295,7 @@
         "Context Loaded declaration",
         "assignment language contract (EN keys + CN task body)",
         "Dev routing or explicit parallel Assignments splitting API vs UI",
-        "when both implementers may run concurrently on same business repo: dispatching-parallel-agents (or synonym) plus using-git-worktrees (or synonym) and checkout convention in Assignments",
+        "when both implementers may run concurrently on same business repo: dispatching-parallel-agents (or synonym) plus using-git-worktrees (or synonym) and absolute Worktree path per track before invoke (not Working branch alone)",
         "API contract alignment",
         "QA evidence in English"
       ],
@@ -304,6 +304,7 @@
         "only @fullstack-dev assigned for both substantial API and new UI with no single-stream reason",
         "concurrent @fullstack-dev + @frontend-dev on same repo without dispatching-parallel-agents (or synonym) in Superpowers/Status Update when plugin workflow applies",
         "concurrent writers same repo without worktree/checkout isolation called out when applicable",
+        "two implement invokes in one message without per-track absolute Worktree path (N invoke is not isolation)",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
@@ -324,8 +325,8 @@
         "assignment language contract (EN keys + CN task body)",
         "parallel split: @fullstack-dev and @fullstack-dev-2 with explicit module boundaries OR Dev owner tie-break: single id with Pre-Implement single_stream_justified",
         "Status Update or implement Assignments include dispatching-parallel-agents skill ID or synonym phrase when Superpowers workflow applies",
-        "using-git-worktrees or synonym plus checkout path convention when two concurrent writers same business repo",
-        "distinct Working branch or worktree per concurrent writer if same repo",
+        "using-git-worktrees or synonym plus absolute Worktree path per concurrent writer on same business repo before invoke",
+        "distinct Working branch and Worktree path per concurrent writer if same repo",
         "QA evidence in English"
       ],
       "hard_fail_if": [
@@ -333,6 +334,7 @@
         "two independent parallel modules assigned only to @fullstack-dev without Dev owner tie-break: single id and single_stream_justified reason",
         "parallel implement round without explicit dispatching-parallel-agents (or synonym) in Superpowers/Status Update when plugin workflow applies",
         "two concurrent writers on same business repo without worktree or equivalent checkout isolation called out in Assignments",
+        "parallel implement batch dispatched without Worktree path fields while only Working branch is set",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
