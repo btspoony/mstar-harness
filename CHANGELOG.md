@@ -2,17 +2,27 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.0.5** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.0.6** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.0.5** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.5** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.5** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.5** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.0.5** |
+| Monorepo root | `morning-star` (`package.json`) | **1.0.6** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.6** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.6** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.6** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.0.6** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.0.6] - 2026-07-08
+
+### Harness (SDD per-task reviewer dispatch)
+
+- **`mstar-sdd`**: pin L2 per-task reviewer to **`subagent_type: generalPurpose`**; forbid `qc-specialist*` at task scope (plan QC tri remains L3 after all tasks).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.0.6**.
 
 ## [1.0.5] - 2026-07-07
 

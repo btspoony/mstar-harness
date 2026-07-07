@@ -45,7 +45,7 @@ Batch all findings for the human in one message. If clean, proceed silently.
    - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
    - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
 5. On `DONE`: `review-package BASE HEAD` → diff file
-6. Dispatch **fresh** task reviewer (brief, report, diff, Global Constraints) — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
+6. Dispatch **fresh** task reviewer — **`subagent_type: generalPurpose`** (L2; **not** `qc-specialist*`) — brief, report, diff, Global Constraints — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
 7. Fix loop for Critical/Important; re-review until approved
 8. Append `progress.md`; update `status.json` `task_commits[]` and `implementer-session.json` `last_task` if sticky
 9. Next task

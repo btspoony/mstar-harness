@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.0.6
+
+- Bundled skills: `mstar-sdd` pins L2 per-task reviewer to `generalPurpose`; forbids `qc-specialist*` at task scope.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.6**.
+
 ## 1.0.5
 
 - Bundled skills: tiered QA gate (`qa-trigger-matrix.md`, `acceptance-gate.md`); QC/QA leaf refs under `mstar-roles/references/`; `mstar-review-qc` PM orchestration only; positive-only load lists; routing-eval v17.

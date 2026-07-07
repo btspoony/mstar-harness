@@ -1,16 +1,26 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.5**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.6**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.0.5** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.5** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.5** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.5** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.5** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.0.6** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.6** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.6** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.6** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.6** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.0.6] - 2026-07-08
+
+### Harness（SDD per-task reviewer 派发）
+
+- **`mstar-sdd`**：L2 per-task reviewer 固定为 **`subagent_type: generalPurpose`**；task 级禁止 `qc-specialist*`（全部 task 完成后的 plan QC tri 仍为 L3）。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.0.6**。
 
 ## [1.0.5] - 2026-07-07
 

@@ -4,6 +4,7 @@ One reviewer per task: spec compliance + code quality (`mstar-sdd`).
 
 ```
 Task / subagent:
+  subagent_type: generalPurpose
   description: "SDD review Task N (spec + quality)"
   model: [REQUIRED — standard tier default; capable if diff is large/subtle]
   prompt: |
