@@ -16,7 +16,9 @@
     "harness-agents",
     "harness-commands",
     "AGENTS.md",
-    "INSTALL.md"
+    "INSTALL.md",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
