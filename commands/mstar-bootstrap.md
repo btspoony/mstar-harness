@@ -14,11 +14,10 @@ Distill a coherent knowledge baseline from the current project — useful when t
 
 1. `mstar-harness-core`
 2. `mstar-roles` → `references/project-manager.md`
-3. `skills/pm/SKILL.md` → **§ Host entry** + **§ Boot**
-4. `mstar-plan-conventions`（路径符号）
-5. `mstar-strategy` → **§ STRATEGY.md structure** + **§ Creating STRATEGY.md**
-6. `mstar-compound` → **references/concepts-vocabulary.md**（CONCEPTS.md 规则）
-7. `mstar-compound-refresh` → **§ Core rules**（知识维护基线）
+3. `mstar-plan-conventions`（路径符号）
+4. `mstar-strategy` → **§ STRATEGY.md structure** + **§ Creating STRATEGY.md**
+5. `mstar-compound` → **references/concepts-vocabulary.md**（CONCEPTS.md 规则）
+6. `mstar-compound-refresh` → **§ Core rules**（知识维护基线）
 
 ## Phase 1: Survey — understand what exists
 

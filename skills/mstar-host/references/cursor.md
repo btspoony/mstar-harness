@@ -6,7 +6,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 
 ## Cursor-only context
 
-- Role prompts: `mstar-roles`; **`/pm`** → `project-manager` via `pm` skill + `mstar-roles`.
+- Role prompts: `mstar-roles`; **`/pm`** or **`pm` skill** → general PM orchestration (per-plan dispatch, gates, QC) without an iteration command. **`commands/`** (`iteration-start`, `iteration-drive`, `mstar-bootstrap`) only when running formal iteration Phase 1–5.
 - Routing-eval: `.cursor/skills/mstar-routing-eval/` — regression tooling only; not runtime load order.
 
 ## Plan mode × harness dual-write
@@ -43,6 +43,22 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 - **`Execution mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path.
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 - SDD implement/reviewer: **serial** — see **`mstar-sdd`**.
+
+## SDD sticky implementer (Cursor Task resume)
+
+When Assignment has **`SDD implementer session: sticky`** (`mstar-sdd/references/sticky-implementer-session.md`):
+
+| Turn | Task tool |
+|------|-----------|
+| **First task** (or after `fresh` reset) | `subagent_type: <Execute as>` + `implementer-prompt.md` body; capture returned **agent id** → `{SDD_DIR}/implementer-session.json` → `host_agent_id` |
+| **Task 2+** | `resume: <host_agent_id>` + `implementer-continuation-prompt.md` body (new brief path + report path only) |
+
+**Rules:**
+
+- **1 implement dispatch ⇒ 1 Task** per task id (resume counts as the implement dispatch for that task).
+- **Task reviewer**: always **new** Task — **no** `resume` for reviewers.
+- After each task reviewer passes, PM updates `progress.md` and `implementer-session.json` `last_task`.
+- If `resume` fails or agent id missing → reset to **`fresh`** for that task; log reason in Status Update.
 
 ## Dispatch execution（canonical）
 

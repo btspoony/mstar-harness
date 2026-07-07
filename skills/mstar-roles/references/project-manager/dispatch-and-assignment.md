@@ -73,6 +73,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Execute as**: <role-id>
 **Delegation**: forbidden | allowed (...)
 **Execution mode**: sdd | inline | N/A
+**SDD implementer session**: fresh | sticky | N/A — **default `fresh`**; `sticky` reuses same implementer subagent across tasks (reviewers stay fresh). See `mstar-sdd/references/sticky-implementer-session.md`
 **SDD dir**: `{HARNESS_DIR}/sdd/<plan-id>/` | N/A
 **Model tier**: fast | standard | capable | N/A
 **QC mode**: full tri-review | single | N/A — **default `full tri-review` when `Execution mode: sdd`**; `single` only for `inline` / override
@@ -163,3 +164,17 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 
 For host behavior details (dispatch turn shape, paste-only failure mode, invoke-count discipline),
 read `mstar-host` → the active host reference and `references/parallel-dispatch.md` as host SSOT for dispatch.
+
+## SDD vs inline implement Assignment（PM）
+
+| Mode | Who loads `mstar-sdd` | Assignment shape |
+|------|----------------------|------------------|
+| **`Execution mode: sdd`**（多 task 默认；iteration Phase 2 默认） | **PM** before first implement dispatch | **Per task**：one implementer dispatch + one **fresh** task reviewer；prompt 只含 `{SDD_DIR}/task-N-brief.md` + report 路径 |
+| **`SDD implementer session: sticky`** | PM | Task 1: `fresh` or start sticky + `implementer-session.json`; Task 2+: host **resume** + continuation prompt — **still** per-task review |
+| **`Execution mode: inline`**（hotfix / 单 task） | PM optional | One leaf Assignment；可含完整 scope，但仍须 canonical 字段 |
+
+**NEVER（SDD）**：
+
+- 把整份 plan 或 T1–Tn 全文贴进 **一个** `fullstack-dev` leaf Assignment。
+- 省略 `Execution mode` / `SDD dir` / `Model tier` 却期望 SDD 产物（`progress.md`、per-task review）。
+- 期望 leaf `fullstack-dev` 载入 `mstar-sdd` 并自编排 per-task 循环 — **编排仅 PM**（`iteration-drive` / `mstar-iteration` §2.4–2.5）。

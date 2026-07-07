@@ -13,6 +13,7 @@ PM and subagents move artifacts as **files**, not pasted text. Pasted content st
    - Interfaces / decisions brief cannot know
    - Report path: `$SDD_DIR/task-N-report.md`
    - `Model tier` → host-specific model (required)
+   - **`SDD implementer session`**: `fresh` (new subagent) or `sticky` (resume — see **`sticky-implementer-session.md`**)
 
 ## Implementer report file
 
@@ -71,3 +72,5 @@ Do not paste:
 - Full diff content
 
 Fresh subagent gets: brief + interfaces + constraints + file paths only.
+
+**Sticky implementer** (task 2+): resume same session; read new brief path + `progress.md` — do not re-paste prior task summaries. PM updates `implementer-session.json`.

@@ -1,16 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.0.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.0.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.0.1] - 2026-07-07
+
+### Harness（SDD iteration-drive + sticky implementer + pm shim）
+
+- **`iteration-drive` / `mstar-iteration`**：Phase 2 显式强制 per-task SDD 循环（Boot 载入 `mstar-sdd`）；禁止多 task plan 用 inline 大包派发。
+- **Sticky implementer**（`SDD implementer session: sticky`）：可选同一 dev subagent 跨 task 续会话（Cursor Task `resume`）；`implementer-session.json` 账本；**task reviewer 仍每 task fresh**。
+- **`pm` skill**：精简为跨宿主入口 shim；iteration 编排 Boot 在 **`commands/`**；SSOT → `project-manager.md`。
+- **派发模板**：`SDD implementer session` 字段；SDD vs inline Assignment 对照表。
+- **Routing eval v14**：iteration Phase 2 SDD 硬失败项；新增 `sdd-sticky-implementer-multi-task`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.0.1**。
 
 ## [1.0.0] - 2026-07-07
 

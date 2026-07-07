@@ -1,6 +1,8 @@
 # Implementer subagent prompt template
 
-Use when PM dispatches an SDD implementer (`mstar-sdd`).
+Use when PM dispatches an SDD implementer (`mstar-sdd`) — **first task** or **`SDD implementer session: fresh`**.
+
+For **sticky** continuation (task 2+), use **`implementer-continuation-prompt.md`** instead.
 
 ```
 Task / subagent:

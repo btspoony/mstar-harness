@@ -1,6 +1,6 @@
 ---
 name: mstar-sdd
-description: Morning Star subagent-driven development (SDD) — file handoff, per-task implementer + task reviewer (L2), progress ledger, branch review-package for plan QC tri (L3). **Must** Read when project-manager runs `Execution mode: sdd` (multi-task plan, single-plan, or iteration Phase 2), dispatches SDD implementer/reviewer subagents, or prepares review-package paths. Leaf implementer/reviewer subagents skip PM sections via SUBAGENT-STOP in dispatch prompts.
+description: Morning Star subagent-driven development (SDD) — file handoff, per-task implementer + task reviewer (L2), progress ledger, branch review-package for plan QC tri (L3). **Implementer session** `fresh` (default) or **`sticky`** (same dev subagent across tasks — `references/sticky-implementer-session.md`). **Must** Read when project-manager runs `Execution mode: sdd` (multi-task plan, single-plan, or iteration Phase 2), dispatches SDD implementer/reviewer subagents, or prepares review-package paths. Leaf implementer/reviewer subagents skip PM sections via SUBAGENT-STOP in dispatch prompts.
 ---
 
 ## Load order
@@ -19,7 +19,9 @@ If you were dispatched as an SDD implementer or task reviewer, skip PM orchestra
 
 ## Core principle
 
-Fresh subagent per task + task review (spec + quality) + plan-level QC on whole branch = quality with isolated context.
+**Default:** fresh implementer subagent per task + task review (spec + quality) + plan-level QC on whole branch = quality with isolated context.
+
+**Optional:** **`SDD implementer session: sticky`** — same implementer subagent across sequential tasks on one plan/branch; **task reviewers stay fresh per task**. SSOT → **`references/sticky-implementer-session.md`**.
 
 **Narration:** at most one short line between tool calls — ledger and file paths carry the record.
 
@@ -39,11 +41,13 @@ Batch all findings for the human in one message. If clean, proceed silently.
 1. Record `BASE_SHA` (never use `HEAD~1` later)
 2. `sdd-workspace <plan-id>` → `SDD_DIR`
 3. `task-brief <plan> N` → brief file
-4. Dispatch implementer (brief + report paths, model tier) — templates: `references/implementer-prompt.md`
+4. Dispatch implementer:
+   - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
+   - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
 5. On `DONE`: `review-package BASE HEAD` → diff file
-6. Dispatch task reviewer (brief, report, diff, Global Constraints) — `references/task-reviewer-prompt.md`
+6. Dispatch **fresh** task reviewer (brief, report, diff, Global Constraints) — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
 7. Fix loop for Critical/Important; re-review until approved
-8. Append `progress.md`; update `status.json` `task_commits[]` if used
+8. Append `progress.md`; update `status.json` `task_commits[]` and `implementer-session.json` `last_task` if sticky
 9. Next task
 
 **Never** dispatch multiple implementers in parallel (write conflicts).
@@ -100,6 +104,8 @@ Minor findings → `## Minor (for plan QC)` section in same file.
 - Skip task review or accept missing verdict
 - Re-dispatch tasks listed complete in ledger
 - PM thread implements instead of subagent dispatch
+- Sticky **resume** for task reviewers
+- Resume implementer without `host_agent_id` in `implementer-session.json`
 
 ## Scripts
 
@@ -114,5 +120,7 @@ From repo: `skills/mstar-sdd/scripts/` (bundled in OpenCode as `harness-skills/m
 ## References
 
 - `references/file-handoffs.md` — paths and fix-loop evidence
+- `references/sticky-implementer-session.md` — `fresh` vs `sticky`, ledger, host resume, micro-batch fallback
 - `references/implementer-prompt.md`
+- `references/implementer-continuation-prompt.md`
 - `references/task-reviewer-prompt.md`

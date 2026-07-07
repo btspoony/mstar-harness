@@ -2,17 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.0.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.0.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.0.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.0.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.0.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.0.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.0.1] - 2026-07-07
+
+### Harness (SDD iteration-drive + sticky implementer + pm shim)
+
+- **`iteration-drive` / `mstar-iteration`**: Phase 2 explicitly mandates per-task SDD loop (`mstar-sdd` in Boot, `task-brief` → implementer → `review-package` → task reviewer); forbids bulk inline implement Assignments for multi-task plans.
+- **Sticky implementer session** (`SDD implementer session: sticky`): optional same dev subagent across tasks via host resume (Cursor Task `resume`); `implementer-session.json` ledger; **task reviewers stay fresh** per task. Docs: `mstar-sdd/references/sticky-implementer-session.md`, `implementer-continuation-prompt.md`.
+- **`pm` skill**: thinned to cross-host entry shim (Codex/Cursor `/pm`); iteration lifecycle Boot lives in **`commands/`**; SSOT → `project-manager.md` + topic skills.
+- **Assignment / dispatch**: `dispatch-and-assignment.md` SDD vs inline table; `SDD implementer session` field on template.
+- **Routing eval v14**: iteration Phase 2 SDD hard-fails; new `sdd-sticky-implementer-multi-task` case.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.0.1**.
 
 ## [1.0.0] - 2026-07-07
 

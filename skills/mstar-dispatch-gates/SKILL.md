@@ -69,7 +69,8 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 When **`Execution mode: sdd`** (`mstar-sdd`):
 
-- **串行**：one implementer at a time; one task reviewer after each — **never** parallel implementers (write conflicts).
+- **串行**：one implementer at a time; one **fresh** task reviewer after each — **never** parallel implementers (write conflicts).
+- **`SDD implementer session: sticky`**：same implementer subagent may **resume** across tasks when host supports it; **reviewers never resume** — see **`mstar-sdd/references/sticky-implementer-session.md`**.
 - File handoffs only — no pasted plan/diff/history in dispatch prompts.
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
 - After all tasks: branch `review-package` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.

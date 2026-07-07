@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.0.1
+
+- Bundled skills/commands: `iteration-drive` + `mstar-iteration` Phase 2 per-task SDD mandate; optional sticky implementer session (`resume` + ledger); thin `pm` skill shim; routing-eval v14.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.1**.
+
 ## 1.0.0
 
 - Bundle `mstar-sdd` skill + scripts; SDD mandatory plan QC tri-review (`Execution mode: sdd`); inline/hotfix single-seat; plan template and SDD metadata fields.

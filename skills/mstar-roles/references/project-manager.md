@@ -138,9 +138,15 @@ Before first implement dispatch (non-hotfix):
 
 If any fail -> do not dispatch implement.
 
-### PM entry sessions (`/pm` or OpenCode PM switch)
+### PM entry sessions
 
-When the session entered via **`/pm`**, **`pm` skill**, or OpenCode PM orchestration, follow **`skills/pm/SKILL.md`** — especially **Host entry**, **iteration branch policy**（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）, **Autonomous Execute**（status.json backlog, per-plan feature branches）, and **Dispatch-first**. Routing, gates, Task Board, QC, and templates remain in this file and topic `mstar-*` skills.
+| Entry | Next reads |
+|-------|------------|
+| **`/pm`** or **`pm` skill** (Codex, Cursor; OpenCode when no command) | This shim → **`project-manager.md`** § Required Reading + topic skills on demand |
+| **Cursor / OpenCode** **`commands/`** (`iteration-start`, `iteration-drive`, `mstar-bootstrap`) | Command **Boot** + **`project-manager.md`** — iteration lifecycle only; **not** required for ordinary per-plan PM |
+| **OpenCode** (no command, not `/pm`) | `project-manager` + `mstar-host` → `opencode.md` |
+
+**Dispatch-first**, iteration branch policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）, Autonomous Execute → **`mstar-iteration`** §2. Routing, gates, Task Board, QC, templates → this file + topic `mstar-*` skills.
 
 ---
 

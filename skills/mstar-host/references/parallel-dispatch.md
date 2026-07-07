@@ -63,4 +63,4 @@ Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-o
 2. Prerequisite-only message? → **zero** batch dispatches unless `N = 1`.
 3. Dispatch message contains **exactly `N`** invocation calls?
 4. QC initial: **`Execution mode: sdd`** → **N=3**? **`inline`** → **N=1**? Targeted re-review → **N** = Assignment reviewer count?
-5. SDD implement → **serial** (never batch implementers)?
+5. SDD implement → **serial** (never batch implementers); sticky = **resume** same implementer, not parallel
