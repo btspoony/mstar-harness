@@ -53,14 +53,10 @@ jobs:
         id: changelog
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          NOTES_FILE="$(mktemp)"
+          NOTES_FILE="${RUNNER_TEMP}/release-notes-${VERSION}.md"
           bun run scripts/extract-changelog-section.ts "$VERSION" > "$NOTES_FILE"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          {
-            echo "notes<<EOF"
-            cat "$NOTES_FILE"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "notes_file=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
 
@@ -69,6 +65,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: v${{ steps.changelog.outputs.version }}
-          body: ${{ steps.changelog.outputs.notes }}
+          body_path: ${{ steps.changelog.outputs.notes_file }}
           draft: false
           prerelease: false
