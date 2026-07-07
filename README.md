@@ -23,6 +23,8 @@ Core value:
 - Run with unified `mstar-*` skills instead of scattered rules
 - Reuse one core process across OpenCode, Cursor, and Codex
 
+**1.0.2:** Iteration artifact boundaries — `{SPECS_DIR}/` for long-lived specs; `{ITERATION_DIR}/<id>/` workspace for iteration drafts; **`mstar-compound`** promotes workspace to `{KNOWLEDGE_DIR}/` at iteration-close (no knowledge writes at iteration-start).
+
 **1.0.1:** `iteration-drive` mandates per-task SDD; optional **sticky implementer** (`SDD implementer session: sticky`, Cursor Task `resume`) to reuse dev context across tasks; thin **`pm`** entry shim for general orchestration (iteration → `commands/`).
 
 **1.0.0 highlights:** SDD (`mstar-sdd`) with per-task **task reviewer** + **mandatory plan QC tri-review** (QC#1/#2/#3 cross-review on whole branch). Single-seat `qc.md` only for `inline` / hotfix.

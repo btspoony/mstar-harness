@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.0.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.0.2** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.0.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.0.1** |
+| Monorepo root | `morning-star` (`package.json`) | **1.0.2** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.2** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.2** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.2** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.0.2** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.0.2] - 2026-07-07
+
+### Harness (iteration artifact boundaries)
+
+- **`mstar-iteration` §1.5.5 / §1.6**: Tighten Phase 1 boundaries — `{SPECS_DIR}/` for locked long-lived specs; `{ITERATION_DIR}/<iteration-id>/` workspace (`guides/`, `specs/`) for iteration-scoped drafts; **no** `{KNOWLEDGE_DIR}/` writes during iteration-start.
+- **`iteration-start` / `mstar-dispatch-gates`**: Review & Edit chain — product-manager / architect edit specs + workspace; writing-specialist **specs corpus hygiene** and existing-knowledge archive only.
+- **`mstar-compound`**: Mandatory **iteration workspace promotion** at iteration-close — inventory `<iteration-id>/` workspace; promote worthy specs/guides to `{KNOWLEDGE_DIR}/` (structured rewrite, not raw copy).
+- **New references**: `iteration-artifact-boundaries.md`, `iteration-corpus-hygiene.md`, `iteration-workspace-readme-template.md`; `knowledge-and-designs.md`, role refs, and `artifact-storage-paths.md` aligned.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.0.2**.
 
 ## [1.0.1] - 2026-07-07
 

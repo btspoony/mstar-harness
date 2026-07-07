@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.2**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.0.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.0.2** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.2** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.2** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.0.2] - 2026-07-07
+
+### Harness（iteration 产物边界收紧）
+
+- **`mstar-iteration` §1.5.5 / §1.6**：Phase 1 边界 — `{SPECS_DIR}/` 为已锁定长期规格；`{ITERATION_DIR}/<iteration-id>/` 工作区（`guides/`、`specs/`）存迭代级草案；**iteration-start 禁止**向 `{KNOWLEDGE_DIR}/` 新增。
+- **`iteration-start` / `mstar-dispatch-gates`**：Review & Edit 链 — product/architect 改 specs + workspace；writing-specialist 做 **specs corpus hygiene** 与既有 knowledge 归档。
+- **`mstar-compound`**：iteration-close **强制盘点** `<iteration-id>/` workspace，将值得保留的 specs/guides **提升**至 `{KNOWLEDGE_DIR}/`（结构化重写，非整文件复制）。
+- **新增 reference**：`iteration-artifact-boundaries.md`、`iteration-corpus-hygiene.md`、`iteration-workspace-readme-template.md`；`knowledge-and-designs.md`、角色引用、`artifact-storage-paths.md` 已对齐。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.0.2**。
 
 ## [1.0.1] - 2026-07-07
 

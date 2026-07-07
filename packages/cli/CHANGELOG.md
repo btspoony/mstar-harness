@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.0.2
+
+- Version alignment with harness **1.0.2** (no CLI behavior change in this release).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.2**.
+
 ## 1.0.1
 
 - Version alignment with harness **1.0.1** (no CLI behavior change in this release).
