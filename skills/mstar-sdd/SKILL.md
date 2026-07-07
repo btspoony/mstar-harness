@@ -1,6 +1,6 @@
 ---
 name: mstar-sdd
-description: Morning Star subagent-driven development (SDD) — file handoff, per-task implementer + task reviewer, progress ledger, pre-flight plan scan. **Must** Read when project-manager executes a multi-task plan with Execution mode sdd, dispatches SDD implementer/reviewer subagents, or prepares review-package paths. Leaf implementer/reviewer subagents skip PM sections via SUBAGENT-STOP in dispatch prompts.
+description: Morning Star subagent-driven development (SDD) — file handoff, per-task implementer + task reviewer (L2), progress ledger, branch review-package for plan QC tri (L3). **Must** Read when project-manager runs `Execution mode: sdd` (multi-task plan, single-plan, or iteration Phase 2), dispatches SDD implementer/reviewer subagents, or prepares review-package paths. Leaf implementer/reviewer subagents skip PM sections via SUBAGENT-STOP in dispatch prompts.
 ---
 
 ## Load order
@@ -78,7 +78,7 @@ Host mapping → **`mstar-host`** references (`model` / Task field).
 ## After all tasks
 
 1. `review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}`
-2. PM dispatches **plan QC tri-review** — **`QC mode: full tri-review`**, **N=3** (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) with branch review-package path — **`mstar-review-qc`**. Cross-review (QC#1/#2/#3 independent lenses on same branch diff); PM writes `qc-consolidated.md`. **Mandatory whenever `Execution mode: sdd`** (single-plan or iteration). **Not** a lone final single-seat review.
+2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, **N=3** — with branch review-package path → **`mstar-review-qc`** · **`mstar-dispatch-gates`**. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `qc-consolidated.md`. **Mandatory whenever `Execution mode: sdd`** (single-plan or iteration).
 3. Critical/Important QC findings → **one** fix dispatch (full list), then targeted re-review
 4. QA gate → **`mstar-review-qc`** / `mstar-harness-core` Done rules
 

@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 11,
+  "version": 12,
   "updated_at": "2026-07-07",
   "cases": [
     {
@@ -451,7 +451,7 @@
         "SDD dir path",
         "Model tier on implement Assignment",
         "serial implementer then task reviewer per task",
-        "QC mode: full tri-review N=3 + branch review-package",
+        "plan QC tri N=3 after all tasks (Execution mode: sdd implies tri) + branch review-package",
         "progress.md ledger"
       ],
       "hard_fail_if": [
@@ -475,7 +475,7 @@
       "must_have_artifacts": [
         "Context Loaded declaration",
         "mstar-iteration Phase 2 context",
-        "QC mode: full tri-review on Assignment",
+        "Execution mode: sdd or QC mode: full tri-review on Assignment",
         "three QC invokes N=3 in one dispatch turn",
         "qc1.md qc2.md qc3.md",
         "qc-consolidated.md",

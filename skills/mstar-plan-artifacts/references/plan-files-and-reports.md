@@ -25,10 +25,9 @@ Per-task briefs, implementer reports, and review diffs live under **`{SDD_DIR}`*
 
 Plan template with Global Constraints / Interfaces → **`templates/plan.main.md`**.
 
-## QC 单席 vs 三审
+## QC 模式（L3 plan 级）
 
-- **SDD 默认（`Execution mode: sdd`）**：plan 完成后 **tri-review** → `qc1.md`…`qc3.md` + `qc-consolidated.md`。Per-task 质量由 **task reviewer**（L2）覆盖；plan QC（L3）为 QC#1/#2/#3 **交叉审**整分支 diff。
-- **单席例外**：`Execution mode: inline` / hotfix → `qc.md`（`QC mode: single`）。
+职责分层 L1–L4 → **`mstar-review-qc/references/review-responsibility-boundaries.md`**。报告 basename 见上表；触发时机与 re-review 波次见下节 **§ QC 三审触发时机**。
 
 ## QC 分报告与 consolidated（tri 模式）
 

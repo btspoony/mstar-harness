@@ -1,6 +1,6 @@
 ---
 name: mstar-phase-gates
-description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`）、意图门禁、长期目标优先、分批 roadmap 强制落盘、clarify 核心纪律（共享理解 / 先探索 / 每问推荐答案）、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。**必须**在 PM 判定 gate、首次 implement 派单前、产品/架构参与 Prepare、或解释为何不能跳过 plan/clarify 时 Read；`@project-manager` 每轮编排非 hotfix 任务必读；`@product-manager` / `@architect` 写规格与锁 plan 时必读 Prepare 节；实现角色 Read Execute 与 hotfix 例外即可。Task category 与 `quick` 禁豁免规则仍在 `mstar-harness-core`。实现行为见 `mstar-coding-behavior`。迭代级活动（iteration-start / iteration-close / compound）见 `mstar-iteration`。
+description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare（`specify → clarify → plan`）、Execute（`plan(locked) → tasks → implement`；多 task 默认 **`Execution mode: sdd`**）、意图门禁、长期目标优先、分批 roadmap 强制落盘、clarify 核心纪律、hotfix 压缩路径、可验证编辑、Phase Gate 最小证据。**必须**在 PM 判定 gate、首次 implement 派单前、产品/架构参与 Prepare、或解释为何不能跳过 plan/clarify 时 Read；`@project-manager` 每轮编排非 hotfix 任务必读；`@product-manager` / `@architect` 写规格与锁 plan 时必读 Prepare 节；实现角色 Read Execute 与 hotfix 例外即可。Task category 与 `quick` 禁豁免规则仍在 `mstar-harness-core`。实现行为见 `mstar-coding-behavior`；SDD 见 `mstar-sdd`；迭代级活动见 `mstar-iteration`。
 ---
 
 ## Load order（必读顺序）
@@ -39,56 +39,20 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 
 ### Hotfix 例外
 
-- 压缩为 `specify(min) → plan(min) → implement`；必须在回报或 plan notes 补记事后 **`clarify/RCA`**。
+压缩路径与事后补记见下文 **§ Hotfix 例外**（Playbook 末尾）。
 
 ## Phase Gate Playbook
 
-本手册将 `specify -> clarify -> plan -> tasks -> implement` 变成可执行动作，供 `@project-manager`、开发与 QA 在日常交付中快速对齐。
+执行动作与最小产物见上文 **§ Spec-Driven 双阶段门禁**。本节仅 **Playbook 补充**（不重复 Prepare/Execute 长文）。
 
-## 适用范围
+### Execute 补充（Playbook 专有）
 
-- 非热修（non-hotfix）任务默认强制执行全链路门禁。
-- 热修可走压缩路径，但必须补事后 `clarify/RCA` 记录。
-
-## 两阶段门禁（per-plan Playbook）
-
-### A. Prepare
-
-顺序：`specify -> clarify -> plan`
-
-- `specify`
-  - 目标：定义问题、范围、验收。
-  - 最小产物：问题陈述、目标用户价值、非目标、DoD 草案。
-- `clarify`
-  - 目标：收敛会影响方案或验收的歧义。
-  - 最小产物：歧义清单 + 结论；若未收敛则 `blocked`。
-  - **意图**：区分字面请求与真实目标；手段/目标混淆须在此收敛（见本 skill `SKILL.md` Intent gate）。
-  - **结构化澄清**：与用户核对歧义或决策时，`@project-manager`（及直接与用户对话的角色）在**宿主支持**时优先用 `question` 类能力拉齐输入；否则用等价结构化正文。宿主差异细则见当前宿主的 `mstar-host` skill。
-  - **`clarify` 核心纪律**（见 **`mstar-phase-gates` SKILL.md** Prepare · `clarify`）：逐方面核对至共享理解；沿设计决策树逐枝、一次一决；能探索代码库则先探索；每问附推荐答案；阶段末汇总已决与仍 open 假设。
-- `plan`
-  - 目标：给出可执行技术方案与风险控制。
-  - 最小产物：目标状态、方案、模块边界/接口契约、风险与回滚、验证计划。
-  - **准入**：能书面写出真实目标、成功判据、非目标后再锁 plan（同 `SKILL.md`）。
-  - **分批准入**：若计划不是一次性交付完整范围，须写 `Roadmap / Batch Plan`：本批做什么、后续批次做什么、依赖顺序、暂缓项、owner/触发条件、最终 Done 定义；缺失则 `blocked`。
-
-### B. Execute
-
-顺序：`plan locked -> tasks -> implement`
-
-- `plan locked`
-  - 目标：冻结本轮基线，防止边做边漂移。
+- **`plan locked`**
   - 最小动作：在 plan 或 notes 记录当前锁定版本（日期或 hash）。
   - **Plan 质量门**（新 plan / 大改）：无 placeholder（`...`、`TBD`、`etc.`）；含 **Global Constraints** 与 per-task **Interfaces**；PM self-review 三问（每 task 可独立验证？依赖顺序清晰？无隐含假设？）— 见 `mstar-plan-artifacts/templates/plan.main.md`。
-- `tasks`
-  - 目标：把 plan 拆成可执行任务与依赖顺序。
-  - 最小产物：任务列表、并行标记、完成判据、映射到验收标准与 roadmap 批次。
-  - **PM**：若并行标记对应「多轨同时 implement」，在对外 **Status Update** 与实现 Assignment 写入 **`Dispatch mode: parallel independent tracks`**；同仓多可写并发时叠 **`Worktree isolation: required`**（见 `mstar-dispatch-gates` 与 `mstar-branch-worktree`）。
-- `implement`
-  - 目标：按任务执行并提交证据，进入审查。
-  - 最小产物：实现 diff、自检证据、回报与 handoff。
-  - **行为准则**：执行中遵循 `mstar-coding-behavior`（不静默假设、优先简单方案、只做与任务直接相关的手术式改动、按 `Step -> verify` 推进）。
-  - **编辑纪律**：改文件前以磁盘为准重读；Patch 失败则重读、缩小步长，禁止盲试（见 **`mstar-phase-gates` SKILL.md**「可验证编辑与上下文纪律」）。
-  - **知识库 / 迭代 compass**：若项目在 `plans[].metadata` 中登记了 `primary_spec` / `spec_refs` / `iteration_compass` / `iteration_refs`，**开工前**须阅读并在回报中说明已对齐；规则见 **`mstar-plan-conventions`** 与 **`mstar-plan-artifacts/references/knowledge-and-designs.md`**。
+- **`implement`**
+  - 最小产物：实现 diff、自检证据、回报与 handoff；行为准则 → **`mstar-coding-behavior`**；编辑纪律 → 上文「可验证编辑与上下文纪律」。
+  - **知识库 / 迭代 compass**：若 `plans[].metadata` 登记了 `primary_spec` / `spec_refs` / `iteration_compass` / `iteration_refs`，**开工前**须阅读并在回报中说明已对齐 → **`mstar-plan-conventions`** · **`mstar-plan-artifacts/references/knowledge-and-designs.md`**。
 
 ## 角色职责
 

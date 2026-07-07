@@ -10,17 +10,12 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 **Per-task (L2):** task reviewer only — **not** `qc-specialist`. One reviewer subagent per task (spec + quality on task diff).
 
-**After all tasks (L3):**
+**After all tasks (L3):** see **`mstar-review-qc/references/review-responsibility-boundaries.md`** · **`mstar-dispatch-gates`** (N=3 same message, branch review-package, `qc1`…`qc3` + consolidated). PM checklist:
 
 0. Pre-dispatch: read `mstar-review-qc`.
 1. `review-package MERGE_BASE HEAD` → branch diff under `{SDD_DIR}` or PM path.
-2. Dispatch **three** QC seats in **one** message (**N=3**), **`QC mode: full tri-review`**:
-   - QC#1 `qc-specialist` → `qc1.md` (architecture / maintainability)
-   - QC#2 `qc-specialist-2` → `qc2.md` (security / correctness) — **cross-review** same branch diff
-   - QC#3 `qc-specialist-3` → `qc3.md` (performance / reliability) — **cross-review** same branch diff
-3. Alignment fields text-identical across three reports and Assignment.
-4. PM writes `qc-consolidated.md`; gate decision from consolidated + three originals.
-5. After fixes: targeted re-review per seat (default) or `QC re-review: full tri-review` for new wave files.
+2. Dispatch **three** QC seats in **one** message (**N=3**); alignment fields text-identical across reports and Assignment.
+3. PM writes `qc-consolidated.md`; after fixes → targeted re-review (default) or `QC re-review: full tri-review` for new wave files.
 
 **NEVER** end an SDD plan with only a single final `qc-specialist` unless user override: `QC mode: single — override: <reason>`.
 
