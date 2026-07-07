@@ -6,7 +6,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 
 ## Cursor-only context
 
-- Role prompts: `mstar-roles`; **`/pm`** or **`pm` skill** → general PM orchestration (per-plan dispatch, gates, QC) without an iteration command. **`commands/`** (`iteration-start`, `iteration-drive`, `mstar-bootstrap`) only when running formal iteration Phase 1–5.
+- Role prompts: `mstar-roles`; **`/pm`** or **`pm` skill** → general PM orchestration (per-plan dispatch, gates, QC) without an iteration command. Host **`commands/`** for formal iteration Phase 1–5 (semantics → **`mstar-iteration`**).
 - Routing-eval: `.cursor/skills/mstar-routing-eval/` — regression tooling only; not runtime load order.
 
 ## Plan mode × harness dual-write

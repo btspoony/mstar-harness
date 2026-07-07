@@ -283,11 +283,15 @@ Iteration Phase 2 附加：
 - `Subagent invokes issued: 0` 而 Assignment 已写出 → **`dispatch incomplete`**；下一条补发 invoke，禁止 PM 顶替
 - QC 初轮：**SDD → N=3**；**inline → N=1**；双轨 implement → **N=2**（同条消息发满 N）
 
-### 2.6 Push 纪律
+### 2.6 Push 纪律（Autonomous Execute）
 
-- 不因 harness 基础问题常问"是否继续"—— 决策、记录、**dispatch**
-- 未知 → 读 `mstar-*`；**`Blocked`** 或仅对 stop/secrets/不可逆范围缺口/冲突后升级
+**Continuous execution（HARD）**：Phase 2 Autonomous Execute 经 Phase 5 merge-ready exit 全程 — 不向用户做例行 yes/no check-in。
+
+- 不因 harness 流程问题常问「是否继续」「要不要现在启动」—— **决策、记录、dispatch**
+- 进度汇报 / subagent Completion Report 后，下一条必须是 **dispatch 或下一 gate 动作**，不得以确认问句收束 turn
+- 未知 → 读 `mstar-*`；仅 **`Blocked`**、secrets、不可逆范围缺口、branch metadata 缺失、或 Phase 5 多轮仍 blocked 时升级用户
 - 实际 Git ≠ `working_branch` → **同轮**更新 plan + status
+- Per-plan loop **串行**（plan A Done 后再 plan B）；plan 内 SDD task **串行** — 见 §2.4、§2.5、`mstar-sdd` Continuous execution
 
 ---
 

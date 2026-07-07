@@ -25,11 +25,33 @@ Phase 2: Autonomous Execute  →  Phase 3: iteration-close  →  Phase 4: Create
 
 **Done 定义**：**仅** Phase 5 §5.5 exit checklist 全 `[x]`。**Phase 3 close ≠ Done；Phase 4 开 PR ≠ Done。**
 
+## Continuous execution（HARD — Phase 2–5）
+
+**Autonomous Execute push**：自 Phase 2 进入至 Phase 5 §5.5 exit 全 `[x]` 前，PM **连续编排**，不得把进度汇报、phase 标题或子 agent 返回当作**回合结束**。
+
+| 禁止 | 必须 |
+|------|------|
+| plan / task / phase 边界问用户「是否继续」「要不要现在启动」「是否开 PR」等例行 yes/no | 进度摘要后**下一条动作** = **dispatch**（`Task`）或下一 phase 步骤（打印 checklist → 执行） |
+| 用完整 Phase 2 汇报收束 turn 后等待用户 | 同 plan 内 task 间 → **`mstar-sdd` Continuous execution**；当前 plan Done 后 → **立刻**下一 plan dispatch |
+| 把 `## Phase 3/4/5` 标题当作可停下协商点（除合法 STOP） | Phase 3 checklist `[x]` → **立刻** Phase 4；PR 创建后 → **立刻** Phase 5 loop |
+| 跨 plan **并行** implement dispatch（多 plan 同时跑 implementer） | Per-plan **串行**：plan A implement→QC→QA→Done 后再 plan B（除非用户书面 override） |
+
+**合法 STOP（仅此升级用户）**：
+
+- §2.0 / Phase 4 branch metadata 缺失（`iteration_base_branch` / `target_branch`）
+- **`Blocked`**：真冲突、secrets、不可逆范围缺口、Phase 5 多轮仍无法 merge-ready
+- 用户本轮显式打断
+
+**Turn 收束纪律**：若 host 即将结束本轮，最后一条 assistant 内容必须是 **in-flight 动作**（invoke 已发出、或写明下一 dispatch 的 Assignment 字段），**不得**以对用户的确认问句结尾。
+
+SSOT 细化：`mstar-sdd`（task 级）· `mstar-iteration` §2.6（push 纪律）。
+
 ## PM invariants（Phase 2–5 全程有效）
 
 | 禁止（PM 线程） | 必须 |
 |-----------------|------|
 | Write/Edit/Shell 产品代码、写测试、跑 QC 审查（Phase 2） | 每条 implement/QC/QA Assignment ⇒ **1 次 `Task`** |
+| **进度汇报后问「是否继续」或以 phase 摘要收束 turn** | 汇报后**立刻** dispatch 或进入下一 phase 动作（见上节 Continuous execution） |
 | **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `task-brief` → implementer → `review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮 dispatch：`Subagent invokes issued: N`（N = Assignment 条数） |
 | 最后一个 plan `Done` 后直接开 PR / 汇报结束 | **Phase 3 → 4 → 5** 顺序执行 |
@@ -59,6 +81,8 @@ Phase 2: Autonomous Execute  →  Phase 3: iteration-close  →  Phase 4: Create
 8. `mstar-plan-artifacts`, `mstar-plan-conventions`, `mstar-branch-worktree`
 
 ## Phase 2: Autonomous Execute
+
+**Continuous execution applies** — 本节全程遵守上节 **Continuous execution（HARD）**；Completion Report / 进度同步后不得 check-in，下一条必须是 dispatch 或下一 plan。
 
 **Branch policy first** — before any plan dispatch（`mstar-iteration` §2.3）:
 

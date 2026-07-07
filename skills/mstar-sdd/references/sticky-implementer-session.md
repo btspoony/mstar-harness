@@ -11,7 +11,7 @@ SSOT for mode selection and host resume → this file. Per-task artifacts → **
 | **`fresh`** (default) | Independent tasks, module boundaries, different dev tracks, or first task on a plan |
 | **`sticky`** | Same `fullstack-dev` (or same role id), sequential tasks on one branch, strong file/context continuity (e.g. T3+T4 daemon stderr + DB reset) |
 
-**Prefer `sticky`** on iteration-drive Phase 2 when PM will dispatch many tasks to the same dev on one plan feature branch.
+**Prefer `sticky`** on iteration Phase 2 Autonomous Execute when PM will dispatch many tasks to the same dev on one plan feature branch.
 
 ## Assignment fields (implement dispatch)
 

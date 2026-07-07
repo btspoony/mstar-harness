@@ -6,7 +6,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 
 ## Role loading
 
-- **PM entry**: **`/pm`** or **`pm` skill** → `project-manager` for general orchestration; **`commands/`** (`iteration-start`, `iteration-drive`, `mstar-bootstrap`) for formal iteration only.
+- **PM entry**: **`/pm`** or **`pm` skill** → `project-manager` for general orchestration; host **`commands/`** for formal iteration Phase 1–5 (semantics → **`mstar-iteration`**).
 - **Role shell**: `agents/<id>.md` referenced by `opencode.json` `agent.<id>` (frontmatter + role binding only).
 - **Role body**: `mstar-roles` `references/<id>.md` (or shared references + parameters).
 - Implementation evidence and RCA behavior: `mstar-coding-behavior`.
