@@ -222,7 +222,7 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |
 | `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residuals, knowledge/iteration indexes, Done compaction |
 | `mstar-design-md` | DESIGN.md design-system gate for UI-bearing plans |
-| `mstar-review-qc` | QC review baseline and report template |
+| `mstar-review-qc` | PM QC tri orchestration, residual gate, layer boundaries; leaf execution → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Cross-role coding behavior: RCA, test-first checks, review feedback, completion evidence |
 | `mstar-compound` | Knowledge crystallization into `{KNOWLEDGE_DIR}` |
 | `mstar-compound-refresh` | Knowledge maintenance: refresh, merge, archive, or remove stale docs |

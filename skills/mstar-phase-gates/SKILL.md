@@ -62,7 +62,7 @@ description: Morning Star (启明星) Spec-Driven 双阶段门禁 —— Prepare
 - 开发角色（`@frontend-dev` / `@fullstack-dev` / `@fullstack-dev-2`）
   - 仅在 Execute gate 放行后开始实现。
   - 发现新约束时先回报并请求回写 plan。
-- `@qa-engineer` — when **`QA gate: mandatory`**, L4 acceptance per `references/qa-engineer.md`; `pm-acceptance` is PM-only (`qa-trigger-matrix.md`).
+- `@qa-engineer` — when **`QA gate: mandatory`**, L4 per `mstar-roles/references/qa-engineer/acceptance-gate.md`; `pm-acceptance` is PM-only (`qa-trigger-matrix.md`).
 
 ## 迭代级活动
 

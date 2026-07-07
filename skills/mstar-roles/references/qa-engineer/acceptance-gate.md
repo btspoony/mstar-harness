@@ -1,6 +1,8 @@
 # QA Acceptance Gate (L4)
 
-Layer **L4** runs when PM sets **`QA gate: mandatory`** and dispatches `qa-engineer` after the QC gate. **`QA gate: pm-acceptance`** is PM-only — see **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**.
+Extension of `references/qa-engineer.md`. Read when PM dispatches you with **`QA gate: mandatory`** or **`QA gate: report-only`**.
+
+Layer **L4** runs after the QC gate. **`QA gate: pm-acceptance`** is PM-only — see **`references/project-manager/qa-trigger-matrix.md`**.
 
 **Do not collapse L4 into L3.** QC reviewers do not close residuals or mark plan `Done`.
 
@@ -53,6 +55,6 @@ Use template in `references/qa-engineer.md`. May skip QC tri only when no implem
 
 ## Related
 
-- Four-layer model: `review-responsibility-boundaries.md`
-- PM trigger matrix: `mstar-roles/references/project-manager/qa-trigger-matrix.md`
+- PM trigger matrix: `references/project-manager/qa-trigger-matrix.md`
 - Checkout alignment: `mstar-branch-worktree` SKILL.md
+- Residual lifecycle: `mstar-plan-artifacts/references/status-and-residuals.md`

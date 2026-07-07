@@ -180,7 +180,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支摘要 |
 | `mstar-plan-artifacts` | 主 plan、`reports/`、`status.json`、residual、knowledge/iteration 索引、Done 归档 |
 | `mstar-design-md` | UI 相关 plan 的 DESIGN.md 设计系统门禁 |
-| `mstar-review-qc` | QC 审查标准与报告模板 |
+| `mstar-review-qc` | PM：QC tri 编排、residual 门禁、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | 通用编码行为：RCA、测试优先检查、审查反馈、完成证据 |
 | `mstar-compound` | 知识结晶，写入 `{KNOWLEDGE_DIR}` |
 | `mstar-compound-refresh` | 知识维护：刷新、合并、归档或移除过期文档 |

@@ -57,7 +57,7 @@ Plan template with Global Constraints / Interfaces → **`templates/plan.main.md
 
 - **流程**：实现完成 → 该 **`plan_id`** 进入 **`InReview`** → **QC 三审（仅针对该 plan 的 `Review range`）** → PM consolidated → **QA** → **`Done`**。**禁止**在多个 `plan_id` 已 `InReview` 的情况下，只推进新实现、不派 QC，或把多个 plan 的变更**伪装成**一套三审字段（单一 `plan_id` / 单一 diff 范围覆盖多 plan）。
 - **并行 vs 串行**：不同 `plan_id` **相互独立**时，可 **并行**派发多组三审（每组各自的 Assignment 与 `reports/<plan-id>/`）；若 PM 选择串行，须在 Status Update 写明顺序——**每组仍须完整三审 + QA**，不是「一个大 QC」混审。
-- **读 skill**：书写或派发 QC 相关 Assignment 前，PM **必须** Read **`mstar-review-qc`** skill（`mstar-plan-conventions` 不重复 QC 清单与 verdict 规则）。见 `mstar-plan-conventions` SKILL.md **QC pre-dispatch gate** 与 **InReview 与 QC+QA** 小节。
+- **读 skill**：书写或派发 QC 相关 Assignment 前，PM **必须** Read **`mstar-review-qc`**（编排与 residual）；leaf `qc-specialist*` → **`mstar-roles/references/qc-specialist/`**。见 `mstar-plan-conventions` SKILL.md **QC pre-dispatch gate**。
 
 **QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），**仅可** Write/Edit **`{PLAN_DIR}/reports/`** 下 **`.md`**（全局 agent 提示词中已配置 `.mstar/plans/reports/**`、`.agents/plans/reports/**`、`.plans/reports/**`、`plans/reports/**` 相对路径）。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。**若** 项目的 `{PLAN_DIR}` 不落在上述根下，须在**项目级**宿主配置（如 OpenCode）中为 QC 角色追加对应的 `edit` allow 规则。
 

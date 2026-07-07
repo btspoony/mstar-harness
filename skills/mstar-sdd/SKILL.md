@@ -84,7 +84,7 @@ Host mapping → **`mstar-host`** references (`model` / Task field).
 1. `review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}`
 2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, **N=3** — with branch review-package path → **`mstar-review-qc`** · **`mstar-dispatch-gates`**. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `qc-consolidated.md`. **Mandatory whenever `Execution mode: sdd`** (single-plan or iteration).
 3. Critical/Important QC findings → **one** fix dispatch (full list), then targeted re-review
-4. QA gate → **`mstar-review-qc`** / `mstar-harness-core` Done rules
+4. QA gate → **`mstar-harness-core`** Done rules; PM **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**
 
 ## Progress ledger
 

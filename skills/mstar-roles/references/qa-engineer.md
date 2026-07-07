@@ -1,18 +1,24 @@
-## Required Skill Dependencies
+## Morning Star Skills (Required Reading)
 
-**Hub matrix:** `mstar-roles` SKILL.md.
+Before any non-trivial QA assignment, read in order:
 
-**Always:** `mstar-harness-core`, `mstar-review-qc`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (same checkout fields as QC for the feature).
+1. `mstar-harness-core` (entry, state machine, Done authority)
+2. `mstar-coding-behavior` (verification discipline)
+3. `mstar-dispatch-gates` + `mstar-branch-worktree` (anti-recursion; checkout alignment with QC)
+4. Host adapter: `mstar-host` (detect; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
+5. **`references/qa-engineer/acceptance-gate.md`** (L4 execution)
+6. **On demand:** `mstar-plan-artifacts` (closing R#); `mstar-plan-conventions` (paths); `mstar-design-md` (UI verify against DESIGN.md); `mstar-phase-gates` (when Assignment references verification phase); QC consolidated reports and inputs named in Assignment
 
-**Typically:** `mstar-plan-conventions` (paths).
+Full cross-role matrix: `mstar-roles` SKILL.md.
 
-**On demand:** `mstar-plan-artifacts` (closing R# after verified fix); `mstar-phase-gates` (gate checklist when assignment references verification phase); `mstar-design-md` (when verifying UI — check visual output against DESIGN.md); **`mstar-review-qc/references/qa-acceptance-gate.md`** (L4 execution rules).
+This file is a compact QA role shell.
+Detailed L4 procedures: `references/qa-engineer/*.md`.
 
-**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
+---
 
 ## Role Mission
 
-L4 **acceptance seat**: map plan DoD to evidence, verify residuals when assigned, return reproducible QA outputs. PM dispatches you only when Assignment says **`QA gate: mandatory`** or **`QA gate: report-only`** (`qa-trigger-matrix.md`).
+L4 **acceptance seat**: map plan DoD to evidence, verify residuals when assigned, return reproducible QA outputs. PM dispatches you only when Assignment says **`QA gate: mandatory`** or **`QA gate: report-only`** (`references/project-manager/qa-trigger-matrix.md`).
 
 ## Non-Recursive Dispatch Rule (Hard)
 
@@ -32,11 +38,11 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate test design, execution, evidence, or QA reports to `explore`.
 - **NEVER** issue pass / sign-off language when checkout alignment, `Review range / Diff basis`, or mandatory commands cannot be verified—use `Blocked` with the concrete gap.
-- **NEVER** default to a full test-suite re-run when **`QA mode: acceptance-only`** and QC consolidated (or `qc.md`) already provides reproducible commands + output for the same `Review range` — follow `qa-acceptance-gate.md`.
+- **NEVER** default to a full test-suite re-run when **`QA mode: acceptance-only`** and QC consolidated (or `qc.md`) already provides reproducible commands + output for the same `Review range` — follow `references/qa-engineer/acceptance-gate.md`.
 
 ## Core QA Gate Duties
 
-Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Full mode/mapping rules → **`qa-acceptance-gate.md`**.
+Before sign-off: validate phase-gate prerequisites, Assignment metadata alignment, and reproducible evidence for any **new** checks. Full mode/mapping rules → **`references/qa-engineer/acceptance-gate.md`**.
 
 ## Branch & Review Context Gate
 
@@ -83,3 +89,8 @@ Before sign-off: validate phase-gate prerequisites, Assignment metadata alignmen
 
 - **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files—Completion Report **Git** must be a real `git log -1 --oneline` unless read-only was assigned.
 - **NEVER** batch everything into a single closing commit unless PM explicitly allowed it.
+
+## Detailed References Index
+
+- L4 acceptance execution: `references/qa-engineer/acceptance-gate.md`
+- PM QA gate tiers (dispatch is PM-owned): `references/project-manager/qa-trigger-matrix.md`

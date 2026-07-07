@@ -1,5 +1,7 @@
 # QC Deep Review Lenses（审查透镜 · 单人模式）
 
+Extension of `references/qc-specialist-shared.md`. Read at QC session start when applying deep review per `reviewer-workflow.md`.
+
 > **关键约束**：mstar 派发模型下，QC reviewer 是 PM 派发的 **leaf executor**（`Delegation: forbidden`），**禁止**自行派发任何 subagent 或 persona（`mstar-dispatch-gates` § 承接方反递归 NEVER 红线）。
 > 本文件的设计选择：**透镜（lens）而非代理（subagent）**——QC reviewer **本人**在审查时额外覆盖的检查维度，每个透镜是一组结构化问题，审查者在本地逐一回答即可。
 > 不派发子 agent，不产生额外对话轮次，不违反反递归约束。
