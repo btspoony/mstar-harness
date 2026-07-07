@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.0.5
+
+- Bundled skills: tiered QA gate (`qa-trigger-matrix.md`, `acceptance-gate.md`); QC/QA leaf refs under `mstar-roles/references/`; `mstar-review-qc` PM orchestration only; positive-only load lists; routing-eval v17.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.5**.
+
 ## 1.0.4
 
 - Bundled skills: parallel writable pre-dispatch SSOT (`parallel-writable-pre-dispatch.md`); dispatch-gates dual-gate table (N invoke vs worktree); deduped skill pointers; routing-eval v16.
