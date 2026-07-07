@@ -73,7 +73,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Execute as**: <role-id>
 **Delegation**: forbidden | allowed (...)
 **Execution mode**: sdd | inline | N/A
-**SDD dir**: .mstar/sdd/<plan-id>/ | N/A
+**SDD dir**: `{HARNESS_DIR}/sdd/<plan-id>/`（默认 `.mstar/sdd/…`；维护仓 `.harness/sdd/…`）| N/A
 **Model tier**: fast | standard | capable | N/A
 **QC mode**: full tri-review | single | N/A — **default `full tri-review` when `Execution mode: sdd`**; `single` only for `inline` / override
 **Review package path**: <branch-review diff file> | N/A

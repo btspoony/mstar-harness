@@ -179,7 +179,7 @@ Anti-patterns:
 - Q6: Is `Task category` aligned with route?
 - Q7: Is `quick` being misused to bypass prepare?
 - Q8: Is intention gate explicit before implement?
-- Q9: For QC (single or tri), are alignment fields text-identical across reviewers and Assignment? Tri mode requires explicit `QC mode: full tri-review`.
+- Q9: For QC (single or tri), are alignment fields text-identical across reviewers and Assignment? SDD / tri: `Execution mode: sdd` or explicit `QC mode: full tri-review`; inline: `QC mode: single` or skip reason.
 - Q10: Is `Delegation` consistent with dispatch and worktree usage?
 - Q11: For non-trivial plan, is PM Task Board published with coverage?
 - Q12: In invoke-based hosts, were matching invokes actually issued?

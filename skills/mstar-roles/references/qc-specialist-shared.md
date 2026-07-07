@@ -91,7 +91,7 @@ Use severity and formatting standards from `mstar-review-qc`; machine `severity`
 
 ## Report path (required)
 
-Write under **`{PLAN_DIR}/reports/<plan-id>/`** using basename **`{report_suffix}.md`** (single-seat default: `qc.md`; tri exception: `qc1.md`, `qc2.md`, `qc3.md`). **Do not** prefix the filename with `<plan-id>` — the folder already scopes the plan. PM consolidated report (`qc-consolidated.md`) applies to **tri mode**; single-seat may use `qc.md` alone as gate input.
+Write under **`{PLAN_DIR}/reports/<plan-id>/`** using basename **`{report_suffix}.md`** (**SDD default / tri**: `qc1.md`, `qc2.md`, `qc3.md`; **inline exception**: `qc.md`). **Do not** prefix the filename with `<plan-id>` — the folder already scopes the plan. PM consolidated report (`qc-consolidated.md`) applies to **tri mode**; single-seat may use `qc.md` alone as gate input.
 
 ## Targeted re-review (same report file)
 

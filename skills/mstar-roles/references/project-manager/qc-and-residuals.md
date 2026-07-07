@@ -2,6 +2,8 @@
 
 Use this reference when PM is dispatching QC, consolidating review verdicts, or managing residual findings lifecycle.
 
+**Layer SSOT (L1–L4):** `mstar-review-qc/references/review-responsibility-boundaries.md`. Dispatch mechanics → **`mstar-dispatch-gates`**; QC checklists / verdict → **`mstar-review-qc`**.
+
 ## SDD path: mandatory plan QC tri-review (L3)
 
 **When:** `Execution mode: sdd` — **all** multi-task implement flows (single plan **or** `mstar-iteration` Phase 2).

@@ -46,7 +46,8 @@ Plan template with Global Constraints / Interfaces → **`templates/plan.main.md
 
 ## QC 三审触发时机（单 plan · 多 batch）
 
-- **默认（推荐）**：同一 **`plan_id`** 下，**单席 QC**（`qc-specialist` ×1 → `qc.md`）**仅在 dev team 按该 plan 约定范围全部交付之后**执行一次**（SDD task reviewers 已完成 per-task gates）。**不要**在每个中间 batch 跑 QC。
+- **默认（SDD）**：同一 **`plan_id`** 下，**plan QC tri-review**（`qc-specialist` ×3 → `qc1`…`qc3` + consolidated）**仅在** dev team 按该 plan 约定范围全部交付、且 **L2 task reviewers** 均已通过后执行 **一次**。**不要**在每个中间 batch 跑完整三审。
+- **单席例外**：`Execution mode: inline` / hotfix → 交付完成后 **一次** `qc.md`（`QC mode: single`）。
 - **batch 之间**：依赖实现方按 **`mstar-coding-behavior`** 提供完成证据、主 plan 任务勾选与 PM 协调；需要书面中间意见时，用对话、主 plan 批注或**非三审**的定向检查（如单审、架构 review），**不**默认等同「又一轮完整三审」。
 - **After `Request Changes` (default — targeted re-review)**：PM maps each **blocking** finding to the QC seat that raised it (`source` on R#, consolidated table, or the originating `qcN.md` / `F-###`). Dispatch **only** those reviewers (`QC re-review: targeted — reviewers: qc-specialist, qc-specialist-2, …`). Each re-reviewing QC **updates the same** `qc1.md` / `qc2.md` / `qc3.md` in place (add `## Revalidation`, refresh verdict / `generated_at`); **do not** add `qc1-rev2.md` siblings on this path. PM **updates the same** `qc-consolidated.md` in place. Git history is the audit trail.
 - **Full tri re-review (exception)**：Only when Assignment states **`QC re-review: full tri-review`**. Run **three** parallel reviews again; use **new basenames** (`qc1-rev2.md` … `qc3-rev2.md`, `qc-consolidated-rev2.md`) so wave-1 files stay immutable; PM states **active wave** in consolidated decision. See `mstar-review-qc` · `mstar-dispatch-gates`.

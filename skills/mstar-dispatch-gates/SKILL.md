@@ -78,7 +78,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 - 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**SDD 单 plan 内 task** 仍串行。
 - **Plan QC tri** after SDD task loop（`Execution mode: sdd`）；**单席**仅 `inline` / hotfix。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
-- **Tri 例外**：`QC mode: full tri-review` 时三席同消息、同 scope 字段。
+- **Tri 同消息规则**：plan QC tri（SDD 或 Assignment 显式 `QC mode: full tri-review`）时三席 **同一条消息**、**同一套** scope 字段。
 
 ## Specialist review-and-edit dispatch
 

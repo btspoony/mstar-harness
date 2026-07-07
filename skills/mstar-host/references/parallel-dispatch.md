@@ -36,11 +36,14 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 
 Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-out.
 
-## QC full tri-review (non-iteration exception)
+## QC full tri-review（非 SDD 但显式 tri）
 
-- Assignment: **`QC mode: full tri-review`**
+当 plan 为 **`Execution mode: inline`** 或单轨，但 Assignment 仍写 **`QC mode: full tri-review`** 时：
+
 - Launch `qc-specialist`, `qc-specialist-2`, `qc-specialist-3` in **one** dispatch turn (**N=3**).
 - Post-dispatch: verify three distinct agent IDs; on mismatch → invalid dispatch.
+
+（**SDD 默认**已在上一节；本节仅覆盖显式 tri 的非 SDD 场景。）
 
 ## SDD implement (serial — not parallel)
 

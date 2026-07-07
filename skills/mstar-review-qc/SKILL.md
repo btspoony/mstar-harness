@@ -11,13 +11,12 @@ description: Morning Star QC/QA review baseline — **SDD plans: mandatory plan 
 
 # Morning Star QC Review Baseline（QC 审查基线）
 
-本 skill 定义所有 QC 审查员的共享基线。**`Execution mode: sdd` 时：plan 级强制 tri-review**（QC#1/#2/#3 交叉审整分支 → `qc1`…`qc3` + `qc-consolidated.md`）。**`inline` / hotfix** 可用单席 `qc.md`。职责分层 → **`references/review-responsibility-boundaries.md`**。三审共用正文以 **`mstar-roles`** `qc-specialist-shared` 为准。
+本 skill 定义所有 QC 审查员的共享基线。**`Execution mode: sdd` 时：plan 级强制 tri-review**（QC#1/#2/#3 交叉审整分支 → `qc1`…`qc3` + `qc-consolidated.md`）。**`inline` / hotfix** 可用单席 `qc.md`。三审共用正文以 **`mstar-roles`** `qc-specialist-shared` 为准。
 
 ## 分派时机（与 plan / batch 对齐）
 
 - **`Execution mode: sdd`**（单 plan 与 iteration 均适用）：全部 task + L2 task reviewers 完成后 → **强制 tri-review**（`QC mode: full tri-review`，**N=3**）。Assignment 须含 **branch review-package** 路径。PM 汇总 `qc-consolidated.md`。
 - **`Execution mode: inline`**：单席 `qc-specialist` → `qc.md`（**N=1**），或按 hotfix 路由跳过。
-- **例外 `QC mode: full tri-review`**：三席并行 `qc1`…`qc3` + consolidated（见 `mstar-dispatch-gates`）。
 - **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only QC seats that **raised** blocking findings for this fix round; each updates **the same** `{PLAN_DIR}/reports/<plan-id>/qcN.md` (e.g. `qc1.md` — no `<plan-id>` prefix in basename) (add `## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` files on this path. Artifact naming and PM consolidated updates → **`mstar-plan-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
 - **Full tri re-review (exception)**：Assignment must say **`QC re-review: full tri-review`**; then new basenames (`qc1-rev2.md` … `qc-consolidated-rev2.md`); PM marks **active wave** in consolidated decision.
 

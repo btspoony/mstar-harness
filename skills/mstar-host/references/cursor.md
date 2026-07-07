@@ -76,7 +76,7 @@ Map Assignment **`Model tier`** to Task `model` (host-specific slugs):
 | Tier | Typical use |
 |------|-------------|
 | `fast` | Transcription tasks; 1–2 file mechanical edits |
-| `standard` | SDD prose implementer; task reviewer floor; default single QC |
+| `standard` | SDD prose implementer; task reviewer floor; plan QC tri seats |
 | `capable` | Large branch QC diff; integration judgment |
 
 **Turn count beats token price** — reviewers and prose implementers use `standard` floor minimum. See `mstar-sdd` SKILL.

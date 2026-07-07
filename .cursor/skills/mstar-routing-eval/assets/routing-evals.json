@@ -507,7 +507,7 @@
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "only one qc-specialist when Assignment requires full tri-review",
-        "tri-review without explicit QC mode: full tri-review",
+        "tri-review without Execution mode: sdd or explicit QC mode: full tri-review",
         "assignment uses non-English field keys"
       ]
     }

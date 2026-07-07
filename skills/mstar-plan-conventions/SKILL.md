@@ -55,7 +55,7 @@ PM 在需要持久化追踪时：
 
 1. 建 `.mstar/`、`plans/`、`status.json`（空模板见 **`mstar-plan-artifacts/templates/status.empty.json`**）
 2. 可选 `notes.json`（模板 **`mstar-plan-artifacts/templates/notes.empty.json`**）、`reports/README.md`、`knowledge/`、`iterations/`、`specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 `mstar-sdd/scripts/sdd-workspace` 创建）
-3. 项目根 `.gitignore` 追加 `.mstar/sdd/`（或 `.agents/sdd/` legacy）— CLI `init` 可自动添加
+3. 项目根 `.gitignore` 追加 `.mstar/sdd/`（或 `.agents/sdd/` legacy；**mstar-harness 维护仓** `.harness/sdd/`）— CLI `init` 可自动添加
 4. Git：团队交付 **勿** ignore 整个 `{HARNESS_DIR}`（handoff 需 clone 可达）
 
 步骤与 `{HARNESS_DIR}/AGENTS.md` 分层 → **`references/harness-bootstrap-and-agents-layering.md`**。
