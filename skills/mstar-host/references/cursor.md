@@ -7,7 +7,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 ## Cursor-only context
 
 - Role prompts: `mstar-roles`; **`/pm`** → `project-manager` via `pm` skill + `mstar-roles`.
-- Routing-eval: `.cursor/skills/mstar-routing-eval/` — maint only.
+- Routing-eval: `.cursor/skills/mstar-routing-eval/` — regression tooling only; not runtime load order.
 
 ## Plan mode × harness dual-write
 

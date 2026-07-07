@@ -14,7 +14,7 @@
 | **知识索引** | `.mstar/knowledge/README.md` | `mstar-compound`（写）、`mstar-compound-refresh`（读写） |
 | **主 plan** | `.mstar/plans/<plan-id>-<name>.md` | PM / `mstar-plan-artifacts` |
 | **QC 报告** | `.mstar/plans/reports/<plan-id>/qc1.md`…`qc3.md` + consolidated（**SDD 默认**）；`qc.md`（inline 例外） | `mstar-review-qc` |
-| **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored；默认 `.mstar/sdd/`，维护仓 `.harness/sdd/`） | `mstar-sdd` |
+| **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored） | `mstar-sdd` |
 | **status.json** | `.mstar/status.json` | `mstar-plan-artifacts` |
 | **迭代 compass** | `.mstar/iterations/<iteration-id>-delivery-compass.md` | `mstar-iteration`（读写） |
 | **迭代索引** | `.mstar/iterations/README.md` | `mstar-iteration`（读写） |

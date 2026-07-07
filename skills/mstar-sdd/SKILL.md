@@ -116,4 +116,3 @@ From repo: `skills/mstar-sdd/scripts/` (bundled in OpenCode as `harness-skills/m
 - `references/file-handoffs.md` — paths and fix-loop evidence
 - `references/implementer-prompt.md`
 - `references/task-reviewer-prompt.md`
-- Design spec (maint): `.harness/specs/sdd-1.0.0-design.md`

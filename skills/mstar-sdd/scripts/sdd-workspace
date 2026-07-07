@@ -16,8 +16,6 @@ if [ -d "$root/.mstar" ]; then
   harness="$root/.mstar"
 elif [ -d "$root/.agents" ]; then
   harness="$root/.agents"
-elif [ -d "$root/.harness" ]; then
-  harness="$root/.harness"
 else
   harness="$root/.mstar"
 fi

@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: Morning Star 迭代管理 —— iteration-start、Autonomous Execute、iteration-close、PR 交付（Phase 4）、PR merge-ready loop（Phase 5）。显式分支策略；compass `{ITERATION_DIR}/`；分支 SSOT：`status.json` metadata + compass frontmatter。
+description: Morning Star 迭代管理 —— iteration-start、Autonomous Execute（per-plan SDD + plan QC tri）、iteration-close、PR 交付（Phase 4）、PR merge-ready loop（Phase 5）。显式分支策略；compass `{ITERATION_DIR}/`；分支 SSOT：`status.json` metadata + compass frontmatter。**必须**在 iteration-start / iteration-drive / 多 plan 编排、integration 分支、iteration-close 或 PR merge-ready 时 Read；`@project-manager` 迭代编排必读。
 ---
 
 # mstar-iteration（迭代管理）
@@ -228,7 +228,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 1. **Plan start — feature branch**：Assignment 用 `Working branch: create <plan-feature-branch> from <spec_integration_branch>`。一个 plan 一条专用实现分支；内部并行 → topic branches + worktrees（`mstar-branch-worktree`）
 2. **Implement → InReview**：dispatch-only 循环（`§ 2.5`）；每次 Completion Report v2 后更新 `status.json` + 主 plan
-3. **QC → QA → Done**：与 **SDD 全局规则一致** — `Execution mode: sdd` 时 **强制** plan QC tri-review（**N=3**，`qc1`…`qc3` + `qc-consolidated.md`）+ QA；整分支 review-package 路径必填。`inline` hotfix 单席例外。
+3. **QC → QA → Done**：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席）+ QA。
 4. **Plan complete — merge back**：合并 plan feature branch → `spec_integration_branch`；在下一 plan 或 QC 前解决冲突
 5. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 的 `## Plans` 表状态列
 6. **Next plan** 从步骤 1 继续
@@ -241,21 +241,13 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 ### 2.5 Dispatch-first（implement 派发约束）
 
-**派发回合纪律**（Cursor Task / 具名 invoke 宿主）：
+派发纪律 SSOT → **`mstar-dispatch-gates`** · **`mstar-host/references/parallel-dispatch.md`** · **`skills/pm/SKILL.md`**（Dispatch-first）。
 
-1. 准备 Assignment 的消息可只含 read/bash — **不计入**派发。
-2. **下一条派发消息**的第一动作 = 发出全部 `Task`（SDD plan QC 初轮 **N=3**；`inline` **N=1**；双轨 implement **N=2**）。
-3. `Subagent invokes issued: 0` 而 Assignment 已写出 → **`dispatch incomplete`**；下一条必须补发 invoke，**禁止** PM 线程亲自实现顶替。
+Iteration Phase 2 附加：
 
-| Do | Don't |
-|----|------|
-| **Loop:** `## Assignment` → invoke → Completion Report v2 → 更新 status → next | PM 亲自 Write/Edit/Shell 产品代码 |
-| 1 Assignment ⇒ 1 invoke | Assignment 只写 markdown 不 invoke |
-| merge/branch/handoff 写入 Assignment | 因"上下文已有"而跳过 subagent |
-
-- **NEVER** implement while staying PM — 实现一律 delegate dev 角色
-- Delegate scope：`mstar-roles` → PM Execution Boundary
-- 例外：用户显式要求 PM thread 实现；hotfix（`mstar-phase-gates`）
+- PM **NEVER** 在 PM 线程实现产品代码（delegate dev；hotfix 例外见 **`mstar-phase-gates`**）
+- `Subagent invokes issued: 0` 而 Assignment 已写出 → **`dispatch incomplete`**；下一条补发 invoke，禁止 PM 顶替
+- QC 初轮：**SDD → N=3**；**inline → N=1**；双轨 implement → **N=2**（同条消息发满 N）
 
 ### 2.6 Push 纪律
 
@@ -304,26 +296,16 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 
 ### 3.2 知识结晶（Compound）—— 迭代级核心收口
 
-**Compound 在此执行，不在 per-plan Done 后独立执行。**
+**Compound 在此执行，不在 per-plan Done 后独立执行。** 工作流 SSOT → **`mstar-compound`**（Q1–Q8 自检、Phase 1–7、Phase 6 索引登记强制）。
 
-PM 触发 `mstar-compound`（可批量）：
+PM 批量触发后须：
 
-1. **收集素材**：回顾本迭代所有 plan 的实现、debug、review 过程，识别以下类型的可结晶知识：
-   - 非平凡 bug 修复及其诊断过程
-   - 新引入的架构模式或约定
-   - 工具链决策及其理由
-   - 跨 plan 重复出现的模式
-   - 有价值的排错经验
+1. 收集本迭代 plan 实现 / debug / review 素材，筛候选知识
+2. 逐条过 `mstar-compound` 自检；跳过项记入 compass `## Compound Round Summary`
+3. 写入或更新 `{KNOWLEDGE_DIR}/<category>/<slug>.md`；新领域词更新 `CONCEPTS.md`
+4. **每篇**新 doc 完成 Phase 6（`{KNOWLEDGE_DIR}/README.md` 登记）
 
-2. **逐条判定**：对每条候选知识，回答 `mstar-compound` 的 Q1-Q8 自检；跳过项要在 compass `## Compound Round Summary` 记录原因。
-
-3. **写入或更新**：值得结晶的条目按 `mstar-compound` Phase 1-7 写入 `{KNOWLEDGE_DIR}/<category>/<slug>.md`，或在高重叠时更新已有文档。
-
-4. **CONCEPTS.md 协同**：若迭代中引入了新的领域词汇，更新 `<repo-root>/CONCEPTS.md`（`mstar-compound` Phase 5）
-
-5. **索引登记（强制）**：每新增一篇 knowledge doc，必须完成 `mstar-compound` Phase 6，在 `{KNOWLEDGE_DIR}/README.md` 登记一行。Lightweight compound 不豁免 Phase 6。
-
-若本轮没有值得结晶的知识，仍须在 `## Compound Round Summary` 写明 `无可结晶知识` 及原因。
+若无结晶，仍在 `## Compound Round Summary` 写明 `无可结晶知识` 及原因。
 
 ### 3.3 更新 roadmap
 
