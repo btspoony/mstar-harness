@@ -48,7 +48,7 @@ In Prepare phase, PM decides whether the project needs a DESIGN.md. If yes, disp
 
 - `@frontend-dev` / `@fullstack-dev` — read DESIGN.md before implementing styled components; map tokens to CSS/theme variables
 - `@qc-specialist` — verify UI implementation aligns with DESIGN.md tokens
-- `@qa-engineer` — verify visual output matches design spec
+- `@qa-engineer` — verify visual output matches design spec when **`QA gate: mandatory`**
 
 ## Phase gate integration
 

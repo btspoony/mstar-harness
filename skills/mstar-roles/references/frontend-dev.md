@@ -82,7 +82,7 @@ If plan drift appears during implementation, request plan write-back before cont
 
 - Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-plan-conventions`.
 - Update assigned task checkboxes and related plan sections.
-- Do not mark full plan `Done` (PM/QA gate authority).
+- Do not mark full plan `Done` (only `project-manager` or `qa-engineer` per `mstar-harness-core`).
 
 ### Git NEVER (repo writes)
 

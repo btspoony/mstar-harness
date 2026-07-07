@@ -1,13 +1,13 @@
 ---
 name: mstar-review-qc
-description: Morning Star QC/QA review baseline — **SDD plans: mandatory plan QC tri-review** (`qc1`…`qc3` + consolidated); inline/hotfix single-seat (`qc.md`); checklists, report template, targeted re-review, residual gate. Per-task review is **`mstar-sdd`** task reviewers (L2). Use when `qc-specialist*` review, `qa-engineer` verifies, or `project-manager` dispatches/consolidates QC.
+description: Morning Star QC/QA review baseline — **SDD plans: mandatory plan QC tri-review** (`qc1`…`qc3` + consolidated); inline/hotfix single-seat (`qc.md`); checklists, report template, targeted re-review, residual gate. Per-task review is **`mstar-sdd`** task reviewers (L2). Use when `qc-specialist*` review, `qa-engineer` executes L4 (`QA gate: mandatory`), or `project-manager` dispatches/consolidates QC.
 ---
 
 ## Load order（必读顺序）
 
 **在同一会话或任务中首次 Read 本 skill 时：必须先 Read `mstar-harness-core` skill（SKILL.md），并按需 Read **`mstar-branch-worktree`**（`Review cwd` / `Working branch` / `Review range`）。** 本 skill 只定义 QC/QA **工作流与报告形态**；派发与三审同消息规则见 **`mstar-dispatch-gates`**；**同仓 worktree 与单一待审 `HEAD`** 以 **`mstar-branch-worktree`** 为准。冲突时 **以 `mstar-harness-core` 为准**。
 
-**摘要**：`mstar-harness-core` — QC-QA 检出与派发门禁；本 skill — 审查清单、报告模板、verdict 与 residual 留档契约。职责分层 → **`references/review-responsibility-boundaries.md`**。
+**摘要**：`mstar-harness-core` — QC-QA 检出与派发门禁；本 skill — 审查清单、报告模板、verdict 与 residual 留档契约。职责分层 → **`references/review-responsibility-boundaries.md`**；L4 验收（`qa-engineer` 被派发时）→ **`references/qa-acceptance-gate.md`**。
 
 # Morning Star QC Review Baseline（QC 审查基线）
 

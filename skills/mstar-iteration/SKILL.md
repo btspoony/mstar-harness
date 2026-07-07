@@ -185,7 +185,7 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 ## Phase 2: Autonomous Execute（per-plan 派发驱动）
 
-**本 Phase 是本 skill 的核心**——定义 per-plan 派发循环的完整流程：前置条件检查、session todos、backlog 读取、integration 分支管理、per-plan dispatch 循环（分支→实现→QC→QA→Done→合并）、dispatch-first 约束、push 纪律。PM 读取本 Phase 即可执行迭代。
+**本 Phase 是本 skill 的核心**——定义 per-plan 派发循环的完整流程：前置条件检查、session todos、backlog 读取、integration 分支管理、per-plan dispatch 循环（分支→实现→QC→**QA gate**→Done→合并）、dispatch-first 约束、push 纪律。PM 读取本 Phase 即可执行迭代。
 
 ### 2.0 前置条件（四道闸）
 
@@ -204,7 +204,7 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 | Host | 工具 | 最小集合 |
 |------|------|---------|
-| **Cursor** | `TodoWrite` / CreatePlan todos | 当前 `plan_id`；下一批 gates（implement/QC/QA）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至 §5.5） |
+| **Cursor** | `TodoWrite` / CreatePlan todos | 当前 `plan_id`；下一批 gates（implement/QC/**QA gate**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至 §5.5） |
 | **Codex** | `update_plan` / Goal UI | 同上 |
 | **OpenCode** | host todo/plan UI（如有） | 同上 |
 
@@ -251,7 +251,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
      6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；更新 `status.json` / plan checkbox
      7. Next task
    - 每次 Completion Report v2 后更新 `status.json` + 主 plan
-3. **QC → QA → Done**：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席）+ QA。
+3. **QC → QA gate → Done**：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。
 4. **Plan complete — merge back**：合并 plan feature branch → `spec_integration_branch`；在下一 plan 或 QC 前解决冲突
 5. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 的 `## Plans` 表状态列
 6. **Next plan** 从步骤 1 继续

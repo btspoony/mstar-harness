@@ -17,7 +17,7 @@ For assignees (non-PM):
 
 - `Execute as: <role-id>` means the current assignee executes personally.
 - Do not spawn same-role nested subagent.
-- Do not infer dispatch from route narrative (`A -> B -> C`), handoff, QA notes, or role names in prose.
+- Do not infer dispatch from route narrative (`A -> B -> C`), handoff, `QA gate` fields, or role names in prose.
 - Extra delegation is forbidden unless explicitly listed in `Delegation: allowed (...)`.
 - If additional assignee is required, return `Blocked` with rationale.
 
@@ -42,7 +42,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
   - **QC reviewers**: "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"
   - **Multi-track implementers** (`fullstack-dev` + `frontend-dev` / `fullstack-dev-2`): "auto-dispatch to the other track mentioned in Dev routing"; "implement in repo root when Assignment names a different `Worktree path`"
   - **`fullstack-dev-2`**: "treat `fullstack-dev` in routing narrative as a handoff or invoke target"
-  - **`qa-engineer`**: "start validation before QC reports are consolidated"; "modify application code"
+  - **`qa-engineer`**: "start validation before QC reports are consolidated"; "default to full test re-run when `QA mode: acceptance-only` and QC evidence is sufficient"; "modify application code" (unless allowed)
   - **`explore`-assigned**: "implement or modify code"
   - **All non-PM**: "dispatch parallel agents"; "spawn a subagent whose `subagent_type` matches your own `Execute as` role id"
 - Anti-patterns must be action-oriented ("auto-dispatch to …", "treat … as invoke", "start … before …") — not abstract descriptions.
@@ -65,7 +65,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 
 **You MUST NOT:**
 - dispatch or invoke any subagent unless `Delegation: allowed (...)` appears below
-- treat plain `role-id` mentions, `Handoff`, `QA note`, routing tables, or multi-track prose as invoke commands
+- treat plain `role-id` mentions, `Handoff`, `QA gate`, routing tables, or multi-track prose as invoke commands
 - invoke a subagent whose `subagent_type` matches your own `Execute as` role id (recursive dispatch)
 - <situation-specific anti-pattern #1>
 - <situation-specific anti-pattern #2>
@@ -94,7 +94,9 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **plan_id**: <plan-id or N/A + scope label>
 **Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
 **Worktree path**: <implementer path if used>
-**QA note**: <PM-scheduled / skipped / self-check>
+**QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
+**QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
+**QA mode**: acceptance-only | full | report-only | N/A — required when `QA gate: mandatory` or `report-only`
 **Why this agent**: <role-fit>
 **PM Task Board coverage**: <task ids>
 **Roadmap / deferred scope**: <required when staged, partial, or temporary; otherwise N/A>
@@ -158,6 +160,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Blockers**: ...
 **Decisions needed**: ...
 **Evidence Snapshot**: ...
+**PM Acceptance**: <required block when QA gate: pm-acceptance before Done — see qa-trigger-matrix.md>
 **Effort note (agent-oriented)**: ...
 ```
 

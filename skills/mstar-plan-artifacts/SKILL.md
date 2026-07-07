@@ -1,6 +1,6 @@
 ---
 name: mstar-plan-artifacts
-description: Morning Star plan harness artifacts — `{PLAN_DIR}` main plans and `reports/`, `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` indexes, Done compaction, plus `{HARNESS_DIR}/status.json` and root `residual_findings` (severity SSOT, open/archived lifecycle, `notes.json`). Read when writing plans or QC reports, maintaining knowledge/iteration indexes, reading or writing `status.json` / R#, Done compaction, or mapping QC severity to JSON. Required for `@project-manager` on status, residuals, and InReview/QC waves; `@qc-specialist*` before `reports/**/*.md`; `@qa-engineer` before closing R#. Verdict rules in `mstar-review-qc`; paths in `mstar-plan-conventions`.
+description: Morning Star plan harness artifacts — `{PLAN_DIR}` main plans and `reports/`, `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` indexes, Done compaction, plus `{HARNESS_DIR}/status.json` and root `residual_findings` (severity SSOT, open/archived lifecycle, `notes.json`). Read when writing plans or QC reports, maintaining knowledge/iteration indexes, reading or writing `status.json` / R#, Done compaction, or mapping QC severity to JSON. Required for `@project-manager` on status, residuals, and InReview/QC waves; `@qc-specialist*` before `reports/**/*.md`; `@qa-engineer` before closing R# when `QA gate: mandatory`. Verdict rules in `mstar-review-qc`; paths in `mstar-plan-conventions`.
 ---
 
 ## Load order

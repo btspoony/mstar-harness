@@ -168,8 +168,11 @@ flowchart TD
     L --> M["QC trio: review gate"]
     M --> N{"QC decision"}
     N -->|Request Changes| J
-    N -->|Approve| O["QA engineer: verification"]
-    O --> P{"Residual findings remain"}
+    N -->|Approve| O{"QA gate"}
+    O -->|mandatory| O1["qa-engineer: acceptance verification"]
+    O -->|pm-acceptance| O2["PM: acceptance checklist"]
+    O1 --> P{"Residual findings remain"}
+    O2 --> P
     P -->|Yes| Q["PM/QA: register or accept residuals in status.json"]
     Q --> R["PM: mark plan Done and merge to integration branch"]
     P -->|No| R
@@ -183,7 +186,7 @@ flowchart TD
     X --> Y["Phase 5: merge-ready loop until CI green and reviews resolved"]
 ```
 
-For single-plan or non-iteration work, use the same per-plan gates (`Prepare → Execute → QC → QA → Done`) without the iteration-start / iteration-close wrapper.
+For single-plan or non-iteration work, use the same per-plan gates (`Prepare → Execute → QC → QA gate → Done`) without the iteration-start / iteration-close wrapper.
 
 ## Role and Skill Overview
 
@@ -196,7 +199,7 @@ For single-plan or non-iteration work, use the same per-plan gates (`Prepare →
 | `architect` | Architect | Architecture and technical contracts |
 | `fullstack-dev` / `fullstack-dev-2` | Fullstack Dev | Backend-led implementation / second parallel track |
 | `frontend-dev` | Frontend Dev | UI, interaction, frontend performance |
-| `qa-engineer` | QA | Testing and acceptance validation |
+| `qa-engineer` | QA | Tiered acceptance validation (dispatched when `QA gate: mandatory`; else PM acceptance) |
 | `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` | QC Trio | Code quality gate (architecture/security/performance) |
 | `ops-engineer` | Ops | Deployment, monitoring, infrastructure |
 | `writing-specialist` | Writing Specialist | Documentation, fiction, copywriting, and script writing |
