@@ -80,7 +80,8 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - `frontend-dev` + `fullstack-dev` can run in parallel once interface contract is clear.
 - `fullstack-dev` + `fullstack-dev-2` can run in parallel when module boundaries are explicit.
 - Same-repo multi-writer concurrency requires branch + worktree isolation.
-- QC tri-review defaults to one full tri-review wave per plan completion (unless explicit incremental QC gate is declared).
+- **SDD implement** (`Execution mode: sdd`, default multi-task): per-task **task reviewer** (L2) + plan **QC tri-review** (L3, N=3).
+- **Inline / hotfix**: single-seat QC or skip per routing table.
 
 ## Routing / allocation NEVER (PM)
 

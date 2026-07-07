@@ -72,6 +72,11 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 
 **Execute as**: <role-id>
 **Delegation**: forbidden | allowed (...)
+**Execution mode**: sdd | inline | N/A
+**SDD dir**: .mstar/sdd/<plan-id>/ | N/A
+**Model tier**: fast | standard | capable | N/A
+**QC mode**: full tri-review | single | N/A — **default `full tri-review` when `Execution mode: sdd`**; `single` only for `inline` / override
+**Review package path**: <branch-review diff file> | N/A
 **Who runs this turn (executor lock)**: only `Execute as` role for this message
 **Primary**: <route type>
 **Task category**: `visual` | `deep` | `quick` | `logic` | `ops` | `docs`

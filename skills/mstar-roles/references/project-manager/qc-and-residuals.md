@@ -2,33 +2,45 @@
 
 Use this reference when PM is dispatching QC, consolidating review verdicts, or managing residual findings lifecycle.
 
-## QC Tri-Review Minimal Flow
+## SDD path: mandatory plan QC tri-review (L3)
 
-0. Pre-dispatch read gate: read `mstar-review-qc` for this round.
-1. Dispatch three independent QC assignments.
-2. Collect reports and verify alignment fields:
-   - `plan_id`
-   - `Review range / Diff basis` — use `metadata.target_branch` or PM-specified base ref for merge-base; **do not** assume `origin/main` in formal iterations (`mstar-iteration` §2.3)
-   - `Review cwd / Worktree path`
-   - `Working branch`
-3. Verify runtime identity/model mapping for three distinct QC roles.
-4. De-duplicate findings and resolve conflicts by evidence strength.
-5. Emit one consolidated gate decision.
-6. After dev fixes blocking items:
-   - **Default**: **Targeted QC re-review** — dispatch only QC seats that **raised** blocking findings (consolidated table, R# `source` e.g. `QC-#2` → `qc-specialist-2`, or originating `qcN.md` / `F-###`). Assignment: `QC re-review: targeted — reviewers: <role-ids>`. Same `plan_id` + `Review range` / `Diff basis` unless PM narrows to fix commits (must still be copy-pasteable for QA).
-   - Each targeted QC **edits the same** `qc1.md` / `qc2.md` / `qc3.md` (per seat); PM **edits the same** `qc-consolidated.md`. **Do not** re-dispatch all three by default.
-   - **Exception**: `QC re-review: full tri-review` → three parallel QC again + new `qc1-rev2.md` … files (see `mstar-plan-artifacts/references/plan-files-and-reports.md`).
-   - Then **QA** when the gate requires sign-off (same checkout fields as initial review).
+**When:** `Execution mode: sdd` — **all** multi-task implement flows (single plan **or** `mstar-iteration` Phase 2).
+
+**Per-task (L2):** task reviewer only — **not** `qc-specialist`. One reviewer subagent per task (spec + quality on task diff).
+
+**After all tasks (L3):**
+
+0. Pre-dispatch: read `mstar-review-qc`.
+1. `review-package MERGE_BASE HEAD` → branch diff under `{SDD_DIR}` or PM path.
+2. Dispatch **three** QC seats in **one** message (**N=3**), **`QC mode: full tri-review`**:
+   - QC#1 `qc-specialist` → `qc1.md` (architecture / maintainability)
+   - QC#2 `qc-specialist-2` → `qc2.md` (security / correctness) — **cross-review** same branch diff
+   - QC#3 `qc-specialist-3` → `qc3.md` (performance / reliability) — **cross-review** same branch diff
+3. Alignment fields text-identical across three reports and Assignment.
+4. PM writes `qc-consolidated.md`; gate decision from consolidated + three originals.
+5. After fixes: targeted re-review per seat (default) or `QC re-review: full tri-review` for new wave files.
+
+**NEVER** end an SDD plan with only a single final `qc-specialist` unless user override: `QC mode: single — override: <reason>`.
+
+## Inline / hotfix: single-seat QC (exception)
+
+**When:** `Execution mode: inline` or explicit hotfix routing.
+
+1. Branch review-package path on dispatch.
+2. **One** `qc-specialist` → `qc.md` (**N=1**).
+3. Targeted re-review updates same `qc.md`.
 
 ## QC / Residual NEVER (PM)
 
-- **NEVER** consolidate tri-review into `Approve` when any QC report’s `plan_id`, `Review range / Diff basis`, `Review cwd / Worktree path`, or `Working branch` **differs** from the PM Assignment text (character-level mismatch).
-- **NEVER** register or rewrite residual `severity` values outside the machine enum in `mstar-plan-artifacts`.
-- **NEVER** drop residual tracking to chat-only when `Approve with residuals` applies—canonical open list lives under `{HARNESS_DIR}/status.json` `residual_findings[<plan-id>]`.
-- **NEVER** archive or delete open residual rows from `status.json` without the documented close + `{HARNESS_DIR}/archived/residuals/` workflow.
-- **NEVER** treat “two of three QC reports arrived” as sufficient for a **full parallel tri-review wave**—missing reviewer => `Blocked` or explicit PM decision, not silent `Approve`.
-- **NEVER** re-dispatch all three QC reviewers after a routine fix round when only one or two seats had blocking findings—use **targeted re-review** unless Assignment declares **`QC re-review: full tri-review`**.
-- **NEVER** create `qc1-rev2.md` (etc.) for **targeted** re-review; update the original `qcN.md` in place.
+- **NEVER** dispatch plan QC without a **branch** review-package file path (MERGE_BASE..HEAD).
+- **NEVER** use single-seat `qc.md` after **`Execution mode: sdd`** without documented user override.
+- **NEVER** dispatch only QC#2 and QC#3 while skipping QC#1 on initial SDD tri wave — full **N=3** cross-review required (all three seats).
+- **NEVER** consolidate tri-review into `Approve` when any QC report's alignment fields differ from Assignment (character-level).
+- **NEVER** register or rewrite residual `severity` outside `mstar-plan-artifacts` machine enum.
+- **NEVER** drop residual tracking to chat-only when `Approve with residuals` applies.
+- **NEVER** treat "two of three QC reports arrived" as sufficient — missing seat → `Blocked`.
+- **NEVER** re-dispatch all three after routine fix when only one or two had blockers — **targeted re-review** unless `QC re-review: full tri-review`.
+- **NEVER** create `qc1-rev2.md` for **targeted** re-review; update original `qcN.md` in place.
 
 ## Consolidated Decision Template
 

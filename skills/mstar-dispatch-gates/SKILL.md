@@ -1,6 +1,6 @@
 ---
 name: mstar-dispatch-gates
-description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、同条消息 N 次 invoke、QC 三审禁止串行 rollout、Assignment 文案≠派发（invoke 条数须对齐）、未齐不发（emit zero until batch-ready）。**必须**在 `project-manager` 每轮派发、QC 三审并发、双轨 implement、或 leaf 角色疑惑能否 Task 时 Read；所有非 PM 承接方动手前必读反递归与自检。同仓 worktree 与 QC 检出对齐见 `mstar-branch-worktree`。宿主细则见 `mstar-host`（`references/parallel-dispatch.md` 与各宿主 reference）。
+description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、SDD implement 串行派发、**SDD 路径 plan QC 强制 tri-review（N=3）**、inline 单席 QC 例外、Assignment 文案≠派发、未齐不发。`project-manager` 派发时必读；leaf 动手前必读反递归。worktree 见 `mstar-branch-worktree`；SDD 见 `mstar-sdd`；宿主见 `mstar-host`。
 ---
 
 ## Load order（必读顺序）
@@ -54,8 +54,9 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**：
 
 - **工具并发**：同一调度轮次内，多个 subagent 调用须在**同一条 assistant 消息**里一次性发出（宿主允许时）。
-- **QC 三审硬门禁（initial wave）**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 须**同一条消息**全部发起（**N=3**）；只发其中一个 = **`dispatch incomplete`**，不得写「三审已并行启动」。
-- **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），仍须**同一条消息**发满 **N**；不得默认补满三人。
+- **QC tri-review（SDD 强制）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 同条消息 **N=3**（`qc1`…`qc3` + `qc-consolidated.md`）。Assignment 须含 branch **review-package** 路径。适用于**单 plan 与 iteration**。
+- **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，`qc.md`。
+- **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），同条消息发满 **N**。
 - **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
 - **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
 - **未齐不发（emit zero until batch-ready）**：需并发 `N≥2` 而当前只能发 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
@@ -64,11 +65,20 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话。PM 须在**同一条 assistant 消息**（或宿主等价机制）发出与 Assignment **条数一致**的 invoke / Task；仅打印 Markdown = **分派未完成**。**几条 Assignment ⇒ 几次 tool 调用**（默认同消息并行）。
 
+## SDD implement 波次（PM only）
+
+When **`Execution mode: sdd`** (`mstar-sdd`):
+
+- **串行**：one implementer at a time; one task reviewer after each — **never** parallel implementers (write conflicts).
+- File handoffs only — no pasted plan/diff/history in dispatch prompts.
+- Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
+- After all tasks: branch `review-package` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
+
 ## 并行规则（摘要）
 
-- 独立模块可并行；避免写操作归属重叠；跨领域变更先锁接口契约再并行编码。
-- **QC 三审**在 feature 开发完成后执行；三名 reviewer 共用同一组 `Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`（**`mstar-branch-worktree`**）。
-- **同一 plan 多 batch**：默认整 plan 交付完成跑一轮完整三审；**fix 后默认 targeted re-review**（N = 被指派的 QC 席位数，同条消息发满 N）；**仅** Assignment 写明 **`QC re-review: full tri-review`** 时复跑三审且用新文件名（**`mstar-plan-artifacts/references/plan-files-and-reports.md`**、**`mstar-review-qc`**）。
+- 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**SDD 单 plan 内 task** 仍串行。
+- **Plan QC tri** after SDD task loop（`Execution mode: sdd`）；**单席**仅 `inline` / hotfix。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
+- **Tri 例外**：`QC mode: full tri-review` 时三席同消息、同 scope 字段。
 
 ## Specialist review-and-edit dispatch
 
@@ -83,8 +93,9 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 ## 反模式（派发）
 
-- QC 三审拆在多条消息或等 #1 返回再发 #2/#3。
-- 仅 1 次 invoke 却声称「并行三审已启动」。
+- QC 三审拆在多条消息（tri 模式）或单席却未附 review-package 路径。
+- 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式 N=3）。
+- SDD 并行 implementer dispatch。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
 - Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。

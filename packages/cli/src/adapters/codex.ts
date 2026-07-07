@@ -12,6 +12,8 @@ import {
   validateLocalHarnessRepo,
   validateSymlink,
   appendGitignore,
+  appendHarnessProjectGitignore,
+  SDD_SCRATCH_GITIGNORE,
   homeRelativeSourcePath,
 } from "./shared-install";
 
@@ -182,6 +184,7 @@ function runInit(scope: Scope, dryRun: boolean) {
     const projectRoot = resolveProjectRoot();
     notes.push(ensureSymlink(HARNESS_REPO_PATH, path.join(projectRoot, CODEX_PLUGIN_LINK), dryRun));
     notes.push(...appendGitignore(projectRoot, [CODEX_PLUGIN_LINK, ".codex/agents/*.toml"], dryRun));
+    notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
   }
   notes.push(...ensureAgentLinks(scope, dryRun));
   if (!dryRun) writeJson(pathToMarketplace, next);
@@ -213,6 +216,9 @@ function runDoctor(scope: Scope) {
     const lines = gitignore.split(/\r?\n/);
     if (!lines.includes(CODEX_PLUGIN_LINK)) errors.push(`Missing .gitignore entry: ${CODEX_PLUGIN_LINK}`);
     if (!lines.includes(".codex/agents/*.toml")) errors.push("Missing .gitignore entry: .codex/agents/*.toml");
+    for (const entry of SDD_SCRATCH_GITIGNORE) {
+      if (!lines.includes(entry)) errors.push(`Missing .gitignore entry: ${entry}`);
+    }
   }
   errors.push(...validateAgentLinks(scope));
   return { location: pathToMarketplace, errors };

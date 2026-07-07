@@ -22,10 +22,11 @@ Detect host → Read `mstar-host` → `references/cursor.md` | `opencode.md` | `
 2. `mstar-roles` → `references/project-manager.md`
 3. Before first **implement** dispatch: `mstar-dispatch-gates` + host reference
 4. Before **QC**: `mstar-review-qc`
-5. **Iteration flow** (start / Execute / close): **`mstar-iteration`** — canonical SSOT for per-plan dispatch loop, integration branch, compound round. Do **not** re-describe the flow in this skill.
-6. **On demand:** `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-branch-worktree`, `mstar-skill-authoring` for skill work
+5. **SDD implement** (`Execution mode: sdd`): `mstar-sdd` before first implement dispatch
+6. **Iteration flow** (start / Execute / close): **`mstar-iteration`** — canonical SSOT for per-plan dispatch loop, integration branch, compound round. Do **not** re-describe the flow in this skill.
+7. **On demand:** `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-branch-worktree`, `mstar-skill-authoring` for skill work
 
-Prepare/Execute gates, routing, Assignment templates, Task Board, QC tri-review, residuals, compound → topic skills + PM references (not repeated here).
+Prepare/Execute gates, routing, Assignment templates, Task Board, QC (SDD → tri; inline → single), residuals, compound → topic skills + PM references (not repeated here).
 
 ## Dispatch-first (`implement`)
 
@@ -35,7 +36,7 @@ Prepare/Execute gates, routing, Assignment templates, Task Board, QC tri-review,
 | **1 Assignment ⇒ 1 invoke** when host supports Task/subagent (`mstar-dispatch-gates`) | Assignment markdown only, no matching invoke |
 | Put merge/branch/handoff from **this thread** into Assignment | Skip subagent because context is "already here" |
 
-- **NEVER** implement while staying PM — QC 3× comes later; **implement still delegates** dev roles.
+- **NEVER** implement while staying PM — SDD ends with **plan QC tri** (N=3); **implement still delegates** dev + task reviewer subagents.
 - **Delegate scope / PM whitelist:** `mstar-roles` → PM Execution Boundary.
 
 **Exceptions:** user explicitly asks PM thread to implement; hotfix per `mstar-phase-gates`.

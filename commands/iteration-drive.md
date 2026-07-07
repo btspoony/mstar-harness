@@ -76,7 +76,7 @@ Execute **`mstar-iteration` § Phase 2** exactly. Summary:
    - Create plan feature branch from integration
    - Dispatch implement subagents (dispatch-first)
    - Update `status.json` + main plan after each Completion Report v2
-   - QC tri-review + QA per `mstar-review-qc`
+   - QC **full tri-review** (`QC mode: full tri-review`, **N=3**, `mstar-review-qc`) + QA per plan
    - Merge plan branch → integration branch
    - Cross-plan progress sync → compass
    - Next plan

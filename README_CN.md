@@ -23,6 +23,8 @@
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
 - 在 OpenCode / Cursor / Codex 下复用同一套核心流程
 
+**1.0.0 亮点：** SDD（`mstar-sdd`）— 每 task **task reviewer** + plan 完成后的 **强制 QC 三审交叉审**（QC#1/#2/#3 看整分支 diff）。仅 `inline`/hotfix 用单席 `qc.md`。
+
 ## 快速开始（推荐方式）
 
 ### CLI Install
@@ -169,6 +171,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 | `mstar-phase-gates` | Prepare/Execute 门禁、clarify、hotfix |
 | `mstar-iteration` | 迭代生命周期：Phase 1–5（start、execute loop、iteration-close、PR 交付、merge-ready loop） |
 | `mstar-dispatch-gates` | PM 派发、Delegation、反递归、并行 invoke |
+| `mstar-sdd` | 子代理驱动开发：文件交接、每 task 实现+审查、进度账本 |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支摘要 |
 | `mstar-plan-artifacts` | 主 plan、`reports/`、`status.json`、residual、knowledge/iteration 索引、Done 归档 |

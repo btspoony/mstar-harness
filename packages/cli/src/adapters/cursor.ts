@@ -10,6 +10,8 @@ import {
   validateLocalHarnessRepo,
   validateGitCheckout,
   appendGitignore,
+  appendHarnessProjectGitignore,
+  SDD_SCRATCH_GITIGNORE,
 } from "./shared-install";
 
 const CURSOR_PLUGIN_NAME = "morning-star-harness";
@@ -65,6 +67,7 @@ function projectInit(dryRun: boolean) {
   const notes = ensureLocalHarnessRepo(dryRun);
   notes.push(...ensureCursorPluginCheckout(location, dryRun));
   notes.push(...appendGitignore(projectRoot, [CURSOR_PLUGIN_LINK], dryRun));
+  notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
   return { location, notes };
 }
 
@@ -85,6 +88,11 @@ function projectDoctor() {
   const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
   if (!gitignore.split(/\r?\n/).includes(CURSOR_PLUGIN_LINK)) {
     errors.push(`Missing .gitignore entry: ${CURSOR_PLUGIN_LINK}`);
+  }
+  for (const entry of SDD_SCRATCH_GITIGNORE) {
+    if (!gitignore.split(/\r?\n/).includes(entry)) {
+      errors.push(`Missing .gitignore entry: ${entry}`);
+    }
   }
   errors.push(...validatePluginAgents(location));
   return { location, errors };

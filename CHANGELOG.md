@@ -2,17 +2,45 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **0.7.9** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.0.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **0.7.9** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **0.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **0.7.9** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **0.7.9** |
-| Codex plugin | `.codex-plugin/plugin.json` | **0.7.9** |
+| Monorepo root | `morning-star` (`package.json`) | **1.0.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.0.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.0.0] - 2026-07-07
+
+### Harness (SDD + plan QC tri-review)
+
+- **New `mstar-sdd` skill**: file handoff, per-task implementer + **task reviewer** (L2), progress ledger under `{SDD_DIR}`.
+- **Plan QC with SDD**: **mandatory tri-review** (QC#1/#2/#3 cross-review on branch diff, **N=3**) when **`Execution mode: sdd`** — single-plan **and** iteration. **Not** a lone final single-seat review.
+- **Single-seat `qc.md`**: only `Execution mode: inline` / hotfix or explicit user override.
+- **Plan template**: `plan.main.md` with Global Constraints, per-task Interfaces, self-review gate; `status.json` optional `sdd_dir`, `task_commits[]` metadata.
+- **PM Assignment**: `Execution mode`, `SDD dir`, `Model tier`; implement default SDD for multi-task plans.
+- **CLI**: project `init`/`doctor` append/check `.mstar/sdd/` gitignore entries.
+- **Routing eval v11**: SDD + mandatory tri-review; inline/hotfix single-seat.
+
+### Breaking changes
+
+1. Multi-task implement defaults to **`Execution mode: sdd`** (single-plan and iteration).
+2. **With SDD**: plan QC is **mandatory tri-review** (QC#1/#2/#3); per-task review is **task reviewer**, not QC.
+3. **Single-seat `qc.md`** only for `inline` / hotfix or explicit override.
+4. New plans: **Global Constraints** + per-task **Interfaces**.
+5. `.mstar/sdd/` ephemeral scratch — gitignore required.
+
+### Superpowers v6 note
+
+Mstar adds L2 **task reviewer** per task; L3 **tri cross-review** retained (not v6's single final reviewer only). See `.harness/specs/sdd-1.0.0-design.md`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.0.0**.
 
 ## [0.7.9] - 2026-07-06
 

@@ -12,6 +12,7 @@ description: Morning Star plan harness artifacts — `{PLAN_DIR}` main plans and
 | Topic | See |
 |-------|-----|
 | Main plan, reports naming, QC waves, residual and plan index order | `references/plan-files-and-reports.md` |
+| Plan template (Global Constraints, Interfaces) | `templates/plan.main.md` |
 | knowledge / iterations / specs boundaries and indexes | `references/knowledge-and-designs.md` |
 | Done row compaction Profile A/B | `references/done-compaction.md` |
 | `status.json`, residual severity, lifecycle, `jq` | `references/status-and-residuals.md` |

@@ -228,7 +228,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 1. **Plan start — feature branch**：Assignment 用 `Working branch: create <plan-feature-branch> from <spec_integration_branch>`。一个 plan 一条专用实现分支；内部并行 → topic branches + worktrees（`mstar-branch-worktree`）
 2. **Implement → InReview**：dispatch-only 循环（`§ 2.5`）；每次 Completion Report v2 后更新 `status.json` + 主 plan
-3. **QC → QA → Done**：三审 + QA（`mstar-review-qc`）；gate 全部通过后 PM 标记 `Done`
+3. **QC → QA → Done**：与 **SDD 全局规则一致** — `Execution mode: sdd` 时 **强制** plan QC tri-review（**N=3**，`qc1`…`qc3` + `qc-consolidated.md`）+ QA；整分支 review-package 路径必填。`inline` hotfix 单席例外。
 4. **Plan complete — merge back**：合并 plan feature branch → `spec_integration_branch`；在下一 plan 或 QC 前解决冲突
 5. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 的 `## Plans` 表状态列
 6. **Next plan** 从步骤 1 继续
@@ -244,7 +244,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 **派发回合纪律**（Cursor Task / 具名 invoke 宿主）：
 
 1. 准备 Assignment 的消息可只含 read/bash — **不计入**派发。
-2. **下一条派发消息**的第一动作 = 发出全部 `Task`（QC 初轮 **N=3** 同条消息；双轨 implement **N=2**）。
+2. **下一条派发消息**的第一动作 = 发出全部 `Task`（SDD plan QC 初轮 **N=3**；`inline` **N=1**；双轨 implement **N=2**）。
 3. `Subagent invokes issued: 0` 而 Assignment 已写出 → **`dispatch incomplete`**；下一条必须补发 invoke，**禁止** PM 线程亲自实现顶替。
 
 | Do | Don't |
@@ -430,7 +430,8 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 | `mstar-phase-gates` | per-plan gate 判定 |
 | `mstar-plan-conventions` | 路径符号（`{ITERATION_DIR}`、`{HARNESS_DIR}`） |
 | `mstar-plan-artifacts` | `status.json` SSOT、`{ITERATION_DIR}` 索引维护 |
-| `mstar-review-qc` | QC 三审 — per-plan loop 引用 |
+| `mstar-sdd` | SDD implement 波次 — per-plan loop |
+| `mstar-review-qc` | SDD 强制 plan QC tri — per-plan loop |
 | `mstar-branch-worktree` | 分支/merge/worktree 隔离 |
 | `mstar-compound` | iteration-close 中触发知识结晶 |
 | `mstar-compound-refresh` | iteration-close 后可触发知识维护 |
@@ -449,3 +450,4 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 - 不要跳过 compound——如果本迭代确实没有可结晶的知识，在 compass `## Compound Round Summary` 写 `无可结晶知识（原因：<简述>）`
 - 不要将 **Phase 4 开 PR** 等同于 **迭代交付完成** — 必须完成 **Phase 5** §5.5 merge-ready loop
 - 不要在 Phase 5 跳过 review comment + resolve 纪律（§5.1 step 5）
+- **不要在 SDD plan 上以单席 `qc.md` 收尾**（除非用户书面 `QC mode: single — override`）

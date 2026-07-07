@@ -7,7 +7,8 @@ Before any non-trivial PM action, read in order:
 3. Host adapter: `mstar-host` (detect host; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
 4. `mstar-plan-conventions` (path discovery, init, Spec branch summary)
 5. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
-6. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, reports naming)
+6. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
+7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, reports naming)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 
@@ -56,11 +57,11 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 
 | Task type | Default route |
 | --- | --- |
-| Large feature | `explore -> product-manager -> architect -> dev -> QC tri-review -> qa-engineer -> ops-engineer` |
-| Medium feature | `explore -> (architect optional) -> dev -> QC tri-review -> qa-engineer` |
-| Small feature | `dev -> QC tri-review -> qa-engineer` |
-| Bug fix | `explore -> RCA brief -> dev -> QC tri-review -> qa-engineer` |
-| High-ambiguity bug | `explore -> RCA -> (architect optional) -> dev -> QC tri-review -> qa-engineer` |
+| Large feature | `explore -> product-manager -> architect -> dev (SDD) -> QC tri-review -> qa-engineer -> ops-engineer` |
+| Medium feature | `explore -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer` |
+| Small feature | `dev (SDD) -> QC tri-review -> qa-engineer` |
+| Bug fix | `explore -> RCA brief -> dev (SDD) -> QC tri-review -> qa-engineer` |
+| High-ambiguity bug | `explore -> RCA -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer` |
 | Hotfix | `single dev -> QC single-review -> qa-engineer fast verify` |
 | Product docs only | `product-manager` (QC may be skipped with explicit reason) |
 | Tech spec only | `architect` (QC may be skipped with explicit reason) |
@@ -78,7 +79,9 @@ Detailed conflict priority and dev allocation:
 
 ## Non-Bypass Constraints
 
-- Code-development plans require QC tri-review by default (hotfix single-review exception only).
+- Code-development plans with **`Execution mode: sdd`** (default for multi-task): **mandatory plan QC tri-review** (`qc1`…`qc3` + consolidated) after all task reviewers complete.
+- **`Execution mode: inline`**: hotfix single-seat QC (`qc.md`) or explicit skip rules unchanged.
+- Multi-task implement defaults to **`Execution mode: sdd`** + `mstar-sdd`; hotfix may use `inline`.
 - Runtime/behavior change requires QA by default.
 - Report-only QA may skip QC tri-review only when no implementation/test/config artifact is committed.
 - Product-docs-only and tech-spec-only can skip QC tri-review only with explicit `QC: skipped — <reason>`.
@@ -176,7 +179,7 @@ Anti-patterns:
 - Q6: Is `Task category` aligned with route?
 - Q7: Is `quick` being misused to bypass prepare?
 - Q8: Is intention gate explicit before implement?
-- Q9: If QC tri-review, are alignment fields text-identical across three reviewers?
+- Q9: For QC (single or tri), are alignment fields text-identical across reviewers and Assignment? Tri mode requires explicit `QC mode: full tri-review`.
 - Q10: Is `Delegation` consistent with dispatch and worktree usage?
 - Q11: For non-trivial plan, is PM Task Board published with coverage?
 - Q12: In invoke-based hosts, were matching invokes actually issued?
@@ -285,7 +288,7 @@ Minimum invariants:
   - `references/project-manager/routing-and-dev-allocation.md`
 - Dispatch mechanics + anti-recursion + templates:
   - `references/project-manager/dispatch-and-assignment.md`
-- QC tri-review + residual lifecycle:
+- QC (SDD → mandatory tri; inline → single) + residual lifecycle:
   - `references/project-manager/qc-and-residuals.md`
 - Plan/status initialization + lifecycle:
   - `references/project-manager/plan-management.md`

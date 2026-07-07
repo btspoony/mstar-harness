@@ -11,7 +11,8 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 |-----------------|------|
 | `mstar-plan-artifacts` | 主 plan、reports、`status.json`、residual、InReview/QC 波次、knowledge |
 | `mstar-branch-worktree` | Assignment 写分支 / worktree / QC 检出 |
-| `mstar-review-qc` | 派 QC 三审（PM 同轮必读） |
+| `mstar-review-qc` | 派 QC（PM 同轮必读；SDD 强制 tri） |
+| `mstar-sdd` | PM 执行 `Execution mode: sdd` 的 implement 波次 |
 
 ## 路径符号（SSOT）
 
@@ -19,6 +20,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 |------|------|
 | `{HARNESS_DIR}` | `.mstar/` |
 | `{PLAN_DIR}` | `{HARNESS_DIR}/plans/` |
+| `{SDD_DIR}` | `{HARNESS_DIR}/sdd/<plan-id>/`（SDD 运行时 scratch；gitignore） |
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/` |
 | `{SPECS_DIR}` | `specs/` 优先，否则 `designs/` |
@@ -27,10 +29,11 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 1. `.mstar/` → `{HARNESS_DIR}=.mstar/`, `{PLAN_DIR}=.mstar/plans/`
 2. 否则 `.agents/` → legacy `{HARNESS_DIR}=.agents/`, `{PLAN_DIR}=.agents/plans/`
-3. 否则 `.plans/` 或 `plans/` → 遗留同目录 `{HARNESS_DIR}={PLAN_DIR}`
-4. 皆无 → 未启用 plan；进度走对话与 Completion Report
+3. 否则 `.harness/` → **本仓库 maint 工作区**（gitignored；`mstar-harness` 维护者迭代 plan/status）
+4. 否则 `.plans/` 或 `plans/` → 遗留同目录 `{HARNESS_DIR}={PLAN_DIR}`
+5. 皆无 → 未启用 plan；进度走对话与 Completion Report
 
-并存时 **`.mstar/` 优先**；仅当项目已有 `.agents/` 且无 `.mstar/` 时继续沿用 `.agents/`。
+并存时 **`.mstar/` 优先**；仅当项目已有 `.agents/` 且无 `.mstar/` 时继续沿用 `.agents/`。**`mstar-harness` 仓库维护**可用仅存在的 `.harness/`（无 `.mstar/`）。
 
 `{SPECS_DIR}`：有 `specs/` 用之；否则 `designs/`；皆无则建议新建 `specs/`。
 
@@ -51,8 +54,9 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 PM 在需要持久化追踪时：
 
 1. 建 `.mstar/`、`plans/`、`status.json`（空模板见 **`mstar-plan-artifacts/templates/status.empty.json`**）
-2. 可选 `notes.json`（模板 **`mstar-plan-artifacts/templates/notes.empty.json`**）、`reports/README.md`、`knowledge/`、`iterations/`、`specs/`
-3. Git：团队交付 **勿** ignore 整个 `{HARNESS_DIR}`（handoff 需 clone 可达）
+2. 可选 `notes.json`（模板 **`mstar-plan-artifacts/templates/notes.empty.json`**）、`reports/README.md`、`knowledge/`、`iterations/`、`specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 `mstar-sdd/scripts/sdd-workspace` 创建）
+3. 项目根 `.gitignore` 追加 `.mstar/sdd/`（或 `.agents/sdd/` legacy）— CLI `init` 可自动添加
+4. Git：团队交付 **勿** ignore 整个 `{HARNESS_DIR}`（handoff 需 clone 可达）
 
 步骤与 `{HARNESS_DIR}/AGENTS.md` 分层 → **`references/harness-bootstrap-and-agents-layering.md`**。
 

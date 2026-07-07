@@ -23,6 +23,8 @@ Core value:
 - Run with unified `mstar-*` skills instead of scattered rules
 - Reuse one core process across OpenCode, Cursor, and Codex
 
+**1.0.0 highlights:** SDD (`mstar-sdd`) with per-task **task reviewer** + **mandatory plan QC tri-review** (QC#1/#2/#3 cross-review on whole branch). Single-seat `qc.md` only for `inline` / hotfix.
+
 ## Quick Start
 
 ### CLI Install
@@ -208,6 +210,7 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-phase-gates` | Prepare/Execute gates, clarify, hotfix |
 | `mstar-iteration` | Iteration lifecycle: Phase 1–5 (start, execute loop, iteration-close, PR delivery, merge-ready loop) |
 | `mstar-dispatch-gates` | PM dispatch, Delegation, anti-recursion, parallel invoke |
+| `mstar-sdd` | Subagent-driven development: file handoffs, per-task implementer + reviewer, progress ledger |
 | `mstar-branch-worktree` | Feature branches, worktrees, QC/QA checkout alignment |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |
 | `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residuals, knowledge/iteration indexes, Done compaction |

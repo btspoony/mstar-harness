@@ -120,6 +120,10 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 | `.harness/docs/` | Design specs, decomposition notes, ADRs for harness changes |
 | `.harness/specs/` | Spec drafts while iterating |
 | `.harness/plans/` | Implementation plans, task boards, maint status notes |
+| `.harness/status.json` | Maintainer plan registry (same schema as consumer `{HARNESS_DIR}/status.json`) |
+| `.harness/sdd/` | Optional SDD scratch during maint smoke (gitignored; inner `*` per plan-id) |
+
+**This repository** uses `.harness/` as its local harness root — not `.mstar/`. Consumer projects still default to `.mstar/` per `mstar-plan-conventions`.
 
 **Runtime SSOT** for `mstar-*` skills stays in repo-root **`skills/`** (bundled via `packages/opencode` `bundle-assets`). Do not treat `.harness/skills/` as the publish path.
 
@@ -127,7 +131,8 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 
 - Core harness entry, state machine, Task category, skill index -> `skills/mstar-harness-core/*`
 - Phase gates (Prepare/Execute, hotfix) -> `skills/mstar-phase-gates/*`
-- Dispatch, Delegation, anti-recursion, parallel invoke -> `skills/mstar-dispatch-gates/*`
+- Dispatch, Delegation, anti-recursion, SDD serial, QC default -> `skills/mstar-dispatch-gates/*`
+- SDD file handoff, per-task review, ledger -> `skills/mstar-sdd/*`
 - Git branches, worktrees, QC/QA checkout alignment -> `skills/mstar-branch-worktree/*`
 - Plan directory discovery, init, Spec branch summary -> `skills/mstar-plan-conventions/*`
 - Plan artifacts (`status.json`, residual, main plan, reports/, knowledge, Done compaction, `templates/`) -> `skills/mstar-plan-artifacts/*`
@@ -169,6 +174,7 @@ After `mstar-harness-core`, load **only** what the role and round need (see `ski
 |-------|-----------------|
 | `mstar-phase-gates` | PM; product/architect in Prepare |
 | `mstar-dispatch-gates` | PM; **all leaf executors** before Task/subagent |
+| `mstar-sdd` | PM on `Execution mode: sdd`; SDD implementer/reviewer subagents (SUBAGENT-STOP) |
 | `mstar-branch-worktree` | PM, dev*, QC*, QA, ops when Git/write or QC checkout |
 | `mstar-plan-conventions` | PM; dev* for path symbols / metadata |
 | `mstar-plan-artifacts` | PM (status/residual, InReview/QC waves), architect, product-manager, QC* (reports), QA (R#) |

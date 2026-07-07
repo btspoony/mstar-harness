@@ -38,7 +38,7 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 - **No invoke tool / no linked custom agent = no dispatch**: printing `## Assignment` does not start another Codex worker.
 - If Codex exposes custom-agent / multi-agent tools and matching Morning Star agents are linked, PM may dispatch through those tools and must follow `parallel-dispatch.md`.
 - If no invoke tool is present when dispatch is required, return **`Blocked`** — report missing invoke capability to the user. Do not substitute single-session role execution in the PM thread unless the user explicitly overrides harness dispatch for this turn.
-- QC tri-review requires three callable reviewer sessions in one dispatch turn. Cannot emit **N=3** → **`Blocked`** for PM rerouting; do not claim tri-review complete or substitute serial/manual review in the PM thread.
+- QC: **`Execution mode: sdd`** → **N=3** tri-review; **`inline`** → **N=1**. Cannot emit required **N** → **`Blocked`**.
 - Leaf executors still follow `mstar-dispatch-gates`: no recursive Task/subagent calls unless Assignment says `Delegation: allowed (...)`.
 
 ## Files, shell, and approvals

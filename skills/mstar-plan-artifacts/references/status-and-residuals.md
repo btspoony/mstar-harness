@@ -125,6 +125,9 @@ In old JSON, **`"severity": "warning"`** is read and rolled up as **`low`**. **F
 | `iteration_compass` | string | Optional `{ITERATION_DIR}/…` |
 | `iteration_refs` | string[] | Optional multiple compass paths |
 | `qc_status` / `tests` / `commits` | string | InReview/Done snapshots; not a substitute for `{PLAN_DIR}/reports/` |
+| `sdd_dir` | string | SDD scratch path, e.g. `.mstar/sdd/<plan-id>/` (gitignored; `mstar-sdd`) |
+| `sdd_progress` | string | Optional pointer to `{SDD_DIR}/progress.md` ledger |
+| `task_commits` | array\<object\> | SDD recovery: `{ "task_id": "T1", "base": "<sha>", "head": "<sha>" }` per completed task |
 
 ### Optional delivery ledger (`phase` + `batches` + `verification`)
 
