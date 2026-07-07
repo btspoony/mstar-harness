@@ -1,6 +1,6 @@
 ---
 name: mstar-compound
-description: Morning Star 知识结晶 —— 将已解决问题的经验沉淀为结构化知识文档，存入 `{KNOWLEDGE_DIR}`。支持 Bug track（症状/失败尝试/解决方案）与 Knowledge track（上下文/指南/适用场景）双轨。含重叠检测（更新已有文档）、可发现性检查（AGENTS.md 索引）、CONCEPTS.md 领域词汇协同。触发：迭代收口时（`mstar-iteration` § iteration-close）批量执行；也可独立触发。产出：`{KNOWLEDGE_DIR}/<category>/<slug>.md` + 可选 AGENTS.md 更新。
+description: Morning Star 知识结晶 —— 将已解决问题的经验沉淀为结构化知识文档，存入 `{KNOWLEDGE_DIR}`；迭代收口时从 `{ITERATION_DIR}/<iteration-id>/` 工作区提升 specs/guides。支持 Bug track 与 Knowledge track 双轨。含重叠检测、可发现性检查、CONCEPTS.md 协同。触发：iteration-close（`mstar-iteration` §3.2）或独立触发。产出：`{KNOWLEDGE_DIR}/<category>/<slug>.md`。
 ---
 
 # mstar-compound（知识结晶）
@@ -79,6 +79,26 @@ iteration-start → [plan lifecycle × N: specify→...→Done] → iteration-cl
 
 迭代内所有 plan Done 后，PM 回顾整轮迭代中产生的可结晶知识，批量 compound。per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动。
 
+### Iteration workspace promotion（iteration-close 强制盘点）
+
+正式迭代收口时，compound **除** plan 实现/debug/review 素材外，**必须**盘点当前迭代的 workspace：
+
+**路径**：`{ITERATION_DIR}/<iteration-id>/**`（含 `guides/`、`specs/`、扁平 `.md`；不含根目录 `*-delivery-compass.md` 除非 PM 显式纳入）。
+
+| 步骤 | 动作 |
+|------|------|
+| 1. Inventory | 列出 workspace 下全部 `.md`；读各文件 + workspace `README.md`（若有） |
+| 2. Triage | 每篇：**Promote** / **Keep snapshot** / **Skip**（理由写入 compound 摘要） |
+| 3. Promote | 值得跨迭代复用 → 走 Q1–Q8（或轻量判定）→ Phase 2 重叠检测 → Phase 3–6 **结构化重写**进 `{KNOWLEDGE_DIR}/`（**禁止**无改写整文件复制） |
+| 4. Trace | 源文件顶栏或 workspace README：`Promoted to: <knowledge-path>`；`{KNOWLEDGE_DIR}/README.md` 的 Source 可记 `iteration:<iteration-id>/<relpath>` |
+| 5. Summary | PM 写入 compass `## Compound Round Summary`：提升篇数、保留快照、跳过及原因 |
+
+**Promote 典型**：迭代 spec 已验证且指导未来实现；guide 含非显而易见的过程知识或失败尝试。
+
+**Keep snapshot**：仅迭代史、已被 `{SPECS_DIR}/` 取代的草案、或自检 ≤2 Yes 的琐碎笔记。
+
+边界 SSOT → **`mstar-iteration/references/iteration-artifact-boundaries.md`**。
+
 ## When to use (trigger)
 
 - **迭代收口时**（`mstar-iteration` § iteration-close）：PM 批量回顾所有 plan 的产物
@@ -114,7 +134,9 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 
 ## Phase 1: Gather context
 
-Read the conversation history to understand:
+Read the conversation history **and**, when `iteration_id` is known, scan **`{ITERATION_DIR}/<iteration-id>/`** workspace per **Iteration workspace promotion** above.
+
+Understand:
 - What problem was solved (the concrete issue)
 - What was tried and didn't work
 - What the working solution was

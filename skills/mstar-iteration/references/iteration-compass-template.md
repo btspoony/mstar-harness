@@ -71,6 +71,20 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 |------|-----------|--------|------------|
 | <risk> | Low/Med/High | Low/Med/High | <mitigation> |
 
+## Iteration workspace (optional)
+
+> Iteration-level **specs** and **guides** live under `{ITERATION_DIR}/<iteration-id>/` — not in `{SPECS_DIR}/` or `{KNOWLEDGE_DIR}/`. Promoted to knowledge at iteration-close via **`mstar-compound`**.
+
+| Path | Purpose |
+|------|---------|
+| `<iteration-id>/guides/` | Exploration, process notes |
+| `<iteration-id>/specs/` | Iteration-scoped spec drafts |
+| `<iteration-id>/README.md` | Workspace index (recommended when non-trivial) |
+
+Link from compass when used:
+
+- Workspace: `<iteration-id>/` | <one-line purpose>
+
 ## Compound Round Summary
 
 > Filled at iteration-close.
@@ -105,6 +119,7 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 | `## Non-Goals` | Yes | Phase 1 |
 | `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
 | `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
+| Iteration workspace (`<iteration-id>/`) | Optional | Phase 1 §1.5.5 — `guides/` + `specs/`; index in `{ITERATION_DIR}/README.md` |
 | `## Compound Round Summary` | Yes | Phase 3 §3.4 |
 | `## Iteration Retrospective` | Recommended | Phase 3 §3.4 |
 

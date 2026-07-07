@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: Morning Star 迭代管理 —— iteration-start、Autonomous Execute（per-plan SDD + plan QC tri）、iteration-close、PR 交付（Phase 4）、PR merge-ready loop（Phase 5）。显式分支策略；compass `{ITERATION_DIR}/`；分支 SSOT：`status.json` metadata + compass frontmatter。**必须**在 iteration-start / iteration-drive / 多 plan 编排、integration 分支、iteration-close 或 PR merge-ready 时 Read；`@project-manager` 迭代编排必读。
+description: Morning Star 迭代管理 —— iteration-start（specs + `<iteration-id>/` workspace；禁止直写 knowledge）、Autonomous Execute、iteration-close（compound 提升 workspace → knowledge）、PR 交付、PR merge-ready loop。分支 SSOT：`status.json` + compass frontmatter。
 ---
 
 # mstar-iteration（迭代管理）
@@ -43,7 +43,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 | **→ Phase 4** | §3.5 exit checklist 全 `[x]`；frontmatter `status: completed` + `end_date` | 打印 `## Phase 4: PR delivery`；开 PR 到 `metadata.target_branch`（§4） | 跳过 §3.1 entry checklist 或 compound Phase 6 |
 | **→ Phase 5** | Phase 4 PR 已创建 | 打印 `## Phase 5: PR merge-ready`；执行 §5 loop 至 §5.5 exit | 开 PR 后停止；跳过 review resolve / CI loop |
 | **→ 迭代交付完成** | §5.5 exit checklist 全 `[x]` | PR mergeable；required CI 全绿；reviews resolved | Phase 4 开 PR 即宣称完成 |
-| **iteration-start → integration branch** | §1.6 Review & Edit chain | 三角色 **按序** invoke 完成 + compass `status: locked` | PM 线程代做三角色编辑；并行三角色；review 前 commit |
+| **iteration-start → integration branch** | §1.6 Review & Edit chain | 三角色按序 invoke；**specs** 为主产出；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene + compass `status: locked` | PM 代做专业编辑；并行三角色；product/architect 写 knowledge；临时笔记进 specs |
 
 **误判信号**：对话里出现 compound 摘要、roadmap 更新、或「所有 plan 已完成」但 **未** 打印 §3.1 / §3.5 checklist → 视为 **Phase 3 未执行**，回到 §3.0。
 
@@ -153,18 +153,31 @@ iteration 正式全流程**必须**写入 `{HARNESS_DIR}/status.json`：
 
 compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** `status.json` 一致；若仅写在 compass 而 status 缺失，§2.3 同轮 backfill。
 
+### 1.5.5 产物边界（specs · iterations · knowledge）
+
+Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）：
+
+| 树 | iteration-start 主责 | 说明 |
+|----|---------------------|------|
+| **`{SPECS_DIR}/`** | product-manager、architect | **长期**规范性产出：锁定规格、ADR、契约；plan `primary_spec` / `spec_refs` 主要挂此处 |
+| **`{ITERATION_DIR}/`** | product-manager、architect、PM | compass（根）+ **`<iteration-id>/` workspace**（迭代级 specs & guides） |
+| **`{KNOWLEDGE_DIR}/`** | **非** start/execute 直写；**`mstar-compound`** @ iteration-close（含 workspace **提升**） | 可复用实施 SSOT |
+
+**禁止**：product/architect 在 §1.6 向 `{KNOWLEDGE_DIR}/` **新增**；把迭代级草案写入 `{SPECS_DIR}/`（应进 `<iteration-id>/specs/` 或 guides）。
+
 ### 1.6 Review & Edit chain（integration 分支前强制）
 
 **Phase 1 在 PM lock 前不算完成**——compass/plans 初稿落盘 ≠ Done。
 
 派发机制 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch，**顺序链**）。PM **不得**将迭代 harness 文档 commit 到 `spec_integration_branch`，直到：
 
-1. **product-manager** → **architect** → **writing-specialist** 已按序通过宿主 invoke **直接编辑**（非仅评论）compass、plans 及受影响 specs；每一环基于上一环落盘修订
-2. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
+1. **product-manager** → **architect** → **writing-specialist** 已按序 invoke 编辑 compass、plans、`{SPECS_DIR}/` 与 **`{ITERATION_DIR}/<iteration-id>/`** workspace（guides/specs，按需）；**不得**在 start 链向 `{KNOWLEDGE_DIR}/` 新增
+2. **writing-specialist** 完成 **corpus hygiene**：全库 `{SPECS_DIR}/` + 既有 `{KNOWLEDGE_DIR}/` 卫生；错放迁回 **`<iteration-id>/`** workspace；细则 → **`iteration-corpus-hygiene.md`**、**`iteration-artifact-boundaries.md`**
+3. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
 
-**顺序理由**：产品范围与优先级 → 架构与契约 → 术语与行文；并行会导致后手重复劳动或覆盖前手未定稿内容。OpenCode：plain role id — **`mstar-host/references/opencode.md`** § Role-mention hygiene。
+**顺序理由**：产品范围与优先级 → 架构与长期契约（specs）→ 行文、规格库卫生与错放纠正（须在 PM/architect 定稿后扫全库 specs）。并行会导致后手重复劳动或覆盖前手未定稿内容。OpenCode：plain role id — **`mstar-host/references/opencode.md`** § Role-mention hygiene。
 
-**完成证据** = 磁盘上的 compass / plans / specs 修订 + compass `status: locked`。**不**要求 `reports/<iteration-id>/` 审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
+**完成证据** = 磁盘上的 compass / plans / specs / iteration 文档修订 + specs（与既有 knowledge）卫生/归档（如有）+ 索引与 metadata 更新 + compass `status: locked`。**不**要求 `reports/<iteration-id>/` 审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
 
 **反模式**：PM 线程代替三角色完成全部编辑而不 invoke；或将本链三角色并行派发 —— 见 **`mstar-harness-core`** 反模式索引。
 
@@ -322,11 +335,12 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 PM 批量触发后须：
 
 1. 收集本迭代 plan 实现 / debug / review 素材，筛候选知识
-2. 逐条过 `mstar-compound` 自检；跳过项记入 compass `## Compound Round Summary`
-3. 写入或更新 `{KNOWLEDGE_DIR}/<category>/<slug>.md`；新领域词更新 `CONCEPTS.md`
-4. **每篇**新 doc 完成 Phase 6（`{KNOWLEDGE_DIR}/README.md` 登记）
+2. **盘点** `{ITERATION_DIR}/<iteration-id>/**` workspace（`guides/`、`specs/`）— **`mstar-compound`**「Iteration workspace promotion」；提升值得保留者进 `{KNOWLEDGE_DIR}/`
+3. 逐条过 `mstar-compound` 自检；跳过项记入 compass `## Compound Round Summary`
+4. 写入或更新 `{KNOWLEDGE_DIR}/<category>/<slug>.md`；新领域词更新 `CONCEPTS.md`
+5. **每篇**新 doc 完成 Phase 6（`{KNOWLEDGE_DIR}/README.md` 登记）
 
-若无结晶，仍在 `## Compound Round Summary` 写明 `无可结晶知识` 及原因。
+若无结晶且无 workspace 提升，仍在 `## Compound Round Summary` 写明 `无可结晶知识` / workspace 盘点结论及原因。
 
 ### 3.3 更新 roadmap
 
@@ -350,7 +364,7 @@ PM 批量触发后须：
 PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`；然后进入 **Phase 4**（§4）：
 
 - [ ] §3.1 前置 gate 已打印并满足
-- [ ] §3.2 compound 完成；新增 knowledge doc 均已登记 `{KNOWLEDGE_DIR}/README.md`（或已记录无可结晶原因）
+- [ ] §3.2 compound 完成；**`<iteration-id>/` workspace 已盘点**（提升 / 保留 / 跳过已记入 Compound Summary）；新增 knowledge doc 均已登记 `{KNOWLEDGE_DIR}/README.md`（或已记录无可结晶原因）
 - [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；tracker / STRATEGY 已按需更新
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Compound Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
@@ -436,8 +450,11 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 | `mstar-sdd` | SDD implement 波次 — per-plan loop |
 | `mstar-review-qc` | SDD 强制 plan QC tri — per-plan loop |
 | `mstar-branch-worktree` | 分支/merge/worktree 隔离 |
-| `mstar-compound` | iteration-close 中触发知识结晶 |
+| `mstar-compound` | iteration-close 中触发知识结晶（**唯一**默认 knowledge 新增路径） |
 | `mstar-compound-refresh` | iteration-close 后可触发知识维护 |
+| `references/iteration-artifact-boundaries.md` | Phase 1 specs / iterations workspace / knowledge 分工 |
+| `references/iteration-workspace-readme-template.md` | `<iteration-id>/README.md` 可选模板 |
+| `references/iteration-corpus-hygiene.md` | §1.6 writing-specialist specs 卫生细则 |
 | `mstar-strategy` | iteration-start 时读 `STRATEGY.md` 对齐方向 |
 
 ## NOT to do
@@ -453,5 +470,8 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 - 不要跳过 compound Phase 6（`{KNOWLEDGE_DIR}/README.md` 索引）——即使只结晶一篇文档
 - 不要跳过 compound——如果本迭代确实没有可结晶的知识，在 compass `## Compound Round Summary` 写 `无可结晶知识（原因：<简述>）`
 - 不要将 **Phase 4 开 PR** 等同于 **迭代交付完成** — 必须完成 **Phase 5** §5.5 merge-ready loop
-- 不要在 Phase 5 跳过 review comment + resolve 纪律（§5.1 step 5）
+- **不要在 iteration-start §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增文档**（知识 → iteration-close **`mstar-compound`**）
+- **不要把迭代级草案写入 `{SPECS_DIR}/`**（应进 `{ITERATION_DIR}/<iteration-id>/specs/` 或 `guides/`）
+- **不要在 iteration-close 跳过 `<iteration-id>/` workspace 盘点**（compound 提升 SSOT → **`mstar-compound`**）
+- **不要在 iteration-start §1.6 跳过 writing-specialist 全库 specs corpus hygiene**（仅改当轮 compass/plans 而不扫 `{SPECS_DIR}/`）
 - **不要在 SDD plan 上以单席 `qc.md` 收尾**（除非用户书面 `QC mode: single — override`）
