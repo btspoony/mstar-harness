@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 14,
+  "version": 15,
   "updated_at": "2026-07-07",
   "cases": [
     {
@@ -480,6 +480,7 @@
         "serial implementer then task reviewer per task",
         "SDD dir path and task-N-brief.md handoffs",
         "progress.md ledger",
+        "continuous execution — next action is dispatch not user check-in",
         "three QC invokes N=3 in one dispatch turn",
         "qc1.md qc2.md qc3.md",
         "qc-consolidated.md",
@@ -487,11 +488,38 @@
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
+        "asks user whether to continue mid Autonomous Execute",
+        "ends turn with confirmation question instead of next dispatch",
+        "parallel implement dispatches across multiple plans without user override",
         "single qc-specialist only in iteration Phase 2 per-plan loop without user override",
         "QC without MERGE_BASE..HEAD review-package",
         "tri-review split across multiple dispatch messages",
         "bulk inline implement Assignment with full plan or T1-Tn pasted for multi-task plan",
         "parallel SDD implementer dispatches",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-drive-continuous-after-plan-wave",
+      "prompt": "iteration-drive：plan A 刚 QC 通过并 merge 回 integration，plan B 仍为 Todo，继续 Autonomous Execute",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "continuous execution — next action is dispatch not user check-in",
+        "immediate plan B implement dispatch without user check-in",
+        "Execution mode: sdd",
+        "serial implementer then task reviewer per task"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "asks user whether to continue before plan B dispatch",
+        "ends turn with confirmation question instead of next dispatch",
+        "parallel implement dispatches across multiple plans without user override",
         "assignment uses non-English field keys"
       ]
     },

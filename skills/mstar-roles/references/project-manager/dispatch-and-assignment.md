@@ -177,4 +177,4 @@ read `mstar-host` → the active host reference and `references/parallel-dispatc
 
 - 把整份 plan 或 T1–Tn 全文贴进 **一个** `fullstack-dev` leaf Assignment。
 - 省略 `Execution mode` / `SDD dir` / `Model tier` 却期望 SDD 产物（`progress.md`、per-task review）。
-- 期望 leaf `fullstack-dev` 载入 `mstar-sdd` 并自编排 per-task 循环 — **编排仅 PM**（`iteration-drive` / `mstar-iteration` §2.4–2.5）。
+- 期望 leaf `fullstack-dev` 载入 `mstar-sdd` 并自编排 per-task 循环 — **编排仅 PM**（`mstar-iteration` §2.4–2.5）。
