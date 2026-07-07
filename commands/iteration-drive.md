@@ -30,6 +30,7 @@ Phase 2: Autonomous Execute  →  Phase 3: iteration-close  →  Phase 4: Create
 | 禁止（PM 线程） | 必须 |
 |-----------------|------|
 | Write/Edit/Shell 产品代码、写测试、跑 QC 审查（Phase 2） | 每条 implement/QC/QA Assignment ⇒ **1 次 `Task`** |
+| **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `task-brief` → implementer → `review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮 dispatch：`Subagent invokes issued: N`（N = Assignment 条数） |
 | 最后一个 plan `Done` 后直接开 PR / 汇报结束 | **Phase 3 → 4 → 5** 顺序执行 |
 | Phase 4 开 PR 后停止 | Phase 5 loop 至 merge-ready；**禁止**未过 §5.5 就结束会话 |
@@ -50,11 +51,12 @@ Phase 2: Autonomous Execute  →  Phase 3: iteration-close  →  Phase 4: Create
 
 1. `mstar-harness-core`
 2. `mstar-roles` → `references/project-manager.md`
-3. `skills/pm/SKILL.md` → **§ Host entry** + **§ Boot**（PM role identity + dispatch-first rules）
-4. `mstar-iteration` → **§ Phase 2–5**（§3 close gate；§4 PR delivery；§5 merge-ready loop）
-5. `mstar-compound` — Phase 3 §3.2 前加载（含 Phase 6 索引登记）
-6. `mstar-dispatch-gates` + host reference
-7. `mstar-plan-artifacts`, `mstar-plan-conventions`, `mstar-branch-worktree`
+3. `mstar-iteration` → **§ Phase 2–5**（§3 close gate；§4 PR delivery；§5 merge-ready loop）
+4. `mstar-compound` — Phase 3 §3.2 前加载（含 Phase 6 索引登记）
+5. `mstar-dispatch-gates` + host reference
+6. **`mstar-sdd`** — **before first implement dispatch** in Phase 2（per-task loop SSOT；多 task plan 默认 `Execution mode: sdd`）
+7. `mstar-review-qc` — before first QC dispatch in Phase 2
+8. `mstar-plan-artifacts`, `mstar-plan-conventions`, `mstar-branch-worktree`
 
 ## Phase 2: Autonomous Execute
 
@@ -74,9 +76,17 @@ Execute **`mstar-iteration` § Phase 2** exactly. Summary:
 4. **Integration branch** (§ 2.3) — `git checkout -b <spec_integration_branch> <iteration_base_branch>` when creating（**not** implicit `main`）
 5. **Per-plan loop** (§ 2.4) — for each non-`Done` plan:
    - Create plan feature branch from integration
-   - Dispatch implement subagents (dispatch-first)
+   - **SDD implement**（默认 `Execution mode: sdd`；`mstar-sdd` 已载入）— per task **串行**：
+     1. `sdd-workspace <plan-id>` → `{SDD_DIR}`
+     2. `task-brief <plan> N` → `{SDD_DIR}/task-N-brief.md`
+     3. Dispatch **one** implementer subagent（brief + report 路径；`references/implementer-prompt.md` 或 sticky 时 `implementer-continuation-prompt.md`）
+     4. `review-package BASE HEAD` → task diff
+     5. Dispatch **one** task reviewer subagent
+     6. Append `{SDD_DIR}/progress.md`；更新 `status.json` `task_commits[]`（如使用）
+     7. Next task — **never** parallel implementers；同 plan 同 dev 可用 **`SDD implementer session: sticky`**（`mstar-sdd/references/sticky-implementer-session.md`）
+   - **禁止**：把整份 plan 或 T1–Tn 全文贴进 implement dispatch；文件交接 SSOT → `mstar-sdd/references/file-handoffs.md`
    - Update `status.json` + main plan after each Completion Report v2
-   - QC **full tri-review** (`QC mode: full tri-review`, **N=3**, `mstar-review-qc`) + QA per plan
+   - QC **full tri-review** (`QC mode: full tri-review`, **N=3**, `mstar-review-qc`) + branch `review-package` + QA per plan
    - Merge plan branch → integration branch
    - Cross-plan progress sync → compass
    - Next plan

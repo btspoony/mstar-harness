@@ -7,7 +7,7 @@ description: Morning Star 迭代管理 —— iteration-start、Autonomous Execu
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols → **`mstar-plan-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. On conflict, **`mstar-harness-core` wins**.
+**Read `mstar-harness-core` first.** Path symbols → **`mstar-plan-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. **Phase 2 implement 波次**（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**。Phase 2 QC 前 → **`mstar-review-qc`**。On conflict, **`mstar-harness-core` wins**.
 
 ## 设计思路
 
@@ -227,7 +227,17 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 对每个 active `plan_id`：
 
 1. **Plan start — feature branch**：Assignment 用 `Working branch: create <plan-feature-branch> from <spec_integration_branch>`。一个 plan 一条专用实现分支；内部并行 → topic branches + worktrees（`mstar-branch-worktree`）
-2. **Implement → InReview**：dispatch-only 循环（`§ 2.5`）；每次 Completion Report v2 后更新 `status.json` + 主 plan
+2. **Implement → InReview**（`§ 2.5`）：
+   - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
+   - PM 载入 **`mstar-sdd`** 后，按 plan task 顺序 **串行** per-task 循环（**不是**一次派发 dev 做全部 tasks）：
+     1. `sdd-workspace <plan-id>` → `{SDD_DIR}`
+     2. `task-brief <plan-file> N` → `{SDD_DIR}/task-N-brief.md`；记录 `BASE_SHA`
+     3. Dispatch **one** implementer subagent（`references/implementer-prompt.md`：brief 路径 + report 路径 + `Model tier`；**禁止**贴整份 plan）
+     4. Implementer `DONE` → `review-package BASE HEAD` → task diff 文件
+     5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
+     6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；更新 `status.json` / plan checkbox
+     7. Next task
+   - 每次 Completion Report v2 后更新 `status.json` + 主 plan
 3. **QC → QA → Done**：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席）+ QA。
 4. **Plan complete — merge back**：合并 plan feature branch → `spec_integration_branch`；在下一 plan 或 QC 前解决冲突
 5. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 的 `## Plans` 表状态列
@@ -241,7 +251,18 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 ### 2.5 Dispatch-first（implement 派发约束）
 
-派发纪律 SSOT → **`mstar-dispatch-gates`** · **`mstar-host/references/parallel-dispatch.md`** · **`skills/pm/SKILL.md`**（Dispatch-first）。
+派发纪律 SSOT → **`mstar-dispatch-gates`** · **`mstar-sdd`** · **`mstar-host/references/parallel-dispatch.md`**。
+
+**SDD implement（Phase 2 默认）** — PM **已载入 `mstar-sdd`** 后执行：
+
+| 规则 | 说明 |
+|------|------|
+| 串行 | 同一 plan 内 **one implementer at a time**；每 task 后 **one fresh task reviewer** |
+| Sticky（可选） | Assignment **`SDD implementer session: sticky`** + `implementer-session.json`；implementer **resume**，reviewer **fresh** — `mstar-sdd/references/sticky-implementer-session.md` |
+| 文件交接 | brief / report / diff / `progress.md` 在 `{SDD_DIR}`；dispatch prompt **只给路径**，不贴 plan 全文或 task 历史 |
+| Assignment 字段 | 每个 implement dispatch 须含 `Execution mode: sdd`、`SDD dir`、`Model tier`；**禁止**省略 `Model tier` |
+| 大包 inline | **禁止**把 T1–Tn 或整份 plan 写进 **一个** `fullstack-dev` leaf Assignment 冒充 SDD |
+| 分支 diff | 全部 task 完成后 `review-package MERGE_BASE HEAD` → branch diff → plan QC tri（N=3） |
 
 Iteration Phase 2 附加：
 
@@ -423,6 +444,7 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 
 - 不要在 per-plan Done 后立即单独 compound——等 iteration-close 统一做
 - 不要在 Autonomous Execute（Phase 2）中修改 per-plan gate 判定
+- **不要在 Phase 2 用 inline 大包 Assignment 替代 SDD per-task 循环**（除非 plan 显式 `Execution mode: inline` / hotfix）
 - 不要用 compass 替代 `status.json` 作为 plan 状态 SSOT
 - 不要在没有完成 per-plan 前置检查的情况下进入 iteration-close
 - 不要在缺少 `iteration_base_branch` / `target_branch` 时默认使用 `main` / `master`

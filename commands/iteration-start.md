@@ -28,12 +28,11 @@ Detailed workflow → **`mstar-iteration` § Phase 1: iteration-start**（含 §
 
 1. `mstar-harness-core`
 2. `mstar-roles` → `references/project-manager.md`
-3. `skills/pm/SKILL.md` → **§ Host entry** + **§ Boot**
-4. `mstar-iteration` → **§ Phase 1: iteration-start**（迭代范围、compass 模板、§1.6 Review & Edit chain、状态初始化）
-5. `mstar-dispatch-gates`
-6. `mstar-phase-gates` → Prepare（specify → clarify → plan）
-7. `mstar-plan-conventions`, `mstar-plan-artifacts`
-8. `mstar-host` → active host reference（invoke 能力）
+3. `mstar-iteration` → **§ Phase 1: iteration-start**（迭代范围、compass 模板、§1.6 Review & Edit chain、状态初始化）
+4. `mstar-dispatch-gates`
+5. `mstar-phase-gates` → Prepare（specify → clarify → plan）
+6. `mstar-plan-conventions`, `mstar-plan-artifacts`
+7. `mstar-host` → active host reference（invoke 能力）
 
 ## 1. Research
 

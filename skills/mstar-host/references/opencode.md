@@ -6,6 +6,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 
 ## Role loading
 
+- **PM entry**: **`/pm`** or **`pm` skill** → `project-manager` for general orchestration; **`commands/`** (`iteration-start`, `iteration-drive`, `mstar-bootstrap`) for formal iteration only.
 - **Role shell**: `agents/<id>.md` referenced by `opencode.json` `agent.<id>` (frontmatter + role binding only).
 - **Role body**: `mstar-roles` `references/<id>.md` (or shared references + parameters).
 - Implementation evidence and RCA behavior: `mstar-coding-behavior`.
@@ -29,6 +30,8 @@ Harness **dispatch** on OpenCode = **one or more `task` tool calls**, each with 
 | No task tool call | **Not dispatched** — paste-only / `dispatch incomplete` |
 
 PM workflow: finalize Assignment → **call task tool** with **subagent** + generated prompt → wait for subagent Completion Report → update plan / status.
+
+**SDD sticky implementer:** if the task tool exposes **resume** / agent id, follow **`mstar-sdd/references/sticky-implementer-session.md`** and the active host reference. If resume is **not** available, use **micro-batch** (2–3 tasks, one invoke) or **`SDD implementer session: fresh`** per task — do not assume sticky without host support.
 
 ## Role-mention hygiene (OpenCode)
 

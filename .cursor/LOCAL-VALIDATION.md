@@ -44,7 +44,7 @@ git rev-parse HEAD | xargs -I{} skills/mstar-sdd/scripts/review-package {} {}
 
 - Confirm outputs land under `{SDD_DIR}` printed by `sdd-workspace` (default `.mstar/sdd/<plan-id>/`).
 - `git status` must **not** list `{HARNESS_DIR}/sdd/` scratch files (directory should be gitignored).
-- PM-style routing: **`Execution mode: sdd`** → plan QC **N=3** tri + branch review-package; **`inline`/hotfix** → **N=1** `qc.md`. SDD implement/reviewer dispatches are **serial**.
+- PM-style routing: **`Execution mode: sdd`** → plan QC **N=3** tri + branch review-package; **`inline`/hotfix** → **N=1** `qc.md`. SDD implement/reviewer dispatches are **serial**. Optional **`SDD implementer session: sticky`** (Cursor Task `resume`) — reviewers stay **fresh** per task (`mstar-sdd/references/sticky-implementer-session.md`).
 
 ## 4) Packaging guardrails
 

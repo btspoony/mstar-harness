@@ -11,7 +11,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an
 - Plugin source: `.codex-plugin/plugin.json`.
 - Runtime skills: repo `skills/` mounted by the Codex plugin (`"skills": "./skills/"`).
 - Custom agent source: repo `codex/agents/*.toml`; CLI/manual install links these into `~/.codex/agents/` or project `.codex/agents/`.
-- `/pm`: shared force entry via the `pm` skill; after that, role behavior comes from `mstar-roles`.
+- **`/pm`** or **`pm` skill**: force PM entry → `mstar-roles` → `project-manager.md` (Codex primary; Cursor/OpenCode for general per-plan work). **`commands/`** when running iteration Phase 1–5.
 - Role files under root `agents/` are for hosts that load OpenCode/Cursor-style agent shells; Codex uses `codex/agents/*.toml` and still loads `mstar-roles` references directly.
 - Tool and plugin availability can be lazy-loaded or session-dependent. Use the tools actually present in the current session; do not infer capability from documentation alone.
 

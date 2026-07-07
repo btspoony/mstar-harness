@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 12,
+  "version": 14,
   "updated_at": "2026-07-07",
   "cases": [
     {
@@ -475,7 +475,11 @@
       "must_have_artifacts": [
         "Context Loaded declaration",
         "mstar-iteration Phase 2 context",
+        "mstar-sdd loaded before first implement dispatch",
         "Execution mode: sdd or QC mode: full tri-review on Assignment",
+        "serial implementer then task reviewer per task",
+        "SDD dir path and task-N-brief.md handoffs",
+        "progress.md ledger",
         "three QC invokes N=3 in one dispatch turn",
         "qc1.md qc2.md qc3.md",
         "qc-consolidated.md",
@@ -486,6 +490,8 @@
         "single qc-specialist only in iteration Phase 2 per-plan loop without user override",
         "QC without MERGE_BASE..HEAD review-package",
         "tri-review split across multiple dispatch messages",
+        "bulk inline implement Assignment with full plan or T1-Tn pasted for multi-task plan",
+        "parallel SDD implementer dispatches",
         "assignment uses non-English field keys"
       ]
     },
@@ -508,6 +514,35 @@
         "missing Context Loaded declaration",
         "only one qc-specialist when Assignment requires full tri-review",
         "tri-review without Execution mode: sdd or explicit QC mode: full tri-review",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "sdd-sticky-implementer-multi-task",
+      "prompt": "同一 plan 上 T3–T6 都是 fullstack-dev 做，任务强相关，希望 sticky 省 token，但每 task 仍要 reviewer",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Execution mode: sdd",
+        "SDD implementer session: sticky on implement Assignment",
+        "implementer-session.json with host_agent_id",
+        "task-N-brief.md per task",
+        "fresh task reviewer per task (no reviewer resume)",
+        "progress.md ledger",
+        "plan QC tri N=3 + branch review-package"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "sticky without implementer-session.json or host_agent_id",
+        "resume task reviewer session",
+        "parallel SDD implementer dispatches",
+        "bulk inline Assignment with full plan pasted instead of per-task briefs",
+        "skip per-task L2 review because implementer session is sticky",
         "assignment uses non-English field keys"
       ]
     }

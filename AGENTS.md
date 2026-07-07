@@ -174,7 +174,7 @@ After `mstar-harness-core`, load **only** what the role and round need (see `ski
 |-------|-----------------|
 | `mstar-phase-gates` | PM; product/architect in Prepare |
 | `mstar-dispatch-gates` | PM; **all leaf executors** before Task/subagent |
-| `mstar-sdd` | PM on `Execution mode: sdd`; SDD implementer/reviewer subagents (SUBAGENT-STOP) |
+| `mstar-sdd` | PM on `Execution mode: sdd`; SDD implementer/reviewer subagents (SUBAGENT-STOP); optional **`SDD implementer session: sticky`** (`references/sticky-implementer-session.md`) |
 | `mstar-branch-worktree` | PM, dev*, QC*, QA, ops when Git/write or QC checkout |
 | `mstar-plan-conventions` | PM; dev* for path symbols / metadata |
 | `mstar-plan-artifacts` | PM (status/residual, InReview/QC waves), architect, product-manager, QC* (reports), QA (R#) |
