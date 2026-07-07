@@ -12,9 +12,9 @@
 | 区域 | 典型内容 | 受众 / 权威 |
 |------|----------|-------------|
 | **`docs/`**（或项目约定的用户文档根） | 安装/quickstart、稳定架构概览、贡献指南、对外 API 说明 | 人类贡献者与终端用户；clone 后应可读 |
-| **`{SPECS_DIR}`**（可选） | 冻结 v1-spec、ADR、program roadmap | 产品/API 规范性最高权威；变更须显式流程 |
-| **`{ITERATION_DIR}`**（可选） | `*-delivery-compass-*`、`*-program-compass-*`、版本范围/验收/风险、遗留 `v1.*` 规划快照 | Agent handoff；**不**替代 `{SPECS_DIR}` |
-| **`{KNOWLEDGE_DIR}`**（可选） | 实现细节 SSOT、架构细则、契约说明、跨版本 tracker、性能基线 | Agent handoff；**不**覆盖 `{SPECS_DIR}` 中的规范性条款 |
+| **`{SPECS_DIR}`**（可选） | 冻结 v1-spec、ADR、program roadmap — **跨迭代长期权威** | 产品/API 规范性最高权威；**iteration-start** 由 product/architect 主写 |
+| **`{ITERATION_DIR}`**（可选） | delivery compass + **`<iteration-id>/` workspace**（`guides/`、`specs/`） | Agent handoff；迭代级草稿；close 时 compound **提升** → knowledge |
+| **`{KNOWLEDGE_DIR}`**（可选） | 实现细节 SSOT、架构细则、契约说明、跨版本 tracker — **经 `mstar-compound` 结晶** | Agent handoff；**不**在 iteration-start 由 product/architect 新增 |
 | **`{PLAN_DIR}/`** | 单 plan 主文件、`reports/`、可选 `residuals/` | 计划执行与审查留档 |
 
 
@@ -23,15 +23,21 @@
 ## `{ITERATION_DIR}`（可选·迭代/版本级 compass）
 
 - **物理路径**：`**{ITERATION_DIR}/**`（推荐布局下常为 `**.mstar/iterations/**`，与 `{KNOWLEDGE_DIR}`、`{PLAN_DIR}` 并列；legacy 项目可继续为 `.agents/iterations/`）。
-- **放什么**：某一**交付版本或迭代**的范围、里程碑、验收、风险、program 备注；命名示例 `v1.15-delivery-compass-v1.md`、`*-program-compass-*.md`；遗留非标准 `v1.*` 规划快照可保留于此并列入索引。
-- **不放什么**：可跨版本复用的实现 SSOT（进 `{KNOWLEDGE_DIR}`）；冻结产品/API 规范（进 `{SPECS_DIR}`）；单 plan 的 QC 留档（进 `{PLAN_DIR}/reports/`）。
-- **索引**：**必须**维护 `**{ITERATION_DIR}/README.md**`：至少 **Document**、**Version / iteration**、**Description**；可按「Delivery compasses」与「Legacy artifacts」分表。
-- **与 plan 的链接**：在 `**plans[].metadata**` 中可用 `**iteration_compass**`（单文件）或 `**iteration_refs**`（`string[]`）登记仓库内相对路径；PM 在 Assignment 点名本轮须读的 compass。
-- **维护**：`@product-manager` / `@architect` 起草；`**@project-manager**` 维护 README 与 metadata 挂接；compass 定稿后**少改多版本**（新版本优先新文件名 `v<N>` 或新 compass 文件）。
+- **放什么**：delivery compass（根目录 `*-delivery-compass*.md`）；**`<iteration-id>/` 工作区** — `guides/`（探索、过程）、`specs/`（迭代级规格草案）；遗留规划快照。
+- **不放什么**：已锁定的仓库级规范（→ **`{SPECS_DIR}/`**）；已提升的跨迭代实施 SSOT（→ **`{KNOWLEDGE_DIR}/`**，经 compound）；单 plan QC（→ `reports/`）。
+- **索引**：`**{ITERATION_DIR}/README.md**` 登记 compass + workspace 目录；`<iteration-id>/README.md` 登记工作区内文档。
+- **维护**：`@product-manager` / `@architect` 起草 workspace；`**@project-manager**` 维护索引与 metadata；**iteration-close** 时 **`mstar-compound`** 盘点 workspace 并**提升**至 `{KNOWLEDGE_DIR}/`。
+
+## `{SPECS_DIR}`（可选·长期规格）
+
+- `{SPECS_DIR}` 解析：优先 `{HARNESS_DIR}/specs/`，否则 `{HARNESS_DIR}/designs/`；皆无则建议新建 `specs/`。
+- **放什么**：跨迭代有效、已锁定或待锁定的产品/API 规范、ADR、契约 — **iteration-start 主产出**（product/architect）。
+- **不放什么**：本迭代-only 探索（→ `<iteration-id>/guides/`）；迭代级 spec 草案（→ `<iteration-id>/specs/`）；实施踩坑原文（→ workspace 或 plan 素材，**close 时 compound 提升**）。
+- **索引**：非 trivial 树建议 `{SPECS_DIR}/README.md`；plan **`primary_spec` / `spec_refs`** 主要指向此处。
 
 ## `{KNOWLEDGE_DIR}`（可选·实施知识库）
 
-- `{SPECS_DIR}` 定义：优先 `{HARNESS_DIR}/specs/`，否则 `{HARNESS_DIR}/designs/`；若两者都不存在，建议新建 `{HARNESS_DIR}/specs/`。
+- **新增 SSOT 默认路径**：**iteration-close** 时经 **`mstar-compound`** 写入；**iteration-start §1.6 禁止** product/architect 新增（见 **`mstar-iteration/references/iteration-artifact-boundaries.md`**）。
 - **必须**维护 `**{KNOWLEDGE_DIR}/README.md**` 作为**目录索引**：至少包含表格列 **Document（链接）**、**Source Plan（`plans[].id`）**、**Description**、**Status**（如 `Active` / `Superseded by implementation (<plan-id>)` / `Archived`）。
 - 可选：目录级 `**{KNOWLEDGE_DIR}/AGENTS.md**` 承载命名、维护节奏、与 `{SPECS_DIR}` 的权威边界（Nexus 模式）；harness 宽规则仍以 `mstar-plan-conventions` 与本 reference 为准。
 - 初始化启用知识库时：创建空表头的 `README.md`，随文档递增行。
@@ -44,16 +50,21 @@
 
 ## 与 `status.json` 的链接
 
-- 某 plan 的**权威设计输入**在知识库、迭代 compass 或规格目录中时，在 `**plans[].metadata**` 中登记路径，推荐使用已列标准键：`**primary_spec**`（单文件）、`**spec_refs**`（`string[]`）、`**iteration_compass**` / `**iteration_refs**`（迭代级，可选）。路径为**仓库内相对路径**（推荐布局下常写作 `**.mstar/knowledge/....md**`、`**.mstar/iterations/....md**` 或 `**.mstar/specs/....md**`；兼容旧目录时也可为 `.agents/...`）。
+- 某 plan 的**权威设计输入**在规格、迭代 compass 或（已有）知识库中时，在 `**plans[].metadata**` 中登记路径：`**primary_spec**` / `**spec_refs**` → 优先 **`{SPECS_DIR}/`**；`**iteration_compass**` / `**iteration_refs**` → **`{ITERATION_DIR}/`**；已有 **`{KNOWLEDGE_DIR}/`** 链接保留，但 **iteration-start 不得新增** knowledge 路径。
 - 执行方在 **implement 前**须按 metadata 读取这些文件，并与主 plan 核对；不得在未读链接文档的情况下**静默偏离**其中已写明的决策（若需偏离，先回写 knowledge 或 plan 并走 PM/architect 门禁）。
 
 ## 维护规则
 
-1. **新增**：按命名规则添加 `.md` → 在 `{KNOWLEDGE_DIR}/README.md` 或 `{ITERATION_DIR}/README.md` 索引表增加一行 → 在相关 `plans[].metadata` 更新 `primary_spec` / `spec_refs` / `iteration_*`（若该文档为本 plan 输入/输出）。
+1. **新增**：
+   - **Specs（长期）**：`{SPECS_DIR}/` → spec 索引（若有）→ `plans[].metadata` 的 `primary_spec` / `spec_refs`
+   - **迭代 workspace**：`{ITERATION_DIR}/<iteration-id>/guides|specs/` → `{ITERATION_DIR}/README.md` + workspace README → `iteration_refs`
+   - **Knowledge**：**`mstar-compound`** @ iteration-close（含 workspace **提升**）→ `{KNOWLEDGE_DIR}/README.md`
 2. **阅读**：开发类 agent 在开始编码前，**必须**阅读当前 plan 在 `metadata` 中指向的 knowledge 文档（若存在）；`@project-manager` 在 Assignment 中可再次点名路径。
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新 README 中 **Status** 或 Description；版本迭代优先新文件名 `v<N+1>` 或保留旧版并标明 Superseded。
-4. **归档**：当文档内容已完全反映到已合并代码中时：**保留文件不删除**（保留设计考据）；将索引 **Status** 标为 `Superseded by implementation (...)` 或 `Archived`。**不要**把知识库产物搬进 `**{HARNESS_DIR}/archived/plans/`**（该处用于**计划行**冷快照）；知识库用索引状态表达生命周期即可。
-5. **结晶（Compound）**：PM 在迭代收口时（`mstar-iteration` § iteration-close）批量触发 `mstar-compound`，将整轮迭代的经验沉淀为结构化知识文档（`{KNOWLEDGE_DIR}/<category>/<slug>.md`，YAML frontmatter + 双轨模板）。compound 是迭代级活动，不在 per-plan Done 后单独执行。定期维护由 `mstar-compound-refresh` 执行。详见 **`mstar-compound`**、**`mstar-iteration`** 与 **`mstar-compound-refresh`**。
+4. **归档**：
+   - **iteration-start（强制）**：`writing-specialist` §1.6 以 **`{SPECS_DIR}/` 全库卫生为主**；对**既有** `{KNOWLEDGE_DIR}/` 仅归档/错放纠正，**不**新增 knowledge。细则 → **`mstar-iteration/references/iteration-corpus-hygiene.md`**。
+   - **其它时机**：当文档内容已完全反映到已合并代码中、且非 iteration-start 扫库时：可将索引 **Status** 标为 `Superseded by implementation (...)` 或 `Archived`；可保留原位或迁入 `archived/knowledge/`。**不要**把知识库产物搬进 `{HARNESS_DIR}/archived/plans/`（该处用于**计划行**冷快照）。
+5. **结晶（Compound）**：PM 在 **iteration-close** 触发 **`mstar-compound`**：plan 素材 + **`{ITERATION_DIR}/<iteration-id>/` workspace 提升** → `{KNOWLEDGE_DIR}/`。不在 per-plan Done 后单独执行。维护 → **`mstar-compound-refresh`**。
 
 ## 与 `reports/`、`{PLAN_DIR}/residuals/` 的区分
 

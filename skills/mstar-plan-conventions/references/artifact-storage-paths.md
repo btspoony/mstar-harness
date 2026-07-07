@@ -17,9 +17,12 @@
 | **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored） | `mstar-sdd` |
 | **status.json** | `.mstar/status.json` | `mstar-plan-artifacts` |
 | **迭代 compass** | `.mstar/iterations/<iteration-id>-delivery-compass.md` | `mstar-iteration`（读写） |
+| **迭代工作区** | `.mstar/iterations/<iteration-id>/`（`guides/`、`specs/` 等） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读） |
 | **迭代索引** | `.mstar/iterations/README.md` | `mstar-iteration`（读写） |
 | **规格** | `specs/`（优先），否则 `designs/` | `mstar-plan-artifacts` |
 | **archived residuals** | `.mstar/archived/residuals/<plan-id>.json` | `mstar-plan-artifacts` |
+| **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-plan-artifacts` |
+| **archived specs** | `.mstar/archived/specs/`（保留原 `{SPECS_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-plan-artifacts` |
 
 ## 仓库根目录（`<repo-root>/`，与 `.git/` 同级）
 

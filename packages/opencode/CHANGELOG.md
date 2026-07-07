@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.0.2
+
+- Bundled skills/commands: iteration artifact boundaries (`{ITERATION_DIR}/<id>/` workspace, specs-first start, compound workspace promotion at close); new iteration references; corpus hygiene aligned.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.0.2**.
+
 ## 1.0.1
 
 - Bundled skills/commands: `iteration-drive` + `mstar-iteration` Phase 2 per-task SDD mandate; optional sticky implementer session (`resume` + ledger); thin `pm` skill shim; routing-eval v14.

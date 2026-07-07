@@ -87,7 +87,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 - PM 写初稿；各角色通过宿主 invoke **直接编辑**目标文件（**不**另写仅评论式 `reports/` 替代修订）。
 - **1 Assignment ⇒ 1 invoke**。
-- **Phase 1 Review & Edit chain**（`mstar-iteration` §1.6）：**顺序** `product-manager` → `architect` → `writing-specialist`；上一角色落盘修订完成后再派发下一角色。**禁止**本链并行 batch（与 QC 三审不同）。
+- **Phase 1 Review & Edit chain**（`mstar-iteration` §1.6）：主产出 **`{SPECS_DIR}/`** + **`{ITERATION_DIR}/<iteration-id>/`** workspace；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增。close 时 **`mstar-compound`** 提升 workspace → knowledge。
 - 其他彼此独立、无先后依赖的文档编辑任务：可并行（同条消息发满 N），见 **`parallel-dispatch.md`**。
 - PM 线程代做全部专业编辑 = **反模式**（`mstar-iteration` §1.6、`mstar-harness-core` 反模式索引）。
 - PM merge / lock（如 compass `status: locked`）在链末 subagent 返回后于 PM 线程完成。**不得**在 review-and-edit 链完成前 commit integration 分支。

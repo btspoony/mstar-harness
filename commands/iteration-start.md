@@ -1,6 +1,6 @@
 ---
 name: iteration-start
-description: Start a new harness iteration — research backlog, lock direction with grill-me, produce compass/plans, run mandatory Review & Edit chain via sequential Task dispatch (product-manager → architect → writing-specialist, each review-and-edit, then PM final lock), then create the integration branch from an explicit base. Not Done until review chain completes, compass is locked, and base/target branches are recorded.
+description: Start a new harness iteration — research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ workspace; compound promotes workspace at close only), PM lock, integration branch.
 agent: project-manager
 ---
 
@@ -28,7 +28,7 @@ Detailed workflow → **`mstar-iteration` § Phase 1: iteration-start**（含 §
 
 1. `mstar-harness-core`
 2. `mstar-roles` → `references/project-manager.md`
-3. `mstar-iteration` → **§ Phase 1: iteration-start**（迭代范围、compass 模板、§1.6 Review & Edit chain、状态初始化）
+3. `mstar-iteration` → **§ Phase 1: iteration-start**（迭代范围、compass 模板、**§1.5.5 产物边界**、§1.6 Review & Edit chain、状态初始化）
 4. `mstar-dispatch-gates`
 5. `mstar-phase-gates` → Prepare（specify → clarify → plan）
 6. `mstar-plan-conventions`, `mstar-plan-artifacts`
@@ -98,12 +98,12 @@ Each role below **reviews and directly edits** the documents. Do not just flag i
 
 | # | Role | Required action | Gate |
 |---|------|-----------------|------|
-| 5.1 | **product-manager** | invoke: **edit** compass, plans, `{SPECS_DIR}/`; scope, UX, priorities | 完成后方可 5.2 |
-| 5.2 | **architect** | invoke: **edit** compass, plans, specs（含 5.1 修订后版本）; contracts, SQL, module boundaries | 5.1 返回后；完成后方可 5.3 |
-| 5.3 | **writing-specialist** | invoke: **edit** all iteration docs（含 5.1–5.2 修订后版本）; terminology, structure, clarity | 5.2 返回后 |
+| 5.1 | **product-manager** | invoke: **edit** compass, plans, **`{SPECS_DIR}/`**, **`{ITERATION_DIR}/<iteration-id>/`**（`guides/`、`specs/` 按需）— **禁止** `{KNOWLEDGE_DIR}/` 新增 | 完成后方可 5.2 |
+| 5.2 | **architect** | invoke: **edit** compass, plans, **`{SPECS_DIR}/`**, workspace `specs/`（含 5.1 后版本）— **禁止** `{KNOWLEDGE_DIR}/` 新增 | 5.1 返回后；完成后方可 5.3 |
+| 5.3 | **writing-specialist** | invoke: **edit** compass / plans / specs / iteration 文档; **specs corpus hygiene**（全库 `{SPECS_DIR}/` + 既有 `{KNOWLEDGE_DIR}/` 卫生与错放纠正，**不**新增 knowledge）— `mstar-iteration/references/iteration-artifact-boundaries.md` + `iteration-corpus-hygiene.md` | 5.2 返回后 |
 | 5.4 | **project-manager** | Merge subagent edits; resolve conflicts; **lock** compass (`status: locked`); confirm Prepare gates | 5.3 返回后 |
 
-**Evidence of done** = edited compass / plans / specs on disk + compass `status: locked`. **No** separate iteration review reports under `reports/` — unlike per-plan QC, there is no downstream audit chain to preserve.
+**Evidence of done** = edited compass / plans / **specs** / iteration docs on disk + specs corpus hygiene（及既有 knowledge 归档/错放纠正，如有）+ compass `status: locked`. **No** new `{KNOWLEDGE_DIR}/` from this chain — knowledge → **`mstar-compound`** @ iteration-close. **No** separate iteration review reports under `reports/`.
 
 **Tool rule (hosts with invoke)** — per **`mstar-dispatch-gates`** · specialist review-and-edit dispatch（**顺序链**，非 parallel batch）：
 
@@ -128,9 +128,9 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 
 - [ ] grill-me decisions recorded in compass
 - [ ] Draft compass + plans + `status.json` registered
-- [ ] product-manager invoke completed — compass / plans / specs edited
-- [ ] architect invoke completed — compass / specs edited
-- [ ] writing-specialist invoke completed — iteration docs edited
+- [ ] product-manager invoke completed — compass / plans / specs / **`<iteration-id>/` workspace**（按需）；**未**向 `{KNOWLEDGE_DIR}/` 新增
+- [ ] architect invoke completed — compass / **specs** edited；**未**向 `{KNOWLEDGE_DIR}/` 新增
+- [ ] writing-specialist invoke completed — specs + iteration docs edited；**specs corpus hygiene** done（全库 `{SPECS_DIR}/`；既有 knowledge 仅卫生/归档；错放已迁回 `iterations/` 或 archive）
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch`, `spec_integration_branch`, and `target_branch` recorded in compass / `status.json`
 - [ ] **THEN**: git commit + push `iteration/<iteration-id>`
