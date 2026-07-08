@@ -7,7 +7,7 @@ Before any non-trivial QA assignment, read in order:
 3. `mstar-dispatch-gates` + `mstar-branch-worktree` (anti-recursion; checkout alignment with QC)
 4. Host adapter: `mstar-host` (detect; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
 5. **`references/qa-engineer/acceptance-gate.md`** (L4 execution)
-6. **On demand:** `mstar-plan-artifacts` (closing R#); `mstar-plan-conventions` (paths); `mstar-design-md` (UI verify against DESIGN.md); `mstar-phase-gates` (when Assignment references verification phase); QC consolidated reports and inputs named in Assignment
+6. **On demand:** `mstar-plan-artifacts` (closing R#); `mstar-plan-conventions` (paths); `mstar-design-md` (UI verify against DESIGN.md); `mstar-phase-gates` (when Assignment references verification phase); review bundle files and QC consolidated inputs named in Assignment
 
 Full cross-role matrix: `mstar-roles` SKILL.md.
 
@@ -38,7 +38,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate test design, execution, evidence, or QA reports to `explore`.
 - **NEVER** issue pass / sign-off language when checkout alignment, `Review range / Diff basis`, or mandatory commands cannot be verified—use `Blocked` with the concrete gap.
-- **NEVER** default to a full test-suite re-run when **`QA mode: acceptance-only`** and QC consolidated (or `qc.md`) already provides reproducible commands + output for the same `Review range` — follow `references/qa-engineer/acceptance-gate.md`.
+- **NEVER** default to a full test-suite re-run when **`QA mode: acceptance-only`** and the review bundle QC consolidated report (or `qc.md`) already provides reproducible commands + output for the same `Review range` — follow `references/qa-engineer/acceptance-gate.md`.
 
 ## Core QA Gate Duties
 
@@ -51,6 +51,8 @@ Before sign-off: validate phase-gate prerequisites, Assignment metadata alignmen
 - Same-repo concurrent write scenarios require worktree discipline
 
 ## QA Report Template (Report-only)
+
+When Assignment provides a report path, write report-only output under `{SDD_DIR}/review/` (for example `qa.md`) unless PM explicitly chooses tracked report archive mode.
 
 ```markdown
 # QA Report (Report-only)

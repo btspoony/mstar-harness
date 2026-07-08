@@ -1,6 +1,6 @@
 ---
 name: mstar-review-qc
-description: Morning Star QC orchestration — **SDD mandatory plan QC tri-review** (`qc1`…`qc3` + consolidated); inline/hotfix single-seat (`qc.md`); PM dispatch timing, tri identity gate, residual registration contract, layer boundaries. Leaf QC execution → **`mstar-roles/references/qc-specialist/`**. Per-task review is **`mstar-sdd`** (L2). Primary reader: **`project-manager`** when dispatching or consolidating QC.
+description: Morning Star QC orchestration — **SDD mandatory plan QC tri-review** (`{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated); inline/hotfix single-seat (`qc.md` in review bundle); PM dispatch timing, tri identity gate, residual registration contract, layer boundaries, durable plan summary. Leaf QC execution → **`mstar-roles/references/qc-specialist/`**. Per-task review is **`mstar-sdd`** (L2). Primary reader: **`project-manager`** when dispatching or consolidating QC.
 ---
 
 ## Load order（必读顺序）
@@ -13,9 +13,9 @@ description: Morning Star QC orchestration — **SDD mandatory plan QC tri-revie
 
 ## 分派时机（与 plan / batch 对齐）
 
-- **`Execution mode: sdd`**：全部 task + L2 task reviewers 完成后 → **强制 tri-review**（`QC mode: full tri-review`，**N=3**）。Assignment 须含 **branch review-package** 路径。PM 汇总 `qc-consolidated.md`。
-- **`Execution mode: inline`**：单席 `qc-specialist` → `qc.md`（**N=1**），或按 hotfix 路由跳过。
-- **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only seats that **raised** blocking findings; each updates **the same** `{PLAN_DIR}/reports/<plan-id>/qcN.md` (`## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` on this path. Naming → **`mstar-plan-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
+- **`Execution mode: sdd`**：全部 task + L2 task reviewers 完成后 → **强制 tri-review**（`QC mode: full tri-review`，**N=3**）。Assignment 须含 **branch review-package** 路径与 `{SDD_DIR}/review/qcN.md` report paths。PM 汇总 `{SDD_DIR}/review/qc-consolidated.md` 并回写主 plan durable summary。
+- **`Execution mode: inline`**：单席 `qc-specialist` → `{SDD_DIR}/review/qc.md`（**N=1**），或按 hotfix 路由跳过。
+- **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only seats that **raised** blocking findings; each updates **the same** `{SDD_DIR}/review/qcN.md` (`## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` for targeted re-review. Naming → **`mstar-plan-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
 - **Full tri re-review (exception)**：Assignment **`QC re-review: full tri-review`** → new basenames (`qc1-rev2.md` …); PM marks **active wave** in consolidated decision.
 
 ## 三审身份与模型独立性门禁（PM 强制）
@@ -41,7 +41,7 @@ description: Morning Star QC orchestration — **SDD mandatory plan QC tri-revie
 
 ## PM consolidated 门禁（摘要）
 
-Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate.
+Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan/status artifacts.
 
 ## 证据规则（PM · consolidated 输入）
 

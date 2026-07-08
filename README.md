@@ -23,6 +23,8 @@ Core value:
 - Run with unified `mstar-*` skills instead of scattered rules
 - Reuse one core process across OpenCode, Cursor, and Codex
 
+**Current:** Ephemeral review bundles — raw QC/QA process reports default to `{SDD_DIR}/review/` (gitignored); durable plan summaries and `status.json` residual findings remain the tracked handoff surface.
+
 **1.0.2:** Iteration artifact boundaries — `{SPECS_DIR}/` for long-lived specs; `{ITERATION_DIR}/<id>/` workspace for iteration drafts; **`mstar-compound`** promotes workspace to `{KNOWLEDGE_DIR}/` at iteration-close (no knowledge writes at iteration-start).
 
 **1.0.1:** `iteration-drive` mandates per-task SDD; optional **sticky implementer** (`SDD implementer session: sticky`, Cursor Task `resume`) to reuse dev context across tasks; thin **`pm`** entry shim for general orchestration (iteration → `commands/`).
@@ -220,7 +222,7 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-sdd` | Subagent-driven development: file handoffs, per-task implementer + reviewer, progress ledger |
 | `mstar-branch-worktree` | Feature branches, worktrees, QC/QA checkout alignment |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |
-| `mstar-plan-artifacts` | Main plan, `reports/`, `status.json`, residuals, knowledge/iteration indexes, Done compaction |
+| `mstar-plan-artifacts` | Main plan, review bundles / durable summaries, `status.json`, residuals, knowledge/iteration indexes, Done compaction |
 | `mstar-design-md` | DESIGN.md design-system gate for UI-bearing plans |
 | `mstar-review-qc` | PM QC tri orchestration, residual gate, layer boundaries; leaf execution → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Cross-role coding behavior: RCA, test-first checks, review feedback, completion evidence |
@@ -232,7 +234,7 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-host` | Host adapter (OpenCode / Cursor / Codex); auto-detect + `references/` |
 | `pm` | Shared `/pm` shortcut for Cursor and Codex PM entry |
 
-Maintainers: in-repo design notes under **`.harness/`** (gitignored) for specs/plans during harness work — not the published skill tree.
+Maintainers: follow [`AGENTS.md`](AGENTS.md) for in-repo maintenance notes and planning; those local artifacts are not part of the published skill tree.
 
 Project plan artifacts default to **`.mstar/`** (`{HARNESS_DIR}`), with existing `.agents/` / `.plans/` / `plans/` layouts still recognized for compatibility.
 

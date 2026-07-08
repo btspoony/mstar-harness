@@ -139,10 +139,10 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 
 - **`project-manager`** 分派 **QC** 时须在 Assignment 写明与待审实现一致的 **`Working branch`**，并写明 **`Review cwd` / `Worktree path`**：**优先**沿用开发 **Completion Report** 中回报的业务仓 **实现检出路径**（即「该 feature 的 worktree」）**当且仅当**该路径上的检出分支 **`HEAD` 已包含本轮待审的全部提交**（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则 **必须**改用 **集成完成后的** `Working branch` 与对应检出路径（或在该分支上 **另开** 审查专用 worktree）。若开发未用 worktree，则写明单一明确的业务仓根路径。若审查需与开发目录 **物理分离** 但仍审 **同一分支**，可指示在 **`Working branch`** 上 **另加** 一个 worktree 专供审查（只读使用业务仓）。**多流并行开发**时的前置归并、**推荐默认编排（plan 集成分支先行）** 与误派禁令见上一小节。
 - **三票审同一功能（强制对齐）**：分派 **QC 三审**时，除上述字段外，**必须**在 **三份 Assignment 中逐字写入相同**的 **`plan_id`** 与 **`Review range` / `Diff basis`**：
-  - **`plan_id`**：与 `{PLAN_DIR}/reports/<plan-id>/` 及主 **Plan Path** 一致；无 `{PLAN_DIR}` 流程时写 **`plan_id: N/A`**，并另给一行 **`Feature / scope label`**（不可歧义，足以与并行其它 feature 区分）。
+  - **`plan_id`**：与 `{SDD_DIR}` 的 `<plan-id>` 段、主 **Plan Path**、`status.json.plans[].id` 一致；无 `{PLAN_DIR}` 流程时写 **`plan_id: N/A`**，并另给一行 **`Feature / scope label`**（不可歧义，足以与并行其它 feature 区分）。
   - **`Review range` / `Diff basis`**：明确本次审查所针对的 **diff/提交范围**（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。**三名 reviewer 的 Assignment 间该字段必须完全一致**；**`qa-engineer`** 验证同一 feature 时 **复用同一 `plan_id` 与同一 `Review range` / `Diff basis`**。**热修 / QC 单审**路径也须含 **同一组字段**，仅承接方份数为 1。
 - **三审并行**时，三名 reviewer **共用同一组 `Review cwd` / `Worktree path` + `Working branch` + `plan_id` + `Review range` / `Diff basis`**（对业务仓只读分析）；**一般不必**为每位 reviewer 各开一个 worktree，除非宿主或执行环境要求进程级隔离。
-- QC 的 **报告落盘**仍仅限 `{PLAN_DIR}/reports/`；上述约定保证 `git diff`、`git log`、lint 与所读文件与 **待合并 feature** 一致。
+- QC 的 **报告落盘**默认仅限 Assignment 指定的 `{SDD_DIR}/review/`；上述约定保证 `git diff`、`git log`、lint 与所读文件与 **待合并 feature** 一致。PM 另行提交主 plan gate summary / `status.json` residual changes as durable artifacts.
 - **`project-manager`** 分派 **`qa-engineer`** 时（仅 **`QA gate: mandatory`**），Assignment 须与 QC **逐字相同**的 **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`**、**`Review range` / `Diff basis`**（QC 已写清则 QA 照抄）。**`qa-engineer`** 执行业务仓命令前须核对检出与分支；Report-only 且无路径依赖时，回报须说明验证环境，否则 `Blocked`。
 - 若 **QA 与同仓其他可写角色并发**提交测试代码，仍须遵守上文「同仓并发写入」的 **worktree** 规则（可为 QA 单开一条写入 worktree，**同一 `Working branch`**，由 PM 在 Assignment 写明）。
 

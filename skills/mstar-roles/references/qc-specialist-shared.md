@@ -18,7 +18,7 @@ Before any non-trivial QC assignment, read in order:
 
 1. `mstar-harness-core`
 2. `mstar-dispatch-gates` + `mstar-branch-worktree`
-3. `mstar-plan-artifacts` (report paths and naming)
+3. `mstar-plan-artifacts` (review bundle paths and naming)
 4. Host: `mstar-host` → active host reference
 5. **`references/qc-specialist/reviewer-workflow.md`**
 6. **`references/qc-specialist/reviewer-checklist.md`**
@@ -49,8 +49,8 @@ If any item below matches, **stop** and return `Blocked` to `project-manager`:
 
 - **NEVER** invoke another QC seat or `{role_id}` again, nor `qa-engineer` / dev / `architect` / `project-manager`, unless `Delegation: allowed (...)` lists them.
 - **NEVER** ask the user for permission to submit a report or stall after a completed review.
-- **NEVER** modify business implementation/tests, `status.json` residual fields, or paths outside QC report whitelist.
-- **NEVER** `git add .` — stage **only** report files you changed.
+- **NEVER** modify business implementation/tests, `status.json` residual fields, or paths outside the Assignment-specified QC report path.
+- **NEVER** `git add .` or commit raw bundle reports by default.
 - **NEVER** close or archive residual entries in `status.json` from QC.
 - **NEVER** treat `Handoff` or routing prose as invoke instructions.
 - **NEVER** infer tool exposure implies authorization.
@@ -76,13 +76,13 @@ See **`references/qc-specialist/report-template.md`**. Machine **`severity`** en
 
 ## Report path (required)
 
-Write **`{PLAN_DIR}/reports/<plan-id>/{report_suffix}.md`** (tri: `qc1`…`qc3`; inline: `qc.md`). No `<plan-id>` filename prefix.
+Write the Assignment-provided path under **`{SDD_DIR}/review/{report_suffix}.md`** (tri: `qc1`…`qc3`; inline: `qc.md`). No `<plan-id>` filename prefix.
 
 ## Targeted re-review (same report file)
 
 When Assignment includes **`QC re-review: targeted`**:
 
-- Edit the **same** `{report_suffix}.md` — add **`## Revalidation`**, update frontmatter verdict/`generated_at`.
+- Edit the **same** bundle `{report_suffix}.md` — add **`## Revalidation`**, update frontmatter verdict/`generated_at`.
 - Do **not** create `qcN-rev2.md` on this path.
 - Full tri re-review → new basenames per `mstar-plan-artifacts/references/plan-files-and-reports.md`.
 
@@ -118,11 +118,11 @@ generated_at: "YYYY-MM-DD"
 
 ## Repository Write Scope
 
-QC may write only `{PLAN_DIR}/reports/**/*.md` per assignment.
+QC may write only the Assignment-specified review bundle `.md` path under `{SDD_DIR}/review/`.
 
 ### Git NEVER (QC reports)
 
-- **NEVER** claim complete without `git add` (report paths only) + `git commit` when required — real `git log -1 --oneline` in Completion Report.
+- **NEVER** commit raw `{SDD_DIR}/review/` reports unless Assignment explicitly says `Review archive mode: tracked reports`.
 - **NEVER** `git add .`
 
 ## Detailed References Index

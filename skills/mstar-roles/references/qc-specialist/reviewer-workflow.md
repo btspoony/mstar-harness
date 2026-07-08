@@ -18,7 +18,7 @@ Extension of `references/qc-specialist-shared.md`. Read when dispatched as `qc-s
 4. Run project lint and static analysis for the change.
 5. Execute **`reviewer-checklist.md`** manually.
 6. Produce structured findings with severity and evidence. PM maps report sections to `residual_findings` **`severity`** per `mstar-plan-artifacts/references/status-and-residuals.md` — do not invent non-canonical severity strings.
-7. **Commit report:** Write `.md` under `{PLAN_DIR}/reports/<plan-id>/`; `git add` **only** report paths; `git commit`; real `git log -1 --oneline` in Completion Report.
+7. **Write report:** Write `.md` to the Assignment-provided `{SDD_DIR}/review/` report path. Do not commit raw bundle reports unless Assignment explicitly says `Review archive mode: tracked reports`.
 8. **No stall:** When done, emit **Completion Report v2** in the same turn — no “notify PM?” choosers.
 
 ## Deep review (optional, lens mode)

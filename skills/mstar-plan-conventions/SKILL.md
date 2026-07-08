@@ -1,6 +1,6 @@
 ---
 name: mstar-plan-conventions
-description: Morning Star (启明星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` 发现与初始化（默认 `.mstar/`，兼容 `.agents/`）、`docs/` 与 harness 子树边界、未启用 plan 时的工作方式、Spec 集成分支与多 Plan 实现分支（显式 base / merge 靶 / PR target）、Morning Star plan-writing path gate、工期预估（agent-oriented）。**必须**在读写 `.mstar/` / `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / reports / knowledge → **`mstar-plan-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
+description: Morning Star (启明星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{SDD_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` 发现与初始化（默认 `.mstar/`，兼容 `.agents/`）、`docs` 与 harness 子树边界、review bundle、未启用 plan 时的工作方式、Spec 集成分支与多 Plan 实现分支（显式 base / merge 靶 / PR target）、Morning Star plan-writing path gate、工期预估（agent-oriented）。**必须**在读写 `.mstar/` / `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / review bundle / knowledge → **`mstar-plan-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
 ---
 
 ## Load order（必读顺序）
@@ -9,7 +9,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 | 你还可能要 Read | 何时 |
 |-----------------|------|
-| `mstar-plan-artifacts` | 主 plan、reports、`status.json`、residual、InReview/QC 波次、knowledge |
+| `mstar-plan-artifacts` | 主 plan、review bundle 摘要、`status.json`、residual、InReview/QC 波次、knowledge |
 | `mstar-branch-worktree` | Assignment 写分支 / worktree / QC 检出 |
 | `mstar-review-qc` | 派 QC（PM 同轮必读；SDD 强制 tri） |
 | `mstar-sdd` | PM 执行 `Execution mode: sdd` 的 implement 波次 |
@@ -20,7 +20,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 |------|------|
 | `{HARNESS_DIR}` | `.mstar/` |
 | `{PLAN_DIR}` | `{HARNESS_DIR}/plans/` |
-| `{SDD_DIR}` | `{HARNESS_DIR}/sdd/<plan-id>/`（SDD 运行时 scratch；gitignore） |
+| `{SDD_DIR}` | `{HARNESS_DIR}/sdd/<plan-id>/`（SDD 运行时 scratch + review bundle；gitignored） |
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/` |
 | `{SPECS_DIR}` | `specs/` 优先，否则 `designs/` |
@@ -44,16 +44,16 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 | `{SPECS_DIR}` | 冻结规格 / ADR |
 | `{ITERATION_DIR}` | 迭代 compass 快照 |
 | `{KNOWLEDGE_DIR}` | 实现 SSOT、可复用设计 |
-| `{PLAN_DIR}/` | 主 plan、`reports/` |
+| `{PLAN_DIR}/` | 主 plan、durable gate summaries、可选 residual prose |
 
-单 plan 评审结论、QC 报告 → **`{PLAN_DIR}/reports/`**，非 `docs/`。细则 → **`mstar-plan-artifacts`**。
+单 plan 的 QC/QA **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；R# open 状态以 `{HARNESS_DIR}/status.json` 为 SSOT。细则 → **`mstar-plan-artifacts`**。
 
 ## 初始化 Plan 目录
 
 PM 在需要持久化追踪时：
 
 1. 建 `.mstar/`、`plans/`、`status.json`（空模板见 **`mstar-plan-artifacts/templates/status.empty.json`**）
-2. 可选 `notes.json`（模板 **`mstar-plan-artifacts/templates/notes.empty.json`**）、`reports/README.md`、`knowledge/`、`iterations/`、`specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 `mstar-sdd/scripts/sdd-workspace` 创建）
+2. 可选 `notes.json`（模板 **`mstar-plan-artifacts/templates/notes.empty.json`**）、`knowledge/`、`iterations/`、`specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 `mstar-sdd/scripts/sdd-workspace` 创建）
 3. 项目根 `.gitignore` 追加 `.mstar/sdd/`（或 `.agents/sdd/` legacy）— CLI `init` 可自动添加
 4. Git：团队交付 **勿** ignore 整个 `{HARNESS_DIR}`（handoff 需 clone 可达）
 
@@ -92,4 +92,4 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 - `references/effort-estimation.md` — agent-oriented 工期（禁人天/FTE）
 - `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-compound`、`mstar-compound-refresh`、`mstar-strategy` 等技能引用此表，不得本地重定义）
 
-**Plan 工件细则**（主 plan、reports、`status.json`、residual、knowledge、Done 归档、**`templates/`**）→ skill **`mstar-plan-artifacts`**（`references/` 与 `templates/`）。
+**Plan 工件细则**（主 plan、review bundle / durable summaries、`status.json`、residual、knowledge、Done 归档、**`templates/`**）→ skill **`mstar-plan-artifacts`**（`references/` 与 `templates/`）。

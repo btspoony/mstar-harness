@@ -9,21 +9,17 @@ tools:
   edit: true
   bash: true
 permission:
-  # `edit` covers write/patch/multiedit. Only `.md` under resolved `{PLAN_DIR}/reports/` (default + legacy roots).
+  # `edit` covers write/patch/multiedit. Only `.md` under resolved `{SDD_DIR}/review/` bundle roots.
   edit:
     "*": deny
-    ".mstar/plans/reports/*.md": allow
-    ".mstar/plans/reports/**/*.md": allow
-    ".agents/plans/reports/*.md": allow
-    ".agents/plans/reports/**/*.md": allow
-    ".plans/reports/*.md": allow
-    ".plans/reports/**/*.md": allow
-    ".worktrees/**/.mstar/plans/reports/*.md": allow
-    ".worktrees/**/.mstar/plans/reports/**/*.md": allow
-    ".worktrees/**/.agents/plans/reports/*.md": allow
-    ".worktrees/**/.agents/plans/reports/**/*.md": allow
-    ".worktrees/**/.plans/reports/*.md": allow
-    ".worktrees/**/.plans/reports/**/*.md": allow
+    ".mstar/sdd/*.md": allow
+    ".mstar/sdd/**/*.md": allow
+    ".agents/sdd/*.md": allow
+    ".agents/sdd/**/*.md": allow
+    ".worktrees/**/.mstar/sdd/*.md": allow
+    ".worktrees/**/.mstar/sdd/**/*.md": allow
+    ".worktrees/**/.agents/sdd/*.md": allow
+    ".worktrees/**/.agents/sdd/**/*.md": allow
   bash:
     "*": deny
     # Git inspection (read-only)
@@ -35,9 +31,6 @@ permission:
     "git stash list*": allow
     "git branch*": allow
     "git status*": allow
-    # Versioning QC reports only (paths you edited must stay under allowed reports/ trees)
-    "git add*": allow
-    "git commit*": allow
     # JavaScript / TypeScript
     "eslint*": allow
     "npx eslint*": allow

@@ -1,16 +1,28 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.0.6**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.1.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.0.6** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.0.6** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.0.6** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.0.6** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.0.6** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.1.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.1.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.1.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.1.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.1.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.1.0] - 2026-07-08
+
+### Harness（临时 review bundle）
+
+- **Review bundle 默认策略**：QC/QA 原始过程报告现在进入 `{SDD_DIR}/review/`（gitignored）；进入 git 的 handoff 产物是主 plan gate summary 与 `{HARNESS_DIR}/status.json` residual findings。
+- **Legacy tracked reports**：`{PLAN_DIR}/reports/` 仅作为 legacy / 显式 audit mode，不再是默认 QC/QA 报告目标。
+- **Iteration compass**：新增 `Quality Gate Summary` 区块，用于迭代级 QC/QA verdict 与 residual 汇总，不替代 per-plan summary 或 `status.json`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.1.0**。
 
 ## [1.0.6] - 2026-07-08
 

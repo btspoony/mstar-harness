@@ -6,15 +6,15 @@
 
 ## Harness 子树内（`{HARNESS_DIR}/` 下）
 
-这些是 agent handoff 用的结构化产物，随 `.git` 追踪，不面向人类直接阅读。
+这些是 agent handoff 用的结构化产物；除明确标注 gitignored 的 scratch 外，默认随 `.git` 追踪，不面向人类直接阅读。
 
 | 产物 | 解析后路径（默认 `.mstar/`） | 读写的技能 |
 |------|---------------------------|-----------|
 | **知识文档** | `.mstar/knowledge/<category>/<slug>.md` | `mstar-compound`（写）、`mstar-compound-refresh`（读写） |
 | **知识索引** | `.mstar/knowledge/README.md` | `mstar-compound`（写）、`mstar-compound-refresh`（读写） |
 | **主 plan** | `.mstar/plans/<plan-id>-<name>.md` | PM / `mstar-plan-artifacts` |
-| **QC 报告** | `.mstar/plans/reports/<plan-id>/qc1.md`…`qc3.md` + consolidated（**SDD 默认**）；`qc.md`（inline 例外） | `mstar-review-qc` |
-| **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored） | `mstar-sdd` |
+| **Review bundle（QC/QA 原始过程报告）** | `{HARNESS_DIR}/sdd/<plan-id>/review/`（gitignored；默认 `.mstar/sdd/<plan-id>/review/`） | `mstar-sdd`、`mstar-review-qc`、`qa-engineer` |
+| **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored；含 per-task handoff 与 `review/` bundle） | `mstar-sdd` |
 | **status.json** | `.mstar/status.json` | `mstar-plan-artifacts` |
 | **迭代 compass** | `.mstar/iterations/<iteration-id>-delivery-compass.md` | `mstar-iteration`（读写） |
 | **迭代工作区** | `.mstar/iterations/<iteration-id>/`（`guides/`、`specs/` 等） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读） |
@@ -43,7 +43,7 @@
 | `docs/` | 人类文档（安装、贡献指南等），知识产物不放此处 |
 | `{ITERATION_DIR}/` | 仅限迭代 compass，知识文档不放此处 |
 | `{SPECS_DIR}/` | 仅限冻结规格/ADR，运行时知识不放此处 |
-| `{PLAN_DIR}/reports/` | 仅限 QC 报告，知识文档不放此处 |
+| `{PLAN_DIR}/reports/` | Legacy / explicit audit mode only；默认 QC/QA 原始过程报告进 `{SDD_DIR}/review/`，知识文档不放此处 |
 
 ## `<category>` 取值
 

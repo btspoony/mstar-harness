@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.1.0
+
+- Bundled skills: raw QC/QA process reports default to gitignored `{SDD_DIR}/review/`; durable gate summaries and `status.json` residual findings are the tracked handoff surface. `{PLAN_DIR}/reports/` is legacy / explicit audit mode only.
+- Bundled skills: iteration compass template adds `Quality Gate Summary` for iteration-level QC/QA and residual rollups.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.1.0**.
+
 ## 1.0.6
 
 - Bundled skills: `mstar-sdd` pins L2 per-task reviewer to `generalPurpose`; forbids `qc-specialist*` at task scope.

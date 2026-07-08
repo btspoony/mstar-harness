@@ -39,7 +39,7 @@ If any conflict appears, `mstar-harness-core` remains the authoritative source f
 | --- | --- |
 | `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-roles` ref; + `references/project-manager/qa-trigger-matrix.md` for QA gate tiers; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-plan-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
 | `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-plan-conventions` (minimal); `mstar-design-md` when implementing styled UI |
-| `qc-specialist*` | `mstar-branch-worktree`, `mstar-plan-artifacts` (report paths); `references/qc-specialist/` (workflow, checklist, template, lenses); `mstar-design-md` when reviewing UI |
+| `qc-specialist*` | `mstar-branch-worktree`, `mstar-plan-artifacts` (review bundle paths); `references/qc-specialist/` (workflow, checklist, template, lenses); `mstar-design-md` when reviewing UI |
 | `qa-engineer` | `mstar-branch-worktree`, `mstar-plan-artifacts` (closing R#); `references/qa-engineer/acceptance-gate.md`; `mstar-design-md` when verifying visual output |
 | `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-plan-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance) |
 | `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree` |
@@ -60,17 +60,17 @@ Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursi
 
 ### QC reviewer (`qc-specialist*` family)
 
-**Default (SDD):** plan QC tri-review — `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` → `qc1`…`qc3` + `qc-consolidated.md` when **`Execution mode: sdd`**.
+**Default (SDD):** plan QC tri-review — `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` → `{SDD_DIR}/review/qc1.md`…`qc3.md` + `qc-consolidated.md` when **`Execution mode: sdd`**.
 
-**Exception (`inline` / hotfix):** single-seat → `qc.md` (`QC mode: single`).
+**Exception (`inline` / hotfix):** single-seat → `{SDD_DIR}/review/qc.md` (`QC mode: single`).
 
 | role_id | reviewer_index | focus | report_suffix |
 | --- | --- | --- | --- |
-| `qc-specialist` | `1` | Architecture coherence and maintainability risk | `qc1` → `{PLAN_DIR}/reports/<plan-id>/qc1.md` |
-| `qc-specialist-2` | `2` | Security and correctness risk | `qc2` → `…/qc2.md` |
-| `qc-specialist-3` | `3` | Performance and reliability risk | `qc3` → `…/qc3.md` |
+| `qc-specialist` | `1` | Architecture coherence and maintainability risk | `qc1` → `{SDD_DIR}/review/qc1.md` |
+| `qc-specialist-2` | `2` | Security and correctness risk | `qc2` → `{SDD_DIR}/review/qc2.md` |
+| `qc-specialist-3` | `3` | Performance and reliability risk | `qc3` → `{SDD_DIR}/review/qc3.md` |
 
-PM consolidated (tri mode): `…/qc-consolidated.md` (same folder; no `<plan-id>` basename prefix). Naming SSOT: `mstar-plan-artifacts/references/plan-files-and-reports.md`.
+PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; no `<plan-id>` basename prefix) + durable main-plan summary. Naming SSOT: `mstar-plan-artifacts/references/plan-files-and-reports.md`.
 
 ## Maintenance Rules
 
