@@ -19,7 +19,7 @@ Legacy fallbacks:
 
 1. Create `{HARNESS_DIR}` and `{PLAN_DIR}` when absent.
 2. Initialize `{HARNESS_DIR}/status.json` from template if available.
-3. Initialize reports path: `{PLAN_DIR}/reports/`.
+3. Ensure `{HARNESS_DIR}/sdd/` is gitignored; per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
 4. Initialize residual archive path: `{HARNESS_DIR}/archived/residuals/`.
 5. **Profile B** only: `{HARNESS_DIR}/archived/plans/` and `archived/plans-done.json` from `mstar-plan-artifacts/templates/plans-done.empty.json` (`{ "plans": [] }` only; see `done-compaction.md`).
 6. Optional: `{HARNESS_DIR}/notes.json`, `{HARNESS_DIR}/knowledge/README.md`.
@@ -36,7 +36,7 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 - On plan create/update: sync `{HARNESS_DIR}/status.json` in same coordination round.
 - Before first non-trivial implement dispatch: ensure main plan file exists and `plan_id` is registered.
 - After each Completion Report: update status before next dispatch (`report-to-status` hard gate).
-- On entering `InReview`: ensure QC report path and aligned review metadata are set.
+- On entering `InReview`: ensure review bundle path (`{SDD_DIR}/review/`) and aligned review metadata are set; write durable gate summaries back to the main plan/status artifacts.
 - On `Done`: ensure residual lifecycle state is consistent (open vs archived).
 
 ## PM Plan / Status NEVER

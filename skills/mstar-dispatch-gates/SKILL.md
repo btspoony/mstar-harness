@@ -54,8 +54,8 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**：
 
 - **工具并发**：同一调度轮次内，多个 subagent 调用须在**同一条 assistant 消息**里一次性发出（宿主允许时）。
-- **QC tri-review（SDD 强制）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 同条消息 **N=3**（`qc1`…`qc3` + `qc-consolidated.md`）。Assignment 须含 branch **review-package** 路径。适用于**单 plan 与 iteration**。
-- **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，`qc.md`。
+- **QC tri-review（SDD 强制）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 同条消息 **N=3**（写 `{SDD_DIR}/review/qc1.md`…`qc3.md`；PM 汇总 `qc-consolidated.md` + durable plan summary）。Assignment 须含 branch **review-package** 路径与 report paths。适用于**单 plan 与 iteration**。
+- **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，写 `{SDD_DIR}/review/qc.md`。
 - **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），同条消息发满 **N**。
 - **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
 - **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
@@ -73,7 +73,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - **`SDD implementer session: sticky`**：same implementer subagent may **resume** across tasks when host supports it; **reviewers never resume** — see **`mstar-sdd/references/sticky-implementer-session.md`**.
 - File handoffs only — no pasted plan/diff/history in dispatch prompts.
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
-- After all tasks: branch `review-package` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
+- After all tasks: branch `review-package` in `{SDD_DIR}/review/` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
 
 ## 并行规则（摘要）
 

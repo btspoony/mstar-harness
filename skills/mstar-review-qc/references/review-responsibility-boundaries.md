@@ -7,7 +7,7 @@
 | **L1** Implementer | dev subagent | Per task | Write code + TDD evidence | `task-N-brief.md` |
 | **L2** Task reviewer | PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** | brief, report, **task-level** diff |
 | **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | Integration, regression, contract drift — **independent lenses, same branch diff** | Branch `review-package` MERGE_BASE..HEAD |
-| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, Done recommendation — **not** default full re-run | QC reports + plan + `status.json` |
+| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, Done recommendation — **not** default full re-run | Review bundle + plan + `status.json` |
 
 PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-matrix.md`. L4 execution when dispatched → `mstar-roles/references/qa-engineer/acceptance-gate.md`.
 
@@ -20,14 +20,14 @@ Per-task spec/quality is **done** in L2 before L3. QC seats do not re-derive eac
 ## Plan QC tri (SDD mandatory)
 
 - Assignment: **`QC mode: full tri-review`** (implicit when `Execution mode: sdd`; PM may state explicitly).
-- **N=3** same dispatch message: QC#1 architecture/maintainability → `qc1.md`; QC#2 security/correctness → `qc2.md`; QC#3 performance/reliability → `qc3.md`.
-- PM **`qc-consolidated.md`** — cross-review synthesis; PM gate input.
+- **N=3** same dispatch message: QC#1 architecture/maintainability → `{SDD_DIR}/review/qc1.md`; QC#2 security/correctness → `{SDD_DIR}/review/qc2.md`; QC#3 performance/reliability → `{SDD_DIR}/review/qc3.md`.
+- PM **`{SDD_DIR}/review/qc-consolidated.md`** — cross-review synthesis; PM gate input and source for durable main-plan summary.
 - Dispatch must include **Review package path** (branch diff file).
 - **NEVER** substitute a single `qc-specialist` for L3 when SDD was used, unless user override: `QC mode: single — override: <reason>`.
 
 ## Plan QC single-seat (inline / exception only)
 
-- Report: `{PLAN_DIR}/reports/<plan-id>/qc.md`
+- Report: `{SDD_DIR}/review/qc.md`
 - `Execution mode: inline` hotfix paths; or explicit override on SDD plan.
 - `N=1`; no `qc-consolidated.md` required.
 
@@ -40,4 +40,4 @@ Per-task spec/quality is **done** in L2 before L3. QC seats do not re-derive eac
 
 ## Minor findings
 
-Task reviewer Minor → `{SDD_DIR}/progress.md` § Minor. Plan QC Minor → `qcN.md` + optional residual via PM.
+Task reviewer Minor → `{SDD_DIR}/progress.md` § Minor. Plan QC Minor → `{SDD_DIR}/review/qcN.md` + optional residual via PM.

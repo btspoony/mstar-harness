@@ -516,8 +516,10 @@
         "progress.md ledger",
         "continuous execution — next action is dispatch not user check-in",
         "three QC invokes N=3 in one dispatch turn",
-        "qc1.md qc2.md qc3.md",
-        "qc-consolidated.md",
+        "{SDD_DIR}/review/qc1.md qc2.md qc3.md",
+        "{SDD_DIR}/review/qc-consolidated.md",
+        "durable main-plan Review Gate Summary",
+        "status.json residual_findings for open R#",
         "branch review-package path"
       ],
       "hard_fail_if": [
@@ -569,8 +571,9 @@
         "Context Loaded declaration",
         "QC mode: full tri-review on Assignment",
         "three QC invokes in one dispatch turn",
-        "qc1.md qc2.md qc3.md",
-        "qc-consolidated.md"
+        "{SDD_DIR}/review/qc1.md qc2.md qc3.md",
+        "{SDD_DIR}/review/qc-consolidated.md",
+        "durable main-plan Review Gate Summary"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",

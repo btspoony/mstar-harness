@@ -58,10 +58,11 @@ After all tasks:
 
 ```bash
 MERGE_BASE=$(git merge-base <target-branch> HEAD)
-skills/mstar-sdd/scripts/review-package "$MERGE_BASE" HEAD "$SDD_DIR/branch-review-....diff"
+mkdir -p "$SDD_DIR/review"
+skills/mstar-sdd/scripts/review-package "$MERGE_BASE" HEAD "$SDD_DIR/review/branch-review-....diff"
 ```
 
-Pass **branch** diff path to QC dispatch — not task-level diffs.
+Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and residuals in tracked plan/status artifacts.
 
 ## PM context hygiene
 

@@ -8,7 +8,7 @@ Before any non-trivial PM action, read in order:
 4. `mstar-plan-conventions` (path discovery, init, Spec branch summary)
 5. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 6. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
-7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, reports naming)
+7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, review bundle naming)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 
@@ -81,8 +81,8 @@ Detailed conflict priority and dev allocation:
 
 ## Non-Bypass Constraints
 
-- Code-development plans with **`Execution mode: sdd`** (default for multi-task): **mandatory plan QC tri-review** (`qc1`…`qc3` + consolidated) after all task reviewers complete.
-- **`Execution mode: inline`**: hotfix single-seat QC (`qc.md`) or explicit skip rules unchanged.
+- Code-development plans with **`Execution mode: sdd`** (default for multi-task): **mandatory plan QC tri-review** (`{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated) after all task reviewers complete.
+- **`Execution mode: inline`**: hotfix single-seat QC (`{SDD_DIR}/review/qc.md`) or explicit skip rules unchanged.
 - Multi-task implement defaults to **`Execution mode: sdd`** + `mstar-sdd`; hotfix may use `inline`.
 - Runtime/behavior change requires a recorded **`QA gate`** decision by default (`mandatory` or `pm-acceptance` per `qa-trigger-matrix.md`).
 - Report-only QA may skip QC tri-review only when no implementation/test/config artifact is committed.
@@ -254,7 +254,7 @@ PM must:
 
 - Dispatch QC with aligned scope fields
 - Consolidate to one gate verdict
-- Assign fixes; default **targeted QC re-review** (same `qcN.md` under `reports/<plan-id>/`); full tri only when Assignment says `QC re-review: full tri-review`
+- Assign fixes; default **targeted QC re-review** (same `{SDD_DIR}/review/qcN.md`); full tri only when Assignment says `QC re-review: full tri-review`
 - Record non-blocking leftovers as residual findings
 - Keep open vs archived residual state coherent at closure
 - Sync plan/status in the same coordination round

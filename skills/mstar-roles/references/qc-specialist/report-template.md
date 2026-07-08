@@ -4,7 +4,7 @@ Extension of `references/qc-specialist-shared.md`. Frontmatter and path rules re
 
 ## Report body template
 
-Write under **`{PLAN_DIR}/reports/<plan-id>/qc#.md`** (`qc1`…`qc3` or `qc.md`). YAML frontmatter first (see `qc-specialist-shared.md`), then:
+Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3` or `qc.md`). YAML frontmatter first (see `qc-specialist-shared.md`), then:
 
 ```markdown
 # Code Review Report

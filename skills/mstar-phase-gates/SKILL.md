@@ -74,9 +74,9 @@ per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 
 
 per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。
 
-## Plan 目录与审查报告（启用 `{PLAN_DIR}` 时）
+## Plan 目录与审查证据（启用 `{PLAN_DIR}` 时）
 
-- 进入 `InReview` 后，QC 产出落入 `{PLAN_DIR}/reports/<plan-id>/`（**SDD 默认 tri** `qc1`…`qc-consolidated`；**inline** 单席 `qc.md`）。**fix 后默认 targeted re-review**。SDD per-task review 在 implement 波次内完成（`mstar-sdd` task reviewer）。
+- 进入 `InReview` 后，QC/QA 原始过程报告默认落入 `{SDD_DIR}/review/`（**SDD 默认 tri** `qc1`…`qc-consolidated`；**inline** 单席 `qc.md`）。**fix 后默认 targeted re-review**。SDD per-task review 在 implement 波次内完成（`mstar-sdd` task reviewer）。PM 将 durable gate summary 回写主 plan / `status.json`，而不是把 raw reports 作为默认 git 产物。
 - 非阻断项与后续技术债：PM 汇总后写入 `{HARNESS_DIR}/status.json` 根级 `residual_findings[<plan-id>]`（**open**，与 `plans` 平级；canonical 见 **`mstar-plan-artifacts` SKILL.md**）；关闭后迁入 `{HARNESS_DIR}/archived/residuals/<plan-id>.json`，与 `mstar-review-qc` 一致。每条 **`severity`** 遵守 **`mstar-plan-artifacts/references/status-and-residuals.md`**「Residual findings：severity（SSOT，机器字段）」。
 
 ## 快速判定（PM）

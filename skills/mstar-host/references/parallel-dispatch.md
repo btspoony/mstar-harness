@@ -29,8 +29,8 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 
 ## QC default (initial wave)
 
-- **`Execution mode: sdd`**: **N=3** tri-review + branch review-package path → `qc1`…`qc3` + consolidated.
-- **`inline` / override**: **N=1** → `qc.md`.
+- **`Execution mode: sdd`**: **N=3** tri-review + branch review-package path → `{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated.
+- **`inline` / override**: **N=1** → `{SDD_DIR}/review/qc.md`.
 
 ## QC iteration / SDD (same rule)
 
@@ -55,7 +55,7 @@ Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-o
 
 - Assignment: **`QC re-review: targeted — reviewers: <role-ids>`** → **N** = listed seats only (1–3), **one** dispatch turn with **N** invocations.
 - Do **not** default to three invocations after a routine fix round.
-- Post-dispatch: verify only **dispatched** seats returned; PM updates same `qc-consolidated.md` (see `mstar-plan-artifacts/references/plan-files-and-reports.md`).
+- Post-dispatch: verify only **dispatched** seats returned; PM updates same bundle `qc-consolidated.md` and durable plan summary (see `mstar-plan-artifacts/references/plan-files-and-reports.md`).
 
 ## Self-check before send
 

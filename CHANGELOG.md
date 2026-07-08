@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.0.6** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.1.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.0.6** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.0.6** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.0.6** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.0.6** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.0.6** |
+| Monorepo root | `morning-star` (`package.json`) | **1.1.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.1.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.1.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.1.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.1.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.1.0] - 2026-07-08
+
+### Harness (ephemeral review bundles)
+
+- **Review bundle default**: raw QC/QA process reports now live under `{SDD_DIR}/review/` (gitignored), while tracked handoff artifacts are durable main-plan gate summaries and `{HARNESS_DIR}/status.json` residual findings.
+- **Legacy tracked reports**: `{PLAN_DIR}/reports/` is now legacy / explicit audit mode only, not the default QC/QA report target.
+- **Iteration compass**: add a `Quality Gate Summary` section for iteration-level QC/QA verdict and residual rollups without replacing per-plan summaries or `status.json`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.1.0**.
 
 ## [1.0.6] - 2026-07-08
 

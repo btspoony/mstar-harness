@@ -10,7 +10,7 @@ Layer **L4** runs after the QC gate. **`QA gate: pm-acceptance`** is PM-only —
 
 | L3 Plan QC | L4 QA (`qa-engineer`) |
 | --- | --- |
-| Independent cross-review lenses on branch diff | Acceptance against plan DoD + QC consolidated input |
+| Independent cross-review lenses on branch diff | Acceptance against plan DoD + review bundle QC consolidated input |
 | Find defects; `Request Changes` / residual registration | Verify fixes, R# lifecycle, Done recommendation |
 | Typically read-only on product code | May run targeted checks; default **evidence reuse** |
 
@@ -26,7 +26,7 @@ Layer **L4** runs after the QC gate. **`QA gate: pm-acceptance`** is PM-only —
 
 When **`QA mode: acceptance-only`**:
 
-1. Read `qc-consolidated.md` (or `qc.md`) **Tools run** and dev Completion Report / SDD TDD triple.
+1. Read `{SDD_DIR}/review/qc-consolidated.md` (or `{SDD_DIR}/review/qc.md`) **Tools run** and dev Completion Report / SDD TDD triple.
 2. If QC report includes **reproducible test commands + output** for the same **`Review range / Diff basis`** as Assignment → **verify mapping** to plan Acceptance Criteria; **do not** default to a full suite re-run.
 3. Document in Completion Report **Validation**: which ACs are covered by reused evidence vs newly executed checks.
 

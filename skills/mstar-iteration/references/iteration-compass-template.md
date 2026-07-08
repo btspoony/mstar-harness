@@ -85,6 +85,19 @@ Link from compass when used:
 
 - Workspace: `<iteration-id>/` | <one-line purpose>
 
+## Quality Gate Summary
+
+> Filled at iteration-close. Human summary only; per-plan gate details stay in each main plan, and open residual SSOT stays in `{HARNESS_DIR}/status.json`.
+
+| plan_id | QC decision | QA gate | Residuals | Durable summary |
+|---------|-------------|---------|-----------|-----------------|
+| <plan-id-1> | Approve / Approve with residuals / Request Changes / N/A | mandatory / pm-acceptance / report-only / N/A | none / R1,R2 / accepted | `{PLAN_DIR}/<plan>.md#review-gate-summary` |
+
+Notes:
+
+- Raw review bundle: `{SDD_DIR}/review/` (ephemeral; do not rely on it after Done).
+- Open residual SSOT: `{HARNESS_DIR}/status.json` root `residual_findings[<plan-id>]`.
+
 ## Compound Round Summary
 
 > Filled at iteration-close.
@@ -120,6 +133,7 @@ Link from compass when used:
 | `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
 | `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
 | Iteration workspace (`<iteration-id>/`) | Optional | Phase 1 §1.5.5 — `guides/` + `specs/`; index in `{ITERATION_DIR}/README.md` |
+| `## Quality Gate Summary` | Yes | Phase 3 §3.4 |
 | `## Compound Round Summary` | Yes | Phase 3 §3.4 |
 | `## Iteration Retrospective` | Recommended | Phase 3 §3.4 |
 

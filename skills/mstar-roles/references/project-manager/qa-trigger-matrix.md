@@ -38,7 +38,7 @@ Set **`QA gate`** on the **first implement Assignment** (or plan frontmatter) an
 
 PM completes this in **Status Update** (or plan closure note). PM **does not** run bash tests or reproduction in the orchestration thread.
 
-1. **QC verdict:** `qc-consolidated.md` or `qc.md` shows `Approve` with **Critical = 0** and **Warning = 0** (not `Approve with residuals`).
+1. **QC verdict:** `{SDD_DIR}/review/qc-consolidated.md` or `{SDD_DIR}/review/qc.md` shows `Approve` with **Critical = 0** and **Warning = 0** (not `Approve with residuals`), and the main plan has a durable gate summary.
 2. **DoD mapping:** Each plan Acceptance Criterion maps to **existing** evidence (dev Completion Report, QC `Tools run`, SDD TDD triple, CI links) — cite paths/commands, do not re-execute.
 3. **Residuals:** `status.json` has **no open R#** for this `plan_id` (or documented waiver per `mstar-plan-artifacts`).
 4. **Checkout alignment:** `Working branch` and `Review range / Diff basis` match QC report verified lines.
@@ -47,7 +47,7 @@ PM completes this in **Status Update** (or plan closure note). PM **does not** r
 ```markdown
 ## PM Acceptance (qa gate: pm-acceptance)
 - QA gate reason: <tier>
-- QC report: <path> — Approve, Critical/Warning 0
+- QC report: <bundle path> — Approve, Critical/Warning 0; durable summary: <main plan section>
 - DoD mapping: <AC-id> → <evidence ref> …
 - Residuals: none open | waived R# …
 - Checkout: Working branch <name>; Review range <basis> (per QC Scope)

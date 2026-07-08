@@ -23,6 +23,8 @@
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
 - 在 OpenCode / Cursor / Codex 下复用同一套核心流程
 
+**当前：** 临时 review bundle — QC/QA 原始过程报告默认进入 `{SDD_DIR}/review/`（gitignored）；长期 handoff 仍以主 plan 摘要与 `status.json` residual findings 为准。
+
 **1.0.2：** iteration 产物边界 — `{SPECS_DIR}/` 长期规格；`{ITERATION_DIR}/<id>/` 工作区放迭代草案；**iteration-close** 时 **`mstar-compound`** 将 workspace 提升进 `{KNOWLEDGE_DIR}/`（start 阶段不写 knowledge）。
 
 **1.0.1：** `iteration-drive` 强制 per-task SDD；可选 **sticky implementer**（`SDD implementer session: sticky`，Cursor Task `resume`）复用 dev 上下文；精简 **`pm`** 通用入口（iteration 走 `commands/`）。
@@ -178,7 +180,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 | `mstar-sdd` | 子代理驱动开发：文件交接、每 task 实现+审查、进度账本 |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支摘要 |
-| `mstar-plan-artifacts` | 主 plan、`reports/`、`status.json`、residual、knowledge/iteration 索引、Done 归档 |
+| `mstar-plan-artifacts` | 主 plan、review bundle / durable summary、`status.json`、residual、knowledge/iteration 索引、Done 归档 |
 | `mstar-design-md` | UI 相关 plan 的 DESIGN.md 设计系统门禁 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 门禁、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | 通用编码行为：RCA、测试优先检查、审查反馈、完成证据 |
@@ -190,7 +192,7 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 | `mstar-host` | 宿主适配（OpenCode / Cursor / Codex）；自动识别 + `references/` |
 | `pm` | Cursor 与 Codex 共享的 `/pm` 强制入口 |
 
-维护者：进行中的 spec/plan 可放在 **`.harness/`**（gitignore，非发布 skill 树）。
+维护者：仓库内维护笔记与计划约定见 [`AGENTS.md`](AGENTS.md)；这些本地产物不属于发布的 skill 树。
 
 项目计划工件默认使用 **`.mstar/`**（`{HARNESS_DIR}`），同时继续识别既有 `.agents/` / `.plans/` / `plans/` 布局。
 

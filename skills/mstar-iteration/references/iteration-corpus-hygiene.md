@@ -12,7 +12,7 @@
 | **Secondary** | `{KNOWLEDGE_DIR}/**` (existing) | Archive / relocate only — **no** new docs |
 | **Included** | `{PLAN_DIR}/` plans touched this iteration | Spec refs, terminology |
 
-**Out of scope**: compound promotion (iteration-close); `{PLAN_DIR}/reports/`; code.
+**Out of scope**: compound promotion (iteration-close); per-plan review bundles (`{SDD_DIR}/review/`); code.
 
 ## Misplaced content (relocate)
 

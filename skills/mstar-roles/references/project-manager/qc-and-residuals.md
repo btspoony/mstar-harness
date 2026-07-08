@@ -10,12 +10,12 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 **Per-task (L2):** task reviewer only — **not** `qc-specialist`. One reviewer subagent per task (spec + quality on task diff).
 
-**After all tasks (L3):** see **`mstar-review-qc/references/review-responsibility-boundaries.md`** · **`mstar-dispatch-gates`** (N=3 same message, branch review-package, `qc1`…`qc3` + consolidated). PM checklist:
+**After all tasks (L3):** see **`mstar-review-qc/references/review-responsibility-boundaries.md`** · **`mstar-dispatch-gates`** (N=3 same message, branch review-package under `{SDD_DIR}/review/`, `qc1`…`qc3` + consolidated). PM checklist:
 
 0. Pre-dispatch: read `mstar-review-qc`.
-1. `review-package MERGE_BASE HEAD` → branch diff under `{SDD_DIR}` or PM path.
+1. `review-package MERGE_BASE HEAD` → branch diff under `{SDD_DIR}/review/`.
 2. Dispatch **three** QC seats in **one** message (**N=3**); alignment fields text-identical across reports and Assignment.
-3. PM writes `qc-consolidated.md`; after fixes → targeted re-review (default) or `QC re-review: full tri-review` for new wave files.
+3. PM writes `{SDD_DIR}/review/qc-consolidated.md` + main plan durable summary; after fixes → targeted re-review (default) or `QC re-review: full tri-review` for new wave files.
 
 **NEVER** end an SDD plan with only a single final `qc-specialist` unless user override: `QC mode: single — override: <reason>`.
 
@@ -24,7 +24,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 **When:** `Execution mode: inline` or explicit hotfix routing.
 
 1. Branch review-package path on dispatch.
-2. **One** `qc-specialist` → `qc.md` (**N=1**).
+2. **One** `qc-specialist` → `{SDD_DIR}/review/qc.md` (**N=1**).
 3. Targeted re-review updates same `qc.md`.
 
 ## QC / Residual NEVER (PM)
@@ -37,7 +37,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 - **NEVER** drop residual tracking to chat-only when `Approve with residuals` applies.
 - **NEVER** treat "two of three QC reports arrived" as sufficient — missing seat → `Blocked`.
 - **NEVER** re-dispatch all three after routine fix when only one or two had blockers — **targeted re-review** unless `QC re-review: full tri-review`.
-- **NEVER** create `qc1-rev2.md` for **targeted** re-review; update original `qcN.md` in place.
+- **NEVER** create `qc1-rev2.md` for **targeted** re-review; update original bundle `qcN.md` in place.
 
 ## Consolidated Decision Template
 
@@ -64,7 +64,7 @@ When blocking issues are fixed but non-blocking warnings/suggestions remain:
 - Must register residual findings (do not leave as chat-only).
 - Severity enum must follow `mstar-plan-artifacts` SSOT.
 - Canonical store: `{HARNESS_DIR}/status.json` -> root `residual_findings[<plan-id>]`.
-- Optional mirrored index in main plan is allowed, but never replace canonical entry.
+- Required durable gate summary in main plan should list R# ids and decisions, but never replace canonical entries.
 
 Each residual record should include:
 

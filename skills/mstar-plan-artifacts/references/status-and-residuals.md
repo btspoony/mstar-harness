@@ -6,7 +6,7 @@
 Canonical vs legacy residual definitions → **`mstar-plan-artifacts` SKILL.md** (“`status.json` and open residual (summary)”); this file covers **fields, severity, lifecycle, archive, and `jq` examples**.  
 **Closed** residuals should not accumulate here long-term; authoritative archive → **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** (see “Residual findings lifecycle”).
 
-**Why this matters:** The open list and `archived/residuals/` are the **cross-session handoff surface** for risk and decisions. Non-blocking conclusions that stay only in chat or a single QC report **without SSOT** cannot be inherited reliably; `Done` drifts from visible known debt. **`@project-manager`** should register trackable open items soon after review closure; close/archive after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist).
+**Why this matters:** The open list and `archived/residuals/` are the **cross-session handoff surface** for risk and decisions. Non-blocking conclusions that stay only in chat or a gitignored review bundle **without SSOT** cannot be inherited reliably; `Done` drifts from visible known debt. **`@project-manager`** should register trackable open items soon after review closure; close/archive after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist).
 
 ## Basic structure
 
@@ -37,7 +37,7 @@ Canonical vs legacy residual definitions → **`mstar-plan-artifacts` SKILL.md**
         "id": "R1",
         "title": "Finding title",
         "severity": "critical | high | medium | low | nit",
-        "source": "QC-#1, QC-#3, review, …",
+        "source": "QC-#1 qc1.md F-001 @ <review-range>, QA qa.md, review, …",
         "scope": "Affected file or component",
         "decision": "defer | accept | risk-accepted",
         "owner": "@fullstack-dev",
@@ -124,9 +124,10 @@ In old JSON, **`"severity": "warning"`** is read and rolled up as **`low`**. **F
 | `primary_spec` | string | Main spec path (`{KNOWLEDGE_DIR}/…`, `{SPECS_DIR}/…`) |
 | `iteration_compass` | string | Optional `{ITERATION_DIR}/…` |
 | `iteration_refs` | string[] | Optional multiple compass paths |
-| `qc_status` / `tests` / `commits` | string | InReview/Done snapshots; not a substitute for `{PLAN_DIR}/reports/` |
+| `qc_status` / `tests` / `commits` | string | InReview/Done snapshots; not a substitute for durable plan gate summaries or root `residual_findings` |
 | `sdd_dir` | string | SDD scratch path, e.g. `{HARNESS_DIR}/sdd/<plan-id>/` (gitignored; `mstar-sdd`) |
 | `sdd_progress` | string | Optional pointer to `{SDD_DIR}/progress.md` ledger |
+| `review_bundle` | string | Optional pointer to `{SDD_DIR}/review/` for current ephemeral QC/QA evidence |
 | `task_commits` | array\<object\> | SDD recovery: `{ "task_id": "T1", "base": "<sha>", "head": "<sha>" }` per completed task |
 
 ### Optional delivery ledger (`phase` + `batches` + `verification`)
@@ -141,7 +142,7 @@ For multi-batch or multi-role plans:
 
 Recommended `batches[]` subfields: `index`, `covers`, `status`, `owner`, `commits`, `a2_self_audit` (or synonym), `verification`.
 
-> `batches` / `verification` are evidence indexes — not replacements for `{PLAN_DIR}/reports/` or root `residual_findings`.
+> `batches` / `verification` are evidence indexes — not replacements for durable plan gate summaries or root `residual_findings`.
 
 ### `plans[].notes` vs `{HARNESS_DIR}/notes.json`
 
@@ -184,7 +185,7 @@ Plan row (per active iteration plan):
 
 - Each `plans[]` row may include optional **`metadata`** (`{}` or omit).
 - Init with `"residual_findings": {}`; **no dual-write** with legacy side (see SKILL.md). Program timeline → **`notes.json`**, not long `metadata.notes` in `status.json`.
-- **`plans[].id`** keys must align with root **`residual_findings`** keys (and `reports/<plan-id>/`). Do not store `residual_findings_plan_id`.
+- **`plans[].id`** keys must align with root **`residual_findings`** keys and `{SDD_DIR}` plan-id segments. Do not store `residual_findings_plan_id`.
 - **Empty `plan-id` key:** when no open items remain, **delete** the key from root **`residual_findings`** (and legacy side if present) — no `"plan-id": []`. Whether **`plans[]`** keeps the row is separate (`done-compaction.md`).
 - **`residual_summary` (optional):** one-line human summary of **open** items only.
 
@@ -245,7 +246,7 @@ Archive file shape (append to `entries`):
 ```
 
 - Each archived entry needs **`archived_at`** (`YYYY-MM-DD`).
-- Closed records live in archive + QC `reports/`; not in open list.
+- Closed records live in archive + durable plan summaries; raw review bundles are ephemeral and not part of the long-term open list.
 - After batch archive/close, **refresh `tech_debt_summary`** (script below).
 
 ### Short in-place close (transition only)

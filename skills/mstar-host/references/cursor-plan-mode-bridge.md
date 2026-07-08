@@ -31,7 +31,7 @@ Cursor **Plan mode** uses **CreatePlan** and built-in plan todos for session UX.
 When plan management is required and directories are missing:
 
 1. Create `{HARNESS_DIR}` and `{PLAN_DIR}`.
-2. Create `{PLAN_DIR}/reports/`.
+2. Ensure `{HARNESS_DIR}/sdd/` is gitignored; per-plan review bundles are created under `{SDD_DIR}/review/` when needed.
 3. Create `{HARNESS_DIR}/archived/residuals/`.
 4. Initialize `{HARNESS_DIR}/status.json` from `mstar-plan-artifacts/templates/status.empty.json` if missing.
 5. Optional: `{HARNESS_DIR}/notes.json` from `templates/notes.empty.json`, `{HARNESS_DIR}/knowledge/README.md`.
@@ -46,7 +46,7 @@ Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
 
 | Todo ID (use in title) | Goal | On-disk outcome |
 |------------------------|------|-----------------|
-| **`harness-init`** | Bootstrap harness tree | `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `reports/`, `archived/residuals/`, `status.json` initialized |
+| **`harness-init`** | Bootstrap harness tree | `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `sdd/` gitignore, `archived/residuals/`, `status.json` initialized |
 | **`spec-register`** | Register plan in SSOT | New `plans[]` row in `status.json` (`id`, `status`, `file`, `metadata`); spec stub in `{SPECS_DIR}` or plan frontmatter |
 | **`mirror-plan`** | SSOT main plan file | `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes aligned to CreatePlan body |
 
@@ -107,7 +107,7 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 ### Bootstrap (fixed prefix — complete before implement)
 
-1. harness-init — init .mstar/, status.json, reports/, archived/residuals/
+1. harness-init — init .mstar/, status.json, sdd/ gitignore, archived/residuals/
 2. spec-register — register plan_id in status.json; spec stub if applicable
 3. mirror-plan — write .mstar/plans/<plan-id>-<short-name>.md
 
@@ -198,6 +198,6 @@ When `/pm` runs under Plan mode:
 ## Related skills
 
 - `mstar-plan-conventions` — discovery, init, plan-writing path gate
-- `mstar-plan-artifacts` — `status.json`, reports, checkboxes, residual
+- `mstar-plan-artifacts` — `status.json`, review bundle summaries, checkboxes, residual
 - `mstar-phase-gates` — Prepare / Execute order
 - `mstar-roles/references/project-manager/dispatch-and-assignment.md` — Checkpoint: commit → Completion Report → Status Update

@@ -19,9 +19,9 @@
 - **最小集**（机器导航够用）：**`id`**、**`status`**（`Done`）、**`file`**（主 plan 路径）、**`metadata`** 仅含：
   - **`archived_record`**：相对 **`{HARNESS_DIR}`** 的路径，例如 `archived/plans/<plan-id>.json`（冷快照内为**完整**当时 `plans[]` 元素，含臃肿字段）
   - 若该 `plan-id` 在 **open 列表**（根级 **`residual_findings`**；若仅存 legacy 侧则同口径）中仍有 **open** 行，在 **`metadata`** 内保留 **`residual_summary`**（语义见 `status-and-residuals.md` **`residual_summary`（可选）** 小节）
-- **可选**（人类扫表友好，非必须）：**`title`** 一行、**`done_at`**；勿把长叙述塞回热行——放进 **`{HARNESS_DIR}/notes.json`** 或依赖冷快照 / `reports/`。
+- **可选**（人类扫表友好，非必须）：**`title`** 一行、**`done_at`**；勿把长叙述塞回热行——放进 **`{HARNESS_DIR}/notes.json`**、主 plan gate summary、archived residuals，或依赖冷快照。
 - 一旦快照已写入，热行**不得**再承载完整 `gates`、`qc_status`、`tests`、`commits`、长 `description`/`scope` 等；**以 `archived_record` 指向文件为准**。
-- 单条 **`plans[].notes`** 字符串若仍在用，保持**极短**（如指向 `reports/<plan-id>/`）；**不要**重复 QC 报告大段原文。
+- 单条 **`plans[].notes`** 字符串若仍在用，保持**极短**（如指向主 plan gate summary 或 R#）；**不要**重复 QC/QA 原始报告大段原文。
 - **可选索引**：`{HARNESS_DIR}/archived/plans/_index.json` — `plan-id` → 相对路径，便于不依赖 glob 的工具。
 - **可选滚动保留**：进一步缩小 `plans[]` 时，可只在热文件中保留**最近窗口**的瘦 `Done` 行，更旧 id 仅出现在 `_index.json` 与快照文件中；若采用，须在项目 `AGENTS.md` 中写明，并检查依赖「热文件中必有全部历史 id」的脚本。
 
