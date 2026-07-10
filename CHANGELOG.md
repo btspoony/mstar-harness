@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.1.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.2.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.1.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.1.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.1.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.1.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.1.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.2.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.2.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.2.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.2.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.2.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.2.0] - 2026-07-10
+
+### Harness (`/iteration-loop` + autonomous direction lock)
+
+- **`/iteration-loop`**: new PM command for autonomous full Phase 1→5 (cloud-agent friendly). Optional args `direction` + `scale` (`S`\|`M`\|`L`, default `M`); code-first auto direction lock (no grill-me); sequential Review & Edit chain retained; Continuous execution through Phase 5 merge-ready. Distinct from `/iteration-start` (Phase 1 + grill-me) and `/iteration-drive` (Phase 2→5 only).
+- **`mstar-iteration` §1.2**: direction lock modes `interactive` | `autonomous`; scale budget; autonomous branch resolve order. Detail → `references/autonomous-direction-lock.md` (skills remain capability providers — no command-name reverse refs).
+- **Docs**: README / README_CN / OpenCode package README command tables distinguish start / drive / loop.
+- **Routing eval v18**: `iteration-loop-autonomous-direction-lock` — no routine direction yes/no; no grill-me; no silent `main` default.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.2.0**.
 
 ## [1.1.0] - 2026-07-08
 

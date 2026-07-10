@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.2.0
+
+- Bundled commands: add `/iteration-loop` (autonomous Phase 1→5; optional `direction` + `scale`).
+- Bundled skills: `mstar-iteration` autonomous direction lock / scale budget / branch resolve + `references/autonomous-direction-lock.md`.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.2.0**.
+
 ## 1.1.0
 
 - Bundled skills: raw QC/QA process reports default to gitignored `{SDD_DIR}/review/`; durable gate summaries and `status.json` residual findings are the tracked handoff surface. `{PLAN_DIR}/reports/` is legacy / explicit audit mode only.

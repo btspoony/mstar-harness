@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: Morning Star 迭代管理 —— iteration-start（specs + `<iteration-id>/` workspace；禁止直写 knowledge）、Autonomous Execute、iteration-close（compound 提升 workspace → knowledge）、PR 交付、PR merge-ready loop。分支 SSOT：`status.json` + compass frontmatter。
+description: Morning Star 迭代管理 —— Phase 1（默认 interactive direction lock；opt-in autonomous；specs + `<iteration-id>/` workspace；禁止直写 knowledge）、Autonomous Execute、iteration-close（compound 提升 workspace → knowledge）、PR 交付、PR merge-ready loop。分支 SSOT：`status.json` + compass frontmatter。
 ---
 
 # mstar-iteration（迭代管理）
@@ -69,7 +69,7 @@ PM 在新迭代启动时执行。
 
 ### 1.2 定义迭代范围
 
-与用户/产品对齐后，确定：
+与用户/产品对齐后（或按下方 **autonomous** 模式锁定后），确定：
 
 | 字段 | 说明 |
 |------|------|
@@ -81,10 +81,22 @@ PM 在新迭代启动时执行。
 | **非目标** | 明确排除在本次迭代外的事项 |
 | **Roadmap 上下文** | 本迭代在整体 roadmap 中的位置（current iteration / next iteration） |
 | **Delivery branch policy** | `iteration_base_branch`（integration 分支从何处分出）、`spec_integration_branch`、`target_branch`（最终 PR 目标） |
+| **Scale budget**（可选） | 仅当 caller **显式**给出或选用 **autonomous** 时适用：`S` = 1 **业务** plan；`M` = 2–3；`L` = 3–4（默认上限 4）。**只计实际业务交付 plan**，不计 harness 流程性工作（Review 链 / QC / QA / compound / close / PR 等）。**interactive 默认不强制** S/M/L。计数细则 → **`references/autonomous-direction-lock.md`** § Scale budget |
 
-**Branch policy gate**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR。
+#### Direction lock modes
 
-**Direction lock**：compass/plans 初稿落盘前，PM 须与用户逐问收敛**单一**迭代方向、成功标准、非目标，并确认 delivery branch policy；决策写入 compass `## Scope` / `## Acceptance Criteria` / `## Non-Goals` 与 Delivery Branch Policy。
+compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标准、非目标，并确认 delivery branch policy；决策写入 compass `## Scope` / `## Acceptance Criteria` / `## Non-Goals` 与 Delivery Branch Policy。
+
+| Mode | 何时选用 | 行为 |
+|------|----------|------|
+| **`interactive`** | **默认**（未显式声明 mode 时一律用此） | 与用户/产品**逐问**收敛方向与 branch policy；不得静默默认 `main`/`master` |
+| **`autonomous`** | **仅**当 caller / Assignment **显式**声明 `Direction lock mode: autonomous`（或等价书面 opt-in） | 代码优先调研 → 排序候选 → **锁定推荐方向并落盘 rationale**；不因「是否同意该方向」例行问用户。细则 → **`references/autonomous-direction-lock.md`** |
+
+**禁止**：在未显式 opt-in 时自行切换到 `autonomous`（例如仅因读了本 skill 或存在 roadmap next）。
+
+**Branch policy gate（interactive — 默认路径）**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR。
+
+**Autonomous branch resolve**：仅 `autonomous` 模式；解析顺序与 STOP 规则见 **`references/autonomous-direction-lock.md`**（勿把该顺序套用到 interactive 以跳过向用户确认）。
 
 ### 1.3 创建迭代 compass
 
@@ -460,6 +472,7 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 | `references/iteration-artifact-boundaries.md` | Phase 1 specs / iterations workspace / knowledge 分工 |
 | `references/iteration-workspace-readme-template.md` | `<iteration-id>/README.md` 可选模板 |
 | `references/iteration-corpus-hygiene.md` | §1.6 writing-specialist specs 卫生细则 |
+| `references/autonomous-direction-lock.md` | §1.2 autonomous direction lock、scale budget、branch resolve |
 | `mstar-strategy` | iteration-start 时读 `STRATEGY.md` 对齐方向 |
 
 ## NOT to do
@@ -480,3 +493,6 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 - **不要在 iteration-close 跳过 `<iteration-id>/` workspace 盘点**（compound 提升 SSOT → **`mstar-compound`**）
 - **不要在 iteration-start §1.6 跳过 writing-specialist 全库 specs corpus hygiene**（仅改当轮 compass/plans 而不扫 `{SPECS_DIR}/`）
 - **不要在 SDD plan 上以单席 `qc.md` 收尾**（除非用户书面 `QC mode: single — override`）
+- **不要在未显式 `Direction lock mode: autonomous` 时跳过与用户收敛方向**（interactive 仍为默认）
+- **不要在 `autonomous` mode 下例行问用户「是否同意该方向」**（须落盘 rationale；无候选且无约束时 STOP）
+- **不要把 harness 流程（Review 链 / QC / QA / compound / close / PR 等）计进 Scale budget 的 plan 数量**，也不得为此单独建 process plan 占坑

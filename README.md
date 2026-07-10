@@ -23,7 +23,9 @@ Core value:
 - Run with unified `mstar-*` skills instead of scattered rules
 - Reuse one core process across OpenCode, Cursor, and Codex
 
-**Current:** Ephemeral review bundles — raw QC/QA process reports default to `{SDD_DIR}/review/` (gitignored); durable plan summaries and `status.json` residual findings remain the tracked handoff surface.
+**Current:** **1.2.0** — `/iteration-loop` autonomous full Phase 1→5; `mstar-iteration` autonomous direction lock + scale budget.
+
+**1.1.0:** Ephemeral review bundles — raw QC/QA process reports default to `{SDD_DIR}/review/` (gitignored); durable plan summaries and `status.json` residual findings remain the tracked handoff surface.
 
 **1.0.2:** Iteration artifact boundaries — `{SPECS_DIR}/` for long-lived specs; `{ITERATION_DIR}/<id>/` workspace for iteration drafts; **`mstar-compound`** promotes workspace to `{KNOWLEDGE_DIR}/` at iteration-close (no knowledge writes at iteration-start).
 
@@ -143,8 +145,9 @@ The shared `commands/` directory currently provides these PM-led harness command
 | Command | Available in | Use when |
 |---------|--------------|----------|
 | `/mstar-bootstrap` | Cursor, OpenCode | Bootstrap or refresh project knowledge scaffolding: `STRATEGY.md`, `CONCEPTS.md`, `{KNOWLEDGE_DIR}`, and related indexes. |
-| `/iteration-start` | Cursor, OpenCode | Start a new harness iteration: research backlog, lock direction, write compass/plans, run the review chain, and create the integration branch. |
-| `/iteration-drive` | Cursor, OpenCode | Drive an active iteration (Phase 2 execute loop → Phase 3 iteration-close → Phase 4 create PR → Phase 5 merge-ready loop until CI green and reviews resolved). |
+| `/iteration-start` | Cursor, OpenCode | Start a new harness iteration (Phase 1 only): research backlog, **grill-me** lock direction, write compass/plans, run the review chain, create the integration branch. |
+| `/iteration-drive` | Cursor, OpenCode | Drive an **already locked** iteration (Phase 2 execute → Phase 3 close → Phase 4 PR → Phase 5 merge-ready). |
+| `/iteration-loop` | Cursor, OpenCode | **Autonomous full loop** (Phase 1→5) for cloud agents: code-first auto direction lock (optional `direction` + `scale` S\|M\|L), review chain, then execute through merge-ready — minimal human check-ins. |
 
 In OpenCode, install or update `@mstar-harness/opencode` and restart OpenCode; the plugin bundles these markdown commands from `harness-commands/`.
 
