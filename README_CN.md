@@ -23,15 +23,7 @@
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
 - 在 OpenCode / Cursor / Codex 下复用同一套核心流程
 
-**当前：** **1.2.0** — `/iteration-loop` 自动化完整 Phase 1→5；`mstar-iteration` autonomous direction lock + scale budget。
-
-**1.1.0：** 临时 review bundle — QC/QA 原始过程报告默认进入 `{SDD_DIR}/review/`（gitignored）；长期 handoff 仍以主 plan 摘要与 `status.json` residual findings 为准。
-
-**1.0.2：** iteration 产物边界 — `{SPECS_DIR}/` 长期规格；`{ITERATION_DIR}/<id>/` 工作区放迭代草案；**iteration-close** 时 **`mstar-compound`** 将 workspace 提升进 `{KNOWLEDGE_DIR}/`（start 阶段不写 knowledge）。
-
-**1.0.1：** `iteration-drive` 强制 per-task SDD；可选 **sticky implementer**（`SDD implementer session: sticky`，Cursor Task `resume`）复用 dev 上下文；精简 **`pm`** 通用入口（iteration 走 `commands/`）。
-
-**1.0.0 亮点：** SDD（`mstar-sdd`）— 每 task **task reviewer** + plan 完成后的 **强制 QC 三审交叉审**（QC#1/#2/#3 看整分支 diff）。仅 `inline`/hotfix 用单席 `qc.md`。
+当前版本：**1.2.0** — 详见 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
 ## 快速开始（推荐方式）
 
