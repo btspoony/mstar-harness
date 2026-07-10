@@ -23,15 +23,7 @@ Core value:
 - Run with unified `mstar-*` skills instead of scattered rules
 - Reuse one core process across OpenCode, Cursor, and Codex
 
-**Current:** **1.2.0** — `/iteration-loop` autonomous full Phase 1→5; `mstar-iteration` autonomous direction lock + scale budget.
-
-**1.1.0:** Ephemeral review bundles — raw QC/QA process reports default to `{SDD_DIR}/review/` (gitignored); durable plan summaries and `status.json` residual findings remain the tracked handoff surface.
-
-**1.0.2:** Iteration artifact boundaries — `{SPECS_DIR}/` for long-lived specs; `{ITERATION_DIR}/<id>/` workspace for iteration drafts; **`mstar-compound`** promotes workspace to `{KNOWLEDGE_DIR}/` at iteration-close (no knowledge writes at iteration-start).
-
-**1.0.1:** `iteration-drive` mandates per-task SDD; optional **sticky implementer** (`SDD implementer session: sticky`, Cursor Task `resume`) to reuse dev context across tasks; thin **`pm`** entry shim for general orchestration (iteration → `commands/`).
-
-**1.0.0 highlights:** SDD (`mstar-sdd`) with per-task **task reviewer** + **mandatory plan QC tri-review** (QC#1/#2/#3 cross-review on whole branch). Single-seat `qc.md` only for `inline` / hotfix.
+Latest release: **1.2.0** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
 ## Quick Start
 
