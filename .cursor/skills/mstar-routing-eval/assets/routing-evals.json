@@ -625,7 +625,7 @@
         "mstar-iteration autonomous direction lock",
         "code-first research of roadmap/status before lock",
         "locked direction rationale on compass disk",
-        "scale budget M with 2-3 plans",
+        "scale budget M with 2-3 business plans (harness process excluded)",
         "sequential Review & Edit chain product-manager then architect then writing-specialist",
         "compass status locked before Phase 2",
         "continuous execution — Phase 1 lock then immediate Phase 2 without user check-in"
@@ -636,6 +636,8 @@
         "loads grill-me for direction lock",
         "ends turn with confirmation question instead of next dispatch or Phase 2",
         "silent default to main or master for iteration_base_branch or target_branch",
+        "counts harness process plans toward scale budget",
+        "creates process-only plans to fill scale budget",
         "parallel Review & Edit tri roles",
         "assignment uses non-English field keys"
       ]

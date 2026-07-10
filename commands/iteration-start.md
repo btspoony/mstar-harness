@@ -65,6 +65,8 @@ Explore candidate directions targeting **product completeness**:
 
 ## 3. Lock Direction — bundled `grill-me`
 
+**Direction lock mode: `interactive`**（`mstar-iteration` §1.2 默认；本命令不使用 `autonomous`）。
+
 This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md`. **Only this command step** references it — **do not** load it from `mstar-harness-core` or other `mstar-*` skills.
 
 **Before this step:** Read `skills/grill-me/SKILL.md`.
