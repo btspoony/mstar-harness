@@ -1,9 +1,8 @@
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { ALL_ROLES } from "../constants";
 import type { AgentAdapter, Scope } from "../types";
-import { ensureObject, normalizeModelList, resolveProjectRoot } from "../utils";
+import { ensureObject, resolveProjectRoot } from "../utils";
 
 const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
 const MSTAR_OPENCODE_PLUGIN = "@mstar-harness/opencode@latest";
@@ -31,13 +30,6 @@ function isMstarHarnessOpencodePlugin(plugin: string): boolean {
 
 function isAnyMstarHarnessOpencodeSlot(plugin: string): boolean {
   return isLegacyMorningStarGitPlugin(plugin) || isMstarHarnessOpencodePlugin(plugin);
-}
-
-function getOpencodeModels() {
-  const raw = execFileSync("opencode", ["models"], { encoding: "utf8" });
-  const models = normalizeModelList(raw);
-  if (!models.length) throw new Error("`opencode models` returned no model entries.");
-  return models;
 }
 
 function resolveOpencodeConfigPath(scope: Scope, outputPath?: string) {
@@ -71,7 +63,9 @@ function updatePluginList(config: Record<string, unknown>) {
   return next;
 }
 
+/** Optional advanced path: write role models only when caller supplied assignments. */
 function applyAssignments(config: Record<string, unknown>, assignments: Record<string, string>) {
+  if (!Object.keys(assignments).length) return config;
   const next = ensureObject(config);
   const agent = ensureObject(next.agent);
   next.agent = agent;
@@ -93,19 +87,15 @@ function validateSetup(config: Record<string, unknown>) {
   const hasMstarOpencode = plugins.some(
     (item) => typeof item === "string" && isAnyMstarHarnessOpencodeSlot(item.trim()),
   );
-  if (!hasMstarOpencode) errors.push("Missing @mstar-harness/opencode plugin entry in `plugin` (or legacy morning-star git plugin).");
-
-  const agent = ensureObject(config.agent);
-  for (const roleId of ALL_ROLES) {
-    const role = ensureObject(agent[roleId]);
-    if (typeof role.model !== "string" || !role.model.trim()) {
-      errors.push(`Missing model for role: ${roleId}`);
-    }
+  if (!hasMstarOpencode) {
+    errors.push("Missing @mstar-harness/opencode plugin entry in `plugin` (or legacy morning-star git plugin).");
   }
+
   return errors;
 }
 
 function getDoctorWarnings(config: Record<string, unknown>): string[] {
+  const warnings: string[] = [];
   const plugins = Array.isArray(config.plugin) ? config.plugin : [];
   const strings = plugins
     .filter((item): item is string => typeof item === "string")
@@ -114,22 +104,33 @@ function getDoctorWarnings(config: Record<string, unknown>): string[] {
   const hasNpm = strings.some(isMstarHarnessOpencodePlugin);
   const hasLegacy = strings.some(isLegacyMorningStarGitPlugin);
   if (hasLegacy && !hasNpm) {
-    return [
-      "Plugin list uses legacy `morning-star@git+…` for this harness; run `mstar-harness init --target opencode` (or `--yes` with model flags) to rewrite to `@mstar-harness/opencode@latest`.",
-    ];
+    warnings.push(
+      "Plugin list uses legacy `morning-star@git+…` for this harness; run `mstar-harness init --target opencode` to rewrite to `@mstar-harness/opencode@latest`.",
+    );
   }
   if (hasLegacy && hasNpm) {
-    return [
+    warnings.push(
       "Both legacy `morning-star@git+…` and `@mstar-harness/opencode` appear in `plugin`; run `init` again to dedupe and keep a single npm plugin line.",
-    ];
+    );
   }
-  return [];
+
+  const agent = ensureObject(config.agent);
+  const missingModels = ALL_ROLES.filter((roleId) => {
+    const role = ensureObject(agent[roleId]);
+    return typeof role.model !== "string" || !role.model.trim();
+  });
+  if (missingModels.length) {
+    warnings.push(
+      `${missingModels.length} role(s) have no explicit agent.<role>.model — OpenCode default model will be used (recommended for fastest setup).`,
+    );
+  }
+  return warnings;
 }
 
 export const opencodeAdapter: AgentAdapter = {
   target: "opencode",
   mode: "config",
-  getAvailableModels: () => getOpencodeModels(),
+  // No getAvailableModels — default init never calls `opencode models` (that command can hang with no feedback).
   resolveConfigPath: (scope, outputPath) => resolveOpencodeConfigPath(scope, outputPath),
   mutateConfigForInit: (config, assignments) => {
     const withSchema = ensureConfigSchema(config);
@@ -141,5 +142,6 @@ export const opencodeAdapter: AgentAdapter = {
   printPostSetupSummary: () => {
     console.log(`Schema: ${OPENCODE_CONFIG_SCHEMA} (ensured)`);
     console.log(`Plugin: ${MSTAR_OPENCODE_PLUGIN} (ensured; legacy git morning-star entries removed)`);
+    console.log("Role models: left to OpenCode defaults (set agent.<role>.model in opencode.json only if you want overrides)");
   },
 };

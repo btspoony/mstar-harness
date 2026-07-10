@@ -3,12 +3,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkbox, select } from "@inquirer/prompts";
+import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
-import { buildModelAssignments, requireValidatedSelection } from "./assignment";
+import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
-import type { DoctorOptions, InitOptions, ModelSelections, Scope, Target } from "./types";
+import type { DoctorOptions, InitOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
 import { parseCsv, readJson, writeJson } from "./utils";
 
@@ -35,85 +35,35 @@ async function pickTargetInteractive() {
   });
 }
 
-const ASCII_ICONS = {
-  checked: "(*)",
-  unchecked: "( )",
-  cursor: ">",
-} as const;
-
-async function pickModelsInteractive(params: {
-  title: string;
-  hint: string;
-  models: string[];
-  maxCount: number;
-  single?: boolean;
-}) {
-  const choices = params.models.map((model) => ({ name: model, value: model }));
-  if (params.single) {
-    const picked = await select<string>({
-      message: `${params.title} (${params.hint})`,
-      choices,
-      theme: { icon: { cursor: ASCII_ICONS.cursor } },
-    });
-    return [picked];
-  }
-  return checkbox<string>({
-    message: `${params.title} (${params.hint})`,
-    choices,
-    theme: { icon: ASCII_ICONS },
-    validate: (picked) => {
-      if (picked.length < 1) return "Pick at least one model.";
-      if (picked.length > params.maxCount) return `Pick at most ${params.maxCount} models.`;
-      return true;
-    },
-  });
+function hasExplicitModelFlags(options: InitOptions): boolean {
+  return Boolean(
+    options.pmModel ||
+      options.strategicModels ||
+      options.devModels ||
+      options.qcModels ||
+      options.otherModels,
+  );
 }
 
-async function resolveSelections(options: InitOptions, models: string[]) {
-  if (options.yes) {
-    return {
-      pm: requireValidatedSelection("pm-model", options.pmModel ? [options.pmModel] : undefined, models, 1, true),
-      strategic: requireValidatedSelection("strategic-models", parseCsv(options.strategicModels), models, 3),
-      dev: requireValidatedSelection("dev-models", parseCsv(options.devModels), models, 3),
-      qc: requireValidatedSelection("qc-models", parseCsv(options.qcModels), models, 3),
-      others: requireValidatedSelection("other-models", parseCsv(options.otherModels), models, 3),
-    } satisfies ModelSelections;
-  }
+/** Advanced override only — never calls `opencode models` (avoids silent hangs). */
+function resolveExplicitModelAssignments(options: InitOptions) {
+  // Trust caller-supplied ids; do not discover/validate against a live model list.
+  const allow = (label: string, values: string[] | undefined, max: number, required: boolean) => {
+    if (!values?.length) {
+      if (required) throw new Error(`${label} is required when any --*-model flag is set.`);
+      return [] as string[];
+    }
+    if (values.length > max) throw new Error(`${label}: pick at most ${max} model(s).`);
+    return values;
+  };
 
-  logStep("Step 4/7 - Configure models by role group");
-  return {
-    pm: await pickModelsInteractive({
-      title: "1) project-manager",
-      hint: "orchestrator role, prefer strong agentic model",
-      models,
-      maxCount: 1,
-      single: true,
-    }),
-    strategic: await pickModelsInteractive({
-      title: "2) architect / product-manager / prompt-engineer",
-      hint: "decision-heavy roles, prefer high intelligence",
-      models,
-      maxCount: 3,
-    }),
-    dev: await pickModelsInteractive({
-      title: "3) fullstack-dev / fullstack-dev-2 / frontend-dev",
-      hint: "prefer coding-focused models",
-      models,
-      maxCount: 3,
-    }),
-    qc: await pickModelsInteractive({
-      title: "4) qc-specialist / qc-specialist-2 / qc-specialist-3",
-      hint: "prefer three distinct models",
-      models,
-      maxCount: 3,
-    }),
-    others: await pickModelsInteractive({
-      title: "5) other roles",
-      hint: "up to 3 models, random assignment",
-      models,
-      maxCount: 3,
-    }),
-  } satisfies ModelSelections;
+  return buildModelAssignments({
+    pm: allow("pm-model", options.pmModel ? [options.pmModel] : undefined, 1, true),
+    strategic: allow("strategic-models", parseCsv(options.strategicModels), 3, true),
+    dev: allow("dev-models", parseCsv(options.devModels), 3, true),
+    qc: allow("qc-models", parseCsv(options.qcModels), 3, true),
+    others: allow("other-models", parseCsv(options.otherModels), 3, true),
+  });
 }
 
 async function runInit(options: InitOptions) {
@@ -140,22 +90,24 @@ async function runInit(options: InitOptions) {
     return;
   }
 
-  logStep(`Step 3/7 - Fetch available models from ${adapter.target}`);
-  const models = adapter.getAvailableModels?.();
-  if (!models) throw new Error(`Adapter ${target} does not implement model discovery.`);
-  const selections = await resolveSelections(options, models);
+  // OpenCode (and any future config-mode targets): default = schema + plugin only.
+  // Skip interactive model picking and `opencode models` discovery (can hang with no output).
+  const useExplicitModels = hasExplicitModelFlags(options);
+  const assignments = useExplicitModels ? resolveExplicitModelAssignments(options) : {};
 
-  logStep("Step 5/7 - Build role model assignments");
-  const assignments = buildModelAssignments(selections);
+  if (useExplicitModels) {
+    logStep("Step 3/4 - Apply explicit role model overrides from CLI flags");
+  } else {
+    logStep("Step 3/4 - Fast setup (schema + plugin; OpenCode default models)");
+  }
 
-  logStep("Step 6/7 - Update config");
+  logStep("Step 4/4 - Update config");
   const configPath = adapter.resolveConfigPath?.(scope, options.output);
   if (!configPath) throw new Error(`Adapter ${target} does not implement config path resolution.`);
   const current = readJson(configPath);
   const updated = adapter.mutateConfigForInit?.(current, assignments);
   if (!updated) throw new Error(`Adapter ${target} does not implement init mutation.`);
 
-  logStep("Step 7/7 - Self-check");
   const checkErrors = adapter.validateConfig?.(updated) || [];
   if (checkErrors.length) {
     throw new Error(`Configuration verification failed:\n- ${checkErrors.join("\n- ")}`);
@@ -173,9 +125,11 @@ async function runInit(options: InitOptions) {
   console.log(`Target: ${target}`);
   console.log(`Config file: ${configPath}`);
   if (adapter.printPostSetupSummary) adapter.printPostSetupSummary(updated);
-  console.log("Assigned roles:");
-  for (const [roleId, modelId] of Object.entries(assignments)) {
-    console.log(`  - ${roleId}: ${modelId}`);
+  if (Object.keys(assignments).length) {
+    console.log("Assigned roles:");
+    for (const [roleId, modelId] of Object.entries(assignments)) {
+      console.log(`  - ${roleId}: ${modelId}`);
+    }
   }
 }
 
@@ -235,11 +189,11 @@ program
   .option("--scope <scope>", "Config scope: global|project (default: project)")
   .option("--output <path>", "Config file path override, relative to project root")
   .option("--dry-run", "Preview result without writing config")
-  .option("--pm-model <model>", "Model for project-manager")
-  .option("--strategic-models <a,b,c>", "Models for architect/product-manager/prompt-engineer")
-  .option("--dev-models <a,b,c>", "Models for fullstack-dev/fullstack-dev-2/frontend-dev")
-  .option("--qc-models <a,b,c>", "Models for qc trio")
-  .option("--other-models <a,b,c>", "Models for random assignment to remaining roles")
+  .option("--pm-model <model>", "Optional: model for project-manager (advanced override)")
+  .option("--strategic-models <a,b,c>", "Optional: models for architect/product-manager/prompt-engineer")
+  .option("--dev-models <a,b,c>", "Optional: models for fullstack-dev/fullstack-dev-2/frontend-dev")
+  .option("--qc-models <a,b,c>", "Optional: models for qc trio")
+  .option("--other-models <a,b,c>", "Optional: models for remaining roles")
   .action(async (options: InitOptions) => {
     await runInit(options);
   });

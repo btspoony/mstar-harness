@@ -6,7 +6,29 @@ on:
       - main
     tags-ignore:
       - "v*"
+    paths:
+      - "packages/cli/**"
+      - "packages/opencode/**"
+      - "skills/**"
+      - "agents/**"
+      - "commands/**"
+      - "package.json"
+      - "bun.lock"
+      - "bun.lockb"
+      - "tsconfig.json"
+      - ".github/workflows/ci.yml"
   pull_request:
+    paths:
+      - "packages/cli/**"
+      - "packages/opencode/**"
+      - "skills/**"
+      - "agents/**"
+      - "commands/**"
+      - "package.json"
+      - "bun.lock"
+      - "bun.lockb"
+      - "tsconfig.json"
+      - ".github/workflows/ci.yml"
 
 jobs:
   validate:
@@ -36,6 +58,9 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+
+      - name: CLI smoke check
+        run: bun run --cwd packages/cli check
 
       - name: Pack CLI tarball
         run: bun run cli:pack
