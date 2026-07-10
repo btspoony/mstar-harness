@@ -22,17 +22,106 @@ Start a new Morning Star harness iteration. **Not Done until the Review & Edit c
 
 **完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-commit checklist 全 `[x]` — 不是初稿落盘。
 
-Detailed workflow → **`mstar-iteration` § Phase 1: iteration-start**（含 §1.6 Review & Edit chain）；per-plan Prepare gates → **`mstar-phase-gates`**（specify → clarify → plan）。
+Detailed workflow → **`mstar-iteration` § Phase 1**（含 §1.6 Review & Edit chain）；per-plan Prepare gates → **`mstar-phase-gates`**（specify → clarify → plan）。
+
+**Path split（HARD）**：
+
+| 宿主上下文 | 走哪条 |
+|------------|--------|
+| **Cursor Plan mode**（CreatePlan / Plan 会话活跃） | §0 Boot → §P（本命令 Plan 分支）— **先**空白 CreatePlan，再动态 grill-me 改文档；**Build 前不执行** Review 链 / commit / integration 分支 |
+| **其它**（Agent、OpenCode、非 Plan） | §0 Boot → §1–§6（Research → Explore → grill-me → Write → Review → branch） |
 
 ## 0. Boot
 
 1. `mstar-harness-core`
 2. `mstar-roles` → `references/project-manager.md`
-3. `mstar-iteration` → **§ Phase 1: iteration-start**（迭代范围、compass 模板、**§1.5.5 产物边界**、§1.6 Review & Edit chain、状态初始化）
+3. `mstar-iteration` → **§ Phase 1**（迭代范围、compass 模板、**§1.5.5 产物边界**、§1.6 Review & Edit chain、状态初始化）
 4. `mstar-dispatch-gates`
 5. `mstar-phase-gates` → Prepare（specify → clarify → plan）
 6. `mstar-plan-conventions`, `mstar-plan-artifacts`
-7. `mstar-host` → active host reference（invoke 能力）
+7. `mstar-host` → active host reference（invoke 能力）；若 Cursor Plan mode → 另读 **`cursor-plan-mode-bridge.md`**（`mstar-iteration` Phase 1 in Plan mode）
+
+**若 Cursor Plan mode 活跃 → 进入 §P；否则继续 §1。**
+
+## P. Cursor Plan mode（Phase 1 scaffold → staged grill → Build）
+
+**Detect**：会话处于 Cursor Plan mode（系统要求 CreatePlan / SwitchMode，或 Plan 工具可用且当前为 Plan 会话）。
+
+**语义**：Plan 模式期间 **只维护 CreatePlan + SSOT 草稿**；**不**把 grill 段标成已执行 todo；**不**派发 Review 链；**不** commit；**不**建 integration 分支。点 **Build** 后才执行下方 Build todos（对齐 `mstar-host/references/cursor-plan-mode-bridge.md` · Phase 1 in Plan mode）。
+
+### P.1 Research（只读）
+
+执行与 §1 相同的调研（structured + unstructured + `STRATEGY.md`）。**不要**在本步写 compass/plans 终稿。
+
+### P.2 Early CreatePlan（空白脚手架 — 先于方向锁定）
+
+Research 后 **立刻** CreatePlan（**禁止**等 grill-me 全部完成再 CreatePlan）。
+
+**CreatePlan 最小结构**（session mirror；dual-write 草稿见 P.3）：
+
+```markdown
+# Phase 1: <iteration-id-or-TBD>
+
+## Direction
+TBD
+
+## Scope
+TBD
+
+## Acceptance Criteria
+TBD
+
+## Non-Goals
+TBD
+
+## Delivery Branch Policy
+| Field | Value |
+|-------|-------|
+| iteration_base_branch | TBD |
+| spec_integration_branch | TBD |
+| target_branch | TBD |
+
+## Plans
+| plan_id | Name | Status | Notes |
+|---------|------|--------|-------|
+| TBD | | Todo | |
+
+## Grill-me log
+（每段收敛后追加：日期 / 议题 / 决议）
+```
+
+**Build 才勾的 todos**（顺序；**不要**把 grill 段写成 Build todo）：
+
+1. `harness-init` — 若 `{HARNESS_DIR}` / `status.json` 缺失则初始化
+2. `finalize-compass-plans` — 将 CreatePlan 正文落成 compass + `{PLAN_DIR}/` plans + `status.json` 登记 + `{ITERATION_DIR}/README.md`
+3. `review-edit-product-manager` — §5.1 invoke
+4. `review-edit-architect` — §5.2 invoke
+5. `review-edit-writing-specialist` — §5.3 invoke
+6. `pm-lock` — §5.4 compass `status: locked` + Prepare gates
+7. `integration-branch` — §6
+
+### P.3 Dynamic grill-me（不固定段数）
+
+**Before this step:** Read `skills/grill-me/SKILL.md`（**仅本命令**引用；勿从 `mstar-*` 加载）。
+
+**Direction lock mode: `interactive`**。按决策树 **动态切段**（段数不固定；随用户需求增减）：
+
+- 一段一问；能靠读代码回答的先探索代码
+- 每段收敛后 **立刻** 更新 CreatePlan body（Direction / Scope / Acceptance / Non-Goals / Branch policy / Plans 表）并 **追加** `## Grill-me log`
+- 同轮 dual-write SSOT **草稿**（可选但推荐）：`{ITERATION_DIR}/` compass stub、`{PLAN_DIR}/` plan stubs、`status.json` 业务 plan 行（方向收敛后至少有草稿登记）
+- **禁止**：固定死 4/5 段；把 grill 标成「已执行完的 todo」；Plan 模式内派发 §5 / commit / §6
+
+用户表示方向/范围已够用、可 Build 时 → 停止 grill；确认 CreatePlan 与草稿 SSOT 已反映锁定内容。
+
+### P.4 Build（执行 Phase 1 可执行门禁）
+
+用户点击 **Build**（或 Plan → Agent）后：
+
+1. 按 Build todos 顺序执行：`harness-init` → `finalize-compass-plans` → §5 Review 链（5.1→5.2→5.3）→ `pm-lock` → §6
+2. **禁止**把 Build 当成重新跑一遍 grill-me
+3. pre-commit checklist（见 §5）全 `[x]` 后再 commit / push integration 分支
+
+**非 Plan 路径从这里继续 ↓**
 
 ## 1. Research
 
@@ -57,6 +146,8 @@ Also read `STRATEGY.md`（if exists）for strategic alignment.
 
 ## 2. Explore Directions
 
+> **非 Plan 路径**。Cursor Plan mode 已在 §P 处理；勿与 §P 并行再跑一遍。
+
 Explore candidate directions targeting **product completeness**:
 
 - Default to completing deferred items from previous iterations
@@ -65,9 +156,11 @@ Explore candidate directions targeting **product completeness**:
 
 ## 3. Lock Direction — bundled `grill-me`
 
+> **非 Plan 路径**。Cursor Plan mode 用 §P.3 动态 grill-me（先 CreatePlan 再分阶段改文档）。
+
 **Direction lock mode: `interactive`**（`mstar-iteration` §1.2 默认；本命令不使用 `autonomous`）。
 
-This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md`. **Only this command step** references it — **do not** load it from `mstar-harness-core` or other `mstar-*` skills.
+This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md`. **Only this command step**（及 §P.3）references it — **do not** load it from `mstar-harness-core` or other `mstar-*` skills.
 
 **Before this step:** Read `skills/grill-me/SKILL.md`.
 
@@ -82,6 +175,8 @@ Run **grill-me** to stress-test candidate directions with the user:
   - If either is not explicit, inspect the current branch and ask. **Do not default to `main` / `master` just because those names exist.**
 
 ## 4. Write Compass & Plans
+
+> **非 Plan 路径**。Plan mode 在 §P.2–P.3 维护草稿，Build 时由 `finalize-compass-plans` 落盘终稿。
 
 Produce harness artifacts per **`mstar-iteration` § 1.3**（template: `mstar-iteration/references/iteration-compass-template.md`）：
 

@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.2.1
+
+- Version alignment with harness **1.2.1** (no CLI behavior change in this release).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.2.1**.
+
 ## 1.2.0
 
 - OpenCode `init` fast path: schema + plugin only; no interactive model picking / no `opencode models` discovery (avoids silent hangs). Optional `--*-model` flags remain as advanced overrides.

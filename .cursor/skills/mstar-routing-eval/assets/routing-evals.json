@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 18,
+  "version": 19,
   "updated_at": "2026-07-10",
   "cases": [
     {
@@ -639,6 +639,33 @@
         "counts harness process plans toward scale budget",
         "creates process-only plans to fill scale budget",
         "parallel Review & Edit tri roles",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase1-cursor-plan-staged-grill",
+      "prompt": "Cursor Plan 模式：/iteration-start 开新迭代，先按 Phase 1 建空白 plan 和 todos，再分阶段 grill-me，每段结束后改 plan；点 Build 前不要跑 Review 链",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "mstar-iteration Phase 1 Plan mode path",
+        "CreatePlan blank Phase 1 scaffold before direction lock finishes",
+        "dynamic staged interactive direction lock updating CreatePlan each stage",
+        "dual-write SSOT drafts when scope changes",
+        "Build-bound Phase 1 todos (finalize / Review & Edit / pm-lock / integration-branch)",
+        "document-only Pre-Build (no Review dispatch before Build)"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "waits until grill/direction lock finishes before first CreatePlan",
+        "dispatches Review & Edit chain before Build",
+        "commits or creates integration branch before Build",
+        "treats grill stages as completed Build todos without updating CreatePlan body",
+        "fixes a hard-coded grill stage count and refuses to revise the plan document",
+        "replays full grill-me after Build instead of finalize + Review chain",
+        "mstar-* skill text names /iteration-start as a load-order dependency",
         "assignment uses non-English field keys"
       ]
     }

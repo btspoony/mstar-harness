@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.2.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.2.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.2.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.2.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.2.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.2.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.2.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.2.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.2.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.2.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.2.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.2.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.2.1] - 2026-07-10
+
+### Harness (Cursor Plan mode × Phase 1 staged direction lock)
+
+- **`/iteration-start` Cursor Plan path**: after Boot, Plan mode creates a blank Phase 1 CreatePlan scaffold first, then runs dynamic staged `grill-me` that updates the plan each stage; Review & Edit / lock / integration branch run only after **Build**. Agent / OpenCode keep Research → Explore → grill-me → Write → Review.
+- **`mstar-host` Cursor bridge / rule**: document `mstar-iteration` Phase 1 in Plan mode (no command-name reverse refs in skills).
+- **`mstar-iteration` §1.2**: host Plan UX may scaffold then converge interactively; non-Plan hosts unchanged.
+- **Routing eval v19**: `iteration-phase1-cursor-plan-staged-grill`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.2.1**.
 
 ## [1.2.0] - 2026-07-10
 
