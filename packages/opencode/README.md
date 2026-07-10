@@ -28,7 +28,7 @@ npx @mstar-harness/cli init --target opencode
 |-----------------|----------|
 | `harness-skills/` | `mstar-harness-core`, `mstar-iteration`, `mstar-sdd`, roles, phase/dispatch gates, … |
 | `harness-agents/` | Role shells (`project-manager`, `fullstack-dev`, `qc-specialist`, …) |
-| `harness-commands/` | `/iteration-start`, `/iteration-drive`, `/mstar-bootstrap` |
+| `harness-commands/` | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/mstar-bootstrap` |
 
 The plugin resolves **only paths inside this package** — not `process.cwd()/skills`, so your app repo root does not affect harness loading.
 
@@ -36,7 +36,7 @@ The plugin resolves **only paths inside this package** — not `process.cwd()/sk
 
 1. Install the plugin (above).
 2. In OpenCode, start with the **Project Manager** agent (`project-manager`).
-3. For a full iteration: run **`/iteration-start`**, then **`/iteration-drive`** when plans are ready.
+3. For a full iteration: run **`/iteration-start`** then **`/iteration-drive`**, or one-shot **`/iteration-loop`** (autonomous Phase 1→5).
 
 Entry skill: **`mstar-harness-core`** (loaded before other `mstar-*` skills).
 

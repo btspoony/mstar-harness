@@ -23,7 +23,9 @@
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
 - 在 OpenCode / Cursor / Codex 下复用同一套核心流程
 
-**当前：** 临时 review bundle — QC/QA 原始过程报告默认进入 `{SDD_DIR}/review/`（gitignored）；长期 handoff 仍以主 plan 摘要与 `status.json` residual findings 为准。
+**当前：** **1.2.0** — `/iteration-loop` 自动化完整 Phase 1→5；`mstar-iteration` autonomous direction lock + scale budget。
+
+**1.1.0：** 临时 review bundle — QC/QA 原始过程报告默认进入 `{SDD_DIR}/review/`（gitignored）；长期 handoff 仍以主 plan 摘要与 `status.json` residual findings 为准。
 
 **1.0.2：** iteration 产物边界 — `{SPECS_DIR}/` 长期规格；`{ITERATION_DIR}/<id>/` 工作区放迭代草案；**iteration-close** 时 **`mstar-compound`** 将 workspace 提升进 `{KNOWLEDGE_DIR}/`（start 阶段不写 knowledge）。
 
@@ -141,8 +143,9 @@ OpenCode 的详细安装与迁移说明见 `packages/opencode/INSTALL.md`。
 | Command | 可用宿主 | 使用场景 |
 |---------|----------|----------|
 | `/mstar-bootstrap` | Cursor、OpenCode | 初始化或刷新项目知识脚手架：`STRATEGY.md`、`CONCEPTS.md`、`{KNOWLEDGE_DIR}` 及相关索引。 |
-| `/iteration-start` | Cursor、OpenCode | 启动新的 harness iteration：调研 backlog、锁定方向、产出 compass/plans、执行 review chain，并创建 integration branch。 |
-| `/iteration-drive` | Cursor、OpenCode | 推进已有 iteration：Phase 2 execute loop → Phase 3 iteration-close → Phase 4 开 PR → Phase 5 merge-ready loop（直至 CI 全绿且 reviews resolved）。 |
+| `/iteration-start` | Cursor、OpenCode | 仅 Phase 1：调研 backlog、**grill-me** 锁定方向、产出 compass/plans、执行 review chain，并创建 integration branch。 |
+| `/iteration-drive` | Cursor、OpenCode | 推进**已锁定**的 iteration：Phase 2 execute → Phase 3 close → Phase 4 开 PR → Phase 5 merge-ready。 |
+| `/iteration-loop` | Cursor、OpenCode | **自动化完整闭环**（Phase 1→5，适合 cloud agent）：代码优先自动锁方向（可选参数 `direction` + `scale` S\|M\|L），review chain 后连续执行至 merge-ready，尽量少人工确认。 |
 
 在 OpenCode 中，安装或更新 `@mstar-harness/opencode` 后重启 OpenCode；插件会从 `harness-commands/` 打包注册这些 markdown commands。
 

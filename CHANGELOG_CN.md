@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.1.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.2.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.1.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.1.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.1.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.1.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.1.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.2.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.2.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.2.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.2.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.2.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.2.0] - 2026-07-10
+
+### Harness（`/iteration-loop` + autonomous direction lock）
+
+- **`/iteration-loop`**：新 PM 命令，自动化完整 Phase 1→5（适合 cloud agent）。可选参数 `direction` + `scale`（`S`\|`M`\|`L`，默认 `M`）；代码优先自动锁方向（不跑 grill-me）；保留顺序 Review & Edit 链；Continuous execution 直至 Phase 5 merge-ready。与 `/iteration-start`（仅 Phase 1 + grill-me）、`/iteration-drive`（仅 Phase 2→5）区分。
+- **`mstar-iteration` §1.2**：direction lock 模式 `interactive` | `autonomous`；scale budget；autonomous branch resolve。细则 → `references/autonomous-direction-lock.md`（skill 为能力提供者，不反向引用 command 名）。
+- **文档**：README / README_CN / OpenCode 包 README 命令表区分 start / drive / loop。
+- **Routing eval v18**：`iteration-loop-autonomous-direction-lock` — 禁止例行方向确认、禁止 grill-me、禁止静默默认 `main`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.2.0**。
 
 ## [1.1.0] - 2026-07-08
 
