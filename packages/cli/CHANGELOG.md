@@ -6,7 +6,8 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## 1.2.0
 
-- Version alignment with harness **1.2.0** (no CLI behavior change in this release).
+- OpenCode `init` fast path: schema + plugin only; no interactive model picking / no `opencode models` discovery (avoids silent hangs). Optional `--*-model` flags remain as advanced overrides.
+- Version alignment with harness **1.2.0**.
 
 See root [CHANGELOG.md](../../CHANGELOG.md) **1.2.0**.
 

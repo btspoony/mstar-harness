@@ -8,17 +8,19 @@ Use this sequence for the quickest user flow.
 
 ### OpenCode
 
-1) Preview what will change:
+1) Preview what will change (schema + plugin only; uses OpenCode default models):
 
-- `npx @mstar-harness/cli init --target opencode --dry-run --yes --pm-model openai/gpt-5.5 --strategic-models openai/gpt-5.5 --dev-models openai/gpt-5.3-codex --qc-models openai/gpt-5.5,openai/gpt-5.4,openai/gpt-5.3-codex --other-models openai/gpt-5.5`
+- `npx @mstar-harness/cli init --target opencode --dry-run --yes`
 
 2) Apply the setup:
 
-- `npx @mstar-harness/cli init --target opencode --yes --pm-model openai/gpt-5.5 --strategic-models openai/gpt-5.5 --dev-models openai/gpt-5.3-codex --qc-models openai/gpt-5.5,openai/gpt-5.4,openai/gpt-5.3-codex --other-models openai/gpt-5.5`
+- `npx @mstar-harness/cli init --target opencode --yes`
 
 3) Verify the final config:
 
 - `npx @mstar-harness/cli doctor --target opencode`
+
+Optional advanced: pass `--pm-model` / `--*-models` flags to write explicit `agent.<role>.model` overrides (does **not** call `opencode models`).
 
 ### Cursor
 
@@ -64,13 +66,17 @@ Interactive bootstrap:
 
 `--scope` defaults to `project` when omitted.
 
-OpenCode non-interactive bootstrap:
+OpenCode non-interactive bootstrap (fast path — no model prompts):
 
-- `npx @mstar-harness/cli init --yes --target opencode --scope project --pm-model openai/gpt-5.5 --strategic-models openai/gpt-5.5,openai/gpt-5.4 --dev-models openai/gpt-5.3-codex,openai/gpt-5.5-fast --qc-models openai/gpt-5.5,openai/gpt-5.4,openai/gpt-5.3-codex --other-models openai/gpt-5.5,openai/gpt-5.4`
+- `npx @mstar-harness/cli init --yes --target opencode --scope project`
 
 Dry-run preview (no file write):
 
-- `npx @mstar-harness/cli init --dry-run --scope project --output .tmp/opencode.json --yes --pm-model openai/gpt-5.5 --strategic-models openai/gpt-5.5 --dev-models openai/gpt-5.3-codex --qc-models openai/gpt-5.5,openai/gpt-5.4,openai/gpt-5.3-codex --other-models openai/gpt-5.5`
+- `npx @mstar-harness/cli init --dry-run --scope project --output .tmp/opencode.json --yes`
+
+Optional role-model overrides (advanced; skips live model discovery):
+
+- `npx @mstar-harness/cli init --yes --target opencode --pm-model openai/gpt-5.5 --strategic-models openai/gpt-5.5 --dev-models openai/gpt-5.3-codex --qc-models openai/gpt-5.5,openai/gpt-5.4,openai/gpt-5.3-codex --other-models openai/gpt-5.5`
 
 Cursor install:
 
@@ -110,7 +116,7 @@ OpenCode `init` enforces these baseline requirements in `opencode.json`:
 
 - `"$schema": "https://opencode.ai/config.json"`
 - `plugin` contains `@mstar-harness/opencode@latest` (legacy `morning-star@git+…` lines for `btspoony/mstar-harness` are stripped on init, including URLs without `.git`, `ssh://`, or `#tag`)
-- all Morning Star roles have `agent.<role>.model`
+- Role models are **not** required — OpenCode defaults apply unless you pass optional `--*-model` flags
 
 Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/harness`. Codex then creates agent symlinks from that checkout. Cursor clones a **separate real git checkout** at the plugin path (see [Install path layout](#install-path-layout)).
 
@@ -131,7 +137,8 @@ Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` 
 
 ## What `doctor` Checks
 
-- Same schema, role models, and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
+- Same schema and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
+- Missing per-role `agent.<role>.model` is a **yellow recommendation** only (OpenCode defaults are OK).
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
 - For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, that the Cursor plugin path is a **real git directory** (not a symlink), and that `agents/*.md` files use Cursor-first frontmatter.
 - For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks.
@@ -168,11 +175,11 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 - `--target <opencode|cursor|codex>`
 - `--scope <global|project>` (default: `project`)
 - `--dry-run`
-- `--pm-model <model>`
-- `--strategic-models <a,b,c>`
-- `--dev-models <a,b,c>`
-- `--qc-models <a,b,c>`
-- `--other-models <a,b,c>`
+- `--pm-model <model>` (optional advanced override)
+- `--strategic-models <a,b,c>` (optional)
+- `--dev-models <a,b,c>` (optional)
+- `--qc-models <a,b,c>` (optional)
+- `--other-models <a,b,c>` (optional)
 
 ### `doctor` options
 
@@ -199,7 +206,7 @@ The CLI uses a target adapter layer so new code agents can be added without rewr
 
 To add a new agent target, implement a new adapter with:
 
-- model discovery (`getAvailableModels`)
-- config path resolution (`resolveConfigPath`)
-- init mutation (`mutateConfigForInit`)
+- config path resolution (`resolveConfigPath`) **or** install flow (`runInstallInit` / `runInstallDoctor`)
+- init mutation (`mutateConfigForInit`) for config-mode targets
 - doctor validation (`validateConfig`)
+- optional model discovery (`getAvailableModels`) — OpenCode default init does **not** use this (avoids hanging on `opencode models`)

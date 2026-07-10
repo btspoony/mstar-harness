@@ -17,9 +17,15 @@
 ### Harness（`/iteration-loop` + autonomous direction lock）
 
 - **`/iteration-loop`**：新 PM 命令，自动化完整 Phase 1→5（适合 cloud agent）。可选参数 `direction` + `scale`（`S`\|`M`\|`L`，默认 `M`）；代码优先自动锁方向（不跑 grill-me）；保留顺序 Review & Edit 链；Continuous execution 直至 Phase 5 merge-ready。与 `/iteration-start`（仅 Phase 1 + grill-me）、`/iteration-drive`（仅 Phase 2→5）区分。
-- **`mstar-iteration` §1.2**：direction lock 模式 `interactive` | `autonomous`；scale budget；autonomous branch resolve。细则 → `references/autonomous-direction-lock.md`（skill 为能力提供者，不反向引用 command 名）。
+- **`mstar-iteration` §1.2**：direction lock 模式 `interactive` | `autonomous`；scale budget **只计业务 plan**（不计 harness 流程）；autonomous branch resolve。细则 → `references/autonomous-direction-lock.md`（skill 为能力提供者，不反向引用 command 名）。
 - **文档**：README / README_CN / OpenCode 包 README 命令表区分 start / drive / loop。
-- **Routing eval v18**：`iteration-loop-autonomous-direction-lock` — 禁止例行方向确认、禁止 grill-me、禁止静默默认 `main`。
+- **Routing eval v18**：`iteration-loop-autonomous-direction-lock` — 禁止例行方向确认、禁止 grill-me、禁止静默默认 `main`、禁止把流程 plan 计入 scale。
+
+### CLI / CI / 发布
+
+- **OpenCode `init` 快路径**：不再交互选模型，也不再调用 `opencode models`（该命令可能无输出卡住）。默认只写 `$schema` + `@mstar-harness/opencode@latest`，角色模型用 OpenCode 默认；可选 `--*-model` 仍作高级覆盖。
+- **CI**：对 `packages/cli`、`packages/opencode` 及 bundled `skills`/`agents`/`commands` 做 path 过滤构建；含 CLI smoke + pack。
+- **Release**：改用 Node 24 自带 npm 做 Trusted Publishing；去掉 Node 22 上损坏的 `npm install -g npm@latest`（修复 `MODULE_NOT_FOUND: sigstore`）；发布前先 build。
 
 ### 版本对齐
 

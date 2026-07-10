@@ -19,9 +19,15 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 ### Harness (`/iteration-loop` + autonomous direction lock)
 
 - **`/iteration-loop`**: new PM command for autonomous full Phase 1→5 (cloud-agent friendly). Optional args `direction` + `scale` (`S`\|`M`\|`L`, default `M`); code-first auto direction lock (no grill-me); sequential Review & Edit chain retained; Continuous execution through Phase 5 merge-ready. Distinct from `/iteration-start` (Phase 1 + grill-me) and `/iteration-drive` (Phase 2→5 only).
-- **`mstar-iteration` §1.2**: direction lock modes `interactive` | `autonomous`; scale budget; autonomous branch resolve order. Detail → `references/autonomous-direction-lock.md` (skills remain capability providers — no command-name reverse refs).
+- **`mstar-iteration` §1.2**: direction lock modes `interactive` | `autonomous`; scale budget counts **business plans only** (harness process excluded); autonomous branch resolve order. Detail → `references/autonomous-direction-lock.md` (skills remain capability providers — no command-name reverse refs).
 - **Docs**: README / README_CN / OpenCode package README command tables distinguish start / drive / loop.
-- **Routing eval v18**: `iteration-loop-autonomous-direction-lock` — no routine direction yes/no; no grill-me; no silent `main` default.
+- **Routing eval v18**: `iteration-loop-autonomous-direction-lock` — no routine direction yes/no; no grill-me; no silent `main` default; no process plans in scale budget.
+
+### CLI / CI / release
+
+- **OpenCode `init` fast path**: no interactive model picking and no `opencode models` discovery (that call could hang with no feedback). Default writes `$schema` + `@mstar-harness/opencode@latest` only; OpenCode default models apply. Optional `--*-model` flags remain as advanced overrides.
+- **CI**: path-filtered builds for `packages/cli`, `packages/opencode`, and bundled `skills`/`agents`/`commands`; includes CLI smoke check + pack.
+- **Release**: use Node 24 bundled npm for Trusted Publishing; remove broken `npm install -g npm@latest` on Node 22 (fixes `MODULE_NOT_FOUND: sigstore`); build packages before publish.
 
 ### Version alignment
 
