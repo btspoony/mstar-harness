@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.2.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.2.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.2.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.2.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.2.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.2.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.2.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.2.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.2.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.2.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.2.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.2.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.2.1] - 2026-07-10
+
+### Harness（Cursor Plan 模式 × Phase 1 分阶段方向锁）
+
+- **`/iteration-start` Cursor Plan 路径**：Boot 后先 CreatePlan 空白 Phase 1 脚手架，再动态分阶段 `grill-me` 并每段更新 plan；Review & Edit / lock / integration 分支仅在 **Build** 后执行。Agent / OpenCode 仍为 Research → Explore → grill-me → Write → Review。
+- **`mstar-host` Cursor bridge / rule**：补充 `mstar-iteration` Phase 1 in Plan mode（skills 不反向引用 command 名）。
+- **`mstar-iteration` §1.2**：宿主 Plan UX 可先 scaffold 再分阶段收敛；非 Plan 宿主不变。
+- **Routing eval v19**：`iteration-phase1-cursor-plan-staged-grill`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.2.1**。
 
 ## [1.2.0] - 2026-07-10
 

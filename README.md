@@ -23,7 +23,7 @@ Core value:
 - Run with unified `mstar-*` skills instead of scattered rules
 - Reuse one core process across OpenCode, Cursor, and Codex
 
-Latest release: **1.2.0** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
+Latest release: **1.2.1** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
 ## Quick Start
 

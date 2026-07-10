@@ -34,6 +34,15 @@ Do **not** mark an implement todo complete until:
 - Keep CreatePlan body and SSOT plan file aligned when scope changes.
 - Use SSOT paths in **Plan Path** / **Context Loaded**, not only the Cursor plan URI.
 
+## `mstar-iteration` Phase 1 in Plan mode
+
+When Plan mode is used to **start a new iteration**:
+
+- CreatePlan a **blank Phase 1 scaffold** (and Build-bound todos) **before** interactive direction lock finishes.
+- During the Plan session, refine direction/scope in **dynamic stages**; after each stage, update the CreatePlan body (and dual-write SSOT drafts).
+- **Do not** dispatch Review & Edit, commit, or create the integration branch until the user clicks **Build**.
+- Detail: `skills/mstar-host/references/cursor-plan-mode-bridge.md` § `mstar-iteration` Phase 1 in Plan mode.
+
 ## Build resume contract
 
 When the user clicks **Build** or Cursor switches from Plan mode to Agent mode:
@@ -43,6 +52,7 @@ When the user clicks **Build** or Cursor switches from Plan mode to Agent mode:
 - If the plan belongs to Morning Star, default to `project-manager` orchestration: plan/status upkeep is allowed; implementation, tests, review, and ops execution must be dispatched.
 - Do not start an implement/code todo until the SSOT plan exists, `status.json` contains the `plan_id`, and the task has a PM Assignment with `Execute as`, `Delegation`, `Working branch` or `Branch policy`, and SSOT `Plan Path`.
 - If any field is missing, report **Blocked** and restore the harness state before implementation.
+- For Phase 1 Build: finalize compass/plans from the CreatePlan body, then run the Review & Edit chain and integration branch — **do not** replay the Plan-session direction interview.
 
 ## Detail
 

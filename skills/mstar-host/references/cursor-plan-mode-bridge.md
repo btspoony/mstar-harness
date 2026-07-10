@@ -183,6 +183,23 @@ When `/pm` runs under Plan mode:
 - Prepare phase (`specify → clarify → plan`) still applies; `mirror-plan` is the harness **`plan`** artifact, not a substitute for clarify.
 - Before QC dispatch, read **`mstar-review-qc`** (unchanged).
 
+## `mstar-iteration` Phase 1 in Plan mode
+
+When starting a **new iteration** under Cursor Plan mode (host command may orchestrate Phase 1):
+
+| Phase | Behavior | Forbidden |
+|-------|----------|-----------|
+| Early CreatePlan | After read-only research, **immediately** CreatePlan with blank Phase 1 scaffold (Direction / Scope / Acceptance / Non-Goals / Branch policy / Plans / Grill log placeholders) + Build-bound todos | Wait until interactive direction lock finishes before CreatePlan |
+| Staged interactive lock | Dynamic number of clarify stages in the Plan session; after each stage, **update CreatePlan body** and dual-write SSOT **drafts** (`{ITERATION_DIR}` compass stub, `{PLAN_DIR}` plan stubs, `status.json` rows when direction converges) | Treat lock stages as completed Build todos; fix a hard-coded stage count; dispatch Review & Edit / commit / integration branch |
+| Pre-Build | Maintain documents only | Execute Review chain, commit, or create `spec_integration_branch` |
+| Build | Run Phase 1 executable todos: finalize SSOT → sequential Review & Edit (`product-manager` → `architect` → `writing-specialist`) → PM lock → integration branch | Replay interactive direction lock as if Plan session never happened |
+
+**Plan mode ≠ executing todos.** Build = Phase 1 executable gate (Review chain, lock, branch).
+
+**Bootstrap relationship**: ordinary per-plan work still uses `harness-init` / `spec-register` / `mirror-plan`. Phase 1 CreatePlan uses Phase 1 todos (`harness-init` → `finalize-compass-plans` → review-edit seats → `pm-lock` → `integration-branch`). Business `plans[]` rows should exist as drafts before Build when direction has converged.
+
+**Helpers**: third-party interview helpers are **not** named here; host **command** layer discovers them when needed.
+
 ## Anti-patterns
 
 | Anti-pattern | Fix |
@@ -194,6 +211,8 @@ When `/pm` runs under Plan mode:
 | Skip `spec-register` | Add `plans[]` row before implement |
 | Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
 | Follow-up only in chat / no roadmap section | Add `Roadmap / deferred scope` to CreatePlan and SSOT plan before implement |
+| Phase 1 Plan mode: grill/lock finishes before first CreatePlan | CreatePlan blank scaffold first; update body each lock stage |
+| Phase 1 Plan mode: Review / commit / branch before Build | Keep Pre-Build document-only; execute those todos after Build |
 
 ## Related skills
 

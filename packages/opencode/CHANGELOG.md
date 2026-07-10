@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.2.1
+
+- Bundled commands: `/iteration-start` Cursor Plan mode path — blank Phase 1 CreatePlan scaffold, staged grill-me plan updates, Build-gated Review chain.
+- Bundled skills: `mstar-iteration` §1.2 host Plan UX scaffold-then-converge; `mstar-host` Cursor Phase 1 Plan mode bridge (no command-name reverse refs).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.2.1**.
+
 ## 1.2.0
 
 - Bundled commands: add `/iteration-loop` (autonomous Phase 1→5; optional `direction` + `scale`).
