@@ -1,23 +1,17 @@
----
-name: mstar-bootstrap
-description: Bootstrap or refresh a project's knowledge scaffolding — distill STRATEGY.md, CONCEPTS.md, and baseline knowledge docs from the existing codebase and any docs. Use when a project has no knowledge infrastructure, stale/partial docs, or needs a fresh distillation.
-agent: project-manager
----
-
 # Bootstrap Project Knowledge
 
 Distill a coherent knowledge baseline from the current project — useful when the project has no `STRATEGY.md` / `CONCEPTS.md` / `{KNOWLEDGE_DIR}`, has partial or outdated ones, or has accumulated documentation debt.
 
 **Goal**: produce a minimal, accurate, opinionated knowledge foundation that future iteration-start and plan-work can ground in.
 
-## Boot
+## Load order (bootstrap)
 
 1. `mstar-harness-core`
-2. `mstar-roles` → `references/project-manager.md`
+2. `mstar-compound-refresh` (this skill)
 3. `mstar-plan-conventions`（路径符号）
 4. `mstar-strategy` → **§ STRATEGY.md structure** + **§ Creating STRATEGY.md**
 5. `mstar-compound` → **references/concepts-vocabulary.md**（CONCEPTS.md 规则）
-6. `mstar-compound-refresh` → **§ Core rules**（知识维护基线）
+6. This reference — **§ Core rules** in `mstar-compound-refresh/SKILL.md`（知识维护基线）
 
 ## Phase 1: Survey — understand what exists
 
