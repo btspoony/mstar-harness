@@ -1,16 +1,35 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.2.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.3.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.2.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.2.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.2.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.2.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.2.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.3.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.3.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.3.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.3.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.3.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.3.0] - 2026-07-11
+
+### Harness（bootstrap 吸收）
+
+- **退役 `/mstar-bootstrap` 命令**：7 阶段项目知识 bootstrap 流程迁入 `mstar-compound-refresh/references/project-knowledge-bootstrap.md`；`mstar-compound-refresh` 与 `mstar-harness-core` 保留简短指针。
+
+### CLI（Codex iteration skills）
+
+- **项目级 Codex 安装**：将 `iteration-start`、`iteration-drive`、`iteration-loop` 物化为 `.agents/skills/*/SKILL.md` 符号链接（源自 harness commands）；`doctor` 校验链接；全局安装跳过并给出明确警告。
+
+### 文档
+
+- **根目录 `INSTALL.md`**：从 README 抽离的可机读安装步骤。
+- **精简双语 README**：CLI 优先 Quick Start；厘清 `/iteration-start` → `/iteration-drive` 与 `/iteration-loop` 使用路径。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.3.0**。
 
 ## [1.2.1] - 2026-07-10
 

@@ -28,7 +28,7 @@ npx @mstar-harness/cli init --target opencode
 |-----------------|----------|
 | `harness-skills/` | `mstar-harness-core`, `mstar-iteration`, `mstar-sdd`, roles, phase/dispatch gates, … |
 | `harness-agents/` | Role shells (`project-manager`, `fullstack-dev`, `qc-specialist`, …) |
-| `harness-commands/` | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/mstar-bootstrap` |
+| `harness-commands/` | `/iteration-start`, `/iteration-drive`, `/iteration-loop` |
 
 The plugin resolves **only paths inside this package** — not `process.cwd()/skills`, so your app repo root does not affect harness loading.
 

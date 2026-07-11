@@ -96,6 +96,8 @@ Codex install:
 - Runtime host behavior after install:
   - `/pm` enters the shared PM flow.
   - Codex custom agents are linked from `~/.mstar/harness/codex/agents/*.toml`.
+  - **Project scope only:** `iteration-start`, `iteration-drive`, and `iteration-loop` are installed as project-local skills under `.agents/skills/<name>/SKILL.md` (symlinked to `~/.mstar/harness/commands/<name>.md`); the CLI gitignores those paths.
+  - **Global scope:** iteration skills are **not** installed (avoids polluting other projects); `init` prints a warning — re-run with `--scope project` to enable them.
   - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in `skills/mstar-host/references/codex.md`.
 
 ### `mstar-harness doctor`
@@ -133,7 +135,7 @@ Codex `init` writes or updates marketplace metadata with a local-source entry:
 - `policy.installation`: `AVAILABLE`
 - `policy.authentication`: `ON_INSTALL`
 
-Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope also links `.codex/plugins/mstar-harness -> ~/.mstar/harness` and adds `.codex/plugins/mstar-harness` plus `.codex/agents/*.toml` to `.gitignore`.
+Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope also links `.codex/plugins/mstar-harness -> ~/.mstar/harness`, adds `.codex/plugins/mstar-harness` plus `.codex/agents/*.toml` to `.gitignore`, and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
 
 ## What `doctor` Checks
 
@@ -141,7 +143,7 @@ Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` 
 - Missing per-role `agent.<role>.model` is a **yellow recommendation** only (OpenCode defaults are OK).
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
 - For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, that the Cursor plugin path is a **real git directory** (not a symlink), and that `agents/*.md` files use Cursor-first frontmatter.
-- For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks.
+- For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks. Project scope also validates iteration skill symlinks under `.agents/skills/`.
 
 ## Install path layout
 

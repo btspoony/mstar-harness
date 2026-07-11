@@ -2,17 +2,36 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.2.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.3.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.2.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.2.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.2.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.2.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.2.1** |
+| Monorepo root | `morning-star` (`package.json`) | **1.3.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.3.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.3.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.3.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.3.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.3.0] - 2026-07-11
+
+### Harness (bootstrap absorb)
+
+- **Retire `/mstar-bootstrap` command**: the 7-phase project knowledge bootstrap procedure moves to `mstar-compound-refresh/references/project-knowledge-bootstrap.md`; `mstar-compound-refresh` and `mstar-harness-core` carry short pointers.
+
+### CLI (Codex iteration skills)
+
+- **Project-scoped Codex install**: materializes `iteration-start`, `iteration-drive`, and `iteration-loop` as `.agents/skills/*/SKILL.md` symlinks from bundled harness commands; `doctor` validates links; global install skips with an explicit warning.
+
+### Docs
+
+- **Root `INSTALL.md`**: machine-readable install steps extracted from READMEs.
+- **Slim bilingual READMEs**: CLI-first Quick Start; clarify `/iteration-start` → `/iteration-drive` vs `/iteration-loop` usage paths.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.3.0**.
 
 ## [1.2.1] - 2026-07-10
 

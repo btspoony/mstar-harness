@@ -1,6 +1,6 @@
 ---
 name: mstar-compound-refresh
-description: Morning Star 知识维护 —— 审查 `{KNOWLEDGE_DIR}` 中文档是否仍准确、去重叠合并、清理过期知识。触发：`mstar-compound` 发现可合并文档、定期维护、或显式调用。产出：更新/合并/删除/标记为 stale 的文档 + 维护报告。
+description: Morning Star 知识维护与项目知识 bootstrap —— 审查 `{KNOWLEDGE_DIR}` 文档是否仍准确、去重叠合并、清理过期知识；或从代码库提炼 STRATEGY.md、CONCEPTS.md、基线 knowledge 脚手架（无/残旧/空白 knowledge）。触发：`mstar-compound` 发现可合并文档、定期维护、项目缺 STRATEGY.md/CONCEPTS.md/{KNOWLEDGE_DIR}、stale knowledge scaffolding、显式 bootstrap 请求、或显式 refresh。产出：更新/合并/删除知识文档 + 维护报告；或 bootstrap 产物（STRATEGY.md、CONCEPTS.md、基线 knowledge）。
 ---
 
 # mstar-compound-refresh（知识维护）
@@ -25,6 +25,16 @@ Knowledge documents in `{KNOWLEDGE_DIR}` age. Code changes, conventions evolve, 
 | Scheduled maintenance | "It's been a quarter, let's audit knowledge" |
 | Domain refactored | After a major module rewrite |
 | Explicit user request | `/pm compound-refresh performance-issues` |
+| **Project knowledge bootstrap** | No/stale/partial `STRATEGY.md`, `CONCEPTS.md`, or `{KNOWLEDGE_DIR}` — see below |
+
+## Bootstrap vs refresh
+
+| Mode | When | Procedure |
+|------|------|-----------|
+| **Refresh** | `{KNOWLEDGE_DIR}` exists; audit accuracy, merge overlaps, delete stale docs | This skill § Process (Phases 1–6) |
+| **Bootstrap** | No knowledge scaffolding, or artifacts are absent/stale enough to warrant full distillation from codebase | **`references/project-knowledge-bootstrap.md`** (7-phase: survey → STRATEGY.md → CONCEPTS.md → baseline knowledge → indexing → harness init → commit) |
+
+Read the bootstrap reference on demand; do not paste its body into this SKILL.md.
 
 ## Maintenance outcomes
 

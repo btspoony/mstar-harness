@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.3.0
+
+- Bundled commands: retire `/mstar-bootstrap`; bootstrap procedure → `mstar-compound-refresh/references/project-knowledge-bootstrap.md`.
+- Bundled skills: `mstar-compound-refresh` and `mstar-harness-core` short pointers for project knowledge bootstrap.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.3.0**.
+
 ## 1.2.1
 
 - Bundled commands: `/iteration-start` Cursor Plan mode path — blank Phase 1 CreatePlan scaffold, staged grill-me plan updates, Build-gated Review chain.

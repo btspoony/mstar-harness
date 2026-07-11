@@ -37,6 +37,15 @@ const CODEX_AGENT_NAMES = [
   "prompt-engineer",
 ];
 
+const CODEX_ITERATION_SKILL_NAMES = [
+  "iteration-start",
+  "iteration-drive",
+  "iteration-loop",
+] as const;
+
+const GLOBAL_ITERATION_SKILLS_WARNING =
+  "Codex iteration commands (iteration-start / iteration-drive / iteration-loop) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
+
 type MarketplaceEntry = {
   name: string;
   source: {
@@ -174,6 +183,50 @@ function validateAgentLinks(scope: Scope) {
   return errors;
 }
 
+function iterationCommandSourcePath(skillName: string) {
+  return path.join(HARNESS_REPO_PATH, "commands", `${skillName}.md`);
+}
+
+function projectIterationSkillLinkPath(skillName: string) {
+  return path.join(resolveProjectRoot(), ".agents", "skills", skillName, "SKILL.md");
+}
+
+function iterationSkillGitignoreEntry(skillName: string) {
+  return `.agents/skills/${skillName}`;
+}
+
+function ensureIterationSkillLinks(dryRun: boolean) {
+  const notes: string[] = [];
+  const projectRoot = resolveProjectRoot();
+  for (const skillName of CODEX_ITERATION_SKILL_NAMES) {
+    const source = iterationCommandSourcePath(skillName);
+    const linkPath = projectIterationSkillLinkPath(skillName);
+    notes.push(ensureSymlink(source, linkPath, dryRun));
+  }
+  const gitignoreEntries = CODEX_ITERATION_SKILL_NAMES.map(iterationSkillGitignoreEntry);
+  notes.push(...appendGitignore(projectRoot, gitignoreEntries, dryRun));
+  notes.push(
+    "Installed Codex project-scoped iteration skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop) — symlinked to harness commands/*.md.",
+  );
+  return notes;
+}
+
+function validateIterationSkillLinks() {
+  const errors: string[] = [];
+  const projectRoot = resolveProjectRoot();
+  const gitignorePath = path.join(projectRoot, ".gitignore");
+  const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
+  const lines = gitignore.split(/\r?\n/);
+  for (const skillName of CODEX_ITERATION_SKILL_NAMES) {
+    const source = iterationCommandSourcePath(skillName);
+    const linkPath = projectIterationSkillLinkPath(skillName);
+    errors.push(...validateSymlink(source, linkPath));
+    const entry = iterationSkillGitignoreEntry(skillName);
+    if (!lines.includes(entry)) errors.push(`Missing .gitignore entry: ${entry}`);
+  }
+  return errors;
+}
+
 function runInit(scope: Scope, dryRun: boolean) {
   const pathToMarketplace = marketplacePath(scope);
   const current = readJson(pathToMarketplace);
@@ -185,6 +238,9 @@ function runInit(scope: Scope, dryRun: boolean) {
     notes.push(ensureSymlink(HARNESS_REPO_PATH, path.join(projectRoot, CODEX_PLUGIN_LINK), dryRun));
     notes.push(...appendGitignore(projectRoot, [CODEX_PLUGIN_LINK, ".codex/agents/*.toml"], dryRun));
     notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
+    notes.push(...ensureIterationSkillLinks(dryRun));
+  } else {
+    notes.push(GLOBAL_ITERATION_SKILLS_WARNING);
   }
   notes.push(...ensureAgentLinks(scope, dryRun));
   if (!dryRun) writeJson(pathToMarketplace, next);
@@ -219,6 +275,7 @@ function runDoctor(scope: Scope) {
     for (const entry of SDD_SCRATCH_GITIGNORE) {
       if (!lines.includes(entry)) errors.push(`Missing .gitignore entry: ${entry}`);
     }
+    errors.push(...validateIterationSkillLinks());
   }
   errors.push(...validateAgentLinks(scope));
   return { location: pathToMarketplace, errors };
