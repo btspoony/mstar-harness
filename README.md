@@ -27,123 +27,49 @@ Latest release: **1.2.1** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.m
 
 ## Quick Start
 
-### CLI Install
+Recommended install uses the CLI (`@mstar-harness/cli`):
 
-- Use the `mstar-harness` CLI (npm package `@mstar-harness/cli`):
-  - `npx @mstar-harness/cli init`
-  - or `bunx @mstar-harness/cli init`
-- `init` provides a target-aware guided setup so installation and baseline config happen in one flow.
-- CLI target support currently includes:
-  - OpenCode: `npx @mstar-harness/cli init --target opencode`
-  - Cursor: `npx @mstar-harness/cli init --target cursor`
-  - Codex:
-    - `npx @mstar-harness/cli init --target codex`
-    - `codex plugin add morning-star-harness --marketplace personal`
-- Cursor and Codex installs maintain a shared checkout at `~/.mstar/harness` (Codex marketplace + agent sources). **Cursor** installs a separate **real git checkout** at the plugin path — Cursor does not discover symlinked plugin directories (see [`docs/cli.md`](docs/cli.md#install-path-layout)).
+```bash
+npx @mstar-harness/cli init
+# or: bunx @mstar-harness/cli init
+```
 
-For full CLI usage and advanced options (`--yes`, `--dry-run`, `--output`, `doctor`) including Cursor and Codex target install modes, see [`docs/cli.md`](docs/cli.md).
+Per-target examples:
 
-### Manual Install
+- OpenCode: `npx @mstar-harness/cli init --target opencode`
+- Cursor: `npx @mstar-harness/cli init --target cursor`
+- Codex: `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal`
 
-Manual install targets currently include:
+`init` provides target-aware guided setup (scopes, path layout, baseline config). Verify with `npx @mstar-harness/cli doctor --target <opencode|cursor|codex>`.
 
-- `opencode`
-- `cursor`
-- `codex`
-
-#### OpenCode
-
-- Plugin install:
-  - Add plugin config in `opencode.json`:
-    ```json
-    {
-      "$schema": "https://opencode.ai/config.json",
-      "plugin": [
-        "@mstar-harness/opencode@latest"
-      ]
-    }
-    ```
-  - Restart OpenCode
-- The OpenCode plugin resolves **skills and agents only inside `@mstar-harness/opencode`** (not `process.cwd()`). Published builds ship `harness-skills/` and `harness-agents/`. If you work from a **git checkout** of this repo, run **`bun install` / `npm install` at the repo root** so `postinstall` runs `opencode:bundle-assets` and populates those directories under `packages/opencode/`.
-
-For detailed OpenCode setup and migration, see `packages/opencode/INSTALL.md`.
-
-#### Cursor
-
-- Recommended:
-  - `npx @mstar-harness/cli init --target cursor --scope global`
-  - Restart Cursor or run `Developer: Reload Window`
-- Manual install (same layout the CLI uses; **do not symlink** the Cursor plugin path):
-  - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
-  - `mkdir -p ~/.cursor/plugins/local`
-  - `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`
-  - Restart Cursor or run `Developer: Reload Window`
-- **Maintainers**: develop in your workspace; refresh the Cursor plugin checkout after merge:
-  - `cd ~/.cursor/plugins/local/morning-star-harness && git pull --ff-only`
-  - or re-run `npx @mstar-harness/cli init --target cursor --scope global`
-
-#### Codex
-
-- Personal marketplace install (without the CLI):
-  - Clone or update the maintained local checkout:
-    - `git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness`
-  - Create or update `~/.agents/plugins/marketplace.json`:
-    ```json
-    {
-      "name": "personal",
-      "interface": {
-        "displayName": "Personal"
-      },
-      "plugins": [
-        {
-          "name": "morning-star-harness",
-          "source": {
-            "source": "local",
-            "path": "./.mstar/harness"
-          },
-          "policy": {
-            "installation": "AVAILABLE",
-            "authentication": "ON_INSTALL"
-          },
-          "category": "Productivity"
-        }
-      ]
-    }
-    ```
-  - Install the plugin:
-    - `codex plugin add morning-star-harness --marketplace personal`
-  - Link Codex custom agents:
-    - `mkdir -p ~/.codex/agents`
-    - `ln -s ~/.mstar/harness/codex/agents/*.toml ~/.codex/agents/`
-- This repository is also the **Morning Star Harness Codex plugin source**:
-  - Plugin manifest: `.codex-plugin/plugin.json`
-  - Runtime skills: `skills/`
-  - Codex custom agents: `codex/agents/`
-  - Codex runtime adaptation: `skills/mstar-host/references/codex.md`
-
-That completes installation.
+**Detailed install** (manual steps, path layout, Codex project vs global): [`INSTALL.md`](INSTALL.md). **CLI flags and advanced options:** [`docs/cli.md`](docs/cli.md).
 
 ## How to use
 
 - **OpenCode**: start with the `Project Manager` role (`agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`).
 - **Cursor**: use `/pm` to force-start with the `Project Manager` role.
-- **Codex**: use `/pm` to force-start with the `Project Manager` role after installing the plugin.
-  Codex loads shared skills and custom agents from `codex/agents/` when linked by the CLI/manual install.
+- **Codex**: use `/pm` after installing the plugin. Custom agents are linked from `codex/agents/` by the CLI or manual install.
 
 ### Harness Commands
 
-The shared `commands/` directory currently provides these PM-led harness commands:
+Three PM-led iteration entry points. Pick by how much human direction you need:
 
-| Command | Available in | Use when |
-|---------|--------------|----------|
-| `/mstar-bootstrap` | Cursor, OpenCode | Bootstrap or refresh project knowledge scaffolding: `STRATEGY.md`, `CONCEPTS.md`, `{KNOWLEDGE_DIR}`, and related indexes. |
-| `/iteration-start` | Cursor, OpenCode | Start a new harness iteration (Phase 1 only): research backlog, **grill-me** lock direction, write compass/plans, run the review chain, create the integration branch. |
-| `/iteration-drive` | Cursor, OpenCode | Drive an **already locked** iteration (Phase 2 execute → Phase 3 close → Phase 4 PR → Phase 5 merge-ready). |
-| `/iteration-loop` | Cursor, OpenCode | **Autonomous full loop** (Phase 1→5) for cloud agents: code-first auto direction lock (optional `direction` + `scale` S\|M\|L), review chain, then execute through merge-ready — minimal human check-ins. |
+| Path | When | Flow |
+|------|------|------|
+| `/iteration-start` → `/iteration-drive` | First iteration, or deep work that needs human direction lock (**grill-me**) before execution | Phase 1 only → Phase 2–5 (execute, close, PR, merge-ready) |
+| `/iteration-loop` | Fast autonomous full loop (cloud-agent friendly); optional `direction` + `scale` (S\|M\|L) | Phase 1→5 continuous with minimal check-ins |
 
-In OpenCode, install or update `@mstar-harness/opencode` and restart OpenCode; the plugin bundles these markdown commands from `harness-commands/`.
+**Where commands load:**
 
-In Cursor, install or update the Cursor plugin link and reload the window; the commands are discovered from this repository's `commands/` directory alongside the shared agents, skills, and rules.
+| Host | Discovery |
+|------|-----------|
+| **Cursor / OpenCode** | Bundled from this repo's `commands/` (OpenCode: `harness-commands/` in the plugin) |
+| **Codex (project install)** | Same three commands as project-local skills: `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
+| **Codex (global install)** | Iteration skills are **not** installed — use `--scope project` to avoid polluting other projects |
+
+Project knowledge bootstrap/refresh: `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`).
+
+After install, reload the host (restart OpenCode / Cursor **Developer: Reload Window** / re-open Codex).
 
 ## Harness Workflow
 
@@ -154,33 +80,36 @@ flowchart TD
     C --> B
     B -->|Yes| D["PM: initialize/load HARNESS_DIR and PLAN_DIR"]
     D --> E{"Iteration scope needed"}
-    E -->|Yes| F["iteration-start: create compass, plans, and review chain"]
+    E -->|Deep / first iteration| F["iteration-start: compass, plans, review chain"]
+    E -->|Fast autonomous loop| F2["iteration-loop: Phase 1→5 continuous"]
     F --> G["PM: lock compass and create integration branch"]
-    E -->|No| H["PM: select active plan from status.json"]
-    G --> H
-    H --> I{"Any plan not Done"}
-    I -->|Yes| J["PM: dispatch one plan on a feature branch"]
-    J --> K["Dev roles: implement and report"]
-    K --> L["PM: update plan and status.json"]
-    L --> M["QC trio: review gate"]
-    M --> N{"QC decision"}
-    N -->|Request Changes| J
-    N -->|Approve| O{"QA gate"}
-    O -->|mandatory| O1["qa-engineer: acceptance verification"]
-    O -->|pm-acceptance| O2["PM: acceptance checklist"]
-    O1 --> P{"Residual findings remain"}
-    O2 --> P
-    P -->|Yes| Q["PM/QA: register or accept residuals in status.json"]
-    Q --> R["PM: mark plan Done and merge to integration branch"]
-    P -->|No| R
-    R --> S["PM: sync compass plan status"]
-    S --> I
-    I -->|No| T["iteration-close: close entry checklist"]
-    T --> U["PM: compound round and knowledge index"]
-    U --> V["PM: update roadmap and compass completed frontmatter"]
-    V --> W["PM: close exit checklist and commit"]
-    W --> X["Phase 4: create PR"]
-    X --> Y["Phase 5: merge-ready loop until CI green and reviews resolved"]
+    F2 --> G
+    G --> H["iteration-drive or loop continues: execute → close → PR → merge-ready"]
+    E -->|No| I["PM: select active plan from status.json"]
+    H --> I
+    I --> J{"Any plan not Done"}
+    J -->|Yes| K["PM: dispatch one plan on a feature branch"]
+    K --> L["Dev roles: implement and report"]
+    L --> M["PM: update plan and status.json"]
+    M --> N["QC trio: review gate"]
+    N --> O{"QC decision"}
+    O -->|Request Changes| K
+    O -->|Approve| P{"QA gate"}
+    P -->|mandatory| P1["qa-engineer: acceptance verification"]
+    P -->|pm-acceptance| P2["PM: acceptance checklist"]
+    P1 --> Q{"Residual findings remain"}
+    P2 --> Q
+    Q -->|Yes| R["PM/QA: register or accept residuals in status.json"]
+    R --> S["PM: mark plan Done and merge to integration branch"]
+    Q -->|No| S
+    S --> T["PM: sync compass plan status"]
+    T --> J
+    J -->|No| U["iteration-close: close entry checklist"]
+    U --> V["PM: compound round and knowledge index"]
+    V --> W["PM: update roadmap and compass completed frontmatter"]
+    W --> X["PM: close exit checklist and commit"]
+    X --> Y["Phase 4: create PR"]
+    Y --> Z["Phase 5: merge-ready loop until CI green and reviews resolved"]
 ```
 
 For single-plan or non-iteration work, use the same per-plan gates (`Prepare → Execute → QC → QA gate → Done`) without the iteration-start / iteration-close wrapper.
