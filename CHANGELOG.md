@@ -14,6 +14,14 @@ All notable changes to this repository are documented here. Published harness su
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
+## [Unreleased]
+
+### Harness (iteration package layout)
+
+- **`iterations/<id>/` directory-first**: compass moves to `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` with sibling `guides/` / `specs/` / optional package `README.md`. Root `{ITERATION_DIR}/README.md` indexes **one row per iteration** (no compass + workspace double entries).
+- **Legacy read compat**: flat `{ITERATION_DIR}/<id>-delivery-compass.md` remains readable; new writes must use the package path.
+- Touches: `mstar-iteration` (+ references), `mstar-compound` package promotion, `mstar-plan-conventions` / `mstar-plan-artifacts` path docs, role shells, `/iteration-start` · `/iteration-drive` · `/iteration-loop`.
+
 ## [1.3.0] - 2026-07-11
 
 ### Harness (bootstrap absorb)

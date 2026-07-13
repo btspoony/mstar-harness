@@ -12,6 +12,14 @@
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
+## [Unreleased]
+
+### Harness（迭代 package 目录化）
+
+- **`iterations/<id>/` 目录优先**：compass 迁至 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`，同目录含 `guides/`、`specs/`、可选 package `README.md`。根 `{ITERATION_DIR}/README.md` **一行 = 一次迭代**（不再 compass + workspace 双行）。
+- **Legacy 只读兼容**：根目录 flat `{ITERATION_DIR}/<id>-delivery-compass.md` 仍可读；新写必须走 package 路径。
+- 涉及：`mstar-iteration`（及 references）、`mstar-compound` package 提升、`mstar-plan-conventions` / `mstar-plan-artifacts` 路径文档、角色壳、`/iteration-start` · `/iteration-drive` · `/iteration-loop`。
+
 ## [1.3.0] - 2026-07-11
 
 ### Harness（bootstrap 吸收）

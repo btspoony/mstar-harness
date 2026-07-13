@@ -13,26 +13,27 @@
 |------|----------|-------------|
 | **`docs/`**（或项目约定的用户文档根） | 安装/quickstart、稳定架构概览、贡献指南、对外 API 说明 | 人类贡献者与终端用户；clone 后应可读 |
 | **`{SPECS_DIR}`**（可选） | 冻结 v1-spec、ADR、program roadmap — **跨迭代长期权威** | 产品/API 规范性最高权威；**iteration-start** 由 product/architect 主写 |
-| **`{ITERATION_DIR}`**（可选） | delivery compass + **`<iteration-id>/` workspace**（`guides/`、`specs/`） | Agent handoff；迭代级草稿；close 时 compound **提升** → knowledge |
+| **`{ITERATION_DIR}`**（可选） | **`<iteration-id>/` package**（`delivery-compass.md` + `guides/`、`specs/`） | Agent handoff；迭代级草稿；close 时 compound **提升** → knowledge |
 | **`{KNOWLEDGE_DIR}`**（可选） | 实现细节 SSOT、架构细则、契约说明、跨版本 tracker — **经 `mstar-compound` 结晶** | Agent handoff；**不**在 iteration-start 由 product/architect 新增 |
 | **`{PLAN_DIR}/`** | 单 plan 主文件、durable gate summary、可选 `residuals/` | 计划执行与长期决策留档 |
 
 
 **不应**放入 `docs/` 的内容：迭代 compass 正文、作为**特定 plan 输入/输出**的评审结论、实施笔记、未稳定规格草案、QC/QA 原始过程报告 —— 分别落 `{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 或 `{SDD_DIR}/review/`；长期 gate 摘要回写主 plan。
 
-## `{ITERATION_DIR}`（可选·迭代/版本级 compass）
+## `{ITERATION_DIR}`（可选·迭代/版本级 package）
 
 - **物理路径**：`**{ITERATION_DIR}/**`（推荐布局下常为 `**.mstar/iterations/**`，与 `{KNOWLEDGE_DIR}`、`{PLAN_DIR}` 并列；legacy 项目可继续为 `.agents/iterations/`）。
-- **放什么**：delivery compass（根目录 `*-delivery-compass*.md`）；**`<iteration-id>/` 工作区** — `guides/`（探索、过程）、`specs/`（迭代级规格草案）；遗留规划快照。
+- **放什么**：**`<iteration-id>/` package** — `delivery-compass.md`（迭代状态 SSOT）；`guides/`（探索、过程）；`specs/`（迭代级规格草案）；可选 package `README.md`；遗留规划快照。
 - **不放什么**：已锁定的仓库级规范（→ **`{SPECS_DIR}/`**）；已提升的跨迭代实施 SSOT（→ **`{KNOWLEDGE_DIR}/`**，经 compound）；单 plan QC/QA 原始报告（→ `{SDD_DIR}/review/`）。
-- **索引**：`**{ITERATION_DIR}/README.md**` 登记 compass + workspace 目录；`<iteration-id>/README.md` 登记工作区内文档。
-- **维护**：`@product-manager` / `@architect` 起草 workspace；`**@project-manager**` 维护索引与 metadata；**iteration-close** 时 **`mstar-compound`** 盘点 workspace 并**提升**至 `{KNOWLEDGE_DIR}/`。
+- **索引**：`**{ITERATION_DIR}/README.md**` **一行 = 一次迭代**（指向 `<iteration-id>/`）；`<iteration-id>/README.md` 登记 package 内文档（Documents 单表）。
+- **维护**：`@product-manager` / `@architect` 起草 package；`**@project-manager**` 维护索引与 metadata；**iteration-close** 时 **`mstar-compound`** 盘点 package 并**提升**至 `{KNOWLEDGE_DIR}/`。
+- **Compass 路径**：canonical `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`；legacy flat `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 仅兼容读。
 
 ## `{SPECS_DIR}`（可选·长期规格）
 
 - `{SPECS_DIR}` 解析：优先 `{HARNESS_DIR}/specs/`，否则 `{HARNESS_DIR}/designs/`；皆无则建议新建 `specs/`。
 - **放什么**：跨迭代有效、已锁定或待锁定的产品/API 规范、ADR、契约 — **iteration-start 主产出**（product/architect）。
-- **不放什么**：本迭代-only 探索（→ `<iteration-id>/guides/`）；迭代级 spec 草案（→ `<iteration-id>/specs/`）；实施踩坑原文（→ workspace 或 plan 素材，**close 时 compound 提升**）。
+- **不放什么**：本迭代-only 探索（→ `<iteration-id>/guides/`）；迭代级 spec 草案（→ `<iteration-id>/specs/`）；实施踩坑原文（→ package 或 plan 素材，**close 时 compound 提升**）。
 - **索引**：非 trivial 树建议 `{SPECS_DIR}/README.md`；plan **`primary_spec` / `spec_refs`** 主要指向此处。
 
 ## `{KNOWLEDGE_DIR}`（可选·实施知识库）
@@ -46,7 +47,7 @@
 
 - 推荐：`<topic>-<qualifier>-v<N>.md`（例：`sync-contract-gap-analysis-v1.md`），便于同主题多版共存。
 - 避免与主 plan 文件名混淆：主 plan 仍建议 `<plan-id>-<plan-name>.md` 且放在 `{PLAN_DIR}/` 根下，而非塞进 `{KNOWLEDGE_DIR}` 根（除非团队明确约定）。
-- 迭代 compass 文件名宜带版本/迭代标识，放在 `{ITERATION_DIR}/`，**不要**与 `{KNOWLEDGE_DIR}` 中跨版本 SSOT 混放同一命名空间。
+- 迭代 compass 放在 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`，**不要**与 `{KNOWLEDGE_DIR}` 中跨版本 SSOT 混放同一命名空间；**不要**新写根目录 flat `*-delivery-compass.md`。
 
 ## 与 `status.json` 的链接
 
@@ -57,14 +58,14 @@
 
 1. **新增**：
    - **Specs（长期）**：`{SPECS_DIR}/` → spec 索引（若有）→ `plans[].metadata` 的 `primary_spec` / `spec_refs`
-   - **迭代 workspace**：`{ITERATION_DIR}/<iteration-id>/guides|specs/` → `{ITERATION_DIR}/README.md` + workspace README → `iteration_refs`
-   - **Knowledge**：**`mstar-compound`** @ iteration-close（含 workspace **提升**）→ `{KNOWLEDGE_DIR}/README.md`
+   - **迭代 package**：`{ITERATION_DIR}/<iteration-id>/guides|specs/` → `{ITERATION_DIR}/README.md`（目录一行）+ package README → `iteration_refs`
+   - **Knowledge**：**`mstar-compound`** @ iteration-close（含 package **提升**）→ `{KNOWLEDGE_DIR}/README.md`
 2. **阅读**：开发类 agent 在开始编码前，**必须**阅读当前 plan 在 `metadata` 中指向的 knowledge 文档（若存在）；`@project-manager` 在 Assignment 中可再次点名路径。
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新 README 中 **Status** 或 Description；版本迭代优先新文件名 `v<N+1>` 或保留旧版并标明 Superseded。
 4. **归档**：
    - **iteration-start（强制）**：`writing-specialist` §1.6 以 **`{SPECS_DIR}/` 全库卫生为主**；对**既有** `{KNOWLEDGE_DIR}/` 仅归档/错放纠正，**不**新增 knowledge。细则 → **`mstar-iteration/references/iteration-corpus-hygiene.md`**。
    - **其它时机**：当文档内容已完全反映到已合并代码中、且非 iteration-start 扫库时：可将索引 **Status** 标为 `Superseded by implementation (...)` 或 `Archived`；可保留原位或迁入 `archived/knowledge/`。**不要**把知识库产物搬进 `{HARNESS_DIR}/archived/plans/`（该处用于**计划行**冷快照）。
-5. **结晶（Compound）**：PM 在 **iteration-close** 触发 **`mstar-compound`**：plan 素材 + **`{ITERATION_DIR}/<iteration-id>/` workspace 提升** → `{KNOWLEDGE_DIR}/`。不在 per-plan Done 后单独执行。维护 → **`mstar-compound-refresh`**。
+5. **结晶（Compound）**：PM 在 **iteration-close** 触发 **`mstar-compound`**：plan 素材 + **`{ITERATION_DIR}/<iteration-id>/` package 提升** → `{KNOWLEDGE_DIR}/`。不在 per-plan Done 后单独执行。维护 → **`mstar-compound-refresh`**。
 
 ## 与 review bundle、`{PLAN_DIR}/residuals/` 的区分
 
@@ -72,7 +73,7 @@
 - `**主 plan gate summary**`：偏 **长期门禁决策摘要**（verdict、review range、R#、QA gate），随主 plan 追踪。
 - `**{PLAN_DIR}/residuals/<plan-id>/`**：偏 **仍 open 的 R# 长文补充**（与根级 `**residual_findings**` 配套，canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）；见下文「open residual 散文详情」。
 - `**{KNOWLEDGE_DIR}/**`：偏 **可复用的实现向设计上下文**（架构细则、决策、分析），可被后续 plan 或多会话反复引用。
-- `**{ITERATION_DIR}/**`：偏 **某一迭代/版本** 的 compass 与规划快照，通常按版本索引而非按单 plan 长期复用。
+- `**{ITERATION_DIR}/**`：偏 **某一迭代/版本** 的 package（compass + guides/specs），通常按版本索引而非按单 plan 长期复用。
 - review bundle、gate summary、residuals、knowledge、iterations 可互链，但职责不混写。
 
 ---
@@ -87,7 +88,7 @@
 | `**{SDD_DIR}/review/**`       | QC / QA **流程临时证据**（`qc1.md` … `qc-consolidated.md`、`qa.md` 等），gitignored                  |
 | **本目录 `{PLAN_DIR}/residuals/<plan-id>/`** | 针对**仍 open** 的某一 R#：defer 背景、遗留原因、代码锚点、后续接手提示等**长文**                  |
 | `**{KNOWLEDGE_DIR}/**`            | 可跨 plan 复用的**实现向**设计上下文、规格修订、gap 分析（若文中顺带提到 residual，仍以 JSON + residuals 为跟踪权威） |
-| `**{ITERATION_DIR}/**`            | 迭代/版本级 compass；**不**替代 `{KNOWLEDGE_DIR}` 中的跨版本 SSOT |
+| `**{ITERATION_DIR}/**`            | 迭代 package（`<id>/delivery-compass.md` 等）；**不**替代 `{KNOWLEDGE_DIR}` 中的跨版本 SSOT |
 
 
 **文件命名（推荐）**：`<finding-id>-<short-label>.md`，其中 `**finding-id`** 与该条在 **open 列表**（根级 `**residual_findings**`，见 `mstar-plan-conventions` **SKILL.md** 开篇）中的 `**id**`（如 `R1`）或团队约定的 `**td-*` 等技术债编号**一致，便于 `detail_doc` 与目录互查。

@@ -131,7 +131,7 @@ Execute **`mstar-iteration` § Phase 2** exactly. Summary:
 |------|---------|------|
 | 1 | §3.0 / §3.0.5 | Phase 边界；legacy compass 规范化（frontmatter + `## Roadmap Position`） |
 | 2 | §3.1 | 打印 close entry checklist，全部 `[x]` |
-| 3 | §3.2 | Compound + **`<iteration-id>/` workspace promotion**；新增 doc 完成 `mstar-compound` Phase 6（`{KNOWLEDGE_DIR}/README.md`） |
+| 3 | §3.2 | Compound + **`<iteration-id>/` package promotion**；新增 doc 完成 `mstar-compound` Phase 6（`{KNOWLEDGE_DIR}/README.md`） |
 | 4 | §3.3 | `## Roadmap Position` current iteration → `delivered`；STRATEGY/tracker 按需更新 |
 | 5 | §3.4 | frontmatter `status: completed` + `end_date`；Compound Summary + Retrospective |
 | 6 | §3.5 | 打印 close exit checklist → commit → push |

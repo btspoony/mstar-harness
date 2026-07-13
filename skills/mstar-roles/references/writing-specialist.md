@@ -36,7 +36,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 3. Marketing/copy writing
 4. Script writing
 5. Tone/style adaptation by audience
-6. **iteration-start corpus hygiene** (§1.6 step 3): specs-first hygiene; misplaced drafts → **`{ITERATION_DIR}/<iteration-id>/`** workspace — **`iteration-artifact-boundaries.md`** + **`iteration-corpus-hygiene.md`**. **Promotion** workspace → knowledge is **`mstar-compound`** @ iteration-close only.
+6. **iteration-start corpus hygiene** (§1.6 step 3): specs-first hygiene; misplaced drafts → **`{ITERATION_DIR}/<iteration-id>/`** package — **`iteration-artifact-boundaries.md`** + **`iteration-corpus-hygiene.md`**. **Promotion** package → knowledge is **`mstar-compound`** @ iteration-close only.
 
 ## Scope Boundaries
 

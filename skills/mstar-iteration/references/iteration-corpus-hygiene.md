@@ -1,51 +1,45 @@
-# iteration-start corpus hygiene（specs primary · knowledge read-only）
+# Iteration corpus hygiene（writing-specialist · §1.6）
 
-> **When**: Phase 1 §1.6 — **writing-specialist** only, after product/architect landed compass / plans / `{SPECS_DIR}/` / **`{ITERATION_DIR}/<iteration-id>/`** workspace.
+> **When**: Phase 1 §1.6 — **writing-specialist** only, after product/architect landed compass / plans / `{SPECS_DIR}/` / **`{ITERATION_DIR}/<iteration-id>/`** package.
 > **Boundaries**: **`iteration-artifact-boundaries.md`** — no `{KNOWLEDGE_DIR}/` adds @ start; iteration drafts → **`<iteration-id>/guides/`** or **`specs/`**.
 
-## Scope (HARD)
+## Scope
 
-| Priority | Tree | Action |
-|----------|------|--------|
-| **Primary** | `{SPECS_DIR}/**` | Full active corpus review |
-| **Included** | `{ITERATION_DIR}/<iteration-id>/**` | Workspace guides/specs + compass cross-links |
-| **Secondary** | `{KNOWLEDGE_DIR}/**` (existing) | Archive / relocate only — **no** new docs |
-| **Included** | `{PLAN_DIR}/` plans touched this iteration | Spec refs, terminology |
+| | Path | Notes |
+|--|------|-------|
+| **Primary** | `{SPECS_DIR}/**` | Full-tree hygiene (lock vs draft, naming, index) |
+| **Included** | `{ITERATION_DIR}/<iteration-id>/**` | Package guides/specs + compass cross-links |
+| **Existing only** | `{KNOWLEDGE_DIR}/**` | Archive / misplaced correction — **no** new knowledge docs |
+| **Out of scope** | New `{KNOWLEDGE_DIR}/` writes | → **`mstar-compound`** @ iteration-close |
 
-**Out of scope**: compound promotion (iteration-close); per-plan review bundles (`{SDD_DIR}/review/`); code.
+## Placement corrections
 
-## Misplaced content (relocate)
-
-| Found in | Target |
-|----------|--------|
+| Found in | Misplaced as | Move to |
+|----------|--------------|---------|
 | `{SPECS_DIR}/` | Iteration-only draft → `{ITERATION_DIR}/<iteration-id>/specs/` or `guides/` |
-| `{SPECS_DIR}/` | Implementation/debug notes → workspace `guides/` (compound @ close) |
+| `{SPECS_DIR}/` | Implementation pitfall prose → package `guides/` or leave for compound |
 | `{KNOWLEDGE_DIR}/` | New exploration from start chain → `<iteration-id>/guides/` or archive |
-| Flat `{ITERATION_DIR}/*-working-guide.md` | OK as entry; or merge into `<iteration-id>/guides/` when workspace exists |
+| Flat `{ITERATION_DIR}/*-working-guide.md`（legacy） | → `<iteration-id>/guides/` |
+| Flat `{ITERATION_DIR}/*-delivery-compass.md`（legacy） | Prefer migrate to `<iteration-id>/delivery-compass.md` when touching that iteration |
 
-## Classification
+## Index updates（after edits）
 
-Same as before for specs + existing knowledge: Active / Superseded / Redundant / Obsolete / Unclear → archive under `archived/specs/` or `archived/knowledge/` with relative path preserved.
+1. `{SPECS_DIR}/README.md`（若存在）— 规格索引
+2. `{KNOWLEDGE_DIR}/README.md` — Status / archive only（无新增行来自 start 链）
+3. `{ITERATION_DIR}/README.md` — **一行 = 一次迭代**（目录链接，非 compass+workspace 双行）
+4. `{ITERATION_DIR}/<iteration-id>/README.md` — Documents 单表列出 guides/specs（非 trivial 时创建）
 
-## Index and metadata
+## Done signals
 
-1. `{SPECS_DIR}/README.md` — update as needed
-2. `{KNOWLEDGE_DIR}/README.md` — archive rows only; no new iteration exploration rows
-3. `{ITERATION_DIR}/README.md` — compass + **`<iteration-id>/` workspace** directory row
-4. `{ITERATION_DIR}/<iteration-id>/README.md` — list guides/specs (create if non-trivial)
-5. `plans[].metadata` — `primary_spec` / `spec_refs` → `{SPECS_DIR}/`; `iteration_refs` → workspace paths
+- Specs tree hygiene complete（draft vs locked clear）
+- Package used for iteration-level drafts (`<iteration-id>/guides|specs/`)
+- Misplaced knowledge / specs moved or archived with index Status updated
+- No new `{KNOWLEDGE_DIR}/` documents from this chain
 
-## Evidence of done
+## Close vs start
 
-- No iteration scratch left in `{SPECS_DIR}/`
-- Workspace used for iteration-level drafts (`<iteration-id>/guides|specs/`)
-- No new `{KNOWLEDGE_DIR}/` from §1.6 chain
-- Completion Report lists workspace paths + spec hygiene moves
-
-## Distinction from compound @ iteration-close
-
-| | §1.6 hygiene | compound workspace promotion |
-|--|--------------|------------------------------|
-| When | iteration-start | iteration-close §3.2 |
+| Tree | Start (§1.6) | Close (§3.2 compound） |
+|------|--------------|------------------------|
+| `{SPECS_DIR}/` | Hygiene + lock clarity | Usually unchanged |
 | `{ITERATION_DIR}/<id>/` | Create/edit drafts | **Inventory → promote** to `{KNOWLEDGE_DIR}/` |
-| `{KNOWLEDGE_DIR}/` | No new writes | Structured new docs |
+| `{KNOWLEDGE_DIR}/` | Hygiene / archive only | **Primary write path** |

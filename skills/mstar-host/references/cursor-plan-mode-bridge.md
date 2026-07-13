@@ -190,7 +190,7 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 | Phase | Behavior | Forbidden |
 |-------|----------|-----------|
 | Early CreatePlan | After read-only research, **immediately** CreatePlan with blank Phase 1 scaffold (Direction / Scope / Acceptance / Non-Goals / Branch policy / Plans / Grill log placeholders) + Build-bound todos | Wait until interactive direction lock finishes before CreatePlan |
-| Staged interactive lock | Dynamic number of clarify stages in the Plan session; after each stage, **update CreatePlan body** and dual-write SSOT **drafts** (`{ITERATION_DIR}` compass stub, `{PLAN_DIR}` plan stubs, `status.json` rows when direction converges) | Treat lock stages as completed Build todos; fix a hard-coded stage count; dispatch Review & Edit / commit / integration branch |
+| Staged interactive lock | Dynamic number of clarify stages in the Plan session; after each stage, **update CreatePlan body** and dual-write SSOT **drafts** (`{ITERATION_DIR}/<id>/delivery-compass.md` stub, `{PLAN_DIR}` plan stubs, `status.json` rows when direction converges) | Treat lock stages as completed Build todos; fix a hard-coded stage count; dispatch Review & Edit / commit / integration branch |
 | Pre-Build | Maintain documents only | Execute Review chain, commit, or create `spec_integration_branch` |
 | Build | Run Phase 1 executable todos: finalize SSOT → sequential Review & Edit (`product-manager` → `architect` → `writing-specialist`) → PM lock → integration branch | Replay interactive direction lock as if Plan session never happened |
 
