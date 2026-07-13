@@ -23,7 +23,7 @@
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
 - 在 OpenCode / Cursor / Codex 下复用同一套核心流程
 
-当前版本：**1.3.0** — 详见 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
+当前版本：**1.3.1** — 详见 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
 ## 快速开始（推荐方式）
 
