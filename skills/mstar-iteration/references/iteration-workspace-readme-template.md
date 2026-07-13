@@ -1,23 +1,19 @@
-# Iteration workspace README (template)
+# Iteration package README (template)
 
-Optional index inside `{ITERATION_DIR}/<iteration-id>/`. Copy when the workspace has more than a few files.
+Optional index inside `{ITERATION_DIR}/<iteration-id>/`. Copy when the package has more than a few files beyond `delivery-compass.md`.
 
 ```markdown
-# <iteration-id> workspace
+# <iteration-id>
 
-Iteration-scoped **specs** and **guides** — not `{KNOWLEDGE_DIR}/`. Worthy content is **promoted** at iteration-close via `mstar-compound`.
+Iteration package — `delivery-compass.md` + specs/guides. Not `{KNOWLEDGE_DIR}/`. Worthy content is **promoted** at iteration-close via `mstar-compound`.
 
-## Guides
+## Documents
 
-| Document | Description | Status |
-|----------|-------------|--------|
-| [guides/<name>.md](guides/<name>.md) | <purpose> | draft / active / promoted |
-
-## Specs (iteration-level)
-
-| Document | Description | Status |
-|----------|-------------|--------|
-| [specs/<name>.md](specs/<name>.md) | <purpose> | draft / locked-in-{SPECS_DIR} / promoted |
+| Document | Kind | Description | Status |
+|----------|------|-------------|--------|
+| [delivery-compass.md](delivery-compass.md) | compass | Scope, plans, branch policy | active / locked / completed |
+| [guides/<name>.md](guides/<name>.md) | guide | <purpose> | draft / active / promoted |
+| [specs/<name>.md](specs/<name>.md) | spec | <purpose> | draft / locked-in-{SPECS_DIR} / promoted |
 
 ## Promotion log (filled at iteration-close)
 
@@ -26,4 +22,6 @@ Iteration-scoped **specs** and **guides** — not `{KNOWLEDGE_DIR}/`. Worthy con
 | | | | |
 ```
 
-**Status values**: `draft` | `active` | `promoted` (link knowledge path) | `superseded` | `snapshot-only`
+**Kind**: `compass` | `guide` | `spec` | `other`
+
+**Status values**: `draft` | `active` | `locked` | `completed` | `promoted` (link knowledge path) | `superseded` | `snapshot-only`

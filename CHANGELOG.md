@@ -2,17 +2,29 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.3.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.3.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.3.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.3.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.3.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.3.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.3.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.3.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.3.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.3.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.3.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.3.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.3.1] - 2026-07-13
+
+### Harness (iteration package layout)
+
+- **`iterations/<id>/` directory-first**: compass moves to `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` with sibling `guides/` / `specs/` / optional package `README.md`. Root `{ITERATION_DIR}/README.md` indexes **one row per iteration** (no compass + workspace double entries).
+- **Legacy read compat**: flat `{ITERATION_DIR}/<id>-delivery-compass.md` remains readable; new writes must use the package path.
+- Touches: `mstar-iteration` (+ references), `mstar-compound` package promotion, `mstar-plan-conventions` / `mstar-plan-artifacts` path docs, role shells, `/iteration-start` · `/iteration-drive` · `/iteration-loop`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.3.1**.
 
 ## [1.3.0] - 2026-07-11
 

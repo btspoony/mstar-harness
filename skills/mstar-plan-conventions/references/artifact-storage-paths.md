@@ -16,9 +16,8 @@
 | **Review bundle（QC/QA 原始过程报告）** | `{HARNESS_DIR}/sdd/<plan-id>/review/`（gitignored；默认 `.mstar/sdd/<plan-id>/review/`） | `mstar-sdd`、`mstar-review-qc`、`qa-engineer` |
 | **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored；含 per-task handoff 与 `review/` bundle） | `mstar-sdd` |
 | **status.json** | `.mstar/status.json` | `mstar-plan-artifacts` |
-| **迭代 compass** | `.mstar/iterations/<iteration-id>-delivery-compass.md` | `mstar-iteration`（读写） |
-| **迭代工作区** | `.mstar/iterations/<iteration-id>/`（`guides/`、`specs/` 等） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读） |
-| **迭代索引** | `.mstar/iterations/README.md` | `mstar-iteration`（读写） |
+| **迭代 package** | `.mstar/iterations/<iteration-id>/`（`delivery-compass.md`、`guides/`、`specs/`、可选 `README.md`） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读；默认排除 compass） |
+| **迭代索引** | `.mstar/iterations/README.md`（一行 = 一次迭代） | `mstar-iteration`（读写） |
 | **规格** | `specs/`（优先），否则 `designs/` | `mstar-plan-artifacts` |
 | **archived residuals** | `.mstar/archived/residuals/<plan-id>.json` | `mstar-plan-artifacts` |
 | **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-plan-artifacts` |
@@ -41,7 +40,7 @@
 | 路径 | 说明 |
 |------|------|
 | `docs/` | 人类文档（安装、贡献指南等），知识产物不放此处 |
-| `{ITERATION_DIR}/` | 仅限迭代 compass，知识文档不放此处 |
+| `{ITERATION_DIR}/` | 迭代 package（compass + guides/specs）；知识文档不放此处 |
 | `{SPECS_DIR}/` | 仅限冻结规格/ADR，运行时知识不放此处 |
 | `{PLAN_DIR}/reports/` | Legacy / explicit audit mode only；默认 QC/QA 原始过程报告进 `{SDD_DIR}/review/`，知识文档不放此处 |
 

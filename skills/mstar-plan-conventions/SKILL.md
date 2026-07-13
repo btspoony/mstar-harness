@@ -42,7 +42,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 |------|------|
 | `docs/` | 人类文档：安装、贡献 |
 | `{SPECS_DIR}` | 冻结规格 / ADR |
-| `{ITERATION_DIR}` | 迭代 compass 快照 |
+| `{ITERATION_DIR}` | 迭代 package（compass + guides/specs） |
 | `{KNOWLEDGE_DIR}` | 实现 SSOT、可复用设计 |
 | `{PLAN_DIR}/` | 主 plan、durable gate summaries、可选 residual prose |
 

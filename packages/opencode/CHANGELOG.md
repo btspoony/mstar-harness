@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.3.1
+
+- Bundled skills/commands: iteration package layout — `{ITERATION_DIR}/<id>/delivery-compass.md` + sibling `guides/` / `specs/`; one-row root iteration index; legacy flat compass read-compat.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.3.1**.
+
 ## 1.3.0
 
 - Bundled commands: retire `/mstar-bootstrap`; bootstrap procedure → `mstar-compound-refresh/references/project-knowledge-bootstrap.md`.

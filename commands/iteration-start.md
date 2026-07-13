@@ -1,6 +1,6 @@
 ---
 name: iteration-start
-description: Start a new harness iteration — research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ workspace; compound promotes workspace at close only), PM lock, integration branch.
+description: Start a new harness iteration — research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch.
 agent: project-manager
 ---
 
@@ -180,10 +180,11 @@ Run **grill-me** to stress-test candidate directions with the user:
 
 Produce harness artifacts per **`mstar-iteration` § 1.3**（template: `mstar-iteration/references/iteration-compass-template.md`）：
 
-- `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` — YAML frontmatter **must** include `iteration_base_branch`, `target_branch`, `status: active`
+- `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` — YAML frontmatter **must** include `iteration_base_branch`, `target_branch`, `status: active`
 - `{PLAN_DIR}/<plan-id>-<name>.md` for each plan in this iteration
 - Register all plans in `{HARNESS_DIR}/status.json`（per `mstar-plan-artifacts` §1.5：root `metadata` + plan `spec_integration_branch`）
-- Update `{ITERATION_DIR}/README.md` index（per `mstar-iteration` § 1.4）
+- Update `{ITERATION_DIR}/README.md` index（**一行 = 一次迭代**；per `mstar-iteration` § 1.4）
+- Create package dirs as needed: `{ITERATION_DIR}/<iteration-id>/{guides,specs}/` + optional package `README.md`
 
 ## 5. Review & Edit Chain（HARD GATE — do not commit before this）
 
@@ -196,7 +197,7 @@ Each role below **reviews and directly edits** the documents. Do not just flag i
 | # | Role | Required action | Gate |
 |---|------|-----------------|------|
 | 5.1 | **product-manager** | invoke: **edit** compass, plans, **`{SPECS_DIR}/`**, **`{ITERATION_DIR}/<iteration-id>/`**（`guides/`、`specs/` 按需）— **禁止** `{KNOWLEDGE_DIR}/` 新增 | 完成后方可 5.2 |
-| 5.2 | **architect** | invoke: **edit** compass, plans, **`{SPECS_DIR}/`**, workspace `specs/`（含 5.1 后版本）— **禁止** `{KNOWLEDGE_DIR}/` 新增 | 5.1 返回后；完成后方可 5.3 |
+| 5.2 | **architect** | invoke: **edit** compass, plans, **`{SPECS_DIR}/`**, package `specs/`（含 5.1 后版本）— **禁止** `{KNOWLEDGE_DIR}/` 新增 | 5.1 返回后；完成后方可 5.3 |
 | 5.3 | **writing-specialist** | invoke: **edit** compass / plans / specs / iteration 文档; **specs corpus hygiene**（全库 `{SPECS_DIR}/` + 既有 `{KNOWLEDGE_DIR}/` 卫生与错放纠正，**不**新增 knowledge）— `mstar-iteration/references/iteration-artifact-boundaries.md` + `iteration-corpus-hygiene.md` | 5.2 返回后 |
 | 5.4 | **project-manager** | Merge subagent edits; resolve conflicts; **lock** compass (`status: locked`); confirm Prepare gates | 5.3 返回后 |
 
@@ -225,7 +226,7 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 
 - [ ] grill-me decisions recorded in compass
 - [ ] Draft compass + plans + `status.json` registered
-- [ ] product-manager invoke completed — compass / plans / specs / **`<iteration-id>/` workspace**（按需）；**未**向 `{KNOWLEDGE_DIR}/` 新增
+- [ ] product-manager invoke completed — compass / plans / specs / **`<iteration-id>/` package**（按需）；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] architect invoke completed — compass / **specs** edited；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] writing-specialist invoke completed — specs + iteration docs edited；**specs corpus hygiene** done（全库 `{SPECS_DIR}/`；既有 knowledge 仅卫生/归档；错放已迁回 `iterations/` 或 archive）
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)

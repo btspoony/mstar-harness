@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.3.1
+
+- Version alignment with harness **1.3.1** (iteration package layout; no CLI behavior change in this release).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.3.1**.
+
 ## 1.3.0
 
 - Codex project install: materialize `iteration-start`, `iteration-drive`, and `iteration-loop` as `.agents/skills/*/SKILL.md` symlinks; `doctor` validates links; global install skips with warning.

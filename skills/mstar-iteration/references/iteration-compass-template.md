@@ -1,6 +1,6 @@
 # Iteration Compass Template
 
-Copy this template when creating a new iteration compass in `{ITERATION_DIR}/`.
+Copy this template when creating `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`.
 
 ```markdown
 ---
@@ -71,19 +71,15 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 |------|-----------|--------|------------|
 | <risk> | Low/Med/High | Low/Med/High | <mitigation> |
 
-## Iteration workspace (optional)
+## Iteration package
 
-> Iteration-level **specs** and **guides** live under `{ITERATION_DIR}/<iteration-id>/` — not in `{SPECS_DIR}/` or `{KNOWLEDGE_DIR}/`. Promoted to knowledge at iteration-close via **`mstar-compound`**.
+> Sibling paths under `{ITERATION_DIR}/<iteration-id>/` — not in `{SPECS_DIR}/` or `{KNOWLEDGE_DIR}/`. Promoted to knowledge at iteration-close via **`mstar-compound`**.
 
 | Path | Purpose |
 |------|---------|
-| `<iteration-id>/guides/` | Exploration, process notes |
-| `<iteration-id>/specs/` | Iteration-scoped spec drafts |
-| `<iteration-id>/README.md` | Workspace index (recommended when non-trivial) |
-
-Link from compass when used:
-
-- Workspace: `<iteration-id>/` | <one-line purpose>
+| `guides/` | Exploration, process notes |
+| `specs/` | Iteration-scoped spec drafts |
+| `README.md` | Package document index (recommended when non-trivial) |
 
 ## Quality Gate Summary
 
@@ -132,7 +128,7 @@ Notes:
 | `## Non-Goals` | Yes | Phase 1 |
 | `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
 | `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
-| Iteration workspace (`<iteration-id>/`) | Optional | Phase 1 §1.5.5 — `guides/` + `specs/`; index in `{ITERATION_DIR}/README.md` |
+| Iteration package (`guides/` / `specs/`) | Optional | Phase 1 §1.5.5; root index one row → `{ITERATION_DIR}/README.md` |
 | `## Quality Gate Summary` | Yes | Phase 3 §3.4 |
 | `## Compound Round Summary` | Yes | Phase 3 §3.4 |
 | `## Iteration Retrospective` | Recommended | Phase 3 §3.4 |
@@ -141,5 +137,6 @@ Notes:
 
 若仓库中已有 compass **无** YAML frontmatter、**无** `## Roadmap Position`，或只有 prose completion status：
 
-- **新迭代**：Phase 1 必须按本模板重写，不延续 prose-only 惯例。
+- **新迭代**：Phase 1 必须按本模板写入 **`{ITERATION_DIR}/<iteration-id>/delivery-compass.md`**，不延续 prose-only 或根目录 flat 文件惯例。
 - **收口时**：`mstar-iteration` §3.0.5 在 Phase 3 入口规范化，再执行 §3.3–§3.4。
+- **Legacy path**：若仍存在 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`，读时兼容；本轮若改写该迭代，迁入 `<iteration-id>/delivery-compass.md`。

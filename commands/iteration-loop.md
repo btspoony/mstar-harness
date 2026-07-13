@@ -178,7 +178,7 @@ Per **`mstar-iteration` §1.3–§1.5**（template: `iteration-compass-template.
 | # | Role | Required action |
 |---|------|-----------------|
 | 5.1 | **product-manager** | invoke: **edit** compass, plans, `{SPECS_DIR}/`, `{ITERATION_DIR}/<iteration-id>/` — **禁止** `{KNOWLEDGE_DIR}/` 新增 |
-| 5.2 | **architect** | invoke: **edit** compass, plans, specs / workspace（含 5.1 后版本）— **禁止** knowledge 新增 |
+| 5.2 | **architect** | invoke: **edit** compass, plans, specs / package（含 5.1 后版本）— **禁止** knowledge 新增 |
 | 5.3 | **writing-specialist** | invoke: edit docs + **specs corpus hygiene** — `iteration-artifact-boundaries.md` + `iteration-corpus-hygiene.md` |
 | 5.4 | **project-manager** | Merge; **lock** compass (`status: locked`); confirm Prepare gates |
 
@@ -237,7 +237,7 @@ Execute **`mstar-iteration` § Phase 2** exactly. Summary:
 
 1. STOP per-plan loop
 2. Print `## Phase 3: iteration-close`
-3. Execute **`mstar-iteration` §3.0→§3.5**（compound + workspace promotion）
+3. Execute **`mstar-iteration` §3.0→§3.5**（compound + package promotion）
 4. Exit checklist `[x]` + compass `completed` → print `## Phase 4: Create PR`
 
 ```bash

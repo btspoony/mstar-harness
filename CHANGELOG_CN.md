@@ -1,16 +1,28 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.3.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.3.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.3.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.3.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.3.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.3.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.3.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.3.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.3.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.3.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.3.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.3.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.3.1] - 2026-07-13
+
+### Harness（迭代 package 目录化）
+
+- **`iterations/<id>/` 目录优先**：compass 迁至 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`，同目录含 `guides/`、`specs/`、可选 package `README.md`。根 `{ITERATION_DIR}/README.md` **一行 = 一次迭代**（不再 compass + workspace 双行）。
+- **Legacy 只读兼容**：根目录 flat `{ITERATION_DIR}/<id>-delivery-compass.md` 仍可读；新写必须走 package 路径。
+- 涉及：`mstar-iteration`（及 references）、`mstar-compound` package 提升、`mstar-plan-conventions` / `mstar-plan-artifacts` 路径文档、角色壳、`/iteration-start` · `/iteration-drive` · `/iteration-loop`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.3.1**。
 
 ## [1.3.0] - 2026-07-11
 

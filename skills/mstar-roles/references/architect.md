@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare: specify/clarify/plan), `mstar-plan-conventions` (`{PLAN_DIR}`, plan-writing path).
 
-**Typically:** `mstar-plan-artifacts` (specs, **`{ITERATION_DIR}/<id>/` workspace**); `mstar-design-md`; `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
+**Typically:** `mstar-plan-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package**); `mstar-design-md`; `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
 
 **On demand:** `mstar-branch-worktree` (when committing architecture docs to the business repo).
 
