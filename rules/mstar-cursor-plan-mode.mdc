@@ -38,8 +38,10 @@ Do **not** mark an implement todo complete until:
 
 When Plan mode is used to **start a new iteration**:
 
-- CreatePlan a **blank Phase 1 scaffold** (and Build-bound todos) **before** interactive direction lock finishes.
-- During the Plan session, refine direction/scope in **dynamic stages**; after each stage, update the CreatePlan body (and dual-write SSOT drafts).
+- **CreatePlan once** for a blank Phase 1 scaffold (Build-bound todos). Record that plan file path.
+- **Feedback loop**: user gives direction/opinions only; agent explores, recommends, and **edits the same plan file in place** (dual-write SSOT drafts). Do **not** run a questionnaire loop as the main path.
+- After user signals feedback-close: optional **minimal** deferred interview **only if** blocking gaps remain — still edit the **same** file. Never open a second CreatePlan.
+- If a duplicate plan file appears: merge into the original and delete the duplicate.
 - **Do not** dispatch Review & Edit, commit, or create the integration branch until the user clicks **Build**.
 - Detail: `skills/mstar-host/references/cursor-plan-mode-bridge.md` § `mstar-iteration` Phase 1 in Plan mode.
 
@@ -52,7 +54,7 @@ When the user clicks **Build** or Cursor switches from Plan mode to Agent mode:
 - If the plan belongs to Morning Star, default to `project-manager` orchestration: plan/status upkeep is allowed; implementation, tests, review, and ops execution must be dispatched.
 - Do not start an implement/code todo until the SSOT plan exists, `status.json` contains the `plan_id`, and the task has a PM Assignment with `Execute as`, `Delegation`, `Working branch` or `Branch policy`, and SSOT `Plan Path`.
 - If any field is missing, report **Blocked** and restore the harness state before implementation.
-- For Phase 1 Build: finalize compass/plans from the CreatePlan body, then run the Review & Edit chain and integration branch — **do not** replay the Plan-session direction interview.
+- For Phase 1 Build: finalize compass/plans from the **same** CreatePlan body the user has open, then run the Review & Edit chain and integration branch — **do not** replay the Plan-session feedback or interview.
 
 ## Detail
 

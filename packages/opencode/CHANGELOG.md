@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.3.2
+
+- Bundled commands: `/iteration-start` Cursor Plan path — feedback-driven plan updates; deferred grill after feedback-close; single CreatePlan URI (in-place edits only).
+- Bundled skills: `mstar-iteration` §1.2 Plan UX feedback-driven + recommended branch policy; `mstar-host` Cursor Phase 1 bridge/rule.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.3.2**.
+
 ## 1.3.1
 
 - Bundled skills/commands: iteration package layout — `{ITERATION_DIR}/<id>/delivery-compass.md` + sibling `guides/` / `specs/`; one-row root iteration index; legacy flat compass read-compat.

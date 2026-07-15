@@ -29,7 +29,7 @@ Before **SwitchMode → Agent**: mirror plan exists; `status.json` lists `plan_i
 
 After **Build**: treat the run as plan resume, not `/pm` replay. Reload `mstar-harness-core` + this Cursor reference, resume Morning Star plans as `project-manager` orchestration, and dispatch implementation through Task unless the user explicitly overrides the harness.
 
-**`mstar-iteration` Phase 1 in Plan mode**: CreatePlan blank scaffold **before** interactive direction lock; update CreatePlan + SSOT drafts each lock stage; **do not** run Review & Edit / commit / integration branch until **Build**. Detail → **`cursor-plan-mode-bridge.md`** § `mstar-iteration` Phase 1 in Plan mode.
+**`mstar-iteration` Phase 1 in Plan mode**: CreatePlan **once** (blank scaffold); then **feedback-driven** in-place updates on that same plan file; deferred interview only after user signals feedback-close **and** gaps remain; **do not** run Review & Edit / commit / integration branch until **Build**. Detail → **`cursor-plan-mode-bridge.md`** § `mstar-iteration` Phase 1 in Plan mode.
 
 Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 

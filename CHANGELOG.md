@@ -2,17 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.3.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.3.2** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.3.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.3.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.3.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.3.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.3.1** |
+| Monorepo root | `morning-star` (`package.json`) | **1.3.2** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.3.2** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.3.2** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.3.2** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.3.2** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+
+## [1.3.2] - 2026-07-15
+
+### Harness (Cursor Plan Phase 1 feedback-driven)
+
+- **`/iteration-start` Cursor Plan path**: feedback-driven loop — user gives direction/opinions only; agent explores, recommends, and updates the plan. `grill-me` is deferred until feedback-close and only if blocking gaps remain.
+- **Single CreatePlan URI (HARD)**: CreatePlan once per Phase 1 Plan session; subsequent updates edit that same file in place; merge and delete accidental duplicates.
+- **`mstar-host` / rule / `mstar-iteration` §1.2**: Phase 1 Plan UX documents feedback-driven updates and recommended branch policy (no silent `main`/`master`).
+- **Routing eval v20**: `iteration-phase1-cursor-plan-feedback-driven`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex plugin manifests: **→ 1.3.2**.
 
 ## [1.3.1] - 2026-07-13
 
