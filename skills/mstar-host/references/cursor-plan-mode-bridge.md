@@ -189,16 +189,21 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 
 | Phase | Behavior | Forbidden |
 |-------|----------|-----------|
-| Early CreatePlan | After read-only research, **immediately** CreatePlan with blank Phase 1 scaffold (Direction / Scope / Acceptance / Non-Goals / Branch policy / Plans / Grill log placeholders) + Build-bound todos | Wait until interactive direction lock finishes before CreatePlan |
-| Staged interactive lock | Dynamic number of clarify stages in the Plan session; after each stage, **update CreatePlan body** and dual-write SSOT **drafts** (`{ITERATION_DIR}/<id>/delivery-compass.md` stub, `{PLAN_DIR}` plan stubs, `status.json` rows when direction converges) | Treat lock stages as completed Build todos; fix a hard-coded stage count; dispatch Review & Edit / commit / integration branch |
+| Early CreatePlan | After read-only research, **CreatePlan once** with blank Phase 1 scaffold + Build-bound todos; **record the returned plan file path** | Wait until direction lock finishes; call CreatePlan again later |
+| Feedback loop | User gives **direction / opinions only** (no questionnaire). Agent explores, recommends, and **edits that same plan file in place** (+ SSOT drafts). Absorb feedback → update again | Routine one-question-at-a-time interview; gate plan updates on user answers; write a second `*.plan.md`; open interview helpers before feedback-close |
+| Feedback-close | When user signals feedback done (e.g. 反馈结束 / 总结 / 准备 Build): if blocking gaps remain → **minimal** deferred interview on gaps only, still editing the **same** plan file; else ready for Build | Start the interview helper as the main Plan-session loop |
 | Pre-Build | Maintain documents only | Execute Review chain, commit, or create `spec_integration_branch` |
-| Build | Run Phase 1 executable todos: finalize SSOT → sequential Review & Edit (`product-manager` → `architect` → `writing-specialist`) → PM lock → integration branch | Replay interactive direction lock as if Plan session never happened |
+| Build | Finalize SSOT from the **same** CreatePlan body → sequential Review & Edit → PM lock → integration branch | Replay feedback/interview; finalize from a different plan URI than View Plan |
+
+**Single CreatePlan URI (HARD)**: one CreatePlan per Phase 1 Plan session. Updates use file edit tools on that path. If a duplicate plan file was created by mistake: merge into the original, delete the duplicate, keep View Plan on the original.
 
 **Plan mode ≠ executing todos.** Build = Phase 1 executable gate (Review chain, lock, branch).
 
+**Branch policy in Plan session**: write **recommended** `iteration_base_branch` / `target_branch` (+ short rationale) into the plan — do **not** silently default to `main`/`master`. User may correct via feedback; ask only after feedback-close if still TBD/conflicting.
+
 **Bootstrap relationship**: ordinary per-plan work still uses `harness-init` / `spec-register` / `mirror-plan`. Phase 1 CreatePlan uses Phase 1 todos (`harness-init` → `finalize-compass-plans` → review-edit seats → `pm-lock` → `integration-branch`). Business `plans[]` rows should exist as drafts before Build when direction has converged.
 
-**Helpers**: third-party interview helpers are **not** named here; host **command** layer discovers them when needed.
+**Helpers**: third-party interview helpers are **not** named here; host **command** layer may use them only after feedback-close when gaps remain.
 
 ## Anti-patterns
 
@@ -211,7 +216,8 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 | Skip `spec-register` | Add `plans[]` row before implement |
 | Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
 | Follow-up only in chat / no roadmap section | Add `Roadmap / deferred scope` to CreatePlan and SSOT plan before implement |
-| Phase 1 Plan mode: grill/lock finishes before first CreatePlan | CreatePlan blank scaffold first; update body each lock stage |
+| Phase 1 Plan mode: second CreatePlan / stale open plan | Edit the original plan file only; merge+delete duplicates |
+| Phase 1 Plan mode: interview loop before feedback-close | Feedback-driven autonomous plan updates; deferred interview only after close signal if gaps remain |
 | Phase 1 Plan mode: Review / commit / branch before Build | Keep Pre-Build document-only; execute those todos after Build |
 
 ## Related skills

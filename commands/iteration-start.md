@@ -28,7 +28,7 @@ Detailed workflow → **`mstar-iteration` § Phase 1**（含 §1.6 Review & Edit
 
 | 宿主上下文 | 走哪条 |
 |------------|--------|
-| **Cursor Plan mode**（CreatePlan / Plan 会话活跃） | §0 Boot → §P（本命令 Plan 分支）— **先**空白 CreatePlan，再动态 grill-me 改文档；**Build 前不执行** Review 链 / commit / integration 分支 |
+| **Cursor Plan mode**（CreatePlan / Plan 会话活跃） | §0 Boot → §P — **先**空白 CreatePlan，再 **feedback-driven** 自主改同一份 plan；grill-me **仅**在用户明确结束反馈后、仍有阻塞疑问时；**Build 前不执行** Review 链 / commit / integration 分支 |
 | **其它**（Agent、OpenCode、非 Plan） | §0 Boot → §1–§6（Research → Explore → grill-me → Write → Review → branch） |
 
 ## 0. Boot
@@ -43,19 +43,28 @@ Detailed workflow → **`mstar-iteration` § Phase 1**（含 §1.6 Review & Edit
 
 **若 Cursor Plan mode 活跃 → 进入 §P；否则继续 §1。**
 
-## P. Cursor Plan mode（Phase 1 scaffold → staged grill → Build）
+## P. Cursor Plan mode（Phase 1 scaffold → feedback loop → deferred grill → Build）
 
 **Detect**：会话处于 Cursor Plan mode（系统要求 CreatePlan / SwitchMode，或 Plan 工具可用且当前为 Plan 会话）。
 
-**语义**：Plan 模式期间 **只维护 CreatePlan + SSOT 草稿**；**不**把 grill 段标成已执行 todo；**不**派发 Review 链；**不** commit；**不**建 integration 分支。点 **Build** 后才执行下方 Build todos（对齐 `mstar-host/references/cursor-plan-mode-bridge.md` · Phase 1 in Plan mode）。
+**语义**：Plan 模式期间 **只维护 CreatePlan + SSOT 草稿**；用户侧是 **纯反馈**（提方向 / 提意见），**不是**答问卷。Agent **探索 + 推荐并直接改 plan**。**不**派发 Review 链；**不** commit；**不**建 integration 分支。点 **Build** 后才执行下方 Build todos（对齐 `mstar-host/references/cursor-plan-mode-bridge.md` · Phase 1 in Plan mode）。
+
+### P.0 Single CreatePlan URI（HARD — 防双 plan）
+
+| 规则 | 说明 |
+|------|------|
+| **CreatePlan 只调用一次** | §P.2 空白脚手架是本会话 **唯一** 一次 CreatePlan |
+| **记录路径** | 记下工具返回的 plan 文件路径（常在 `~/.cursor/plans/*.plan.md`）；后续所有修订都写 **这一份** |
+| **更新方式** | Feedback / deferred grill 后用 **Read + Write/StrReplace 原地改** 该文件；**禁止**再调 CreatePlan 开第二份 |
+| **发现重复** | 若已误开第二份：把有效内容 **合并进第一份**，删除重复文件，并确保用户 View Plan 指向第一份 |
 
 ### P.1 Research（只读）
 
 执行与 §1 相同的调研（structured + unstructured + `STRATEGY.md`）。**不要**在本步写 compass/plans 终稿。
 
-### P.2 Early CreatePlan（空白脚手架 — 先于方向锁定）
+### P.2 Early CreatePlan（空白脚手架 — 本会话唯一一次）
 
-Research 后 **立刻** CreatePlan（**禁止**等 grill-me 全部完成再 CreatePlan）。
+Research 后 **立刻** CreatePlan **一次**（**禁止**等方向锁定完成再 CreatePlan；**禁止**之后再 CreatePlan）。
 
 **CreatePlan 最小结构**（session mirror；dual-write 草稿见 P.3）：
 
@@ -86,39 +95,62 @@ TBD
 |---------|------|--------|-------|
 | TBD | | Todo | |
 
-## Grill-me log
-（每段收敛后追加：日期 / 议题 / 决议）
+## Feedback log
+（吸收用户反馈 / agent 推荐决议后追加）
+
+## Deferred grill log
+（仅 P.3.5 若发起 grill 时追加；可空）
 ```
 
-**Build 才勾的 todos**（顺序；**不要**把 grill 段写成 Build todo）：
+**Build 才勾的 todos**（顺序；**不要**把 feedback / grill 写成 Build todo）：
 
 1. `harness-init` — 若 `{HARNESS_DIR}` / `status.json` 缺失则初始化
-2. `finalize-compass-plans` — 将 CreatePlan 正文落成 compass + `{PLAN_DIR}/` plans + `status.json` 登记 + `{ITERATION_DIR}/README.md`
+2. `finalize-compass-plans` — 将 **同一份** CreatePlan 正文落成 compass + `{PLAN_DIR}/` plans + `status.json` 登记 + `{ITERATION_DIR}` 索引
 3. `review-edit-product-manager` — §5.1 invoke
 4. `review-edit-architect` — §5.2 invoke
 5. `review-edit-writing-specialist` — §5.3 invoke
 6. `pm-lock` — §5.4 compass `status: locked` + Prepare gates
 7. `integration-branch` — §6
 
-### P.3 Dynamic grill-me（不固定段数）
+### P.3 Feedback loop（主路径 — 直到用户明确结束反馈）
 
-**Before this step:** Read `skills/grill-me/SKILL.md`（**仅本命令**引用；勿从 `mstar-*` 加载）。
+**用户模式**：提方向、提意见、纠正推荐 — **纯反馈**。**不要**把用户当成问卷答题人；**禁止**例行一问一答卡更新。
 
-**Direction lock mode: `interactive`**。按决策树 **动态切段**（段数不固定；随用户需求增减）：
+**Agent 每轮**（可多轮，直到用户喊停）：
 
-- 一段一问；能靠读代码回答的先探索代码
-- 每段收敛后 **立刻** 更新 CreatePlan body（Direction / Scope / Acceptance / Non-Goals / Branch policy / Plans 表）并 **追加** `## Grill-me log`
-- 同轮 dual-write SSOT **草稿**（可选但推荐）：`{ITERATION_DIR}/` compass stub、`{PLAN_DIR}/` plan stubs、`status.json` 业务 plan 行（方向收敛后至少有草稿登记）
-- **禁止**：固定死 4/5 段；把 grill 标成「已执行完的 todo」；Plan 模式内派发 §5 / commit / §6
+1. 探索代码 / harness / roadmap（能靠读回答的先读）
+2. 形成推荐（Direction / Scope / Acceptance / Non-Goals / Branch policy / Plans）
+3. **立刻**原地更新 **§P.2 那一份** CreatePlan（含 `## Feedback log`）+ 推荐 dual-write SSOT 草稿
+4. 吸收用户新反馈 → 再探索/再改 **同一份** plan
 
-用户表示方向/范围已够用、可 Build 时 → 停止 grill；确认 CreatePlan 与草稿 SSOT 已反映锁定内容。
+**Branch policy**：在 plan 中写入 **推荐值 + 简短 rationale**（不得静默默认 `main`/`master`）；用户可用反馈改掉。**不要**在本阶段为 branch 开 grill。
+
+**禁止**：
+
+- 再调 CreatePlan / 写到另一份 plan 文件
+- 把「等用户回答问题」当作更新 plan 的门禁
+- 在用户结束反馈前加载 / 运行 `grill-me`
+- 固定死反馈轮数；Plan 模式内派发 §5 / commit / §6
+
+### P.3.5 Feedback-close → deferred grill（可选）
+
+**触发**：用户明确表示反馈结束（例如：反馈结束、总结、分析反馈、可以了、准备 Build）。
+
+然后 Agent 自检 CreatePlan：Direction / Scope / Acceptance / Non-Goals / Branch policy / Plans 是否仍有 **阻塞缺口**。
+
+| 结果 | 动作 |
+|------|------|
+| **无阻塞缺口** | **不**开 grill-me；宣布可 Build；确认同一份 CreatePlan + 草稿 SSOT 已反映锁定内容 |
+| **仍有阻塞缺口** | Read `skills/grill-me/SKILL.md`（**仅本命令**）；对 **剩余缺口** 做最小 grill（一段一问）；每段收敛后仍 **原地改同一份** CreatePlan，并追加 `## Deferred grill log` |
+
+**Direction lock mode** 仍为 interactive 语义，但 Plan 会话的 **主路径是 feedback-driven**；grill 是 close 后门禁，不是主循环。
 
 ### P.4 Build（执行 Phase 1 可执行门禁）
 
 用户点击 **Build**（或 Plan → Agent）后：
 
-1. 按 Build todos 顺序执行：`harness-init` → `finalize-compass-plans` → §5 Review 链（5.1→5.2→5.3）→ `pm-lock` → §6
-2. **禁止**把 Build 当成重新跑一遍 grill-me
+1. 按 Build todos 顺序执行：`harness-init` → `finalize-compass-plans`（以 **View Plan 打开的那一份** CreatePlan 为准）→ §5 Review 链（5.1→5.2→5.3）→ `pm-lock` → §6
+2. **禁止**把 Build 当成重新跑 feedback / grill
 3. pre-commit checklist（见 §5）全 `[x]` 后再 commit / push integration 分支
 
 **非 Plan 路径从这里继续 ↓**
@@ -156,11 +188,11 @@ Explore candidate directions targeting **product completeness**:
 
 ## 3. Lock Direction — bundled `grill-me`
 
-> **非 Plan 路径**。Cursor Plan mode 用 §P.3 动态 grill-me（先 CreatePlan 再分阶段改文档）。
+> **非 Plan 路径**。Cursor Plan mode 用 §P.3 feedback loop + §P.3.5 deferred grill（主路径不是 grill）。
 
 **Direction lock mode: `interactive`**（`mstar-iteration` §1.2 默认；本命令不使用 `autonomous`）。
 
-This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md`. **Only this command step**（及 §P.3）references it — **do not** load it from `mstar-harness-core` or other `mstar-*` skills.
+This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md`. **Only this command step**（及 §P.3.5 deferred grill）references it — **do not** load it from `mstar-harness-core` or other `mstar-*` skills.
 
 **Before this step:** Read `skills/grill-me/SKILL.md`.
 
@@ -176,7 +208,7 @@ Run **grill-me** to stress-test candidate directions with the user:
 
 ## 4. Write Compass & Plans
 
-> **非 Plan 路径**。Plan mode 在 §P.2–P.3 维护草稿，Build 时由 `finalize-compass-plans` 落盘终稿。
+> **非 Plan 路径**。Plan mode 在 §P.2–P.3.5 维护 **同一份** CreatePlan 草稿，Build 时由 `finalize-compass-plans` 落盘终稿。
 
 Produce harness artifacts per **`mstar-iteration` § 1.3**（template: `mstar-iteration/references/iteration-compass-template.md`）：
 
@@ -224,7 +256,7 @@ Only after 5.4 → proceed to §6.
 
 PM must print this block before §6; all `[ ]` must be `[x]`:
 
-- [ ] grill-me decisions recorded in compass
+- [ ] direction lock decisions recorded in compass（Plan 路径：Feedback log + 可选 Deferred grill log；非 Plan：grill-me）
 - [ ] Draft compass + plans + `status.json` registered
 - [ ] product-manager invoke completed — compass / plans / specs / **`<iteration-id>/` package**（按需）；**未**向 `{KNOWLEDGE_DIR}/` 新增
 - [ ] architect invoke completed — compass / **specs** edited；**未**向 `{KNOWLEDGE_DIR}/` 新增

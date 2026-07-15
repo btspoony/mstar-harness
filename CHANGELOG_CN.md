@@ -1,16 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.3.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.3.2**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.3.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.3.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.3.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.3.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.3.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.3.2** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.3.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.3.2** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.3.2** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.3.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+
+## [1.3.2] - 2026-07-15
+
+### Harness（Cursor Plan Phase 1 反馈驱动）
+
+- **`/iteration-start` Cursor Plan 路径**：feedback-driven — 用户只提方向/意见；Agent 探索、推荐并改 plan。`grill-me` 仅在反馈结束后、仍有阻塞缺口时发起。
+- **Single CreatePlan URI（HARD）**：Phase 1 Plan 会话只 CreatePlan 一次；后续原地改同一文件；误开第二份则合并并删除。
+- **`mstar-host` / rule / `mstar-iteration` §1.2**：Phase 1 Plan UX 写明反馈驱动与推荐 branch policy（禁止静默 `main`/`master`）。
+- **Routing eval v20**：`iteration-phase1-cursor-plan-feedback-driven`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex 插件：**→ 1.3.2**。
 
 ## [1.3.1] - 2026-07-13
 
