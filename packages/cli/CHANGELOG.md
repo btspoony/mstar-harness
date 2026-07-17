@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.4.0
+
+- Version alignment with harness **1.4.0** (Kimi host installs via Kimi TUI `/plugins install`; no CLI `--target kimi`).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.4.0**.
+
 ## 1.3.2
 
 - Version alignment with harness **1.3.2** (no CLI behavior change in this release).

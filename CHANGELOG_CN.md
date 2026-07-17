@@ -1,23 +1,31 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.3.2**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.4.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.3.2** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.3.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.3.2** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.3.2** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.3.2** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.3.2** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.4.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.4.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.4.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.4.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.4.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.4.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
 
-### Harness / CLI（Kimi 宿主）
+## [1.4.0] - 2026-07-17
 
-- **Kimi 宿主支持**：`.kimi-plugin/plugin.json`（host 目录布局；`sessionStart.skill: pm`）；`mstar-host` Kimi 参考 / Plan 模式桥；主安装路径为 Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness`；CLI 不再提供 `--target kimi`。
+### Harness（Kimi Code 宿主）
+
+- **Kimi 宿主支持**：`.kimi-plugin/plugin.json`（与 Cursor/Codex 同构的 host 目录布局；`sessionStart.skill: pm`）；`mstar-host` Kimi 参考 / Plan 模式桥；角色绑定写在 Agent prompt（内置子 agent 仅 `coder` / `explore` / `plan`）。
+- **安装**：主路径为 Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness` 后 `/plugins reload`（无 CLI `--target kimi`）。
+- 插件命令：`/morning-star-harness:iteration-start` · `iteration-drive` · `iteration-loop`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi 插件：**→ 1.4.0**。
 
 ## [1.3.2] - 2026-07-15
 

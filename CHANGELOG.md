@@ -2,24 +2,32 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.3.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.4.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.3.2** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.3.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.3.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.3.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.3.2** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.3.2** |
+| Monorepo root | `morning-star` (`package.json`) | **1.4.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.4.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.4.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.4.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.4.0** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.4.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
 
-### Harness / CLI (Kimi host)
+## [1.4.0] - 2026-07-17
 
-- **Kimi host support**: `.kimi-plugin/plugin.json` (host-folder layout; `sessionStart.skill: pm`); `mstar-host` Kimi reference / Plan-mode bridge; primary install via Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness`; CLI no longer exposes `--target kimi`.
+### Harness (Kimi Code host)
+
+- **Kimi host support**: `.kimi-plugin/plugin.json` (host-folder layout aligned with Cursor/Codex; `sessionStart.skill: pm`); `mstar-host` Kimi reference / Plan-mode bridge; role binding in Agent prompts (built-in `coder` / `explore` / `plan` only).
+- **Install**: primary path is Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness` then `/plugins reload` (no CLI `--target kimi`).
+- Plugin commands: `/morning-star-harness:iteration-start` · `iteration-drive` · `iteration-loop`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi plugin manifests: **→ 1.4.0**.
 
 ## [1.3.2] - 2026-07-15
 
