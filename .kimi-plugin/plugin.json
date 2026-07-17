@@ -15,7 +15,7 @@
     "harness",
     "agent",
     "multi-agent",
-    "codex-plugin",
+    "kimi-plugin",
     "specification-engineering",
     "harness-engineering",
     "quality-gates",
@@ -23,6 +23,10 @@
     "role-based-workflow"
   ],
   "skills": "./skills/",
+  "commands": "./commands/",
+  "sessionStart": {
+    "skill": "pm"
+  },
   "interface": {
     "displayName": "Morning Star Harness",
     "shortDescription": "Multi-agent code harness with role-based workflows and quality gates.",

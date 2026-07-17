@@ -1,6 +1,6 @@
 # mstar-harness CLI Guide
 
-This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, and Codex bootstrap.
+This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, and Codex bootstrap. Kimi Code uses Kimi TUI `/plugins install` — see [INSTALL.md](../INSTALL.md#kimi).
 
 ## Fast Path
 
@@ -45,6 +45,17 @@ Optional advanced: pass `--pm-model` / `--*-models` flags to write explicit `age
 3) Verify marketplace metadata and agent symlinks:
 
 - `npx @mstar-harness/cli doctor --target codex`
+
+### Kimi
+
+Kimi is **not** a CLI `--target`. Install via Kimi TUI:
+
+```text
+/plugins install https://github.com/btspoony/mstar-harness
+/plugins reload
+```
+
+See [INSTALL.md](../INSTALL.md#kimi) and `skills/mstar-host/references/kimi.md` for host behavior (`sessionStart.skill: pm`, `/morning-star-harness:iteration-*`, C5/C5b role-in-prompt).
 
 ## Install
 
@@ -99,6 +110,8 @@ Codex install:
   - **Project scope only:** `iteration-start`, `iteration-drive`, and `iteration-loop` are installed as project-local skills under `.agents/skills/<name>/SKILL.md` (symlinked to `~/.mstar/harness/commands/<name>.md`); the CLI gitignores those paths.
   - **Global scope:** iteration skills are **not** installed (avoids polluting other projects); `init` prints a warning — re-run with `--scope project` to enable them.
   - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in `skills/mstar-host/references/codex.md`.
+
+Kimi: not a CLI target — use `/plugins install` in Kimi TUI (see [INSTALL.md](../INSTALL.md#kimi)).
 
 ### `mstar-harness doctor`
 

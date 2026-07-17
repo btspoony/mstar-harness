@@ -101,7 +101,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-strategy` | `STRATEGY.md` 全局战略方向 —— 产品愿景、技术方向、决策原则 |
 | `mstar-skill-authoring` | mstar-native skill authoring: trigger contracts, progressive disclosure, pressure scenarios, behavior-change evidence |
 | `mstar-roles` | 角色正文 hub |
-| `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `parallel-dispatch.md`） |
+| `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |
 
 ## 宿主 `mstar-host`
 
@@ -112,6 +112,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | OpenCode | `question`、**task tool**（**subagent** 参数）→ `references/opencode.md` |
 | Cursor | Task 并行 QC；Plan 双写 → `references/cursor.md` · `cursor-plan-mode-bridge.md` |
 | Codex | plugin skills、sandbox/apply_patch/tool discovery；无 invoke 工具时不声称 subagent dispatch → `references/codex.md` |
+| Kimi | `Agent`/`AgentSwarm`（仅 `coder`/`explore`/`plan`）；角色绑定在 prompt（C5b）；Plan 双写 → `references/kimi.md` · `kimi-plan-mode-bridge.md` |
 | 其它 | 同 `mstar-host` skill；按工具信号选 reference |
 
 ## 护栏（不变量）

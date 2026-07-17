@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.4.0
+
+- Version alignment with harness **1.4.0** (Kimi Code host support lives in shared skills / `.kimi-plugin`; OpenCode package unchanged beyond version bump).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.4.0**.
+
 ## 1.3.2
 
 - Bundled commands: `/iteration-start` Cursor Plan path — feedback-driven plan updates; deferred grill after feedback-close; single CreatePlan URI (in-place edits only).
