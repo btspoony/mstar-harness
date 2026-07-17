@@ -142,13 +142,12 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 - Skill authoring / trigger contracts -> `skills/mstar-skill-authoring/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:
-  - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex/Kimi via `.cursor-plugin/` / `.codex-plugin` / `kimi.plugin.json` `skills/`)
+  - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex/Kimi via `.cursor-plugin/` / `.codex-plugin` / `.kimi-plugin/` `skills/`)
   - OpenCode package: `harness-skills/` + `harness-agents/` from `bundle-assets` (npm publish prepublish + root `postinstall`); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
 - CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
 - Codex plugin manifest -> `.codex-plugin/plugin.json`
-- Kimi plugin manifest -> `kimi.plugin.json` (wins over `.kimi-plugin/plugin.json`)
+- Kimi plugin manifest -> `.kimi-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`)
 - Codex install metadata generation -> `packages/cli/src/adapters/codex.ts`
-- Kimi install adapter -> `packages/cli/src/adapters/kimi.ts`
 - Maintenance policy (this file) -> `AGENTS.md`
 
 ## Skill Sync Rules

@@ -11,6 +11,7 @@ All notable changes to this repository are documented here. Published harness su
 | OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.3.2** |
 | Cursor plugin | `.cursor-plugin/plugin.json` | **1.3.2** |
 | Codex plugin | `.codex-plugin/plugin.json` | **1.3.2** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.3.2** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
@@ -18,7 +19,7 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ### Harness / CLI (Kimi host)
 
-- **Kimi host support**: `kimi.plugin.json` + `mstar-host` Kimi reference / Plan-mode bridge; CLI `--target kimi` init/doctor (manifest validate, project-scoped iteration skill links under `.agents/skills/`); bilingual install/usage docs.
+- **Kimi host support**: `.kimi-plugin/plugin.json` (host-folder layout; `sessionStart.skill: pm`); `mstar-host` Kimi reference / Plan-mode bridge; primary install via Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness`; CLI no longer exposes `--target kimi`.
 
 ## [1.3.2] - 2026-07-15
 

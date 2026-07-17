@@ -18,7 +18,7 @@ Kimi **Plan mode** (`EnterPlanMode` / `ExitPlanMode`, `/plan`, or `Shift-Tab`) u
 ## When this applies
 
 - Kimi **Plan mode** is active (`EnterPlanMode` succeeded, `/plan on`, or `kimi --plan`).
-- Morning Star plugin is installed (`kimi.plugin.json` skills loaded) or **`/skill:pm`** / **`pm` skill** is in use.
+- Morning Star plugin is installed (`.kimi-plugin/plugin.json` skills loaded) or **`/skill:pm`** / **`pm` skill** is in use.
 
 ## Before entering Plan mode
 

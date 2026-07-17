@@ -9,6 +9,7 @@
 | OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.3.2** |
 | Cursor 插件 | `.cursor-plugin/plugin.json` | **1.3.2** |
 | Codex 插件 | `.codex-plugin/plugin.json` | **1.3.2** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.3.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
@@ -16,7 +17,7 @@
 
 ### Harness / CLI（Kimi 宿主）
 
-- **Kimi 宿主支持**：`kimi.plugin.json` + `mstar-host` Kimi 参考 / Plan 模式桥；CLI `--target kimi` init/doctor（manifest 校验、项目级 iteration skill 链接至 `.agents/skills/`）；双语安装与使用文档。
+- **Kimi 宿主支持**：`.kimi-plugin/plugin.json`（host 目录布局；`sessionStart.skill: pm`）；`mstar-host` Kimi 参考 / Plan 模式桥；主安装路径为 Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness`；CLI 不再提供 `--target kimi`。
 
 ## [1.3.2] - 2026-07-15
 

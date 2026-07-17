@@ -1,6 +1,6 @@
 # Kimi host reference
 
-Load when **`mstar-host`** detection resolves **kimi** (Kimi Code CLI session, `kimi.plugin.json` plugin installed, `Agent` / `AgentSwarm` / `AskUserQuestion` / `EnterPlanMode` tools, or `/morning-star-harness:*` plugin commands).
+Load when **`mstar-host`** detection resolves **kimi** (Kimi Code CLI session, `.kimi-plugin/plugin.json` plugin installed, `Agent` / `AgentSwarm` / `AskUserQuestion` / `EnterPlanMode` tools, or `/morning-star-harness:*` plugin commands).
 
 Plan mode: read **`kimi-plan-mode-bridge.md`** when `EnterPlanMode` / `ExitPlanMode`, `/plan`, or `kimi --plan` is active.
 
@@ -8,17 +8,18 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 
 ## Kimi-only context
 
-- Plugin manifest: root **`kimi.plugin.json`** (wins over `.kimi-plugin/plugin.json`).
+- Plugin manifest: **`.kimi-plugin/plugin.json`** (plugin root is the **repo root**; paths stay `./skills/` and `./commands/`).
 - Runtime skills: repo `skills/` mounted by the plugin (`"skills": "./skills/"`).
 - Plugin commands: repo `commands/` → `/morning-star-harness:<name>` (e.g. `/morning-star-harness:iteration-start`).
-- Project CLI install (`mstar-harness init --target kimi --scope project`) materializes `iteration-start`, `iteration-drive`, and `iteration-loop` as `.agents/skills/<name>/SKILL.md` symlinks for `/skill:<name>`.
-- **`/skill:pm`** or **`pm` skill**: force PM entry → `mstar-roles` → `project-manager.md`. Formal iteration Phase 1–5 → plugin **`commands/`** + **`mstar-iteration`**.
-- Plugins are **user-scoped** (all projects); no project-level plugin install today. Managed copy lives under `$KIMI_CODE_HOME/plugins/managed/` after `/plugins install`.
-- After install/enable changes: run **`/plugins reload`** or start a **`/new`** session.
+- **`sessionStart.skill: pm`** auto-loads the PM entry shim on new sessions; `pm` → **Read next** → `mstar-harness-core` → `project-manager.md`.
+- **`/skill:pm`** or **`pm` skill**: same PM entry when invoked manually.
+- Install (user-scoped): in Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness` then `/plugins reload` (or `/new`).
+- Plugins are **user-scoped** (all projects); managed copy lives under `$KIMI_CODE_HOME/plugins/managed/` after `/plugins install`.
+- Project `.agents/skills/` symlinks are **not** required when using the plugin — commands and skills come from the plugin mount.
 
 ## Skill loading
 
-1. Read `mstar-harness-core` (also injected via `sessionStart.skill` when plugin active).
+1. On session start: `pm` (via `sessionStart.skill`) → **Read next** loads `mstar-harness-core`, then `mstar-roles` → `project-manager.md` when PM is active.
 2. Read `mstar-host` and this Kimi reference.
 3. If Plan mode is active, read `kimi-plan-mode-bridge.md`.
 4. Load `mstar-roles` and the active role reference.
@@ -54,7 +55,7 @@ Kimi ships **built-in subagent types only**. Valid **`subagent_type`** values:
 | `plan` | Plan-mode subagent | Prepare plan-only work when host is already in plan context |
 | `coder` | General implementation | **All other Morning Star roles** (`product-manager`, `fullstack-dev`, `qc-specialist`, …) |
 
-Morning Star role ids (`product-manager`, `fullstack-dev`, `qc-specialist`, …) are **not** valid `subagent_type` values. The host cannot register custom named agents like Codex TOML or Cursor `subagent_type` role ids.
+Morning Star role ids (`project-manager`, `fullstack-dev`, `qc-specialist`, …) are **not** valid `subagent_type` values. The host cannot register custom named agents like Codex TOML or Cursor `subagent_type` role ids.
 
 ### Role binding in prompt (C5b — required)
 
@@ -141,9 +142,7 @@ Cannot emit required **N** → **`Blocked`**.
 |---------|-------------------|
 | Plugin skills | `/skill:<skill-name>` or auto-load from `skills/` via plugin |
 | Plugin commands | `/morning-star-harness:iteration-start` etc. |
-| Project iteration (CLI) | `.agents/skills/iteration-*/SKILL.md` → `/skill:iteration-start` |
-| Global user skills | `~/.agents/skills/` (optional; iteration skills skipped on global install) |
-| Session entry | `sessionStart.skill: mstar-harness-core` |
+| Session entry | `sessionStart.skill: pm` → `mstar-harness-core` via pm **Read next** |
 
 ## Files, shell, and approvals
 

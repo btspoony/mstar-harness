@@ -14,7 +14,7 @@ description: "PM entry shim — force project-manager orchestration when user in
 | **Codex** | **`/pm`** or this skill → **`project-manager`** for the session |
 | **Cursor** | **`/pm`** or this skill → general PM orchestration (single-plan, hotfix, QC waves, dispatch) **without** starting an iteration. Formal iteration → host **`commands/`** + **`mstar-iteration`** |
 | **OpenCode** | Same as Cursor when no command: **`project-manager`** via `mstar-roles` → `references/project-manager.md` |
-| **Kimi** | **`/skill:pm`** or this skill → **`project-manager`**; iteration → plugin **`commands/`** (`/morning-star-harness:iteration-*`) or project `.agents/skills/` (`/skill:iteration-*`) |
+| **Kimi** | **`/skill:pm`** or this skill → **`project-manager`**; iteration → plugin **`commands/`** (`/morning-star-harness:iteration-*`) |
 
 **Iteration lifecycle** (optional): host `commands/` may sequence Phase 1–5; semantics SSOT → **`mstar-iteration`**. Not required for ordinary PM work.
 

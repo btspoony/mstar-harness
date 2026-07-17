@@ -90,33 +90,25 @@ Full CLI flags, `doctor` checks, and path tables: [`docs/cli.md`](docs/cli.md).
 
 ### Kimi
 
-Prepare harness checkout and (for project scope) iteration skill links:
-
-```bash
-npx @mstar-harness/cli init --target kimi --scope project
-npx @mstar-harness/cli doctor --target kimi --scope project
-```
-
 Install the plugin in Kimi TUI (user-scoped — all projects):
 
 ```text
-/plugins install ~/.mstar/harness
+/plugins install https://github.com/btspoony/mstar-harness
 /plugins reload
 ```
-
-Or from GitHub: `/plugins install https://github.com/btspoony/mstar-harness`
 
 **Notes:**
 
 - Kimi plugins are **user-scoped** today (no project-level plugin install). Managed copy lives under `$KIMI_CODE_HOME/plugins/managed/`.
 - Plugin commands: `/morning-star-harness:iteration-start`, `/morning-star-harness:iteration-drive`, `/morning-star-harness:iteration-loop`.
-- Project scope also symlinks iteration commands into `.agents/skills/<name>/SKILL.md` for `/skill:<name>` (gitignored). Global scope skips `.agents/skills/` iteration links (same pollution rule as Codex).
+- New sessions auto-load **`pm`** via `sessionStart.skill`; use `/skill:pm` anytime.
+- Project `.agents/skills/` symlinks are **not** required — skills and commands come from the plugin.
 
 ## Manual install
 
 Use when you cannot run the CLI or need to mirror the same layout by hand.
 
-Supported targets: `opencode`, `cursor`, `codex`, `kimi`.
+Supported targets: `opencode`, `cursor`, `codex`. Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above).
 
 ### OpenCode
 
@@ -215,27 +207,19 @@ For project-local iteration skills, prefer `npx @mstar-harness/cli init --target
 
 ### Kimi
 
-Clone or refresh harness checkout:
-
-```bash
-git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness
-```
-
 Install via Kimi TUI:
 
 ```text
-/plugins install ~/.mstar/harness
+/plugins install https://github.com/btspoony/mstar-harness
 /plugins reload
 ```
 
 Kimi plugin source in this repository:
 
-- Manifest: `kimi.plugin.json` (wins over `.kimi-plugin/plugin.json`)
+- Manifest: `.kimi-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`)
 - Runtime skills: `skills/`
 - Plugin commands: `commands/`
 - Host adapter: `skills/mstar-host/references/kimi.md`
-
-For project-local iteration skills (`/skill:iteration-*`), prefer `npx @mstar-harness/cli init --target kimi --scope project`.
 
 ## Post-install
 

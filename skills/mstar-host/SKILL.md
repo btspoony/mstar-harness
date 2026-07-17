@@ -31,7 +31,7 @@ Use **capability signals** (not filesystem paths):
 | **`question`** tool or **`task`** tool (**subagent** invoke) | `opencode` | `references/opencode.md` |
 | **Task** + `subagent_type`, no CreatePlan | `cursor` | `references/cursor.md` |
 | **Codex app/CLI/plugin context**, `/plan`, `/goal`, Goal tools, `functions.*`, `codex_app.*`, `tool_search`, Browser plugin tools | `codex` | `references/codex.md`; Plan/Goal mode also `references/codex-plan-goal-mode-bridge.md` |
-| **`Agent`** / **`AgentSwarm`** / **`AskUserQuestion`** / **`EnterPlanMode`**, Kimi plugin (`kimi.plugin.json`), `/morning-star-harness:*` commands | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
+| **`Agent`** / **`AgentSwarm`** / **`AskUserQuestion`** / **`EnterPlanMode`**, Kimi plugin (`.kimi-plugin/plugin.json`), `/morning-star-harness:*` commands | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
 | Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, **`codex.md`**, and **`kimi.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
 
 ## Parallel dispatch (invoke-capable hosts)

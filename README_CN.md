@@ -39,9 +39,9 @@ npx @mstar-harness/cli init
 - OpenCode：`npx @mstar-harness/cli init --target opencode`
 - Cursor：`npx @mstar-harness/cli init --target cursor`
 - Codex：`npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal`
-- Kimi：`npx @mstar-harness/cli init --target kimi`，然后在 Kimi TUI 执行 `/plugins install ~/.mstar/harness` 与 `/plugins reload`
+- Kimi：在 Kimi TUI 执行 `/plugins install https://github.com/btspoony/mstar-harness`，然后 `/plugins reload`
 
-`init` 提供按 target 的引导式安装（scope、路径布局、基础配置）。可用 `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|kimi>` 校验。
+`init` 提供按 target 的引导式安装（scope、路径布局、基础配置）。可用 `npx @mstar-harness/cli doctor --target <opencode|cursor|codex>` 校验。
 
 **详细安装**（手动步骤、路径布局、Codex project vs global）：[`INSTALL.md`](INSTALL.md)。**CLI 参数与高级选项：** [`docs/cli.md`](docs/cli.md)。
 
@@ -50,7 +50,7 @@ npx @mstar-harness/cli init
 - **OpenCode**：以 `Project Manager` 角色开局（对应 `agents/project-manager.md`，通常是 `opencode.json` 里的 `agent.project-manager`）。
 - **Cursor**：使用 `/pm` 强制以 `Project Manager` 角色启动。
 - **Codex**：安装插件后使用 `/pm`。CLI 或手动安装会链接 `codex/agents/` 下的 custom agents。
-- **Kimi**：安装插件（`kimi.plugin.json`）后使用 `/skill:pm`。内置子 agent 仅 `coder` / `explore` / `plan` — 角色绑定写在 Agent prompt 中（见 `mstar-host/references/kimi.md`）。
+- **Kimi**：安装插件（`.kimi-plugin/plugin.json`）；新会话通过 `sessionStart` 自动加载 **`pm`**。随时可用 `/skill:pm`。内置子 agent 仅 `coder` / `explore` / `plan` — 角色绑定写在 Agent prompt 中（见 `mstar-host/references/kimi.md`）。
 
 ### Harness Commands
 
@@ -68,9 +68,7 @@ npx @mstar-harness/cli init
 | **Cursor / OpenCode** | 从本仓库 `commands/` 打包（OpenCode：插件内 `harness-commands/`） |
 | **Codex（project 安装）** | 同上三条命令作为项目本地 skill：`.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链接） |
 | **Codex（global 安装）** | **不**安装 iteration skills — 使用 `--scope project` 以免污染其他项目 |
-| **Kimi（插件）** | 通过 `kimi.plugin.json` 的 `/morning-star-harness:iteration-start` 等命令 |
-| **Kimi（project 安装）** | 同上三条命令作为项目本地 skill：`.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链接） |
-| **Kimi（global 安装）** | **不**在 `.agents/skills/` 安装 iteration skills — `/plugins install` 后仍可用插件命令 |
+| **Kimi（插件）** | 通过 `.kimi-plugin/plugin.json` 的 `/morning-star-harness:iteration-start` 等命令 |
 
 项目知识脚手架的初始化/刷新：通过 `mstar-compound-refresh` skill（`references/project-knowledge-bootstrap.md`）。
 

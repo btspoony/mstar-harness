@@ -25,7 +25,7 @@
   "skills": "./skills/",
   "commands": "./commands/",
   "sessionStart": {
-    "skill": "mstar-harness-core"
+    "skill": "pm"
   },
   "interface": {
     "displayName": "Morning Star Harness",
