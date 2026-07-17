@@ -1,6 +1,6 @@
 # Parallel dispatch (invoke-capable hosts)
 
-Shared PM dispatch contract for **any** host that uses subagent / Task / named-role invoke (OpenCode, Cursor Task, Codex only when a callable multi-agent / Task tool is actually available). Process SSOT also in `mstar-dispatch-gates`.
+Shared PM dispatch contract for **any** host that uses subagent / Task / Agent invoke (OpenCode task tool, Cursor Task, Kimi **Agent** / **AgentSwarm**, Codex only when a callable multi-agent / Task tool is actually available). Process SSOT also in `mstar-dispatch-gates`.
 
 If the active host has no callable invoke tool, this reference does not create delegation capability — mark dispatch **`Blocked`** and report to the user. Do not substitute PM-thread or single-session role execution unless the user explicitly overrides harness dispatch for this turn.
 
@@ -17,7 +17,7 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 
 1. Finalize all `N` Assignment payloads (after any prerequisite turn).
 2. Count distinct `Execute as` sessions (`N`).
-3. Issue **`N` host invocations first** — OpenCode: **N `task` tool** calls with **subagent**; Cursor: **N `Task`** with `subagent_type`; each with one Assignment body. For parallel work, **all `N` tool calls in one assistant message** when the host allows.
+3. Issue **`N` host invocations first** — OpenCode: **N `task` tool** calls with **subagent**; Cursor: **N `Task`** with `subagent_type`; Kimi: **N `Agent`** calls (each prompt carries **Act as** + skill load; `subagent_type` ∈ {`coder`,`explore`,`plan`} only — see `kimi.md` C5/C5b); each with one Assignment body. For parallel work, **all `N` tool calls in one assistant message** when the host allows.
 4. Optionally post a short **Status Update** after invocations (audit trail only — does not replace step 3).
 
 ## Hard rules

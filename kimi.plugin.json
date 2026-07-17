@@ -1,0 +1,47 @@
+{
+  "name": "morning-star-harness",
+  "version": "1.3.2",
+  "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, and Kimi Code.",
+  "author": {
+    "name": "Bohao Tang",
+    "email": "tech@btang.cn"
+  },
+  "homepage": "https://github.com/btspoony/mstar-harness",
+  "repository": "https://github.com/btspoony/mstar-harness.git",
+  "license": "MIT",
+  "keywords": [
+    "morning-star",
+    "mstar",
+    "harness",
+    "agent",
+    "multi-agent",
+    "kimi-plugin",
+    "specification-engineering",
+    "harness-engineering",
+    "quality-gates",
+    "workflow",
+    "role-based-workflow"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "sessionStart": {
+    "skill": "mstar-harness-core"
+  },
+  "interface": {
+    "displayName": "Morning Star Harness",
+    "shortDescription": "Multi-agent code harness with role-based workflows and quality gates.",
+    "longDescription": "Morning Star (启明星) provides a multi-agent code harness framework with role-based workflows, quality gates, and unified skills across OpenCode, Cursor, Codex, and Kimi Code. Start a usable multi-role workflow quickly with PM routing, specs, implementation tracks, QC review, and QA verification.",
+    "developerName": "Bohao Tang",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "brandColor": "#E6B450",
+    "composerIcon": "./assets/logo.svg",
+    "logo": "./assets/logo.svg",
+    "logoDark": "./assets/logo-dark.svg",
+    "defaultPrompt": [
+      "Start a new project with PM routing and role assignment.",
+      "Run a QC review on recent changes.",
+      "Create a product spec and implementation plan."
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 ---
 name: mstar-host
-description: Morning Star host adapter (OpenCode, Cursor, Codex). Use after mstar-harness-core whenever host entry, clarify, dispatch, or plan UX differs by platform - OpenCode question/task-tool subagent invoke, Cursor /pm and CreatePlan/SwitchMode dual-write and Task parallel QC, Codex plugin skills plus Plan/Goal Mode, sandboxed tools, and tool discovery. Auto-detect host from session tools; then Read references/<host>.md. Always load after mstar-harness-core.
+description: Morning Star host adapter (OpenCode, Cursor, Codex, Kimi). Use after mstar-harness-core whenever host entry, clarify, dispatch, or plan UX differs by platform - OpenCode question/task-tool subagent invoke, Cursor /pm and CreatePlan/SwitchMode dual-write and Task parallel QC, Codex plugin skills plus Plan/Goal Mode, Kimi Agent/AgentSwarm with built-in subagent types only (coder/explore/plan) and role-in-prompt binding, sandboxed tools, and tool discovery. Auto-detect host from session tools; then Read references/<host>.md. Always load after mstar-harness-core.
 ---
 
 # Morning Star Host Adapter
@@ -31,7 +31,8 @@ Use **capability signals** (not filesystem paths):
 | **`question`** tool or **`task`** tool (**subagent** invoke) | `opencode` | `references/opencode.md` |
 | **Task** + `subagent_type`, no CreatePlan | `cursor` | `references/cursor.md` |
 | **Codex app/CLI/plugin context**, `/plan`, `/goal`, Goal tools, `functions.*`, `codex_app.*`, `tool_search`, Browser plugin tools | `codex` | `references/codex.md`; Plan/Goal mode also `references/codex-plan-goal-mode-bridge.md` |
-| Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, and **`codex.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
+| **`Agent`** / **`AgentSwarm`** / **`AskUserQuestion`** / **`EnterPlanMode`**, Kimi plugin (`kimi.plugin.json`), `/morning-star-harness:*` commands | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
+| Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, **`codex.md`**, and **`kimi.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
 
 ## Parallel dispatch (invoke-capable hosts)
 
