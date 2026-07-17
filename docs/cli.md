@@ -1,6 +1,6 @@
 # mstar-harness CLI Guide
 
-This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, and Codex bootstrap.
+This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, Codex, and Kimi bootstrap.
 
 ## Fast Path
 
@@ -45,6 +45,21 @@ Optional advanced: pass `--pm-model` / `--*-models` flags to write explicit `age
 3) Verify marketplace metadata and agent symlinks:
 
 - `npx @mstar-harness/cli doctor --target codex`
+
+### Kimi
+
+1) Prepare harness checkout and (for project scope) iteration skill symlinks. The CLI maintains `~/.mstar/harness` and validates `kimi.plugin.json`:
+
+- `npx @mstar-harness/cli init --target kimi --scope project`
+
+2) Install the plugin in Kimi TUI (user-scoped):
+
+- `/plugins install ~/.mstar/harness`
+- `/plugins reload`
+
+3) Verify manifest and project skill links:
+
+- `npx @mstar-harness/cli doctor --target kimi --scope project`
 
 ## Install
 
@@ -100,6 +115,21 @@ Codex install:
   - **Global scope:** iteration skills are **not** installed (avoids polluting other projects); `init` prints a warning — re-run with `--scope project` to enable them.
   - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in `skills/mstar-host/references/codex.md`.
 
+Kimi install:
+
+- Project scope (iteration skill symlinks + harness gitignore entries):
+  - `npx @mstar-harness/cli init --target kimi --scope project`
+- Global scope (skips `.agents/skills/` iteration links; prints pollution-avoidance warning):
+  - `npx @mstar-harness/cli init --target kimi --scope global`
+- Then install the plugin in Kimi TUI:
+  - `/plugins install ~/.mstar/harness` (or GitHub URL)
+  - `/plugins reload`
+- Runtime host behavior after install:
+  - `/skill:pm` enters the shared PM flow.
+  - Plugin commands: `/morning-star-harness:iteration-start`, etc.
+  - **Project scope only:** iteration commands also available as `/skill:iteration-*` via `.agents/skills/<name>/SKILL.md` symlinks.
+  - Kimi built-in subagents are `coder` / `explore` / `plan` only; role binding is prompt-based — see `skills/mstar-host/references/kimi.md`.
+
 ### `mstar-harness doctor`
 
 Check an existing config:
@@ -109,6 +139,7 @@ Check an existing config:
 - `npx @mstar-harness/cli doctor --target cursor --scope global`
 - `npx @mstar-harness/cli doctor --target cursor --scope project`
 - `npx @mstar-harness/cli doctor --target codex`
+- `npx @mstar-harness/cli doctor --target kimi --scope project`
 
 If validation fails, `doctor` exits with a non-zero status code.
 
@@ -120,7 +151,7 @@ OpenCode `init` enforces these baseline requirements in `opencode.json`:
 - `plugin` contains `@mstar-harness/opencode@latest` (legacy `morning-star@git+…` lines for `btspoony/mstar-harness` are stripped on init, including URLs without `.git`, `ssh://`, or `#tag`)
 - Role models are **not** required — OpenCode defaults apply unless you pass optional `--*-model` flags
 
-Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/harness`. Codex then creates agent symlinks from that checkout. Cursor clones a **separate real git checkout** at the plugin path (see [Install path layout](#install-path-layout)).
+Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/harness`. Codex then creates agent symlinks from that checkout. Cursor clones a **separate real git checkout** at the plugin path (see [Install path layout](#install-path-layout)). Kimi `init` validates `kimi.plugin.json` and (project scope) symlinks iteration commands into `.agents/skills/`.
 
 Cursor `init`:
 
@@ -137,6 +168,8 @@ Codex `init` writes or updates marketplace metadata with a local-source entry:
 
 Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope also links `.codex/plugins/mstar-harness -> ~/.mstar/harness`, adds `.codex/plugins/mstar-harness` plus `.codex/agents/*.toml` to `.gitignore`, and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
 
+Kimi `init` ensures `~/.mstar/harness` contains `kimi.plugin.json` with `skills`, `commands`, and `sessionStart.skill: mstar-harness-core`. Project scope symlinks the same three iteration commands into `.agents/skills/` (gitignored). Global scope skips `.agents/skills/` iteration links. Post-install: `/plugins install` + `/plugins reload` in Kimi TUI.
+
 ## What `doctor` Checks
 
 - Same schema and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
@@ -144,6 +177,7 @@ Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` 
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
 - For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, that the Cursor plugin path is a **real git directory** (not a symlink), and that `agents/*.md` files use Cursor-first frontmatter.
 - For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks. Project scope also validates iteration skill symlinks under `.agents/skills/`.
+- For Kimi, `doctor` checks `kimi.plugin.json`, skills/commands paths, and (project scope) iteration skill symlinks under `.agents/skills/`.
 
 ## Install path layout
 
@@ -151,7 +185,7 @@ Cursor **does not discover symlinked plugin directories**. Use real directories 
 
 | Path | Host | Layout | Notes |
 | --- | --- | --- | --- |
-| `~/.mstar/harness` | Codex (marketplace `local` source), OpenCode dev bundle | git checkout | Codex agent `.toml` files are **symlinked** from here into `~/.codex/agents/` |
+| `~/.mstar/harness` | Codex (marketplace `local` source), OpenCode dev bundle, **Kimi** (`/plugins install`) | git checkout | Codex agent `.toml` files are **symlinked** from here into `~/.codex/agents/`; Kimi copies to `$KIMI_CODE_HOME/plugins/managed/` on install |
 | `~/.cursor/plugins/local/morning-star-harness` | Cursor global plugin | **git checkout (real dir)** | **Not** a symlink to `~/.mstar/harness`; `init` clones or `git pull`s here |
 | `.cursor/plugins/morning-star-harness` | Cursor project plugin | **git checkout (real dir)** | gitignored; same clone/pull behavior as global |
 
@@ -174,7 +208,7 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 ### `init` options
 
 - `--yes`: non-interactive mode
-- `--target <opencode|cursor|codex>`
+- `--target <opencode|cursor|codex|kimi>`
 - `--scope <global|project>` (default: `project`)
 - `--dry-run`
 - `--pm-model <model>` (optional advanced override)
@@ -204,6 +238,7 @@ The CLI uses a target adapter layer so new code agents can be added without rewr
 - OpenCode adapter: `packages/cli/src/adapters/opencode.ts`
 - Cursor adapter: `packages/cli/src/adapters/cursor.ts`
 - Codex adapter: `packages/cli/src/adapters/codex.ts`
+- Kimi adapter: `packages/cli/src/adapters/kimi.ts`
 - Shared contracts: `packages/cli/src/types.ts`
 
 To add a new agent target, implement a new adapter with:

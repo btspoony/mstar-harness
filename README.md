@@ -21,7 +21,7 @@ Core value:
 
 - Start a usable multi-role workflow quickly
 - Run with unified `mstar-*` skills instead of scattered rules
-- Reuse one core process across OpenCode, Cursor, and Codex
+- Reuse one core process across OpenCode, Cursor, Codex, and Kimi Code
 
 Latest release: **1.3.2** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
@@ -39,8 +39,9 @@ Per-target examples:
 - OpenCode: `npx @mstar-harness/cli init --target opencode`
 - Cursor: `npx @mstar-harness/cli init --target cursor`
 - Codex: `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal`
+- Kimi: `npx @mstar-harness/cli init --target kimi` then in Kimi TUI `/plugins install ~/.mstar/harness` and `/plugins reload`
 
-`init` provides target-aware guided setup (scopes, path layout, baseline config). Verify with `npx @mstar-harness/cli doctor --target <opencode|cursor|codex>`.
+`init` provides target-aware guided setup (scopes, path layout, baseline config). Verify with `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|kimi>`.
 
 **Detailed install** (manual steps, path layout, Codex project vs global): [`INSTALL.md`](INSTALL.md). **CLI flags and advanced options:** [`docs/cli.md`](docs/cli.md).
 
@@ -49,6 +50,7 @@ Per-target examples:
 - **OpenCode**: start with the `Project Manager` role (`agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`).
 - **Cursor**: use `/pm` to force-start with the `Project Manager` role.
 - **Codex**: use `/pm` after installing the plugin. Custom agents are linked from `codex/agents/` by the CLI or manual install.
+- **Kimi**: use `/skill:pm` after installing the plugin (`kimi.plugin.json`). Built-in subagents are `coder` / `explore` / `plan` only — role binding is in the Agent prompt (see `mstar-host/references/kimi.md`).
 
 ### Harness Commands
 
@@ -66,10 +68,13 @@ Three PM-led iteration entry points. Pick by how much human direction you need:
 | **Cursor / OpenCode** | Bundled from this repo's `commands/` (OpenCode: `harness-commands/` in the plugin) |
 | **Codex (project install)** | Same three commands as project-local skills: `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
 | **Codex (global install)** | Iteration skills are **not** installed — use `--scope project` to avoid polluting other projects |
+| **Kimi (plugin)** | `/morning-star-harness:iteration-start` etc. from `commands/` via `kimi.plugin.json` |
+| **Kimi (project install)** | Same three commands as project-local skills: `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
+| **Kimi (global install)** | Iteration skills are **not** installed under `.agents/skills/` — plugin commands still work after `/plugins install` |
 
 Project knowledge bootstrap/refresh: `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`).
 
-After install, reload the host (restart OpenCode / Cursor **Developer: Reload Window** / re-open Codex).
+After install, reload the host (restart OpenCode / Cursor **Developer: Reload Window** / re-open Codex / Kimi `/plugins reload` or `/new`).
 
 ## Harness Workflow
 
@@ -155,8 +160,8 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-strategy` | STRATEGY.md alignment for long-running direction and decisions |
 | `mstar-skill-authoring` | Skill authoring, trigger contracts, progressive disclosure, and behavior-change evidence |
 | `mstar-roles` | Role prompt bus + per-role skill load lists |
-| `mstar-host` | Host adapter (OpenCode / Cursor / Codex); auto-detect + `references/` |
-| `pm` | Shared `/pm` shortcut for Cursor and Codex PM entry |
+| `mstar-host` | Host adapter (OpenCode / Cursor / Codex / Kimi); auto-detect + `references/` |
+| `pm` | Shared `/pm` or `/skill:pm` shortcut for Cursor, Codex, and Kimi PM entry |
 
 Maintainers: follow [`AGENTS.md`](AGENTS.md) for in-repo maintenance notes and planning; those local artifacts are not part of the published skill tree.
 

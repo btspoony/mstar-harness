@@ -9,6 +9,7 @@
   - [OpenCode](https://opencode.ai)
   - [Cursor](https://cursor.com)
   - [Codex](https://github.com/openai/codex) (with `codex` CLI for marketplace install)
+  - [Kimi Code CLI](https://www.kimi.com/code/docs/kimi-code-cli/) (for `/plugins install`)
 
 ## Recommended: CLI install
 
@@ -87,11 +88,35 @@ npx @mstar-harness/cli doctor --target codex --scope project
 
 Full CLI flags, `doctor` checks, and path tables: [`docs/cli.md`](docs/cli.md).
 
+### Kimi
+
+Prepare harness checkout and (for project scope) iteration skill links:
+
+```bash
+npx @mstar-harness/cli init --target kimi --scope project
+npx @mstar-harness/cli doctor --target kimi --scope project
+```
+
+Install the plugin in Kimi TUI (user-scoped — all projects):
+
+```text
+/plugins install ~/.mstar/harness
+/plugins reload
+```
+
+Or from GitHub: `/plugins install https://github.com/btspoony/mstar-harness`
+
+**Notes:**
+
+- Kimi plugins are **user-scoped** today (no project-level plugin install). Managed copy lives under `$KIMI_CODE_HOME/plugins/managed/`.
+- Plugin commands: `/morning-star-harness:iteration-start`, `/morning-star-harness:iteration-drive`, `/morning-star-harness:iteration-loop`.
+- Project scope also symlinks iteration commands into `.agents/skills/<name>/SKILL.md` for `/skill:<name>` (gitignored). Global scope skips `.agents/skills/` iteration links (same pollution rule as Codex).
+
 ## Manual install
 
 Use when you cannot run the CLI or need to mirror the same layout by hand.
 
-Supported targets: `opencode`, `cursor`, `codex`.
+Supported targets: `opencode`, `cursor`, `codex`, `kimi`.
 
 ### OpenCode
 
@@ -188,11 +213,36 @@ Codex plugin source in this repository:
 
 For project-local iteration skills, prefer `npx @mstar-harness/cli init --target codex --scope project` (see [Codex: project vs global scope](#codex-project-vs-global-scope)).
 
+### Kimi
+
+Clone or refresh harness checkout:
+
+```bash
+git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness
+```
+
+Install via Kimi TUI:
+
+```text
+/plugins install ~/.mstar/harness
+/plugins reload
+```
+
+Kimi plugin source in this repository:
+
+- Manifest: `kimi.plugin.json` (wins over `.kimi-plugin/plugin.json`)
+- Runtime skills: `skills/`
+- Plugin commands: `commands/`
+- Host adapter: `skills/mstar-host/references/kimi.md`
+
+For project-local iteration skills (`/skill:iteration-*`), prefer `npx @mstar-harness/cli init --target kimi --scope project`.
+
 ## Post-install
 
 1. **Enter PM orchestration**
    - OpenCode: start with the `Project Manager` role (`agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`).
    - Cursor / Codex: use `/pm`.
+   - Kimi: use `/skill:pm`.
 
 2. **Run an iteration** (see [README — Harness Commands](README.md#harness-commands))
    - **Deep / first iteration:** `/iteration-start` (Phase 1) → `/iteration-drive` (Phase 2–5).
