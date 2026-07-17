@@ -1,6 +1,6 @@
 ---
 name: pm
-description: "PM entry shim — force project-manager orchestration when user invokes /pm or this skill (Codex and Cursor). General per-plan PM work: this skill + project-manager.md. Formal iteration lifecycle: mstar-iteration (host commands/ may orchestrate Phase 1–5). Boot, routing, dispatch SSOT → mstar-roles/references/project-manager.md and topic mstar-* skills — not here."
+description: "PM entry shim — force project-manager orchestration when user invokes /pm or this skill (Codex, Cursor, OpenCode, and Kimi). General per-plan PM work: this skill + project-manager.md. Formal iteration lifecycle: mstar-iteration (host commands/ may orchestrate Phase 1–5). Boot, routing, dispatch SSOT → mstar-roles/references/project-manager.md and topic mstar-* skills — not here."
 ---
 
 # PM (entry shim)

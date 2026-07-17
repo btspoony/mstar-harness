@@ -11,7 +11,7 @@ Kimi **Plan mode** (`EnterPlanMode` / `ExitPlanMode`, `/plan`, or `Shift-Tab`) u
 1. User explicit instructions (this turn)
 2. Project `AGENTS.md` / `CLAUDE.md`
 3. **`{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json`** (harness SSOT)
-4. Kimi plan file and `SetTodoList` UI (session UX mirror)
+4. Kimi plan file and `TodoList` UI (session UX mirror)
 
 **NEVER** cite only a Kimi plan file path in Assignment **Plan Path**, **Context Loaded**, or Completion Report when `{PLAN_DIR}/<plan-id>-<name>.md` should exist.
 
@@ -31,12 +31,12 @@ Kimi **Plan mode** (`EnterPlanMode` / `ExitPlanMode`, `/plan`, or `Shift-Tab`) u
 | Step | Kimi session | Harness SSOT |
 |------|--------------|--------------|
 | Enter | `EnterPlanMode` or `/plan on` — explore read-only | Ensure `{HARNESS_DIR}` exists; register `plan_id` in `status.json` when known |
-| Design | Edit Kimi plan file with `WriteFile` / `StrReplaceFile` | Mirror main plan to `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes |
+| Design | Edit Kimi plan file with `Write` / `Edit` (when Plan mode allows writes) | Mirror main plan to `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes |
 | Clarify | `AskUserQuestion` for blocking ambiguity only | Record decisions in plan / spec when durable |
 | Exit | `ExitPlanMode` — user approves plan to implement | SSOT plan locked; `status.json` row updated |
 | Implement | Agent mode resumes | Per-task commits, Working branch, dispatch per `mstar-dispatch-gates` |
 
-`SetTodoList` and Kimi UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and `status.json` when coordination requires it.
+`TodoList` and Kimi UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and `status.json` when coordination requires it.
 
 ## ExitPlanMode gate
 

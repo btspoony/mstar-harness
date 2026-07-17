@@ -14,6 +14,12 @@ All notable changes to this repository are documented here. Published harness su
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
+## [Unreleased]
+
+### Harness / CLI (Kimi host)
+
+- **Kimi host support**: `kimi.plugin.json` + `mstar-host` Kimi reference / Plan-mode bridge; CLI `--target kimi` init/doctor (manifest validate, project-scoped iteration skill links under `.agents/skills/`); bilingual install/usage docs.
+
 ## [1.3.2] - 2026-07-15
 
 ### Harness (Cursor Plan Phase 1 feedback-driven)

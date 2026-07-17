@@ -12,6 +12,12 @@
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
+## [Unreleased]
+
+### Harness / CLI（Kimi 宿主）
+
+- **Kimi 宿主支持**：`kimi.plugin.json` + `mstar-host` Kimi 参考 / Plan 模式桥；CLI `--target kimi` init/doctor（manifest 校验、项目级 iteration skill 链接至 `.agents/skills/`）；双语安装与使用文档。
+
 ## [1.3.2] - 2026-07-15
 
 ### Harness（Cursor Plan Phase 1 反馈驱动）

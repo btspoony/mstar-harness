@@ -34,12 +34,12 @@ Use skill names in prompts and references. Avoid absolute local paths unless mai
 | **AgentSwarm** | Parallel batch when **same** role/profile and prompts differ only by task slice; prefer **N× Agent** when roles differ |
 | **AskUserQuestion** | Structured clarify (1–4 questions, 2–4 options each); prefer over free-form when choices are known |
 | **EnterPlanMode** / **ExitPlanMode** | Plan mode entry/approval → **`kimi-plan-mode-bridge.md`** |
-| **SetTodoList** | Session UX only; mirror to SSOT plan / `status.json` when durable |
-| **Shell** | Commands, git, tests — evidence per `mstar-coding-behavior` |
-| **ReadFile** / **ReadMediaFile** | File reads |
+| **TodoList** | Session UX only; mirror to SSOT plan / `status.json` when durable |
+| **Bash** | Commands, git, tests — evidence per `mstar-coding-behavior` |
+| **Read** / **ReadMediaFile** | File reads |
 | **Glob** / **Grep** | Search (prefer over shell find/grep) |
-| **WriteFile** / **StrReplaceFile** | Edits |
-| **SearchWeb** / **FetchURL** | External docs / facts |
+| **Write** / **Edit** | Edits |
+| **WebSearch** / **FetchURL** | External docs / facts |
 | **TaskList** / **TaskOutput** / **TaskStop** | Long-running task management when present |
 
 OpenCode-style `question` and Cursor **Task** are **not** Kimi tools — do not assume them.
@@ -147,7 +147,7 @@ Cannot emit required **N** → **`Blocked`**.
 
 ## Files, shell, and approvals
 
-- Prefer **Glob** / **Grep** for search; **WriteFile** / **StrReplaceFile** for edits.
+- Prefer **Glob** / **Grep** for search; **Write** / **Edit** for edits.
 - Respect Kimi approval prompts for destructive operations.
 - Do not edit `$KIMI_CODE_HOME` credentials, managed plugin copies, or user secrets without explicit consent.
 
@@ -160,5 +160,5 @@ Cannot emit required **N** → **`Blocked`**.
 
 - Plugin install copies source to managed dir — edit checkout + reinstall to pick up harness changes.
 - **`AgentSwarm`** shares one template — not for mixed-role QC tri-review; use **3× Agent** instead.
-- Session plan file and `SetTodoList` are not durable SSOT unless mirrored to `{HARNESS_DIR}`.
+- Session plan file and `TodoList` are not durable SSOT unless mirrored to `{HARNESS_DIR}`.
 - No custom Kimi agent profiles for Morning Star roles — role binding is **always** prompt + skill load (C5b).

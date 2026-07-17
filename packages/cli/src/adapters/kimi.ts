@@ -107,6 +107,10 @@ function validateIterationSkillLinks() {
 
 function runInit(scope: Scope, dryRun: boolean) {
   const notes = ensureLocalHarnessRepo(dryRun);
+  const manifestErrors = validateKimiPluginManifest();
+  if (manifestErrors.length) {
+    throw new Error(manifestErrors.join("\n"));
+  }
   notes.push(`Validated Kimi plugin manifest at ${path.join(HARNESS_REPO_PATH, KIMI_PLUGIN_MARKER)}`);
 
   if (scope === "project") {
