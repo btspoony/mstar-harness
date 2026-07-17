@@ -7,7 +7,15 @@ export const REPO_URL = "https://github.com/btspoony/mstar-harness.git";
 export const PLUGIN_NAME = "morning-star-harness";
 export const HARNESS_REPO_PATH = path.join(os.homedir(), ".mstar", "harness");
 
-const HARNESS_MARKER = ".codex-plugin/plugin.json";
+const HARNESS_MARKERS = [".codex-plugin/plugin.json", "kimi.plugin.json"];
+
+function harnessMarkerPath() {
+  for (const marker of HARNESS_MARKERS) {
+    const candidate = path.join(HARNESS_REPO_PATH, marker);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(HARNESS_REPO_PATH, HARNESS_MARKERS[0]);
+}
 
 function pathOrSymlinkExists(filePath: string) {
   try {
@@ -51,9 +59,11 @@ export function validateLocalHarnessRepo() {
     errors.push(`Missing local harness repo: ${HARNESS_REPO_PATH}`);
     return errors;
   }
-  const marker = path.join(HARNESS_REPO_PATH, HARNESS_MARKER);
+  const marker = harnessMarkerPath();
   if (!fs.existsSync(marker)) {
-    errors.push(`Local harness repo is missing marker file: ${marker}`);
+    errors.push(
+      `Local harness repo is missing a plugin marker (expected one of: ${HARNESS_MARKERS.join(", ")}).`,
+    );
   }
   return errors;
 }
