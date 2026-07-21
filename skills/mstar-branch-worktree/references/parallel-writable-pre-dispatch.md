@@ -1,5 +1,17 @@
 # Parallel writable pre-dispatch gate (PM)
 
+## Layer: L2 (within-plan)
+
+This reference is **L2** worktree isolation: **same `plan_id`**, **same business repo**, **≥2 concurrent writable implement tracks**.
+
+**L1 (cross-plan)** is separate and stacks on top when iteration Phase 2 defaults apply:
+
+- A **control worktree** on `spec_integration_branch` (`metadata.control_worktree_path`) holds status/SDD SSOT and serial integration merge.
+- Each concurrently active plan uses a **distinct feature worktree** (`execution_lease.worktree_path` **≠** `control_worktree_path`) with verified `plans[].execution_lease` before writable dispatch.
+- Claim/hold/release/merge rules → **`mstar-iteration`** `references/phase-2-worktree-lease.md` (not repeated here).
+
+When **one plan** runs **≥2** concurrent writable tracks, **L2 still applies** inside that plan even if L1 leases already isolate plans from each other. Run this checklist **per plan** that has multiple parallel implement tracks.
+
 ## Why this exists
 
 Host dispatch can satisfy **「N Assignments ⇒ N invokes in one message」** while every writer still shares **one checkout directory**. That may satisfy `mstar-dispatch-gates` tool concurrency but **violates** same-repo write isolation.
@@ -8,9 +20,9 @@ Host dispatch can satisfy **「N Assignments ⇒ N invokes in one message」** w
 
 ## Mode switch (do not carry single-track habits)
 
-Serial single-plan waves (one feature branch, one checkout, PM on integration) do **not** authorize multi-writer parallel tracks without re-running this gate.
+Serial single-plan waves (one feature branch, one checkout, PM on integration) do **not** authorize multi-writer parallel tracks without re-running this **L2** gate.
 
-When the round adds a second **concurrent** writable implement track on the **same business repo**, treat it as a **mode switch** — even if earlier plans in the iteration were serial.
+When the round adds a second **concurrent** writable implement track on the **same business repo** within one plan, treat it as a **mode switch** — even if earlier plans in the iteration were serial or L1 already assigned each plan its own feature worktree.
 
 ## Pre-dispatch checklist (HARD)
 

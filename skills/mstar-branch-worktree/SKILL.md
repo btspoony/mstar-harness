@@ -1,19 +1,20 @@
 ---
 name: mstar-branch-worktree
-description: Morning Star business-repo Git feature branches, same-repo concurrent `git worktree` isolation (N parallel Task invokes do NOT satisfy isolation — worktrees must exist before writable dispatch), plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, dispatches ≥2 concurrent writable implement tracks on one repo, `Worktree isolation: required`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `project-manager` parallel implement or pre-QC orchestration; `fullstack-dev*` / `frontend-dev` / `qa-engineer` / `ops-engineer` on repo writes; `qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`).
+description: Morning Star business-repo Git feature branches, worktree isolation layers **L1** (iteration cross-plan — control worktree + per-plan feature worktrees + `execution_lease`) and **L2** (within-plan — `references/parallel-writable-pre-dispatch.md`; N parallel Task invokes do NOT satisfy isolation), plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, iteration Phase 2 control vs feature worktree paths, dispatches ≥2 concurrent writable implement tracks on one repo, `Worktree isolation: required`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `project-manager` parallel implement or pre-QC orchestration; `fullstack-dev*` / `frontend-dev` / `qa-engineer` / `ops-engineer` on repo writes; `qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`).
 ---
 
 ## Load order（必读顺序）
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 冲突时 **以 `mstar-harness-core` 为准**。
 
-**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-plan-conventions`**。同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；下文为分支与 QC/QA 检出对齐主文。
+**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-plan-conventions`**。**L1/L2 worktree 分层**（迭代 control vs feature、plan 内并行轨）→ 下文 **「Worktree isolation layers」**；**L2** 同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；迭代 lease claim/merge 细则 → **`mstar-iteration`** `references/phase-2-worktree-lease.md`（勿在本 skill 重复完整协议表）。下文为分支与 QC/QA 检出对齐主文。
 
 ## Scope（摘要）
 
 - **仅 PM 决定分支**；其他可写角色不得自行新开分支或切回 `main`。
 - **Assignment 须含其一**：`Working branch: <existing>` | `create <new> from <base>` | `Branch policy: direct on <branch> — <reason>`。
-- **同仓 ≥2 可写并发**：派发 **前** 完成 **`references/parallel-writable-pre-dispatch.md`**（含 `git worktree`、绝对 **`Worktree path`**；**N 次并行 invoke ≠ 已隔离**）。
+- **L1（跨 plan / 迭代 Phase 2）**：control worktree（`metadata.control_worktree_path`，检出 `spec_integration_branch`）+ 每 plan 独立 feature worktree（`execution_lease.worktree_path` **≠** control 路径）+ lease；见 **「Worktree isolation layers」**。
+- **L2（同 plan 内 ≥2 可写并发）**：派发 **前** 完成 **`references/parallel-writable-pre-dispatch.md`**（含 `git worktree`、绝对 **`Worktree path`**；**N 次并行 invoke ≠ 已隔离**）。单 plan 多轨时 **L1 不替代 L2**。
 - **QC/QA 前**：待审提交归并到 **单一 `Working branch` `HEAD`**；三审 + QA 共用一套 **`Review cwd` + `plan_id` + `Review range` / `Diff basis`**（逐字相同）。
 
 ## Git 功能分支、同仓并发与 Worktree 对齐
@@ -99,9 +100,46 @@ description: Morning Star business-repo Git feature branches, same-repo concurre
 
 - `Working branch used: <branch-name>`
 
+## Worktree isolation layers (L1 vs L2)
+
+Two complementary **worktree** isolation layers coexist. Do **not** conflate them with SDD **review** layers (L1–L4 in `mstar-review-qc/references/review-responsibility-boundaries.md`).
+
+| Layer | Scope | When | Mechanism |
+|-------|-------|------|-----------|
+| **L1** | Cross-plan (iteration Phase 2) | Multiple plans may implement concurrently in one iteration | **Control worktree** + per-plan **feature worktrees** + `plans[].execution_lease` |
+| **L2** | Within-plan | Same `plan_id`, same business repo, **≥2 concurrent writable implement tracks** | **`references/parallel-writable-pre-dispatch.md`** — distinct absolute **`Worktree path`** per track |
+
+**Stacking rules**
+
+- Default **L1** capacity is **one writable track per plan**. If one plan runs **≥2** concurrent writable tracks, each track **also** satisfies **L2**; L1 does **not** replace L2.
+- **L1** applies under iteration commands with Phase 2 control-worktree defaults (unless explicit `Worktree mode: waived` this turn). Single-plan waves without iteration leases still require **L2** when **≥2** parallel writable tracks share one repo.
+- Cross-plan **integration merge** into `spec_integration_branch` remains **serial** (`metadata.integration_merge_lease`) even when L1 feature implementation runs in parallel.
+
+### Control worktree vs feature worktree (iteration / L1)
+
+Established at iteration **Phase 2 entry** (Phase 1 Review & Edit may stay on the primary checkout). Normative field names and claim/release/merge protocol → **`mstar-iteration`** `references/phase-2-worktree-lease.md` and maintenance ADR `2026-07-22-iteration-worktree-plan-lease.md`. **Do not invent alternate lease field names in this skill.**
+
+| Worktree role | Checked-out branch | Path recorded in `status.json` | Writable product edits |
+|---------------|-------------------|-------------------------------|------------------------|
+| **Control worktree** | Resolved `spec_integration_branch` (same across active plans) | `metadata.control_worktree_path` — canonical **repository root** (not `{HARNESS_DIR}`) | **Forbidden** — coordination, status/SDD SSOT, serial integration merge only |
+| **Feature worktree** (per plan) | Plan `Working branch` / feature branch from integration | `plans[].execution_lease.worktree_path` | **Required cwd** for that plan's product/source edits |
+
+**Hard rules**
+
+- `execution_lease.worktree_path` **MUST** differ from `metadata.control_worktree_path`.
+- Status SSOT: `<control_worktree_path>/{HARNESS_DIR}/status.json`. SDD SSOT: `<control_worktree_path>/{HARNESS_DIR}/sdd/<plan-id>/`. A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT.
+- Absolute **`Worktree path`** MUST appear in the writable Assignment and in `execution_lease.worktree_path` before first writable implement dispatch for that plan.
+- Writable dispatch for a plan requires a **verified** `execution_lease` (same read-check-replace-verify discipline as the iteration reference). Full claim tables are **not** duplicated here.
+
+**Naming conventions (PM / ops; examples only — paths MUST be canonical absolute)**
+
+1. **Control worktree** — usually the primary checkout or a PM-designated path on `spec_integration_branch`; record once in `metadata.control_worktree_path`.
+2. **Feature worktree (per plan)** — one distinct sibling directory per active `plan_id`, e.g. `<repo-parent>/worktrees/<plan-id>` or team `.worktrees/<plan-id>`; Assignment **`Worktree path`** must match lease `worktree_path`.
+3. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
+
 ## 同仓并发写入与 Git worktree（强制）
 
-**首要场景是开发阶段**：多条可写流 **并发** 改 **同一仓库** 时，用 worktree 做 **写入侧目录隔离**。派发前清单 → **`references/parallel-writable-pre-dispatch.md`**。下列规则针对该类开发并发；**QC / QA 阶段的检出约定**见下一小节。
+**首要场景是开发阶段（L2；迭代多 plan 时另见上文 L1）**：多条可写流 **并发** 改 **同一仓库** 时，用 worktree 做 **写入侧目录隔离**。派发前清单 → **`references/parallel-writable-pre-dispatch.md`**。下列规则针对该类开发并发；**QC / QA 阶段的检出约定**见下一小节。
 
 当 **`project-manager` 在同一调度轮次内并发启动多个** subagent（含宿主侧「并行 Task / 并行 subagent」），且 **≥2 个承接方**可能对 **同一 Git 仓库的同一工作区（同一 cwd 检出目录）**产生写文件或 `git commit` 级改动时：
 
