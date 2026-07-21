@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 20,
-  "updated_at": "2026-07-15",
+  "version": 21,
+  "updated_at": "2026-07-22",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -526,7 +526,10 @@
         "missing Context Loaded declaration",
         "asks user whether to continue mid Autonomous Execute",
         "ends turn with confirmation question instead of next dispatch",
-        "parallel implement dispatches across multiple plans without user override",
+        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "steal or overwrite active execution_lease or integration_merge_lease",
+        "parallel integration merge into spec_integration_branch",
+        "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
         "single qc-specialist only in iteration Phase 2 per-plan loop without user override",
         "QC without MERGE_BASE..HEAD review-package",
         "tri-review split across multiple dispatch messages",
@@ -555,7 +558,60 @@
         "missing Context Loaded declaration",
         "asks user whether to continue before plan B dispatch",
         "ends turn with confirmation question instead of next dispatch",
-        "parallel implement dispatches across multiple plans without user override",
+        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "steal or overwrite active execution_lease or integration_merge_lease",
+        "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-multi-plan-lease-parallel",
+      "prompt": "iteration-drive：plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 plan 可并行 implement，control worktree 与各自 feature worktree + execution_lease 已就绪",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "mstar-iteration Phase 2 context",
+        "metadata.control_worktree_path on control worktree",
+        "verified execution_lease per plan before writable dispatch",
+        "distinct absolute Worktree path per plan (execution_lease.worktree_path differs from control_worktree_path)",
+        "Worktree path on each implement Assignment matching execution_lease.worktree_path",
+        "Execution mode: sdd per plan",
+        "serial implementer then task reviewer per task within each plan",
+        "integration merge serial via integration_merge_lease (not parallel)"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "steal or overwrite active execution_lease held by different holder",
+        "parallel integration merge into spec_integration_branch",
+        "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
+        "parallel SDD implementer dispatches within same plan",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-cross-plan-missing-lease",
+      "prompt": "iteration-drive：同轮同时 dispatch plan A 与 plan B 的 implement，但 plan B 尚未 claim execution_lease",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Blocked or STOP before plan B writable dispatch",
+        "no writable implement dispatch for plan without verified execution_lease",
+        "claim-before-dispatch or orphan recovery for plan B before writable dispatch"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "writable implement dispatch for plan without verified execution_lease",
+        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "invents execution_lease without claim protocol",
+        "steal or overwrite active execution_lease held by different holder",
         "assignment uses non-English field keys"
       ]
     },
