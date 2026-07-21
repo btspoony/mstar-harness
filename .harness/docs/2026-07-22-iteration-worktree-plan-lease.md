@@ -152,6 +152,18 @@ claim, release, transfer, plan-status transition, or merge-lease mutation. It
 MUST NOT rely on a cached plan row. A writer MUST preserve unrelated plan rows,
 root metadata, and residual findings.
 
+### Same-host exclusive write lock
+
+Lease mutations on the control copy of `{HARNESS_DIR}/status.json` MUST run
+inside a same-host exclusive write lock for the full read-check-replace-verify
+sequence. Preferred: `flock` on `{HARNESS_DIR}/.status-write.lock`. Alternative:
+atomic `mkdir` on `{HARNESS_DIR}/.status-write.lockdir/`. Cross-host / no shared
+flock: cooperative only — residual race risk remains; do not add a distributed
+CAS CLI in v1.
+
+Immediately before any writable implement dispatch, reread control `status.json`
+and re-verify `execution_lease` holder and paths; mismatch → STOP.
+
 ## Execution lease protocol
 
 ### Claim
@@ -161,34 +173,45 @@ A Phase 2 session MUST claim before it moves a plan from `Todo` or `Blocked` to
 
 1. Read the control copy of `status.json` and locate exactly one matching plan
    row (read compatibility accepts `id` or `plan_id`).
-2. If `execution_lease` exists, stop as **Blocked**. No timestamp makes it
-   stealable.
-3. Create or verify the dedicated feature worktree and branch.
-4. Re-read `status.json`. If the row, status, or lease state changed, restart
-   the claim.
-5. In one complete-file update, set `status: "InProgress"` and write the full
-   `execution_lease` object. Write a temporary file in the same directory and
-   atomically replace `status.json`; never expose partial JSON.
-6. Re-read the stored row and verify that `holder`, `worktree_path`, and
+2. **Resume (not steal):** if `execution_lease` exists and `holder` **equals
+   this session** → verify-held-lease: confirm `worktree_path` and
+   `working_branch` match the Assignment; continue (this is **not** Blocked and
+   **not** a new claim).
+3. **Blocked:** if `execution_lease` exists and `holder` **differs** → stop. No
+   timestamp makes it stealable.
+4. **Orphan:** if `status` is `InProgress` but `execution_lease` is absent →
+   STOP; recovery semantics are in runtime SSOT (`status-and-residuals.md`).
+5. Create or verify the dedicated feature worktree and branch.
+6. Acquire the same-host write lock; re-read `status.json`. If the row, status,
+   or lease state changed, restart the claim.
+7. In one complete-file update (under lock), set `status: "InProgress"` and write
+   the full `execution_lease` object. Write a temporary file in the same
+   directory and atomically replace `status.json`; never expose partial JSON.
+8. Re-read the stored row and verify that `holder`, `worktree_path`, and
    `working_branch` exactly match the attempted claim. Writable dispatch is
    forbidden until this verification succeeds.
 
-This read-check-replace-verify sequence reduces lost updates but is still
-cooperative, not a compare-and-swap guarantee. If two writers race or any
-unrelated field is lost, both MUST stop, restore a coherent status file from
-the latest complete state, and obtain explicit human/PM ownership resolution
-before implementation continues.
+This read-check-replace-verify sequence reduces lost updates on a single host
+when combined with the same-host write lock. Cross-host it remains cooperative,
+not a compare-and-swap guarantee. If two writers race or any unrelated field is
+lost, both MUST stop, restore a coherent status file from the latest complete
+state, and obtain explicit human/PM ownership resolution before implementation
+continues.
 
 ### Hold and release
 
-- A lease remains active across `InProgress` and `InReview`, including review
-  fix rounds, unless ownership is deliberately released or transferred.
+- A lease remains active across `InProgress` and `InReview`, including
+  post-QC/QA ready-to-merge, unless ownership is deliberately released or
+  transferred.
 - Normal release deletes `execution_lease`; `null` and tombstone objects are
   invalid writes.
 - The holder MAY release on voluntary abandonment. A blocked abandonment MUST
   set `status: "Blocked"` and delete the lease in the same complete-file update.
 - The authority that sets `status: "Done"` MUST delete any execution lease in
-  the same update. This does not change existing Done ownership rules.
+  the same update — **only after** successful integration merge into
+  `spec_integration_branch` when the Phase 2 lease gate is not waived. After
+  QC/QA pass, the plan stays `InReview` with the lease retained until merge
+  succeeds. This does not change existing Done ownership rules.
 - A temporary blockage MAY retain the lease only when the same holder remains
   responsible and the plan record explains the next action.
 - The releasing session MUST re-read and confirm that the stored `holder`
@@ -207,6 +230,13 @@ MUST append an audit entry to the existing plan `notes` convention containing
 the timestamp, prior holder, new holder (or release), and the fact that the
 user authorized the override. An agent may not infer override authorization
 from age, inactivity, `Blocked` status, or a failed session.
+
+### Orphan recovery (`InProgress` without `execution_lease`)
+
+Runtime skills STOP and defer recovery to `status-and-residuals.md`. Unattended
+"Recover with claim" is permitted **only** for the **same** stable `holder`.
+Different holder requires verified quiescence of the prior writer plus explicit
+handoff, or current-turn user override with audit `notes`.
 
 ## Expiry policy
 
@@ -228,21 +258,26 @@ all mutations of `spec_integration_branch` are serialized:
 
 1. From the control worktree, verify a clean working tree and verify the checked
    out branch equals the plan's resolved `spec_integration_branch`.
-2. Reread root `metadata`. If `integration_merge_lease` exists, stop as
-   **Blocked**; it cannot expire or be stolen.
-3. Re-read and then claim the merge lease using the same complete-file
+2. Under the same-host write lock, reread root `metadata`. If
+   `integration_merge_lease` exists:
+   - **Resume (not steal):** `holder` **equals this session** →
+     verify-held-merge-lease: confirm `plan_id`, `source_branch`, and
+     `target_branch` match the intended merge; confirm control worktree state;
+     continue (this is **not** Blocked).
+   - **Blocked:** `holder` **differs** → stop; it cannot expire or be stolen.
+3. If unclaimed, claim the merge lease using the same complete-file
    read-check-replace-verify discipline as execution claims. The source branch
    and plan ID MUST match the feature being integrated; the target MUST match
    `spec_integration_branch`.
 4. Only the exact stored merge-lease holder may run the integration operation,
    and it MUST run from `control_worktree_path`.
 5. On successful integration, record the resulting commit/evidence through the
-   existing plan/status conventions, then delete
-   `metadata.integration_merge_lease` in a complete-file update.
-6. On conflict or failed integration, retain the merge lease while resolving or
-   aborting so another session cannot begin a second merge. If abandoned, mark
-   the affected plan blocked as appropriate and manually release the merge
-   lease after the control worktree is returned to a clean, known state.
+   existing plan/status conventions, delete `metadata.integration_merge_lease`,
+   and in the same locked update set plan `status: "Done"` and delete
+   `execution_lease`.
+6. On conflict or failed integration, retain both leases; the plan stays
+   `InReview` — do not set `Done`. Release the merge lease only after the
+   control worktree is returned to a clean, known state.
 
 Execution and merge leases may coexist. The merge lease is global and permits
 exactly one integration operation; it does not grant execution ownership for
@@ -286,6 +321,9 @@ lock/CAS service and failure model rather than an incidental helper command.
 - **Short default TTL**: unsafe for sleeping sessions and long review rounds.
 - **File `flock` as primary SSOT**: brittle across hosts, operating systems, and
   machines; it also does not provide the required durable ownership record.
+  v1 uses `flock` (or `mkdir` lock-dir) as a **same-host adjunct** to the
+  durable `execution_lease` / `integration_merge_lease` record in
+  `status.json`, not as a cross-machine lock service.
 - **CLI JSON helper in this plan**: does not solve distributed atomicity and
   adds a runtime dependency before the cooperative semantics are validated.
 - **Parallel merge into integration**: creates non-deterministic conflicts and
