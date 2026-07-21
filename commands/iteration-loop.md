@@ -62,8 +62,8 @@ Phase 1: Autonomous start  →  Phase 2: Autonomous Execute  →  Phase 3: close
 | 禁止 | 必须 |
 |------|------|
 | 方向 / plan / phase 边界例行 yes/no（「是否同意该方向」「要不要继续」「是否开 PR」） | 进度摘要后**下一条** = dispatch 或下一 phase 步骤 |
-| 用 Phase 汇报收束 turn 后等待用户 | Phase 1 lock → **立刻** Phase 2；plan Done → 下一 plan 或 Phase 3 |
-| 跨 plan 并行 implement | Per-plan **串行** |
+| 用 Phase 汇报收束 turn 后等待用户 | Phase 1 lock → **立刻** Phase 2；plan 可 lease 门控并行 implement；merge 串行 |
+| 跨 plan 无 lease 并行 implement | **默认 lease 门控并行**；`Plan parallelism: serial` 恢复逐 plan 串行 |
 
 **合法 STOP（仅此升级用户）**：
 
@@ -119,6 +119,7 @@ Phase 1: Autonomous start  →  Phase 2: Autonomous Execute  →  Phase 3: close
 9. **`mstar-sdd`** — before first implement dispatch in Phase 2
 10. `mstar-review-qc` — before first QC dispatch in Phase 2
 11. `mstar-branch-worktree` — when Git/write or QC checkout
+12. **`mstar-iteration/references/phase-2-worktree-lease.md`** — Phase 2 control worktree + lease（§2.0 #5 未 waive）
 
 **Do not** Read `skills/grill-me/SKILL.md` for this command.
 
@@ -218,15 +219,15 @@ Register branch fields in compass + `status.json`. Commit docs; push.
 
 ## Phase 2: Autonomous Execute
 
-**Continuous execution applies.** Branch policy first（`mstar-iteration` §2.3）.
+**Continuous execution applies.** Branch policy + control worktree first（`mstar-iteration` §2.3 + **`references/phase-2-worktree-lease.md`**）.
 
 Execute **`mstar-iteration` § Phase 2** exactly. Summary:
 
-1. Precondition gate §2.0（four checks）
+1. Precondition gate §2.0（five checks；含 control-worktree + lease defaults）
 2. Session todos §2.1
 3. Read backlog §2.2
-4. Integration branch §2.3
-5. Per-plan loop §2.4 — **SDD** default; serial implementer → task reviewer; QC **full tri-review** N=3; QA gate; merge to integration; next plan
+4. Integration branch + control worktree §2.3
+5. Per-plan loop §2.4 — **lease-gated parallel** across plan IDs（unless `Plan parallelism: serial`）；claim/resume `execution_lease`；feature worktree；**SDD** default；serial merge via `integration_merge_lease`
 6. All plans `Done` → print `## Phase 3: iteration-close` → **`mstar-iteration` §3**（不得开 PR）
 
 派发纪律 → **`mstar-dispatch-gates`** + **`mstar-iteration` §2.5**。
