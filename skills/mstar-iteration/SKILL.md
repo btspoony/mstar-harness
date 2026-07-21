@@ -7,7 +7,7 @@ description: Morning Star 迭代管理 —— Phase 1（默认 interactive direc
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols → **`mstar-plan-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. **Phase 2 entry**（control worktree + lease）→ **`references/phase-2-worktree-lease.md`** + **`mstar-branch-worktree`**。 **Phase 2 implement 波次**（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**。Phase 2 QC 前 → **`mstar-review-qc`**。On conflict, **`mstar-harness-core` wins**.
+**Read `mstar-harness-core` first.** Path symbols → **`mstar-plan-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. **Phase 2 entry**（control worktree + lease）→ **`references/phase-2-worktree-lease.md`** + **`mstar-branch-worktree`**。**Phase 2 implement 波次**（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**。Phase 2 QC 前 → **`mstar-review-qc`**。On conflict, **`mstar-harness-core` wins**.
 
 ## 设计思路
 
@@ -216,7 +216,7 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
 4. **Branch metadata gate**：root `metadata.iteration_base_branch`、`metadata.target_branch` 已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
-5. **Control-worktree + lease defaults**（iteration 命令）：除非本轮 Assignment 显式 `Worktree mode: waived` / `Plan parallelism: serial`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写 `status.json` / `{SDD_DIR}`，并在可写派发前 claim `plans[].execution_lease`。细则 → **`references/phase-2-worktree-lease.md`**。
+5. **Control-worktree + lease defaults**（iteration 命令）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写 `status.json` / `{SDD_DIR}`，并在可写派发前 claim `plans[].execution_lease`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；control worktree + `execution_lease` / `integration_merge_lease` 仍须满足。细则 → **`references/phase-2-worktree-lease.md`**。
 
 任一 false → **stop**。Phase 1 / Prepare 未完成 → 先完成 Phase 1 或 per-plan Prepare，再进入本 Phase。
 

@@ -10,8 +10,10 @@ checklist**; do not invent alternate lease field names.
 
 **Iteration commands only** (`iteration-start` ends before this; `iteration-drive`
 / `iteration-loop` Phase 2+). Defaults are **hard** unless the current turn
-explicitly waives via Assignment `Worktree mode: waived`, `Plan parallelism:
-serial`, or equivalent user instruction.
+explicitly waives via Assignment `Worktree mode: waived` (or equivalent user
+instruction). `Plan parallelism: serial` is **not** a waiver — it only forces
+serial cross-plan **implement** scheduling while control worktree + leases remain
+required.
 
 Phase 1 Review & Edit may stay on the primary checkout. The control-worktree gate
 starts at **Phase 2 entry**.
@@ -37,6 +39,9 @@ claim, release, transfer, plan-status transition, or merge-lease mutation.
 
 - Each concurrently active plan uses a **distinct** absolute feature-worktree
   path and dedicated feature branch from `spec_integration_branch`.
+- `execution_lease.worktree_path` MUST differ from
+  `metadata.control_worktree_path` (never reuse the control checkout for product
+  edits).
 - `Worktree path` MUST appear in the writable Assignment and in
   `plans[].execution_lease.worktree_path` before first writable implement dispatch.
 - Product/source edits run from the feature worktree; status and SDD
@@ -67,7 +72,9 @@ Required shape (v1): `holder`, `claimed_at` (RFC 3339 UTC with `Z`),
 
 - Lease stays active across `InProgress` and `InReview` unless released or
   transferred.
-- Normal release **deletes** `execution_lease` (never `null` or tombstone).
+- Normal release: re-read control `status.json`; confirm stored `holder` matches
+  this session — mismatch → **Blocked**; then **delete** `execution_lease`
+  (never `null` or tombstone).
 - `Done` authority deletes lease in the same update.
 - Override of another holder requires **explicit user instruction this turn** +
   audit note on plan `notes` (prior holder, new holder/release, user authorized).
@@ -102,6 +109,10 @@ Execution and merge leases may coexist; merge lease does not grant execution
 ownership for the source plan.
 
 ## Waiver
+
+Full control-worktree + lease gate waiver requires explicit `Worktree mode: waived`
+(or equivalent user instruction) this turn. `Plan parallelism: serial` does **not**
+waive control worktree or leases.
 
 Iteration commands MUST NOT infer waiver from missing worktrees or single-session
 starts. Explicit override this turn only.
