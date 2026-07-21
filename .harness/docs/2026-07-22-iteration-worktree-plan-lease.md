@@ -253,8 +253,10 @@ the source plan.
 For iteration commands, the control worktree, per-plan feature worktree,
 execution lease, and serial merge lease are hard Phase 2 defaults. They may be
 waived only by explicit user instruction in the current turn, expressed in the
-Assignment as `Worktree mode: waived`, `Plan parallelism: serial`, or an
-equally unambiguous statement. No persistent waiver schema is added here, and
+Assignment as `Worktree mode: waived` (or an equally unambiguous statement).
+`Plan parallelism: serial` is **not** a waiver — it only forces serial cross-plan
+implement scheduling; control worktree and leases remain required. No persistent
+waiver schema is added here, and
 iteration commands MUST NOT infer a waiver from missing worktrees or a
 single-session start.
 
