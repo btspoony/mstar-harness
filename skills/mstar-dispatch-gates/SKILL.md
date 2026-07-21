@@ -84,8 +84,11 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 | **工具并发** | 同条消息发满 N 次 invoke | 已发 2 个 Task ⇒ 误以为「并行合规」 |
 | **同仓写隔离** | 派发 **前** 每轨独立 `Worktree path` | 只写了 `Working branch` / `checkout -b` |
 
-- 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**同仓 ≥2 可写并发** → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**（先于 invoke）。
-- **SDD 单 plan 内 task** 仍串行（`mstar-sdd`）；plan 间默认串行（`mstar-iteration` §2.6）— 用户书面 override 时仍须 worktree 隔离。
+- 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**同仓 ≥2 可写并发** → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**（先于 invoke；同 plan 多轨 = L2）。
+- **SDD 单 plan 内**：task / implementer **仍串行**（`mstar-sdd`）；**禁止**同一 plan 内并行 SDD implementer（写冲突）。
+- **跨 plan（迭代 Phase 2）≠ 单 plan 内并行**：不同 `plan_id` 的 feature implement **允许** lease 门控并行（每 plan 独立 verified `plans[].execution_lease` + feature worktree，L1）→ **`mstar-iteration`** §2.6 · **`mstar-branch-worktree`** L1。**禁止**无 lease 的跨 plan 可写派发。
+- **`integration_merge_lease`**：`spec_integration_branch` 上的 merge **始终串行**（一次仅一 holder）→ **`mstar-iteration`** · **`mstar-plan-artifacts`**。
+- **`Plan parallelism: serial`**：仅强制跨 plan implement **调度串行**；**不** waive control worktree / `execution_lease` / `integration_merge_lease`（`Worktree mode: waived` 才是完整豁免）→ **`mstar-iteration`** §2.0 #5。
 - **Plan QC tri** after SDD task loop（`Execution mode: sdd`）；**单席**仅 `inline` / hotfix。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
 - **Tri 同消息规则**：plan QC tri（SDD 或 Assignment 显式 `QC mode: full tri-review`）时三席 **同一条消息**、**同一套** scope 字段。
 
@@ -104,8 +107,10 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 - QC 三审拆在多条消息（tri 模式）或单席却未附 review-package 路径。
 - 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式 N=3）。
-- SDD 并行 implementer dispatch（**同一 plan 内**多 task）。
-- 同仓多轨 writable implement：**N invoke ≠ worktree 隔离** → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**。
+- SDD 并行 implementer dispatch（**同一 plan 内**多 task）— **不同于**跨 plan lease 门控并行（后者见上节 L1）。
+- 跨 plan 可写派发无 verified `execution_lease`；steal / 覆盖活跃 `execution_lease` 或 `integration_merge_lease`；并行 integration merge。
+- `InProgress` 无 `execution_lease` 未走 orphan recovery 即 writable-dispatch。
+- 同仓多轨 writable implement：**N invoke ≠ worktree 隔离**（L2）→ **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
 - Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。

@@ -314,7 +314,7 @@ After any recovery path, the next session must pass verify-held-lease before wri
 - **MUST NOT** steal or overwrite an active `execution_lease` or `integration_merge_lease` (no TTL, age, or inactivity authority in v1).
 - **MUST NOT** writable-dispatch without a verified `execution_lease` for that plan (resume counts only when same `holder` passes verify-held-lease).
 - **MUST NOT** write `null` or tombstone objects for lease keys — **delete** the key on release.
-- **PM NEVER** steal an active lease without explicit current-turn user override + audit `notes` (full PM NEVER consolidation → plan T5 / `project-manager` refs).
+- **PM NEVER** steal an active lease without explicit current-turn user override + audit `notes` (full list → `mstar-roles/references/project-manager.md` § PM-Specific NEVER Rules).
 
 Preservation: writers **MUST** preserve unrelated plan rows, root metadata, and `residual_findings` on every lease mutation.
 
