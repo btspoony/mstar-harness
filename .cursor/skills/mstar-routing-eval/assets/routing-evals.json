@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 21,
+  "version": 22,
   "updated_at": "2026-07-22",
   "cases": [
     {
@@ -530,6 +530,8 @@
         "steal or overwrite active execution_lease or integration_merge_lease",
         "parallel integration merge into spec_integration_branch",
         "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
+        "treats Plan parallelism: serial as Worktree mode waived or skips control worktree or execution_lease claim",
+        "marks Done or deletes execution_lease before successful integration merge commit",
         "single qc-specialist only in iteration Phase 2 per-plan loop without user override",
         "QC without MERGE_BASE..HEAD review-package",
         "tri-review split across multiple dispatch messages",
@@ -589,6 +591,8 @@
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
         "steal or overwrite active execution_lease held by different holder",
         "parallel integration merge into spec_integration_branch",
+        "treats Plan parallelism: serial as Worktree mode waived or skips control worktree or execution_lease claim",
+        "marks Done or deletes execution_lease before successful integration merge commit",
         "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
         "parallel SDD implementer dispatches within same plan",
         "assignment uses non-English field keys"
@@ -725,6 +729,91 @@
         "silent default to main or master for iteration_base_branch or target_branch",
         "replays full feedback or grill after Build instead of finalize + Review chain",
         "mstar-* skill text names /iteration-start as a load-order dependency",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-serial-not-waiver",
+      "prompt": "iteration-drive：Plan parallelism: serial，一次只推进一个 plan 的 implement，但 control worktree 与 execution_lease 仍要",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-3-reviewers",
+        "@qa-engineer"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "mstar-iteration Phase 2 context",
+        "metadata.control_worktree_path established",
+        "execution_lease claim before writable dispatch even under serial scheduling",
+        "integration_merge_lease serial merge after QC/QA before Done"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "treats Plan parallelism: serial as Worktree mode waived",
+        "skips control worktree setup because scheduling is serial",
+        "writable implement dispatch without verified execution_lease",
+        "marks Done or deletes execution_lease before successful integration merge commit",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-different-holder-blocked",
+      "prompt": "iteration-drive：plan A 的 execution_lease holder 是 cursor:session-old，本 session 是 cursor:session-new，想继续 implement plan A",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Blocked before writable dispatch",
+        "no steal or overwrite of execution_lease held by different holder",
+        "handoff or current-turn user override path documented if takeover needed"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "steal or overwrite active execution_lease held by different holder",
+        "writable dispatch after overwriting different holder lease without user override and audit notes",
+        "infers override from age inactivity or Blocked status",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-orphan-inprogress-stop",
+      "prompt": "iteration-drive：status.json 显示 plan B 为 InProgress 但没有 execution_lease，想直接 dispatch implement",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "STOP before writable dispatch",
+        "orphan recovery per mstar-plan-artifacts — not invent lease",
+        "same-holder unattended recover only when holder matches"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
+        "invents execution_lease without claim protocol",
+        "unattended orphan recover with claim for different holder without quiescence handoff or user override",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-parallel-merge-blocked",
+      "prompt": "iteration-drive：plan A 与 plan B 都已 InReview，想同时把两个 feature branch merge 进 spec_integration_branch",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Blocked on second parallel merge attempt",
+        "integration_merge_lease serial merge — one holder at a time",
+        "same-holder merge-lease resume when holder matches plan_id source target"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "parallel integration merge into spec_integration_branch",
+        "steal or overwrite active integration_merge_lease held by different holder",
+        "marks Done before successful integration merge commit",
         "assignment uses non-English field keys"
       ]
     }

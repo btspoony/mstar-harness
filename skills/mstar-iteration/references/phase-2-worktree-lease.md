@@ -35,6 +35,19 @@ starts at **Phase 2 entry**.
 All sessions MUST reread the **control copy** of `status.json` immediately before
 claim, release, transfer, plan-status transition, or merge-lease mutation.
 
+### Same-host exclusive write lock
+
+All control-path lease mutations (claim, release, transfer, merge-lease
+claim/release) **MUST** run inside a same-host exclusive write lock for the full
+read-check-replace-verify sequence. Prefer `flock` on
+`{HARNESS_DIR}/.status-write.lock`; alternative: atomic `mkdir` on
+`{HARNESS_DIR}/.status-write.lockdir/`. Cross-host / no shared flock: cooperative
+only — document residual race risk; do **not** invent distributed CAS CLI.
+
+Immediately before **any** writable implement dispatch, re-read control
+`status.json` and re-verify `execution_lease` holder + paths match this session;
+mismatch → **STOP**.
+
 ## Feature worktree (per plan)
 
 - Each concurrently active plan uses a **distinct** absolute feature-worktree
@@ -62,20 +75,21 @@ Required shape (v1): `holder`, `claimed_at` (RFC 3339 UTC with `Z`),
      `working_branch` match the Assignment; continue (not steal/block).
    - **Different `holder`** → **Blocked** (no timestamp makes it stealable).
 3. Create or verify dedicated feature worktree + branch.
-4. Re-read `status.json`; if row/status/lease changed, restart claim.
-5. One complete-file update: `status: "InProgress"` + full `execution_lease`.
+4. Re-read `status.json` under write lock; if row/status/lease changed, restart claim.
+5. One complete-file update (still under lock): `status: "InProgress"` + full `execution_lease`.
    Use temp file + atomic replace; never expose partial JSON.
 6. Re-read and verify `holder`, `worktree_path`, `working_branch` match before
    any writable dispatch.
 
 ### Hold, release, override
 
-- Lease stays active across `InProgress` and `InReview` unless released or
-  transferred.
-- Normal release: re-read control `status.json`; confirm stored `holder` matches
+- Lease stays active across `InProgress` and `InReview` (including post-QC/QA
+  ready-to-merge) unless released or transferred.
+- Normal release: re-read control `status.json` under write lock; confirm stored `holder` matches
   this session — mismatch → **Blocked**; then **delete** `execution_lease`
   (never `null` or tombstone).
-- `Done` authority deletes lease in the same update.
+- `Done` authority deletes `execution_lease` in the same update as `status: "Done"`
+  — **only after** successful integration merge (when lease gate not waived).
 - Override of another holder requires **explicit user instruction this turn** +
   audit note on plan `notes` (prior holder, new holder/release, user authorized).
 - V1: **manual release only** — no `expires_at`, TTL, or heartbeat authority.
@@ -83,8 +97,10 @@ Required shape (v1): `holder`, `claimed_at` (RFC 3339 UTC with `Z`),
 ### Orphan `InProgress` without lease
 
 If a plan row is `InProgress` but has **no** `execution_lease`, STOP and
-escalate — do not invent a lease or writable-dispatch. Recovery semantics →
-`mstar-plan-artifacts` (not iteration skill).
+escalate — do not invent a lease or writable-dispatch. Unattended "Recover with
+claim" is permitted **only** for the **same** stable `holder`; different holder
+requires verified quiescence + handoff or current-turn user override + audit.
+Recovery semantics → `mstar-plan-artifacts` (not iteration skill).
 
 ## Multi-plan parallelism
 
@@ -98,12 +114,17 @@ Required shape (v1): `holder`, `claimed_at`, `plan_id`, `source_branch`,
 `target_branch` (= resolved `spec_integration_branch`); optional `session_label`.
 
 1. From control worktree: clean tree; branch = `spec_integration_branch`.
-2. If `integration_merge_lease` exists → **Blocked** (cannot expire or steal).
-3. Claim merge lease (same read-check-replace-verify as execution claim).
+2. Under write lock, reread root `metadata`. If `integration_merge_lease` exists:
+   - **Same `holder` as this session** → **resume**: verify `plan_id`,
+     `source_branch`, `target_branch` match intended merge; confirm control
+     worktree state; continue (not steal/block).
+   - **Different `holder`** → **Blocked** (cannot expire or steal).
+3. If unclaimed, claim merge lease (same read-check-replace-verify as execution claim).
 4. Only merge-lease holder runs integration from `control_worktree_path`.
-5. On success: record evidence per plan/status conventions; delete merge lease.
-6. On conflict/failure: retain lease while resolving; release only after control
-   worktree is clean and known state.
+5. On success: record merge commit/evidence; delete merge lease; set plan
+   **`Done`** and delete `execution_lease` in the same locked update.
+6. On conflict/failure: retain leases; plan stays **`InReview`** — do not set
+   `Done`. Release merge lease only after control worktree is clean and known state.
 
 Execution and merge leases may coexist; merge lease does not grant execution
 ownership for the source plan.
