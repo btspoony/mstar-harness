@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 22,
+  "version": 23,
   "updated_at": "2026-07-22",
   "cases": [
     {
@@ -527,6 +527,7 @@
         "asks user whether to continue mid Autonomous Execute",
         "ends turn with confirmation question instead of next dispatch",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "cross-plan parallel writable implement without same-host exclusive write lock on control status.json and without Cross-host lease race accepted override",
         "steal or overwrite active execution_lease or integration_merge_lease",
         "parallel integration merge into spec_integration_branch",
         "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
@@ -561,6 +562,7 @@
         "asks user whether to continue before plan B dispatch",
         "ends turn with confirmation question instead of next dispatch",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "cross-plan parallel writable implement without same-host exclusive write lock on control status.json and without Cross-host lease race accepted override",
         "steal or overwrite active execution_lease or integration_merge_lease",
         "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
         "assignment uses non-English field keys"
@@ -579,6 +581,7 @@
         "Context Loaded declaration",
         "mstar-iteration Phase 2 context",
         "metadata.control_worktree_path on control worktree",
+        "same-host exclusive write lock available and used for every lease mutation before cross-plan parallel dispatch",
         "verified execution_lease per plan before writable dispatch",
         "distinct absolute Worktree path per plan (execution_lease.worktree_path differs from control_worktree_path)",
         "Worktree path on each implement Assignment matching execution_lease.worktree_path",
@@ -589,6 +592,7 @@
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "cross-plan parallel writable implement without same-host exclusive write lock on control status.json and without Cross-host lease race accepted override",
         "steal or overwrite active execution_lease held by different holder",
         "parallel integration merge into spec_integration_branch",
         "treats Plan parallelism: serial as Worktree mode waived or skips control worktree or execution_lease claim",
@@ -614,6 +618,7 @@
         "missing Context Loaded declaration",
         "writable implement dispatch for plan without verified execution_lease",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "cross-plan parallel writable implement without same-host exclusive write lock on control status.json and without Cross-host lease race accepted override",
         "invents execution_lease without claim protocol",
         "steal or overwrite active execution_lease held by different holder",
         "assignment uses non-English field keys"
@@ -814,6 +819,26 @@
         "parallel integration merge into spec_integration_branch",
         "steal or overwrite active integration_merge_lease held by different holder",
         "marks Done before successful integration merge commit",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-cross-host-parallel-without-lock",
+      "prompt": "iteration-drive：plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 session 在不同机器上、control status.json 无共享 flock，想同时 dispatch 两 plan 的 implement",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Blocked or Plan parallelism: serial before cross-plan parallel writable dispatch",
+        "no cross-plan parallel writable dispatch without same-host exclusive write lock on control status.json",
+        "cross-host residual documented only after current-turn Cross-host lease race accepted plus audit plans notes"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "cross-plan parallel writable implement without same-host exclusive write lock on control status.json and without Cross-host lease race accepted override",
+        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
+        "writable implement dispatch for plan without verified execution_lease",
         "assignment uses non-English field keys"
       ]
     }

@@ -157,9 +157,17 @@ root metadata, and residual findings.
 Lease mutations on the control copy of `{HARNESS_DIR}/status.json` MUST run
 inside a same-host exclusive write lock for the full read-check-replace-verify
 sequence. Preferred: `flock` on `{HARNESS_DIR}/.status-write.lock`. Alternative:
-atomic `mkdir` on `{HARNESS_DIR}/.status-write.lockdir/`. Cross-host / no shared
-flock: cooperative only — residual race risk remains; do not add a distributed
+atomic `mkdir` on `{HARNESS_DIR}/.status-write.lockdir/`. Do not add a distributed
 CAS CLI in v1.
+
+**Cross-plan parallel hard gate:** Lease-gated cross-plan parallel writable
+implement is allowed only when this same-host lock is available on the control
+worktree filesystem and held for every lease mutation in that Phase 2 session.
+Agents on different hosts or with no shared flock/lockdir MUST default to
+`Plan parallelism: serial` for cross-plan implement scheduling. Assignment that
+still claims cross-plan parallel without lock availability is Blocked until PM
+aligns serial scheduling or the user supplies current-turn override
+`Cross-host lease race: accepted` (or equivalent) with audit on `plans[].notes`.
 
 Immediately before any writable implement dispatch, reread control `status.json`
 and re-verify `execution_lease` holder and paths; mismatch → STOP.
@@ -253,8 +261,14 @@ clock tolerance, stale detection, and override audit semantics.
 
 ## Serial integration merge protocol
 
-Feature implementation may proceed concurrently across different plan IDs, but
-all mutations of `spec_integration_branch` are serialized:
+Feature implementation may proceed concurrently across different plan IDs only
+when each plan holds a verified execution lease and distinct feature worktree
+**and** same-host exclusive write lock is available on the control path and used
+for every lease mutation. Cross-host or no shared flock/lockdir: default
+`Plan parallelism: serial`; cross-plan parallel Assignment without lock is
+Blocked unless the user supplies current-turn `Cross-host lease race: accepted`
+(or equivalent) with audit on `plans[].notes`. All mutations of
+`spec_integration_branch` are serialized:
 
 1. From the control worktree, verify a clean working tree and verify the checked
    out branch equals the plan's resolved `spec_integration_branch`.
@@ -307,9 +321,14 @@ lock/CAS service and failure model rather than an incidental helper command.
 ## Consequences
 
 - Routing evaluation must allow cross-plan parallelism only when distinct
-  feature worktrees and verified per-plan leases are present.
-- Double claim, writable dispatch before a verified claim, and concurrent merge
-  attempts are hard failures.
+  feature worktrees, verified per-plan leases, **and** same-host exclusive write
+  lock availability on the control path are present — or when the user supplies
+  current-turn `Cross-host lease race: accepted` with audit `plans[].notes`.
+- Cross-host / no shared flock without override: `Plan parallelism: serial` or
+  Blocked if Assignment still claims cross-plan parallel implement.
+- Double claim, writable dispatch before a verified claim, cross-plan parallel
+  without same-host lock (and without override), and concurrent merge attempts
+  are hard failures.
 - Phase 1 Review & Edit may remain on the primary checkout; the control-worktree
   gate begins at Phase 2 entry.
 - Stale leases require manual human/PM resolution. This operational cost is

@@ -201,7 +201,7 @@ Plan row (per active iteration plan):
 
 ## Iteration execution leases (Phase 2)
 
-Cooperative coordination through the **control worktree** copy of `{HARNESS_DIR}/status.json`. Not a distributed lock service — non-cooperating processes are out of scope. **Same-host** writers additionally use an exclusive write lock (below) around lease mutations.
+Cooperative coordination through the **control worktree** copy of `{HARNESS_DIR}/status.json`. Not a distributed lock service — non-cooperating processes are out of scope. **Same-host** writers use an exclusive write lock (below) around lease mutations; **cross-plan parallel writable implement** is permitted only when that lock is available on the control path and held for every lease mutation (see hard gate below).
 
 **When fields apply:** iteration Phase 2 (after control worktree entry). Waived only by explicit current-turn user instruction (`Worktree mode: waived` or equivalent). `Plan parallelism: serial` does **not** waive leases.
 
@@ -226,7 +226,9 @@ LOCK="$CONTROL_ROOT/$HARNESS/.status-write.lock"
 
 **Alternative when `flock` unavailable:** atomic `mkdir` on `{HARNESS_DIR}/.status-write.lockdir/` — success acquires; existing dir → **Blocked** (another writer holds the lock); remove the directory only after successful verify or explicit rollback.
 
-**Cross-host / NFS / no shared flock:** remains **cooperative only** — v1 does **not** add a distributed CAS CLI. Writers MUST still follow read-check-replace-verify. **Residual risk:** two hosts can still race; document cross-host use in `plans[].notes` or iteration compass when applicable.
+**Hard gate — cross-plan parallel writable implement:** Lease-gated **cross-plan parallel** writable implement is allowed **only when** a same-host exclusive write lock is **available on the control worktree filesystem and held for every lease mutation** in that Phase 2 session (execution claim/release/transfer, plan-status transitions that touch leases, `integration_merge_lease` claim/release). If agents span hosts or the control `status.json` path has **no shared flock/lockdir** (distinct machines, non-shared mount), **default `Plan parallelism: serial`** for cross-plan implement scheduling — one plan writable wave at a time. If Assignment still claims cross-plan parallel implement without same-host lock availability → **Blocked** until PM aligns Assignment (`Plan parallelism: serial`) or the user supplies the override below. v1 does **not** add a distributed CAS CLI.
+
+**Exception — documented cross-host residual:** Explicit **current-turn** user instruction such as `Cross-host lease race: accepted` (or equally unambiguous equivalent) **plus** audit entry on affected `plans[].notes` (timestamp, hosts/sessions involved, residual race risk acknowledged) permits cooperative multi-host cross-plan parallel with documented residual risk.
 
 **Pre-dispatch re-verify:** Immediately before **any** writable implement dispatch, reread control `status.json` and confirm this session still passes verify-held-lease (`holder`, `worktree_path`, `working_branch` match Assignment). Mismatch or absent lease → **STOP** — do not dispatch.
 

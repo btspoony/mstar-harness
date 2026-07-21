@@ -86,7 +86,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 - 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**同仓 ≥2 可写并发** → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**（先于 invoke；同 plan 多轨 = L2）。
 - **SDD 单 plan 内**：task / implementer **仍串行**（`mstar-sdd`）；**禁止**同一 plan 内并行 SDD implementer（写冲突）。
-- **跨 plan（迭代 Phase 2）≠ 单 plan 内并行**：不同 `plan_id` 的 feature implement **允许** lease 门控并行（每 plan 独立 verified `plans[].execution_lease` + feature worktree，L1）→ **`mstar-iteration`** §2.6 · **`mstar-branch-worktree`** L1。**禁止**无 lease 的跨 plan 可写派发。
+- **跨 plan（迭代 Phase 2）≠ 单 plan 内并行**：不同 `plan_id` 的 feature implement **允许** lease 门控并行（每 plan 独立 verified `plans[].execution_lease` + feature worktree，L1）**仅当** control 路径 same-host 独占写锁可用且每次 lease 变更持锁 → **`mstar-iteration`** §2.0 #5 · **`mstar-plan-artifacts`**。**跨主机 / 无共享 flock** → 默认 **`Plan parallelism: serial`** 或 Assignment 仍写并行 → **Blocked**（用户本轮 `Cross-host lease race: accepted` + audit `notes` 除外）。**禁止**无 lease 的跨 plan 可写派发。
 - **`integration_merge_lease`**：`spec_integration_branch` 上的 merge **始终串行**（一次仅一 holder）→ **`mstar-iteration`** · **`mstar-plan-artifacts`**。
 - **`Plan parallelism: serial`**：仅强制跨 plan implement **调度串行**；**不** waive control worktree / `execution_lease` / `integration_merge_lease`（`Worktree mode: waived` 才是完整豁免）→ **`mstar-iteration`** §2.0 #5。
 - **Plan QC tri** after SDD task loop（`Execution mode: sdd`）；**单席**仅 `inline` / hotfix。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
@@ -109,6 +109,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式 N=3）。
 - SDD 并行 implementer dispatch（**同一 plan 内**多 task）— **不同于**跨 plan lease 门控并行（后者见上节 L1）。
 - 跨 plan 可写派发无 verified `execution_lease`；steal / 覆盖活跃 `execution_lease` 或 `integration_merge_lease`；并行 integration merge。
+- 跨 plan **并行**可写派发在 **无** same-host 独占写锁（跨主机 / 无共享 flock）且 **无** 用户本轮 `Cross-host lease race: accepted` + audit `notes`。
 - `InProgress` 无 `execution_lease` 未走 orphan recovery 即 writable-dispatch。
 - 同仓多轨 writable implement：**N invoke ≠ worktree 隔离**（L2）→ **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。

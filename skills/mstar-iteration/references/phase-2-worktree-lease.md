@@ -41,8 +41,17 @@ All control-path lease mutations (claim, release, transfer, merge-lease
 claim/release) **MUST** run inside a same-host exclusive write lock for the full
 read-check-replace-verify sequence. Prefer `flock` on
 `{HARNESS_DIR}/.status-write.lock`; alternative: atomic `mkdir` on
-`{HARNESS_DIR}/.status-write.lockdir/`. Cross-host / no shared flock: cooperative
-only — document residual race risk; do **not** invent distributed CAS CLI.
+`{HARNESS_DIR}/.status-write.lockdir/`. Do **not** invent a distributed CAS CLI.
+
+**Cross-plan parallel hard gate:** Lease-gated **cross-plan parallel** writable
+implement is allowed **only when** this same-host lock is **available on the
+control worktree path and used for every lease mutation** in that Phase 2
+session. Agents on **different hosts** or with **no shared flock/lockdir** →
+default **`Plan parallelism: serial`** (one cross-plan writable wave at a time).
+Assignment still claiming cross-plan parallel without lock availability →
+**Blocked** until PM sets serial scheduling or the user gives current-turn
+override `Cross-host lease race: accepted` (or equivalent) + audit on
+`plans[].notes`.
 
 Immediately before **any** writable implement dispatch, re-read control
 `status.json` and re-verify `execution_lease` holder + paths match this session;
@@ -105,7 +114,12 @@ Recovery semantics → `mstar-plan-artifacts` (not iteration skill).
 ## Multi-plan parallelism
 
 - **Feature implementation** MAY proceed in parallel across **different plan IDs**
-  when each holds a verified, distinct `execution_lease` and feature worktree.
+  when each holds a verified, distinct `execution_lease` and feature worktree —
+  **only if** same-host exclusive write lock is available on the control path and
+  used for every lease mutation (see above). Cross-host / no shared lock →
+  **`Plan parallelism: serial`** by default, or **Blocked** if Assignment claims
+  parallel without override; exception: current-turn
+  `Cross-host lease race: accepted` + audit `plans[].notes`.
 - **Integration merge** into `spec_integration_branch` is **serial** (one at a time).
 
 ## Integration merge lease (`metadata.integration_merge_lease`)
