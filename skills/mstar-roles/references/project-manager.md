@@ -127,6 +127,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration` §1.6).
 - **NEVER** mark the last plan `Done` and then create a PR or declare the iteration complete without **`## Phase 3: iteration-close`** and `mstar-iteration` §3.1–§3.5 checklists.
 - **NEVER** treat final plan closure prose as iteration-close — compound, roadmap `delivered`, and compass `status: completed` require Phase 3.
+- **NEVER** steal or overwrite an active `execution_lease` or `integration_merge_lease` without explicit current-turn user override + audit `plans[].notes` (`mstar-plan-artifacts/references/status-and-residuals.md` — “Iteration execution leases”; full PM NEVER lease list → plan T5).
 
 ---
 

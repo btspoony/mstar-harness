@@ -130,6 +130,20 @@ In old JSON, **`"severity": "warning"`** is read and rolled up as **`low`**. **F
 | `review_bundle` | string | Optional pointer to `{SDD_DIR}/review/` for current ephemeral QC/QA evidence |
 | `task_commits` | array\<object\> | SDD recovery: `{ "task_id": "T1", "base": "<sha>", "head": "<sha>" }` per completed task |
 
+### `plans[].execution_lease` (iteration Phase 2)
+
+Optional when a plan is not owned; **required** while a Phase 2 session owns writable execution for that plan. Normative protocol below; iteration command checklist → `mstar-iteration/references/phase-2-worktree-lease.md`.
+
+| Field | Type | Required | Semantics |
+| --- | --- | --- | --- |
+| `holder` | non-empty string | Yes | Opaque cooperative owner identity (recommended `<host>:<stable-session-id>`, e.g. `cursor:bc-1234`). Stable for claim lifetime; **no credentials**; used for ownership comparison — not `session_label`. |
+| `claimed_at` | RFC 3339 UTC (`Z`) | Yes | Acquisition time (audit only; **not** an expiry clock). |
+| `worktree_path` | absolute path string | Yes | Dedicated feature-worktree root; **MUST** differ from `metadata.control_worktree_path`. |
+| `working_branch` | non-empty string | Yes | Feature branch at `worktree_path`; MUST agree with Assignment **`Working branch`**. |
+| `session_label` | string | No | Human display only — **MUST NOT** authorize or compare ownership. |
+
+Writers **delete** `execution_lease` on release; `null` and tombstone objects are invalid.
+
 ### Optional delivery ledger (`phase` + `batches` + `verification`)
 
 For multi-batch or multi-role plans:
@@ -161,6 +175,8 @@ Legacy string `plans[].notes` is OK; new repos should use arrays with time + eve
 | `notes` | array | **Legacy** — prefer **`{HARNESS_DIR}/notes.json`** |
 | `residual_findings_history` | object | **Legacy** — prefer **`archived/residuals/<plan-id>.json`** |
 | `tech_debt_summary` | object | Optional rollup over open R#; maintain via script (below) |
+| `control_worktree_path` | absolute path string | Iteration Phase 2: canonical **repository root** (not `{HARNESS_DIR}`) checked out to active `spec_integration_branch`; coordination + serial merge cwd |
+| `integration_merge_lease` | object | While one integration merge is owned; **absent** = unclaimed. Writers **delete** the key on release — never write `null` or tombstone objects |
 
 **Formal iteration example** (root `metadata`; values are project-specific — **do not** copy `main` by default):
 
@@ -180,6 +196,129 @@ Plan row (per active iteration plan):
   "iteration_refs": ["v1.77"]
 }
 ```
+
+---
+
+## Iteration execution leases (Phase 2)
+
+Cooperative coordination through the **control worktree** copy of `{HARNESS_DIR}/status.json`. Not a distributed lock — non-cooperating processes are out of scope.
+
+**When fields apply:** iteration Phase 2 (after control worktree entry). Waived only by explicit current-turn user instruction (`Worktree mode: waived` or equivalent). `Plan parallelism: serial` does **not** waive leases.
+
+**Path SSOT:** status and SDD reads/writes use `<control_worktree_path>/{HARNESS_DIR}/…`. A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT.
+
+### Root `metadata.integration_merge_lease` (v1)
+
+Single global lease authorizing one plan feature branch integration into `spec_integration_branch`.
+
+| Field | Type | Required | Semantics |
+| --- | --- | --- | --- |
+| `holder` | non-empty string | Yes | Same format and comparison rules as `execution_lease.holder`. |
+| `claimed_at` | RFC 3339 UTC (`Z`) | Yes | Acquisition time (audit only). |
+| `plan_id` | non-empty string | Yes | `plans[].id` (or legacy `plan_id`) of the feature being integrated. |
+| `source_branch` | non-empty string | Yes | Plan feature branch to integrate. |
+| `target_branch` | non-empty string | Yes | Resolved `spec_integration_branch` — no other target is valid. |
+| `session_label` | string | No | Display only. |
+
+Example fragments:
+
+```json
+{
+  "metadata": {
+    "control_worktree_path": "/repo",
+    "integration_merge_lease": {
+      "holder": "cursor:bc-1234",
+      "claimed_at": "2026-07-22T04:00:00Z",
+      "plan_id": "plan-a",
+      "source_branch": "feature/plan-a",
+      "target_branch": "iteration/2026-07",
+      "session_label": "Integrate plan A"
+    }
+  },
+  "plans": [
+    {
+      "id": "plan-a",
+      "status": "InProgress",
+      "execution_lease": {
+        "holder": "cursor:bc-1234",
+        "claimed_at": "2026-07-22T02:30:00Z",
+        "worktree_path": "/repo-worktrees/plan-a",
+        "working_branch": "feature/plan-a",
+        "session_label": "Plan A implementation"
+      },
+      "metadata": {
+        "spec_integration_branch": "iteration/2026-07",
+        "merge_target": "iteration/2026-07"
+      }
+    }
+  ]
+}
+```
+
+### Claim-before-`InProgress` (execution lease)
+
+A Phase 2 session **MUST** claim **before** moving a plan from `Todo` or `Blocked` to `InProgress` and **before** any writable dispatch for that plan:
+
+1. Reread the control copy of `status.json`; locate exactly one plan row (`id` or `plan_id` read compatibility).
+2. **Resume (not steal):** if `execution_lease` exists and `holder` **equals this session** → verify-held-lease: confirm `worktree_path` and `working_branch` match the Assignment; continue (this is **not** Blocked and **not** a new claim).
+3. **Blocked:** if `execution_lease` exists and `holder` **differs** → stop. No timestamp, TTL, or inactivity makes it stealable.
+4. **Orphan:** if `status` is `InProgress` but `execution_lease` is absent → **STOP** (see “Orphan recovery” below). Do not writable-dispatch or invent a lease.
+5. Create or verify the dedicated feature worktree and branch (`worktree_path` ≠ `control_worktree_path`).
+6. Reread `status.json`; if row, status, or lease state changed, restart from step 1.
+7. In **one complete-file update**, set `status: "InProgress"` and write the full `execution_lease` object. Use a temp file in the same directory and atomically replace `status.json`.
+8. Reread the stored row; verify `holder`, `worktree_path`, and `working_branch` exactly match the attempted claim. Writable dispatch is forbidden until verification succeeds.
+
+V1: **manual release only** — omit `expires_at`; readers **MUST NOT** treat unknown or draft `expires_at` as authority to steal or release.
+
+### Hold, release, and override
+
+- Lease remains active across `InProgress` and `InReview` (including review fix rounds) unless deliberately released or transferred.
+- **Release:** reread control `status.json`; stored `holder` must match this session (mismatch → **Blocked**, not permission to delete). Delete `execution_lease` in the same complete-file update — never `null`.
+- Voluntary abandonment: may set `status: "Blocked"` and delete the lease in one update.
+- **`Done` authority** deletes any `execution_lease` in the same update as `status: "Done"`.
+- Temporary blockage may retain the lease when the same holder remains responsible and the plan record explains the next action.
+- **Override (only exception to no-steal):** explicit **user instruction in the current turn** may remove or replace another holder's lease. Append an audit entry to `plans[].notes` with timestamp, prior holder, new holder (or release), and that the user authorized override. Agents **MUST NOT** infer override from age, inactivity, `Blocked` status, or a failed session.
+- Cooperative handoff: current holder explicitly agrees; receiving worktree/branch verified; one complete-file update — otherwise old holder releases and new holder follows normal claim.
+
+### Integration merge protocol
+
+Feature implementation may run in parallel across plan IDs; mutations of `spec_integration_branch` are **serial**:
+
+1. From `control_worktree_path`: clean working tree; checked-out branch = resolved `spec_integration_branch`.
+2. Reread root `metadata`. If `integration_merge_lease` exists → **Blocked** (cannot expire or steal).
+3. Claim merge lease with the same read-check-replace-verify discipline as execution claims. `source_branch` and `plan_id` must match the feature; `target_branch` must match `spec_integration_branch`.
+4. Only the stored merge-lease `holder` runs integration from `control_worktree_path`.
+5. On success: record commit/evidence per plan/status conventions; **delete** `integration_merge_lease`.
+6. On conflict/failure: retain lease while resolving; release only after control worktree is clean and in a known state.
+
+Execution and merge leases may coexist; merge lease does not grant execution ownership for the source plan.
+
+### Orphan recovery (`InProgress` without `execution_lease`)
+
+Runtime skills that detect this state (e.g. `mstar-iteration`) **STOP** and defer recovery here — they **MUST NOT** silently add a lease or writable-dispatch.
+
+**Immediate gate:** no writable dispatch until recovery completes and a verified `execution_lease` exists (or plan is returned to a non-active status).
+
+**Resolver:** `@project-manager` (or explicit human/PM ownership resolution after race or corruption).
+
+| Path | When | Actions |
+| ---- | ---- | ------- |
+| **Reset to `Todo`** | Work abandoned, unknown owner, or safe to restart claim | One complete-file update: `status: "Todo"`; ensure `execution_lease` absent; append `plans[].notes` audit (timestamp, reason, actor). |
+| **Recover with claim** | Legitimate in-progress work attributable to a session; feature worktree/branch verified on disk | Follow claim-before-`InProgress` from step 5; append `plans[].notes` audit that this was orphan recovery (prior state, new `holder`, paths verified). |
+| **Escalate / `Blocked`** | Ambiguous ownership, conflicting worktrees, or partial/corrupt `status.json` | Set `status: "Blocked"` with `metadata.blocked_reason`; do **not** writable-dispatch until human/PM resolves. Restore coherent `status.json` from latest complete state if needed. |
+
+After any recovery path, the next session must pass verify-held-lease before writable dispatch.
+
+### Agent prohibitions (lease SSOT)
+
+- **MUST NOT** steal or overwrite an active `execution_lease` or `integration_merge_lease` (no TTL, age, or inactivity authority in v1).
+- **MUST NOT** writable-dispatch without a verified `execution_lease` for that plan (resume counts only when same `holder` passes verify-held-lease).
+- **MUST NOT** write `null` or tombstone objects for lease keys — **delete** the key on release.
+- **PM NEVER** steal an active lease without explicit current-turn user override + audit `notes` (full PM NEVER consolidation → plan T5 / `project-manager` refs).
+
+Preservation: writers **MUST** preserve unrelated plan rows, root metadata, and `residual_findings` on every lease mutation.
+
+---
 
 ## General constraints
 
