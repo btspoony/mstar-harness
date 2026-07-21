@@ -216,7 +216,7 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
 4. **Branch metadata gate**：root `metadata.iteration_base_branch`、`metadata.target_branch` 已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
-5. **Control-worktree + lease defaults**（iteration 命令）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写 `status.json` / `{SDD_DIR}`，并在可写派发前 claim `plans[].execution_lease`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；control worktree + `execution_lease` / `integration_merge_lease` 仍须满足。**跨 plan 并行可写 implement** 仅当 control 路径上 **same-host 独占写锁可用且每次 lease 变更均持锁**；跨主机 / 无共享 flock → 默认 **`Plan parallelism: serial`**（Assignment 仍写并行则 **Blocked**），除非用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。细则 → **`references/phase-2-worktree-lease.md`**。
+5. **Control-worktree + lease defaults**（iteration 命令；可被 `Worktree mode: waived` 豁免）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写 `status.json` / `{SDD_DIR}`，并在可写派发前 claim `plans[].execution_lease` / `integration_merge_lease`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；control worktree + lease 仍须满足。**跨 plan 并行安全闸**（**不可**被 `Worktree mode: waived` 豁免）：跨 plan **并行可写 implement** 须满足下列之一——(a) coordination 路径（control 或 waived 时主 checkout `{HARNESS_DIR}/status.json`）上 **same-host 独占写锁可用且每次 status/协调变更持锁**；(b) 默认 **`Plan parallelism: serial`**（**waived 时尤其优先默认串行**）；(c) 用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。**禁止**将 `Worktree mode: waived` 当作跨主机无锁并行的授权。细则 → **`references/phase-2-worktree-lease.md`**。
 
 任一 false → **stop**。Phase 1 / Prepare 未完成 → 先完成 Phase 1 或 per-plan Prepare，再进入本 Phase。
 
@@ -268,7 +268,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 ### 2.4 Per-plan loop（直到全部 Done）
 
-**跨 plan 默认**：在 §2.0 #5 未 waive 时，**不同 `plan_id` 可并行 implement**（各持 verified `execution_lease` + 独立 feature worktree）**仅当** control 路径 same-host 独占写锁可用且每次 lease 变更持锁；跨主机 / 无共享锁 → 默认 **`Plan parallelism: serial`** 或 Assignment 仍写并行时 **Blocked**（用户本轮 `Cross-host lease race: accepted` + audit `notes` 除外）；**merge 入 `spec_integration_branch` 仍串行**（`metadata.integration_merge_lease`）。未 waive 时 **禁止**无 lease 的跨 plan 可写派发。
+**跨 plan 默认**（**无论** `Worktree mode: waived`）：**不同 `plan_id` 可并行 implement** 须满足 §2.0 #5 跨 plan 并行安全闸——(a) coordination 路径 same-host 独占写锁可用且每次 status/协调变更持锁，或 (b) **`Plan parallelism: serial`**（waived 时默认），或 (c) 用户本轮 `Cross-host lease race: accepted` + audit `notes`；否则 Assignment 仍写并行 → **Blocked**。**merge 入 `spec_integration_branch` 仍串行**（`metadata.integration_merge_lease`；waived 时无 merge lease 仍须串行 merge）。未 waive 时 **禁止**无 verified `execution_lease` 的跨 plan 可写派发。
 
 对每个本轮要推进的 active `plan_id`（可交错/并行，非强制 plan A 全 Done 再 plan B）：
 
@@ -330,7 +330,7 @@ Iteration Phase 2 附加：
 - 进度汇报 / subagent Completion Report 后，下一条必须是 **dispatch 或下一 gate 动作**，不得以确认问句收束 turn
 - 未知 → 读 `mstar-*`；仅 **`Blocked`**、secrets、不可逆范围缺口、branch metadata 缺失、或 Phase 5 多轮仍 blocked 时升级用户
 - 实际 Git ≠ `working_branch` → **同轮**更新 plan + status + `execution_lease.working_branch`（如适用）
-- **跨 plan implement**（§2.0 #5 未 waive）：**lease 门控并行**（distinct `execution_lease` + feature worktree）**仅当** same-host 独占写锁可用且每次 lease 变更持锁；跨主机 / 无共享锁 → 默认 **`Plan parallelism: serial`**（或 Assignment 仍写并行 → **Blocked**；用户本轮 `Cross-host lease race: accepted` + audit `notes` 除外）；**integration merge 串行**（`integration_merge_lease`）。显式 `Plan parallelism: serial` 可恢复逐 plan 串行 implement
+- **跨 plan implement**（**无论** `Worktree mode: waived`）：并行可写 implement 须满足 §2.0 #5 跨 plan 并行安全闸——same-host 独占写锁 + 每次协调变更持锁，或默认 **`Plan parallelism: serial`**（waived 时尤其优先），或用户本轮 `Cross-host lease race: accepted` + audit `notes`；**禁止**将 waived 当作无锁跨主机并行授权；未 waive 时另须 verified `execution_lease` + feature worktree。**integration merge 串行**（`integration_merge_lease` 或 waived 下无 lease 仍须串行 merge）
 - plan 内 SDD task **串行** — 见 §2.4、§2.5、`mstar-sdd` Continuous execution
 
 ---

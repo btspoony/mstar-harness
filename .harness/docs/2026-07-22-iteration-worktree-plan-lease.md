@@ -303,11 +303,22 @@ For iteration commands, the control worktree, per-plan feature worktree,
 execution lease, and serial merge lease are hard Phase 2 defaults. They may be
 waived only by explicit user instruction in the current turn, expressed in the
 Assignment as `Worktree mode: waived` (or an equally unambiguous statement).
+
+**What waiver covers:** control worktree establishment, control-path SSOT routing,
+per-plan feature worktree defaults, and `execution_lease` / `integration_merge_lease`
+claim/hold/release defaults.
+
+**What waiver does not cover:** the **cross-plan parallel safety gate**. Under
+waiver, cross-plan parallel writable implement still requires same-host exclusive
+write lock on the coordination `status.json` path, default **`Plan parallelism:
+serial`** (preferred when waived), or current-turn `Cross-host lease race: accepted`
+(or equivalent) with audit on `plans[].notes`. **`Worktree mode: waived` alone
+is not** authorization for lockless cross-host parallel.
+
 `Plan parallelism: serial` is **not** a waiver — it only forces serial cross-plan
-implement scheduling; control worktree and leases remain required. No persistent
-waiver schema is added here, and
-iteration commands MUST NOT infer a waiver from missing worktrees or a
-single-session start.
+implement scheduling; control worktree and leases remain required when the lease
+gate is active. No persistent waiver schema is added here, and iteration commands
+MUST NOT infer a waiver from missing worktrees or a single-session start.
 
 ## CLI helper scope
 
@@ -321,11 +332,14 @@ lock/CAS service and failure model rather than an incidental helper command.
 ## Consequences
 
 - Routing evaluation must allow cross-plan parallelism only when distinct
-  feature worktrees, verified per-plan leases, **and** same-host exclusive write
-  lock availability on the control path are present — or when the user supplies
-  current-turn `Cross-host lease race: accepted` with audit `plans[].notes`.
+  feature worktrees, verified per-plan leases (when lease gate active), **and**
+  same-host exclusive write lock availability on the coordination path are
+  present — or when the user supplies current-turn `Cross-host lease race:
+  accepted` with audit `plans[].notes`. **`Worktree mode: waived` does not
+  satisfy this gate alone.**
 - Cross-host / no shared flock without override: `Plan parallelism: serial` or
-  Blocked if Assignment still claims cross-plan parallel implement.
+  Blocked if Assignment still claims cross-plan parallel implement — **including
+  when worktree/lease gate is waived** (prefer serial when waived).
 - Double claim, writable dispatch before a verified claim, cross-plan parallel
   without same-host lock (and without override), and concurrent merge attempts
   are hard failures.

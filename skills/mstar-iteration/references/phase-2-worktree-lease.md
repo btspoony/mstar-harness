@@ -43,15 +43,17 @@ read-check-replace-verify sequence. Prefer `flock` on
 `{HARNESS_DIR}/.status-write.lock`; alternative: atomic `mkdir` on
 `{HARNESS_DIR}/.status-write.lockdir/`. Do **not** invent a distributed CAS CLI.
 
-**Cross-plan parallel hard gate:** Lease-gated **cross-plan parallel** writable
-implement is allowed **only when** this same-host lock is **available on the
-control worktree path and used for every lease mutation** in that Phase 2
-session. Agents on **different hosts** or with **no shared flock/lockdir** →
-default **`Plan parallelism: serial`** (one cross-plan writable wave at a time).
-Assignment still claiming cross-plan parallel without lock availability →
-**Blocked** until PM sets serial scheduling or the user gives current-turn
-override `Cross-host lease race: accepted` (or equivalent) + audit on
-`plans[].notes`.
+**Cross-plan parallel hard gate:** Applies **whether or not** `Worktree mode: waived`.
+Lease-gated **cross-plan parallel** writable implement is allowed **only when**
+this same-host lock is **available on the coordination `status.json` path and
+used for every status/coordination mutation** in that Phase 2 session (control
+path when lease gate active; primary checkout `{HARNESS_DIR}/status.json` when
+waived). Agents on **different hosts** or with **no shared flock/lockdir** →
+default **`Plan parallelism: serial`** (preferred when waived). Assignment still
+claiming cross-plan parallel without lock availability → **Blocked** until PM
+sets serial scheduling or the user gives current-turn override
+`Cross-host lease race: accepted` (or equivalent) + audit on `plans[].notes`.
+**`Worktree mode: waived` alone is not** this override.
 
 Immediately before **any** writable implement dispatch, re-read control
 `status.json` and re-verify `execution_lease` holder + paths match this session;
@@ -113,14 +115,24 @@ Recovery semantics → `mstar-plan-artifacts` (not iteration skill).
 
 ## Multi-plan parallelism
 
+**Cross-plan parallel safety gate** applies **whether or not** `Worktree mode:
+waived` is in effect — waiver does **not** authorize lockless cross-host parallel.
+
 - **Feature implementation** MAY proceed in parallel across **different plan IDs**
-  when each holds a verified, distinct `execution_lease` and feature worktree —
-  **only if** same-host exclusive write lock is available on the control path and
-  used for every lease mutation (see above). Cross-host / no shared lock →
-  **`Plan parallelism: serial`** by default, or **Blocked** if Assignment claims
-  parallel without override; exception: current-turn
-  `Cross-host lease race: accepted` + audit `plans[].notes`.
-- **Integration merge** into `spec_integration_branch` is **serial** (one at a time).
+  only when **one** of:
+  1. Same-host exclusive write lock is available on the coordination
+     `status.json` path (control path when lease gate active; primary checkout
+     `{HARNESS_DIR}/status.json` when waived) and used for every status/coordination
+     mutation in that session; **and** when lease gate is not waived, each plan
+     holds a verified, distinct `execution_lease` and feature worktree.
+  2. **`Plan parallelism: serial`** (default when waived; preferred default under
+     waiver).
+  3. Current-turn `Cross-host lease race: accepted` (or equivalent) + audit
+     `plans[].notes`.
+  Cross-host / no shared lock without (2) or (3) → **Blocked** if Assignment still
+  claims cross-plan parallel writable implement.
+- **Integration merge** into `spec_integration_branch` is **serial** (one at a time),
+  with or without lease gate.
 
 ## Integration merge lease (`metadata.integration_merge_lease`)
 
@@ -145,9 +157,23 @@ ownership for the source plan.
 
 ## Waiver
 
-Full control-worktree + lease gate waiver requires explicit `Worktree mode: waived`
-(or equivalent user instruction) this turn. `Plan parallelism: serial` does **not**
-waive control worktree or leases.
+Explicit `Worktree mode: waived` (or equivalent user instruction) this turn
+waives **only**:
+
+- Control worktree establishment and control-path SSOT routing
+- Per-plan feature worktree defaults
+- `plans[].execution_lease` and `metadata.integration_merge_lease` claim/hold/release
+  defaults
+
+It does **not** waive the **cross-plan parallel safety gate**. Under waiver,
+cross-plan **parallel writable** implement still requires same-host exclusive
+write lock on the coordination `status.json` path, default **`Plan parallelism:
+serial`**, or current-turn `Cross-host lease race: accepted` + audit
+`plans[].notes`. **Prefer serial scheduling when waived**; parallel under waiver
+only with the race-accepted override (or same-host lock when mutating shared
+status).
+
+`Plan parallelism: serial` does **not** waive control worktree or leases.
 
 Iteration commands MUST NOT infer waiver from missing worktrees or single-session
 starts. Explicit override this turn only.
