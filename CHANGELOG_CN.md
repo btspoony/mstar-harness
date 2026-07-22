@@ -1,19 +1,35 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.4.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.4.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.4.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.4.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.4.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.4.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.4.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.5.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.5.0] - 2026-07-22
+
+### Harness（迭代 Phase 2 worktree + lease）
+
+- **Phase 2 control worktree**（`spec_integration_branch`）+ 每 plan **feature worktree**，配合 `execution_lease` / `integration_merge_lease`（同机独占写锁；合入 integration 串行；`Done` 仅在 merge 成功后）。
+- 多会话跨 plan 并行 implement（lease 门控）；`Worktree mode: waived` **不**豁免跨 plan 并行安全闸；`Plan parallelism: serial` 仅调度串行。
+- routing-eval 与双语 README Phase 2 默认说明已更新。
+
+### Harness（Phase 5 helpers）
+
+- **Phase 5 merge-ready helpers**：优先 `babysit` 或任意 `*-babysit`；`greploop` **仅当**仓库具备 Greptile/`greploop` 时可选。两者都适用时先 babysit/`*-babysit`，再可选 greploop。已更新 `mstar-iteration` §5 指针与 `commands/iteration-drive` / `iteration-loop`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi 插件：**→ 1.5.0**。
 
 ## [1.4.0] - 2026-07-17
 

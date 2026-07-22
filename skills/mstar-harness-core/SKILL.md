@@ -143,7 +143,10 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 递归误派 / 误读 Handoff | `mstar-dispatch-gates` |
 | `quick` 跳过 Prepare | 上表 + `mstar-phase-gates` |
 | 多 worktree 未归并就 QC | `mstar-branch-worktree` |
-| 并行 implement：N invoke 无 worktree | `mstar-branch-worktree` → `references/parallel-writable-pre-dispatch.md` |
+| 并行 writable implement 无隔离（L2 同 plan 多轨：N invoke ≠ worktree；L1 跨 plan：无 verified `execution_lease` + feature worktree） | `mstar-branch-worktree` L1/L2 · `mstar-iteration` §2.6 · `references/parallel-writable-pre-dispatch.md` |
+| 跨 plan 可写派发无 verified `execution_lease` / steal 活跃 lease / 并行 merge 入 `spec_integration_branch` | `mstar-iteration` · `mstar-plan-artifacts`（leases）· `mstar-branch-worktree` L1 |
+| `InProgress` 无 `execution_lease` 未恢复即可写派发 | `mstar-plan-artifacts` — orphan recovery |
+| 混淆跨 plan lease 门控并行与单 plan 内 SDD 并行 implementer | `mstar-dispatch-gates` · `mstar-sdd` |
 | residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
 | 角色文件塞流程长文 | 用专题 skill |
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |

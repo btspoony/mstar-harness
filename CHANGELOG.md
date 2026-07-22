@@ -2,20 +2,36 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.4.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.5.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.4.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.4.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.4.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.4.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.4.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.5.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.5.0** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.5.0] - 2026-07-22
+
+### Harness (iteration Phase 2 worktree + lease)
+
+- **Phase 2 control worktree** on `spec_integration_branch` plus per-plan **feature worktree** with `execution_lease` / `integration_merge_lease` (same-host exclusive write lock; serial integration merge; `Done` only after successful merge).
+- Multi-session cross-plan parallel implement under leases; `Worktree mode: waived` does **not** bypass the cross-plan parallel safety gate; `Plan parallelism: serial` is scheduling-only.
+- Routing-eval updates for lease-gated multi-plan parallel and failure modes; bilingual README Phase 2 defaults.
+
+### Harness (Phase 5 helpers)
+
+- **Phase 5 merge-ready helpers**: prefer `babysit` or any `*-babysit` skill; `greploop` is **optional** only when the repo has Greptile/`greploop`. When both apply, run babysit/`*-babysit` first, then optional greploop. Updated `mstar-iteration` §5 pointer + `commands/iteration-drive` / `iteration-loop`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi plugin manifests: **→ 1.5.0**.
 
 ## [1.4.0] - 2026-07-17
 

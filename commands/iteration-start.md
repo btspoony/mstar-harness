@@ -280,4 +280,6 @@ git checkout -b <spec_integration_branch> <iteration_base_branch>
 - Register `iteration_base_branch`, `spec_integration_branch`, and `target_branch` in compass frontmatter **and** `{HARNESS_DIR}/status.json` root `metadata`
 - Commit all documents to the integration branch and push to remote
 
+**Phase 2 note**：integration 分支在此创建；**control worktree + `execution_lease` 门控在 Phase 2 入口**（`iteration-drive` / `iteration-loop`）——见 **`mstar-iteration/references/phase-2-worktree-lease.md`**。
+
 **STOP** if `iteration_base_branch` or `target_branch` is missing. Ask the user or derive only from an already documented project/iteration policy; never silently substitute `main`.

@@ -127,6 +127,12 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration` §1.6).
 - **NEVER** mark the last plan `Done` and then create a PR or declare the iteration complete without **`## Phase 3: iteration-close`** and `mstar-iteration` §3.1–§3.5 checklists.
 - **NEVER** treat final plan closure prose as iteration-close — compound, roadmap `delivered`, and compass `status: completed` require Phase 3.
+- **NEVER** steal or overwrite an active `execution_lease` or `integration_merge_lease` (no TTL, age, or inactivity authority); override only on explicit current-turn user instruction + audit `plans[].notes` (`mstar-plan-artifacts/references/status-and-residuals.md` — “Iteration execution leases”).
+- **NEVER** writable-dispatch for a plan without a **verified** `execution_lease` for that plan (resume only when same `holder` passes verify-held-lease against Assignment `Worktree path` / `Working branch`).
+- **NEVER** writable-dispatch when a plan is `InProgress` but has **no** `execution_lease` — complete orphan recovery first (`mstar-plan-artifacts` — “Orphan recovery”).
+- **NEVER** run or dispatch **parallel** integration merges into `spec_integration_branch` — merge is **serial** via `metadata.integration_merge_lease` from the control worktree (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
+- **NEVER** cross-plan writable implement without distinct per-plan verified `execution_lease` + feature worktree; `Plan parallelism: serial` forces serial **scheduling** only — it does **not** waive control worktree or lease gates (`mstar-iteration` §2.0 #5).
+- **NEVER** dispatch **cross-plan parallel** writable implement when same-host exclusive write lock is **not** available on the coordination `status.json` path (cross-host / no shared flock) — default **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel; exception only on current-turn user `Cross-host lease race: accepted` (or equivalent) + audit `plans[].notes` — **including when `Worktree mode: waived`** (`mstar-plan-artifacts` — “Hard gate — cross-plan parallel writable implement”).
 
 ---
 

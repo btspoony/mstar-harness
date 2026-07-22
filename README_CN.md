@@ -23,7 +23,7 @@
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
 - 在 OpenCode / Cursor / Codex / Kimi Code 下复用同一套核心流程
 
-当前版本：**1.4.0** — 详见 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
+当前版本：**1.5.0** — 详见 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
 ## 快速开始（推荐方式）
 
@@ -60,6 +60,15 @@ npx @mstar-harness/cli init
 |------|----------|------|
 | `/iteration-start` → `/iteration-drive` | 首次 iteration，或需要人工方向锁定（**grill-me**）的深度工作 | 仅 Phase 1 → Phase 2–5（执行、收尾、开 PR、merge-ready） |
 | `/iteration-loop` | 快速自动化完整闭环（适合 cloud agent）；可选 `direction` + `scale`（S\|M\|L） | Phase 1→5 连续执行，尽量少人工确认 |
+
+**Phase 2 默认**（iteration 执行；仅当 Assignment 显式 `Worktree mode: waived` 时可豁免）：
+
+- 在 `spec_integration_branch` 上使用 **control worktree**；`status.json` 与 SDD 以该检出路径为 SSOT。
+- 每个 plan 在可写 implement 派发前须具备独立 **feature worktree** + `execution_lease`。
+- 不同 plan 可在多 session 下并行 implement（各自 lease）；合并回 integration 分支仍须**串行**。
+- `Plan parallelism: serial` 仅约束 implement 调度波次，**不**豁免 worktree / lease 闸。
+
+细则 → `mstar-iteration`（`references/phase-2-worktree-lease.md`）与 `mstar-branch-worktree`。
 
 **命令加载位置：**
 
