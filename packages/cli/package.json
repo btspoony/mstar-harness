@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/cli",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Morning Star harness installer CLI (OpenCode, Cursor, Codex).",
   "license": "MIT",
   "repository": {

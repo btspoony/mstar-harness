@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.5.0
+
+- Version alignment with harness **1.5.0** (bundled skills/commands: iteration Phase 2 worktree/lease + Phase 5 babysit-first helpers).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.5.0**.
+
 ## 1.4.0
 
 - Version alignment with harness **1.4.0** (Kimi Code host support lives in shared skills / `.kimi-plugin`; OpenCode package unchanged beyond version bump).

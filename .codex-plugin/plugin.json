@@ -1,6 +1,6 @@
 {
   "name": "morning-star-harness",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, and Kimi Code.",
   "author": {
     "name": "Bohao Tang",
@@ -26,7 +26,7 @@
   "interface": {
     "displayName": "Morning Star Harness",
     "shortDescription": "Multi-agent code harness with role-based workflows and quality gates.",
-    "longDescription": "Morning Star (启明星) provides a multi-agent code harness framework with role-based workflows, quality gates, and unified skills across OpenCode, Cursor, Codex, and Kimi Code. Start a usable multi-role workflow quickly with PM routing, specs, implementation tracks, QC review, and QA verification.",
+    "longDescription": "Morning Star (\u542f\u660e\u661f) provides a multi-agent code harness framework with role-based workflows, quality gates, and unified skills across OpenCode, Cursor, Codex, and Kimi Code. Start a usable multi-role workflow quickly with PM routing, specs, implementation tracks, QC review, and QA verification.",
     "developerName": "Bohao Tang",
     "category": "Productivity",
     "capabilities": [
