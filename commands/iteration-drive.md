@@ -196,22 +196,24 @@ Before the first loop pass, search for bundled/host skills（first readable `SKI
 | 改 CI workflow 只为「让检查变绿」 | 仅修 **本 PR 范围内** 引起的失败；workflow 变更需用户明确授权 |
 | 未 comment + resolve 就宣称 review 已处理 | 每次 push 针对 review 的修复 → §5.3 |
 | §5.5 未全 `[x]` 就结束会话 | 循环直至 merge-ready |
+| **CI / AI review 仍在跑时 push**（打断 bot review、浪费 token） | **`mstar-iteration` §5.1a**：本地可提前修；push 仅当上一波 CI **与** reviews 均 idle |
 
-Fixes **push 到 `spec_integration_branch`**（PR head）；禁止另开分支替代。
+Fixes **push 到 `spec_integration_branch`**（PR head）；禁止另开分支替代。Push 前核对 §5.1a（无 in-flight CI）。
 
 ### 5.2 Loop（all modes）
 
 Repeat until §5.5 exit checklist passes:
 
-1. **Status** — `gh pr view <number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision`（或宿主等价 API）
-2. **Merge conflicts** — if blocking: resolve on integration branch（意图冲突 → **Blocked**，问用户）→ push
-3. **Active reviews** — fetch **unresolved** review threads only；triage valid change requests
-4. **CI** — list failing required checks；dispatch or fix in-scope → push
-5. **Mode-specific pass**:
-   - **babysit / `*-babysit`**: follow that SKILL（comments + CI loop）— **primary**
+1. **Status** — `gh pr view <number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision`（或宿主等价 API）；确认 **无 queued/in_progress checks**
+2. **Merge conflicts** — if blocking: resolve **locally** on integration branch（意图冲突 → **Blocked**，问用户）；**仅 §5.1a idle 后** push
+3. **Active reviews** — fetch **unresolved** review threads only；triage valid change requests；**本地**开工修复（可在上一波次仍在跑时）
+4. **CI** — list failing required checks；dispatch or fix in-scope **locally**（可提前）；**禁止**在 CI 仍在跑时 push
+5. **Push gate** — wait until current head’s CI **and** AI/bot review wave **completed**；then **one** push of the fix batch（§5.1a）
+6. **Mode-specific pass**（on settled head after push / poll）:
+   - **babysit / `*-babysit`**: follow that SKILL（comments + CI loop）— **primary**；skill 内若暗示立即 push，**仍以 §5.1a 为准**
    - **greploop**（optional, repo has it）: follow greploop SKILL until Greptile **5/5** — **after** babysit/`*-babysit` gates when both apply
    - **fallback**（no babysit/`*-babysit`）: triage unresolved review threads（§5.3）+ poll CI until all required checks green（no skill Read；**与 babysit 同级的 CI + reviews 门禁**）
-6. After each push → §5.3 → return to step 1
+7. After each push → §5.3 → return to step 1（CI 结束后若出现 **新** reviews → 继续本地修，再等 idle 后 push）
 
 **Stop looping only when** §5.5 全 `[x]`。若多轮仍 blocked → 升级用户（列出 failing checks / unresolved threads / Greptile score if greploop mode）。
 
@@ -229,11 +231,12 @@ Do not bulk-resolve without a per-thread reply. Disagree or uncertain → reply 
 
 When no `babysit` / `*-babysit` skill is found, **本 command 承担 babysit 同级职责**（无外部 SKILL，但 exit 标准相同）。`greploop` alone does **not** replace babysit — if only greploop is present and the repo has Greptile, still run §5.4 for CI + reviews, and optionally greploop for score:
 
-1. Fetch **unresolved** review threads；triage valid change requests → dispatch fix → push → §5.3 comment + resolve
-2. Poll PR required checks until **all green**（reasonable backoff between polls）
-3. On CI failure: diagnose → dispatch implement/ops if code fix needed → push → poll again
+1. Fetch **unresolved** review threads；triage valid change requests → dispatch fix **locally**（可在 CI/review 波次进行中）
+2. Poll PR required checks until **settled**（all completed — green or failed；reasonable backoff）
+3. On CI failure: diagnose → dispatch implement/ops if code fix needed **locally**；**only push when §5.1a idle**（no in-flight CI / AI review）→ poll again on new head
 4. Do **not** exit until **both** CI green **and** all review threads resolved（或用户书面 waive）
 5. Do **not** exit on first green if new commits or reviews reopened checks
+6. After CI completes, if **new** reviews appear → continue local fixes；push only after the new review wave settles
 
 ### 5.5 Phase 5 exit checklist（iteration-drive Done）
 

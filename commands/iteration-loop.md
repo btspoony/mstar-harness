@@ -278,9 +278,11 @@ Both apply: **babysit/`*-babysit` first**, then optional greploop（串行）. D
 
 ### 5.1–5.4 Loop
 
-Same hygiene as drive consumer pattern: status → conflicts → reviews → CI → mode pass → comment+resolve on addressed threads → repeat until §5.5.
+Same hygiene as drive consumer pattern: status → conflicts → reviews → CI → **§5.1a idle push** → mode pass → comment+resolve on addressed threads → repeat until §5.5.
 
 Fixes push to `spec_integration_branch` only. PM does not rewrite product code in-thread.
+
+**Push cadence（HARD）** → **`mstar-iteration` §5.1a**：CI/review 发现问题可**本地提前修**；**禁止**在 CI 仍在跑或 AI review 波次未结束时 push（打断 bot reviews、浪费 token）。CI 结束后若出现新 reviews，继续本地修，等 idle 后再 push。
 
 ### 5.5 Phase 5 exit checklist（iteration-loop Done）
 

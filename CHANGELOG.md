@@ -2,20 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.5.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.5.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.5.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.5.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.5.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.5.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.5.1] - 2026-07-22
+
+### Harness (Phase 5 push cadence)
+
+- **Phase 5 push cadence (HARD)**: CI/review findings may be fixed **locally early**, but **`git push` only after** the previous CI **and** review wave on the current head have **fully completed**. After CI settles, new reviews may continue to be fixed locally; **never push while CI is still running** (cancels/orphans AI reviews — wasted tokens, incomplete results). SSOT: `mstar-iteration` §5.1a; aligned `iteration-drive` / `iteration-loop`; core anti-pattern row.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi plugin manifests: **→ 1.5.1**.
 
 ## [1.5.0] - 2026-07-22
 

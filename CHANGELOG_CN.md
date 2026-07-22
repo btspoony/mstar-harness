@@ -1,19 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.5.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.5.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.1** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.5.1] - 2026-07-22
+
+### Harness（Phase 5 push cadence）
+
+- **Phase 5 push cadence（HARD）**：发现 CI/review 问题可**本地提前修**，但 **`git push` 必须等**当前 head 上一波 CI **与** review 全部跑完。CI 结束后若出现新 reviews，可继续本地修；**禁止在 CI 仍在跑时 push**（会打断 AI reviews，浪费 token 且无完整结果）。SSOT：`mstar-iteration` §5.1a；已对齐 `iteration-drive` / `iteration-loop` 与 core 反模式。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi 插件：**→ 1.5.1**。
 
 ## [1.5.0] - 2026-07-22
 

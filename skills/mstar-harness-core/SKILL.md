@@ -157,6 +157,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | Phase 2 paste-only / PM 自实现 | `mstar-dispatch-gates` |
 | Phase 3 折叠进 final plan closure / 跳过 §3.1 gate | `mstar-iteration` §3.0–§3.5 |
 | Phase 4 开 PR 后跳过 merge-ready loop | `mstar-iteration` §5 |
+| Phase 5 在 CI / AI review 仍在跑时 push | `mstar-iteration` §5.1a |
 | iteration-close 无 frontmatter completed / 漏 compound Phase 6 | `mstar-iteration` §3.0.5、§3.4、§3.2 #5 |
 | iteration 默认 `main` 作 base 或 PR 目标 | `mstar-iteration` §1.2、§2.3；`mstar-plan-conventions` Spec 分支模型 |
 
