@@ -15,6 +15,10 @@
 
 ## [Unreleased]
 
+### Harness（Phase 5 helpers）
+
+- **Phase 5 merge-ready helpers**：优先 `babysit` 或任意 `*-babysit`；`greploop` **仅当**仓库具备 Greptile/`greploop` 时可选。两者都适用时先 babysit/`*-babysit`，再可选 greploop。已更新 `mstar-iteration` §5 指针与 `commands/iteration-drive` / `iteration-loop`。
+
 ## [1.4.0] - 2026-07-17
 
 ### Harness（Kimi Code 宿主）

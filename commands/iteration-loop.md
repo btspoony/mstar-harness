@@ -265,16 +265,16 @@ Execute **`mstar-iteration` § Phase 5**。**§5.5 exit 全 `[x]` = iteration-lo
 
 | Skill | Search paths（示例） |
 |-------|----------------------|
-| `greploop` | `skills/greploop/SKILL.md`；`~/.cursor/skills-cursor/greploop/SKILL.md`；`~/.agents/skills/greploop/SKILL.md` |
-| `babysit` | `skills/babysit/SKILL.md`；`~/.cursor/skills-cursor/babysit/SKILL.md`；`~/.agents/skills/babysit/SKILL.md` |
+| `babysit` / `*-babysit` | `skills/babysit/SKILL.md`；`skills/*-babysit/SKILL.md`；`~/.cursor/skills-cursor/babysit/`；`~/.agents/skills/babysit/`（及 `*-babysit`） |
+| `greploop`（optional） | `skills/greploop/…`；host skill dirs — **only when repo has Greptile/greploop** |
 
 | Priority | Condition | Primary done signal |
 |----------|-----------|---------------------|
-| 1 | `greploop` found | Greptile **5/5** |
-| 2 | else `babysit` | Required CI green + reviews resolved |
-| 3 | else neither | Same as babysit（本 command fallback） |
+| 1 | `babysit` or any `*-babysit` | Required CI green + reviews resolved |
+| 2 | `greploop` **and** repo has Greptile | Greptile **5/5**（additive） |
+| 3 | else neither babysit/`*-babysit` | Same as babysit（本 command fallback） |
 
-Both present: greploop to 5/5, then babysit（串行）.
+Both apply: **babysit/`*-babysit` first**, then optional greploop（串行）. Do not prefer greploop over babysit.
 
 ### 5.1–5.4 Loop
 
@@ -289,7 +289,7 @@ Fixes push to `spec_integration_branch` only. PM does not rewrite product code i
 - [ ] PR mergeable
 - [ ] All **required** CI checks green on latest head
 - [ ] All review threads **resolved**（或用户书面 waive）
-- [ ] Greptile **5/5**（若 greploop mode / repo 可见分数）
+- [ ] Greptile **5/5**（**仅当**可选 greploop mode / repo 可见分数；否则 N/A）
 - [ ] Review comment + resolve 已覆盖本轮 addressed feedback
 - [ ] Host todo `phase-5-pr-merge-ready` 可勾选
 

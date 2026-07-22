@@ -17,6 +17,10 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+### Harness (Phase 5 helpers)
+
+- **Phase 5 merge-ready helpers**: prefer `babysit` or any `*-babysit` skill; `greploop` is **optional** only when the repo has Greptile/`greploop`. When both apply, run babysit/`*-babysit` first, then optional greploop. Updated `mstar-iteration` §5 pointer + `commands/iteration-drive` / `iteration-loop`.
+
 ## [1.4.0] - 2026-07-17
 
 ### Harness (Kimi Code host)
