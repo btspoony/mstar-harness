@@ -6,7 +6,9 @@
 Canonical vs legacy residual definitions → **`mstar-plan-artifacts` SKILL.md** (“`status.json` and open residual (summary)”); this file covers **fields, severity, lifecycle, archive, and `jq` examples**.  
 **Closed** residuals should not accumulate here long-term; authoritative archive → **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`** (see “Residual findings lifecycle”).
 
-**Why this matters:** The open list and `archived/residuals/` are the **cross-session handoff surface** for risk and decisions. Non-blocking conclusions that stay only in chat or a gitignored review bundle **without SSOT** cannot be inherited reliably; `Done` drifts from visible known debt. **`@project-manager`** should register trackable open items soon after review closure; close/archive after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist).
+**Why this matters:** Within a working copy, the open list in `status.json` and `archived/residuals/` are the **local session SSOT** for risk and decisions. Non-blocking conclusions that stay only in chat or a gitignored review bundle **without local SSOT update** cannot be inherited reliably in that session; `Done` drifts from visible known debt. **`@project-manager`** should register trackable open items soon after review closure; close/archive after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist).
+
+**Cross-clone handoff** (default git policy): tracked `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**`, and root `CONCEPTS.md` / `STRATEGY.md` when used. Residuals that must survive clone must be **promoted** (compound) or written into those tracked results — do not treat `status.json` / `plans/` as the default clone handoff surface.
 
 ## Basic structure
 

@@ -62,7 +62,7 @@ mkdir -p "$SDD_DIR/review"
 skills/mstar-sdd/scripts/review-package "$MERGE_BASE" HEAD "$SDD_DIR/review/branch-review-....diff"
 ```
 
-Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and residuals in tracked plan/status artifacts.
+Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and open residuals in **local** plan/`status.json` (session SSOT) and promotes cross-clone decisions into tracked knowledge/specs/`AGENTS.md` per `mstar-plan-conventions` git policy.
 
 ## PM context hygiene
 

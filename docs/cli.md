@@ -138,7 +138,7 @@ Cursor and Codex `init` ensure a maintained local checkout exists at `~/.mstar/h
 Cursor `init`:
 
 - global: `git clone` / `git pull` at `~/.cursor/plugins/local/morning-star-harness`
-- project: `git clone` / `git pull` at `.cursor/plugins/morning-star-harness` and `.gitignore` entry for the plugin directory
+- project: `git clone` / `git pull` at `.cursor/plugins/morning-star-harness`, `.gitignore` entry for the plugin directory, and harness **process** gitignore entries for `.mstar/` and legacy `.agents/` (`archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json`). Harness **results** (`knowledge/`, `specs/`, `AGENTS.md`) are not added automatically.
 
 Codex `init` writes or updates marketplace metadata with a local-source entry:
 
@@ -148,15 +148,15 @@ Codex `init` writes or updates marketplace metadata with a local-source entry:
 - `policy.installation`: `AVAILABLE`
 - `policy.authentication`: `ON_INSTALL`
 
-Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope also links `.codex/plugins/mstar-harness -> ~/.mstar/harness`, adds `.codex/plugins/mstar-harness` plus `.codex/agents/*.toml` to `.gitignore`, and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
+Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope also links `.codex/plugins/mstar-harness -> ~/.mstar/harness`, adds `.codex/plugins/mstar-harness` plus `.codex/agents/*.toml` to `.gitignore`, appends the same harness **process** gitignore set as Cursor project `init` (see above), and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
 
 ## What `doctor` Checks
 
 - Same schema and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
 - Missing per-role `agent.<role>.model` is a **yellow recommendation** only (OpenCode defaults are OK).
 - If only legacy git is present, or legacy and npm are both listed, `doctor` prints **yellow recommendations** and still exits 0; run `init` to normalize to `@mstar-harness/opencode@latest`.
-- For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, that the Cursor plugin path is a **real git directory** (not a symlink), and that `agents/*.md` files use Cursor-first frontmatter.
-- For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks. Project scope also validates iteration skill symlinks under `.agents/skills/`.
+- For Cursor, `doctor` checks the maintained `~/.mstar/harness` checkout, that the Cursor plugin path is a **real git directory** (not a symlink), that `agents/*.md` files use Cursor-first frontmatter, and (project scope) all harness **process** `.gitignore` entries listed under Cursor `init`.
+- For Codex, `doctor` checks the local marketplace entry, the maintained `~/.mstar/harness` checkout, and custom-agent symlinks. Project scope also validates iteration skill symlinks under `.agents/skills/` and harness **process** `.gitignore` entries.
 
 ## Install path layout
 

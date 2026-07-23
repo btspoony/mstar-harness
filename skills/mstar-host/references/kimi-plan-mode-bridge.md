@@ -24,7 +24,7 @@ Kimi **Plan mode** (`EnterPlanMode` / `ExitPlanMode`, `/plan`, or `Shift-Tab`) u
 
 1. **Read** (minimum): `mstar-plan-conventions`, `mstar-plan-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
 2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions`.
-3. **Initialize** if absent: `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `status.json` from `mstar-plan-artifacts/templates/status.empty.json`, `archived/residuals/`, gitignored `sdd/`.
+3. **Initialize** if absent: `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `status.json` from `mstar-plan-artifacts/templates/status.empty.json`, `archived/residuals/`, Morning Star process-artifact gitignore set (see `mstar-plan-conventions` SKILL.md「Git 跟踪策略」).
 
 ## Plan mode workflow (dual-write)
 

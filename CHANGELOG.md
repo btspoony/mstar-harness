@@ -2,20 +2,33 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.5.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.5.2** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.5.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.5.1** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.1** |
+| Monorepo root | `morning-star` (`package.json`) | **1.5.2** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.2** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.2** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.2** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.5.2** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.2** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.5.2] - 2026-07-23
+
+### Harness (git policy + SPECS_DIR)
+
+- **Process vs results git policy**: default tracked under `{HARNESS_DIR}` — `AGENTS.md`, `knowledge/`, `specs/`; default gitignored — `plans/`, `iterations/`, `status.json`, `sdd/`, `archived/`, `notes.json`. Cross-clone handoff = tracked results + root `CONCEPTS.md` / `STRATEGY.md`; promote residuals via compound instead of default `git add` for `status.json` / `plans/`.
+- **`{SPECS_DIR}` resolve order**: `{HARNESS_DIR}/specs/` → `docs/specs/` → repo-root `specs/` (skip empty dirs; greenfield creates `{HARNESS_DIR}/specs/`). Legacy read-compat: non-empty `designs/` paths.
+- Aligned: `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-sdd` file-handoffs, host Plan-mode bridges, bilingual README, `.cursor/LOCAL-VALIDATION.md`.
+- **CLI**: `init`/`doctor` append/check the full process gitignore set (see `packages/cli/CHANGELOG.md`).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi plugin manifests: **→ 1.5.2**.
 
 ## [1.5.1] - 2026-07-22
 

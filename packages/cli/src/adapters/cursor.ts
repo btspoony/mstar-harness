@@ -11,7 +11,7 @@ import {
   validateGitCheckout,
   appendGitignore,
   appendHarnessProjectGitignore,
-  SDD_SCRATCH_GITIGNORE,
+  missingHarnessProcessGitignoreEntries,
 } from "./shared-install";
 
 const CURSOR_PLUGIN_NAME = "morning-star-harness";
@@ -89,10 +89,8 @@ function projectDoctor() {
   if (!gitignore.split(/\r?\n/).includes(CURSOR_PLUGIN_LINK)) {
     errors.push(`Missing .gitignore entry: ${CURSOR_PLUGIN_LINK}`);
   }
-  for (const entry of SDD_SCRATCH_GITIGNORE) {
-    if (!gitignore.split(/\r?\n/).includes(entry)) {
-      errors.push(`Missing .gitignore entry: ${entry}`);
-    }
+  for (const entry of missingHarnessProcessGitignoreEntries(gitignore)) {
+    errors.push(`Missing .gitignore entry: ${entry}`);
   }
   errors.push(...validatePluginAgents(location));
   return { location, errors };

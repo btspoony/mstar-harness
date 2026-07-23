@@ -43,9 +43,9 @@ git rev-parse HEAD | xargs -I{} skills/mstar-sdd/scripts/review-package {} {}
 ```
 
 - Confirm outputs land under `{SDD_DIR}` printed by `sdd-workspace` (default `.mstar/sdd/<plan-id>/`) and plan-level review artifacts use `{SDD_DIR}/review/`.
-- `git status` must **not** list `{HARNESS_DIR}/sdd/` scratch files (directory should be gitignored).
+- `git status` must **not** list `{HARNESS_DIR}/sdd/` scratch files or other process artifacts (`plans/`, `iterations/`, `status.json`, … — see `mstar-plan-conventions` git policy).
 - PM-style routing: **`Execution mode: sdd`** → plan QC **N=3** tri + branch review-package in `{SDD_DIR}/review/`; **`inline`/hotfix** → **N=1** `qc.md` in the same bundle. SDD implement/reviewer dispatches are **serial**. Optional **`SDD implementer session: sticky`** (Cursor Task `resume`) — reviewers stay **fresh** per task (`mstar-sdd/references/sticky-implementer-session.md`).
-- Stale path check: raw QC/QA report defaults should not point at `{PLAN_DIR}/reports/` or `plans/reports/`; tracked artifacts should be durable plan summaries and `status.json` residuals.
+- Stale path check: raw QC/QA report defaults should not point at `{PLAN_DIR}/reports/` or `plans/reports/`; cross-clone tracked results are `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/`, `{SPECS_DIR}/` — durable gate summaries live in local plan files (gitignored by default).
 
 ## 4) Packaging guardrails
 
