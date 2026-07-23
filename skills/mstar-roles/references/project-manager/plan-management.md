@@ -19,7 +19,7 @@ Legacy fallbacks:
 
 1. Create `{HARNESS_DIR}` and `{PLAN_DIR}` when absent.
 2. Initialize `{HARNESS_DIR}/status.json` from template if available.
-3. Ensure `{HARNESS_DIR}/sdd/` is gitignored; per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
+3. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json` (legacy `.agents/` equivalents when applicable). Per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
 4. Initialize residual archive path: `{HARNESS_DIR}/archived/residuals/`.
 5. **Profile B** only: `{HARNESS_DIR}/archived/plans/` and `archived/plans-done.json` from `mstar-plan-artifacts/templates/plans-done.empty.json` (`{ "plans": [] }` only; see `done-compaction.md`).
 6. Optional: `{HARNESS_DIR}/notes.json`, `{HARNESS_DIR}/knowledge/README.md`.
@@ -28,8 +28,12 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 
 ## Git Tracking Policy
 
-- Default: track `{HARNESS_DIR}` files in repo for reproducible handoff.
-- If project policy requires local-only, explicitly record it and ensure no required artifact depends on ignored files.
+**Principle:** process stays local; results are shared with the team. Full rules → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」.
+
+- **Default tracked** under `{HARNESS_DIR}`: `AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**` (resolved specs path; default `{HARNESS_DIR}/specs/`).
+- **Default gitignored** (local session SSOT / coordination): `archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json`.
+- `status.json` and main plan files remain **local session SSOT** — PM must keep them current on disk, but **do not** default `git add` / `git commit` for cross-clone handoff. Promote durable residuals and decisions into tracked `knowledge/` / `specs/` / `AGENTS.md` (compound) when they must survive clone.
+- If a project explicitly opts into tracking process artifacts, record that policy in `{HARNESS_DIR}/AGENTS.md` and ensure team alignment.
 
 ## PM Responsibilities
 
