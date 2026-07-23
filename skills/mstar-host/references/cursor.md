@@ -19,7 +19,7 @@ Before first **CreatePlan**: Read `mstar-plan-conventions`, `mstar-plan-artifact
 
 | Todo ID | Purpose |
 |---------|---------|
-| `harness-init` | Init `{HARNESS_DIR}`, `{PLAN_DIR}`, `sdd/` gitignore, `archived/residuals/`, `status.json` |
+| `harness-init` | Init `{HARNESS_DIR}`, `{PLAN_DIR}`, process-artifact gitignore set (`plans/`, `iterations/`, `sdd/`, `status.json`, …), `archived/residuals/`, `status.json` |
 | `spec-register` | Register `plan_id` in `status.json.plans[]` + spec stub if applicable |
 | `mirror-plan` | Write SSOT main plan under `{PLAN_DIR}/` |
 

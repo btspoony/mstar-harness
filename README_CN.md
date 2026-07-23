@@ -174,6 +174,8 @@ flowchart TD
 
 项目计划工件默认使用 **`.mstar/`**（`{HARNESS_DIR}`），同时继续识别既有 `.agents/` / `.plans/` / `plans/` 布局。
 
+**Git 跟踪（默认）**：进程本地（`plans/`、`iterations/`、`status.json`、`sdd/` 等 gitignored）；结果共享（`{HARNESS_DIR}` 下 `AGENTS.md`、`knowledge/`、`specs/` 默认 tracked）。`{SPECS_DIR}` 解析顺序：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`（空目录跳过；greenfield 创建 `.mstar/specs/`）。细则 → `mstar-plan-conventions`。
+
 ## 许可
 
 本项目采用 MIT License，详见 [LICENSE](./LICENSE)。

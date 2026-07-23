@@ -31,7 +31,7 @@
 
 ## `{SPECS_DIR}`（可选·长期规格）
 
-- `{SPECS_DIR}` 解析：优先 `{HARNESS_DIR}/specs/`，否则 `{HARNESS_DIR}/designs/`；皆无则建议新建 `specs/`。
+- `{SPECS_DIR}` 解析（非空即停）：`{HARNESS_DIR}/specs/` → `docs/specs/` → 仓库根 `specs/`；皆无或皆空则 init 创建 `{HARNESS_DIR}/specs/`。Legacy 只读：`{HARNESS_DIR}/designs/` 或根 `designs/` 非空时可用。细则 → `mstar-plan-conventions` SKILL.md「`{SPECS_DIR}` 解析」。
 - **放什么**：跨迭代有效、已锁定或待锁定的产品/API 规范、ADR、契约 — **iteration-start 主产出**（product/architect）。
 - **不放什么**：本迭代-only 探索（→ `<iteration-id>/guides/`）；迭代级 spec 草案（→ `<iteration-id>/specs/`）；实施踩坑原文（→ package 或 plan 素材，**close 时 compound 提升**）。
 - **索引**：非 trivial 树建议 `{SPECS_DIR}/README.md`；plan **`primary_spec` / `spec_refs`** 主要指向此处。

@@ -17,6 +17,12 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+### Harness (git policy + SPECS_DIR)
+
+- **Process vs results git policy**: default tracked under `{HARNESS_DIR}` — `AGENTS.md`, `knowledge/`, `specs/`; default gitignored — `plans/`, `iterations/`, `status.json`, `sdd/`, `archived/`, `notes.json`. Cross-clone handoff = tracked results + root `CONCEPTS.md` / `STRATEGY.md`; promote residuals via compound instead of default `git add` for `status.json` / `plans/`.
+- **`{SPECS_DIR}` resolve order**: `{HARNESS_DIR}/specs/` → `docs/specs/` → repo-root `specs/` (skip empty dirs; greenfield creates `{HARNESS_DIR}/specs/`). Legacy read-compat: non-empty `designs/` paths.
+- Aligned: `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-sdd` file-handoffs, host Plan-mode bridges, bilingual README, `.cursor/LOCAL-VALIDATION.md`.
+
 ## [1.5.1] - 2026-07-22
 
 ### Harness (Phase 5 push cadence)

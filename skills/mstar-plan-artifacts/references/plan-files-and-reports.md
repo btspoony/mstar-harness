@@ -54,7 +54,7 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 
 ## Residual findings（R#）：权威在哪、和主 plan 谁先谁后？
 
-- **Open 条目的单一事实来源（SSOT）**是 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-plan-artifacts` **SKILL.md** 开篇；字段见 `mstar-plan-artifacts/references/status-and-residuals.md`）。跨会话 handoff、关闭与归档流程**以该数组为准**。
+- **Open 条目的单一事实来源（SSOT）**是 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-plan-artifacts` **SKILL.md** 开篇；字段见 `mstar-plan-artifacts/references/status-and-residuals.md`）。**同一工作副本内**的会话 handoff、关闭与归档流程**以该数组为准**（本地 SSOT，默认 gitignored）；**跨 clone** 须持久的 residual 须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 等（见 `mstar-plan-conventions`「Git 跟踪策略」）。
 - **推荐操作顺序**（避免 plan 与 JSON 两套 ID 漂移）：
   1. `project-manager` 读完 review bundle 并完成「QC 三审轻量汇总」：对 finding **去重合并**，为每条待跟踪项分配**稳定 `id`**（如 `R1`、`R2`，全 plan 内唯一）。
   2. **立即**将上述条目写入根级 **`residual_findings[<plan-id>]`**（含 `source` 指向 reviewer seat + bundle basename + finding id + review range，便于回溯）；**勿**与 legacy 侧双写（见 `mstar-plan-conventions` **SKILL.md** 开篇）。
@@ -79,7 +79,7 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 
 **QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），默认 **仅可** Write/Edit Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。全局 agent 提示词应允许 `.mstar/sdd/**`、`.agents/sdd/**` 及 worktree 下对应路径。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
 
-**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM must commit durable artifacts instead: main plan gate summaries, `{HARNESS_DIR}/status.json` residual changes, and any tracked specs/knowledge/iteration updates. If a project explicitly opts into tracked audit reports, state `Review archive mode: tracked reports` in Assignment and use project-specific allow rules.
+**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（本地会话 SSOT；默认 gitignored）并在当轮更新 `{HARNESS_DIR}/status.json` 的 open residuals（本地 SSOT，默认 gitignored）。**跨 clone 须持久的** residual 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md`（见 `mstar-plan-conventions`「Git 跟踪策略」）— **勿**默认 `git add` `status.json` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
 
 ## 主 plan 内任务清单（Markdown checkbox）
 

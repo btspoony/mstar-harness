@@ -15,6 +15,12 @@
 
 ## [Unreleased]
 
+### Harness（git 策略 + SPECS_DIR）
+
+- **进程 vs 结果 Git 策略**：`{HARNESS_DIR}` 下默认 tracked — `AGENTS.md`、`knowledge/`、`specs/`；默认 gitignored — `plans/`、`iterations/`、`status.json`、`sdd/`、`archived/`、`notes.json`。跨 clone handoff = tracked 结果 + 根目录 `CONCEPTS.md` / `STRATEGY.md`；residual 经 compound 提升，**勿**默认 `git add` `status.json` / `plans/`。
+- **`{SPECS_DIR}` 解析顺序**：`{HARNESS_DIR}/specs/` → `docs/specs/` → 仓库根 `specs/`（空目录跳过；greenfield 创建 `{HARNESS_DIR}/specs/`）。Legacy 只读：非空 `designs/` 路径。
+- 已对齐：`mstar-plan-conventions`、`mstar-plan-artifacts`、`mstar-sdd` file-handoffs、宿主 Plan 模式桥接、双语 README、`.cursor/LOCAL-VALIDATION.md`。
+
 ## [1.5.1] - 2026-07-22
 
 ### Harness（Phase 5 push cadence）

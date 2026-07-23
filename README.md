@@ -174,6 +174,8 @@ Maintainers: follow [`AGENTS.md`](AGENTS.md) for in-repo maintenance notes and p
 
 Project plan artifacts default to **`.mstar/`** (`{HARNESS_DIR}`), with existing `.agents/` / `.plans/` / `plans/` layouts still recognized for compatibility.
 
+**Git tracking (default):** process stays local (`plans/`, `iterations/`, `status.json`, `sdd/`, … are gitignored); results are shared (`AGENTS.md`, `knowledge/`, `specs/` under `{HARNESS_DIR}` are tracked). `{SPECS_DIR}` resolves `.mstar/specs/` → `docs/specs/` → repo-root `specs/` (empty dirs skipped; greenfield creates `.mstar/specs/`). Details → `mstar-plan-conventions`.
+
 ## License
 
 This project is licensed under MIT. See [LICENSE](./LICENSE).
