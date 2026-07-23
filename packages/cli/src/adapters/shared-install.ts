@@ -170,7 +170,26 @@ export function validateSymlink(target: string, linkPath: string) {
   return errors;
 }
 
-export const SDD_SCRATCH_GITIGNORE = [".mstar/sdd/", ".agents/sdd/"];
+/** Harness process artifacts (not results: knowledge/, specs/, AGENTS.md). */
+export const HARNESS_PROCESS_GITIGNORE = [
+  ".mstar/archived/",
+  ".mstar/iterations/",
+  ".mstar/plans/",
+  ".mstar/sdd/",
+  ".mstar/notes.json",
+  ".mstar/status.json",
+  ".agents/archived/",
+  ".agents/iterations/",
+  ".agents/plans/",
+  ".agents/sdd/",
+  ".agents/notes.json",
+  ".agents/status.json",
+];
+
+export function missingHarnessProcessGitignoreEntries(gitignoreContent: string): string[] {
+  const lines = gitignoreContent.split(/\r?\n/);
+  return HARNESS_PROCESS_GITIGNORE.filter((entry) => !lines.includes(entry));
+}
 
 export function appendGitignore(projectRoot: string, entries: string[], dryRun: boolean) {
   const gitignorePath = path.join(projectRoot, ".gitignore");
@@ -186,7 +205,7 @@ export function appendGitignore(projectRoot: string, entries: string[], dryRun: 
 }
 
 export function appendHarnessProjectGitignore(projectRoot: string, dryRun: boolean) {
-  return appendGitignore(projectRoot, SDD_SCRATCH_GITIGNORE, dryRun);
+  return appendGitignore(projectRoot, HARNESS_PROCESS_GITIGNORE, dryRun);
 }
 
 export function homeRelativeSourcePath(targetPath: string) {

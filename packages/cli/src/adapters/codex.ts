@@ -13,7 +13,7 @@ import {
   validateSymlink,
   appendGitignore,
   appendHarnessProjectGitignore,
-  SDD_SCRATCH_GITIGNORE,
+  missingHarnessProcessGitignoreEntries,
   homeRelativeSourcePath,
 } from "./shared-install";
 
@@ -272,8 +272,8 @@ function runDoctor(scope: Scope) {
     const lines = gitignore.split(/\r?\n/);
     if (!lines.includes(CODEX_PLUGIN_LINK)) errors.push(`Missing .gitignore entry: ${CODEX_PLUGIN_LINK}`);
     if (!lines.includes(".codex/agents/*.toml")) errors.push("Missing .gitignore entry: .codex/agents/*.toml");
-    for (const entry of SDD_SCRATCH_GITIGNORE) {
-      if (!lines.includes(entry)) errors.push(`Missing .gitignore entry: ${entry}`);
+    for (const entry of missingHarnessProcessGitignoreEntries(gitignore)) {
+      errors.push(`Missing .gitignore entry: ${entry}`);
     }
     errors.push(...validateIterationSkillLinks());
   }
