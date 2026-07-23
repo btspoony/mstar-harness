@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.5.2
+
+- Version alignment with harness **1.5.2** (bundled skills/commands: process-vs-results git policy + `{SPECS_DIR}` resolve order).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.5.2**.
+
 ## 1.5.1
 
 - Version alignment with harness **1.5.1** (bundled skills/commands: Phase 5 push cadence — local early fix, push only when CI/review wave idle).

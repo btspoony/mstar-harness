@@ -1,25 +1,32 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.2**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.5.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.1** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.5.2** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.2** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.2** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.2** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.5.2] - 2026-07-23
 
 ### Harness（git 策略 + SPECS_DIR）
 
 - **进程 vs 结果 Git 策略**：`{HARNESS_DIR}` 下默认 tracked — `AGENTS.md`、`knowledge/`、`specs/`；默认 gitignored — `plans/`、`iterations/`、`status.json`、`sdd/`、`archived/`、`notes.json`。跨 clone handoff = tracked 结果 + 根目录 `CONCEPTS.md` / `STRATEGY.md`；residual 经 compound 提升，**勿**默认 `git add` `status.json` / `plans/`。
 - **`{SPECS_DIR}` 解析顺序**：`{HARNESS_DIR}/specs/` → `docs/specs/` → 仓库根 `specs/`（空目录跳过；greenfield 创建 `{HARNESS_DIR}/specs/`）。Legacy 只读：非空 `designs/` 路径。
 - 已对齐：`mstar-plan-conventions`、`mstar-plan-artifacts`、`mstar-sdd` file-handoffs、宿主 Plan 模式桥接、双语 README、`.cursor/LOCAL-VALIDATION.md`。
+- **CLI**：`init`/`doctor` 追加/检查完整 process gitignore 集（见 `packages/cli/CHANGELOG.md`）。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi 插件：**→ 1.5.2**。
 
 ## [1.5.1] - 2026-07-22
 
