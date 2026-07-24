@@ -23,7 +23,7 @@ Core value:
 - Run with unified `mstar-*` skills instead of scattered rules
 - Reuse one core process across OpenCode, Cursor, Codex, and Kimi Code
 
-Latest release: **1.5.2** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
+Latest release: **1.5.3** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
 ## Quick Start
 
@@ -59,7 +59,7 @@ Three PM-led iteration entry points. Pick by how much human direction you need:
 | Path | When | Flow |
 |------|------|------|
 | `/iteration-start` → `/iteration-drive` | First iteration, or deep work that needs human direction lock (**grill-me**) before execution | Phase 1 only → Phase 2–5 (execute, close, PR, merge-ready) |
-| `/iteration-loop` | Fast autonomous full loop (cloud-agent friendly); optional `direction` + `scale` (S\|M\|L) | Phase 1→5 continuous with minimal check-ins |
+| `/iteration-loop` | Fast autonomous full loop (cloud-agent friendly); optional `direction` + `scale` (S\|M\|L\|XL) | Phase 1→5 continuous with minimal check-ins |
 
 **Phase 2 defaults** (iteration execute; waive only with explicit `Worktree mode: waived`):
 

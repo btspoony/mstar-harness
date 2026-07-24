@@ -1,19 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.2**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.3**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.5.2** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.2** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.2** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.2** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.2** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.5.3** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.3** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.3** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.3** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.3** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.3** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.5.3] - 2026-07-25
+
+### Harness（commands / frontmatter）
+
+- **Frontmatter YAML**：对含 `: ` 的 `description` 加引号，避免 Cursor/插件发现不到 command/skill（`iteration-loop`、`mstar-branch-worktree`、`mstar-phase-gates`、`mstar-plan-artifacts`、`mstar-review-qc`、`mstar-sdd`）。
+- **`/iteration-loop` scale**：新增 **`XL`** = **>4** 个业务 plan（`S`/`M`/`L`/`XL`；默认仍为 `M`）。SSOT：`mstar-iteration` §1.2 + `references/autonomous-direction-lock.md`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi 插件：**→ 1.5.3**。
 
 ## [1.5.2] - 2026-07-23
 

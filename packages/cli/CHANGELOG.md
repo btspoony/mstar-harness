@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.5.3
+
+- Version alignment with harness **1.5.3** (no CLI API change in this release).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.5.3**.
+
 ## 1.5.2
 
 - Project `init`/`doctor` (Cursor/Codex project scope): append/check full harness **process** gitignore set under `.mstar/` and legacy `.agents/` (`archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json`). Results paths (`knowledge/`, `specs/`, `AGENTS.md`) are not forced gitignored.
