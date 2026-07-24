@@ -2,25 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.5.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.5.3** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.5.2** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.5.2** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.2** |
+| Monorepo root | `morning-star` (`package.json`) | **1.5.3** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.3** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.3** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.3** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.5.3** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.3** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-07-25
+
 ### Harness (commands / frontmatter)
 
 - **Frontmatter YAML**: quote `description` fields that contain `: ` so Cursor/plugin discovery does not drop commands/skills (`iteration-loop`, `mstar-branch-worktree`, `mstar-phase-gates`, `mstar-plan-artifacts`, `mstar-review-qc`, `mstar-sdd`).
 - **`/iteration-loop` scale**: add **`XL`** = **>4** business plans (`S`/`M`/`L`/`XL`; default still `M`). SSOT: `mstar-iteration` §1.2 + `references/autonomous-direction-lock.md`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi plugin manifests: **→ 1.5.3**.
 
 ## [1.5.2] - 2026-07-23
 

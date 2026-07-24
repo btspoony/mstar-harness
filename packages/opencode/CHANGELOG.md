@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.5.3
+
+- Version alignment with harness **1.5.3** (bundled skills/commands: frontmatter YAML quotes + `/iteration-loop` scale `XL`).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.5.3**.
+
 ## 1.5.2
 
 - Version alignment with harness **1.5.2** (bundled skills/commands: process-vs-results git policy + `{SPECS_DIR}` resolve order).
