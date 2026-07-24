@@ -15,6 +15,11 @@
 
 ## [Unreleased]
 
+### Harness（commands / frontmatter）
+
+- **Frontmatter YAML**：对含 `: ` 的 `description` 加引号，避免 Cursor/插件发现不到 command/skill（`iteration-loop`、`mstar-branch-worktree`、`mstar-phase-gates`、`mstar-plan-artifacts`、`mstar-review-qc`、`mstar-sdd`）。
+- **`/iteration-loop` scale**：新增 **`XL`** = **>4** 个业务 plan（`S`/`M`/`L`/`XL`；默认仍为 `M`）。SSOT：`mstar-iteration` §1.2 + `references/autonomous-direction-lock.md`。
+
 ## [1.5.2] - 2026-07-23
 
 ### Harness（git 策略 + SPECS_DIR）

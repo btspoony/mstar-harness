@@ -59,7 +59,7 @@ npx @mstar-harness/cli init
 | 路径 | 适用场景 | 流程 |
 |------|----------|------|
 | `/iteration-start` → `/iteration-drive` | 首次 iteration，或需要人工方向锁定（**grill-me**）的深度工作 | 仅 Phase 1 → Phase 2–5（执行、收尾、开 PR、merge-ready） |
-| `/iteration-loop` | 快速自动化完整闭环（适合 cloud agent）；可选 `direction` + `scale`（S\|M\|L） | Phase 1→5 连续执行，尽量少人工确认 |
+| `/iteration-loop` | 快速自动化完整闭环（适合 cloud agent）；可选 `direction` + `scale`（S\|M\|L\|XL） | Phase 1→5 连续执行，尽量少人工确认 |
 
 **Phase 2 默认**（iteration 执行；仅当 Assignment 显式 `Worktree mode: waived` 时可豁免）：
 

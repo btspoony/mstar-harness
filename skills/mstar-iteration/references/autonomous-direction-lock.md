@@ -8,7 +8,7 @@ Capability detail for Phase 1 when direction lock mode is **`autonomous`**.
 
 - Research (§1.1) and candidate exploration already done — **read repo artifacts before ranking**.
 - Do not invent roadmap items that have no file or status evidence.
-- Scale budget (`S`/`M`/`L`) applies in this mode (or when the caller supplies one); do not retrofit a scale cap onto an interactive start that never asked for one.
+- Scale budget (`S`/`M`/`L`/`XL`) applies in this mode (or when the caller supplies one); do not retrofit a scale cap onto an interactive start that never asked for one.
 
 ## Ranking heuristics（highest first）
 
@@ -29,7 +29,7 @@ Write into compass (and plan Scope as needed):
 | Rationale | Why this candidate won（cite paths / roadmap lines） |
 | Acceptance criteria | Iteration-level Done |
 | Non-goals | Explicit exclusions |
-| Scale budget | `S` \| `M` \| `L` and resulting plan-count cap |
+| Scale budget | `S` \| `M` \| `L` \| `XL` and resulting plan-count cap |
 
 ## Scale budget
 
@@ -37,7 +37,8 @@ Write into compass (and plan Scope as needed):
 |--------|-------------------------|
 | `S` | 1 |
 | `M` | 2–3 |
-| `L` | 3–4（default cap 4 unless a written constraint requires more） |
+| `L` | 3–4（cap 4） |
+| `XL` | **>4**（5+） |
 
 ### What counts toward the budget（HARD）
 
@@ -52,7 +53,7 @@ Count only **business delivery plans** registered in compass / `status.json` who
 | Phase 3–5 process | Compound / package promotion, iteration-close, Create PR, merge-ready / CI babysit |
 | Meta “plans” | “run QC”, “do compound”, “open PR”, “setup harness”, “write compass only” |
 
-Harness steps remain **mandatory gates** outside the budget — they do not consume S/M/L slots and must not be padded into the plan list to “fill” the budget.
+Harness steps remain **mandatory gates** outside the budget — they do not consume S/M/L/XL slots and must not be padded into the plan list to “fill” the budget.
 
 If evidence suggests more **business** work than the budget allows, keep overflow in compass `## Roadmap Position` → next iteration — do not silently expand past the budget, and do not replace business plans with process plans to stay under the cap.
 

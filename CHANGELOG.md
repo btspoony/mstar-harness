@@ -17,6 +17,11 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+### Harness (commands / frontmatter)
+
+- **Frontmatter YAML**: quote `description` fields that contain `: ` so Cursor/plugin discovery does not drop commands/skills (`iteration-loop`, `mstar-branch-worktree`, `mstar-phase-gates`, `mstar-plan-artifacts`, `mstar-review-qc`, `mstar-sdd`).
+- **`/iteration-loop` scale**: add **`XL`** = **>4** business plans (`S`/`M`/`L`/`XL`; default still `M`). SSOT: `mstar-iteration` §1.2 + `references/autonomous-direction-lock.md`.
+
 ## [1.5.2] - 2026-07-23
 
 ### Harness (git policy + SPECS_DIR)
