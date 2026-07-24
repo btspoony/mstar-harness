@@ -1,6 +1,6 @@
 ---
 name: iteration-loop
-description: Autonomous full iteration loop for cloud agents — Phase 1 (code-first auto direction lock + compass/plans + Review & Edit chain) through Phase 2–5 (execute → close → PR → merge-ready). Optional args: direction, scale (S|M|L, default M). Not Done until Phase 5 exit checklist passes. Minimal human intervention; no grill-me.
+description: "Autonomous full iteration loop for cloud agents — Phase 1 (code-first auto direction lock + compass/plans + Review & Edit chain) through Phase 2–5 (execute → close → PR → merge-ready). Optional args: direction, scale (S|M|L, default M). Not Done until Phase 5 exit checklist passes. Minimal human intervention; no grill-me."
 agent: project-manager
 ---
 

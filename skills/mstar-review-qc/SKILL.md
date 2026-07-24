@@ -1,6 +1,6 @@
 ---
 name: mstar-review-qc
-description: Morning Star QC orchestration — **SDD mandatory plan QC tri-review** (`{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated); inline/hotfix single-seat (`qc.md` in review bundle); PM dispatch timing, tri identity gate, residual registration contract, layer boundaries, durable plan summary. Leaf QC execution → **`mstar-roles/references/qc-specialist/`**. Per-task review is **`mstar-sdd`** (L2). Primary reader: **`project-manager`** when dispatching or consolidating QC.
+description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-review** (`{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated); inline/hotfix single-seat (`qc.md` in review bundle); PM dispatch timing, tri identity gate, residual registration contract, layer boundaries, durable plan summary. Leaf QC execution → **`mstar-roles/references/qc-specialist/`**. Per-task review is **`mstar-sdd`** (L2). Primary reader: **`project-manager`** when dispatching or consolidating QC."
 ---
 
 ## Load order（必读顺序）
