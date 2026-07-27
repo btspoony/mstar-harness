@@ -1,6 +1,6 @@
 ---
 name: mstar-branch-worktree
-description: "Morning Star business-repo Git feature branches, worktree isolation layers **L1** (iteration cross-plan — control worktree + per-plan feature worktrees + `execution_lease`) and **L2** (within-plan — `references/parallel-writable-pre-dispatch.md`; N parallel Task invokes do NOT satisfy isolation), plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, iteration Phase 2 control vs feature worktree paths, dispatches ≥2 concurrent writable implement tracks on one repo, `Worktree isolation: required`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `project-manager` parallel implement or pre-QC orchestration; `fullstack-dev*` / `frontend-dev` / `qa-engineer` / `ops-engineer` on repo writes; `qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`)."
+description: "Morning Star business-repo Git feature branches, worktree isolation layers **L1** (iteration cross-plan — control worktree + per-plan feature worktrees + `execution_lease`; under default gitignore, process harness SSOT via absolute control paths — plans/iterations/status/sdd — while product edits stay on the feature worktree; do not waive worktree because feature lacks plans) and **L2** (within-plan — `references/parallel-writable-pre-dispatch.md`; N parallel Task invokes do NOT satisfy isolation), plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, iteration Phase 2 control vs feature worktree paths, dispatches ≥2 concurrent writable implement tracks on one repo, `Worktree isolation: required`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `project-manager` parallel implement or pre-QC orchestration; `fullstack-dev*` / `frontend-dev` / `qa-engineer` / `ops-engineer` on repo writes; `qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`)."
 ---
 
 ## Load order（必读顺序）
@@ -121,15 +121,31 @@ Established at iteration **Phase 2 entry** (Phase 1 Review & Edit may stay on th
 
 | Worktree role | Checked-out branch | Path recorded in `status.json` | Writable product edits |
 |---------------|-------------------|-------------------------------|------------------------|
-| **Control worktree** | Resolved `spec_integration_branch` (same across active plans) | `metadata.control_worktree_path` — canonical **repository root** (not `{HARNESS_DIR}`) | **Forbidden** — coordination, status/SDD SSOT, serial integration merge only |
+| **Control worktree** | Resolved `spec_integration_branch` (same across active plans) | `metadata.control_worktree_path` — canonical **repository root** (not `{HARNESS_DIR}`) | **Forbidden** — harness coordination SSOT + serial integration merge only |
 | **Feature worktree** (per plan) | Plan `Working branch` / feature branch from integration | `plans[].execution_lease.worktree_path` | **Required cwd** for that plan's product/source edits |
+
+### Harness path SSOT under default gitignore (L1)
+
+Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `notes.json`, `archived/`) are **gitignored** (`mstar-plan-conventions`「Git 跟踪策略」). `git worktree add` does **not** copy them into a new feature checkout. They live on the **control worktree filesystem** (the checkout of `spec_integration_branch`), not as Git blobs on that branch.
+
+| Path role | Resolve from |
+|-----------|--------------|
+| **Control harness root** | `<control_worktree_path>/{HARNESS_DIR}/` |
+| **Process / coordination SSOT** (read + write) | Absolute under control harness root: `status.json`, `plans/`, `iterations/`, `sdd/<plan-id>/`, `notes.json`, `archived/` |
+| **Tracked results** (`AGENTS.md`, `knowledge/`, `specs/`) | Available in any worktree via Git; absolute control paths in Assignment are still fine |
+| **Product / source edits** | Feature worktree only (`execution_lease.worktree_path`) |
 
 **Hard rules**
 
 - `execution_lease.worktree_path` **MUST** differ from `metadata.control_worktree_path`.
-- Status SSOT: `<control_worktree_path>/{HARNESS_DIR}/status.json`. SDD SSOT: `<control_worktree_path>/{HARNESS_DIR}/sdd/<plan-id>/`. A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT.
-- Absolute **`Worktree path`** MUST appear in the writable Assignment and in `execution_lease.worktree_path` before first writable implement dispatch for that plan.
+- A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT — **never** treat it as the source of plans/status/SDD, and **never** bootstrap a second plans/status/SDD tree there.
+- Absolute **`Worktree path`** (feature) MUST appear in the writable Assignment and in `execution_lease.worktree_path` before first writable implement dispatch for that plan.
+- When L1 lease gate is active (not `Worktree mode: waived`), Assignment **`Plan Path`** and **`SDD dir`** MUST be **absolute paths under the control harness root** (not relative `.mstar/...` resolved from the feature cwd). Prefer also writing **`Control harness root: <control_worktree_path>/{HARNESS_DIR}`**.
 - Writable dispatch for a plan requires a **verified** `execution_lease` (same read-check-replace-verify discipline as the iteration reference). Full claim tables are **not** duplicated here.
+
+**Anti-pattern (forbidden)**
+
+- Inferring `Worktree mode: waived` because “feature worktree has no plans” under default gitignore. Correct response: keep feature worktrees; route harness I/O through control absolute paths. Missing same-host write lock → **`Plan parallelism: serial`** only — that is a **separate** gate and does **not** waive worktree/lease.
 
 **Naming conventions (PM / ops; examples only — paths MUST be canonical absolute)**
 

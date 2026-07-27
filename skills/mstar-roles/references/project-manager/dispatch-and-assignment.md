@@ -75,7 +75,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Delegation**: forbidden | allowed (...)
 **Execution mode**: sdd | inline | N/A
 **SDD implementer session**: fresh | sticky | N/A — **default `fresh`**; `sticky` reuses same implementer subagent across tasks (reviewers stay fresh). See `mstar-sdd/references/sticky-implementer-session.md`
-**SDD dir**: `{HARNESS_DIR}/sdd/<plan-id>/` | N/A
+**SDD dir**: absolute `<control_worktree_path>/{HARNESS_DIR}/sdd/<plan-id>/` when L1 lease gate active | `{HARNESS_DIR}/sdd/<plan-id>/` when waived / single checkout | N/A
 **Model tier**: fast | standard | capable | N/A
 **QC mode**: full tri-review | single | N/A — **default `full tri-review` when `Execution mode: sdd`**; `single` only for `inline` / override
 **Review package path**: <branch-review diff file> | N/A
@@ -90,10 +90,11 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Execute: `plan locked` [done|n/a], `tasks` [done|n/a], `implement` [this assignment|done]
 - Gate decision: `go` | `blocked` (<reason>)
 **Working branch**: <branch policy or create-from policy> — formal iteration: from `metadata.spec_integration_branch`; integration cut from `metadata.iteration_base_branch` (`mstar-iteration` §2.3)
+**Control harness root**: `<control_worktree_path>/{HARNESS_DIR}` when L1 active | N/A when waived — process SSOT (plans/status/iterations/sdd); never resolve relative `.mstar/...` from feature cwd
 **Review cwd / Worktree path**: <absolute path or N/A>
 **plan_id**: <plan-id or N/A + scope label>
 **Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
-**Worktree path**: <implementer path if used>
+**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; must ≠ control_worktree_path>
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
 **QA mode**: acceptance-only | full | report-only | N/A — required when `QA gate: mandatory` or `report-only`
@@ -121,11 +122,23 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - Do not dispatch roles from route narrative/handoff text
 - `explore` is read-only orientation only
 - Tool availability ≠ delegation authorization
-**Plan Path**: <{PLAN_DIR}/... or N/A>
+**Plan Path**: absolute `<control_worktree_path>/{PLAN_DIR}/...` when L1 lease gate active | `{PLAN_DIR}/...` when waived / single checkout | N/A
 **Report Format**: Completion Report v2
 **Execution evidence**: <RCA/test-first/review feedback/evidence expectations for the assignee, if applicable>
 ```
 
+## L1 path fields (iteration Phase 2, lease gate not waived)
+
+When `metadata.control_worktree_path` is set and worktree mode is **not** waived:
+
+| Field | Must be |
+|-------|---------|
+| **`Worktree path`** | Absolute **feature** checkout (`execution_lease.worktree_path`) — product/source edits only |
+| **`Control harness root`** | Absolute `<control_worktree_path>/{HARNESS_DIR}` |
+| **`Plan Path`** | Absolute under control harness (not relative from feature cwd) |
+| **`SDD dir`** | Absolute under control harness; run `sdd-workspace` with `MSTAR_CONTROL_ROOT=<control_worktree_path>` when cwd is the feature tree |
+
+Do **not** waive worktree because default-gitignored `plans/` are missing under the feature checkout — see `mstar-branch-worktree` 「Harness path SSOT under default gitignore」.
 ## Completion Report v2 Template
 
 ```markdown

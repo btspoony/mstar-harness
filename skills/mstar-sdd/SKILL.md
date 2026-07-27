@@ -39,7 +39,7 @@ Batch all findings for the human in one message. If clean, proceed silently.
 ## Per-task loop (PM only)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
-2. `sdd-workspace <plan-id>` → `SDD_DIR`
+2. `sdd-workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<control_worktree_path>` 或 `sdd-workspace <plan-id> <control_worktree_path>`；缺 status.json 的 linked worktree 会 fail closed）
 3. `task-brief <plan> N` → brief file
 4. Dispatch implementer:
    - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
@@ -113,7 +113,7 @@ From repo: `skills/mstar-sdd/scripts/` (bundled in OpenCode as `harness-skills/m
 
 | Script | Usage |
 |--------|--------|
-| `sdd-workspace` | `PLAN_ID` → creates `{SDD_DIR}`, prints path |
+| `sdd-workspace` | `PLAN_ID [CONTROL_ROOT]` → creates `{SDD_DIR}` under control harness when set (`MSTAR_CONTROL_ROOT` or 2nd arg); fail closed on linked worktree without `status.json` |
 | `task-brief` | `PLAN_FILE TASK_N [OUTFILE]` |
 | `review-package` | `BASE HEAD [OUTFILE]` |
 

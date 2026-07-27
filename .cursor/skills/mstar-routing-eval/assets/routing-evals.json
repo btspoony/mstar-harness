@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
   "version": 24,
-  "updated_at": "2026-07-22",
+  "updated_at": "2026-07-27",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -602,6 +602,55 @@
         "marks Done or deletes execution_lease before successful integration merge commit",
         "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
         "parallel SDD implementer dispatches within same plan",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-no-flock-serial-keep-worktree",
+      "prompt": "iteration-drive：本机无 flock / 无共享 status 写锁；plans/ 默认 gitignore，feature worktree 看不到 .mstar/plans；plan 141 与 143 可能同时改同一文件。编排 Phase 2。",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Plan parallelism: serial",
+        "control worktree retained (Worktree mode not waived solely for missing flock)",
+        "per-plan feature worktree + execution_lease still required unless user explicitly waives worktree this turn",
+        "absolute control Plan Path / Control harness root for harness reads",
+        "absolute feature Worktree path for product edits"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "sets Worktree mode: waived because no flock",
+        "sets Worktree mode: waived because feature worktree lacks plans under default gitignore",
+        "cross-plan parallel writable implement without same-host exclusive write lock and without Cross-host lease race accepted",
+        "relative Plan Path resolved from feature cwd when L1 lease gate active",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-gitignore-control-path-harness",
+      "prompt": "iteration-drive：默认 gitignore 下 feature worktree 无 plans/status；control worktree 在 spec_integration_branch 上已有 .mstar/plans 与 status.json。派发 plan feature implement。",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "metadata.control_worktree_path",
+        "Control harness root absolute path on Assignment",
+        "Plan Path absolute under control worktree",
+        "SDD dir absolute under control worktree or MSTAR_CONTROL_ROOT for sdd-workspace",
+        "Worktree path absolute feature checkout distinct from control",
+        "product/source edits only on feature Worktree path",
+        "Execution mode: sdd"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "Worktree mode: waived because feature lacks plans",
+        "treats feature checkout .mstar/plans as SSOT",
+        "bootstraps second plans/status/sdd tree under feature worktree as SSOT",
+        "relative Plan Path .mstar/plans/... without control absolute prefix when L1 active",
         "assignment uses non-English field keys"
       ]
     },

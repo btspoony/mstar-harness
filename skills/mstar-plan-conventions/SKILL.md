@@ -92,6 +92,8 @@ PM 在需要持久化追踪时：
 
 Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
 
+**多 worktree（iteration L1）**：默认 gitignored 的进程产物**不会**随 `git worktree add` 进入 feature 检出。读写须经 **control worktree** 绝对路径（`<control_worktree_path>/{HARNESS_DIR}/…`）；产品代码改在 feature worktree。细则与反模式（禁止因 feature 缺 plans 而 `Worktree mode: waived`）→ **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」。
+
 **Canonical `.gitignore` snippet**（skills 与 CLI `init` 对齐）：
 
 ```gitignore

@@ -28,12 +28,20 @@ starts at **Phase 2 entry**.
    tree clean before merge operations.
 4. Record canonical absolute repository-root path in
    `metadata.control_worktree_path` (not `{HARNESS_DIR}`; canonicalize symlinks).
-5. Resolve coordination paths from that root:
+5. Resolve coordination paths from that root (default-gitignored process artifacts live on the **control filesystem**, not as Git blobs):
    - status SSOT: `<control_worktree_path>/{HARNESS_DIR}/status.json`
+   - plans SSOT: `<control_worktree_path>/{PLAN_DIR}/` (or `<control>/{HARNESS_DIR}/plans/`)
+   - iterations SSOT: `<control_worktree_path>/{ITERATION_DIR}/`
    - SDD tree: `<control_worktree_path>/{HARNESS_DIR}/sdd/<plan-id>/`
+   - also under control harness root when used: `notes.json`, `archived/`
 
 All sessions MUST reread the **control copy** of `status.json` immediately before
 claim, release, transfer, plan-status transition, or merge-lease mutation.
+
+**Do not** set `Worktree mode: waived` because a feature worktree lacks
+`plans/` under default gitignore — keep feature worktrees and pass absolute
+control **`Plan Path`** / **`SDD dir`** in Assignments
+(`mstar-branch-worktree` 「Harness path SSOT under default gitignore」).
 
 ### Same-host exclusive write lock
 
@@ -49,7 +57,9 @@ this same-host lock is **available on the coordination `status.json` path and
 used for every status/coordination mutation** in that Phase 2 session (control
 path when lease gate active; primary checkout `{HARNESS_DIR}/status.json` when
 waived). Agents on **different hosts** or with **no shared flock/lockdir** →
-default **`Plan parallelism: serial`** (preferred when waived). Assignment still
+default **`Plan parallelism: serial`** (preferred when waived). **No flock
+does not waive** control worktree / feature worktree / leases — serial
+scheduling only. Assignment still
 claiming cross-plan parallel without lock availability → **Blocked** until PM
 sets serial scheduling or the user gives current-turn override
 `Cross-host lease race: accepted` (or equivalent) + audit on `plans[].notes`.
@@ -68,8 +78,11 @@ mismatch → **STOP**.
   edits).
 - `Worktree path` MUST appear in the writable Assignment and in
   `plans[].execution_lease.worktree_path` before first writable implement dispatch.
-- Product/source edits run from the feature worktree; status and SDD
-  coordination reads/writes run through the control path.
+- Product/source edits run from the feature worktree; plans, iterations,
+  status, and SDD coordination reads/writes run through **absolute control
+  paths** (never relative `.mstar/...` from the feature cwd when L1 is active).
+- Assignment MUST include absolute feature **`Worktree path`** and absolute
+  control **`Plan Path`** / **`SDD dir`** before writable implement dispatch.
 - Default **L1**: one writable track per plan. Within-plan multi-writable tracks
   still follow L2 `parallel-writable-pre-dispatch` (`mstar-branch-worktree`).
 

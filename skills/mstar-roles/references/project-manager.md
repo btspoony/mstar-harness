@@ -133,6 +133,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** run or dispatch **parallel** integration merges into `spec_integration_branch` — merge is **serial** via `metadata.integration_merge_lease` from the control worktree (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
 - **NEVER** cross-plan writable implement without distinct per-plan verified `execution_lease` + feature worktree; `Plan parallelism: serial` forces serial **scheduling** only — it does **not** waive control worktree or lease gates (`mstar-iteration` §2.0 #5).
 - **NEVER** dispatch **cross-plan parallel** writable implement when same-host exclusive write lock is **not** available on the coordination `status.json` path (cross-host / no shared flock) — default **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel; exception only on current-turn user `Cross-host lease race: accepted` (or equivalent) + audit `plans[].notes` — **including when `Worktree mode: waived`** (`mstar-plan-artifacts` — “Hard gate — cross-plan parallel writable implement”).
+- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree — keep feature worktrees; put absolute control **`Plan Path`** / **`SDD dir`** / **`Control harness root`** on Assignments (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」). No flock → serial scheduling only, not worktree waiver.
 
 ---
 

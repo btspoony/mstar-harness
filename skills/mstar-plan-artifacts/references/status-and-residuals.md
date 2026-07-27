@@ -207,7 +207,7 @@ Cooperative coordination through the **control worktree** copy of `{HARNESS_DIR}
 
 **When fields apply:** iteration Phase 2 (after control worktree entry, or primary checkout when `Worktree mode: waived`). Control worktree + lease fields are waived only by explicit current-turn user instruction (`Worktree mode: waived` or equivalent). `Plan parallelism: serial` does **not** waive leases. **`Worktree mode: waived` does not waive the cross-plan parallel safety gate** (see hard gate below).
 
-**Path SSOT:** status and SDD reads/writes use `<control_worktree_path>/{HARNESS_DIR}/…`. A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT.
+**Path SSOT:** Default-gitignored process artifacts — `status.json`, `plans/`, `iterations/`, `sdd/`, `notes.json`, `archived/` — read/write via `<control_worktree_path>/{HARNESS_DIR}/…` (absolute). A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT. Missing plans under a feature checkout (gitignore) is **not** grounds for `Worktree mode: waived` — keep feature worktrees and use control absolute **`Plan Path`** / **`SDD dir`**. Detail → **`mstar-branch-worktree`** 「Harness path SSOT under default gitignore」.
 
 ### Same-host exclusive write lock (control `status.json`)
 

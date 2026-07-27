@@ -143,6 +143,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 递归误派 / 误读 Handoff | `mstar-dispatch-gates` |
 | `quick` 跳过 Prepare | 上表 + `mstar-phase-gates` |
 | 多 worktree 未归并就 QC | `mstar-branch-worktree` |
+| 因默认 gitignore 致 feature 缺 plans 而 `Worktree mode: waived`（应保留 feature worktree + control 绝对 Plan Path / SDD dir；无 flock 仅 → `Plan parallelism: serial`） | `mstar-branch-worktree` · `mstar-iteration` §2.0 #5 · `phase-2-worktree-lease` |
 | 并行 writable implement 无隔离（L2 同 plan 多轨：N invoke ≠ worktree；L1 跨 plan：无 verified `execution_lease` + feature worktree） | `mstar-branch-worktree` L1/L2 · `mstar-iteration` §2.6 · `references/parallel-writable-pre-dispatch.md` |
 | 跨 plan 可写派发无 verified `execution_lease` / steal 活跃 lease / 并行 merge 入 `spec_integration_branch` | `mstar-iteration` · `mstar-plan-artifacts`（leases）· `mstar-branch-worktree` L1 |
 | `InProgress` 无 `execution_lease` 未恢复即可写派发 | `mstar-plan-artifacts` — orphan recovery |

@@ -5,6 +5,10 @@ PM and subagents move artifacts as **files**, not pasted text. Pasted content st
 ## Before implementer dispatch
 
 1. `export SDD_DIR=$(skills/mstar-sdd/scripts/sdd-workspace <plan-id>)`
+   - Iteration L1 (implementer cwd = feature worktree):  
+     `export MSTAR_CONTROL_ROOT=<control_worktree_path>`  
+     or `sdd-workspace <plan-id> <control_worktree_path>`  
+     so `{SDD_DIR}` lands on the control harness (default-gitignored plans/status/sdd). Do not create a second SDD tree under the feature checkout.
 2. `skills/mstar-sdd/scripts/task-brief <plan-file> <N> "$SDD_DIR/task-N-brief.md"`
 3. Record `BASE_SHA` (`git rev-parse HEAD` before dispatch).
 4. Dispatch implementer with:

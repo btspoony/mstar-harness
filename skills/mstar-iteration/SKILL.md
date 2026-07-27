@@ -216,7 +216,7 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
 4. **Branch metadata gate**：root `metadata.iteration_base_branch`、`metadata.target_branch` 已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
-5. **Control-worktree + lease defaults**（iteration 命令；可被 `Worktree mode: waived` 豁免）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写 `status.json` / `{SDD_DIR}`，并在可写派发前 claim `plans[].execution_lease` / `integration_merge_lease`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；control worktree + lease 仍须满足。**跨 plan 并行安全闸**（**不可**被 `Worktree mode: waived` 豁免）：跨 plan **并行可写 implement** 须满足下列之一——(a) coordination 路径（control 或 waived 时主 checkout `{HARNESS_DIR}/status.json`）上 **same-host 独占写锁可用且每次 status/协调变更持锁**；(b) 默认 **`Plan parallelism: serial`**（**waived 时尤其优先默认串行**）；(c) 用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。**禁止**将 `Worktree mode: waived` 当作跨主机无锁并行的授权。细则 → **`references/phase-2-worktree-lease.md`**。
+5. **Control-worktree + lease defaults**（iteration 命令；可被 `Worktree mode: waived` 豁免）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写默认 gitignored 的 harness 进程产物（`status.json`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{SDD_DIR}` 等），并在可写派发前 claim `plans[].execution_lease` / `integration_merge_lease`。可写 Assignment 须含绝对 feature **`Worktree path`** + 绝对 control 系 **`Plan Path`** / **`SDD dir`**（见 **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」）。**禁止**因 feature worktree 在默认 gitignore 下看不到 plans 而推断 `Worktree mode: waived`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；control worktree + lease 仍须满足。**跨 plan 并行安全闸**（**不可**被 `Worktree mode: waived` 豁免）：跨 plan **并行可写 implement** 须满足下列之一——(a) coordination 路径（control 或 waived 时主 checkout `{HARNESS_DIR}/status.json`）上 **same-host 独占写锁可用且每次 status/协调变更持锁**；(b) 默认 **`Plan parallelism: serial`**（**waived 时尤其优先默认串行**；**无 flock / 无共享锁时只触发本条，不豁免 worktree**）；(c) 用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。**禁止**将 `Worktree mode: waived` 当作跨主机无锁并行的授权。细则 → **`references/phase-2-worktree-lease.md`**。
 
 任一 false → **stop**。Phase 1 / Prepare 未完成 → 先完成 Phase 1 或 per-plan Prepare，再进入本 Phase。
 
@@ -253,9 +253,13 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 1. 解析或创建 **control worktree**（通常 primary checkout 或 PM 指定路径），检出到上一步的 `spec_integration_branch`
 2. `git fetch`（按需）；`git branch --show-current` 确认在 `spec_integration_branch`
 3. 将规范绝对仓库根路径写入 control 副本 `metadata.control_worktree_path`（仓库根，非 `{HARNESS_DIR}` 子路径）
-4. 此后 **status / SDD SSOT** 均经 control 路径解析：
+4. 此后 **harness 进程产物 SSOT**（默认 gitignored）均经 control 绝对路径解析：
    - `<control_worktree_path>/{HARNESS_DIR}/status.json`
+   - `<control_worktree_path>/{PLAN_DIR}/`（主 plan）
+   - `<control_worktree_path>/{ITERATION_DIR}/`（compass / iteration package）
    - `<control_worktree_path>/{HARNESS_DIR}/sdd/<plan-id>/`
+   - 同树：`notes.json`、`archived/`（若使用）
+   Feature worktree 只承载产品/源码编辑；其同名 `{HARNESS_DIR}` **不是** SSOT。Assignment **`Plan Path`** / **`SDD dir`** 须写 control 绝对路径。
 5. 若 integration 分支尚不存在：在 control worktree 内 `git checkout -b <spec_integration_branch> <iteration_base_branch>`（**必须**从记录的 base 创建）
 
 **Git 操作（无 control worktree 时 — 仅 `Worktree mode: waived`）**：
@@ -279,7 +283,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
    - 若 `status: InProgress` 但 **无** `execution_lease` → **STOP** 升级（孤儿状态恢复 → **`mstar-plan-artifacts`**；本 skill 不自行补 lease）
    - 否则按 **`references/phase-2-worktree-lease.md`** claim：`Todo`/`Blocked` → `InProgress` + 写入完整 `execution_lease`；verify 通过前 **禁止**可写派发
 2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**
-3. **Implement → InReview**（`§ 2.5`；产品编辑在 feature worktree，status/SDD 经 control 路径）：
+3. **Implement → InReview**（`§ 2.5`；产品编辑在 feature worktree；plans / status / iterations / SDD 经 control 绝对路径）：
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
    - PM 载入 **`mstar-sdd`** 后，按 plan task 顺序 **串行** per-task 循环（**不是**一次派发 dev 做全部 tasks）：
      1. `sdd-workspace <plan-id>` → `{SDD_DIR}`
@@ -561,5 +565,6 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 - **不要把 harness 流程（Review 链 / QC / QA / compound / close / PR 等）计进 Scale budget 的 plan 数量**，也不得为此单独建 process plan 占坑
 - **不要在 Phase 2 无 verified `execution_lease` 就做可写 implement 派发**（resume 仅限同 `holder` verify-held-lease）
 - **不要 steal / 覆盖他人 `execution_lease` 或 `integration_merge_lease`**（除非用户本轮显式 override + audit `notes`）
-- **不要从 feature worktree 的 `{HARNESS_DIR}` 路径当作 status/SDD SSOT**（control worktree 路径为准）
+- **不要从 feature worktree 的 `{HARNESS_DIR}` 路径当作 plans / status / iterations / SDD SSOT**（control worktree 绝对路径为准；默认 gitignore 下 feature 缺 plans **不得**推断 `Worktree mode: waived`）
+- **不要把「无 flock」与「gitignore / feature 缺 plans」捆成一次 waive**（无锁 → `Plan parallelism: serial` only；gitignore → control-path harness）
 - **不要并行 merge 入 `spec_integration_branch`**（merge 必须经 `integration_merge_lease` 串行）
