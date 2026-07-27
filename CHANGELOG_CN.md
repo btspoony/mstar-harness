@@ -1,19 +1,32 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.4**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.5**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.5.4** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.4** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.4** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.4** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.4** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.5.5** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.5** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.5** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.5** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.5** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.5** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.5.5] - 2026-07-27
+
+### Harness（worktree / L1）
+
+- **默认 gitignore 下的 control-path harness**：进程产物（`plans/`、`iterations/`、`status.json`、`sdd/` 等）仍本地；经 **control worktree** 绝对路径读写。Feature worktree 只改产品代码——**禁止**因 feature 缺 plans 而 waive worktree；**禁止**把「无 flock」当成 worktree 豁免（仅 `Plan parallelism: serial`）。
+- Assignment：绝对 **`Control harness root`**、control 系 **`Plan Path`** / **`SDD dir`**、feature **`Worktree path`**。
+- **`sdd-workspace`**：支持 `MSTAR_CONTROL_ROOT` / control-root 参数；linked worktree 无 `status.json` 时 fail closed。
+- routing-eval：无 flock 串行保留 worktree、gitignore control-path 场景。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi 插件：**→ 1.5.5**。
 
 ## [1.5.4] - 2026-07-27
 

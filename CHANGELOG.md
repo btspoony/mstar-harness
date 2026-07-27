@@ -2,20 +2,33 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.5.4** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.5.5** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.5.4** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.4** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.4** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.5.4** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.4** |
+| Monorepo root | `morning-star` (`package.json`) | **1.5.5** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.5** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.5** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.5** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.5.5** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.5** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.5.5] - 2026-07-27
+
+### Harness (worktree / L1)
+
+- **Control-path harness under default gitignore**: process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, …) stay local; read/write them via absolute **control worktree** paths. Feature worktrees keep product/source edits only — do **not** waive worktree because feature checkouts lack plans, and do **not** treat “no flock” as a worktree waiver (serial plan parallelism only).
+- Assignment fields: absolute **`Control harness root`**, control **`Plan Path`** / **`SDD dir`**, feature **`Worktree path`**.
+- **`sdd-workspace`**: `MSTAR_CONTROL_ROOT` / optional control-root arg; fail-closed on linked worktrees without `status.json`.
+- Routing-eval cases for no-flock serial + gitignore control-path harness.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi plugin manifests: **→ 1.5.5**.
 
 ## [1.5.4] - 2026-07-27
 
