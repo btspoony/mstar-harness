@@ -64,7 +64,7 @@ When Assignment has **`SDD implementer session: sticky`** (`mstar-sdd/references
 
 ## Dispatch execution（canonical）
 
-Cursor PM dispatch = **`Task`** with `subagent_type` matching the Assignment `Execute as` role.
+Cursor PM dispatch = **`Task`** with `subagent_type` matching the Assignment `Execute as` role. Flat JSON field shape → **Task invoke schema (Cursor)** below.
 
 - **1 Assignment ⇒ 1 Task**; parallel batches ⇒ **N Tasks in one message** (`parallel-dispatch.md`, `mstar-dispatch-gates`).
 - Assignment Markdown **does not** start work. PM thread **must not** implement, review, or edit specialist deliverables by loading another role reference in the same session (`Acting as role: …` is **not** dispatch).
@@ -72,6 +72,84 @@ Cursor PM dispatch = **`Task`** with `subagent_type` matching the Assignment `Ex
 - **Only exception:** user explicitly overrides harness dispatch for this turn (document the override).
 - Concurrent writers / QC cwd alignment → **`mstar-branch-worktree`** (not a separate “mode”).
 - Implement subagents: recipient is already `Execute as`; **no** recursive Task with same `subagent_type`. Assignment wins (`Delegation: forbidden` unless stated).
+
+## Task invoke schema (Cursor)
+
+Cursor’s live **Task** tool expects a **flat** JSON argument object. `prompt` and `subagent_type` are **sibling fields** — not nested, not stringified. Official behavior docs cover subagents/parallel/resume; the flat field shape below is Morning Star’s operational SSOT for Cursor (live-tool contract).
+
+### Canonical flat shape
+
+```json
+{
+  "description": "3-5 word UI title",
+  "prompt": "<full Assignment Markdown body>",
+  "subagent_type": "<Execute as role id or built-in>",
+  "model": "<optional host slug>",
+  "run_in_background": false
+}
+```
+
+### Required vs optional fields
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `prompt` | yes | Full Assignment Markdown string (IDENTITY, gates, Plan Path, Working branch, …) |
+| `subagent_type` | yes | Must equal Assignment `Execute as` (Morning Star role id when using custom agents) |
+| `description` | recommended | Short UI title only (3–5 words); never the Assignment body |
+| `model` | optional | Host slug from Assignment **Model tier** mapping |
+| `run_in_background` | optional | Default false unless PM intentionally backgrounds |
+| `resume` | sticky continue only | Omit on fresh dispatch; see sticky section |
+
+### Must-have example (single dispatch)
+
+```text
+Task(
+  description: "Implement auth middleware",
+  prompt: "<full Assignment body>",
+  subagent_type: "fullstack-dev",
+  model: "<optional>",
+  run_in_background: false
+)
+```
+
+Rules:
+
+- `subagent_type` **=** Assignment `Execute as` — never OpenCode’s `subagent` key.
+- `prompt` = plain Markdown Assignment text, **not** a JSON object string of the whole call.
+- `description` = UI title only; do not put the Assignment there.
+
+### Parallel batch (N Tasks, one message)
+
+When `N ≥ 2`, emit **N** separate Task tool calls in **one** assistant message (`parallel-dispatch.md`). Each call is still a flat object with its own `prompt` + `subagent_type`.
+
+### Anti-patterns (do not send)
+
+| Anti-pattern | Correct |
+|--------------|---------|
+| Args as one stringified JSON blob | Flat sibling fields on the Task tool |
+| Field name `subagent` (OpenCode) | `subagent_type` |
+| `CallMcpTool` / MCP wrap for Task | Native Task tool only |
+| Missing `subagent_type` | Always set; match `Execute as` |
+| Assignment JSON stuffed only into `prompt`, no top-level `subagent_type` | Both `prompt` and `subagent_type` present |
+| Nested `{ "arguments": { ... } }` Task payload | Flat object at tool-call top level |
+| Treating paste-only `## Assignment` as dispatch | Must emit Task call(s) |
+
+### Self-check before send
+
+1. Tool name is **Task** (not MCP, not OpenCode `task`+`subagent`).
+2. Top-level keys include **`prompt`** and **`subagent_type`** (siblings).
+3. `subagent_type` equals Assignment `Execute as`.
+4. `prompt` is Markdown Assignment text, not stringified JSON of the whole call.
+5. If sticky continue: `resume` + continuation prompt per sticky section; else omit `resume`.
+6. If `N ≥ 2`: this message contains **exactly N** Task calls (`parallel-dispatch.md`).
+
+### Sticky / resume (pointer)
+
+First vs resume field set → **SDD sticky implementer (Cursor Task resume)** above. Do not restate those tables here.
+
+- Fresh: `subagent_type` + full implementer prompt; capture agent id.
+- Continue: `resume: <host_agent_id>` + continuation prompt; still flat sibling fields.
+- Reviewers: never `resume`.
 
 ## Clarify
 
