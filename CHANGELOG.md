@@ -2,20 +2,30 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.5.3** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.5.4** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.5.3** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.3** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.3** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.3** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.5.3** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.3** |
+| Monorepo root | `morning-star` (`package.json`) | **1.5.4** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.4** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.4** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.4** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.5.4** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.4** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.5.4] - 2026-07-27
+
+### Harness (Cursor host)
+
+- **`mstar-host` Cursor Task invoke schema**: document flat sibling fields (`prompt` + `subagent_type` + `description`) with examples, anti-patterns (nested/stringified JSON, OpenCode `subagent`, MCP wrap, missing `subagent_type`), and a send-time self-check — reduces first-attempt Task parameter-format failures. Pointer from `parallel-dispatch.md`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi plugin manifests: **→ 1.5.4**.
 
 ## [1.5.3] - 2026-07-25
 

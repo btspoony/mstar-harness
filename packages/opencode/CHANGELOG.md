@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.5.4
+
+- Version alignment with harness **1.5.4** (bundled skills/commands: Cursor Task flat invoke schema in `mstar-host`).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.5.4**.
+
 ## 1.5.3
 
 - Version alignment with harness **1.5.3** (bundled skills/commands: frontmatter YAML quotes + `/iteration-loop` scale `XL`).

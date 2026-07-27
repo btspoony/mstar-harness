@@ -1,19 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.3**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.4**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.5.3** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.3** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.3** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.3** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.3** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.3** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.5.4** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.4** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.4** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.4** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.4** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.4** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.5.4] - 2026-07-27
+
+### Harness（Cursor 宿主）
+
+- **`mstar-host` Cursor Task invoke schema**：文档化扁平并列字段（`prompt` + `subagent_type` + `description`）、范例、反模式（嵌套/字符串化 JSON、OpenCode `subagent`、MCP 包装、漏传 `subagent_type`）与发送前自检，降低 Task 首次参数格式失败。`parallel-dispatch.md` 增加指针。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi 插件：**→ 1.5.4**。
 
 ## [1.5.3] - 2026-07-25
 
