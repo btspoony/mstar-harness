@@ -28,11 +28,13 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 
 ## Residual Findings 留档门禁（PM）
 
-- 阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须留档；**`severity`** 仅允许 `mstar-plan-artifacts/references/status-and-residuals.md` 枚举。
+- 先读 Assignment **`Findings cleanup`**（及可选 `plans[].metadata.findings_cleanup`）→ **`mstar-plan-artifacts/references/status-and-residuals.md`**「Findings cleanup modes」。
+- **`Findings cleanup: zero-residual`**（iteration Phase 2 默认）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer。
+- **`Findings cleanup: allow-residual`**（standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须留档；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论须含 residual 清单与跟踪位置。
+- **`severity`** 仅允许 `mstar-plan-artifacts/references/status-and-residuals.md` 枚举。
 - **Open SSOT**：`{HARNESS_DIR}/status.json` 根级 **`residual_findings[<plan-id>]`**；PM 在 consolidated 决策分配 **R1…** 并写入。关闭 → **`{HARNESS_DIR}/archived/residuals/<plan-id>.json`**。
 - 主 plan 仅作人类索引；不得作为唯一 SSOT。
-- **`Approve with residuals`**：仅当无 open **Critical**；PM 汇总结论须含 residual 清单与跟踪位置。
-- 未完成 residual 留档 → 不得进入 plan **Done**。
+- 未完成 residual 留档（`allow-residual`）或未清干净可修 findings（`zero-residual`）→ 不得进入 plan **Done**。
 
 ### Residual 关闭与验证
 

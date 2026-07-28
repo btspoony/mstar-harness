@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.5.6
+
+- Version alignment with harness **1.5.6** (bundled skills: `Findings cleanup: zero-residual` mode).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.5.6**.
+
 ## 1.5.5
 
 - Version alignment with harness **1.5.5** (bundled skills: control-path harness under default gitignore + `sdd-workspace` `MSTAR_CONTROL_ROOT`).

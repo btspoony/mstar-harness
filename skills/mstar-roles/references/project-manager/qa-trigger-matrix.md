@@ -34,6 +34,8 @@ Set **`QA gate`** on the **first implement Assignment** (or plan frontmatter) an
 
 **Upgrade rule:** If conditions change mid-round (e.g. QC becomes `Approve with residuals`, UI scope added, open R# registered), change `QA gate` from `pm-acceptance` to `mandatory` before `Done`.
 
+**Findings cleanup note:** Under Assignment **`Findings cleanup: zero-residual`** (iteration Phase 2 default), prefer clean QC `Approve` with **no open R#** — that restores the small-feature `pm-acceptance` path when other tier rules allow. Any remaining open R# (even blocker-defer) still force **`QA gate: mandatory`** like the residual row above. See `mstar-plan-artifacts` Findings cleanup modes.
+
 ## PM acceptance checklist (required before `Done` when `QA gate: pm-acceptance`)
 
 PM completes this in **Status Update** (or plan closure note). PM **does not** run bash tests or reproduction in the orchestration thread.

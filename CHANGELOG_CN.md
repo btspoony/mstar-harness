@@ -1,19 +1,30 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.5**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.6**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.5.5** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.5** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.5** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.5** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.5** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.5** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.5.6** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.6** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.6** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.6** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.6** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.6** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.5.6] - 2026-07-28
+
+### Harness（residuals）
+
+- **`Findings cleanup: zero-residual | allow-residual`**：计划级「不残留」模式——可修 findings 尽量在当轮 fix→re-review 清干净。正式 **iteration Phase 2** 默认 **`zero-residual`**（仅真 blocker-defer + Durable Roadmap 可留 open R#）。独立 `/pm`、hotfix、`inline` 仍默认 **`allow-residual`**。
+- Assignment 字段 + 可选 `plans[].metadata.findings_cleanup`；SSOT 在 `mstar-plan-artifacts`；贯通 `mstar-review-qc`、PM NEVER / Assignment、iteration close、QA 矩阵说明与 routing-eval。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi 插件：**→ 1.5.6**。
 
 ## [1.5.5] - 2026-07-27
 

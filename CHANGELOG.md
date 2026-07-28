@@ -2,20 +2,31 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.5.5** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.5.6** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.5.5** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.5** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.5** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.5** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.5.5** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.5** |
+| Monorepo root | `morning-star` (`package.json`) | **1.5.6** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.6** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.6** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.6** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.5.6** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.6** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.5.6] - 2026-07-28
+
+### Harness (residuals)
+
+- **`Findings cleanup: zero-residual | allow-residual`**: plan-level mode to clear QC/QA findings in-session when possible. Formal **iteration Phase 2** defaults to **`zero-residual`** (fix-now + re-review; open R# only for true blocker-defer + Durable Roadmap). Standalone `/pm`, hotfix, and `inline` keep **`allow-residual`**.
+- Assignment field + optional `plans[].metadata.findings_cleanup`; SSOT in `mstar-plan-artifacts` Findings cleanup modes; wired through `mstar-review-qc`, PM NEVER / Assignment template, iteration close checklist, QA trigger note, and routing-eval cases.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi plugin manifests: **→ 1.5.6**.
 
 ## [1.5.5] - 2026-07-27
 

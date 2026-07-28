@@ -98,6 +98,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
 **QA mode**: acceptance-only | full | report-only | N/A — required when `QA gate: mandatory` or `report-only`
+**Findings cleanup**: zero-residual | allow-residual — **default `zero-residual` on formal iteration Phase 2**; **default `allow-residual`** for standalone `/pm`, hotfix, `Execution mode: inline` (override via Assignment or `plans[].metadata.findings_cleanup`; SSOT → `mstar-plan-artifacts` Findings cleanup modes)
 **Why this agent**: <role-fit>
 **PM Task Board coverage**: <task ids>
 **Roadmap / deferred scope**: <required when staged, partial, or temporary; otherwise N/A>

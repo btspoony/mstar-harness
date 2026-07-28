@@ -26,9 +26,10 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 - **`{HARNESS_DIR}/status.json`**: `plans[]` row status + root **`residual_findings[<plan-id>]`** (open list **SSOT**).
 - **Canonical**: register new findings only at root `residual_findings`; **`metadata.residual_findings`** is legacy read-only — **do not** dual-write.
 - **Lifecycle**: open → verified close → **`archived/residuals/<plan-id>.json`**; machine **`severity`** enum in reference.
+- **Findings cleanup**: Assignment **`Findings cleanup: zero-residual | allow-residual`** (+ optional `metadata.findings_cleanup`); iteration Phase 2 defaults to **`zero-residual`** → **`references/status-and-residuals.md`** (“Findings cleanup modes”).
 - **`notes.json`**, optional **`tech_debt_summary`** (rollup view; compute via **`scripts/tech-debt-rollup.sh`**).
 - **Iteration Phase 2 leases** (`metadata.control_worktree_path`, `plans[].execution_lease`, `metadata.integration_merge_lease`): claim-before-`InProgress`, resume vs steal, orphan recovery → **`references/status-and-residuals.md`** (“Iteration execution leases”).
 
-Field semantics, severity mapping, archive flow, and `jq` examples → **`references/status-and-residuals.md`**.
+Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq` examples → **`references/status-and-residuals.md`**.
 
 **Templates (this skill):** `templates/status.empty.json`, `templates/notes.empty.json` — copy into `{HARNESS_DIR}/` (`templates/README.md`).

@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 24,
-  "updated_at": "2026-07-27",
+  "version": 25,
+  "updated_at": "2026-07-28",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -914,6 +914,47 @@
         "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
         "cross-plan parallel writable implement without same-host exclusive write lock on control status.json and without Cross-host lease race accepted override",
         "cross-plan parallel writable dispatch solely because Worktree mode waived",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-zero-residual-fix-wave",
+      "prompt": "iteration-drive Phase 2：plan QC tri 无 Critical，但有可修 Warning/Suggestion；Findings cleanup 未覆写（默认 zero-residual）",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev",
+        "QC-targeted-rereview"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Findings cleanup: zero-residual on Assignment or iteration Phase 2 default",
+        "fix-now dispatch + targeted re-review for fixable Warning/Suggestion",
+        "prefer clean Approve over Approve with residuals for fixable items"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "registers open residual_findings for fixable Warning/Suggestion under zero-residual",
+        "Approve with residuals used to park fixable findings under zero-residual",
+        "marks plan Done with open fixable residuals under zero-residual",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-phase2-zero-residual-blocker-defer",
+      "prompt": "iteration-drive Phase 2：zero-residual 下 QC 发现依赖外部 API 尚未就绪的非 Critical 项，用户本轮确认 defer 到下一迭代",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Findings cleanup: zero-residual",
+        "open R# with decision defer + Durable Roadmap / target next iteration",
+        "Approve with residuals only for blocker-defer leftovers"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "defers without Durable Roadmap Gate or decision defer + target",
+        "parks unrelated fixable findings as residual alongside blocker defer",
         "assignment uses non-English field keys"
       ]
     }

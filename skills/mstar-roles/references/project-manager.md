@@ -115,6 +115,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** split a required **parallel batch** of `N >= 2` invokes across multiple assistant messages when the host requires a single dispatch turn with all `N` calls.
 - **NEVER** register residuals only inside the plan narrative while skipping root `{HARNESS_DIR}/status.json` `residual_findings[<plan_id>]` when plan conventions require the SSOT field.
 - **NEVER** write non-canonical residual `severity` strings—use only the machine enum from `mstar-plan-artifacts`.
+- **NEVER** under `Findings cleanup: zero-residual`, park fixable Critical/Warning/Suggestion as open R# or use `Approve with residuals` for them — fix-now + re-review; open residual only for true blocker-defer + Durable Roadmap (`mstar-plan-artifacts` Findings cleanup modes).
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
 - **NEVER** dispatch same-repo **≥2 concurrent writable implement** tracks without **`references/parallel-writable-pre-dispatch.md`**（per-track worktree + absolute **`Worktree path`**；**N invokes ≠ isolation** — also `mstar-dispatch-gates` dual-gate table).
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).

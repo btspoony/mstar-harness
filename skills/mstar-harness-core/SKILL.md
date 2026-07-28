@@ -149,6 +149,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | `InProgress` 无 `execution_lease` 未恢复即可写派发 | `mstar-plan-artifacts` — orphan recovery |
 | 混淆跨 plan lease 门控并行与单 plan 内 SDD 并行 implementer | `mstar-dispatch-gates` · `mstar-sdd` |
 | residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
+| `zero-residual` 下把可修 findings 登记为 open R# / 草草 `Approve with residuals` | `mstar-plan-artifacts` Findings cleanup modes · `mstar-review-qc` |
 | 角色文件塞流程长文 | 用专题 skill |
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |
 | CreatePlan 不落盘 / 无 `{HARNESS_DIR}` mirror | `mstar-host` · `cursor-plan-mode-bridge` |

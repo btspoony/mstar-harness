@@ -106,10 +106,47 @@ In old JSON, **`"severity": "warning"`** is read and rolled up as **`low`**. **F
 
 ---
 
+## Findings cleanup modes
+
+Plan-level policy for whether non-blocking QC/QA findings may remain as open residuals or must be cleared in the current plan session.
+
+### Assignment + metadata
+
+| Surface | Values |
+| ------- | ------ |
+| Assignment **`Findings cleanup`** | `zero-residual` \| `allow-residual` |
+| `plans[].metadata.findings_cleanup` | same strings (optional mirror; Assignment wins when both set) |
+
+**Defaults**
+
+| Context | Default |
+| ------- | ------- |
+| Formal **iteration Phase 2** (Autonomous Execute) | `zero-residual` (compass or Assignment may override to `allow-residual`) |
+| Standalone `/pm`, hotfix, `Execution mode: inline` | `allow-residual` |
+
+### `zero-residual` (clean-session)
+
+Intent: clear findings in the current plan session whenever possible. Open residuals only for **true blocker-defers**.
+
+1. After QC: default path is **fix-now + targeted re-review**, not `Approve with residuals`.
+2. Do **not** register open R# for items that can be fixed in this session.
+3. **`nit`**: fix in-session **or** drop with no R# (existing “no tracking needed”); **never** open residual for style-only nits.
+4. **`Approve with residuals`** only when every remaining open item is a true blocker-defer (`decision: defer`, `target` = next iteration/milestone, Durable Roadmap Gate written).
+5. **True defer** only: external dependency; product/scope decision for a later iteration; or explicit **current-turn** user defer — plus Durable Roadmap Gate.
+6. **`waived` / `risk-accepted`**: still require PM + user/architect alignment; **close/archive** (do not leave open). Prefer a cheap fix over waive-as-shortcut.
+7. Plan **Done**: prefer empty `residual_findings[<plan_id>]`. If any open R# remain, **every** entry must be blocker-defer + roadmap; otherwise keep `InReview` / `Blocked`.
+
+### `allow-residual` (legacy default)
+
+Non-blocking Warning/Suggestion may ship with open R# registration and `Approve with residuals` when no unresolved Critical remains (existing residual lifecycle unchanged).
+
+---
+
 ## `plans[].metadata` standard optional fields
 
 | Key | Type | Purpose |
 | --- | --- | --- |
+| `findings_cleanup` | `zero-residual` \| `allow-residual` | Mirror of Assignment **`Findings cleanup`**; see **Findings cleanup modes** |
 | `working_branch` | string | Implementation branch; aligns with Assignment **`Working branch`** (SSOT) |
 | `spec_integration_branch` | string | (Multi-plan same **Spec**) integration branch name; created from root `metadata.iteration_base_branch`; plan branches merge here before final PR (`mstar-plan-conventions`) |
 | `merge_target` | string | Next merge target; multi-plan + Spec → usually `spec_integration_branch`; final PR target is root `metadata.target_branch` |

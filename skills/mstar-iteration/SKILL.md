@@ -208,6 +208,8 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 **本 Phase 是本 skill 的核心**——定义 per-plan 派发循环的完整流程：前置条件检查、session todos、backlog 读取、integration 分支管理、per-plan dispatch 循环（分支→实现→QC→**QA gate**→Done→合并）、dispatch-first 约束、push 纪律。PM 读取本 Phase 即可执行迭代。
 
+**Findings cleanup（默认）**：Phase 2 每个 plan Assignment 默认 **`Findings cleanup: zero-residual`**（可修 findings 当轮 fix→re-review 清干净；仅真 blocker-defer + Durable Roadmap 可留 open R#）。compass 或 Assignment 可显式覆写为 `allow-residual`。SSOT → **`mstar-plan-artifacts`**「Findings cleanup modes」。
+
 ### 2.0 前置条件（五道闸）
 
 进入 Autonomous Execute 前必须满足：
@@ -325,6 +327,7 @@ Iteration Phase 2 附加：
 - PM **NEVER** 在 PM 线程实现产品代码（delegate dev；hotfix 例外见 **`mstar-phase-gates`**）
 - `Subagent invokes issued: 0` 而 Assignment 已写出 → **`dispatch incomplete`**；下一条补发 invoke，禁止 PM 顶替
 - QC 初轮：**SDD → N=3**；**inline → N=1**；plan QC tri 三席 **同条消息 N=3**（非 implement 轨数）
+- **`Findings cleanup: zero-residual`（默认）**：QC 后可修 Warning/Suggestion → 继续 fix→targeted re-review，直至 clean `Approve` 或仅剩真 blocker-defer；**禁止**把可修项登记为 open residual 草草 `Approve with residuals`
 
 ### 2.6 Push 纪律（Autonomous Execute）
 
@@ -336,6 +339,7 @@ Iteration Phase 2 附加：
 - 实际 Git ≠ `working_branch` → **同轮**更新 plan + status + `execution_lease.working_branch`（如适用）
 - **跨 plan implement**（**无论** `Worktree mode: waived`）：并行可写 implement 须满足 §2.0 #5 跨 plan 并行安全闸——same-host 独占写锁 + 每次协调变更持锁，或默认 **`Plan parallelism: serial`**（waived 时尤其优先），或用户本轮 `Cross-host lease race: accepted` + audit `notes`；**禁止**将 waived 当作无锁跨主机并行授权；未 waive 时另须 verified `execution_lease` + feature worktree。**integration merge 串行**（`integration_merge_lease` 或 waived 下无 lease 仍须串行 merge）
 - plan 内 SDD task **串行** — 见 §2.4、§2.5、`mstar-sdd` Continuous execution
+- **zero-residual（默认）**：单 plan QC findings 尽量在当轮清干净；仅真 blocker 才 defer 到后续迭代（须 Durable Roadmap）— 见 **`mstar-plan-artifacts`** Findings cleanup modes
 
 ---
 
@@ -370,7 +374,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支�
 **STOP**: 打印下方 checklist，且全部为 `[x]` 后，才可进入 §3.2 Compound。
 
 - [ ] 所有 compass 中登记的 plan 在 `{HARNESS_DIR}/status.json` 均为 `Done`
-- [ ] 所有 plan 的 residual findings 已收口（closed 或 accepted；见 `mstar-plan-artifacts`）
+- [ ] 所有 plan 的 residual findings 已收口：优先 empty open 列表；若仍有 open R#，须均为 Phase 2 `zero-residual` 允许的 blocker-defer + roadmap，或已 closed/accepted/waived 归档（见 `mstar-plan-artifacts` Findings cleanup modes）
 - [ ] compass `## Plans` 表状态列已与 `status.json` 同步
 - [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
 - [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + close 占位节）

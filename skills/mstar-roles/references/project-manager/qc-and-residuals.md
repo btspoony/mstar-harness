@@ -34,6 +34,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 - **NEVER** dispatch only QC#2 and QC#3 while skipping QC#1 on initial SDD tri wave — full **N=3** cross-review required (all three seats).
 - **NEVER** consolidate tri-review into `Approve` when any QC report's alignment fields differ from Assignment (character-level).
 - **NEVER** register or rewrite residual `severity` outside `mstar-plan-artifacts` machine enum.
+- **NEVER** under `Findings cleanup: zero-residual`, use `Approve with residuals` or open R# for fixable findings — fix-now + re-review; residual only for true blocker-defer + roadmap.
 - **NEVER** drop residual tracking to chat-only when `Approve with residuals` applies.
 - **NEVER** treat "two of three QC reports arrived" as sufficient — missing seat → `Blocked`.
 - **NEVER** re-dispatch all three after routine fix when only one or two had blockers — **targeted re-review** unless `QC re-review: full tri-review`.
@@ -59,6 +60,18 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 ## Residual Findings (Mandatory)
 
+Read Assignment **`Findings cleanup`** first (`mstar-plan-artifacts` — Findings cleanup modes).
+
+### When `Findings cleanup: zero-residual`
+
+- Prefer **fix-now + targeted re-review** for Critical / Warning / Suggestion that can be fixed this session.
+- **NEVER** park fixable findings as open R# or use `Approve with residuals` for them.
+- Register open R# **only** for true blocker-defers (`decision: defer` + Durable Roadmap + `target` next iteration/milestone).
+- `nit`: fix or drop (no R#).
+- Plan Done: prefer empty open list; any remaining open R# must all be blocker-defer + roadmap.
+
+### When `Findings cleanup: allow-residual` (or unset outside iteration Phase 2)
+
 When blocking issues are fixed but non-blocking warnings/suggestions remain:
 
 - Must register residual findings (do not leave as chat-only).
@@ -70,7 +83,7 @@ Each residual record should include:
 
 - `id`, `title`, `severity`, `source`, `scope`, `decision`, `owner`, `target milestone/date`, `tracking link`
 
-`Approve with residuals` is only valid when no unresolved blocking items remain.
+`Approve with residuals` is only valid when no unresolved blocking items remain (and under `zero-residual`, only when leftovers are blocker-defers).
 
 ## Residual Closure & Archive
 
