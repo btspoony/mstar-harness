@@ -23,7 +23,7 @@
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
 - 在 OpenCode / Cursor / Codex / Kimi Code 下复用同一套核心流程
 
-当前版本：**1.5.5** — 详见 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
+当前版本：**1.5.6** — 详见 [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
 ## 快速开始（推荐方式）
 
@@ -63,12 +63,13 @@ npx @mstar-harness/cli init
 
 **Phase 2 默认**（iteration 执行；仅当 Assignment 显式 `Worktree mode: waived` 时可豁免）：
 
-- 在 `spec_integration_branch` 上使用 **control worktree**；`status.json` 与 SDD 以该检出路径为 SSOT。
-- 每个 plan 在可写 implement 派发前须具备独立 **feature worktree** + `execution_lease`。
+- 在 `spec_integration_branch` 上使用 **control worktree**；进程 SSOT（`status.json`、plans、SDD）经 **control harness** 绝对路径读写（gitignored 产物不会出现在 feature 检出）。
+- 每个 plan 在可写 implement 派发前须具备独立 **feature worktree** + `execution_lease`；产品/源码改动落在 feature worktree。
 - 不同 plan 可在多 session 下并行 implement（各自 lease）；合并回 integration 分支仍须**串行**。
-- `Plan parallelism: serial` 仅约束 implement 调度波次，**不**豁免 worktree / lease 闸。
+- `Plan parallelism: serial` 仅约束 implement 调度波次，**不**豁免 worktree / lease 闸。不要因为 feature 检出缺少 plans 而 waive worktree。
+- **Findings cleanup**：正式 Phase 2 默认 `zero-residual`（当场修 + 复审；仅真 blocker-defer 可留 open R#）。独立 `/pm`、hotfix、`inline` 仍为 `allow-residual`。
 
-细则 → `mstar-iteration`（`references/phase-2-worktree-lease.md`）与 `mstar-branch-worktree`。
+细则 → `mstar-iteration`（`references/phase-2-worktree-lease.md`）、`mstar-branch-worktree`，以及 `mstar-plan-artifacts`（Findings cleanup modes）。
 
 **命令加载位置：**
 
@@ -158,7 +159,7 @@ flowchart TD
 | `mstar-sdd` | 子代理驱动开发：文件交接、每 task 实现+审查、进度账本 |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支摘要 |
-| `mstar-plan-artifacts` | 主 plan、review bundle / durable summary、`status.json`、residual、knowledge/iteration 索引、Done 归档 |
+| `mstar-plan-artifacts` | 主 plan、review bundle / durable summary、`status.json`、residual、Findings cleanup modes、knowledge/iteration 索引、Done 归档 |
 | `mstar-design-md` | UI 相关 plan 的 DESIGN.md 设计系统门禁 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 门禁、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | 通用编码行为：RCA、测试优先检查、审查反馈、完成证据 |

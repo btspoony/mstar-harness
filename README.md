@@ -23,7 +23,7 @@ Core value:
 - Run with unified `mstar-*` skills instead of scattered rules
 - Reuse one core process across OpenCode, Cursor, Codex, and Kimi Code
 
-Latest release: **1.5.5** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
+Latest release: **1.5.6** — see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
 ## Quick Start
 
@@ -63,12 +63,13 @@ Three PM-led iteration entry points. Pick by how much human direction you need:
 
 **Phase 2 defaults** (iteration execute; waive only with explicit `Worktree mode: waived`):
 
-- Control worktree on `spec_integration_branch`; `status.json` and SDD SSOT from that checkout.
-- Per-plan feature worktree + `execution_lease` before writable implement dispatch.
+- Control worktree on `spec_integration_branch`; process SSOT (`status.json`, plans, SDD) via absolute **control harness** paths (gitignored artifacts are not in feature checkouts).
+- Per-plan feature worktree + `execution_lease` before writable implement dispatch; product/source edits stay on the feature worktree.
 - Plans may implement in parallel across sessions (distinct leases); merge to the integration branch stays serial.
-- `Plan parallelism: serial` is scheduling-only — does not waive worktrees or leases.
+- `Plan parallelism: serial` is scheduling-only — does not waive worktrees or leases. Do not waive worktree because a feature checkout lacks plans.
+- **Findings cleanup**: formal Phase 2 defaults to `zero-residual` (fix-now + re-review; open R# only for true blocker-defer). Standalone `/pm`, hotfix, and `inline` keep `allow-residual`.
 
-Details → `mstar-iteration` (`references/phase-2-worktree-lease.md`) and `mstar-branch-worktree`.
+Details → `mstar-iteration` (`references/phase-2-worktree-lease.md`), `mstar-branch-worktree`, and `mstar-plan-artifacts` (Findings cleanup modes).
 
 **Where commands load:**
 
@@ -158,7 +159,7 @@ Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar
 | `mstar-sdd` | Subagent-driven development: file handoffs, per-task implementer + reviewer, progress ledger |
 | `mstar-branch-worktree` | Feature branches, worktrees, QC/QA checkout alignment |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |
-| `mstar-plan-artifacts` | Main plan, review bundles / durable summaries, `status.json`, residuals, knowledge/iteration indexes, Done compaction |
+| `mstar-plan-artifacts` | Main plan, review bundles / durable summaries, `status.json`, residuals, Findings cleanup modes, knowledge/iteration indexes, Done compaction |
 | `mstar-design-md` | DESIGN.md design-system gate for UI-bearing plans |
 | `mstar-review-qc` | PM QC tri orchestration, residual gate, layer boundaries; leaf execution → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Cross-role coding behavior: RCA, test-first checks, review feedback, completion evidence |
