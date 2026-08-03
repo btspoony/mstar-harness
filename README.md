@@ -43,7 +43,7 @@ Per-target examples:
 - Cursor: `npx @mstar-harness/cli init --target cursor`
 - Codex: `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal`
 - Kimi: in Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness` then `/plugins reload`
-- ZCode: `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** from the **mstar-local** marketplace in ZCode → Settings → Plugin Management
+- ZCode: `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** in ZCode → Settings → Plugin Management
 
 `init` provides target-aware guided setup (scopes, path layout, baseline config). Verify with `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode>`.
 

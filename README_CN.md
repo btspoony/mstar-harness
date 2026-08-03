@@ -43,7 +43,7 @@ npx @mstar-harness/cli init
 - Cursor：`npx @mstar-harness/cli init --target cursor`
 - Codex：`npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal`
 - Kimi：在 Kimi TUI 执行 `/plugins install https://github.com/btspoony/mstar-harness`，然后 `/plugins reload`
-- ZCode：`npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理 中从 **mstar-local** 市场安装 **morning-star-harness**
+- ZCode：`npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理 中安装 **morning-star-harness**
 
 `init` 提供按 target 的引导式安装（scope、路径布局、基础配置）。可用 `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode>` 校验。
 
