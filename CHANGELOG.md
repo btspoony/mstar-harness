@@ -2,20 +2,36 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.5.6** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.6.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.5.6** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.5.6** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.5.6** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.5.6** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.5.6** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.5.6** |
+| Monorepo root | `morning-star` (`package.json`) | **1.6.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.6.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.6.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.6.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.6.0** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.6.0** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.6.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.6.0] - 2026-08-03
+
+### Harness (ZCode host surface)
+
+- **ZCode as fifth host surface**: plugin root = repo root via `.zcode-plugin/plugin.json` (mounts `./skills/`, `./commands/`, `./agents/`); no `sessionStart` (ZCode lacks it — PM entry is manual `/morning-star-harness:pm`). New `skills/mstar-host/references/zcode.md` with tool map written against the real ZCode session tools (`Agent` / `AskUserQuestion` / `EnterPlanMode`·`ExitPlanMode` / `TodoWrite` / `Bash` / `Read` / `Edit` / `Write` / `WebSearch` / `WebFetch` / `TaskOutput`·`TaskStop`), reusing Kimi **C5b role-in-prompt binding** (ZCode ships built-in `subagent_type` profiles only). `zcode-plan-mode-bridge.md` for Enter/Exit dual-write.
+- **`mstar-host` SKILL.md**: description, detect-host table, and fallback row now include ZCode.
+
+### CLI (`@mstar-harness/cli`)
+
+- **`zcode` install target**: `npx @mstar-harness/cli init --target zcode` registers a `mstar-local` marketplace in `~/.zcode/cli/plugins/known_marketplaces.json` + `marketplaces/mstar-local/marketplace.json`, both pointing at the **`github:btspoony/mstar-harness`** repo source (matches ZCode's built-in marketplace source shape). Project scope also keeps a local `.zcode/plugin-checkout` for agent-file smoke checks. `doctor --target zcode` validates both JSON files + checkout + gitignore. `shared-install` `HARNESS_MARKERS` now also accepts `.zcode-plugin/plugin.json`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode plugin manifests: **→ 1.6.0**.
 
 ## [1.5.6] - 2026-07-28
 

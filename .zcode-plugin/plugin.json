@@ -15,7 +15,7 @@
     "harness",
     "agent",
     "multi-agent",
-    "kimi-plugin",
+    "zcode-plugin",
     "specification-engineering",
     "harness-engineering",
     "quality-gates",
@@ -24,9 +24,7 @@
   ],
   "skills": "./skills/",
   "commands": "./commands/",
-  "sessionStart": {
-    "skill": "pm"
-  },
+  "agents": "./agents/",
   "interface": {
     "displayName": "Morning Star Harness",
     "shortDescription": "Multi-agent code harness with role-based workflows and quality gates.",

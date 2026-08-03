@@ -1,0 +1,55 @@
+# ZCode Plan Mode × Harness Dual-Write Bridge
+
+> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-plan-conventions`** and **`mstar-plan-artifacts`** when Plan mode is active. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-plan-conventions`. On conflict, **`mstar-harness-core`** wins.
+
+## Purpose
+
+ZCode **Plan mode** (`EnterPlanMode` / `ExitPlanMode`) uses read-only exploration for design and a plan approval gate before implementation. Morning Star **SSOT** lives on disk under **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`). This reference defines **dual-write**: mirror durable plan artifacts to the repo; never treat the ZCode session todo list alone as the handoff surface.
+
+## Priority (hard)
+
+1. User explicit instructions (this turn)
+2. Project `AGENTS.md` / `CLAUDE.md`
+3. **`{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json`** (harness SSOT)
+4. ZCode `TodoWrite` UI (session UX mirror)
+
+**NEVER** cite only a session todo list path in Assignment **Plan Path**, **Context Loaded**, or Completion Report when `{PLAN_DIR}/<plan-id>-<name>.md` should exist.
+
+## When this applies
+
+- ZCode **Plan mode** is active (`EnterPlanMode` succeeded).
+- Morning Star plugin is installed (`.zcode-plugin/plugin.json` skills loaded) or **`/morning-star-harness:pm`** / **`pm` skill** is in use.
+
+## Before entering Plan mode
+
+1. **Read** (minimum): `mstar-plan-conventions`, `mstar-plan-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
+2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions`.
+3. **Initialize** if absent: `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `status.json` from `mstar-plan-artifacts/templates/status.empty.json`, `archived/residuals/`, Morning Star process-artifact gitignore set (see `mstar-plan-conventions` SKILL.md「Git 跟踪策略」).
+
+## Plan mode workflow (dual-write)
+
+| Step | ZCode session | Harness SSOT |
+|------|---------------|--------------|
+| Enter | `EnterPlanMode` — explore read-only | Ensure `{HARNESS_DIR}` exists; register `plan_id` in `status.json` when known |
+| Design | Draft plan content; surface via `ExitPlanMode` plan text | Mirror main plan to `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes |
+| Clarify | `AskUserQuestion` for blocking ambiguity only | Record decisions in plan / spec when durable |
+| Exit | `ExitPlanMode` — user approves plan to implement | SSOT plan locked; `status.json` row updated |
+| Implement | Agent mode resumes | Per-task commits, Working branch, dispatch per `mstar-dispatch-gates` |
+
+`TodoWrite` and ZCode UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and `status.json` when coordination requires it.
+
+## ExitPlanMode gate
+
+Do **not** treat ExitPlanMode approval as Morning Star **Done**. Implementation still follows phase gates, per-task commits, QC, and QA per the SSOT plan.
+
+## `mstar-iteration` Phase 1
+
+When iteration Phase 1 runs in Plan mode:
+
+- Use **one** plan session; iterate the **same** plan content and SSOT mirror in place (feedback-driven edits).
+- Do **not** run Review & Edit, commit integration branch, or dispatch implementers until the user approves via `ExitPlanMode` (or explicit go-ahead after plan lock).
+- After approval: reload `mstar-harness-core` + `zcode.md`; resume as `project-manager` orchestration.
+
+## Enforcement
+
+Conflict with harness invariants → **`mstar-harness-core`** wins. Full Cursor CreatePlan bridge detail lives in `cursor-plan-mode-bridge.md` when hosts differ; ZCode uses this lighter Enter/Exit bridge only.

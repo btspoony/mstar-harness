@@ -10,6 +10,7 @@
   - [Cursor](https://cursor.com)
   - [Codex](https://github.com/openai/codex) (with `codex` CLI for marketplace install)
   - [Kimi Code CLI](https://www.kimi.com/code/docs/kimi-code-cli/) (for `/plugins install`)
+  - [ZCode](https://zcode.z.ai) (for Plugin Management install)
 
 ## Recommended: CLI install
 
@@ -88,6 +89,26 @@ npx @mstar-harness/cli doctor --target codex --scope project
 
 Full CLI flags, `doctor` checks, and path tables: [`docs/cli.md`](docs/cli.md).
 
+### ZCode
+
+Global marketplace (recommended for personal use):
+
+```bash
+npx @mstar-harness/cli init --target zcode --scope global
+npx @mstar-harness/cli doctor --target zcode
+```
+
+Then in ZCode: **Settings → Plugin Management → Discover** → install **morning-star-harness** from the **mstar-local** marketplace.
+
+Project (plugin checkout under `.zcode/plugin-checkout`, gitignored):
+
+```bash
+npx @mstar-harness/cli init --target zcode --scope project
+npx @mstar-harness/cli doctor --target zcode --scope project
+```
+
+**Layout note:** the CLI registers a `mstar-local` marketplace in `~/.zcode/cli/plugins/known_marketplaces.json` pointing at the **`github:btspoony/mstar-harness`** repo (same source shape ZCode uses for built-in marketplaces). Project scope additionally keeps a real git checkout under `.zcode/plugin-checkout` (gitignored) for local agent-file smoke checks; the registered marketplace always points at the github repo so installs work across machines.
+
 ### Kimi
 
 Install the plugin in Kimi TUI (user-scoped — all projects):
@@ -108,7 +129,7 @@ Install the plugin in Kimi TUI (user-scoped — all projects):
 
 Use when you cannot run the CLI or need to mirror the same layout by hand.
 
-Supported targets: `opencode`, `cursor`, `codex`. Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above).
+Supported targets: `opencode`, `cursor`, `codex`, `zcode`. Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above).
 
 ### OpenCode
 
@@ -221,12 +242,56 @@ Kimi plugin source in this repository:
 - Plugin commands: `commands/`
 - Host adapter: `skills/mstar-host/references/kimi.md`
 
+### ZCode
+
+Register the harness as a marketplace (without the CLI). Create `~/.zcode/cli/plugins/marketplaces/mstar-local/marketplace.json`:
+
+```json
+{
+  "name": "mstar-local",
+  "plugins": [
+    {
+      "name": "morning-star-harness",
+      "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
+      "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
+      "version": "1.5.6",
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+Append the marketplace to `~/.zcode/cli/plugins/known_marketplaces.json` (`marketplaces[]`):
+
+```json
+{
+  "id": "mstar-local",
+  "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
+  "name": "mstar-local",
+  "description": "Morning Star harness marketplace (GitHub source).",
+  "addedAt": "1970-01-01T00:00:00.000Z",
+  "pluginCount": 1,
+  "lastUpdated": "1970-01-01T00:00:00.000Z"
+}
+```
+
+Then in ZCode **Settings → Plugin Management → Discover** install **morning-star-harness**.
+
+ZCode plugin source in this repository:
+
+- Manifest: `.zcode-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`, `./agents/`)
+- Runtime skills: `skills/`
+- Plugin commands: `commands/`
+- Plugin agents: `agents/`
+- Host adapter: `skills/mstar-host/references/zcode.md`
+
 ## Post-install
 
 1. **Enter PM orchestration**
    - OpenCode: start with the `Project Manager` role (`agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`).
    - Cursor / Codex: use `/pm`.
    - Kimi: use `/skill:pm`.
+   - ZCode: use `/morning-star-harness:pm` or `/skill:pm` (no session auto-load).
 
 2. **Run an iteration** (see [README — Harness Commands](README.md#harness-commands))
    - **Deep / first iteration:** `/iteration-start` (Phase 1) → `/iteration-drive` (Phase 2–5).

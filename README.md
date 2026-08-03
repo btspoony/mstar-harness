@@ -24,7 +24,7 @@ Core value:
 
 - Start a usable multi-role workflow quickly
 - Run with unified `mstar-*` skills instead of scattered rules
-- Reuse one core process across OpenCode, Cursor, Codex, and Kimi Code
+- Reuse one core process across OpenCode, Cursor, Codex, Kimi Code, and ZCode
 
 Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
@@ -43,8 +43,9 @@ Per-target examples:
 - Cursor: `npx @mstar-harness/cli init --target cursor`
 - Codex: `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal`
 - Kimi: in Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness` then `/plugins reload`
+- ZCode: `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** in ZCode → Settings → Plugin Management
 
-`init` provides target-aware guided setup (scopes, path layout, baseline config). Verify with `npx @mstar-harness/cli doctor --target <opencode|cursor|codex>`.
+`init` provides target-aware guided setup (scopes, path layout, baseline config). Verify with `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode>`.
 
 **Detailed install** (manual steps, path layout, Codex project vs global): [`INSTALL.md`](INSTALL.md). **CLI flags and advanced options:** [`docs/cli.md`](docs/cli.md).
 

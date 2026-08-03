@@ -24,7 +24,7 @@
 
 - 快速启动一套可用的多角色协作流
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
-- 在 OpenCode / Cursor / Codex / Kimi Code 下复用同一套核心流程
+- 在 OpenCode / Cursor / Codex / Kimi Code / ZCode 下复用同一套核心流程
 
 更新说明：[CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
@@ -43,8 +43,9 @@ npx @mstar-harness/cli init
 - Cursor：`npx @mstar-harness/cli init --target cursor`
 - Codex：`npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal`
 - Kimi：在 Kimi TUI 执行 `/plugins install https://github.com/btspoony/mstar-harness`，然后 `/plugins reload`
+- ZCode：`npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理 中安装 **morning-star-harness**
 
-`init` 提供按 target 的引导式安装（scope、路径布局、基础配置）。可用 `npx @mstar-harness/cli doctor --target <opencode|cursor|codex>` 校验。
+`init` 提供按 target 的引导式安装（scope、路径布局、基础配置）。可用 `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode>` 校验。
 
 **详细安装**（手动步骤、路径布局、Codex project vs global）：[`INSTALL.md`](INSTALL.md)。**CLI 参数与高级选项：** [`docs/cli.md`](docs/cli.md)。
 

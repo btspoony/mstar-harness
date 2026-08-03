@@ -1,19 +1,35 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.5.6**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.6.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.5.6** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.5.6** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.5.6** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.5.6** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.5.6** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.5.6** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.6.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.6.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.6.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.6.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.6.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.6.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.6.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.6.0] - 2026-08-03
+
+### Harness（ZCode 宿主面）
+
+- **ZCode 作为第五宿主面**：插件根 = 仓库根，经 `.zcode-plugin/plugin.json` 挂载（`./skills/`、`./commands/`、`./agents/`）；无 `sessionStart`（ZCode 不支持——PM 入口手动 `/morning-star-harness:pm`）。新增 `skills/mstar-host/references/zcode.md`，tool map 按真实 ZCode 会话工具编写（`Agent` / `AskUserQuestion` / `EnterPlanMode`·`ExitPlanMode` / `TodoWrite` / `Bash` / `Read` / `Edit` / `Write` / `WebSearch` / `WebFetch` / `TaskOutput`·`TaskStop`），复用 Kimi **C5b role-in-prompt binding**（ZCode 仅内置 `subagent_type` profile）。`zcode-plan-mode-bridge.md` 处理 Enter/Exit 双写。
+- **`mstar-host` SKILL.md**：description、detect-host 表、兜底行加入 ZCode。
+
+### CLI（`@mstar-harness/cli`）
+
+- **`zcode` 安装 target**：`npx @mstar-harness/cli init --target zcode` 注册 `mstar-local` marketplace 到 `~/.zcode/cli/plugins/known_marketplaces.json` + `marketplaces/mstar-local/marketplace.json`，两者均指向 **`github:btspoony/mstar-harness`** 仓库 source（与 ZCode 内建 marketplace source 形状一致）。Project scope 另在 `.zcode/plugin-checkout` 保留本地 checkout 做 agent 文件 smoke 校验。`doctor --target zcode` 校验两个 JSON + checkout + gitignore。`shared-install` 的 `HARNESS_MARKERS` 新增接受 `.zcode-plugin/plugin.json`。
+
+### 版本对齐
+
+- monorepo、OpenCode、CLI、Cursor/Codex/Kimi/ZCode 插件：**→ 1.6.0**。
 
 ## [1.5.6] - 2026-07-28
 
