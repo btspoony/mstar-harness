@@ -55,7 +55,7 @@ npx @mstar-harness/cli init
 - **Cursor**：使用 `/pm` 强制以 `Project Manager` 角色启动。
 - **Codex**：安装插件后使用 `/pm`。CLI 或手动安装会链接 `codex/agents/` 下的 custom agents。
 - **Kimi**：安装插件（`.kimi-plugin/plugin.json`）；新会话通过 `sessionStart` 自动加载 **`pm`**。随时可用 `/skill:pm`。内置子 agent 仅 `coder` / `explore` / `plan` — 角色绑定写在 Agent prompt 中（见 `mstar-host/references/kimi.md`）。
-- **ZCode**：安装插件（`.zcode-plugin/plugin.json`）后使用 `/morning-star-harness:pm` 开局。无 session 自动加载 — 每次会话需手动进入 PM。角色绑定写在 Agent prompt 中（见 `mstar-host/references/zcode.md`）。
+- **ZCode**：安装插件（`.zcode-plugin/plugin.json`）后使用 `/morning-star-harness:pm` 开局。无 session 自动加载 — 每次会话需手动进入 PM。插件 agents 在「设置 → 子智能体」可见，但**不**作为可调用的 `subagent_type` 暴露（仅 `general-purpose` / `Explore` 可用）；角色绑定写在 Agent prompt 中（见 `mstar-host/references/zcode.md`）。
 
 ### Harness Commands
 

@@ -55,7 +55,7 @@ Per-target examples:
 - **Cursor**: use `/pm` to force-start with the `Project Manager` role.
 - **Codex**: use `/pm` after installing the plugin. Custom agents are linked from `codex/agents/` by the CLI or manual install.
 - **Kimi**: install the plugin (`.kimi-plugin/plugin.json`); new sessions auto-load **`pm`** via `sessionStart`. Use `/skill:pm` anytime. Built-in subagents are `coder` / `explore` / `plan` only — role binding is in the Agent prompt (see `mstar-host/references/kimi.md`).
-- **ZCode**: install the plugin (`.zcode-plugin/plugin.json`), then use `/morning-star-harness:pm` to start. No session auto-load — enter PM manually each session. Role binding lives in the Agent prompt (see `mstar-host/references/zcode.md`).
+- **ZCode**: install the plugin (`.zcode-plugin/plugin.json`), then use `/morning-star-harness:pm` to start. No session auto-load — enter PM manually each session. Plugin agents are visible in **Settings → Subagents** but are **not** exposed as callable `subagent_type` values (only `general-purpose` / `Explore` are); role binding lives in the Agent prompt (see `mstar-host/references/zcode.md`).
 
 ### Harness Commands
 
