@@ -3,3 +3,6 @@ secrets.env
 .secrets/
 .harness/
 .gitnexus/
+
+# ZCode client workspace state
+.zcode/
