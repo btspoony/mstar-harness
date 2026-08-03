@@ -18,9 +18,7 @@ English / [中文](README_CN.md)
 
 </div>
 
-This repository provides the **Morning Star** multi-agent code harness framework.
-
-Core value:
+**Morning Star** is a multi-agent code harness for AI coding hosts.
 
 - Start a usable multi-role workflow quickly
 - Run with unified `mstar-*` skills instead of scattered rules
@@ -28,58 +26,62 @@ Core value:
 
 Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-## Quick Start
-
-Recommended install uses the CLI (`@mstar-harness/cli`):
+## Install
 
 ```bash
 npx @mstar-harness/cli init
 # or: bunx @mstar-harness/cli init
 ```
 
-Per-target examples:
+| Host | Command |
+|------|---------|
+| OpenCode | `npx @mstar-harness/cli init --target opencode` |
+| Cursor | `npx @mstar-harness/cli init --target cursor` |
+| Codex | `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal` |
+| Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
+| ZCode | `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** in ZCode → Settings → Plugin Management |
 
-- OpenCode: `npx @mstar-harness/cli init --target opencode`
-- Cursor: `npx @mstar-harness/cli init --target cursor`
-- Codex: `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal`
-- Kimi: in Kimi TUI `/plugins install https://github.com/btspoony/mstar-harness` then `/plugins reload`
-- ZCode: `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** in ZCode → Settings → Plugin Management
+Verify: `npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode>`.
 
-`init` provides target-aware guided setup (scopes, path layout, baseline config). Verify with `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode>`.
+Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.md`](docs/cli.md).
 
-**Detailed install** (manual steps, path layout, Codex project vs global): [`INSTALL.md`](INSTALL.md). **CLI flags and advanced options:** [`docs/cli.md`](docs/cli.md).
+Reload the host after install (OpenCode restart / Cursor **Developer: Reload Window** / reopen Codex / Kimi `/plugins reload` or `/new` / ZCode reload plugin).
 
-## How to use
+## Use
 
-- **OpenCode**: start with the `Project Manager` role (`agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`).
-- **Cursor**: use `/pm` to force-start with the `Project Manager` role.
-- **Codex**: use `/pm` after installing the plugin. Custom agents are linked from `codex/agents/` by the CLI or manual install.
-- **Kimi**: install the plugin (`.kimi-plugin/plugin.json`); new sessions auto-load **`pm`** via `sessionStart`. Use `/skill:pm` anytime. Built-in subagents are `coder` / `explore` / `plan` only — role binding is in the Agent prompt (see `mstar-host/references/kimi.md`).
-- **ZCode**: install the plugin (`.zcode-plugin/plugin.json`), then use `/morning-star-harness:pm` to start. No session auto-load — enter PM manually each session. Plugin agents are visible in **Settings → Subagents** but are **not** exposed as callable `subagent_type` values (only `general-purpose` / `Explore` are); role binding lives in the Agent prompt (see `mstar-host/references/zcode.md`).
+Two entry shapes: **without iteration** (single plan / hotfix) or **with iteration** (multi-plan Phase 1–5).
 
-### Harness Commands
+### Without iteration
 
-Three PM-led iteration entry points. Pick by how much human direction you need:
+Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate → Done`.
 
-| Path | When | Flow |
-|------|------|------|
-| `/iteration-start` → `/iteration-drive` | First iteration, or deep work that needs human direction lock (**grill-me**) before execution | Phase 1 only → Phase 2–5 (execute, close, PR, merge-ready) |
-| `/iteration-loop` | Fast autonomous full loop (cloud-agent friendly); optional `direction` + `scale` (S\|M\|L\|XL) | Phase 1→5 continuous with minimal check-ins |
+| Host | Enter PM |
+|------|----------|
+| OpenCode | `agent.project-manager` (`agents/project-manager.md`) |
+| Cursor | `/pm` |
+| Codex | `/pm` |
+| Kimi | session auto-loads `pm`; or `/skill:pm` |
+| ZCode | `/morning-star-harness:pm` each session (no auto-load) |
 
-**Phase 2** defaults to a per-plan worktree + lease on the integration branch and `zero-residual` findings cleanup; waive only with explicit `Worktree mode: waived`. Details → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
+Host limits (Kimi/ZCode subagent surfaces, role binding in prompt): `mstar-host/references/kimi.md`, `mstar-host/references/zcode.md`.
 
-**Where commands load:**
+### With iteration
 
-| Host | Discovery |
-|------|-----------|
-| **Cursor / OpenCode** | Bundled from this repo's `commands/` (OpenCode: `harness-commands/` in the plugin) |
-| **Codex (project install)** | Same three commands as project-local skills: `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
-| **Codex (global install)** | Iteration skills are **not** installed — use `--scope project` to avoid polluting other projects |
-| **Kimi / ZCode (plugin)** | `/morning-star-harness:iteration-start` etc. from `commands/` via the host plugin manifest |
+| Path | When |
+|------|------|
+| `/iteration-start` → `/iteration-drive` | First iteration, or need human direction lock before execute |
+| `/iteration-loop` | Full Phase 1→5 with minimal check-ins (optional `direction`, `scale` S\|M\|L\|XL) |
 
-Project knowledge bootstrap/refresh: `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`).
+| Host | How commands load |
+|------|-------------------|
+| Cursor / OpenCode | Bundled from `commands/` (OpenCode: plugin `harness-commands/`) |
+| Codex project | `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
+| Codex global | Iteration skills **not** installed — use `--scope project` |
+| Kimi / ZCode | `/morning-star-harness:iteration-start` (etc.) via plugin manifest |
 
-After install, reload the host (restart OpenCode / Cursor **Developer: Reload Window** / re-open Codex / Kimi `/plugins reload` or `/new` / ZCode reload the plugin).
+Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
+
+Project knowledge bootstrap: `mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`.
 
 ## Harness Workflow
 
@@ -122,58 +124,49 @@ flowchart TD
     Y --> Z["Phase 5: merge-ready loop until CI green and reviews resolved"]
 ```
 
-For single-plan or non-iteration work, use the same per-plan gates (`Prepare → Execute → QC → QA gate → Done`) without the iteration-start / iteration-close wrapper.
+Without iteration: same per-plan gates, no `iteration-start` / `iteration-close` wrapper.
 
-## Role and Skill Overview
+## Roles and skills
 
-### Roles
+| Agent ID | Responsibility |
+|----------|----------------|
+| `project-manager` | Routing, assignment, phase progression |
+| `product-manager` | Requirements, product planning, research |
+| `architect` | Architecture and technical contracts |
+| `fullstack-dev` / `fullstack-dev-2` | Backend-led implement / second parallel track |
+| `frontend-dev` | UI, interaction, frontend performance |
+| `qa-engineer` | Acceptance when `QA gate: mandatory` |
+| `qc-specialist` / `-2` / `-3` | QC trio |
+| `ops-engineer` | Deploy, monitoring, infrastructure |
+| `writing-specialist` | Docs, fiction, copy, scripts |
+| `prompt-engineer` | Prompt / skill / rule work |
 
-| Agent ID | Role | Responsibility |
-|----------|------|----------------|
-| `project-manager` | Project Manager | Routing, assignment, phase progression |
-| `product-manager` | Product Manager | Requirements, product planning, and market/user research |
-| `architect` | Architect | Architecture and technical contracts |
-| `fullstack-dev` / `fullstack-dev-2` | Fullstack Dev | Backend-led implementation / second parallel track |
-| `frontend-dev` | Frontend Dev | UI, interaction, frontend performance |
-| `qa-engineer` | QA | Tiered acceptance validation (dispatched when `QA gate: mandatory`; else PM acceptance) |
-| `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` | QC Trio | Code quality gate (architecture/security/performance) |
-| `ops-engineer` | Ops | Deployment, monitoring, infrastructure |
-| `writing-specialist` | Writing Specialist | Documentation, fiction, copywriting, and script writing |
-| `prompt-engineer` | Prompt Engineer | Prompt / skill / rule optimization |
-
-You can assign different models per agent in `opencode.json` without replacing your existing file.
-
-### Core Skills
-
-Load **`mstar-harness-core` first**, then topic skills **on demand** (see `mstar-roles` for per-role lists).
+Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`).
 
 | Skill | Purpose |
 |-------|---------|
-| `mstar-harness-core` | Global entry, state machine, Task category, skill index |
-| `mstar-phase-gates` | Prepare/Execute gates, clarify, hotfix |
-| `mstar-iteration` | Iteration lifecycle: Phase 1–5 (start, execute loop, iteration-close, PR delivery, merge-ready loop) |
-| `mstar-dispatch-gates` | PM dispatch, Delegation, anti-recursion, parallel invoke |
-| `mstar-sdd` | Subagent-driven development: file handoffs, per-task implementer + reviewer, progress ledger |
-| `mstar-branch-worktree` | Feature branches, worktrees, QC/QA checkout alignment |
-| `mstar-plan-conventions` | `{HARNESS_DIR}` discovery, init, Spec branch summary |
-| `mstar-plan-artifacts` | Main plan, review bundles / durable summaries, `status.json`, residuals, Findings cleanup modes, knowledge/iteration indexes, Done compaction |
-| `mstar-design-md` | DESIGN.md design-system gate for UI-bearing plans |
-| `mstar-review-qc` | PM QC tri orchestration, residual gate, layer boundaries; leaf execution → `mstar-roles/references/qc-specialist/` |
-| `mstar-coding-behavior` | Cross-role coding behavior: RCA, test-first checks, review feedback, completion evidence |
-| `mstar-compound` | Knowledge crystallization into `{KNOWLEDGE_DIR}` |
-| `mstar-compound-refresh` | Knowledge maintenance: refresh, merge, archive, or remove stale docs |
-| `mstar-strategy` | STRATEGY.md alignment for long-running direction and decisions |
-| `mstar-skill-authoring` | Skill authoring, trigger contracts, progressive disclosure, and behavior-change evidence |
-| `mstar-roles` | Role prompt bus + per-role skill load lists |
-| `mstar-host` | Host adapter (OpenCode / Cursor / Codex / Kimi); auto-detect + `references/` |
-| `pm` | Shared `/pm` or `/skill:pm` shortcut for Cursor, Codex, and Kimi PM entry |
+| `mstar-harness-core` | Entry, state machine, Task category, skill index |
+| `mstar-phase-gates` | Prepare/Execute, clarify, hotfix |
+| `mstar-iteration` | Phase 1–5 iteration lifecycle |
+| `mstar-dispatch-gates` | Dispatch, Delegation, anti-recursion |
+| `mstar-sdd` | Subagent-driven development |
+| `mstar-branch-worktree` | Branches, worktrees, QC/QA checkout |
+| `mstar-plan-conventions` | `{HARNESS_DIR}` discovery / init |
+| `mstar-plan-artifacts` | Plans, `status.json`, residuals, Findings cleanup |
+| `mstar-design-md` | DESIGN.md gate for UI plans |
+| `mstar-review-qc` | PM QC tri orchestration |
+| `mstar-coding-behavior` | RCA, test-first, review feedback, evidence |
+| `mstar-compound` / `mstar-compound-refresh` | Knowledge crystallize / maintain |
+| `mstar-strategy` | `STRATEGY.md` alignment |
+| `mstar-skill-authoring` | Skill authoring contracts |
+| `mstar-roles` | Role prompts + load lists |
+| `mstar-host` | Host adapters (OpenCode / Cursor / Codex / Kimi / ZCode) |
+| `pm` | `/pm` / `/skill:pm` / host PM entry |
 
-Maintainers: follow [`AGENTS.md`](AGENTS.md) for in-repo maintenance notes and planning; those local artifacts are not part of the published skill tree.
+Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Details → `mstar-plan-conventions`.
 
-Project plan artifacts default to **`.mstar/`** (`{HARNESS_DIR}`), with existing `.agents/` / `.plans/` / `plans/` layouts still recognized for compatibility.
-
-**Git tracking (default):** process stays local (`plans/`, `iterations/`, `status.json`, `sdd/`, … are gitignored); results are shared (`AGENTS.md`, `knowledge/`, `specs/` under `{HARNESS_DIR}` are tracked). `{SPECS_DIR}` resolves `.mstar/specs/` → `docs/specs/` → repo-root `specs/` (empty dirs skipped; greenfield creates `.mstar/specs/`). Details → `mstar-plan-conventions`.
+Maintainers: [`AGENTS.md`](AGENTS.md).
 
 ## License
 
-This project is licensed under MIT. See [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).

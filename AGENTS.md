@@ -25,10 +25,17 @@ Use this document as the primary maintenance contract for contributors and agent
   - `AGENTS.md` describes repository maintenance policy.
 - **Surgical edits**: only change what the task requires; avoid opportunistic refactors.
 - **Read before edit**: inspect current content before patching; verify after patching.
+- **README = developer consumer docs** (`README.md` / `README_CN.md`):
+  - Audience is developers who install and run the harness — not a concept tutorial.
+  - Prefer commands, tables, and links. Do **not** write chatty “How to use” prose.
+  - A short curated value-prop bullet list at the top is allowed; keep it to a few selling points, not a marketing essay.
+  - Keep the shortest executable path: Install → Use (**without iteration** vs **with iteration**) → Workflow diagram → Roles/skills tables.
+  - Put narrative, deep install, and host quirks in `INSTALL.md`, `docs/`, or `mstar-*` skills — not in the README body.
+  - Edit both language files together when README content changes.
 
 ## Cursor + OpenCode + Codex + Kimi + ZCode Sync Policy
 
-When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, and Kimi as host surfaces of one system.
+When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Kimi, and ZCode as host surfaces of one system.
 
 - Update shared semantics first (core harness contract), then host-specific adapters.
 - Keep host wording consistent on:
@@ -43,6 +50,7 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, an
 
 - Do align changes with the current harness invariants before editing downstream docs/prompts.
 - Do update bilingual docs together when user-facing behavior changes.
+- Do keep `README.md` / `README_CN.md` developer-short (Install + Use scenarios + Workflow + tables); reject verbose onboarding rewrites into README.
 - Do keep CLI implementation changes inside `packages/cli` and OpenCode plugin packaging inside `packages/opencode`.
 - Do keep role shells thin and maintain richer role behavior in role-skill references.
 - Do keep commit scope coherent (one concern per commit when possible).
@@ -53,6 +61,7 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, an
 - Do not edit user secrets or local credential files.
 - Do not silently change security-sensitive defaults.
 - Do not introduce parallel “maintenance manuals” inside skill bodies.
+- Do not turn `README.md` / `README_CN.md` into tutorials or long “How to use” essays — keep executable paths; detail belongs in `INSTALL.md` / `docs/` / skills.
 - Do not scatter the same rule text across multiple files just for discoverability.
 - Do not require manual file-by-file index maintenance when explore/search can discover structure.
 
