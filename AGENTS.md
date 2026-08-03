@@ -26,7 +26,7 @@ Use this document as the primary maintenance contract for contributors and agent
 - **Surgical edits**: only change what the task requires; avoid opportunistic refactors.
 - **Read before edit**: inspect current content before patching; verify after patching.
 
-## Cursor + OpenCode + Codex + Kimi Sync Policy
+## Cursor + OpenCode + Codex + Kimi + ZCode Sync Policy
 
 When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, and Kimi as host surfaces of one system.
 
@@ -142,12 +142,14 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 - Skill authoring / trigger contracts -> `skills/mstar-skill-authoring/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:
-  - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex/Kimi via `.cursor-plugin/` / `.codex-plugin` / `.kimi-plugin/` `skills/`)
+  - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex/Kimi/ZCode via `.cursor-plugin/` / `.codex-plugin` / `.kimi-plugin` / `.zcode-plugin/` `skills/`)
   - OpenCode package: `harness-skills/` + `harness-agents/` from `bundle-assets` (npm publish prepublish + root `postinstall`); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
 - CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
 - Codex plugin manifest -> `.codex-plugin/plugin.json`
 - Kimi plugin manifest -> `.kimi-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`)
+- ZCode plugin manifest -> `.zcode-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`, `./agents/`)
 - Codex install metadata generation -> `packages/cli/src/adapters/codex.ts`
+- ZCode install metadata generation -> `packages/cli/src/adapters/zcode.ts`
 - Maintenance policy (this file) -> `AGENTS.md`
 
 ## Skill Sync Rules
