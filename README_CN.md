@@ -55,6 +55,7 @@ npx @mstar-harness/cli init
 - **Cursor**：使用 `/pm` 强制以 `Project Manager` 角色启动。
 - **Codex**：安装插件后使用 `/pm`。CLI 或手动安装会链接 `codex/agents/` 下的 custom agents。
 - **Kimi**：安装插件（`.kimi-plugin/plugin.json`）；新会话通过 `sessionStart` 自动加载 **`pm`**。随时可用 `/skill:pm`。内置子 agent 仅 `coder` / `explore` / `plan` — 角色绑定写在 Agent prompt 中（见 `mstar-host/references/kimi.md`）。
+- **ZCode**：安装插件（`.zcode-plugin/plugin.json`）后使用 `/morning-star-harness:pm` 开局。无 session 自动加载 — 每次会话需手动进入 PM。角色绑定写在 Agent prompt 中（见 `mstar-host/references/zcode.md`）。
 
 ### Harness Commands
 
@@ -65,15 +66,7 @@ npx @mstar-harness/cli init
 | `/iteration-start` → `/iteration-drive` | 首次 iteration，或需要人工方向锁定（**grill-me**）的深度工作 | 仅 Phase 1 → Phase 2–5（执行、收尾、开 PR、merge-ready） |
 | `/iteration-loop` | 快速自动化完整闭环（适合 cloud agent）；可选 `direction` + `scale`（S\|M\|L\|XL） | Phase 1→5 连续执行，尽量少人工确认 |
 
-**Phase 2 默认**（iteration 执行；仅当 Assignment 显式 `Worktree mode: waived` 时可豁免）：
-
-- 在 `spec_integration_branch` 上使用 **control worktree**；进程 SSOT（`status.json`、plans、SDD）经 **control harness** 绝对路径读写（gitignored 产物不会出现在 feature 检出）。
-- 每个 plan 在可写 implement 派发前须具备独立 **feature worktree** + `execution_lease`；产品/源码改动落在 feature worktree。
-- 不同 plan 可在多 session 下并行 implement（各自 lease）；合并回 integration 分支仍须**串行**。
-- `Plan parallelism: serial` 仅约束 implement 调度波次，**不**豁免 worktree / lease 闸。不要因为 feature 检出缺少 plans 而 waive worktree。
-- **Findings cleanup**：正式 Phase 2 默认 `zero-residual`（当场修 + 复审；仅真 blocker-defer 可留 open R#）。独立 `/pm`、hotfix、`inline` 仍为 `allow-residual`。
-
-细则 → `mstar-iteration`（`references/phase-2-worktree-lease.md`）、`mstar-branch-worktree`，以及 `mstar-plan-artifacts`（Findings cleanup modes）。
+**Phase 2** 默认在每个 plan 上使用独立 worktree + lease（挂在 integration branch）并采用 `zero-residual` 的 Findings cleanup；仅当显式 `Worktree mode: waived` 时可豁免。细则 → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
 
 **命令加载位置：**
 
@@ -82,11 +75,11 @@ npx @mstar-harness/cli init
 | **Cursor / OpenCode** | 从本仓库 `commands/` 打包（OpenCode：插件内 `harness-commands/`） |
 | **Codex（project 安装）** | 同上三条命令作为项目本地 skill：`.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链接） |
 | **Codex（global 安装）** | **不**安装 iteration skills — 使用 `--scope project` 以免污染其他项目 |
-| **Kimi（插件）** | 通过 `.kimi-plugin/plugin.json` 的 `/morning-star-harness:iteration-start` 等命令 |
+| **Kimi / ZCode（插件）** | 通过宿主插件 manifest 提供 `/morning-star-harness:iteration-start` 等命令 |
 
 项目知识脚手架的初始化/刷新：通过 `mstar-compound-refresh` skill（`references/project-knowledge-bootstrap.md`）。
 
-安装后请重载宿主（重启 OpenCode / Cursor **Developer: Reload Window** / 重新打开 Codex / Kimi `/plugins reload` 或 `/new`）。
+安装后请重载宿主（重启 OpenCode / Cursor **Developer: Reload Window** / 重新打开 Codex / Kimi `/plugins reload` 或 `/new` / ZCode 重载插件）。
 
 ## Harness Workflow（统一流程）
 

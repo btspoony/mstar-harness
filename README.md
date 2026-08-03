@@ -55,6 +55,7 @@ Per-target examples:
 - **Cursor**: use `/pm` to force-start with the `Project Manager` role.
 - **Codex**: use `/pm` after installing the plugin. Custom agents are linked from `codex/agents/` by the CLI or manual install.
 - **Kimi**: install the plugin (`.kimi-plugin/plugin.json`); new sessions auto-load **`pm`** via `sessionStart`. Use `/skill:pm` anytime. Built-in subagents are `coder` / `explore` / `plan` only — role binding is in the Agent prompt (see `mstar-host/references/kimi.md`).
+- **ZCode**: install the plugin (`.zcode-plugin/plugin.json`), then use `/morning-star-harness:pm` to start. No session auto-load — enter PM manually each session. Role binding lives in the Agent prompt (see `mstar-host/references/zcode.md`).
 
 ### Harness Commands
 
@@ -65,15 +66,7 @@ Three PM-led iteration entry points. Pick by how much human direction you need:
 | `/iteration-start` → `/iteration-drive` | First iteration, or deep work that needs human direction lock (**grill-me**) before execution | Phase 1 only → Phase 2–5 (execute, close, PR, merge-ready) |
 | `/iteration-loop` | Fast autonomous full loop (cloud-agent friendly); optional `direction` + `scale` (S\|M\|L\|XL) | Phase 1→5 continuous with minimal check-ins |
 
-**Phase 2 defaults** (iteration execute; waive only with explicit `Worktree mode: waived`):
-
-- Control worktree on `spec_integration_branch`; process SSOT (`status.json`, plans, SDD) via absolute **control harness** paths (gitignored artifacts are not in feature checkouts).
-- Per-plan feature worktree + `execution_lease` before writable implement dispatch; product/source edits stay on the feature worktree.
-- Plans may implement in parallel across sessions (distinct leases); merge to the integration branch stays serial.
-- `Plan parallelism: serial` is scheduling-only — does not waive worktrees or leases. Do not waive worktree because a feature checkout lacks plans.
-- **Findings cleanup**: formal Phase 2 defaults to `zero-residual` (fix-now + re-review; open R# only for true blocker-defer). Standalone `/pm`, hotfix, and `inline` keep `allow-residual`.
-
-Details → `mstar-iteration` (`references/phase-2-worktree-lease.md`), `mstar-branch-worktree`, and `mstar-plan-artifacts` (Findings cleanup modes).
+**Phase 2** defaults to a per-plan worktree + lease on the integration branch and `zero-residual` findings cleanup; waive only with explicit `Worktree mode: waived`. Details → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
 
 **Where commands load:**
 
@@ -82,11 +75,11 @@ Details → `mstar-iteration` (`references/phase-2-worktree-lease.md`), `mstar-b
 | **Cursor / OpenCode** | Bundled from this repo's `commands/` (OpenCode: `harness-commands/` in the plugin) |
 | **Codex (project install)** | Same three commands as project-local skills: `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
 | **Codex (global install)** | Iteration skills are **not** installed — use `--scope project` to avoid polluting other projects |
-| **Kimi (plugin)** | `/morning-star-harness:iteration-start` etc. from `commands/` via `.kimi-plugin/plugin.json` |
+| **Kimi / ZCode (plugin)** | `/morning-star-harness:iteration-start` etc. from `commands/` via the host plugin manifest |
 
 Project knowledge bootstrap/refresh: `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`).
 
-After install, reload the host (restart OpenCode / Cursor **Developer: Reload Window** / re-open Codex / Kimi `/plugins reload` or `/new`).
+After install, reload the host (restart OpenCode / Cursor **Developer: Reload Window** / re-open Codex / Kimi `/plugins reload` or `/new` / ZCode reload the plugin).
 
 ## Harness Workflow
 
