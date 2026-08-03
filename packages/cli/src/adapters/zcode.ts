@@ -21,7 +21,7 @@ const MARKETPLACE_NAME = "mstar-local";
 const MARKETPLACE_DESCRIPTION = "Morning Star harness marketplace (GitHub source).";
 const PLUGIN_DESCRIPTION =
   "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.";
-const PLUGIN_VERSION = "1.5.6";
+const PLUGIN_VERSION = "1.6.0";
 const PLUGIN_CATEGORY = "Productivity";
 const GITHUB_REPO = "btspoony/mstar-harness";
 const GITHUB_REF = "main";

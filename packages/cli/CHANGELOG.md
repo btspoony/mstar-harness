@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.6.0
+
+- **New `zcode` install target**: `init --target zcode` registers a `mstar-local` marketplace (github source) in `~/.zcode/cli/plugins/{known_marketplaces.json, marketplaces/mstar-local/marketplace.json}`; `doctor --target zcode` validates both JSON files + checkout + gitignore. Project scope keeps a local `.zcode/plugin-checkout` for smoke checks. `SUPPORTED_TARGETS` now includes `zcode`; `shared-install` `HARNESS_MARKERS` also accepts `.zcode-plugin/plugin.json`.
+- Version alignment with harness **1.6.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.6.0**.
+
 ## 1.5.6
 
 - Version alignment with harness **1.5.6** (no CLI API change in this release).

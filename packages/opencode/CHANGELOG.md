@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.6.0
+
+- Version alignment with harness **1.6.0** (no OpenCode plugin change in this release; ZCode host surface is added at the harness/CLI layer, not bundled into the OpenCode package).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.6.0**.
+
 ## 1.5.6
 
 - Version alignment with harness **1.5.6** (bundled skills: `Findings cleanup: zero-residual` mode).
