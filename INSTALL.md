@@ -107,9 +107,7 @@ npx @mstar-harness/cli init --target zcode --scope project
 npx @mstar-harness/cli doctor --target zcode --scope project
 ```
 
-**Layout note:** the CLI registers a local marketplace `mstar-local` in `~/.zcode/cli/plugins/known_marketplaces.json` pointing at the harness checkout (directory source). Project scope uses a real git checkout under `.zcode/plugin-checkout` (directory sources require a real directory, not a symlink).
-
-**Fallback** (if ZCode rejects `directory` source): add `github:btspoony/mstar-harness` as a marketplace in **Settings → Plugin Management → +**, then install from there.
+**Layout note:** the CLI registers a `mstar-local` marketplace in `~/.zcode/cli/plugins/known_marketplaces.json` pointing at the **`github:btspoony/mstar-harness`** repo (same source shape ZCode uses for built-in marketplaces). Project scope additionally keeps a real git checkout under `.zcode/plugin-checkout` (gitignored) for local agent-file smoke checks; the registered marketplace always points at the github repo so installs work across machines.
 
 ### Kimi
 
@@ -246,13 +244,7 @@ Kimi plugin source in this repository:
 
 ### ZCode
 
-Register the harness as a local marketplace (without the CLI):
-
-```bash
-git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness
-```
-
-Create `~/.zcode/cli/plugins/marketplaces/mstar-local/marketplace.json`:
+Register the harness as a marketplace (without the CLI). Create `~/.zcode/cli/plugins/marketplaces/mstar-local/marketplace.json`:
 
 ```json
 {
@@ -260,7 +252,7 @@ Create `~/.zcode/cli/plugins/marketplaces/mstar-local/marketplace.json`:
   "plugins": [
     {
       "name": "morning-star-harness",
-      "source": { "source": "directory", "path": "./.mstar/harness" },
+      "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
       "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
       "version": "1.5.6",
       "category": "Productivity"
@@ -269,7 +261,21 @@ Create `~/.zcode/cli/plugins/marketplaces/mstar-local/marketplace.json`:
 }
 ```
 
-Append the marketplace to `~/.zcode/cli/plugins/known_marketplaces.json` (`marketplaces[]`), then in ZCode **Settings → Plugin Management → Discover** install **morning-star-harness**.
+Append the marketplace to `~/.zcode/cli/plugins/known_marketplaces.json` (`marketplaces[]`):
+
+```json
+{
+  "id": "mstar-local",
+  "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
+  "name": "mstar-local",
+  "description": "Morning Star harness marketplace (GitHub source).",
+  "addedAt": "1970-01-01T00:00:00.000Z",
+  "pluginCount": 1,
+  "lastUpdated": "1970-01-01T00:00:00.000Z"
+}
+```
+
+Then in ZCode **Settings → Plugin Management → Discover** install **morning-star-harness**.
 
 ZCode plugin source in this repository:
 

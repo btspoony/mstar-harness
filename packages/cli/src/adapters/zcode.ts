@@ -14,16 +14,17 @@ import {
   appendGitignore,
   appendHarnessProjectGitignore,
   missingHarnessProcessGitignoreEntries,
-  homeRelativeSourcePath,
 } from "./shared-install";
 
 const MARKETPLACE_ID = "mstar-local";
 const MARKETPLACE_NAME = "mstar-local";
-const MARKETPLACE_DESCRIPTION = "Local Morning Star harness marketplace (directory source).";
+const MARKETPLACE_DESCRIPTION = "Morning Star harness marketplace (GitHub source).";
 const PLUGIN_DESCRIPTION =
   "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.";
 const PLUGIN_VERSION = "1.5.6";
 const PLUGIN_CATEGORY = "Productivity";
+const GITHUB_REPO = "btspoony/mstar-harness";
+const GITHUB_REF = "main";
 const ZCODE_PLUGIN_MARKER = ".zcode-plugin/plugin.json";
 const ZCODE_PLUGIN_CHECKOUT_PROJECT = ".zcode/plugin-checkout";
 const ZCODE_AGENT_SMOKE_NAMES = ["fullstack-dev", "qc-specialist"];
@@ -33,9 +34,11 @@ const KNOWN_MARKETPLACES_PATH = path.join(ZCODE_PLUGINS_ROOT, "known_marketplace
 const MARKETPLACE_DIR = path.join(ZCODE_PLUGINS_ROOT, "marketplaces", MARKETPLACE_ID);
 const MARKETPLACE_JSON_PATH = path.join(MARKETPLACE_DIR, "marketplace.json");
 
+type GithubSource = { source: "github"; repo: string; ref?: string };
+
 type MarketplacePluginEntry = {
   name: string;
-  source: { source: "directory"; path: string };
+  source: GithubSource;
   description: string;
   version: string;
   category: string;
@@ -43,7 +46,7 @@ type MarketplacePluginEntry = {
 
 type KnownMarketplaceEntry = {
   id: string;
-  source: { source: "directory"; path: string } | { source: "github"; repo: string };
+  source: GithubSource;
   name: string;
   description: string;
   addedAt: string;
@@ -51,37 +54,27 @@ type KnownMarketplaceEntry = {
   lastUpdated: string;
 };
 
+const GITHUB_SOURCE: GithubSource = { source: "github", repo: GITHUB_REPO, ref: GITHUB_REF };
+
 function nowIso() {
   return new Date().toISOString();
 }
 
-/** Where the plugin source directory lives for a given scope. */
-function pluginSourcePath(scope: Scope): string {
-  if (scope === "global") return HARNESS_REPO_PATH;
-  return path.join(resolveProjectRoot(), ZCODE_PLUGIN_CHECKOUT_PROJECT);
-}
-
-function marketplacePluginEntry(scope: Scope): MarketplacePluginEntry {
-  const sourcePath =
-    scope === "global" ? homeRelativeSourcePath(HARNESS_REPO_PATH) : `./${ZCODE_PLUGIN_CHECKOUT_PROJECT}`;
+function marketplacePluginEntry(): MarketplacePluginEntry {
   return {
     name: PLUGIN_NAME,
-    source: { source: "directory", path: sourcePath },
+    source: { ...GITHUB_SOURCE },
     description: PLUGIN_DESCRIPTION,
     version: PLUGIN_VERSION,
     category: PLUGIN_CATEGORY,
   };
 }
 
-function knownMarketplaceEntry(scope: Scope, existing?: Record<string, unknown>): KnownMarketplaceEntry {
-  const source: KnownMarketplaceEntry["source"] =
-    scope === "global"
-      ? { source: "directory", path: homeRelativeSourcePath(HARNESS_REPO_PATH) }
-      : { source: "github", repo: "btspoony/mstar-harness" };
+function knownMarketplaceEntry(existing?: Record<string, unknown>): KnownMarketplaceEntry {
   const previous = (existing && typeof existing.addedAt === "string" && existing.addedAt) || nowIso();
   return {
     id: MARKETPLACE_ID,
-    source,
+    source: { ...GITHUB_SOURCE },
     name: MARKETPLACE_NAME,
     description: MARKETPLACE_DESCRIPTION,
     addedAt: previous,
@@ -91,7 +84,7 @@ function knownMarketplaceEntry(scope: Scope, existing?: Record<string, unknown>)
 }
 
 /** Normalize + upsert the mstar-local entry in known_marketplaces.json. */
-function upsertKnownMarketplace(raw: Record<string, unknown>, scope: Scope) {
+function upsertKnownMarketplace(raw: Record<string, unknown>) {
   const next = ensureObject(raw);
   if (typeof next.version !== "number") next.version = 1;
   if (!Array.isArray(next.marketplaces)) next.marketplaces = [];
@@ -111,7 +104,7 @@ function upsertKnownMarketplace(raw: Record<string, unknown>, scope: Scope) {
       (entry as { id?: unknown }).id === MARKETPLACE_ID
     );
   });
-  marketplaces.push(knownMarketplaceEntry(scope, existing));
+  marketplaces.push(knownMarketplaceEntry(existing));
   next.marketplaces = marketplaces;
   return next;
 }
@@ -140,7 +133,7 @@ function findMarketplacePlugin(raw: Record<string, unknown>) {
   }) as Record<string, unknown> | undefined;
 }
 
-function validateMarketplaceJson(scope: Scope) {
+function validateMarketplaceJson() {
   const errors: string[] = [];
   if (!fs.existsSync(MARKETPLACE_JSON_PATH)) {
     errors.push(`Missing ZCode marketplace: ${MARKETPLACE_JSON_PATH}`);
@@ -155,13 +148,13 @@ function validateMarketplaceJson(scope: Scope) {
     errors.push(`Missing ${PLUGIN_NAME} plugin entry in ${MARKETPLACE_JSON_PATH}.`);
     return errors;
   }
-  const expected = marketplacePluginEntry(scope);
+  const expected = marketplacePluginEntry();
   const source = ensureObject(entry.source);
-  if (source.source !== "directory") {
-    errors.push("ZCode marketplace plugin source.source must be `directory`.");
+  if (source.source !== "github") {
+    errors.push("ZCode marketplace plugin source.source must be `github`.");
   }
-  if (source.path !== expected.source.path) {
-    errors.push(`ZCode marketplace plugin source.path must be ${expected.source.path}.`);
+  if (source.repo !== expected.source.repo) {
+    errors.push(`ZCode marketplace plugin source.repo must be ${expected.source.repo}.`);
   }
   if (entry.version !== PLUGIN_VERSION) {
     errors.push(`ZCode marketplace plugin version must be ${PLUGIN_VERSION}.`);
@@ -169,7 +162,7 @@ function validateMarketplaceJson(scope: Scope) {
   return errors;
 }
 
-function validateKnownMarketplaces(scope: Scope) {
+function validateKnownMarketplaces() {
   const errors: string[] = [];
   if (!fs.existsSync(KNOWN_MARKETPLACES_PATH)) {
     errors.push(`Missing ZCode known_marketplaces.json: ${KNOWN_MARKETPLACES_PATH}`);
@@ -181,12 +174,13 @@ function validateKnownMarketplaces(scope: Scope) {
     errors.push(`Missing ${MARKETPLACE_ID} entry in ${KNOWN_MARKETPLACES_PATH}.`);
     return errors;
   }
-  const expected = knownMarketplaceEntry(scope, entry);
   if (entry.id !== MARKETPLACE_ID) errors.push(`known_marketplaces entry id must be ${MARKETPLACE_ID}.`);
   const source = ensureObject(entry.source);
-  const expectedSource = expected.source as { source: string };
-  if (source.source !== expectedSource.source) {
-    errors.push(`known_marketplaces entry source.source must be ${expectedSource.source}.`);
+  if (source.source !== "github") {
+    errors.push(`known_marketplaces entry source.source must be github.`);
+  }
+  if (source.repo !== GITHUB_REPO) {
+    errors.push(`known_marketplaces entry source.repo must be ${GITHUB_REPO}.`);
   }
   return errors;
 }
@@ -207,52 +201,50 @@ function validatePluginAgents(pluginRoot: string) {
   return errors;
 }
 
+function buildMarketplaceJson(): Record<string, unknown> {
+  return {
+    name: MARKETPLACE_NAME,
+    description: MARKETPLACE_DESCRIPTION,
+    plugins: [marketplacePluginEntry()],
+  };
+}
+
 function runInit(scope: Scope, dryRun: boolean) {
   const notes = ensureLocalHarnessRepo(dryRun);
   const projectRoot = resolveProjectRoot();
 
   if (scope === "project") {
+    // Project scope keeps a local real checkout for doctor/agent-file smoke checks.
+    // The registered marketplace still points at the github repo (durable across machines).
     const checkoutPath = path.join(projectRoot, ZCODE_PLUGIN_CHECKOUT_PROJECT);
     notes.push(...ensureGitCheckout(REPO_URL, checkoutPath, dryRun));
     notes.push(...appendGitignore(projectRoot, [ZCODE_PLUGIN_CHECKOUT_PROJECT], dryRun));
     notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
     notes.push(
-      `Materialized ZCode plugin checkout at ${ZCODE_PLUGIN_CHECKOUT_PROJECT} (directory source requires a real directory).`,
+      `Materialized local ZCode plugin checkout at ${ZCODE_PLUGIN_CHECKOUT_PROJECT} for smoke checks (the registered marketplace still points at the github repo).`,
     );
   }
 
-  // Write the marketplace.json (single mstar plugin entry).
-  const marketplaceJson = buildMarketplaceJsonForScope(scope);
+  // Write the marketplace.json (single mstar plugin entry, github source).
   if (!dryRun) {
     if (!fs.existsSync(MARKETPLACE_DIR)) fs.mkdirSync(MARKETPLACE_DIR, { recursive: true });
-    writeJson(MARKETPLACE_JSON_PATH, marketplaceJson);
+    writeJson(MARKETPLACE_JSON_PATH, buildMarketplaceJson());
   }
   notes.push(`Wrote ZCode marketplace: ${MARKETPLACE_JSON_PATH}`);
 
   // Upsert the mstar-local entry in known_marketplaces.json.
   const knownRaw = readJson(KNOWN_MARKETPLACES_PATH);
-  const knownNext = upsertKnownMarketplace(knownRaw, scope);
+  const knownNext = upsertKnownMarketplace(knownRaw);
   if (!dryRun) writeJson(KNOWN_MARKETPLACES_PATH, knownNext);
   notes.push(`Registered ${MARKETPLACE_ID} marketplace in ${KNOWN_MARKETPLACES_PATH}`);
 
   notes.push(
     `Then in ZCode: Settings → Plugin Management → Discover → install ${PLUGIN_NAME} from the ${MARKETPLACE_ID} marketplace.`,
   );
-  notes.push(
-    `Fallback (if directory source is rejected): add \`github:btspoony/mstar-harness\` as a marketplace instead.`,
-  );
 
   return {
     location: KNOWN_MARKETPLACES_PATH,
     notes,
-  };
-}
-
-function buildMarketplaceJsonForScope(scope: Scope): Record<string, unknown> {
-  return {
-    name: MARKETPLACE_NAME,
-    description: MARKETPLACE_DESCRIPTION,
-    plugins: [marketplacePluginEntry(scope)],
   };
 }
 
@@ -277,8 +269,8 @@ function runDoctor(scope: Scope) {
     errors.push(...validatePluginAgents(HARNESS_REPO_PATH));
   }
 
-  errors.push(...validateKnownMarketplaces(scope));
-  errors.push(...validateMarketplaceJson(scope));
+  errors.push(...validateKnownMarketplaces());
+  errors.push(...validateMarketplaceJson());
 
   return { location: KNOWN_MARKETPLACES_PATH, errors };
 }
