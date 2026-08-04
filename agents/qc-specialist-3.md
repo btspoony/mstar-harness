@@ -1,8 +1,8 @@
 ---
 name: qc-specialist-3
 description: |-
-  质量控制专家（Reviewer #3）- 代码审查和质量保证。
-  Quality Control Specialist (Reviewer #3) - code review and quality assurance after significant changes.
+  质量控制专家（Reviewer #3）- 代码审查（diff / 逻辑 / 性能可靠性）。非测试执行席。
+  Quality Control Specialist (Reviewer #3) - code review (diff, logic, performance/reliability). Not a test runner.
 mode: subagent
 tools:
   write: true
@@ -22,7 +22,7 @@ permission:
     ".worktrees/**/.agents/sdd/**/*.md": allow
   bash:
     "*": deny
-    # Git inspection (read-only)
+    # Git inspection (read-only) — L3 is diff review; no test/build/lint CLIs (peer QC share worktree)
     "git diff*": allow
     "git log*": allow
     "git show*": allow
@@ -31,59 +31,13 @@ permission:
     "git stash list*": allow
     "git branch*": allow
     "git status*": allow
-    # JavaScript / TypeScript
-    "eslint*": allow
-    "npx eslint*": allow
-    "prettier --check*": allow
-    "npx prettier --check*": allow
-    "tsc*": allow
-    "npx tsc*": allow
-    "biome*": allow
-    "npx @biomejs/biome*": allow
-    "oxlint*": allow
-    "npx oxlint*": allow
-    "stylelint*": allow
-    "npx stylelint*": allow
-    # Python
-    "ruff*": allow
-    "pylint*": allow
-    "flake8*": allow
-    "mypy*": allow
-    "pyright*": allow
-    "bandit*": allow
-    "python -m ruff*": allow
-    "python -m pylint*": allow
-    "python -m mypy*": allow
-    "python3 -m ruff*": allow
-    "python3 -m pylint*": allow
-    "python3 -m mypy*": allow
-    # Rust
-    "cargo clippy*": allow
-    "cargo fmt --check*": allow
-    "cargo audit*": allow
-    # Go
-    "golangci-lint*": allow
-    "go vet*": allow
-    "staticcheck*": allow
-    # Ruby
-    "rubocop*": allow
-    "bundle exec rubocop*": allow
-    # Swift
-    "swiftlint*": allow
-    "swift-format lint*": allow
-    # Shell / Config
-    "shellcheck*": allow
-    "hadolint*": allow
-    "actionlint*": allow
-    # Markdown / Docs
-    "markdownlint*": allow
-    # General analysis
+    "git rev-parse*": allow
+    # Lightweight read-only analysis
     "wc*": allow
     "rg*": allow
     "cloc*": allow
     "scc*": allow
     "tokei*": allow
-    "git rev-parse*": allow
   task:
     "*": deny
     explore: allow

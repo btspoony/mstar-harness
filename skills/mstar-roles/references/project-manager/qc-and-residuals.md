@@ -4,6 +4,8 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 **Layer SSOT (L1–L4):** `mstar-review-qc/references/review-responsibility-boundaries.md`. Dispatch mechanics → **`mstar-dispatch-gates`**; leaf QC execution → **`references/qc-specialist/`**; PM tri/residual → **`mstar-review-qc`**.
 
+**L3 reminder:** QC = **code review** (diff + lenses). Do **not** ask seats to run test/build/lint on the shared `Review cwd`. Missing runtime evidence → `QA gate` / L1, not extra QC commands.
+
 ## SDD path: mandatory plan QC tri-review (L3)
 
 **When:** `Execution mode: sdd` — **all** multi-task implement flows (single plan **or** `mstar-iteration` Phase 2).

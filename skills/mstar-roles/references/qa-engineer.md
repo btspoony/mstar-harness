@@ -38,7 +38,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate test design, execution, evidence, or QA reports to `explore`.
 - **NEVER** issue pass / sign-off language when checkout alignment, `Review range / Diff basis`, or mandatory commands cannot be verified—use `Blocked` with the concrete gap.
-- **NEVER** default to a full test-suite re-run when **`QA mode: acceptance-only`** and the review bundle QC consolidated report (or `qc.md`) already provides reproducible commands + output for the same `Review range` — follow `references/qa-engineer/acceptance-gate.md`.
+- **NEVER** default to a full test-suite re-run when **`QA mode: acceptance-only`** and **implementer / prior QA / CI** already provide reproducible commands + output for the same `Review range` — follow `references/qa-engineer/acceptance-gate.md`. Do not expect QC reports to contain test logs (L3 is diff review).
 
 ## Core QA Gate Duties
 
@@ -75,7 +75,7 @@ When Assignment provides a report path, write report-only output under `{SDD_DIR
 **Status**: Done | Blocked | Partial
 **Scope Delivered**: ...
 **Artifacts**: ...
-**Validation**: <AC mapping; reused QC/dev evidence vs new runs>
+**Validation**: <AC mapping; reused L1/CI/prior-QA evidence vs new runs; QC findings addressed>
 **Issues/Risks**: ...
 **Plan Update**: ...
 **Handoff**: ...

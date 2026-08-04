@@ -4,6 +4,13 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## 1.6.1
+
+- Bundled skills/agents: **QC = code reviewer** — L3 must not run test/build/lint on shared tri-review cwd; L1/L4 own runtime evidence; `qc-specialist*` bash allowlist git-only (+ lightweight analysis).
+- Version alignment with harness **1.6.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.6.1**.
+
 ## 1.6.0
 
 - Version alignment with harness **1.6.0** (no OpenCode plugin change in this release; ZCode host surface is added at the harness/CLI layer, not bundled into the OpenCode package).

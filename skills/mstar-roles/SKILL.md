@@ -60,6 +60,8 @@ Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursi
 
 ### QC reviewer (`qc-specialist*` family)
 
+**Job:** Independent **code review** on the plan branch diff (logic, security, contracts, maintainability, reliability). **Not** test execution — suites/builds belong to implementer (L1) and `qa-engineer` (L4). See `mstar-review-qc/references/review-responsibility-boundaries.md`.
+
 **Default (SDD):** plan QC tri-review — `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` → `{SDD_DIR}/review/qc1.md`…`qc3.md` + `qc-consolidated.md` when **`Execution mode: sdd`**.
 
 **Exception (`inline` / hotfix):** single-seat → `{SDD_DIR}/review/qc.md` (`QC mode: single`).

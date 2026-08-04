@@ -4,12 +4,23 @@
 
 | Layer | Who | When | Scope | Input |
 |-------|-----|------|-------|--------|
-| **L1** Implementer | dev subagent | Per task | Write code + TDD evidence | `task-N-brief.md` |
-| **L2** Task reviewer | PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** | brief, report, **task-level** diff |
-| **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | Integration, regression, contract drift — **independent lenses, same branch diff** | Branch `review-package` MERGE_BASE..HEAD |
-| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, Done recommendation — **not** default full re-run | Review bundle + plan + `status.json` |
+| **L1** Implementer | dev subagent | Per task | Write code + **run** TDD / verification evidence | `task-N-brief.md` |
+| **L2** Task reviewer | PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** (diff-first; no full suite) | brief, report, **task-level** diff |
+| **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | **Code-review seat** — diff, language/logic, security & contract lenses on **whole branch**; **not** the test-execution path | Branch `review-package` MERGE_BASE..HEAD |
+| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, targeted/full **command** verification, Done recommendation | Review bundle + plan + **L1 evidence** + `status.json` |
 
 PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-matrix.md`. L4 execution when dispatched → `mstar-roles/references/qa-engineer/acceptance-gate.md`.
+
+### L3 vs L4 vs L1 — who runs commands?
+
+| Duty | Owner | QC (`qc-specialist*`) |
+|------|-------|------------------------|
+| Produce runnable test/build evidence | **L1** implementer | **Does not** own |
+| Diff / logic / vulnerability / contract review | **L3** QC (and L2 task reviewer) | **Primary job** |
+| Map DoD → evidence; re-run gaps; close residuals | **L4** QA (or PM acceptance) | **Does not** own |
+| Full / targeted test suites, builds, installs | **L1** and/or **L4** | **NEVER** — leave to QA/dev |
+
+**Why:** SDD plan QC is **N=3 parallel** on a **shared** `Review cwd`. Build/test/lint toolchains contend for caches and locks and falsely `Blocked` peer reviewers. QC is a **reviewer**, not a second QA lane.
 
 **SDD rule:** Layers L1–L2 run **per task** (serial). Layer L3 is **mandatory full tri-review** (`N=3`) whenever **`Execution mode: sdd`** — single-plan **and** iteration **and** multi-plan iteration. Layer L3 is **not** optional “final single review”.
 

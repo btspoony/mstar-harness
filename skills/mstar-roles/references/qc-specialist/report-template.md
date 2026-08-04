@@ -23,7 +23,7 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
 - Review cwd (verified): {path from git rev-parse --show-toplevel}
 - Files reviewed: {count}
 - Commit range (if not identical to Review range line, explain): {hash..hash}
-- Tools run: {list}
+- Analysis methods: {e.g. git-diff, read, grep, deep-lens: <names> — not test/build runs}
 
 ## Findings
 ### 🔴 Critical
@@ -37,8 +37,8 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
 
 ## Source Trace
 - Finding ID: {F-001}
-- Source Type: {git-diff | linter | static-analysis | doc-rule | manual-reasoning | deep-lens: <name>}
-- Source Reference: {command/snippet/file}
+- Source Type: {git-diff | read | grep | doc-rule | manual-reasoning | deep-lens: <name> | assignment-ci-note}
+- Source Reference: {path/snippet — not a test/build log you produced}
 - Confidence: High | Medium | Low
 
 ## Summary
@@ -59,13 +59,14 @@ Report **Critical / Warning / Suggestion** sections are human-readable; PM maps 
 - No Critical/Warning but high-impact unresolved trade-off (often architectural Suggestion) → `Needs Discussion`
 - **Approve** only when Critical = 0 and Warning = 0 (unresolved)
 
-### CI supplement
+### CI / runtime evidence (read-only notes — do not re-run)
 
-- CI failures in scope (build, test, lint, types) default to **≥ Warning** — must fix or escalate before `Approve`
-- Flaky CI requires reproducible evidence in the report; until PM records disposition → `Needs Discussion` or `Request Changes`
+- If Assignment or review-package **already cites** failing CI (build, test, lint, types) for this **`Review range`**, treat as **≥ Warning** (or Critical when security/data) — do **not** re-run CI/build/test to reproduce.
+- If CI status is unknown: judge from the diff; note `Needs L4/QA verification` when runtime proof is required. Absence of a green CI link is **not** itself a Critical finding.
+- Flaky CI disposition belongs to PM / QA after recorded evidence — QC does not chase flakes with local suite runs.
 
 ## Evidence rules
 
-- Critical findings: trigger condition, impact scope, fix suggestion
-- Low-confidence findings: follow-up verification steps
+- Critical findings: trigger condition, impact scope, fix suggestion (from source reasoning)
+- Low-confidence / runtime-only doubts: follow-up steps for **L4 QA** or implementer — not self-executed suites
 - Repeated cross-task patterns: mark as recurring in findings

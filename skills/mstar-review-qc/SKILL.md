@@ -7,9 +7,15 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 
 **首次 Read 本 skill 时：必须先 Read `mstar-harness-core`。** 同仓检出与派发 → **`mstar-branch-worktree`** · **`mstar-dispatch-gates`**。冲突时 **以 `mstar-harness-core` 为准**。
 
-**摘要**：职责分层 → **`references/review-responsibility-boundaries.md`**。Leaf QC 执行 → **`mstar-roles/references/qc-specialist/`**。L4 验收 → **`mstar-roles/references/qa-engineer/`**。
+**摘要**：职责分层 → **`references/review-responsibility-boundaries.md`**（**L3 = code reviewer / diff+logic；不跑 test/build**；运行时验证归 L1/L4）。Leaf QC 执行 → **`mstar-roles/references/qc-specialist/`**。L4 验收 → **`mstar-roles/references/qa-engineer/`**。
 
 # Morning Star QC Orchestration（PM · 编排层）
+
+## L3 是什么（派发前对齐）
+
+- Plan QC seats are **reviewers**: whole-branch **diff / logic / risk** lenses — same family as PR review, not a parallel QA test lane.
+- **Do not** instruct QC in Assignment to “run the suite / build / lint to confirm” on shared tri cwd; that causes peer `Blocked` and collapses L3 into L4.
+- Runtime proof stays with **implementer evidence** and **`QA gate`** (`qa-engineer` or PM acceptance).
 
 ## 分派时机（与 plan / batch 对齐）
 

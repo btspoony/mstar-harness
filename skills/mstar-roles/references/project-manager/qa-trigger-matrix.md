@@ -9,8 +9,8 @@ Extension of `references/project-manager.md`. Use when choosing **`QA gate`** an
 | **`QA gate`** | `mandatory` | After QC passes, dispatch `qa-engineer` |
 | | `pm-acceptance` | Do **not** dispatch QA; PM completes acceptance checklist and may mark `Done` |
 | | `report-only` | Primary route is investigation/repro only; dispatch `qa-engineer` (QC tri may be skipped per rules) |
-| **`QA mode`** | `acceptance-only` (default when QA dispatched) | Evidence reuse first; map plan DoD to existing QC/dev evidence |
-| | `full` | Full verification run when QC lacks test evidence, fix wave, high-risk, or user override |
+| **`QA mode`** | `acceptance-only` (default when QA dispatched) | Evidence reuse first; map plan DoD to **implementer / CI / prior QA** evidence (QC reports are review findings, not the test log) |
+| | `full` | Full verification when **L1 evidence** is insufficient, fix wave, high-risk, or user override |
 | | `report-only` | No business-code changes unless explicitly allowed |
 
 **Deprecated:** `QA note: skipped / self-check` — use **`QA gate: pm-acceptance`** plus **`QA gate reason: <tier>`**.
@@ -41,7 +41,7 @@ Set **`QA gate`** on the **first implement Assignment** (or plan frontmatter) an
 PM completes this in **Status Update** (or plan closure note). PM **does not** run bash tests or reproduction in the orchestration thread.
 
 1. **QC verdict:** `{SDD_DIR}/review/qc-consolidated.md` or `{SDD_DIR}/review/qc.md` shows `Approve` with **Critical = 0** and **Warning = 0** (not `Approve with residuals`), and the main plan has a durable gate summary.
-2. **DoD mapping:** Each plan Acceptance Criterion maps to **existing** evidence (dev Completion Report, QC `Tools run`, SDD TDD triple, CI links) — cite paths/commands, do not re-execute.
+2. **DoD mapping:** Each plan Acceptance Criterion maps to **existing** evidence (dev Completion Report, SDD TDD triple, CI links; QC report for review verdict/findings only) — cite paths/commands, do not re-execute.
 3. **Residuals:** `status.json` has **no open R#** for this `plan_id` (or documented waiver per `mstar-plan-artifacts`).
 4. **Checkout alignment:** `Working branch` and `Review range / Diff basis` match QC report verified lines.
 5. **`QA gate reason`:** One line naming the tier (e.g. `hotfix-inline`, `small-feature-clean-qc`).

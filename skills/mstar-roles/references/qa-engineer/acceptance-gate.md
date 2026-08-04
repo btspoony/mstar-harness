@@ -8,17 +8,19 @@ Layer **L4** runs after the QC gate. **`QA gate: pm-acceptance`** is PM-only —
 
 ## Scope (L4 vs L3)
 
-| L3 Plan QC | L4 QA (`qa-engineer`) |
+| L3 Plan QC (`qc-specialist*`) | L4 QA (`qa-engineer`) |
 | --- | --- |
-| Independent cross-review lenses on branch diff | Acceptance against plan DoD + review bundle QC consolidated input |
-| Find defects; `Request Changes` / residual registration | Verify fixes, R# lifecycle, Done recommendation |
-| Typically read-only on product code | May run targeted checks; default **evidence reuse** |
+| **Code review** — independent lenses on branch **diff** (logic, security, contracts) | Acceptance against plan DoD + review bundle + **L1** evidence |
+| Find defects in source; `Request Changes` / residual registration via PM | Verify fixes, R# lifecycle, run **targeted/full** checks when needed, Done recommendation |
+| **Does not** run test/build suites (shared tri worktree) | May run verification commands; default **reuse L1 / prior QA evidence** |
+
+**Do not collapse L4 into L3.** QC reviewers do not close residuals, mark plan `Done`, or produce the runtime test log that acceptance depends on — that is L1 (implement) and/or L4 (QA).
 
 ## QA modes
 
 | `QA mode` | When | Behavior |
 | --- | --- | --- |
-| **`acceptance-only`** (default) | Most `mandatory` dispatches | Map DoD to QC/dev evidence; re-run only gaps listed below |
+| **`acceptance-only`** (default) | Most `mandatory` dispatches | Map DoD to **dev Completion Report / SDD TDD / CI** evidence; re-run only gaps listed below |
 | **`full`** | High-risk ops, user override, or gaps below | Full verification commands for assigned scope |
 | **`report-only`** | `QA gate: report-only` | Structured findings; no business-code edits unless allowed |
 
@@ -26,8 +28,8 @@ Layer **L4** runs after the QC gate. **`QA gate: pm-acceptance`** is PM-only —
 
 When **`QA mode: acceptance-only`**:
 
-1. Read `{SDD_DIR}/review/qc-consolidated.md` (or `{SDD_DIR}/review/qc.md`) **Tools run** and dev Completion Report / SDD TDD triple.
-2. If QC report includes **reproducible test commands + output** for the same **`Review range / Diff basis`** as Assignment → **verify mapping** to plan Acceptance Criteria; **do not** default to a full suite re-run.
+1. Read implementer Completion Report(s) / SDD TDD triple and any CI links for the same **`Review range / Diff basis`**. Read QC consolidated (or `qc.md`) for **findings and “Needs L4/QA verification”** notes — **not** as a substitute test log (QC is diff review).
+2. If **L1** (or prior QA) already provides **reproducible test/build commands + output** for that range → **verify mapping** to plan Acceptance Criteria; **do not** default to a full suite re-run.
 3. Document in Completion Report **Validation**: which ACs are covered by reused evidence vs newly executed checks.
 
 ## Mandatory full re-run
@@ -35,7 +37,7 @@ When **`QA mode: acceptance-only`**:
 Run full verification (or escalate to **`QA mode: full`**) when **any** applies:
 
 - Assignment says **`QA mode: full`**
-- QC report lacks reproducible test evidence for behavior-critical ACs
+- **Implementer / prior evidence** lacks reproducible commands+output for behavior-critical ACs (QC noting a gap counts as a signal to run, not as evidence)
 - Post–fix-wave scope: `Review range` changed since QC consolidated
 - UI observable gate required and QC/dev left no screenshot, preview URL, or equivalent
 - Open R# marked resolved this round — verify each with targeted repro/tests

@@ -39,10 +39,10 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 
 - Always include the **IDENTITY preamble**: state who the assignee IS (e.g. "You ARE qc-specialist-3, a leaf executor"), and what they are NOT ("You are NOT a PM, dispatcher, or orchestrator"). Follow with the universal floor.
 - Add anti-patterns specific to the assignment context. Examples per role type:
-  - **QC reviewers**: "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"
+  - **QC reviewers** (`qc-specialist*`): "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"; "run test/build/lint on shared Review cwd"; "fill missing runtime evidence by executing the suite"
   - **Multi-track implementers** (`fullstack-dev` + `frontend-dev` / `fullstack-dev-2`): "auto-dispatch to the other track mentioned in Dev routing"; "implement in repo root when Assignment names a different `Worktree path`"
   - **`fullstack-dev-2`**: "treat `fullstack-dev` in routing narrative as a handoff or invoke target"
-  - **`qa-engineer`**: "start validation before QC reports are consolidated"; "default to full test re-run when `QA mode: acceptance-only` and QC evidence is sufficient"; "modify application code" (unless allowed)
+  - **`qa-engineer`**: "start validation before QC reports are consolidated"; "default to full test re-run when `QA mode: acceptance-only` and L1/CI evidence is sufficient"; "expect QC reports to contain test logs"; "modify application code" (unless allowed)
   - **`explore`-assigned**: "implement or modify code"
   - **All non-PM**: "dispatch parallel agents"; "spawn a subagent whose `subagent_type` matches your own `Execute as` role id"
 - Anti-patterns must be action-oriented ("auto-dispatch to …", "treat … as invoke", "start … before …") — not abstract descriptions.

@@ -2,21 +2,33 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.6.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.6.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.6.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.6.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.6.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.6.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.6.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.6.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.6.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.6.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.6.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.6.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.6.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.6.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.6.1** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.6.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.6.1] - 2026-08-04
+
+### Harness (QC = code reviewer, not test runner)
+
+- **L3 Plan QC clarified as diff/logic review**: `mstar-review-qc` boundaries + `qc-specialist*` workflow/shared NEVER — parallel tri-review on a shared `Review cwd` must **not** run test/build/install/lint/typecheck (peer QC `Blocked` from toolchain contention). Coverage is judged from the **diff**, not by re-running suites.
+- **L1 / L4 own runtime evidence**: QA `acceptance-only` reuses implementer/CI/prior-QA logs; QC reports are findings, not the test log. PM Assignment anti-patterns and `qa-trigger-matrix` updated accordingly.
+- **OpenCode `qc-specialist*` agents**: bash allowlist trimmed to git + lightweight read-only analysis (removed eslint/tsc/ruff/clippy/etc.).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode plugin manifests: **→ 1.6.1**.
 
 ## [1.6.0] - 2026-08-03
 
