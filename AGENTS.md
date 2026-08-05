@@ -33,9 +33,9 @@ Use this document as the primary maintenance contract for contributors and agent
   - Put narrative, deep install, and host quirks in `INSTALL.md`, `docs/`, or `mstar-*` skills — not in the README body.
   - Edit both language files together when README content changes.
 
-## Cursor + OpenCode + Codex + Kimi + ZCode Sync Policy
+## Cursor + OpenCode + Codex + Kimi + ZCode + omp Sync Policy
 
-When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Kimi, and ZCode as host surfaces of one system.
+When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Kimi, ZCode, and omp as host surfaces of one system.
 
 - Update shared semantics first (core harness contract), then host-specific adapters.
 - Keep host wording consistent on:
@@ -151,14 +151,16 @@ Use **`.harness/`** only for **in-progress maint work** on this repo (not publis
 - Skill authoring / trigger contracts -> `skills/mstar-skill-authoring/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
 - Host adapters:
-  - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex/Kimi/ZCode via `.cursor-plugin/` / `.codex-plugin` / `.kimi-plugin` / `.zcode-plugin/` `skills/`)
+  - Host adapter -> `mstar-host` (in-repo: `skills/mstar-host/*`; OpenCode via `bundle-assets` → `harness-skills/mstar-host/`; Cursor/Codex/Kimi/ZCode/omp via `.cursor-plugin/` / `.codex-plugin` / `.kimi-plugin` / `.zcode-plugin/` / `.omp-plugin/` `skills/`)
   - OpenCode package: `harness-skills/` + `harness-agents/` from `bundle-assets` (npm publish prepublish + root `postinstall`); plugin reads only package paths, not `process.cwd()` (npm: `@mstar-harness/opencode`)
 - CLI package -> `packages/cli/*` (package name `@mstar-harness/cli`; local `AGENTS.md`)
 - Codex plugin manifest -> `.codex-plugin/plugin.json`
 - Kimi plugin manifest -> `.kimi-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`)
 - ZCode plugin manifest -> `.zcode-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`, `./agents/`)
+- omp plugin markers -> `.omp-plugin/plugin.json` + `.claude-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`, `./agents/`)
 - Codex install metadata generation -> `packages/cli/src/adapters/codex.ts`
 - ZCode install metadata generation -> `packages/cli/src/adapters/zcode.ts`
+- omp install/link flow -> `packages/cli/src/adapters/omp.ts`
 - Maintenance policy (this file) -> `AGENTS.md`
 
 ## Skill Sync Rules

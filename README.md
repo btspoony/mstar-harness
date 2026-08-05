@@ -22,7 +22,7 @@ English / [中文](README_CN.md)
 
 - Start a usable multi-role workflow quickly
 - Run with unified `mstar-*` skills instead of scattered rules
-- Reuse one core process across OpenCode, Cursor, Codex, Kimi Code, and ZCode
+- Reuse one core process across OpenCode, Cursor, Codex, Kimi Code, ZCode, and omp
 
 Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
@@ -40,12 +40,13 @@ npx @mstar-harness/cli init
 | Codex | `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal` |
 | Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** in ZCode → Settings → Plugin Management |
+| omp | `npx @mstar-harness/cli init --target omp` (links `~/.mstar/harness`) or `omp plugin install github:btspoony/mstar-harness` |
 
-Verify: `npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode>`.
+Verify: `npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp>`.
 
 Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.md`](docs/cli.md).
 
-Reload the host after install (OpenCode restart / Cursor **Developer: Reload Window** / reopen Codex / Kimi `/plugins reload` or `/new` / ZCode reload plugin).
+Reload the host after install (OpenCode restart / Cursor **Developer: Reload Window** / reopen Codex / Kimi `/plugins reload` or `/new` / ZCode reload plugin / omp new session or `/reload-plugins` if available).
 
 ## Use
 
@@ -62,8 +63,9 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 | Codex | `/pm` |
 | Kimi | session auto-loads `pm`; or `/skill:pm` |
 | ZCode | `/morning-star-harness:pm` each session (no auto-load) |
+| omp | `/skill:pm` each session (no auto-load) |
 
-Host limits (Kimi/ZCode subagent surfaces, role binding in prompt): `mstar-host/references/kimi.md`, `mstar-host/references/zcode.md`.
+Host limits (Kimi/ZCode/omp subagent surfaces, role binding in prompt): `mstar-host/references/kimi.md`, `mstar-host/references/zcode.md`, `mstar-host/references/omp.md`.
 
 ### With iteration
 
@@ -78,6 +80,7 @@ Host limits (Kimi/ZCode subagent surfaces, role binding in prompt): `mstar-host/
 | Codex project | `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
 | Codex global | Iteration skills **not** installed — use `--scope project` |
 | Kimi / ZCode | `/morning-star-harness:iteration-start` (etc.) via plugin manifest |
+| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` (filename commands from plugin `commands/`) |
 
 Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
 
@@ -160,7 +163,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-strategy` | `STRATEGY.md` alignment |
 | `mstar-skill-authoring` | Skill authoring contracts |
 | `mstar-roles` | Role prompts + load lists |
-| `mstar-host` | Host adapters (OpenCode / Cursor / Codex / Kimi / ZCode) |
+| `mstar-host` | Host adapters (OpenCode / Cursor / Codex / Kimi / ZCode / omp) |
 | `pm` | `/pm` / `/skill:pm` / host PM entry |
 
 Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Details → `mstar-plan-conventions`.

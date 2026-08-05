@@ -1,6 +1,6 @@
 # mstar-harness CLI Guide
 
-This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, and Codex bootstrap. Kimi Code uses Kimi TUI `/plugins install` — see [INSTALL.md](../INSTALL.md#kimi).
+This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, Codex, ZCode, and omp bootstrap. Kimi Code uses Kimi TUI `/plugins install` — see [INSTALL.md](../INSTALL.md#kimi).
 
 ## Fast Path
 
@@ -56,6 +56,25 @@ Kimi is **not** a CLI `--target`. Install via Kimi TUI:
 ```
 
 See [INSTALL.md](../INSTALL.md#kimi) and `skills/mstar-host/references/kimi.md` for host behavior (`sessionStart.skill: pm`, `/morning-star-harness:iteration-*`, C5/C5b role-in-prompt).
+
+
+### omp
+
+1) Link the local harness checkout into omp plugins (user scope):
+
+- `npx @mstar-harness/cli init --target omp --scope global`
+
+2) Verify:
+
+- `npx @mstar-harness/cli doctor --target omp`
+
+Alternate without the CLI:
+
+- `omp plugin install github:btspoony/mstar-harness`
+- or `omp plugin link ~/.mstar/harness`
+
+See [INSTALL.md](../INSTALL.md#omp) and `skills/mstar-host/references/omp.md` for host behavior (`/skill:pm`, filename `/iteration-*` commands, C5/C5b role-in-prompt).
+
 
 ## Install
 

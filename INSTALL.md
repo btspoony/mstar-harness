@@ -11,6 +11,7 @@
   - [Codex](https://github.com/openai/codex) (with `codex` CLI for marketplace install)
   - [Kimi Code CLI](https://www.kimi.com/code/docs/kimi-code-cli/) (for `/plugins install`)
   - [ZCode](https://zcode.z.ai) (for Plugin Management install)
+  - [omp (Oh My Pi)](https://omp.sh) (for `omp plugin install` / `omp plugin link`)
 
 ## Recommended: CLI install
 
@@ -125,11 +126,36 @@ Install the plugin in Kimi TUI (user-scoped — all projects):
 - New sessions auto-load **`pm`** via `sessionStart.skill`; use `/skill:pm` anytime.
 - Project `.agents/skills/` symlinks are **not** required — skills and commands come from the plugin.
 
+### omp
+
+User scope (recommended):
+
+```bash
+npx @mstar-harness/cli init --target omp --scope global
+npx @mstar-harness/cli doctor --target omp
+```
+
+Or install/link directly:
+
+```bash
+omp plugin install github:btspoony/mstar-harness
+# maintainer / local checkout:
+# omp plugin link ~/.mstar/harness
+```
+
+Project scope: `npx @mstar-harness/cli init --target omp --scope project`.
+
+**Notes:**
+
+- `omp plugin list` package name is root **`morning-star`**; display name remains **morning-star-harness**.
+- Enter PM with `/skill:pm`. Iteration commands: `/iteration-start`, `/iteration-drive`, `/iteration-loop`.
+- Host adapter: `skills/mstar-host/references/omp.md`.
+
 ## Manual install
 
 Use when you cannot run the CLI or need to mirror the same layout by hand.
 
-Supported targets: `opencode`, `cursor`, `codex`, `zcode`. Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above).
+Supported targets: `opencode`, `cursor`, `codex`, `zcode`, `omp`. Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above).
 
 ### OpenCode
 
@@ -285,6 +311,46 @@ ZCode plugin source in this repository:
 - Plugin agents: `agents/`
 - Host adapter: `skills/mstar-host/references/zcode.md`
 
+
+### omp
+
+User scope (recommended):
+
+```bash
+npx @mstar-harness/cli init --target omp --scope global
+npx @mstar-harness/cli doctor --target omp
+```
+
+Or install/link directly with the omp CLI:
+
+```bash
+omp plugin install github:btspoony/mstar-harness
+# local checkout / maintainer link:
+# omp plugin link ~/.mstar/harness
+omp plugin list
+```
+
+Project scope:
+
+```bash
+npx @mstar-harness/cli init --target omp --scope project
+npx @mstar-harness/cli doctor --target omp --scope project
+```
+
+**Notes:**
+
+- Plugin package name in `omp plugin list` is root **`morning-star`** (`package.json` name); display name remains **morning-star-harness**.
+- Skills/commands are discovered from the linked/installed package root (`skills/`, `commands/`).
+- Enter PM with `/skill:pm`. Iteration commands are filename-based: `/iteration-start`, `/iteration-drive`, `/iteration-loop`.
+- Host adapter: `skills/mstar-host/references/omp.md`.
+
+omp plugin source in this repository:
+
+- Markers: `.omp-plugin/plugin.json`, `.claude-plugin/plugin.json` (Claude-compatible discovery)
+- Runtime skills: `skills/`
+- Plugin commands: `commands/`
+- Plugin agents: `agents/` (optional discovery; Morning Star roles still bind via prompt — see C5/C5b)
+
 ## Post-install
 
 1. **Enter PM orchestration**
@@ -292,6 +358,7 @@ ZCode plugin source in this repository:
    - Cursor / Codex: use `/pm`.
    - Kimi: use `/skill:pm`.
    - ZCode: use `/morning-star-harness:pm` or `/skill:pm` (no session auto-load).
+   - omp: use `/skill:pm` (no session auto-load).
 
 2. **Run an iteration** (see [README — Harness Commands](README.md#harness-commands))
    - **Deep / first iteration:** `/iteration-start` (Phase 1) → `/iteration-drive` (Phase 2–5).

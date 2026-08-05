@@ -7,7 +7,11 @@ export const REPO_URL = "https://github.com/btspoony/mstar-harness.git";
 export const PLUGIN_NAME = "morning-star-harness";
 export const HARNESS_REPO_PATH = path.join(os.homedir(), ".mstar", "harness");
 
-const HARNESS_MARKERS = [".codex-plugin/plugin.json", ".zcode-plugin/plugin.json"];
+const HARNESS_MARKERS = [
+  ".codex-plugin/plugin.json",
+  ".zcode-plugin/plugin.json",
+  ".omp-plugin/plugin.json",
+];
 
 function harnessMarkerPath() {
   for (const marker of HARNESS_MARKERS) {

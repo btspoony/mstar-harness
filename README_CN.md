@@ -22,7 +22,7 @@
 
 - 快速启动一套可用的多角色协作流
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
-- 在 OpenCode / Cursor / Codex / Kimi Code / ZCode 下复用同一套核心流程
+- 在 OpenCode / Cursor / Codex / Kimi Code / ZCode / omp 下复用同一套核心流程
 
 更新说明：[CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
@@ -40,12 +40,13 @@ npx @mstar-harness/cli init
 | Codex | `npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal` |
 | Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理安装 **morning-star-harness** |
+| omp | `npx @mstar-harness/cli init --target omp`（链接 `~/.mstar/harness`）或 `omp plugin install github:btspoony/mstar-harness` |
 
-校验：`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode>`。
+校验：`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp>`。
 
 手动安装 / 路径布局：[`INSTALL.md`](INSTALL.md)。CLI 参数：[`docs/cli.md`](docs/cli.md)。
 
-安装后重载宿主（重启 OpenCode / Cursor **Developer: Reload Window** / 重开 Codex / Kimi `/plugins reload` 或 `/new` / ZCode 重载插件）。
+安装后重载宿主（重启 OpenCode / Cursor **Developer: Reload Window** / 重开 Codex / Kimi `/plugins reload` 或 `/new` / ZCode 重载插件 / omp 新会话或 `/reload-plugins`）。
 
 ## 使用
 
@@ -62,8 +63,9 @@ npx @mstar-harness/cli init
 | Codex | `/pm` |
 | Kimi | 新会话自动加载 `pm`；或 `/skill:pm` |
 | ZCode | 每会话 `/morning-star-harness:pm`（无自动加载） |
+| omp | 每会话 `/skill:pm`（无自动加载） |
 
-宿主限制（Kimi/ZCode 子代理面、角色绑定在 prompt）：`mstar-host/references/kimi.md`、`mstar-host/references/zcode.md`。
+宿主限制（Kimi/ZCode/omp 子代理面、角色绑定在 prompt）：`mstar-host/references/kimi.md`、`mstar-host/references/zcode.md`、`mstar-host/references/omp.md`。
 
 ### 跑迭代
 
@@ -78,6 +80,7 @@ npx @mstar-harness/cli init
 | Codex project | `.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链） |
 | Codex global | **不**装 iteration skills — 用 `--scope project` |
 | Kimi / ZCode | 插件 manifest：`/morning-star-harness:iteration-start` 等 |
+| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop`（插件 `commands/` 文件名命令） |
 
 Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
 
@@ -160,7 +163,7 @@ flowchart TD
 | `mstar-strategy` | `STRATEGY.md` 对齐 |
 | `mstar-skill-authoring` | skill 编写契约 |
 | `mstar-roles` | 角色提示词 + 加载清单 |
-| `mstar-host` | 宿主适配（OpenCode / Cursor / Codex / Kimi / ZCode） |
+| `mstar-host` | 宿主适配（OpenCode / Cursor / Codex / Kimi / ZCode / omp） |
 | `pm` | `/pm` / `/skill:pm` / 宿主 PM 入口 |
 
 消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。细则 → `mstar-plan-conventions`。
