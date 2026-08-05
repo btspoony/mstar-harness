@@ -1,17 +1,17 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.4**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.5**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.4** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.4** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.4** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.4** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.4** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.4** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.4** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.5** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.5** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.5** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.5** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.5** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.5** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.5** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.5** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
