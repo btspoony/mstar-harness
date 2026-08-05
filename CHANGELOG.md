@@ -2,22 +2,35 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.2** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.1** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.1** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.1** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.1** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.2** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.2** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.2** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.2** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.2** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.2** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.2** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.2** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.8.2] - 2026-08-05
+
+### Docs (README + host detection)
+
+- **README** (`README.md` + `README_CN.md`): reorder all host tables to the recommended host order (`omp > OpenCode > Cursor > Kimi = ZCode > Codex`); reorganize **Use** section into General (without iteration) → Iteration → Codebase audit.
+- **`mstar-host`**: rewrite the host detection table to use **session tool shapes / available commands only** — `*-plugin/plugin.json` files cannot identify the host (they coexist in this source repo and in any multi-host install). Merge the duplicate Cursor detection rows into one keyed on `subagent_type`.
+- **Host references**: strip the same plugin-marker clauses from the `Load when` trigger lines of `codex.md` / `kimi.md` / `zcode.md` / `omp.md`; keep tool-shape / observable-command signals only. Path-reference context lines and bridge `plugin is installed` prerequisites are left as documentation (not detection triggers).
+- **omp**: document native internal URL schemes (`skill://`, `local://`, `agent://`, `artifact://`, `history://`) in `references/omp.md`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.8.2**.
 
 ## [1.8.1] - 2026-08-05
 
