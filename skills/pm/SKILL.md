@@ -20,6 +20,8 @@ description: "PM entry shim — force project-manager orchestration when user in
 
 **Iteration lifecycle** (optional): host `commands/` may sequence Phase 1–5; semantics SSOT → **`mstar-iteration`**. Not required for ordinary PM work.
 
+**Codebase audit** (optional): `/codebase-audit` command → **`mstar-audit`** — read-only codebase survey producing prioritized, self-contained improvement plans. Output feeds iteration-start §1 Research or normal Prepare → Execute. Dispatched by PM under `Task category: audit`.
+
 Detect host → **`mstar-host`** → `references/codex.md` | `cursor.md` | `opencode.md` | `kimi.md` | `zcode.md` | `omp.md`.
 
 ## Read next (in order)

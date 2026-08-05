@@ -18,7 +18,7 @@ const OMP_PLUGIN_MARKER = ".omp-plugin/plugin.json";
 const CLAUDE_PLUGIN_MARKER = ".claude-plugin/plugin.json";
 const PACKAGE_NAMES = new Set(["morning-star", PLUGIN_NAME, "github:btspoony/mstar-harness"]);
 const SKILL_SMOKE = ["mstar-host", "mstar-harness-core", "pm"];
-const COMMAND_SMOKE = ["iteration-start", "iteration-drive", "iteration-loop"];
+const COMMAND_SMOKE = ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"];
 
 function ompAvailable() {
   try {
@@ -171,7 +171,7 @@ function runInit(scope: Scope, dryRun: boolean) {
   }
 
   notes.push("Verify with: omp plugin list");
-  notes.push("Enter PM with /skill:pm ; iteration commands: /iteration-start /iteration-drive /iteration-loop");
+  notes.push("Enter PM with /skill:pm ; commands: /iteration-start /iteration-drive /iteration-loop /codebase-audit");
   notes.push(`Host adapter: skills/mstar-host/references/omp.md`);
   notes.push(`Alternate install without CLI link: omp plugin install ${REPO_URL.replace("https://github.com/", "github:").replace(/\.git$/, "")}`);
 

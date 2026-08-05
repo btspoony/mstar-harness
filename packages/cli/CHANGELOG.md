@@ -6,6 +6,11 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-05
+
+- **Codex adapter**: `CODEX_PROJECT_COMMAND_NAMES` (renamed from `CODEX_ITERATION_SKILL_NAMES`) now includes `codebase-audit`; project-scoped install materializes it alongside iteration commands. Global-scoped install warning updated.
+- **omp adapter**: smoke test (`COMMAND_SMOKE`) and install notes include `codebase-audit`.
+
 ## [1.7.1] - 2026-08-05
 
 - Fix omp doctor plugin detection for `omp plugin list --json` `{ npm, marketplace }` shape.

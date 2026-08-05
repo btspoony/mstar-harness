@@ -78,11 +78,13 @@ Host limits (Kimi/ZCode/omp subagent surfaces, role binding in prompt): `mstar-h
 |------|-------------------|
 | Cursor / OpenCode | Bundled from `commands/` (OpenCode: plugin `harness-commands/`) |
 | Codex project | `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
-| Codex global | Iteration skills **not** installed — use `--scope project` |
+| Codex global | Project-scoped commands (iteration + audit) **not** installed — use `--scope project` |
 | Kimi / ZCode | `/morning-star-harness:iteration-start` (etc.) via plugin manifest |
-| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` (filename commands from plugin `commands/`) |
+| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit` (filename commands from plugin `commands/`) |
 
 Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
+
+**Codebase audit** (standalone, read-only): `/codebase-audit` surveys a repo and writes prioritized, self-contained improvement plans to `{PLAN_DIR}/audit-<date>/`. Output feeds iteration-start Research or normal Prepare → Execute. Same command loading as iteration commands below (Codex: project-scope only).
 
 Project knowledge bootstrap: `mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`.
 
@@ -162,6 +164,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-compound` / `mstar-compound-refresh` | Knowledge crystallize / maintain |
 | `mstar-strategy` | `STRATEGY.md` alignment |
 | `mstar-skill-authoring` | Skill authoring contracts |
+| `mstar-audit` | Read-only codebase audit → prioritized improvement plans |
 | `mstar-roles` | Role prompts + load lists |
 | `mstar-host` | Host adapters (OpenCode / Cursor / Codex / Kimi / ZCode / omp) |
 | `pm` | `/pm` / `/skill:pm` / host PM entry |

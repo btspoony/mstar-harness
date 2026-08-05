@@ -124,3 +124,4 @@ From repo: `skills/mstar-sdd/scripts/` (bundled in OpenCode as `harness-skills/m
 - `references/implementer-prompt.md`
 - `references/implementer-continuation-prompt.md`
 - `references/task-reviewer-prompt.md`
+- `mstar-plan-artifacts/references/plan-quality-bar.md` — plan self-containment standard (plans must meet this before SDD dispatch)

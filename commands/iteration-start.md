@@ -176,6 +176,8 @@ Identify deferred or incomplete items from prior iterations as priority candidat
 
 Also read `STRATEGY.md`（if exists）for strategic alignment.
 
+**Optional — codebase audit**: if a prior `/codebase-audit` run exists under `{PLAN_DIR}/audit-<date>/`, read its findings index. Audit plans are evidence-grounded direction candidates — high-leverage fixes, security issues, tech debt, or feature directions the codebase itself signals. Use them as input to §2 Explore Directions alongside deferred items and roadmap context. Do **not** treat the audit as mandatory; it is one source among many.
+
 ## 2. Explore Directions
 
 > **非 Plan 路径**。Cursor Plan mode 已在 §P 处理；勿与 §P 并行再跑一遍。

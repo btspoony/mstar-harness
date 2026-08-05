@@ -37,14 +37,15 @@ const CODEX_AGENT_NAMES = [
   "prompt-engineer",
 ];
 
-const CODEX_ITERATION_SKILL_NAMES = [
+const CODEX_PROJECT_COMMAND_NAMES = [
   "iteration-start",
   "iteration-drive",
   "iteration-loop",
+  "codebase-audit",
 ] as const;
 
 const GLOBAL_ITERATION_SKILLS_WARNING =
-  "Codex iteration commands (iteration-start / iteration-drive / iteration-loop) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
+  "Codex project-scoped commands (iteration-start / iteration-drive / iteration-loop / codebase-audit) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
 
 type MarketplaceEntry = {
   name: string;
@@ -198,15 +199,15 @@ function iterationSkillGitignoreEntry(skillName: string) {
 function ensureIterationSkillLinks(dryRun: boolean) {
   const notes: string[] = [];
   const projectRoot = resolveProjectRoot();
-  for (const skillName of CODEX_ITERATION_SKILL_NAMES) {
+  for (const skillName of CODEX_PROJECT_COMMAND_NAMES) {
     const source = iterationCommandSourcePath(skillName);
     const linkPath = projectIterationSkillLinkPath(skillName);
     notes.push(ensureSymlink(source, linkPath, dryRun));
   }
-  const gitignoreEntries = CODEX_ITERATION_SKILL_NAMES.map(iterationSkillGitignoreEntry);
+  const gitignoreEntries = CODEX_PROJECT_COMMAND_NAMES.map(iterationSkillGitignoreEntry);
   notes.push(...appendGitignore(projectRoot, gitignoreEntries, dryRun));
   notes.push(
-    "Installed Codex project-scoped iteration skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop) — symlinked to harness commands/*.md.",
+    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit) — symlinked to harness commands/*.md.",
   );
   return notes;
 }
@@ -217,7 +218,7 @@ function validateIterationSkillLinks() {
   const gitignorePath = path.join(projectRoot, ".gitignore");
   const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
   const lines = gitignore.split(/\r?\n/);
-  for (const skillName of CODEX_ITERATION_SKILL_NAMES) {
+  for (const skillName of CODEX_PROJECT_COMMAND_NAMES) {
     const source = iterationCommandSourcePath(skillName);
     const linkPath = projectIterationSkillLinkPath(skillName);
     errors.push(...validateSymlink(source, linkPath));

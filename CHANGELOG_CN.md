@@ -1,21 +1,39 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.7.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.7.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.7.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.7.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.7.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.7.1** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.7.1** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.7.1** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.7.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.0** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.8.0] - 2026-08-05
+
+### Harness（代码库审计 skill）
+
+- **新增 `mstar-audit` skill**：只读顾问式工作流，改编自 [improve](https://github.com/shadcn/improve) skill（MIT，© shadcn）。跨 9 个类别审查代码库（正确性/安全/性能/测试/技术债/依赖/DX/文档/方向），vet findings，按 leverage 排序，向 `{PLAN_DIR}/audit-<date>/` 写入自包含的改进计划。**不**引入 improve 的 `execute`/`reconcile`/`--issues` 变体——mstar 的 SDD、`status.json` 与 residual 追踪已替代它们。
+- **新增 `plan-quality-bar` 参考**（`mstar-plan-artifacts/references/plan-quality-bar.md`）：计划自包含标准——验证门、STOP 条件、drift check、机器可检查的 done criteria。适用于 SDD task-brief、Prepare plan 与 audit plan。
+- **新增 `/codebase-audit` 命令**（`commands/codebase-audit.md`）：独立入口。以 `codebase-` 前缀命名避免宿主命令冲突（沿用 `iteration-*` 约定）。接线：`mstar-harness-core` Task category `audit` + skill 索引；`mstar-phase-gates` Plan 质量门；`mstar-sdd` 引用；`mstar-roles` architect 加载项；`pm` skill 入口；`iteration-start` §1 Research 可选来源。
+- **致谢**：improve（MIT，© shadcn），在 `mstar-audit/SKILL.md` 与 `plan-quality-bar.md` 中标注。
+
+### CLI（`@mstar-harness/cli`）
+
+- **Codex adapter**：`CODEX_PROJECT_COMMAND_NAMES`（从 `CODEX_ITERATION_SKILL_NAMES` 重命名）现包含 `codebase-audit`；project-scoped 安装将其物化为 `.agents/skills/codebase-audit/SKILL.md`。
+- **omp adapter**：smoke 测试与安装说明包含 `codebase-audit`。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.8.0**。
 
 ## [1.7.1] - 2026-08-05
 
