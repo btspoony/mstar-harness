@@ -26,6 +26,10 @@
 - **宿主参考**：移除 `codex.md` / `kimi.md` / `zcode.md` / `omp.md` 各自 `Load when` 触发行里的插件标记子句，只保留工具形态 / 可见命令信号。路径参考上下文行与 plan-mode bridge 的 `plugin is installed` 前提留作文档（非识别触发）。
 - **omp**：在 `references/omp.md` 记录原生 internal URL 方案（`skill://`、`local://`、`agent://`、`artifact://`、`history://`）。
 
+### CLI
+
+- `zcode` adapter 不再硬编码 `PLUGIN_VERSION` 常量（此前已漂移到 `1.6.0`）。marketplace 条目生成与 `doctor` 的 ZCode 版本校验改为通过 `utils.ts` 新增的共享 `readHarnessVersion()` 从 `packages/cli/package.json` 派生（`index.ts` 的 `--version` 也改用同一 helper）。修正 `INSTALL.md` 与 ZCode adapter 中陈旧的 `1.5.6` / `1.6.0` 版本字符串。
+
 ### 版本对齐
 
 - 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.8.2**。

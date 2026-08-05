@@ -28,6 +28,10 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 - **Host references**: strip the same plugin-marker clauses from the `Load when` trigger lines of `codex.md` / `kimi.md` / `zcode.md` / `omp.md`; keep tool-shape / observable-command signals only. Path-reference context lines and bridge `plugin is installed` prerequisites are left as documentation (not detection triggers).
 - **omp**: document native internal URL schemes (`skill://`, `local://`, `agent://`, `artifact://`, `history://`) in `references/omp.md`.
 
+### CLI
+
+- `zcode` adapter no longer hardcodes a `PLUGIN_VERSION` constant (it had drifted to `1.6.0`). Marketplace entry generation and `doctor`'s ZCode version check now derive the version from `packages/cli/package.json` via a shared `readHarnessVersion()` helper in `utils.ts` (same helper `index.ts` now uses for `--version`). Fixed stale `1.5.6`/`1.6.0` version strings in `INSTALL.md` and the ZCode adapter.
+
 ### Version alignment
 
 - Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.8.2**.
