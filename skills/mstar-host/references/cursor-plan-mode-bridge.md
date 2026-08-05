@@ -1,19 +1,8 @@
 # Cursor Plan Mode × Harness Dual-Write Bridge
 
-> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-plan-conventions`** and **`mstar-plan-artifacts`** before the first **CreatePlan** in Plan mode. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-plan-conventions`. On conflict, **`mstar-harness-core`** wins.
+> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and **`references/cursor.md`**, then **`references/_shared/plan-mode-bridge-core.md`** (shared contract) + this bridge. When plan management is required, also read **`mstar-plan-conventions`** and **`mstar-plan-artifacts`** before the first **CreatePlan** in Plan mode. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-plan-conventions`. On conflict, **`mstar-harness-core`** wins.
 
-## Purpose
-
-Cursor **Plan mode** uses **CreatePlan** and built-in plan todos for session UX. Morning Star **SSOT** lives on disk under **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`). This reference defines **dual-write**: mirror every durable plan artifact to the repo; never treat the Cursor plan URI alone as the handoff surface.
-
-## Priority (hard)
-
-1. User explicit instructions (this turn)
-2. Project `AGENTS.md` / `CLAUDE.md`
-3. **`{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json`** (harness SSOT)
-4. Cursor CreatePlan body and plan todos (session UX mirror)
-
-**NEVER** cite only a Cursor plan file path in Assignment **Plan Path**, **Context Loaded**, or Completion Report when `{PLAN_DIR}/<plan-id>-<name>.md` should exist.
+**Shared contract** (dual-write SSOT rule + priority, bootstrap init, Build resume contract, bootstrap todos, implement done-gate, Phase 1 gate, shared anti-patterns) → **`references/_shared/plan-mode-bridge-core.md`**. This bridge covers Cursor **CreatePlan** / **SwitchMode** / Plan-mode specifics only.
 
 ## When this applies
 
@@ -24,31 +13,11 @@ Cursor **Plan mode** uses **CreatePlan** and built-in plan todos for session UX.
 
 1. **Read** (minimum): `mstar-plan-conventions`, `mstar-plan-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
 2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
-3. **Initialize** if absent (see checklist below).
+3. **Initialize** if absent — checklist in core; full PM checklist (incl. process-artifact gitignore set): `mstar-roles/references/project-manager/plan-management.md` (canonical gitignore snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」).
 
-### Harness initialization checklist
+## CreatePlan specifics
 
-When plan management is required and directories are missing:
-
-1. Create `{HARNESS_DIR}` and `{PLAN_DIR}`.
-2. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json` (legacy `.agents/` equivalents when applicable). Per-plan review bundles are created under `{SDD_DIR}/review/` when needed.
-3. Create `{HARNESS_DIR}/archived/residuals/`.
-4. Initialize `{HARNESS_DIR}/status.json` from `mstar-plan-artifacts/templates/status.empty.json` if missing.
-5. Optional: `{HARNESS_DIR}/notes.json` from `templates/notes.empty.json`, `{HARNESS_DIR}/knowledge/README.md`.
-
-Reuse legacy `.plans/` or `plans/` only when already present; do not duplicate structures.
-
-Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
-
-## CreatePlan: fixed bootstrap todos (prefix)
-
-**Emit these three todos first**, in order, **before** any implement / code todos. Do **not** mark implement todos in progress until all three are **done**.
-
-| Todo ID (use in title) | Goal | On-disk outcome |
-|------------------------|------|-----------------|
-| **`harness-init`** | Bootstrap harness tree | `{HARNESS_DIR}/`, `{PLAN_DIR}/`, process-artifact gitignore set, `archived/residuals/`, `status.json` initialized |
-| **`spec-register`** | Register plan in SSOT | New `plans[]` row in `status.json` (`id`, `status`, `file`, `metadata`); spec stub in `{SPECS_DIR}` or plan frontmatter |
-| **`mirror-plan`** | SSOT main plan file | `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes aligned to CreatePlan body |
+Bootstrap todos `harness-init` / `spec-register` / `mirror-plan` (emit first, in order, before any implement todos) → core.
 
 ### `spec-register` minimum fields
 
@@ -77,7 +46,7 @@ Set `updated_at` on `status.json` to today (`YYYY-MM-DD`). Commit **tracked resu
 
 After **CreatePlan**, keep CreatePlan body and mirror file **in sync** when scope changes (update both in the same coordination round).
 
-## CreatePlan body template (copyable)
+### CreatePlan body template (copyable)
 
 Use this structure in CreatePlan `plan` markdown; mirror the same sections into `{PLAN_DIR}/<plan-id>-<name>.md`.
 
@@ -128,22 +97,7 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 ## Implement todo completion gate (every code todo)
 
-Embed this checklist **inside each implement todo description** in CreatePlan (and mirror the same text on the matching checkbox line in the SSOT plan file).
-
-**Before marking the todo done:**
-
-1. **Commit**: `git add` + `git commit` on the authorized **Working branch** for this **task id** (one commit per task unless PM explicitly allowed batched commits in Assignment).
-2. **Plan checkbox**: Set `- [x]` on the matching line in `{PLAN_DIR}/<plan-id>-<name>.md`.
-3. **status.json** (when PM round requires): bump `plans[].status` (e.g. `InProgress`) or append coordination notes per `mstar-plan-artifacts`.
-4. **Evidence**: Record real `git log -1 --oneline` in Completion Report v2 **Git** (or Plan-mode status note if executing as PM in Plan mode).
-
-**NEVER**
-
-- Mark implement todos done without a commit when tracked files changed.
-- Batch all work into one closing commit unless PM documented an exception.
-- Mark plan-level `Done` in `status.json` without PM/QA authority and without recorded **`QA gate`** (`mandatory` fulfilled or `pm-acceptance` checklist per `qa-trigger-matrix.md`).
-
-Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/references/fullstack-dev-shared.md` (Git NEVER).
+Commit → SSOT checkbox → `status.json` sync → `git log -1 --oneline` evidence; NEVER list → core. Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/references/fullstack-dev-shared.md` (Git NEVER).
 
 ## SwitchMode → Agent (pre-flight)
 
@@ -160,19 +114,7 @@ If any item fails → **Blocked**; finish harness sync before implement.
 
 ## Build resume contract
 
-Cursor **Build** resumes the current plan in Agent mode. Do not assume it replays `/pm` or re-enters a role skill automatically.
-
-First action after Build, before product-code edits:
-
-1. Reload the harness entry: `mstar-harness-core` → `mstar-host` Cursor reference → this bridge.
-2. If the plan is a Morning Star plan, resume as `project-manager` for coordination and dispatch only.
-3. Read the SSOT plan and `status.json`; use them as the source of truth over the Cursor plan URI.
-4. For each implement/code todo, require a PM Assignment with `Execute as`, `Delegation`, `Working branch` or `Branch policy`, and SSOT `Plan Path`.
-5. If the Assignment or SSOT state is missing, report **Blocked** and repair the harness state before implementation.
-
-Allowed in the parent Build session: plan/status maintenance, routing decisions, Assignment writing, and host Task dispatch.
-
-Not allowed in the parent Build session by default: product implementation, test implementation, QC execution, QA execution, deployment, or ops changes. Those follow the normal PM dispatch rules unless the user explicitly overrides the harness.
+→ core. Cursor delta: **Build** resumes the current plan in Agent mode; do not assume it replays `/pm` or re-enters a role skill automatically.
 
 ## PM in Plan mode (`/pm`)
 
@@ -197,28 +139,17 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 
 **Single CreatePlan URI (HARD)**: one CreatePlan per Phase 1 Plan session. Updates use file edit tools on that path. If a duplicate plan file was created by mistake: merge into the original, delete the duplicate, keep View Plan on the original.
 
-**Plan mode ≠ executing todos.** Build = Phase 1 executable gate (Review chain, lock, branch).
-
-**Branch policy in Plan session**: write **recommended** `iteration_base_branch` / `target_branch` (+ short rationale) into the plan — do **not** silently default to `main`/`master`. User may correct via feedback; ask only after feedback-close if still TBD/conflicting.
-
 **Bootstrap relationship**: ordinary per-plan work still uses `harness-init` / `spec-register` / `mirror-plan`. Phase 1 CreatePlan uses Phase 1 todos (`harness-init` → `finalize-compass-plans` → review-edit seats → `pm-lock` → `integration-branch`). Business `plans[]` rows should exist as drafts before Build when direction has converged.
 
 **Helpers**: third-party interview helpers are **not** named here; host **command** layer may use them only after feedback-close when gaps remain.
 
-## Anti-patterns
+## Anti-patterns (Cursor-specific)
 
 | Anti-pattern | Fix |
 |--------------|-----|
-| CreatePlan only, no `{HARNESS_DIR}` files | Run bootstrap todos; Write mirror plan + status.json |
-| Todo done, no commit | Commit per task; paste `git log -1` evidence |
-| Drift between CreatePlan and SSOT plan | Update both in same round |
-| Cursor plan URI as Plan Path | Use `{PLAN_DIR}/...` path |
-| Skip `spec-register` | Add `plans[]` row before implement |
-| Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
 | Follow-up only in chat / no roadmap section | Add `Roadmap / deferred scope` to CreatePlan and SSOT plan before implement |
 | Phase 1 Plan mode: second CreatePlan / stale open plan | Edit the original plan file only; merge+delete duplicates |
 | Phase 1 Plan mode: interview loop before feedback-close | Feedback-driven autonomous plan updates; deferred interview only after close signal if gaps remain |
-| Phase 1 Plan mode: Review / commit / branch before Build | Keep Pre-Build document-only; execute those todos after Build |
 
 ## Related skills
 

@@ -138,18 +138,9 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 
 ---
 
-## Phase Gates (Minimal Tree)
+## Phase Gates
 
-Before first implement dispatch (non-hotfix):
-
-1. `specify` done
-2. `clarify` done (no unresolved high-impact ambiguity)
-3. `plan` done and referenceable
-4. `tasks` + PM Task Board ready for non-trivial plan
-5. Roadmap written when delivery is split, deferred, or temporary
-6. New constraints discovered are written back to plan first
-
-If any fail -> do not dispatch implement.
+完整 Prepare/Execute 门禁树（`specify → clarify → plan` → `plan(locked) → tasks → implement`）、意图门禁、hotfix 压缩路径、Phase Gate 最小证据 → **`mstar-phase-gates`**。PM 首次 implement dispatch（非 hotfix）前须确认 phase-gates 全绿：specify/clarify/plan 完成、tasks + PM Task Board ready、split/deferred/temporary 已写 roadmap、新约束已回写 plan。任一未过 → 不 dispatch implement。
 
 ### PM entry sessions
 
@@ -252,7 +243,7 @@ Before first implement dispatch:
 - If delivery spans batches, include the full roadmap: batch order, deferred scope, dependencies, owner/trigger, and final Done definition
 - Every implement Assignment declares `PM Task Board coverage`
 - Default batch size 1-2 IDs; `>=3` requires `Why batching is safe`
-- Completion rhythm: commit -> Completion Report v2 -> PM Status Update -> next dispatch
+- Completion rhythm: commit -> Completion Report -> PM Status Update -> next dispatch
 
 ---
 
@@ -281,7 +272,7 @@ Use canonical templates from:
 `references/project-manager/dispatch-and-assignment.md`
 
 - `## Assignment`
-- `## Completion Report v2`
+- `## Completion Report`
 - `## Status Update`
 
 Minimum invariants:

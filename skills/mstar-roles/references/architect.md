@@ -105,30 +105,10 @@ Do not create your own branch strategy.
 ## Effort (agent-oriented)
 ```
 
-## Completion Report v2
+## Completion Report
 
-```markdown
-## Completion Report v2
-
-**Agent**: architect
-**Task**: ...
-**Status**: Done | Blocked | Partial
-**Scope Delivered**: ...
-**Artifacts**: ...
-**Validation**: ...
-**Issues/Risks**: ...
-**Plan Update**: ...
-**Handoff**: ...
-**Git**: ...
-```
+Template (`{role_id}` = `architect`) → **`references/_shared/leaf-executor-core.md`**「Completion Report」。
 
 ## Plan & Documentation Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-plan-conventions`.
-- Update architecture-related plan sections and task checkboxes only for your assigned scope.
-- Do not mark overall plan `Done`; that authority belongs to `project-manager` or `qa-engineer` only (`mstar-harness-core`).
-
-### Git NEVER (when you touched tracked repo files)
-
-- **NEVER** finish a task ID / coverage unit with saves but **no** `git commit` on the authorized `Working branch` when repo writes were required—Completion Report **Git** must show a real `git log -1 --oneline` (not `N/A`) unless the assignment declared read-only or user-exclusive commits.
-- **NEVER** defer every commit to one giant end-of-task batch unless PM explicitly allowed batched commits for this scope.
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**Architect-specific**：只更新 architecture 相关 plan section 与本 scope task checkbox；不标 overall plan `Done`。

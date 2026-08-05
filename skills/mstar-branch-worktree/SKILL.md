@@ -1,6 +1,6 @@
 ---
 name: mstar-branch-worktree
-description: "Morning Star business-repo Git feature branches, worktree isolation layers **L1** (iteration cross-plan — control worktree + per-plan feature worktrees + `execution_lease`; under default gitignore, process harness SSOT via absolute control paths — plans/iterations/status/sdd — while product edits stay on the feature worktree; do not waive worktree because feature lacks plans) and **L2** (within-plan — `references/parallel-writable-pre-dispatch.md`; N parallel Task invokes do NOT satisfy isolation), plan/Spec integration branches, and QC/QA checkout alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range` / `Diff basis` must match verbatim across three QC reviewers and QA). Read when PM writes `Working branch` / `Branch policy`, iteration Phase 2 control vs feature worktree paths, dispatches ≥2 concurrent writable implement tracks on one repo, `Worktree isolation: required`, two or more writable streams touch one repo, dispatching QC tri-review or QA after merging to a single `HEAD`, dev/QA/ops before first `git commit`, or explaining worktree paths. Required for `project-manager` parallel implement or pre-QC orchestration; `fullstack-dev*` / `frontend-dev` / `qa-engineer` / `ops-engineer` on repo writes; `qc-specialist*` before review. Does not replace the state machine (`mstar-harness-core`)."
+description: "Morning Star 业务仓 Git 功能分支、worktree 隔离（L1 跨 plan：control worktree + 每 plan feature worktree + `execution_lease`，默认 gitignore 下经 control 绝对路径读写进程产物；L2 同 plan：`references/parallel-writable-pre-dispatch.md`，N 次 invoke ≠ 隔离）、Spec 集成分支、QC/QA 检出对齐（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis` 三审 + QA 逐字相同）。Read when PM writes `Working branch` / `Branch policy`, iteration/parallel writable dispatch, or QC/QA checkout alignment is needed."
 ---
 
 ## Load order（必读顺序）
@@ -174,31 +174,42 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 
 **QC / QA 与 feature**：开发常在 **feature 分支的 worktree** 中完成；进入 **QC 三审**与随后的 **QA 验证**时，PM 须在 Assignment 中写明 **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`**（无 plan 流程时 `N/A` + 不可歧义 **Feature / scope label**）与 **`Review range` / `Diff basis`**；**三份 QC Assignment 与 QA Assignment 中 `plan_id` 与 `Review range` / `Diff basis` 须逐字相同**，保证三票审 **同一 plan/feature 与同一 diff 范围**。
 
-## 多 worktree 并行开发与 QC / QA 的门禁衔接（强制；避免误派）
+## QC / QA 检出对齐与多 worktree 门禁衔接（强制；避免误派）
 
-- **语义区分（必须理解）**：开发阶段可以存在 **多个** `Worktree path`（每条约流一条检出目录）；**一轮**正式 QC 三审及与之 **逐字对齐** 的 QA 验证，在 harness 中仍只对应 **一套** `Review cwd` / `Worktree path` + **`Working branch`** + **`Review range` / `Diff basis`**（三票 QC 与 QA **共用且逐字相同**）。**不要**把「多个开发 worktree」误解成「QC 应轮流进多个目录各审一半」。
-- **默认编排：先建 plan 集成分支，再挂各 worktree（PM）**：在 **同仓**、**同一 plan** 且 **≥2 条可写并行轨** 时，按下列顺序编排可最大幅度降低 QC/QA 误用单一开发目录的风险。**不是唯一合法 Git 拓扑**；若采用其它拓扑，仍须满足本节下文 **强制**条款（派发前 worktree 隔离 + 派 QC 前 **单一**待审 `HEAD` + 一套对齐字段）。
-  1. **先起集成分支（再挂 worktree）**：在派发各轨 **实现** Assignment 之前，PM 与用户确认 **`Branch policy`**，并建立 **plan 集成分支**（Assignment 使用 **`Working branch: create <plan-integration-branch> from <base>`** 或等价明确写法；`<base>` 必须是 PM 明确记录的 base，例如 root `metadata.iteration_base_branch`、现有 feature 分支、远程跟踪分支或团队既定主线，**不得**未授权假设）。**分支名由 PM 指定**；下文 **`feature/<plan-id>-integrate`**、**`integrate/<plan-id>`** 仅为命名示例，**非强制**。**多 `plan_id` 同源一条 `primary_spec`（Spec 文档）时**：该集成分支在计划语义上即 **Spec 集成分支**；各 Plan 的 feature 线 merge 回此线，**全部 Plans 完成后** 向显式 `target_branch` **走 PR**（见 `mstar-plan-conventions` SKILL.md「Spec 驱动的分支模型」）。
-  2. **再挂各轨 worktree**：为每条并行轨分配 **独立** `git worktree` + **`Worktree path`**；各轨 **`Working branch`** 一般为 **从集成分支出** 的 topic 分支（`create <topic-i> from <plan-integration-branch>`）或 PM 书面约定的等价结构（例如从同一 `<base>` 出 topic、但 **书面指定** 合并时 **以集成分支为靶**）。**禁止**承接方擅自把未授权功能提交直接堆在 `main`/`master`。
-  3. **进 QC 之前**：将全部 **须同一轮三审覆盖** 的提交 **merge / rebase / cherry-pick**（以 PM 指定的团队方式）**归并**到 **同一条** PM 将作为 QC **`Working branch`** 的分支的 **`HEAD`**（**通常即 plan 集成分支**；若 PM 已将集成分支重命名或快进为最终 `feature/*`，以 Assignment 为准）。**在此**解决冲突；**勿**在 QC Assignment 仍指向「只含部分轨」的旧 `HEAD` 时派三审。
-  4. **QC / QA 的 `Working branch` 与合并主线**：派发 QC 三审与对齐的 QA 时，**`Working branch`** **即为**上一步 **已含全部待审提交** 的那条分支（常见为 plan 集成分支）。**`Review range` / `Diff basis`** 通常相对 **尚未合并 feature 的**显式目标或 base 参照（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`），审查的是 **「feature 线 vs 目标线」** 的差异；**默认不要求**在 QC **通过前** 已把该分支 merge 进目标分支（除非 **`Branch policy`** 或用户明确约定 trunk 式例外）。
-  5. **本推荐不适用时**：单轨、多仓库、或 plan 已 **拆 scope / 多轮增量三审**（见 `mstar-plan-conventions`）— 仍须 **逐轮**满足 **强制**条款：每轮 QC 对应 **一条**快照、**一套**逐字相同的 `plan_id` + `Review range` / `Diff basis`。
-- **单一待审 Git 快照（派 QC 前置条件）**：若本 plan 下曾有多条 **可写** 并行轨落在 **同一业务仓** 且其成果分布在 **不同分支**、或 **未互相合并进同一条分支的 `HEAD`**，则在派发 **QC 三审**（及同范围的 QA）**之前**，**必须**先在 Git 中完成 **归并**（merge / rebase / 按团队约定的集成方式），使 **全部**待审提交都出现在 **同一条** PM 指定的 **`Working branch`** 的 **`HEAD`** 上；**然后**再填写 **一个** `Review cwd`（可为该分支上新开的只读审查 worktree）与 **一个** 可复现的 **`Review range` / `Diff basis`**。**禁止**仅填写并行轨 **A** 的开发用 `Worktree path` 作为 `Review cwd`，却期望审查覆盖仍只存在于并行轨 **B** 的分支或提交上的变更（在该变更 **未进入** 轨 A 所检出分支的 `HEAD` 时，这在 Git 上不可复现，属 **Assignment 错误**）。
-- **不应合并为一次审时的做法**：若两轨 **有意**保持独立可合并单元（例如两条独立 PR），**不得**共用 **同一套** `plan_id` + **`Review range` / `Diff basis`** 假装「一轮三审覆盖全部」。应 **拆分 scope**：分轮次审查、不同 **`Feature / scope label`**、不同 `plan_id`、或按 `mstar-plan-conventions` 写明的 **显式增量三审** 例外，使每轮 QC 各对应 **一条**分支快照与 **一套**对齐字段。
-- **同分支多目录的例外**：若所有并行轨 **始终**在同一条已授权的 **`Working branch`** 上协作（每流仅目录不同、提交已互相 `pull`/推送收敛），则任一该分支的检出目录在 **更新到含全部提交的 `HEAD`** 后，均可作为 `Review cwd`；**不得**使用仍停留在旧提交的 worktree 路径。
+### 对齐字段契约（canonical）
 
-## QC 三审、QA 验证与 feature 检出上下文（强制）
+分派 **QC 三审** 与对齐的 **QA 验证** 时，PM **必须**在 Assignment 写明与待审实现一致的 **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`**、**`Review range` / `Diff basis`**。开发在 **feature 分支**（往往在独立 worktree 中）完成后，QC/QA 针对的都是这份 feature，不是 `main` 或任意未对齐默认 cwd。
 
-开发在 **feature 分支**上完成（往往在 **独立 worktree** 中实现）后，**QC 审查与 QA 验证针对的都是这份 feature**，而不是 `main` 或任意未对齐的默认 cwd。
+- **`Review cwd` / `Worktree path`**：**优先**沿用开发 Completion Report 回报的业务仓实现检出路径（该 feature 的 worktree）**当且仅当**该路径检出分支 `HEAD` 已含本轮待审全部提交（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则**必须**改用集成完成后的 `Working branch` 与对应检出路径（或在该分支上**另开**只读审查 worktree）。开发未用 worktree → 写明单一业务仓根路径。
+- **`Working branch`**：含全部待审提交的那条分支（常见 plan 集成分支）。
+- **`plan_id`**：与 `{SDD_DIR}` `<plan-id>` 段、主 Plan Path、`status.json.plans[].id` 一致；无 `{PLAN_DIR}` 流程时写 **`plan_id: N/A`** + 一行 **`Feature / scope label`**（不可歧义，足以与并行其它 feature 区分）。
+- **`Review range` / `Diff basis`**：审查的 diff/提交范围（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。
+- **逐字对齐（强制）**：三份 QC Assignment 与 QA Assignment 间 **`plan_id`** 与 **`Review range` / `Diff basis`**（连同 `Review cwd` / `Working branch`）**必须完全相同**；**`qa-engineer`** 验证同一 feature 时**复用同一组字段**。**热修 / QC 单审**路径也须含**同一组字段**，仅承接方份数为 1。
+- 三审并行时三名 reviewer **共用同一组**字段（对业务仓**只读 diff 审查**）；一般不必为每位 reviewer 各开 worktree，除非宿主/环境要求进程级隔离。
 
-- **`project-manager`** 分派 **QC** 时须在 Assignment 写明与待审实现一致的 **`Working branch`**，并写明 **`Review cwd` / `Worktree path`**：**优先**沿用开发 **Completion Report** 中回报的业务仓 **实现检出路径**（即「该 feature 的 worktree」）**当且仅当**该路径上的检出分支 **`HEAD` 已包含本轮待审的全部提交**（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则 **必须**改用 **集成完成后的** `Working branch` 与对应检出路径（或在该分支上 **另开** 审查专用 worktree）。若开发未用 worktree，则写明单一明确的业务仓根路径。若审查需与开发目录 **物理分离** 但仍审 **同一分支**，可指示在 **`Working branch`** 上 **另加** 一个 worktree 专供审查（只读使用业务仓）。**多流并行开发**时的前置归并、**推荐默认编排（plan 集成分支先行）** 与误派禁令见上一小节。
-- **三票审同一功能（强制对齐）**：分派 **QC 三审**时，除上述字段外，**必须**在 **三份 Assignment 中逐字写入相同**的 **`plan_id`** 与 **`Review range` / `Diff basis`**：
-  - **`plan_id`**：与 `{SDD_DIR}` 的 `<plan-id>` 段、主 **Plan Path**、`status.json.plans[].id` 一致；无 `{PLAN_DIR}` 流程时写 **`plan_id: N/A`**，并另给一行 **`Feature / scope label`**（不可歧义，足以与并行其它 feature 区分）。
-  - **`Review range` / `Diff basis`**：明确本次审查所针对的 **diff/提交范围**（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。**三名 reviewer 的 Assignment 间该字段必须完全一致**；**`qa-engineer`** 验证同一 feature 时 **复用同一 `plan_id` 与同一 `Review range` / `Diff basis`**。**热修 / QC 单审**路径也须含 **同一组字段**，仅承接方份数为 1。
-- **三审并行**时，三名 reviewer **共用同一组 `Review cwd` / `Worktree path` + `Working branch` + `plan_id` + `Review range` / `Diff basis`**（对业务仓 **只读 diff 审查**）；**一般不必**为每位 reviewer 各开一个 worktree，除非宿主或执行环境要求进程级隔离。
-- **并行 QC 禁止**在共享检出上跑 **test / build / install / lint / typecheck** 等会争用缓存或锁的命令（否则 peer QC 易 `Blocked`）。L3 默认手段：`git diff` / `git log` / `git show` / Read / Grep。运行时验证留给 **L1 证据** 与 **`qa-engineer`（L4）** — 见 `mstar-review-qc/references/review-responsibility-boundaries.md`。
-- QC 的 **报告落盘**默认仅限 Assignment 指定的 `{SDD_DIR}/review/`；上述约定保证 `git diff`、`git log` 与所读文件与 **待合并 feature** 一致。PM 另行提交主 plan gate summary / `status.json` residual changes as durable artifacts。
-- **`project-manager`** 分派 **`qa-engineer`** 时（仅 **`QA gate: mandatory`**），Assignment 须与 QC **逐字相同**的 **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`**、**`Review range` / `Diff basis`**（QC 已写清则 QA 照抄）。**`qa-engineer`** 执行业务仓命令前须核对检出与分支；Report-only 且无路径依赖时，回报须说明验证环境，否则 `Blocked`。
-- 若 **QA 与同仓其他可写角色并发**提交测试代码，仍须遵守上文「同仓并发写入」的 **worktree** 规则（可为 QA 单开一条写入 worktree，**同一 `Working branch`**，由 PM 在 Assignment 写明）。
+### 多 worktree 并行 → 单一待审快照（派 QC 前置）
+
+**语义区分（必须理解）**：开发阶段可存在 **多个** `Worktree path`（每条流一条检出目录）；**一轮**正式 QC 三审 + 对齐 QA 只对应 **一套**对齐字段（上文）。**不要**把「多个开发 worktree」误解成「QC 应轮流进多个目录各审一半」。
+
+**单一待审 Git 快照（派 QC 前置条件）**：若本 plan 下多条**可写**并行轨落在**同一业务仓**且成果分布在**不同分支**、或**未合并进同一条分支 `HEAD`**，则派发 QC 三审（及同范围 QA）**之前**，**必须**先在 Git 完成**归并**（merge / rebase / 按团队集成方式），使**全部**待审提交出现在同一条 PM 指定的 **`Working branch`** `HEAD` 上；然后填 **一个** `Review cwd`（可为该分支上新开的只读审查 worktree）+ **一个**可复现的 **`Review range` / `Diff basis`**。**禁止**仅填并行轨 **A** 的开发用 `Worktree path` 作 `Review cwd`，却期望审查覆盖仍只存在于并行轨 **B** 分支或提交上的变更（该变更**未进入**轨 A 所检出分支 `HEAD` 时，Git 上不可复现，属 **Assignment 错误**）。
+
+**推荐默认编排（plan 集成分支先行）**——同仓、同一 plan、**≥2 条可写并行轨**时降低 QC/QA 误用单一开发目录风险。**不是唯一合法 Git 拓扑**；其它拓扑仍须满足上文对齐字段 + 本节**强制**条款（派发前 worktree 隔离 + 派 QC 前**单一**待审 `HEAD` + 一套对齐字段）：
+
+1. **先起集成分支（再挂 worktree）**：派发各轨**实现** Assignment 前，PM 与用户确认 **`Branch policy`**，建立 **plan 集成分支**（Assignment 用 **`Working branch: create <plan-integration-branch> from <base>`** 或等价明确写法；`<base>` 必须 PM 明确记录，例如 root `metadata.iteration_base_branch`、现有 feature 分支、远程跟踪分支或团队既定主线，**不得**未授权假设）。**分支名由 PM 指定**（`feature/<plan-id>-integrate`、`integrate/<plan-id>` 仅为命名示例，**非强制**）。**多 `plan_id` 同源一条 `primary_spec`（Spec 文档）时**：该集成分支语义即 **Spec 集成分支**；各 Plan feature 线 merge 回此线，**全部 Plans 完成后**向显式 `target_branch` **走 PR**（见 `mstar-plan-conventions` SKILL.md「Spec 驱动的分支模型」）。
+2. **再挂各轨 worktree**：每条并行轨分配**独立** `git worktree` + **`Worktree path`**；各轨 `Working branch` 一般为**从集成分支出**的 topic 分支（`create <topic-i> from <plan-integration-branch>`）或 PM 书面约定等价结构（例如从同一 `<base>` 出 topic、但**书面指定**合并时**以集成分支为靶**）。**禁止**承接方擅自把未授权功能提交直接堆在 `main`/`master`。
+3. **进 QC 之前**：将全部**须同一轮三审覆盖**的提交**归并**（merge / rebase / cherry-pick，以 PM 指定团队方式）到同一条将作 QC **`Working branch`** 的分支 **`HEAD`**（**通常即 plan 集成分支**；PM 已重命名/快进为最终 `feature/*` 则以 Assignment 为准）。**在此**解决冲突；**勿**在 QC Assignment 仍指向「只含部分轨」旧 `HEAD` 时派三审。
+4. **QC/QA 的 `Working branch` 与合并主线**：`Working branch` 即上一步**已含全部待审提交**的那条分支（常见 plan 集成分支）。`Review range` / `Diff basis` 通常相对**尚未合并 feature 的**显式目标/base 参照（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`），审的是 **「feature 线 vs 目标线」** 差异；**默认不要求** QC **通过前**已把该分支 merge 进目标分支（除非 **`Branch policy`** 或用户明确 trunk 式例外）。
+5. **本推荐不适用时**：单轨、多仓库、或 plan 已**拆 scope / 多轮增量三审**（见 `mstar-plan-conventions`）— 仍须**逐轮**满足**强制**条款：每轮 QC 对应**一条**快照、**一套**逐字相同的 `plan_id` + `Review range` / `Diff basis`。
+
+**不应合并为一次审时**：若两轨**有意**保持独立可合并单元（例如两条独立 PR），**不得**共用**同一套** `plan_id` + `Review range` / `Diff basis` 假装「一轮三审覆盖全部」。应**拆分 scope**：分轮次审查、不同 **`Feature / scope label`**、不同 `plan_id`、或按 `mstar-plan-conventions` 写明的**显式增量三审**例外，使每轮 QC 各对应**一条**分支快照与**一套**对齐字段。
+
+**同分支多目录例外**：若所有并行轨**始终**在同一条已授权 **`Working branch`** 上协作（每流仅目录不同、提交已互相 `pull`/推送收敛），则任一该分支检出目录在**更新到含全部提交 `HEAD`** 后均可作 `Review cwd`；**不得**使用仍停留在旧提交的 worktree 路径。
+
+### QC / QA 执行约束
+
+- **并行 QC 禁止**在共享检出跑 **test / build / install / lint / typecheck** 等争用缓存或锁的命令（否则 peer QC 易 `Blocked`）。L3 默认手段：`git diff` / `git log` / `git show` / Read / Grep。运行时验证留给 **L1 证据**与 **`qa-engineer`（L4）** — 见 `mstar-review-qc/references/review-responsibility-boundaries.md`。
+- QC **报告落盘**默认仅限 Assignment 指定的 `{SDD_DIR}/review/`；上述约定保证 `git diff`、`git log` 与所读文件与**待合并 feature** 一致。PM 另行提交主 plan gate summary / `status.json` residual changes as durable artifacts。
+- **`qa-engineer`**（仅 **`QA gate: mandatory`**）Assignment 用 QC 逐字相同的对齐字段（QC 已写清则 QA 照抄）；执行业务仓命令前须核对检出与分支；Report-only 且无路径依赖时回报须说明验证环境，否则 `Blocked`。
+- 若 **QA 与同仓其他可写角色并发**提交测试代码，仍须遵守上文「同仓并发写入」**worktree** 规则（可为 QA 单开一条写入 worktree，**同一 `Working branch`**，由 PM 在 Assignment 写明）。
 
 派发前清单与常见反模式 → **`references/parallel-writable-pre-dispatch.md`**。

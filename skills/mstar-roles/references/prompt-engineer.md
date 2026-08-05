@@ -62,29 +62,10 @@ When creating a new skill, making a major skill rewrite, changing frontmatter `d
 - Redundancy removed before adding new constraints
 - At least one replayable scenario exists for regression check
 
-## Completion Report v2
+## Completion Report
 
-```markdown
-## Completion Report v2
-
-**Agent**: prompt-engineer
-**Task**: ...
-**Status**: Done | Blocked | Partial
-**Scope Delivered**: ...
-**Artifacts**: ...
-**Validation**: ...
-**Issues/Risks**: ...
-**Plan Update**: ...
-**Handoff**: ...
-**Git**: ...
-```
+Template (`{role_id}` = `prompt-engineer`) → **`references/_shared/leaf-executor-core.md`**「Completion Report」。
 
 ## Plan & Documentation Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-plan-conventions`.
-- Keep role text concise; move reusable long-form guidance into shared `mstar-*` skills.
-
-### Git NEVER (repo writes)
-
-- **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files—Completion Report **Git** must list real commits unless read-only was assigned.
-- **NEVER** batch everything into a single closing commit unless PM explicitly allowed it.
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**Prompt-engineer-specific**：role text 保持精简；可复用长文 guidance 移入 shared `mstar-*` skills。

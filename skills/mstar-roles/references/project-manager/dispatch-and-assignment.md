@@ -27,7 +27,7 @@ For assignees (non-PM):
 - **NEVER** assume exposed `Task` / subagent menus imply you may call them; **tool availability ≠ delegation authorization**.
 - **NEVER** execute parallel-agent dispatch as a leaf assignee; dispatch is **PM-orchestration-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate the main deliverable of this assignment to `explore` (read-only orientation only, per `mstar-harness-core`).
-- **NEVER** claim `Done` / pass in **Completion Report v2** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
+- **NEVER** claim `Done` / pass in **Completion Report** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
 
 ## Assignment Template (Canonical)
 
@@ -103,7 +103,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **PM Task Board coverage**: <task ids>
 **Roadmap / deferred scope**: <required when staged, partial, or temporary; otherwise N/A>
 **Task**: <concrete work aligned with coverage>
-**Checkpoint Comment Rule**: commit -> Completion Report v2 -> PM Status Update -> next batch
+**Checkpoint Comment Rule**: commit -> Completion Report -> PM Status Update -> next batch
 **Why batching is safe**: <required when batching >=3 IDs>
 **Scope**:
 - In: ...
@@ -124,7 +124,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - `explore` is read-only orientation only
 - Tool availability ≠ delegation authorization
 **Plan Path**: absolute `<control_worktree_path>/{PLAN_DIR}/...` when L1 lease gate active | `{PLAN_DIR}/...` when waived / single checkout | N/A
-**Report Format**: Completion Report v2
+**Report Format**: Completion Report
 **Execution evidence**: <RCA/test-first/review feedback/evidence expectations for the assignee, if applicable>
 ```
 
@@ -140,10 +140,10 @@ When `metadata.control_worktree_path` is set and worktree mode is **not** waived
 | **`SDD dir`** | Absolute under control harness; run `sdd-workspace` with `MSTAR_CONTROL_ROOT=<control_worktree_path>` when cwd is the feature tree |
 
 Do **not** waive worktree because default-gitignored `plans/` are missing under the feature checkout — see `mstar-branch-worktree` 「Harness path SSOT under default gitignore」.
-## Completion Report v2 Template
+## Completion Report Template
 
 ```markdown
-## Completion Report v2
+## Completion Report
 
 **Agent**: <role-id>
 **Task**: ...

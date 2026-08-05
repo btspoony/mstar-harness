@@ -22,7 +22,7 @@
 
 - 快速启动一套可用的多角色协作流
 - 通过统一的 `mstar-*` skills 执行，而不是散落规则
-- 在 OpenCode / Cursor / Codex / Kimi Code / ZCode / omp 下复用同一套核心流程
+- **推荐宿主顺序**（最佳 → 可用）：**omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex** —— omp/OpenCode/Cursor 的 subagent + Plan UX 最完整；Kimi/ZCode 仅支持内置 agent 类型；Codex 派发面最受限。
 
 更新说明：[CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 

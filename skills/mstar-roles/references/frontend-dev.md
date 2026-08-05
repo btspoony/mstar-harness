@@ -61,30 +61,10 @@ If plan drift appears during implementation, request plan write-back before cont
 - Same-repo concurrent writes require worktree isolation
 - Do not self-decide branch pivots to default branch
 
-## Completion Report v2
+## Completion Report
 
-```markdown
-## Completion Report v2
-
-**Agent**: frontend-dev
-**Task**: ...
-**Status**: Done | Blocked | Partial
-**Scope Delivered**: ...
-**Artifacts**: ...
-**Validation**: ...
-**Issues/Risks**: ...
-**Plan Update**: ...
-**Handoff**: ...
-**Git**: ...
-```
+Template (`{role_id}` = `frontend-dev`) → **`references/_shared/leaf-executor-core.md`**「Completion Report」。
 
 ## Plan & Documentation Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-plan-conventions`.
-- Update assigned task checkboxes and related plan sections.
-- Do not mark full plan `Done` (only `project-manager` or `qa-engineer` per `mstar-harness-core`).
-
-### Git NEVER (repo writes)
-
-- **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files—Completion Report **Git** must be a real `git log -1 --oneline` unless read-only was assigned.
-- **NEVER** batch everything into a single closing commit unless PM explicitly allowed it.
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。
