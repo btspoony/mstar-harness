@@ -349,7 +349,7 @@ omp plugin source in this repository:
 - Markers: `.omp-plugin/plugin.json`, `.claude-plugin/plugin.json` (Claude-compatible discovery)
 - Runtime skills: `skills/`
 - Plugin commands: `commands/`
-- Plugin agents: `agents/` (optional discovery; Morning Star roles still bind via prompt — see C5/C5b)
+- Plugin agents: `agents/` (discovered into live `task.agent` after install/link + reload; prefer `agent: "<role-id>"`, keep C5b skill load — see `omp.md` C5/C5b)
 
 ## Post-install
 

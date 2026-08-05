@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-08-05
+
+- Version alignment with harness **1.8.3** (omp host docs prefer live-schema role `task.agent`; no CLI API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.3**.
+
+## [1.8.2] - 2026-08-05
+
+- Derive ZCode marketplace/`doctor` version from `packages/cli/package.json` via shared `readHarnessVersion()` (remove drifted hardcoded `PLUGIN_VERSION`).
+- Version alignment with harness **1.8.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.2**.
+
 ## [1.8.1] - 2026-08-05
 
 - Version alignment with harness **1.8.1** (no CLI API change; bundled skills/commands optimization landed at the harness layer).

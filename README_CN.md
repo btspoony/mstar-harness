@@ -65,8 +65,6 @@ npx @mstar-harness/cli init
 | ZCode | 每会话 `/morning-star-harness:pm`（无自动加载） |
 | Codex | `/pm` |
 
-宿主限制（Kimi/ZCode/omp 子代理面、角色绑定在 prompt）：`mstar-host/references/kimi.md`、`mstar-host/references/zcode.md`、`mstar-host/references/omp.md`。
-
 ### 迭代
 
 | 路径 | 何时 |
