@@ -39,7 +39,7 @@ description: Morning Star (启明星) harness **强制全局入口** —— 信�
 | 角色 | 始终 | 按任务追加（典型） |
 |------|------|-------------------|
 | **全部** | 本 skill | — |
-| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-plan-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-plan-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`。**不**读 `mstar-coding-behavior` |
+| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-plan-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-plan-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`。**不**读 `mstar-coding-behavior` |
 | **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-plan-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-plan-artifacts`；UI：`mstar-design-md`；知识库：`mstar-compound`（PM） |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
 
@@ -66,6 +66,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `logic` | `@architect` + dev |
 | `ops` | `@ops-engineer` |
 | `docs` | `@product-manager` / `@architect` / `@writing-specialist` |
+| `audit` | `@architect` / read-only `scout` subagents → `mstar-audit`（read-only advisory；不进入状态机） |
 
 **硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + `status.json` 登记（见 **`mstar-plan-conventions`**）。
 
@@ -100,6 +101,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-compound-refresh` | 知识维护 —— 审查/更新/合并/删除 `{KNOWLEDGE_DIR}` 文档；**项目知识 bootstrap**（无/残旧 STRATEGY.md、CONCEPTS.md、`{KNOWLEDGE_DIR}`）→ `references/project-knowledge-bootstrap.md` |
 | `mstar-strategy` | `STRATEGY.md` 全局战略方向 —— 产品愿景、技术方向、决策原则 |
 | `mstar-skill-authoring` | mstar-native skill authoring: trigger contracts, progressive disclosure, pressure scenarios, behavior-change evidence |
+| `mstar-audit` | Read-only codebase audit → prioritized, self-contained improvement plans（`audit-playbook` 9 类别 + `finding-format` + `plan-quality-bar`） |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |
 

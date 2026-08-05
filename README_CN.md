@@ -78,11 +78,13 @@ npx @mstar-harness/cli init
 |------|----------|
 | Cursor / OpenCode | 从 `commands/` 打包（OpenCode：插件 `harness-commands/`） |
 | Codex project | `.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链） |
-| Codex global | **不**装 iteration skills — 用 `--scope project` |
+| Codex global | **不**装 project 命令（iteration + audit）— 用 `--scope project` |
 | Kimi / ZCode | 插件 manifest：`/morning-star-harness:iteration-start` 等 |
-| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop`（插件 `commands/` 文件名命令） |
+| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（插件 `commands/` 文件名命令） |
 
 Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
+
+**代码库审计**（独立、只读）：`/codebase-audit` 扫描代码库，向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划。产出可喂给 iteration-start Research 或常规 Prepare → Execute。命令加载方式与下方 iteration 命令一致（Codex：仅 project scope）。
 
 项目知识脚手架：`mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`。
 
@@ -162,6 +164,7 @@ flowchart TD
 | `mstar-compound` / `mstar-compound-refresh` | 知识结晶 / 维护 |
 | `mstar-strategy` | `STRATEGY.md` 对齐 |
 | `mstar-skill-authoring` | skill 编写契约 |
+| `mstar-audit` | 只读代码库审计 → 优先级改进计划 |
 | `mstar-roles` | 角色提示词 + 加载清单 |
 | `mstar-host` | 宿主适配（OpenCode / Cursor / Codex / Kimi / ZCode / omp） |
 | `pm` | `/pm` / `/skill:pm` / 宿主 PM 入口 |
