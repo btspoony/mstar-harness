@@ -2,25 +2,32 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.7.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.7.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.7.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.7.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.7.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.7.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.7.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.7.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.7.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.7.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.7.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.7.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.7.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.7.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.7.1** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.7.1** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.7.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-08-05
+
 ### CLI (`@mstar-harness/cli`)
 
 - **omp doctor**: parse `omp plugin list --json` shape `{ npm, marketplace }` (omp 17.x) instead of only array/`plugins`, and match `manifest.name`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.7.1**.
 
 ## [1.7.0] - 2026-08-05
 
