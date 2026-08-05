@@ -25,7 +25,7 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 - **omp C5 corrected**: after plugin install/link, discovered `agents/*.md` role ids (`product-manager`, `architect`, `fullstack-dev`, `qc-specialist*`, …) are valid live `task.agent` values. Prefer **`agent: "<Execute as role-id>"`**; use generic `task` / `scout` / … only as fallback when the role is absent from the live schema. Using `agent: "task"` while the matching role agent is listed is an anti-pattern.
 - **C5b retained**: even when `agent` already matches the role id, Assignment still requires **Act as + skill load** (agent shell ≠ full Morning Star role prompt).
-- Updated `skills/mstar-host/references/omp.md` (self-contained C5 + C5b), narrowed `_shared/host-role-binding-core.md` to **Kimi/ZCode only** (omp is not a peer of built-in-only hosts), plus `parallel-dispatch.md` and `mstar-host` skill description; aligned INSTALL / `docs/cli.md`. Dropped the README “Host notes / 宿主说明” aside so the Use section stays entry-only.
+- Updated `skills/mstar-host/references/omp.md` (self-contained C5 + C5b); `_shared/host-role-binding-core.md` is **Kimi/ZCode only** (no omp rows/mentions — other hosts use their own references), plus `parallel-dispatch.md` and `mstar-host` skill description; aligned INSTALL / `docs/cli.md`. Dropped the README “Host notes / 宿主说明” aside so the Use section stays entry-only.
 
 ### Version alignment
 

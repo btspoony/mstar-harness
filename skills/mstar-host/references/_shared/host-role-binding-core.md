@@ -2,13 +2,7 @@
 
 Shared role-binding contract for **Kimi / ZCode** — hosts where Morning Star role ids are **never** valid invoke types, so picking `subagent_type` alone cannot carry Assignment IDENTITY + skill load.
 
-| Host class | Where C5 / C5b live |
-|------------|---------------------|
-| **Kimi / ZCode** | This file + `kimi.md` / `zcode.md` |
-| **omp** | **`omp.md` only** — live-schema role `task.agent` selection; do **not** treat omp as a Kimi/ZCode peer |
-| **Cursor / OpenCode / Codex** | Role via agent config or role-id `subagent_type` / `subagent` — follow those host references; they do **not** use this file for agent selection |
-
-Read this file from the active host reference when that host points here (Kimi / ZCode).
+Other hosts follow their own `references/<host>.md` and do **not** use this file for agent selection. Read this file only when the active host reference is Kimi or ZCode.
 
 ## C5 — invoke type selection (Kimi / ZCode)
 
