@@ -1,6 +1,6 @@
 # omp host reference
 
-Load when **`mstar-host`** detection resolves **omp** (Oh My Pi / `omp` session, `.omp-plugin/plugin.json` or `.claude-plugin/plugin.json` installed, **`task`** tool with **`agent`** / **`tasks[]`** batch shape, **`ask`** tool, **`hub`** tool, or `/skill:pm` / `/iteration-*` from this plugin).
+Load when **`mstar-host`** detection resolves **omp** (Oh My Pi / `omp` session, **`task`** tool with **`agent`** / **`tasks[]`** batch shape, **`ask`** tool, **`hub`** tool, or `/skill:pm` / `/iteration-*` from this plugin).
 
 Plan mode: read **`omp-plan-mode-bridge.md`** when `/plan`, plan-yolo, or plan-model / read-only-with-resolve plan UX is active.
 
@@ -29,6 +29,20 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 5. Load topic skills on demand per the role reference.
 
 Use skill names in prompts and references. Prefer `skill://<name>/…` / `/skill:<name>` over absolute local paths unless maintaining this repository.
+
+## Internal URLs
+
+omp resolves **internal URL schemes** natively (see <https://omp.sh/#urls>), so skills and shared content stay addressable wherever omp installs the plugin — prefer URLs over absolute local paths:
+
+| Scheme | Use |
+|--------|-----|
+| `skill://<name>` | Load a skill's `SKILL.md` — e.g. `skill://mstar-harness-core`, `skill://mstar-host` |
+| `skill://<name>/<path>` | Read a file inside a skill — e.g. `skill://mstar-host/references/omp.md` |
+| `local://<name>.md` | Share context / assignments with subagents — prefer over pasting large payloads inline |
+| `artifact://<id>` / `agent://<id>` | Read a subagent's output artifact / a nested child's output |
+| `history://<id>` | Read-only transcript of a (sub)agent session |
+
+`/skill:<name>` (slash command to **invoke**) and `skill://<name>` (URL the model can **`Read`**) resolve to the same skill. Put URLs in `task` assignment bodies and skill **Read next** lists so a role subagent loads the right skill regardless of install path — this is what makes cross-host skill references portable on omp.
 
 ## Tools map (default agent)
 

@@ -23,18 +23,19 @@ Load topic skills **on demand** per `mstar-roles` (do not read every `mstar-*` s
 
 ## Detect active host
 
-Use **capability signals** (not filesystem paths):
+Detect from **session tool shapes and available commands** — not from plugin markers on disk. The `*-plugin/plugin.json` files **cannot** identify the host: they all coexist in this harness source repo and in any multi-host install.
 
 | Signal | Host | Next read |
 |--------|------|-----------|
-| **CreatePlan** / **SwitchMode** available | `cursor` | `references/cursor.md`; Plan mode also `references/cursor-plan-mode-bridge.md` |
-| **`question`** tool or OpenCode-style **`task`** tool with **`subagent`** (not omp `agent`/`tasks[]`) | `opencode` | `references/opencode.md` |
-| **Task** + `subagent_type`, no CreatePlan | `cursor` | `references/cursor.md` |
-| **Codex app/CLI/plugin context**, `/plan`, `/goal`, Goal tools, `functions.*`, `codex_app.*`, `tool_search`, Browser plugin tools | `codex` | `references/codex.md`; Plan/Goal mode also `references/codex-plan-goal-mode-bridge.md` |
-| **`Agent`** / **`AgentSwarm`** / **`AskUserQuestion`** / **`EnterPlanMode`**, Kimi plugin (`.kimi-plugin/plugin.json`), `/morning-star-harness:*` commands | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
-| **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** / **`TodoWrite`**, no `AgentSwarm`, ZCode plugin (`.zcode-plugin/plugin.json`), `/morning-star-harness:*` commands | `zcode` | `references/zcode.md`; Plan mode also `references/zcode-plan-mode-bridge.md` |
-| **`task`** tool with **`agent`** / **`tasks[]`** batch, **`ask`**, **`hub`**, omp plugin (`.omp-plugin/plugin.json` / `.claude-plugin/plugin.json`), `/skill:pm` + `/iteration-*` filename commands | `omp` | `references/omp.md`; Plan mode also `references/omp-plan-mode-bridge.md` |
+| **`subagent_type`** param on the Task tool (plus **CreatePlan**/**SwitchMode** when Plan mode is active) | `cursor` | `references/cursor.md`; Plan mode also `references/cursor-plan-mode-bridge.md` |
+| **`question`** tool, or **`task`** tool with **`subagent`** (singular) — no `tasks[]` batch | `opencode` | `references/opencode.md` |
+| **`task`** tool with **`agent`** / **`tasks[]`** batch, **`ask`**, **`hub`** | `omp` | `references/omp.md`; Plan mode also `references/omp-plan-mode-bridge.md` |
+| **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** + **`AgentSwarm`** (Kimi-only) | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
+| **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** / **`TodoWrite`**, **no `AgentSwarm`** | `zcode` | `references/zcode.md`; Plan mode also `references/zcode-plan-mode-bridge.md` |
+| `/plan`, `/goal` slash commands; **Goal tools**; `functions.*` / `codex_app.*` tool namespaces; `tool_search`; Browser plugin tools | `codex` | `references/codex.md`; Plan/Goal mode also `references/codex-plan-goal-mode-bridge.md` |
 | Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, **`codex.md`**, **`kimi.md`**, **`zcode.md`**, and **`omp.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
+
+Order matters: check `cursor` → `opencode` → `omp` → `kimi` → `zcode` → `codex`. `subagent_type` (Cursor) vs `subagent` (OpenCode) vs `agent`/`tasks[]` (omp) is the sharpest split among the Task-based hosts.
 
 ## Parallel dispatch (invoke-capable hosts)
 

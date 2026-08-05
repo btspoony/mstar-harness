@@ -1,6 +1,6 @@
 # Codex host reference
 
-Load when **`mstar-host`** detection resolves **codex** (Codex app/CLI session, Codex plugin installed from `.codex-plugin/plugin.json`, Codex custom agents linked from `codex/agents/*.toml`, or Codex tool namespaces such as `functions.*`, `codex_app.*`, `tool_search`, `image_gen`, or Browser plugin tools).
+Load when **`mstar-host`** detection resolves **codex** (Codex app/CLI session, `/plan` / `/goal` slash commands, Goal tools, or Codex tool namespaces such as `functions.*`, `codex_app.*`, `tool_search`, `image_gen`, or Browser plugin tools).
 
 Plan / Goal Mode: read **`codex-plan-goal-mode-bridge.md`** when Codex Plan Mode (`/plan`) or Goal Mode (`/goal`, goal tools, or goal progress controls) is active. Codex session plans, UI todos, and goal text are not durable harness SSOT.
 
