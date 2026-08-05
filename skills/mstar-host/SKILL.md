@@ -41,6 +41,20 @@ Order matters: check `cursor` → `opencode` → `omp` → `kimi` → `zcode` �
 
 When PM dispatches **N >= 2** concurrent assignees (QC tri-review, dual-track implement, etc.) and the host exposes actual invoke / Task / subagent tools, read **`references/parallel-dispatch.md`** in the dispatch round (shared with `mstar-dispatch-gates`). Without a callable invoke tool when dispatch is required → **`Blocked`**; Assignment Markdown alone is not dispatch.
 
+## Resolve loaded skill root
+
+Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **Resolve the loaded skill directory first** — do **not** open `skills/<name>/…` from a consumer app cwd (that layout exists in the harness source / plugin package only).
+
+| Host | Prefer | Filesystem fallback (only if the host cannot load by name) |
+|------|--------|--------------------------------------------------------------|
+| **omp** | `skill://<name>` / `skill://<name>/<rel>` / `/skill:<name>` | Plugin package root `skills/<name>/` after install/link — not app cwd |
+| **Cursor** | Skill **name** via plugin skills | Global `~/.cursor/plugins/local/morning-star-harness/skills/<name>/`; project `.cursor/plugins/morning-star-harness/skills/<name>/` |
+| **Codex** | Skill **name** via plugin | Plugin-mounted `skills/<name>/`; project command skills under `.agents/skills/<name>/` |
+| **OpenCode** | Skill **name** via `@mstar-harness/opencode` | Package-internal `harness-skills/<name>/` — never `process.cwd()/skills/` |
+| **Kimi / ZCode** | Skill **name** / `/skill:<name>` | Plugin mount `./skills/<name>/` from the installed plugin root |
+
+Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and asset paths. Per-host URI / mount detail: `references/<host>.md`.
+
 ## Conflict order
 
 1. User explicit instructions (this turn)

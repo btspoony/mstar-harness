@@ -110,8 +110,9 @@ When a skill ships executables or assets under `scripts/` / `templates/` / `refe
 - Good: skill **`mstar-sdd`** → `scripts/sdd-workspace`
 - Good: `<mstar-sdd>/scripts/sdd-workspace` (placeholder for the loaded skill root)
 - Bad in runtime docs: `skills/mstar-sdd/scripts/sdd-workspace` as if it were a consumer-project cwd path
+- Bad in shipped rules / CLI notes: `skills/mstar-host/references/…` as a consumer cwd path — use **`mstar-host`** → `references/…` (omp may also cite `skill://mstar-host/references/…`)
 
-Agents discover skills by **name**; they often miss files when docs present a full repo-relative path and they search that literal string under the app checkout. Resolve the loaded skill directory first, then append `scripts/…`. Reserve `skills/<name>/…` only for harness-repo maintenance notes that explicitly say “from this repository root”.
+Agents discover skills by **name**; they often miss files when docs present a full repo-relative path and they search that literal string under the app checkout. Resolve the loaded skill directory first, then append `scripts/…` / `references/…`. **How** to resolve differs by host — use **`mstar-host`** § Resolve loaded skill root (omp `skill://`, Cursor plugin checkout under `~/.cursor/plugins/…` or `.cursor/plugins/…`, OpenCode `harness-skills/`, Codex/Kimi/ZCode plugin mounts). Reserve `skills/<name>/…` only for harness-repo maintenance notes that explicitly say "from this repository root".
 
 ## Progressive Disclosure
 

@@ -23,7 +23,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an
 4. Load `mstar-roles` and the active role reference.
 5. Load topic skills on demand per the role reference.
 
-Use skill names in prompts and references. Avoid absolute local paths unless the user is maintaining this repository or the skill is not installed and must be read from the checkout.
+Use skill names in prompts and references. Avoid absolute local paths unless the user is maintaining this repository or the skill is not installed and must be read from the checkout. Skill-root resolve (plugin `skills/<name>/`, project `.agents/skills/<name>/`) → `mstar-host` § Resolve loaded skill root.
 
 ## Clarify
 

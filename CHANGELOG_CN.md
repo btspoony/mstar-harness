@@ -17,6 +17,18 @@
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-08-06
+
+### Harness（技能路径发现 — 运行时表面）
+
+- 关闭仍留在**已发布运行时表面**上的 cwd 型 `skills/mstar-*` 陷阱：Cursor `rules/mstar-entry.mdc`、`rules/mstar-cursor-plan-mode.mdc`，以及 omp CLI 安装后提示 `packages/cli/src/adapters/omp.ts`（改为 `mstar-host → references/omp.md` / `skill://…`）。
+- **`mstar-host`**：新增 § Resolve loaded skill root（按宿主 prefer + 文件系统回退：omp `skill://`、Cursor 插件 checkout、OpenCode `harness-skills/`、Codex/Kimi/ZCode 插件挂载）。各宿主 reference 指向该表；`mstar-skill-authoring` 同步 rules/CLI note 反模式。
+- INSTALL / `docs/cli.md` 的 Host adapter 条目改为同一套技能相对写法（不再用 consumer cwd 的 `skills/mstar-host/references/…`）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.8.5**。
+
 ## [1.8.4] - 2026-08-06
 
 ### Harness（技能脚本路径发现）

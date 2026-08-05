@@ -149,7 +149,7 @@ Project scope: `npx @mstar-harness/cli init --target omp --scope project`.
 
 - `omp plugin list` package name is root **`morning-star`**; display name remains **morning-star-harness**.
 - Enter PM with `/skill:pm`. Iteration commands: `/iteration-start`, `/iteration-drive`, `/iteration-loop`.
-- Host adapter: `skills/mstar-host/references/omp.md`.
+- Host adapter: **`mstar-host`** → `references/omp.md` (`skill://mstar-host/references/omp.md`).
 
 ## Manual install
 
@@ -248,7 +248,7 @@ Codex plugin source in this repository:
 - Manifest: `.codex-plugin/plugin.json`
 - Runtime skills: `skills/`
 - Custom agents: `codex/agents/`
-- Host adapter: `skills/mstar-host/references/codex.md`
+- Host adapter: **`mstar-host`** → `references/codex.md`
 
 For project-local iteration skills, prefer `npx @mstar-harness/cli init --target codex --scope project` (see [Codex: project vs global scope](#codex-project-vs-global-scope)).
 
@@ -266,7 +266,7 @@ Kimi plugin source in this repository:
 - Manifest: `.kimi-plugin/plugin.json` (plugin root is repo root; paths `./skills/`, `./commands/`)
 - Runtime skills: `skills/`
 - Plugin commands: `commands/`
-- Host adapter: `skills/mstar-host/references/kimi.md`
+- Host adapter: **`mstar-host`** → `references/kimi.md`
 
 ### ZCode
 
@@ -280,7 +280,7 @@ Register the harness as a marketplace (without the CLI). Create `~/.zcode/cli/pl
       "name": "morning-star-harness",
       "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
       "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
-      "version": "1.8.4",
+      "version": "1.8.5",
       "category": "Productivity"
     }
   ]
@@ -309,7 +309,7 @@ ZCode plugin source in this repository:
 - Runtime skills: `skills/`
 - Plugin commands: `commands/`
 - Plugin agents: `agents/`
-- Host adapter: `skills/mstar-host/references/zcode.md`
+- Host adapter: **`mstar-host`** → `references/zcode.md`
 
 
 ### omp
@@ -342,7 +342,7 @@ npx @mstar-harness/cli doctor --target omp --scope project
 - Plugin package name in `omp plugin list` is root **`morning-star`** (`package.json` name); display name remains **morning-star-harness**.
 - Skills/commands are discovered from the linked/installed package root (`skills/`, `commands/`).
 - Enter PM with `/skill:pm`. Iteration commands are filename-based: `/iteration-start`, `/iteration-drive`, `/iteration-loop`.
-- Host adapter: `skills/mstar-host/references/omp.md`.
+- Host adapter: **`mstar-host`** → `references/omp.md` (`skill://mstar-host/references/omp.md`).
 
 omp plugin source in this repository:
 

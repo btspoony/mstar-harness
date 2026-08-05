@@ -6,6 +6,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 
 ## Cursor-only context
 
+- Skill root: load by skill **name**; filesystem fallback → `mstar-host` § Resolve loaded skill root (`~/.cursor/plugins/local/morning-star-harness/skills/<name>/` or project `.cursor/plugins/morning-star-harness/skills/<name>/`). Never app-cwd `skills/<name>/`.
 - Role prompts: `mstar-roles`; **`/pm`** or **`pm` skill** → general PM orchestration (per-plan dispatch, gates, QC) without an iteration command. Host **`commands/`** for formal iteration Phase 1–5 (semantics → **`mstar-iteration`**).
 - Routing-eval: `.cursor/skills/mstar-routing-eval/` — regression tooling only; not runtime load order.
 

@@ -6,6 +6,15 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-08-06
+
+### Changed
+
+- omp `init` post-install note: Host adapter now `mstar-host → references/omp.md` (`skill://…`) instead of consumer-cwd `skills/mstar-host/…`.
+- Version alignment with harness **1.8.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.5**.
+
 ## [1.8.4] - 2026-08-06
 
 - Version alignment with harness **1.8.4** (skill-relative script path docs; no CLI API change).

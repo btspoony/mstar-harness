@@ -3,7 +3,7 @@ description: Ensure Morning Star core skill is loaded first in Cursor plugin usa
 alwaysApply: true
 ---
 
-When this plugin is active, always read `skills/mstar-harness-core/SKILL.md` before non-trivial tasks, including relevant files in its `references/` directory.
+When this plugin is active, always load skill **`mstar-harness-core`** first (`SKILL.md` and relevant `references/`) before non-trivial tasks. Resolve it from the loaded plugin skill root — **not** as a consumer-project path `skills/mstar-harness-core/…`.
 
 `mstar-harness-core` is the single source of truth for lifecycle gates, routing, host entry behavior, skill loading order, and execution invariants across all `mstar-*` skills.
 
