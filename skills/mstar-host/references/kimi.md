@@ -1,6 +1,6 @@
 # Kimi host reference
 
-Load when **`mstar-host`** detection resolves **kimi** (Kimi Code CLI session, `.kimi-plugin/plugin.json` plugin installed, `Agent` / `AgentSwarm` / `AskUserQuestion` / `EnterPlanMode` tools, or `/morning-star-harness:*` plugin commands).
+Load when **`mstar-host`** detection resolves **kimi** (Kimi Code CLI session, `Agent` / `AgentSwarm` / `AskUserQuestion` / `EnterPlanMode` tools, or `/morning-star-harness:*` plugin commands).
 
 Plan mode: read **`kimi-plan-mode-bridge.md`** when `EnterPlanMode` / `ExitPlanMode`, `/plan`, or `kimi --plan` is active.
 

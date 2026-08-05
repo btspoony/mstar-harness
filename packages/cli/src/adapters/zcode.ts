@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentAdapter, Scope } from "../types";
-import { ensureObject, readJson, writeJson, resolveProjectRoot } from "../utils";
+import { ensureObject, readJson, writeJson, resolveProjectRoot, readHarnessVersion } from "../utils";
 import {
   REPO_URL,
   PLUGIN_NAME,
@@ -21,7 +21,6 @@ const MARKETPLACE_NAME = "mstar-local";
 const MARKETPLACE_DESCRIPTION = "Morning Star harness marketplace (GitHub source).";
 const PLUGIN_DESCRIPTION =
   "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.";
-const PLUGIN_VERSION = "1.6.0";
 const PLUGIN_CATEGORY = "Productivity";
 const GITHUB_REPO = "btspoony/mstar-harness";
 const GITHUB_REF = "main";
@@ -65,7 +64,7 @@ function marketplacePluginEntry(): MarketplacePluginEntry {
     name: PLUGIN_NAME,
     source: { ...GITHUB_SOURCE },
     description: PLUGIN_DESCRIPTION,
-    version: PLUGIN_VERSION,
+    version: readHarnessVersion(),
     category: PLUGIN_CATEGORY,
   };
 }
@@ -156,8 +155,9 @@ function validateMarketplaceJson() {
   if (source.repo !== expected.source.repo) {
     errors.push(`ZCode marketplace plugin source.repo must be ${expected.source.repo}.`);
   }
-  if (entry.version !== PLUGIN_VERSION) {
-    errors.push(`ZCode marketplace plugin version must be ${PLUGIN_VERSION}.`);
+  const expectedVersion = readHarnessVersion();
+  if (entry.version !== expectedVersion) {
+    errors.push(`ZCode marketplace plugin version must be ${expectedVersion}.`);
   }
   return errors;
 }

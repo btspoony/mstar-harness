@@ -35,12 +35,12 @@ npx @mstar-harness/cli init
 
 | 宿主 | 命令 |
 |------|------|
+| omp | `npx @mstar-harness/cli init --target omp`（链接 `~/.mstar/harness`）或 `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
-| Codex | `npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal` |
 | Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理安装 **morning-star-harness** |
-| omp | `npx @mstar-harness/cli init --target omp`（链接 `~/.mstar/harness`）或 `omp plugin install github:btspoony/mstar-harness` |
+| Codex | `npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal` |
 
 校验：`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp>`。
 
@@ -50,7 +50,29 @@ npx @mstar-harness/cli init
 
 ## 使用
 
-三种入口：**代码库审计**（发现该做什么）、**不跑迭代**（单 plan / hotfix）、或 **跑迭代**（多 plan Phase 1–5）。
+三种入口：**不跑迭代**（单 plan / hotfix）、**跑迭代**（多 plan Phase 1–5）、或 **代码库审计**（发现该做什么）。
+
+### 通用（不跑迭代）
+
+进入 PM，然后走 per-plan 循环：`Prepare → Execute → QC → QA gate → Done`。
+
+| 宿主 | 进入 PM |
+|------|---------|
+| omp | 每会话 `/skill:pm`（无自动加载） |
+| OpenCode | `agent.project-manager`（`agents/project-manager.md`） |
+| Cursor | `/pm` |
+| Kimi | 新会话自动加载 `pm`；或 `/skill:pm` |
+| ZCode | 每会话 `/morning-star-harness:pm`（无自动加载） |
+| Codex | `/pm` |
+
+宿主限制（Kimi/ZCode/omp 子代理面、角色绑定在 prompt）：`mstar-host/references/kimi.md`、`mstar-host/references/zcode.md`、`mstar-host/references/omp.md`。
+
+### 迭代
+
+| 路径 | 何时 |
+|------|------|
+| `/iteration-start` → `/iteration-drive` | 首次迭代，或需要人工方向锁定后再执行 |
+| `/iteration-loop` | Phase 1→5 连续少确认（可选 `direction`、`scale` S\|M\|L\|XL） |
 
 ### 代码库审计
 
@@ -60,37 +82,15 @@ npx @mstar-harness/cli init
 
 只读顾问——**不**改源码。产出可喂给 iteration-start Research 或常规 Prepare → Execute。深度级别：`quick` / `standard`（默认） / `deep`；可按类别聚焦（`security`、`perf`、`tests`、…）或用 `branch` / `next` 变体。SSOT → `mstar-audit`。
 
-### 不跑迭代
-
-进入 PM，然后走 per-plan 循环：`Prepare → Execute → QC → QA gate → Done`。
-
-| 宿主 | 进入 PM |
-|------|---------|
-| OpenCode | `agent.project-manager`（`agents/project-manager.md`） |
-| Cursor | `/pm` |
-| Codex | `/pm` |
-| Kimi | 新会话自动加载 `pm`；或 `/skill:pm` |
-| ZCode | 每会话 `/morning-star-harness:pm`（无自动加载） |
-| omp | 每会话 `/skill:pm`（无自动加载） |
-
-宿主限制（Kimi/ZCode/omp 子代理面、角色绑定在 prompt）：`mstar-host/references/kimi.md`、`mstar-host/references/zcode.md`、`mstar-host/references/omp.md`。
-
-### 跑迭代
-
-| 路径 | 何时 |
-|------|------|
-| `/iteration-start` → `/iteration-drive` | 首次迭代，或需要人工方向锁定后再执行 |
-| `/iteration-loop` | Phase 1→5 连续少确认（可选 `direction`、`scale` S\|M\|L\|XL） |
-
 ### 命令加载
 
 | 宿主 | 命令加载 |
 |------|----------|
+| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（插件 `commands/` 文件名命令） |
 | Cursor / OpenCode | 从 `commands/` 打包（OpenCode：插件 `harness-commands/`） |
+| Kimi / ZCode | 插件 manifest：`/morning-star-harness:iteration-start` · `:codebase-audit` 等 |
 | Codex project | `.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链） |
 | Codex global | **不**装 project 命令 — 用 `--scope project` |
-| Kimi / ZCode | 插件 manifest：`/morning-star-harness:iteration-start` · `:codebase-audit` 等 |
-| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（插件 `commands/` 文件名命令） |
 
 Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
 
@@ -174,7 +174,7 @@ flowchart TD
 | `mstar-skill-authoring` | skill 编写契约 |
 | `mstar-audit` | 只读代码库审计 → 优先级改进计划 |
 | `mstar-roles` | 角色提示词 + 加载清单 |
-| `mstar-host` | 宿主适配（OpenCode / Cursor / Codex / Kimi / ZCode / omp） |
+| `mstar-host` | 宿主适配（omp / OpenCode / Cursor / Kimi / ZCode / Codex） |
 | `pm` | `/pm` / `/skill:pm` / 宿主 PM 入口 |
 
 消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。细则 → `mstar-plan-conventions`。

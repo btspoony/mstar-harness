@@ -22,7 +22,7 @@ English / [中文](README_CN.md)
 
 - Start a usable multi-role workflow quickly
 - Run with unified `mstar-*` skills instead of scattered rules
-- Reuse one core process across OpenCode, Cursor, Codex, Kimi Code, ZCode, and omp
+- Reuse one core process across omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
 - **Recommended host order** (best → usable): **omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex** — omp/OpenCode/Cursor have the richest subagent + Plan UX; Kimi/ZCode work with built-in agent types only; Codex has the most constrained dispatch surface.
 Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
@@ -35,12 +35,12 @@ npx @mstar-harness/cli init
 
 | Host | Command |
 |------|---------|
+| omp | `npx @mstar-harness/cli init --target omp` (links `~/.mstar/harness`) or `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
-| Codex | `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal` |
 | Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** in ZCode → Settings → Plugin Management |
-| omp | `npx @mstar-harness/cli init --target omp` (links `~/.mstar/harness`) or `omp plugin install github:btspoony/mstar-harness` |
+| Codex | `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal` |
 
 Verify: `npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp>`.
 
@@ -50,7 +50,29 @@ Reload the host after install (OpenCode restart / Cursor **Developer: Reload Win
 
 ## Use
 
-Three entry shapes: **codebase audit** (discover what to do), **without iteration** (single plan / hotfix), or **with iteration** (multi-plan Phase 1–5).
+Three entry shapes: **without iteration** (single plan / hotfix), **with iteration** (multi-plan Phase 1–5), or **codebase audit** (discover what to do).
+
+### General (without iteration)
+
+Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate → Done`.
+
+| Host | Enter PM |
+|------|----------|
+| omp | `/skill:pm` each session (no auto-load) |
+| OpenCode | `agent.project-manager` (`agents/project-manager.md`) |
+| Cursor | `/pm` |
+| Kimi | session auto-loads `pm`; or `/skill:pm` |
+| ZCode | `/morning-star-harness:pm` each session (no auto-load) |
+| Codex | `/pm` |
+
+Host limits (Kimi/ZCode/omp subagent surfaces, role binding in prompt): `mstar-host/references/kimi.md`, `mstar-host/references/zcode.md`, `mstar-host/references/omp.md`.
+
+### Iteration
+
+| Path | When |
+|------|------|
+| `/iteration-start` → `/iteration-drive` | First iteration, or need human direction lock before execute |
+| `/iteration-loop` | Full Phase 1→5 with minimal check-ins (optional `direction`, `scale` S\|M\|L\|XL) |
 
 ### Codebase audit
 
@@ -60,37 +82,15 @@ Three entry shapes: **codebase audit** (discover what to do), **without iteratio
 
 Read-only advisory — never edits source. Output feeds iteration-start Research or normal Prepare → Execute. Effort levels: `quick` / `standard` (default) / `deep`; category focus (`security`, `perf`, `tests`, …) or `branch` / `next` variants. SSOT → `mstar-audit`.
 
-### Without iteration
-
-Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate → Done`.
-
-| Host | Enter PM |
-|------|----------|
-| OpenCode | `agent.project-manager` (`agents/project-manager.md`) |
-| Cursor | `/pm` |
-| Codex | `/pm` |
-| Kimi | session auto-loads `pm`; or `/skill:pm` |
-| ZCode | `/morning-star-harness:pm` each session (no auto-load) |
-| omp | `/skill:pm` each session (no auto-load) |
-
-Host limits (Kimi/ZCode/omp subagent surfaces, role binding in prompt): `mstar-host/references/kimi.md`, `mstar-host/references/zcode.md`, `mstar-host/references/omp.md`.
-
-### With iteration
-
-| Path | When |
-|------|------|
-| `/iteration-start` → `/iteration-drive` | First iteration, or need human direction lock before execute |
-| `/iteration-loop` | Full Phase 1→5 with minimal check-ins (optional `direction`, `scale` S\|M\|L\|XL) |
-
 ### Command loading
 
 | Host | How commands load |
 |------|-------------------|
+| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit` (filename commands from plugin `commands/`) |
 | Cursor / OpenCode | Bundled from `commands/` (OpenCode: plugin `harness-commands/`) |
+| Kimi / ZCode | `/morning-star-harness:iteration-start` · `:codebase-audit` (etc.) via plugin manifest |
 | Codex project | `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
 | Codex global | Project-scoped commands **not** installed — use `--scope project` |
-| Kimi / ZCode | `/morning-star-harness:iteration-start` · `:codebase-audit` (etc.) via plugin manifest |
-| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit` (filename commands from plugin `commands/`) |
 
 Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
 
@@ -174,7 +174,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-skill-authoring` | Skill authoring contracts |
 | `mstar-audit` | Read-only codebase audit → prioritized improvement plans |
 | `mstar-roles` | Role prompts + load lists |
-| `mstar-host` | Host adapters (OpenCode / Cursor / Codex / Kimi / ZCode / omp) |
+| `mstar-host` | Host adapters (omp / OpenCode / Cursor / Kimi / ZCode / Codex) |
 | `pm` | `/pm` / `/skill:pm` / host PM entry |
 
 Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Details → `mstar-plan-conventions`.

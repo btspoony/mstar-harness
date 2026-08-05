@@ -1,8 +1,5 @@
 #!/usr/bin/env bun
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
@@ -10,17 +7,9 @@ import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
 import type { DoctorOptions, InitOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
-import { parseCsv, readJson, writeJson } from "./utils";
+import { parseCsv, readJson, writeJson, readHarnessVersion } from "./utils";
 
-const packageJsonPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../package.json");
-const packageVersion = (() => {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: string };
-    return parsed.version || "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-})();
+const packageVersion = readHarnessVersion();
 
 const program = new Command();
 

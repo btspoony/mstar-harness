@@ -1,6 +1,6 @@
 # ZCode host reference
 
-Load when **`mstar-host`** detection resolves **zcode** (ZCode client session, `.zcode-plugin/plugin.json` plugin installed, `Agent` / `AskUserQuestion` / `EnterPlanMode` / `TodoWrite` tools, or `/morning-star-harness:*` plugin commands).
+Load when **`mstar-host`** detection resolves **zcode** (ZCode client session, `Agent` / `AskUserQuestion` / `EnterPlanMode` / `TodoWrite` tools, or `/morning-star-harness:*` plugin commands).
 
 Plan mode: read **`zcode-plan-mode-bridge.md`** when `EnterPlanMode` / `ExitPlanMode` is active.
 

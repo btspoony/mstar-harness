@@ -1,21 +1,34 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.2**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.1** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.1** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.1** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.2** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.2** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.2** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.2** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.2** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.2** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.8.2] - 2026-08-05
+
+### 文档（README + 宿主识别）
+
+- **README**（`README.md` + `README_CN.md`）：所有宿主表格按推荐宿主顺序重排（`omp > OpenCode > Cursor > Kimi = ZCode > Codex`）；**使用**一节重组为 通用（不跑迭代） → 迭代 → 代码库审计。
+- **`mstar-host`**：重写宿主识别表，**仅用会话工具形态 / 可见命令**——`*-plugin/plugin.json` 文件无法识别宿主（在本源仓与任何多宿主安装里它们都同时存在）。合并重复的 Cursor 两行为一行，以 `subagent_type` 为关键信号。
+- **宿主参考**：移除 `codex.md` / `kimi.md` / `zcode.md` / `omp.md` 各自 `Load when` 触发行里的插件标记子句，只保留工具形态 / 可见命令信号。路径参考上下文行与 plan-mode bridge 的 `plugin is installed` 前提留作文档（非识别触发）。
+- **omp**：在 `references/omp.md` 记录原生 internal URL 方案（`skill://`、`local://`、`agent://`、`artifact://`、`history://`）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.8.2**。
 
 ## [1.8.1] - 2026-08-05
 
