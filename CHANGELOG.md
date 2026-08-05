@@ -2,21 +2,36 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.6.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.7.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.6.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.6.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.6.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.6.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.6.1** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.6.1** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.6.1** |
+| Monorepo root | `morning-star` (`package.json`) | **1.7.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.7.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.7.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.7.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.7.0** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.7.0** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.7.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.7.0] - 2026-08-05
+
+### Harness (omp host surface)
+
+- **omp as sixth host surface**: markers `.omp-plugin/plugin.json` + `.claude-plugin/plugin.json` (plugin root = repo root; mounts `./skills/`, `./commands/`, `./agents/`). New `skills/mstar-host/references/omp.md` covering `task`/`ask`/`hub`, filename slash commands (`/iteration-*`), and C5/C5b built-in `task.agent` + role-in-prompt binding. `omp-plan-mode-bridge.md` for `/plan` dual-write. `mstar-host` detect table + `pm` entry + `parallel-dispatch` updated.
+- Install: `omp plugin install github:btspoony/mstar-harness` or `omp plugin link` of the local harness checkout; package list name is root `morning-star`.
+
+### CLI (`@mstar-harness/cli`)
+
+- **`omp` install target**: `npx @mstar-harness/cli init --target omp` ensures `~/.mstar/harness` and runs `omp plugin link` (falls back to `omp plugin install github:btspoony/mstar-harness`). `doctor --target omp` checks markers, smoke skills/commands, and `omp plugin list`. `shared-install` `HARNESS_MARKERS` accepts `.omp-plugin/plugin.json`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.7.0**.
 
 ## [1.6.1] - 2026-08-04
 

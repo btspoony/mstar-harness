@@ -1,6 +1,6 @@
 {
   "name": "morning-star",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "private": true,
   "type": "module",
   "main": "packages/opencode/src/mstar.ts",
@@ -26,5 +26,9 @@
   "packageManager": "bun@1.2.17",
   "devDependencies": {
     "@types/node": "^25.6.0"
+  },
+  "omp": {
+    "name": "morning-star-harness",
+    "description": "Morning Star multi-agent harness skills and iteration commands for omp."
   }
 }

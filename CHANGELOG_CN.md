@@ -1,20 +1,35 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.6.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.7.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.6.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.6.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.6.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.6.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.6.1** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.6.1** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.6.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.7.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.7.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.7.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.7.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.7.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.7.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.7.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.7.0] - 2026-08-05
+
+### Harness（omp 宿主面）
+
+- **omp 作为第六宿主面**：标记 `.omp-plugin/plugin.json` + `.claude-plugin/plugin.json`（插件根 = 仓库根；挂载 `./skills/`、`./commands/`、`./agents/`）。新增 `skills/mstar-host/references/omp.md`，覆盖 `task`/`ask`/`hub`、文件名 slash 命令（`/iteration-*`）、以及 C5/C5b 内置 `task.agent` + prompt 角色绑定。`omp-plan-mode-bridge.md` 用于 `/plan` 双写。`mstar-host` detect 表、`pm` 入口、`parallel-dispatch` 已同步。
+- 安装：`omp plugin install github:btspoony/mstar-harness` 或对本地 harness checkout 执行 `omp plugin link`；`omp plugin list` 中的包名为根 `morning-star`。
+
+### CLI（`@mstar-harness/cli`）
+
+- **`omp` 安装目标**：`npx @mstar-harness/cli init --target omp` 确保 `~/.mstar/harness` 并执行 `omp plugin link`（失败则回退 `omp plugin install github:btspoony/mstar-harness`）。`doctor --target omp` 校验标记、skills/commands 冒烟与 `omp plugin list`。`shared-install` 的 `HARNESS_MARKERS` 接受 `.omp-plugin/plugin.json`。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.7.0**。
 
 ## [1.6.1] - 2026-08-04
 
