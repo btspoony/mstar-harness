@@ -104,7 +104,35 @@ Single-task shorthand may exist depending on host version — always match the l
 
 ### Role binding in prompt (C5b — required)
 
-Even when `agent` already matches the role id, still bind Morning Star process in the Assignment / `task` body (skill load is not automatic from the agent shell alone). Contract + template → **`_shared/host-role-binding-core.md`** (C5/C5b). omp-specific invoke shapes, same turn:
+omp C5/C5b SSOT is **this file** — do **not** use `_shared/host-role-binding-core.md` (that file is Kimi/ZCode only). Even when `agent` already matches the role id, still bind Morning Star process in the Assignment / `task` body (agent shell ≠ full role prompt; skill load is not automatic).
+
+Required in every role dispatch:
+
+1. **`Execute as: <role-id>`** in Assignment (harness routing SSOT).
+2. **`Act as <role-id>`** (or equivalent) at the top of the `task` body.
+3. **Skill load list** — instruct the subagent to read `mstar-roles` → `references/<role-id>.md` (or shared reference + parameters) and topic skills per that reference.
+4. **`agent`** — live-schema role id per C5 above (not “always `task`”).
+
+Paste-only Assignment **without** a `task` invoke is **not** dispatch.
+
+Assignment / prompt template:
+
+```markdown
+## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Working branch**: feat/example
+**Plan Path**: .mstar/plans/20260717-example.md
+
+**IDENTITY:** You ARE `fullstack-dev`. Act as `fullstack-dev` for this task.
+
+Load: `mstar-harness-core` → `mstar-host` → `omp.md` → `mstar-roles` → `references/fullstack-dev-shared.md` → topic skills per that reference.
+
+<task body>
+```
+
+omp invoke shapes, same turn:
 
 ```text
 task(
@@ -145,7 +173,7 @@ task(
 
 ## PM dispatch (`task`)
 
-Harness **dispatch** on omp = **one or more `task` tool calls** with correct **`agent`** values and role-bound assignment text (C5b → **`_shared/host-role-binding-core.md`**). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
+Harness **dispatch** on omp = **one or more `task` tool calls** with correct **`agent`** values and role-bound assignment text (C5 + C5b in this file). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
 
 | Harness | omp |
 |---------|-----|
