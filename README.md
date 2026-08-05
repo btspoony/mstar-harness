@@ -65,8 +65,6 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 | ZCode | `/morning-star-harness:pm` each session (no auto-load) |
 | Codex | `/pm` |
 
-Host notes (Kimi/ZCode built-in agent types + prompt role binding; omp prefers live-schema role agents from `agents/*.md` with C5b skill load): `mstar-host/references/kimi.md`, `mstar-host/references/zcode.md`, `mstar-host/references/omp.md`.
-
 ### Iteration
 
 | Path | When |

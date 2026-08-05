@@ -23,7 +23,7 @@
 
 - **修正 omp C5**：插件 install/link 后，由 `agents/*.md` 发现的角色 id（`product-manager`、`architect`、`fullstack-dev`、`qc-specialist*` 等）是合法的 live `task.agent`。优先 **`agent: "<Execute as role-id>"`**；仅当 live schema 未列出该角色时才回退 `task` / `scout` / …。schema 已有对应角色却仍写 `agent: "task"` 为反模式。
 - **保留 C5b**：即使 `agent` 已等于角色 id，Assignment 仍需 **Act as + skill load**（agent shell ≠ 完整 Morning Star 角色提示）。
-- 更新 `skills/mstar-host/references/omp.md`、`_shared/host-role-binding-core.md`（拆分 Kimi/ZCode vs omp）、`parallel-dispatch.md`、`mstar-host` skill description；同步 README / INSTALL / `docs/cli.md` 表述。
+- 更新 `skills/mstar-host/references/omp.md`、`_shared/host-role-binding-core.md`（拆分 Kimi/ZCode vs omp）、`parallel-dispatch.md`、`mstar-host` skill description；同步 INSTALL / `docs/cli.md`。删除 README「宿主说明 / Host notes」旁注，Use 区只保留入口。
 
 ### 版本对齐
 
