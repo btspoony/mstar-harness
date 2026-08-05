@@ -55,7 +55,7 @@ Kimi is **not** a CLI `--target`. Install via Kimi TUI:
 /plugins reload
 ```
 
-See [INSTALL.md](../INSTALL.md#kimi) and `skills/mstar-host/references/kimi.md` for host behavior (`sessionStart.skill: pm`, `/morning-star-harness:iteration-*`, C5/C5b role-in-prompt).
+See [INSTALL.md](../INSTALL.md#kimi) and **`mstar-host`** → `references/kimi.md` for host behavior (`sessionStart.skill: pm`, `/morning-star-harness:iteration-*`, C5/C5b role-in-prompt).
 
 
 ### omp
@@ -73,7 +73,7 @@ Alternate without the CLI:
 - `omp plugin install github:btspoony/mstar-harness`
 - or `omp plugin link ~/.mstar/harness`
 
-See [INSTALL.md](../INSTALL.md#omp) and `skills/mstar-host/references/omp.md` for host behavior (`/skill:pm`, filename `/iteration-*` commands, live-schema role `task.agent` preference + C5b skill load).
+See [INSTALL.md](../INSTALL.md#omp) and **`mstar-host`** → `references/omp.md` for host behavior (`/skill:pm`, filename `/iteration-*` commands, live-schema role `task.agent` preference + C5b skill load).
 
 
 ## Install
@@ -128,7 +128,7 @@ Codex install:
   - Codex custom agents are linked from `~/.mstar/harness/codex/agents/*.toml`.
   - **Project scope only:** `iteration-start`, `iteration-drive`, and `iteration-loop` are installed as project-local skills under `.agents/skills/<name>/SKILL.md` (symlinked to `~/.mstar/harness/commands/<name>.md`); the CLI gitignores those paths.
   - **Global scope:** iteration skills are **not** installed (avoids polluting other projects); `init` prints a warning — re-run with `--scope project` to enable them.
-  - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in `skills/mstar-host/references/codex.md`.
+  - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in **`mstar-host`** → `references/codex.md`.
 
 Kimi: not a CLI target — use `/plugins install` in Kimi TUI (see [INSTALL.md](../INSTALL.md#kimi)).
 

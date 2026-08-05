@@ -43,7 +43,7 @@ When Plan mode is used to **start a new iteration**:
 - After user signals feedback-close: optional **minimal** deferred interview **only if** blocking gaps remain — still edit the **same** file. Never open a second CreatePlan.
 - If a duplicate plan file appears: merge into the original and delete the duplicate.
 - **Do not** dispatch Review & Edit, commit, or create the integration branch until the user clicks **Build**.
-- Detail: `skills/mstar-host/references/cursor-plan-mode-bridge.md` § `mstar-iteration` Phase 1 in Plan mode.
+- Detail: **`mstar-host`** → `references/cursor-plan-mode-bridge.md` § `mstar-iteration` Phase 1 in Plan mode.
 
 ## Build resume contract
 
@@ -58,4 +58,4 @@ When the user clicks **Build** or Cursor switches from Plan mode to Agent mode:
 
 ## Detail
 
-Read `skills/mstar-host/references/cursor-plan-mode-bridge.md` (via `mstar-host` skill) for templates and checklists. Conflict with harness invariants → **`mstar-harness-core`** wins.
+Read **`mstar-host`** → `references/cursor-plan-mode-bridge.md` for templates and checklists. Conflict with harness invariants → **`mstar-harness-core`** wins.

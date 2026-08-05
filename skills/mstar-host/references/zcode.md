@@ -25,7 +25,7 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 4. Load `mstar-roles` and the active role reference.
 5. Load topic skills on demand per the role reference.
 
-Use skill names in prompts and references. Avoid absolute local paths unless maintaining this repository or skills are not installed.
+Use skill names in prompts and references. Avoid absolute local paths unless maintaining this repository or skills are not installed. Skill-root resolve (plugin mount `./skills/<name>/`) → `mstar-host` § Resolve loaded skill root.
 
 ## Tools map (default agent)
 

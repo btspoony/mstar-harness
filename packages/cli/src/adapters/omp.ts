@@ -172,7 +172,7 @@ function runInit(scope: Scope, dryRun: boolean) {
 
   notes.push("Verify with: omp plugin list");
   notes.push("Enter PM with /skill:pm ; commands: /iteration-start /iteration-drive /iteration-loop /codebase-audit");
-  notes.push(`Host adapter: skills/mstar-host/references/omp.md`);
+  notes.push(`Host adapter: mstar-host → references/omp.md (skill://mstar-host/references/omp.md)`);
   notes.push(`Alternate install without CLI link: omp plugin install ${REPO_URL.replace("https://github.com/", "github:").replace(/\.git$/, "")}`);
 
   return {

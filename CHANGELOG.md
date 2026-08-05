@@ -19,6 +19,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-08-06
+
+### Harness (skill path discovery — runtime surfaces)
+
+- Closed remaining cwd-looking `skills/mstar-*` traps on **shipped runtime surfaces**: Cursor `rules/mstar-entry.mdc` and `rules/mstar-cursor-plan-mode.mdc`, plus omp CLI post-install note in `packages/cli/src/adapters/omp.ts` (now `mstar-host → references/omp.md` / `skill://…`).
+- **`mstar-host`**: new § Resolve loaded skill root (per-host prefer + filesystem fallback: omp `skill://`, Cursor plugin checkouts, OpenCode `harness-skills/`, Codex/Kimi/ZCode plugin mounts). Host references point at the table; `mstar-skill-authoring` documents the same anti-pattern for rules/CLI notes.
+- INSTALL / `docs/cli.md` Host adapter bullets use the same skill-relative form (not consumer-cwd `skills/mstar-host/references/…`).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.8.5**.
+
 ## [1.8.4] - 2026-08-06
 
 ### Harness (skill script path discovery)

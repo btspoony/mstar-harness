@@ -6,6 +6,15 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-08-06
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- Sync `mstar-host` § Resolve loaded skill root + host-reference skill-root cues; `mstar-skill-authoring` anti-pattern for rules/CLI cwd paths.
+- Version alignment with harness **1.8.5** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.5**.
+
 ## [1.8.4] - 2026-08-06
 
 - **Bundled skills**: skill-relative script path naming (`mstar-sdd` → `scripts/…`) so agents resolve scripts from the loaded skill directory instead of consumer-cwd `skills/…` paths.
