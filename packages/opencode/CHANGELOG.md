@@ -4,6 +4,12 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## [1.7.1] - 2026-08-05
+
+- Version alignment with harness **1.7.1** (no OpenCode package API change; CLI omp doctor fix).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.7.1**.
+
 ## [1.7.0] - 2026-08-05
 
 - Version alignment with harness **1.7.0** (omp host surface is added at the harness/CLI layer; OpenCode package unchanged beyond version bump / bundled skills sync).

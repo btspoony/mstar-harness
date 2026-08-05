@@ -4,6 +4,15 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## [Unreleased]
+
+## [1.7.1] - 2026-08-05
+
+- Fix omp doctor plugin detection for `omp plugin list --json` `{ npm, marketplace }` shape.
+- Version alignment with harness **1.7.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.7.1**.
+
 ## [1.7.0] - 2026-08-05
 
 - Add **`omp`** install target (`packages/cli/src/adapters/omp.ts`): link/install Morning Star into omp plugins; doctor validates markers + `omp plugin list`.

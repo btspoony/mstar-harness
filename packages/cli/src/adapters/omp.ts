@@ -42,8 +42,26 @@ function listInstalledPlugins(): Array<Record<string, unknown>> {
     });
     const parsed = JSON.parse(raw) as unknown;
     if (Array.isArray(parsed)) return parsed as Array<Record<string, unknown>>;
-    if (parsed && typeof parsed === "object" && Array.isArray((parsed as { plugins?: unknown }).plugins)) {
-      return (parsed as { plugins: Array<Record<string, unknown>> }).plugins;
+    if (parsed && typeof parsed === "object") {
+      const record = parsed as {
+        plugins?: unknown;
+        npm?: unknown;
+        marketplace?: unknown;
+      };
+      if (Array.isArray(record.plugins)) {
+        return record.plugins as Array<Record<string, unknown>>;
+      }
+      // omp 17.x: { npm: [...], marketplace: [...] }
+      const entries: Array<Record<string, unknown>> = [];
+      for (const key of ["npm", "marketplace"] as const) {
+        const group = record[key];
+        if (Array.isArray(group)) {
+          for (const item of group) {
+            if (item && typeof item === "object") entries.push(item as Record<string, unknown>);
+          }
+        }
+      }
+      if (entries.length > 0) return entries;
     }
     return [];
   } catch {
@@ -55,8 +73,13 @@ function findInstalledPlugin(plugins: Array<Record<string, unknown>>) {
   return plugins.find((entry) => {
     const name = typeof entry.name === "string" ? entry.name : "";
     const pathValue = typeof entry.path === "string" ? entry.path : "";
-    if (PACKAGE_NAMES.has(name)) return true;
-    if (name.includes("morning-star")) return true;
+    const manifest =
+      entry.manifest && typeof entry.manifest === "object"
+        ? (entry.manifest as Record<string, unknown>)
+        : null;
+    const manifestName = typeof manifest?.name === "string" ? manifest.name : "";
+    if (PACKAGE_NAMES.has(name) || PACKAGE_NAMES.has(manifestName)) return true;
+    if (name.includes("morning-star") || manifestName.includes("morning-star")) return true;
     if (pathValue.includes("mstar-harness") || pathValue.includes(`${path.sep}morning-star`)) return true;
     return false;
   });

@@ -1,20 +1,31 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.7.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.7.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.7.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.7.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.7.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.7.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.7.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.7.0** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.7.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.7.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.7.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.7.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.7.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.7.1** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.7.1** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.7.1** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.7.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.7.1] - 2026-08-05
+
+### CLI（`@mstar-harness/cli`）
+
+- **omp doctor**：解析 omp 17.x 的 `omp plugin list --json` 形状 `{ npm, marketplace }`（不再只认数组/`plugins`），并匹配 `manifest.name`。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.7.1**。
 
 ## [1.7.0] - 2026-08-05
 
