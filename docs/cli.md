@@ -73,7 +73,7 @@ Alternate without the CLI:
 - `omp plugin install github:btspoony/mstar-harness`
 - or `omp plugin link ~/.mstar/harness`
 
-See [INSTALL.md](../INSTALL.md#omp) and `skills/mstar-host/references/omp.md` for host behavior (`/skill:pm`, filename `/iteration-*` commands, C5/C5b role-in-prompt).
+See [INSTALL.md](../INSTALL.md#omp) and `skills/mstar-host/references/omp.md` for host behavior (`/skill:pm`, filename `/iteration-*` commands, live-schema role `task.agent` preference + C5b skill load).
 
 
 ## Install

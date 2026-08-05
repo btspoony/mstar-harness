@@ -2,22 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.3** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.2** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.2** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.2** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.2** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.2** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.3** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.3** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.3** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.3** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.3** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.3** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.3** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.3** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.8.3] - 2026-08-05
+
+### Harness (omp role-agent dispatch)
+
+- **omp C5 corrected**: after plugin install/link, discovered `agents/*.md` role ids (`product-manager`, `architect`, `fullstack-dev`, `qc-specialist*`, …) are valid live `task.agent` values. Prefer **`agent: "<Execute as role-id>"`**; use generic `task` / `scout` / … only as fallback when the role is absent from the live schema. Using `agent: "task"` while the matching role agent is listed is an anti-pattern.
+- **C5b retained**: even when `agent` already matches the role id, Assignment still requires **Act as + skill load** (agent shell ≠ full Morning Star role prompt).
+- Updated `skills/mstar-host/references/omp.md`, `_shared/host-role-binding-core.md` (Kimi/ZCode vs omp host classes), `parallel-dispatch.md`, and `mstar-host` skill description; aligned README / INSTALL / `docs/cli.md` wording.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.8.3**.
 
 ## [1.8.2] - 2026-08-05
 

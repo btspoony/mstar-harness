@@ -11,14 +11,14 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 - Plugin markers: **`.omp-plugin/plugin.json`** (Morning Star host marker) and **`.claude-plugin/plugin.json`** (Claude-compatible marketplace discovery). Plugin root is the **repo root**; paths stay `./skills/`, `./commands/`, `./agents/`.
 - Runtime skills: repo `skills/` discovered after `omp plugin install` / `omp plugin link` (OMP extension-package sub-discovery) or Claude marketplace install.
 - Plugin commands: repo `commands/<name>.md` → slash **`/<name>`** (e.g. `/iteration-start`). omp uses the **filename** as the command name (no `morning-star-harness:` prefix).
-- Plugin agents: repo `agents/*.md` may be discovered, but Morning Star role ids are **not** assumed to be valid `task.agent` values — see C5/C5b.
+- Plugin agents: repo **`agents/*.md`** are discovered into the live **`task.agent`** list after install/link + reload. Morning Star **subagent** role ids (`product-manager`, `architect`, `fullstack-dev`, `qc-specialist`, …) are valid `agent` values **when listed** — see C5. `project-manager` is **`mode: primary`** (orchestration seat), not a typical `task` dispatch target.
 - **No Kimi-style `sessionStart.skill`** — enter PM manually via **`/skill:pm`** (or the `pm` skill), then **Read next** → `mstar-harness-core` → `project-manager.md`.
 - Install (user-scoped, recommended):
   - `omp plugin install github:btspoony/mstar-harness`
   - or CLI: `npx @mstar-harness/cli init --target omp --scope global` (links `~/.mstar/harness`)
 - Project scope: `omp plugin install github:btspoony/mstar-harness --scope project` or `npx @mstar-harness/cli init --target omp --scope project`.
 - Local maintainers: `omp plugin link /path/to/mstar-harness` (or the CLI-managed `~/.mstar/harness` checkout).
-- After install/link: `omp plugin list` should show package **`morning-star`** (root `package.json` name). Reload / new session to pick up skills and commands.
+- After install/link: `omp plugin list` should show package **`morning-star`** (root `package.json` name). Reload / new session to pick up skills, commands, and agents.
 
 ## Skill loading
 
@@ -48,7 +48,7 @@ omp resolves **internal URL schemes** natively (see <https://omp.sh/#urls>), so 
 
 | omp tool | Harness use |
 |----------|-------------|
-| **`task`** | Primary dispatch — fan out one or more subagents (`agent` ∈ built-ins; batch via `tasks[]` + shared `context`) |
+| **`task`** | Primary dispatch — fan out one or more subagents (`agent` = live-schema id; prefer Morning Star role id; batch via `tasks[]` + shared `context`) |
 | **`ask`** | Structured clarify (options + recommended); prefer over free-form when choices are known |
 | **`hub`** | Optional peer messaging / long-running process control among subagents — not a substitute for Assignment + `task` |
 | **bash** | Commands, git, tests — evidence per `mstar-coding-behavior` |
@@ -68,7 +68,7 @@ task(
   tasks: [
     {
       name: "CamelCaseId",
-      agent: "task",          # built-in only — see C5
+      agent: "<Execute as role-id>",   # prefer live-schema role agent — see C5
       task: "<full Assignment body including Act as + skill load>"
     }
   ]
@@ -79,36 +79,59 @@ Single-task shorthand may exist depending on host version — always match the l
 
 ## Role agents (C5 — hard constraint)
 
-omp ships **built-in `task.agent` types**. Exact names vary by omp version — **read the live `task` tool schema**. Common set (docs + current releases):
+**Live `task` tool schema is SSOT every session.** Exact `agent` names vary by omp version and which `agents/*.md` were discovered after plugin install/link. Read the tool's Available Agents list before dispatch — do not invent names; do not hard-code stale tables over the live list.
 
-| `agent` | Typical use | Harness mapping |
-|---------|-------------|-----------------|
-| `scout` / `explore` | Fast read-only investigation | Orientation, codebase survey, Prepare explore passes |
-| `plan` | Architectural planning | Prepare plan-only work when appropriate |
-| `reviewer` / `security-reviewer` | Structured review | Optional QC assist — still bind Morning Star QC role in prompt (C5b) |
-| `designer` | UI/UX | Optional when Assignment is UI-heavy `frontend-dev` |
-| `librarian` | External library/API research | Optional research assist |
-| `sonic` / `quick_task` | Mechanical / low-reasoning | Mechanical transcription only |
-| `task` | General-purpose worker | **Default for Morning Star roles** (`product-manager`, `fullstack-dev`, `qc-specialist`, …) |
+### Selection order (required)
 
-Morning Star role ids (`project-manager`, `fullstack-dev`, `qc-specialist`, …) are **not** valid `task.agent` values unless the live schema explicitly lists them after a custom-agent unpack. Do not invent agent names.
+1. **Role match first** — if Assignment `Execute as: <role-id>` appears in the live `task.agent` list, set **`agent: "<role-id>"`**. Examples commonly present after Morning Star plugin discovery: `product-manager`, `architect`, `frontend-dev`, `fullstack-dev`, `fullstack-dev-2`, `ops-engineer`, `prompt-engineer`, `qa-engineer`, `qc-specialist`, `qc-specialist-2`, `qc-specialist-3`, `writing-specialist`.
+2. **Generic built-in only as fallback** — when the role id is **absent** from the live schema, pick the closest host built-in and keep full C5b prompt binding:
+
+| Fallback `agent` | When |
+|------------------|------|
+| `scout` / `explore` | Read-only orientation / codebase survey / Prepare explore |
+| `reviewer` / `security-reviewer` | Optional QC assist **only if** the matching `qc-specialist*` agent is missing |
+| `designer` | UI-heavy work when `frontend-dev` is missing |
+| `librarian` | External library/API research assist |
+| `sonic` / `quick_task` | Mechanical / low-reasoning transcription only |
+| `task` (or omit if schema says omit = general worker) | Last resort general worker when no specialist fits |
+
+3. **Anti-pattern** — **`agent: "task"` (or omitting agent) while a matching role agent is listed** is incorrect dispatch. Prefer the specialist; generic `task` is not the Morning Star default when role agents are available.
+
+### Notes
+
+- `project-manager` is the **primary** orchestration agent (`agents/project-manager.md` `mode: primary`). Do not dispatch PM-to-PM via `task` unless the live schema explicitly lists it **and** the Assignment requires it.
+- Host generics (`scout`, `reviewer`, `designer`, …) remain useful for non-role orientation / assist — they do not replace a listed Morning Star role agent for role-owned deliverables.
 
 ### Role binding in prompt (C5b — required)
 
-Role-binding contract + Assignment template → **`_shared/host-role-binding-core.md`** (C5/C5b). omp-specific invoke shapes, same turn:
+Even when `agent` already matches the role id, still bind Morning Star process in the Assignment / `task` body (skill load is not automatic from the agent shell alone). Contract + template → **`_shared/host-role-binding-core.md`** (C5/C5b). omp-specific invoke shapes, same turn:
 
 ```text
 task(
   context: "Morning Star dispatch for plan 20260717-example",
   tasks: [{
     name: "ImplementAuth",
-    agent: "task",
+    agent: "fullstack-dev",   # live-schema role id matching Execute as
     task: "<full Assignment body including Act as + skill load>"
   }]
 )
 ```
 
-For explore-only orientation:
+Review & Edit / Prepare specialist chain (sequential, **N=1** each turn):
+
+```text
+task(
+  context: "Review & Edit — product scope",
+  tasks: [{
+    name: "ReviewEditProduct",
+    agent: "product-manager",
+    task: "<Assignment: Execute as product-manager; Act as + skill load>"
+  }]
+)
+# wait for return, then architect, then writing-specialist — each with agent: "<role-id>"
+```
+
+For explore-only orientation (no Morning Star role deliverable):
 
 ```text
 task(
@@ -126,20 +149,20 @@ Harness **dispatch** on omp = **one or more `task` tool calls** with correct **`
 
 | Harness | omp |
 |---------|-----|
-| `Execute as: <role-id>` | Role id in Assignment + **Act as** + skill load in **task** body (C5b) |
-| `agent` for invoke | built-ins only (default `task`; explore → `scout`/`explore`) |
+| `Execute as: <role-id>` | **`agent: "<role-id>"`** when listed in live schema; else generic built-in + C5b |
+| Role identity / skills | Assignment **Act as** + skill load in **task** body (C5b) — always |
 | Parallel batch **N** | **N** `tasks[]` entries in **one** `task` call, or **N** `task` calls in **one** assistant message |
 
 ### QC default
 
-- **`Execution mode: sdd`**: **N=3** task entries (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each body **Act as** the respective QC role; prefer `agent: "task"` (or `reviewer` only when it does not drop Morning Star QC skill load). N rules → `parallel-dispatch.md`.
+- **`Execution mode: sdd`**: **N=3** task entries — prefer `agent: "qc-specialist"`, `"qc-specialist-2"`, `"qc-specialist-3"` when listed; each body still **Act as** the respective QC role + QC skill load. If a seat is missing from the live schema, fall back per C5 (generic + C5b) for that seat only. N rules → `parallel-dispatch.md`.
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 
 Cannot emit required **N** → **`Blocked`**.
 
 ### SDD implement (serial)
 
-- **`Execution mode: sdd`**: one implementer `task` entry per task id; task reviewer = new entry (no sticky resume unless host resume/id is available and recorded). Serial rule → **`parallel-dispatch.md`** § SDD implement.
+- **`Execution mode: sdd`**: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry (no sticky resume unless host resume/id is available and recorded). Serial rule → **`parallel-dispatch.md`** § SDD implement.
 - **Never** multiple implementer entries in one message for the same plan.
 
 ## Clarify
@@ -174,6 +197,8 @@ Cannot emit required **N** → **`Blocked`**.
 - Installed npm/git plugin package name is root **`morning-star`** (`package.json`); Morning Star display name remains **morning-star-harness**.
 - Marketplace (Claude) installs and `omp plugin install` are different discovery providers — prefer one install path per machine to avoid duplicate skill listings.
 - Session plan UI / todos are not durable SSOT unless mirrored to `{HARNESS_DIR}`.
-- No custom guaranteed Morning Star `task.agent` profiles — role binding is **always** prompt + skill load (C5b).
+- After install/link, **reload / new session** so `agents/*.md` appear in the live `task.agent` list — stale sessions may only show host generics and wrongly push you to `agent: "task"`.
+- Role agent shell ≠ full role prompt: **C5b skill load remains required** even when `agent` already equals the role id.
 - omp has no `sessionStart.skill`; new sessions do **not** auto-load PM — invoke `/skill:pm` manually.
 - Do not confuse omp **`task.agent`** with OpenCode **`subagent`** or Cursor **`subagent_type`**.
+- Do not treat Kimi/ZCode “built-ins only → always `coder`/`task`” habits as omp defaults when Morning Star role agents are listed.

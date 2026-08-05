@@ -1,21 +1,33 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.2**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.3**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.2** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.2** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.2** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.2** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.2** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.2** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.2** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.3** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.3** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.3** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.3** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.3** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.3** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.3** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.3** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.8.3] - 2026-08-05
+
+### Harness（omp 角色 agent 派发）
+
+- **修正 omp C5**：插件 install/link 后，由 `agents/*.md` 发现的角色 id（`product-manager`、`architect`、`fullstack-dev`、`qc-specialist*` 等）是合法的 live `task.agent`。优先 **`agent: "<Execute as role-id>"`**；仅当 live schema 未列出该角色时才回退 `task` / `scout` / …。schema 已有对应角色却仍写 `agent: "task"` 为反模式。
+- **保留 C5b**：即使 `agent` 已等于角色 id，Assignment 仍需 **Act as + skill load**（agent shell ≠ 完整 Morning Star 角色提示）。
+- 更新 `skills/mstar-host/references/omp.md`、`_shared/host-role-binding-core.md`（拆分 Kimi/ZCode vs omp）、`parallel-dispatch.md`、`mstar-host` skill description；同步 README / INSTALL / `docs/cli.md` 表述。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.8.3**。
 
 ## [1.8.2] - 2026-08-05
 

@@ -65,7 +65,7 @@ npx @mstar-harness/cli init
 | ZCode | 每会话 `/morning-star-harness:pm`（无自动加载） |
 | Codex | `/pm` |
 
-宿主限制（Kimi/ZCode/omp 子代理面、角色绑定在 prompt）：`mstar-host/references/kimi.md`、`mstar-host/references/zcode.md`、`mstar-host/references/omp.md`。
+宿主说明（Kimi/ZCode 仅内置 agent 类型 + prompt 角色绑定；omp 优先用 live schema 中由 `agents/*.md` 发现的角色 agent，并保留 C5b skill load）：`mstar-host/references/kimi.md`、`mstar-host/references/zcode.md`、`mstar-host/references/omp.md`。
 
 ### 迭代
 
