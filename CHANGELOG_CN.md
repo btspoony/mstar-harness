@@ -1,22 +1,38 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.0** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.0** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.1** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.1** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.1** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-08-05
+
+### Harness（skills + commands 优化）
+
+- **无损优化** `skills/` 与 `commands/`，按 SkillsBench 原则（紧凑 body、progressive disclosure、dedup 到 SSOT）。无任何规则、门禁、字段名或 NEVER 条目被改动或删除——规则只移动或压缩，绝不消失。
+- **提取到 `references/`**：`mstar-iteration` Phase 3 → `phase-3-iteration-close.md`、Phase 4/5 → `phase-4-5-pr-delivery.md`（body 574 → 384 行）；`mstar-compound` Q1–Q8 + Phase 1–7 → `compound-workflow.md`（275 → 103）。
+- **压缩**：`mstar-coding-behavior` 216 → 142（保留 The Ladder、`simplify:` 标记、minimal-check）；`qc-specialist/deep-review-lenses.md` 11 个透镜清单 → 每透镜一行（155 → 94）。
+- **去重**：反模式清单 → `mstar-harness-core` 索引；新增 `_shared/leaf-executor-core.md`（9 个 leaf 角色的 Completion Report + Git NEVER 去重）；新增 `_shared/host-role-binding-core.md` + `_shared/plan-mode-bridge-core.md`（kimi/zcode/omp 宿主文件 + 5 个 plan-mode bridge 去重）。
+- **命令 → 薄编排器**：4 个命令 943 → 388 行（−59%）；新增 `mstar-iteration/references/phase5-helper-discovery.md`。
+- **描述**：收紧 `coding-behavior`、`branch-worktree`、`phase-gates` 的 frontmatter 为触发契约。
+- **文档**：`README.md` + `README_CN.md` 增加推荐宿主顺序（`omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex`）。
+- **命名**：`Completion Report v2` → `Completion Report`（模板已统一，去掉版本后缀）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.8.1**。
 ## [1.8.0] - 2026-08-05
 
 ### Harness（代码库审计 skill）

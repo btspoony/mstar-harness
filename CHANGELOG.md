@@ -2,23 +2,39 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.0** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.0** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.1** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.1** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-08-05
+
+### Harness (skills + commands optimization)
+
+- **Lossless optimization** of `skills/` and `commands/` per SkillsBench principles (compact bodies, progressive disclosure, dedup to SSOT). No rule, gate, field name, or NEVER bullet altered or dropped — rules move or compress, never disappear.
+- **Extract to `references/`**: `mstar-iteration` Phase 3 → `phase-3-iteration-close.md`, Phase 4/5 → `phase-4-5-pr-delivery.md` (body 574 → 384 lines); `mstar-compound` Q1–Q8 + Phase 1–7 → `compound-workflow.md` (275 → 103).
+- **Compress**: `mstar-coding-behavior` 216 → 142 (kept The Ladder, `simplify:` marker, minimal-check); `qc-specialist/deep-review-lenses.md` 11 lens checklists → one-liners (155 → 94).
+- **Dedup**: anti-pattern lists → `mstar-harness-core` index; new `_shared/leaf-executor-core.md` (Completion Report + Git NEVER across 9 leaf roles); new `_shared/host-role-binding-core.md` + `_shared/plan-mode-bridge-core.md` (de-clone kimi/zcode/omp host files + 5 plan-mode bridges).
+- **Commands → thin orchestrators**: 4 commands 943 → 388 lines (−59%); new `mstar-iteration/references/phase5-helper-discovery.md`.
+- **Descriptions**: tightened `coding-behavior`, `branch-worktree`, `phase-gates` frontmatter to trigger contracts.
+- **Docs**: recommended host order added to `README.md` + `README_CN.md` (`omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex`).
+- **Naming**: `Completion Report v2` → `Completion Report` (template unified; version suffix dropped).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.8.1**.
 ## [1.8.0] - 2026-08-05
 
 ### Harness (codebase audit skill)

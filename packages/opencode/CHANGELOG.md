@@ -4,6 +4,22 @@ All notable changes to the `@mstar-harness/opencode` package are documented in t
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## [Unreleased]
+
+## [1.8.1] - 2026-08-05
+
+- **Bundled skills/commands lossless optimization** (SkillsBench principles): compact `SKILL.md` bodies + progressive disclosure — extracted Phase 3/4/5 and compound workflow to `references/`; compressed `mstar-coding-behavior` and QC review lenses; deduped anti-pattern lists, leaf-role Completion Report/Git NEVER (new `_shared/leaf-executor-core.md`), host role-binding (new `_shared/host-role-binding-core.md`) and plan-mode bridges (new `_shared/plan-mode-bridge-core.md`); slimmed 4 commands to thin boot+route+delegate orchestrators (943 → 388 lines); tightened frontmatter descriptions; `Completion Report v2` → `Completion Report`. No rule, gate, or field name altered or dropped.
+- Version alignment with harness **1.8.1** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.1**.
+
+## [1.8.0] - 2026-08-05
+
+- **Bundled skills**: new `mstar-audit` skill + `plan-quality-bar` reference + `/codebase-audit` command (read-only advisory workflow adapted from improve).
+- Version alignment with harness **1.8.0** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.0**.
+
 ## [1.7.1] - 2026-08-05
 
 - Version alignment with harness **1.7.1** (no OpenCode package API change; CLI omp doctor fix).

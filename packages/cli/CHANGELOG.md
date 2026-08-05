@@ -6,6 +6,12 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-08-05
+
+- Version alignment with harness **1.8.1** (no CLI API change; bundled skills/commands optimization landed at the harness layer).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.1**.
+
 ## [1.8.0] - 2026-08-05
 
 - **Codex adapter**: `CODEX_PROJECT_COMMAND_NAMES` (renamed from `CODEX_ITERATION_SKILL_NAMES`) now includes `codebase-audit`; project-scoped install materializes it alongside iteration commands. Global-scoped install warning updated.
