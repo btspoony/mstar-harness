@@ -18,6 +18,10 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+### CLI (`@mstar-harness/cli`)
+
+- **omp doctor**: parse `omp plugin list --json` shape `{ npm, marketplace }` (omp 17.x) instead of only array/`plugins`, and match `manifest.name`.
+
 ## [1.7.0] - 2026-08-05
 
 ### Harness (omp host surface)

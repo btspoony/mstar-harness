@@ -16,6 +16,10 @@
 
 ## [Unreleased]
 
+### CLI（`@mstar-harness/cli`）
+
+- **omp doctor**：解析 omp 17.x 的 `omp plugin list --json` 形状 `{ npm, marketplace }`（不再只认数组/`plugins`），并匹配 `manifest.name`。
+
 ## [1.7.0] - 2026-08-05
 
 ### Harness（omp 宿主面）
