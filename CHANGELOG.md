@@ -2,22 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.3** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.4** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.3** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.3** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.3** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.3** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.3** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.3** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.3** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.3** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.4** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.4** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.4** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.4** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.4** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.4** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.4** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.4** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.8.4] - 2026-08-06
+
+### Harness (skill script path discovery)
+
+- **Skill-relative script naming**: runtime docs now reference executables as skill **`mstar-sdd`** → `scripts/<name>` (or `<mstar-sdd>/scripts/…`), not as consumer-cwd paths like `skills/mstar-sdd/scripts/…`. Agents were searching the literal repo-relative path under app checkouts and missing the loaded skill / plugin install location.
+- Updated `mstar-sdd` (SKILL + `file-handoffs`), `mstar-plan-artifacts` (`tech-debt-rollup`), `mstar-plan-conventions`, `mstar-iteration`, PM Assignment `SDD dir` cue, and `mstar-skill-authoring` (new “Skill-relative script and asset paths” convention).
+- Maintainer `.cursor/LOCAL-VALIDATION.md` keeps `skills/…` smoke commands only for this harness repo root, with an explicit note.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.8.4**.
 
 ## [1.8.3] - 2026-08-05
 

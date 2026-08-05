@@ -6,6 +6,12 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-08-06
+
+- Version alignment with harness **1.8.4** (skill-relative script path docs; no CLI API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.4**.
+
 ## [1.8.3] - 2026-08-05
 
 - Version alignment with harness **1.8.3** (omp host docs prefer live-schema role `task.agent`; no CLI API change).

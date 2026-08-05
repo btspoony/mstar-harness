@@ -137,7 +137,7 @@ When `metadata.control_worktree_path` is set and worktree mode is **not** waived
 | **`Worktree path`** | Absolute **feature** checkout (`execution_lease.worktree_path`) — product/source edits only |
 | **`Control harness root`** | Absolute `<control_worktree_path>/{HARNESS_DIR}` |
 | **`Plan Path`** | Absolute under control harness (not relative from feature cwd) |
-| **`SDD dir`** | Absolute under control harness; run `sdd-workspace` with `MSTAR_CONTROL_ROOT=<control_worktree_path>` when cwd is the feature tree |
+| **`SDD dir`** | Absolute under control harness; run skill **`mstar-sdd`** → `scripts/sdd-workspace` with `MSTAR_CONTROL_ROOT=<control_worktree_path>` when cwd is the feature tree |
 
 Do **not** waive worktree because default-gitignored `plans/` are missing under the feature checkout — see `mstar-branch-worktree` 「Harness path SSOT under default gitignore」.
 ## Completion Report Template

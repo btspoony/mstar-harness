@@ -475,7 +475,8 @@ Prefer **`archived/residuals/`**; migrate and delete history key when possible.
 # Replace .mstar with your resolved {HARNESS_DIR}; legacy projects may use .agents.
 jq '.residual_findings["01-data-infrastructure"] // .metadata.residual_findings["01-data-infrastructure"]' .mstar/status.json
 jq '.entries[] | select(.id == "R1")' .mstar/archived/residuals/01-data-infrastructure.json
-bash skills/mstar-plan-artifacts/scripts/tech-debt-rollup.sh .mstar/status.json
+# skill mstar-plan-artifacts → scripts/tech-debt-rollup.sh (not a consumer cwd path)
+bash <mstar-plan-artifacts>/scripts/tech-debt-rollup.sh .mstar/status.json
 ```
 
 (`//` right-hand side = legacy read path.)
@@ -508,8 +509,9 @@ Append-only log for merge closure, batch archive, `tech_debt_summary` refresh, e
 **Compute (canonical):** run the read-only script (do **not** hand-count):
 
 ```bash
-# From repo root; pass path to status.json if not .mstar/status.json
-bash skills/mstar-plan-artifacts/scripts/tech-debt-rollup.sh .mstar/status.json
+# Resolve from skill mstar-plan-artifacts → scripts/tech-debt-rollup.sh
+# Pass path to status.json if not .mstar/status.json
+bash <mstar-plan-artifacts>/scripts/tech-debt-rollup.sh .mstar/status.json
 ```
 
 - Prints computed `total_open`, `by_severity`, `by_target`, `by_plan`.

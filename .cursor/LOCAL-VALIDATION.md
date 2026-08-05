@@ -34,7 +34,7 @@ Use before publishing or sharing the Morning Star Cursor plugin from this repo.
 
 ## 3c) SDD smoke (1.0.0+)
 
-From repo root with a fixture plan:
+From **this harness repo root** (not a consumer project) with a fixture plan. Runtime docs name these as skill **`mstar-sdd`** → `scripts/…`; the `skills/mstar-sdd/scripts/…` form below is valid **only** here because this repository vendors the skill tree at `skills/`.
 
 ```bash
 skills/mstar-sdd/scripts/sdd-workspace test-plan-id
