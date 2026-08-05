@@ -1,0 +1,23 @@
+{
+  "name": "morning-star-harness",
+  "version": "1.7.0",
+  "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, ZCode, and omp.",
+  "author": {
+    "name": "Bohao Tang",
+    "email": "tech@btang.cn"
+  },
+  "homepage": "https://github.com/btspoony/mstar-harness",
+  "repository": "https://github.com/btspoony/mstar-harness.git",
+  "license": "MIT",
+  "keywords": [
+    "morning-star",
+    "mstar",
+    "harness",
+    "omp",
+    "oh-my-pi",
+    "claude-plugin"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "agents": "./agents/"
+}
