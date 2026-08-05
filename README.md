@@ -50,7 +50,15 @@ Reload the host after install (OpenCode restart / Cursor **Developer: Reload Win
 
 ## Use
 
-Two entry shapes: **without iteration** (single plan / hotfix) or **with iteration** (multi-plan Phase 1–5).
+Three entry shapes: **codebase audit** (discover what to do), **without iteration** (single plan / hotfix), or **with iteration** (multi-plan Phase 1–5).
+
+### Codebase audit
+
+| Path | When |
+|------|------|
+| `/codebase-audit` | Survey a repo read-only → prioritized, self-contained improvement plans in `{PLAN_DIR}/audit-<date>/` |
+
+Read-only advisory — never edits source. Output feeds iteration-start Research or normal Prepare → Execute. Effort levels: `quick` / `standard` (default) / `deep`; category focus (`security`, `perf`, `tests`, …) or `branch` / `next` variants. SSOT → `mstar-audit`.
 
 ### Without iteration
 
@@ -74,17 +82,17 @@ Host limits (Kimi/ZCode/omp subagent surfaces, role binding in prompt): `mstar-h
 | `/iteration-start` → `/iteration-drive` | First iteration, or need human direction lock before execute |
 | `/iteration-loop` | Full Phase 1→5 with minimal check-ins (optional `direction`, `scale` S\|M\|L\|XL) |
 
+### Command loading
+
 | Host | How commands load |
 |------|-------------------|
 | Cursor / OpenCode | Bundled from `commands/` (OpenCode: plugin `harness-commands/`) |
 | Codex project | `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
-| Codex global | Project-scoped commands (iteration + audit) **not** installed — use `--scope project` |
-| Kimi / ZCode | `/morning-star-harness:iteration-start` (etc.) via plugin manifest |
+| Codex global | Project-scoped commands **not** installed — use `--scope project` |
+| Kimi / ZCode | `/morning-star-harness:iteration-start` · `:codebase-audit` (etc.) via plugin manifest |
 | omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit` (filename commands from plugin `commands/`) |
 
 Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
-
-**Codebase audit** (standalone, read-only): `/codebase-audit` surveys a repo and writes prioritized, self-contained improvement plans to `{PLAN_DIR}/audit-<date>/`. Output feeds iteration-start Research or normal Prepare → Execute. Same command loading as iteration commands below (Codex: project-scope only).
 
 Project knowledge bootstrap: `mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`.
 

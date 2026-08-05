@@ -50,7 +50,15 @@ npx @mstar-harness/cli init
 
 ## 使用
 
-两种入口：**不跑迭代**（单 plan / hotfix）或 **跑迭代**（多 plan Phase 1–5）。
+三种入口：**代码库审计**（发现该做什么）、**不跑迭代**（单 plan / hotfix）、或 **跑迭代**（多 plan Phase 1–5）。
+
+### 代码库审计
+
+| 路径 | 何时 |
+|------|------|
+| `/codebase-audit` | 只读扫描代码库 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划 |
+
+只读顾问——**不**改源码。产出可喂给 iteration-start Research 或常规 Prepare → Execute。深度级别：`quick` / `standard`（默认） / `deep`；可按类别聚焦（`security`、`perf`、`tests`、…）或用 `branch` / `next` 变体。SSOT → `mstar-audit`。
 
 ### 不跑迭代
 
@@ -74,17 +82,17 @@ npx @mstar-harness/cli init
 | `/iteration-start` → `/iteration-drive` | 首次迭代，或需要人工方向锁定后再执行 |
 | `/iteration-loop` | Phase 1→5 连续少确认（可选 `direction`、`scale` S\|M\|L\|XL） |
 
+### 命令加载
+
 | 宿主 | 命令加载 |
 |------|----------|
 | Cursor / OpenCode | 从 `commands/` 打包（OpenCode：插件 `harness-commands/`） |
 | Codex project | `.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链） |
-| Codex global | **不**装 project 命令（iteration + audit）— 用 `--scope project` |
-| Kimi / ZCode | 插件 manifest：`/morning-star-harness:iteration-start` 等 |
+| Codex global | **不**装 project 命令 — 用 `--scope project` |
+| Kimi / ZCode | 插件 manifest：`/morning-star-harness:iteration-start` · `:codebase-audit` 等 |
 | omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（插件 `commands/` 文件名命令） |
 
 Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
-
-**代码库审计**（独立、只读）：`/codebase-audit` 扫描代码库，向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划。产出可喂给 iteration-start Research 或常规 Prepare → Execute。命令加载方式与下方 iteration 命令一致（Codex：仅 project scope）。
 
 项目知识脚手架：`mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`。
 
