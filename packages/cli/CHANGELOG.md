@@ -4,6 +4,14 @@ All notable changes to the `@mstar-harness/cli` package are documented in this f
 
 The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface releases.
 
+## [1.7.0] - 2026-08-05
+
+- Add **`omp`** install target (`packages/cli/src/adapters/omp.ts`): link/install Morning Star into omp plugins; doctor validates markers + `omp plugin list`.
+- Version alignment with harness **1.7.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.7.0**.
+
+
 ## 1.6.1
 
 - Version alignment with harness **1.6.1** (no CLI API change in this release).
