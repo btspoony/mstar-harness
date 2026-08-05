@@ -14,7 +14,7 @@
 
 1. 创建 `{HARNESS_DIR}`（推荐 `.mstar/`）与 `{PLAN_DIR}`（推荐 `.mstar/plans/`）。
 2. 初始化 `status.json`：从 **`mstar-plan-artifacts/templates/status.empty.json`** 复制；residual canonical 见 **`mstar-plan-artifacts` SKILL.md**；字段与生命周期见 **`mstar-plan-artifacts/references/status-and-residuals.md`**。
-3. 初始化可选 `notes.json`（**`mstar-plan-artifacts/templates/notes.empty.json`**）；`sdd/` 空目录占位（per-plan 子目录由 `mstar-sdd/scripts/sdd-workspace` 创建）。
+3. 初始化可选 `notes.json`（**`mstar-plan-artifacts/templates/notes.empty.json`**）；`sdd/` 空目录占位（per-plan 子目录由 skill **`mstar-sdd`** → `scripts/sdd-workspace` 创建）。
 4. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」；legacy `.agents/` 有等价表）。
 5. **Profile B**（统一 Done 压缩）时另建 `{HARNESS_DIR}/archived/plans/` 与 `archived/plans-done.json`（自 **`mstar-plan-artifacts/templates/plans-done.empty.json`** 复制；schema 仅 `{ "plans": [] }`，见 **`mstar-plan-artifacts/references/done-compaction.md`**）。
 6. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；`{HARNESS_DIR}/specs/`（解析后的 `{SPECS_DIR}` 默认落点）；内容边界见 `mstar-plan-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。

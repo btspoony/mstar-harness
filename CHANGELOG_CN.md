@@ -1,21 +1,33 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.3**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.4**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.3** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.3** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.3** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.3** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.3** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.3** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.3** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.3** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.4** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.4** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.4** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.4** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.4** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.4** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.4** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.4** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.8.4] - 2026-08-06
+
+### Harness（技能脚本路径发现）
+
+- **技能相对脚本命名**：运行时文档改为 skill **`mstar-sdd`** → `scripts/<name>`（或 `<mstar-sdd>/scripts/…`），不再写成 consumer cwd 路径 `skills/mstar-sdd/scripts/…`。Agent 会按字面路径在应用仓库下搜索，从而找不到已加载 skill / 插件安装位置。
+- 更新 `mstar-sdd`（SKILL + `file-handoffs`）、`mstar-plan-artifacts`（`tech-debt-rollup`）、`mstar-plan-conventions`、`mstar-iteration`、PM Assignment `SDD dir` cue，以及 `mstar-skill-authoring`（新增「Skill-relative script and asset paths」约定）。
+- 维护者 `.cursor/LOCAL-VALIDATION.md` 仅在本 harness 仓根保留 `skills/…` smoke 命令，并加明确说明。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.8.4**。
 
 ## [1.8.3] - 2026-08-05
 

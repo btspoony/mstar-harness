@@ -6,6 +6,13 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-08-06
+
+- **Bundled skills**: skill-relative script path naming (`mstar-sdd` → `scripts/…`) so agents resolve scripts from the loaded skill directory instead of consumer-cwd `skills/…` paths.
+- Version alignment with harness **1.8.4** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.4**.
+
 ## [1.8.3] - 2026-08-05
 
 - **Bundled skills**: omp host C5 corrected — prefer live-schema Morning Star role `task.agent` values from discovered `agents/*.md`; keep C5b skill load; update shared host-role-binding + parallel-dispatch docs.
