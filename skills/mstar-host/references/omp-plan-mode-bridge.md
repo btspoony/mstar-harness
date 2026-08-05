@@ -1,6 +1,6 @@
 # omp Plan mode bridge
 
-Load with **`omp.md`** when omp Plan mode is active (`/plan`, plan-yolo / plan-model flows, or read-only-with-resolve plan UX).
+Load with **`omp.md`** when omp Plan mode is active (`/plan`, plan-yolo / plan-model flows, or read-only-with-resolve plan UX). Shared contract → **`references/_shared/plan-mode-bridge-core.md`** (dual-write SSOT rule + priority, bootstrap init, Build resume contract, bootstrap todos, implement done-gate, Phase 1 gate, shared anti-patterns). This bridge covers omp plan-UX specifics only.
 
 ## Dual-write contract
 
@@ -12,23 +12,13 @@ omp session plans, composer todos, and plan-mode UI text are **session UX only**
 | Plan registry | `{HARNESS_DIR}/status.json` |
 | Iteration compass | `{ITERATION_DIR}/…` when in formal iteration |
 
-Before treating a plan as ready for Execute:
-
-1. Read `mstar-plan-conventions` + `mstar-plan-artifacts`.
-2. Ensure `{HARNESS_DIR}` / `{PLAN_DIR}` exist and process-artifact gitignore entries are present.
-3. Mirror the active omp plan content into the SSOT main plan path.
-4. Register `plan_id` in `status.json.plans[]` when required by Prepare gates.
+Bootstrap before treating a plan as ready for Execute (read `mstar-plan-conventions` + `mstar-plan-artifacts`; ensure `{HARNESS_DIR}` / `{PLAN_DIR}` exist with process-artifact gitignore entries; mirror the active omp plan into the SSOT main plan path; register `plan_id` in `status.json.plans[]` when required by Prepare gates) → core.
 
 **Never** use only the omp session plan / UI todo list as **Plan Path**.
 
 ## `mstar-iteration` Phase 1 in Plan mode
 
-When formal iteration Phase 1 runs under omp Plan UX:
-
-1. Keep a **single** SSOT draft plan path (no silent second plan file).
-2. Converge by **feedback-driven in-place edits** on that SSOT plan (and mirror into omp plan UI if helpful).
-3. **Do not** run Review & Edit chain, commit, or create integration branch until the user leaves Plan mode / approves implementation (Build-equivalent).
-4. Recommended branch policy still applies — no silent work on `main`/`master` (`mstar-iteration` §1.2).
+When formal iteration Phase 1 runs under omp Plan UX, the shared gate → core: single SSOT draft plan path (no silent second plan file); feedback-driven in-place edits; **do not** run Review & Edit chain, commit, or create integration branch until the user leaves Plan mode / approves implementation (Build-equivalent). Recommended branch policy still applies — no silent work on `main`/`master` (`mstar-iteration` §1.2).
 
 ## Clarify vs plan approval
 

@@ -42,7 +42,7 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 
 ## Task tool (QC: SDD → N=3)
 
-- **`Execution mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path.
+- **`Execution mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path (N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 - SDD implement/reviewer: **serial** — see **`mstar-sdd`**.
 
@@ -66,8 +66,8 @@ When Assignment has **`SDD implementer session: sticky`** (`mstar-sdd/references
 
 Cursor PM dispatch = **`Task`** with `subagent_type` matching the Assignment `Execute as` role. Flat JSON field shape → **Task invoke schema (Cursor)** below.
 
-- **1 Assignment ⇒ 1 Task**; parallel batches ⇒ **N Tasks in one message** (`parallel-dispatch.md`, `mstar-dispatch-gates`).
-- Assignment Markdown **does not** start work. PM thread **must not** implement, review, or edit specialist deliverables by loading another role reference in the same session (`Acting as role: …` is **not** dispatch).
+- **1 Assignment ⇒ 1 Task**; parallel batches ⇒ **N Tasks in one message** → **`parallel-dispatch.md`** (`mstar-dispatch-gates`).
+- Paste-only: Assignment Markdown **does not** start work; PM thread **must not** implement, review, or edit specialist deliverables by loading another role reference in the same session (`Acting as role: …` is **not** dispatch) → **`parallel-dispatch.md`** § Paste-only failure.
 - No callable `Task` / subagent for required work → **`Blocked`** — report to user; do not substitute in-thread execution.
 - **Only exception:** user explicitly overrides harness dispatch for this turn (document the override).
 - Concurrent writers / QC cwd alignment → **`mstar-branch-worktree`** (not a separate “mode”).

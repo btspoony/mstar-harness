@@ -50,30 +50,10 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - Keep writing usable and publication-ready
 - Include source notes when factual claims require evidence
 
-## Completion Report v2
+## Completion Report
 
-```markdown
-## Completion Report v2
-
-**Agent**: writing-specialist
-**Task**: ...
-**Status**: Done | Blocked | Partial
-**Scope Delivered**: ...
-**Artifacts**: ...
-**Validation**: ...
-**Issues/Risks**: ...
-**Plan Update**: ...
-**Handoff**: ...
-**Git**: ...
-```
+Template (`{role_id}` = `writing-specialist`) → **`references/_shared/leaf-executor-core.md`**「Completion Report」。
 
 ## Plan Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-plan-conventions`.
-- Update assigned plan tasks only.
-- Do not mark full plan `Done`.
-
-### Git NEVER (repo writes)
-
-- **NEVER** skip commits on the authorized `Working branch` when you wrote tracked files—Completion Report **Git** must be honest unless read-only was assigned.
-- **NEVER** batch unrelated edits into one opaque commit unless PM explicitly allowed it.
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**Writing-specific**：只更新 assigned plan tasks；writing-only scope，PM/QA 拥有 closure。

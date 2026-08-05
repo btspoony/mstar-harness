@@ -105,19 +105,14 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 ## 反模式（派发）
 
+完整反模式索引见 **`mstar-harness-core`**；lease / worktree / Phase 相关反模式见 **`mstar-branch-worktree`** 与 **`mstar-iteration`**。本节仅列派发机制专属：
+
 - QC 三审拆在多条消息（tri 模式）或单席却未附 review-package 路径。
 - 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式 N=3）。
-- SDD 并行 implementer dispatch（**同一 plan 内**多 task）— **不同于**跨 plan lease 门控并行（后者见上节 L1）。
-- 跨 plan 可写派发无 verified `execution_lease`；steal / 覆盖活跃 `execution_lease` 或 `integration_merge_lease`；并行 integration merge。
-- 跨 plan **并行**可写派发在 **无** same-host 独占写锁（跨主机 / 无共享 flock）且 **无** 用户本轮 `Cross-host lease race: accepted` + audit `notes` — **无论** `Worktree mode: waived`。
-- 将 **`Worktree mode: waived`** 当作跨 plan 无锁并行授权（须 serial 或 race-accepted + audit）。
-- 因 feature worktree 在默认 gitignore 下看不到 `plans/` 而设 **`Worktree mode: waived`**（应保留 feature worktree + control 绝对 `Plan Path` / `SDD dir`）。
-- `InProgress` 无 `execution_lease` 未走 orphan recovery 即 writable-dispatch。
-- 同仓多轨 writable implement：**N invoke ≠ worktree 隔离**（L2）→ **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**。
+- SDD 并行 implementer dispatch（**同一 plan 内**多 task）— **不同于**跨 plan lease 门控并行（后者见上节 L1 / **`mstar-branch-worktree`**）。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
 - Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。
-- 全部 plan `Done` 后跳过 Phase 3 直接 PR；final plan closure 替代 `mstar-iteration` §3.1–§3.5。
 - Assignment 已写、invoke 为零（paste-only）却进入下一 gate。
 
 ## References

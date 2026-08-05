@@ -1,6 +1,8 @@
 # Codex Plan / Goal Mode x Harness Bridge
 
-> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and **`references/codex.md`**. When plan management is required, also read **`mstar-plan-conventions`** and **`mstar-plan-artifacts`** before creating or claiming any durable plan state. On conflict, **`mstar-harness-core`** wins.
+> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and **`references/codex.md`**, then **`references/_shared/plan-mode-bridge-core.md`** (shared contract) + this bridge. When plan management is required, also read **`mstar-plan-conventions`** and **`mstar-plan-artifacts`** before creating or claiming any durable plan state. On conflict, **`mstar-harness-core`** wins.
+
+**Shared contract** (dual-write SSOT rule + priority, bootstrap init, Build resume contract, bootstrap todos, implement done-gate, Phase 1 gate, shared anti-patterns) → **`references/_shared/plan-mode-bridge-core.md`**. This bridge covers Codex **Plan Mode** (`/plan`) and **Goal Mode** (`/goal`) specifics only.
 
 ## Purpose
 
@@ -13,9 +15,8 @@ Morning Star durable state still lives under **`{HARNESS_DIR}`** (default `.msta
 
 ## Priority (hard)
 
-1. User explicit instructions (this turn)
-2. Project `AGENTS.md` / `CLAUDE.md`
-3. **`{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json`** (harness SSOT)
+1–3 → core (user explicit → `AGENTS.md`/`CLAUDE.md` → **`{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json`** harness SSOT).
+
 4. Codex Goal Mode objective / progress controls
 5. Codex Plan Mode output, `update_plan`, UI todos, chat summaries
 
@@ -31,13 +32,7 @@ Morning Star durable state still lives under **`{HARNESS_DIR}`** (default `.msta
 
 Use Plan Mode to clarify, inspect, compare approaches, and draft the harness plan. Do **not** treat Plan Mode output as a durable artifact.
 
-Before implementation or PM dispatch:
-
-1. Discover `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions`.
-2. Ensure `{HARNESS_DIR}/status.json` exists or initialize it via `mstar-plan-artifacts` templates.
-3. Register a `plans[]` row in `status.json` when a Morning Star plan is needed.
-4. Write `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes, branch policy, verification, and roadmap / deferred scope when applicable.
-5. Use the SSOT plan path in Assignment and Completion Report evidence.
+Bootstrap before implementation or PM dispatch (discover `{HARNESS_DIR}` / `{PLAN_DIR}`, ensure `status.json`, register a `plans[]` row, write `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes + roadmap; use the SSOT plan path in Assignment and Completion Report evidence) → core.
 
 Allowed in Plan Mode: exploration, clarify questions, spec/plan drafting, `.mstar/` initialization, SSOT plan/status edits, PM routing decisions.
 

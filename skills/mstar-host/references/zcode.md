@@ -57,32 +57,7 @@ Morning Star role ids (`project-manager`, `fullstack-dev`, `qc-specialist`, …)
 
 ### Role binding in prompt (C5b — required)
 
-Because ZCode cannot bind roles via agent config, every dispatch **must** carry the played Morning Star role in the **Assignment** and in the **`Agent` prompt**:
-
-1. **`Execute as: <role-id>`** in Assignment (harness routing SSOT).
-2. **`Act as <role-id>`** (or equivalent) at the top of the Agent prompt.
-3. **Skill load list** — instruct the subagent to read `mstar-roles` → `references/<role-id>.md` (or shared reference + parameters) and topic skills per that reference.
-4. **`subagent_type`** — pick from the host's built-in profiles only (typically `general-purpose`; `Explore` for read-only orientation).
-
-Paste-only Assignment without an **`Agent`** call is **not** dispatch.
-
-### Assignment / Agent-prompt template
-
-```markdown
-## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Working branch**: feat/example
-**Plan Path**: .mstar/plans/20260717-example.md
-
-**IDENTITY:** You ARE `fullstack-dev`. Act as `fullstack-dev` for this task.
-Load: `mstar-harness-core` → `mstar-host` → `zcode.md` → `mstar-roles` → `references/fullstack-dev-shared.md` → topic skills per that reference.
-
-<task body>
-```
-
-PM dispatch invocation (same turn):
+Role-binding contract + Assignment template → **`_shared/host-role-binding-core.md`** (C5/C5b). ZCode-specific invoke shapes, same turn:
 
 ```text
 Agent(
@@ -100,26 +75,24 @@ Agent(subagent_type: "Explore", description: "...", prompt: "... Act as explore-
 
 ## PM dispatch (`Agent`)
 
-Harness **dispatch** on ZCode = **one or more `Agent` tool calls** with correct **`subagent_type`** and role-bound prompts.
+Harness **dispatch** on ZCode = **one or more `Agent` tool calls** with correct **`subagent_type`** and role-bound prompts (C5b → **`_shared/host-role-binding-core.md`**). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
 
 | Harness | ZCode |
 |---------|-------|
-| `Execute as: <role-id>` | Role id in Assignment + **Act as** + skill load in **Agent** prompt |
+| `Execute as: <role-id>` | Role id in Assignment + **Act as** + skill load in **Agent** prompt (C5b) |
 | `subagent_type` for invoke | built-in profiles only (typically `general-purpose`; `Explore` for read-only) |
-| 1 Assignment ⇒ 1 invoke | **1 `Agent`** call with full Assignment prompt |
 | Parallel batch **N** | **N `Agent`** calls in **one assistant message** |
-| No `Agent` call | **Not dispatched** — paste-only / `dispatch incomplete` |
 
 ### QC default
 
-- **`Execution mode: sdd`**: **N=3** `Agent` calls (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each prompt **Act as** the respective QC role, all `subagent_type: "general-purpose"`.
+- **`Execution mode: sdd`**: **N=3** `Agent` calls (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each prompt **Act as** the respective QC role, all `subagent_type: "general-purpose"` (N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 
 Cannot emit required **N** → **`Blocked`**.
 
 ### SDD implement (serial)
 
-- **`Execution mode: sdd`**: one implementer **`Agent`** per task id; task reviewer = new **`Agent`** (no sticky resume unless host adds it later).
+- **`Execution mode: sdd`**: one implementer **`Agent`** per task id; task reviewer = new **`Agent`** (no sticky resume unless host adds it later). Serial rule → **`parallel-dispatch.md`** § SDD implement.
 - **Never** multiple implementer Agents in one message for the same plan.
 
 ## Clarify

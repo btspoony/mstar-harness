@@ -69,30 +69,10 @@ When assignment is marked `high-risk`:
 ## Monitoring Checks
 ```
 
-## Completion Report v2
+## Completion Report
 
-```markdown
-## Completion Report v2
-
-**Agent**: ops-engineer
-**Task**: ...
-**Status**: Done | Blocked | Partial
-**Scope Delivered**: ...
-**Artifacts**: ...
-**Validation**: ...
-**Issues/Risks**: ...
-**Plan Update**: ...
-**Handoff**: ...
-**Git**: ...
-```
+Template (`{role_id}` = `ops-engineer`) → **`references/_shared/leaf-executor-core.md`**「Completion Report」。
 
 ## Plan & Documentation Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` from `mstar-plan-conventions`.
-- Update assigned plan tasks and notes.
-- Do not mark full plan `Done`.
-
-### Git NEVER (repo writes)
-
-- **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files—Completion Report **Git** must be a real `git log -1 --oneline` unless read-only was assigned.
-- **NEVER** batch everything into a single closing commit unless PM explicitly allowed it.
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。

@@ -65,32 +65,13 @@ When Assignment provides a report path, write report-only output under `{SDD_DIR
 ## Recommended owners
 ```
 
-## Completion Report v2
+## Completion Report
 
-```markdown
-## Completion Report v2
-
-**Agent**: qa-engineer
-**Task**: ...
-**Status**: Done | Blocked | Partial
-**Scope Delivered**: ...
-**Artifacts**: ...
-**Validation**: <AC mapping; reused L1/CI/prior-QA evidence vs new runs; QC findings addressed>
-**Issues/Risks**: ...
-**Plan Update**: ...
-**Handoff**: ...
-**Git**: ...
-```
+Template (`{role_id}` = `qa-engineer`) → **`references/_shared/leaf-executor-core.md`**「Completion Report」。
 
 ## Plan & Residual Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` from `mstar-plan-conventions`; residual lifecycle from `mstar-plan-artifacts`.
-- QA and PM are the only roles allowed to finalize plan `Done`.
-
-### Git NEVER (repo writes)
-
-- **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files—Completion Report **Git** must be a real `git log -1 --oneline` unless read-only was assigned.
-- **NEVER** batch everything into a single closing commit unless PM explicitly allowed it.
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**QA-specific**：QA 和 PM 是唯一可终结 plan `Done` 的角色；residual lifecycle 来自 `mstar-plan-artifacts`。
 
 ## Detailed References Index
 

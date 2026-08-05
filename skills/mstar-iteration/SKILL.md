@@ -295,7 +295,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
      5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
      6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；更新 `status.json` / plan checkbox
      7. Next task
-   - 每次 Completion Report v2 后更新 `status.json` + 主 plan
+   - 每次 Completion Report 后更新 `status.json` + 主 plan
 4. **QC → QA gate**（plan 保持 **`InReview`**；**保留** `execution_lease`）：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席；raw reports in `{SDD_DIR}/review/`，durable summary in main plan/status）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。**禁止**在 integration merge 成功前设 `Done` 或删除 `execution_lease`。
 5. **Plan complete — serial merge back**（§2.0 #5 未 waive）：自 **control worktree** claim/resume `metadata.integration_merge_lease` → 将 plan feature branch 合并入 `spec_integration_branch`（仅 merge-lease holder；细则 → **`references/phase-2-worktree-lease.md`**）→ 记录 merge commit 证据 → 释放 merge lease；**同轮**设 `Done` 并删除 `execution_lease`。merge 失败：保持 `InReview` + 保留 lease，不得标 `Done`。
 6. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
@@ -341,181 +341,21 @@ Iteration Phase 2 附加：
 - plan 内 SDD task **串行** — 见 §2.4、§2.5、`mstar-sdd` Continuous execution
 - **zero-residual（默认）**：单 plan QC findings 尽量在当轮清干净；仅真 blocker 才 defer 到后续迭代（须 Durable Roadmap）— 见 **`mstar-plan-artifacts`** Findings cleanup modes
 
----
-
 ## Phase 3: iteration-close（收口迭代）
 
-PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 root `metadata.target_branch`。入口：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。
+**入口**：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。本 Phase 在 **integration 分支**上运行；产出物 commit 到该分支，随迭代 PR 合入 `metadata.target_branch`。
+
+完整流程（§3.0 phase boundary、§3.0.5 compass 规范化、§3.1 entry checklist **HARD GATE**、§3.2 compound、§3.3 roadmap、§3.4 标记完成、§3.5 exit checklist + commit、§3.6 可选 compound-refresh）→ **`references/phase-3-iteration-close.md`**。
 
 **Close Done 定义**：§3.1→§3.5 全部完成；compass frontmatter 写入 `status: completed` + `end_date`；每篇新增 knowledge doc 已登记 `{KNOWLEDGE_DIR}/README.md`。只在 final plan 中写了 compound / roadmap / PR 说明，不算 iteration-close 完成。
 
-### 3.0 Phase boundary（HARD）
-
-- Phase 3 是 iteration 级收口，不是任一 plan 的子任务。
-- final plan closure、plan notes、plan compaction 可作为输入，但不能替代 §3.1→§3.5。
-- 读过 `mstar-iteration` / `mstar-compound` 不等于执行 gate；必须打印 checklist 并写入产物。
-
-### 3.0.5 Compass shape normalization（legacy 漂移修复）
-
-进入 §3.1 前，先确认 compass 具有 close 可写入的结构。若缺失，PM 在本 thread 做最小规范化，不委派、不重写无关内容。
-
-| 检查 | 缺则补齐 |
-|------|----------|
-| YAML frontmatter：`iteration_id`, `start_date`, `status` | 从文件名 / 正文提取；收口前 `status` 保持 `active` 或 `locked` |
-| `## Roadmap Position` | 从 general context / roadmap prose 迁移为本节 |
-| `## Quality Gate Summary` | 按模板补占位，§3.4 填写 |
-| `## Compound Round Summary` | 按模板补占位，§3.4 填写 |
-| `## Iteration Retrospective (minimal)` | 按模板补占位，§3.4 填写 |
-
-正文 completion status 只能作为历史注释；最终状态必须写入 frontmatter `status: completed` + `end_date`。
-
-### 3.1 Close entry checklist（HARD GATE）
-
-**STOP**: 打印下方 checklist，且全部为 `[x]` 后，才可进入 §3.2 Compound。
-
-- [ ] 所有 compass 中登记的 plan 在 `{HARNESS_DIR}/status.json` 均为 `Done`
-- [ ] 所有 plan 的 residual findings 已收口：优先 empty open 列表；若仍有 open R#，须均为 Phase 2 `zero-residual` 允许的 blocker-defer + roadmap，或已 closed/accepted/waived 归档（见 `mstar-plan-artifacts` Findings cleanup modes）
-- [ ] compass `## Plans` 表状态列已与 `status.json` 同步
-- [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
-- [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + close 占位节）
-
-PM **必须**在对话中打印本 checklist；不得默认同过。
-
-### 3.2 知识结晶（Compound）—— 迭代级核心收口
-
-**Compound 在此执行，不在 per-plan Done 后独立执行。** 工作流 SSOT → **`mstar-compound`**（Q1–Q8 自检、Phase 1–7、Phase 6 索引登记强制）。
-
-PM 批量触发后须：
-
-1. 收集本迭代 plan 实现 / debug / review 素材，筛候选知识
-2. **盘点** `{ITERATION_DIR}/<iteration-id>/**` package（`guides/`、`specs/`；默认排除 `delivery-compass.md`）— **`mstar-compound`**「Iteration package promotion」；提升值得保留者进 `{KNOWLEDGE_DIR}/`
-3. 逐条过 `mstar-compound` 自检；跳过项记入 compass `## Compound Round Summary`
-4. 写入或更新 `{KNOWLEDGE_DIR}/<category>/<slug>.md`；新领域词更新 `CONCEPTS.md`
-5. **每篇**新 doc 完成 Phase 6（`{KNOWLEDGE_DIR}/README.md` 登记）
-
-若无结晶且无 package 提升，仍在 `## Compound Round Summary` 写明 `无可结晶知识` / package 盘点结论及原因。
-
-### 3.3 更新 roadmap
-
-1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：
-   - current iteration 行标记为 **`delivered`**（或等价明确措辞）
-   - next iteration 更新为即将开始的内容、触发条件、owner
-2. 若 `status.json` 中有 `plans[].metadata.roadmap` 字段，同步更新
-3. 若存在 deferred-features / roadmap tracker 类文档，按项目惯例刷新
-4. 若 `STRATEGY.md` 存在，可更新 `## Decision Log`（重大架构决策时）
-
-### 3.4 标记迭代完成
-
-1. compass **YAML frontmatter**：`status: completed`，`end_date: YYYY-MM-DD`（必须；见 §3.0.5）
-2. 更新 `{ITERATION_DIR}/README.md` 索引中该迭代行 Status 为 `completed`
-3. 填充 compass `## Quality Gate Summary`、`## Compound Round Summary` 与 `## Iteration Retrospective (minimal)`（见模板）
-
-### 3.5 Close exit checklist + commit
-
-**Precondition**: §3.1 checklist `[x]`；§3.4 frontmatter `completed` + `end_date` 已写。
-
-PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`；然后进入 **Phase 4**（§4）：
-
-- [ ] §3.1 前置 gate 已打印并满足
-- [ ] §3.2 compound 完成；**`<iteration-id>/` package 已盘点**（提升 / 保留 / 跳过已记入 Compound Summary）；新增 knowledge doc 均已登记 `{KNOWLEDGE_DIR}/README.md`（或已记录无可结晶原因）
-- [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；tracker / STRATEGY 已按需更新
-- [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary + Compound Summary + Retrospective 已填
-- [ ] 当前分支是 `spec_integration_branch`
-- [ ] PR base = `metadata.target_branch`（与 compass frontmatter 一致）；**不是**未记录的 `main`
-
-**Commit 到 integration 分支**：
-
-```bash
-git add {ITERATION_DIR}/<id>/ {ITERATION_DIR}/README.md {KNOWLEDGE_DIR}/ CONCEPTS.md
-git commit -m "chore(iteration): close <iteration-id> — compound round, roadmap update"
-git push origin <spec_integration_branch>
-```
-
-PR 目标使用 root `metadata.target_branch`；缺失时停止并补齐，不得默认 `main`。
-
-### 3.6 可选：触发 compound-refresh
-
-若本轮 compound 新增了较多知识文档，或 compass 标记了可能过时的旧知识，触发 `mstar-compound-refresh` 对有重叠的知识文档做维护。
-
 ---
 
-## Phase 4: PR delivery（开 PR）
+## Phase 4 & 5: PR delivery + merge-ready loop
 
-**Precondition**: Phase 3 §3.5 exit 全 `[x]`；close commit 已 push 到 `spec_integration_branch`。
+**Phase 4**（开 PR）与 **Phase 5**（merge-ready loop）完整流程（§4、§5.0、§5.1a push cadence、§5.1 loop、§5.2 exit checklist）→ **`references/phase-4-5-pr-delivery.md`**。
 
-1. 打印 **`## Phase 4: PR delivery`**
-2. Resolve target：`metadata.target_branch`（compass frontmatter 镜像）；缺失 → **STOP**，问用户
-3. 创建 PR：`spec_integration_branch` → `target_branch`
-4. 记录 PR URL / number（Phase 5 会话 SSOT）
-5. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
-
----
-
-## Phase 5: PR merge-ready loop
-
-**Precondition**: Phase 4 PR 已创建且 head = `spec_integration_branch`。
-
-**Loop 理念**（mstar SSOT）：PR 开完后进入 **验证—修复—再验证** 循环，直至 PR 可合并。与 Phase 2 per-plan loop 类似，但对象是 **PR 级** merge 门禁（CI、review、冲突），不是 plan 实现。
-
-### 5.0 Phase boundary
-
-- Phase 5 在 PR head（`spec_integration_branch`）上 push 修复；**禁止**另开替代分支
-- 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；PM 线程不代写实现
-- 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
-- **Push cadence** → **§5.1a**（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）
-
-### 5.1a Push cadence（HARD — 防打断 CI / AI review）
-
-发现 CI 失败或 review 问题时，**允许本地提前修**（含 dispatch implement/ops、落盘 commit），但 **`git push`（更新 PR head）必须等上一波次跑完**。
-
-| 允许 | 禁止 |
-|------|------|
-| CI/review **进行中**就开始本地诊断与修复 | 当前 head 上仍有 **CI queued/in_progress**，或 **AI review 波次**（Bugbot / Greptile / 等价 bot）未结束时 **push** |
-| CI **全部结束后**出现新的 review 评论 → 继续本地修，批完再 push | 为「抢时间」在 CI 仍在跑时 push（会取消/孤儿化进行中的 CI 与 **AI reviews**，浪费 token 且无完整结果） |
-| 一批本地修复 **合并为一次 push**（本 head 波次 settled 后） | 同一波次未 settled 就连续多次 push |
-
-**Push gate（每次 push 前必须核对）**：
-
-1. 当前 PR head 的 **required CI**（及已启动的检查）均已 **completed**（success / failure / cancelled — 不得仍为 queued / in_progress）
-2. 附着在该 head 的 **AI / bot review 波次**已跑完（无进行中的 review job；若宿主无法探测 job，则至少等 CI settled **且** review 评论不再增长一小段稳定窗口后再 push）
-3. 仅当 **1–2 满足** 且本地仍有未推送修复时，才 **push 一次**
-4. Push 后：等 **新 head** 的 CI + reviews 全部跑完 → 再决定下一轮本地修 / push
-
-**顺序记忆**：`observe findings → fix locally early → wait until CI + review wave idle → push batch → wait new wave → repeat`。
-
-### 5.1 Loop（repeat until §5.5 exit）
-
-1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**
-2. **Merge conflicts** — blocking 则在 integration 分支**本地**解决；**仅当 §5.1a push gate 满足时**再 push（意图冲突 → **Blocked**）
-3. **Reviews** — fetch unresolved threads；triage；dispatch **本地**修复（可在上一波次仍在跑时开工）
-4. **CI** — 失败项在 PR 范围内**本地**修复（可提前开工）；**不**在 CI 仍在跑时 push
-5. **Push** — 仅当 §5.1a 满足：无 in-flight CI，上一波 CI **与** reviews 均已跑完 → **一次** push 本批修复
-6. **Review fix hygiene**（每次因 review 而 push 后）：
-   - 在同 thread **comment**（改动 + 验证）
-   - **Resolve** when addressed
-7. Return to step 1（CI 结束后若出现 **新** reviews → 继续本地修，再等 idle 后 push）
-
-**Optional host helpers（command 层发现；非 `mstar-*` load order）**：
-
-| Priority | Helper | When |
-|----------|--------|------|
-| 1 | `babysit` or any `*-babysit` skill（first readable `SKILL.md`） | **Default prefer** — CI green + reviews resolved loop |
-| 2 | `greploop` | **Optional** — only when the **repo** uses Greptile / has `greploop` available; then run for Greptile **5/5** in addition to babysit/`*-babysit` (or fallback) gates |
-| 3 | neither | Command fallback = babysit-equivalent CI + reviews gates |
-
-When both babysit/`*-babysit` and `greploop` apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → host `commands/iteration-drive` / `iteration-loop` Phase 5.
-
-### 5.2 Phase 5 exit checklist（迭代交付完成）
-
-打印 **`## Phase 5 exit checklist`**；全 `[x]` 后方可宣称 **迭代交付完成**：
-
-- [ ] PR mergeable（无 blocking merge conflicts）
-- [ ] All **required** CI checks green on latest head
-- [ ] All review threads **resolved**（或用户书面 waive 特定 thread）
-- [ ] §5.1 review comment + resolve 已覆盖本轮所有 addressed feedback
-- [ ] Host todo `phase-5-pr-merge-ready` 可勾选
-
-PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 auto-merge。
+**关键定位（hard）**：Phase 4 开 PR **≠** 迭代交付完成；必须完成 Phase 5 §5.2 merge-ready exit。**Push cadence（§5.1a HARD）**：本地可提前修，**禁止**在 CI / AI review 波次未结束时 `git push`。
 
 ---
 
@@ -525,50 +365,20 @@ PR **merge** 本身可仍由用户手动执行，除非 Assignment 明确授权 
 
 ## 与其它技能的关系
 
-| 技能 | 关系 |
-|------|------|
-| `mstar-dispatch-gates` | Dispatch rules — per-plan loop 引用 |
-| `mstar-phase-gates` | per-plan gate 判定 |
-| `mstar-plan-conventions` | 路径符号（`{ITERATION_DIR}`、`{HARNESS_DIR}`） |
-| `mstar-plan-artifacts` | `status.json` SSOT、`{ITERATION_DIR}` 索引维护 |
-| `mstar-sdd` | SDD implement 波次 — per-plan loop |
-| `mstar-review-qc` | SDD 强制 plan QC tri — per-plan loop |
-| `mstar-branch-worktree` | 分支/merge/worktree 隔离 |
-| `mstar-compound` | iteration-close 中触发知识结晶（**唯一**默认 knowledge 新增路径） |
-| `mstar-compound-refresh` | iteration-close 后可触发知识维护 |
-| `references/iteration-artifact-boundaries.md` | Phase 1 specs / iteration package / knowledge 分工 |
-| `references/iteration-workspace-readme-template.md` | `<iteration-id>/README.md` 可选模板（Documents 单表） |
-| `references/iteration-corpus-hygiene.md` | §1.6 writing-specialist specs 卫生细则 |
-| `references/autonomous-direction-lock.md` | §1.2 autonomous direction lock、scale budget、branch resolve |
-| `references/phase-2-worktree-lease.md` | Phase 2 control worktree、`execution_lease`、`integration_merge_lease` |
-| `mstar-strategy` | iteration-start 时读 `STRATEGY.md` 对齐方向 |
+完整 topic-skill 索引见 **`mstar-harness-core`**。本 skill 迭代级关键引用：
+
+- **`mstar-compound`** — iteration-close 中触发知识结晶（**唯一**默认 knowledge 新增路径）
+- **`references/phase-2-worktree-lease.md`** — Phase 2 control worktree、`execution_lease`、`integration_merge_lease`
+- **`references/autonomous-direction-lock.md`** — §1.2 autonomous direction lock、scale budget、branch resolve
+- **`references/iteration-artifact-boundaries.md`** — Phase 1 specs / iteration package / knowledge 分工
+- **`references/iteration-corpus-hygiene.md`** — §1.6 writing-specialist specs 卫生细则
 
 ## NOT to do
 
-- 不要在 per-plan Done 后立即单独 compound——等 iteration-close 统一做
-- 不要在 Autonomous Execute（Phase 2）中修改 per-plan gate 判定
-- **不要在 Phase 2 用 inline 大包 Assignment 替代 SDD per-task 循环**（除非 plan 显式 `Execution mode: inline` / hotfix）
-- 不要用 compass 替代 `status.json` 作为 plan 状态 SSOT
-- 不要在没有完成 per-plan 前置检查的情况下进入 iteration-close
-- 不要在缺少 `iteration_base_branch` / `target_branch` 时默认使用 `main` / `master`
-- 不要将 Phase 3 折叠进 final plan closure——须显式 §3.0→§3.5
-- 不要用 prose completion status 替代 compass frontmatter `status: completed` + `end_date`
-- 不要跳过 compound Phase 6（`{KNOWLEDGE_DIR}/README.md` 索引）——即使只结晶一篇文档
-- 不要跳过 compound——如果本迭代确实没有可结晶的知识，在 compass `## Compound Round Summary` 写 `无可结晶知识（原因：<简述>）`
-- 不要将 **Phase 4 开 PR** 等同于 **迭代交付完成** — 必须完成 **Phase 5** §5.5 merge-ready loop
-- **不要在 Phase 5 于 CI 仍在跑或 AI review 波次未结束时 push**（浪费 token、打断 review；§5.1a）— 本地可提前修，push 必须等 idle
-- **不要在 iteration-start §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增文档**（知识 → iteration-close **`mstar-compound`**）
-- **不要把迭代级草案写入 `{SPECS_DIR}/`**（应进 `{ITERATION_DIR}/<iteration-id>/specs/` 或 `guides/`）
-- **不要在 iteration-close 跳过 `<iteration-id>/` package 盘点**（compound 提升 SSOT → **`mstar-compound`**）
-- **不要新写根目录 `<iteration-id>-delivery-compass.md`**（canonical：`<iteration-id>/delivery-compass.md`；legacy flat 仅兼容读）
-- **不要在 `{ITERATION_DIR}/README.md` 为同一迭代登记 compass + workspace 双行**（一行 = 一次迭代）
-- **不要在 iteration-start §1.6 跳过 writing-specialist 全库 specs corpus hygiene**（仅改当轮 compass/plans 而不扫 `{SPECS_DIR}/`）
-- **不要在 SDD plan 上以单席 `qc.md` 收尾**（除非用户书面 `QC mode: single — override`）
-- **不要在未显式 `Direction lock mode: autonomous` 时跳过与用户收敛方向**（interactive 仍为默认）
-- **不要在 `autonomous` mode 下例行问用户「是否同意该方向」**（须落盘 rationale；无候选且无约束时 STOP）
-- **不要把 harness 流程（Review 链 / QC / QA / compound / close / PR 等）计进 Scale budget 的 plan 数量**，也不得为此单独建 process plan 占坑
-- **不要在 Phase 2 无 verified `execution_lease` 就做可写 implement 派发**（resume 仅限同 `holder` verify-held-lease）
-- **不要 steal / 覆盖他人 `execution_lease` 或 `integration_merge_lease`**（除非用户本轮显式 override + audit `notes`）
-- **不要从 feature worktree 的 `{HARNESS_DIR}` 路径当作 plans / status / iterations / SDD SSOT**（control worktree 绝对路径为准；默认 gitignore 下 feature 缺 plans **不得**推断 `Worktree mode: waived`）
-- **不要把「无 flock」与「gitignore / feature 缺 plans」捆成一次 waive**（无锁 → `Plan parallelism: serial` only；gitignore → control-path harness）
-- **不要并行 merge 入 `spec_integration_branch`**（merge 必须经 `integration_merge_lease` 串行）
+完整反模式索引见 **`mstar-harness-core`**。迭代级高频陷阱（其余各 Phase 内已含对应 hard rule）：
+
+- **不要将 Phase 4 开 PR 等同于迭代交付完成** — 必须完成 Phase 5 §5.2 merge-ready loop
+- **不要在 Phase 5 CI 仍跑或 AI review 波次未结束时 push**（§5.1a）— 本地可提前修，push 等 idle
+- **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**
+- **不要在 iteration-start §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-compound`**）
+- **不要在 per-plan Done 后立即 compound** — 等 iteration-close 统一做

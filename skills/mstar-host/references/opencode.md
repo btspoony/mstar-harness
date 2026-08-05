@@ -20,14 +20,12 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 
 ## PM dispatch (task tool + subagent)
 
-Harness **dispatch** on OpenCode = **one or more `task` tool calls**, each with **`subagent: <agent-id>`** (read the tool schema every session).
+Harness **dispatch** on OpenCode = **one or more `task` tool calls**, each with **`subagent: <agent-id>`** (read the tool schema every session). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
 
 | Harness | OpenCode |
 |---------|----------|
 | `Execute as: <role-id>` | **`subagent`** on **task tool** = same agent id |
-| 1 Assignment ⇒ 1 invoke | **1 task tool** call with matching **subagent** + prompt from Assignment |
 | Parallel batch **N** | **N task tool** calls in **one assistant message** when the host allows (`parallel-dispatch.md`) |
-| No task tool call | **Not dispatched** — paste-only / `dispatch incomplete` |
 
 PM workflow: finalize Assignment → **call task tool** with **subagent** + generated prompt → wait for subagent Completion Report → update plan / status.
 

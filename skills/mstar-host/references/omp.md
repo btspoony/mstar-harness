@@ -81,32 +81,7 @@ Morning Star role ids (`project-manager`, `fullstack-dev`, `qc-specialist`, …)
 
 ### Role binding in prompt (C5b — required)
 
-Because omp cannot bind Morning Star roles via `task.agent` alone, every dispatch **must** carry the played role in the **Assignment** and in the **task assignment text**:
-
-1. **`Execute as: <role-id>`** in Assignment (harness routing SSOT).
-2. **`Act as <role-id>`** (or equivalent) at the top of the task body.
-3. **Skill load list** — instruct the subagent to read `mstar-roles` → `references/<role-id>.md` (or shared reference + parameters) and topic skills per that reference.
-4. **`agent`** — pick from the live built-in list only (default **`task`**; explore → `scout`/`explore`).
-
-Paste-only Assignment without a **`task`** call is **not** dispatch.
-
-### Assignment / task-body template
-
-```markdown
-## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Working branch**: feat/example
-**Plan Path**: .mstar/plans/20260717-example.md
-
-**IDENTITY:** You ARE `fullstack-dev`. Act as `fullstack-dev` for this task.
-Load: `mstar-harness-core` → `mstar-host` → `omp.md` → `mstar-roles` → `references/fullstack-dev-shared.md` → topic skills per that reference.
-
-<task body>
-```
-
-PM dispatch invocation (same turn):
+Role-binding contract + Assignment template → **`_shared/host-role-binding-core.md`** (C5/C5b). omp-specific invoke shapes, same turn:
 
 ```text
 task(
@@ -133,26 +108,24 @@ task(
 
 ## PM dispatch (`task`)
 
-Harness **dispatch** on omp = **one or more `task` tool calls** with correct **`agent`** values and role-bound assignment text.
+Harness **dispatch** on omp = **one or more `task` tool calls** with correct **`agent`** values and role-bound assignment text (C5b → **`_shared/host-role-binding-core.md`**). N-parallel / 1-Assignment-1-invoke / paste-only mechanics → **`parallel-dispatch.md`**.
 
 | Harness | omp |
 |---------|-----|
-| `Execute as: <role-id>` | Role id in Assignment + **Act as** + skill load in **task** body |
+| `Execute as: <role-id>` | Role id in Assignment + **Act as** + skill load in **task** body (C5b) |
 | `agent` for invoke | built-ins only (default `task`; explore → `scout`/`explore`) |
-| 1 Assignment ⇒ 1 invoke | **1** `tasks[]` entry (or 1 `task` call) with full Assignment body |
 | Parallel batch **N** | **N** `tasks[]` entries in **one** `task` call, or **N** `task` calls in **one** assistant message |
-| No `task` call | **Not dispatched** — paste-only / `dispatch incomplete` |
 
 ### QC default
 
-- **`Execution mode: sdd`**: **N=3** task entries (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each body **Act as** the respective QC role; prefer `agent: "task"` (or `reviewer` only when it does not drop Morning Star QC skill load).
+- **`Execution mode: sdd`**: **N=3** task entries (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each body **Act as** the respective QC role; prefer `agent: "task"` (or `reviewer` only when it does not drop Morning Star QC skill load). N rules → `parallel-dispatch.md`.
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 
 Cannot emit required **N** → **`Blocked`**.
 
 ### SDD implement (serial)
 
-- **`Execution mode: sdd`**: one implementer `task` entry per task id; task reviewer = new entry (no sticky resume unless host resume/id is available and recorded).
+- **`Execution mode: sdd`**: one implementer `task` entry per task id; task reviewer = new entry (no sticky resume unless host resume/id is available and recorded). Serial rule → **`parallel-dispatch.md`** § SDD implement.
 - **Never** multiple implementer entries in one message for the same plan.
 
 ## Clarify

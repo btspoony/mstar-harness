@@ -98,30 +98,10 @@ If writing files to business repo, use only PM-assigned `Working branch` / `Bran
 
 - **NEVER** embed human calendar estimates (person-days, FTE, “waiting for review X days”) inside **Effort (agent-oriented)** fields; keep agent-only sizing per `mstar-plan-conventions` `references/effort-estimation.md`.
 
-## Completion Report v2
+## Completion Report
 
-```markdown
-## Completion Report v2
-
-**Agent**: product-manager
-**Task**: ...
-**Status**: Done | Blocked | Partial
-**Scope Delivered**: ...
-**Artifacts**: ...
-**Validation**: ...
-**Issues/Risks**: ...
-**Plan Update**: ...
-**Handoff**: ...
-**Git**: ...
-```
+Template (`{role_id}` = `product-manager`) → **`references/_shared/leaf-executor-core.md`**「Completion Report」。
 
 ## Plan & Documentation Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` from `mstar-plan-conventions`.
-- Update assigned plan sections and task checkboxes.
-- Do not set full plan to `Done`.
-
-### Git NEVER (repo writes)
-
-- **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files—Completion Report **Git** must be a real `git log -1 --oneline` unless read-only was assigned.
-- **NEVER** batch everything into a single closing commit unless PM explicitly allowed it.
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**Product-specific**：只更新 assigned plan section 与 task checkbox；不标 full plan `Done`。

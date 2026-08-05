@@ -32,7 +32,7 @@ Layer SSOT → `mstar-review-qc/references/review-responsibility-boundaries.md`.
 5. Execute **`reviewer-checklist.md`** manually against the diff.
 6. Produce structured findings with severity and evidence. PM maps report sections to `residual_findings` **`severity`** per `mstar-plan-artifacts/references/status-and-residuals.md` — do not invent non-canonical severity strings.
 7. **Write report:** Write `.md` to the Assignment-provided `{SDD_DIR}/review/` report path. Do not commit raw bundle reports unless Assignment explicitly says `Review archive mode: tracked reports`.
-8. **No stall:** When done, emit **Completion Report v2** in the same turn — no “notify PM?” choosers.
+8. **No stall:** When done, emit **Completion Report** in the same turn — no “notify PM?” choosers.
 
 ## Evidence gaps (hand to QA — do not self-execute)
 
