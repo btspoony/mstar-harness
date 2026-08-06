@@ -2,18 +2,18 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.4** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.5** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.4** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.4** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.4** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.4** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.4** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.4** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.4** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.5** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.5** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.5** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.5** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.5** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.5** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.5** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.5** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
