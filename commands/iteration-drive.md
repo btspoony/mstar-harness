@@ -101,7 +101,7 @@ Helper 搜索路径 → **`mstar-iteration/references/phase5-helper-discovery.md
 
 ### 5.1 Loop + review fix hygiene（all modes）
 
-Execute **`mstar-iteration` §5.1 loop**（`references/phase-4-5-pr-delivery.md` §5.1）：status（`gh pr view <number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision` 或宿主等价 API）→ merge conflicts → unresolved reviews → CI → **§5.1a idle push**（一批修复一次 push）→ mode-specific pass（babysit SKILL / greploop / fallback）→ §5.1 review fix hygiene（**comment on same thread + resolve**）→ repeat until §5.5。Fixes **push 到 `spec_integration_branch`**（PR head）；禁止另开分支替代。产品代码修复 → **dispatch** dev/ops；PM 线程不代写。**禁止**为「让 CI 变绿」而改 workflow，除非用户明确授权。多轮仍 blocked → 升级用户。
+Execute **`mstar-iteration` §5.1 loop**（`references/phase-4-5-pr-delivery.md` §5.1）：status（`gh pr view <number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision` 或宿主等价 API）→ merge conflicts → unresolved reviews → CI → **§5.1a idle push**（一批修复一次 push）→ mode-specific pass（babysit SKILL / greploop / fallback）→ §5.1 review fix hygiene（**comment on same thread + resolve**）→ repeat until §5.5。Fixes **push 到 `spec_integration_branch`**（PR head）；禁止另开分支替代。**Checkout（HARD，§5.0）**：直接在 control / 集成分支 checkout 上修；**禁止**另开 Phase 5 fix worktree，**禁止**套用 Phase 2 control 产品编辑禁令。产品代码修复 → **dispatch** dev/ops（Assignment cwd = control）；PM 线程不代写。**禁止**为「让 CI 变绿」而改 workflow，除非用户明确授权。多轮仍 blocked → 升级用户。
 
 ### 5.2 Phase 5 exit checklist（iteration-drive Done）
 

@@ -355,7 +355,7 @@ Iteration Phase 2 附加：
 
 **Phase 4**（开 PR）与 **Phase 5**（merge-ready loop）完整流程（§4、§5.0、§5.1a push cadence、§5.1 loop、§5.2 exit checklist）→ **`references/phase-4-5-pr-delivery.md`**。
 
-**关键定位（hard）**：Phase 4 开 PR **≠** 迭代交付完成；必须完成 Phase 5 §5.2 merge-ready exit。**Push cadence（§5.1a HARD）**：本地可提前修，**禁止**在 CI / AI review 波次未结束时 `git push`。
+**关键定位（hard）**：Phase 4 开 PR **≠** 迭代交付完成；必须完成 Phase 5 §5.2 merge-ready exit。**Push cadence（§5.1a HARD）**：本地可提前修，**禁止**在 CI / AI review 波次未结束时 `git push`。**Checkout（HARD）**：Phase 5 修复直接在 control / `spec_integration_branch` 上做；**禁止**另开 Phase 5 fix worktree，**禁止**套用 Phase 2「control 禁止产品编辑」（细则 → **`references/phase-4-5-pr-delivery.md`** §5.0）。
 
 ---
 
@@ -379,6 +379,7 @@ Iteration Phase 2 附加：
 
 - **不要将 Phase 4 开 PR 等同于迭代交付完成** — 必须完成 Phase 5 §5.2 merge-ready loop
 - **不要在 Phase 5 CI 仍跑或 AI review 波次未结束时 push**（§5.1a）— 本地可提前修，push 等 idle
+- **不要为 Phase 5 另开 feature/fix worktree**，也不要把 Phase 2 control 产品编辑禁令套到 Phase 5 — 直接在集成分支 checkout 上修
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**
 - **不要在 iteration-start §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-compound`**）
 - **不要在 per-plan Done 后立即 compound** — 等 iteration-close 统一做

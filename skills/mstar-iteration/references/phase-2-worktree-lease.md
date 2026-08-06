@@ -18,6 +18,8 @@ required.
 Phase 1 Review & Edit may stay on the primary checkout. The control-worktree gate
 starts at **Phase 2 entry**.
 
+**Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control 禁止产品编辑 / 每 plan feature worktree」）。**Phase 5** PR merge-ready 修复 **不**沿用该产品编辑隔离——直接在 control / `spec_integration_branch` 上改，**禁止**另开 Phase 5 fix worktree → **`phase-4-5-pr-delivery.md`** §5.0。
+
 ## Control worktree (Phase 2 entry)
 
 1. Resolve all active plans' `metadata.spec_integration_branch` to the **same**
