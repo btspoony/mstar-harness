@@ -17,6 +17,11 @@
 
 ## [Unreleased]
 
+### Harness（skill 撰写 — SkillsBench 门控）
+
+- **`mstar-skill-authoring`**：将 skill-writer 六原则并入运行时撰写技能——专家流程优先、紧凑 5 问 body、1–3 skill 路由、按 model+harness 实测、只补模型缺口、每次改动做 paired 实验。Body 保留可执行门控；完整 writer 流程 / 输出模板 / 反模式 → `references/skillsbench-authoring.md`（渐进披露）。
+- 收紧 `description` 触发契约（中文，含排除条件）；保留 Morning Star 既有结构（purpose test、frontmatter 契约、技能相对路径、review 模板）作为 SSOT，不另起平行手册。
+
 ## [1.8.7] - 2026-08-06
 
 ### Harness

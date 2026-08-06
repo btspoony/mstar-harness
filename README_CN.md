@@ -169,7 +169,7 @@ flowchart TD
 | `mstar-coding-behavior` | RCA、测试优先、审查反馈、证据 |
 | `mstar-compound` / `mstar-compound-refresh` | 知识结晶 / 维护 |
 | `mstar-strategy` | `STRATEGY.md` 对齐 |
-| `mstar-skill-authoring` | skill 编写契约 |
+| `mstar-skill-authoring` | skill 编写契约（SkillsBench 门控） |
 | `mstar-audit` | 只读代码库审计 → 优先级改进计划 |
 | `mstar-roles` | 角色提示词 + 加载清单 |
 | `mstar-host` | 宿主适配（omp / OpenCode / Cursor / Kimi / ZCode / Codex） |

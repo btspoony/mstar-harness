@@ -19,6 +19,11 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+### Harness (skill authoring — SkillsBench gate)
+
+- **`mstar-skill-authoring`**: fold the skill-writer 6 principles into the runtime authoring skill — expert process first, compact 5-question body, 1–3 skill routing, per model+harness validation, encode only model gaps, every edit as paired experiment. Body stays the executable gate; full writer loop / output template / anti-patterns → `references/skillsbench-authoring.md` (progressive disclosure).
+- Tightened `description` trigger contract (ZH) with exclusions; kept Morning Star layout (purpose test, frontmatter contract, skill-relative paths, review template) as SSOT rather than a parallel handbook.
+
 ## [1.8.7] - 2026-08-06
 
 ### Harness

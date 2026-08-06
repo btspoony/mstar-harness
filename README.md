@@ -169,7 +169,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-coding-behavior` | RCA, test-first, review feedback, evidence |
 | `mstar-compound` / `mstar-compound-refresh` | Knowledge crystallize / maintain |
 | `mstar-strategy` | `STRATEGY.md` alignment |
-| `mstar-skill-authoring` | Skill authoring contracts |
+| `mstar-skill-authoring` | Skill authoring contracts (SkillsBench gate) |
 | `mstar-audit` | Read-only codebase audit → prioritized improvement plans |
 | `mstar-roles` | Role prompts + load lists |
 | `mstar-host` | Host adapters (omp / OpenCode / Cursor / Kimi / ZCode / Codex) |
