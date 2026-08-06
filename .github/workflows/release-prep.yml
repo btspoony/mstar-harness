@@ -73,7 +73,11 @@ jobs:
         run: bun run release:validate -- "v${{ steps.ver.outputs.version }}"
 
       - name: Typecheck + pack (release sanity)
-        run: bun run release:check
+        run: |
+          mkdir -p /tmp/pack-out
+          bun run typecheck
+          npm pack --workspace @mstar-harness/cli --pack-destination /tmp/pack-out
+          npm pack --workspace @mstar-harness/opencode --pack-destination /tmp/pack-out
 
       - name: Extract release notes
         run: bun run scripts/extract-changelog-section.ts "${{ steps.ver.outputs.version }}" > /tmp/notes.md
