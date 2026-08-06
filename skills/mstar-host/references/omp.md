@@ -77,7 +77,7 @@ task(
 
 Single-task shorthand may exist depending on host version — always match the live schema. Parallel **N** Morning Star assignees ⇒ **one** `task` call with **N** `tasks[]` entries **or** **N** `task` calls in one assistant message when the host requires that shape. Count emitted dispatches = **N**.
 
-**Construct the envelope first (production cue — prevents the omission at the source, not just at the gate).** When building a `tasks[]` entry, write **`agent`** + **`name`** as the first fields, *before* the long `task` body. The Assignment body is hundreds of lines of structured text and dominates working memory; `agent`/`name` are one-line envelope fields with no intrinsic saliency and no auto-check — writing the body first and the envelope last is how `agent` gets silently dropped (omp then defaults to generic `task`). The pre-send field gate (see **C5** below) catches it, but **envelope-first is the cheaper failure mode**: it makes the high-stakes-but-low-saliency field structural, so it cannot be forgotten by attention drift while authoring the body.
+**Envelope-first**: write `agent` + `name` as the first fields of each `tasks[]` entry, before the long `task` body — the body crowds them out and `agent` gets silently dropped (omp defaults to generic `task`, no error). SSOT → `parallel-dispatch.md` § Mandatory order.
 
 ## Role agents (C5 — hard constraint)
 
@@ -150,26 +150,13 @@ task(
 Review & Edit / Prepare specialist chain (sequential, **N=1** each turn — re-set **`agent`** on **every** dispatch; at N=1 the count gate is trivial, so the **field** gate is the only protection):
 
 ```text
+# pass 1 — product-manager
 task(
   context: "Review & Edit — product scope",
-  tasks: [{
-    name: "ReviewEditProduct",
-    agent: "product-manager",
-    task: "<Assignment: Execute as product-manager; Act as + skill load>"
-  }]
+  tasks: [{ name: "ReviewEditProduct", agent: "product-manager",
+            task: "<Assignment: Execute as product-manager; Act as + skill load>" }]
 )
-# pass 2 — architect (re-set agent on EVERY dispatch; a bare tasks:[{task:"…"}] with no agent silently falls back to generic task — C5 anti-pattern)
-task(
-  context: "Review & Edit — architecture",
-  tasks: [{ name: "ReviewEditArchitect", agent: "architect",
-            task: "<Assignment: Execute as architect; Act as + skill load>" }]
-)
-# pass 3 — writing-specialist
-task(
-  context: "Review & Edit — writing",
-  tasks: [{ name: "ReviewEditWriting", agent: "writing-specialist",
-            task: "<Assignment: Execute as writing-specialist; Act as + skill load>" }]
-)
+# repeat for architect, writing-specialist, … — each a separate N=1 dispatch with agent re-set
 ```
 
 For explore-only orientation (no Morning Star role deliverable):
@@ -203,7 +190,7 @@ Cannot emit required **N** → **`Blocked`**.
 
 ### SDD implement (serial)
 
-- **`Execution mode: sdd`**: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry (no sticky resume unless host resume/id is available and recorded). Serial rule → **`parallel-dispatch.md`** § SDD implement.
+- **`Execution mode: sdd`**: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry with `agent: "reviewer"` (omp L2 review; not qc-specialist*) or `agent: "task"` as last resort + C5b — no sticky resume unless host resume/id is available and recorded. Serial rule → **`parallel-dispatch.md`** § SDD implement.
 - **Never** multiple implementer entries in one message for the same plan.
 
 ## Clarify
