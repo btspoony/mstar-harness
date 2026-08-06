@@ -7,6 +7,8 @@ assembles into `CHANGELOG.md` / `CHANGELOG_CN.md` / `packages/*/CHANGELOG.md` at
 
 1. **During development**, add one fragment per logical change to `unreleased/`:
    `unreleased/<slug>.md` (e.g. `unreleased/add-dispatch-gate.md`). Commit it with the change.
+   **Do not** paste the same bullets into `CHANGELOG.md` / `CHANGELOG_CN.md` /
+   `packages/*/CHANGELOG.md` (including under `## [Unreleased]`). Those files are assembled later.
 2. **At release time**, `bun run release:prepare -- <version>` (or the **Release prep** GitHub
    Actions workflow) reads every `unreleased/*.md`, inserts a `## [<version>]` section into each
    changelog, bumps all version surfaces, and **moves** the consumed fragments into

@@ -100,7 +100,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-compound` | 知识结晶 —— 已解决问题→结构化知识文档，双轨（Bug/Knowledge），「是否值得结晶」自检清单，重叠检测，可发现性检查，CONCEPTS.md 协同 |
 | `mstar-compound-refresh` | 知识维护 —— 审查/更新/合并/删除 `{KNOWLEDGE_DIR}` 文档；**项目知识 bootstrap**（无/残旧 STRATEGY.md、CONCEPTS.md、`{KNOWLEDGE_DIR}`）→ `references/project-knowledge-bootstrap.md` |
 | `mstar-strategy` | `STRATEGY.md` 全局战略方向 —— 产品愿景、技术方向、决策原则 |
-| `mstar-skill-authoring` | mstar-native skill authoring: trigger contracts, progressive disclosure, pressure scenarios, behavior-change evidence |
+| `mstar-skill-authoring` | 通用 skill 撰写门控（SkillsBench 六原则）：trigger 契约、紧凑 5 问 body、渐进披露、paired 证据 |
 | `mstar-audit` | Read-only codebase audit → prioritized, self-contained improvement plans（`audit-playbook` 9 类别 + `finding-format` + `plan-quality-bar`） |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |

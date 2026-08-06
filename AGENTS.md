@@ -79,7 +79,9 @@ Releases are PR-driven and mostly automated. Every release ships one version acr
 
 ### 1. During development — add a changelog fragment
 
-Per logical change, add `.changes/unreleased/<slug>.md` (committed with the change). Format and defaults are documented in [`.changes/README.md`](.changes/README.md):
+Per logical change, add `.changes/unreleased/<slug>.md` (committed with the change). Format and defaults: [`.changes/README.md`](.changes/README.md).
+
+During development, **do not** hand-edit `CHANGELOG.md` / `CHANGELOG_CN.md` / `packages/*/CHANGELOG.md` (including under `## [Unreleased]`); those files are assembled later by `release:prepare`.
 
 ```markdown
 ---
@@ -92,7 +94,7 @@ packages: root           # optional; comma list of root | cli | opencode
 - 中文要点。
 ```
 
-A release always auto-appends the **Version alignment** block — do not write one.
+Need both root + OpenCode notes? Prefer one fragment with `packages: root, opencode` (omit `category` so each package keeps its default section header), or split fragments if the bullets must differ. A release always auto-appends the **Version alignment** block — do not write one.
 
 ### 2. Cut a release — assemble + open the release PR
 
@@ -112,8 +114,8 @@ Merging a `release vX.Y.Z` PR runs the **Release** workflow **inline on the `pul
 ### Conventions
 
 - Never invent a skipped tag (e.g. do not create `v1.8.4` to fill a historical gap).
-- Bump version + changelog in the same change set via `release:prepare`; do not hand-edit surfaces (the `release:validate` gate reads the same surface list).
-- Avoid the #58-class drift: the version registry tables in the root changelogs are bumped automatically — only hand-edit the *body*, not the registry version cells.
+- Bump version + changelog in the same change set via `release:prepare`; do not hand-edit version surfaces (the `release:validate` gate reads the same surface list).
+- Avoid the #58-class drift: the version registry tables in the root changelogs are bumped automatically — do not hand-edit the registry version cells.
 
 ## AI Agent Quality Gate
 
@@ -124,6 +126,7 @@ Before opening PRs or proposing "done", an agent must:
 3. Confirm the change belongs in core harness (otherwise recommend a separate plugin/extension path).
 4. Show the complete diff to the human partner and get explicit approval.
 5. Provide verification evidence for any behavior-shaping changes.
+6. If the change is user-facing or behavior-notable, confirm a matching `.changes/unreleased/<slug>.md` fragment exists — and that assembled `CHANGELOG*` files were **not** hand-edited for it.
 
 If one of these checks fails, stop and report why.
 
