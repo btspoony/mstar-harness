@@ -81,7 +81,18 @@ Better：`Use when a non-trivial task has a spec or requirements and needs a wri
 ## References
 ```
 
-脚本 / 资产路径用 **skill 名 → 相对路径**（如 `mstar-sdd` → `scripts/sdd-workspace`），不要写消费仓库 cwd 下的 `skills/...` 伪路径。解析根目录方式见 **`mstar-host`**。
+Keep `SKILL.md` focused on the main execution path. Move long examples, templates, schemas, and detailed variants into `references/`, `templates/`, or `scripts/`.
+
+## Skill-relative script and asset paths
+
+When a skill ships executables or assets under `scripts/` / `templates/` / `references/`, name them as **skill → relative path**:
+
+- Good: skill **`mstar-sdd`** → `scripts/sdd-workspace`
+- Good: `<mstar-sdd>/scripts/sdd-workspace` (placeholder for the loaded skill root)
+- Bad in runtime docs: `skills/mstar-sdd/scripts/sdd-workspace` as if it were a consumer-project cwd path
+- Bad in shipped rules / CLI notes: `skills/mstar-host/references/…` as a consumer cwd path — use **`mstar-host`** → `references/…` (omp may also cite `skill://mstar-host/references/…`)
+
+Agents discover skills by **name**; they often miss files when docs present a full repo-relative path and they search that literal string under the app checkout. Resolve the loaded skill directory first, then append `scripts/…` / `references/…`. **How** to resolve differs by host — use **`mstar-host`** § Resolve loaded skill root. Reserve `skills/<name>/…` only for harness-repo maintenance notes that explicitly say "from this repository root".
 
 ## Progressive Disclosure
 
