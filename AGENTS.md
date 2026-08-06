@@ -55,7 +55,6 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Ki
 - Do keep role shells thin and maintain richer role behavior in role-skill references.
 - Do keep commit scope coherent (one concern per commit when possible).
 - Do verify any changed command/config snippets are still runnable.
-- Do record user-facing / behavior-notable work as a **changelog fragment** under `.changes/unreleased/` (see *Release Process* §1) — commit the fragment with the change.
 
 ## What Not To Do
 
@@ -65,7 +64,6 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Ki
 - Do not turn `README.md` / `README_CN.md` into tutorials or long “How to use” essays — keep executable paths; detail belongs in `INSTALL.md` / `docs/` / skills.
 - Do not scatter the same rule text across multiple files just for discoverability.
 - Do not require manual file-by-file index maintenance when explore/search can discover structure.
-- Do **not** hand-edit `CHANGELOG.md` / `CHANGELOG_CN.md` / `packages/*/CHANGELOG.md` during ordinary development (including filling `## [Unreleased]`). Write `.changes/unreleased/<slug>.md` instead; only `release:prepare` assembles those files.
 
 ## Change Workflow (Lightweight)
 
@@ -79,9 +77,11 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Ki
 
 Releases are PR-driven and mostly automated. Every release ships one version across all 9 surfaces (root + 2 npm packages + 6 plugin manifests + INSTALL.md marketplace example).
 
-### 1. During development — add a changelog fragment (**not** the CHANGELOG files)
+### 1. During development — add a changelog fragment
 
-Per logical change, add `.changes/unreleased/<slug>.md` (committed with the change). Format and defaults are documented in [`.changes/README.md`](.changes/README.md):
+Per logical change, add `.changes/unreleased/<slug>.md` (committed with the change). Format and defaults: [`.changes/README.md`](.changes/README.md).
+
+During development, **do not** hand-edit `CHANGELOG.md` / `CHANGELOG_CN.md` / `packages/*/CHANGELOG.md` (including under `## [Unreleased]`); those files are assembled later by `release:prepare`.
 
 ```markdown
 ---
@@ -94,13 +94,7 @@ packages: root           # optional; comma list of root | cli | opencode
 - 中文要点。
 ```
 
-**Hard rule for agents and contributors:**
-
-- **Write**: `.changes/unreleased/<slug>.md` only.
-- **Do not write**: `CHANGELOG.md`, `CHANGELOG_CN.md`, or `packages/*/CHANGELOG.md` (including pasting bullets under `## [Unreleased]`).
-- Those changelog files are **release-assembly outputs**. Editing them mid-development races `release:prepare`, duplicates CN/EN work, and often skips the fragment archive trail.
-- Need both root + OpenCode notes? Prefer one fragment with `packages: root, opencode` (omit `category` so each package keeps its default section header), or split fragments if the bullets must differ.
-- A release always auto-appends the **Version alignment** block — do not write one.
+Need both root + OpenCode notes? Prefer one fragment with `packages: root, opencode` (omit `category` so each package keeps its default section header), or split fragments if the bullets must differ. A release always auto-appends the **Version alignment** block — do not write one.
 
 ### 2. Cut a release — assemble + open the release PR
 
@@ -121,7 +115,6 @@ Merging a `release vX.Y.Z` PR runs the **Release** workflow **inline on the `pul
 
 - Never invent a skipped tag (e.g. do not create `v1.8.4` to fill a historical gap).
 - Bump version + changelog in the same change set via `release:prepare`; do not hand-edit version surfaces (the `release:validate` gate reads the same surface list).
-- During development, changelog narrative lives **only** in `.changes/unreleased/*.md`. Hand-editing assembled `CHANGELOG*` files is a process bug unless you are fixing a release-prep mistake in a `release vX.Y.Z` PR.
 - Avoid the #58-class drift: the version registry tables in the root changelogs are bumped automatically — do not hand-edit the registry version cells.
 
 ## AI Agent Quality Gate
