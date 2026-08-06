@@ -1,21 +1,38 @@
 name: Release
 
+# PR-driven release. Merging a `release vX.Y.Z` PR runs the whole release inline
+# on the pull_request event: validate -> build -> npm publish (provenance) ->
+# create+push the `vX.Y.Z` tag -> GitHub Release.
+#
+# No secrets are required for the default flow (the tag is pushed with the
+# workflow's GITHUB_TOKEN). Releases are PR-driven by design: a manual
+# `git tag && git push --tags` no longer auto-publishes.
+#
+# NOTE: npm trusted publishing / provenance now runs on the pull_request event
+# instead of push:tags. The workflow filename (`.github/workflows/release.yml`)
+# is unchanged. If the first release via this flow fails publish, provenance
+# trust may need the trigger reverted to push:tags (see git history).
+
 on:
-  push:
-    tags:
-      - "v*"
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
-  publish:
+  release:
+    if: >
+      github.event.pull_request.merged == true
+      && startsWith(github.event.pull_request.title, 'release v')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout merge commit
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
       - name: Setup Bun
@@ -34,10 +51,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Resolve version
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: Validate release versions
-        run: bun run release:validate
         env:
-          GITHUB_REF_NAME: ${{ github.ref_name }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: bun run release:validate -- "v${VERSION}"
 
       - name: Typecheck
         run: bun run typecheck
@@ -53,22 +74,33 @@ jobs:
       - name: Publish @mstar-harness/opencode
         run: npm publish --workspace @mstar-harness/opencode --access public
 
+      - name: Create + push tag
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; skipping tag creation."
+            exit 0
+          fi
+          git tag -a -m "Release ${TAG}" "$TAG"
+          git push origin "$TAG"
+
       - name: Extract changelog notes
         id: changelog
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           NOTES_FILE="${RUNNER_TEMP}/release-notes-${VERSION}.md"
           bun run scripts/extract-changelog-section.ts "$VERSION" > "$NOTES_FILE"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "notes_file=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
-        env:
-          GITHUB_REF_NAME: ${{ github.ref_name }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: v${{ steps.changelog.outputs.version }}
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
           body_path: ${{ steps.changelog.outputs.notes_file }}
           draft: false
           prerelease: false

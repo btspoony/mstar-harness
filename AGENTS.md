@@ -73,6 +73,48 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Ki
 4. Run lightweight validation (lint/typecheck/doc link sanity as relevant).
 5. Summarize what changed, why, and any intentional host-specific divergence.
 
+## Release Process
+
+Releases are PR-driven and mostly automated. Every release ships one version across all 9 surfaces (root + 2 npm packages + 6 plugin manifests + INSTALL.md marketplace example).
+
+### 1. During development — add a changelog fragment
+
+Per logical change, add `.changes/unreleased/<slug>.md` (committed with the change). Format and defaults are documented in [`.changes/README.md`](.changes/README.md):
+
+```markdown
+---
+category: Harness        # optional; default per package
+packages: root           # optional; comma list of root | cli | opencode
+---
+- English bullet.
+
+<!-- CN -->
+- 中文要点。
+```
+
+A release always auto-appends the **Version alignment** block — do not write one.
+
+### 2. Cut a release — assemble + open the release PR
+
+Either:
+
+- **GitHub Actions**: Actions → *Release prep* → Run workflow (optionally pass an explicit `X.Y.Z`; empty = auto patch bump), **or**
+- **Local**: `bun run release:prepare -- 1.8.7` (or `-- --patch` / `-- --minor`), then open a PR titled `release v1.8.7`.
+
+`scripts/prepare-release.ts` reads `.changes/unreleased/*.md`, inserts a `## [<version>]` section into all 4 changelogs, bumps every surface, updates the root changelog registry tables, and moves consumed fragments to `.changes/archive/<version>/`. Validate with `bun run release:validate -- v1.8.7`.
+
+### 3. Merge the release PR — auto-tag + publish
+
+Merging a `release vX.Y.Z` PR runs the **Release** workflow **inline on the `pull_request` event**: validate → build → npm publish (provenance) → create+push `vX.Y.Z` (annotated tag, pushed with the workflow's `GITHUB_TOKEN`) → GitHub Release. No secrets are required for the default flow. Releases are PR-driven by design — a manual `git tag && git push --tags` no longer auto-publishes.
+
+> npm trusted publishing / provenance now runs on the `pull_request` event (previously `push:tags`); the workflow filename is unchanged. If the first release via this flow fails publish, revert the trigger to `push:tags` and switch to a PAT-pushed auto-tag model.
+
+### Conventions
+
+- Never invent a skipped tag (e.g. do not create `v1.8.4` to fill a historical gap).
+- Bump version + changelog in the same change set via `release:prepare`; do not hand-edit surfaces (the `release:validate` gate reads the same surface list).
+- Avoid the #58-class drift: the version registry tables in the root changelogs are bumped automatically — only hand-edit the *body*, not the registry version cells.
+
 ## AI Agent Quality Gate
 
 Before opening PRs or proposing "done", an agent must:
