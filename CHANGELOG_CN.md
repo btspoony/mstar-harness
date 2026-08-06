@@ -1,21 +1,33 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.5**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.6**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.5** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.5** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.5** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.5** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.5** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.5** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.5** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.5** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.6** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.6** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.6** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.6** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.6** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.6** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.6** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.6** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.8.6] - 2026-08-06
+
+### Harness（派发保真 — invoke 字段完整性门禁）
+
+- 在派发自检处新增**逐项字段完整性门禁**：每条 Task/subagent invoke 必须携带与 `Execute as` 匹配的角色绑定字段（omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`）。漏写字段（如 omp 漏 `agent` ⇒ 静默回退 generic `task`）现为**派发未完成**——与 paste-only（零 invoke）同级——避免裸 `tasks:[{task:"…"}]` 仅因 invoke 计数 = N 而蒙混过关。N=1 顺序 Review-&-Edit 链显式覆盖（count 门在该处恒过）。
+- `mstar-dispatch-gates`：发送前自检 + 反模式条目；`mstar-host/references/parallel-dispatch.md`：硬规则 + 自检步骤；`mstar-host/references/omp.md`：Review-&-Edit 示例为每轮（architect / writing-specialist）展示完整 `task(...)` 块并显式 `agent`，并加 N=1 gotcha。
+- `.cursor/skills/mstar-routing-eval`：新增回归信号「invoke 角色字段缺失 ⇒ 静默 generic 回退」。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp 插件清单：**→ 1.8.6**。
 
 ## [1.8.5] - 2026-08-06
 

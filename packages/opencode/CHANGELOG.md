@@ -6,6 +6,15 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.6] - 2026-08-06
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- Sync dispatch field-completeness gate: `mstar-dispatch-gates` self-check + anti-pattern, `mstar-host/references/parallel-dispatch.md` hard rule + self-check, `mstar-host/references/omp.md` Review-&-Edit example + N=1 gotcha.
+- Version alignment with harness **1.8.6** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.6**.
+
 ## [1.8.5] - 2026-08-06
 
 ### Bundled harness skills (`harness-skills/` at publish)
