@@ -23,7 +23,8 @@
 ### 5.0 Phase boundary
 
 - Phase 5 在 PR head（`spec_integration_branch`）上 push 修复；**禁止**另开替代分支
-- 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；PM 线程不代写实现
+- **Checkout / worktree（HARD）**：Phase 5 是 PR 级 **hotfix** loop，**不是** Phase 2 plan 实现。修复直接在 **control worktree**（已检出 `spec_integration_branch` 的 checkout）上编辑、commit、再按 §5.1a push。**禁止**为 Phase 5 另开 feature / fix worktree；**禁止**把 Phase 2「control 禁止产品编辑 / 须 feature worktree」套用到 Phase 5。另开 worktree 浪费时间、磁盘与计算，与 Phase 5 快速收敛 CI/review 的目标相悖。
+- 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；Assignment **`Worktree path`** / cwd = control（`metadata.control_worktree_path` 或当前已在集成分支上的 checkout）；PM 线程不代写实现
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
 - **Push cadence** → **§5.1a**（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）
 
@@ -66,7 +67,7 @@
 | 2 | `greploop` | **Optional** — only when the **repo** uses Greptile / has `greploop` available; then run for Greptile **5/5** in addition to babysit/`*-babysit` (or fallback) gates |
 | 3 | neither | Command fallback = babysit-equivalent CI + reviews gates |
 
-When both babysit/`*-babysit` and `greploop` apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → host `commands/iteration-drive` / `iteration-loop` Phase 5.
+When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → host `commands/iteration-drive` / `iteration-loop` Phase 5.
 
 ### 5.2 Phase 5 exit checklist（迭代交付完成）
 
