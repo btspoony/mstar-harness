@@ -6,10 +6,6 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
-### Bundled harness skills (`harness-skills/` at publish)
-
-- Sync `mstar-skill-authoring`: SkillsBench 6-principle gate in `SKILL.md` + `references/skillsbench-authoring.md`.
-
 ## [1.8.7] - 2026-08-06
 
 ### Bundled harness skills (`harness-skills/` at publish)
