@@ -20,6 +20,7 @@
     "opencode:publish:dry-run": "npm publish --workspace @mstar-harness/opencode --dry-run",
     "opencode:publish": "npm publish --workspace @mstar-harness/opencode",
     "opencode:pack": "npm pack --workspace @mstar-harness/opencode",
+    "release:prepare": "bun run scripts/prepare-release.ts",
     "release:validate": "bun run scripts/validate-release-version.ts",
     "release:check": "bun run typecheck && bun run cli:pack && bun run opencode:pack"
   },
