@@ -6,3 +6,6 @@ secrets.env
 
 # ZCode client workspace state
 .zcode/
+
+# npm pack output (release sanity check)
+*.tgz
