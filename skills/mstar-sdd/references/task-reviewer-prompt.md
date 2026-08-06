@@ -3,11 +3,12 @@
 One reviewer per task: spec compliance + code quality (`mstar-sdd`).
 
 ```
-Task / subagent:
-  subagent_type: generalPurpose
-  description: "SDD review Task N (spec + quality)"
-  model: [REQUIRED — standard tier default; capable if diff is large/subtle]
-  prompt: |
+Dispatch:
+  Role: generalPurpose                # L2 SDD task reviewer; NOT qc-specialist*
+                                      # omp: agent = "reviewer" or "task" + C5b; Cursor: subagent_type = "generalPurpose" → mstar-host C5
+  Name: <CamelCaseId>                 # omp/Cursor name
+  Model: [REQUIRED — standard tier default; capable if diff is large/subtle]
+  Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration. Read-only review.</SUBAGENT-STOP>
 
     Review one task implementation: spec compliance first, then quality.

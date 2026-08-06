@@ -5,10 +5,11 @@ Use when PM dispatches an SDD implementer (`mstar-sdd`) — **first task** or **
 For **sticky** continuation (task 2+), use **`implementer-continuation-prompt.md`** instead.
 
 ```
-Task / subagent:
-  description: "SDD implement Task N: <name>"
-  model: [REQUIRED — per Model tier in Assignment and mstar-sdd SKILL]
-  prompt: |
+Dispatch:
+  Role: <Execute as role-id>          # omp agent / Cursor subagent_type / OpenCode subagent → mstar-host C5
+  Name: <CamelCaseId>                 # omp/Cursor name
+  Model: [REQUIRED — per Model tier in Assignment and mstar-sdd SKILL]
+  Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration skills. You are a leaf implementer.</SUBAGENT-STOP>
 
     You are implementing Task N: <name>

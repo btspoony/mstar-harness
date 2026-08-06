@@ -15,7 +15,7 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 
 ## Mandatory order (dispatch turn)
 
-1. Finalize all `N` Assignment payloads (after any prerequisite turn). **Build each invoke entry envelope-first**: set the role-binding field (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`) + `name` *before* writing the long Assignment body — the body is high-volume and will crowd out the one-line envelope field from working memory.
+1. Finalize all `N` Assignment payloads (after any prerequisite turn). **Build each invoke entry envelope-first**: set the role-binding field (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`) + `name` *before* writing the long Assignment body.
 2. Count distinct `Execute as` sessions (`N`).
 3. Issue **`N` host invocations first** — OpenCode: **N `task` tool** calls with **subagent**; Cursor: **N `Task`** with `subagent_type` (JSON field shape → `cursor.md` § Task invoke schema); Kimi: **N `Agent`** calls (each prompt carries **Act as** + skill load; `subagent_type` ∈ {`coder`,`explore`,`plan`} only — see `kimi.md` C5/C5b); omp: **one `task` call with N `tasks[]`** (or N `task` calls) with `agent` = live-schema role id matching `Execute as` when listed (else generic built-in) + **Act as** / skill load (see `omp.md` C5/C5b); each with one Assignment body. For parallel work, **all `N` tool calls in one assistant message** when the host allows.
 4. Optionally post a short **Status Update** after invocations (audit trail only — does not replace step 3).

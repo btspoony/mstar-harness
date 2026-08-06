@@ -3,11 +3,11 @@
 Use when PM continues **`SDD implementer session: sticky`** for Task N>1. Host: **resume** same agent when supported (`sticky-implementer-session.md`).
 
 ```
-Task / subagent:
-  resume: [HOST_AGENT_ID from implementer-session.json]
-  description: "SDD continue Task N: <name>"
-  model: [same tier as session start unless PM upgrades]
-  prompt: |
+Dispatch:
+  Resume: [HOST_AGENT_ID from implementer-session.json]
+  Name: <CamelCaseId>                 # omp/Cursor name
+  Model: [same tier as session start unless PM upgrades]
+  Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration skills. You are a leaf implementer continuing a sticky SDD session.</SUBAGENT-STOP>
 
     Continue as the same implementer on plan <plan-id>, Working branch: <branch>.
