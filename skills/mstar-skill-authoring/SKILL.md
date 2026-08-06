@@ -1,19 +1,21 @@
 ---
 name: mstar-skill-authoring
-description: Morning Star skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、或判断某段行为塑形文案是否值得保留时读取。不用于普通应用实现；不替代 `mstar-harness-core` 的加载与冲突裁决。
+description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建任意 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、或判断某段行为塑形文案是否值得保留时读取。适用于任何领域的 skill，不限于本仓库专题；不用于普通应用实现。
 ---
 
-# Morning Star Skill Authoring
+# Skill Authoring
 
-本 skill 约束如何编写、审查与验证 runtime skills。面向 **skill 工作**，不是普通应用实现。
+本 skill 约束如何编写、审查与验证 **任意** agent skill（`SKILL.md`）。面向 **skill 工作**，不是普通应用实现。
 
 ## Load Order
 
-先 Read **`mstar-harness-core`**。仓库维护另遵根目录 `AGENTS.md`。
+在本 harness 仓库内工作时：先 Read **`mstar-harness-core`**（加载 / 冲突裁决）；仓库维护另遵根目录 `AGENTS.md`。
 
-改现有 skill 时：读完被改的每个专题 skill 及其 SSOT 引用；禁止仅为文风重写相邻 skill。
+在其它仓库 / 宿主上使用本 skill 时：按当地入口文档加载；本文件的原则与门控仍然适用。
 
-详细原则与输出模板 → `references/skillsbench-authoring.md`（需要完整 writer 流程时再读）。
+改现有 skill 时：读完被改 skill 及其 SSOT 引用；禁止仅为文风重写相邻 skill。
+
+详细 writer 流程与输出模板 → `references/skillsbench-authoring.md`（需要完整循环时再读）。
 
 ## 6 条作者原则（必须遵守）
 
@@ -46,16 +48,16 @@ description: Morning Star skill 撰写 / 重写 / 优化规范（SkillsBench 实
 
 1. 行为应跨多项目、角色或任务复用。
 2. 需要判断或排序，且不宜用代码强制。
-3. 现有 `mstar-*` 树尚未拥有同一规则。
+3. 现有 skill 树尚未拥有同一规则（避免副本）。
 4. 触发条件可写清，agent 知道何时读取。
 
-不要为这些建 skill：一次性项目约定（放项目 `AGENTS.md`）、可 lint/脚本化的机械规则、无复用手法的事故叙述、已有 `mstar-*` 规则的副本。
+不要为这些建 skill：一次性项目约定（放项目 `AGENTS.md` / 等价处）、可 lint/脚本化的机械规则、无复用手法的事故叙述、已有 skill 规则的副本。
 
 ## Frontmatter Contract
 
 ```yaml
 ---
-name: mstar-example
+name: example-skill
 description: Use when...
 ---
 ```
@@ -85,14 +87,15 @@ Keep `SKILL.md` focused on the main execution path. Move long examples, template
 
 ## Skill-relative script and asset paths
 
-When a skill ships executables or assets under `scripts/` / `templates/` / `references/`, name them as **skill → relative path**:
+When a skill ships executables or assets under `scripts/` / `templates/` / `references/`, name them as **skill → relative path**：
 
-- Good: skill **`mstar-sdd`** → `scripts/sdd-workspace`
-- Good: `<mstar-sdd>/scripts/sdd-workspace` (placeholder for the loaded skill root)
-- Bad in runtime docs: `skills/mstar-sdd/scripts/sdd-workspace` as if it were a consumer-project cwd path
-- Bad in shipped rules / CLI notes: `skills/mstar-host/references/…` as a consumer cwd path — use **`mstar-host`** → `references/…` (omp may also cite `skill://mstar-host/references/…`)
+- Good: skill **`my-skill`** → `scripts/do-thing`
+- Good: `<my-skill>/scripts/do-thing`（已加载 skill 根的占位写法）
+- Bad：把 `skills/my-skill/scripts/do-thing` 写成消费仓库 cwd 下的字面路径
 
-Agents discover skills by **name**; they often miss files when docs present a full repo-relative path and they search that literal string under the app checkout. Resolve the loaded skill directory first, then append `scripts/…` / `references/…`. **How** to resolve differs by host — use **`mstar-host`** § Resolve loaded skill root. Reserve `skills/<name>/…` only for harness-repo maintenance notes that explicitly say "from this repository root".
+Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径，agent 常在应用仓库 cwd 下按字面搜索而找不到。先解析已加载 skill 根目录，再拼 `scripts/…` / `references/…`。
+
+在本 harness：解析方式见 **`mstar-host`** § Resolve loaded skill root（omp `skill://`、各宿主插件挂载等）。其它环境按当地 skill 安装约定解析。
 
 ## Progressive Disclosure
 
@@ -114,7 +117,7 @@ Agents discover skills by **name**; they often miss files when docs present a fu
 
 ```json
 {
-  "skill_name": "mstar-example",
+  "skill_name": "example-skill",
   "evals": [
     {
       "id": 1,

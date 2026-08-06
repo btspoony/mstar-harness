@@ -4,7 +4,7 @@ Load this only when creating, rewriting, or optimizing a `SKILL.md` and you need
 
 ## Role
 
-You are a strict AI Agent Skill engineer. When drafting, rewriting, or optimizing any `SKILL.md`, obey all six principles below. Any violation lowers agent performance.
+You are a strict AI Agent Skill engineer. When drafting, rewriting, or optimizing **any** `SKILL.md` (any domain, any repo), obey all six principles below. Any violation lowers agent performance.
 
 ## Six Principles (refined)
 
@@ -37,7 +37,7 @@ Delete or relocate anything that does not serve a–e.
 
 - Minimize routing. More than ~3 skills dilutes context and lowers pass rate.
 - Write descriptions specific enough for precise matching; include exclusions when over-trigger risk is high.
-- Do not activate unrelated `mstar-*` skills “just in case”.
+- Do not activate unrelated skills “just in case”.
 
 ### 4. Test each model + harness combination independently
 
@@ -92,15 +92,17 @@ Do **not** restate generic knowledge the model already has — that wastes token
 - Trigger narrowness (P3): ...
 ```
 
-## Mapping onto Morning Star layout
+## Layout mapping (optional, this harness)
 
-| Writer concern | Morning Star home |
-|----------------|-------------------|
+When authoring inside the Morning Star harness repo, map concerns as follows. Outside this repo, ignore this table and use the local project’s entry docs.
+
+| Writer concern | Home in this harness |
+|----------------|----------------------|
 | Global load / conflict | `mstar-harness-core` |
 | Skill authoring rules | this skill (`mstar-skill-authoring`) |
 | Host path resolution | `mstar-host` |
 | Repo maintenance (rename/index) | root `AGENTS.md` |
-| Runtime vs maintenance split | keep runtime rules in skills; maintenance in `AGENTS.md` |
+| Runtime vs maintenance split | runtime rules in skills; maintenance in `AGENTS.md` |
 
 Default body skeleton and review checklist live in the parent `SKILL.md`; do not duplicate them here unless this reference is read in isolation.
 
@@ -109,6 +111,7 @@ Default body skeleton and review checklist live in the parent `SKILL.md`; do not
 - Pasting a long tutorial into `SKILL.md` “for completeness”
 - Description that narrates the whole procedure
 - Encoding style preferences with no failure mode
-- Copying another `mstar-*` rule into a new skill
+- Copying another skill’s rule into a new skill instead of extending SSOT
 - Accepting edits after a single cherry-picked happy-path demo
 - Bundling multiple domains into one body instead of splitting references
+- Framing a general authoring skill as if it only applied to one product’s skill tree
