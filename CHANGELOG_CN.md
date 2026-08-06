@@ -1,21 +1,35 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.7**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.8**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.7** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.7** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.7** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.7** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.7** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.7** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.7** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.7** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.8** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.8** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.8** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.8** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.8** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.8** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.8** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.8** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.8.8] - 2026-08-06
+
+### Harness
+
+- **`mstar-skill-authoring`**：将 skill-writer 六原则并入运行时撰写技能——专家流程优先、紧凑 5 问 body、1–3 skill 路由、按 model+harness 实测、只补模型缺口、每次改动做 paired 实验。Body 保留可执行门控；完整 writer 流程 / 输出模板 / 反模式 → `references/skillsbench-authoring.md`（渐进披露）。
+- 收紧 `description` 触发契约（含排除条件）；保留 purpose test / frontmatter / 渐进披露 / review 模板作为可复用 SSOT。
+- 重写为**通用** skill 撰写规范（任意领域/仓库）：去掉 body 中 Morning Star / 仅 `mstar-*` 品牌化表述；本仓工作仅保留最短 harness 挂钩（Load Order + `mstar-host` 路径解析）。
+- 恢复 `## Skill-relative script and asset paths` 小节标题，使 `mstar-host` 的 § 交叉引用继续有效（Post-Skill-Change stale-ref 清单）。
+- 收敛 `AGENTS.md` changelog 规则：§1 为唯一权威（含开发期禁止手改 assembled `CHANGELOG*`）；Quality Gate #6 保留为可执行检查；删除其余 copy-paste 重复。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单：**→ 1.8.8**。
 
 ## [1.8.7] - 2026-08-06
 

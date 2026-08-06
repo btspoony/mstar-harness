@@ -2,22 +2,36 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.7** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.8** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.7** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.7** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.7** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.7** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.7** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.7** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.7** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.7** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.8** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.8** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.8** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.8** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.8** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.8** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.8** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.8** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.8.8] - 2026-08-06
+
+### Harness
+
+- **`mstar-skill-authoring`**: fold the skill-writer 6 principles into the runtime authoring skill — expert process first, compact 5-question body, 1–3 skill routing, per model+harness validation, encode only model gaps, every edit as paired experiment. Body stays the executable gate; full writer loop / output template / anti-patterns → `references/skillsbench-authoring.md` (progressive disclosure).
+- Tightened `description` trigger contract with exclusions; keep purpose test / frontmatter / progressive disclosure / review template as reusable SSOT.
+- Reframe as **general** skill-authoring guidance (any domain/repo): drop Morning Star / `mstar-*`-only branding from body; keep minimal harness hooks (Load Order + `mstar-host` path resolve) only when working in this repo.
+- Restored `## Skill-relative script and asset paths` heading so `mstar-host` § cross-reference stays valid (Post-Skill-Change stale-ref checklist).
+- Keep changelog SSOT tight in `AGENTS.md`: §1 owns the fragment rule (including no hand-edit of assembled `CHANGELOG*`); Quality Gate #6 stays the executable check; remove copy-paste repeats elsewhere.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests: **→ 1.8.8**.
 
 ## [1.8.7] - 2026-08-06
 
