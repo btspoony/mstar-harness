@@ -280,7 +280,7 @@ Register the harness as a marketplace (without the CLI). Create `~/.zcode/cli/pl
       "name": "morning-star-harness",
       "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
       "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
-      "version": "1.8.6",
+      "version": "1.8.7",
       "category": "Productivity"
     }
   ]

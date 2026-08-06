@@ -1,21 +1,32 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.6**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.7**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.6** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.6** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.6** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.6** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.6** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.6** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.6** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.6** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.7** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.7** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.7** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.7** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.7** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.7** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.7** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.7** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.8.7] - 2026-08-06
+
+### Harness
+
+- 将 SDD 派发模板改为**宿主中立**，不再固定引发单一宿主工具 schema：`implementer-prompt.md`、`task-reviewer-prompt.md`、`implementer-continuation-prompt.md` 改用 `Dispatch:` / `Role:` / `Name:` / `Prompt body:` 标签 + 内联宿主字段映射（`omp agent / Cursor subagent_type / OpenCode subagent → mstar-host C5`），替代 Cursor 专有字段（`subagent_type`、`description`、`prompt`）。L2 任务 reviewer 模板现直接给出 omp `agent` 取值（`reviewer` 或 `task` + C5b），消除 SDD 下导致 generic worker 回退的映射困惑。
+- 精简 `mstar-host/references/omp.md` 与 `parallel-dispatch.md` 中**envelope-first** 的重复论述为单行机械规则 + SSOT 指针（长段散文本身会加剧注意力挤占），并在 omp SDD 段补充 L2 reviewer `agent` 映射。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单：**→ 1.8.7**。
 
 ## [1.8.6] - 2026-08-06
 
