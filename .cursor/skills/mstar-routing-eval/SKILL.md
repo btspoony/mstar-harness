@@ -99,6 +99,7 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - **跨 plan 无 lease 并行**：迭代 Phase 2 跨 plan 可写派发无 verified **`plans[].execution_lease`** + 独立 feature **`Worktree path`**；或 steal / 覆盖活跃 **`execution_lease`** / **`integration_merge_lease`**；或并行 integration merge；或 **`InProgress`** 无 lease 未恢复即 writable-dispatch（见 **`mstar-iteration`** §2.6 · **`mstar-dispatch-gates`**）
 - **跨 plan 并行无 same-host 锁**：跨主机 / 无共享 flock 仍 dispatch 跨 plan 并行可写 implement，且 **无** 用户本轮 `Cross-host lease race: accepted`（或等价）+ audit `plans[].notes`；应 **Blocked** 或改为 **`Plan parallelism: serial`**（见 **`mstar-plan-artifacts`** · **`mstar-iteration`** §2.0 #5）— **含 `Worktree mode: waived`**
 - **`Worktree mode: waived` 误作并行授权**：Assignment 含 waived 且无 same-host 锁、无 serial、无 `Cross-host lease race: accepted` + audit 仍 dispatch 跨 plan 并行可写 implement
+- **invoke 角色字段缺失（静默 generic 回退）**：已发 Task/subagent invoke，但 item 漏写与 **`Execute as`** 匹配的角色绑定字段（omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**）⇒ 宿主静默回退 generic worker，却因 count=N 通过而误判「派发完成」（见 **`mstar-dispatch-gates`**、**`mstar-host/references/parallel-dispatch.md`**）。**N=1 顺序 Review-&-Edit 链**最易触发——count 门恒过，字段门是唯一保护
 
 ## 3. 迭代规则
 

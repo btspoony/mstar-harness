@@ -2,22 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.5** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.6** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.5** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.5** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.5** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.5** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.5** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.5** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.5** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.5** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.6** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.6** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.6** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.6** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.6** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.6** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.6** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.6** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.8.6] - 2026-08-06
+
+### Harness (dispatch fidelity — invoke field-completeness gate)
+
+- Added a per-item **field-completeness gate** at the dispatch self-check: every Task/subagent invoke must carry the role-binding field matching `Execute as` (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`). A missing field (e.g. omp omitting `agent` ⇒ silent generic `task` fallback) is now **dispatch incomplete** — same severity as paste-only zero-invoke — so a bare `tasks:[{task:"…"}]` no longer passes just because invoke count = N. N=1 sequential Review-&-Edit chains are explicitly covered (count gate is vacuous there).
+- `mstar-dispatch-gates`: pre-send self-check line + anti-pattern bullet; `mstar-host/references/parallel-dispatch.md`: hard rule + self-check step; `mstar-host/references/omp.md`: Review-&-Edit example now shows a full `task(...)` block per pass (architect / writing-specialist) with `agent` set, plus an N=1 gotcha.
+- `.cursor/skills/mstar-routing-eval`: regression signal for "invoke role field missing ⇒ silent generic fallback".
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp plugin manifests: **→ 1.8.6**.
 
 ## [1.8.5] - 2026-08-06
 

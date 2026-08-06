@@ -15,7 +15,7 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 
 ## Mandatory order (dispatch turn)
 
-1. Finalize all `N` Assignment payloads (after any prerequisite turn).
+1. Finalize all `N` Assignment payloads (after any prerequisite turn). **Build each invoke entry envelope-first**: set the role-binding field (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`) + `name` *before* writing the long Assignment body — the body is high-volume and will crowd out the one-line envelope field from working memory.
 2. Count distinct `Execute as` sessions (`N`).
 3. Issue **`N` host invocations first** — OpenCode: **N `task` tool** calls with **subagent**; Cursor: **N `Task`** with `subagent_type` (JSON field shape → `cursor.md` § Task invoke schema); Kimi: **N `Agent`** calls (each prompt carries **Act as** + skill load; `subagent_type` ∈ {`coder`,`explore`,`plan`} only — see `kimi.md` C5/C5b); omp: **one `task` call with N `tasks[]`** (or N `task` calls) with `agent` = live-schema role id matching `Execute as` when listed (else generic built-in) + **Act as** / skill load (see `omp.md` C5/C5b); each with one Assignment body. For parallel work, **all `N` tool calls in one assistant message** when the host allows.
 4. Optionally post a short **Status Update** after invocations (audit trail only — does not replace step 3).
@@ -26,6 +26,7 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 - Do not end the dispatch turn until **`N` invocations emitted**, or mark `Blocked` / `dispatch incomplete`.
 - Dual-track implement: **`N = 2` ⇒ two invocations in one message** when parallel is required.
 - Status Update on dispatch turns: **`Subagent invokes issued: N`** (must match Assignment count). If Assignments were written but `N = 0` → **`dispatch failed — paste-only`**; fix next message.
+- **Per-item field completeness (same severity as paste-only)**: every invocation must carry the role-binding field set to **`Execute as`** — omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**. A missing field (e.g. omp omitting `agent` ⇒ silent generic `task` fallback) = **dispatch incomplete** even though count = N passes. Sequential **N=1** Review-&-Edit turns are not exempt — re-set the field on **every** dispatch.
 
 ## QC default (initial wave)
 
@@ -62,5 +63,6 @@ Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-o
 1. Required assignments this turn? (`N`)
 2. Prerequisite-only message? → **zero** batch dispatches unless `N = 1`.
 3. Dispatch message contains **exactly `N`** invocation calls?
-4. QC initial: **`Execution mode: sdd`** → **N=3**? **`inline`** → **N=1**? Targeted re-review → **N** = Assignment reviewer count?
-5. SDD implement → **serial** (never batch implementers); sticky = **resume** same implementer, not parallel
+4. **Each** invocation carries its role-binding field set to **`Execute as`** (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`)? A bare `task`/prompt item with no role field = **incomplete**, even at **N=1**.
+5. QC initial: **`Execution mode: sdd`** → **N=3**? **`inline`** → **N=1**? Targeted re-review → **N** = Assignment reviewer count?
+6. SDD implement → **serial** (never batch implementers); sticky = **resume** same implementer, not parallel

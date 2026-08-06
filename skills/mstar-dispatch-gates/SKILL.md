@@ -1,6 +1,6 @@
 ---
 name: mstar-dispatch-gates
-description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、SDD implement 串行派发、**SDD 路径 plan QC 强制 tri-review（N=3）**、inline 单席 QC 例外、Assignment 文案≠派发、未齐不发。`project-manager` 派发时必读；leaf 动手前必读反递归。worktree 见 `mstar-branch-worktree`；SDD 见 `mstar-sdd`；宿主见 `mstar-host`。
+description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、SDD implement 串行派发、**SDD 路径 plan QC 强制 tri-review（N=3）**、inline 单席 QC 例外、Assignment 文案≠派发、未齐不发、**invoke 角色字段必填（漏写=静默 generic 回退=派发未完成）**。`project-manager` 派发时必读；leaf 动手前必读反递归。worktree 见 `mstar-branch-worktree`；SDD 见 `mstar-sdd`；宿主见 `mstar-host`。
 ---
 
 ## Load order（必读顺序）
@@ -58,6 +58,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，写 `{SDD_DIR}/review/qc.md`。
 - **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），同条消息发满 **N**。
 - **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
+- **先自检字段再发送（与 count 同级门禁）**：核对**每条** invoke 都携带与 **`Execute as`** 匹配的角色绑定字段——omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**。**漏写或取默认通用值**（omp 漏 `agent` ⇒ 自动回退 generic `task`，无报错）= **派发未完成**，与 paste-only（零 invoke）**同等级**：当场补齐重发，不得进入下一 gate。**N=1 顺序链（Review & Edit）不豁免**——count 门在 N=1 恒过，**字段门是唯一保护**。
 - **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
 - **未齐不发（emit zero until batch-ready）**：需并发 `N≥2` 而当前只能发 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
 
@@ -114,6 +115,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
 - Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。
 - Assignment 已写、invoke 为零（paste-only）却进入下一 gate。
+- Task/subagent item 漏写角色绑定字段（omp 漏 `agent` / Cursor 漏 `subagent_type` / OpenCode 漏 `subagent`）⇒ **静默回退 generic worker**，却因 count=N 通过而误判「派发完成」；属 paste-only 同级的 **dispatch-incomplete**。N=1 顺序 Review-&-Edit 链最易在此漏字段。
 
 ## References
 

@@ -77,6 +77,8 @@ task(
 
 Single-task shorthand may exist depending on host version — always match the live schema. Parallel **N** Morning Star assignees ⇒ **one** `task` call with **N** `tasks[]` entries **or** **N** `task` calls in one assistant message when the host requires that shape. Count emitted dispatches = **N**.
 
+**Construct the envelope first (production cue — prevents the omission at the source, not just at the gate).** When building a `tasks[]` entry, write **`agent`** + **`name`** as the first fields, *before* the long `task` body. The Assignment body is hundreds of lines of structured text and dominates working memory; `agent`/`name` are one-line envelope fields with no intrinsic saliency and no auto-check — writing the body first and the envelope last is how `agent` gets silently dropped (omp then defaults to generic `task`). The pre-send field gate (see **C5** below) catches it, but **envelope-first is the cheaper failure mode**: it makes the high-stakes-but-low-saliency field structural, so it cannot be forgotten by attention drift while authoring the body.
+
 ## Role agents (C5 — hard constraint)
 
 **Live `task` tool schema is SSOT every session.** Exact `agent` names vary by omp version and which `agents/*.md` were discovered after plugin install/link. Read the tool's Available Agents list before dispatch — do not invent names; do not hard-code stale tables over the live list.
@@ -145,7 +147,7 @@ task(
 )
 ```
 
-Review & Edit / Prepare specialist chain (sequential, **N=1** each turn):
+Review & Edit / Prepare specialist chain (sequential, **N=1** each turn — re-set **`agent`** on **every** dispatch; at N=1 the count gate is trivial, so the **field** gate is the only protection):
 
 ```text
 task(
@@ -156,7 +158,18 @@ task(
     task: "<Assignment: Execute as product-manager; Act as + skill load>"
   }]
 )
-# wait for return, then architect, then writing-specialist — each with agent: "<role-id>"
+# pass 2 — architect (re-set agent on EVERY dispatch; a bare tasks:[{task:"…"}] with no agent silently falls back to generic task — C5 anti-pattern)
+task(
+  context: "Review & Edit — architecture",
+  tasks: [{ name: "ReviewEditArchitect", agent: "architect",
+            task: "<Assignment: Execute as architect; Act as + skill load>" }]
+)
+# pass 3 — writing-specialist
+task(
+  context: "Review & Edit — writing",
+  tasks: [{ name: "ReviewEditWriting", agent: "writing-specialist",
+            task: "<Assignment: Execute as writing-specialist; Act as + skill load>" }]
+)
 ```
 
 For explore-only orientation (no Morning Star role deliverable):
@@ -230,3 +243,4 @@ Cannot emit required **N** → **`Blocked`**.
 - omp has no `sessionStart.skill`; new sessions do **not** auto-load PM — invoke `/skill:pm` manually.
 - Do not confuse omp **`task.agent`** with OpenCode **`subagent`** or Cursor **`subagent_type`**.
 - Do not treat Kimi/ZCode “built-ins only → always `coder`/`task`” habits as omp defaults when Morning Star role agents are listed.
+- **Sequential N=1 Review-&-Edit turns are where `agent` gets dropped**: the “all N in one message” pressure is absent and the count gate passes trivially — re-verify **`agent: "<Execute as>"`** on every single dispatch; `tasks:[{task:"…"}]` with no `agent` is a silent generic fallback, not a valid role invoke.
