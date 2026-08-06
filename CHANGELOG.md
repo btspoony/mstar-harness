@@ -2,22 +2,33 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.6** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.7** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.6** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.6** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.6** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.6** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.6** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.6** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.6** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.6** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.7** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.7** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.7** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.7** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.7** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.7** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.7** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.7** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.8.7] - 2026-08-06
+
+### Harness
+
+- Made the SDD dispatch templates **host-neutral** so they no longer prime a single host's tool schema: `implementer-prompt.md`, `task-reviewer-prompt.md`, and `implementer-continuation-prompt.md` now use `Dispatch:` / `Role:` / `Name:` / `Prompt body:` labels with an inline host-field map (`omp agent / Cursor subagent_type / OpenCode subagent → mstar-host C5`) instead of Cursor-only fields (`subagent_type`, `description`, `prompt`). The L2 task reviewer template now states the omp `agent` value directly (`reviewer` or `task` + C5b), closing the mapping confusion that produced generic-worker fallbacks under SDD.
+- Trimmed the **envelope-first** rationale repeated across `mstar-host/references/omp.md` and `parallel-dispatch.md` to a one-line mechanical rule + SSOT pointer (the long-body prose was itself contributing to attention crowding), and added the L2 reviewer `agent` mapping to the omp SDD section.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests: **→ 1.8.7**.
 
 ## [1.8.6] - 2026-08-06
 
