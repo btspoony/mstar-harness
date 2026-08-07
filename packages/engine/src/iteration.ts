@@ -13,10 +13,11 @@
  *   required; §3.5 exit checklist all `[x]` + frontmatter `completed` +
  *   `end_date` → Phase 4): `mstar-iteration` SKILL.md Phase transition
  *   gates table.
- * - §3.1 close entry checklist (checkable subset — plans all Done, no open
- *   residual_findings for the iteration's plans, compass frontmatter
- *   complete): `mstar-iteration/references/phase-3-iteration-close.md`
- *   §3.1. Un-checkable items (Acceptance Criteria waiver reasoning,
+ * - §3.1 close entry checklist (checkable subset — plans all Done, no
+ *   residual_findings open beyond zero-residual blocker-defers for the
+ *   iteration's plans, compass frontmatter complete):
+ *   `mstar-iteration/references/phase-3-iteration-close.md` §3.1.
+ *   Un-checkable items (Acceptance Criteria waiver reasoning,
  *   `## Plans` table prose sync) stay judgment and are NOT asserted here.
  * - §3.5 close exit checklist (checkable subset — frontmatter `status:
  *   completed` + `end_date`, current branch is `spec_integration_branch`,
@@ -36,7 +37,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
-import type { StatusDoc } from "./status.js";
+import { isOpenResidual, type StatusDoc } from "./status.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -237,10 +238,13 @@ function entryPlansAllDone(statusDoc: StatusDoc, registered: string[]): Validati
 }
 
 /**
- * §3.1 entry item 2 (checkable subset) — no open residual_findings for the
- * iteration's plans. An entry counts as open when its lifecycle is missing
- * or `"open"` (same semantics as status.ts isOpenResidual). The
- * blocker-defer + roadmap nuance stays judgment (prose).
+ * §3.1 entry item 2 (checkable subset) — residual findings of the
+ * iteration's plans must be closed or archived. Openness reuses status.ts
+ * `isOpenResidual` (jq `//` parity: missing / null / false lifecycle all
+ * count as open — closed/waived/resolved entries are not open). Exception
+ * per mstar-plan-artifacts Findings cleanup modes (`zero-residual`):
+ * blocker-defers (`decision: "defer"` + non-empty `target`) may stay open;
+ * the Durable Roadmap prose itself remains human judgment.
  */
 function entryResidualsOpen(statusDoc: StatusDoc, planId: string): ValidationResult[] {
   const violations: ValidationResult[] = [];
@@ -270,20 +274,23 @@ function entryResidualsOpen(statusDoc: StatusDoc, planId: string): ValidationRes
   }
   const openIds: string[] = [];
   for (const entry of entries) {
-    if (!isPlainObject(entry)) continue;
-    const lifecycle = entry.lifecycle;
-    if (lifecycle === undefined || lifecycle === "open") {
-      const id = typeof entry.id === "string" ? entry.id : null;
-      if (id !== null) openIds.push(id);
-    }
+    if (!isPlainObject(entry) || !isOpenResidual(entry)) continue;
+    // zero-residual exception: blocker-defer (`decision: defer` + non-empty
+    // `target`) may stay open at entry; every other open residual blocks.
+    const isBlockerDefer =
+      entry.decision === "defer" &&
+      typeof entry.target === "string" &&
+      entry.target.trim() !== "";
+    if (isBlockerDefer) continue;
+    openIds.push(typeof entry.id === "string" ? entry.id : "<unnamed>");
   }
   if (openIds.length > 0) {
     violations.push(
       violation(
         "high",
         "OPEN_RESIDUALS",
-        `Plan '${planId}' has ${openIds.length} open residual finding(s) (${openIds.join(", ")}) — residuals must be closed/archived before iteration-close (mstar-iteration §3.1 entry item 2)`,
-        "Close or archive the open residuals (mstar-plan-artifacts Findings cleanup modes)",
+        `Plan '${planId}' has ${openIds.length} open residual finding(s) not exempted as blocker-defers (${openIds.join(", ")}) — residuals must be closed/archived before iteration-close; only zero-residual blocker-defers (decision: defer + target) may stay open (mstar-iteration §3.1 entry item 2)`,
+        "Close or archive the open residuals, or convert them into blocker-defers (decision: defer + non-empty target) per mstar-plan-artifacts Findings cleanup modes",
       ),
     );
   }

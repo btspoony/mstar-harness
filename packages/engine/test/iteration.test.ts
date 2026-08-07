@@ -39,8 +39,8 @@ import {
   pushCadenceProbe,
   validateCompassFrontmatter,
   type CompassDoc,
-  type StatusDoc,
 } from "../src/iteration.js";
+import { isOpenResidual, type StatusDoc } from "../src/status.js";
 import { readJson } from "../src/core.js";
 
 const REAL_COMPASS_PATH =
@@ -249,6 +249,22 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
     expect(result.entry.violations.some((v) => v.code === "PLAN_NOT_IN_STATUS" && v.message.includes("plan-b"))).toBe(true);
   });
 
+  test("id-only plan rows (no plan_id) are found — status-and-residuals.md § Compatibility read accepts id or plan_id", () => {
+    const doc: StatusDoc = {
+      version: 1,
+      updated_at: "2026-08-08",
+      plans: [
+        { id: "plan-a", status: "Done" },
+        { id: "plan-b", status: "Done" },
+      ],
+    };
+    const result = evaluatePhaseGate(doc, compass());
+    expect(result.allPlansDone).toBe(true);
+    expect(result.entry.violations.some((v) => v.code === "PLAN_NOT_IN_STATUS")).toBe(false);
+    expect(result.entry.violations.some((v) => v.code === "PLAN_NOT_DONE")).toBe(false);
+    expect(result.transition).toBe("phase-3-close");
+  });
+
   test("all plans Done + clean residuals + complete frontmatter → phase-3-close required, entry gate clean", () => {
     const result = evaluatePhaseGate(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), compass());
     expect(result.allPlansDone).toBe(true);
@@ -284,6 +300,58 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
     });
     const result = evaluatePhaseGate(doc, compass());
     expect(result.entry.ok).toBe(true);
+  });
+
+  test("lifecycle null/false count as open — jq `//` parity with status.ts isOpenResidual (entry §3.1 item 2)", () => {
+    // status.ts isOpenResidual mirrors `.lifecycle // "open"`: undefined,
+    // null AND false all default to "open" (jq `//` treats false as falsy).
+    for (const lifecycle of [undefined, null, false, "open"]) {
+      expect(isOpenResidual({ lifecycle })).toBe(true);
+    }
+    for (const lifecycle of ["resolved", "waived", "superseded", "duplicate", "closed"]) {
+      expect(isOpenResidual({ lifecycle })).toBe(false);
+    }
+    const doc = withResiduals(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), {
+      "plan-a": [
+        { id: "R-null", title: "null lifecycle", severity: "low", lifecycle: null },
+        { id: "R-false", title: "false lifecycle", severity: "low", lifecycle: false },
+      ],
+    });
+    const result = evaluatePhaseGate(doc, compass());
+    expect(result.entry.ok).toBe(false);
+    const violation = result.entry.violations.find((v) => v.code === "OPEN_RESIDUALS");
+    expect(violation).toBeDefined();
+    expect(violation!.message).toContain("R-null");
+    expect(violation!.message).toContain("R-false");
+  });
+
+  test("zero-residual blocker-defers (decision: defer + non-empty target) are allowed at entry", () => {
+    const doc = withResiduals(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), {
+      "plan-a": [
+        { id: "R1", title: "external dependency", severity: "medium", decision: "defer", target: "v2.1.0", lifecycle: "open" },
+        { id: "R2", title: "roadmap slice", severity: "low", decision: "defer", target: "Next iteration" },
+      ],
+    });
+    const result = evaluatePhaseGate(doc, compass());
+    expect(result.entry.ok).toBe(true);
+    expect(result.entry.violations.some((v) => v.code === "OPEN_RESIDUALS")).toBe(false);
+  });
+
+  test("defer without roadmap target / risk-accepted / fixable opens still block entry (zero-residual rules)", () => {
+    const doc = withResiduals(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), {
+      "plan-a": [
+        { id: "R1", title: "defer without target", severity: "medium", decision: "defer" },
+        { id: "R2", title: "risk accepted", severity: "medium", decision: "risk-accepted" },
+        { id: "R3", title: "fixable open", severity: "high" },
+      ],
+    });
+    const result = evaluatePhaseGate(doc, compass());
+    expect(result.entry.ok).toBe(false);
+    const violation = result.entry.violations.find((v) => v.code === "OPEN_RESIDUALS");
+    expect(violation).toBeDefined();
+    expect(violation!.message).toContain("R1");
+    expect(violation!.message).toContain("R2");
+    expect(violation!.message).toContain("R3");
   });
 
   test("incomplete compass frontmatter fails entry (entry §3.1 item 5 checkable subset)", () => {

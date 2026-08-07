@@ -152,8 +152,10 @@ export function normalizeSeverity(value: unknown): unknown {
  * (tech-debt-rollup.sh `is_open`; status-and-residuals.md § lifecycle).
  * The jq alternative operator `//` yields the default for `false` AND
  * `null` (not just null) — `lifecycle: false` therefore counts as open.
+ * Exported for consumers that need the shared open semantics (e.g. the
+ * iteration phase-gate entry check) instead of a local re-implementation.
  */
-function isOpenResidual(entry: Record<string, unknown>): boolean {
+export function isOpenResidual(entry: Record<string, unknown>): boolean {
   const lifecycle = entry.lifecycle;
   const effective = lifecycle === false || lifecycle === null || lifecycle === undefined ? "open" : lifecycle;
   return effective === "open";
