@@ -1,0 +1,565 @@
+/**
+ * Engine sdd module — SDD loop state machine + ports of the three
+ * `skills/mstar-sdd/scripts/` bash scripts with byte parity.
+ *
+ * Spec sources (each test cites the skill/reference section it enforces):
+ * - Per-task loop, BASE_SHA rule, progress ledger, model tiers, red flags:
+ *   `skills/mstar-sdd/SKILL.md` § Per-task loop, § Progress ledger,
+ *   § Red flags (NEVER) — `HEAD~1` as review BASE, resume without
+ *   `host_agent_id`, re-dispatch of completed tasks, skip task review.
+ * - Script ports: `skills/mstar-sdd/SKILL.md` § Scripts table +
+ *   `skills/mstar-sdd/scripts/{sdd-workspace,task-brief,review-package}`
+ *   (byte parity is the contract — the TS port must match bash output on
+ *   the same fixtures).
+ * - File handoffs (task-N-report.md, review-package usage):
+ *   `skills/mstar-sdd/references/file-handoffs.md`.
+ * - Sticky implementer session (host_agent_id required for resume,
+ *   micro-batch ≤ 3, fresh fallback, reviewers never sticky):
+ *   `skills/mstar-sdd/references/sticky-implementer-session.md` +
+ *   SKILL.md red flag "Resume implementer without host_agent_id".
+ * - Harness-root override (`MSTAR_HARNESS_DIR` env / option) in addition
+ *   to CONTROL_ROOT, because the bash probe picks `.mstar`/`.agents` and
+ *   misses `.harness`-rooted repos:
+ *   plan 20260808-slice2-sdd-iteration Task 1 Finding (2026-08-08, PM).
+ */
+import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  SddScriptError,
+  assertBaseSha,
+  implementerSessionStickyRules,
+  readProgressLedger,
+  reviewPackage,
+  sddWorkspace,
+  taskBrief,
+  taskReportExists,
+  type ImplementerSessionLedger,
+} from "../src/sdd.js";
+
+const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
+const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
+const SDD_DIR = "SDD_DIR";
+
+function tmpRoot(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
+
+/**
+ * Monorepo root (walk up from this test dir) — provides the bash originals
+ * at `skills/mstar-sdd/scripts/` for byte-parity tests.
+ */
+function findRepoRoot(): string {
+  let dir = import.meta.dir;
+  for (;;) {
+    if (existsSync(join(dir, "skills")) && existsSync(join(dir, "package.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error("could not locate the monorepo root from the test dir");
+    dir = parent;
+  }
+}
+
+const REPO_ROOT = findRepoRoot();
+const SCRIPTS = join(REPO_ROOT, "skills", "mstar-sdd", "scripts");
+const SAMPLE_PLAN = join(import.meta.dir, "fixtures", "sample-plan.md");
+
+function git(args: string[], cwd: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function runBash(script: string, args: string[], cwd: string): { stdout: string; stderr: string; status: number } {
+  try {
+    const stdout = execFileSync("bash", [script, ...args], { cwd, encoding: "utf8" });
+    return { stdout, stderr: "", status: 0 };
+  } catch (err) {
+    const e = err as { stdout?: Buffer | string; stderr?: Buffer | string; status?: number };
+    return {
+      stdout: e.stdout ? e.stdout.toString() : "",
+      stderr: e.stderr ? e.stderr.toString() : "",
+      status: e.status ?? 1,
+    };
+  }
+}
+
+function withEnv(key: string, value: string | undefined, fn: () => void): void {
+  const previous = process.env[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+  try {
+    fn();
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+}
+
+/** Create a git repo at `root` with commits A (base) and B (head). */
+function gitFixture(root: string): { base: string; head: string } {
+  git(["init", "-q"], root);
+  git(["config", "user.email", "sdd-test@example.com"], root);
+  git(["config", "user.name", "SDD Test"], root);
+  writeFileSync(join(root, "file1.txt"), "line one\nline two\nline three\nline four\nline five\nline six\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const base = git(["rev-parse", "HEAD"], root);
+  writeFileSync(join(root, "file2.txt"), "new file\n");
+  writeFileSync(join(root, "file1.txt"), "line one\nline two\nline three\nCHANGED line four\nline five\nline six\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "head commit"], root);
+  const head = git(["rev-parse", "HEAD"], root);
+  return { base, head };
+}
+
+function errOf(fn: () => unknown): SddScriptError {
+  try {
+    fn();
+  } catch (e) {
+    expect(e).toBeInstanceOf(SddScriptError);
+    return e as SddScriptError;
+  }
+  throw new Error("expected SddScriptError, got no throw");
+}
+
+describe("assertBaseSha — BASE_SHA rule (mstar-sdd SKILL.md § Red flags: NEVER `HEAD~1` as review BASE)", () => {
+  test("rejects HEAD~1", () => {
+    const err = errOf(() => assertBaseSha("HEAD~1"));
+    expect(err.exitCode).toBe(2);
+    expect(err.message).toContain("HEAD~1");
+    expect(err.message).toMatch(/Never use HEAD~1 as review BASE/i);
+  });
+
+  test("rejects HEAD, HEAD^, branches, tags and other non-SHA refs", () => {
+    for (const ref of ["HEAD", "HEAD^", "HEAD@{1}", "main", "feature/x", "v1.0", ""]) {
+      expect(() => assertBaseSha(ref)).toThrow(SddScriptError);
+    }
+  });
+
+  test("rejects a well-formed but nonexistent SHA", () => {
+    const root = tmpRoot("sdd-assert-missing-");
+    try {
+      gitFixture(root);
+      const err = errOf(() => assertBaseSha("0123456789abcdef0123456789abcdef01234567", { cwd: root }));
+      expect(err.exitCode).toBe(2);
+      expect(err.message).toMatch(/commit not found/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts a full SHA and an unambiguous prefix that exist", () => {
+    const root = tmpRoot("sdd-assert-ok-");
+    try {
+      const { base } = gitFixture(root);
+      expect(() => assertBaseSha(base, { cwd: root })).not.toThrow();
+      expect(() => assertBaseSha(base.slice(0, 8), { cwd: root })).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("taskReportExists — file handoffs (file-handoffs.md: implementer writes task-N-report.md)", () => {
+  test("false when the report file is missing", () => {
+    const dir = tmpRoot("sdd-report-");
+    try {
+      expect(taskReportExists(dir, 1)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("false when the report file exists but is empty (no evidence)", () => {
+    const dir = tmpRoot("sdd-report-");
+    try {
+      writeFileSync(join(dir, "task-1-report.md"), "");
+      expect(taskReportExists(dir, 1)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("true when a non-empty task-N-report.md exists", () => {
+    const dir = tmpRoot("sdd-report-");
+    try {
+      writeFileSync(join(dir, "task-3-report.md"), "Status: DONE\n");
+      expect(taskReportExists(dir, 3)).toBe(true);
+      expect(taskReportExists(dir, 2)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("readProgressLedger — progress ledger (mstar-sdd SKILL.md § Progress ledger)", () => {
+  test("returns [] when progress.md is missing", () => {
+    const dir = tmpRoot("sdd-ledger-");
+    try {
+      expect(readProgressLedger(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns non-empty trimmed lines; completed tasks are not re-dispatched", () => {
+    const dir = tmpRoot("sdd-ledger-");
+    try {
+      writeFileSync(join(dir, "progress.md"), "Task 1: complete (abc..def, review clean)\n\n## Minor (for plan QC)\n- nit\n");
+      const ledger = readProgressLedger(dir);
+      expect(ledger).toEqual(["Task 1: complete (abc..def, review clean)", "## Minor (for plan QC)", "- nit"]);
+      expect(ledger.some((line) => line.startsWith("Task 1: complete"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("implementerSessionStickyRules — sticky resume rules (sticky-implementer-session.md)", () => {
+  function stickyLedger(overrides: Partial<ImplementerSessionLedger> = {}): ImplementerSessionLedger {
+    return {
+      plan_id: "test-plan",
+      execute_as: "fullstack-dev",
+      session_mode: "sticky",
+      host: "omp",
+      host_agent_id: "agent-123",
+      working_branch: "feature/x",
+      started_task: 1,
+      last_task: 1,
+      started_at: "2026-08-08T00:00:00Z",
+      ...overrides,
+    };
+  }
+
+  test("fresh session never resumes", () => {
+    const result = implementerSessionStickyRules({ session: stickyLedger({ session_mode: "fresh" }), nextTask: 2 });
+    expect(result.resume).toBe(false);
+    expect(result.reason).toMatch(/fresh/);
+  });
+
+  test("sticky without host_agent_id falls back to fresh (SKILL.md red flag)", () => {
+    const result = implementerSessionStickyRules({
+      session: stickyLedger({ host_agent_id: undefined }),
+      nextTask: 2,
+    });
+    expect(result.resume).toBe(false);
+    expect(result.reason).toMatch(/host_agent_id/);
+  });
+
+  test("sticky with host_agent_id and a new task resumes", () => {
+    const result = implementerSessionStickyRules({ session: stickyLedger(), nextTask: 2 });
+    expect(result.resume).toBe(true);
+    expect(result.reason).toMatch(/agent-123/);
+  });
+
+  test("never resumes a task already completed through last_task", () => {
+    const result = implementerSessionStickyRules({ session: stickyLedger({ last_task: 3 }), nextTask: 3 });
+    expect(result.resume).toBe(false);
+    expect(result.reason).toMatch(/last_task/);
+  });
+
+  test("micro-batch of 4 is rejected, 3 is allowed (max 3 without user override)", () => {
+    const over = { session: stickyLedger(), nextTask: 2 };
+    expect(implementerSessionStickyRules({ ...over, microBatchTasks: 4 }).resume).toBe(false);
+    expect(implementerSessionStickyRules({ ...over, microBatchTasks: 3 }).resume).toBe(true);
+    expect(implementerSessionStickyRules({ ...over, microBatchTasks: 1 }).resume).toBe(true);
+  });
+});
+
+describe("sddWorkspace — port of scripts/sdd-workspace (SKILL.md § Scripts)", () => {
+  test("resolves/creates {HARNESS_DIR}/sdd/<plan-id>/.gitignore when .mstar/status.json exists", () => {
+    const root = tmpRoot("sdd-ws-mstar-");
+    try {
+      git(["init", "-q"], root);
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "status.json"), "{}\n");
+      const dir = sddWorkspace("plan-1", { cwd: root });
+      expect(dir).toBe(realpathSync(join(root, ".mstar", "sdd", "plan-1")));
+      expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("*\n");
+      expect(statSync(dir).isDirectory()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("honors the CONTROL_ROOT option (bash 2nd arg) and MSTAR_CONTROL_ROOT env", () => {
+    const control = tmpRoot("sdd-ws-control-");
+    const elsewhere = tmpRoot("sdd-ws-elsewhere-");
+    try {
+      mkdirSync(join(control, ".mstar"), { recursive: true });
+      writeFileSync(join(control, ".mstar", "status.json"), "{}\n");
+      const fromArg = sddWorkspace("plan-1", { cwd: elsewhere, controlRoot: control });
+      expect(fromArg).toBe(realpathSync(join(control, ".mstar", "sdd", "plan-1")));
+      withEnv(MSTAR_CONTROL_ROOT, control, () => {
+        const fromEnv = sddWorkspace("plan-1", { cwd: elsewhere });
+        expect(fromEnv).toBe(realpathSync(join(control, ".mstar", "sdd", "plan-1")));
+      });
+    } finally {
+      rmSync(control, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  test("non-directory CONTROL_ROOT fails with exit code 1", () => {
+    const err = errOf(() => sddWorkspace("plan-1", { controlRoot: "/definitely/not/a/dir-xyz" }));
+    expect(err.exitCode).toBe(1);
+    expect(err.message).toContain("is not a directory");
+  });
+
+  test("fail-closed: linked worktree without status.json refuses a second SDD tree", () => {
+    const main = tmpRoot("sdd-ws-main-");
+    try {
+      gitFixture(main);
+      const linked = join(tmpRoot("sdd-ws-parent-"), "linked");
+      mkdirSync(dirname(linked), { recursive: true });
+      git(["worktree", "add", "-q", linked, "-b", "feature/linked"], main);
+      // linked worktree has no .mstar/status.json and no control root
+      const err = errOf(() => sddWorkspace("plan-1", { cwd: linked }));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toMatch(/linked worktree at .* has no \{HARNESS_DIR\}\/status\.json/);
+      expect(err.message).toMatch(/Refusing to create a second SDD tree/);
+      expect(err.message).toContain("MSTAR_CONTROL_ROOT");
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+    }
+  });
+
+  test("harness-root override: MSTAR_HARNESS_DIR picks .harness (plan finding 2026-08-08)", () => {
+    const root = tmpRoot("sdd-ws-harness-");
+    try {
+      git(["init", "-q"], root);
+      mkdirSync(join(root, ".harness"), { recursive: true });
+      withEnv(MSTAR_HARNESS_DIR, ".harness", () => {
+        const dir = sddWorkspace("plan-1", { cwd: root });
+        expect(dir).toBe(realpathSync(join(root, ".harness", "sdd", "plan-1")));
+      });
+      withEnv(MSTAR_HARNESS_DIR, undefined, () => {
+        // no probed harness and not a linked worktree → bash default .mstar
+        const dir = sddWorkspace("plan-1", { cwd: root });
+        expect(dir).toBe(realpathSync(join(root, ".mstar", "sdd", "plan-1")));
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("override wins over CONTROL_ROOT probing (.harness control repo convention)", () => {
+    const control = tmpRoot("sdd-ws-override-");
+    try {
+      git(["init", "-q"], control);
+      mkdirSync(join(control, ".harness"), { recursive: true });
+      withEnv(MSTAR_HARNESS_DIR, ".harness", () => {
+        const dir = sddWorkspace("plan-1", { cwd: control, controlRoot: control });
+        expect(dir).toBe(realpathSync(join(control, ".harness", "sdd", "plan-1")));
+      });
+    } finally {
+      rmSync(control, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("taskBrief — port of scripts/task-brief (SKILL.md § Scripts)", () => {
+  test("extracts from the matching '## Task N' heading; fenced headings and number boundaries ignored", () => {
+    const out = tmpRoot("sdd-brief-");
+    try {
+      const file = join(out, "task-2-brief.md");
+      const written = taskBrief(SAMPLE_PLAN, 2, file);
+      expect(written).toBe(file);
+      const content = readFileSync(file, "utf8");
+      expect(content.startsWith("### Task 2: second task\n")).toBe(true);
+      expect(content).not.toContain("hidden behind a fence");
+      expect(content).not.toContain("Task 1: first task");
+      const task10 = join(out, "task-10-brief.md");
+      taskBrief(SAMPLE_PLAN, 10, task10);
+      expect(readFileSync(task10, "utf8")).toBe("### Task 10: tenth task\n\n- [ ] not task 1 (heading number boundary)\n");
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("missing plan file fails with exit code 2", () => {
+    const err = errOf(() => taskBrief("/no/such/plan.md", 1, "/tmp/out.md"));
+    expect(err.exitCode).toBe(2);
+    expect(err.message).toContain("no such plan file");
+  });
+
+  test("missing task heading fails with exit code 3 and writes an empty out file", () => {
+    const out = tmpRoot("sdd-brief-");
+    try {
+      const file = join(out, "task-5-brief.md");
+      const err = errOf(() => taskBrief(SAMPLE_PLAN, 5, file));
+      expect(err.exitCode).toBe(3);
+      expect(err.message).toContain("task 5 not found");
+      expect(existsSync(file)).toBe(true);
+      expect(statSync(file).size).toBe(0);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("default out path uses SDD_DIR/task-N-brief.md and creates SDD_DIR", () => {
+    const out = tmpRoot("sdd-brief-");
+    try {
+      const sddDir = join(out, "sdd", "sub");
+      withEnv(SDD_DIR, sddDir, () => {
+        const file = taskBrief(SAMPLE_PLAN, 1);
+        expect(file).toBe(join(sddDir, "task-1-brief.md"));
+        expect(existsSync(file)).toBe(true);
+      });
+      withEnv(SDD_DIR, undefined, () => {
+        const err = errOf(() => taskBrief(SAMPLE_PLAN, 1));
+        expect(err.exitCode).toBe(2);
+        expect(err.message).toMatch(/set SDD_DIR or pass OUTFILE/);
+      });
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("reviewPackage — port of scripts/review-package (SKILL.md § Scripts)", () => {
+  test("writes commit list, stat, and -U10 diff for BASE..HEAD", () => {
+    const root = tmpRoot("sdd-rp-");
+    const out = tmpRoot("sdd-rp-out-");
+    try {
+      const { base, head } = gitFixture(root);
+      const file = join(out, "package.diff");
+      const written = reviewPackage(base, head, file, { cwd: root });
+      expect(written).toBe(file);
+      const content = readFileSync(file, "utf8");
+      expect(content.startsWith(`# Review package: ${base}..${head}\n`)).toBe(true);
+      expect(content).toContain("## Commits\n");
+      expect(content).toContain(`${head.slice(0, 7)} head commit\n`);
+      expect(content).toContain("## Files changed\n");
+      expect(content).toContain("file1.txt");
+      expect(content).toContain("file2.txt");
+      expect(content).toContain("## Diff\n");
+      expect(content).toContain("@@"); // unified diff hunks
+      expect(content).toContain("CHANGED line four"); // -U10 context from the head commit
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("default out file is SDD_DIR/review-<short base>..<short head>.diff", () => {
+    const root = tmpRoot("sdd-rp-");
+    const out = tmpRoot("sdd-rp-out-");
+    try {
+      const { base, head } = gitFixture(root);
+      const sddDir = join(out, "sdd");
+      const file = reviewPackage(base, head, undefined, { cwd: root, sddDir });
+      expect(file).toBe(join(sddDir, `review-${base.slice(0, 7)}..${head.slice(0, 7)}.diff`));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("bad BASE / HEAD fail with exit code 2", () => {
+    const root = tmpRoot("sdd-rp-");
+    try {
+      const { base, head } = gitFixture(root);
+      const bad = errOf(() => reviewPackage("does-not-exist", head, undefined, { cwd: root }));
+      expect(bad.exitCode).toBe(2);
+      expect(bad.message).toContain("bad BASE");
+      const badHead = errOf(() => reviewPackage(base, "nope", undefined, { cwd: root }));
+      expect(badHead.exitCode).toBe(2);
+      expect(badHead.message).toContain("bad HEAD");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("byte parity: TS ports vs bash originals on fixtures", () => {
+  test("sdd-workspace: identical resolved path (incl. symlink normalization)", () => {
+    const root = tmpRoot("sdd-parity-ws-");
+    try {
+      git(["init", "-q"], root);
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "status.json"), "{}\n");
+      const bashRun = runBash(join(SCRIPTS, "sdd-workspace"), ["parity-plan"], root);
+      expect(bashRun.status).toBe(0);
+      const tsDir = sddWorkspace("parity-plan", { cwd: root });
+      expect(tsDir).toBe(bashRun.stdout.trim());
+      expect(readFileSync(join(tsDir, ".gitignore"), "utf8")).toBe("*\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("sdd-workspace fail-closed: identical error text and exit code", () => {
+    const main = tmpRoot("sdd-parity-main-");
+    try {
+      gitFixture(main);
+      const parent = tmpRoot("sdd-parity-parent-");
+      const linked = join(parent, "linked");
+      mkdirSync(linked, { recursive: true });
+      git(["worktree", "add", "-q", linked, "-b", "feature/parity"], main);
+      const bashRun = runBash(join(SCRIPTS, "sdd-workspace"), ["parity-plan"], linked);
+      expect(bashRun.status).toBe(1);
+      const err = errOf(() => sddWorkspace("parity-plan", { cwd: linked }));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toBe(bashRun.stderr.trimEnd());
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+    }
+  });
+
+  test("sdd-workspace harness override diverges from bash by design (plan finding)", () => {
+    const control = tmpRoot("sdd-parity-control-");
+    try {
+      git(["init", "-q"], control);
+      mkdirSync(join(control, ".harness"), { recursive: true });
+      // bash probe misses .harness → falls back to .mstar (the finding's bug)
+      const bashRun = runBash(join(SCRIPTS, "sdd-workspace"), ["parity-plan", control], control);
+      expect(bashRun.status).toBe(0);
+      expect(bashRun.stdout.trim()).toBe(realpathSync(join(control, ".mstar", "sdd", "parity-plan")));
+      // TS port honors the explicit override and lands on the real harness root
+      withEnv(MSTAR_HARNESS_DIR, ".harness", () => {
+        const tsDir = sddWorkspace("parity-plan", { cwd: control, controlRoot: control });
+        expect(tsDir).toBe(realpathSync(join(control, ".harness", "sdd", "parity-plan")));
+      });
+    } finally {
+      rmSync(control, { recursive: true, force: true });
+    }
+  });
+
+  test("task-brief: byte-identical file content and identical stdout message", () => {
+    const out = tmpRoot("sdd-parity-brief-");
+    try {
+      const bashOut = join(out, "bash-task-1.md");
+      const bashRun = runBash(join(SCRIPTS, "task-brief"), [SAMPLE_PLAN, "1", bashOut], out);
+      expect(bashRun.status).toBe(0);
+      const tsOut = join(out, "ts-task-1.md");
+      taskBrief(SAMPLE_PLAN, 1, tsOut);
+      expect(readFileSync(tsOut)).toEqual(readFileSync(bashOut));
+      // stdout parity: the message is derived from path + wc -l of the same bytes
+      const tsLines = readFileSync(tsOut, "utf8").split("\n").length - 1;
+      expect(bashRun.stdout).toBe(`wrote ${bashOut}: ${tsLines} lines\n`);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("review-package: byte-identical file content (commits + stat + -U10 diff) and stdout message", () => {
+    const root = tmpRoot("sdd-parity-rp-");
+    const out = tmpRoot("sdd-parity-rp-out-");
+    try {
+      const { base, head } = gitFixture(root);
+      const bashOut = join(out, "bash.diff");
+      const bashRun = runBash(join(SCRIPTS, "review-package"), [base, head, bashOut], root);
+      expect(bashRun.status).toBe(0);
+      const tsOut = join(out, "ts.diff");
+      reviewPackage(base, head, tsOut, { cwd: root });
+      expect(readFileSync(tsOut)).toEqual(readFileSync(bashOut));
+      const tsBytes = statSync(tsOut).size;
+      const tsCommits = git(["rev-list", "--count", `${base}..${head}`], root);
+      expect(bashRun.stdout).toBe(`wrote ${bashOut}: ${tsCommits} commit(s), ${tsBytes} bytes\n`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+});

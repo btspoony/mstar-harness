@@ -60,3 +60,21 @@ export {
   verifyPlanExecutionLease,
   withStatusWriteLock,
 } from "./lease.js";
+export type {
+  ImplementerSessionLedger,
+  ReviewPackageOptions,
+  SddWorkspaceOptions,
+  StickyRulesInput,
+  StickyRulesResult,
+  TaskBriefOptions,
+} from "./sdd.js";
+export {
+  SddScriptError,
+  assertBaseSha,
+  implementerSessionStickyRules,
+  readProgressLedger,
+  reviewPackage,
+  sddWorkspace,
+  taskBrief,
+  taskReportExists,
+} from "./sdd.js";

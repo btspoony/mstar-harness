@@ -1,0 +1,418 @@
+/**
+ * Engine sdd module — SDD loop state machine + TS ports of the three
+ * `skills/mstar-sdd/scripts/` bash scripts with byte parity.
+ *
+ * Spec source: `skills/mstar-sdd/SKILL.md` (per-task loop, BASE_SHA rule,
+ * progress ledger, red flags) + `references/file-handoffs.md` +
+ * `references/sticky-implementer-session.md`. The three script ports
+ * (`sddWorkspace`, `taskBrief`, `reviewPackage`) mirror the bash originals
+ * byte-for-byte on the same fixtures — bash remains the fallback until
+ * Slice 5 (roadmap §8.2 / plan 20260808-slice2-sdd-iteration).
+ *
+ * Harness-root override: `MSTAR_HARNESS_DIR` env / `opts.harnessDir` (plan
+ * finding 2026-08-08) — the bash probe only knows `.mstar`/`.agents` and
+ * picks the wrong root in `.harness`-rooted repos; the TS port honors the
+ * explicit override in addition to CONTROL_ROOT.
+ */
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { resolveSddDir } from "./path.js";
+
+/**
+ * Error carrying the bash original's exit code so the CLI (slice-2 Task 3)
+ * can map validation failures to identical non-zero exits.
+ */
+export class SddScriptError extends Error {
+  readonly exitCode: number;
+
+  constructor(message: string, exitCode: number) {
+    super(message);
+    this.name = "SddScriptError";
+    this.exitCode = exitCode;
+  }
+}
+
+/**
+ * Options for `sddWorkspace` — mirrors the bash `sdd-workspace PLAN_ID
+ * [CONTROL_ROOT]` usage plus the harness-root override (plan finding
+ * 2026-08-08).
+ */
+export type SddWorkspaceOptions = {
+  /** Control worktree repo root — bash 2nd arg / `MSTAR_CONTROL_ROOT`. */
+  controlRoot?: string;
+  /** Explicit harness root — `MSTAR_HARNESS_DIR` / `--harness-dir`. */
+  harnessDir?: string;
+  /** Working directory for git probes; default `process.cwd()`. */
+  cwd?: string;
+};
+
+/** Options for `taskBrief` (mirrors `$SDD_DIR` for the default out path). */
+export type TaskBriefOptions = {
+  sddDir?: string;
+};
+
+/** Options for `reviewPackage` (mirrors `$SDD_DIR` + git probe cwd). */
+export type ReviewPackageOptions = {
+  sddDir?: string;
+  cwd?: string;
+};
+
+function isDirectory(dir: string): boolean {
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Run git, returning trimmed stdout or null on failure. */
+function gitOut(cwd: string, args: string[]): string | null {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Port of the bash `resolve_harness_with_status` probe: a harness dir only
+ * counts when it carries `status.json` (that is what distinguishes a real
+ * control harness from a linked feature checkout under default gitignore).
+ */
+function probeHarnessWithStatus(root: string): string | null {
+  if (isFile(join(root, ".mstar", "status.json"))) return join(root, ".mstar");
+  if (isFile(join(root, ".agents", "status.json"))) return join(root, ".agents");
+  return null;
+}
+
+/**
+ * Port of the bash `is_linked_worktree` check: a linked worktree from
+ * `git worktree add` has `--git-dir` ≠ `--git-common-dir` (or a
+ * `.git/worktrees/` / `worktrees/` git dir path).
+ */
+function isLinkedWorktree(root: string): boolean {
+  const gitDirRaw = gitOut(root, ["rev-parse", "--git-dir"]);
+  const commonRaw = gitOut(root, ["rev-parse", "--git-common-dir"]);
+  if (gitDirRaw === null || commonRaw === null) return false;
+  const gitDir = isAbsolute(gitDirRaw) ? gitDirRaw : join(root, gitDirRaw);
+  const common = isAbsolute(commonRaw) ? commonRaw : join(root, commonRaw);
+  // Path contains /worktrees/ → definitely linked (bash `case` glob).
+  if (gitDir.includes("/.git/worktrees/") || gitDir.includes("/worktrees/")) return true;
+  try {
+    const gdParent = realpathSync(dirname(gitDir));
+    const cmAbs = realpathSync(common);
+    return join(gdParent, basename(gitDir)) !== cmAbs && gitDir !== cmAbs;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Port of `scripts/sdd-workspace`: resolve and ensure `{SDD_DIR}` =
+ * `{HARNESS_DIR}/sdd/<plan-id>/` (bash prints the absolute path; we return
+ * it). Resolution order:
+ *
+ * 1. explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`)
+ *    — plan finding 2026-08-08: covers `.harness`-rooted repos the bash
+ *    probe misses;
+ * 2. `status.json` probe at root (`.mstar` → `.agents`);
+ * 3. fail-closed when the cwd is a linked worktree without a control root
+ *    (refuses a second SDD tree under the feature checkout);
+ * 4. bash fallback: existing `.mstar`/`.agents` dir, else `.mstar`.
+ *
+ * `controlRoot` (bash 2nd arg / `MSTAR_CONTROL_ROOT`) pins `root` to the
+ * control worktree instead of the cwd's git top-level.
+ */
+export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): string {
+  if (!planId) {
+    throw new SddScriptError(
+      "usage: sdd-workspace PLAN_ID [CONTROL_ROOT]\n" +
+        "  Set MSTAR_CONTROL_ROOT=<control_worktree_path> when running from a feature worktree.",
+      2,
+    );
+  }
+  const cwd = opts.cwd ?? process.cwd();
+  const controlRoot = opts.controlRoot ?? (process.env.MSTAR_CONTROL_ROOT || undefined);
+  let root: string;
+  if (controlRoot) {
+    if (!isDirectory(controlRoot)) {
+      throw new SddScriptError(`sdd-workspace: CONTROL_ROOT / MSTAR_CONTROL_ROOT is not a directory: ${controlRoot}`, 1);
+    }
+    root = realpathSync(controlRoot);
+  } else {
+    const topLevel = gitOut(cwd, ["rev-parse", "--show-toplevel"]);
+    root = realpathSync(topLevel ?? cwd);
+  }
+
+  const harnessOverride = opts.harnessDir ?? (process.env.MSTAR_HARNESS_DIR || undefined);
+  let harnessDir: string;
+  if (harnessOverride) {
+    harnessDir = resolve(root, harnessOverride);
+  } else {
+    const probed = probeHarnessWithStatus(root);
+    if (probed) {
+      harnessDir = probed;
+    } else if (!controlRoot && isLinkedWorktree(root)) {
+      // Verbatim bash fail-closed message (byte parity on stderr).
+      throw new SddScriptError(
+        `sdd-workspace: linked worktree at ${root} has no {HARNESS_DIR}/status.json (default gitignore).\n` +
+          `  Refusing to create a second SDD tree under the feature checkout.\n` +
+          `  Re-run with MSTAR_CONTROL_ROOT=<control_worktree_path> or: sdd-workspace ${planId} <control_worktree_path>\n` +
+          `  See mstar-branch-worktree «Harness path SSOT under default gitignore».`,
+        1,
+      );
+    } else if (isDirectory(join(root, ".mstar"))) {
+      harnessDir = join(root, ".mstar");
+    } else if (isDirectory(join(root, ".agents"))) {
+      harnessDir = join(root, ".agents");
+    } else {
+      harnessDir = join(root, ".mstar");
+    }
+  }
+
+  const sddDir = resolveSddDir(harnessDir, planId);
+  mkdirSync(sddDir, { recursive: true });
+  writeFileSync(join(sddDir, ".gitignore"), "*\n");
+  // bash ends with `cd "$dir" && pwd` — physical path, symlinks resolved.
+  return realpathSync(sddDir);
+}
+
+/**
+ * Port of `scripts/task-brief`: extract the `## Task N` section of a plan
+ * into a file (default `{SDD_DIR}/task-N-brief.md`). Replicates the awk
+ * state machine exactly: ``` fences toggle `infence`; headings inside
+ * fences are ignored; once the heading for `taskN` matches, everything to
+ * EOF is printed. A missing task writes an empty file then fails with the
+ * bash exit-3 equivalent (`SddScriptError.exitCode === 3`).
+ */
+export function taskBrief(planFile: string, taskN: number, outFile?: string, opts: TaskBriefOptions = {}): string {
+  if (!planFile || !Number.isInteger(taskN) || taskN < 1) {
+    throw new SddScriptError("usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]", 2);
+  }
+  let content: string;
+  try {
+    content = readFileSync(planFile, "utf8");
+  } catch {
+    throw new SddScriptError(`no such plan file: ${planFile}`, 2);
+  }
+
+  let out: string;
+  if (outFile) {
+    out = outFile;
+  } else {
+    const sddDir = opts.sddDir ?? process.env.SDD_DIR;
+    if (!sddDir) {
+      throw new SddScriptError("task-brief: set SDD_DIR or pass OUTFILE (run sdd-workspace PLAN_ID first)", 2);
+    }
+    mkdirSync(sddDir, { recursive: true });
+    out = join(sddDir, `task-${taskN}-brief.md`);
+  }
+
+  // awk records: every newline-terminated line plus a final unterminated
+  // line; each printed record is emitted with a trailing newline.
+  const records = content.endsWith("\n") ? content.split("\n").slice(0, -1) : content.split("\n");
+  const headingRe = /^#+[ \t]+Task[ \t]+[0-9]+/;
+  const targetRe = new RegExp(`^#+[ \t]+Task[ \t]+${taskN}([^0-9]|$)`);
+  let infence = false;
+  let intask = false;
+  const printed: string[] = [];
+  for (const line of records) {
+    if (/^```/.test(line)) infence = !infence;
+    if (!infence && headingRe.test(line)) intask = targetRe.test(line);
+    if (intask) printed.push(line);
+  }
+  const output = printed.length > 0 ? `${printed.join("\n")}\n` : "";
+  writeFileSync(out, output);
+
+  if (printed.length === 0) {
+    throw new SddScriptError(`task ${taskN} not found in ${planFile} (no heading matching Task ${taskN})`, 3);
+  }
+  return out;
+}
+
+/**
+ * Port of `scripts/review-package`: write commit list, stat summary and
+ * `git diff -U10` for `BASE..HEAD` into a file (default
+ * `{SDD_DIR}/review-<short base>..<short head>.diff`). Both refs are
+ * validated with `git rev-parse --verify --quiet` (bash parity — any ref
+ * bash accepts is accepted here; the SHA-only guard is `assertBaseSha`).
+ */
+export function reviewPackage(base: string, head: string, outFile?: string, opts: ReviewPackageOptions = {}): string {
+  if (!base || !head) {
+    throw new SddScriptError("usage: review-package BASE HEAD [OUTFILE]", 2);
+  }
+  const cwd = opts.cwd ?? process.cwd();
+
+  const verifyRef = (ref: string, what: "BASE" | "HEAD"): void => {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    } catch {
+      throw new SddScriptError(`bad ${what}: ${ref}`, 2);
+    }
+  };
+  verifyRef(base, "BASE");
+  verifyRef(head, "HEAD");
+
+  let out: string;
+  if (outFile) {
+    out = outFile;
+  } else {
+    const sddDir = opts.sddDir ?? process.env.SDD_DIR;
+    if (!sddDir) {
+      throw new SddScriptError("review-package: set SDD_DIR or pass OUTFILE", 2);
+    }
+    mkdirSync(sddDir, { recursive: true });
+    const shortBase = gitOut(cwd, ["rev-parse", "--short", base]) ?? base;
+    const shortHead = gitOut(cwd, ["rev-parse", "--short", head]) ?? head;
+    out = join(sddDir, `review-${shortBase}..${shortHead}.diff`);
+  }
+
+  const run = (args: string[]): Buffer => execFileSync("git", args, { cwd });
+  // Bash `{ echo …; git …; } > file` layout, byte-for-byte.
+  const parts: Buffer[] = [
+    Buffer.from(`# Review package: ${base}..${head}\n\n## Commits\n`),
+    run(["log", "--oneline", `${base}..${head}`]),
+    Buffer.from("\n## Files changed\n"),
+    run(["diff", "--stat", `${base}..${head}`]),
+    Buffer.from("\n## Diff\n"),
+    run(["diff", "-U10", `${base}..${head}`]),
+  ];
+  writeFileSync(out, Buffer.concat(parts));
+  return out;
+}
+
+/**
+ * BASE_SHA guard (mstar-sdd SKILL.md red flags: never use `HEAD~1` as the
+ * review BASE — multi-commit tasks truncate). Accepts only a full or prefix
+ * commit SHA that exists in the repo; throws `SddScriptError` (exit 2)
+ * otherwise.
+ */
+export function assertBaseSha(ref: string, opts: { cwd?: string } = {}): void {
+  if (typeof ref !== "string" || !/^[0-9a-f]{4,40}$/i.test(ref)) {
+    throw new SddScriptError(
+      `assertBaseSha: BASE must be a commit SHA (full or prefix); got ${JSON.stringify(ref)}. ` +
+        "Never use HEAD~1 as review BASE (multi-commit tasks truncate).",
+      2,
+    );
+  }
+  try {
+    // `^{commit}` forces an object-store lookup: bare `rev-parse --verify`
+    // accepts any well-formed 40-hex string without checking existence.
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+      cwd: opts.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    throw new SddScriptError(`assertBaseSha: commit not found: ${ref}`, 2);
+  }
+}
+
+/**
+ * True when `{sddDir}/task-N-report.md` exists and is non-empty
+ * (file-handoffs.md: the implementer writes a full report to
+ * `task-N-report.md`; an empty file carries no evidence).
+ */
+export function taskReportExists(sddDir: string, taskN: number): boolean {
+  try {
+    const st = statSync(join(sddDir, `task-${taskN}-report.md`));
+    return st.isFile() && st.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read the progress ledger (mstar-sdd SKILL.md § Progress ledger) as
+ * non-empty trimmed lines; missing `progress.md` reads as `[]`. Tasks
+ * marked `Task N: complete` are DONE and must not be re-dispatched.
+ */
+export function readProgressLedger(sddDir: string): string[] {
+  let content: string;
+  try {
+    content = readFileSync(join(sddDir, "progress.md"), "utf8");
+  } catch {
+    return [];
+  }
+  return content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/**
+ * Sticky implementer session ledger — `{SDD_DIR}/implementer-session.json`
+ * (sticky-implementer-session.md § Session ledger).
+ */
+export type ImplementerSessionLedger = {
+  plan_id: string;
+  execute_as: string;
+  session_mode: "sticky" | "fresh";
+  host: string;
+  /** Agent id from the first Task return — required for resume. */
+  host_agent_id?: string;
+  working_branch: string;
+  started_task: number;
+  last_task: number;
+  started_at: string;
+};
+
+/** Input to `implementerSessionStickyRules`. */
+export type StickyRulesInput = {
+  session: ImplementerSessionLedger;
+  /** Task about to be dispatched. */
+  nextTask: number;
+  /** Tasks covered by this dispatch (micro-batch); default 1. */
+  microBatchTasks?: number;
+};
+
+/** Verdict of the sticky resume rules. */
+export type StickyRulesResult = {
+  resume: boolean;
+  reason: string;
+};
+
+/**
+ * Sticky resume rules (sticky-implementer-session.md + SKILL.md red flag
+ * "Resume implementer without host_agent_id"): a sticky session may only
+ * resume when `session_mode` is `sticky`, `host_agent_id` is present,
+ * `nextTask` is not already completed through `last_task`, and the
+ * micro-batch size is ≤ 3 (max without user override). Reviewers never
+ * resume — that rule lives in the PM flow, not the session ledger.
+ */
+export function implementerSessionStickyRules(input: StickyRulesInput): StickyRulesResult {
+  const { session, nextTask, microBatchTasks = 1 } = input;
+  if (session.session_mode !== "sticky") {
+    return { resume: false, reason: `session_mode is '${session.session_mode}'; sticky resume requires 'sticky'` };
+  }
+  if (typeof session.host_agent_id !== "string" || session.host_agent_id.length === 0) {
+    return {
+      resume: false,
+      reason:
+        "host_agent_id is missing from implementer-session.json; fall back to fresh for this task " +
+        "(mstar-sdd SKILL.md red flag: resume implementer without host_agent_id)",
+    };
+  }
+  if (nextTask <= session.last_task) {
+    return {
+      resume: false,
+      reason: `nextTask ${nextTask} <= last_task ${session.last_task}; task already completed in this session`,
+    };
+  }
+  if (microBatchTasks < 1 || microBatchTasks > 3) {
+    return {
+      resume: false,
+      reason: `micro-batch of ${microBatchTasks} tasks is outside 1..3 (max 3 without user override, ` +
+        "sticky-implementer-session.md § Micro-batch fallback)",
+    };
+  }
+  return { resume: true, reason: `sticky resume OK: host_agent_id ${session.host_agent_id}, next task ${nextTask}` };
+}
