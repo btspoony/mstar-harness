@@ -1,0 +1,294 @@
+/**
+ * Engine path module — harness directory discovery, spec/plan/sdd/iteration
+ * path composition, scaffold generation, canonical `.gitignore` snippet and
+ * the plan-writing path gate.
+ *
+ * Spec source: `skills/mstar-plan-conventions/SKILL.md` § 路径符号 (SSOT),
+ * § {HARNESS_DIR} 解析顺序（找到即停）, § {SPECS_DIR} 解析（找到非空目录即停）
+ * and § Git 跟踪策略 / § Plan-Writing Path Gate. The default probe stays
+ * `.mstar/` → `.agents/` → `.plans/`/`plans/` per consumer convention; the
+ * explicit harness-root override (`MSTAR_HARNESS_DIR` env / `opts.harnessDir`)
+ * covers repos whose harness root is not one of the probed names (slice-2
+ * plan finding 2026-08-08) — `.harness` is intentionally NOT probed.
+ *
+ * All skill-derived artifacts (status.json empty template, gitignore snippet)
+ * are embedded constants: the engine never reads skill files at runtime
+ * (roadmap §8.5 standalone rule).
+ */
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { readJson, writeJson, type ValidationResult } from "./core.js";
+
+/**
+ * Options for `resolveHarnessDir`.
+ */
+export type ResolveHarnessDirOptions = {
+  /**
+   * Explicit harness root. Resolved against `startDir` when relative.
+   * Takes precedence over `MSTAR_HARNESS_DIR` and over default probing.
+   * Authoritative: the path is returned even when it does not exist yet
+   * (the caller may scaffold it).
+   */
+  harnessDir?: string;
+};
+
+/**
+ * Resolve `{HARNESS_DIR}` per plan-conventions § {HARNESS_DIR} 解析顺序
+ * (find-first-stop): `.mstar/` → `.agents/` → `.plans/`/`plans/`, walking up
+ * from `startDir`. Harness candidates are dir-existence (the empty-dir rule
+ * applies to `{SPECS_DIR}` only). An explicit override via `opts.harnessDir`
+ * or `MSTAR_HARNESS_DIR` wins over probing.
+ *
+ * Returns the absolute harness dir, or `null` when no candidate exists.
+ */
+export function resolveHarnessDir(
+  startDir: string = process.cwd(),
+  opts: ResolveHarnessDirOptions = {},
+): string | null {
+  const start = resolve(startDir);
+  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
+  if (explicit) return resolve(start, explicit);
+  let dir = start;
+  for (;;) {
+    for (const candidate of [join(dir, ".mstar"), join(dir, ".agents"), join(dir, ".plans"), join(dir, "plans")]) {
+      if (isDirectory(candidate)) return candidate;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * Options for `resolveSpecsDir`.
+ */
+export type ResolveSpecsDirOptions = {
+  /**
+   * Default true: when every candidate is absent or empty, create
+   * `{HARNESS_DIR}/specs/` (plan-conventions § 创建默认). Read-only callers
+   * (e.g. `mstar path resolve`) pass `false` to skip the side effect.
+   */
+  create?: boolean;
+};
+
+/**
+ * Resolve `{SPECS_DIR}` per plan-conventions § {SPECS_DIR} 解析: first
+ * non-empty candidate wins — `{HARNESS_DIR}/specs/` → `docs/specs/` →
+ * repo-root `specs/` (repo root = parent of the harness dir). A candidate
+ * that exists but holds no files is treated as absent (empty-dir rule,
+ * recursive). When all candidates are absent, `{HARNESS_DIR}/specs/` is
+ * created and returned (unless `create: false`).
+ */
+export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions = {}): string {
+  const harness = resolve(harnessDir);
+  const repoRoot = dirname(harness);
+  const candidates = [join(harness, "specs"), join(repoRoot, "docs", "specs"), join(repoRoot, "specs")];
+  for (const candidate of candidates) {
+    if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
+  }
+  const fallback = join(harness, "specs");
+  if (opts.create !== false) mkdirSync(fallback, { recursive: true });
+  return fallback;
+}
+
+/**
+ * Compose `{PLAN_DIR}` from the harness dir (plan-conventions § 路径符号).
+ * Legacy layout: when the harness root is a plans dir itself (`.plans/` or
+ * `plans/`, resolution rung 3), `{HARNESS_DIR}={PLAN_DIR}` — the same
+ * directory is returned.
+ */
+export function resolvePlanDir(harnessDir: string): string {
+  const dir = resolve(harnessDir);
+  const name = basename(dir);
+  if (name === ".plans" || name === "plans") return dir;
+  return join(dir, "plans");
+}
+
+/**
+ * Compose `{SDD_DIR}` = `{HARNESS_DIR}/sdd/<plan-id>/` (plan-conventions
+ * § 路径符号). The per-plan directory is created by the sdd workspace flow,
+ * not here.
+ */
+export function resolveSddDir(harnessDir: string, planId: string): string {
+  return join(resolve(harnessDir), "sdd", planId);
+}
+
+/**
+ * Compose `{ITERATION_DIR}` = `{HARNESS_DIR}/iterations/` (plan-conventions
+ * § 路径符号).
+ */
+export function resolveIterationDir(harnessDir: string): string {
+  return join(resolve(harnessDir), "iterations");
+}
+
+/**
+ * Empty status.json template — embedded copy of
+ * `skills/mstar-plan-artifacts/templates/status.empty.json`
+ * (plan-conventions § 初始化 Plan 目录). Kept as a constant so the engine
+ * has no runtime dependency on skill files.
+ */
+const EMPTY_STATUS_TEMPLATE: Record<string, unknown> = {
+  version: 1,
+  updated_at: "1970-01-01",
+  plans: [],
+  residual_findings: {},
+  metadata: {},
+};
+
+/** Subdirectories created under `.mstar/` by `scaffoldHarness`. */
+const SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"] as const;
+
+/**
+ * Initialize the harness directory under `root`: create `.mstar/` with
+ * `plans/`, `iterations/`, `knowledge/`, `specs/`, `sdd/` and write
+ * `status.json` from the empty template (plan-conventions § 初始化 Plan 目录).
+ * Idempotent: an existing non-empty `status.json` is never clobbered.
+ * Returns the absolute harness dir.
+ */
+export function scaffoldHarness(root: string): string {
+  const harnessDir = join(resolve(root), ".mstar");
+  for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harnessDir, dir), { recursive: true });
+  const statusPath = join(harnessDir, "status.json");
+  // readJson treats a missing file as `{}`, so a missing (or empty) status.json
+  // is replaced with the empty template; anything with content is preserved.
+  if (Object.keys(readJson(statusPath)).length === 0) writeJson(statusPath, EMPTY_STATUS_TEMPLATE);
+  return harnessDir;
+}
+
+/**
+ * Canonical Morning Star `.gitignore` snippet — single source constant
+ * (plan-conventions § Git 跟踪策略). Skills and the CLI `init` share this
+ * exact text. Ends with a trailing newline so it can be appended directly.
+ */
+const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
+# Principle: process stays local; results are shared with the team.
+# Ignored (process / coordination):
+.mstar/archived/
+.mstar/iterations/
+.mstar/plans/
+.mstar/sdd/
+.mstar/notes.json
+.mstar/status.json
+# Tracked (results): .mstar/AGENTS.md, .mstar/knowledge/, .mstar/specs/
+`;
+
+/** Process-artifact ignore entries, derived from the canonical snippet. */
+const GITIGNORE_PROCESS_ENTRIES: readonly string[] = GITIGNORE_SNIPPET.split("\n")
+  .filter((line) => line.startsWith(".mstar/"))
+  .map((line) => line.trim());
+
+/**
+ * Emit the canonical `.gitignore` snippet (plan-conventions § Git 跟踪策略):
+ * the process-artifact ignore set (`archived/`, `iterations/`, `plans/`,
+ * `sdd/`, `notes.json`, `status.json` under the harness dir) with the
+ * tracked/results note.
+ */
+export function emitGitignoreSnippet(): string {
+  return GITIGNORE_SNIPPET;
+}
+
+/**
+ * Validate that `<root>/.gitignore` contains the canonical process-artifact
+ * ignore set (plan-conventions § Git 跟踪策略). Extra entries are fine;
+ * any missing canonical entry is a violation. Non-blocking: returns a
+ * `ValidationResult` (v1 enforcement depth, roadmap §8.5).
+ */
+export function validateGitignore(root: string): ValidationResult {
+  const gitignorePath = join(resolve(root), ".gitignore");
+  let content: string;
+  try {
+    content = readFileSync(gitignorePath, "utf8");
+  } catch {
+    return {
+      ok: false,
+      severity: "medium",
+      code: "gitignore.missing",
+      message: `no .gitignore found at ${gitignorePath}`,
+      fix: `append the canonical snippet (emitGitignoreSnippet()) to ${gitignorePath}`,
+    };
+  }
+  const lines = new Set(
+    content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0),
+  );
+  const missing = GITIGNORE_PROCESS_ENTRIES.filter((entry) => !lines.has(entry));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      severity: "medium",
+      code: "gitignore.missing-entries",
+      message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries: ${missing.join(", ")}`,
+      fix: `append the canonical snippet (emitGitignoreSnippet()) to ${gitignorePath}`,
+    };
+  }
+  return {
+    ok: true,
+    severity: "low",
+    code: "gitignore.ok",
+    message: `.gitignore at ${gitignorePath} contains all canonical harness process-artifact ignores`,
+  };
+}
+
+/**
+ * Plan-writing path gate (plan-conventions § Plan-Writing Path Gate +
+ * harness-core 护栏): plans must live under `{PLAN_DIR}`; external default
+ * plan directories are rejected. When `harnessDir` is `null` (persistent
+ * plan tracking not enabled) any plan path is rejected with a fix pointing
+ * at `scaffoldHarness`. Non-blocking: returns a `ValidationResult`.
+ */
+export function assertPlanWritingPath(planPath: string, harnessDir: string | null): ValidationResult {
+  const planAbs = resolve(planPath);
+  if (!harnessDir) {
+    return {
+      ok: false,
+      severity: "high",
+      code: "plan-path.no-harness",
+      message: `persistent plan tracking is not enabled — cannot place plan ${planAbs} under {PLAN_DIR}`,
+      fix: "initialize the harness (scaffoldHarness) so plans land in {PLAN_DIR}",
+    };
+  }
+  const planDir = resolvePlanDir(harnessDir);
+  const rel = relative(planDir, planAbs);
+  const inside = rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  if (!inside) {
+    return {
+      ok: false,
+      severity: "high",
+      code: "plan-path.outside-plan-dir",
+      message: `plan file ${planAbs} is outside {PLAN_DIR} (${planDir})`,
+      fix: `write the plan under ${planDir}`,
+    };
+  }
+  return {
+    ok: true,
+    severity: "low",
+    code: "plan-path.ok",
+    message: `plan file ${planAbs} lives under {PLAN_DIR} (${planDir})`,
+  };
+}
+
+function isDirectory(dir: string): boolean {
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** True when `dir` contains at least one file, recursively (empty-dir rule). */
+function hasFiles(dir: string): boolean {
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (hasFiles(join(dir, entry.name))) return true;
+      } else if (entry.isFile()) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
