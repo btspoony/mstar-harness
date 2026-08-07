@@ -23,6 +23,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/engine.js && bunx tsc",
+    "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "engines": {

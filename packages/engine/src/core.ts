@@ -1,21 +1,32 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Severity levels used across harness validation results. Machine SSOT —
- * the skills describe the same values (see `mstar-plan-artifacts` § status
- * and residuals); order is defined by `SEVERITY_ORDER` in the Task 2 core.
+ * Severity levels used across harness validation results.
+ *
+ * Machine SSOT — `mstar-plan-artifacts/references/status-and-residuals.md`
+ * § "Residual findings: `severity` (SSOT, machine field)" defines the same
+ * five lowercase-English values; `warning` / `Major` / any other value are
+ * forbidden in JSON severity fields.
  */
 export type Severity = "critical" | "high" | "medium" | "low" | "nit";
 
 /**
+ * Total order, heavy → light (spec: status-and-residuals.md § severity):
+ * `critical` > `high` > `medium` > `low` > `nit`. `nit` is always lighter
+ * than `low` — never invert or equate.
+ */
+export const SEVERITY_ORDER: readonly Severity[] = ["critical", "high", "medium", "low", "nit"];
+
+/**
  * Result of one harness validation check.
  *
- * Placeholder for the Task 2 core module (full shape per
- * `mstar-skill-authoring` § ValidationResult: `{ ok, severity, code, message, fix? }`).
- * Task 2 replaces this module with the real implementation and adds
- * `GateResult`, `readJson`/`writeJson`, `resolveProjectRoot`.
+ * Shape per `.harness/references/skill-programmatic-roadmap.md` §8.5 C4:
+ * `{ ok: boolean, severity, code, message, fix? }`. v1 enforcement is
+ * non-blocking: callers (CLI output readers, host hooks) surface it as a
+ * warning, never a hard stop.
  */
 export type ValidationResult = {
   ok: boolean;
@@ -26,11 +37,74 @@ export type ValidationResult = {
 };
 
 /**
+ * Aggregate of validation checks for one gate (spec: roadmap §8.2 core row).
+ * `ok` is the gate verdict over `violations` — a gate with any violation
+ * does not pass.
+ */
+export type GateResult = {
+  ok: boolean;
+  violations: ValidationResult[];
+};
+
+/**
+ * Read and parse a JSON document. Missing or empty files read as `{}`
+ * (same contract as the CLI helper this consolidates); malformed JSON
+ * throws with the file path in the message.
+ */
+export function readJson(filePath: string): Record<string, unknown> {
+  if (!existsSync(filePath)) return {};
+  const content = readFileSync(filePath, "utf8").trim();
+  if (!content) return {};
+  try {
+    return JSON.parse(content) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${filePath}: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Serialize `value` as pretty JSON with a trailing newline and write it
+ * atomically: temp file in the same directory, then rename over the target.
+ * Creates parent directories as needed; on failure the temp file is removed
+ * and the error rethrown, so the target is never partially written.
+ */
+export function writeJson(filePath: string, value: Record<string, unknown>): void {
+  const parent = dirname(filePath);
+  mkdirSync(parent, { recursive: true });
+  const tmp = join(parent, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    renameSync(tmp, filePath);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // temp file already renamed away or never created — nothing to clean
+    }
+    throw error;
+  }
+}
+
+/**
+ * Resolve the project root by walking up from `startDir` (default: cwd) to
+ * the nearest ancestor containing `package.json` or `bun.lock`. Falls back
+ * to the resolved `startDir` when no marker exists up to the filesystem root.
+ */
+export function resolveProjectRoot(startDir: string = process.cwd()): string {
+  const start = resolve(startDir);
+  let dir = start;
+  for (;;) {
+    if (existsSync(join(dir, "package.json")) || existsSync(join(dir, "bun.lock"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return start;
+    dir = parent;
+  }
+}
+
+/**
  * Locate the monorepo root `package.json` (`name: "morning-star"`) by walking
- * up from this module. Works from source and from any bundled output layout.
- * simplify: placeholder — Task 2 replaces this with the CLI implementation
- * moved from `packages/cli/src/utils.ts` (import.meta.url-based, then the CLI
- * re-exports it from the engine).
+ * up from a start directory. Works from source and from any bundled output
+ * layout (`import.meta.url` anchors the walk at the module's own location).
  */
 function findRootPackageJson(startDir: string): string | null {
   let dir = startDir;
@@ -50,8 +124,10 @@ function findRootPackageJson(startDir: string): string | null {
 
 /**
  * Read the harness version from the monorepo root `package.json`.
- * The single-version invariant keeps every surface (engine included)
- * aligned with this value.
+ *
+ * Single source for the harness version inside TS (roadmap §8.5 C6, moved
+ * from `packages/cli/src/utils.ts`); the CLI re-exports it unchanged. The
+ * single-version invariant keeps root, engine, cli and opencode aligned.
  */
 export function readHarnessVersion(): string {
   const root = findRootPackageJson(dirname(fileURLToPath(import.meta.url)));
