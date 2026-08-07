@@ -39,7 +39,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 - **`notes.json`**, optional **`tech_debt_summary`** (rollup view; compute via **`scripts/tech-debt-rollup.sh`**).
 - **Iteration Phase 2 leases** (`metadata.control_worktree_path`, `plans[].execution_lease`, `metadata.integration_merge_lease`): claim-before-`InProgress`, resume vs steal, orphan recovery → **`references/status-and-residuals.md`** (“Iteration execution leases”).
 
-> **Engine check (when available):** run `mstar lease verify <plan-id>` (or `import { validateExecutionLease, validateIntegrationMergeLease } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar lease verify <plan-id>` (or `import { validateExecutionLease } from "@mstar-harness/engine"` in a host hook — `validateIntegrationMergeLease` is import-only; no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq` examples → **`references/status-and-residuals.md`**.
 

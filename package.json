@@ -5,8 +5,7 @@
   "type": "module",
   "main": "packages/opencode/src/mstar.ts",
   "workspaces": [
-    "packages/*",
-    "packages/engine"
+    "packages/*"
   ],
   "scripts": {
     "postinstall": "bun run opencode:bundle-assets",

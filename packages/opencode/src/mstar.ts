@@ -8,6 +8,10 @@
  * - Non-blocking `status.json` write lint (roadmap §8.5 `beforeStatusWrite`, v1):
  *   on structured file-write tools targeting `{HARNESS_DIR}/status.json`, runs the
  *   engine `status.validateStatus` and emits a `warn` on violations. Never blocks.
+ *   Hook coverage follows `resolveHarnessDir` probing (`.mstar/` → `.agents/` →
+ *   `.plans/`|`plans/`); repos with a non-probed harness root (e.g. `.harness/`)
+ *   MUST set `MSTAR_HARNESS_DIR` in the OpenCode server env — see package README
+ *   "Status write lint (hook coverage)" (qc2 F-006).
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import { resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
@@ -320,6 +324,11 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
         }
         validateStatusWrite(args.filePath, { doc });
       } else if (input.tool === "edit") {
+        // v1 limitation (qc2 F-005 / qc3 F-7): validates the PRE-edit on-disk
+        // file, not the patched result — an edit that turns a valid file
+        // invalid is caught by the subsequent write, and editing an already
+        // invalid file re-warns about the state being replaced. Computing the
+        // patched doc for `edit` is a later-slice improvement.
         validateStatusWrite(args.filePath);
       }
     },
