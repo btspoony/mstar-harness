@@ -78,3 +78,15 @@ export {
   taskBrief,
   taskReportExists,
 } from "./sdd.js";
+export type {
+  CompassDoc,
+  PhaseGateOptions,
+  PhaseGateResult,
+  PhaseTransition,
+} from "./iteration.js";
+export {
+  assertIndexRowObligations,
+  evaluatePhaseGate,
+  pushCadenceProbe,
+  validateCompassFrontmatter,
+} from "./iteration.js";
