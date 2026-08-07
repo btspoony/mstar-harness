@@ -547,24 +547,6 @@ function groupCount(values: unknown[]): Record<string, number> {
   return Object.fromEntries([...counts.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
-/** Semantic JSON equality, key-order-insensitive for objects (jq `==` semantics). */
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (typeof a !== typeof b) return false;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((value, index) => deepEqual(value, b[index]));
-  }
-  if (isPlainObject(a) && isPlainObject(b)) {
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-    return (
-      keysA.length === keysB.length &&
-      keysA.every((key) => Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key]))
-    );
-  }
-  return false;
-}
-
 /**
  * TS port of `scripts/tech-debt-rollup.sh` (status-and-residuals.md
  * § `metadata.tech_debt_summary`): compute `total_open` / `by_severity` /
@@ -614,8 +596,15 @@ export function techDebtRollup(docOrPath: StatusDoc | string): TechDebtRollup {
   const checks: TechDebtCheck[] = ROLLUP_FIELDS.map((field) => {
     const computedField = computed[field];
     if (stored === null) return { field, status: "DRIFT" as const };
-    // jq compares values semantically (`==`), so use deep equality, not string compare
-    const status = deepEqual(computedField, stored[field] ?? null) ? ("PASS" as const) : ("DRIFT" as const);
+    // Bash oracle parity: `compare_field` string-compares `jq -c` output, so
+    // key ORDER matters (`{"a":1,"b":2}` != `{"b":2,"a":1}`). JSON.stringify
+    // preserves insertion order like `jq -c` — the computed side is built in
+    // jq construction order (SEVERITY_ORDER for by_severity, sorted group
+    // keys for by_target/by_plan) — so stringify, not deep equality, mirrors
+    // the oracle. (jq `//` also maps `false`/`0` to null; not replicated —
+    // stored field values are objects or a positive total_open in practice.)
+    const status =
+      JSON.stringify(computedField) === JSON.stringify(stored[field] ?? null) ? ("PASS" as const) : ("DRIFT" as const);
     return { field, status };
   });
   const overall = checks.every((check) => check.status === "PASS") ? ("PASS" as const) : ("DRIFT" as const);

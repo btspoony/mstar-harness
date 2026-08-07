@@ -33,7 +33,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   archiveResiduals,
   findingsCleanupGate,
@@ -50,11 +50,29 @@ const FIXTURES = join(import.meta.dir, "fixtures");
 const EMPTY_TEMPLATE = join(FIXTURES, "status.empty.json");
 const REAL_SHAPE = join(FIXTURES, "status.real-shape.json");
 const ROLLUP_FIXTURE = join(FIXTURES, "status.rollup-multiplans.json");
+const SCRAMBLED_FIXTURE = join(FIXTURES, "status.rollup-scrambled.json");
 
-/** Bash parity oracle — the control checkout copy of the skill script. */
-const ROLLUP_SCRIPT =
-  process.env.MSTAR_PLAN_ARTIFACTS_SCRIPT ??
-  "/Users/bibi/workspace/ai/mstar-harness/skills/mstar-plan-artifacts/scripts/tech-debt-rollup.sh";
+/**
+ * Bash parity oracle — `skills/mstar-plan-artifacts/scripts/tech-debt-rollup.sh`
+ * in the monorepo root. No machine-local paths: the env override
+ * (`MSTAR_PLAN_ARTIFACTS_SCRIPT`) wins, else walk up from this test dir to the
+ * repo root. Returns null when the script is unreachable (parity tests then
+ * fail loudly — see `bashRollup`).
+ */
+function resolveRollupScript(): string | null {
+  const fromEnv = process.env.MSTAR_PLAN_ARTIFACTS_SCRIPT;
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+  let dir = import.meta.dir;
+  for (;;) {
+    const candidate = join(dir, "skills", "mstar-plan-artifacts", "scripts", "tech-debt-rollup.sh");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+const ROLLUP_SCRIPT = resolveRollupScript();
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -139,7 +157,14 @@ function renderRollupOutput(rollup: TechDebtRollup): string {
 }
 
 function bashRollup(statusPath: string): { stdout: string; exitCode: number } {
+  if (ROLLUP_SCRIPT === null) {
+    throw new Error(
+      "parity test requires the bash oracle scripts/tech-debt-rollup.sh — the monorepo root walk found " +
+        "nothing; set MSTAR_PLAN_ARTIFACTS_SCRIPT to its path",
+    );
+  }
   const result = spawnSync("bash", [ROLLUP_SCRIPT, statusPath], { encoding: "utf8" });
+  if (result.error !== undefined) throw result.error; // e.g. ENOENT when bash is not installed
   return { stdout: result.stdout ?? "", exitCode: result.status ?? -1 };
 }
 
@@ -536,15 +561,29 @@ describe("techDebtRollup", () => {
     expect(rollup.overall).toBe("DRIFT");
   });
 
-  const bashPresent = existsSync(ROLLUP_SCRIPT);
+  test("stored summary with scrambled key order → DRIFT (bash compare_field string-compares jq -c output, key order matters)", () => {
+    // Same values as ROLLUP_FIXTURE, but every stored object's keys are in a
+    // different order than jq -c emits — deep equality would PASS; the string
+    // compare (like bash compare_field) must DRIFT on by_severity/by_target/by_plan.
+    const rollup = techDebtRollup(SCRAMBLED_FIXTURE);
+    expect(rollup.checks.map((c) => `${c.field}:${c.status}`)).toEqual([
+      "total_open:PASS",
+      "by_severity:DRIFT",
+      "by_target:DRIFT",
+      "by_plan:DRIFT",
+    ]);
+    expect(rollup.overall).toBe("DRIFT");
+    // bash oracle agrees: jq -c string compare exits 1 on the same fixture
+    expect(bashRollup(SCRAMBLED_FIXTURE).exitCode).toBe(1);
+  });
 
-  test.skipIf(!bashPresent)("PARITY: TS rollup output is byte-identical to tech-debt-rollup.sh on the multi-plan fixture", () => {
+  test("PARITY: TS rollup output is byte-identical to tech-debt-rollup.sh on the multi-plan fixture", () => {
     const bash = bashRollup(ROLLUP_FIXTURE);
     expect(bash.exitCode).toBe(0);
     expect(renderRollupOutput(techDebtRollup(ROLLUP_FIXTURE))).toBe(bash.stdout);
   });
 
-  test.skipIf(!bashPresent)("PARITY: DRIFT output is byte-identical to tech-debt-rollup.sh on a drifted fixture", () => {
+  test("PARITY: DRIFT output is byte-identical to tech-debt-rollup.sh on a drifted fixture", () => {
     const dir = tmpRoot("status-rollup-drift-");
     const drifted = JSON.parse(readFileSync(ROLLUP_FIXTURE, "utf8")) as {
       metadata: { tech_debt_summary: { by_severity: Record<string, number> } };
@@ -562,7 +601,7 @@ describe("techDebtRollup", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test.skipIf(!bashPresent)(
+  test(
     "PARITY: canonical+legacy merge precedence is byte-identical to tech-debt-rollup.sh on a conflict fixture",
     () => {
       const conflictFixture = join(FIXTURES, "status.rollup-conflict.json");
