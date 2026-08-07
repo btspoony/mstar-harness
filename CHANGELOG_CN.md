@@ -12,6 +12,7 @@
 | Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.8** |
 | ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.8** |
 | omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.8** |
+| Agent Plugins 清单 | `plugin.json` | **1.8.8** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 

@@ -351,6 +351,20 @@ omp plugin source in this repository:
 - Plugin commands: `commands/`
 - Plugin agents: `agents/` (discovered into live `task.agent` after install/link + reload; prefer `agent: "<role-id>"`, keep C5b skill load — see `omp.md` C5/C5b)
 
+### Agent Plugins (generic)
+
+Install this repo as a portable [Agent Plugins v1.0.0](https://agent-plugins.org) package (no host-specific glue):
+
+```bash
+git clone https://github.com/btspoony/mstar-harness.git ~/.mstar/harness
+```
+
+Point any Agent Plugins v1.0.0 conformant client at that directory: root `plugin.json` is the portable manifest and `skills/` is the Agent Skills component. Validate:
+
+```bash
+npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
+```
+
 ## Post-install
 
 1. **Enter PM orchestration**

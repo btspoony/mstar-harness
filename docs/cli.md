@@ -144,6 +144,20 @@ Check an existing config:
 
 If validation fails, `doctor` exits with a non-zero status code.
 
+### `mstar-harness plugin validate`
+
+Validate a plugin package against the [Agent Plugins v1.0.0](https://agent-plugins.org/specification) portable format. The root `plugin.json` is checked against the closed manifest schema (required `$schema` and `name`, metadata types, plugin name rules, `extensions`), `mcp.json` per §7.2.1 if present (closed `$schema` + `mcpServers`, stdio/streamable-http/sse server variants, `env`/`cwd`/`url`/`headers` rules), and `skills/` discovery per §6.1 (immediate child directories with `SKILL.md`; frontmatter `name` must equal the directory name and `description` must be non-empty). No schemas are fetched at runtime. Without `--root`, the command starts at the project root and walks up to the nearest ancestor containing `plugin.json`; use `--root` for an unambiguous target.
+
+- `npx @mstar-harness/cli plugin validate`
+- `npx @mstar-harness/cli plugin validate --root /path/to/plugin`
+
+Exit codes:
+
+- `0` — conformant: prints `OK <root>: Agent Plugins v1.0.0 conformant`
+- `1` — non-conformant: prints one error line per finding, prefixed with `plugin.json:` / `mcp.json:` / `skills:`
+
+Non-fatal findings are reported separately: an unknown top-level field, a non-object `extensions` field, or a non-object `extensions.<namespace>` entry is reported and ignored (validation continues), and a `skills/` child directory without `SKILL.md` prints a yellow warning without failing validation. Non-conforming skills are skipped the same way (§7.1): a `SKILL.md` with missing or invalid frontmatter, a `name` that does not match its directory or violates Agent Skills name rules, or a missing `description` prints a `skills:` warning and that skill is skipped while validation of the remaining components continues.
+
 ## What `init` Ensures
 
 OpenCode `init` enforces these baseline requirements in `opencode.json`:
@@ -220,6 +234,10 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 - `--target <agent>`
 - `--scope <global|project>`
 - `--output <path>`
+
+### `plugin validate` options
+
+- `--root <path>`: plugin root directory to validate (default: nearest ancestor of the project root that contains `plugin.json`)
 
 ## Development (Repository)
 

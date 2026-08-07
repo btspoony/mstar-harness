@@ -21,6 +21,10 @@ export type DoctorOptions = {
   output?: string;
 };
 
+export type PluginValidateOptions = {
+  root?: string;
+};
+
 export type ModelSelections = {
   pm: string[];
   strategic: string[];

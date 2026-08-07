@@ -12,7 +12,7 @@
  *   2. Reads `.changes/unreleased/*.md` fragments and groups them by changelog + category.
  *   3. Inserts a new `## [<version>] - <date>` section into each changelog
  *      (under `## [Unreleased]`), auto-appending a Version-alignment block.
- *   4. Bumps all 9 version surfaces + the INSTALL.md ZCode marketplace example.
+ *   4. Bumps all 10 version surfaces (including the portable Agent Plugins manifest) + the INSTALL.md ZCode marketplace example.
  *   5. Bumps the version registry table cells in the root changelogs (head region only).
  *   6. Moves consumed fragments to `.changes/archive/<version>/`.
  *
@@ -155,14 +155,14 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
       lines.push(
         "### 版本对齐",
         "",
-        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单：**→ ${version}**。`,
+        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ ${version}**。`,
         "",
       );
     } else {
       lines.push(
         "### Version alignment",
         "",
-        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests: **→ ${version}**.`,
+        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ ${version}**.`,
         "",
       );
     }

@@ -75,7 +75,7 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Ki
 
 ## Release Process
 
-Releases are PR-driven and mostly automated. Every release ships one version across all 9 surfaces (root + 2 npm packages + 6 plugin manifests + INSTALL.md marketplace example).
+Releases are PR-driven and mostly automated. Every release ships one version across all 10 surfaces (root + 2 npm packages + 7 plugin manifests [6 host + portable Agent Plugins] + INSTALL.md marketplace example).
 
 ### 1. During development — add a changelog fragment
 

@@ -19,6 +19,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
   { label: "ZCode plugin", path: ".zcode-plugin/plugin.json" },
   { label: "omp plugin", path: ".omp-plugin/plugin.json" },
   { label: "Claude plugin", path: ".claude-plugin/plugin.json" },
+  { label: "Agent Plugins manifest", path: "plugin.json" },
 ] as const;
 
 /**

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "morning-star-harness",
+  "version": "1.8.8",
+  "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, ZCode, and omp.",
+  "author": {
+    "name": "Bohao Tang",
+    "email": "tech@btang.cn"
+  },
+  "homepage": "https://github.com/btspoony/mstar-harness",
+  "repository": "https://github.com/btspoony/mstar-harness.git",
+  "license": "MIT",
+  "keywords": [
+    "morning-star",
+    "mstar",
+    "harness",
+    "agent",
+    "multi-agent",
+    "agent-plugin",
+    "specification-engineering",
+    "harness-engineering",
+    "quality-gates",
+    "workflow",
+    "role-based-workflow"
+  ]
+}
