@@ -324,6 +324,26 @@ describe("sddWorkspace — port of scripts/sdd-workspace (SKILL.md § Scripts)",
     }
   });
 
+  test("fail-closed first: MSTAR_HARNESS_DIR cannot bypass the linked-worktree guard", () => {
+    const main = tmpRoot("sdd-ws-guard-");
+    try {
+      gitFixture(main);
+      const linked = join(tmpRoot("sdd-ws-guard-parent-"), "linked");
+      mkdirSync(dirname(linked), { recursive: true });
+      git(["worktree", "add", "-q", linked, "-b", "feature/guarded"], main);
+      // override + no CONTROL_ROOT must still fail closed — the override
+      // may never create a second SDD tree under the feature checkout
+      withEnv(MSTAR_HARNESS_DIR, ".harness", () => {
+        const err = errOf(() => sddWorkspace("plan-1", { cwd: linked }));
+        expect(err.exitCode).toBe(1);
+        expect(err.message).toMatch(/linked worktree at .* has no \{HARNESS_DIR\}\/status\.json/);
+        expect(err.message).toMatch(/Refusing to create a second SDD tree/);
+      });
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+    }
+  });
+
   test("harness-root override: MSTAR_HARNESS_DIR picks .harness (plan finding 2026-08-08)", () => {
     const root = tmpRoot("sdd-ws-harness-");
     try {

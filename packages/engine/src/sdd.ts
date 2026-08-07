@@ -15,7 +15,7 @@
  * explicit override in addition to CONTROL_ROOT.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { resolveSddDir } from "./path.js";
 
@@ -121,12 +121,13 @@ function isLinkedWorktree(root: string): boolean {
  * `{HARNESS_DIR}/sdd/<plan-id>/` (bash prints the absolute path; we return
  * it). Resolution order:
  *
- * 1. explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`)
+ * 1. fail-closed FIRST: a linked worktree without a control root never
+ *    resolves or creates any SDD tree under the feature checkout (refuses a
+ *    second SDD tree; no override or probe may bypass this guard);
+ * 2. explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`)
  *    — plan finding 2026-08-08: covers `.harness`-rooted repos the bash
- *    probe misses;
- * 2. `status.json` probe at root (`.mstar` → `.agents`);
- * 3. fail-closed when the cwd is a linked worktree without a control root
- *    (refuses a second SDD tree under the feature checkout);
+ *    probe misses; resolved relative to the established root;
+ * 3. `status.json` probe at root (`.mstar` → `.agents`);
  * 4. bash fallback: existing `.mstar`/`.agents` dir, else `.mstar`.
  *
  * `controlRoot` (bash 2nd arg / `MSTAR_CONTROL_ROOT`) pins `root` to the
@@ -153,6 +154,21 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
     root = realpathSync(topLevel ?? cwd);
   }
 
+  // Fail-closed FIRST (mstar-branch-worktree «Harness path SSOT under
+  // default gitignore»): a linked worktree without CONTROL_ROOT must never
+  // resolve or create any SDD tree under the feature checkout — the harness
+  // override and the status probe both run only after this guard passes.
+  if (!controlRoot && isLinkedWorktree(root)) {
+    // Verbatim bash fail-closed message (byte parity on stderr).
+    throw new SddScriptError(
+      `sdd-workspace: linked worktree at ${root} has no {HARNESS_DIR}/status.json (default gitignore).\n` +
+        `  Refusing to create a second SDD tree under the feature checkout.\n` +
+        `  Re-run with MSTAR_CONTROL_ROOT=<control_worktree_path> or: sdd-workspace ${planId} <control_worktree_path>\n` +
+        `  See mstar-branch-worktree «Harness path SSOT under default gitignore».`,
+      1,
+    );
+  }
+
   const harnessOverride = opts.harnessDir ?? (process.env.MSTAR_HARNESS_DIR || undefined);
   let harnessDir: string;
   if (harnessOverride) {
@@ -161,15 +177,6 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
     const probed = probeHarnessWithStatus(root);
     if (probed) {
       harnessDir = probed;
-    } else if (!controlRoot && isLinkedWorktree(root)) {
-      // Verbatim bash fail-closed message (byte parity on stderr).
-      throw new SddScriptError(
-        `sdd-workspace: linked worktree at ${root} has no {HARNESS_DIR}/status.json (default gitignore).\n` +
-          `  Refusing to create a second SDD tree under the feature checkout.\n` +
-          `  Re-run with MSTAR_CONTROL_ROOT=<control_worktree_path> or: sdd-workspace ${planId} <control_worktree_path>\n` +
-          `  See mstar-branch-worktree «Harness path SSOT under default gitignore».`,
-        1,
-      );
     } else if (isDirectory(join(root, ".mstar"))) {
       harnessDir = join(root, ".mstar");
     } else if (isDirectory(join(root, ".agents"))) {
@@ -190,9 +197,11 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
  * Port of `scripts/task-brief`: extract the `## Task N` section of a plan
  * into a file (default `{SDD_DIR}/task-N-brief.md`). Replicates the awk
  * state machine exactly: ``` fences toggle `infence`; headings inside
- * fences are ignored; once the heading for `taskN` matches, everything to
- * EOF is printed. A missing task writes an empty file then fails with the
- * bash exit-3 equivalent (`SddScriptError.exitCode === 3`).
+ * fences are ignored; printing starts at the heading for `taskN` and
+ * continues until the NEXT `## Task` heading (or EOF for the last task) —
+ * a later Task heading resets the section, matching the bash `awk`
+ * program. A missing task writes an empty file then fails with the bash
+ * exit-3 equivalent (`SddScriptError.exitCode === 3`).
  */
 export function taskBrief(planFile: string, taskN: number, outFile?: string, opts: TaskBriefOptions = {}): string {
   if (!planFile || !Number.isInteger(taskN) || taskN < 1) {
