@@ -67,6 +67,13 @@ export function readJson(filePath: string): Record<string, unknown> {
  * atomically: temp file in the same directory, then rename over the target.
  * Creates parent directories as needed; on failure the temp file is removed
  * and the error rethrown, so the target is never partially written.
+ *
+ * Durability note (qc2 F-013): no fsync before the rename — atomicity (no
+ * partial file) is guaranteed by the same-dir temp + rename, but a power
+ * loss immediately after rename may lose the write. Acceptable for
+ * coordination files (status.json) whose writers re-read + verify the
+ * stored state; revisit if the harness moves to a filesystem without
+ * rename-atomicity guarantees.
  */
 export function writeJson(filePath: string, value: Record<string, unknown>): void {
   const parent = dirname(filePath);
@@ -123,14 +130,25 @@ function findRootPackageJson(startDir: string): string | null {
 }
 
 /**
- * Read the harness version from the monorepo root `package.json`.
- *
- * Single source for the harness version inside TS (roadmap §8.5 C6, moved
- * from `packages/cli/src/utils.ts`); the CLI re-exports it unchanged. The
- * single-version invariant keeps root, engine, cli and opencode aligned.
+ * Resolve the harness version from a module directory: the module's OWN
+ * manifest first (`<moduleDir>/../package.json` — always shipped by npm,
+ * e.g. `node_modules/@mstar-harness/engine/package.json` next to
+ * `dist/engine.js`, or the CLI/opencode package.json next to their bundles),
+ * falling back to the monorepo root `morning-star` `package.json` walk.
+ * The single-version invariant makes both equivalent in-repo; the
+ * own-manifest-first order fixes published installs, where no
+ * `morning-star` manifest exists anywhere above `node_modules` and the walk
+ * alone would regress to `"0.0.0"` (qc3 F-1).
  */
-export function readHarnessVersion(): string {
-  const root = findRootPackageJson(dirname(fileURLToPath(import.meta.url)));
+export function harnessVersionFrom(moduleDir: string): string {
+  const ownManifest = join(moduleDir, "..", "package.json");
+  try {
+    const pkg = JSON.parse(readFileSync(ownManifest, "utf8")) as { version?: string };
+    if (typeof pkg.version === "string" && pkg.version !== "") return pkg.version;
+  } catch {
+    // no own manifest (e.g. source layout without package.json) — fall through
+  }
+  const root = findRootPackageJson(moduleDir);
   if (!root) return "0.0.0";
   try {
     const pkg = JSON.parse(readFileSync(root, "utf8")) as { version?: string };
@@ -138,4 +156,15 @@ export function readHarnessVersion(): string {
   } catch {
     return "0.0.0";
   }
+}
+
+/**
+ * Read the harness version (own-manifest first — see `harnessVersionFrom`).
+ *
+ * Single source for the harness version inside TS (roadmap §8.5 C6, moved
+ * from `packages/cli/src/utils.ts`); the CLI re-exports it unchanged. The
+ * single-version invariant keeps root, engine, cli and opencode aligned.
+ */
+export function readHarnessVersion(): string {
+  return harnessVersionFrom(dirname(fileURLToPath(import.meta.url)));
 }

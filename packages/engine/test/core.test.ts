@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   SEVERITY_ORDER,
+  harnessVersionFrom,
   readHarnessVersion,
   readJson,
   resolveProjectRoot,
@@ -217,15 +218,63 @@ describe("resolveProjectRoot", () => {
   });
 });
 
-describe("readHarnessVersion", () => {
-  test("returns the root morning-star package.json version (1.8.8)", () => {
+describe("readHarnessVersion / harnessVersionFrom", () => {
+  test("returns the root morning-star package.json version (derived, no literal)", () => {
     // Spec: roadmap §8.5 C6 — single source for the harness version; the root
     // package.json (`name: "morning-star"`) is the version anchor. Engine,
-    // cli, opencode and root all share it (single-version invariant).
+    // cli, opencode and root all share it (single-version invariant). Derived
+    // comparison only — no hardcoded version literal (qc3 F-9).
     const repoRoot = resolve(import.meta.dir, "..", "..", "..");
     const rootPkg = readJson(join(repoRoot, "package.json"));
     expect(rootPkg.name).toBe("morning-star");
     expect(readHarnessVersion()).toBe(rootPkg.version);
-    expect(readHarnessVersion()).toBe("1.8.8");
+  });
+
+  test("own manifest first: a published engine layout resolves without any morning-star package (qc3 F-1)", () => {
+    // Simulates `node_modules/@mstar-harness/engine/dist/engine.js` with the
+    // engine's own package.json next to it and NO morning-star manifest
+    // anywhere above — the walk-up alone would return "0.0.0".
+    const dir = mkdtempSync(join(tmpdir(), "core-version-published-"));
+    try {
+      const engineRoot = join(dir, "node_modules", "@mstar-harness", "engine");
+      const distDir = join(engineRoot, "dist");
+      mkdirSync(distDir, { recursive: true });
+      writeFileSync(
+        join(engineRoot, "package.json"),
+        JSON.stringify({ name: "@mstar-harness/engine", version: "9.9.9" }),
+        "utf8",
+      );
+      expect(harnessVersionFrom(distDir)).toBe("9.9.9");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fallback: walks up to a morning-star package.json when no own manifest exists", () => {
+    const dir = mkdtempSync(join(tmpdir(), "core-version-fallback-"));
+    try {
+      const root = join(dir, "repo");
+      mkdirSync(join(root, "lib", "dist"), { recursive: true });
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ name: "morning-star", version: "5.5.5" }),
+        "utf8",
+      );
+      // No package.json next to the module dir — the walk finds morning-star.
+      expect(harnessVersionFrom(join(root, "lib", "dist"))).toBe("5.5.5");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns 0.0.0 when neither own manifest nor morning-star package exists", () => {
+    const dir = mkdtempSync(join(tmpdir(), "core-version-none-"));
+    try {
+      const moduleDir = join(dir, "somewhere");
+      mkdirSync(moduleDir, { recursive: true });
+      expect(harnessVersionFrom(moduleDir)).toBe("0.0.0");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

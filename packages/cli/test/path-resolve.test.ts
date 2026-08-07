@@ -23,9 +23,24 @@ interface RunResult {
   stderr: string;
 }
 
+/**
+ * Spawn env with ambient MSTAR_HARNESS_DIR pinned out (qc3 F-4): the CLI
+ * resolves harness dirs from that env var ahead of probing, so an ambient
+ * value would redirect every fixture to the env dir and fail spuriously.
+ */
+function cliEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key === "MSTAR_HARNESS_DIR") continue;
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 function runResolve(args: string[]): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", "src/index.ts", "path", "resolve", ...args], {
     cwd: CLI_ROOT,
+    env: cliEnv(),
     stdout: "pipe",
     stderr: "pipe",
   });

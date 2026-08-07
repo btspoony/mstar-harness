@@ -14,11 +14,27 @@
  * wiring (`tool.execute.before` on opencode `write`/`edit`) is exercised
  * end-to-end at the bottom.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MorningStarHarnessPlugin, validateStatusWrite, type StatusLogger } from "../src/mstar.js";
+
+/**
+ * Ambient MSTAR_HARNESS_DIR is pinned out for the whole file (qc3 F-4):
+ * resolveHarnessDir honors the env var ahead of `.mstar/` probing, so an
+ * ambient value would redirect every `.mstar` fixture to the env dir.
+ */
+const ENV_KEY = "MSTAR_HARNESS_DIR";
+let previousEnv: string | undefined;
+beforeEach(() => {
+  previousEnv = process.env[ENV_KEY];
+  delete process.env[ENV_KEY];
+});
+afterEach(() => {
+  if (previousEnv === undefined) delete process.env[ENV_KEY];
+  else process.env[ENV_KEY] = previousEnv;
+});
 
 const validDoc = {
   version: 1,
