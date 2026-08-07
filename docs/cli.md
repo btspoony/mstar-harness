@@ -156,7 +156,7 @@ Exit codes:
 - `0` — conformant: prints `OK <root>: Agent Plugins v1.0.0 conformant`
 - `1` — non-conformant: prints one error line per finding, prefixed with `plugin.json:` / `mcp.json:` / `skills:`
 
-Non-fatal findings are reported separately: an unknown top-level field is reported and ignored (validation continues), and a `skills/` child directory without `SKILL.md` prints a yellow warning without failing validation. Non-conforming skills are skipped the same way (§7.1): a `SKILL.md` with missing or invalid frontmatter, a `name` that does not match its directory or violates Agent Skills name rules, or a missing `description` prints a `skills:` warning and that skill is skipped while validation of the remaining components continues.
+Non-fatal findings are reported separately: an unknown top-level field, a non-object `extensions` field, or a non-object `extensions.<namespace>` entry is reported and ignored (validation continues), and a `skills/` child directory without `SKILL.md` prints a yellow warning without failing validation. Non-conforming skills are skipped the same way (§7.1): a `SKILL.md` with missing or invalid frontmatter, a `name` that does not match its directory or violates Agent Skills name rules, or a missing `description` prints a `skills:` warning and that skill is skipped while validation of the remaining components continues.
 
 ## What `init` Ensures
 
