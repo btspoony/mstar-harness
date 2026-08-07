@@ -14,7 +14,7 @@ All notable changes to this repository are documented here. Published harness su
 | Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.8** |
 | ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.8** |
 | omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.8** |
-| Agent Plugins manifest | plugin.json | **1.8.8** |
+| Agent Plugins manifest | `plugin.json` | **1.8.8** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
