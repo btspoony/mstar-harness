@@ -210,6 +210,99 @@ plans: [plan-a, plan-b]
     });
   });
 
+  test("plans: [\"hello, world\"] → exit 1: comma inside quotes is ambiguous, not split", () => {
+    withFixtures((_dir, statusPath, compassPath) => {
+      writeFileSync(
+        compassPath,
+        `---
+iteration_id: v9.9.9
+start_date: 2026-08-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans: ["hello, world"]
+---
+`,
+      );
+      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("ambiguous flow-style array");
+      expect(result.stderr).toContain("quoted item containing comma");
+      // The quote-aware guard must fire before the naive split — the gate
+      // never runs, so no plan lookups for a misparsed ["hello","world"].
+      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+      expect(result.stderr).not.toContain("PLAN_NOT_DONE");
+    });
+  });
+
+  test("plans: [\"a, b\", \"c\"] → exit 1: first quoted item's comma is ambiguous", () => {
+    withFixtures((_dir, statusPath, compassPath) => {
+      writeFileSync(
+        compassPath,
+        `---
+iteration_id: v9.9.9
+start_date: 2026-08-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans: ["a, b", "c"]
+---
+`,
+      );
+      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("ambiguous flow-style array");
+      expect(result.stderr).toContain("quoted item containing comma");
+      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+    });
+  });
+
+  test("plans: [[a]] → exit 1: nested flow-style array rejected", () => {
+    withFixtures((_dir, statusPath, compassPath) => {
+      writeFileSync(
+        compassPath,
+        `---
+iteration_id: v9.9.9
+start_date: 2026-08-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans: [[a]]
+---
+`,
+      );
+      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("nested flow-style array");
+    });
+  });
+
+  test("plans: [\"ok\"] → quoted item without comma parses to [\"ok\"]", () => {
+    withFixtures((_dir, statusPath, compassPath) => {
+      writeFileSync(
+        compassPath,
+        `---
+iteration_id: v9.9.9
+start_date: 2026-08-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans: ["ok"]
+---
+`,
+      );
+      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("transition: phase-2-execute");
+      // Parsed as ["ok"]: the plan id is looked up in status.json and
+      // reported as missing (PLAN_NOT_IN_STATUS) — not a scalar misparse.
+      expect(result.stderr).toContain("PLAN_NOT_IN_STATUS");
+      expect(result.stderr).toContain("ok");
+      expect(result.stderr).not.toContain("COMPASS_NO_PLANS");
+      expect(result.stderr).not.toContain("COMPASS_INVALID_FIELD");
+    });
+  });
+
   test("missing status file → exit 1 with precise message", () => {
     withFixtures((dir, _statusPath, compassPath) => {
       const result = runCli(["iteration", "gate", "--status", join(dir, "nope.json"), "--compass", compassPath]);
