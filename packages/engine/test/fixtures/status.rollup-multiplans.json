@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "updated_at": "2026-08-08",
+  "plans": [
+    {
+      "id": "plan-a",
+      "file": ".mstar/plans/plan-a.md",
+      "title": "Plan A — legacy warning severity",
+      "status": "InReview"
+    },
+    {
+      "plan_id": "plan-b",
+      "file": ".mstar/plans/plan-b.md",
+      "title": "Plan B — null/empty severities",
+      "status": "Done"
+    },
+    {
+      "id": "plan-c",
+      "file": ".mstar/plans/plan-c.md",
+      "title": "Plan C — no open residuals",
+      "status": "Todo"
+    }
+  ],
+  "residual_findings": {
+    "plan-a": [
+      {
+        "id": "R1",
+        "title": "Legacy 'warning' severity reads as low",
+        "severity": "warning",
+        "source": "QC-#1 qc1.md Warning",
+        "scope": "src/a1.ts",
+        "decision": "defer",
+        "owner": "@fullstack-dev",
+        "target": "V1.1",
+        "tracking": null
+      },
+      {
+        "id": "R2",
+        "title": "Null severity reads as medium",
+        "severity": null,
+        "source": "QC-#1 qc1.md",
+        "scope": "src/a2.ts",
+        "decision": "defer",
+        "owner": "@fullstack-dev",
+        "target": "V1.1",
+        "tracking": null
+      },
+      {
+        "id": "R3",
+        "title": "Low severity without target groups under 'unspecified'",
+        "severity": "low",
+        "source": "QA qa.md",
+        "scope": "src/a3.ts",
+        "decision": "accept",
+        "owner": "@project-manager",
+        "target": null,
+        "tracking": null
+      },
+      {
+        "id": "R4",
+        "title": "Closed entry is not counted",
+        "severity": "high",
+        "source": "QC-#2 qc2.md",
+        "scope": "src/a4.ts",
+        "decision": "defer",
+        "owner": "@fullstack-dev",
+        "target": "V1.2",
+        "tracking": null,
+        "lifecycle": "resolved",
+        "closed_at": "2026-08-07",
+        "closure_note": "fixed and verified"
+      }
+    ],
+    "plan-b": [
+      {
+        "id": "R1",
+        "title": "Medium severity",
+        "severity": "medium",
+        "source": "review",
+        "scope": "src/b1.ts",
+        "decision": "accept",
+        "owner": "@fullstack-dev",
+        "target": "V1.0",
+        "tracking": null
+      },
+      {
+        "id": "R2",
+        "title": "Empty-string severity reads as medium",
+        "severity": "",
+        "source": "review",
+        "scope": "src/b2.ts",
+        "decision": "accept",
+        "owner": "@fullstack-dev",
+        "target": "V1.0",
+        "tracking": null
+      }
+    ]
+  },
+  "metadata": {
+    "tech_debt_summary": {
+      "updated_at": "2026-08-08",
+      "total_open": 5,
+      "by_severity": {
+        "critical": 0,
+        "high": 0,
+        "medium": 3,
+        "low": 2,
+        "nit": 0
+      },
+      "by_target": {
+        "V1.0": 2,
+        "V1.1": 2,
+        "unspecified": 1
+      },
+      "by_plan": {
+        "plan-a": 3,
+        "plan-b": 2
+      }
+    }
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "updated_at": "2026-08-08",
+  "plans": [
+    {
+      "id": "plan-a",
+      "file": ".mstar/plans/plan-a.md",
+      "title": "Plan A — canonical + legacy conflict",
+      "status": "InReview"
+    },
+    {
+      "id": "plan-b",
+      "file": ".mstar/plans/plan-b.md",
+      "title": "Plan B — legacy-only residuals",
+      "status": "Done"
+    }
+  ],
+  "residual_findings": {
+    "plan-a": [
+      {
+        "id": "R1",
+        "title": "Canonical entry — loses the merge to the legacy map per jq `+`",
+        "severity": "low",
+        "source": "QC-#1 qc1.md",
+        "scope": "src/a.ts",
+        "decision": "defer",
+        "owner": "@fullstack-dev",
+        "target": "V1.0",
+        "tracking": null
+      }
+    ]
+  },
+  "metadata": {
+    "residual_findings": {
+      "plan-a": [
+        {
+          "id": "R1",
+          "title": "Legacy conflicting key wins over canonical",
+          "severity": "high",
+          "source": "review",
+          "scope": "src/a.ts",
+          "decision": "accept",
+          "owner": "@fullstack-dev",
+          "target": "V1.0",
+          "tracking": null
+        },
+        {
+          "id": "R2",
+          "title": "Legacy second entry",
+          "severity": "medium",
+          "source": "review",
+          "scope": "src/a2.ts",
+          "decision": "accept",
+          "owner": "@fullstack-dev",
+          "target": "V1.1",
+          "tracking": null
+        }
+      ],
+      "plan-b": [
+        {
+          "id": "R1",
+          "title": "Legacy-only plan key",
+          "severity": "nit",
+          "source": "review",
+          "scope": "src/b.ts",
+          "decision": "accept",
+          "owner": "@project-manager",
+          "target": null,
+          "tracking": null
+        }
+      ]
+    },
+    "tech_debt_summary": {
+      "updated_at": "2026-08-08",
+      "total_open": 3,
+      "by_severity": {
+        "critical": 0,
+        "high": 1,
+        "medium": 1,
+        "low": 0,
+        "nit": 1
+      },
+      "by_target": {
+        "V1.0": 1,
+        "V1.1": 1,
+        "unspecified": 1
+      },
+      "by_plan": {
+        "plan-a": 2,
+        "plan-b": 1
+      }
+    }
+  }
+}

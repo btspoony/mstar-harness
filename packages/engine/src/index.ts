@@ -2,9 +2,10 @@
  * @mstar-harness/engine — public entry (exports map `.` → `dist/engine.js`).
  *
  * Engine = importable library for deterministic harness checks; the CLI and
- * OpenCode plugin consume it in-process. `status`, `lease` modules land in
- * later tasks of this slice; `core` is the shared type/version base and
- * `path` implements harness path resolution + scaffold + gitignore checks.
+ * OpenCode plugin consume it in-process. `core` is the shared type/version
+ * base, `path` implements harness path resolution + scaffold + gitignore
+ * checks, and `status` implements the status.json schema, residual lifecycle,
+ * findings-cleanup gate and the tech-debt rollup port.
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
@@ -20,3 +21,22 @@ export {
   scaffoldHarness,
   validateGitignore,
 } from "./path.js";
+export type {
+  ArchiveResult,
+  FindingsCleanupMode,
+  PlanRow,
+  ResidualEntry,
+  StatusDoc,
+  TechDebtCheck,
+  TechDebtRollup,
+  TechDebtSummary,
+} from "./status.js";
+export {
+  archiveResiduals,
+  findingsCleanupGate,
+  normalizeSeverity,
+  techDebtRollup,
+  validatePlanRow,
+  validateResidual,
+  validateStatus,
+} from "./status.js";

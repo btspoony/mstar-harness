@@ -5,6 +5,7 @@ import path from "node:path";
 import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
+import { archiveResiduals, resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
@@ -243,6 +244,72 @@ pluginCommand
   .option("--root <path>", "Plugin root directory to validate (default: project root)")
   .action((options: PluginValidateOptions) => {
     runPluginValidate(options);
+  });
+
+const statusCommand = program
+  .command("status")
+  .description("status.json schema + residual lifecycle checks (engine-backed)");
+
+/** Resolve the status.json path: explicit arg wins, else the resolved {HARNESS_DIR}. */
+function resolveStatusFilePath(pathArg?: string): string {
+  if (pathArg) return path.resolve(pathArg);
+  const harnessDir = resolveHarnessDir();
+  if (!harnessDir) {
+    throw new Error(`harness dir not found from ${process.cwd()} — pass a status.json path or set MSTAR_HARNESS_DIR`);
+  }
+  return path.join(harnessDir, "status.json");
+}
+
+statusCommand
+  .command("validate")
+  .description("Validate status.json (schema, severity enum, root-only residual_findings)")
+  .argument("[path]", "status.json path (default: {HARNESS_DIR}/status.json)")
+  .action((pathArg?: string) => {
+    let statusPath: string;
+    try {
+      statusPath = resolveStatusFilePath(pathArg);
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const gate = validateStatus(statusPath);
+      if (gate.ok) {
+        console.log(pc.green(`${statusPath}: OK`));
+        return;
+      }
+      const count = gate.violations.length;
+      console.error(pc.red(`${statusPath}: FAIL (${count} violation${count === 1 ? "" : "s"})`));
+      for (const violation of gate.violations) {
+        console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
+        if (violation.fix) console.error(`    fix: ${violation.fix}`);
+      }
+      process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`status validate failed: ${(error as Error).message}`));
+      process.exit(1);
+    }
+  });
+
+statusCommand
+  .command("archive-residuals")
+  .description("Archive a plan's open residuals to archived/residuals/<plan-id>.json")
+  .argument("<plan-id>", "Plan id whose open residuals are archived")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .action((planId: string, options: { harness?: string }) => {
+    try {
+      const harnessDir = options.harness ?? resolveHarnessDir();
+      if (!harnessDir) {
+        throw new Error(`harness dir not found from ${process.cwd()} — pass --harness or set MSTAR_HARNESS_DIR`);
+      }
+      const result = archiveResiduals(planId, harnessDir);
+      if (result.archived === 0) {
+        console.log(pc.yellow(`No open residuals for plan ${planId}`));
+      } else {
+        console.log(pc.green(`Archived ${result.archived} residual(s) for ${planId} -> ${result.archivePath}`));
+      }
+    } catch (error) {
+      console.error(pc.red(`archive-residuals failed: ${(error as Error).message}`));
+      process.exit(1);
+    }
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
