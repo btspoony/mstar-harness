@@ -10,13 +10,14 @@ import { readJson } from "./utils";
  * schema fetching. All validation rules are implemented locally in TS.
  *
  * Severity model:
- * - `errors` — findings that make the package non-conformant (fatal manifest
- *   violations plus closed-schema violations such as unknown top-level fields,
- *   which the spec reports and ignores for loading but which still mean the
- *   manifest "does not conform to the schema", §5.2). Each line carries a
- *   `plugin.json:` / `mcp.json:` / `skills:` prefix.
- * - `warnings` — tolerated findings that do not affect conformance (a child
- *   directory under skills/ without SKILL.md is simply not a skill, §7.1).
+ * - `errors` — findings that make the package non-conformant (missing/invalid
+ *   manifest, `$schema`, `name`, or metadata types; mcp.json violations). Each
+ *   line carries a `plugin.json:` / `mcp.json:` / `skills:` prefix.
+ * - `warnings` — report-and-ignore findings that do not fail validation:
+ *   unknown top-level plugin.json fields are reported and ignored while the
+ *   plugin keeps loading (§5.2), and non-conforming skills are skipped while
+ *   other skills and component types keep loading (§7.1). A child directory
+ *   under skills/ without SKILL.md is simply not a skill.
  *
  * Validation continues past report-and-ignore findings so one run aggregates
  * every issue; `ok` is false when any error was recorded.
@@ -126,18 +127,18 @@ function isValidMcpUrl(raw: string): boolean {
   return true;
 }
 
-function validateManifest(manifest: unknown, errors: string[]) {
+function validateManifest(manifest: unknown, errors: string[], warnings: string[]) {
   if (!isPlainObject(manifest)) {
     errors.push("plugin.json: manifest must be a JSON object");
     return;
   }
   const doc = manifest as Record<string, unknown>;
 
-  // §5.2: closed top-level schema — unknown fields are reported and ignored,
-  // but still mean the manifest does not conform to the schema.
+  // §5.2: unknown top-level fields are reported and ignored; loading continues
+  // when the manifest otherwise satisfies this section.
   for (const key of Object.keys(doc)) {
     if (!Object.hasOwn(PLUGIN_TOP_LEVEL_FIELDS, key)) {
-      errors.push(
+      warnings.push(
         `plugin.json: unknown top-level field "${key}" (ignored; client-specific data belongs under "extensions")`,
       );
     }
@@ -406,23 +407,31 @@ function validateSkills(root: string, errors: string[], warnings: string[]) {
     }
     const frontmatter = parseFrontmatter(skillMdPath);
     if (!frontmatter) {
-      errors.push(`skills: ${skillDir}/SKILL.md is missing YAML frontmatter (name and description are required)`);
+      // §7.1: missing frontmatter means the skill does not conform; report and skip it.
+      warnings.push(
+        `skills: ${skillDir}/SKILL.md is missing YAML frontmatter (name and description are required; skill skipped)`,
+      );
       continue;
     }
     const skillName = frontmatter.name;
+    const problems: string[] = [];
     if (skillName !== skillDir) {
-      errors.push(
-        `skills: ${skillDir}/SKILL.md frontmatter "name" ${JSON.stringify(skillName)} must equal the directory name "${skillDir}"`,
+      problems.push(
+        `frontmatter "name" ${JSON.stringify(skillName)} must equal the directory name "${skillDir}"`,
       );
     } else if (!SKILL_NAME_PATTERN.test(skillName)) {
-      errors.push(
-        `skills: ${skillDir}/SKILL.md frontmatter "name" violates Agent Skills name rules ` +
+      problems.push(
+        `frontmatter "name" violates Agent Skills name rules ` +
           `(lowercase alphanumerics and hyphens, no "--", no leading or trailing hyphen)`,
       );
     }
     const description = frontmatter.description;
     if (typeof description !== "string" || description.trim().length === 0) {
-      errors.push(`skills: ${skillDir}/SKILL.md frontmatter "description" is required and must be non-empty`);
+      problems.push(`frontmatter "description" is required and must be non-empty`);
+    }
+    // §7.1: a non-conforming skill is skipped; the remaining skills still load.
+    for (const problem of problems) {
+      warnings.push(`skills: ${skillDir}/SKILL.md ${problem} (skill skipped)`);
     }
   }
 }
@@ -444,7 +453,7 @@ export function validateAgentPlugin(root: string): AgentPluginValidation {
     return { ok: false, errors, warnings };
   }
 
-  validateManifest(manifest, errors);
+  validateManifest(manifest, errors, warnings);
   // Keep checking components even after manifest errors: aggregated diagnostics
   // help authors fix every issue in one run. `ok` stays false on any error.
   const manifestSchema = isPlainObject(manifest) ? (manifest as Record<string, unknown>)["$schema"] : undefined;
