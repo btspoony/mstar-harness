@@ -146,7 +146,7 @@ If validation fails, `doctor` exits with a non-zero status code.
 
 ### `mstar-harness plugin validate`
 
-Validate a plugin package against the [Agent Plugins v1.0.0](https://agent-plugins.org/specification) portable format. The root `plugin.json` is checked against the closed manifest schema (required `$schema` and `name`, metadata types, plugin name rules, `extensions`), `mcp.json` per §7.2.1 if present (closed `$schema` + `mcpServers`, stdio/streamable-http/sse server variants, `env`/`cwd`/`url`/`headers` rules), and `skills/` discovery per §6.1 (immediate child directories with `SKILL.md`; frontmatter `name` must equal the directory name and `description` must be non-empty). No schemas are fetched at runtime.
+Validate a plugin package against the [Agent Plugins v1.0.0](https://agent-plugins.org/specification) portable format. The root `plugin.json` is checked against the closed manifest schema (required `$schema` and `name`, metadata types, plugin name rules, `extensions`), `mcp.json` per §7.2.1 if present (closed `$schema` + `mcpServers`, stdio/streamable-http/sse server variants, `env`/`cwd`/`url`/`headers` rules), and `skills/` discovery per §6.1 (immediate child directories with `SKILL.md`; frontmatter `name` must equal the directory name and `description` must be non-empty). No schemas are fetched at runtime. Without `--root`, the command starts at the project root and walks up to the nearest ancestor containing `plugin.json`; use `--root` for an unambiguous target.
 
 - `npx @mstar-harness/cli plugin validate`
 - `npx @mstar-harness/cli plugin validate --root /path/to/plugin`
@@ -237,7 +237,7 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 
 ### `plugin validate` options
 
-- `--root <path>`: plugin root directory to validate (default: project root)
+- `--root <path>`: plugin root directory to validate (default: nearest ancestor of the project root that contains `plugin.json`)
 
 ## Development (Repository)
 

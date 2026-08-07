@@ -50,8 +50,30 @@ const PLUGIN_TOP_LEVEL_FIELDS: Record<string, true> = {
 /** §5.5: lowercase alphanumerics, hyphens, periods; no `--` or `..`; alnum start/end; 1-64 chars. */
 const PLUGIN_NAME_PATTERN = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
 
-/** §7.2.1 stdio cwd: `./…`, `${PLUGIN_ROOT}` (or `/…`), `${PLUGIN_DATA}` (or `/…`). */
-const MCP_CWD_PATTERN = /^(?:\.\/|\$\{PLUGIN_ROOT\}(?:\/|$)|\$\{PLUGIN_DATA\}(?:\/|$))/;
+/**
+ * §7.2.1 stdio path containment: cwd/command values must begin with a
+ * recognized prefix (`./`, `${PLUGIN_ROOT}/`, `${PLUGIN_DATA}/` — or the bare
+ * `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` variable forms for cwd) and the
+ * remainder must resolve to a path inside the plugin root. Returns the
+ * remainder after the matched prefix, or null when no prefix matches.
+ */
+function stripMcpPathPrefix(raw: string): string | null {
+  if (raw.startsWith("./")) return raw.slice(2);
+  if (raw.startsWith("${PLUGIN_ROOT}/")) return raw.slice("${PLUGIN_ROOT}/".length);
+  if (raw.startsWith("${PLUGIN_DATA}/")) return raw.slice("${PLUGIN_DATA}/".length);
+  if (raw === "${PLUGIN_ROOT}" || raw === "${PLUGIN_DATA}") return "";
+  return null;
+}
+
+/**
+ * True when a prefix-stripped relative path escapes the plugin root after
+ * POSIX normalization (leading `..` or an absolute remainder). Pure textual
+ * check — no filesystem access.
+ */
+function escapesPluginRoot(remainder: string): boolean {
+  const normalized = path.posix.normalize(remainder);
+  return normalized.startsWith("..") || path.posix.isAbsolute(normalized);
+}
 
 /** Agent Skills name rules: lowercase alphanumerics + hyphens, no `--`, no leading/trailing hyphen. */
 const SKILL_NAME_PATTERN = /^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -259,6 +281,10 @@ function validateMcpServer(name: string, entry: unknown, errors: string[]) {
         errors.push(
           `${prefix}: "command" must be a bare executable name or a plugin-relative path beginning with "./"`,
         );
+      } else if (command.startsWith("./") && escapesPluginRoot(command.slice(2))) {
+        errors.push(
+          `${prefix}: "command" must remain within the plugin root (got "${command}")`,
+        );
       }
     }
     if (server.args !== undefined) {
@@ -285,10 +311,17 @@ function validateMcpServer(name: string, entry: unknown, errors: string[]) {
     if (server.cwd !== undefined) {
       if (typeof server.cwd !== "string") {
         errors.push(`${prefix}: "cwd" must be a string`);
-      } else if (!MCP_CWD_PATTERN.test(server.cwd)) {
-        errors.push(
-          `${prefix}: "cwd" must be "./…", "${"${PLUGIN_ROOT}"}…", or "${"${PLUGIN_DATA}"}…"`,
-        );
+      } else {
+        const remainder = stripMcpPathPrefix(server.cwd);
+        if (remainder === null) {
+          errors.push(
+            `${prefix}: "cwd" must be "./…", "${"${PLUGIN_ROOT}"}…", or "${"${PLUGIN_DATA}"}…"`,
+          );
+        } else if (escapesPluginRoot(remainder)) {
+          errors.push(
+            `${prefix}: "cwd" must remain within the plugin root (got "${server.cwd}")`,
+          );
+        }
       }
     }
     return;
@@ -391,50 +424,84 @@ function validateMcp(root: string, manifestSchema: unknown, errors: string[]) {
 
 function validateSkills(root: string, errors: string[], warnings: string[]) {
   const skillsPath = path.join(root, "skills");
-  if (!fs.existsSync(skillsPath)) return; // §6.2: absent fixed location is not an error.
-  if (!fs.statSync(skillsPath).isDirectory()) {
-    errors.push("skills: skills/ is not a directory (component type invalid)");
-    return;
-  }
-  const entries = fs.readdirSync(skillsPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue; // §7.1: only immediate child directories can be skills.
-    const skillDir = entry.name;
-    const skillMdPath = path.join(skillsPath, skillDir, "SKILL.md");
-    if (!fs.existsSync(skillMdPath) || !fs.statSync(skillMdPath).isFile()) {
-      warnings.push(
-        `skills: ${skillDir}/ has no SKILL.md (directory is not a skill; ignored)`,
-      );
-      continue;
+  try {
+    if (!fs.existsSync(skillsPath)) return; // §6.2: absent fixed location is not an error.
+    if (!fs.statSync(skillsPath).isDirectory()) {
+      errors.push("skills: skills/ is not a directory (component type invalid)");
+      return;
     }
-    const frontmatter = parseFrontmatter(skillMdPath);
-    if (!frontmatter) {
-      // §7.1: missing frontmatter means the skill does not conform; report and skip it.
-      warnings.push(
-        `skills: ${skillDir}/SKILL.md is missing YAML frontmatter (name and description are required; skill skipped)`,
-      );
-      continue;
+    const entries = fs.readdirSync(skillsPath, { withFileTypes: true });
+    const realRoot = fs.realpathSync(root);
+    for (const entry of entries) {
+      // §7.1: only immediate child directories can be skills. A symlink to a
+      // directory counts when its target stays inside the plugin root.
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const skillDir = entry.name;
+      // §4.1: package paths must resolve within the plugin root; a symlinked
+      // skill that resolves outside the root is skipped with a warning.
+      let realSkillPath: string;
+      try {
+        realSkillPath = fs.realpathSync(path.join(skillsPath, skillDir));
+      } catch (error) {
+        warnings.push(
+          `skills: ${skillDir}/ cannot be resolved (${(error as Error).message}; skill skipped)`,
+        );
+        continue;
+      }
+      const relative = path.relative(realRoot, realSkillPath);
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        warnings.push(
+          `skills: ${skillDir}/ resolves outside the plugin root (${realSkillPath}; skill skipped)`,
+        );
+        continue;
+      }
+      const skillMdPath = path.join(skillsPath, skillDir, "SKILL.md");
+      if (!fs.existsSync(skillMdPath) || !fs.statSync(skillMdPath).isFile()) {
+        warnings.push(
+          `skills: ${skillDir}/ has no SKILL.md (directory is not a skill; ignored)`,
+        );
+        continue;
+      }
+      const frontmatter = parseFrontmatter(skillMdPath);
+      if (!frontmatter) {
+        // §7.1: missing frontmatter means the skill does not conform; report and skip it.
+        warnings.push(
+          `skills: ${skillDir}/SKILL.md is missing YAML frontmatter (name and description are required; skill skipped)`,
+        );
+        continue;
+      }
+      const skillName = frontmatter.name;
+      const problems: string[] = [];
+      if (skillName !== skillDir) {
+        problems.push(
+          `frontmatter "name" ${JSON.stringify(skillName)} must equal the directory name "${skillDir}"`,
+        );
+      } else if (!SKILL_NAME_PATTERN.test(skillName)) {
+        problems.push(
+          `frontmatter "name" violates Agent Skills name rules ` +
+            `(lowercase alphanumerics and hyphens, no "--", no leading or trailing hyphen)`,
+        );
+      }
+      if (typeof skillName === "string" && skillName.length > 64) {
+        problems.push(`frontmatter "name" must be at most 64 characters (got ${skillName.length})`);
+      }
+      const description = frontmatter.description;
+      if (typeof description !== "string" || description.trim().length === 0) {
+        problems.push(`frontmatter "description" is required and must be non-empty`);
+      } else if (description.length > 1024) {
+        problems.push(
+          `frontmatter "description" must be at most 1024 characters (got ${description.length})`,
+        );
+      }
+      // §7.1: a non-conforming skill is skipped; the remaining skills still load.
+      for (const problem of problems) {
+        warnings.push(`skills: ${skillDir}/SKILL.md ${problem} (skill skipped)`);
+      }
     }
-    const skillName = frontmatter.name;
-    const problems: string[] = [];
-    if (skillName !== skillDir) {
-      problems.push(
-        `frontmatter "name" ${JSON.stringify(skillName)} must equal the directory name "${skillDir}"`,
-      );
-    } else if (!SKILL_NAME_PATTERN.test(skillName)) {
-      problems.push(
-        `frontmatter "name" violates Agent Skills name rules ` +
-          `(lowercase alphanumerics and hyphens, no "--", no leading or trailing hyphen)`,
-      );
-    }
-    const description = frontmatter.description;
-    if (typeof description !== "string" || description.trim().length === 0) {
-      problems.push(`frontmatter "description" is required and must be non-empty`);
-    }
-    // §7.1: a non-conforming skill is skipped; the remaining skills still load.
-    for (const problem of problems) {
-      warnings.push(`skills: ${skillDir}/SKILL.md ${problem} (skill skipped)`);
-    }
+  } catch (error) {
+    // Filesystem/permission failures keep the structured `skills:` prefix
+    // instead of escaping to the generic command-level catch.
+    errors.push(`skills: ${(error as Error).message}`);
   }
 }
 
