@@ -9,8 +9,11 @@
  *   `.plans/`/`plans/` (rung 3: `{HARNESS_DIR}={PLAN_DIR}`); harness
  *   candidates are dir-existence (the empty-dir rule applies to SPECS only).
  * - `{SPECS_DIR}` resolution (first non-empty candidate wins, empty-dir-as-
- *   absent, default-create `{HARNESS_DIR}/specs/` when all absent):
- *   `skills/mstar-plan-conventions/SKILL.md` § {SPECS_DIR} 解析（找到非空目录即停）.
+ *   absent, default-create `{HARNESS_DIR}/specs/` when all absent; legacy
+ *   read-only `designs/` candidates `{HARNESS_DIR}/designs/` → repo-root
+ *   `designs/` — 兼容读, never created by init):
+ *   `skills/mstar-plan-conventions/SKILL.md` § {SPECS_DIR} 解析（找到非空目录即停）
+ *   + § {SPECS_DIR} 解析 Legacy.
  * - Scaffold dirs + status.json empty template:
  *   `skills/mstar-plan-conventions/SKILL.md` § 初始化 Plan 目录 +
  *   `skills/mstar-plan-artifacts/templates/status.empty.json` (embedded as a
@@ -54,6 +57,17 @@ const CANONICAL_SNIPPET = `# Morning Star harness (.mstar/)
 .mstar/notes.json
 .mstar/status.json
 # Tracked (results): .mstar/AGENTS.md, .mstar/knowledge/, .mstar/specs/
+`;
+
+/** Legacy snippet text — verbatim from plan-conventions § Git 跟踪策略 ("Legacy `.agents/` 等价"). */
+const CANONICAL_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
+.agents/archived/
+.agents/iterations/
+.agents/plans/
+.agents/sdd/
+.agents/notes.json
+.agents/status.json
+# Tracked (results): .agents/AGENTS.md, .agents/knowledge/, .agents/specs/
 `;
 
 function tmpRoot(prefix: string): string {
@@ -318,6 +332,58 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("legacy {HARNESS_DIR}/designs is picked when the primary candidates miss (compat read)", () => {
+    const root = tmpRoot("path-specs-designs-harness-");
+    try {
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
+      mkdirSync(join(root, "designs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "designs", "arch.md"), "# arch\n");
+      writeFileSync(join(root, "designs", "other.md"), "# other\n");
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "designs"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("empty legacy {HARNESS_DIR}/designs is skipped → repo-root designs/", () => {
+    const root = tmpRoot("path-specs-designs-skip-");
+    try {
+      mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
+      mkdirSync(join(root, "designs"), { recursive: true });
+      writeFileSync(join(root, "designs", "arch.md"), "# arch\n");
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, "designs"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("empty legacy repo-root designs/ is skipped → default-creates {HARNESS_DIR}/specs", () => {
+    const root = tmpRoot("path-specs-designs-empty-");
+    try {
+      mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
+      mkdirSync(join(root, "designs"), { recursive: true });
+      const specsDir = resolveSpecsDir(join(root, ".mstar"));
+      expect(specsDir).toBe(join(root, ".mstar", "specs"));
+      expect(readdirSync(specsDir)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("create: false with empty legacy designs/ keeps the no-side-effect behavior", () => {
+    const root = tmpRoot("path-specs-designs-nocreate-");
+    try {
+      mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
+      mkdirSync(join(root, "designs"), { recursive: true });
+      const specsDir = resolveSpecsDir(join(root, ".mstar"), { create: false });
+      expect(specsDir).toBe(join(root, ".mstar", "specs"));
+      expect(() => readdirSync(specsDir)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates/status.empty.json)", () => {
@@ -360,17 +426,71 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
 });
 
 describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟踪策略)", () => {
-  test("emitGitignoreSnippet returns the exact canonical snippet", () => {
-    expect(emitGitignoreSnippet()).toBe(CANONICAL_SNIPPET);
+  test("emitGitignoreSnippet(\"mstar\") returns the exact canonical .mstar/ snippet", () => {
+    expect(emitGitignoreSnippet("mstar")).toBe(CANONICAL_SNIPPET);
   });
 
-  test("validateGitignore passes when .gitignore contains the canonical process-artifact set", () => {
+  test("emitGitignoreSnippet(\"agents\") returns the exact legacy .agents/ snippet", () => {
+    expect(emitGitignoreSnippet("agents")).toBe(CANONICAL_SNIPPET_AGENTS);
+  });
+
+  test("emitGitignoreSnippet() with unknown kind returns both snippets", () => {
+    expect(emitGitignoreSnippet()).toBe(`${CANONICAL_SNIPPET}${CANONICAL_SNIPPET_AGENTS}`);
+  });
+
+  test("validateGitignore passes when .gitignore contains the .mstar/ set (kind undetected → either set accepted)", () => {
     const root = tmpRoot("path-gi-ok-");
     try {
       writeFileSync(join(root, ".gitignore"), `${CANONICAL_SNIPPET}\nnode_modules\n`);
       const result = validateGitignore(root);
       expect(result.ok).toBe(true);
       expect(result.code).toBe("gitignore.ok");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("validateGitignore passes when .gitignore contains only the legacy .agents/ set", () => {
+    const root = tmpRoot("path-gi-agents-ok-");
+    try {
+      writeFileSync(join(root, ".gitignore"), `${CANONICAL_SNIPPET_AGENTS}\nnode_modules\n`);
+      const result = validateGitignore(root);
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe("gitignore.ok");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("validateGitignore requires the .mstar/ set when a .mstar harness is detected", () => {
+    const root = tmpRoot("path-gi-mstar-kind-");
+    try {
+      mkdirSync(join(root, ".mstar"));
+      writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET);
+      expect(validateGitignore(root).ok).toBe(true);
+      // The .agents/ set alone does NOT fence a .mstar harness.
+      writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET_AGENTS);
+      const result = validateGitignore(root);
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe("gitignore.missing-entries");
+      expect(result.message).toContain(".mstar/ set");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("validateGitignore requires the .agents/ set when a legacy .agents harness is detected", () => {
+    const root = tmpRoot("path-gi-agents-kind-");
+    try {
+      mkdirSync(join(root, ".agents"));
+      writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET_AGENTS);
+      expect(validateGitignore(root).ok).toBe(true);
+      // The .mstar/ set alone does NOT fence a legacy .agents harness.
+      writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET);
+      const result = validateGitignore(root);
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe("gitignore.missing-entries");
+      expect(result.message).toContain(".agents/ set");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -388,7 +508,7 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
     }
   });
 
-  test("validateGitignore fails and lists the missing entries when the ignore set is partial", () => {
+  test("validateGitignore fails and lists the missing entries when no complete set is present", () => {
     const root = tmpRoot("path-gi-partial-");
     try {
       writeFileSync(
@@ -398,6 +518,7 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
       const result = validateGitignore(root);
       expect(result.ok).toBe(false);
       expect(result.code).toBe("gitignore.missing-entries");
+      // Unknown kind — reports the set needing the fewest additions (.mstar/ here).
       expect(result.message).toContain(".mstar/archived/");
       expect(result.message).toContain(".mstar/iterations/");
       expect(result.message).toContain(".mstar/sdd/");

@@ -74,15 +74,25 @@ export type ResolveSpecsDirOptions = {
 /**
  * Resolve `{SPECS_DIR}` per plan-conventions § {SPECS_DIR} 解析: first
  * non-empty candidate wins — `{HARNESS_DIR}/specs/` → `docs/specs/` →
- * repo-root `specs/` (repo root = parent of the harness dir). A candidate
- * that exists but holds no files is treated as absent (empty-dir rule,
- * recursive). When all candidates are absent, `{HARNESS_DIR}/specs/` is
- * created and returned (unless `create: false`).
+ * repo-root `specs/` (repo root = parent of the harness dir), then the
+ * legacy read-only `designs/` candidates (`{HARNESS_DIR}/designs/` →
+ * repo-root `designs/`, § {SPECS_DIR} 解析 Legacy — 兼容读 only, never
+ * created by init). A candidate that exists but holds no files is treated
+ * as absent (empty-dir rule, recursive). When all candidates are absent,
+ * `{HARNESS_DIR}/specs/` is created and returned (unless `create: false`).
  */
 export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions = {}): string {
   const harness = resolve(harnessDir);
   const repoRoot = dirname(harness);
-  const candidates = [join(harness, "specs"), join(repoRoot, "docs", "specs"), join(repoRoot, "specs")];
+  const candidates = [
+    join(harness, "specs"),
+    join(repoRoot, "docs", "specs"),
+    join(repoRoot, "specs"),
+    // Legacy 兼容读 (plan-conventions § {SPECS_DIR} 解析 Legacy): read-only —
+    // init must NOT create designs/; same empty-dir-as-absent rule applies.
+    join(harness, "designs"),
+    join(repoRoot, "designs"),
+  ];
   for (const candidate of candidates) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
   }
@@ -156,9 +166,13 @@ export function scaffoldHarness(root: string): string {
 }
 
 /**
- * Canonical Morning Star `.gitignore` snippet — single source constant
- * (plan-conventions § Git 跟踪策略). Skills and the CLI `init` share this
- * exact text. Ends with a trailing newline so it can be appended directly.
+ * Canonical `.mstar/` `.gitignore` snippet — verbatim embedded copy of the
+ * skill's canonical snippet (plan-conventions § Git 跟踪策略; the skill is
+ * the SSOT, this constant exists so the engine never reads skill files at
+ * runtime). NOTE: it is NOT byte-identical to the CLI `init` fence — the
+ * CLI currently appends a flat dual-prefix entry list (packages/cli
+ * src/adapters/shared-install.ts HARNESS_PROCESS_GITIGNORE). Ends with a
+ * trailing newline so it can be appended directly.
  */
 const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
 # Principle: process stays local; results are shared with the team.
@@ -172,29 +186,69 @@ const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
 # Tracked (results): .mstar/AGENTS.md, .mstar/knowledge/, .mstar/specs/
 `;
 
-/** Process-artifact ignore entries, derived from the canonical snippet. */
+/**
+ * Legacy `.agents/` `.gitignore` snippet — verbatim embedded copy of the
+ * skill's legacy equivalent (plan-conventions § Git 跟踪策略 "Legacy
+ * `.agents/` 等价"), comments included. Used when the resolved harness kind
+ * is `.agents`.
+ */
+const GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
+.agents/archived/
+.agents/iterations/
+.agents/plans/
+.agents/sdd/
+.agents/notes.json
+.agents/status.json
+# Tracked (results): .agents/AGENTS.md, .agents/knowledge/, .agents/specs/
+`;
+
+/** Process-artifact ignore entries, derived from the `.mstar/` snippet. */
 const GITIGNORE_PROCESS_ENTRIES: readonly string[] = GITIGNORE_SNIPPET.split("\n")
   .filter((line) => line.startsWith(".mstar/"))
   .map((line) => line.trim());
 
+/** Process-artifact ignore entries, derived from the legacy `.agents/` snippet. */
+const GITIGNORE_PROCESS_ENTRIES_AGENTS: readonly string[] = GITIGNORE_SNIPPET_AGENTS.split("\n")
+  .filter((line) => line.startsWith(".agents/"))
+  .map((line) => line.trim());
+
 /**
- * Emit the canonical `.gitignore` snippet (plan-conventions § Git 跟踪策略):
- * the process-artifact ignore set (`archived/`, `iterations/`, `plans/`,
- * `sdd/`, `notes.json`, `status.json` under the harness dir) with the
- * tracked/results note.
+ * Harness kind for the gitignore fence — the canonical snippet is per
+ * harness layout (plan-conventions § Git 跟踪策略): `.mstar/` (default) and
+ * legacy `.agents/`.
  */
-export function emitGitignoreSnippet(): string {
-  return GITIGNORE_SNIPPET;
+export type HarnessKind = "mstar" | "agents";
+
+/**
+ * Emit the canonical `.gitignore` snippet for `kind` (plan-conventions
+ * § Git 跟踪策略): the process-artifact ignore set (`archived/`,
+ * `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json` under the
+ * harness dir) with the tracked/results note. When the kind is unknown
+ * (omitted), both snippets are emitted so either fence can be applied.
+ */
+export function emitGitignoreSnippet(kind?: HarnessKind): string {
+  if (kind === "agents") return GITIGNORE_SNIPPET_AGENTS;
+  if (kind === "mstar") return GITIGNORE_SNIPPET;
+  return `${GITIGNORE_SNIPPET}${GITIGNORE_SNIPPET_AGENTS}`;
 }
 
 /**
- * Validate that `<root>/.gitignore` contains the canonical process-artifact
- * ignore set (plan-conventions § Git 跟踪策略). Extra entries are fine;
- * any missing canonical entry is a violation. Non-blocking: returns a
+ * Validate that `<root>/.gitignore` contains a complete canonical
+ * process-artifact ignore set (plan-conventions § Git 跟踪策略). Rule
+ * (chosen alignment): the gate passes when the repo's .gitignore holds ONE
+ * complete set for the DETECTED harness kind — `.mstar/` for a `.mstar`
+ * harness, `.agents/` for a legacy `.agents` harness; layouts without a
+ * canonical snippet (rung-3 `.plans`/`plans`, or no harness yet) accept
+ * either complete set. This is deliberately per-kind, unlike the CLI `init`
+ * fence which requires BOTH prefixes (flat dual-entry list — packages/cli
+ * src/adapters/shared-install.ts HARNESS_PROCESS_GITIGNORE); a repo fenced
+ * for one layout still passes here. Extra entries are fine; any missing
+ * entry of the required set is a violation. Non-blocking: returns a
  * `ValidationResult` (v1 enforcement depth, roadmap §8.5).
  */
 export function validateGitignore(root: string): ValidationResult {
   const gitignorePath = join(resolve(root), ".gitignore");
+  const kind = detectHarnessKind(resolveHarnessDir(root));
   let content: string;
   try {
     content = readFileSync(gitignorePath, "utf8");
@@ -204,7 +258,7 @@ export function validateGitignore(root: string): ValidationResult {
       severity: "medium",
       code: "gitignore.missing",
       message: `no .gitignore found at ${gitignorePath}`,
-      fix: `append the canonical snippet (emitGitignoreSnippet()) to ${gitignorePath}`,
+      fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
     };
   }
   const lines = new Set(
@@ -213,22 +267,51 @@ export function validateGitignore(root: string): ValidationResult {
       .map((line) => line.trim())
       .filter((line) => line.length > 0),
   );
-  const missing = GITIGNORE_PROCESS_ENTRIES.filter((entry) => !lines.has(entry));
+  const mstarMissing = GITIGNORE_PROCESS_ENTRIES.filter((entry) => !lines.has(entry));
+  const agentsMissing = GITIGNORE_PROCESS_ENTRIES_AGENTS.filter((entry) => !lines.has(entry));
+  let missing: readonly string[];
+  let label: string;
+  if (kind === "agents") {
+    missing = agentsMissing;
+    label = ".agents/ set";
+  } else if (kind === "mstar") {
+    missing = mstarMissing;
+    label = ".mstar/ set";
+  } else {
+    // Unknown kind — either complete set passes; report the set needing the
+    // fewest additions (completing either one clears the gate).
+    label = "either .mstar/ or .agents/ set";
+    missing =
+      mstarMissing.length === 0 || agentsMissing.length === 0
+        ? []
+        : mstarMissing.length <= agentsMissing.length
+          ? mstarMissing
+          : agentsMissing;
+  }
   if (missing.length > 0) {
     return {
       ok: false,
       severity: "medium",
       code: "gitignore.missing-entries",
-      message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries: ${missing.join(", ")}`,
-      fix: `append the canonical snippet (emitGitignoreSnippet()) to ${gitignorePath}`,
+      message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries (${label}): ${missing.join(", ")}`,
+      fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
     };
   }
   return {
     ok: true,
     severity: "low",
     code: "gitignore.ok",
-    message: `.gitignore at ${gitignorePath} contains all canonical harness process-artifact ignores`,
+    message: `.gitignore at ${gitignorePath} contains a complete canonical harness process-artifact ignore set (${label})`,
   };
+}
+
+/** Detect the gitignore fence kind from a resolved harness dir (basename). */
+function detectHarnessKind(harnessDir: string | null): HarnessKind | null {
+  if (!harnessDir) return null;
+  const name = basename(resolve(harnessDir));
+  if (name === ".mstar") return "mstar";
+  if (name === ".agents") return "agents";
+  return null;
 }
 
 /**

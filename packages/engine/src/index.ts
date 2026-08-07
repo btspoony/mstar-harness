@@ -8,7 +8,7 @@
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
-export type { ResolveHarnessDirOptions, ResolveSpecsDirOptions } from "./path.js";
+export type { HarnessKind, ResolveHarnessDirOptions, ResolveSpecsDirOptions } from "./path.js";
 export {
   assertPlanWritingPath,
   emitGitignoreSnippet,
