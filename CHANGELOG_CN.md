@@ -1,22 +1,33 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.8**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.9**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.8** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.8** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.8** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.8** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.8** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.8** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.8** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.8** |
-| Agent Plugins 清单 | `plugin.json` | **1.8.8** |
+| monorepo 根 | `morning-star`（`package.json`） | **1.8.9** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.9** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.9** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.9** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.9** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.9** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.9** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.9** |
+| Agent Plugins 清单 | `plugin.json` | **1.8.9** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [1.8.9] - 2026-08-07
+
+### Harness
+
+- 在仓库根新增便携式 **Agent Plugins v1.0.0** manifest（`plugin.json`），与 CLI 发布面保持一致（`skills/` 为 Agent Skills 组件），并新增 `mstar-harness plugin validate` 按 Agent Plugins v1.0.0 规范校验插件包（含 `mcp.json` / `skills/`）。
+- **Phase 5 checkout**：merge-ready 产品修复直接在 control / `spec_integration_branch` checkout 上改；**禁止**另开 Phase 5 feature/fix worktree，也**禁止**套用 Phase 2「control 禁止产品编辑」。SSOT 在 `mstar-iteration`（`phase-4-5-pr-delivery` §5.0）；**不**写入通用 `mstar-branch-worktree` skill。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 1.8.9**。
 
 ## [1.8.8] - 2026-08-06
 

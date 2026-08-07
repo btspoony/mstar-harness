@@ -2,23 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.8** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **1.8.9** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.8** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.8** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.8** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.8** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.8** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.8** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.8** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.8** |
-| Agent Plugins manifest | `plugin.json` | **1.8.8** |
+| Monorepo root | `morning-star` (`package.json`) | **1.8.9** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.9** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.9** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.9** |
+| Codex plugin | `.codex-plugin/plugin.json` | **1.8.9** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.9** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.9** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.9** |
+| Agent Plugins manifest | `plugin.json` | **1.8.9** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [1.8.9] - 2026-08-07
+
+### Harness
+
+- Added a portable **Agent Plugins v1.0.0** manifest (`plugin.json`) at the repo root, aligned with the CLI release surface (`skills/` is the Agent Skills component), plus `mstar-harness plugin validate` to check the package (including `mcp.json` / `skills/`) against the Agent Plugins v1.0.0 spec.
+- **Phase 5 checkout**: merge-ready product fixes edit **directly** on the control / `spec_integration_branch` checkout; **forbid** opening a separate Phase 5 feature/fix worktree or applying Phase 2's "no product edits on control" rule. SSOT stays in `mstar-iteration` (`phase-4-5-pr-delivery` §5.0); **not** in the general `mstar-branch-worktree` skill.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 1.8.9**.
 
 ## [1.8.8] - 2026-08-06
 
