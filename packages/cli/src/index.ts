@@ -5,7 +5,20 @@ import path from "node:path";
 import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
-import { archiveResiduals, resolveHarnessDir, resolveSpecsDir, validateStatus } from "@mstar-harness/engine";
+import {
+  archiveResiduals,
+  evaluatePhaseGate,
+  pushCadenceProbe,
+  resolveHarnessDir,
+  resolveSpecsDir,
+  reviewPackage,
+  SddScriptError,
+  sddWorkspace,
+  taskBrief,
+  validateStatus,
+  type GateResult,
+} from "@mstar-harness/engine";
+import { parseCompassFrontmatter } from "./compass";
 import { verifyPlanExecutionLease } from "./lease-verify";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
@@ -412,6 +425,140 @@ leaseCommand
       console.error(pc.red(`lease verify failed: ${(error as Error).message}`));
       process.exitCode = 1;
     }
+  });
+
+/**
+ * Map engine `SddScriptError` exit codes (bash-parity: 1 = resolution/
+ * workspace failure, 2 = usage/bad-ref, 3 = task N missing) onto the
+ * process; anything else fails gracefully with exit 1 (slice-1
+ * convention: `process.exitCode`, no throw through commander).
+ */
+function failScript(error: unknown, context: string): void {
+  if (error instanceof SddScriptError) {
+    console.error(pc.red(`${context} failed: ${error.message}`));
+    process.exitCode = error.exitCode;
+    return;
+  }
+  console.error(pc.red(`${context} failed: ${(error as Error).message}`));
+  process.exitCode = 1;
+}
+
+const sddCommand = program
+  .command("sdd")
+  .description("SDD workspace / task-brief / review-package helpers (engine-backed, bash parity)");
+
+sddCommand
+  .command("workspace")
+  .description("Resolve and ensure {SDD_DIR} for a plan (exit 1 on resolution failures, 2 on usage errors)")
+  .argument("<plan-id>", "Plan id whose SDD dir is resolved/created")
+  .argument("[control-root]", "Control worktree root (default: MSTAR_CONTROL_ROOT or the cwd's git top-level)")
+  .action((planId: string, controlRoot?: string) => {
+    try {
+      const sddDir = sddWorkspace(planId, controlRoot ? { controlRoot } : {});
+      console.log(pc.green(`sdd dir: ${sddDir}`));
+    } catch (error) {
+      failScript(error, "sdd workspace");
+    }
+  });
+
+sddCommand
+  .command("task-brief")
+  .description("Extract the `## Task N` section of a plan into a brief file (exit 3 when task N is missing)")
+  .argument("<plan-file>", "Plan markdown file")
+  .argument("<task-number>", "Task number whose brief is extracted")
+  .argument("[outfile]", "Output file (default: {SDD_DIR}/task-N-brief.md)")
+  .action((planFile: string, taskNumber: string, outfile?: string) => {
+    try {
+      const out = taskBrief(planFile, Number(taskNumber), outfile);
+      console.log(pc.green(`task ${taskNumber} brief: ${out}`));
+    } catch (error) {
+      failScript(error, "sdd task-brief");
+    }
+  });
+
+sddCommand
+  .command("review-package")
+  .description("Write commits + stat + diff -U10 for BASE..HEAD into a review file (exit 2 on bad refs)")
+  .argument("<base>", "Base ref (commit SHA)")
+  .argument("<head>", "Head ref (commit SHA)")
+  .argument("[outfile]", "Output file (default: {SDD_DIR}/review-<short-base>..<short-head>.diff)")
+  .action((base: string, head: string, outfile?: string) => {
+    try {
+      const out = reviewPackage(base, head, outfile);
+      console.log(pc.green(`review package: ${out}`));
+    } catch (error) {
+      failScript(error, "sdd review-package");
+    }
+  });
+
+const iterationCommand = program
+  .command("iteration")
+  .description("iteration phase-gate + push-cadence checks (engine-backed)");
+
+/** Print one §3.1 entry / §3.5 exit checklist gate (OK or FAIL + violations). */
+function printChecklist(label: string, gate: GateResult): void {
+  if (gate.ok) {
+    console.log(pc.green(`${label}: OK`));
+    return;
+  }
+  const count = gate.violations.length;
+  console.error(pc.red(`${label}: FAIL (${count} violation${count === 1 ? "" : "s"})`));
+  for (const violation of gate.violations) {
+    console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
+    if (violation.fix) console.error(`    fix: ${violation.fix}`);
+  }
+}
+
+iterationCommand
+  .command("gate")
+  .description(
+    "Evaluate the phase-transition gate: prints the transition (phase-2-execute / phase-3-close / phase-4-pr-delivery) " +
+      "plus the §3.1 entry and §3.5 exit checklists (exit 1 when the gate verdict fails)",
+  )
+  .requiredOption("--status <path>", "status.json path")
+  .requiredOption("--compass <path>", "delivery-compass.md path")
+  .option("--branch <branch>", "Current branch probe (exit §3.5 item 5)")
+  .option("--integration <branch>", "Spec integration branch probe (exit §3.5 item 5)")
+  .option("--target <branch>", "PR base branch probe (exit §3.5 item 6)")
+  .action((options: { status: string; compass: string; branch?: string; integration?: string; target?: string }) => {
+    try {
+      const statusPath = path.resolve(options.status);
+      const compassPath = path.resolve(options.compass);
+      if (!fs.existsSync(statusPath)) throw new Error(`status file not found: ${statusPath}`);
+      if (!fs.existsSync(compassPath)) throw new Error(`compass file not found: ${compassPath}`);
+      const result = evaluatePhaseGate(readJson(statusPath), parseCompassFrontmatter(compassPath), {
+        currentBranch: options.branch,
+        specIntegrationBranch: options.integration,
+        prBaseBranch: options.target,
+      });
+      console.log(`transition: ${result.transition}`);
+      printChecklist("entry (close §3.1)", result.entry);
+      printChecklist("exit (close §3.5)", result.exit);
+      if (!result.ok) process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`iteration gate failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+iterationCommand
+  .command("push-cadence")
+  .description("§5.1a push-cadence probe: never push while CI or an AI review wave is running (exit 1 when blocked)")
+  .option("--ci-running", "CI checks are still queued/in_progress on the current head")
+  .option("--review-wave", "An AI/bot review wave is still running on the current head")
+  .action((options: { ciRunning?: boolean; reviewWave?: boolean }) => {
+    const result = pushCadenceProbe(Boolean(options.ciRunning), Boolean(options.reviewWave));
+    if (result.ok) {
+      console.log(pc.green("push allowed: CI idle, no AI review wave"));
+      return;
+    }
+    const count = result.violations.length;
+    console.error(pc.red(`push blocked (${count} violation${count === 1 ? "" : "s"})`));
+    for (const violation of result.violations) {
+      console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
+      if (violation.fix) console.error(`    fix: ${violation.fix}`);
+    }
+    process.exitCode = 1;
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
