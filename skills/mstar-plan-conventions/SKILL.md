@@ -25,6 +25,8 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/` |
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
 
+> **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveSpecsDir` from `@mstar-harness/engine` in a host hook to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ### `{HARNESS_DIR}` 解析顺序（找到即停）
 
 1. `.mstar/` → `{HARNESS_DIR}=.mstar/`, `{PLAN_DIR}=.mstar/plans/`
@@ -45,6 +47,8 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 **创建默认**：全部缺失或皆空 → 创建并使用 `{HARNESS_DIR}/specs/`（统一落在 `.mstar/` 下）。**禁止**在 greenfield init 时优先创建裸仓库根 `specs/`。
 
 **Legacy（仅兼容读）**：若以上皆无内容，但 `{HARNESS_DIR}/designs/` 或仓库根 `designs/` **非空**，可作 `{SPECS_DIR}` 使用；init 时**不**新建 `designs/`。
+
+> **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook to confirm the candidate order (empty-dir-as-absent included). Skill text below remains authoritative when the runtime is absent.
 
 可选项目选择：部分 spoke 仓库另跟踪 `{HARNESS_DIR}/roadmap.md` — **非**默认 tracked；仅在项目 opt-in 时提及。
 
@@ -122,6 +126,8 @@ Legacy `.agents/` 等价：
 # Tracked (results): .agents/AGENTS.md, .agents/knowledge/, .agents/specs/
 ```
 
+> **Engine check (when available):** import `emitGitignoreSnippet` / `validateGitignore` from `@mstar-harness/engine` in a host hook to emit or validate the canonical snippet above. Skill text below remains authoritative when the runtime is absent.
+
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
 - **Iteration base branch**：创建 Spec/iteration 集成分支的祖先分支或 ref；必须显式记录，不能默认 `main` / `master`。
@@ -136,6 +142,8 @@ Legacy `.agents/` 等价：
 ## Plan-Writing Path Gate
 
 Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. Do not introduce external default plan directories.
+
+> **Engine check (when available):** import `assertPlanWritingPath` from `@mstar-harness/engine` in a host hook to enforce the gate above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## 状态与权限（摘要）
 

@@ -25,10 +25,21 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 
 - **`{HARNESS_DIR}/status.json`**: `plans[]` row status + root **`residual_findings[<plan-id>]`** (open list **SSOT**).
 - **Canonical**: register new findings only at root `residual_findings`; **`metadata.residual_findings`** is legacy read-only — **do not** dual-write.
+
+> **Engine check (when available):** run `mstar status validate <path>` (or `import { validateStatus } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 - **Lifecycle**: open → verified close → **`archived/residuals/<plan-id>.json`**; machine **`severity`** enum in reference.
+
+> **Engine check (when available):** run `mstar status archive-residuals <plan-id>` (or `import { archiveResiduals } from "@mstar-harness/engine"` in a host hook). Skill text below remains authoritative when the runtime is absent.
+
 - **Findings cleanup**: Assignment **`Findings cleanup: zero-residual | allow-residual`** (+ optional `metadata.findings_cleanup`); iteration Phase 2 defaults to **`zero-residual`** → **`references/status-and-residuals.md`** (“Findings cleanup modes”).
+
+> **Engine check (when available):** import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook to enforce the cleanup mode above. Skill text below remains authoritative when the runtime is absent.
+
 - **`notes.json`**, optional **`tech_debt_summary`** (rollup view; compute via **`scripts/tech-debt-rollup.sh`**).
 - **Iteration Phase 2 leases** (`metadata.control_worktree_path`, `plans[].execution_lease`, `metadata.integration_merge_lease`): claim-before-`InProgress`, resume vs steal, orphan recovery → **`references/status-and-residuals.md`** (“Iteration execution leases”).
+
+> **Engine check (when available):** run `mstar lease verify <plan-id>` (or `import { validateExecutionLease, validateIntegrationMergeLease } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq` examples → **`references/status-and-residuals.md`**.
 
