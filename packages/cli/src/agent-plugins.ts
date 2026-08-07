@@ -15,9 +15,11 @@ import { readJson } from "./utils";
  *   line carries a `plugin.json:` / `mcp.json:` / `skills:` prefix.
  * - `warnings` — report-and-ignore findings that do not fail validation:
  *   unknown top-level plugin.json fields are reported and ignored while the
- *   plugin keeps loading (§5.2), and non-conforming skills are skipped while
- *   other skills and component types keep loading (§7.1). A child directory
- *   under skills/ without SKILL.md is simply not a skill.
+ *   plugin keeps loading (§5.2), non-object `extensions` fields and namespace
+ *   entries are reported and ignored without validating their contents
+ *   (§5.2/§8.1), and non-conforming skills are skipped while other skills and
+ *   component types keep loading (§7.1). A child directory under skills/
+ *   without SKILL.md is simply not a skill.
  *
  * Validation continues past report-and-ignore findings so one run aggregates
  * every issue; `ok` is false when any error was recorded.
@@ -205,17 +207,17 @@ function validateManifest(manifest: unknown, errors: string[], warnings: string[
     }
   }
 
-  // §5.6/§8.1: extensions is an object of objects; non-object values are
-  // reported and ignored. Member contents are client-defined — never validated.
+  // §5.2/§8.1: a non-object extensions field (or namespace entry) is
+  // report-and-ignore, not fatal. The validator implements no client
+  // namespaces, so all extensions content is unimplemented-namespace content:
+  // report it, ignore it, and never validate its values.
   if (doc.extensions !== undefined) {
     if (!isPlainObject(doc.extensions)) {
-      errors.push('plugin.json: "extensions" must be an object of objects (field ignored)');
+      warnings.push('plugin.json: "extensions" is not an object — ignored');
     } else {
       for (const [namespace, value] of Object.entries(doc.extensions as Record<string, unknown>)) {
         if (!isPlainObject(value)) {
-          errors.push(
-            `plugin.json: "extensions.${namespace}" must be an object (entry ignored)`,
-          );
+          warnings.push(`plugin.json: "extensions.${namespace}" is not an object — ignored`);
         }
       }
     }
