@@ -5,7 +5,7 @@ import path from "node:path";
 import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
-import { archiveResiduals, resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
+import { archiveResiduals, resolveHarnessDir, resolveSpecsDir, validateStatus } from "@mstar-harness/engine";
 import { verifyPlanExecutionLease } from "./lease-verify";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
@@ -245,6 +245,44 @@ pluginCommand
   .option("--root <path>", "Plugin root directory to validate (default: project root)")
   .action((options: PluginValidateOptions) => {
     runPluginValidate(options);
+  });
+
+const pathCommand = program
+  .command("path")
+  .description("harness/specs dir resolution checks (engine-backed)");
+
+pathCommand
+  .command("resolve")
+  .description("Resolve {HARNESS_DIR} + {SPECS_DIR} from a start dir (exit 1 when no harness dir resolves)")
+  .argument("[path]", "Start dir to resolve from (default: cwd)")
+  .option("--json", "Machine-readable JSON output (ok, harnessDir, specsDir, guidance on failure)")
+  .action((pathArg: string | undefined, options: { json?: boolean }) => {
+    const startDir = pathArg ? path.resolve(pathArg) : process.cwd();
+    const harnessDir = resolveHarnessDir(startDir);
+    if (!harnessDir) {
+      // plan-conventions § {HARNESS_DIR} 解析顺序: no .mstar/ → .agents/ →
+      // .plans/|plans/ anywhere up the tree — harness not enabled from here.
+      const guidance =
+        "no harness dir found (probed .mstar/, .agents/, .plans/, plans/ walking up from " +
+        `${startDir}) — run \`mstar init\` to bootstrap, or pass a start dir inside a harness-enabled project`;
+      if (options.json) {
+        console.log(JSON.stringify({ ok: false, startDir, harnessDir: null, specsDir: null, guidance }));
+      } else {
+        console.error(pc.red(`path resolve: no harness dir from ${startDir}`));
+        console.error(`  guidance: ${guidance}`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+    // Read-only resolution: never create {HARNESS_DIR}/specs/ as a side
+    // effect (engine resolveSpecsDir opts.create defaults to true).
+    const specsDir = resolveSpecsDir(harnessDir, { create: false });
+    if (options.json) {
+      console.log(JSON.stringify({ ok: true, startDir, harnessDir, specsDir }));
+    } else {
+      console.log(pc.green(`harness dir: ${harnessDir}`));
+      console.log(pc.green(`specs dir:   ${specsDir}`));
+    }
   });
 
 const statusCommand = program
