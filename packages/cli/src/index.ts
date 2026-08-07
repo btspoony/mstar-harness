@@ -5,7 +5,7 @@ import path from "node:path";
 import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
-import { archiveResiduals, resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
+import { archiveResiduals, resolveHarnessDir, validateExecutionLease, validateStatus } from "@mstar-harness/engine";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
@@ -308,6 +308,95 @@ statusCommand
       }
     } catch (error) {
       console.error(pc.red(`archive-residuals failed: ${(error as Error).message}`));
+      process.exit(1);
+    }
+  });
+
+const leaseCommand = program
+  .command("lease")
+  .description("execution_lease / integration_merge_lease checks (engine-backed)");
+
+/** Resolve the harness dir for lease commands: --harness wins, else {HARNESS_DIR} resolution. */
+function resolveLeaseHarnessDir(harnessArg?: string): string {
+  if (harnessArg) return path.resolve(harnessArg);
+  const harnessDir = resolveHarnessDir();
+  if (!harnessDir) {
+    throw new Error(`harness dir not found from ${process.cwd()} — pass --harness or set MSTAR_HARNESS_DIR`);
+  }
+  return harnessDir;
+}
+
+/**
+ * Read-compat lookup of a plan's execution_lease: SSOT location is the plan
+ * row (`plans[].execution_lease`); the real control `.harness/status.json`
+ * (written 2026-08-08) stores it at `plans[].metadata.execution_lease`, so
+ * that legacy/hand-written location is read as a fallback.
+ */
+function planExecutionLease(row: Record<string, unknown>): unknown {
+  if (row.execution_lease !== undefined) return row.execution_lease;
+  const meta = row.metadata;
+  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+    return (meta as Record<string, unknown>).execution_lease;
+  }
+  return undefined;
+}
+
+leaseCommand
+  .command("verify")
+  .description("Verify a plan's execution_lease (missing/invalid → exit 1 with violations)")
+  .argument("<plan-id>", "Plan id whose execution_lease is verified")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .action((planId: string, options: { harness?: string }) => {
+    try {
+      const harnessDir = resolveLeaseHarnessDir(options.harness);
+      const statusPath = path.join(harnessDir, "status.json");
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const doc = readJson(statusPath);
+      const plans = Array.isArray(doc.plans) ? (doc.plans as Array<Record<string, unknown>>) : [];
+      const matches = plans.filter((row) => row?.id === planId || row?.plan_id === planId);
+      if (matches.length === 0) {
+        console.error(pc.red(`${statusPath}: FAIL plan ${planId}`));
+        console.error(`  - [high] lease.verify.plan-not-found: no plan row with id/plan_id ${planId}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (matches.length > 1) {
+        console.error(pc.red(`${statusPath}: FAIL plan ${planId}`));
+        console.error("  - [high] lease.verify.ambiguous: multiple plan rows match (id and plan_id both present)");
+        process.exitCode = 1;
+        return;
+      }
+      const row = matches[0];
+      const lease = planExecutionLease(row);
+      if (lease === undefined) {
+        console.error(pc.red(`${statusPath}: FAIL plan ${planId}`));
+        if (row.status === "InProgress") {
+          console.error(
+            "  - [high] lease.verify.orphan: plan is InProgress without an execution_lease — orphan: STOP, no writable dispatch until recovery (status-and-residuals.md § Orphan recovery)",
+          );
+        } else {
+          console.error(`  - [high] lease.verify.missing: plan ${planId} has no execution_lease`);
+        }
+        process.exitCode = 1;
+        return;
+      }
+      const gate = validateExecutionLease(lease);
+      if (gate.ok) {
+        const holder = String((lease as Record<string, unknown>).holder ?? "");
+        console.log(pc.green(`${statusPath}: OK plan ${planId} — execution_lease valid (holder ${holder})`));
+        return;
+      }
+      const count = gate.violations.length;
+      console.error(pc.red(`${statusPath}: FAIL plan ${planId} (${count} violation${count === 1 ? "" : "s"})`));
+      for (const violation of gate.violations) {
+        console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
+        if (violation.fix) console.error(`    fix: ${violation.fix}`);
+      }
+      process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`lease verify failed: ${(error as Error).message}`));
       process.exit(1);
     }
   });

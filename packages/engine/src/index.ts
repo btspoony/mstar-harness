@@ -4,8 +4,9 @@
  * Engine = importable library for deterministic harness checks; the CLI and
  * OpenCode plugin consume it in-process. `core` is the shared type/version
  * base, `path` implements harness path resolution + scaffold + gitignore
- * checks, and `status` implements the status.json schema, residual lifecycle,
- * findings-cleanup gate and the tech-debt rollup port.
+ * checks, `status` implements the status.json schema, residual lifecycle,
+ * findings-cleanup gate and the tech-debt rollup port, and `lease` implements
+ * the execution/merge lease state machines + same-host status write lock.
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
@@ -40,3 +41,13 @@ export {
   validateResidual,
   validateStatus,
 } from "./status.js";
+export type { ClaimLeaseFields, ExecutionLease, IntegrationMergeLease, LeaseTransition } from "./lease.js";
+export {
+  canSteal,
+  claimLease,
+  releaseLease,
+  sameHolderResume,
+  validateExecutionLease,
+  validateIntegrationMergeLease,
+  withStatusWriteLock,
+} from "./lease.js";
