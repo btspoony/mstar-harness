@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [1.8.9] - 2026-08-07
+
+### Changed
+
+- Added a portable **Agent Plugins v1.0.0** manifest (`plugin.json`) at the repo root, aligned with the CLI release surface (`skills/` is the Agent Skills component), plus `mstar-harness plugin validate` to check the package (including `mcp.json` / `skills/`) against the Agent Plugins v1.0.0 spec.
+
+- Version alignment with harness **1.8.9**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.9**.
+
 ## [1.8.8] - 2026-08-06
 
 ### Changed
