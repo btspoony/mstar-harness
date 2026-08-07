@@ -144,6 +144,20 @@ Check an existing config:
 
 If validation fails, `doctor` exits with a non-zero status code.
 
+### `mstar-harness plugin validate`
+
+Validate a plugin package against the [Agent Plugins v1.0.0](https://agent-plugins.org/specification) portable format. The root `plugin.json` is checked against the closed manifest schema (required `$schema` and `name`, metadata types, plugin name rules, `extensions`), `mcp.json` per §7.2.1 if present (closed `$schema` + `mcpServers`, stdio/streamable-http/sse server variants, `env`/`cwd`/`url`/`headers` rules), and `skills/` discovery per §6.1 (immediate child directories with `SKILL.md`; frontmatter `name` must equal the directory name and `description` must be non-empty). No schemas are fetched at runtime.
+
+- `npx @mstar-harness/cli plugin validate`
+- `npx @mstar-harness/cli plugin validate --root /path/to/plugin`
+
+Exit codes:
+
+- `0` — conformant: prints `OK <root>: Agent Plugins v1.0.0 conformant`
+- `1` — non-conformant: prints one error line per finding, prefixed with `plugin.json:` / `mcp.json:` / `skills:`
+
+Non-fatal findings are reported separately: an unknown top-level field is reported and ignored (validation continues), and a `skills/` child directory without `SKILL.md` prints a yellow warning without failing validation.
+
 ## What `init` Ensures
 
 OpenCode `init` enforces these baseline requirements in `opencode.json`:
@@ -220,6 +234,10 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 - `--target <agent>`
 - `--scope <global|project>`
 - `--output <path>`
+
+### `plugin validate` options
+
+- `--root <path>`: plugin root directory to validate (default: project root)
 
 ## Development (Repository)
 

@@ -1,13 +1,16 @@
 #!/usr/bin/env bun
 
+import fs from "node:fs";
+import path from "node:path";
 import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
+import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
-import type { DoctorOptions, InitOptions, Target } from "./types";
+import type { DoctorOptions, InitOptions, PluginValidateOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
-import { parseCsv, readJson, writeJson, readHarnessVersion } from "./utils";
+import { parseCsv, readJson, writeJson, readHarnessVersion, resolveProjectRoot } from "./utils";
 
 const packageVersion = readHarnessVersion();
 
@@ -165,6 +168,39 @@ function runDoctor(options: DoctorOptions) {
   process.exitCode = 1;
 }
 
+/**
+ * Resolve the plugin root for `plugin validate`: explicit `--root` wins;
+ * otherwise start from `resolveProjectRoot()` and walk up to the nearest
+ * ancestor containing `plugin.json` (bun run --cwd rewrites PWD, so the
+ * project root is not always the resolved cwd).
+ */
+function resolvePluginRoot(options: PluginValidateOptions): string {
+  if (options.root) return path.resolve(options.root);
+  let candidate = resolveProjectRoot();
+  while (!fs.existsSync(path.join(candidate, "plugin.json"))) {
+    const parent = path.dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
+  return candidate;
+}
+
+function runPluginValidate(options: PluginValidateOptions) {
+  const root = resolvePluginRoot(options);
+  const result = validateAgentPlugin(root);
+  for (const warning of result.warnings) {
+    console.warn(pc.yellow(warning));
+  }
+  if (result.ok) {
+    console.log(pc.green(`OK ${root}: Agent Plugins v1.0.0 conformant`));
+    return;
+  }
+  for (const error of result.errors) {
+    console.error(pc.red(error));
+  }
+  process.exitCode = 1;
+}
+
 program
   .name("mstar-harness")
   .description("Morning Star harness CLI for target-based agent bootstrap")
@@ -195,6 +231,18 @@ program
   .option("--output <path>", "Config file path override, relative to project root")
   .action((options: DoctorOptions) => {
     runDoctor(options);
+  });
+
+const pluginCommand = program
+  .command("plugin")
+  .description("Agent Plugins v1.0.0 portable package commands");
+
+pluginCommand
+  .command("validate")
+  .description("Validate a plugin package against Agent Plugins v1.0.0")
+  .option("--root <path>", "Plugin root directory to validate (default: project root)")
+  .action((options: PluginValidateOptions) => {
+    runPluginValidate(options);
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
