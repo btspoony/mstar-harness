@@ -29,9 +29,10 @@
  *   flock (`flockSync` undefined), so this module implements the documented
  *   mkdir alternative.
  */
-import { mkdirSync, rmdirSync } from "node:fs";
+import { mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import type { PlanRow } from "./status.js";
 
@@ -443,8 +444,111 @@ export function canSteal(lease: unknown, holder: string, opts: { userOverride?: 
   return opts.userOverride === true;
 }
 
+/** Execution lease locations found on one plan row (SSOT + legacy read-compat). */
+export type ExecutionLeaseLocations = {
+  /** SSOT location: `plans[].execution_lease`. */
+  row: unknown;
+  /** Legacy/hand-written read-compat location: `plans[].metadata.execution_lease`. */
+  metadata: unknown;
+};
+
+export function planExecutionLeaseLocations(row: Record<string, unknown>): ExecutionLeaseLocations {
+  const meta = row.metadata;
+  const metadataLease =
+    meta && typeof meta === "object" && !Array.isArray(meta)
+      ? (meta as Record<string, unknown>).execution_lease
+      : undefined;
+  return { row: row.execution_lease, metadata: metadataLease };
+}
+
+export type LeaseVerifyResult = {
+  ok: boolean;
+  violations: ValidationResult[];
+  /** The lease chosen for validation (row-level wins) — absent when neither location has one. */
+  lease?: unknown;
+};
+
+/**
+ * Verify a plan's `execution_lease` across its two possible locations
+ * (status-and-residuals.md § `plans[].execution_lease`; ADR
+ * 2026-07-22-iteration-worktree-plan-lease.md A3 — the plan row is the
+ * claim/hold/release SSOT):
+ * - Row-level `plans[].execution_lease` only, valid → OK.
+ * - Metadata-only (`plans[].metadata.execution_lease`) → high-severity
+ *   `lease.verify.non-ssot-location`: the metadata location is a
+ *   legacy/hand-written read-compat fallback, NOT equivalent to SSOT
+ *   success. Always a FAIL (non-zero exit) with the lease shape still
+ *   validated and reported.
+ * - Both locations present → `lease.verify.dual-write`: the row-level lease
+ *   wins and is validated; the metadata copy must be deleted.
+ * - Neither present → `lease.verify.missing` (non-InProgress) /
+ *   `lease.verify.orphan` (InProgress).
+ *
+ * Kept in the engine so every host hook / CLI entry / Slice-2+ consumer
+ * imports ONE gate (CLI `mstar lease verify` is a thin wrapper).
+ */
+export function verifyPlanExecutionLease(row: Record<string, unknown>, planId: string): LeaseVerifyResult {
+  const { row: rowLease, metadata: metadataLease } = planExecutionLeaseLocations(row);
+  const lease = rowLease !== undefined ? rowLease : metadataLease;
+  if (lease === undefined) {
+    if (row.status === "InProgress") {
+      return {
+        ok: false,
+        violations: [
+          violation(
+            "high",
+            "lease.verify.orphan",
+            "plan is InProgress without an execution_lease — orphan: STOP, no writable dispatch until recovery (status-and-residuals.md § Orphan recovery)",
+          ),
+        ],
+      };
+    }
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "lease.verify.missing",
+          `plan ${planId} has no execution_lease (neither plans[].execution_lease nor legacy plans[].metadata.execution_lease)`,
+        ),
+      ],
+    };
+  }
+  const violations: ValidationResult[] = [];
+  if (rowLease !== undefined && metadataLease !== undefined) {
+    violations.push(
+      violation(
+        "high",
+        "lease.verify.dual-write",
+        "execution_lease present in BOTH plans[].execution_lease (SSOT) and plans[].metadata.execution_lease — the row-level lease wins; delete the metadata copy to remove the dual write",
+      ),
+    );
+  } else if (rowLease === undefined) {
+    violations.push(
+      violation(
+        "high",
+        "lease.verify.non-ssot-location",
+        "execution_lease found only under plans[].metadata.execution_lease — the SSOT location is plans[].execution_lease; the metadata location is a legacy/hand-written read-compat fallback, not equivalent to SSOT success (migrate the lease to the plan row)",
+      ),
+    );
+  }
+  violations.push(...validateExecutionLease(lease).violations);
+  return { ok: violations.length === 0, violations, lease };
+}
+
 /** Lock-directory name (SSOT § Same-host exclusive write lock, mkdir alternative). */
 const STATUS_WRITE_LOCKDIR = ".status-write.lockdir";
+/** Holder pid-file name inside the lockdir (crash diagnosis; F-3). */
+const LOCKDIR_HOLDER_PID = "holder.pid";
+
+/**
+ * Async-local set of lockdirs held by THIS process+async-context. Used for
+ * reentrancy detection: a nested `withStatusWriteLock` call on the same
+ * lockdir (same async chain) throws immediately instead of waiting out the
+ * 30s poll timeout. Independent concurrent writers (separate call chains)
+ * have no shared store and serialize via mkdir as designed.
+ */
+const heldLockDirs = new AsyncLocalStorage<Set<string>>();
 
 /**
  * Same-host exclusive write lock around `status.json` coordination writes
@@ -456,8 +560,24 @@ const STATUS_WRITE_LOCKDIR = ".status-write.lockdir";
  * Acquires by atomic `mkdir` on `<status dir>/.status-write.lockdir/`
  * (success acquires; existing dir → another writer holds the lock). While
  * another writer holds it, wait up to `timeoutMs` (default 30s) and then
- * throw (Blocked) — the lockdir is never removed for another holder. The
- * lockdir is removed on all exit paths of `fn` (success or failure).
+ * throw (Blocked) — the lockdir is never removed for another holder.
+ *
+ * Ownership guard (double-unlock safety): the lockdir's `(dev, ino)` is
+ * captured at acquisition; `finally` re-stats the path and removes the
+ * directory ONLY when the identity is unchanged. When `fn` itself removed
+ * the lockdir (e.g. explicit rollback), or another writer replaced it with
+ * a fresh lockdir before this writer's `finally` ran, the removal is
+ * skipped — a second writer's lock is never destroyed.
+ *
+ * Reentrancy: a nested acquisition on the same lockdir within the same
+ * async context (i.e. `fn` calling `withStatusWriteLock` on the same
+ * status.json) throws immediately instead of waiting out the timeout.
+ *
+ * Crash diagnosis: a `holder.pid` file (acquiring process id) is written
+ * inside the lockdir on acquisition and removed on release. A hard crash
+ * between `mkdirSync` and release leaks the lockdir; the timeout error
+ * message names the recovery step (remove the lockdir when no writer is
+ * alive).
  *
  * simplify: mkdir lockdir is the SSOT-documented alternative to `flock`
  * (`{HARNESS_DIR}/.status-write.lock`) — Bun 1.2 exposes no `node:fs`
@@ -471,28 +591,56 @@ export async function withStatusWriteLock<T>(
   opts: { timeoutMs?: number; pollMs?: number } = {},
 ): Promise<T> {
   const lockDir = join(dirname(resolve(statusPath)), STATUS_WRITE_LOCKDIR);
+  const held = heldLockDirs.getStore();
+  if (held !== undefined && held.has(lockDir)) {
+    throw new Error(
+      `${lockDir} is already held by this process in this async context — withStatusWriteLock is not reentrant; a nested acquisition on the same status.json is a bug`,
+    );
+  }
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const pollMs = opts.pollMs ?? 25;
   const deadline = Date.now() + timeoutMs;
+  let acquired: { dev: number; ino: number } | null = null;
   for (;;) {
     try {
       mkdirSync(lockDir);
+      const st = statSync(lockDir);
+      acquired = { dev: st.dev, ino: st.ino };
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (Date.now() >= deadline) {
         throw new Error(
-          `${lockDir} already exists — another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock)`,
+          `${lockDir} already exists — another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock). ` +
+            `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
         );
       }
       await sleep(pollMs);
     }
   }
   try {
-    return await fn();
+    writeFileSync(join(lockDir, LOCKDIR_HOLDER_PID), String(process.pid), "utf8");
+  } catch {
+    // pid file is best-effort diagnosis only — a failed write must not abort the lock
+  }
+  const owns = held ?? new Set<string>();
+  owns.add(lockDir);
+  try {
+    return await heldLockDirs.run(owns, fn);
   } finally {
+    owns.delete(lockDir);
     try {
-      rmdirSync(lockDir);
+      const current = statSync(lockDir);
+      // Remove only our own lockdir: absent (fn rolled back) or a different
+      // (dev, ino) (another writer acquired after fn removed ours) ⇒ skip.
+      if (acquired !== null && current.dev === acquired.dev && current.ino === acquired.ino) {
+        try {
+          unlinkSync(join(lockDir, LOCKDIR_HOLDER_PID));
+        } catch {
+          // pid file already removed by fn — proceed to remove the directory
+        }
+        rmdirSync(lockDir);
+      }
     } catch {
       // lockdir already removed (e.g. explicit rollback) — nothing to clean
     }

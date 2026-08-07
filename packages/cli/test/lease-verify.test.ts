@@ -20,6 +20,25 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { planExecutionLeaseLocations, verifyPlanExecutionLease } from "@mstar-harness/engine";
+import {
+  planExecutionLeaseLocations as cliLocations,
+  verifyPlanExecutionLease as cliVerify,
+} from "../src/lease-verify";
+
+/**
+ * Spawn env with ambient MSTAR_HARNESS_DIR pinned out (qc3 F-4): the CLI
+ * resolves harness dirs from that env var ahead of probing, so an ambient
+ * value would redirect every fixture to the env dir and fail spuriously.
+ */
+function cliEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key === "MSTAR_HARNESS_DIR") continue;
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
 
 /** Valid lease by engine rules (claimed_at dual-format read-compat included). */
 const VALID_LEASE = {
@@ -41,7 +60,7 @@ function makeFixture(doc: Record<string, unknown>): string {
 function runVerify(fixtureDir: string, planId = "plan-a"): { exitCode: number | null; stdout: string; stderr: string } {
   const proc = Bun.spawnSync(
     [process.execPath, "run", "src/index.ts", "lease", "verify", planId, "--harness", fixtureDir],
-    { cwd: CLI_ROOT, stdout: "pipe", stderr: "pipe" },
+    { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
   );
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
@@ -58,6 +77,13 @@ function withFixture(doc: Record<string, unknown>, fn: (dir: string) => void): v
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+describe("CLI lease-verify wrapper (qc1 F-001)", () => {
+  test("re-exports the engine gate unchanged (thin wrapper, no CLI-side logic)", () => {
+    expect(cliVerify).toBe(verifyPlanExecutionLease);
+    expect(cliLocations).toBe(planExecutionLeaseLocations);
+  });
+});
 
 describe("mstar lease verify — execution_lease location matrix", () => {
   test("row-level plans[].execution_lease valid → OK, exit 0", () => {

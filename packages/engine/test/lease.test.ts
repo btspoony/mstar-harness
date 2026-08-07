@@ -43,7 +43,7 @@
  * `"claimed_at": "2026-08-08"` and MUST pass `mstar lease verify`.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PlanRow } from "../src/status.js";
@@ -51,10 +51,12 @@ import type { ClaimLeaseFields } from "../src/lease.js";
 import {
   canSteal,
   claimLease,
+  planExecutionLeaseLocations,
   releaseLease,
   sameHolderResume,
   validateExecutionLease,
   validateIntegrationMergeLease,
+  verifyPlanExecutionLease,
   withStatusWriteLock,
 } from "../src/lease.js";
 
@@ -495,6 +497,71 @@ describe("canSteal", () => {
   });
 });
 
+describe("planExecutionLeaseLocations / verifyPlanExecutionLease (SSOT-location matrix, moved from CLI)", () => {
+  const VALID = validExecutionLease({ claimed_at: "2026-08-08" });
+
+  function planRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return { plan_id: "plan-a", title: "Plan A", status: "InProgress", ...overrides };
+  }
+
+  test("row-level plans[].execution_lease only, valid → ok (SSOT location)", () => {
+    const result = verifyPlanExecutionLease(planRow({ execution_lease: VALID }), "plan-a");
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+    expect(result.lease).toBe(VALID);
+  });
+
+  test("metadata-only lease → lease.verify.non-ssot-location, not ok (legacy read-compat ≠ SSOT success)", () => {
+    const result = verifyPlanExecutionLease(planRow({ metadata: { execution_lease: VALID } }), "plan-a");
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.verify.non-ssot-location");
+    // The lease shape is still validated and reported.
+    expect(result.lease).toBe(VALID);
+  });
+
+  test("both locations → lease.verify.dual-write, not ok (row-level wins)", () => {
+    const result = verifyPlanExecutionLease(
+      planRow({ execution_lease: VALID, metadata: { execution_lease: { ...VALID, holder: "stale" } } }),
+      "plan-a",
+    );
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.verify.dual-write");
+    expect(result.lease).toBe(VALID);
+  });
+
+  test("neither location, non-InProgress plan → lease.verify.missing", () => {
+    const result = verifyPlanExecutionLease(planRow({ status: "Todo" }), "plan-a");
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.verify.missing");
+  });
+
+  test("neither location, InProgress plan → lease.verify.orphan", () => {
+    const result = verifyPlanExecutionLease(planRow({}), "plan-a");
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.verify.orphan");
+  });
+
+  test("row-level lease with shape violations → engine validation codes flow through", () => {
+    const result = verifyPlanExecutionLease(
+      planRow({ execution_lease: { ...VALID, worktree_path: "relative/worktree" } }),
+      "plan-a",
+    );
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.execution-lease.invalid-worktree-path");
+  });
+
+  test("planExecutionLeaseLocations extracts row + metadata locations", () => {
+    const lease = { holder: "h", claimed_at: "2026-08-08", worktree_path: "/wt", working_branch: "b" };
+    const locations = planExecutionLeaseLocations(planRow({ execution_lease: lease, metadata: { execution_lease: "x" } }));
+    expect(locations.row).toBe(lease);
+    expect(locations.metadata).toBe("x");
+    expect(planExecutionLeaseLocations(planRow()).row).toBeUndefined();
+    expect(planExecutionLeaseLocations(planRow()).metadata).toBeUndefined();
+    // metadata non-object rows yield no metadata location.
+    expect(planExecutionLeaseLocations(planRow({ metadata: "nope" })).metadata).toBeUndefined();
+  });
+});
+
 describe("withStatusWriteLock", () => {
   function makeDir(): string {
     return mkdtempSync(join(tmpdir(), "lease-lock-"));
@@ -576,6 +643,136 @@ describe("withStatusWriteLock", () => {
       const statusPath = join(dir, "status.json");
       const value = withStatusWriteLock(statusPath, () => 42);
       expect(value).resolves.toBe(42);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("double-unlock guard: a late finally never removes a second writer's lockdir", async () => {
+    // Spec: qc2 F-002 — writer A's fn removes the lockdir (rollback); writer B
+    // acquires a fresh lockdir; A's finally must detect the changed (dev, ino)
+    // and skip rmdir, so B's lock is not destroyed.
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      let aRemovedOwn = false;
+      let bInside = false;
+      const { promise: gate, resolve: openGate } = Promise.withResolvers<void>();
+
+      const a = withStatusWriteLock(statusPath, async () => {
+        // A's fn rolls back by removing its own lockdir (holder.pid first —
+        // rmdir fails on a non-empty directory).
+        unlinkSync(join(lockDir, "holder.pid"));
+        rmdirSync(lockDir);
+        aRemovedOwn = true;
+        await gate; // hold A inside fn until B has acquired
+      });
+
+      const b = withStatusWriteLock(statusPath, async () => {
+        bInside = true;
+        return "b";
+      });
+
+      // Real-timer exception: this interleaving is driven by real filesystem
+      // state (mkdir/rmdir/stat) across two concurrent async tasks — fake
+      // timers cannot advance real FS I/O, so the poll waits on observable
+      // state rather than a fixed delay (same rationale as the suite's
+      // "serializes two concurrent writers" yield comment).
+      const start = Date.now();
+      while (!(aRemovedOwn && bInside) && Date.now() - start < 5_000) {
+        await Bun.sleep(2);
+      }
+      openGate(); // always release A after the wait window — a must never dangle
+      expect(aRemovedOwn).toBe(true);
+      expect(bInside).toBe(true); // B acquired the lockdir A removed
+      await expect(a).resolves.toBeUndefined();
+      expect(await b).toBe("b");
+      // B's own finally removed B's lockdir; A's finally skipped it.
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fn removing the lockdir on failure leaves nothing to clean (skip, no throw)", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      await expect(
+        withStatusWriteLock(statusPath, async () => {
+          // rollback removes the lockdir (holder.pid first) before the throw
+          unlinkSync(join(lockDir, "holder.pid"));
+          rmdirSync(lockDir);
+          throw new Error("boom");
+        }),
+      ).rejects.toThrow("boom");
+      expect(existsSync(lockDir)).toBe(false);
+      // A subsequent writer can acquire normally.
+      expect(await withStatusWriteLock(statusPath, () => "ok")).toBe("ok");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reentrancy: nested acquisition on the same status.json throws immediately", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      await expect(
+        withStatusWriteLock(statusPath, async () => {
+          // Nested call on the SAME lockdir — must throw fast, not wait 30s.
+          return withStatusWriteLock(statusPath, () => "nested");
+        }),
+      ).rejects.toThrow(/not reentrant/i);
+      // The outer lock was still released cleanly.
+      expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reentrancy is scoped per async context: sequential locks on the same path are fine", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const first = await withStatusWriteLock(statusPath, () => "one");
+      const second = await withStatusWriteLock(statusPath, () => "two");
+      expect(first).toBe("one");
+      expect(second).toBe("two");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("holder.pid file is written inside the lockdir and removed on release", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      const seen: number[] = [];
+      await withStatusWriteLock(statusPath, async () => {
+        const pidPath = join(lockDir, "holder.pid");
+        expect(existsSync(pidPath)).toBe(true);
+        seen.push(Number(readFileSync(pidPath, "utf8")));
+      });
+      expect(seen).toEqual([process.pid]);
+      expect(existsSync(join(lockDir, "holder.pid"))).toBe(false);
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("timeout error message names the recovery step (remove <lockdir> if no writer is alive)", async () => {
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      mkdirSync(join(dir, ".status-write.lockdir"));
+      await expect(withStatusWriteLock(statusPath, () => "never", { timeoutMs: 120 })).rejects.toThrow(
+        /remove .*\.status-write\.lockdir if no writer is alive/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -324,7 +324,7 @@ statusCommand
       process.exitCode = 1;
     } catch (error) {
       console.error(pc.red(`status validate failed: ${(error as Error).message}`));
-      process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -333,13 +333,13 @@ statusCommand
   .description("Archive a plan's open residuals to archived/residuals/<plan-id>.json")
   .argument("<plan-id>", "Plan id whose open residuals are archived")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action((planId: string, options: { harness?: string }) => {
+  .action(async (planId: string, options: { harness?: string }) => {
     try {
       const harnessDir = options.harness ?? resolveHarnessDir();
       if (!harnessDir) {
         throw new Error(`harness dir not found from ${process.cwd()} — pass --harness or set MSTAR_HARNESS_DIR`);
       }
-      const result = archiveResiduals(planId, harnessDir);
+      const result = await archiveResiduals(planId, harnessDir);
       if (result.archived === 0) {
         console.log(pc.yellow(`No open residuals for plan ${planId}`));
       } else {
@@ -347,13 +347,13 @@ statusCommand
       }
     } catch (error) {
       console.error(pc.red(`archive-residuals failed: ${(error as Error).message}`));
-      process.exit(1);
+      process.exitCode = 1;
     }
   });
 
 const leaseCommand = program
   .command("lease")
-  .description("execution_lease / integration_merge_lease checks (engine-backed)");
+  .description("execution_lease checks (engine-backed) — integration_merge_lease validation stays import-only via @mstar-harness/engine until a dedicated subcommand exists");
 
 /** Resolve the harness dir for lease commands: --harness wins, else {HARNESS_DIR} resolution. */
 function resolveLeaseHarnessDir(harnessArg?: string): string {
@@ -410,11 +410,11 @@ leaseCommand
       process.exitCode = 1;
     } catch (error) {
       console.error(pc.red(`lease verify failed: ${(error as Error).message}`));
-      process.exit(1);
+      process.exitCode = 1;
     }
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   console.error(pc.red(`Setup failed: ${(error as Error).message}`));
-  process.exit(1);
+  process.exitCode = 1;
 });

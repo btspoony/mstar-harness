@@ -41,13 +41,22 @@ export {
   validateResidual,
   validateStatus,
 } from "./status.js";
-export type { ClaimLeaseFields, ExecutionLease, IntegrationMergeLease, LeaseTransition } from "./lease.js";
+export type {
+  ClaimLeaseFields,
+  ExecutionLease,
+  ExecutionLeaseLocations,
+  IntegrationMergeLease,
+  LeaseTransition,
+  LeaseVerifyResult,
+} from "./lease.js";
 export {
   canSteal,
   claimLease,
+  planExecutionLeaseLocations,
   releaseLease,
   sameHolderResume,
   validateExecutionLease,
   validateIntegrationMergeLease,
+  verifyPlanExecutionLease,
   withStatusWriteLock,
 } from "./lease.js";
