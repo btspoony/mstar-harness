@@ -33,7 +33,8 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { readJson, writeJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
-import { resolveHarnessDir } from "./path.js";
+import { resolveHarnessDir, assertSafePathComponent } from "./path.js";
+import { withStatusWriteLock } from "./lease.js";
 
 /**
  * Loose shape of a parsed status.json document. All fields are `unknown`
@@ -149,9 +150,13 @@ export function normalizeSeverity(value: unknown): unknown {
 /**
  * jq parity: an entry is open when `.lifecycle // "open"` equals `"open"`
  * (tech-debt-rollup.sh `is_open`; status-and-residuals.md § lifecycle).
+ * The jq alternative operator `//` yields the default for `false` AND
+ * `null` (not just null) — `lifecycle: false` therefore counts as open.
  */
 function isOpenResidual(entry: Record<string, unknown>): boolean {
-  return (entry.lifecycle ?? "open") === "open";
+  const lifecycle = entry.lifecycle;
+  const effective = lifecycle === false || lifecycle === null || lifecycle === undefined ? "open" : lifecycle;
+  return effective === "open";
 }
 
 function validateNonEmptyString(
@@ -186,11 +191,19 @@ export function validatePlanRow(row: unknown): GateResult {
   if (id === undefined && planId === undefined) {
     violations.push(violation("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
   } else {
-    if (id !== undefined && typeof id !== "string") {
-      violations.push(violation("medium", "status.plan-row.invalid-id", "id must be a string"));
+    // Non-empty check applies to whichever key(s) are present — the absent-key
+    // case is the missing-id violation above (legacy plan_id-only rows pass).
+    if (id !== undefined) {
+      validateNonEmptyString(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
     }
-    if (planId !== undefined && typeof planId !== "string") {
-      violations.push(violation("medium", "status.plan-row.invalid-plan-id", "plan_id must be a string"));
+    if (planId !== undefined) {
+      validateNonEmptyString(
+        violations,
+        planId,
+        "plan_id",
+        "status.plan-row.missing-plan-id",
+        "status.plan-row.invalid-plan-id",
+      );
     }
     if (id !== undefined && planId !== undefined && id !== planId) {
       violations.push(
@@ -223,6 +236,16 @@ export function validatePlanRow(row: unknown): GateResult {
   }
   if (execution_lease !== undefined && !isPlainObject(execution_lease)) {
     violations.push(violation("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
+  }
+  if (status === "Done" && execution_lease !== undefined) {
+    violations.push(
+      violation(
+        "medium",
+        "status.plan-row.done-with-lease",
+        "plan status Done must not carry an execution_lease — the Done authority deletes the lease in the same complete-file update as status: \"Done\" (status-and-residuals.md § Hold, release, and override)",
+        "delete plans[].execution_lease in the same update that sets status: \"Done\"",
+      ),
+    );
   }
 
   return { ok: violations.length === 0, violations };
@@ -297,6 +320,13 @@ export function validateResidual(entry: unknown): GateResult {
     violations.push(violation("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
   }
 
+  // closed_at format is enforced whenever the field is present, regardless of
+  // lifecycle (status-and-residuals.md § Residual findings lifecycle — the
+  // close protocol sets `closed_at` (YYYY-MM-DD) + `closure_note`).
+  if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
+    violations.push(violation("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
+  }
+
   if (lifecycle !== undefined) {
     if (typeof lifecycle !== "string" || !(RESIDUAL_LIFECYCLES as readonly string[]).includes(lifecycle)) {
       violations.push(
@@ -306,9 +336,31 @@ export function validateResidual(entry: unknown): GateResult {
           `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`,
         ),
       );
+    } else if (lifecycle !== "open") {
+      // Closed-lifecycle completeness (status-and-residuals.md § Residual
+      // findings lifecycle: "On close: set closed_at (YYYY-MM-DD) and
+      // closure_note; recommend closure_evidence").
+      if (closed_at === undefined) {
+        violations.push(
+          violation(
+            "high",
+            "status.residual.closed-missing-closed-at",
+            `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`,
+            'set closed_at (e.g. "2026-08-08")',
+          ),
+        );
+      }
+      if (entry.closure_note === undefined) {
+        violations.push(
+          violation(
+            "medium",
+            "status.residual.closed-missing-closure-note",
+            `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`,
+            "add closure_note explaining the close",
+          ),
+        );
+      }
     }
-  } else if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
-    violations.push(violation("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
   }
 
   return { ok: violations.length === 0, violations };
@@ -409,37 +461,64 @@ export function validateStatus(docOrPath: StatusDoc | string): GateResult {
  * <plan-id>.json` (stamped `archived_at`), delete the key from the open list,
  * and bump root `updated_at`. No-op (archived 0) when the plan has no open
  * residuals. `harnessDir` defaults to the resolved `{HARNESS_DIR}` from cwd.
+ *
+ * `planId` is validated as a single safe path component before it is used to
+ * build the archive path (path traversal guard — see
+ * `assertSafePathComponent`). The status.json read-modify-write runs under
+ * `withStatusWriteLock` so concurrent coordination writers serialize.
+ *
+ * simplify: archive append + status.json update are two separate writes —
+ * a crash between them leaves entries both archived and open; re-running is
+ * safe because appends dedup on `entries[].id` (F-10). Not transactional by
+ * design (v1); the write lock from F-004 keeps concurrent writers safe.
  */
-export function archiveResiduals(planId: string, harnessDir?: string): ArchiveResult {
+export async function archiveResiduals(planId: string, harnessDir?: string): Promise<ArchiveResult> {
   const dir = harnessDir !== undefined ? resolve(harnessDir) : resolveHarnessDir();
   if (dir === null) {
     throw new Error(`harness dir not found from ${process.cwd()} — pass harnessDir or set MSTAR_HARNESS_DIR`);
   }
+  assertSafePathComponent(planId, "planId");
   const statusPath = join(dir, "status.json");
   if (!existsSync(statusPath)) {
     throw new Error(`status file not found: ${statusPath}`);
   }
-  const doc = readJson(statusPath) as StatusDoc;
-  if (!isPlainObject(doc.residual_findings)) {
-    throw new Error(`status.json residual_findings must be an object: ${statusPath}`);
-  }
-  const open = doc.residual_findings[planId];
-  const archivePath = join(dir, "archived", "residuals", `${planId}.json`);
-  if (!Array.isArray(open) || open.length === 0) {
-    return { planId, archived: 0, archivePath };
-  }
+  return withStatusWriteLock(statusPath, () => {
+    const doc = readJson(statusPath) as StatusDoc;
+    if (!isPlainObject(doc.residual_findings)) {
+      throw new Error(`status.json residual_findings must be an object: ${statusPath}`);
+    }
+    const open = doc.residual_findings[planId];
+    const archivePath = join(dir, "archived", "residuals", `${planId}.json`);
+    if (!Array.isArray(open) || open.length === 0) {
+      return { planId, archived: 0, archivePath };
+    }
 
-  const archive = readJson(archivePath) as { entries?: unknown };
-  const existing = Array.isArray(archive.entries) ? archive.entries : [];
-  const today = todayString();
-  const moved = open.map((entry) => ({ ...(entry as Record<string, unknown>), archived_at: today }));
-  writeJson(archivePath, { plan_id: planId, schema_version: 1, entries: [...existing, ...moved] });
+    const archive = readJson(archivePath) as { entries?: unknown };
+    const existing = Array.isArray(archive.entries) ? archive.entries : [];
+    const existingIds = new Set(
+      existing
+        .map((e) => (isPlainObject(e) && typeof e.id === "string" ? e.id : undefined))
+        .filter((id): id is string => id !== undefined),
+    );
+    const today = todayString();
+    // Dedup on append: ids already present in the archive file are skipped
+    // (re-running an interrupted archive must not duplicate entries).
+    const moved = open
+      .filter((entry) => {
+        if (!isPlainObject(entry) || typeof entry.id !== "string") return true;
+        return !existingIds.has(entry.id);
+      })
+      .map((entry) => ({ ...(entry as Record<string, unknown>), archived_at: today }));
+    if (moved.length > 0) {
+      writeJson(archivePath, { plan_id: planId, schema_version: 1, entries: [...existing, ...moved] });
+    }
 
-  delete doc.residual_findings[planId];
-  doc.updated_at = today;
-  writeJson(statusPath, doc);
+    delete doc.residual_findings[planId];
+    doc.updated_at = today;
+    writeJson(statusPath, doc);
 
-  return { planId, archived: moved.length, archivePath };
+    return { planId, archived: moved.length, archivePath };
+  });
 }
 
 /** Read `plans[].metadata.findings_cleanup` for a plan (mirror; Assignment wins). */
@@ -596,15 +675,17 @@ export function techDebtRollup(docOrPath: StatusDoc | string): TechDebtRollup {
   const checks: TechDebtCheck[] = ROLLUP_FIELDS.map((field) => {
     const computedField = computed[field];
     if (stored === null) return { field, status: "DRIFT" as const };
-    // Bash oracle parity: `compare_field` string-compares `jq -c` output, so
-    // key ORDER matters (`{"a":1,"b":2}` != `{"b":2,"a":1}`). JSON.stringify
+    // Bash oracle parity: `compare_field` string-compares `jq -c ".$field // null"`,
+    // so key ORDER matters (`{"a":1,"b":2}` != `{"b":2,"a":1}`). JSON.stringify
     // preserves insertion order like `jq -c` — the computed side is built in
     // jq construction order (SEVERITY_ORDER for by_severity, sorted group
     // keys for by_target/by_plan) — so stringify, not deep equality, mirrors
-    // the oracle. (jq `//` also maps `false`/`0` to null; not replicated —
-    // stored field values are objects or a positive total_open in practice.)
+    // the oracle. jq's alternative operator `//` yields the default for
+    // `false` AND `null` (0 stays 0 — it is truthy in jq); mirror exactly.
+    const storedField = stored[field];
+    const storedCompared = storedField === false ? null : (storedField ?? null);
     const status =
-      JSON.stringify(computedField) === JSON.stringify(stored[field] ?? null) ? ("PASS" as const) : ("DRIFT" as const);
+      JSON.stringify(computedField) === JSON.stringify(storedCompared) ? ("PASS" as const) : ("DRIFT" as const);
     return { field, status };
   });
   const overall = checks.every((check) => check.status === "PASS") ? ("PASS" as const) : ("DRIFT" as const);

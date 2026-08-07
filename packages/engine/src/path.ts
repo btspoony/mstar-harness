@@ -115,11 +115,28 @@ export function resolvePlanDir(harnessDir: string): string {
 }
 
 /**
+ * Single safe path component for per-plan path composition
+ * (qc2 F-001 — path traversal guard): rejects `""`, `.`, `..`, and any
+ * `/` or `\`; allows `[A-Za-z0-9._-]+` only. Throws with a clear message so
+ * callers interpolating a plan id into a path (archive files, SDD dirs)
+ * can never escape the intended parent directory.
+ */
+export function assertSafePathComponent(value: string, what: string): void {
+  if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error(
+      `${what} must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", "..", or containing "/" or "\\") — got ${JSON.stringify(value)}`,
+    );
+  }
+}
+
+/**
  * Compose `{SDD_DIR}` = `{HARNESS_DIR}/sdd/<plan-id>/` (plan-conventions
  * § 路径符号). The per-plan directory is created by the sdd workspace flow,
- * not here.
+ * not here. `planId` must be a single safe path component (traversal
+ * guard) — see `assertSafePathComponent`.
  */
 export function resolveSddDir(harnessDir: string, planId: string): string {
+  assertSafePathComponent(planId, "planId");
   return join(resolve(harnessDir), "sdd", planId);
 }
 

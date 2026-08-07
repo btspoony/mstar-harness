@@ -29,11 +29,12 @@
  *   (consumer convention stays `.mstar` → `.agents` → `.plans`/`plans`).
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   assertPlanWritingPath,
+  assertSafePathComponent,
   emitGitignoreSnippet,
   resolveHarnessDir,
   resolveIterationDir,
@@ -72,6 +73,29 @@ const CANONICAL_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+/**
+ * Monorepo root (walk up from this test dir to the nearest ancestor holding
+ * `skills/`), for byte-parity tests against the skill SSOT files (qc3 F-5).
+ */
+function findRepoRoot(): string {
+  let dir = import.meta.dir;
+  for (;;) {
+    if (existsSync(join(dir, "skills")) && existsSync(join(dir, "package.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error("could not locate the monorepo root from the test dir");
+    dir = parent;
+  }
+}
+
+/** Extract the Nth ```gitignore fence from a skill file. */
+function gitignoreFence(skillPath: string, fenceIndex: number): string {
+  const content = readFileSync(skillPath, "utf8");
+  const blocks = [...content.matchAll(/```gitignore\n([\s\S]*?)```/g)];
+  const block = blocks[fenceIndex];
+  if (block === undefined) throw new Error(`no gitignore fence ${fenceIndex} in ${skillPath}`);
+  return block[1];
 }
 
 function withEnv(value: string | undefined, fn: () => void): void {
@@ -561,5 +585,54 @@ describe("assertPlanWritingPath (plan-conventions § Plan-Writing Path Gate)", (
     expect(result.ok).toBe(false);
     expect(result.code).toBe("plan-path.no-harness");
     expect(result.severity).toBe("high");
+  });
+});
+
+describe("assertSafePathComponent / resolveSddDir (path traversal guard, qc2 F-001)", () => {
+  test("safe plan ids pass and compose {HARNESS_DIR}/sdd/<plan-id>", () => {
+    expect(resolveSddDir(join("/r", ".mstar"), "20260808-p1")).toBe(join("/r", ".mstar", "sdd", "20260808-p1"));
+    for (const safe of ["plan-a", "2026.08.08_x-1", "P1_2.3"]) {
+      expect(() => resolveSddDir(join("/r", ".mstar"), safe)).not.toThrow();
+    }
+  });
+
+  test("traversal attempts are rejected with a clear error", () => {
+    for (const bad of ["", ".", "..", "../escape", "a/b", "a\\b", "..%2f", "a/../../tmp/pwn", "a b", "../.."]) {
+      expect(() => resolveSddDir(join("/r", ".mstar"), bad)).toThrow(/single safe path component/);
+      expect(() => assertSafePathComponent(bad, "planId")).toThrow(/single safe path component/);
+    }
+  });
+
+  test("the guard message names the value", () => {
+    expect(() => assertSafePathComponent("../escape", "planId")).toThrow(/planId/);
+    expect(() => assertSafePathComponent("../escape", "planId")).toThrow(/"\.\.\/escape"/);
+  });
+});
+
+describe("byte-parity with skill SSOT files (qc3 F-5)", () => {
+  const repoRoot = findRepoRoot();
+
+  test("emitGitignoreSnippet(\"mstar\") is byte-identical to the plan-conventions .mstar/ fence", () => {
+    const skillPath = join(repoRoot, "skills", "mstar-plan-conventions", "SKILL.md");
+    expect(emitGitignoreSnippet("mstar")).toBe(gitignoreFence(skillPath, 0));
+  });
+
+  test("emitGitignoreSnippet(\"agents\") is byte-identical to the plan-conventions legacy .agents/ fence", () => {
+    const skillPath = join(repoRoot, "skills", "mstar-plan-conventions", "SKILL.md");
+    expect(emitGitignoreSnippet("agents")).toBe(gitignoreFence(skillPath, 1));
+  });
+
+  test("scaffoldHarness status.json is byte-identical to templates/status.empty.json", () => {
+    const root = tmpRoot("path-scaffold-byte-");
+    try {
+      const template = readFileSync(
+        join(repoRoot, "skills", "mstar-plan-artifacts", "templates", "status.empty.json"),
+        "utf8",
+      );
+      const harnessDir = scaffoldHarness(root);
+      expect(readFileSync(join(harnessDir, "status.json"), "utf8")).toBe(template);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -142,9 +142,13 @@ function renderRollupOutput(rollup: TechDebtRollup): string {
     } else if (check.status === "PASS") {
       lines.push(`PASS: ${check.field}`);
     } else {
+      // Mirror the bash oracle's `jq -c ".$field // null"`: `false` renders as
+      // null (jq alternative operator), 0 stays 0 (truthy in jq).
+      const storedField = rollup.stored[check.field];
+      const storedCompared = storedField === false ? null : (storedField ?? null);
       lines.push(`DRIFT: ${check.field}`);
       lines.push(`  computed: ${computed}`);
-      lines.push(`  stored:   ${JSON.stringify(rollup.stored[check.field] ?? null)}`);
+      lines.push(`  stored:   ${JSON.stringify(storedCompared)}`);
     }
   }
   lines.push("");
@@ -233,6 +237,27 @@ describe("validatePlanRow", () => {
       validatePlanRow(row({ execution_lease: "cursor:abc" })),
     );
   });
+
+  test("empty-string id / plan_id are violations (non-empty required)", () => {
+    // Spec: qc2 F-010 — id/plan_id must be non-empty strings, same as
+    // title/file (validateNonEmptyString).
+    violationCodes("status.plan-row.invalid-id")(validatePlanRow(row({ id: "  " })));
+    violationCodes("status.plan-row.invalid-plan-id")(validatePlanRow(row({ plan_id: "" })));
+    const { id: _drop, ...rest } = row({ plan_id: "" });
+    void _drop;
+    violationCodes("status.plan-row.invalid-plan-id")(validatePlanRow(rest));
+  });
+
+  test("cross-field invariant: status Done must not carry an execution_lease", () => {
+    // Spec: qc2 F-010 — the lease protocol says Done-with-lease never exists;
+    // the Done authority deletes the lease in the same update as status Done.
+    const gate = validatePlanRow(
+      row({ status: "Done", execution_lease: { holder: "h", claimed_at: "2026-08-08", worktree_path: "/wt", working_branch: "b" } }),
+    );
+    expect(gate.ok).toBe(false);
+    expect(violationsOf(gate)).toContain("status.plan-row.done-with-lease");
+    expect(validatePlanRow(row({ status: "Done" })).ok).toBe(true);
+  });
 });
 
 describe("validateResidual", () => {
@@ -277,6 +302,31 @@ describe("validateResidual", () => {
         entry({ lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed and verified" }),
       ).violations,
     ).toEqual([]);
+  });
+
+  test("closed_at format is enforced even when lifecycle is present (qc2 F-009)", () => {
+    violationCodes("status.residual.invalid-closed-at")(
+      validateResidual(entry({ lifecycle: "resolved", closed_at: "not-a-date", closure_note: "x" })),
+    );
+    violationCodes("status.residual.invalid-closed-at")(
+      validateResidual(entry({ lifecycle: "open", closed_at: "2026/08/07" })),
+    );
+  });
+
+  test("closed lifecycles require closed_at + closure_note (status-and-residuals.md § lifecycle)", () => {
+    // Spec: "On close: set closed_at (YYYY-MM-DD) and closure_note" — every
+    // closed lifecycle (resolved/waived/superseded/duplicate) must be complete.
+    for (const lifecycle of ["resolved", "waived", "superseded", "duplicate"]) {
+      const incomplete = validateResidual(entry({ lifecycle }));
+      expect(incomplete.ok).toBe(false);
+      expect(violationsOf(incomplete)).toContain("status.residual.closed-missing-closed-at");
+      expect(violationsOf(incomplete)).toContain("status.residual.closed-missing-closure-note");
+    }
+    const closedWithAtOnly = validateResidual(entry({ lifecycle: "resolved", closed_at: "2026-08-07" }));
+    expect(violationsOf(closedWithAtOnly)).toContain("status.residual.closed-missing-closure-note");
+    expect(violationsOf(closedWithAtOnly)).not.toContain("status.residual.closed-missing-closed-at");
+    // An open entry never needs close fields.
+    expect(validateResidual(entry({ lifecycle: "open" })).ok).toBe(true);
   });
 });
 
@@ -356,7 +406,7 @@ describe("validateStatus", () => {
 });
 
 describe("archiveResiduals", () => {
-  test("moves open residuals to archived/residuals/<plan-id>.json and removes them from the open list", () => {
+  test("moves open residuals to archived/residuals/<plan-id>.json and removes them from the open list", async () => {
     const dir = tmpRoot("status-archive-");
     const statusPath = join(dir, "status.json");
     const before = doc({
@@ -367,7 +417,7 @@ describe("archiveResiduals", () => {
     });
     writeFileSync(statusPath, JSON.stringify(before, null, 2), "utf8");
 
-    const result = archiveResiduals("plan-a", dir);
+    const result = await archiveResiduals("plan-a", dir);
     expect(result.archived).toBe(2);
     expect(result.archivePath).toBe(join(dir, "archived", "residuals", "plan-a.json"));
 
@@ -389,7 +439,7 @@ describe("archiveResiduals", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("appends to an existing archive file", () => {
+  test("appends to an existing archive file", async () => {
     const dir = tmpRoot("status-archive-append-");
     const statusPath = join(dir, "status.json");
     writeFileSync(
@@ -403,24 +453,84 @@ describe("archiveResiduals", () => {
     const existing = { plan_id: "plan-a", schema_version: 1, entries: [entry({ id: "R1", archived_at: "2026-07-01" })] };
     writeFileSync(archivePath, JSON.stringify(existing, null, 2), "utf8");
 
-    archiveResiduals("plan-a", dir);
+    await archiveResiduals("plan-a", dir);
     const archive = JSON.parse(readFileSync(archivePath, "utf8")) as { entries: unknown[] };
     expect(archive.entries).toHaveLength(2);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("no-op when the plan has no open residuals (no archive file created)", () => {
+  test("no-op when the plan has no open residuals (no archive file created)", async () => {
     const dir = tmpRoot("status-archive-empty-");
     writeFileSync(join(dir, "status.json"), JSON.stringify(doc(), null, 2), "utf8");
-    const result = archiveResiduals("plan-a", dir);
+    const result = await archiveResiduals("plan-a", dir);
     expect(result.archived).toBe(0);
     expect(existsSync(result.archivePath)).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("throws when status.json is missing", () => {
+  test("throws when status.json is missing", async () => {
     const dir = tmpRoot("status-archive-missing-");
-    expect(() => archiveResiduals("plan-a", dir)).toThrow(/status file not found/);
+    await expect(archiveResiduals("plan-a", dir)).rejects.toThrow(/status file not found/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("rejects plan ids that are not a single safe path component (traversal guard)", async () => {
+    const dir = tmpRoot("status-archive-traversal-");
+    writeFileSync(join(dir, "status.json"), JSON.stringify(doc(), null, 2), "utf8");
+    for (const bad of ["", ".", "..", "../escape", "a/b", "a\\b", "a/../../tmp/pwn", "..%2f"]) {
+      await expect(archiveResiduals(bad, dir)).rejects.toThrow(/single safe path component/);
+    }
+    // Nothing escaped the harness dir: no archived/ tree with traversal names.
+    expect(existsSync(join(dir, "archived"))).toBe(false);
+    expect(existsSync(join(dir, "..", "escape.json"))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("two concurrent archive runs serialize (no lost update, no duplicate entries)", async () => {
+    // Spec: qc2 F-004 / qc3 F-2 — the status.json read-modify-write runs under
+    // withStatusWriteLock; two writers serialize and the second is a no-op.
+    const dir = tmpRoot("status-archive-race-");
+    const statusPath = join(dir, "status.json");
+    writeFileSync(
+      statusPath,
+      JSON.stringify(doc({ residual_findings: { "plan-a": [entry({ id: "R1" }), entry({ id: "R2" })] } }), null, 2),
+      "utf8",
+    );
+
+    const [a, b] = await Promise.all([archiveResiduals("plan-a", dir), archiveResiduals("plan-a", dir)]);
+    expect(a.archived + b.archived).toBe(2);
+    const archive = JSON.parse(readFileSync(join(dir, "archived", "residuals", "plan-a.json"), "utf8")) as {
+      entries: unknown[];
+    };
+    expect(archive.entries).toHaveLength(2);
+    const after = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
+    expect(after.residual_findings).not.toHaveProperty("plan-a");
+    expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("dedups on append: ids already in the archive file are skipped", async () => {
+    const dir = tmpRoot("status-archive-dedup-");
+    const statusPath = join(dir, "status.json");
+    writeFileSync(
+      statusPath,
+      JSON.stringify(
+        doc({ residual_findings: { "plan-a": [entry({ id: "R1" }), entry({ id: "R2" })] } }),
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const archiveDir = join(dir, "archived", "residuals");
+    mkdirSync(archiveDir, { recursive: true });
+    const archivePath = join(archiveDir, "plan-a.json");
+    const existing = { plan_id: "plan-a", schema_version: 1, entries: [entry({ id: "R1", archived_at: "2026-07-01" })] };
+    writeFileSync(archivePath, JSON.stringify(existing, null, 2), "utf8");
+
+    const result = await archiveResiduals("plan-a", dir);
+    expect(result.archived).toBe(1); // only R2 is new — R1 already archived
+    const archive = JSON.parse(readFileSync(archivePath, "utf8")) as { entries: Array<{ id: string }> };
+    expect(archive.entries.map((e) => e.id)).toEqual(["R1", "R2"]);
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -614,4 +724,64 @@ describe("techDebtRollup", () => {
       expect(renderRollupOutput(ts)).toBe(bash.stdout);
     },
   );
+
+  test("PARITY: stored total_open: 0 (correct empty state) is PASS in bash AND TS (jq `//` keeps 0)", () => {
+    // qc2 F-008 — jq's alternative operator maps only `false`/`null` to the
+    // default; `0` is truthy in jq, so a stored total_open of 0 must compare
+    // equal to the computed 0 on both sides.
+    const dir = tmpRoot("status-rollup-zero-");
+    try {
+      const zeroSummary = {
+        total_open: 0,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
+        by_target: {},
+        by_plan: {},
+      };
+      const zeroFixture = doc({ metadata: { tech_debt_summary: zeroSummary } });
+      const statusPath = join(dir, "status.json");
+      writeFileSync(statusPath, JSON.stringify(zeroFixture, null, 2), "utf8");
+
+      const bash = bashRollup(statusPath);
+      expect(bash.exitCode).toBe(0);
+      const ts = techDebtRollup(statusPath);
+      expect(ts.checks.every((c) => c.status === "PASS")).toBe(true);
+      expect(ts.overall).toBe("PASS");
+      expect(renderRollupOutput(ts)).toBe(bash.stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("PARITY: entry lifecycle: false counts as OPEN in bash AND TS (jq `//` defaults false)", () => {
+    // qc2 F-008 — `.lifecycle // "open"` yields "open" for `false` (jq maps
+    // false AND null to the default), so an entry with `lifecycle: false`
+    // contributes to total_open on both sides; the stored summary omitting it
+    // must DRIFT identically.
+    const dir = tmpRoot("status-rollup-false-");
+    try {
+      const falseLifecycle = doc({
+        residual_findings: { "plan-a": [entry({ id: "R1", severity: "low", target: "V1", lifecycle: false })] },
+        metadata: {
+          tech_debt_summary: {
+            total_open: 0,
+            by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
+            by_target: {},
+            by_plan: {},
+          },
+        },
+      });
+      const statusPath = join(dir, "status.json");
+      writeFileSync(statusPath, JSON.stringify(falseLifecycle, null, 2), "utf8");
+
+      const bash = bashRollup(statusPath);
+      expect(bash.exitCode).toBe(1); // bash DRIFT: computed total_open 1 vs stored 0
+      const ts = techDebtRollup(statusPath);
+      expect(ts.computed.total_open).toBe(1); // lifecycle: false is open, like jq
+      expect(ts.overall).toBe("DRIFT");
+      expect(ts.checks.find((c) => c.field === "total_open")?.status).toBe("DRIFT");
+      expect(renderRollupOutput(ts)).toBe(bash.stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
