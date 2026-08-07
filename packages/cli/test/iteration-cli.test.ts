@@ -155,6 +155,61 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
     });
   });
 
+  test("plans: [] flow-style empty array → gate runs without PLAN_NOT_IN_STATUS noise", () => {
+    withFixtures((_dir, statusPath, compassPath) => {
+      writeFileSync(
+        compassPath,
+        `---
+iteration_id: v9.9.9
+start_date: 2026-08-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans: []
+---
+`,
+      );
+      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("transition: phase-2-execute");
+      // Parsed as an empty array: the frontmatter schema accepts it, and the
+      // only report is the accurate COMPASS_NO_PLANS — no string-misparse
+      // COMPASS_INVALID_FIELD and no per-plan PLAN_NOT_IN_STATUS noise.
+      expect(result.stderr).toContain("COMPASS_NO_PLANS");
+      expect(result.stderr).not.toContain("COMPASS_INVALID_FIELD");
+      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+    });
+  });
+
+  test("plans: [a, b] flow-style array → gate checks those plan ids", () => {
+    withFixtures((_dir, statusPath, compassPath) => {
+      writeFileSync(
+        compassPath,
+        `---
+iteration_id: v9.9.9
+start_date: 2026-08-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans: [plan-a, plan-b]
+---
+`,
+      );
+      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("transition: phase-2-execute");
+      // Parsed as ["plan-a", "plan-b"]: both ids are looked up in status.json
+      // and reported as still-executing (PLAN_NOT_DONE) — not lost to a
+      // scalar misparse (COMPASS_NO_PLANS / COMPASS_INVALID_FIELD).
+      expect(result.stderr).toContain("PLAN_NOT_DONE");
+      expect(result.stderr).toContain("plan-a");
+      expect(result.stderr).toContain("plan-b");
+      expect(result.stderr).not.toContain("COMPASS_NO_PLANS");
+      expect(result.stderr).not.toContain("COMPASS_INVALID_FIELD");
+      expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
+    });
+  });
+
   test("missing status file → exit 1 with precise message", () => {
     withFixtures((dir, _statusPath, compassPath) => {
       const result = runCli(["iteration", "gate", "--status", join(dir, "nope.json"), "--compass", compassPath]);

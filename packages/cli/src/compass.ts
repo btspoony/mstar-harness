@@ -42,8 +42,33 @@ export function parseCompassFrontmatter(filePath: string): Record<string, unknow
       throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
     }
     const value = kv[2]!.trim();
-    doc[kv[1]!] = value === "" ? null : value.replace(/^["']|["']$/g, "");
+    // A flat flow-style array (`plans: []` / `plans: [a, b]`) becomes an
+    // array of trimmed string items; anything else stays a scalar (empty
+    // value → null, like before).
+    doc[kv[1]!] =
+      value === "" ? null : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
     listKey = value === "" ? kv[1] : null;
   }
   return doc;
+}
+
+function parseFlowArray(raw: string, filePath: string): string[] {
+  const inner = raw.slice(1, -1);
+  if (/[[\]]/.test(inner)) {
+    throw new Error(
+      `nested flow-style array in ${filePath}: ${JSON.stringify(raw)} — only flat scalar items are supported (e.g. [a, b])`,
+    );
+  }
+  const items: string[] = [];
+  for (const part of inner.split(",")) {
+    const item = part.trim().replace(/^["']|["']$/g, "");
+    if (item === "") continue;
+    if (item.includes(",")) {
+      throw new Error(
+        `ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} — item contains a comma that cannot be split unambiguously (flat scalar items only)`,
+      );
+    }
+    items.push(item);
+  }
+  return items;
 }
