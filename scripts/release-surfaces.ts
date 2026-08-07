@@ -13,6 +13,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
   { label: "monorepo root", path: "package.json" },
   { label: "@mstar-harness/cli", path: "packages/cli/package.json" },
   { label: "@mstar-harness/opencode", path: "packages/opencode/package.json" },
+  { label: "@mstar-harness/engine", path: "packages/engine/package.json" },
   { label: "Cursor plugin", path: ".cursor-plugin/plugin.json" },
   { label: "Codex plugin", path: ".codex-plugin/plugin.json" },
   { label: "Kimi plugin", path: ".kimi-plugin/plugin.json" },
@@ -30,7 +31,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
 export type ChangelogTarget = {
   path: string;
   lang: "en" | "cn";
-  pkg: "root" | "cli" | "opencode";
+  pkg: "root" | "cli" | "opencode" | "engine";
   hasRegistryTable: boolean;
 };
 
@@ -39,6 +40,7 @@ export const CHANGELOGS: readonly ChangelogTarget[] = [
   { path: "CHANGELOG_CN.md", lang: "cn", pkg: "root", hasRegistryTable: true },
   { path: "packages/cli/CHANGELOG.md", lang: "en", pkg: "cli", hasRegistryTable: false },
   { path: "packages/opencode/CHANGELOG.md", lang: "en", pkg: "opencode", hasRegistryTable: false },
+  { path: "packages/engine/CHANGELOG.md", lang: "en", pkg: "engine", hasRegistryTable: false },
 ] as const;
 
 /** INSTALL.md ZCode marketplace example carries a quoted version field. */

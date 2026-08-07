@@ -21,7 +21,7 @@ assembles into `CHANGELOG.md` / `CHANGELOG_CN.md` / `packages/*/CHANGELOG.md` at
 ```markdown
 ---
 category: Harness        # optional; section header. Default per package (see below).
-packages: root           # optional; comma list of root | cli | opencode. Default: root.
+packages: root           # optional; comma list of root | cli | opencode | engine. Default: root.
 ---
 
 - English bullet (markdown). Use **bold** lead-ins like the real changelogs.
@@ -33,9 +33,9 @@ packages: root           # optional; comma list of root | cli | opencode. Defaul
 ```
 
 - **`category`** drives the `### <Category>` header under the version section.
-  Defaults: `root` → `Harness`, `cli` → `Changed`, `opencode` → `Bundled harness skills (\`harness-skills/\` at publish)`.
+  Defaults: `root` → `Harness`, `cli` → `Changed`, `opencode` → `Bundled harness skills (\`harness-skills/\` at publish)`, `engine` → `Changed`.
 - **`packages`** routes bullets to changelog(s). `root` → root EN + root CN.
-  `cli`/`opencode` → that package's changelog (EN only).
+  `cli`/`opencode`/`engine` → that package's changelog (EN only).
 - The body before `<!-- CN -->` is English; after it is Chinese. Chinese is written only to
   `CHANGELOG_CN.md` (root). If a `root` fragment omits the CN block, the English bullets are
   reused for the Chinese section.

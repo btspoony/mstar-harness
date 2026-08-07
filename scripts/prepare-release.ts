@@ -12,14 +12,14 @@
  *   2. Reads `.changes/unreleased/*.md` fragments and groups them by changelog + category.
  *   3. Inserts a new `## [<version>] - <date>` section into each changelog
  *      (under `## [Unreleased]`), auto-appending a Version-alignment block.
- *   4. Bumps all 10 version surfaces (including the portable Agent Plugins manifest) + the INSTALL.md ZCode marketplace example.
+ *   4. Bumps all 11 version surfaces (including the portable Agent Plugins manifest) + the INSTALL.md ZCode marketplace example.
  *   5. Bumps the version registry table cells in the root changelogs (head region only).
  *   6. Moves consumed fragments to `.changes/archive/<version>/`.
  *
  * Fragment format (`.changes/unreleased/<slug>.md`):
  *   ---
  *   category: Harness        # optional; default per package (Harness | Changed | ...)
- *   packages: root           # optional; comma list of root | cli | opencode
+ *   packages: root           # optional; comma list of root | cli | opencode | engine
  *   ---
  *   - English bullet.
  *   - Another English bullet.
@@ -54,6 +54,7 @@ const DEFAULT_CATEGORY: Record<string, string> = {
   root: "Harness",
   cli: "Changed",
   opencode: "Bundled harness skills (`harness-skills/` at publish)",
+  engine: "Changed",
 };
 
 function parseArgs(argv: string[]): { version?: string; bump: "patch" | "minor" } {
@@ -155,14 +156,14 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
       lines.push(
         "### 版本对齐",
         "",
-        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ ${version}**。`,
+        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、\`@mstar-harness/engine\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ ${version}**。`,
         "",
       );
     } else {
       lines.push(
         "### Version alignment",
         "",
-        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ ${version}**.`,
+        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, \`@mstar-harness/engine\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ ${version}**.`,
         "",
       );
     }
@@ -173,9 +174,9 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
     lines.push(`### ${cat}`, "");
     if (bullets.length) lines.push(...bullets, "");
     const note =
-      target.pkg === "cli"
-        ? `- Version alignment with harness **${version}**.`
-        : `- Version alignment with harness **${version}** (no OpenCode package API change).`;
+      target.pkg === "opencode"
+        ? `- Version alignment with harness **${version}** (no OpenCode package API change).`
+        : `- Version alignment with harness **${version}**.`;
     lines.push(note, "", `See root [CHANGELOG.md](../../CHANGELOG.md) **${version}**.`, "");
   }
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
