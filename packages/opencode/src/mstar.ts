@@ -12,10 +12,17 @@
  *   `.plans/`|`plans/`); repos with a non-probed harness root (e.g. `.harness/`)
  *   MUST set `MSTAR_HARNESS_DIR` in the OpenCode server env — see package README
  *   "Status write lint (hook coverage)" (qc2 F-006).
+ * - Non-blocking `beforeDispatch` presence lint (roadmap §8.5, v1): on `task`-tool
+ *   executions (subagent dispatch), parses the prompt for the three core
+ *   Assignment header fields (`Execute as` / `Delegation` / `Task category`) and
+ *   emits `warn` lines for missing ones. Never blocks. Field-presence only via
+ *   `engine/core` types — full Assignment validation (Working-branch forms,
+ *   N→seat mapping, tri identity) is a later slice via
+ *   `dispatch.validateAssignmentFields`.
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import { resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
-import type { GateResult, StatusDoc } from "@mstar-harness/engine";
+import type { GateResult, Severity, StatusDoc, ValidationResult } from "@mstar-harness/engine";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -260,6 +267,123 @@ export function validateStatusWrite(
   }
 }
 
+/**
+ * `## Assignment` heading marker: a document carrying this heading is treated
+ * as Assignment-shaped and linted even when none of the three fields is found.
+ */
+const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
+
+/**
+ * Line-anchored match of an Assignment header field, tolerating optional list
+ * bullets and `**bold**` markers around the key (`- **Execute as**: x`). The
+ * value must be non-empty (`(\S.*)`) — a bare `Delegation:` counts as missing.
+ */
+const ASSIGNMENT_FIELD_RE =
+  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
+
+type AssignmentPresenceKey = "Execute as" | "Delegation" | "Task category";
+
+const ASSIGNMENT_PRESENCE_SPECS: Record<
+  AssignmentPresenceKey,
+  { code: string; severity: Severity; message: string; fix: string }
+> = {
+  "Execute as": {
+    code: "assignment.presence.missing-execute-as",
+    severity: "high",
+    message: 'Assignment is missing "Execute as: <role-id>" — the identity lock that binds this dispatch to a role.',
+    fix: 'add "Execute as: <role-id>" to the Assignment header',
+  },
+  Delegation: {
+    code: "assignment.presence.missing-delegation",
+    severity: "medium",
+    message: 'Assignment is missing "Delegation: allowed|forbidden" — unset assignments default to forbidden.',
+    fix: 'add "Delegation: allowed|forbidden" to the Assignment header',
+  },
+  "Task category": {
+    code: "assignment.presence.missing-task-category",
+    severity: "medium",
+    message: 'Assignment is missing "Task category: <category>" — routing falls back to a generic worker.',
+    fix: 'add "Task category: <category>" to the Assignment header',
+  },
+};
+
+/**
+ * Assignment header field-presence check (roadmap §4.3 + §8.5 `beforeDispatch`, v1).
+ *
+ * Parses the Assignment markdown for the PRESENCE of the three core fields
+ * only — `Execute as: <role-id>` / `Delegation: allowed|forbidden` /
+ * `Task category: <category>`. Missing fields come back as `medium`/`high`
+ * violations (codes `assignment.presence.missing-*`). No value-level
+ * validation (Working-branch forms, N→seat mapping, tri identity) — that is
+ * Slice 3 via `dispatch.validateAssignmentFields`, which extends this hook.
+ *
+ * Text that is not Assignment-shaped (no `## Assignment` heading and none of
+ * the three fields) returns `{ ok: true, violations: [] }` so unrelated
+ * prompts never produce false-positive warnings.
+ */
+export function validateAssignmentPresence(assignmentText: string): GateResult {
+  const present = new Set<string>();
+  for (const match of assignmentText.matchAll(ASSIGNMENT_FIELD_RE)) {
+    present.add(match[1]);
+  }
+
+  const violations: ValidationResult[] = [];
+  for (const [key, spec] of Object.entries(ASSIGNMENT_PRESENCE_SPECS)) {
+    if (present.has(key)) continue;
+    violations.push({
+      ok: false,
+      severity: spec.severity,
+      code: spec.code,
+      message: spec.message,
+      fix: spec.fix,
+    });
+  }
+
+  if (
+    violations.length === Object.keys(ASSIGNMENT_PRESENCE_SPECS).length &&
+    !ASSIGNMENT_HEADING_RE.test(assignmentText)
+  ) {
+    return { ok: true, violations: [] };
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+/**
+ * Non-blocking dispatch-side lint (roadmap §8.5 `beforeDispatch`, v1).
+ *
+ * Runs `validateAssignmentPresence` on a subagent-prompt / Assignment text
+ * and logs one `warn` line per missing core field through the
+ * `[mstar-harness]` channel. NEVER throws and NEVER blocks (v1 hard
+ * constraint) — unexpected errors degrade to a single `error` log and a
+ * `null` return.
+ *
+ * Returns the engine gate result for Assignment-shaped text, an ok result
+ * for text that is not an Assignment, and `null` only when the check aborted.
+ */
+export function validateDispatchAssignment(
+  assignmentText: string,
+  opts: { log?: StatusLogger } = {},
+): GateResult | null {
+  const log = opts.log ?? defaultStatusLogger;
+  try {
+    const result = validateAssignmentPresence(assignmentText);
+    if (!result.ok) {
+      for (const violation of result.violations) {
+        const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
+        log(
+          "warn",
+          `assignment presence: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
+        );
+      }
+    }
+    return result;
+  } catch (error) {
+    // v1 hard constraint: never throw, never block.
+    log("error", `assignment presence check aborted: ${(error as Error).message}`);
+    return null;
+  }
+}
+
 export const MorningStarHarnessPlugin: Plugin = async () => {
   const homeDir = os.homedir();
   const envConfigDir = normalizePath(process.env.OPENCODE_CONFIG_DIR, homeDir);
@@ -303,11 +427,24 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
     },
 
     "tool.execute.before": async (input, output) => {
+      const args = (output?.args ?? {}) as Record<string, unknown>;
+
+      // beforeDispatch-equivalent (v1): non-blocking presence warn on
+      // subagent dispatch. OpenCode's `task` tool carries the subagent
+      // prompt — the harness Assignment markdown — in `args.prompt`; missing
+      // core fields (Execute as / Delegation / Task category) are logged as
+      // warnings. Never blocks, never modifies args (v1 hard constraint).
+      // Full Assignment validation lands in a later slice via
+      // `dispatch.validateAssignmentFields`.
+      if (input.tool === "task" && typeof args.prompt === "string") {
+        validateDispatchAssignment(args.prompt);
+        return;
+      }
+
       // Non-blocking status.json write lint (v1): warn only — never modify
       // args, never throw. Structured file-write tools (`write`/`edit`) carry
       // the target path in `args.filePath`; bash-heredoc writes are out of v1
       // scope. Tool implementations may call `validateStatusWrite` directly.
-      const args = (output?.args ?? {}) as Record<string, unknown>;
       if (typeof args.filePath !== "string") return;
 
       if (input.tool === "write") {
