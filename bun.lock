@@ -37,6 +37,7 @@
       "name": "@mstar-harness/opencode",
       "version": "1.8.8",
       "dependencies": {
+        "@mstar-harness/engine": "1.8.8",
         "@opencode-ai/plugin": "1.4.8",
       },
     },

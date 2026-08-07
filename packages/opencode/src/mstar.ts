@@ -5,8 +5,13 @@
  * - Registers skill paths only inside this package: `harness-skills/` (synced at build / repo postinstall; includes `mstar-host`).
  * - Loads agents from `harness-agents/` only (same sync). Does not use `process.cwd()` so OpenCode project cwd does not matter.
  * - Loads custom commands from `harness-commands/` only (same sync).
+ * - Non-blocking `status.json` write lint (roadmap §8.5 `beforeStatusWrite`, v1):
+ *   on structured file-write tools targeting `{HARNESS_DIR}/status.json`, runs the
+ *   engine `status.validateStatus` and emits a `warn` on violations. Never blocks.
  */
 import type { Plugin } from "@opencode-ai/plugin";
+import { resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
+import type { GateResult, StatusDoc } from "@mstar-harness/engine";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -185,6 +190,72 @@ const loadBundledCommands = (): Record<string, JsonObject> => {
   return result;
 };
 
+/**
+ * Plugin log channel (roadmap §8.5 `HostAdapter.log`). v1 routes to the
+ * console — OpenCode captures plugin stdout/stderr into its server log.
+ */
+export type StatusLogger = (level: "info" | "warn" | "error", message: string) => void;
+
+const defaultStatusLogger: StatusLogger = (level, message) => {
+  const line = `[mstar-harness] ${message}`;
+  if (level === "warn") console.warn(line);
+  else if (level === "error") console.error(line);
+  else console.log(line);
+};
+
+const STATUS_FILE = "status.json";
+
+/**
+ * Non-blocking `status.json` write lint (roadmap §8.5 `beforeStatusWrite`, v1).
+ *
+ * Given the target path of a file write, resolves `{HARNESS_DIR}` from the
+ * target via the engine (`path.resolveHarnessDir` find-first-stop) and runs
+ * `status.validateStatus` on the document about to be written (`opts.doc`) or
+ * on the current file. Violations are surfaced as `warn` through the plugin
+ * log channel. NEVER throws and NEVER blocks (v1 hard constraint) — unexpected
+ * errors degrade to a single `error` log and a `null` return.
+ *
+ * Returns the engine gate result when the target is the canonical harness
+ * `status.json` and something could be validated; `null` otherwise (not a
+ * harness status write, file does not exist yet, or validation aborted).
+ */
+export function validateStatusWrite(
+  targetPath: string,
+  opts: { doc?: unknown; log?: StatusLogger } = {},
+): GateResult | null {
+  const log = opts.log ?? defaultStatusLogger;
+  try {
+    const resolved = path.resolve(targetPath);
+    if (path.basename(resolved) !== STATUS_FILE) return null;
+
+    const harnessDir = resolveHarnessDir(path.dirname(resolved));
+    if (!harnessDir || path.join(harnessDir, STATUS_FILE) !== resolved) return null;
+
+    const result: GateResult | null =
+      opts.doc !== undefined
+        ? validateStatus(opts.doc as StatusDoc)
+        : fs.existsSync(resolved)
+          ? validateStatus(resolved)
+          : null;
+    if (!result) return null;
+
+    if (!result.ok) {
+      for (const violation of result.violations) {
+        const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
+        log(
+          "warn",
+          `status.json validation: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
+        );
+      }
+    }
+    return result;
+  } catch (error) {
+    // v1 hard constraint: never throw, never block.
+    log("error", `status.json validation aborted: ${(error as Error).message}`);
+    return null;
+  }
+}
+
 export const MorningStarHarnessPlugin: Plugin = async () => {
   const homeDir = os.homedir();
   const envConfigDir = normalizePath(process.env.OPENCODE_CONFIG_DIR, homeDir);
@@ -224,6 +295,32 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
           ...(runtimeConfig.command[commandId] || {}),
           ...definition,
         };
+      }
+    },
+
+    "tool.execute.before": async (input, output) => {
+      // Non-blocking status.json write lint (v1): warn only — never modify
+      // args, never throw. Structured file-write tools (`write`/`edit`) carry
+      // the target path in `args.filePath`; bash-heredoc writes are out of v1
+      // scope. Tool implementations may call `validateStatusWrite` directly.
+      const args = (output?.args ?? {}) as Record<string, unknown>;
+      if (typeof args.filePath !== "string") return;
+
+      if (input.tool === "write") {
+        // Validate the document about to be written when it parses as JSON;
+        // otherwise fall back to the current on-disk state.
+        const rawContent = args.content;
+        let doc: unknown;
+        if (typeof rawContent === "string") {
+          try {
+            doc = JSON.parse(rawContent);
+          } catch {
+            doc = undefined;
+          }
+        }
+        validateStatusWrite(args.filePath, { doc });
+      } else if (input.tool === "edit") {
+        validateStatusWrite(args.filePath);
       }
     },
 
