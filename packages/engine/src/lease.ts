@@ -279,6 +279,10 @@ export function validateIntegrationMergeLease(lease: unknown): GateResult {
  *   lease (§ Orphan recovery — recovery is PM/human-owned).
  * - `null`/tombstone stored lease → refused, not silently replaced
  *   (§ Agent prohibitions).
+ * - The fields to be written are validated via `validateExecutionLease`
+ *   **before** the Todo/Blocked → InProgress transition commits: a relative
+ *   `worktree_path` or missing fields are rejected without mutating the row
+ *   (the written lease must itself pass the validator).
  *
  * Pure: returns the resulting row; the caller performs the locked
  * read-check-replace-verify around `status.json` and persists it.
@@ -360,19 +364,28 @@ export function claimLease(row: PlanRow, holder: string, fields: ClaimLeaseField
     working_branch: fields.working_branch,
     ...(fields.session_label !== undefined ? { session_label: fields.session_label } : {}),
   };
+  // Validate before committing the transition: reject invalid ClaimLeaseFields
+  // (relative worktree_path, missing fields) without mutating the row.
+  const gate = validateExecutionLease(claimed);
+  if (!gate.ok) {
+    return { ok: false, row, violations: gate.violations };
+  }
   return { ok: true, row: { ...row, status: "InProgress", execution_lease: claimed }, outcome: "claimed", violations: [] };
 }
 
 /**
  * Release transition — deletes `execution_lease` entirely, never writes
  * `null` (status-and-residuals.md § "Hold, release, and override" + § Agent
- * prohibitions). Idempotent when no lease is present. The `Done` authority
- * deletes the lease in the same complete-file update as `status: "Done"` —
- * **only after** successful integration merge into `spec_integration_branch`
- * (§ Integration merge protocol); the caller enforces that ordering around
- * the locked update.
+ * prohibitions). Requires the **same-session holder**: when `holder` differs
+ * from the stored lease `holder`, the release is refused and the row is left
+ * unmodified — a different holder must Blocked, never released by another
+ * session (no timestamp makes a lease stealable). Idempotent when no lease
+ * is present. The `Done` authority deletes the lease in the same
+ * complete-file update as `status: "Done"` — **only after** successful
+ * integration merge into `spec_integration_branch` (§ Integration merge
+ * protocol); the caller enforces that ordering around the locked update.
  */
-export function releaseLease(row: PlanRow): LeaseTransition {
+export function releaseLease(row: PlanRow, holder: string): LeaseTransition {
   if (row.execution_lease === undefined) {
     return { ok: true, row, outcome: "released", violations: [] };
   }
@@ -385,6 +398,19 @@ export function releaseLease(row: PlanRow): LeaseTransition {
           "high",
           "lease.release.tombstone",
           "execution_lease must be an object — null and tombstone objects are invalid; resolve the corrupt state before releasing",
+        ),
+      ],
+    };
+  }
+  if (row.execution_lease.holder !== holder) {
+    return {
+      ok: false,
+      row,
+      violations: [
+        violation(
+          "high",
+          "lease.release.other-holder",
+          `execution_lease held by ${JSON.stringify(row.execution_lease.holder)} — release requires the same-session holder; a different holder must Blocked (no timestamp makes it stealable)`,
         ),
       ],
     };

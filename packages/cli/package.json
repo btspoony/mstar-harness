@@ -19,6 +19,7 @@
     "dev": "bun run src/index.ts",
     "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/mstar-harness.js",
     "check": "bun run src/index.ts --help",
+    "test": "bun test",
     "prepublishOnly": "bun run build && bun run check"
   },
   "engines": {

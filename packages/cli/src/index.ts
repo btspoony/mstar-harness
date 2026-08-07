@@ -5,7 +5,8 @@ import path from "node:path";
 import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
-import { archiveResiduals, resolveHarnessDir, validateExecutionLease, validateStatus } from "@mstar-harness/engine";
+import { archiveResiduals, resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
+import { verifyPlanExecutionLease } from "./lease-verify";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
@@ -326,24 +327,9 @@ function resolveLeaseHarnessDir(harnessArg?: string): string {
   return harnessDir;
 }
 
-/**
- * Read-compat lookup of a plan's execution_lease: SSOT location is the plan
- * row (`plans[].execution_lease`); the real control `.harness/status.json`
- * (written 2026-08-08) stores it at `plans[].metadata.execution_lease`, so
- * that legacy/hand-written location is read as a fallback.
- */
-function planExecutionLease(row: Record<string, unknown>): unknown {
-  if (row.execution_lease !== undefined) return row.execution_lease;
-  const meta = row.metadata;
-  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
-    return (meta as Record<string, unknown>).execution_lease;
-  }
-  return undefined;
-}
-
 leaseCommand
   .command("verify")
-  .description("Verify a plan's execution_lease (missing/invalid → exit 1 with violations)")
+  .description("Verify a plan's execution_lease (missing/invalid/non-SSOT location → exit 1 with violations)")
   .argument("<plan-id>", "Plan id whose execution_lease is verified")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
   .action((planId: string, options: { harness?: string }) => {
@@ -368,29 +354,18 @@ leaseCommand
         process.exitCode = 1;
         return;
       }
-      const row = matches[0];
-      const lease = planExecutionLease(row);
-      if (lease === undefined) {
-        console.error(pc.red(`${statusPath}: FAIL plan ${planId}`));
-        if (row.status === "InProgress") {
-          console.error(
-            "  - [high] lease.verify.orphan: plan is InProgress without an execution_lease — orphan: STOP, no writable dispatch until recovery (status-and-residuals.md § Orphan recovery)",
-          );
-        } else {
-          console.error(`  - [high] lease.verify.missing: plan ${planId} has no execution_lease`);
-        }
-        process.exitCode = 1;
-        return;
-      }
-      const gate = validateExecutionLease(lease);
-      if (gate.ok) {
-        const holder = String((lease as Record<string, unknown>).holder ?? "");
+      // SSOT-location rules live in lease-verify.ts (pure, tested): row-level
+      // plans[].execution_lease is SSOT; metadata-only / dual-write are
+      // violations, never equivalent to SSOT success.
+      const result = verifyPlanExecutionLease(matches[0], planId);
+      if (result.ok) {
+        const holder = String((result.lease as Record<string, unknown>).holder ?? "");
         console.log(pc.green(`${statusPath}: OK plan ${planId} — execution_lease valid (holder ${holder})`));
         return;
       }
-      const count = gate.violations.length;
+      const count = result.violations.length;
       console.error(pc.red(`${statusPath}: FAIL plan ${planId} (${count} violation${count === 1 ? "" : "s"})`));
-      for (const violation of gate.violations) {
+      for (const violation of result.violations) {
         console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
         if (violation.fix) console.error(`    fix: ${violation.fix}`);
       }

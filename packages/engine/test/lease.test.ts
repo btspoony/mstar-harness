@@ -47,6 +47,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PlanRow } from "../src/status.js";
+import type { ClaimLeaseFields } from "../src/lease.js";
 import {
   canSteal,
   claimLease,
@@ -351,6 +352,41 @@ describe("claimLease", () => {
     expect(violationCodes(result)).toContain("lease.claim.tombstone");
     expect(result.row.execution_lease).toBeNull();
   });
+
+  test("relative worktree_path in claim fields is rejected before the transition (row unmutated)", () => {
+    // Fix round (reviewer): ClaimLeaseFields must be validated via
+    // validateExecutionLease BEFORE the Todo/Blocked → InProgress transition —
+    // a relative worktree_path must not be written.
+    const prior = row();
+    const result = claimLease(prior, "cursor:bc-1234", { ...FIELDS, worktree_path: "worktrees/plan-a" });
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.execution-lease.invalid-worktree-path");
+    expect(result.row).toEqual(prior);
+    expect(result.row.status).toBe("Todo");
+    expect(result.row.execution_lease).toBeUndefined();
+  });
+
+  test("missing worktree_path in claim fields is rejected before the transition (row unmutated)", () => {
+    const prior = row();
+    const result = claimLease(prior, "cursor:bc-1234", {
+      working_branch: FIELDS.working_branch,
+    } as unknown as ClaimLeaseFields);
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.execution-lease.missing-worktree-path");
+    expect(result.row).toEqual(prior);
+    expect(result.row.execution_lease).toBeUndefined();
+  });
+
+  test("missing working_branch in claim fields is rejected before the transition (row unmutated)", () => {
+    const prior = row();
+    const result = claimLease(prior, "cursor:bc-1234", {
+      worktree_path: FIELDS.worktree_path,
+    } as unknown as ClaimLeaseFields);
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.execution-lease.missing-working-branch");
+    expect(result.row).toEqual(prior);
+    expect(result.row.execution_lease).toBeUndefined();
+  });
 });
 
 describe("releaseLease", () => {
@@ -367,7 +403,7 @@ describe("releaseLease", () => {
   test("release deletes execution_lease entirely (never writes null)", () => {
     // Spec: § Hold, release, and override — delete execution_lease in the
     // same complete-file update — never `null`; § Agent prohibitions.
-    const result = releaseLease(leasedRow());
+    const result = releaseLease(leasedRow(), "cursor:bc-1234");
     expect(result.ok).toBe(true);
     expect(result.outcome).toBe("released");
     expect("execution_lease" in result.row).toBe(false);
@@ -378,7 +414,7 @@ describe("releaseLease", () => {
     // Spec: § Agent prohibitions — writers MUST preserve unrelated plan rows
     // and fields on every lease mutation.
     const prior = leasedRow();
-    const result = releaseLease(prior);
+    const result = releaseLease(prior, "cursor:bc-1234");
     expect(result.row.id).toBe("plan-a");
     expect(result.row.title).toBe("Plan A");
     expect(result.row.status).toBe("InReview");
@@ -388,7 +424,7 @@ describe("releaseLease", () => {
   test("release is idempotent when no lease is present", () => {
     const prior = leasedRow();
     delete prior.execution_lease;
-    const result = releaseLease(prior);
+    const result = releaseLease(prior, "cursor:bc-1234");
     expect(result.ok).toBe(true);
     expect(result.outcome).toBe("released");
     expect(result.row).toEqual(prior);
@@ -397,10 +433,22 @@ describe("releaseLease", () => {
   test("tombstone lease is rejected, row unchanged", () => {
     const prior = leasedRow();
     prior.execution_lease = null;
-    const result = releaseLease(prior);
+    const result = releaseLease(prior, "cursor:bc-1234");
     expect(result.ok).toBe(false);
     expect(violationCodes(result)).toContain("lease.release.tombstone");
     expect(result.row.execution_lease).toBeNull();
+  });
+
+  test("different-holder release is refused, lease preserved (same-session holder check)", () => {
+    // Spec: § Hold, release, and override — release is a same-session-holder
+    // operation; no timestamp makes a lease stealable, so another holder must
+    // Blocked instead of releasing.
+    const prior = leasedRow();
+    const result = releaseLease(prior, "other:session-99");
+    expect(result.ok).toBe(false);
+    expect(violationCodes(result)).toContain("lease.release.other-holder");
+    expect(result.row).toEqual(prior);
+    expect(result.row.execution_lease).toEqual(prior.execution_lease);
   });
 });
 
