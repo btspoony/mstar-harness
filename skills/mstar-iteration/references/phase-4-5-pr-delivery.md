@@ -47,6 +47,8 @@
 
 **顺序记忆**：`observe findings → fix locally early → wait until CI + review wave idle → push batch → wait new wave → repeat`。
 
+> **Engine check (when available):** run `mstar iteration push-cadence [--ci-running] [--review-wave]` (or `import { pushCadenceProbe } from "@mstar-harness/engine"` in a host hook) to probe the push gate above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ### 5.1 Loop（repeat until §5.5 exit）
 
 1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**

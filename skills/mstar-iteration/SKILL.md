@@ -45,6 +45,8 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 | **→ 迭代交付完成** | §5.5 exit checklist 全 `[x]` | PR mergeable；required CI 全绿；reviews resolved | Phase 4 开 PR 即宣称完成 |
 | **iteration-start → integration branch** | §1.6 Review & Edit chain | 三角色按序 invoke；**specs** 为主产出；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene + compass `status: locked` | PM 代做专业编辑；并行三角色；product/architect 写 knowledge；临时笔记进 specs |
 
+> **Engine check (when available):** run `mstar iteration gate --status <status.json> --compass <delivery-compass.md>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` in a host hook) to evaluate the transition gate above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 **误判信号**：对话里出现 compound 摘要、roadmap 更新、或「所有 plan 已完成」但 **未** 打印 §3.1 / §3.5 checklist → 视为 **Phase 3 未执行**，回到 §3.0。
 
 **per-plan 状态 SSOT**：`{HARNESS_DIR}/status.json`（per-plan Todo/InProgress/InReview/Done）。
@@ -156,6 +158,8 @@ plans: []
 | target_branch | <PR target> |
 ```
 
+> **Engine check (when available):** import `validateCompassFrontmatter` from `@mstar-harness/engine` in a host hook to validate the compass frontmatter above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ### 1.4 更新索引
 
 在 `{ITERATION_DIR}/README.md` 中添加**一行**（首次创建时建立表头；**一行 = 一次迭代**，不拆 compass/workspace 双行）：
@@ -163,6 +167,8 @@ plans: []
 | Iteration | Path | Description | Status |
 |-----------|------|-------------|--------|
 | `<iteration-id>` | [`<iteration-id>/`](<iteration-id>/) | `<简短描述>` | `active` |
+
+> **Engine check (when available):** import `assertIndexRowObligations` from `@mstar-harness/engine` in a host hook to assert the index-row obligations above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### 1.5 登记到 status.json（formal iteration 必填）
 

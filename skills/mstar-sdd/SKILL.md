@@ -23,6 +23,8 @@ If you were dispatched as an SDD implementer or task reviewer, skip PM orchestra
 
 **Optional:** **`SDD implementer session: sticky`** — same implementer subagent across sequential tasks on one plan/branch; **task reviewers stay fresh per task**. SSOT → **`references/sticky-implementer-session.md`**.
 
+> **Engine check (when available):** import `implementerSessionStickyRules` from `@mstar-harness/engine` in a host hook to validate the sticky resume decision above (no CLI form yet). Skill text below remains authoritative when the runtime is absent.
+
 **Narration:** at most one short line between tool calls — ledger and file paths carry the record.
 
 **Continuous execution:** do not check in with the human between tasks. Stop only for BLOCKED, genuine ambiguity, or all tasks complete.
@@ -53,6 +55,8 @@ Batch all findings for the human in one message. If clean, proceed silently.
 **Never** dispatch multiple implementers in parallel (write conflicts).
 
 Detail: **`references/file-handoffs.md`**.
+
+> **Engine check (when available):** run `mstar sdd workspace <plan-id>` / `mstar sdd task-brief <plan-file> <task-number>` / `mstar sdd review-package <base> <head>` (or `import { assertBaseSha, sddWorkspace, taskBrief, reviewPackage } from "@mstar-harness/engine"` in a host hook) to drive the loop steps above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Implementer statuses
 
@@ -93,6 +97,8 @@ At start: `cat {SDD_DIR}/progress.md`. Tasks marked complete are DONE — do not
 Append on clean review: `Task N: complete (<base>..<head>, review clean)`.
 
 Minor findings → `## Minor (for plan QC)` section in same file.
+
+> **Engine check (when available):** import `readProgressLedger` from `@mstar-harness/engine` in a host hook to read the ledger above (no CLI form yet). Skill text below remains authoritative when the runtime is absent.
 
 ## Red flags (NEVER)
 
