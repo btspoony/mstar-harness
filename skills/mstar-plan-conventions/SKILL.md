@@ -25,7 +25,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/` |
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
 
-> **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveSpecsDir` from `@mstar-harness/engine` in a host hook to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve [path]` (`--json` for machine output) to print the resolved dirs — to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### `{HARNESS_DIR}` 解析顺序（找到即停）
 
@@ -48,7 +48,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 **Legacy（仅兼容读）**：若以上皆无内容，但 `{HARNESS_DIR}/designs/` 或仓库根 `designs/` **非空**，可作 `{SPECS_DIR}` 使用；init 时**不**新建 `designs/`。
 
-> **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook to confirm the candidate order (empty-dir-as-absent included). Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints the resolved specs dir) — to confirm the candidate order (empty-dir-as-absent included). Skill text below remains authoritative when the runtime is absent.
 
 可选项目选择：部分 spoke 仓库另跟踪 `{HARNESS_DIR}/roadmap.md` — **非**默认 tracked；仅在项目 opt-in 时提及。
 
