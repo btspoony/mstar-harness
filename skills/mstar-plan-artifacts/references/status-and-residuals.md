@@ -476,7 +476,6 @@ Prefer **`archived/residuals/`**; migrate and delete history key when possible.
 jq '.residual_findings["01-data-infrastructure"] // .metadata.residual_findings["01-data-infrastructure"]' .mstar/status.json
 jq '.entries[] | select(.id == "R1")' .mstar/archived/residuals/01-data-infrastructure.json
 # Engine rollup (read-only, no CLI form): import { techDebtRollup } from "@mstar-harness/engine" in a host hook
-mstar status validate .mstar/status.json
 ```
 
 (`//` right-hand side = legacy read path.)

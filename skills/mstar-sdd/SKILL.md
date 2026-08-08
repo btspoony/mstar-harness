@@ -44,8 +44,8 @@ Batch all findings for the human in one message. If clean, proceed silently.
 2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<control_worktree_path>` 或 `mstar sdd workspace <plan-id> <control_worktree_path>`；缺 status.json 的 linked worktree 会 fail closed）
 3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
-  - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
-  - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
+    - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
+    - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
 5. On `DONE`: `mstar sdd review-package BASE HEAD` → diff file
 6. Dispatch **fresh** task reviewer — role **`generalPurpose`** (L2; **not** `qc-specialist*`; host role field → `mstar-host` C5) — brief, report, diff, Global Constraints — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
 7. Fix loop for Critical/Important; re-review until approved
