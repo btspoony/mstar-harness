@@ -55,3 +55,6 @@ export function compareSemver(a: string, b: string): number {
   }
   return 0;
 }
+
+// Release note: v2.0.0 first release attempt failed at install (engine runtime-dep 404);
+// engine is now a build-time devDependency (consumers bundle it) — see git history.
