@@ -74,7 +74,7 @@ An advisory `agent/pre-step` waterfall listener appends one **`mstar-engine-stat
 
 ## Development
 
-Commands (from `packages/dsh`): the coverage gate is per-file 100% on `src/` (dsh testing policy); the build bun-bundles the src entries into `dist/` (engine + schemastery inlined, cordis external) and emits tsc declarations.
+Commands (from `packages/dsh`): the coverage gate is per-file 100% on `src/` (dsh testing policy); the build bun-bundles the src entries into `dist/` (engine + schemastery inlined; `cordis` and the functional seam packages `@deepseek-ai/dsh-skill-local` + `@deepseek-ai/dsh-llm` external) and emits tsc declarations.
 
 ```sh
 bun test --coverage
@@ -102,7 +102,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 
 ## Known Limitations and Deferred Work
 
-- **Dev-time peer stubs** — the `@deepseek-ai/dsh-*` seams are type-only stubs at dev/test time (no runtime implementations), so the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform; a composed app with real seam packages is the deployment target and is not covered by this package's suite.
+- **Dev-time peer stubs** — the `@deepseek-ai/dsh-*` seams split into (a) **type-only / placeholder stubs** (`dsh-fs`, `dsh-fs-policy`, `dsh-tools`, `dsh-agent`, `dsh-invariants`, `dsh-subagent`) exposing the seam types/peer names only, and (b) **functional composition stubs** (`dsh-skill`, `dsh-skill-local`, `dsh-llm`) carrying minimal dev-time runtimes (`simplify:` markers; pinned to dsh-private `9451be2`) so composition, waterfalls, and the catalog message factory actually run in tests. The functional stubs are **externalized at build time** (`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining the stand-in code); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. Swapping in the real seam packages is deferred to P3 e2e (`20260808-dsh-seams-bundle`); a composed app with real seams is the deployment target and is not covered by this package's suite.
 - **Anti-recursion binding is Config-declared** — dsh exposes no per-agent role on the tool-execution context, so `dispatchBinding` declares one deployment-wide role; an Assignment with a different `Execute as` cannot be caught as self-recursion, and multi-role dispatchers need per-instance plugins.
 - **Lease gate diverges from opencode by design** — opencode's `beforeDispatch` runs no lease checks; the dsh lease gate is additive (`lease.dispatch.*` codes) and fires only for writable SDD/InProgress dispatches, so parity covers the field set, not the lease surface.
 - **Engine single-version pin** — `@mstar-harness/engine` is an exact `2.0.0` devDependency bundled into `dist/` (never a runtime dependency); `readHarnessVersion()` reads the dsh package manifest next to the bundle, which stays `2.0.0` by the single-version invariant.

@@ -74,7 +74,7 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入（ro
 
 ## Development
 
-命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 入口 bun 打包进 `dist/`（内联 engine 与 schemastery，cordis 保持外部）并输出 tsc 声明。
+命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 条目 bun 打包进 `dist/`（内联 engine 与 schemastery；`cordis` 与功能性 seam 包 `@deepseek-ai/dsh-skill-local` + `@deepseek-ai/dsh-llm` 保持外部）并输出 tsc 声明。
 
 ```sh
 bun test --coverage
@@ -102,7 +102,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 
 ## Known Limitations and Deferred Work
 
-- **开发期 peer stubs** —— `@deepseek-ai/dsh-*` 各 seam 在开发/测试期仅为类型 stub（无运行时实现），因此闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证；由真实 seam 包组合的应用是部署目标，不在本包测试套件覆盖内。
+- **开发期 peer stubs** —— `@deepseek-ai/dsh-*` 各 seam 分为 (a) **仅类型/占位 stub**（`dsh-fs`、`dsh-fs-policy`、`dsh-tools`、`dsh-agent`、`dsh-invariants`、`dsh-subagent`）只暴露 seam 类型/peer 名，与 (b) **功能性组合 stub**（`dsh-skill`、`dsh-skill-local`、`dsh-llm`）携带最小开发期运行时（`simplify:` 标记；钉定 dsh-private `9451be2`），使组合、瀑布链与 catalog 消息工厂在测试中真实运行。功能性 stub 在**构建时外部化**（`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-llm`——发布的 `dist/` 导入它们而非内联占位代码）；闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证。替换为真实 seam 包推迟到 P3 e2e（`20260808-dsh-seams-bundle`）；由真实 seam 组合的应用是部署目标，不在本包测试套件覆盖内。
 - **反递归绑定为 Config 声明** —— dsh 在工具执行上下文上不暴露每 agent 角色，故 `dispatchBinding` 声明单一部署级角色；`Execute as` 不同的 Assignment 无法被识别为自我递归，多角色派发方需要按实例拆分插件。
 - **租约闸门有意与 opencode 分叉** —— opencode 的 `beforeDispatch` 不运行租约检查；dsh 租约闸门是新增的（`lease.dispatch.*` 码），且仅对可写 SDD/InProgress 派发触发，故对齐覆盖字段集而非租约面。
 - **engine 单一版本钉定** —— `@mstar-harness/engine` 为精确 `2.0.0` devDependency，构建时打入 `dist/`（绝非运行时依赖）；`readHarnessVersion()` 读取 bundle 旁的 dsh 包清单，按单一版本不变量保持 `2.0.0`。
