@@ -29,10 +29,18 @@ import {
   resolveHarnessDir,
   validateAssignmentFields,
   validateExecutionLease,
+  validateIntegrationMergeLease,
   validateStatus,
   verifyPlanExecutionLease,
 } from '@mstar-harness/engine'
-import type { GateResult, StatusDoc, ValidationResult } from '@mstar-harness/engine'
+import type {
+  AssignmentFields,
+  GateResult,
+  HostAdapter,
+  IntegrationMergeLease,
+  StatusDoc,
+  ValidationResult,
+} from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { DshMstar } from './service.ts'
@@ -62,6 +70,9 @@ const STATUS_FILE = 'status.json'
 
 /** Logger label for the dispatch gate (dsh logger naming: `<scope>/<subject>`). */
 const DISPATCH_LOGGER = 'mstar/dispatch-gate'
+
+/** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
+const HOST_LOGGER = 'mstar/host-adapter'
 
 /** Default delegation tool names the dispatch gate matches (tool-subagent default id). */
 const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
@@ -217,24 +228,52 @@ function resolveHard(harnessDir: string, config: Config): boolean {
 }
 
 /**
+ * Validate a PARSED status document through the status-gate pipeline
+ * (engine `validateStatus` + `findingsCleanupGate` per plan row that
+ * CONFIGURES a mode). Shared by {@link validateStatusDoc} (the on-disk
+ * single-read path) and the host adapter's `beforeStatusWrite` (the
+ * incoming document) — the fs-intent gate, the adapter hook and the repair
+ * escape all surface the SAME violation codes.
+ */
+function validateStatusValue(doc: unknown): GateResult {
+  const base = validateStatus(doc as StatusDoc)
+  if (!base.ok) return base
+  const record = asRecord(doc)
+  if (record === undefined) return base
+  const violations: ValidationResult[] = []
+  for (const row of Array.isArray(record.plans) ? record.plans : []) {
+    const metadata = asRecord(row.metadata)
+    const mode = metadata?.['findings_cleanup']
+    if (mode !== 'zero-residual' && mode !== 'allow-residual') continue
+    const planId = typeof row.id === 'string' ? row.id : typeof row.plan_id === 'string' ? row.plan_id : undefined
+    if (planId === undefined) continue
+    violations.push(...findingsCleanupGate(record as StatusDoc, planId, { mode }).violations)
+  }
+  if (violations.length === 0) return base
+  return { ok: false, violations }
+}
+
+/**
  * Run the status gate over the CURRENT on-disk document. The fs intent
  * waterfall carries only `(target, actor)` — never the incoming content — so
  * the vetoable check is the pre-write state (the opencode hook's fallback for
- * the same reason). A missing file (first create) has no document to validate
- * and passes. `findingsCleanupGate` runs per plan row that CONFIGURES a mode
- * (`plans[].metadata.findings_cleanup`); schema violations short-circuit it
- * (the doc must parse for the cleanup gate to be meaningful).
+ * the same reason). `findingsCleanupGate` runs per plan row that CONFIGURES a
+ * mode (`plans[].metadata.findings_cleanup`); schema violations short-circuit
+ * it (the doc must parse for the cleanup gate to be meaningful).
  *
  * Single-read contract (qc3 F-1): the file is parsed exactly once and the
- * parsed doc is passed to `validateStatus` — the previous path-first read
- * then `readJson` re-read was a TOCTOU window (a concurrent writer between
- * the two reads threw a raw error from inside the gate). Malformed JSON is
- * contained here with the engine's `status.invalid-json` shape; never throws.
+ * parsed doc is passed to {@link validateStatusValue} — the previous
+ * path-first read then `readJson` re-read was a TOCTOU window (a concurrent
+ * writer between the two reads threw a raw error from inside the gate).
+ * Malformed JSON is contained here with the engine's `status.invalid-json`
+ * shape; never throws. Missing files are guarded by the callers
+ * (`gateStatusIntent`, {@link DshHostAdapter.statusGate}) — first create has
+ * no document to validate and passes before this function runs.
  */
 function validateStatusDoc(statusPath: string): GateResult {
-  let doc: StatusDoc
+  let doc: unknown
   try {
-    doc = readJson(statusPath) as StatusDoc
+    doc = readJson(statusPath)
   } catch (error) {
     return {
       ok: false,
@@ -246,19 +285,7 @@ function validateStatusDoc(statusPath: string): GateResult {
       }],
     }
   }
-  const base = validateStatus(doc)
-  if (!base.ok) return base
-  const violations: ValidationResult[] = []
-  for (const row of Array.isArray(doc.plans) ? doc.plans : []) {
-    const metadata = asRecord(row.metadata)
-    const mode = metadata?.['findings_cleanup']
-    if (mode !== 'zero-residual' && mode !== 'allow-residual') continue
-    const planId = typeof row.id === 'string' ? row.id : typeof row.plan_id === 'string' ? row.plan_id : undefined
-    if (planId === undefined) continue
-    violations.push(...findingsCleanupGate(doc, planId, { mode }).violations)
-  }
-  if (violations.length === 0) return base
-  return { ok: false, violations }
+  return validateStatusValue(doc)
 }
 
 /**
@@ -281,6 +308,7 @@ function gateStatusIntent(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   operation: 'write' | 'edit',
   target: FsTarget,
 ): void {
@@ -288,8 +316,9 @@ function gateStatusIntent(
     if (harnessDir === null) return
     if (!isStatusTarget(harnessDir, target)) return
     const statusPath = join(harnessDir, STATUS_FILE)
-    if (!existsSync(statusPath)) return // first create: nothing to validate
-    const result = validateStatusDoc(statusPath)
+    // The adapter owns the shared status-gate core (missing file = first
+    // create = pass); this listener adds enforcement + observability.
+    const result = adapter.statusGate(statusPath)
     const hard = resolveHard(harnessDir, config)
     const verdict = applyEnforcement(result, { hard })
     if (!verdict.ok) {
@@ -333,11 +362,12 @@ async function writeIntentListener(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   target: FsTarget,
   _actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateStatusIntent(ctx, harnessDir, config, 'write', target)
+  gateStatusIntent(ctx, harnessDir, config, adapter, 'write', target)
   return await next()
 }
 
@@ -346,11 +376,12 @@ async function editIntentListener(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   target: FsTarget,
   _actor: object | undefined,
   next: () => { version: FsVersion } | undefined | Promise<{ version: FsVersion } | undefined>,
 ): Promise<{ version: FsVersion } | undefined> {
-  gateStatusIntent(ctx, harnessDir, config, 'edit', target)
+  gateStatusIntent(ctx, harnessDir, config, adapter, 'edit', target)
   return await next()
 }
 
@@ -585,25 +616,23 @@ function leaseGateViolations(
 }
 
 /**
- * Run the dispatch gate over one delegation tool call (opencode
- * `validateDispatchAssignment` parity — the SAME engine fns, so violation
- * codes are identical). Returns the veto decision in hard mode, undefined
- * otherwise (warn mode: log + advisory emit; the caller delegates via `next()`).
- * Non-subagent tools, non-Assignment prompts and malformed payloads are pure
- * pass-through (undefined).
+ * The dispatch-gate validation core (opencode `validateDispatchAssignment`
+ * parity — the SAME engine fns, so violation codes are identical): the field
+ * gate (`validateAssignmentFields`; read-only roles skip the branch gate),
+ * the anti-recursion precheck (Config binding) and the default-branch gate.
+ * Extracted from `gateDispatch` so the `tools/pre-execute` listener and the
+ * host adapter's `beforeDispatch` share ONE code path. The lease gate is NOT
+ * here — it binds the ToolExecution context (session id) and joins via
+ * {@link DshHostAdapter.dispatchGate} when the listener passes `exec`.
+ *
+ * @returns the violations plus the writable flag (false for read-only
+ * roles — the listener feeds it to the lease gate).
  */
-function gateDispatch(
-  ctx: Context,
+function dispatchGateCore(
   harnessDir: string | null,
   config: Config,
-  exec: ToolExecution,
-): PreToolDecision | undefined {
-  const toolName = exec.name
-  if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
-  const args = asRecord(exec.arguments)
-  const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
-  if (prompt === undefined || !isAssignmentShaped(prompt)) return undefined
-
+  prompt: string,
+): { violations: ValidationResult[]; writable: boolean | undefined } {
   const violations: ValidationResult[] = []
   const fields = parseAssignmentFields(prompt)
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
@@ -626,14 +655,34 @@ function gateDispatch(
       violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations)
     }
   }
+  return { violations, writable }
+}
 
-  // Lease gate (Task 5, additive — see leaseGateViolations): verify the plan's
-  // execution_lease when the Assignment declares `Execution mode: sdd` or the
-  // plan row is InProgress; violations flow through the SAME enforcement /
-  // deny / advisory path as the field checks above.
-  violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt))
+/**
+ * Run the dispatch gate over one delegation tool call (opencode
+ * `validateDispatchAssignment` parity — the SAME engine fns, so violation
+ * codes are identical). Returns the veto decision in hard mode, undefined
+ * otherwise (warn mode: log + advisory emit; the caller delegates via `next()`).
+ * Non-subagent tools, non-Assignment prompts and malformed payloads are pure
+ * pass-through (undefined).
+ */
+function gateDispatch(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  adapter: DshHostAdapter,
+  exec: ToolExecution,
+): PreToolDecision | undefined {
+  const toolName = exec.name
+  if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
+  const args = asRecord(exec.arguments)
+  const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
+  if (prompt === undefined || !isAssignmentShaped(prompt)) return undefined
 
-  const result: GateResult = { ok: violations.length === 0, violations }
+  // The adapter owns the shared dispatch-gate core; the exec context is
+  // passed so the lease gate (session-id bound — see leaseGateViolations)
+  // joins the SAME verdict as the field/branch/anti-recursion checks.
+  const result = adapter.dispatchGate(prompt, exec)
   const hard = resolveDispatchHard(harnessDir, config, prompt)
   const verdict = applyEnforcement(result, { hard })
   if (verdict.hardBlocked) {
@@ -646,7 +695,8 @@ function gateDispatch(
     ctx.logger(DISPATCH_LOGGER).warn(
       `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
     )
-    ctx.emit('mstar/dispatch-gate', { tool: toolName, role: fields.executeAs ?? '', result: verdict, hard })
+    const role = parseAssignmentFields(prompt).executeAs ?? ''
+    ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
   }
   return undefined
 }
@@ -668,12 +718,13 @@ async function preExecuteListener(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   exec: ToolExecution,
   next: () => Promise<PreToolDecision>,
 ): Promise<PreToolDecision> {
   let veto: PreToolDecision | undefined
   try {
-    veto = gateDispatch(ctx, harnessDir, config, exec)
+    veto = gateDispatch(ctx, harnessDir, config, adapter, exec)
   } catch (error) {
     ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted (degraded, dispatch allowed): ${(error as Error).message}`)
     try {
@@ -688,15 +739,185 @@ async function preExecuteListener(
 }
 
 /**
+ * Rebuild the canonical Assignment HEADER text from parsed fields (the
+ * engine's OWN header grammar — `parseAssignmentFields` reads exactly these
+ * labels — so the engine parsers round-trip losslessly). The host hook's
+ * engine-typed input is `AssignmentFields`; the shared gate core validates
+ * assignment TEXT, so the fields form is normalized to text before gating.
+ */
+function assignmentTextFromFields(fields: AssignmentFields): string {
+  const lines = ['## Assignment', '']
+  if (fields.executeAs !== undefined) lines.push(`**Execute as**: ${fields.executeAs}`)
+  if (fields.delegation !== undefined) lines.push(`**Delegation**: ${fields.delegation}`)
+  if (fields.taskCategory !== undefined) lines.push(`**Task category**: ${fields.taskCategory}`)
+  if (fields.workingBranch !== undefined) lines.push(`**Working branch**: ${fields.workingBranch}`)
+  if (fields.branchPolicy !== undefined) lines.push(`**Branch policy**: ${fields.branchPolicy}`)
+  return lines.join('\n')
+}
+
+/** Options for {@link DshHostAdapter}. */
+export interface DshHostAdapterOptions {
+  /** Resolved `{HARNESS_DIR}` (null when probing found none — gates stay inert). */
+  readonly harnessDir: string | null
+  /** The plugin Config the gates resolve enforcement + anti-recursion binding from. */
+  readonly config: Config
+  /**
+   * Log sink for `HostAdapter.log`. Defaults to the dsh ctx logger scoped
+   * `mstar/host-adapter` (dsh logger naming: `<scope>/<subject>`).
+   */
+  readonly log?: (level: 'info' | 'warn' | 'error', msg: string) => void
+}
+
+/**
+ * The plugin's `HostAdapter` implementation (engine `host.ts` type-only
+ * contract, roadmap §8.4) — the HOST-FACING facade over the P1 gate
+ * internals: `host: 'dsh'`, `log` → dsh ctx logger, and the optional hooks
+ * wired to the SAME code paths the in-plugin gates use, so host hooks and
+ * gates share ONE validation path:
+ *
+ * - `beforeStatusWrite(path, doc)` — validates the incoming document when
+ *   the host provides it (the write's content — the opencode consumer
+ *   convention for this engine hook), else the current on-disk document at
+ *   `path` via the gate's single-read `validateStatusDoc` semantics (missing
+ *   file = first create = pass). Both inputs flow through
+ *   `validateStatusValue` — the same pipeline the fs-intent gate runs, so
+ *   codes match by construction. Returns the FIRST violation: the engine
+ *   hook shape is one `ValidationResult`; the gate's full violation list
+ *   stays available on the fs-intent slot.
+ * - `beforeDispatch(assignment)` — the dispatch gate validation path
+ *   (validateAssignmentFields + branch gate + anti-recursion; read-only
+ *   roles skip the branch gate). The lease gate stays listener-side: it
+ *   binds the ToolExecution context (session id) this hook's contract does
+ *   not carry. The parsed `AssignmentFields` form is normalized to the
+ *   engine's own header grammar (lossless — the parsers read exactly these
+ *   labels) and gated through the same text path. Enforcement is applied
+ *   like the listener (opencode parity): the returned GateResult carries
+ *   `hardBlocked` so a refusal-capable host can refuse the dispatch.
+ * - `beforeMerge(lease)` — thin wrapper over the engine
+ *   `validateIntegrationMergeLease` (reserve/validate the integration merge
+ *   lease; the reservation WRITE into status.json is a P3 seam).
+ */
+export class DshHostAdapter implements HostAdapter {
+  /** Engine host identity (roadmap §8.4 `HostId` union). */
+  readonly host = 'dsh' as const
+
+  private readonly harnessDir: string | null
+  private readonly config: Config
+  private readonly logSink: (level: 'info' | 'warn' | 'error', msg: string) => void
+
+  constructor(ctx: Context, options: DshHostAdapterOptions) {
+    this.harnessDir = options.harnessDir
+    this.config = options.config
+    this.logSink = options.log ?? ((level, msg) => {
+      const logger = ctx.logger(HOST_LOGGER)
+      if (level === 'warn') logger.warn(msg)
+      else if (level === 'error') logger.error(msg)
+      else logger.info(msg)
+    })
+  }
+
+  /**
+   * `HostAdapter.log` — the adapter's own reporting channel (the gates keep
+   * their scoped loggers; this is the host-facing sink).
+   * @param level - log level.
+   * @param msg - message.
+   */
+  log(level: 'info' | 'warn' | 'error', msg: string): void {
+    this.logSink(level, msg)
+  }
+
+  /**
+   * Shared status-gate core (plugin-internal): the fs-intent listeners and
+   * the `beforeStatusWrite` on-disk fallback route through this method —
+   * ONE validation code path. Missing file = first create = pass (the
+   * intent waterfall carries no incoming content, so the vetoable signal is
+   * the pre-write on-disk state, qc3 F-1).
+   * @param statusPath - the canonical `{HARNESS_DIR}/status.json` path.
+   */
+  statusGate(statusPath: string): GateResult {
+    if (!existsSync(statusPath)) return { ok: true, violations: [] }
+    return validateStatusDoc(statusPath)
+  }
+
+  /**
+   * Shared dispatch-gate core (plugin-internal): the `tools/pre-execute`
+   * listener and `beforeDispatch` route through this method — ONE
+   * validation code path (field gate + anti-recursion + branch gate;
+   * read-only roles skip the branch gate). The listener passes `exec` so
+   * the lease gate (ToolExecution-bound: session id, in-flight call) joins
+   * the same verdict; the host hook has no exec context and covers the
+   * field/branch/anti-recursion path.
+   * @param prompt - the Assignment text (engine header grammar).
+   * @param exec - the in-flight delegation tool call (listener path only).
+   */
+  dispatchGate(prompt: string, exec?: ToolExecution): GateResult {
+    const { violations, writable } = dispatchGateCore(this.harnessDir, this.config, prompt)
+    if (exec !== undefined) {
+      violations.push(...leaseGateViolations(this.harnessDir, exec, writable, prompt))
+    }
+    return { ok: violations.length === 0, violations }
+  }
+
+  /**
+   * `HostAdapter.beforeStatusWrite` — see the class doc for the doc-first /
+   * on-disk-fallback semantics. Never throws; a failing gate maps to its
+   * FIRST violation (severity/code/message/fix/aliases preserved — failing
+   * gates always carry ≥1 violation), a passing gate to
+   * `host.beforeStatusWrite.ok` (the engine test convention for this hook).
+   * @param path - the status.json target path.
+   * @param doc - the document about to be written (undefined → validate the
+   * on-disk document at `path`).
+   */
+  async beforeStatusWrite(path: string, doc: unknown): Promise<ValidationResult> {
+    const gate = doc !== undefined ? validateStatusValue(doc) : this.statusGate(path)
+    if (!gate.ok) {
+      const first = gate.violations[0]!
+      return { ok: false, severity: first.severity, code: first.code, message: first.message, fix: first.fix, aliases: first.aliases }
+    }
+    return { ok: true, severity: 'low', code: 'host.beforeStatusWrite.ok', message: `status write to ${path} validated` }
+  }
+
+  /**
+   * `HostAdapter.beforeDispatch` — the dispatch gate validation path (see
+   * the class doc). Accepts the raw Assignment text (full fidelity: the
+   * `Enforcement` header flag participates in enforcement resolution) or the
+   * parsed `AssignmentFields` (engine-typed hook input; normalized to the
+   * engine's header grammar before gating). Returns the enforced GateResult
+   * — `hardBlocked` mirrors the `tools/pre-execute` deny decision under the
+   * same enforcement resolution.
+   * @param assignment - raw Assignment text or parsed header fields.
+   */
+  async beforeDispatch(assignment: AssignmentFields | string): Promise<GateResult> {
+    const prompt = typeof assignment === 'string' ? assignment : assignmentTextFromFields(assignment)
+    const gate = this.dispatchGate(prompt)
+    return applyEnforcement(gate, { hard: resolveDispatchHard(this.harnessDir, this.config, prompt) })
+  }
+
+  /**
+   * `HostAdapter.beforeMerge` — reserve/validate the integration merge
+   * lease. Thin wrapper over the engine `validateIntegrationMergeLease`
+   * (the engine owns the lease shape; the reservation write into
+   * `{HARNESS_DIR}/status.json` is a P3 seam).
+   * @param lease - the `metadata.integration_merge_lease` object.
+   */
+  async beforeMerge(lease: IntegrationMergeLease): Promise<GateResult> {
+    return validateIntegrationMergeLease(lease)
+  }
+}
+
+/**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
- * engine, expose the engine surface as `ctx.dshMstar`, and register the status
- * gate on the fs intent waterfalls + the dispatch gate on `tools/pre-execute`.
+ * engine, expose the engine surface as `ctx.dshMstar`, construct the host
+ * adapter (the gates route through it — one code path with the host hooks),
+ * and register the status gate on the fs intent waterfalls + the dispatch
+ * gate on `tools/pre-execute`.
  *
  * Layering (qc1 F-002): the gates are co-located engine wrappers in this
  * module importing `@mstar-harness/engine` directly (same plugin, engine
  * bundled at build time); `ctx.dshMstar` is the composition/test façade for
- * future inject consumers (host adapters, catalogs) — see the README Service
- * section. The engine is the single grammar for both paths.
+ * future inject consumers (catalogs) — see the README Service section; the
+ * adapter is the host-facing facade. The engine is the single grammar for
+ * both paths.
  * @param ctx - Cordis context of the composed app.
  * @param config - validated plugin configuration.
  */
@@ -705,6 +926,9 @@ export function apply(ctx: Context, config: Config): void {
   // The Service constructor registers itself on the fiber via reflect.provide,
   // so construction alone exposes `ctx.dshMstar` (dsh service convention).
   new DshMstar(ctx, { harnessDir: harnessDir ?? null })
+  // The host-facing HostAdapter facade — the fs-intent / pre-execute gates
+  // route through it (host hooks and in-plugin gates share ONE code path).
+  const adapter = new DshHostAdapter(ctx, { harnessDir, config })
 
   // Deploy-time observability (qc2 S-002): when enforcement resolves hard but
   // no dispatchBinding is declared, the anti-recursion red line is off by
@@ -718,8 +942,8 @@ export function apply(ctx: Context, config: Config): void {
 
   // Status gate — fs intent slot (single-slot waterfall; prepend so this
   // decider runs before dsh-fs-policy regardless of mount order).
-  ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
-  ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
+  ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
+  ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
 
   // Dispatch gate — tools/pre-execute waterfall (refusal channel:
   // PreToolDecision.deny returned without next()). Registered prepend for the
@@ -727,5 +951,5 @@ export function apply(ctx: Context, config: Config): void {
   // listener that returns a decision without next() would short-circuit the
   // chain and make this security gate unreachable — "a deny short-circuits
   // regardless of order" holds only once the listener is reached.
-  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, exec, next), { prepend: true })
+  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, adapter, exec, next), { prepend: true })
 }
