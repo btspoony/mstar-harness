@@ -6,6 +6,11 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+### Changed
+
+- `mstar dispatch validate` derives the default-branch gate branch FROM the Assignment's own branch forms (create-form name / Working branch / Branch policy branch), with `--branch` / `$MSTAR_WORKING_BRANCH` as context fallbacks (qc2 W-1 / qc3 F-2); read-only roles (scout/explore) skip both branch gates (qc3 F-1).
+- Local `parseBranchPolicyDirectOnBranch` removed — CLI consumes the engine's single branch-form grammar (`parseAssignmentBranchForms` / `parseBranchPolicyDirectOnBranch`) (qc1 F-001).
+
 ## [1.8.8] - 2026-08-06
 
 ### Changed

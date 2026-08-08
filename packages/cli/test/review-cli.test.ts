@@ -108,6 +108,34 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     });
   });
 
+  test("targeted duplicate reviewers are deduped before counting (qc2 S-3): [a,a,b] → 2 seats", () => {
+    withAssignment(assignmentWithMode("targeted"), (file) => {
+      const result = runCli([
+        "review",
+        "seats",
+        file,
+        "--reviewers",
+        "qc-specialist,qc-specialist,qc-specialist-3",
+      ]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("seats: 2");
+    });
+  });
+
+  test("targeted duplicates crossing the 4-token raw count stay within the band (unique ≤ 3) → exit 0", () => {
+    withAssignment(assignmentWithMode("targeted"), (file) => {
+      const result = runCli([
+        "review",
+        "seats",
+        file,
+        "--reviewers",
+        "qc-specialist,qc-specialist,qc-specialist-2,qc-specialist-2,qc-specialist-3",
+      ]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("seats: 3");
+    });
+  });
+
   test("targeted without listed reviewers → dispatch.execution-mode.missing-seats, exit 1", () => {
     withAssignment(assignmentWithMode("targeted"), (file) => {
       const result = runCli(["review", "seats", file]);

@@ -11,8 +11,12 @@ import {
   assertTriIdentity,
   evaluatePhaseGate,
   executionModeToN,
+  isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
+  parseAssignmentBranchForms,
+  parseAssignmentFields,
+  parseBranchPolicyDirectOnBranch,
   pushCadenceProbe,
   resolveHarnessDir,
   resolveSpecsDir,
@@ -589,27 +593,6 @@ iterationCommand
     process.exitCode = 1;
   });
 
-/**
- * Parse the Assignment's `Branch policy: direct on <branch> — <reason>`
- * form (mstar-branch-worktree § Git 功能分支门禁). Returns the exception
- * branch only for the well-formed direct-on form (branch + reason, same
- * separator set as the engine's `validateAssignmentFields`); undefined when
- * absent or malformed — the default-branch gate recognizes explicit
- * direct-on exceptions only.
- */
-function parseBranchPolicyDirectOnBranch(assignmentText: string): string | undefined {
-  for (const line of assignmentText.split(/\r?\n/)) {
-    const match =
-      line.match(/^\*\*\s*Branch policy\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^Branch policy\s*:\s*(.*)$/);
-    if (match) {
-      const form = match[1]!.trim().match(/^direct\s+on\s+(\S+)(?:\s*(?:[—–]|--|-)\s*(.+))?$/);
-      if (form && (form[2] ?? "").trim() !== "") return form[1]!.trim();
-      return undefined;
-    }
-  }
-  return undefined;
-}
-
 const dispatchCommand = program
   .command("dispatch")
   .description("Assignment field + default-branch gate checks (engine-backed)");
@@ -621,7 +604,10 @@ dispatchCommand
       "then the default-protected-branch gate (exit 1 on violations, 2 on usage)",
   )
   .argument("[assignment-file]", "Assignment markdown file")
-  .option("--branch <branch>", "Branch to check against the default-protected gate (default: $MSTAR_WORKING_BRANCH)")
+  .option(
+    "--branch <branch>",
+    "Gate branch context (default: derived from the Assignment's own branch forms, then $MSTAR_WORKING_BRANCH)",
+  )
   .action((assignmentFile: string | undefined, options: { branch?: string }) => {
     try {
       // Optional arg + explicit count check (bash-parity usage exit 2, slice-2
@@ -634,15 +620,31 @@ dispatchCommand
         throw new Error(`assignment file not found: ${file}`);
       }
       const text = fs.readFileSync(file, "utf8");
-      const violations = [...validateAssignmentFields(text).violations];
-      // Default-branch gate: --branch wins, else the MSTAR_WORKING_BRANCH env
-      // var; skipped when neither is set (nothing to check). A well-formed
-      // `Branch policy: direct on <branch> — <reason>` exception is honored
-      // only when its branch is the one being checked.
-      const branch = options.branch ?? process.env.MSTAR_WORKING_BRANCH;
-      if (branch !== undefined && branch.trim() !== "") {
-        const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
-        violations.push(...assertDefaultBranchProtected(branch, { directOnException }).violations);
+
+      // Read-only orientation roles (scout/explore, engine SSOT) skip the
+      // branch-form gate AND the default-branch gate — no writable work on a
+      // branch (qc3 F-1 / qc2 S-5): `mstar dispatch validate` on a scout
+      // Assignment without a Working branch exits 0.
+      const readOnly = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "");
+      const violations = [...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations];
+
+      if (!readOnly) {
+        // Default-branch gate: the checked branch is derived FROM THE
+        // ASSIGNMENT — create-form → the created branch, existing form → the
+        // branch, `Branch policy` → the exception branch — so the documented
+        // preflight invocation (`dispatch validate <assignment-file>`, no
+        // --branch) actually gates (qc2 W-1). `--branch` / $MSTAR_WORKING_BRANCH
+        // are context fallbacks for assignments without a branch form (qc3
+        // F-2: "create feature/x from main" checks feature/x, not main). A
+        // well-formed `Branch policy: direct on <branch> — <reason>` exception
+        // is honored only when its branch is the one being checked.
+        const forms = parseAssignmentBranchForms(text);
+        const branch =
+          forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? options.branch ?? process.env.MSTAR_WORKING_BRANCH;
+        if (branch !== undefined && branch.trim() !== "") {
+          const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
+          violations.push(...assertDefaultBranchProtected(branch, { directOnException }).violations);
+        }
       }
       printChecklist("dispatch validate", { ok: violations.length === 0, violations });
       if (violations.length > 0) process.exitCode = 1;
