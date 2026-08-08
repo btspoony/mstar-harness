@@ -37,21 +37,15 @@
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import {
-  antiRecursionPrecheck,
   applyEnforcement,
-  assertDefaultBranchProtected,
-  assignmentHeaderRegion,
+  composeDispatchGate,
   isReadOnlyAssignmentRole,
-  parseAssignmentBranchForms,
   parseAssignmentFields,
-  parseBranchPolicyDirectOnBranch,
-  parseEnforcementFlag,
   resolveCompassEnforcement,
   resolveHarnessDir,
-  validateAssignmentFields,
   validateStatus,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, StatusDoc, ValidationResult } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, StatusDoc } from "@mstar-harness/engine";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -331,60 +325,34 @@ export function validateStatusWrite(
 }
 
 /**
- * `## Assignment` heading marker: a document carrying this heading is treated
- * as Assignment-shaped and linted even when none of the three fields is found.
- */
-const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
-
-/**
- * Shape-guard match of an Assignment header field, tolerating optional list
- * bullets and `**bold**` markers around the key (`- **Execute as**: x`).
- * The value must be non-empty (`(\S.*)`) — a bare `Delegation:` counts as
- * missing. Shape detection ONLY: field parsing/semantics live in the engine
- * (`parseAssignmentFields` / `validateAssignmentFields`) — no local parser
- * (qc1 F-002).
- */
-const ASSIGNMENT_FIELD_RE =
-  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
-
-/**
- * True when the text looks like an Assignment: carries the `## Assignment`
- * heading or at least one core field line (`Execute as` / `Delegation` /
- * `Task category`). Non-Assignment prompts (plain task instructions) stay
- * silent — no false-positive warnings. Non-string input is never shaped
- * (host tool args are `any`; RegExp.test coerces objects to "[object Object]"
- * which would then blow up on `.match`).
- */
-function isAssignmentShaped(assignmentText: unknown): boolean {
-  if (typeof assignmentText !== "string") return false;
-  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null;
-}
-
-/**
  * Dispatch-side Assignment validation (roadmap §8.5 `beforeDispatch`).
  *
- * Full Assignment validation:
- * (1) `dispatch.validateAssignmentFields` — required fields, exactly-one
+ * Delegates the entire composition to the engine's single shared
+ * `dispatch.composeDispatchGate` (qc1 F-001/F-006 — no local composition
+ * left in the host adapter):
+ * (1) Shape guard — `## Assignment` heading or a core field line
+ * (`Execute as` / `Delegation` / `Task category`); non-Assignment prompts
+ * stay silent (no false positives).
+ * (2) `validateAssignmentFields` — required fields, exactly-one
  * Working-branch form, create-form `<base>`, Branch policy reason; the
  * legacy `assignment.presence.*` codes are engine ALIASES on the three
  * core-field violations (single parser — no local presence parser, qc1
- * F-002); read-only roles (scout/explore) pass `writable: false` so no
+ * F-002). Read-only roles (scout/explore) pass `writable: false` so no
  * spurious `branch-missing` fires (qc3 F-1 / qc2 S-5).
- * (2) Anti-recursion NEVER red line via `dispatch.antiRecursionPrecheck`:
- * when the task tool's role binding (`args.subagent` / `args.subagent_type`)
- * equals the Assignment's `Execute as`, a critical-severity violation is
- * logged (qc1 F-004 / qc2 S-2).
- * (3) The default-branch gate via `dispatch.assertDefaultBranchProtected` —
- * the checked branch comes from the Assignment's own branch forms
- * (create-form name / Working branch / Branch policy branch, engine
- * `parseAssignmentBranchForms`), else `$MSTAR_WORKING_BRANCH` (qc3 F-2);
- * a well-formed `Branch policy: direct on <branch> — <reason>` exception is
- * honored only when its branch is the one being checked. Skipped entirely
- * for read-only roles (no writable work on a branch).
+ * (3) Anti-recursion NEVER red line — when the task tool's role binding
+ * (`args.subagent` / `args.subagent_type`) equals the Assignment's
+ * `Execute as`, a critical-severity violation is logged (qc1 F-004 /
+ * qc2 S-2).
+ * (4) The default-branch gate — the checked branch comes from the
+ * Assignment's own branch forms (create-form name / Working branch /
+ * Branch policy branch), else `$MSTAR_WORKING_BRANCH`; a well-formed
+ * `Branch policy: direct on <branch> — <reason>` exception is honored only
+ * when its branch is the one being checked. Skipped entirely for read-only
+ * roles (no writable work on a branch).
  *
  * Enforcement (roadmap §8.5 C4/D2, Slice 5) — the Assignment's OWN flag
- * decides (engine `dispatch.parseEnforcementFlag`; per-Assignment, never
- * global):
+ * decides (engine `dispatch.parseEnforcementFlag` via
+ * `composeDispatchGate`; per-Assignment, never global):
  * - **Warn mode (default)** — no `Enforcement: hard` on the Assignment: one
  *   `warn` line per violation through the `[mstar-harness]` channel;
  *   `hardBlocked` is false. Unchanged v1 behavior.
@@ -416,41 +384,21 @@ export function validateDispatchAssignment(
 ): GateResult | null {
   const log = opts.log ?? defaultStatusLogger;
   try {
-    // Shape guard: non-strings and non-Assignment prompts stay silent
-    // (no false positives / no `assignmentText.match is not a function`).
-    if (typeof assignmentText !== "string" || !isAssignmentShaped(assignmentText)) {
+    // Non-string host args (typed string here, but tool args are `any`) stay
+    // silent with the exact v1 result shape (`assignmentText.match is not a
+    // function` regression guard — qc1 F-004).
+    if (typeof assignmentText !== "string") {
       return { ok: true, violations: [] };
     }
+    // Read-only roles (scout/explore) skip the branch-form/default-branch
+    // gates — the engine composition's `writable` flag.
+    const writable = isReadOnlyAssignmentRole(parseAssignmentFields(assignmentText).executeAs ?? "") ? false : undefined;
+    const composed = composeDispatchGate(assignmentText, { agent: opts.subagentType ?? "", writable });
 
-    const violations: ValidationResult[] = [];
-    const fields = parseAssignmentFields(assignmentText);
-    // (1) Engine full field validation — read-only roles skip the branch-form gate.
-    const writable = isReadOnlyAssignmentRole(fields.executeAs ?? "") ? false : undefined;
-    violations.push(...validateAssignmentFields(assignmentText, { writable }).violations);
-    // (2) Anti-recursion NEVER red line (engine gate; warn/error in the hook).
-    const binding = opts.subagentType ?? "";
-    if (binding.trim() !== "") {
-      violations.push(...antiRecursionPrecheck(binding, fields.executeAs ?? "").violations);
-    }
-    // (3) Default-branch gate — branch derived from the Assignment's forms.
-    if (writable !== false) {
-      const forms = parseAssignmentBranchForms(assignmentText);
-      const branch =
-        forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;
-      if (branch !== undefined && branch.trim() !== "") {
-        const directOnException = parseBranchPolicyDirectOnBranch(assignmentText) === branch.trim();
-        violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
-      }
-    }
-
-    const result: GateResult = { ok: violations.length === 0, violations };
-    // Header region only: an example `**Enforcement**: hard` line quoted in
-    // the task body must not harden the dispatch (qc1 F-003 / qc2 F-003).
-    const enforcement: EnforcementFlag = parseEnforcementFlag(assignmentHeaderRegion(assignmentText));
-    if (!result.ok) {
-      for (const violation of result.violations) {
+    if (!composed.ok) {
+      for (const violation of composed.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
-        if (enforcement.hard) {
+        if (composed.enforcement.hard) {
           log(
             "error",
             `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
@@ -463,7 +411,7 @@ export function validateDispatchAssignment(
         }
       }
     }
-    return applyEnforcement(result, { hard: enforcement.hard });
+    return composed;
   } catch (error) {
     // Never throw, never block unexpectedly: unexpected errors degrade to a
     // single `error` log and a `null` return in BOTH modes (hard gates are
