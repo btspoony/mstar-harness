@@ -1,0 +1,6 @@
+# Translation pairing record for the @mstar-harness/dsh package README pair.
+# Blob hashes (git hash-object) of each side as of the last confirmation that
+# both languages say the same thing (dsh i18n contract: a pair is three
+# sibling files; editing either side obligates re-confirming and re-recording).
+README.md: 059cedd5206e19f67d6d105116ece2d6e3e639ea
+README.zh.md: 3963090d626c000369668d4aa69dc626161756ff

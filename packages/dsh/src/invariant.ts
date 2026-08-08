@@ -15,9 +15,13 @@ export const name = 'dsh-invariant'
 export const inject = ['invariants']
 
 /**
- * No runtime invariant: the scaffold registers no mutable state yet — the status/dispatch/lease
- * gate listeners and their `Enforcement: hard` configuration land in later tasks of this plan;
- * the companion gains a config↔listener presence check once those listeners exist.
+ * No runtime invariant: this package registers no package-owned mutable state
+ * the invariant service could assert over an event/data relation. Its
+ * contributions are lifecycle registrations — the fs intent waterfall
+ * listeners, the `tools/pre-execute` listener, and the `ctx.dshMstar` service
+ * — whose presence and removal are asserted by the real-composition suite and
+ * the HMR-safety disposal test, not by an invariant companion. A
+ * config↔listener presence check would duplicate those tests.
  */
 const install: InvariantInstaller = () => {}
 

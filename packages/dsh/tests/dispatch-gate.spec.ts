@@ -18,7 +18,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { bootApp, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -498,5 +498,76 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
     } finally {
       delete process.env.MSTAR_WORKING_BRANCH
     }
+  })
+})
+
+/* ---------------------------------- Task 4 reviewer carry-overs (Task 6) ---------------------------------- */
+
+describe('dispatch gate — Task 4 reviewer carry-overs (explore / compass / degrade)', () => {
+  /** Read-only orientation role (the reviewer note: only `scout` was fixture-covered). */
+  const EXPLORE_NO_BRANCH = `## Assignment
+
+**Execute as**: explore
+**Delegation**: n/a
+**Task category**: deep
+
+Survey the codebase, report only.
+`
+
+  it('explore read-only role without branch form → silent pass (branch + lease gates skipped)', async () => {
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(EXPLORE_NO_BRANCH), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('explore under Enforcement: hard → allow (read-only assignments carry no vetoable violations)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(EXPLORE_NO_BRANCH), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('compass frontmatter Enforcement: hard (no Config/Assignment flag) → deny', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, {
+      'iterations/v2.1.0/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
+    })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_BRANCH), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.branch-missing')
+    expect(advisories).toHaveLength(0) // the veto is the signal; advisory is warn-mode only
+  })
+
+  it('engine-failure degrade: a throwing gate never hardens — waterfall falls through to next() (opencode parity)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+    let secondRan = false
+    app.ctx.on('tools/pre-execute', () => {
+      secondRan = true
+      return Promise.resolve<PreToolDecision>({ kind: 'allow' })
+    })
+
+    // Any unexpected failure inside the gate (engine or payload access) must
+    // degrade to allow in BOTH modes — a hard gate failure never hardens a
+    // workflow that was soft (preExecuteListener catch; opencode parity).
+    const broken: ToolExecution = {
+      ...subagentExec(MISSING_EXECUTE_AS),
+      get name() { throw new Error('boom: gate internals exploded') },
+    }
+    const decision = await app.ctx.waterfall('tools/pre-execute', broken, defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(secondRan).toBe(true) // next() was still invoked — chain integrity preserved
+    expect(advisories).toHaveLength(0)
   })
 })

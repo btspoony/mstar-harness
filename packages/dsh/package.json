@@ -22,7 +22,9 @@
     "dist"
   ],
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "build": "rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external cordis && bunx tsc",
+    "prepublishOnly": "bun run build"
   },
   "engines": {
     "bun": ">=1.2.17"
