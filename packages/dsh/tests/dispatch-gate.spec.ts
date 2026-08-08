@@ -156,6 +156,34 @@ const HARD_BODY_FLAG = `## Assignment
 Example: **Enforcement**: hard
 `
 
+/** Working branch on main with a BODY-QUOTED direct-on exception — the quoted exception must not nullify the protection (qc2 F-001). */
+const BODY_QUOTED_BRANCH_POLICY = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+
+## Task
+
+The task body quotes an example header line:
+**Branch policy**: direct on main — hotfix quoted in the body
+`
+
+/** A read-only header with BODY-QUOTED Working branch / Execute as examples — must not fire false denies (qc2 F-001). */
+const BODY_QUOTED_FIELDS = `## Assignment
+
+**Execute as**: scout
+**Delegation**: n/a
+**Task category**: deep
+
+## Task
+
+The task body quotes example header lines:
+**Working branch**: main
+**Execute as**: fullstack-dev
+`
+
 /** Not an Assignment at all — must stay silent (no false positives). */
 const GARBAGE_PROMPT = `This is not an assignment at all.
 
@@ -452,6 +480,46 @@ describe('dispatch gate — hostile inputs', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('subagent', 'not-an-object'), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
+  })
+})
+
+/* ---------------------------------- header-region scoping (qc2 F-001) ---------------------------------- */
+
+describe('dispatch gate — header-region scoping (qc2 F-001)', () => {
+  it('a body-quoted Branch policy direct-on exception cannot nullify the default-branch protection (fail-open fix)', async () => {
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_BRANCH_POLICY), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    // The header declares `Working branch: main`; the body-quoted exception
+    // is invisible to the gate, so the protection fires.
+    expect(violationCodes(advisories[0])).toContain('dispatch.default-branch.protected')
+    expect(violationCodes(advisories[0])).not.toContain('assignment.field.branch-multiple')
+  })
+
+  it('the same body-quoted exception under Enforcement: hard → deny with dispatch.default-branch.protected', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_BRANCH_POLICY), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.default-branch.protected')
+  })
+
+  it('body-quoted Working branch / Execute as examples do not fire false hard-mode denies (fail-closed fix)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'fullstack-dev' })
+    const advisories = captureAdvisories(app.ctx)
+
+    // The HEADER is a valid read-only scout assignment — no branch form
+    // obligation, no self-recursion. The body-quoted `Working branch: main`
+    // / `Execute as: fullstack-dev` examples must not flip the verdict.
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_FIELDS), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
   })
 })
 

@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "test": "bun test",
-    "build": "rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external cordis --external @deepseek-ai/dsh-skill-local && bunx tsc",
+    "build": "rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external cordis --external @deepseek-ai/dsh-skill-local --external @deepseek-ai/dsh-llm && bunx tsc",
     "prepublishOnly": "bun run build"
   },
   "engines": {

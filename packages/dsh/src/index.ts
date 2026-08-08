@@ -93,6 +93,9 @@ const HOST_LOGGER = 'mstar/host-adapter'
 /** Logger label for the skill lint gate (dsh logger naming: `<scope>/<subject>`). */
 const SKILL_LINT_LOGGER = 'mstar/skill-lint'
 
+/** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
+const CATALOG_LOGGER = 'mstar/engine-status-catalog'
+
 /** Default delegation tool names the dispatch gate matches (tool-subagent default id). */
 const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
 
@@ -302,6 +305,12 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * Whether a target is the canonical `{HARNESS_DIR}/status.json`. Matching is by
  * resolved path equality on `displayPath` (the local backend reports absolute
  * paths; remote/URI backends never match and the gate is inert for them).
+ *
+ * simplify: case-sensitive `===` comparison (qc2 S-006) — on case-insensitive
+ * filesystems (macOS/Windows defaults) a case-variant write path escapes the
+ * gate (inert, never a false positive); case-normalized matching would need
+ * the fs backend's canonical-case notion, revisit if case-variant writes
+ * become an observed bypass.
  */
 function isStatusTarget(harnessDir: string, target: FsTarget): boolean {
   return basename(target.displayPath) === STATUS_FILE
@@ -568,6 +577,10 @@ function skillRootsOf(config: Config): string[] {
  * Matching is by resolved path on `displayPath` (the local backend reports
  * absolute paths; remote/URI backends never resolve under a local root and
  * the gate is inert for them — status-gate discipline).
+ *
+ * simplify: case-sensitive containment (qc2 S-006) — on case-insensitive
+ * filesystems a case-variant path escapes the gate (inert, never a false
+ * positive); revisit if case-variant writes become an observed bypass.
  */
 function isSkillTarget(roots: readonly string[], target: FsTarget): boolean {
   if (basename(target.displayPath) !== 'SKILL.md') return false
@@ -710,7 +723,9 @@ async function skillWriteIntentListener(
 /**
  * True when the text looks like an Assignment (opencode parity: `## Assignment`
  * heading or at least one core field line). Non-Assignment delegation prompts
- * stay silent — no false-positive warnings.
+ * stay silent — no false-positive warnings. Callers MUST pass the engine
+ * `assignmentHeaderRegion` slice (qc2 F-001): a `## Assignment` heading or
+ * field line quoted in the task body must not shape a non-assignment prompt.
  */
 function isAssignmentShaped(assignmentText: string): boolean {
   return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null
@@ -947,6 +962,14 @@ function leaseGateViolations(
  * here — it binds the ToolExecution context (session id) and joins via
  * {@link DshHostAdapter.dispatchGate} when the listener passes `exec`.
  *
+ * Header-region scoping (qc2 F-001): the engine `assignmentHeaderRegion`
+ * slice is computed ONCE and feeds EVERY Assignment parser (fields, branch
+ * forms, direct-on exception) — body-quoted field examples after a
+ * `# Task` / `# Target` / `---` marker never leak into the header fields the
+ * gate validates (the same discipline enforcement / plan-id / lease already
+ * honor). Well-formed assignments (fields in the header) slice to the full
+ * text, so their verdicts are unchanged.
+ *
  * @returns the violations plus the writable flag (false for read-only
  * roles — the listener feeds it to the lease gate).
  */
@@ -954,11 +977,12 @@ function dispatchGateCore(
   config: Config,
   prompt: string,
 ): { violations: ValidationResult[]; writable: boolean | undefined } {
+  const header = assignmentHeaderRegion(prompt)
   const violations: ValidationResult[] = []
-  const fields = parseAssignmentFields(prompt)
+  const fields = parseAssignmentFields(header)
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
   const writable = isReadOnlyAssignmentRole(fields.executeAs ?? '') ? false : undefined
-  violations.push(...validateAssignmentFields(prompt, { writable }).violations)
+  violations.push(...validateAssignmentFields(header, { writable }).violations)
   // Anti-recursion NEVER red line — binding = the dispatching agent's own
   // type (Config-declared; dsh exposes no agent role on the execution context).
   const binding = config.dispatchBinding ?? ''
@@ -969,10 +993,10 @@ function dispatchGateCore(
   // branch forms, else $MSTAR_WORKING_BRANCH (opencode parity); the direct-on
   // exception is honored only when its branch is the one being checked.
   if (writable !== false) {
-    const forms = parseAssignmentBranchForms(prompt)
+    const forms = parseAssignmentBranchForms(header)
     const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH
     if (branch !== undefined && branch.trim() !== '') {
-      const directOnException = parseBranchPolicyDirectOnBranch(prompt) === branch.trim()
+      const directOnException = parseBranchPolicyDirectOnBranch(header) === branch.trim()
       violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations)
     }
   }
@@ -998,7 +1022,12 @@ function gateDispatch(
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)
   const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
-  if (prompt === undefined || !isAssignmentShaped(prompt)) return undefined
+  if (prompt === undefined) return undefined
+  // Shape guard + advisory role read run on the header region (qc2 F-001):
+  // a `## Assignment` heading or field line quoted in the task body cannot
+  // shape a non-assignment prompt or leak into the advisory role.
+  const header = assignmentHeaderRegion(prompt)
+  if (!isAssignmentShaped(header)) return undefined
 
   // The adapter owns the shared dispatch-gate core; the exec context is
   // passed so the lease gate (session-id bound — see leaseGateViolations)
@@ -1016,7 +1045,7 @@ function gateDispatch(
     ctx.logger(DISPATCH_LOGGER).warn(
       `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
     )
-    const role = parseAssignmentFields(prompt).executeAs ?? ''
+    const role = parseAssignmentFields(header).executeAs ?? ''
     ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
   }
   return undefined
@@ -1266,7 +1295,17 @@ function pluginVersion(): string {
   }
 }
 
-/** The durable catalog source for the current engine status (the watermark fields). */
+/**
+ * The durable catalog source for the current engine status (the watermark
+ * fields). Computed ONCE at `apply()` and reused per pre-step (qc3 W-002):
+ * every field is boot-resolved — engine + plugin versions are process
+ * -immutable manifest reads and the compass enforcement resolves at boot
+ * like the gates themselves. A mid-session compass change therefore does NOT
+ * re-watermark the catalog until a config reload re-runs `apply` (HMR fiber
+ * restart) — the documented staleness tradeoff that keeps synchronous disk
+ * I/O off the agent-loop hot path.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ */
 function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource {
   return {
     kind: 'mstar-engine-status',
@@ -1297,31 +1336,46 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
  * step — and never replaces the delegated messages) and appends ONE
  * `mstar-engine-status` catalog MessageSource to the composed step messages,
  * so the durable session log carries the engine status row (model-visible ⟺
- * logged, MessageSource form). An aborted step publishes nothing (tool-skill
- * precedent).
+ * logged, MessageSource form). An aborted step publishes nothing: the
+ * delegated decision is returned unchanged (tool-skill precedent; narrowed
+ * abort race — qc2 S-001: an abort after delegation must not surface as a
+ * turn failure).
+ *
+ * Error containment (qc3 W-003): the append path is wrapped — a failure
+ * (e.g. a downstream decider returning a non-iterable `messages` set, or a
+ * throwing message factory) logs and returns the delegated decision
+ * unchanged; the advisory listener never aborts the very step it observes.
  *
  * simplify: dev-time stub — every composed step carries the catalog row (no
  * per-session dedup: the real dsh-session log is unavailable at dev time).
  * Digest-gated re-emission against the durable log lands with the real
  * session seam at P3.
- * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ * @param ctx - registrant context (logger for the containment path).
+ * @param source - the boot-resolved watermark source (computed once at apply,
+ * qc3 W-002).
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
  */
 async function preStepCatalogListener(
-  harnessDir: string | null,
+  ctx: Context,
+  source: MstarEngineStatusSource,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
   const decision = await next()
-  if (decision.kind === 'reject') return decision
-  payload.signal.throwIfAborted()
-  const source = engineStatusSource(harnessDir)
-  const catalog = createUserMessage({
-    source,
-    content: [{ type: 'text', text: renderEngineStatusCatalog(source) }],
-  })
-  return { kind: 'enter', messages: [...decision.messages, catalog] }
+  if (decision.kind === 'reject' || payload.signal.aborted) return decision
+  try {
+    const catalog = createUserMessage({
+      source,
+      content: [{ type: 'text', text: renderEngineStatusCatalog(source) }],
+    })
+    return { kind: 'enter', messages: [...decision.messages, catalog] }
+  } catch (error) {
+    ctx.logger(CATALOG_LOGGER).error(
+      `engine-status catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
+    )
+    return decision
+  }
 }
 
 /**
@@ -1376,6 +1430,15 @@ export function apply(ctx: Context, config: Config): void {
       'Enforcement: hard is active but dispatchBinding is unset — the anti-recursion precheck is skipped (an Assignment whose Execute as equals the dispatching agent cannot be detected)',
     )
   }
+  // Deploy-time observability (qc2 S-004): a renamed dsh subagent tool
+  // (toolName) with dispatchTools unset silently disables BOTH the dispatch
+  // gate and host detection — mirror the dispatchBinding warn so the absence
+  // is surfaced instead of only documented.
+  if (effectiveHard && config.dispatchTools === undefined) {
+    ctx.logger(DISPATCH_LOGGER).warn(
+      'Enforcement: hard is active but dispatchTools is unset — the dispatch gate matches the default tool name "subagent"; a deployment renaming the dsh subagent tool (toolName) without declaring dispatchTools silently disables the gate',
+    )
+  }
 
   // Status gate — fs intent slot (single-slot waterfall; prepend so this
   // decider runs before dsh-fs-policy regardless of mount order).
@@ -1402,5 +1465,16 @@ export function apply(ctx: Context, config: Config): void {
   // replaces the delegated messages) and appends one `mstar-engine-status`
   // catalog MessageSource to the composed step messages, so the session log
   // carries the engine status row (model-visible ⟺ logged).
-  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(harnessDir, payload, next))
+  //
+  // The watermark is computed ONCE at boot (qc3 W-002) — engine/plugin
+  // versions are process-immutable and compass enforcement is boot-resolved
+  // like the gates — so the pre-step hot path does no disk I/O (see
+  // engineStatusSource for the mid-session staleness tradeoff).
+  const catalogSource = engineStatusSource(harnessDir)
+  // The manifest fallback is never silent (qc2 S-005): a '0.0.0' plugin
+  // version would watermark every catalog row wrongly, so it logs at boot.
+  if (catalogSource.pluginVersion === '0.0.0') {
+    ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
+  }
+  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, payload, next))
 }

@@ -17,12 +17,14 @@
  * (`readHarnessVersion`), the compass enforcement mode
  * (`resolveCompassEnforcement`), the harness dir, and the plugin package
  * version — so the model-visible row is reconstructable from the session log
- * (MessageSource form; model-visible ⟺ logged). Fiber disposal removes the
- * listener (HMR-safe).
+ * (MessageSource form; model-visible ⟺ logged). The watermark is
+ * boot-resolved (qc3 W-002) and the append is error-contained (qc3 W-003);
+ * an aborted step returns the delegated decision unchanged (qc2 S-001).
+ * Fiber disposal removes the listener (HMR-safe).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from 'cordis'
@@ -98,8 +100,12 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
   })
 
   it('renders the compass enforcement mode as the watermark (active hard compass → hard)', async () => {
-    const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, {
+    // The watermark is boot-resolved (qc3 W-002) — the compass must exist
+    // before apply() runs.
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
       'iterations/20260808-catalog-test/delivery-compass.md': [
         '---',
         'status: active',
@@ -109,6 +115,8 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
         'body text must not count',
       ].join('\n'),
     })
+
+    const app = booted = await bootApp({ root })
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
@@ -120,6 +128,23 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
     })
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
     expect(text).toContain('enforcement: hard (compass)')
+  })
+
+  it('keeps the watermark process-stable — a compass appearing after boot does not re-watermark (qc3 W-002)', async () => {
+    const app = booted = await bootApp()
+    // Enforcement is boot-resolved; a compass that appears mid-session does
+    // not change the catalog row until a config reload re-runs apply() (the
+    // documented staleness tradeoff for keeping disk I/O off the hot path).
+    await seedHarness(app.harnessDir, {
+      'iterations/20260808-catalog-test/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
+    })
+
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+
+    const catalog = lastMessage(decision)
+    expect(catalog?.source).toMatchObject({ enforcement: { hard: false, source: 'none' } })
+    const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
+    expect(text).toContain('enforcement: soft')
   })
 
   it('delegates a rejected step without appending (advisory — never vetoes, never publishes on a blocked step)', async () => {
@@ -156,14 +181,33 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
     expect(catalog?.source).toMatchObject({ kind: 'mstar-engine-status' })
   })
 
-  it('observes the step abort signal — an aborted step publishes no catalog', async () => {
+  it('observes the step abort signal — an aborted step publishes no catalog and returns the delegated decision (qc2 S-001)', async () => {
     const app = booted = await bootApp()
     const controller = new AbortController()
     controller.abort()
 
-    await expect(
-      app.ctx.waterfall('agent/pre-step', stepPayload([], controller.signal), defaultEnter([])),
-    ).rejects.toThrow()
+    // Narrowed abort race: an abort after delegation returns the delegated
+    // decision unchanged (clean abort semantics) instead of surfacing an
+    // AbortError as a turn failure; the catalog simply is not appended.
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], controller.signal), defaultEnter([]))
+
+    expect(decision).toEqual({ kind: 'enter', messages: [] })
+  })
+
+  it('contains a third-party decider with non-iterable messages — the step still delegates unchanged (qc3 W-003)', async () => {
+    const app = booted = await bootApp()
+    // A downstream (third-party) pre-step decider returns an enter decision
+    // whose messages are not iterable (cordis waterfalls do not validate
+    // listener return values). The catalog append must not abort the step:
+    // the delegated decision is returned unchanged after an error log.
+    const broken = 42 as unknown as UserMessage[]
+    app.ctx.on('agent/pre-step', async (_payload, _next): Promise<PreStepDecision> => {
+      return { kind: 'enter', messages: broken }
+    })
+
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+
+    expect(decision).toEqual({ kind: 'enter', messages: broken })
   })
 })
 

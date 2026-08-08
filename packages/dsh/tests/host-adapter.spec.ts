@@ -101,6 +101,20 @@ const SELF_RECURSION = `## Assignment
 Do the thing.
 `
 
+/** Working branch on main with a BODY-QUOTED direct-on exception — both paths must ignore the body (qc2 F-001). */
+const BODY_QUOTED_BRANCH_POLICY = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+
+## Task
+
+The task body quotes an example header line:
+**Branch policy**: direct on main — hotfix quoted in the body
+`
+
 /** The fields-form equivalent of WORKING_BRANCH_MAIN (parsed input shape). */
 const MAIN_FIELDS = {
   executeAs: 'fullstack-dev',
@@ -393,6 +407,24 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
         'assignment.field.missing-task-category',
       ]),
     )
+  })
+
+  it('header-region scoping holds for BOTH paths — a body-quoted direct-on exception is invisible to the listener AND the adapter (qc2 F-001 parity)', async () => {
+    const app = booted = await bootApp()
+    const adapter = makeAdapter()
+
+    const advisories = captureDispatchAdvisories(app.ctx)
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_BRANCH_POLICY), defaultAllow)
+
+    const result = await adapter.beforeDispatch(BODY_QUOTED_BRANCH_POLICY)
+
+    // The waterfall listener and the adapter slice the engine header region
+    // identically (dispatchGateCore), so the default-branch protection fires
+    // with the same codes on both paths — the quoted exception is not a
+    // direct-on override for either.
+    expect(result.ok).toBe(false)
+    expect(result.violations.map((v) => v.code)).toEqual(dispatchCodes(advisories[0]))
+    expect(result.violations.map((v) => v.code)).toContain('dispatch.default-branch.protected')
   })
 })
 
