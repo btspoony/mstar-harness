@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-08-08
+
+### Fixed
+
+- OpenCode plugin entry now default-exports `{ server: MorningStarHarnessPlugin }` so helper function exports are not registered as plugins (fixes `plugin config hook failed: N.config` / `N.dispose` on startup).
+
+- Version alignment with harness **2.0.2** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.0.2**.
+
 ## [2.0.1] - 2026-08-08
 
 ### Fixed
