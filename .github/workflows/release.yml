@@ -83,6 +83,9 @@ jobs:
       - name: Publish @mstar-harness/engine
         run: npm publish --workspace @mstar-harness/engine --access public
 
+      - name: Rewrite engine dep spec for publish (workspace:* -> version)
+        run: bun run scripts/rewrite-engine-dep-for-publish.mjs
+
       - name: Publish @mstar-harness/cli
         run: npm publish --workspace @mstar-harness/cli --access public
 
