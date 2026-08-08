@@ -22,7 +22,7 @@
  *   misses `.harness`-rooted repos:
  *   plan 20260808-slice2-sdd-iteration Task 1 Finding (2026-08-08, PM).
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,6 +42,28 @@ import {
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
 const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
 const SDD_DIR = "SDD_DIR";
+
+/** Ambient env vars `sddWorkspace` / `taskBrief` / `reviewPackage` read. */
+const AMBIENT_ENV_KEYS = [MSTAR_CONTROL_ROOT, MSTAR_HARNESS_DIR, SDD_DIR] as const;
+const ambientEnvValues = new Map<string, string | undefined>(
+  AMBIENT_ENV_KEYS.map((key) => [key, process.env[key]]),
+);
+
+// Env pinning (qc3 W-4): `sddWorkspace` reads MSTAR_CONTROL_ROOT and
+// MSTAR_HARNESS_DIR ahead of probing, and taskBrief/reviewPackage read
+// SDD_DIR — an ambient shell export would redirect fixture resolution and
+// fail these tests spuriously (or worse, resolve against the developer's
+// real control worktree). Pin all three to undefined before every test and
+// restore the ambient values once at the end of the suite.
+beforeEach(() => {
+  for (const key of AMBIENT_ENV_KEYS) delete process.env[key];
+});
+afterAll(() => {
+  for (const [key, value] of ambientEnvValues) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -308,9 +330,10 @@ describe("sddWorkspace — port of scripts/sdd-workspace (SKILL.md § Scripts)",
 
   test("fail-closed: linked worktree without status.json refuses a second SDD tree", () => {
     const main = tmpRoot("sdd-ws-main-");
+    const parent = tmpRoot("sdd-ws-parent-");
     try {
       gitFixture(main);
-      const linked = join(tmpRoot("sdd-ws-parent-"), "linked");
+      const linked = join(parent, "linked");
       mkdirSync(dirname(linked), { recursive: true });
       git(["worktree", "add", "-q", linked, "-b", "feature/linked"], main);
       // linked worktree has no .mstar/status.json and no control root
@@ -321,14 +344,16 @@ describe("sddWorkspace — port of scripts/sdd-workspace (SKILL.md § Scripts)",
       expect(err.message).toContain("MSTAR_CONTROL_ROOT");
     } finally {
       rmSync(main, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 
   test("fail-closed first: MSTAR_HARNESS_DIR cannot bypass the linked-worktree guard", () => {
     const main = tmpRoot("sdd-ws-guard-");
+    const parent = tmpRoot("sdd-ws-guard-parent-");
     try {
       gitFixture(main);
-      const linked = join(tmpRoot("sdd-ws-guard-parent-"), "linked");
+      const linked = join(parent, "linked");
       mkdirSync(dirname(linked), { recursive: true });
       git(["worktree", "add", "-q", linked, "-b", "feature/guarded"], main);
       // override + no CONTROL_ROOT must still fail closed — the override
@@ -341,6 +366,7 @@ describe("sddWorkspace — port of scripts/sdd-workspace (SKILL.md § Scripts)",
       });
     } finally {
       rmSync(main, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 
@@ -511,9 +537,9 @@ describe("byte parity: TS ports vs bash originals on fixtures", () => {
 
   test("sdd-workspace fail-closed: identical error text and exit code", () => {
     const main = tmpRoot("sdd-parity-main-");
+    const parent = tmpRoot("sdd-parity-parent-");
     try {
       gitFixture(main);
-      const parent = tmpRoot("sdd-parity-parent-");
       const linked = join(parent, "linked");
       mkdirSync(linked, { recursive: true });
       git(["worktree", "add", "-q", linked, "-b", "feature/parity"], main);
@@ -524,6 +550,7 @@ describe("byte parity: TS ports vs bash originals on fixtures", () => {
       expect(err.message).toBe(bashRun.stderr.trimEnd());
     } finally {
       rmSync(main, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 
@@ -580,6 +607,96 @@ describe("byte parity: TS ports vs bash originals on fixtures", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("review-package: >1MiB diff does not hit the default maxBuffer; byte-identical to bash", () => {
+    const root = tmpRoot("sdd-parity-rp-large-");
+    const out = tmpRoot("sdd-parity-rp-large-out-");
+    try {
+      // One ~2MiB line changed between commits → the -U10 diff output
+      // exceeds Node's default 1 MiB capture cap (qc3 W-2 regression).
+      git(["init", "-q"], root);
+      git(["config", "user.email", "sdd-test@example.com"], root);
+      git(["config", "user.name", "SDD Test"], root);
+      const bigLine = "x".repeat(2 * 1024 * 1024);
+      writeFileSync(join(root, "big.txt"), `before\n${bigLine}\nafter\n`);
+      git(["add", "-A"], root);
+      git(["commit", "-q", "-m", "base commit"], root);
+      const base = git(["rev-parse", "HEAD"], root);
+      writeFileSync(join(root, "big.txt"), `before\n${bigLine}!\nafter\n`);
+      git(["add", "-A"], root);
+      git(["commit", "-q", "-m", "head commit"], root);
+      const head = git(["rev-parse", "HEAD"], root);
+
+      const bashOut = join(out, "bash-large.diff");
+      const bashRun = runBash(join(SCRIPTS, "review-package"), [base, head, bashOut], root);
+      expect(bashRun.status).toBe(0);
+      // Guard: the fixture really exceeds the old 1 MiB cap — without this
+      // the test would pass vacuously if the diff shrank below the cap.
+      expect(statSync(bashOut).size).toBeGreaterThan(1024 * 1024);
+
+      const tsOut = join(out, "ts-large.diff");
+      expect(() => reviewPackage(base, head, tsOut, { cwd: root })).not.toThrow();
+      expect(readFileSync(tsOut)).toEqual(readFileSync(bashOut));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("repo under a directory named 'worktrees' is classified as linked (bash parity, documented)", () => {
+    const parent = tmpRoot("sdd-parity-wt-");
+    const root = join(parent, "worktrees", "proj");
+    try {
+      mkdirSync(root, { recursive: true });
+      git(["init", "-q"], root);
+      git(["config", "user.email", "sdd-test@example.com"], root);
+      git(["config", "user.name", "SDD Test"], root);
+      writeFileSync(join(root, "a.txt"), "a\n");
+      git(["add", "-A"], root);
+      git(["commit", "-q", "-m", "base commit"], root);
+      // The `git_dir` path contains `/worktrees/` → both the bash `case`
+      // glob (sdd-workspace:62-64) and the TS port classify this MAIN
+      // checkout as linked and fail closed with byte-identical text —
+      // documented in `isLinkedWorktree` (qc3 S-2).
+      const bashRun = runBash(join(SCRIPTS, "sdd-workspace"), ["parity-plan"], root);
+      expect(bashRun.status).toBe(1);
+      expect(bashRun.stderr).toContain("linked worktree");
+      const err = errOf(() => sddWorkspace("parity-plan", { cwd: root }));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toBe(bashRun.stderr.trimEnd());
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("stray status.json in a linked worktree: TS diverges from bash by design (fail-closed first)", () => {
+    const main = tmpRoot("sdd-parity-stray-main-");
+    const parent = tmpRoot("sdd-parity-stray-parent-");
+    try {
+      gitFixture(main);
+      const linked = join(parent, "linked");
+      mkdirSync(dirname(linked), { recursive: true });
+      git(["worktree", "add", "-q", linked, "-b", "feature/stray"], main);
+      // Stray `.mstar/status.json` under the feature checkout (default
+      // gitignore lets it exist uncommitted).
+      mkdirSync(join(linked, ".mstar"), { recursive: true });
+      writeFileSync(join(linked, ".mstar", "status.json"), "{}\n");
+      // bash probes status.json FIRST (sdd-workspace:71) → resolves and
+      // creates the second SDD tree under the feature checkout (the hazard).
+      const bashRun = runBash(join(SCRIPTS, "sdd-workspace"), ["parity-plan"], linked);
+      expect(bashRun.status).toBe(0);
+      expect(bashRun.stdout.trim()).toBe(realpathSync(join(linked, ".mstar", "sdd", "parity-plan")));
+      // TS guards FIRST (fail-closed-before-override, mstar-branch-worktree
+      // «Harness path SSOT under default gitignore») → refuses regardless
+      // of the probe result (qc2 F-004, intentional divergence).
+      const err = errOf(() => sddWorkspace("parity-plan", { cwd: linked }));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toMatch(/Refusing to create a second SDD tree/);
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 });
