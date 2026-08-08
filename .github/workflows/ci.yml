@@ -62,7 +62,7 @@ jobs:
             exit 1
           }
           echo "$TREE"
-          if echo "$TREE" | grep -E 'commander|inquirer'; then
+          if echo "$TREE" | grep -E '(^|\s)(commander|inquirer)(\s|@|$)'; then
             echo "::error::@mstar-harness/opencode dep tree must not contain commander or inquirer (roadmap §8.7 item 5)"
             exit 1
           fi
@@ -79,6 +79,20 @@ jobs:
 
       - name: CLI smoke check
         run: bun run --cwd packages/cli check
+
+      - name: Test engine
+        run: bun run --cwd packages/engine test
+
+      # The cli test script runs the engine build as a pre-step (tests import
+      # @mstar-harness/engine dist) — use the package script, not raw bun test.
+      - name: Test CLI
+        run: bun run --cwd packages/cli test
+
+      - name: Test OpenCode
+        run: bun run --cwd packages/opencode test
+
+      - name: Test scripts
+        run: bun test scripts/prepare-release.test.ts
 
       - name: Pack CLI tarball
         run: bun run cli:pack

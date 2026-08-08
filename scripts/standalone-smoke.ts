@@ -7,7 +7,9 @@
  * skill loads without depending on the runtime:
  *
  *   1. Every `skills/<name>/SKILL.md` parses a frontmatter `name:` (it loads
- *      as a skill). Expected: the 19 harness skills (18 `mstar-*` + `pm`).
+ *      as a skill). Expected: the 19 harness skills (18 `mstar-*` + `pm`);
+ *      optional bundled skills (e.g. `grill-me`) are load-checked too but
+ *      reported separately from the harness set.
  *   2. No skill markdown references `@mstar-harness/engine` or
  *      `@mstar-harness/cli` outside an advisory `**Engine check (when
  *      available):**` blockquote. Fenced code blocks are allowed only when
@@ -99,7 +101,8 @@ const skillDirs = readdirSync(join(root, "skills"), { withFileTypes: true })
 
 /* 1. Every SKILL.md must load (frontmatter `name:`), expected set present. */
 let loaded = 0;
-const loadedNames: string[] = [];
+const harnessNames: string[] = [];
+const optionalNames: string[] = [];
 for (const dir of skillDirs) {
   const skillFile = join(root, "skills", dir, "SKILL.md");
   let text: string;
@@ -118,10 +121,11 @@ for (const dir of skillDirs) {
     continue;
   }
   loaded++;
-  loadedNames.push(name);
+  if (EXPECTED_SKILLS.includes(dir)) harnessNames.push(name);
+  else optionalNames.push(name);
 }
 for (const expected of EXPECTED_SKILLS) {
-  if (!loadedNames.includes(expected)) {
+  if (!harnessNames.includes(expected)) {
     failures.push(`expected harness skill "${expected}" did not load`);
   }
 }
@@ -196,6 +200,11 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`standalone-smoke: OK — ${loaded} skills load standalone (${EXPECTED_SKILLS.length} expected: ${loadedNames.join(", ")})`);
+console.log(
+  `standalone-smoke: OK — ${harnessNames.length} harness skills load standalone (${EXPECTED_SKILLS.length}: 18 mstar-* + pm — ${harnessNames.join(", ")})` +
+    (optionalNames.length > 0
+      ? `; ${optionalNames.length} optional bundled skill${optionalNames.length === 1 ? "" : "s"} (${optionalNames.join(", ")})`
+      : ""),
+);
 console.log(`standalone-smoke: OK — ${callouts} Engine-check callouts are advisory blockquotes with the standalone guarantee`);
 console.log(`standalone-smoke: OK — no @mstar-harness/engine or @mstar-harness/cli reference in any skill load order (engine + cli uninstalled simulation)`);

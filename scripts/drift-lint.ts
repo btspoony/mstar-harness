@@ -133,7 +133,9 @@ for (const file of skillFiles) {
     }
     for (const im of run.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
       for (const raw of im[1].split(",")) {
-        const name = raw.trim();
+        // Strip TS import modifiers so `import { type Foo }` / `import {
+        // Foo as Bar }` resolve to the exported name `Foo`.
+        const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
         if (name && !engineExports.has(name)) {
           fail(`${rel}:${run.start + 1} callout imports unknown engine export "${name}"`);
         }
@@ -144,7 +146,7 @@ for (const file of skillFiles) {
   // Import statements anywhere in a skill file must reference real exports.
   for (const im of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
     for (const raw of im[1].split(",")) {
-      const name = raw.trim();
+      const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
       if (name && !engineExports.has(name)) {
         fail(`${rel}: import of unknown engine export "${name}"`);
       }
