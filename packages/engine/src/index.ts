@@ -77,6 +77,22 @@ export {
   validateAssignmentFields,
 } from "./dispatch.js";
 export type {
+  BranchProbeOptions,
+  L1PreDispatchInput,
+  L2PreDispatchInput,
+  QcAlignmentAssignment,
+  QcSnapshotAssignment,
+  WorktreeTrack,
+} from "./worktree.js";
+export {
+  assertBranchAlignment,
+  assertControlVsFeaturePath,
+  assertQcAlignment,
+  l1PreDispatchCheck,
+  l2PreDispatchCheck,
+  singleReviewSnapshot,
+} from "./worktree.js";
+export type {
   ImplementerSessionLedger,
   ReviewPackageOptions,
   SddWorkspaceOptions,
