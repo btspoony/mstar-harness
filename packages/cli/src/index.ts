@@ -450,10 +450,20 @@ const sddCommand = program
 sddCommand
   .command("workspace")
   .description("Resolve and ensure {SDD_DIR} for a plan (exit 1 on resolution failures, 2 on usage errors)")
-  .argument("<plan-id>", "Plan id whose SDD dir is resolved/created")
+  .argument("[plan-id]", "Plan id whose SDD dir is resolved/created")
   .argument("[control-root]", "Control worktree root (default: MSTAR_CONTROL_ROOT or the cwd's git top-level)")
-  .action((planId: string, controlRoot?: string) => {
+  .action((planId: string | undefined, controlRoot?: string) => {
     try {
+      // Optional args + explicit count check: commander's own
+      // missing-argument error exits 1, which would bypass the bash-parity
+      // usage contract (exit 2) — validate in-handler instead (qc2 F-005).
+      if (!planId) {
+        throw new SddScriptError(
+          "usage: sdd-workspace PLAN_ID [CONTROL_ROOT]\n" +
+            "  Set MSTAR_CONTROL_ROOT=<control_worktree_path> when running from a feature worktree.",
+          2,
+        );
+      }
       const sddDir = sddWorkspace(planId, controlRoot ? { controlRoot } : {});
       console.log(pc.green(`sdd dir: ${sddDir}`));
     } catch (error) {
@@ -464,11 +474,15 @@ sddCommand
 sddCommand
   .command("task-brief")
   .description("Extract the `## Task N` section of a plan into a brief file (exit 3 when task N is missing)")
-  .argument("<plan-file>", "Plan markdown file")
-  .argument("<task-number>", "Task number whose brief is extracted")
+  .argument("[plan-file]", "Plan markdown file")
+  .argument("[task-number]", "Task number whose brief is extracted")
   .argument("[outfile]", "Output file (default: {SDD_DIR}/task-N-brief.md)")
-  .action((planFile: string, taskNumber: string, outfile?: string) => {
+  .action((planFile: string | undefined, taskNumber: string | undefined, outfile?: string) => {
     try {
+      // Optional args + explicit count check (bash-parity usage exit 2).
+      if (!planFile || !taskNumber) {
+        throw new SddScriptError("usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]", 2);
+      }
       const out = taskBrief(planFile, Number(taskNumber), outfile);
       console.log(pc.green(`task ${taskNumber} brief: ${out}`));
     } catch (error) {
@@ -479,11 +493,15 @@ sddCommand
 sddCommand
   .command("review-package")
   .description("Write commits + stat + diff -U10 for BASE..HEAD into a review file (exit 2 on bad refs)")
-  .argument("<base>", "Base ref (commit SHA)")
-  .argument("<head>", "Head ref (commit SHA)")
+  .argument("[base]", "Base ref (commit SHA)")
+  .argument("[head]", "Head ref (commit SHA)")
   .argument("[outfile]", "Output file (default: {SDD_DIR}/review-<short-base>..<short-head>.diff)")
-  .action((base: string, head: string, outfile?: string) => {
+  .action((base: string | undefined, head: string | undefined, outfile?: string) => {
     try {
+      // Optional args + explicit count check (bash-parity usage exit 2).
+      if (!base || !head) {
+        throw new SddScriptError("usage: review-package BASE HEAD [OUTFILE]", 2);
+      }
       const out = reviewPackage(base, head, outfile);
       console.log(pc.green(`review package: ${out}`));
     } catch (error) {
@@ -513,7 +531,9 @@ iterationCommand
   .command("gate")
   .description(
     "Evaluate the phase-transition gate: prints the transition (phase-2-execute / phase-3-close / phase-4-pr-delivery) " +
-      "plus the §3.1 entry and §3.5 exit checklists (exit 1 when the gate verdict fails)",
+      "plus the §3.1 entry and §3.5 exit checklists. Exit 1 when the gate verdict fails — during the Phase-3 window " +
+      "(transition: phase-3-close) exit 1 is EXPECTED until the §3.4 close items (status: completed + end_date) are " +
+      "written: the exit checklist gates Phase 4, not the Phase-3 entry (qc2 F-003)",
   )
   .requiredOption("--status <path>", "status.json path")
   .requiredOption("--compass <path>", "delivery-compass.md path")
