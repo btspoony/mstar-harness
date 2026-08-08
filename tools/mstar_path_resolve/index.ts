@@ -16,7 +16,7 @@ import {
   resolvePlanDir,
   resolveSddDir,
   resolveSpecsDir,
-} from "../../bundle/engine-bundle.js";
+} from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = { planId?: string };

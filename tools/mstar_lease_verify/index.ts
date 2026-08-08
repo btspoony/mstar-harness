@@ -8,8 +8,8 @@
  * engine calls. No local rule logic.
  */
 import { join } from "node:path";
-import { readJson, resolveHarnessDir, validateIntegrationMergeLease, verifyPlanExecutionLease } from "../../bundle/engine-bundle.js";
-import type { ValidationResult } from "../../bundle/engine-bundle.js";
+import { readJson, resolveHarnessDir, validateIntegrationMergeLease, verifyPlanExecutionLease } from "@mstar-harness/engine";
+import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = { planId: string; kind: "execution" | "integration" };

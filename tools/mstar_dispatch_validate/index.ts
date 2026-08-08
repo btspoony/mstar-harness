@@ -18,8 +18,8 @@ import {
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   validateAssignmentFields,
-} from "../../bundle/engine-bundle.js";
-import type { GateResult, ValidationResult } from "../../bundle/engine-bundle.js";
+} from "@mstar-harness/engine";
+import type { GateResult, ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = { assignmentText: string; agent?: string; readOnlyRole?: boolean };

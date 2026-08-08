@@ -8,8 +8,8 @@
  * single validator; this module only locates the file and formats output.
  */
 import { join, resolve } from "node:path";
-import { readJson, resolveHarnessDir, validateStatus } from "../../bundle/engine-bundle.js";
-import type { ValidationResult } from "../../bundle/engine-bundle.js";
+import { readJson, resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
+import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = { path?: string };

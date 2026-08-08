@@ -9,8 +9,8 @@
  * Working branch per track); the zod shape guards the L2PreDispatchInput
  * contract at the parameter boundary. No local rule logic.
  */
-import { l1PreDispatchCheck, l2PreDispatchCheck } from "../../bundle/engine-bundle.js";
-import type { L1PreDispatchInput, ValidationResult, WorktreeTrack } from "../../bundle/engine-bundle.js";
+import { l1PreDispatchCheck, l2PreDispatchCheck } from "@mstar-harness/engine";
+import type { L1PreDispatchInput, ValidationResult, WorktreeTrack } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = {

@@ -11,8 +11,8 @@
  * engine. `statusPath` / `compassPath` are resolved against `pi.cwd`.
  */
 import { resolve } from "node:path";
-import { evaluatePhaseGate, readJson } from "../../bundle/engine-bundle.js";
-import type { ValidationResult } from "../../bundle/engine-bundle.js";
+import { evaluatePhaseGate, readJson } from "@mstar-harness/engine";
+import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = { phase: string; statusPath: string; compassPath: string };

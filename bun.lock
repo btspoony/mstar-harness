@@ -3,6 +3,9 @@
   "workspaces": {
     "": {
       "name": "morning-star",
+      "dependencies": {
+        "@mstar-harness/engine": "^2.0.2",
+      },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^17.2.11",
         "@types/node": "^25.6.0",
