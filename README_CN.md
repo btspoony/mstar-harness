@@ -4,7 +4,7 @@
 
 # Morning Star (启明星)
 
-编码智能体 Harness 框架
+Harness Workflow Engine · Agent Plugin
 
 [English](README.md) / 中文
 
@@ -18,11 +18,22 @@
 
 </div>
 
-**Morning Star / 启明星** 是面向 AI 编码宿主的多角色 code harness。
+**Morning Star / 启明星** 是面向 harness 工程工作流的 Agent Plugin：TypeScript **Harness Workflow Engine**（`@mstar-harness/engine`）强制执行确定性工作流门禁，`mstar-*` 判断型 skills 驱动多智能体代码交付。
 
-- 快速启动一套可用的多角色协作流
-- 通过统一的 `mstar-*` skills 执行，而不是散落规则
+- **确定性门禁，由 TS 引擎强制执行** —— path/status/lease/dispatch/sdd/iteration/lint 门禁运行在 `@mstar-harness/engine` 中，而非仅靠 prompt 建议
+- **判断留在 `mstar-*` skills** —— skills 仍是角色、门禁与工作流判断的唯一事实来源（SSOT）
+- **一个引擎跨宿主** —— 同一引擎 + skills 驱动 omp、OpenCode、Cursor、Kimi Code、ZCode、Codex
+- **Agent Plugin 打包** —— 一条命令安装；可移植到任意 Agent Plugins v1.0.0 客户端
 - **推荐宿主顺序**（最佳 → 可用）：**omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex** —— omp/OpenCode/Cursor 的 subagent + Plan UX 最完整；Kimi/ZCode 仅支持内置 agent 类型；Codex 派发面最受限。
+
+**交付内容**
+
+| 组件 | 说明 |
+|------|------|
+| Harness Workflow Engine | `@mstar-harness/engine` —— 确定性工作流门禁的 TS 强制执行层 |
+| mstar CLI | `@mstar-harness/cli` —— 安装引导 + `mstar` 工作流动词 |
+| `mstar-*` skills | 角色、门禁与工作流判断（唯一事实来源） |
+| 宿主适配 | omp、OpenCode、Cursor、Kimi Code、ZCode、Codex |
 
 更新说明：[CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 

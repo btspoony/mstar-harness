@@ -2,7 +2,7 @@
   "name": "morning-star-harness",
   "displayName": "Morning Star Harness",
   "version": "1.8.9",
-  "description": "Morning Star harness engineering framework as a Cursor plugin.",
+  "description": "Morning Star harness engineering Agent Plugin for Cursor: a TS Harness Workflow Engine (@mstar-harness/engine) that enforces deterministic workflow gates, plus mstar-* judgment skills for multi-agent code delivery.",
   "author": {
     "name": "Bohao Tang",
     "email": "tech@btang.cn"
