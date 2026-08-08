@@ -7,8 +7,14 @@
  * checks, `status` implements the status.json schema, residual lifecycle,
  * findings-cleanup gate and the tech-debt rollup port, `lease` implements
  * the execution/merge lease state machines + same-host status write lock,
- * and `dispatch` implements the Assignment field contract, default-branch
- * gate, QC seat mapping and tri-identity/anti-recursion prechecks.
+ * `dispatch` implements the Assignment field contract, default-branch
+ * gate, QC seat mapping and tri-identity/anti-recursion prechecks, `lint`
+ * implements marker/TDD-triple/plan-quality/frontmatter/STRATEGY checks,
+ * `design-md` validates DESIGN.md token frontmatter + light/dark parity +
+ * completeness levels, `audit` validates audit Status blocks, redacts
+ * secrets and scaffolds audit-<date>/ plan dirs, and `compound` validates
+ * knowledge-doc schema, reference existence, index rows and the
+ * compound-refresh scope.
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
@@ -127,6 +133,55 @@ export {
   pushCadenceProbe,
   validateCompassFrontmatter,
 } from "./iteration.js";
+export type {
+  CompletenessItem,
+  CompletenessLevel,
+  CompletenessPlaceholder,
+  CompletenessResult,
+  DesignFrontmatter,
+} from "./design-md.js";
+export {
+  assertLightDarkParity,
+  completenessLevel,
+  parseDesignFrontmatter,
+  validateDesignTokenFrontmatter,
+} from "./design-md.js";
+export type {
+  AuditCategory,
+  AuditEffort,
+  AuditFinding,
+  AuditPriority,
+  AuditRisk,
+  RedactResult,
+  ScaffoldAuditPlanOptions,
+  ScaffoldAuditPlanResult,
+  SecretFinding,
+} from "./audit.js";
+export {
+  AUDIT_CATEGORIES,
+  AUDIT_EFFORTS,
+  AUDIT_PRIORITIES,
+  AUDIT_RISKS,
+  redactSecrets,
+  scaffoldAuditPlan,
+  validateAuditStatusBlocks,
+} from "./audit.js";
+export type { ReferenceCheckResult } from "./compound.js";
+export {
+  KNOWLEDGE_BUG_PROBLEM_TYPES,
+  KNOWLEDGE_CATEGORY_MAP,
+  KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES,
+  KNOWLEDGE_PROBLEM_TYPES,
+  KNOWLEDGE_REQUIRED_FIELDS,
+  KNOWLEDGE_RESOLUTION_TYPES,
+  KNOWLEDGE_SEVERITIES,
+  assertIndexRows,
+  compoundRefreshScope,
+  referenceExists,
+  scopeGuard,
+  validateSchemaYaml,
+} from "./compound.js";
+
 export type {
   PlanQualityFinding,
   PlanQualityResult,

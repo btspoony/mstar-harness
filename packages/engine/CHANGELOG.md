@@ -8,6 +8,9 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ### Added
 
+- `design-md` module — `validateDesignTokenFrontmatter` (token-group/type checks per design-md-spec §1.5, `{path}` ref resolution), `assertLightDarkParity` (same key sets across light/dark), `completenessLevel` (MVP/Standard/Production with placeholder-driven upgrade suggestions).
+- `audit` module — `validateAuditStatusBlocks` (Priority/Effort/Risk/Category/Depends on/Planned at enums), `redactSecrets` (conservative credential-pattern scan → `[REDACTED type@line in file]`, mstar-audit Hard Rule 4), `scaffoldAuditPlan` (audit-<date>/ README index + numbered plan files, monotonic numbering across re-runs).
+- `compound` module — `validateSchemaYaml` (knowledge frontmatter vs schema.yaml rules embedded as constants, incl. category-mapping consistency), `referenceExists` (file-path existence + module-file heuristic for symbol refs), `assertIndexRows` (README.md index obligations), `scopeGuard` + `compoundRefreshScope` (compound-refresh scope SSOT).
 - `dispatch.parseAssignmentFields` exported (single Assignment header grammar, list-bullet acceptance folded in).
 - `dispatch.parseAssignmentBranchForms` + `dispatch.parseBranchPolicyDirectOnBranch` — engine-owned branch-form grammar shared by CLI and host hooks (qc1 F-001).
 - `dispatch.isReadOnlyAssignmentRole` — scout/explore read-only role detection (qc3 F-1).
