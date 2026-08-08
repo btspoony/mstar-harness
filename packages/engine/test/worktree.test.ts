@@ -289,6 +289,54 @@ describe("l2PreDispatchCheck — within-plan parallel track checklist", () => {
     }
   });
 
+  test("duplicate worktreePath across tracks → worktree.l2.track-path-collision (real git worktrees; distinct paths → ok covered by the ok test above)", () => {
+    const root = tmpRoot("worktree-l2-collision-");
+    try {
+      const wts = worktreeFixture(root, ["track/a"]);
+      const shared = wts.get("track/a")!;
+      const result = l2PreDispatchCheck({
+        tracks: [
+          { worktreePath: shared, workingBranch: "track/a" },
+          { worktreePath: shared, workingBranch: "track/a" },
+        ],
+      });
+      expect(result.ok).toBe(false);
+      // exactly one collision violation, nothing else — the duplicate short-circuits before dir/probe checks
+      expect(codesOf(result)).toEqual(["worktree.l2.track-path-collision"]);
+      expect(severitiesOf(result)).toEqual(["high"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("relative track worktreePath → worktree.l2.track-path-relative", () => {
+    const result = l2PreDispatchCheck({
+      tracks: [{ worktreePath: "worktrees/track-a", workingBranch: "track/a" }],
+    });
+    expect(result.ok).toBe(false);
+    // the relative path short-circuits before dir/probe checks — no track-missing
+    expect(codesOf(result)).toEqual(["worktree.l2.track-path-relative"]);
+    const v = findViolation(result, "worktree.l2.track-path-relative");
+    expect(v?.severity).toBe("high");
+  });
+
+  test("relative path on one track does not skip the other track's checks", () => {
+    const root = tmpRoot("worktree-l2-relmixed-");
+    try {
+      const wts = worktreeFixture(root, ["track/a"]);
+      const result = l2PreDispatchCheck({
+        tracks: [
+          { worktreePath: wts.get("track/a")!, workingBranch: "track/a" },
+          { worktreePath: "relative/track-b", workingBranch: "track/b" },
+        ],
+      });
+      expect(result.ok).toBe(false);
+      expect(codesOf(result)).toEqual(["worktree.l2.track-path-relative"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("precomputed branchOf opt works per track (purity)", () => {
     const root = tmpRoot("worktree-l2-pure-");
     try {

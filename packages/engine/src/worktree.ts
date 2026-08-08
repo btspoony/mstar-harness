@@ -16,10 +16,11 @@
  *   feature checkout (harness SSOT resolves from the control worktree):
  *   SKILL.md § "Control worktree vs feature worktree (iteration / L1)" +
  *   § "Harness path SSOT under default gitignore (L1)" § "Hard rules".
- * - L2 pre-dispatch checklist — per-track worktree dirs exist and
- *   `git -C <path> branch --show-current` matches the Assignment Working
- *   branch before the first concurrent writable dispatch; N parallel invokes
- *   ≠ isolation; emit zero until ready:
+ * - L2 pre-dispatch checklist — per-track worktree dirs exist, `worktreePath`
+ *   values are absolute and distinct (one Worktree per track; N parallel
+ *   invokes ≠ isolation) and `git -C <path> branch --show-current` matches
+ *   the Assignment Working branch before the first concurrent writable
+ *   dispatch; emit zero until ready:
  *   `mstar-branch-worktree` `references/parallel-writable-pre-dispatch.md`
  *   § "Pre-dispatch checklist (HARD)".
  * - QC/QA alignment — `plan_id` + `Review range`/`Diff basis` byte-identical
@@ -31,6 +32,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 
 /** One L2 parallel implement track (mstar-branch-worktree L2 table). */
@@ -213,14 +215,17 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
 
 /**
  * L2 within-plan pre-dispatch checklist (parallel-writable-pre-dispatch.md):
- * every parallel writable track's worktree dir exists and
- * `git -C <path> branch --show-current` matches its Working branch — before
- * the first concurrent writable dispatch. Fewer than one track is itself a
- * violation (the checklist needs something to verify).
+ * every parallel writable track's `worktreePath` must be absolute and
+ * distinct (one Worktree per track — N parallel invokes ≠ isolation), the
+ * worktree dir must exist, and `git -C <path> branch --show-current` must
+ * match its Working branch — before the first concurrent writable dispatch.
+ * Fewer than one track is itself a violation (the checklist needs something
+ * to verify).
  */
 export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
   const tracks = input.tracks ?? [];
+  const seenPaths = new Set<string>();
 
   if (tracks.length < 1) {
     violations.push(
@@ -245,6 +250,29 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
       );
       return;
     }
+    if (!isAbsolute(track.worktreePath)) {
+      violations.push(
+        violation(
+          "high",
+          "worktree.l2.track-path-relative",
+          `track ${index + 1} worktreePath "${track.worktreePath}" is not an absolute path — L2 tracks MUST use absolute worktree checkout paths (consistent with the lease validator's absolute worktree_path enforcement)`,
+          `use an absolute path for track ${index + 1} (e.g. /Users/<you>/worktrees/<branch>)`,
+        ),
+      );
+      return;
+    }
+    if (seenPaths.has(track.worktreePath)) {
+      violations.push(
+        violation(
+          "high",
+          "worktree.l2.track-path-collision",
+          `duplicate worktreePath "${track.worktreePath}" across parallel tracks — L2 parallel-writable isolation requires a distinct absolute Worktree path per track (N parallel invokes ≠ isolation)`,
+          "give every parallel track its own git worktree checkout",
+        ),
+      );
+      return;
+    }
+    seenPaths.add(track.worktreePath);
     if (!existsSync(track.worktreePath)) {
       violations.push(
         violation(
