@@ -6,13 +6,30 @@ Morning Star as a first-class dsh host — a cordis function plugin that mounts 
 
 ## Installation
 
-The package ships as a workspace package (`workspaces: ["packages/*"]`) with the engine bundled into `dist/` at build time (`bun run build`; dist is gitignored). Add it to a dsh app's `cordis.yml`:
+The package ships as a workspace package (`workspaces: ["packages/*"]`) with the engine bundled into `dist/` at build time (`bun run build`; dist is gitignored). Two install shapes:
+
+**As a cordis plugin** in a dsh app's `cordis.yml`:
 
 ```yaml
 - name: '@mstar-harness/dsh'
   config:
     harnessDir: .mstar
 ```
+
+**As a profile bundle** (`dsh --profile mstar`), through the `dsh.bundle.patch` manifest. Local checkout (this iteration — local-only, no npm publish yet):
+
+```sh
+cd <repo>/packages/dsh
+dsh plugin --profile mstar add .
+```
+
+Published package (later, once `@mstar-harness/dsh` is on the registry):
+
+```sh
+dsh plugin --profile mstar add @mstar-harness/dsh
+```
+
+Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add .` runs from the package checkout; pnpm must be on PATH. Details, layer position, and the shipped defaults live in [`bundle/README.md`](bundle/README.md) — the local path is **verified** (Task 5), the registry path is deferred until publish.
 
 `cordis` and the `@deepseek-ai/dsh-*` seams are peerDependencies — the composed dsh app provides them.
 
@@ -66,7 +83,27 @@ The mstar skills mount through the dsh skill-local provider as a **single canoni
 
 `packages/dsh/skills/README.md` is the packaged mount target and intentionally contains **no skill copies** — skill content lives once in the repo-root `skills/` mirror (19 `mstar-*` + `pm`), and mstar skills stay standalone-usable everywhere. No double-loading: the opencode plugin ships the same skills in its own package, so dsh must mount them ONLY through this single skill-local path.
 
-Dev-time reality: the `@deepseek-ai/dsh-skill-local` runtime is a peer-stub (contract-mirroring registration, no file watcher), so the mount is verified through real composition against the stub + the actual mirror `skills/` frontmatter (engine `lintSkillFrontmatter`); real-runtime composition (real seam packages, watcher, `$DSH_BUNDLED_SKILL_DIR` env flow) is deferred to P3 e2e.
+Dev-time reality: the `@deepseek-ai/dsh-skill-local` runtime is a peer-stub (contract-mirroring registration, no file watcher), so the mount is verified through real composition against the stub + the actual mirror `skills/` frontmatter (engine `lintSkillFrontmatter`); real-runtime composition (real seam packages, watcher, `$DSH_BUNDLED_SKILL_DIR` env flow) is the deployment target, not covered by this package's suite.
+
+## Engine seam mapping
+
+Every engine module attaches to a dsh surface — all delivered (v2.1.0; epic roadmap `dsh-adapter-roadmap.md` §4):
+
+| Engine module | dsh seam | Status |
+|---|---|---|
+| core (applyEnforcement, GateResult/Severity) | cross-cutting veto/reject | delivered (P1) |
+| path (resolveHarnessDir, assertPlanWritingPath) | `fs/write-intent` on `{HARNESS_DIR}` writes | delivered (P1) |
+| status (validateStatus, validateResidual, findingsCleanupGate) | `fs/write-intent` + `fs/edit-intent` on status.json | delivered (P1) |
+| lease (verifyPlanExecutionLease, validateIntegrationMergeLease) | exec lease: `tools/pre-execute` (inside the dispatch gate); merge lease: `HostAdapter.beforeMerge` | delivered (P1 exec / P3 merge) |
+| dispatch (validateAssignmentFields, antiRecursionPrecheck, isReadOnlyAssignmentRole) | `tools/pre-execute` on the subagent tool (`PreToolDecision.deny` to block); `agent/pre-step` advisory | delivered (P1) |
+| host (detectHost, resolveSkillRoot, HostAdapter) | engine host.ts + plugin adapter (`host: dsh`) | delivered (P2) |
+| skill-authoring (lintFrontmatter, lintFiveQuestion) | skill-local roots + `fs/write-intent` on SKILL.md | delivered (P2) |
+| lint (lintSkillFrontmatter, planQualityBar, assertSddTddTriple) | `fs/write-intent` plan/tdd + seam tools | delivered (P2 skill / P3 plan) |
+| agent catalog | MessageSourceMap `mstar-engine-status` (model-visible ⟺ logged) | delivered (P2) |
+| sdd (sddWorkspace, taskBrief, reviewPackage) | `defineTool` wrappers registered on `ctx.tools`; `agent/pre-step` | delivered (P3) |
+| iteration (evaluatePhaseGate, pushCadenceProbe, validateCompassFrontmatter) | `agent/pre-step` + iteration gate | delivered (P3) |
+| worktree (l1/l2PreDispatchCheck, assertQcAlignment) | `tools/pre-execute` L1/L2 (inside the dispatch gate) | delivered (P3) |
+| design-md / audit / compound / roles | `fs/write-intent` + `defineTool` wrappers on `ctx.tools` | delivered (P3) |
 
 ## Engine-status catalog
 
@@ -74,7 +111,7 @@ An advisory `agent/pre-step` waterfall listener appends one **`mstar-engine-stat
 
 ## Development
 
-Commands (from `packages/dsh`): the coverage gate is per-file 100% on `src/` (dsh testing policy); the build bun-bundles the src entries into `dist/` (engine + schemastery inlined; `cordis` and the functional seam packages `@deepseek-ai/dsh-skill-local` + `@deepseek-ai/dsh-llm` external) and emits tsc declarations.
+Commands (from `packages/dsh`): the coverage gate is per-file 100% on `src/` (dsh testing policy); the build bun-bundles the src entries into `dist/` (engine + schemastery inlined; `cordis` and the runtime seam imports — `@deepseek-ai/dsh-skill-local`, `@deepseek-ai/dsh-tools` (`defineTool`), `@deepseek-ai/dsh-llm` — external) and emits tsc declarations.
 
 ```sh
 bun test --coverage
@@ -102,7 +139,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 
 ## Known Limitations and Deferred Work
 
-- **Dev-time peer stubs** — the `@deepseek-ai/dsh-*` seams split into (a) **type-only / placeholder stubs** (`dsh-fs`, `dsh-fs-policy`, `dsh-tools`, `dsh-agent`, `dsh-invariants`, `dsh-subagent`) exposing the seam types/peer names only, and (b) **functional composition stubs** (`dsh-skill`, `dsh-skill-local`, `dsh-llm`) carrying minimal dev-time runtimes (`simplify:` markers; pinned to dsh-private `9451be2`) so composition, waterfalls, and the catalog message factory actually run in tests. The functional stubs are **externalized at build time** (`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining the stand-in code); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. Swapping in the real seam packages is deferred to P3 e2e (`20260808-dsh-seams-bundle`); a composed app with real seams is the deployment target and is not covered by this package's suite.
+- **Dev-time peer stubs** — the `@deepseek-ai/dsh-*` seams split into (a) **type-only / placeholder stubs** (`dsh-fs`, `dsh-fs-policy`, `dsh-agent`, `dsh-invariants`, `dsh-subagent`) exposing the seam types/peer names only, and (b) **functional composition stubs** (`dsh-skill`, `dsh-skill-local`, `dsh-tools` (`defineTool`), `dsh-llm`) carrying minimal dev-time runtimes (`simplify:` markers; pinned to dsh-private `9451be2`) so composition, waterfalls, the catalog message factory, and the v2 seam tools actually run in tests. **All four runtime seam imports are externalized at build time** (`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining the stand-in code; verified in the Task 6 pack review); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. Swapping in the real seam packages for the plugin's own suite is NOT planned — a composed app with real seams is the deployment target (this package's suite deliberately runs the pinned stubs for hermetic composition tests).
 - **Anti-recursion binding is Config-declared** — dsh exposes no per-agent role on the tool-execution context, so `dispatchBinding` declares one deployment-wide role; an Assignment with a different `Execute as` cannot be caught as self-recursion, and multi-role dispatchers need per-instance plugins.
 - **Lease gate diverges from opencode by design** — opencode's `beforeDispatch` runs no lease checks; the dsh lease gate is additive (`lease.dispatch.*` codes) and fires only for writable SDD/InProgress dispatches, so parity covers the field set, not the lease surface.
 - **Engine single-version pin** — `@mstar-harness/engine` is an exact `2.0.0` devDependency bundled into `dist/` (never a runtime dependency); `readHarnessVersion()` reads the dsh package manifest next to the bundle, which stays `2.0.0` by the single-version invariant.
@@ -111,7 +148,10 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **Status gate is content-blind by seam design** (qc2 W-001) — the `fs/write-intent`/`fs/edit-intent` waterfall carries only `(target, actor)`, never the incoming content, so the write that FIRST corrupts a valid `status.json` passes in BOTH modes (the gate validates the pre-write document only). Hard mode therefore never vetoes status writes: an already-invalid document is allowed as a **repair escape** (error-level advisory with `hard: true, repair: true`) so the repairing write can land. Recovery path: repair the document in place (the gate allows it) or delete `status.json` and let the harness re-create it; monitor hard-mode deployments for `repair: true` advisories.
 - **Missing `status.json` lease behavior** (qc3 F-5) — on sdd writable dispatches a missing status file surfaces `lease.dispatch.unverifiable` (advisory in warn, deny under hard); non-SDD dispatches carry no lease obligation and keep the silent degrade-allow.
 - **Gate matching follows `displayPath`** (qc2 S-007) — the status gate matches on the resolved `displayPath` of the fs target. A backend reporting workspace-relative paths, a symlinked harness dir, or remote/URI targets never match and the gate is inert for them (no false positives); use absolute local paths for gated harness writes.
-- **`lintSkillWrite` typed veto not production-wired** — the incoming-document hard veto (`SkillLintVetoError`, code `skill-lint.veto`) is exported and test-covered, but has no production caller yet: the engine `HostAdapter` has no content-carrying skill-write hook (only `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`), and the fs intent slot is content-blind. Wiring lands with a future content-carrying hook; until then the listener path enforces only via the repair-escape advisory (never a veto).
 - **Content-blind skill-lint blind spots** — the `fs/write-intent` slot carries only `(target, actor)`: first-create incoming content is not linted, and valid→invalid overwrites are not detected on the listener path (it lints the pre-write on-disk document only). Warn/hard advisories surface pre-existing on-disk violations only — the same class of limitation as the status gate.
-- **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming.
+- **`bundledSkillDir` is cwd-anchored** (Task 5 e2e finding) — skill-local resolves a relative bundled root with plain `join()` semantics against the dsh **process cwd** at boot; the shipped patch default `./skills` only finds the packaged mount when dsh launches from the package root. The supported production form is an **absolute path override in the profile layer** (see `bundle/README.md`); a deployment launching from another cwd gets no bundled mount until overridden.
+- **Profile-bundle registry install deferred to publish** — `dsh plugin --profile mstar add <local path>` is verified (Task 5); the public-registry form (`add @mstar-harness/dsh`) runs through the same pnpm + reconcile mechanism but is not executed this iteration (local-only constraint; roadmap §7).
+- **`lintSkillWrite` typed veto not production-wired** — the incoming-document hard veto (`SkillLintVetoError`, code `skill-lint.veto`) is exported and test-covered, but has no production caller yet: the engine `HostAdapter` has no content-carrying skill-write hook (only `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`), and the fs intent slot is content-blind. Wiring lands with a future content-carrying hook; until then the listener path enforces only via the repair-escape advisory (never a veto). (Roadmap §7 deferral, qc2 S-002.)
+- **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming. (Roadmap §7 deferral, qc2 S-003 — upstream PR batch.)
+- **Entry `src/index.ts` stays monolithic** — the qc1 F-003 module-split deferral is kept: the 2600+ line entry ships as-is for this iteration because a split at the FINAL task would destabilize a reviewed, fully-tested surface for zero behavioral gain; the split remains a roadmap follow-up (roadmap §7).
 - **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root) updates with it.

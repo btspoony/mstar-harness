@@ -493,6 +493,25 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(violationCodes(advisories[0])).toContain('worktree.l2.no-tracks')
   })
+
+  it('serial single-track with a parallel-CONTAINING Dispatch mode → L2 does NOT run (canonical-marker match, P3 T2 review)', async () => {
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+    // Substring "parallel" present, but NOT the canonical
+    // `parallel independent tracks` marker — the serial norm must stay inert.
+    const prompt = trackAssignment([
+      '**Dispatch mode**: serial (parallel-flavored naming)',
+      '**Worktree path**: wt/relative-serial',
+      '**Working branch**: feature/a',
+    ])
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+    // Even a RELATIVE single-track path is untouched: no track list to verify.
+    expect(violationCodes(advisories[0])).toEqual([])
+  })
 })
 
 describe('dispatch gate — worktree L2 hard mode', () => {

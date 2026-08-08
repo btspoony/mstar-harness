@@ -15,13 +15,13 @@
       "types": "./dist/invariant.d.ts",
       "default": "./dist/invariant.js"
     },
-    "./src/*": "./src/*",
     "./bundle/cordis.patch.yml": "./bundle/cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "bundle"
+    "bundle",
+    "skills/README.md"
   ],
   "dsh": {
     "bundle": {
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "test": "bun test",
-    "build": "rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external cordis --external @deepseek-ai/dsh-skill-local --external @deepseek-ai/dsh-llm && bunx tsc",
+    "build": "rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external cordis --external @deepseek-ai/dsh-skill-local --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bunx tsc",
     "prepublishOnly": "bun run build"
   },
   "engines": {

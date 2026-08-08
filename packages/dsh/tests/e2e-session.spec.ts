@@ -28,7 +28,7 @@
  * CLI real-run outcome is documented in task-5-report.md.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'

@@ -1457,9 +1457,14 @@ function worktreeL2Violations(header: string): ValidationResult[] {
   const workingBranches = assignmentHeaderValues(header, 'Working branch')
   const dispatchMode = assignmentHeaderValue(header, 'Dispatch mode')
   // Parallel-track declaration: ≥2 Worktree path entries, or the documented
-  // parallel-tracks marker. A single Worktree path is the serial norm and
-  // never triggers the L2 checklist (no track list to verify against).
-  if (worktreePaths.length < 2 && !/parallel/i.test(dispatchMode ?? '')) return []
+  // canonical parallel-tracks marker (`Dispatch mode: parallel independent
+  // tracks`, mstar-phase-gates 并行标签). A single Worktree path is the
+  // serial norm and never triggers the L2 checklist (no track list to verify
+  // against). The marker match is exact (P3 T2 review — no substring
+  // widening): a Dispatch mode merely CONTAINING "parallel" (e.g. a serial
+  // mode with a parallel-flavored name) must not trigger the L2 checklist.
+  const isParallelTracksMarker = dispatchMode?.trim().toLowerCase() === 'parallel independent tracks'
+  if (worktreePaths.length < 2 && !isParallelTracksMarker) return []
 
   const violations: ValidationResult[] = []
   const tracks: WorktreeTrack[] = []
