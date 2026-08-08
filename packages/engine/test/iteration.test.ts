@@ -30,7 +30,7 @@
  *   §1.4.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -43,42 +43,7 @@ import {
 import { isOpenResidual, type StatusDoc } from "../src/status.js";
 import { readJson } from "../src/core.js";
 
-const REAL_COMPASS_PATH =
-  "/Users/bibi/workspace/ai/mstar-harness/.harness/iterations/v2.0.0/delivery-compass.md";
-const REAL_STATUS_PATH =
-  "/Users/bibi/workspace/ai/worktrees/mstar-harness-skill-engine/packages/engine/test/fixtures/status.real-shape.json";
-
-/** Minimal YAML-subset frontmatter parser (flat scalars + list-of-scalars) — test-only. */
-function parseFrontmatter(filePath: string): Record<string, unknown> {
-  const content = readFileSync(filePath, "utf8");
-  const lines = content.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") throw new Error(`no frontmatter fence in ${filePath}`);
-  const end = lines.indexOf("---", 1);
-  if (end === -1) throw new Error(`unterminated frontmatter in ${filePath}`);
-  const doc: Record<string, unknown> = {};
-  let listKey: string | null = null;
-  for (let i = 1; i < end; i++) {
-    const line = lines[i] ?? "";
-    if (line.trim() === "" || line.trim().startsWith("#")) {
-      listKey = null;
-      continue;
-    }
-    const listMatch = line.match(/^\s*-\s+(.+)$/);
-    if (listMatch) {
-      if (!listKey) throw new Error(`list item outside a key in ${filePath}: ${line}`);
-      const arr = doc[listKey];
-      if (!Array.isArray(arr)) doc[listKey] = [];
-      (doc[listKey] as unknown[]).push(listMatch[1]!.trim());
-      continue;
-    }
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!kv) throw new Error(`unsupported frontmatter line in ${filePath}: ${line}`);
-    const value = kv[2]!.trim();
-    doc[kv[1]!] = value === "" ? null : value.replace(/^["']|["']$/g, "");
-    listKey = value === "" ? kv[1] : null;
-  }
-  return doc;
-}
+const REAL_STATUS_PATH = join(import.meta.dir, "fixtures", "status.real-shape.json");
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -129,15 +94,6 @@ describe("validateCompassFrontmatter — compass schema (mstar-iteration §1.3 +
   test("real v2.0.0 delivery-compass.md frontmatter shape (fixture) passes", () => {
     const fixture = readJson(join(import.meta.dir, "fixtures", "compass.real-frontmatter.json"));
     const result = validateCompassFrontmatter(fixture);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("REAL .harness/iterations/v2.0.0/delivery-compass.md (control, read-only) parses to the fixture shape and passes", () => {
-    expect(existsSync(REAL_COMPASS_PATH)).toBe(true);
-    const parsed = parseFrontmatter(REAL_COMPASS_PATH);
-    expect(parsed).toEqual(readJson(join(import.meta.dir, "fixtures", "compass.real-frontmatter.json")));
-    const result = validateCompassFrontmatter(parsed);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
@@ -436,7 +392,7 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
     expect(result.exit.ok).toBe(true);
   });
 
-  test("real compass frontmatter + real status shape → phase-2-execute (registered slice plans not Done)", () => {
+  test("compass frontmatter + status shape fixtures → phase-2-execute (registered slice plans not Done)", () => {
     const compassFixture = readJson(join(import.meta.dir, "fixtures", "compass.real-frontmatter.json"));
     const statusFixture = readJson(REAL_STATUS_PATH);
     const result = evaluatePhaseGate(statusFixture as StatusDoc, compassFixture as CompassDoc);
