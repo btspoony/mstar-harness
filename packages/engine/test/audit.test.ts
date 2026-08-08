@@ -157,6 +157,21 @@ describe("validateAuditStatusBlocks", () => {
     expect(result.ok).toBe(false);
     expect(hasCode(result, "audit.status.missing-block")).toBe(true);
   });
+
+  test("accepts the documented depends-on wildcard and unknown-commit fallback", () => {
+    const plan = `# Plan with scaffold defaults
+## Status
+- **Priority**: P2
+- **Effort**: S
+- **Risk**: LOW
+- **Depends on**: plans/002-*.md
+- **Category**: tests
+- **Planned at**: commit \`unknown\`, 2026-08-08
+`;
+    const result = validateAuditStatusBlocks(plan);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -204,6 +219,22 @@ describe("redactSecrets", () => {
     const result = redactSecrets(SECRETS_SAFE);
     expect(result.text).toBe(SECRETS_SAFE);
     expect(result.findings).toEqual([]);
+  });
+
+  test("redacts quoted JSON keys and preserves the quotes", () => {
+    const json = '{"password": "hunter2hunter2hunter2", "token": "abcdefghijklmnopqrstuvwxyz0123456789"}';
+    const result = redactSecrets(json, "config.json");
+    expect(result.text).toContain('{"password": [REDACTED password@1 in config.json]');
+    expect(result.text).toContain('"token": [REDACTED token@1 in config.json]');
+    expect(result.text).not.toContain("hunter2hunter2hunter2");
+    expect(result.text).not.toContain("abcdefghijklmnopqrstuvwxyz0123456789");
+  });
+
+  test("redacts single-quoted keys and YAML unquoted keys", () => {
+    const yaml = "password: 'hunter2hunter2hunter2'\n'token': hunter2hunter2hunter2abcdefgh";
+    const result = redactSecrets(yaml);
+    expect(result.text).toContain("password: [REDACTED password@1]");
+    expect(result.text).toContain("'token': [REDACTED token@2]");
   });
 
   test("findings are sorted by line", () => {
@@ -330,5 +361,58 @@ describe("scaffoldAuditPlan", () => {
     const readme = readFileSync(join(out, "README.md"), "utf8");
     expect(readme).toContain("## Findings considered and rejected");
     expect(readme).toContain("- Add dark mode: not worth doing for a CLI");
+  });
+
+  test("same-slug findings get -2/-3 suffixes instead of overwriting", () => {
+    const out = join(tmp, "audit-2026-08-13");
+    const result = scaffoldAuditPlan(
+      out,
+      [
+        { title: "Fix N+1 query", category: "perf" as const, impact: "a", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: ["x"], priority: "P1" as const },
+        { title: "Fix N+1 query!", category: "perf" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: ["y"], priority: "P2" as const },
+        { title: "Fix N+1 query??", category: "perf" as const, impact: "c", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: ["z"], priority: "P3" as const },
+      ],
+      { date: "2026-08-13" },
+    );
+    expect(result.files).toEqual(["001-fix-n-1-query.md", "002-fix-n-1-query-2.md", "003-fix-n-1-query-3.md"]);
+    // every finding's plan file exists and keeps its own content
+    expect(readFileSync(join(out, "002-fix-n-1-query-2.md"), "utf8")).toContain("# Fix N+1 query!");
+    expect(readFileSync(join(out, "003-fix-n-1-query-3.md"), "utf8")).toContain("# Fix N+1 query??");
+    // index rows are unique per file (no silent loss)
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("| 001 | Fix N+1 query |");
+    expect(readme).toContain("| 002 | Fix N+1 query! |");
+    expect(readme).toContain("| 003 | Fix N+1 query?? |");
+  });
+
+  test("scaffold output round-trips through validateAuditStatusBlocks (defaults included)", () => {
+    const out = join(tmp, "audit-2026-08-12");
+    const result = scaffoldAuditPlan(
+      out,
+      [
+        { title: "Fix N+1 query in order list", category: "perf" as const, impact: "Queries explode.", effort: "M" as const, risk: "MED" as const, confidence: "HIGH" as const, evidence: ["src/orders.ts:42"], priority: "P1" as const, dependsOn: "plans/002-*.md" },
+        { title: "Rotate leaked AWS keys", category: "security" as const, impact: "Credentials in git history.", effort: "S" as const, risk: "HIGH" as const, confidence: "HIGH" as const, evidence: [], priority: "P1" as const },
+      ],
+      // no plannedAt / repoShortSha — commit falls back to "unknown", the
+      // documented non-git-repo default that the validator accepts
+      { date: "2026-08-12" },
+    );
+    expect(result.files).toHaveLength(2);
+    for (const file of result.files) {
+      const plan = readFileSync(join(out, file), "utf8");
+      const gate = validateAuditStatusBlocks(plan);
+      expect({ file, ok: gate.ok, violations: gate.violations.map((v) => v.code) }).toEqual({ file, ok: true, violations: [] });
+    }
+  });
+
+  test("omits the Evidence section when a finding carries no evidence", () => {
+    const out = join(tmp, "audit-2026-08-14");
+    scaffoldAuditPlan(
+      out,
+      [{ title: "Document the fixture layout", category: "docs" as const, impact: "Nobody knows the layout.", effort: "XS" as const, risk: "LOW" as const, confidence: "MED" as const, evidence: [], priority: "P3" as const }],
+      { date: "2026-08-14" },
+    );
+    const plan = readFileSync(join(out, "001-document-the-fixture-layout.md"), "utf8");
+    expect(plan).not.toContain("## Evidence");
   });
 });

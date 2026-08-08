@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { validateAuditStatusBlocks } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -37,9 +38,9 @@ interface RunResult {
 }
 
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[]): RunResult {
+function runCli(args: string[], cwd: string = CLI_ROOT): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
+    cwd,
     env: cliEnv(),
     stdout: "pipe",
     stderr: "pipe",
@@ -403,8 +404,8 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      const outDir = join(dir, "audit-out");
-      const result = runCli(["audit", "scaffold", outDir, findingsFile]);
+      const outDir = join(dir, "audit-2026-08-08");
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("audit scaffold: OK");
       expect(result.stdout).toContain("created: 001-fix-n-1-query.md");
@@ -417,6 +418,83 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       expect(plan).toContain("## Impact");
       expect(plan).toContain("Queries explode on the dashboard.");
       expect(plan).toContain("- **Priority**: P1");
+      // dependsOn "002" (scaffolded numbering scheme) renders as the
+      // documented plans/NNN-*.md form — no dangling Evidence heading either.
+      expect(plan).toContain("- **Depends on**: plans/002-*.md");
+      expect(plan).not.toContain("## Evidence");
+    });
+  });
+
+  test("scaffolded plans round-trip through the engine's validateAuditStatusBlocks", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
+      const outDir = join(dir, "audit-2026-08-08");
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
+      expect(result.exitCode).toBe(0);
+      for (const file of ["001-fix-n-1-query.md", "002-add-index.md"]) {
+        const gate = validateAuditStatusBlocks(readFileSync(join(outDir, file), "utf8"));
+        expect({ file, ok: gate.ok, violations: gate.violations.map((v) => v.code) }).toEqual({ file, ok: true, violations: [] });
+      }
+    });
+  });
+
+  test("Planned at carries the repo short SHA resolved at scaffold time", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
+      const outDir = join(dir, "audit-2026-08-08");
+      // cwd = this repo checkout → git rev-parse --short HEAD resolves
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
+      expect(result.exitCode).toBe(0);
+      const plan = readFileSync(join(outDir, "001-fix-n-1-query.md"), "utf8");
+      const plannedAt = /- \*\*Planned at\*\*: commit `([0-9a-f]{7,40})`, \d{4}-\d{2}-\d{2}/.exec(plan);
+      expect(plannedAt).not.toBeNull();
+      expect(plannedAt![1]).not.toBe("unknown");
+    });
+  });
+
+  test("--sha override wins over git resolution; outside a repo the fallback is 'unknown'", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
+      const outDir = join(dir, "audit-2026-08-08");
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee"]);
+      expect(result.exitCode).toBe(0);
+      expect(readFileSync(join(outDir, "001-fix-n-1-query.md"), "utf8")).toContain("- **Planned at**: commit `deadbee`,");
+    });
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
+      // cwd = a temp dir outside any git repo → documented "unknown" fallback
+      const result = runCli(["audit", "scaffold", findingsFile], dir);
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"))).toBe(true);
+      const plan = readFileSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"), "utf8");
+      expect(plan).toContain("- **Planned at**: commit `unknown`,");
+      // the "unknown" fallback still round-trips through the validator
+      expect(validateAuditStatusBlocks(plan).ok).toBe(true);
+    });
+  });
+
+  test("--date derives the audit-<date> directory name when --dir is omitted", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
+      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-07-01"], dir);
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(join(dir, "audit-2026-07-01", "README.md"))).toBe(true);
+      expect(existsSync(join(dir, "audit-2026-07-01", "001-fix-n-1-query.md"))).toBe(true);
+    });
+  });
+
+  test("invalid dependsOn → usage, exit 2", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", dependsOn: "plan-002.md", description: "d" }]));
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("dependsOn must be");
     });
   });
 
@@ -424,7 +502,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, "not json");
-      const result = runCli(["audit", "scaffold", join(dir, "out"), findingsFile]);
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("not valid JSON");
     });
@@ -434,7 +512,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, "{}");
-      const result = runCli(["audit", "scaffold", join(dir, "out"), findingsFile]);
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("must be a JSON array");
     });
@@ -444,7 +522,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P9", effort: "M", risk: "LOW", category: "perf", description: "d" }]));
-      const result = runCli(["audit", "scaffold", join(dir, "out"), findingsFile]);
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("priority must be one of P1|P2|P3");
     });
@@ -454,7 +532,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf" }]));
-      const result = runCli(["audit", "scaffold", join(dir, "out"), findingsFile]);
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("non-empty title and description");
     });
@@ -463,12 +541,12 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
   test("missing args → usage, exit 2", () => {
     const result = runCli(["audit", "scaffold"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: audit scaffold <out-dir> <findings-file>");
+    expect(result.stderr).toContain("usage: audit scaffold <findings-file>");
   });
 
   test("nonexistent findings file → exit 1", () => {
     withTempDir((dir) => {
-      const result = runCli(["audit", "scaffold", join(dir, "out"), join(dir, "nope.json")]);
+      const result = runCli(["audit", "scaffold", join(dir, "nope.json"), "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("findings file not found");
     });

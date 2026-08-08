@@ -85,10 +85,14 @@ function parseStatusBlocks(planText: string): StatusBlock[] {
  * - `Priority`: P1 | P2 | P3
  * - `Effort`: XS | S | M | L | XL
  * - `Risk`: LOW | MED | HIGH
- * - `Depends on`: `none` or `plans/NNN-*.md`
+ * - `Depends on`: `none` or `plans/NNN-*.md` (the `*` is a literal
+ *   wildcard form — the documented scaffolded scheme; concrete
+ *   `plans/NNN-<slug>.md` paths are accepted too)
  * - `Category`: bug | security | perf | tests | tech-debt | migration |
  *   dx | docs | direction
- * - `Planned at`: `commit <short SHA>, <YYYY-MM-DD>`
+ * - `Planned at`: `commit <short SHA>, <YYYY-MM-DD>` — `commit unknown`
+ *   is accepted as the documented fallback (`scaffoldAuditPlan` default
+ *   when the CLI runs outside a git repo)
  *
  * Every `## Status` block in the document is checked; a document without
  * any block gets `audit.status.missing-block`. Violation codes:
@@ -142,8 +146,8 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
     check("Effort", /^(?:XS|S|M|L|XL)$/, "audit.status.invalid-effort", "XS | S | M | L | XL");
     check("Risk", /^(?:LOW|MED|HIGH)$/, "audit.status.invalid-risk", "LOW | MED | HIGH");
     check("Category", /^(?:bug|security|perf|tests|tech-debt|migration|dx|docs|direction)$/, "audit.status.invalid-category", "bug | security | perf | tests | tech-debt | migration | dx | docs | direction");
-    check("Depends on", /^(?:none|plans\/\d{3}-[\w.-]+\.md)$/i, "audit.status.invalid-depends-on", "none or plans/NNN-*.md");
-    check("Planned at", /^commit `?[0-9a-f]{7,40}`?, \d{4}-\d{2}-\d{2}$/, "audit.status.invalid-planned-at", "commit <short SHA>, <YYYY-MM-DD>");
+    check("Depends on", /^(?:none|plans\/\d{3}-[\w.*-]+\.md)$/i, "audit.status.invalid-depends-on", "none or plans/NNN-*.md");
+    check("Planned at", /^commit \`?(?:[0-9a-f]{7,40}|unknown)\`?, \d{4}-\d{2}-\d{2}$/, "audit.status.invalid-planned-at", "commit <short SHA>, <YYYY-MM-DD> (or `commit unknown` outside a git repo)");
   });
 
   return { ok: violations.length === 0, violations };
@@ -170,7 +174,11 @@ const WHOLE_MATCH_PATTERNS: readonly { type: string; re: RegExp }[] = [
   { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
   { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
   { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
-  { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g },
+  // Segments are capped ({10,1024}) so a dot-less run of eyJ-prefixed text
+  // cannot backtrack quadratically — per-start work is bounded, keeping the
+  // whole scan linear. 1024 chars covers ES/RS-family signatures (RS256
+  // ~342 chars); only oversized exotic JWTs fall outside.
+  { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
   { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g },
 ];
 
@@ -178,6 +186,9 @@ const WHOLE_MATCH_PATTERNS: readonly { type: string; re: RegExp }[] = [
  * Key-value assignment patterns — the key name is preserved and only the
  * value is replaced. Value minimum lengths (8 quoted / 16 unquoted) keep the
  * scan conservative (`token: x` and `password: 1234` are not flagged).
+ * Keys may carry optional quotes (JSON/YAML `"password": "..."`), which are
+ * preserved in the replacement: group 1 = optional open quote, group 3 =
+ * optional close quote, group 4 = separator, group 5 = value (dropped).
  */
 const VALUE_PATTERNS: readonly { typeOf: (key: string) => string; re: RegExp }[] = [
   {
@@ -186,16 +197,32 @@ const VALUE_PATTERNS: readonly { typeOf: (key: string) => string; re: RegExp }[]
         .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
         .toLowerCase()
         .replace(/[_-]+/g, "-"),
-    re: /\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi,
+    re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi,
   },
 ];
 
-function lineAt(text: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index && i < text.length; i++) {
-    if (text[i] === "\n") line++;
+/**
+ * Line-number lookup via precomputed line-start offsets: O(n) to build once,
+ * O(log n) per query — `redactSecrets` calls it once per match, so the total
+ * stays linear instead of O(matches × text length).
+ */
+function buildLineStarts(text: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") starts.push(i + 1);
   }
-  return line;
+  return starts;
+}
+
+function lineAt(starts: number[], index: number): number {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= index) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
 }
 
 /**
@@ -206,8 +233,12 @@ function lineAt(text: string, index: number): number {
  * line-sorted findings summary (`{ line, type }`).
  */
 export function redactSecrets(text: string, filePath?: string): RedactResult {
+  // simplify: single linear scan — line starts are precomputed once (O(n))
+  // and per-match lookups are O(log n); the JWT whole-match pattern bounds
+  // its segments ({10,1024}) so per-position backtracking is constant.
+  const starts = buildLineStarts(text);
   const marker = (type: string, index: number) =>
-    `[REDACTED ${type}@${lineAt(text, index)}${filePath === undefined ? "" : ` in ${filePath}`}]`;
+    `[REDACTED ${type}@${lineAt(starts, index)}${filePath === undefined ? "" : ` in ${filePath}`}]`;
   const replacements: { index: number; length: number; text: string }[] = [];
   const findings: SecretFinding[] = [];
 
@@ -215,16 +246,19 @@ export function redactSecrets(text: string, filePath?: string): RedactResult {
     for (const match of text.matchAll(pattern.re)) {
       if (match.index === undefined) continue;
       replacements.push({ index: match.index, length: match[0].length, text: marker(pattern.type, match.index) });
-      findings.push({ line: lineAt(text, match.index), type: pattern.type });
+      findings.push({ line: lineAt(starts, match.index), type: pattern.type });
     }
   }
   for (const pattern of VALUE_PATTERNS) {
     for (const match of text.matchAll(pattern.re)) {
       if (match.index === undefined) continue;
-      const type = pattern.typeOf(match[1]);
-      const replacement = `${match[1]}${match[2]}${marker(type, match.index)}`;
+      const type = pattern.typeOf(match[2]);
+      // match[1]/match[3] = optional key quotes, match[4] = separator —
+      // all preserved; the value (match[5]) is dropped and replaced by the
+      // marker.
+      const replacement = `${match[1]}${match[2]}${match[3]}${match[4]}${marker(type, match.index)}`;
       replacements.push({ index: match.index, length: match[0].length, text: replacement });
-      findings.push({ line: lineAt(text, match.index), type });
+      findings.push({ line: lineAt(starts, match.index), type });
     }
   }
 
@@ -291,7 +325,9 @@ const escapeCell = (value: string) => value.replace(/\|/g, "\\|");
 const truncate = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}…` : value);
 
 /** Render one numbered plan file from a finding (self-contained; no
- * placeholder tokens, per plan-quality-bar). */
+ * placeholder tokens, per plan-quality-bar). The `## Evidence` section is
+ * rendered only when the finding carries evidence — an empty evidence list
+ * must not leave a dangling heading behind. */
 function renderPlanFile(finding: AuditFinding, plannedAt: { commit: string; date: string }): string {
   const sections = [
     `# ${finding.title}`,
@@ -306,10 +342,10 @@ function renderPlanFile(finding: AuditFinding, plannedAt: { commit: string; date
     "",
     "## Impact",
     finding.impact,
-    "",
-    "## Evidence",
-    ...finding.evidence.map((e) => `- ${e}`),
   ];
+  if (finding.evidence.length > 0) {
+    sections.push("", "## Evidence", ...finding.evidence.map((e) => `- ${e}`));
+  }
   if (finding.fixSketch !== undefined) {
     sections.push("", "## Fix sketch", finding.fixSketch);
   }
@@ -401,9 +437,20 @@ export function scaffoldAuditPlan(
   let next = existing.reduce((max, f) => Math.max(max, Number(f.slice(0, 3))), 0) + 1;
 
   const written: string[] = [];
+  // Slug collision guard: two findings whose titles slugify identically
+  // (e.g. "Fix N+1 query" / "Fix N+1 query!") get a `-2`/`-3` suffix instead
+  // of silently overwriting the earlier plan file (qc3 F-001).
+  const usedSlugs = new Set<string>();
   for (const finding of findings) {
     const num = String(next).padStart(3, "0");
-    const file = `${num}-${slugify(finding.title)}.md`;
+    let slug = slugify(finding.title);
+    if (usedSlugs.has(slug)) {
+      let n = 2;
+      while (usedSlugs.has(`${slug}-${n}`)) n++;
+      slug = `${slug}-${n}`;
+    }
+    usedSlugs.add(slug);
+    const file = `${num}-${slug}.md`;
     writeFileSync(join(outDir, file), renderPlanFile(finding, plannedAt));
     written.push(file);
     next++;

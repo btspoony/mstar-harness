@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { select } from "@inquirer/prompts";
@@ -1059,6 +1060,12 @@ designMdCommand
  * (arg-shape errors → usage exit 2). Findings-file contract: a JSON array of
  * `{title, priority, effort, risk, category, dependsOn?, description}` —
  * `description` maps to the plan's Impact section.
+ *
+ * `dependsOn` is validated against the Status-block contract and normalized:
+ * `"none"` / `plans/NNN-*.md` pass through, a bare plan number (`002`) from
+ * the scaffolded numbering scheme is rendered as `plans/002-*.md`, anything
+ * else is a usage error — so every scaffolded plan round-trips through
+ * `validateAuditStatusBlocks` (qc2 F-001 / qc3 F-002).
  */
 function parseAuditFindings(text: string): AuditFinding[] {
   let parsed: unknown;
@@ -1094,7 +1101,15 @@ function parseAuditFindings(text: string): AuditFinding[] {
     if (AUDIT_CATEGORY_LOOKUP[category] !== true) {
       throw new SddScriptError(`usage: audit scaffold — findings[${index}].category must be one of ${AUDIT_CATEGORIES.join("|")}`, 2);
     }
-    const dependsOn = typeof finding.dependsOn === "string" && finding.dependsOn.trim() !== "" ? finding.dependsOn.trim() : undefined;
+    const rawDependsOn = typeof finding.dependsOn === "string" && finding.dependsOn.trim() !== "" ? finding.dependsOn.trim() : undefined;
+    if (rawDependsOn !== undefined && !/^(?:none|plans\/\d{3}-[\w.*-]+\.md|\d{3})$/i.test(rawDependsOn)) {
+      throw new SddScriptError(
+        `usage: audit scaffold — findings[${index}].dependsOn must be "none", "plans/NNN-*.md", or a plan number NNN`,
+        2,
+      );
+    }
+    const dependsOn =
+      rawDependsOn === undefined ? undefined : /^\d{3}$/.test(rawDependsOn) ? `plans/${rawDependsOn}-*.md` : rawDependsOn;
     // Enum memberships were validated above — cast the narrowed unions.
     return {
       title,
@@ -1114,21 +1129,53 @@ const auditCommand = program
   .command("audit")
   .description("audit plan scaffold (engine-backed)");
 
+/**
+ * Resolve the short repo SHA for the scaffolded `Planned at` field:
+ * `--sha` override wins; otherwise `git rev-parse --short HEAD` from the
+ * current working directory; `unknown` only when the cwd is not inside a
+ * git repo (the documented validator fallback — qc2 F-001 / qc3 F-002).
+ */
+function resolveAuditShortSha(cwd: string, override?: string): string {
+  if (override !== undefined && override !== "") return override;
+  try {
+    const out = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 auditCommand
   .command("scaffold")
   .description(
     "Scaffold an audit-<date>/ plan directory (numbered plan files + README index) from a JSON findings file " +
       "(exit 2 on usage)",
   )
-  .argument("[out-dir]", "Output directory for the scaffolded audit plan")
   .argument("[findings-file]", "JSON file: array of {title, priority, effort, risk, category, dependsOn?, description}")
-  .action((outDir?: string, findingsFile?: string) => {
+  .option("--dir <out-dir>", "Output directory (default: ./audit-<date> from --date or today)")
+  .option("--sha <commit>", "Short commit SHA for the Planned-at field (default: git rev-parse --short HEAD)")
+  .option("--date <YYYY-MM-DD>", "Audit date (default: today)")
+  .option("--repo <name>", "Repository name for the README title (default: repo)")
+  .action((findingsFile: string | undefined, options: { dir?: string; sha?: string; date?: string; repo?: string }) => {
     try {
-      if (!outDir || !findingsFile) throw new SddScriptError("usage: audit scaffold <out-dir> <findings-file>", 2);
+      if (!findingsFile) throw new SddScriptError("usage: audit scaffold <findings-file> [--dir <out-dir>]", 2);
       const abs = path.resolve(findingsFile);
       if (!fs.existsSync(abs)) throw new Error(`findings file not found: ${abs}`);
+      if (options.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
+        throw new SddScriptError("usage: audit scaffold — --date must be YYYY-MM-DD", 2);
+      }
+      if (options.sha !== undefined && !/^[0-9a-f]{7,40}$/.test(options.sha)) {
+        throw new SddScriptError("usage: audit scaffold — --sha must be a 7-40 char hex commit SHA", 2);
+      }
+      const date = options.date ?? new Date().toISOString().slice(0, 10);
+      const outDir = options.dir !== undefined ? path.resolve(options.dir) : path.resolve(`audit-${date}`);
       const findings = parseAuditFindings(fs.readFileSync(abs, "utf8"));
-      const result = scaffoldAuditPlan(path.resolve(outDir), findings);
+      const sha = resolveAuditShortSha(process.cwd(), options.sha);
+      const result = scaffoldAuditPlan(outDir, findings, { date, repoName: options.repo, repoShortSha: sha });
       const count = result.files.length;
       console.log(pc.green(`audit scaffold: OK — ${count} plan file${count === 1 ? "" : "s"} in ${result.outDir}`));
       for (const file of result.files) console.log(`  created: ${file}`);
