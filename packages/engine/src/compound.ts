@@ -16,7 +16,7 @@
  *   `{HARNESS_DIR}/knowledge/**` + `*.md` files, `knowledge/README.md`,
  *   `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
 
@@ -279,13 +279,26 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
     if (!(field in doc) || doc[field] === "") missing(field);
   }
 
-  if (isStr(doc.date) && !DATE_RE.test(doc.date)) {
+  // Non-string values on enum/pattern fields are violations, not silent
+  // passes — YAML-lite parses `date: 20260808` as a number, which is not a
+  // valid date (qc3 F-003 / qc2 F-007).
+  if (doc.date !== undefined && (!isStr(doc.date) || !DATE_RE.test(doc.date))) {
     violations.push(
-      violation("medium", "compound.schema.invalid-date", `date "${doc.date}" must be YYYY-MM-DD (schema.yaml required_fields.date)`, "use `YYYY-MM-DD`"),
+      violation("medium", "compound.schema.invalid-date", `date "${String(doc.date)}" must be a YYYY-MM-DD string (schema.yaml required_fields.date)`, "use `YYYY-MM-DD`"),
     );
   }
 
   const problemType = doc.problem_type;
+  if (problemType !== undefined && !isStr(problemType)) {
+    violations.push(
+      violation(
+        "medium",
+        "compound.schema.invalid-problem-type",
+        `problem_type "${String(problemType)}" must be a string — one of the schema.yaml enum values (bug: build_error…config_error; knowledge: developer_experience…testing_pattern)`,
+        "pick the narrowest applicable problem_type from schema.yaml",
+      ),
+    );
+  }
   const problemTypeValid = isStr(problemType) && (KNOWLEDGE_PROBLEM_TYPES as readonly string[]).includes(problemType);
   if (isStr(problemType) && !problemTypeValid) {
     violations.push(
@@ -295,6 +308,11 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
         `problem_type "${problemType}" is not one of the schema.yaml enum values (bug: build_error…config_error; knowledge: developer_experience…testing_pattern)`,
         "pick the narrowest applicable problem_type from schema.yaml",
       ),
+    );
+  }
+  if (doc.severity !== undefined && !isStr(doc.severity)) {
+    violations.push(
+      violation("medium", "compound.schema.invalid-severity", `severity "${String(doc.severity)}" must be a string — critical | high | medium | low (schema.yaml required_fields.severity)`, "use one of the four severity values"),
     );
   }
   if (isStr(doc.severity) && !(KNOWLEDGE_SEVERITIES as readonly string[]).includes(doc.severity)) {
@@ -412,50 +430,10 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
   let checked = 0;
   const seen = new Set<string>();
 
-  const moduleCache = new Map<string, boolean>();
-  const moduleFileExists = (module: string): boolean => {
-    const cached = moduleCache.get(module);
-    if (cached !== undefined) return cached;
-    let found = false;
-    let walked = 0;
-    const stack = [repoRoot];
-    while (stack.length > 0 && walked < MAX_WALK_FILES) {
-      const dir = stack.pop()!;
-      let entries: string[];
-      try {
-        entries = readdirSync(dir);
-      } catch {
-        continue;
-      }
-      for (const name of entries) {
-        if (++walked > MAX_WALK_FILES) break;
-        const full = join(dir, name);
-        let stat;
-        try {
-          stat = statSync(full);
-        } catch {
-          continue;
-        }
-        if (stat.isDirectory()) {
-          if (!WALK_SKIP_DIRS.has(name)) stack.push(full);
-        } else if (
-          name === `${module}.ts` ||
-          name === `${module}.tsx` ||
-          name === `${module}.js` ||
-          name === `${module}.jsx` ||
-          name === `${module}.mjs` ||
-          name === `${module}.cjs`
-        ) {
-          found = true;
-          break;
-        }
-      }
-      if (found) break;
-    }
-    moduleCache.set(module, found);
-    return found;
-  };
-
+  // Collect every distinct backticked ref first, then resolve the distinct
+  // module names with ONE bounded walk (O(files) once, not per module).
+  const moduleNames = new Set<string>();
+  const refs: { ref: string; isSymbol: boolean; module?: string }[] = [];
   for (const match of docText.matchAll(/`([^`\n]+)`/g)) {
     const ref = match[1].trim();
     if (ref === "" || seen.has(ref)) continue;
@@ -472,6 +450,44 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
       continue;
     }
     if (ref.includes("/") || REF_EXT_RE.test(ref)) {
+      // Path-shaped refs first (`core.ts` is a file path, not a
+      // `module.symbol` ref — same precedence as the pre-single-walk code).
+      refs.push({ ref, isSymbol: false });
+    } else if (SYMBOL_REF_RE.test(ref)) {
+      const module = ref.split(".")[0];
+      moduleNames.add(module);
+      refs.push({ ref, isSymbol: true, module });
+    }
+  }
+
+  const foundModules = new Set<string>();
+  if (moduleNames.size > 0) {
+    // simplify: bounded walk (5000 entries) so symbol heuristics stay cheap on
+    // large repos; raise the cap if module resolution misses in monorepos.
+    let walked = 0;
+    const stack = [repoRoot];
+    while (stack.length > 0 && walked < MAX_WALK_FILES) {
+      const dir = stack.pop()!;
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (++walked > MAX_WALK_FILES) break;
+        if (entry.isDirectory()) {
+          if (!WALK_SKIP_DIRS.has(entry.name)) stack.push(join(dir, entry.name));
+        } else if (!entry.isSymbolicLink()) {
+          const base = entry.name.replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$/, "");
+          if (moduleNames.has(base)) foundModules.add(base);
+        }
+      }
+    }
+  }
+
+  for (const { ref, isSymbol, module } of refs) {
+    if (!isSymbol || module === undefined) {
       const candidate = ref.replace(LINE_SUFFIX_RE, "").replace(ANCHOR_RE, "");
       if (existsSync(resolve(repoRoot, candidate))) {
         checked++;
@@ -485,20 +501,17 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
           ),
         );
       }
-    } else if (SYMBOL_REF_RE.test(ref)) {
-      const module = ref.split(".")[0];
-      if (moduleFileExists(module)) {
-        checked++;
-      } else {
-        violations.push(
-          violation(
-            "low",
-            "compound.reference.module-missing",
-            `symbol ref \`${ref}\` — heuristic: no ${module}.ts|tsx|js|jsx|mjs|cjs module file found under ${repoRoot} (compound-refresh Phase 2)`,
-            "verify the module file exists, or update the reference",
-          ),
-        );
-      }
+    } else if (foundModules.has(module)) {
+      checked++;
+    } else {
+      violations.push(
+        violation(
+          "low",
+          "compound.reference.module-missing",
+          `symbol ref \`${ref}\` — heuristic: no ${module}.ts|tsx|js|jsx|mjs|cjs module file found under ${repoRoot} (compound-refresh Phase 2)`,
+          "verify the module file exists, or update the reference",
+        ),
+      );
     }
   }
 
@@ -510,29 +523,27 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
 // ---------------------------------------------------------------------------
 
 /** Recursively collect knowledge doc paths (posix separators) under `dir`,
- * excluding `README.md` / `index.md` index files. */
+ * excluding `README.md` / `index.md` index files. Symlinks are skipped
+ * (`withFileTypes` + `isSymbolicLink`) so a symlink cycle inside the
+ * knowledge dir cannot hang the walk — same policy as the CLI lint walk.
+ */
 function collectKnowledgeDocs(dir: string): string[] {
   const docs: string[] = [];
   const stack = [dir];
   while (stack.length > 0) {
     const current = stack.pop()!;
-    let entries: string[];
+    let entries: Dirent[];
     try {
-      entries = readdirSync(current);
+      entries = readdirSync(current, { withFileTypes: true });
     } catch {
       continue;
     }
-    for (const name of entries) {
-      const full = join(current, name);
-      let stat;
-      try {
-        stat = statSync(full);
-      } catch {
-        continue;
-      }
-      if (stat.isDirectory()) {
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
         stack.push(full);
-      } else if (name.endsWith(".md") && name !== "README.md" && name !== "index.md") {
+      } else if (entry.name.endsWith(".md") && entry.name !== "README.md" && entry.name !== "index.md") {
         docs.push(relative(dir, full).split(sep).join("/"));
       }
     }
@@ -629,7 +640,12 @@ function isFileLikeRoot(root: string): boolean {
  * Guard an operation path against the allowed root set (compound-refresh
  * scope SSOT: only knowledge/**, knowledge/README.md, CONCEPTS.md, and
  * status.json may be written). File-like roots require an exact match;
- * directory roots allow any path beneath them.
+ * directory roots allow any path beneath them. `..` traversal-out is
+ * rejected via `resolve()` normalization.
+ *
+ * Limitation (documented): the guard is lexical — `resolve()` never follows
+ * symlinks, so a symlink inside an allowed root that points outside is not
+ * detected. Real enforcement is host-side (the sandbox/approval layer).
  *
  * Violation code: `compound.scope.outside` (medium).
  */

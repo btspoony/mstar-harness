@@ -10,10 +10,11 @@
  * mstar-compound-refresh SKILL.md (scope SSOT: knowledge/**, README.md,
  * CONCEPTS.md, status.json).
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   assertIndexRows,
   compoundRefreshScope,
@@ -169,6 +170,25 @@ describe("validateSchemaYaml", () => {
     expect(missing).toContain("problem_type");
   });
 
+  test("reports non-string values for date / problem_type / severity (YAML-lite numbers)", () => {
+    const result = validateSchemaYaml(`---
+module: dispatch
+date: 20260808
+problem_type: 42
+severity: 123
+category: build-error
+symptoms:
+  - "crash"
+root_cause: "numeric values"
+resolution_type: code_fix
+---
+`);
+    expect(result.ok).toBe(false);
+    expect(hasCode(result, "compound.schema.invalid-date")).toBe(true);
+    expect(hasCode(result, "compound.schema.invalid-problem-type")).toBe(true);
+    expect(hasCode(result, "compound.schema.invalid-severity")).toBe(true);
+  });
+
   test("reports invalid date, problem_type, and severity", () => {
     const result = validateSchemaYaml(DOC_BAD_VALUES);
     expect(result.ok).toBe(false);
@@ -279,6 +299,26 @@ describe("referenceExists", () => {
     expect(result.ok).toBe(true);
     expect(result.checked).toBe(1);
   });
+
+  test("resolves N module refs with a single repo walk (perf regression)", () => {
+    const walkRepo = join(tmp, "single-walk");
+    mkdirSync(join(walkRepo, "src"), { recursive: true });
+    writeFileSync(join(walkRepo, "src", "core.ts"), "// core\n");
+    writeFileSync(join(walkRepo, "src", "path.ts"), "// path\n");
+    writeFileSync(join(walkRepo, "src", "lease.ts"), "// lease\n");
+    const doc = "Refs: `core.validateStatus`, `path.resolvePlan`, `lease.verifyPlanExecutionLease`.";
+    const readdirSpy = spyOn(fs, "readdirSync");
+    try {
+      const result = referenceExists(walkRepo, doc);
+      expect(result.ok).toBe(true);
+      expect(result.checked).toBe(3);
+      // One walk = one readdirSync per directory (repo root + src); a
+      // per-module walk would call it 3x per directory.
+      expect(readdirSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -336,6 +376,24 @@ describe("assertIndexRows", () => {
     expect(result.ok).toBe(false);
     expect(hasCode(result, "compound.index.missing-readme")).toBe(true);
   });
+
+  test("symlink cycle inside the knowledge dir cannot hang the walk", () => {
+    const kd = join(tmp, "knowledge-cycle");
+    mkdirSync(join(kd, "logic-errors"), { recursive: true });
+    writeFileSync(join(kd, "logic-errors", "cycle-a.md"), "# a\n");
+    writeFileSync(
+      join(kd, "README.md"),
+      `# Knowledge Index\n\n| Document | Source Plan | Description | Status |\n|----------|-------------|-------------|--------|\n| [A](logic-errors/cycle-a.md) | 2026-a | Cycle doc | active |\n`,
+    );
+    // Two cycle shapes: a dir → root loop and a self-loop. Both must be
+    // skipped as symlinks (bounded walk — the test itself would hang on the
+    // old follow-everything walker).
+    symlinkSync(kd, join(kd, "logic-errors", "back-to-root"));
+    symlinkSync(kd, join(kd, "self-loop"));
+    const result = assertIndexRows(kd);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -374,6 +432,16 @@ describe("scopeGuard", () => {
     const roots2 = [join(tmp, "CONCEPTS.md")];
     expect(scopeGuard(join(tmp, "CONCEPTS.md"), roots2).ok).toBe(true);
     expect(scopeGuard(join(tmp, "CONCEPTS.draft.md"), roots2).ok).toBe(false);
+  });
+
+  test("rejects '..' traversal-out of an allowed root", () => {
+    const roots3 = [join(harness, "knowledge")];
+    // `..` escaping the knowledge root — resolve() normalization makes the
+    // escape observable even though the path text starts inside the root.
+    expect(scopeGuard(join(harness, "knowledge", "sub", "..", "..", "status.json"), roots3).ok).toBe(false);
+    expect(scopeGuard(join(harness, "knowledge", "..", "plans", "x.md"), roots3).ok).toBe(false);
+    // `..` that stays inside the root is still allowed.
+    expect(scopeGuard(join(harness, "knowledge", "sub", "..", "README.md"), roots3).ok).toBe(true);
   });
 
   test("compoundRefreshScope returns the four documented paths", () => {
