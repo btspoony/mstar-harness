@@ -21,6 +21,7 @@
     "opencode:publish:dry-run": "npm publish --workspace @mstar-harness/opencode --dry-run",
     "opencode:publish": "npm publish --workspace @mstar-harness/opencode",
     "opencode:pack": "npm pack --workspace @mstar-harness/opencode",
+    "engine:bundle": "bun build packages/engine/src/index.ts --target node --outfile bundle/engine-bundle.js",
     "release:prepare": "bun run scripts/prepare-release.ts",
     "release:validate": "bun run scripts/validate-release-version.ts",
     "release:check": "bun run typecheck && bun run cli:pack && bun run opencode:pack",
@@ -30,6 +31,7 @@
   },
   "packageManager": "bun@1.2.17",
   "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "^17.2.11",
     "@types/node": "^25.6.0"
   },
   "omp": {
