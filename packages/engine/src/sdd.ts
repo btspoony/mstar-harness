@@ -1,18 +1,20 @@
 /**
- * Engine sdd module — SDD loop state machine + TS ports of the three
- * `skills/mstar-sdd/scripts/` bash scripts with byte parity.
+ * Engine sdd module — SDD loop state machine + the engine implementations
+ * of the SDD workspace / task-brief / review-package helpers (CLI form:
+ * `mstar sdd workspace|task-brief|review-package`).
  *
  * Spec source: `skills/mstar-sdd/SKILL.md` (per-task loop, BASE_SHA rule,
  * progress ledger, red flags) + `references/file-handoffs.md` +
- * `references/sticky-implementer-session.md`. The three script ports
- * (`sddWorkspace`, `taskBrief`, `reviewPackage`) mirror the bash originals
- * byte-for-byte on the same fixtures — bash remains the fallback until
- * Slice 5 (roadmap §8.2 / plan 20260808-slice2-sdd-iteration).
+ * `references/sticky-implementer-session.md`. The three engine functions
+ * (`sddWorkspace`, `taskBrief`, `reviewPackage`) are the operative
+ * implementation; byte parity with the former bash scripts was proven in
+ * slice 2 (roadmap §8.2 / plan 20260808-slice2-sdd-iteration) before the
+ * scripts were removed in slice 5.
  *
  * Harness-root override: `MSTAR_HARNESS_DIR` env / `opts.harnessDir` (plan
- * finding 2026-08-08) — the bash probe only knows `.mstar`/`.agents` and
- * picks the wrong root in `.harness`-rooted repos; the TS port honors the
- * explicit override in addition to CONTROL_ROOT.
+ * finding 2026-08-08) — the status.json probe only knows `.mstar`/`.agents`
+ * and picks the wrong root in `.harness`-rooted repos; the engine honors
+ * the explicit override in addition to CONTROL_ROOT.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -20,8 +22,8 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { resolveSddDir } from "./path.js";
 
 /**
- * Error carrying the bash original's exit code so the CLI (slice-2 Task 3)
- * can map validation failures to identical non-zero exits.
+ * Error carrying the ported script exit code so the CLI can map validation
+ * failures to identical non-zero exits.
  */
 export class SddScriptError extends Error {
   readonly exitCode: number;
@@ -34,12 +36,11 @@ export class SddScriptError extends Error {
 }
 
 /**
- * Options for `sddWorkspace` — mirrors the bash `sdd-workspace PLAN_ID
- * [CONTROL_ROOT]` usage plus the harness-root override (plan finding
- * 2026-08-08).
+ * Options for `sddWorkspace` — `mstar sdd workspace PLAN_ID [CONTROL_ROOT]`
+ * usage plus the harness-root override (plan finding 2026-08-08).
  */
 export type SddWorkspaceOptions = {
-  /** Control worktree repo root — bash 2nd arg / `MSTAR_CONTROL_ROOT`. */
+  /** Control worktree repo root — CLI 2nd arg / `MSTAR_CONTROL_ROOT`. */
   controlRoot?: string;
   /** Explicit harness root — `MSTAR_HARNESS_DIR` / `--harness-dir`. */
   harnessDir?: string;
@@ -76,10 +77,9 @@ function isFile(file: string): boolean {
 
 /**
  * Git capture ceiling for `gitOut` / `reviewPackage` (qc3 W-2): Node's
- * default 1 MiB `maxBuffer` ENOBUFS'd on large review ranges where the bash
- * original (which streams into the file via redirection) has no cap. 64 MiB
- * keeps byte parity for realistic iteration-close ranges while bounding
- * memory; captures beyond that fail as SddScriptError via the CLI.
+ * default 1 MiB `maxBuffer` ENOBUFS'd on large review ranges. 64 MiB keeps
+ * realistic iteration-close ranges working while bounding memory; captures
+ * beyond that fail as SddScriptError via the CLI.
  */
 const GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -98,9 +98,9 @@ function gitOut(cwd: string, args: string[]): string | null {
 }
 
 /**
- * Port of the bash `resolve_harness_with_status` probe: a harness dir only
- * counts when it carries `status.json` (that is what distinguishes a real
- * control harness from a linked feature checkout under default gitignore).
+ * Harness probe: a harness dir only counts when it carries `status.json`
+ * (that is what distinguishes a real control harness from a linked feature
+ * checkout under default gitignore).
  */
 function probeHarnessWithStatus(root: string): string | null {
   if (isFile(join(root, ".mstar", "status.json"))) return join(root, ".mstar");
@@ -109,18 +109,16 @@ function probeHarnessWithStatus(root: string): string | null {
 }
 
 /**
- * Port of the bash `is_linked_worktree` check: a linked worktree from
- * `git worktree add` has `--git-dir` ≠ `--git-common-dir` (or a
- * `.git/worktrees/` / `worktrees/` git dir path).
+ * A linked worktree from `git worktree add` has `--git-dir` ≠
+ * `--git-common-dir` (or a `.git/worktrees/` / `worktrees/` git dir path).
  *
- * The `/worktrees/` substring branches mirror the bash `case` glob
- * (sdd-workspace:62-64: git-dir matching `.git` + `/worktrees/` + suffix,
- * or `/worktrees/` + suffix) byte for byte — bash parity is the contract,
- * so a MAIN checkout cloned into a directory literally named `worktrees`
- * is ALSO classified as linked by both (fail-closed until CONTROL_ROOT is
- * given). The realpath comparison below would classify such a checkout
- * correctly, but the substring branches short-circuit first exactly like
- * bash; see the parity test "repo under a directory named 'worktrees'".
+ * The `/worktrees/` substring branches keep the original script's
+ * fail-closed classification: a MAIN checkout cloned into a directory
+ * literally named `worktrees` is ALSO classified as linked (fail-closed
+ * until CONTROL_ROOT is given). The realpath comparison below would
+ * classify such a checkout correctly, but the substring branches
+ * short-circuit first; see the test "repo under a directory named
+ * 'worktrees'".
  */
 function isLinkedWorktree(root: string): boolean {
   const gitDirRaw = gitOut(root, ["rev-parse", "--git-dir"]);
@@ -128,7 +126,7 @@ function isLinkedWorktree(root: string): boolean {
   if (gitDirRaw === null || commonRaw === null) return false;
   const gitDir = isAbsolute(gitDirRaw) ? gitDirRaw : join(root, gitDirRaw);
   const common = isAbsolute(commonRaw) ? commonRaw : join(root, commonRaw);
-  // Path contains /worktrees/ → definitely linked (bash `case` glob).
+  // Path contains /worktrees/ → definitely linked (original case glob).
   if (gitDir.includes("/.git/worktrees/") || gitDir.includes("/worktrees/")) return true;
   try {
     const gdParent = realpathSync(dirname(gitDir));
@@ -140,26 +138,25 @@ function isLinkedWorktree(root: string): boolean {
 }
 
 /**
- * Port of `scripts/sdd-workspace`: resolve and ensure `{SDD_DIR}` =
- * `{HARNESS_DIR}/sdd/<plan-id>/` (bash prints the absolute path; we return
- * it). Resolution order:
+ * Resolve and ensure `{SDD_DIR}` = `{HARNESS_DIR}/sdd/<plan-id>/` (prints
+ * the absolute path). Resolution order:
  *
  * 1. fail-closed FIRST: a linked worktree without a control root never
  *    resolves or creates any SDD tree under the feature checkout (refuses a
  *    second SDD tree; no override or probe may bypass this guard);
  * 2. explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`)
- *    — plan finding 2026-08-08: covers `.harness`-rooted repos the bash
- *    probe misses; resolved relative to the established root;
+ *    — plan finding 2026-08-08: covers `.harness`-rooted repos the
+ *    status.json probe misses; resolved relative to the established root;
  * 3. `status.json` probe at root (`.mstar` → `.agents`);
- * 4. bash fallback: existing `.mstar`/`.agents` dir, else `.mstar`.
+ * 4. fallback: existing `.mstar`/`.agents` dir, else `.mstar`.
  *
- * `controlRoot` (bash 2nd arg / `MSTAR_CONTROL_ROOT`) pins `root` to the
+ * `controlRoot` (CLI 2nd arg / `MSTAR_CONTROL_ROOT`) pins `root` to the
  * control worktree instead of the cwd's git top-level.
  */
 export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): string {
   if (!planId) {
     throw new SddScriptError(
-      "usage: sdd-workspace PLAN_ID [CONTROL_ROOT]\n" +
+      "usage: mstar sdd workspace PLAN_ID [CONTROL_ROOT]\n" +
         "  Set MSTAR_CONTROL_ROOT=<control_worktree_path> when running from a feature worktree.",
       2,
     );
@@ -169,7 +166,10 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
   let root: string;
   if (controlRoot) {
     if (!isDirectory(controlRoot)) {
-      throw new SddScriptError(`sdd-workspace: CONTROL_ROOT / MSTAR_CONTROL_ROOT is not a directory: ${controlRoot}`, 1);
+      throw new SddScriptError(
+        `mstar sdd workspace: CONTROL_ROOT / MSTAR_CONTROL_ROOT is not a directory: ${controlRoot}`,
+        1,
+      );
     }
     root = realpathSync(controlRoot);
   } else {
@@ -182,20 +182,18 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
   // resolve or create any SDD tree under the feature checkout — the harness
   // override and the status probe both run only after this guard passes.
   //
-  // INTENTIONAL DIVERGENCE from bash (qc2 F-004, pinned by the parity test
-  // "stray status.json in a linked worktree"): the bash original probes
-  // `status.json` FIRST (sdd-workspace:71), so a linked feature checkout
-  // with a stray `.mstar/status.json` resolves and creates the second SDD
-  // tree under the feature checkout — exactly the hazard this guard exists
-  // to refuse. The TS port refuses regardless of the probe result; bash
-  // parity holds only for linked worktrees WITHOUT status.json (both fail
-  // closed with identical text).
+  // INTENTIONAL DIVERGENCE from the original script (qc2 F-004, pinned by
+  // the test "stray status.json in a linked worktree"): a status.json-first
+  // probe would resolve a linked feature checkout with a stray
+  // `.mstar/status.json` and create the second SDD tree under the feature
+  // checkout — exactly the hazard this guard exists to refuse. The engine
+  // refuses regardless of the probe result.
   if (!controlRoot && isLinkedWorktree(root)) {
-    // Verbatim bash fail-closed message (byte parity on stderr).
+    // Fail-closed message (exit 1).
     throw new SddScriptError(
-      `sdd-workspace: linked worktree at ${root} has no {HARNESS_DIR}/status.json (default gitignore).\n` +
+      `mstar sdd workspace: linked worktree at ${root} has no {HARNESS_DIR}/status.json (default gitignore).\n` +
         `  Refusing to create a second SDD tree under the feature checkout.\n` +
-        `  Re-run with MSTAR_CONTROL_ROOT=<control_worktree_path> or: sdd-workspace ${planId} <control_worktree_path>\n` +
+        `  Re-run with MSTAR_CONTROL_ROOT=<control_worktree_path> or: mstar sdd workspace ${planId} <control_worktree_path>\n` +
         `  See mstar-branch-worktree «Harness path SSOT under default gitignore».`,
       1,
     );
@@ -221,23 +219,22 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
   const sddDir = resolveSddDir(harnessDir, planId);
   mkdirSync(sddDir, { recursive: true });
   writeFileSync(join(sddDir, ".gitignore"), "*\n");
-  // bash ends with `cd "$dir" && pwd` — physical path, symlinks resolved.
+  // Ends with `cd "$dir" && pwd` semantics — physical path, symlinks resolved.
   return realpathSync(sddDir);
 }
 
 /**
- * Port of `scripts/task-brief`: extract the `## Task N` section of a plan
- * into a file (default `{SDD_DIR}/task-N-brief.md`). Replicates the awk
- * state machine exactly: ``` fences toggle `infence`; headings inside
- * fences are ignored; printing starts at the heading for `taskN` and
- * continues until the NEXT `## Task` heading (or EOF for the last task) —
- * a later Task heading resets the section, matching the bash `awk`
- * program. A missing task writes an empty file then fails with the bash
- * exit-3 equivalent (`SddScriptError.exitCode === 3`).
+ * Extract the `## Task N` section of a plan into a file (default
+ * `{SDD_DIR}/task-N-brief.md`). Line state machine: ``` fences toggle
+ * `infence`; headings inside fences are ignored; printing starts at the
+ * heading for `taskN` and continues until the NEXT `## Task` heading (or
+ * EOF for the last task) — a later Task heading resets the section. A
+ * missing task writes an empty file then fails with exit-3
+ * (`SddScriptError.exitCode === 3`).
  */
 export function taskBrief(planFile: string, taskN: number, outFile?: string, opts: TaskBriefOptions = {}): string {
   if (!planFile || !Number.isInteger(taskN) || taskN < 1) {
-    throw new SddScriptError("usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]", 2);
+    throw new SddScriptError("usage: mstar sdd task-brief PLAN_FILE TASK_NUMBER [OUTFILE]", 2);
   }
   let content: string;
   try {
@@ -252,7 +249,10 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
   } else {
     const sddDir = opts.sddDir ?? process.env.SDD_DIR;
     if (!sddDir) {
-      throw new SddScriptError("task-brief: set SDD_DIR or pass OUTFILE (run sdd-workspace PLAN_ID first)", 2);
+      throw new SddScriptError(
+        "mstar sdd task-brief: set SDD_DIR or pass OUTFILE (run mstar sdd workspace PLAN_ID first)",
+        2,
+      );
     }
     mkdirSync(sddDir, { recursive: true });
     out = join(sddDir, `task-${taskN}-brief.md`);
@@ -281,15 +281,15 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
 }
 
 /**
- * Port of `scripts/review-package`: write commit list, stat summary and
- * `git diff -U10` for `BASE..HEAD` into a file (default
- * `{SDD_DIR}/review-<short base>..<short head>.diff`). Both refs are
- * validated with `git rev-parse --verify --quiet` (bash parity — any ref
- * bash accepts is accepted here; the SHA-only guard is `assertBaseSha`).
+ * Write commit list, stat summary and `git diff -U10` for `BASE..HEAD`
+ * into a file (default `{SDD_DIR}/review-<short base>..<short head>.diff`).
+ * Both refs are validated with `git rev-parse --verify --quiet` (any ref
+ * the original accepted is accepted here; the SHA-only guard is
+ * `assertBaseSha`).
  */
 export function reviewPackage(base: string, head: string, outFile?: string, opts: ReviewPackageOptions = {}): string {
   if (!base || !head) {
-    throw new SddScriptError("usage: review-package BASE HEAD [OUTFILE]", 2);
+    throw new SddScriptError("usage: mstar sdd review-package BASE HEAD [OUTFILE]", 2);
   }
   const cwd = opts.cwd ?? process.cwd();
 
@@ -309,7 +309,7 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
   } else {
     const sddDir = opts.sddDir ?? process.env.SDD_DIR;
     if (!sddDir) {
-      throw new SddScriptError("review-package: set SDD_DIR or pass OUTFILE", 2);
+      throw new SddScriptError("mstar sdd review-package: set SDD_DIR or pass OUTFILE", 2);
     }
     mkdirSync(sddDir, { recursive: true });
     const shortBase = gitOut(cwd, ["rev-parse", "--short", base]) ?? base;
@@ -319,7 +319,7 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
 
   const run = (args: string[]): Buffer =>
     execFileSync("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES });
-  // Bash `{ echo …; git …; } > file` layout, byte-for-byte.
+  // `{ echo …; git …; } > file` layout, byte-for-byte.
   const parts: Buffer[] = [
     Buffer.from(`# Review package: ${base}..${head}\n\n## Commits\n`),
     run(["log", "--oneline", `${base}..${head}`]),

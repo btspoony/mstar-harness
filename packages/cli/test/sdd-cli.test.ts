@@ -1,10 +1,10 @@
 /**
  * CLI `mstar sdd workspace|task-brief|review-package` — engine-backed
- * wrappers with bash-parity exit codes.
+ * wrappers with ported exit codes.
  *
  * Each case runs the real CLI as a subprocess against temp fixtures
  * (sample plan file; temp git repos incl. a linked worktree for the
- * fail-closed guard). Exit codes follow the bash originals via
+ * fail-closed guard). Exit codes follow the ported engine contracts via
  * `SddScriptError`:
  * - `workspace`: 1 = resolution failure (linked worktree w/o control root,
  *   bad CONTROL_ROOT), 2 = usage.
@@ -26,7 +26,7 @@ const SAMPLE_PLAN = `# Fixture Plan
 
 ## Goal
 
-Extract per-task briefs with bash parity.
+Extract per-task briefs (engine taskBrief).
 
 ### Task 1: first task
 
@@ -187,12 +187,12 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     }
   });
 
-  test("missing <plan-id> → exit 2 usage error (qc2 F-005: commander must not bypass the bash exit-2 usage contract)", () => {
+  test("missing <plan-id> → exit 2 usage error (qc2 F-005: commander must not bypass the ported exit-2 usage contract)", () => {
     const root = tmpRoot("mstar-sdd-ws-usage-");
     try {
       const result = runCli(["sdd", "workspace"], { cwd: root });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: sdd-workspace");
+      expect(result.stderr).toContain("usage: mstar sdd workspace");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -220,7 +220,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("missing task N → exit 3 (bash parity) with empty outfile", () => {
+  test("missing task N → exit 3 with empty outfile", () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const planFile = join(root, "plan.md");
@@ -242,7 +242,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
       writeFileSync(planFile, SAMPLE_PLAN);
       const result = runCli(["sdd", "task-brief", planFile, "abc", join(root, "out.md")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: task-brief");
+      expect(result.stderr).toContain("usage: mstar sdd task-brief");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -292,7 +292,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     try {
       const result = runCli(["sdd", "task-brief"], { cwd: root });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: task-brief");
+      expect(result.stderr).toContain("usage: mstar sdd task-brief");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -351,7 +351,7 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
     try {
       const result = runCli(["sdd", "review-package"], { cwd: root });
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("usage: review-package");
+      expect(result.stderr).toContain("usage: mstar sdd review-package");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

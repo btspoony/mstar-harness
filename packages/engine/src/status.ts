@@ -1,7 +1,7 @@
 /**
  * Engine status module — status.json schema validation, residual severity
  * normalization, residual lifecycle (open → archived), findings-cleanup gate,
- * and the `tech-debt-rollup.sh` parity port.
+ * and the `metadata.tech_debt_summary` rollup.
  *
  * Spec sources (each export cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`:
@@ -13,7 +13,7 @@
  *   `severity` (SSOT, machine field)" — allowed values
  *   `critical|high|medium|low|nit`; `warning`/`Major`/non-English forbidden in
  *   JSON; legacy `"severity": "warning"` is read and rolled up as `low`.
- *   `null`/`""` → `medium` mirrors `scripts/tech-debt-rollup.sh` `norm_sev`.
+ *   `null`/`""` → `medium` (rollup `norm_sev` semantics).
  * - Residual required fields + lifecycle + archive shape:
  *   § Basic structure (entry fields), § Residual findings lifecycle
  *   ("Recommended: archive to `archived/residuals/<plan-id>.json`":
@@ -28,7 +28,7 @@
  * - Rollup aggregates + drift check (total_open / by_severity / by_target /
  *   by_plan; PASS/DRIFT vs stored `metadata.tech_debt_summary`):
  *   § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
- *   `scripts/tech-debt-rollup.sh`; the TS port must be byte-identical.
+ *   `techDebtRollup` (engine; no CLI form).
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -85,7 +85,7 @@ export type PlanRow = {
 /** Findings cleanup policy mirror of Assignment `Findings cleanup`. */
 export type FindingsCleanupMode = "zero-residual" | "allow-residual";
 
-/** Computed rollup aggregates — jq port of `scripts/tech-debt-rollup.sh`. */
+/** Computed rollup aggregates (jq semantics). */
 export type TechDebtSummary = {
   total_open: number;
   by_severity: Record<string, number>;
@@ -138,7 +138,7 @@ function todayString(): string {
 
 /**
  * Normalize a residual `severity` value for reading/rolling up
- * (status-and-residuals.md § severity 5 + `tech-debt-rollup.sh` `norm_sev`):
+ * (status-and-residuals.md § severity 5 + rollup `norm_sev`):
  * legacy `"warning"` → `"low"`; `null`/`""` → `"medium"`; anything else passes
  * through unchanged (unknown values match no enum bucket, same as jq).
  */
@@ -149,8 +149,8 @@ export function normalizeSeverity(value: unknown): unknown {
 }
 
 /**
- * jq parity: an entry is open when `.lifecycle // "open"` equals `"open"`
- * (tech-debt-rollup.sh `is_open`; status-and-residuals.md § lifecycle).
+ * jq semantics: an entry is open when `.lifecycle // "open"` equals `"open"`
+ * (rollup `is_open`; status-and-residuals.md § lifecycle).
  * The jq alternative operator `//` yields the default for `false` AND
  * `null` (not just null) — `lifecycle: false` therefore counts as open.
  * Exported for consumers that need the shared open semantics (e.g. the
@@ -667,8 +667,8 @@ function groupCount(values: unknown[]): Record<string, number> {
 }
 
 /**
- * TS port of `scripts/tech-debt-rollup.sh` (status-and-residuals.md
- * § `metadata.tech_debt_summary`): compute `total_open` / `by_severity` /
+ * Compute the `metadata.tech_debt_summary` rollup (status-and-residuals.md
+ * § `metadata.tech_debt_summary`): `total_open` / `by_severity` /
  * `by_target` / `by_plan` over open entries of root `residual_findings`
  * merged with the legacy `metadata.residual_findings` read path (canonical
  * keys win; legacy `"warning"` → `low`, `null`/`""` → `medium`; closed
@@ -683,7 +683,7 @@ export function techDebtRollup(docOrPath: StatusDoc | string): TechDebtRollup {
   const legacy = isPlainObject(metadata.residual_findings) ? metadata.residual_findings : {};
   // jq `($canon + $legacy)`: object `+` keeps the RIGHT operand's value for
   // duplicate keys — so on a conflicting plan key the legacy map wins. The
-  // script comment says "canonical keys win", but the expression behaves
+  // reference says "canonical keys win", but the expression behaves
   // otherwise; the port mirrors the actual jq output (dual-write is forbidden
   // in practice, so conflicts should not occur — `status.dual-write-residuals`).
   const merged = { ...canonical, ...legacy };

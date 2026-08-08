@@ -2,8 +2,7 @@
 
 ## Goal
 
-Extract per-task briefs with byte parity to the bash `task-brief` script
-(`skills/mstar-sdd/scripts/task-brief`).
+Extract per-task briefs (engine `taskBrief` — CLI form `mstar sdd task-brief`).
 
 ### Task 1: first task
 

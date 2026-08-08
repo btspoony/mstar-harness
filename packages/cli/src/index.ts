@@ -484,7 +484,7 @@ function failScript(error: unknown, context: string): void {
 
 const sddCommand = program
   .command("sdd")
-  .description("SDD workspace / task-brief / review-package helpers (engine-backed, bash parity)");
+  .description("SDD workspace / task-brief / review-package helpers (engine-backed)");
 
 sddCommand
   .command("workspace")
@@ -494,11 +494,11 @@ sddCommand
   .action((planId: string | undefined, controlRoot?: string) => {
     try {
       // Optional args + explicit count check: commander's own
-      // missing-argument error exits 1, which would bypass the bash-parity
-      // usage contract (exit 2) — validate in-handler instead (qc2 F-005).
+      // missing-argument error exits 1, which would bypass the usage
+      // contract (exit 2) — validate in-handler instead (qc2 F-005).
       if (!planId) {
         throw new SddScriptError(
-          "usage: sdd-workspace PLAN_ID [CONTROL_ROOT]\n" +
+          "usage: mstar sdd workspace PLAN_ID [CONTROL_ROOT]\n" +
             "  Set MSTAR_CONTROL_ROOT=<control_worktree_path> when running from a feature worktree.",
           2,
         );
@@ -518,9 +518,9 @@ sddCommand
   .argument("[outfile]", "Output file (default: {SDD_DIR}/task-N-brief.md)")
   .action((planFile: string | undefined, taskNumber: string | undefined, outfile?: string) => {
     try {
-      // Optional args + explicit count check (bash-parity usage exit 2).
+      // Optional args + explicit count check (usage exit 2).
       if (!planFile || !taskNumber) {
-        throw new SddScriptError("usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]", 2);
+        throw new SddScriptError("usage: mstar sdd task-brief PLAN_FILE TASK_NUMBER [OUTFILE]", 2);
       }
       const out = taskBrief(planFile, Number(taskNumber), outfile);
       console.log(pc.green(`task ${taskNumber} brief: ${out}`));
@@ -537,9 +537,9 @@ sddCommand
   .argument("[outfile]", "Output file (default: {SDD_DIR}/review-<short-base>..<short-head>.diff)")
   .action((base: string | undefined, head: string | undefined, outfile?: string) => {
     try {
-      // Optional args + explicit count check (bash-parity usage exit 2).
+      // Optional args + explicit count check (usage exit 2).
       if (!base || !head) {
-        throw new SddScriptError("usage: review-package BASE HEAD [OUTFILE]", 2);
+        throw new SddScriptError("usage: mstar sdd review-package BASE HEAD [OUTFILE]", 2);
       }
       const out = reviewPackage(base, head, outfile);
       console.log(pc.green(`review package: ${out}`));

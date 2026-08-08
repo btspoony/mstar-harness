@@ -1,7 +1,7 @@
 /**
  * Engine status module — status.json schema validation, residual severity
  * normalization, residual lifecycle (open → archived), findings-cleanup gate,
- * and the `tech-debt-rollup.sh` parity port.
+ * and the `metadata.tech_debt_summary` rollup.
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`
@@ -13,7 +13,7 @@
  *   § "Residual findings: `severity` (SSOT, machine field)" — allowed values
  *   `critical|high|medium|low|nit`; `warning`/`Major`/non-English forbidden in
  *   JSON; legacy `"severity": "warning"` is read and rolled up as `low`.
- *   `null`/`""` → `medium` mirrors `scripts/tech-debt-rollup.sh` `norm_sev`.
+ *   `null`/`""` → `medium` (rollup `norm_sev` semantics).
  * - Residual lifecycle + archive shape (plan_id, schema_version, entries[],
  *   `archived_at`; remove from open list; update root `updated_at`; delete
  *   empty plan-id keys):
@@ -25,12 +25,13 @@
  * - Rollup aggregates + drift check (total_open / by_severity / by_target /
  *   by_plan; PASS/DRIFT vs stored `metadata.tech_debt_summary`):
  *   § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
- *   `scripts/tech-debt-rollup.sh`; the TS port must be byte-identical.
+ *   `techDebtRollup` (engine; no CLI form). Golden-fixture parity: outputs
+ *   captured from the former bash rollup oracle (byte-proven in slice 2)
+ *   are stored under `fixtures/rollup.*.golden.txt`.
  * - `ValidationResult`/`GateResult` shapes + severity machine SSOT:
  *   `packages/engine/src/core.ts` (roadmap §8.5 C2/C4).
  */
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -53,27 +54,13 @@ const REAL_SHAPE = join(FIXTURES, "status.real-shape.json");
 const ROLLUP_FIXTURE = join(FIXTURES, "status.rollup-multiplans.json");
 const SCRAMBLED_FIXTURE = join(FIXTURES, "status.rollup-scrambled.json");
 
-/**
- * Bash parity oracle — `skills/mstar-plan-artifacts/scripts/tech-debt-rollup.sh`
- * in the monorepo root. No machine-local paths: the env override
- * (`MSTAR_PLAN_ARTIFACTS_SCRIPT`) wins, else walk up from this test dir to the
- * repo root. Returns null when the script is unreachable (parity tests then
- * fail loudly — see `bashRollup`).
- */
-function resolveRollupScript(): string | null {
-  const fromEnv = process.env.MSTAR_PLAN_ARTIFACTS_SCRIPT;
-  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
-  let dir = import.meta.dir;
-  for (;;) {
-    const candidate = join(dir, "skills", "mstar-plan-artifacts", "scripts", "tech-debt-rollup.sh");
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
-const ROLLUP_SCRIPT = resolveRollupScript();
+// Golden fixtures: outputs captured from the former bash rollup oracle
+// (byte-proven in slice 2, scripts removed in slice 5).
+const ROLLUP_MULTIPLANS_GOLDEN = join(FIXTURES, "rollup.multiplans.golden.txt");
+const ROLLUP_CONFLICT_GOLDEN = join(FIXTURES, "rollup.conflict.golden.txt");
+const ROLLUP_DRIFT_GOLDEN = join(FIXTURES, "rollup.drift.golden.txt");
+const ROLLUP_ZERO_GOLDEN = join(FIXTURES, "rollup.zero.golden.txt");
+const ROLLUP_FALSE_LIFECYCLE_GOLDEN = join(FIXTURES, "rollup.false-lifecycle.golden.txt");
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -126,7 +113,7 @@ function doc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-/** Mirror of the bash script's echo formatting (see `scripts/tech-debt-rollup.sh`). */
+/** Rendered rollup output format (matches the former bash script's echo formatting). */
 function renderRollupOutput(rollup: TechDebtRollup): string {
   const lines: string[] = [];
   lines.push("=== tech_debt_summary (computed from open residual_findings) ===");
@@ -143,7 +130,7 @@ function renderRollupOutput(rollup: TechDebtRollup): string {
     } else if (check.status === "PASS") {
       lines.push(`PASS: ${check.field}`);
     } else {
-      // Mirror the bash oracle's `jq -c ".$field // null"`: `false` renders as
+      // Mirrors the jq `-c ".$field // null"` comparison: `false` renders as
       // null (jq alternative operator), 0 stays 0 (truthy in jq).
       const storedField = rollup.stored[check.field];
       const storedCompared = storedField === false ? null : (storedField ?? null);
@@ -161,24 +148,12 @@ function renderRollupOutput(rollup: TechDebtRollup): string {
   return `${lines.join("\n")}\n`;
 }
 
-function bashRollup(statusPath: string): { stdout: string; exitCode: number } {
-  if (ROLLUP_SCRIPT === null) {
-    throw new Error(
-      "parity test requires the bash oracle scripts/tech-debt-rollup.sh — the monorepo root walk found " +
-        "nothing; set MSTAR_PLAN_ARTIFACTS_SCRIPT to its path",
-    );
-  }
-  const result = spawnSync("bash", [ROLLUP_SCRIPT, statusPath], { encoding: "utf8" });
-  if (result.error !== undefined) throw result.error; // e.g. ENOENT when bash is not installed
-  return { stdout: result.stdout ?? "", exitCode: result.status ?? -1 };
-}
-
 describe("normalizeSeverity (legacy read path)", () => {
   test("legacy 'warning' normalizes to 'low' (status-and-residuals § severity 5)", () => {
     expect(normalizeSeverity("warning")).toBe("low");
   });
 
-  test("null and empty-string normalize to 'medium' (tech-debt-rollup.sh norm_sev)", () => {
+  test("null and empty-string normalize to 'medium' (rollup norm_sev)", () => {
     expect(normalizeSeverity(null)).toBe("medium");
     expect(normalizeSeverity("")).toBe("medium");
   });
@@ -684,17 +659,15 @@ describe("techDebtRollup", () => {
       "by_plan:DRIFT",
     ]);
     expect(rollup.overall).toBe("DRIFT");
-    // bash oracle agrees: jq -c string compare exits 1 on the same fixture
-    expect(bashRollup(SCRAMBLED_FIXTURE).exitCode).toBe(1);
   });
 
-  test("PARITY: TS rollup output is byte-identical to tech-debt-rollup.sh on the multi-plan fixture", () => {
-    const bash = bashRollup(ROLLUP_FIXTURE);
-    expect(bash.exitCode).toBe(0);
-    expect(renderRollupOutput(techDebtRollup(ROLLUP_FIXTURE))).toBe(bash.stdout);
+  test("GOLDEN: TS rollup output matches the stored bash-oracle fixture on the multi-plan fixture", () => {
+    const golden = readFileSync(ROLLUP_MULTIPLANS_GOLDEN, "utf8");
+    const ts = renderRollupOutput(techDebtRollup(ROLLUP_FIXTURE));
+    expect(ts).toBe(golden);
   });
 
-  test("PARITY: DRIFT output is byte-identical to tech-debt-rollup.sh on a drifted fixture", () => {
+  test("GOLDEN: DRIFT output matches the stored bash-oracle fixture on a drifted fixture", () => {
     const dir = tmpRoot("status-rollup-drift-");
     const drifted = JSON.parse(readFileSync(ROLLUP_FIXTURE, "utf8")) as {
       metadata: { tech_debt_summary: { by_severity: Record<string, number> } };
@@ -703,33 +676,29 @@ describe("techDebtRollup", () => {
     const driftPath = join(dir, "status.json");
     writeFileSync(driftPath, JSON.stringify(drifted, null, 2), "utf8");
 
-    const bash = bashRollup(driftPath);
-    expect(bash.exitCode).toBe(1);
     const ts = techDebtRollup(driftPath);
     expect(ts.overall).toBe("DRIFT");
     expect(ts.checks.find((c) => c.field === "by_severity")?.status).toBe("DRIFT");
-    expect(renderRollupOutput(ts)).toBe(bash.stdout);
+    expect(renderRollupOutput(ts)).toBe(readFileSync(ROLLUP_DRIFT_GOLDEN, "utf8"));
     rmSync(dir, { recursive: true, force: true });
   });
 
   test(
-    "PARITY: canonical+legacy merge precedence is byte-identical to tech-debt-rollup.sh on a conflict fixture",
+    "GOLDEN: canonical+legacy merge precedence matches the stored bash-oracle fixture on a conflict fixture",
     () => {
       const conflictFixture = join(FIXTURES, "status.rollup-conflict.json");
-      const bash = bashRollup(conflictFixture);
-      expect(bash.exitCode).toBe(0);
       const ts = techDebtRollup(conflictFixture);
       // jq `$canon + $legacy` keeps the legacy value on conflicting plan keys
       expect(ts.computed.total_open).toBe(3);
       expect(ts.overall).toBe("PASS");
-      expect(renderRollupOutput(ts)).toBe(bash.stdout);
+      expect(renderRollupOutput(ts)).toBe(readFileSync(ROLLUP_CONFLICT_GOLDEN, "utf8"));
     },
   );
 
-  test("PARITY: stored total_open: 0 (correct empty state) is PASS in bash AND TS (jq `//` keeps 0)", () => {
+  test("GOLDEN: stored total_open: 0 (correct empty state) matches the stored bash-oracle fixture (jq `//` keeps 0)", () => {
     // qc2 F-008 — jq's alternative operator maps only `false`/`null` to the
     // default; `0` is truthy in jq, so a stored total_open of 0 must compare
-    // equal to the computed 0 on both sides.
+    // equal to the computed 0 (the golden was captured from the bash oracle).
     const dir = tmpRoot("status-rollup-zero-");
     try {
       const zeroSummary = {
@@ -742,22 +711,20 @@ describe("techDebtRollup", () => {
       const statusPath = join(dir, "status.json");
       writeFileSync(statusPath, JSON.stringify(zeroFixture, null, 2), "utf8");
 
-      const bash = bashRollup(statusPath);
-      expect(bash.exitCode).toBe(0);
       const ts = techDebtRollup(statusPath);
       expect(ts.checks.every((c) => c.status === "PASS")).toBe(true);
       expect(ts.overall).toBe("PASS");
-      expect(renderRollupOutput(ts)).toBe(bash.stdout);
+      expect(renderRollupOutput(ts)).toBe(readFileSync(ROLLUP_ZERO_GOLDEN, "utf8"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("PARITY: entry lifecycle: false counts as OPEN in bash AND TS (jq `//` defaults false)", () => {
+  test("GOLDEN: entry lifecycle: false counts as OPEN and DRIFTs like the stored bash-oracle fixture (jq `//` defaults false)", () => {
     // qc2 F-008 — `.lifecycle // "open"` yields "open" for `false` (jq maps
     // false AND null to the default), so an entry with `lifecycle: false`
-    // contributes to total_open on both sides; the stored summary omitting it
-    // must DRIFT identically.
+    // contributes to total_open; the stored summary omitting it DRIFTs
+    // identically (golden captured from the bash oracle).
     const dir = tmpRoot("status-rollup-false-");
     try {
       const falseLifecycle = doc({
@@ -774,13 +741,11 @@ describe("techDebtRollup", () => {
       const statusPath = join(dir, "status.json");
       writeFileSync(statusPath, JSON.stringify(falseLifecycle, null, 2), "utf8");
 
-      const bash = bashRollup(statusPath);
-      expect(bash.exitCode).toBe(1); // bash DRIFT: computed total_open 1 vs stored 0
       const ts = techDebtRollup(statusPath);
       expect(ts.computed.total_open).toBe(1); // lifecycle: false is open, like jq
       expect(ts.overall).toBe("DRIFT");
       expect(ts.checks.find((c) => c.field === "total_open")?.status).toBe("DRIFT");
-      expect(renderRollupOutput(ts)).toBe(bash.stdout);
+      expect(renderRollupOutput(ts)).toBe(readFileSync(ROLLUP_FALSE_LIFECYCLE_GOLDEN, "utf8"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
