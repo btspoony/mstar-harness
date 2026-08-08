@@ -29,6 +29,10 @@ export interface BootOptions {
   dispatchTools?: string[]
   /** The dispatching agent's own harness role (Config `dispatchBinding`). */
   dispatchBinding?: string
+  /** Additional skill roots registered with skill-local (Config `skillRoots`). */
+  skillRoots?: string[]
+  /** Bundled skill root registered with skill-local (Config `bundledSkillDir`). */
+  bundledSkillDir?: string
   /** App root override (default: a fresh temp dir). */
   root?: string
 }
@@ -84,10 +88,15 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const harnessDir = join(root, 'harness')
   await mkdir(harnessDir, { recursive: true })
   const configPath = join(root, 'cordis.yml')
-  const lines = ["- name: '@mstar-harness/dsh'", '  config:', `    harnessDir: ${JSON.stringify(harnessDir)}`]
+  // The dsh skill registry row mounts first (real dsh app layout): the
+  // `@mstar-harness/dsh` plugin mounts skill-local as a child, which injects
+  // the `skills` service.
+  const lines = ["- name: '@deepseek-ai/dsh-skill'", "- name: '@mstar-harness/dsh'", '  config:', `    harnessDir: ${JSON.stringify(harnessDir)}`]
   if (options.enforcement !== undefined) lines.push(`    enforcement: ${options.enforcement}`)
   if (options.dispatchTools !== undefined) lines.push(`    dispatchTools: ${JSON.stringify(options.dispatchTools)}`)
   if (options.dispatchBinding !== undefined) lines.push(`    dispatchBinding: ${JSON.stringify(options.dispatchBinding)}`)
+  if (options.skillRoots !== undefined) lines.push(`    skillRoots: ${JSON.stringify(options.skillRoots)}`)
+  if (options.bundledSkillDir !== undefined) lines.push(`    bundledSkillDir: ${JSON.stringify(options.bundledSkillDir)}`)
   await writeFile(configPath, lines.join('\n') + '\n')
 
   const ctx = new Context()
@@ -96,6 +105,9 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   ctx.loader.builtins.include = Include
   const modules = new Map<string, unknown>([
     ['@mstar-harness/dsh', plugin],
+    // The `ctx.skills` registry seam — dev-time peer stub (real package ships
+    // from the composed dsh app at runtime).
+    ['@deepseek-ai/dsh-skill', await import('@deepseek-ai/dsh-skill')],
   ])
   ctx.loader.internal = {
     version: 'v2',

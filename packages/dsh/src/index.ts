@@ -10,8 +10,15 @@
 
 import { existsSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
-import type { Context } from 'cordis'
+import { Service, type Context } from 'cordis'
 import z from 'schemastery'
+import {
+  apply as applySkillLocal,
+  Config as SkillLocalSchema,
+  inject as skillLocalInject,
+  name as skillLocalName,
+} from '@deepseek-ai/dsh-skill-local'
+import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-local'
 import {
   antiRecursionPrecheck,
   applyEnforcement,
@@ -116,6 +123,25 @@ export interface Config {
    * precheck is skipped (an empty binding is not self-recursion).
    */
   dispatchBinding?: string
+  /**
+   * Additional skill roots registered with the dsh skill-local provider
+   * (skill-local `Config.customSkillDirs` semantics — scanned after project
+   * roots and before user roots; roadmap D6 single canonical mount).
+   * Dev-time: the mirror `<repo-root>/skills` absolute path. Each root's
+   * children are skill dirs (`<name>/SKILL.md`) or flat skill files
+   * (`<name>.md`). Absent → no custom-root registration.
+   */
+  skillRoots?: string[]
+  /**
+   * Bundled skill root registered with the dsh skill-local provider
+   * (skill-local `Config.bundledSkillDir` semantics — scanned last, trusted).
+   * Production: a `skills/` dir shipped inside the plugin package (the
+   * canonical published form — dsh defaults `$DSH_BUNDLED_SKILL_DIR` when
+   * default roots are included; this plugin mounts an isolated provider, so
+   * the bundled root is registered explicitly). Absent → no bundled-root
+   * registration.
+   */
+  bundledSkillDir?: string
 }
 
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall), so both dispatch keys preserve omission via `.default(undefined)`. */
@@ -124,6 +150,8 @@ export const Config: z<Config> = z.object({
   enforcement: z.union(['hard', 'soft']),
   dispatchTools: z.array(z.string()).default(undefined as unknown as string[]),
   dispatchBinding: z.string().default(undefined as unknown as string),
+  skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
+  bundledSkillDir: z.string().default(undefined as unknown as string),
 })
 
 /**
@@ -175,6 +203,16 @@ export interface DispatchGateAdvisory {
 }
 
 declare module 'cordis' {
+  interface Context {
+    /**
+     * The plugin's engine `HostAdapter` implementation (`host: 'dsh'`) —
+     * provided as a dsh service (constructed in `apply`, same convention as
+     * `ctx.dshMstar`) so host hooks and future inject consumers share the
+     * one instance.
+     */
+    dshHostAdapter: DshHostAdapter
+  }
+
   interface Events {
     /**
      * Advisory: a subagent dispatch passed the dispatch gate in warn mode
@@ -755,6 +793,33 @@ function assignmentTextFromFields(fields: AssignmentFields): string {
   return lines.join('\n')
 }
 
+/**
+ * Build the dsh skill-local registration payload from the plugin Config
+ * (roadmap D6 — single canonical mount). Semantics mirror the skill-local
+ * `Config` contract: `skillRoots` → `customSkillDirs` (custom roots),
+ * `bundledSkillDir` → `bundledSkillDir` (bundled root). The provider is
+ * named `mstar` and default roots are excluded (`includeDefaultRoots: false`
+ * — the repository-plugin convention: an isolated provider must see only its
+ * explicit roots, so the mstar mount never claims the host app's own skills;
+ * without this the app's user/project skills would be re-discovered under
+ * the mstar provider). Returns `undefined` when nothing is configured — no
+ * registration happens.
+ * @param config - validated plugin configuration.
+ */
+export function skillLocalConfig(config: Config): SkillLocalConfig | undefined {
+  const customSkillDirs = config.skillRoots?.map((root) => root.trim()).filter((root) => root !== '')
+  const bundledSkillDir = config.bundledSkillDir?.trim()
+  if ((customSkillDirs === undefined || customSkillDirs.length === 0) && bundledSkillDir === undefined) {
+    return undefined
+  }
+  return {
+    providerName: 'mstar',
+    includeDefaultRoots: false,
+    ...(customSkillDirs !== undefined && customSkillDirs.length > 0 ? { customSkillDirs } : {}),
+    ...(bundledSkillDir !== undefined ? { bundledSkillDir } : {}),
+  }
+}
+
 /** Options for {@link DshHostAdapter}. */
 export interface DshHostAdapterOptions {
   /** Resolved `{HARNESS_DIR}` (null when probing found none — gates stay inert). */
@@ -797,7 +862,7 @@ export interface DshHostAdapterOptions {
  *   `validateIntegrationMergeLease` (reserve/validate the integration merge
  *   lease; the reservation WRITE into status.json is a P3 seam).
  */
-export class DshHostAdapter implements HostAdapter {
+export class DshHostAdapter extends Service implements HostAdapter {
   /** Engine host identity (roadmap §8.4 `HostId` union). */
   readonly host = 'dsh' as const
 
@@ -806,6 +871,9 @@ export class DshHostAdapter implements HostAdapter {
   private readonly logSink: (level: 'info' | 'warn' | 'error', msg: string) => void
 
   constructor(ctx: Context, options: DshHostAdapterOptions) {
+    // Provided as a dsh service (`ctx.dshHostAdapter`, same convention as
+    // `ctx.dshMstar`): construction self-registers on the fiber.
+    super(ctx, 'dshHostAdapter')
     this.harnessDir = options.harnessDir
     this.config = options.config
     this.logSink = options.log ?? ((level, msg) => {
@@ -928,7 +996,25 @@ export function apply(ctx: Context, config: Config): void {
   new DshMstar(ctx, { harnessDir: harnessDir ?? null })
   // The host-facing HostAdapter facade — the fs-intent / pre-execute gates
   // route through it (host hooks and in-plugin gates share ONE code path).
+  // Constructed as a dsh service: `ctx.dshHostAdapter` is available to
+  // inject consumers and host hooks after boot.
   const adapter = new DshHostAdapter(ctx, { harnessDir, config })
+
+  // Skills mount — single canonical mount (roadmap D6): register configured
+  // skill roots with the dsh skill-local provider contract. The object form
+  // mirrors the module shape the dsh Loader composes for the real
+  // `@deepseek-ai/dsh-skill-local` package (`{ name, inject, Config, apply }`),
+  // so `inject: ['skills']` defers the child fiber until `ctx.skills` exists
+  // regardless of mount order. Dev-time the seam package is a peer stub (no
+  // real runtime) — this call is the contract-typed registration; real-runtime
+  // composition is verified at P3 e2e (README Known Limitations).
+  const skillConfig = skillLocalConfig(config)
+  if (skillConfig !== undefined) {
+    ctx.plugin(
+      { name: skillLocalName, inject: skillLocalInject, Config: SkillLocalSchema, apply: applySkillLocal },
+      skillConfig,
+    )
+  }
 
   // Deploy-time observability (qc2 S-002): when enforcement resolves hard but
   // no dispatchBinding is declared, the anti-recursion red line is off by

@@ -30,6 +30,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { join } from 'node:path'
+import { Context } from 'cordis'
 import type { HostAdapter } from '@mstar-harness/engine'
 import type { AssignmentFields } from '@mstar-harness/engine'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
@@ -128,9 +129,15 @@ const BARE_FIELDS_TEXT = `## Assignment
 
 /* ---------------------------------- helpers ---------------------------------- */
 
-/** An adapter over the booted app's context (default ctx logger, empty Config). */
+/**
+ * An adapter over an ISOLATED root context (default ctx logger, empty
+ * Config). The booted app provides the app's single `ctx.dshHostAdapter`
+ * service (Task 3: adapter attached on ctx) — direct constructions for
+ * config-variant tests use a fresh context so the service name does not
+ * collide with the provided instance.
+ */
 function makeAdapter(opts: { config?: Config; log?: (level: 'info' | 'warn' | 'error', msg: string) => void } = {}): DshHostAdapter {
-  return new DshHostAdapter(booted!.ctx, {
+  return new DshHostAdapter(new Context(), {
     harnessDir: booted!.harnessDir,
     config: opts.config ?? {},
     log: opts.log,
