@@ -11,9 +11,10 @@
  *   `warn` lines on violations, never blocks. Hard mode (repo iteration
  *   compass frontmatter `enforcement: hard`, engine
  *   `status.resolveCompassEnforcement`): error-level lines with a skill-text
- *   pointer + a GateResult carrying `hardBlocked: true` (the caller MUST
- *   refuse the write). Never throws raw exceptions in either mode — OpenCode's
- *   plugin API (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
+ *   pointer + a GateResult carrying `hardBlocked: true` (a refusal-capable
+ *   caller MUST refuse the write — this hook itself cannot abort the tool).
+ *   Never throws raw exceptions in either mode — OpenCode's plugin API
+ *   (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
  *   `Promise<void>` with no refusal channel, so hard mode is surfaced as the
  *   error logs + structured result (see `validateStatusWrite`).
  *   Hook coverage follows `resolveHarnessDir` probing (`.mstar/` → `.agents/` →
@@ -39,6 +40,7 @@ import {
   antiRecursionPrecheck,
   applyEnforcement,
   assertDefaultBranchProtected,
+  assignmentHeaderRegion,
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,
   parseAssignmentFields,
@@ -260,8 +262,10 @@ const STATUS_FILE = "status.json";
  *   frontmatter declares `enforcement: hard` (engine
  *   `status.resolveCompassEnforcement`): violations are surfaced as `error`
  *   lines with a skill-text pointer and the returned GateResult carries
- *   `hardBlocked: true` — the caller MUST refuse the write. Never throws a
- *   raw exception: hard mode is the structured result + error log channel.
+ *   `hardBlocked: true` — a refusal-capable caller MUST refuse the write
+ *   (this hook itself cannot abort the tool; see the blocking-channel note).
+ *   Never throws a raw exception: hard mode is the structured result +
+ *   error log channel.
  *
  * Blocking channel note (documented behavior): OpenCode's plugin API
  * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns `Promise<void>`
@@ -302,7 +306,7 @@ export function validateStatusWrite(
         if (enforcement.hard) {
           log(
             "error",
-            `status.json validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — refusing write per Enforcement: hard (skill: mstar-plan-artifacts/references/status-and-residuals.md)`,
+            `status.json validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-plan-artifacts/references/status-and-residuals.md)`,
           );
         } else {
           log(
@@ -377,12 +381,16 @@ function isAssignmentShaped(assignmentText: string): boolean {
  * - **Warn mode (default)** — no `Enforcement: hard` on the Assignment: one
  *   `warn` line per violation through the `[mstar-harness]` channel;
  *   `hardBlocked` is false. Unchanged v1 behavior.
- * - **Hard mode** — the Assignment carries `Enforcement: hard` (bold or
- *   plain): one `error` line per violation with a skill-text pointer and the
- *   returned GateResult carries `hardBlocked: true` — the caller MUST refuse
- *   the dispatch. Never throws a raw exception: hard mode is the structured
- *   result + error log channel. `Enforcement: soft` (explicit non-hard)
- *   stays warn-only; rollback = unset the flag.
+ * - **Hard mode** — the Assignment header carries `Enforcement: hard`
+ *   (bold or plain): one `error` line per violation with a skill-text
+ *   pointer and the returned GateResult carries `hardBlocked: true` — a
+ *   refusal-capable caller MUST refuse the dispatch (this hook itself
+ *   cannot abort the tool; see the blocking-channel note). Never throws a
+ *   raw exception: hard mode is the structured result + error log channel.
+ *   `Enforcement: soft` (explicit non-hard) stays warn-only; rollback =
+ *   unset the flag. The flag is read from the Assignment HEADER region
+ *   only — an example `**Enforcement**: hard` line in the task body does
+ *   not harden (qc1 F-003 / qc2 F-003).
  *
  * Blocking channel note (documented behavior): OpenCode's plugin API
  * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns `Promise<void>`
@@ -426,14 +434,16 @@ export function validateDispatchAssignment(
     }
 
     const result: GateResult = { ok: violations.length === 0, violations };
-    const enforcement: EnforcementFlag = parseEnforcementFlag(assignmentText);
+    // Header region only: an example `**Enforcement**: hard` line quoted in
+    // the task body must not harden the dispatch (qc1 F-003 / qc2 F-003).
+    const enforcement: EnforcementFlag = parseEnforcementFlag(assignmentHeaderRegion(assignmentText));
     if (!result.ok) {
       for (const violation of result.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
         if (enforcement.hard) {
           log(
             "error",
-            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — dispatch refused per Enforcement: hard (skill: mstar-dispatch-gates)`,
+            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
           );
         } else {
           log(

@@ -658,6 +658,45 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
     expect(result!.violations.some((v) => v.code === "assignment.field.missing-delegation")).toBe(false);
   });
 
+  test("body example **Enforcement**: hard after `# Change` does NOT harden (qc1 F-003 / qc2 F-003)", () => {
+    const { entries, log } = capture();
+    const text = `## Assignment
+
+**Delegation**: forbidden
+**Task category**: docs
+
+# Change
+
+An example Assignment template line: **Enforcement**: hard
+`;
+    const result = validateDispatchAssignment(text, { log });
+    // Missing Execute as is a real violation — but the flag lives in the
+    // BODY, so the gate stays warn-only (no hardBlocked, no error lines).
+    expect(result!.ok).toBe(false);
+    expect(result!.hardBlocked).toBe(false);
+    expect(entries.some(([level]) => level === "warn")).toBe(true);
+    expect(entries.some(([level]) => level === "error")).toBe(false);
+  });
+
+  test("header **Enforcement**: hard hardens even when the body quotes a soft example", () => {
+    const { entries, log } = capture();
+    const text = `## Assignment
+
+**Enforcement**: hard
+**Delegation**: forbidden
+**Task category**: docs
+
+# Change
+
+**Enforcement**: soft (example only)
+`;
+    const result = validateDispatchAssignment(text, { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.hardBlocked).toBe(true);
+    expect(entries.some(([level]) => level === "error")).toBe(true);
+    expect(entries.some(([level]) => level === "warn")).toBe(false);
+  });
+
   test("plugin wiring: task tool with hard assignment logs error-level lines, never throws", async () => {
     const plugin = await MorningStarHarnessPlugin();
     const beforeExecute = plugin["tool.execute.before"];

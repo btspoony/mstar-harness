@@ -32,6 +32,7 @@ const ENGINE_STUB = `const unavailable = () => {
 export const antiRecursionPrecheck = unavailable;
 export const applyEnforcement = unavailable;
 export const assertDefaultBranchProtected = unavailable;
+export const assignmentHeaderRegion = unavailable;
 export const isReadOnlyAssignmentRole = unavailable;
 export const parseAssignmentBranchForms = unavailable;
 export const parseAssignmentFields = unavailable;
