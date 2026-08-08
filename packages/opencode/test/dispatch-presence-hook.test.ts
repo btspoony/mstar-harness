@@ -232,11 +232,17 @@ describe("plugin wiring (tool.execute.before)", () => {
     expect(beforeExecute).toBeDefined();
 
     const restore = captureConsoleWarn();
-    await beforeExecute!(
-      { tool: "task", sessionID: "s1", callID: "c1" },
-      { args: { subagent_type: "fullstack-dev", prompt: missingExecuteAs } },
-    );
-    let warnings = restore();
+    let warnings: string[];
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c1" },
+        { args: { subagent_type: "fullstack-dev", prompt: missingExecuteAs } },
+      );
+    } finally {
+      // Restore even if beforeExecute throws (qc3 S-4): a left-patched
+      // console.warn would pollute every later capture in this file.
+      warnings = restore();
+    }
     expect(
       warnings.some(
         (w) => w.includes("[mstar-harness]") && w.includes("assignment.presence.missing-execute-as"),
@@ -244,11 +250,14 @@ describe("plugin wiring (tool.execute.before)", () => {
     ).toBe(true);
 
     const restore2 = captureConsoleWarn();
-    await beforeExecute!(
-      { tool: "task", sessionID: "s1", callID: "c2" },
-      { args: { subagent_type: "fullstack-dev", prompt: completeAssignment } },
-    );
-    warnings = restore2();
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c2" },
+        { args: { subagent_type: "fullstack-dev", prompt: completeAssignment } },
+      );
+    } finally {
+      warnings = restore2();
+    }
     expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
   });
 
@@ -257,12 +266,16 @@ describe("plugin wiring (tool.execute.before)", () => {
     const beforeExecute = plugin["tool.execute.before"];
 
     const restore = captureConsoleWarn();
-    await beforeExecute!({ tool: "task", sessionID: "s1", callID: "c1" }, { args: { subagent_type: "fullstack-dev" } });
-    await beforeExecute!(
-      { tool: "task", sessionID: "s1", callID: "c2" },
-      { args: { subagent_type: "fullstack-dev", prompt: garbageText } },
-    );
-    const warnings = restore();
+    let warnings: string[];
+    try {
+      await beforeExecute!({ tool: "task", sessionID: "s1", callID: "c1" }, { args: { subagent_type: "fullstack-dev" } });
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c2" },
+        { args: { subagent_type: "fullstack-dev", prompt: garbageText } },
+      );
+    } finally {
+      warnings = restore();
+    }
     expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
   });
 });
