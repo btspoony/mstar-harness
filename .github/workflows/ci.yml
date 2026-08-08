@@ -62,11 +62,12 @@ jobs:
             exit 1
           }
           echo "$TREE"
-          if echo "$TREE" | grep -E '(^|\s)(commander|inquirer)(\s|@|$)'; then
+          if echo "$TREE" | bun run ci:dep-guard; then
+            echo "OK — opencode dep tree has no commander/inquirer"
+          else
             echo "::error::@mstar-harness/opencode dep tree must not contain commander or inquirer (roadmap §8.7 item 5)"
             exit 1
           fi
-          echo "OK — opencode dep tree has no commander/inquirer"
 
       - name: Typecheck
         run: bun run typecheck
@@ -92,7 +93,7 @@ jobs:
         run: bun run --cwd packages/opencode test
 
       - name: Test scripts
-        run: bun test scripts/prepare-release.test.ts
+        run: bun test scripts/prepare-release.test.ts scripts/ci-dep-guard.test.ts
 
       - name: Pack CLI tarball
         run: bun run cli:pack
