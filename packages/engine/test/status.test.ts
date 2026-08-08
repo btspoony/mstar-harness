@@ -755,7 +755,10 @@ describe("techDebtRollup", () => {
 describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5, roadmap §8.5 D2)", () => {
   // Spec: roadmap §8.5 C4/D2 — hard gates are enabled per Assignment/compass;
   // compass frontmatter `enforcement: hard` hardens the status-write gate in
-  // that repo; no compass / non-hard value → warn-only (flag inert).
+  // that repo, but ONLY for compasses still steering it (`status: active` or
+  // `status: locked`) — a COMPLETED iteration's hard compass must not keep
+  // the repo hardened (qc1 F-001 / qc2 F-002); no counting compass / non-hard
+  // value → warn-only (flag inert).
   const makeCompass = (harnessDir: string, iterationId: string, frontmatter: string): string => {
     const dir = join(harnessDir, "iterations", iterationId);
     mkdirSync(dir, { recursive: true });
@@ -805,7 +808,7 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
-      makeCompass(harness, "20260808-demo", "enforcement: soft\n");
+      makeCompass(harness, "20260808-demo", "iteration_id: 20260808-demo\nstatus: active\nenforcement: soft\n");
       expect(resolveCompassEnforcement(harness)).toEqual({ hard: false, source: "none" });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -823,14 +826,66 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
     }
   });
 
-  test("multiple iterations — any compass declaring hard → hard", () => {
+  test("multiple iterations — only ACTIVE/LOCKED compasses count: completed hard is ignored, active hard wins", () => {
     const root = tmpRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
-      makeCompass(harness, "20260701-a", "iteration_id: 20260701-a\nstatus: completed\n");
+      // A COMPLETED iteration declaring hard must NOT harden by itself —
+      // the active iteration's flag is the only one that counts (qc1 F-001).
+      makeCompass(harness, "20260701-a", "iteration_id: 20260701-a\nstatus: completed\nenforcement: hard\n");
       makeCompass(harness, "20260808-b", "iteration_id: 20260808-b\nstatus: active\nenforcement: hard\n");
       expect(resolveCompassEnforcement(harness)).toEqual({ hard: true, source: "compass" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("completed compass with enforcement: hard → none (D2 rollback works across iterations)", () => {
+    const root = tmpRoot("mstar-compass-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      makeCompass(harness, "20260601-old", "iteration_id: 20260601-old\nstatus: completed\nenforcement: hard\n");
+      makeCompass(harness, "20260701-older", "iteration_id: 20260701-older\nstatus: completed\nenforcement: hard\n");
+      expect(resolveCompassEnforcement(harness)).toEqual({ hard: false, source: "none" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("active + completed — the ACTIVE compass wins: completed hard + active soft → none", () => {
+    const root = tmpRoot("mstar-compass-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      makeCompass(harness, "20260601-old", "iteration_id: 20260601-old\nstatus: completed\nenforcement: hard\n");
+      makeCompass(harness, "20260808-now", "iteration_id: 20260808-now\nstatus: active\nenforcement: soft\n");
+      expect(resolveCompassEnforcement(harness)).toEqual({ hard: false, source: "none" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("locked compass with enforcement: hard → hard (locked still steers the repo)", () => {
+    const root = tmpRoot("mstar-compass-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      makeCompass(harness, "20260808-locked", "iteration_id: 20260808-locked\nstatus: locked\nenforcement: hard\n");
+      expect(resolveCompassEnforcement(harness)).toEqual({ hard: true, source: "compass" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("status-less compass with enforcement: hard → none (fail-soft — no status, no hardening)", () => {
+    const root = tmpRoot("mstar-compass-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      makeCompass(harness, "20260808-demo", "iteration_id: 20260808-demo\nenforcement: hard\n");
+      expect(resolveCompassEnforcement(harness)).toEqual({ hard: false, source: "none" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

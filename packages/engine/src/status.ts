@@ -620,12 +620,17 @@ export function findingsCleanupGate(
 /**
  * Resolve the repo-level hard-enforcement flag from the iteration compass
  * (roadmap §8.5 C4/D2): `{ITERATION_DIR}/<id>/delivery-compass.md` files are
- * scanned; the FIRST compass whose frontmatter declares `enforcement: hard`
- * hardens the gate in this repo. A compass declaring a non-hard value, or
- * no compass at all, leaves the flag unset (`source: none`) — hard gates
- * are never the default and the flag is inert when the engine is absent.
- * Frontmatter is `---`-fenced; hard declarations in the compass BODY do not
- * count (the frontmatter is the schema surface — see iteration.compassSchema).
+ * scanned; only compasses still steering the repo count — frontmatter
+ * `status: active` or `status: locked` — and the FIRST such compass whose
+ * frontmatter declares `enforcement: hard` hardens the gate in this repo.
+ * A COMPLETED (or status-less/archived) iteration's compass NEVER hardens:
+ * D2 rollback = unset the flag in the ACTIVE compass, and that must work
+ * while older completed compasses still declare hard (qc1 F-001 / qc2 F-002).
+ * A counting compass declaring a non-hard value, or no compass at all,
+ * leaves the flag unset (`source: none`) — hard gates are never the default
+ * and the flag is inert when the engine is absent. Frontmatter is
+ * `---`-fenced; hard declarations in the compass BODY do not count (the
+ * frontmatter is the schema surface — see iteration.compassSchema).
  */
 export function resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
   const iterationsDir = resolveIterationDir(harnessDir);
@@ -648,7 +653,13 @@ export function resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
     }
     // Frontmatter only: leading `---` fence through the closing fence.
     const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    const flag = parseEnforcementFlag(frontmatter !== null ? frontmatter[1]! : "");
+    const fm = frontmatter !== null ? frontmatter[1]! : "";
+    // Sticky-hard guard (qc1 F-001 / qc2 F-002): only `status: active` /
+    // `status: locked` compasses count toward hardening. Completed and
+    // status-less compasses are skipped — fail-soft (an archive must never
+    // keep the repo hardened).
+    if (!/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(fm)) continue;
+    const flag = parseEnforcementFlag(fm);
     if (flag.hard) return flag;
   }
   return { hard: false, source: "none" };
