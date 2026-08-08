@@ -10,13 +10,19 @@
 import { Context, Service } from 'cordis'
 import {
   applyEnforcement as engineApplyEnforcement,
+  findingsCleanupGate as engineFindingsCleanupGate,
   readHarnessVersion as engineReadHarnessVersion,
+  resolveCompassEnforcement as engineResolveCompassEnforcement,
   resolveHarnessDir as engineResolveHarnessDir,
+  validateResidual as engineValidateResidual,
   validateStatus as engineValidateStatus,
 } from '@mstar-harness/engine'
 import type {
+  EnforcementFlag,
+  FindingsCleanupMode,
   GateResult,
   ResolveHarnessDirOptions,
+  ResidualEntry,
   StatusDoc,
 } from '@mstar-harness/engine'
 
@@ -36,9 +42,9 @@ export interface DshMstarOptions {
 /**
  * Morning Star engine access for dsh gate plugins.
  *
- * The service is provided programmatically by the `dsh` function plugin
- * (`ctx.provide`); it exists so gate listeners and future consumers declare
- * `inject: ['dshMstar']` instead of importing the engine directly.
+ * The service is constructed (and thereby self-registered) by the `dsh`
+ * function plugin's `apply`; it exists so gate listeners and future consumers
+ * declare `inject: ['dshMstar']` instead of importing the engine directly.
  */
 export class DshMstar extends Service {
   /** Resolved `{HARNESS_DIR}` for this app (null when probing found none). */
@@ -55,6 +61,36 @@ export class DshMstar extends Service {
    */
   validateStatus(docOrPath: StatusDoc | string): GateResult {
     return engineValidateStatus(docOrPath)
+  }
+
+  /**
+   * Validate one residual entry (status-and-residuals.md § Basic structure).
+   * @param entry - the residual entry as parsed from status.json.
+   */
+  validateResidual(entry: ResidualEntry | unknown): GateResult {
+    return engineValidateResidual(entry)
+  }
+
+  /**
+   * Findings cleanup gate for one plan (status-and-residuals.md § Findings
+   * cleanup modes). Mode resolution: explicit `opts.mode` → `plans[].metadata.
+   * findings_cleanup` → `allow-residual`.
+   * @param doc - the parsed status document.
+   * @param planId - the plan whose open residuals are checked.
+   * @param opts - explicit cleanup-mode override.
+   */
+  findingsCleanupGate(doc: StatusDoc, planId: string, opts?: { mode?: FindingsCleanupMode }): GateResult {
+    return engineFindingsCleanupGate(doc, planId, opts)
+  }
+
+  /**
+   * Resolve the repo-level hard-enforcement flag from the iteration compass
+   * (`{ITERATION_DIR}/<id>/delivery-compass.md` frontmatter `enforcement: hard`
+   * on active/locked compasses). Hard gates are never the default.
+   * @param harnessDir - the resolved `{HARNESS_DIR}`.
+   */
+  resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
+    return engineResolveCompassEnforcement(harnessDir)
   }
 
   /**

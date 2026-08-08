@@ -27,6 +27,7 @@
         "@cordisjs/plugin-include": "1.0.4",
         "@cordisjs/plugin-loader": "1.0.0-rc.5",
         "@deepseek-ai/dsh-agent": "^0.0.1",
+        "@deepseek-ai/dsh-fs": "^0.0.1",
         "@deepseek-ai/dsh-fs-policy": "^0.0.1",
         "@deepseek-ai/dsh-invariants": "^0.0.1",
         "@deepseek-ai/dsh-subagent": "^0.0.1",
@@ -41,6 +42,7 @@
       },
       "peerDependencies": {
         "@deepseek-ai/dsh-agent": "^0.0.1",
+        "@deepseek-ai/dsh-fs": "^0.0.1",
         "@deepseek-ai/dsh-fs-policy": "^0.0.1",
         "@deepseek-ai/dsh-subagent": "^0.0.1",
         "@deepseek-ai/dsh-tools": "^0.0.1",
@@ -49,6 +51,10 @@
     },
     "packages/dsh/peer-stubs/dsh-agent": {
       "name": "@deepseek-ai/dsh-agent",
+      "version": "0.0.1",
+    },
+    "packages/dsh/peer-stubs/dsh-fs": {
+      "name": "@deepseek-ai/dsh-fs",
       "version": "0.0.1",
     },
     "packages/dsh/peer-stubs/dsh-fs-policy": {
@@ -91,6 +97,8 @@
     "@cordisjs/plugin-loader": ["@cordisjs/plugin-loader@1.0.0-rc.5", "", { "dependencies": { "cosmokit": "^1.8.1" }, "peerDependencies": { "cordis": "^4.0.0-rc.7", "node-addon-require-builtin": "^0.1.0" }, "optionalPeers": ["node-addon-require-builtin"] }, "sha512-084Wn2SzkFinbaASTq8blHOUqQt/oxZfX6gnrt0lnJ1CrystulFLL1+XVgF4o7lUMN9bHn4cfT1pMtkHprCtHw=="],
 
     "@deepseek-ai/dsh-agent": ["@deepseek-ai/dsh-agent@workspace:packages/dsh/peer-stubs/dsh-agent"],
+
+    "@deepseek-ai/dsh-fs": ["@deepseek-ai/dsh-fs@workspace:packages/dsh/peer-stubs/dsh-fs"],
 
     "@deepseek-ai/dsh-fs-policy": ["@deepseek-ai/dsh-fs-policy@workspace:packages/dsh/peer-stubs/dsh-fs-policy"],
 

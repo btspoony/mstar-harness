@@ -10,83 +10,22 @@
  * Tasks 3–5 extend the same boot with real seam packages when available.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { Context } from 'cordis'
-import Loader from '@cordisjs/plugin-loader'
-import Include from '@cordisjs/plugin-include'
 import { readHarnessVersion } from '@mstar-harness/engine'
-import * as plugin from '../src/index.ts'
+import { bootApp, INVALID_STATUS, VALID_STATUS, type BootResult } from './harness.ts'
 
-let root: string | undefined
-let context: Context | undefined
+let booted: BootResult | undefined
 
 afterEach(async () => {
-  await context?.fiber.dispose()
-  context = undefined
-  if (root !== undefined) await rm(root, { recursive: true, force: true })
-  root = undefined
+  await booted?.dispose()
+  booted = undefined
 })
-
-/** Minimal valid status.json (engine test fixture `status.empty.json` shape). */
-const VALID_STATUS = {
-  version: 1,
-  updated_at: '2026-08-08',
-  plans: [],
-  residual_findings: {},
-  metadata: {},
-}
-
-/** Well-formed JSON that fails the status schema (plans must be an array). */
-const INVALID_STATUS = {
-  version: 1,
-  updated_at: '2026-08-08',
-  plans: 'not-an-array',
-  residual_findings: {},
-  metadata: {},
-}
-
-/**
- * Boot a test-only cordis.yml through the Loader with the plugin mounted.
- * @returns the booted context and the harness dir the plugin resolved.
- */
-async function boot(): Promise<{ ctx: Context; harnessDir: string }> {
-  root = await mkdtemp(join(tmpdir(), 'dsh-mstar-loader-'))
-  const harnessDir = join(root, 'harness')
-  await mkdir(harnessDir, { recursive: true })
-  const configPath = join(root, 'cordis.yml')
-  await writeFile(configPath, [
-    "- name: '@mstar-harness/dsh'",
-    '  config:',
-    `    harnessDir: ${JSON.stringify(harnessDir)}`,
-    '',
-  ].join('\n'))
-
-  const ctx = new Context()
-  context = ctx
-  ctx.baseUrl = pathToFileURL(root).href + '/'
-  await ctx.plugin(Loader)
-  ctx.loader.builtins.include = Include
-  const modules = new Map<string, unknown>([
-    ['@mstar-harness/dsh', plugin],
-  ])
-  ctx.loader.internal = {
-    version: 'v2',
-    async import(specifier: string) {
-      if (!modules.has(specifier)) throw new Error(`unexpected Loader import: ${specifier}`)
-      return modules.get(specifier)
-    },
-  } as unknown as NonNullable<typeof ctx.loader.internal>
-  await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
-  await ctx.loader.await()
-  return { ctx, harnessDir }
-}
 
 describe('@mstar-harness/dsh through a real Loader composition (cordis.yml)', () => {
   it('resolves the configured harness dir and validates a fixture status.json inside the app', async () => {
-    const { ctx, harnessDir } = await boot()
+    const app = booted = await bootApp()
+    const { ctx, harnessDir } = app
     const statusPath = join(harnessDir, 'status.json')
     const badStatusPath = join(harnessDir, 'bad-status.json')
     await writeFile(statusPath, JSON.stringify(VALID_STATUS))
@@ -103,7 +42,8 @@ describe('@mstar-harness/dsh through a real Loader composition (cordis.yml)', ()
   })
 
   it('exposes the engine version 2.0.0 through the service and the direct import surface', async () => {
-    const { ctx, harnessDir } = await boot()
+    const app = booted = await bootApp()
+    const { ctx, harnessDir } = app
     const badStatusPath = join(harnessDir, 'bad-status.json')
     await writeFile(badStatusPath, JSON.stringify(INVALID_STATUS))
     expect(ctx.dshMstar.readHarnessVersion()).toBe('2.0.0')
@@ -114,5 +54,30 @@ describe('@mstar-harness/dsh through a real Loader composition (cordis.yml)', ()
     const hard = ctx.dshMstar.applyEnforcement(verdict, { hard: true })
     expect(hard.hardBlocked).toBe(true)
     expect(ctx.dshMstar.applyEnforcement(verdict, { hard: false }).hardBlocked).toBe(false)
+  })
+
+  it('exposes the Task 3 gate surface (residual validation, cleanup gate, compass flag)', async () => {
+    const app = booted = await bootApp()
+    const { ctx, harnessDir } = app
+
+    // validateResidual rejects a malformed entry.
+    const badResidual = ctx.dshMstar.validateResidual({ id: '', severity: 'warning' })
+    expect(badResidual.ok).toBe(false)
+    expect(badResidual.violations.map((v) => v.code)).toContain('status.residual.invalid-id')
+
+    // findingsCleanupGate with zero-residual flags an open nit.
+    const doc = {
+      ...VALID_STATUS,
+      plans: [{ id: 'p1', title: 't', file: 'plans/p1.md', status: 'InProgress' }],
+      residual_findings: {
+        p1: [{ id: 'R1', title: 't', severity: 'nit', source: 'qc', scope: 'plan', decision: 'defer', target: 'n', tracking: null }],
+      },
+    }
+    const cleanup = ctx.dshMstar.findingsCleanupGate(doc, 'p1', { mode: 'zero-residual' })
+    expect(cleanup.ok).toBe(false)
+    expect(cleanup.violations.map((v) => v.code)).toContain('findings.zero-residual-nit')
+
+    // No compass in a bare harness dir → never hard by default.
+    expect(ctx.dshMstar.resolveCompassEnforcement(harnessDir)).toEqual({ hard: false, source: 'none' })
   })
 })
