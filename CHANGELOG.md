@@ -2,24 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **2.0.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **2.0.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **2.0.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.0** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **2.0.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.0** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.0** |
-| Agent Plugins manifest | `plugin.json` | **2.0.0** |
+| Monorepo root | `morning-star` (`package.json`) | **2.0.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.1** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **2.0.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.1** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.1** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.1** |
+| Agent Plugins manifest | `plugin.json` | **2.0.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [2.0.1] - 2026-08-08
+
+### Fixed
+
+- OpenCode plugin hooks no longer abort-log on non-string `task`/`write` args: Assignment and `status.json` validators refuse non-string input before `.match` / `path.resolve`, and the `tool.execute.before` hook snapshots `prompt`/`filePath` once (avoids getter/Proxy type flips).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 2.0.1**.
 
 ## [2.0.0] - 2026-08-08
 

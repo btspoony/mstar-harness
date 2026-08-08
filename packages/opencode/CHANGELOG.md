@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-08-08
+
+### Fixed
+
+- OpenCode plugin hooks no longer abort-log on non-string `task`/`write` args: Assignment and `status.json` validators refuse non-string input before `.match` / `path.resolve`, and the `tool.execute.before` hook snapshots `prompt`/`filePath` once (avoids getter/Proxy type flips).
+
+- Version alignment with harness **2.0.1** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.0.1**.
+
 ## [2.0.0] - 2026-08-08
 
 ### Bundled harness skills (`harness-skills/` at publish)
