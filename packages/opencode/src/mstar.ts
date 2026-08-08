@@ -285,6 +285,10 @@ export function validateStatusWrite(
 ): GateResult | null {
   const log = opts.log ?? defaultStatusLogger;
   try {
+    // Host tool args are `any` — refuse non-string paths before path.resolve
+    // (Bun: `The "paths[0]" property must be of type string, got object`).
+    if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
+
     const resolved = path.resolve(targetPath);
     if (path.basename(resolved) !== STATUS_FILE) return null;
 
@@ -347,9 +351,12 @@ const ASSIGNMENT_FIELD_RE =
  * True when the text looks like an Assignment: carries the `## Assignment`
  * heading or at least one core field line (`Execute as` / `Delegation` /
  * `Task category`). Non-Assignment prompts (plain task instructions) stay
- * silent — no false-positive warnings.
+ * silent — no false-positive warnings. Non-string input is never shaped
+ * (host tool args are `any`; RegExp.test coerces objects to "[object Object]"
+ * which would then blow up on `.match`).
  */
-function isAssignmentShaped(assignmentText: string): boolean {
+function isAssignmentShaped(assignmentText: unknown): boolean {
+  if (typeof assignmentText !== "string") return false;
   return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null;
 }
 
@@ -409,8 +416,11 @@ export function validateDispatchAssignment(
 ): GateResult | null {
   const log = opts.log ?? defaultStatusLogger;
   try {
-    // Shape guard: non-Assignment prompts stay silent (no false positives).
-    if (!isAssignmentShaped(assignmentText)) return { ok: true, violations: [] };
+    // Shape guard: non-strings and non-Assignment prompts stay silent
+    // (no false positives / no `assignmentText.match is not a function`).
+    if (typeof assignmentText !== "string" || !isAssignmentShaped(assignmentText)) {
+      return { ok: true, violations: [] };
+    }
 
     const violations: ValidationResult[] = [];
     const fields = parseAssignmentFields(assignmentText);
@@ -506,7 +516,16 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
     },
 
     "tool.execute.before": async (input, output) => {
+      // Snapshot once: host `args` may be getter/Proxy-backed; re-reading
+      // `args.prompt` / `args.filePath` between a typeof check and the call
+      // can observe a different type (then `.match` / `path.resolve` throw
+      // into the abort log channel).
       const args = (output?.args ?? {}) as Record<string, unknown>;
+      const prompt = args.prompt;
+      const rawFilePath = args.filePath;
+      const rawPath = args.path;
+      const filePath =
+        typeof rawFilePath === "string" ? rawFilePath : typeof rawPath === "string" ? rawPath : undefined;
 
       // beforeDispatch-equivalent (Slice 5, dual-mode): Assignment
       // validation on subagent dispatch. OpenCode's `task` tool carries the
@@ -520,14 +539,14 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       // on this host (`@opencode-ai/plugin` 1.4.8 — no refusal channel), so a
       // hard gate degrades to the explicit refusal-channel log below. The
       // role binding key is `subagent` (OpenCode) / `subagent_type` (Cursor).
-      if (input.tool === "task" && typeof args.prompt === "string") {
+      if (input.tool === "task" && typeof prompt === "string") {
         const subagentType =
           typeof args.subagent === "string"
             ? args.subagent
             : typeof args.subagent_type === "string"
               ? args.subagent_type
               : "";
-        const gate = validateDispatchAssignment(args.prompt, { subagentType });
+        const gate = validateDispatchAssignment(prompt, { subagentType });
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",
@@ -541,13 +560,14 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       // hard mode (repo compass `enforcement: hard`) logs error-level lines
       // + a `hardBlocked` result. Never modifies args and never throws in
       // either mode. Structured file-write tools (`write`/`edit`) carry the
-      // target path in `args.filePath`; bash-heredoc writes are out of
-      // scope. Tool implementations may call `validateStatusWrite` directly.
-      if (typeof args.filePath !== "string") return;
+      // target path in `args.filePath` (fallback `args.path`); bash-heredoc
+      // writes are out of scope. Tool implementations may call
+      // `validateStatusWrite` directly.
+      if (typeof filePath !== "string") return;
 
       if (input.tool === "write") {
-        // Validate the document about to be written when it parses as JSON;
-        // otherwise fall back to the current on-disk state.
+        // Validate the document about to be written when it is already an
+        // object or parses as JSON; otherwise fall back to on-disk state.
         const rawContent = args.content;
         let doc: unknown;
         if (typeof rawContent === "string") {
@@ -556,8 +576,10 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
           } catch {
             doc = undefined;
           }
+        } else if (rawContent !== null && typeof rawContent === "object") {
+          doc = rawContent;
         }
-        const gate = validateStatusWrite(args.filePath, { doc });
+        const gate = validateStatusWrite(filePath, { doc });
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",
@@ -570,7 +592,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
         // invalid is caught by the subsequent write, and editing an already
         // invalid file re-warns about the state being replaced. Computing the
         // patched doc for `edit` is a later-slice improvement.
-        const gate = validateStatusWrite(args.filePath);
+        const gate = validateStatusWrite(filePath);
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",
