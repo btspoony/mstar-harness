@@ -93,13 +93,19 @@ const PLAN_TWO_BLOCKS = `# Two status blocks
 `;
 
 /** Secret-laden text covering each redaction pattern. */
-const SECRETS_FIXTURE = `const awsKey = "${ + }";
+const AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
+const SLACK_TOKEN = "xoxb-" + "123456789012-1234567890123-abcdefghijklmnopqrstuvwx";
+const JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0" + "." + "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+const OPENAI_KEY = "sk-proj-" + "0123456789abcdef0123456789abcdef";
+const API_KEY = "0123456789abcdef" + "0123456789abcdef";
+
+const SECRETS_FIXTURE = `const awsKey = "${AWS_KEY}";
 const ghToken = "gho_123456789012345678901234567890123456";
-const slackToken = "${ + }";
-const jwt = "${ +  +  +  + }";
-const openAiKey = "${ + }";
+const slackToken = "${SLACK_TOKEN}";
+const jwt = "${JWT_TOKEN}";
+const openAiKey = "${OPENAI_KEY}";
 const password = "hunter2hunter2hunter2";
-const apiKey = "0123456789abcdef0123456789abcdef";
+const apiKey = "${API_KEY}";
 const pem = "-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEA...\\n-----END RSA PRIVATE KEY-----\\n";
 `;
 
@@ -194,7 +200,7 @@ describe("redactSecrets", () => {
     // Every finding carries a 1-based line number.
     expect(result.findings.every((f) => f.line >= 1)).toBe(true);
     // The redacted text never contains the raw secrets.
-    expect(result.text).not.toContain("${ + }");
+    expect(result.text).not.toContain(AWS_KEY);
     expect(result.text).not.toContain("gho_123456789012345678901234567890123456");
     expect(result.text).not.toContain("hunter2hunter2hunter2");
     expect(result.text).not.toContain("BEGIN RSA PRIVATE KEY");
