@@ -59,21 +59,25 @@ function parseFlowArray(raw: string, filePath: string): string[] {
       `nested flow-style array in ${filePath}: ${JSON.stringify(raw)} — only flat scalar items are supported (e.g. [a, b])`,
     );
   }
-  // Quote-aware scan BEFORE the naive split: a comma inside double quotes
-  // must stay part of its item, so `["a, b", "c"]` cannot be split
-  // unambiguously and is rejected here (a post-split `item.includes(",")`
-  // check would be dead — split(",") items can never contain a comma).
-  let inQuotes = false;
+  // Quote-aware scan BEFORE the naive split: a comma inside a quoted item
+  // (single OR double quotes) must stay part of its item, so `["a, b"]` /
+  // `['a, b']` cannot be split unambiguously and are rejected here (a
+  // post-split `item.includes(",")` check would be dead — split(",") items
+  // can never contain a comma). A different quote char inside a quoted item
+  // is a literal character (YAML parity), not a toggle.
+  let quote: string | null = null;
   for (const ch of inner) {
-    if (ch === '"') inQuotes = !inQuotes;
-    else if (ch === "," && inQuotes) {
+    if (ch === '"' || ch === "'") {
+      if (quote === null) quote = ch;
+      else if (quote === ch) quote = null;
+    } else if (ch === "," && quote !== null) {
       throw new Error(
         `ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} — quoted item containing comma cannot be split unambiguously (flat scalar items only)`,
       );
     }
   }
-  if (inQuotes) {
-    throw new Error(`unterminated double quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
+  if (quote !== null) {
+    throw new Error(`unterminated ${quote} quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
   }
   const items: string[] = [];
   for (const part of inner.split(",")) {
