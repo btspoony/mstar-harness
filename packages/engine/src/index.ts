@@ -5,8 +5,10 @@
  * OpenCode plugin consume it in-process. `core` is the shared type/version
  * base, `path` implements harness path resolution + scaffold + gitignore
  * checks, `status` implements the status.json schema, residual lifecycle,
- * findings-cleanup gate and the tech-debt rollup port, and `lease` implements
- * the execution/merge lease state machines + same-host status write lock.
+ * findings-cleanup gate and the tech-debt rollup port, `lease` implements
+ * the execution/merge lease state machines + same-host status write lock,
+ * and `dispatch` implements the Assignment field contract, default-branch
+ * gate, QC seat mapping and tri-identity/anti-recursion prechecks.
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
@@ -60,6 +62,20 @@ export {
   verifyPlanExecutionLease,
   withStatusWriteLock,
 } from "./lease.js";
+export type {
+  AssignmentFields,
+  DefaultBranchOptions,
+  ExecutionModeToNOptions,
+  ExecutionModeToNResult,
+  ValidateAssignmentFieldsOptions,
+} from "./dispatch.js";
+export {
+  antiRecursionPrecheck,
+  assertDefaultBranchProtected,
+  assertTriIdentity,
+  executionModeToN,
+  validateAssignmentFields,
+} from "./dispatch.js";
 export type {
   ImplementerSessionLedger,
   ReviewPackageOptions,
