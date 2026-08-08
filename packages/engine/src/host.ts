@@ -73,9 +73,12 @@ export type ToolSignal =
  * | `/plan`, `/goal`; Goal tools; `functions.*` namespaces; `tool_search` | codex |
  *
  * Order matters: cursor → opencode → omp → dsh → kimi → zcode → codex — the
- * sharpest Task-based split is `subagent_type` (Cursor) vs `subagent`
+ * sharpest Task-based split is `subagent_type` (Cursor) vs `task_subagent`
  * (OpenCode) vs `agent`/`tasks[]` (omp); dsh's `subagent` tool (roadmap §4
  * D5) collides with no other row, so it sits with the agent-tool hosts.
+ * (`mstar-host` skill prose still says colloquial `subagent` for OpenCode —
+ * disambiguate it to `task_subagent` in the same upstream PR that carries
+ * this row, together with the CLI `HOST_SIGNALS` list.)
  * Still ambiguous → `"ambiguous"` (prompt judgment stays in the skill).
  */
 export function detectHost(signals: readonly ToolSignal[]): DetectResult {
