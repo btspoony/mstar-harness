@@ -12,16 +12,24 @@
  *   `.plans/`|`plans/`); repos with a non-probed harness root (e.g. `.harness/`)
  *   MUST set `MSTAR_HARNESS_DIR` in the OpenCode server env — see package README
  *   "Status write lint (hook coverage)" (qc2 F-006).
- * - Non-blocking `beforeDispatch` presence lint (roadmap §8.5, v1): on `task`-tool
- *   executions (subagent dispatch), parses the prompt for the three core
- *   Assignment header fields (`Execute as` / `Delegation` / `Task category`) and
- *   emits `warn` lines for missing ones. Never blocks. Field-presence only via
- *   `engine/core` types — full Assignment validation (Working-branch forms,
- *   N→seat mapping, tri identity) is a later slice via
- *   `dispatch.validateAssignmentFields`.
+ * - Non-blocking `beforeDispatch` dispatch lint (roadmap §8.5, v1): on
+ *   `task`-tool executions (subagent dispatch), validates the Assignment
+ *   header — field presence (`Execute as` / `Delegation` / `Task category`,
+ *   backward-compat `assignment.presence.*` codes), full field validation
+ *   from the engine (`dispatch.validateAssignmentFields`: exactly-one
+ *   Working-branch form, create-form `<base>`, Branch policy reason) and the
+ *   default-branch gate (`dispatch.assertDefaultBranchProtected` with the
+ *   CLI ea010f1 direct-on-exception wiring). Emits `warn` lines, never
+ *   blocks (v1 hard constraint; hard gates are Slice 5 behind
+ *   `Enforcement: hard`).
  */
 import type { Plugin } from "@opencode-ai/plugin";
-import { resolveHarnessDir, validateStatus } from "@mstar-harness/engine";
+import {
+  assertDefaultBranchProtected,
+  resolveHarnessDir,
+  validateAssignmentFields,
+  validateStatus,
+} from "@mstar-harness/engine";
 import type { GateResult, Severity, StatusDoc, ValidationResult } from "@mstar-harness/engine";
 import fs from "node:fs";
 import os from "node:os";
@@ -349,16 +357,88 @@ export function validateAssignmentPresence(assignmentText: string): GateResult {
 }
 
 /**
+ * True when the text looks like an Assignment: carries the `## Assignment`
+ * heading or at least one core field line (`Execute as` / `Delegation` /
+ * `Task category`). Non-Assignment prompts (plain task instructions) stay
+ * silent — no false-positive warnings.
+ */
+function isAssignmentShaped(assignmentText: string): boolean {
+  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null;
+}
+
+/**
+ * IO-only branch resolution for the default-branch gate (roadmap §8.5 —
+ * the plugin keeps the Assignment parse, no git/file probes):
+ * `Working branch: <existing>` → the branch; `Working branch: create <new>
+ * from <base>` → the new branch being created; `Branch policy: direct on
+ * <branch> — <reason>` → the exception branch. Undefined when the text
+ * carries no usable branch form.
+ */
+function parseAssignmentBranch(assignmentText: string): string | undefined {
+  for (const line of assignmentText.split(/\r?\n/)) {
+    const match =
+      line.match(/^\*\*\s*Working branch\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^Working branch\s*:\s*(.*)$/);
+    if (!match) continue;
+    const value = match[1]!.trim();
+    if (value === "") continue;
+    // Case-insensitive create-form token match, same as the engine: the
+    // created branch is the gate target; missing `<base>` is the engine's
+    // `branch-missing-base` violation, not a gate input.
+    const create = value.match(/^create\s+(\S+)(?:\s+from\s+(\S+))?$/i);
+    if (create) return create[1]!;
+    return value.split(/\s+/)[0]!;
+  }
+  for (const line of assignmentText.split(/\r?\n/)) {
+    const match =
+      line.match(/^\*\*\s*Branch policy\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^Branch policy\s*:\s*(.*)$/);
+    if (!match) continue;
+    const direct = match[1]!.trim().match(/^direct\s+on\s+(\S+)/i);
+    if (direct) return direct[1]!;
+  }
+  return undefined;
+}
+
+/**
+ * Parse the Assignment's `Branch policy: direct on <branch> — <reason>`
+ * form. Returns the exception branch only for the well-formed direct-on
+ * form (branch + reason, same separator set as the engine's
+ * `validateAssignmentFields`); undefined when absent or malformed — the
+ * default-branch gate recognizes explicit direct-on exceptions only.
+ * Mirrors the CLI helper (`packages/cli` fix ea010f1) so the plugin's
+ * exception wiring stays byte-consistent with `mstar dispatch validate`.
+ */
+function parseBranchPolicyDirectOnBranch(assignmentText: string): string | undefined {
+  for (const line of assignmentText.split(/\r?\n/)) {
+    const match =
+      line.match(/^\*\*\s*Branch policy\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^Branch policy\s*:\s*(.*)$/);
+    if (match) {
+      const form = match[1]!.trim().match(/^direct\s+on\s+(\S+)(?:\s*(?:[—–]|--|-)\s*(.+))?$/);
+      if (form && (form[2] ?? "").trim() !== "") return form[1]!.trim();
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Non-blocking dispatch-side lint (roadmap §8.5 `beforeDispatch`, v1).
  *
- * Runs `validateAssignmentPresence` on a subagent-prompt / Assignment text
- * and logs one `warn` line per missing core field through the
- * `[mstar-harness]` channel. NEVER throws and NEVER blocks (v1 hard
- * constraint) — unexpected errors degrade to a single `error` log and a
- * `null` return.
+ * Full Assignment validation, warn-only: (1) the Slice-2 presence lint
+ * (backward-compat `assignment.presence.*` codes for the three core
+ * fields), (2) `dispatch.validateAssignmentFields` from the engine
+ * (required fields, exactly-one Working-branch form, create-form `<base>`,
+ * Branch policy reason) and (3) the default-branch gate via
+ * `dispatch.assertDefaultBranchProtected` — the checked branch comes from
+ * the Assignment's own Working branch / Branch policy forms, else
+ * `$MSTAR_WORKING_BRANCH`; a well-formed `Branch policy: direct on
+ * <branch> — <reason>` exception is honored only when its branch is the
+ * one being checked (CLI ea010f1 wiring). One `warn` line per violation
+ * through the `[mstar-harness]` channel. NEVER throws and NEVER blocks
+ * (v1 hard constraint) — unexpected errors degrade to a single `error` log
+ * and a `null` return.
  *
- * Returns the engine gate result for Assignment-shaped text, an ok result
- * for text that is not an Assignment, and `null` only when the check aborted.
+ * Returns the gate result for Assignment-shaped text, an ok result for
+ * text that is not an Assignment, and `null` only when the check aborted.
  */
 export function validateDispatchAssignment(
   assignmentText: string,
@@ -366,20 +446,36 @@ export function validateDispatchAssignment(
 ): GateResult | null {
   const log = opts.log ?? defaultStatusLogger;
   try {
-    const result = validateAssignmentPresence(assignmentText);
+    // Shape guard: non-Assignment prompts stay silent (no false positives).
+    if (!isAssignmentShaped(assignmentText)) return { ok: true, violations: [] };
+
+    const violations: ValidationResult[] = [];
+    // (1) Backward-compat presence lint (Slice 2 codes).
+    violations.push(...validateAssignmentPresence(assignmentText).violations);
+    // (2) Engine full field validation (writable default — read-only
+    // assignments are not detectable from the prompt text alone).
+    violations.push(...validateAssignmentFields(assignmentText).violations);
+    // (3) Default-branch gate — IO-only branch resolution.
+    const branch = parseAssignmentBranch(assignmentText) ?? process.env.MSTAR_WORKING_BRANCH;
+    if (branch !== undefined && branch.trim() !== "") {
+      const directOnException = parseBranchPolicyDirectOnBranch(assignmentText) === branch.trim();
+      violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
+    }
+
+    const result: GateResult = { ok: violations.length === 0, violations };
     if (!result.ok) {
       for (const violation of result.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
         log(
           "warn",
-          `assignment presence: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
+          `assignment validation: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
         );
       }
     }
     return result;
   } catch (error) {
     // v1 hard constraint: never throw, never block.
-    log("error", `assignment presence check aborted: ${(error as Error).message}`);
+    log("error", `assignment validation aborted: ${(error as Error).message}`);
     return null;
   }
 }
@@ -429,13 +525,12 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
     "tool.execute.before": async (input, output) => {
       const args = (output?.args ?? {}) as Record<string, unknown>;
 
-      // beforeDispatch-equivalent (v1): non-blocking presence warn on
-      // subagent dispatch. OpenCode's `task` tool carries the subagent
-      // prompt — the harness Assignment markdown — in `args.prompt`; missing
-      // core fields (Execute as / Delegation / Task category) are logged as
-      // warnings. Never blocks, never modifies args (v1 hard constraint).
-      // Full Assignment validation lands in a later slice via
-      // `dispatch.validateAssignmentFields`.
+      // beforeDispatch-equivalent (v1): non-blocking Assignment validation
+      // warn on subagent dispatch. OpenCode's `task` tool carries the
+      // subagent prompt — the harness Assignment markdown — in `args.prompt`;
+      // missing core fields (Execute as / Delegation / Task category),
+      // branch-form violations and default-protected-branch work are logged
+      // as warnings. Never blocks, never modifies args (v1 hard constraint).
       if (input.tool === "task" && typeof args.prompt === "string") {
         validateDispatchAssignment(args.prompt);
         return;

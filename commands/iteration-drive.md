@@ -64,6 +64,14 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 �
 
 **Continuous execution applies**（上节）。Execute **`mstar-iteration` § Phase 2** exactly：§2.0 前置五道闸（含 branch metadata #4 + control-worktree/lease #5）→ §2.1 session todos → §2.2 read backlog（`status.json` + branch metadata）→ §2.3 integration branch + control worktree（record `metadata.control_worktree_path`；status/SDD via control path）→ §2.4 per-plan loop（**lease-gated parallel** across plan IDs unless `Plan parallelism: serial`；claim/resume `execution_lease`；feature worktree；**SDD** per-task 串行；QC full tri-review **N=3** + QA；serial merge via `integration_merge_lease`；cross-plan sync → compass）→ §2.5 dispatch-first → §2.6 push 纪律。全部 plan `Done` → **STOP**（Phase flow）→ 打印 `## Phase 3: iteration-close`；**不得**进入 Phase 4。
 
+**Optional — Assignment preflight**（`mstar-harness` bin 未安装时静默跳过；可选，不改变本命令核心流程）: 在每次 implement/QC/QA 派发前（**SDD** 下为最新 `{SDD_DIR}/task-N-brief.md` 或临时写盘的 Assignment），若本机装有 CLI，校验最新 Assignment：
+
+```bash
+command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate <latest-assignment-file>
+```
+
+exit 1 仅提示（Slice 3 可选 preflight，不阻断派发；Slice 5 `Enforcement: hard` 前不 fail-fast）。
+
 ## Phase 3: iteration-close
 
 当 **every** plan 为 `Done`：

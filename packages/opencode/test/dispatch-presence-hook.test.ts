@@ -1,6 +1,6 @@
 /**
- * OpenCode plugin — non-blocking `beforeDispatch` Assignment presence lint
- * (roadmap §8.5, v1).
+ * OpenCode plugin — non-blocking `beforeDispatch` Assignment validation lint
+ * (roadmap §8.5, v1; Slice 3 extension of the Slice 2 presence hook).
  *
  * Spec sources:
  * - `beforeDispatch` host hook + v1 non-blocking warn / never-block
@@ -8,9 +8,13 @@
  *   D2 (v1 = non-blocking lints; hard gates are v2 opt-in).
  * - Assignment core fields (`Execute as` / `Delegation` / `Task category`
  *   presence): roadmap §4.3 dispatch/gates layer + Slice 2 Global
- *   Constraint (field-presence ONLY via `engine/core` types; full
- *   Assignment validation lands in Slice 3 via
- *   `dispatch.validateAssignmentFields` — no `engine/dispatch` import).
+ *   Constraint; presence codes (`assignment.presence.*`) stay observable
+ *   for backward compat.
+ * - Full field validation (exactly-one Working-branch form, create-form
+ *   `<base>`, Branch policy reason) + default-branch gate: Slice 3 via
+ *   `dispatch.validateAssignmentFields` / `dispatch.assertDefaultBranchProtected`,
+ *   direct-on exception wiring per the CLI fix ea010f1
+ *   (`mstar dispatch validate`).
  *
  * The exported `validateAssignmentPresence` / `validateDispatchAssignment`
  * helpers are the hook module; the plugin wiring (`tool.execute.before` on
@@ -29,6 +33,7 @@ const completeAssignment = `## Assignment
 **Execute as**: fullstack-dev
 **Delegation**: forbidden
 **Task category**: logic
+**Working branch**: feature/example
 
 Do the thing, evidence-first.
 `;
@@ -62,6 +67,65 @@ const missingAllFields = `## Assignment
 
 **Working branch**: feature/example
 **Plan Path**: .harness/plans/20260808-slice2-sdd-iteration.md
+`;
+
+/** Core fields but no branch form — engine `branch-missing` (writable default). */
+const noBranchForm = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+
+Do the thing.
+`;
+
+/** Existing-branch form on a default protected branch without an exception. */
+const workingBranchMain = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+
+Ship directly on main.
+`;
+
+/** `Branch policy: direct on main — <reason>` — the exception matches the gate branch. */
+const directOnMainPolicy = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: allowed (hotfix)
+**Task category**: logic
+**Branch policy**: direct on main — urgent user-authorized hotfix
+
+Ship the hotfix.
+`;
+
+/**
+ * The exception names a DIFFERENT branch than the one being checked —
+ * the direct-on exception must not be honored for `main` (CLI ea010f1
+ * semantics: `parseBranchPolicyDirectOnBranch(text) === checked branch`).
+ */
+const exceptionBranchMismatch = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+**Branch policy**: direct on main-tmp — other work
+
+Conflicting branch forms.
+`;
+
+/** Create-form Working branch without `<base>` — engine `branch-missing-base`. */
+const createWithoutBase = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: create feature/x
+
+Create the branch.
 `;
 
 /** Not an assignment at all — must stay silent (no false positives). */
@@ -154,33 +218,54 @@ describe("validateAssignmentPresence (exported hook module)", () => {
   });
 });
 
-describe("validateDispatchAssignment (warn-only wrapper)", () => {
-  test("complete assignment → no warnings, ok result", () => {
+describe("validateDispatchAssignment (warn-only wrapper, full validation)", () => {
+  test("complete assignment (core fields + branch form) → no warnings, ok result", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(completeAssignment, { log });
     expect(result!.ok).toBe(true);
+    expect(result.violations).toEqual([]);
     expect(warnings).toEqual([]);
   });
 
-  test("missing Execute as → one warn containing code and fix", () => {
+  test("missing Execute as → presence code + engine field code + branch-missing warns", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(missingExecuteAs, { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("assignment.presence.missing-execute-as");
-    expect(warnings[0]).toContain("[high]");
-    expect(warnings[0]).toContain("(fix:");
+    expect(warnings).toHaveLength(3);
+    // Backward-compat presence code stays observable.
+    expect(warnings.some((w) => w.includes("assignment.presence.missing-execute-as"))).toBe(true);
+    // Engine full-validation codes now also fire.
+    expect(warnings.some((w) => w.includes("assignment.field.missing-execute-as"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
+    expect(warnings.some((w) => w.includes("[high]"))).toBe(true);
+    expect(warnings.some((w) => w.includes("(fix:"))).toBe(true);
   });
 
-  test("missing all three → 3 warnings", () => {
+  test("missing Delegation / Task category → presence + field codes warn", () => {
+    for (const [fixture, presenceCode, fieldCode] of [
+      [missingDelegation, "assignment.presence.missing-delegation", "assignment.field.missing-delegation"],
+      [missingTaskCategory, "assignment.presence.missing-task-category", "assignment.field.missing-task-category"],
+    ] as const) {
+      const { warnings, log } = captureWarnings();
+      const result = validateDispatchAssignment(fixture, { log });
+      expect(result!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes(presenceCode))).toBe(true);
+      expect(warnings.some((w) => w.includes(fieldCode))).toBe(true);
+    }
+  });
+
+  test("missing all three → 3 presence + 3 engine field warnings", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(missingAllFields, { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(3);
+    expect(warnings).toHaveLength(6);
     for (const code of [
       "assignment.presence.missing-execute-as",
       "assignment.presence.missing-delegation",
       "assignment.presence.missing-task-category",
+      "assignment.field.missing-execute-as",
+      "assignment.field.missing-delegation",
+      "assignment.field.missing-task-category",
     ]) {
       expect(warnings.some((w) => w.includes(code))).toBe(true);
     }
@@ -190,6 +275,7 @@ describe("validateDispatchAssignment (warn-only wrapper)", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(garbageText, { log });
     expect(result!.ok).toBe(true);
+    expect(result!.violations).toEqual([]);
     expect(warnings).toEqual([]);
   });
 
@@ -203,13 +289,99 @@ describe("validateDispatchAssignment (warn-only wrapper)", () => {
 
   test("field fragment without heading is linted, not silent", () => {
     // A bare `Execute as:` line is Assignment-shaped — the other two fields
-    // still warn (presence lint), unlike true garbage.
+    // still warn (presence + engine), unlike true garbage.
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment("Execute as: [unbalanced", { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(2);
+    expect(warnings).toHaveLength(5);
     expect(warnings.some((w) => w.includes("assignment.presence.missing-delegation"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.presence.missing-task-category"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.field.missing-delegation"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
+  });
+});
+
+describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
+  test("branch-missing: core fields without any branch form warn", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(noBranchForm, { log });
+    expect(result!.ok).toBe(false);
+    expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
+    expect(warnings.some((w) => w.includes("exactly one"))).toBe(true);
+  });
+
+  test("create-without-base: create form without <base> warns", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(createWithoutBase, { log });
+    expect(result!.ok).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("assignment.field.branch-missing-base");
+    // The created branch (feature/x) itself is not default-protected — no gate warn.
+    expect(warnings[0]).not.toContain("dispatch.default-branch.protected");
+  });
+
+  test("directOnException match: Branch policy direct on main — reason → no gate warn", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(directOnMainPolicy, { log });
+    expect(result!.ok).toBe(true);
+    expect(result!.violations).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  test("directOnException mismatch: exception on another branch does not unprotect main", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(exceptionBranchMismatch, { log });
+    expect(result!.ok).toBe(false);
+    // Branch-policy branch differs from the checked Working branch → protected.
+    expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(true);
+    // Both branch forms present → branch-multiple too.
+    expect(warnings.some((w) => w.includes("assignment.field.branch-multiple"))).toBe(true);
+  });
+
+  test("Working branch: main without an exception → protected warn", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(workingBranchMain, { log });
+    expect(result!.ok).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("dispatch.default-branch.protected");
+    expect(warnings[0]).toContain('"main"');
+    expect(warnings[0]).toContain("(fix:");
+  });
+
+  test("Working branch on a feature branch → no protected warn", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(completeAssignment, { log });
+    expect(result!.ok).toBe(true);
+    expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(false);
+  });
+
+  test("env fallback: MSTAR_WORKING_BRANCH=main supplies the gate branch", () => {
+    const previous = process.env.MSTAR_WORKING_BRANCH;
+    try {
+      process.env.MSTAR_WORKING_BRANCH = "main";
+      const { warnings, log } = captureWarnings();
+      const result = validateDispatchAssignment(noBranchForm, { log });
+      expect(result!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(true);
+      expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_WORKING_BRANCH;
+      else process.env.MSTAR_WORKING_BRANCH = previous;
+    }
+  });
+
+  test("directOnException match via env: policy on main + env main → no protected warn", () => {
+    const previous = process.env.MSTAR_WORKING_BRANCH;
+    try {
+      process.env.MSTAR_WORKING_BRANCH = "main";
+      const { warnings, log } = captureWarnings();
+      const result = validateDispatchAssignment(directOnMainPolicy, { log });
+      expect(result!.ok).toBe(true);
+      expect(warnings).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_WORKING_BRANCH;
+      else process.env.MSTAR_WORKING_BRANCH = previous;
+    }
   });
 });
 
@@ -275,6 +447,38 @@ describe("plugin wiring (tool.execute.before)", () => {
       );
     } finally {
       warnings = restore();
+    }
+    expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
+  });
+
+  test("task tool with default-protected Working branch warns; direct-on exception stays silent", async () => {
+    const plugin = await MorningStarHarnessPlugin();
+    const beforeExecute = plugin["tool.execute.before"];
+
+    const restore = captureConsoleWarn();
+    let warnings: string[];
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c1" },
+        { args: { subagent_type: "fullstack-dev", prompt: workingBranchMain } },
+      );
+    } finally {
+      warnings = restore();
+    }
+    expect(
+      warnings.some(
+        (w) => w.includes("[mstar-harness]") && w.includes("dispatch.default-branch.protected"),
+      ),
+    ).toBe(true);
+
+    const restore2 = captureConsoleWarn();
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c2" },
+        { args: { subagent_type: "fullstack-dev", prompt: directOnMainPolicy } },
+      );
+    } finally {
+      warnings = restore2();
     }
     expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
   });
