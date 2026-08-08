@@ -951,7 +951,6 @@ function leaseGateViolations(
  * roles — the listener feeds it to the lease gate).
  */
 function dispatchGateCore(
-  harnessDir: string | null,
   config: Config,
   prompt: string,
 ): { violations: ValidationResult[]; writable: boolean | undefined } {
@@ -1203,7 +1202,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * @param exec - the in-flight delegation tool call (listener path only).
    */
   dispatchGate(prompt: string, exec?: ToolExecution): GateResult {
-    const { violations, writable } = dispatchGateCore(this.harnessDir, this.config, prompt)
+    const { violations, writable } = dispatchGateCore(this.config, prompt)
     if (exec !== undefined) {
       violations.push(...leaseGateViolations(this.harnessDir, exec, writable, prompt))
     }

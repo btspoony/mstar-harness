@@ -18,10 +18,15 @@ export const inject = ['invariants']
  * No runtime invariant: this package registers no package-owned mutable state
  * the invariant service could assert over an event/data relation. Its
  * contributions are lifecycle registrations — the fs intent waterfall
- * listeners, the `tools/pre-execute` listener, and the `ctx.dshMstar` service
- * — whose presence and removal are asserted by the real-composition suite and
- * the HMR-safety disposal test, not by an invariant companion. A
- * config↔listener presence check would duplicate those tests.
+ * listeners (`fs/write-intent` + `fs/edit-intent` status gate, `fs/write-intent`
+ * skill-lint gate), the `tools/pre-execute` dispatch listener, the advisory
+ * `agent/pre-step` catalog listener, the `ctx.dshMstar` and
+ * `ctx.dshHostAdapter` services, and the child skill-local mount (skills
+ * provider registration) — whose presence and removal are asserted by the
+ * real-composition suite and the HMR-safety disposal tests (hmr-safety.spec.ts
+ * aggregate, catalog.spec.ts teardown, skill-lint.spec.ts HMR, skills-mount
+ * disposal), not by an invariant companion. A config↔listener presence check
+ * would duplicate those tests.
  */
 const install: InvariantInstaller = () => {}
 

@@ -37,7 +37,7 @@ import { Context } from 'cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import * as plugin from '../src/index.ts'
 import { lintSkillDoc, lintSkillWrite, SkillLintVetoError, type SkillLintAdvisory } from '../src/index.ts'
-import { bootApp, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -246,11 +246,14 @@ describe('skill lint gate — fs/write-intent listener (content-blind slot)', ()
     const intent = await booted.ctx.waterfall('fs/write-intent', skillTarget(root, 'broken-skill'), {}, () => undefined)
 
     // Repair escape: the on-disk document is ALREADY invalid, so this write
-    // may BE the repair — hard mode allows it with a loud advisory.
+    // may BE the repair — hard mode allows it with a loud advisory. The
+    // advisory carries the ENFORCED verdict (status-gate shape): `hardBlocked`
+    // true — the write would have been blocked, and is allowed as a repair.
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.hard).toBe(true)
     expect(advisories[0]!.repair).toBe(true)
+    expect(advisories[0]!.result.hardBlocked).toBe(true)
     expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('lint.frontmatter.description.missing')
   })
 
@@ -264,6 +267,26 @@ describe('skill lint gate — fs/write-intent listener (content-blind slot)', ()
 
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(0)
+  })
+
+  it('hard via compass frontmatter (no Config override) → repair-escape advisory with hardBlocked', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-skilllint-'))
+    booted = await bootApp({ skillRoots: [root] })
+    await seedHarness(booted.harnessDir, {
+      'iterations/v2.1.0/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
+    })
+    await seedSkill(root, 'broken-skill', NO_DESCRIPTION_SKILL)
+    const advisories = captureAdvisories(booted.ctx)
+
+    const intent = await booted.ctx.waterfall('fs/write-intent', skillTarget(root, 'broken-skill'), {}, () => undefined)
+
+    // `resolveSkillHard` mirrors `resolveHard`: the iteration compass hardens
+    // the skill lint gate exactly like the status gate (no Config override).
+    expect(intent).toBeUndefined()
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.hard).toBe(true)
+    expect(advisories[0]!.repair).toBe(true)
+    expect(advisories[0]!.result.hardBlocked).toBe(true)
   })
 
   it('path-scoping: SKILL.md outside the configured roots is untouched', async () => {
@@ -334,6 +357,40 @@ describe('skill lint gate — fs/write-intent listener (content-blind slot)', ()
     // later decider still owns the intent decision (fs-policy CAS parity).
     expect(intent).toEqual({ kind: 'createIfAbsent' })
     expect(secondRan).toBe(true)
+  })
+
+  it('unreadable on-disk document → degrade to allow with a degraded advisory (read-failure envelope)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-skilllint-'))
+    booted = await bootApp({ skillRoots: [root] })
+    // A DIRECTORY named SKILL.md passes existsSync but fails readFileSync
+    // (EISDIR) — the single-read contract degrades to allow with a loud
+    // advisory (status-gate envelope parity), never an untyped throw.
+    await mkdir(join(root, 'weird-skill', 'SKILL.md'), { recursive: true })
+    const advisories = captureAdvisories(booted.ctx)
+
+    const intent = await booted.ctx.waterfall('fs/write-intent', skillTarget(root, 'weird-skill'), {}, () => undefined)
+
+    expect(intent).toBeUndefined()
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.degraded).toBe(true)
+    expect(advisories[0]!.hard).toBe(false)
+    expect(advisories[0]!.repair).toBeUndefined()
+    expect(advisories[0]!.result.ok).toBe(true)
+    expect(advisories[0]!.canonical).toBe('$DSH_BUNDLED_SKILL_DIR/weird-skill/SKILL.md')
+  })
+
+  it('a throwing advisory consumer is contained by the envelope (emit failure cannot block the write)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-skilllint-'))
+    booted = await bootApp({ skillRoots: [root] })
+    await seedSkill(root, 'broken-skill', NO_DESCRIPTION_SKILL)
+    booted.ctx.on('mstar/skill-lint', () => { throw new Error('consumer boom') })
+
+    const intent = await booted.ctx.waterfall('fs/write-intent', skillTarget(root, 'broken-skill'), {}, () => undefined)
+
+    // The warn advisory emit fails → outer envelope degrades to allow (error
+    // log + degraded advisory attempt) → the degraded emit fails too (same
+    // consumer) → emit-error containment logs. Never a throw from the gate.
+    expect(intent).toBeUndefined()
   })
 
   it('HMR disposal: fiber.dispose unwinds the listener; a reloaded fiber restores it', async () => {

@@ -20,14 +20,16 @@
  * status/dispatch/lease suites.
  */
 import { describe, expect, it } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from 'cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
-import type { StatusGateAdvisory } from '../src/index.ts'
+import type { SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { INVALID_STATUS, seedHarness } from './harness.ts'
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
@@ -57,6 +59,40 @@ const subagentExec = (prompt: string): ToolExecution => ({
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
+
+/** Invalid skill document (missing description — the frontmatter trigger contract). */
+const INVALID_SKILL = `---
+name: broken-skill
+---
+
+# Body
+`
+
+/** FsTarget for `<root>/<name>/SKILL.md` (local-backend shape). */
+const skillTarget = (root: string, name: string): FsTarget => ({
+  targetKey: join(root, name, 'SKILL.md') as FsTarget['targetKey'],
+  displayPath: join(root, name, 'SKILL.md'),
+})
+
+/** One pre-existing user message the agent loop pulled from the inbox. */
+const inboxMessage = (): UserMessage => createUserMessage({ content: [{ type: 'text', text: 'probe' }] })
+
+/** A `agent/pre-step` payload the agent loop would dispatch. */
+const stepPayload = (messages: UserMessage[]): { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal } => ({
+  agent: {},
+  messages,
+  turn: 1,
+  step: 1,
+  signal: new AbortController().signal,
+})
+
+/** The loop's default pre-step decision: enter the step with the inbox messages. */
+const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
+  () => Promise.resolve<PreStepDecision>({ kind: 'enter', messages })
+
+/** The last message of an enter decision (the appended catalog when present). */
+const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>
+  decision.kind === 'enter' ? decision.messages.at(-1) : undefined
 
 describe('HMR safety — fiber.dispose removes every gate contribution', () => {
   it('disposes the gates + service on fiber.dispose and a reloaded fiber restores them', async () => {
@@ -107,6 +143,45 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
       expect(deniedAgain).toMatchObject({ kind: 'deny' })
       await reloaded.dispose()
       expect(ctx.dshMstar).toBeUndefined()
+    } finally {
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('disposes the skill-lint and catalog listeners on fiber.dispose; a reloaded fiber restores them', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
+    const harnessDir = join(root, 'harness')
+    const skillRoot = join(root, 'skills')
+    const ctx = new Context()
+    await mkdir(join(skillRoot, 'broken-skill'), { recursive: true })
+    await writeFile(join(skillRoot, 'broken-skill', 'SKILL.md'), INVALID_SKILL)
+    const skillAdvisories: SkillLintAdvisory[] = []
+    ctx.on('mstar/skill-lint', (payload) => { skillAdvisories.push(payload) })
+    const inbox = [inboxMessage()]
+    try {
+      // Mount 1 — the skill-lint advisory and the catalog append are live.
+      const fiber = await ctx.plugin(plugin, { harnessDir, skillRoots: [skillRoot] })
+      await ctx.waterfall('fs/write-intent', skillTarget(skillRoot, 'broken-skill'), {}, () => undefined)
+      expect(skillAdvisories).toHaveLength(1)
+      const live = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+      expect(lastMessage(live)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+
+      // Dispose — both contributions are unwound: no advisory, no catalog row.
+      await fiber.dispose()
+      const before = skillAdvisories.length
+      await ctx.waterfall('fs/write-intent', skillTarget(skillRoot, 'broken-skill'), {}, () => undefined)
+      expect(skillAdvisories.length).toBe(before)
+      const after = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+      expect(after).toEqual({ kind: 'enter', messages: inbox })
+
+      // HMR reload — a fresh fiber restores both.
+      const reloaded = await ctx.plugin(plugin, { harnessDir, skillRoots: [skillRoot] })
+      await ctx.waterfall('fs/write-intent', skillTarget(skillRoot, 'broken-skill'), {}, () => undefined)
+      expect(skillAdvisories.length).toBe(before + 1)
+      const again = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+      expect(lastMessage(again)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+      await reloaded.dispose()
     } finally {
       await ctx.fiber.dispose().catch(() => {})
       await rm(root, { recursive: true, force: true })

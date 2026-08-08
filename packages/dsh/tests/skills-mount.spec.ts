@@ -17,12 +17,15 @@
  * `ctx.skills` (the plan acceptance).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Context } from 'cordis'
 import { lintSkillFrontmatter, resolveSkillRoot } from '@mstar-harness/engine'
+import SkillService from '@deepseek-ai/dsh-skill'
 import { Config as SkillLocalSchema } from '@deepseek-ai/dsh-skill-local'
+import * as plugin from '../src/index.ts'
 import { DshHostAdapter, skillLocalConfig } from '../src/index.ts'
 import { bootApp, type BootResult } from './harness.ts'
 
@@ -178,6 +181,20 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(await booted.ctx.skills.list()).toEqual([])
   })
 
+  it('a missing skill root degrades to an empty catalog (ENOENT resilience)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-skills-'))
+    booted = await bootApp({ skillRoots: [join(root, 'does-not-exist')] })
+    expect(await booted.ctx.skills.list()).toEqual([])
+  })
+
+  it('a vanished skill file loads as undefined (get ENOENT path)', async () => {
+    const root = await seedSkillRoot()
+    booted = await bootApp({ skillRoots: [root] })
+    expect(await booted.ctx.skills.get('temp-one')).toBeDefined()
+    await rm(join(root, 'temp-one', 'SKILL.md'))
+    expect(await booted.ctx.skills.get('temp-one')).toBeUndefined()
+  })
+
   it('unregisters the provider on fiber disposal (HMR safety)', async () => {
     booted = await bootApp({ skillRoots: [MIRROR_SKILLS] })
     expect((await booted.ctx.skills.list()).length).toBeGreaterThan(0)
@@ -188,6 +205,49 @@ describe('skills mount via the plugin (real composition)', () => {
     const fresh = await bootApp({ skillRoots: [MIRROR_SKILLS] })
     expect((await fresh.ctx.skills.list()).length).toBeGreaterThan(0)
     await fresh.dispose()
+  })
+
+  it('duplicate provider names are rejected by the registry (contract)', async () => {
+    const ctx = new Context()
+    const registry = new SkillService(ctx)
+    const first = registry.registerProvider(() => ({
+      name: 'mstar',
+      list: async () => [],
+      get: async () => undefined,
+    }))
+    try {
+      expect(() => registry.registerProvider(() => ({
+        name: 'mstar',
+        list: async () => [],
+        get: async () => undefined,
+      }))).toThrow(/already registered/)
+    } finally {
+      first()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('observes same-context provider removal on fiber.dispose (skill mount HMR)', async () => {
+    // Same-context observation: the skills registry service (dev-time stub)
+    // stays alive while the plugin's child skill-local fiber — and with it
+    // the registered provider — is disposed and re-mounted.
+    const tempRoot = await seedSkillRoot()
+    const ctx = new Context()
+    new SkillService(ctx)
+    try {
+      const fiber = await ctx.plugin(plugin, { skillRoots: [tempRoot] })
+      expect((await ctx.skills.list()).map((skill) => skill.name)).toContain('temp-one')
+
+      await fiber.dispose()
+      expect(await ctx.skills.list()).toEqual([])
+
+      const reloaded = await ctx.plugin(plugin, { skillRoots: [tempRoot] })
+      expect((await ctx.skills.list()).map((skill) => skill.name)).toContain('temp-one')
+      await reloaded.dispose()
+      expect(await ctx.skills.list()).toEqual([])
+    } finally {
+      await ctx.fiber.dispose().catch(() => {})
+    }
   })
 })
 
