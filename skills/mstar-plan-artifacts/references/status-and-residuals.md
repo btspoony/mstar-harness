@@ -213,7 +213,7 @@ Legacy string `plans[].notes` is OK; new repos should use arrays with time + eve
 | `target_branch` | string | Final PR target after iteration-close; required for formal iterations |
 | `notes` | array | **Legacy** — prefer **`{HARNESS_DIR}/notes.json`** |
 | `residual_findings_history` | object | **Legacy** — prefer **`archived/residuals/<plan-id>.json`** |
-| `tech_debt_summary` | object | Optional rollup over open R#; maintain via script (below) |
+| `tech_debt_summary` | object | Optional rollup over open R#; maintain via engine rollup (below) |
 | `control_worktree_path` | absolute path string | Iteration Phase 2: canonical **repository root** (not `{HARNESS_DIR}`) checked out to active `spec_integration_branch`; coordination + serial merge cwd |
 | `integration_merge_lease` | object | While one integration merge is owned; **absent** = unclaimed. Writers **delete** the key on release — never write `null` or tombstone objects |
 
@@ -453,7 +453,7 @@ Archive file shape (append to `entries`):
 
 - Each archived entry needs **`archived_at`** (`YYYY-MM-DD`).
 - Closed records live in archive + durable plan summaries; raw review bundles are ephemeral and not part of the long-term open list.
-- After batch archive/close, **refresh `tech_debt_summary`** (script below).
+- After batch archive/close, **refresh `tech_debt_summary`** (engine rollup below).
 
 ### Short in-place close (transition only)
 
@@ -475,8 +475,7 @@ Prefer **`archived/residuals/`**; migrate and delete history key when possible.
 # Replace .mstar with your resolved {HARNESS_DIR}; legacy projects may use .agents.
 jq '.residual_findings["01-data-infrastructure"] // .metadata.residual_findings["01-data-infrastructure"]' .mstar/status.json
 jq '.entries[] | select(.id == "R1")' .mstar/archived/residuals/01-data-infrastructure.json
-# skill mstar-plan-artifacts → scripts/tech-debt-rollup.sh (not a consumer cwd path)
-bash <mstar-plan-artifacts>/scripts/tech-debt-rollup.sh .mstar/status.json
+# Engine rollup (read-only, no CLI form): import { techDebtRollup } from "@mstar-harness/engine" in a host hook
 ```
 
 (`//` right-hand side = legacy read path.)
@@ -506,21 +505,21 @@ Append-only log for merge closure, batch archive, `tech_debt_summary` refresh, e
 
 **Role:** Cross-plan aggregate over **open** R# in root **`residual_findings`** (and legacy read path if present). Does **not** replace per-entry SSOT.
 
-**Compute (canonical):** run the read-only script (do **not** hand-count):
+**Compute (canonical):** engine import (do **not** hand-count):
 
-```bash
-# Resolve from skill mstar-plan-artifacts → scripts/tech-debt-rollup.sh
-# Pass path to status.json if not .mstar/status.json
-bash <mstar-plan-artifacts>/scripts/tech-debt-rollup.sh .mstar/status.json
+```ts
+// Engine check (when available) — pass status.json path if not .mstar/status.json
+import { techDebtRollup } from "@mstar-harness/engine";
+const rollup = techDebtRollup(".mstar/status.json"); // { computed, stored, checks, overall }
 ```
 
 - Prints computed `total_open`, `by_severity`, `by_target`, `by_plan`.
 - Prints **PASS** / **DRIFT** vs stored `metadata.tech_debt_summary`.
-- Script **does not write** `status.json` — PM copies computed values into `metadata.tech_debt_summary` after DRIFT or milestone refresh.
+- The engine call **does not write** `status.json` — PM copies computed values into `metadata.tech_debt_summary` after DRIFT or milestone refresh.
 
 **When to refresh:** after QC waves, batch archive of resolved items, or release freeze. Optional `notes.json` entry: “refreshed tech_debt_summary”.
 
-**Recommended stored shape** (`cross_cutting` optional; script does not compute `cross_cutting` — maintain manually if used):
+**Recommended stored shape** (`cross_cutting` optional; engine does not compute `cross_cutting` — maintain manually if used):
 
 ```json
 {
@@ -549,11 +548,11 @@ bash <mstar-plan-artifacts>/scripts/tech-debt-rollup.sh .mstar/status.json
 
 ## Pre-merge: `status.json` should match reality
 
-Before merge/PR, **`@project-manager`** (or delegate) should verify: `plans[].status`, `metadata.gates`, root **`residual_findings`** (no accidental dual-write), **`tech_debt_summary`** (if used — run script), **`notes.json`** (if used), vs review/CI.
+Before merge/PR, **`@project-manager`** (or delegate) should verify: `plans[].status`, `metadata.gates`, root **`residual_findings`** (no accidental dual-write), **`tech_debt_summary`** (if used — run engine rollup), **`notes.json`** (if used), vs review/CI.
 
 **Common gaps:**
 
-- R# added/closed but **`tech_debt_summary` not refreshed** (script shows DRIFT).
+- R# added/closed but **`tech_debt_summary` not refreshed** (engine rollup shows DRIFT).
 - Finding only in **`plans[].notes`** or chat, not in **`residual_findings[<plan-id>]`**.
 - Major milestone with no **`notes.json`** entry when team uses program timeline.
 

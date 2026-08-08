@@ -1,7 +1,7 @@
 {
   "name": "@mstar-harness/opencode",
   "version": "1.8.9",
-  "description": "Morning Star harness OpenCode plugin (skills bootstrap and agent loading).",
+  "description": "Morning Star harness OpenCode plugin — skills bootstrap + engine-backed runtime hooks (status lint, dispatch validation, Enforcement: hard gates).",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,12 +23,14 @@
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
     "build": "bun run bundle-assets && rm -rf dist && bun build src/mstar.ts --target node --outfile dist/mstar.js",
+    "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "engines": {
     "bun": ">=1.2.17"
   },
   "dependencies": {
+    "@mstar-harness/engine": "1.8.9",
     "@opencode-ai/plugin": "1.4.8"
   },
   "publishConfig": {

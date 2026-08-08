@@ -75,7 +75,7 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Ki
 
 ## Release Process
 
-Releases are PR-driven and mostly automated. Every release ships one version across all 10 surfaces (root + 2 npm packages + 7 plugin manifests [6 host + portable Agent Plugins] + INSTALL.md marketplace example).
+Releases are PR-driven and mostly automated. Every release ships one version across all 11 version surfaces (root + 3 npm packages + 7 plugin manifests [6 host + portable Agent Plugins]); also bump the INSTALL.md marketplace example.
 
 ### 1. During development — add a changelog fragment
 
@@ -86,7 +86,7 @@ During development, **do not** hand-edit `CHANGELOG.md` / `CHANGELOG_CN.md` / `p
 ```markdown
 ---
 category: Harness        # optional; default per package
-packages: root           # optional; comma list of root | cli | opencode
+packages: root           # optional; comma list of root | cli | opencode | engine
 ---
 - English bullet.
 
@@ -103,7 +103,7 @@ Either:
 - **GitHub Actions**: Actions → *Release prep* → Run workflow (optionally pass an explicit `X.Y.Z`; empty = auto patch bump), **or**
 - **Local**: `bun run release:prepare -- 1.8.7` (or `-- --patch` / `-- --minor`), then open a PR titled `release v1.8.7`.
 
-`scripts/prepare-release.ts` reads `.changes/unreleased/*.md`, inserts a `## [<version>]` section into all 4 changelogs, bumps every surface, updates the root changelog registry tables, and moves consumed fragments to `.changes/archive/<version>/`. Validate with `bun run release:validate -- v1.8.7`.
+`scripts/prepare-release.ts` reads `.changes/unreleased/*.md`, inserts a `## [<version>]` section into all 5 changelogs, bumps every surface, updates the root changelog registry tables, and moves consumed fragments to `.changes/archive/<version>/`. Validate with `bun run release:validate -- v1.8.7`.
 
 ### 3. Merge the release PR — auto-tag + publish
 

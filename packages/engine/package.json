@@ -1,0 +1,41 @@
+{
+  "name": "@mstar-harness/engine",
+  "version": "1.8.9",
+  "description": "Morning Star Harness Workflow Engine — deterministic workflow enforcement library (path, status, lease, dispatch, sdd, iteration, lint gates).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/btspoony/mstar-harness.git",
+    "directory": "packages/engine"
+  },
+  "type": "module",
+  "main": "./dist/engine.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/engine.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/engine.js && bunx tsc",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "engines": {
+    "bun": ">=1.2.17"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "bun-types": "^1.2.17",
+    "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -70,6 +70,8 @@ description: Use when...
 Bad：`Explains how to write plans with steps, tests, commits, and review gates.`  
 Better：`Use when a non-trivial task has a spec or requirements and needs a written implementation plan before code changes.`
 
+> **Engine check (when available):** run `mstar skill lint <skill-dir>` (or `import { lintFrontmatter, lintFiveQuestion } from "@mstar-harness/engine"` in a host hook) to lint the frontmatter contract and the five-question body contract above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## 默认 Body 结构
 
 ```markdown
@@ -96,6 +98,8 @@ When a skill ships executables or assets under `scripts/` / `templates/` / `refe
 Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径，agent 常在应用仓库 cwd 下按字面搜索而找不到。先解析已加载 skill 根目录，再拼 `scripts/…` / `references/…`。
 
 在本 harness：解析方式见 **`mstar-host`** § Resolve loaded skill root（omp `skill://`、各宿主插件挂载等）。其它环境按当地 skill 安装约定解析。
+
+> **Engine check (when available):** import `resolveAssetPath` from `@mstar-harness/engine` in a host hook to resolve a skill-relative asset per the convention above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Progressive Disclosure
 

@@ -12,14 +12,14 @@
  *   2. Reads `.changes/unreleased/*.md` fragments and groups them by changelog + category.
  *   3. Inserts a new `## [<version>] - <date>` section into each changelog
  *      (under `## [Unreleased]`), auto-appending a Version-alignment block.
- *   4. Bumps all 10 version surfaces (including the portable Agent Plugins manifest) + the INSTALL.md ZCode marketplace example.
+ *   4. Bumps all 11 version surfaces (including the portable Agent Plugins manifest) + the INSTALL.md ZCode marketplace example.
  *   5. Bumps the version registry table cells in the root changelogs (head region only).
  *   6. Moves consumed fragments to `.changes/archive/<version>/`.
  *
  * Fragment format (`.changes/unreleased/<slug>.md`):
  *   ---
  *   category: Harness        # optional; default per package (Harness | Changed | ...)
- *   packages: root           # optional; comma list of root | cli | opencode
+ *   packages: root           # optional; comma list of root | cli | opencode | engine
  *   ---
  *   - English bullet.
  *   - Another English bullet.
@@ -54,6 +54,7 @@ const DEFAULT_CATEGORY: Record<string, string> = {
   root: "Harness",
   cli: "Changed",
   opencode: "Bundled harness skills (`harness-skills/` at publish)",
+  engine: "Changed",
 };
 
 function parseArgs(argv: string[]): { version?: string; bump: "patch" | "minor" } {
@@ -155,14 +156,14 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
       lines.push(
         "### 版本对齐",
         "",
-        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ ${version}**。`,
+        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、\`@mstar-harness/engine\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ ${version}**。`,
         "",
       );
     } else {
       lines.push(
         "### Version alignment",
         "",
-        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ ${version}**.`,
+        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, \`@mstar-harness/engine\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ ${version}**.`,
         "",
       );
     }
@@ -173,9 +174,9 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
     lines.push(`### ${cat}`, "");
     if (bullets.length) lines.push(...bullets, "");
     const note =
-      target.pkg === "cli"
-        ? `- Version alignment with harness **${version}**.`
-        : `- Version alignment with harness **${version}** (no OpenCode package API change).`;
+      target.pkg === "opencode"
+        ? `- Version alignment with harness **${version}** (no OpenCode package API change).`
+        : `- Version alignment with harness **${version}**.`;
     lines.push(note, "", `See root [CHANGELOG.md](../../CHANGELOG.md) **${version}**.`, "");
   }
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -198,6 +199,44 @@ function bumpRegistryHead(changelog: string, oldV: string, newV: string): string
   const head = unreleased === -1 ? changelog : changelog.slice(0, unreleased);
   const rest = unreleased === -1 ? "" : changelog.slice(unreleased);
   return head.replaceAll(`**${oldV}**`, `**${newV}**`) + rest;
+}
+
+/**
+ * Ensure the `@mstar-harness/engine` registry row + package-history link
+ * exist in a root changelog HEAD region (qc1 F-002). The Engine npm package
+ * is a version surface since 1.8.8, so the human SSOT registry must carry it
+ * even when the row was never hand-added: insert an Engine row right after
+ * the CLI row (deriving the row style from the CLI row so EN/CN variants
+ * match their table), and append the `packages/engine/CHANGELOG.md` link to
+ * the "Package-specific histories" / "各包独立日志" line. Idempotent — a head
+ * that already mentions `@mstar-harness/engine` is returned unchanged.
+ */
+export function ensureEngineRegistryRow(changelog: string, version: string): string {
+  const unreleased = changelog.indexOf("## [Unreleased]");
+  const head = unreleased === -1 ? changelog : changelog.slice(0, unreleased);
+  const rest = unreleased === -1 ? "" : changelog.slice(unreleased);
+  if (head.includes("@mstar-harness/engine")) return changelog;
+  let next = head;
+  const cliRow = next.match(/^(\| CLI \|.*)$/m)?.[1];
+  if (cliRow !== undefined) {
+    const engineRow = cliRow
+      .replace("CLI", "Engine")
+      .replace("@mstar-harness/cli", "@mstar-harness/engine")
+      .replace(/`packages\/cli`/, "`packages/engine`")
+      .replace(/\*\*[^*]+\*\*/, `**${version}**`);
+    next = next.replace(cliRow, `${cliRow}\n${engineRow}`);
+  }
+  if (!next.includes("packages/engine/CHANGELOG.md")) {
+    next = next.replace(
+      /(Package-specific histories:.*?)(\.)(\s*)$/m,
+      `$1, [\`packages/engine/CHANGELOG.md\`](packages/engine/CHANGELOG.md)$2$3`,
+    );
+    next = next.replace(
+      /(各包独立日志：.*?)(。)(\s*)$/m,
+      `$1、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)$2$3`,
+    );
+  }
+  return `${next}${rest}`;
 }
 
 async function bumpJsonVersion(path: string, oldV: string, newV: string): Promise<void> {
@@ -252,7 +291,12 @@ async function main(): Promise<void> {
     const text = await Bun.file(target.path).text();
     const body = buildSectionBody(target, frags, version);
     let next = insertSection(text, version, date, body);
-    if (target.hasRegistryTable) next = bumpRegistryHead(next, current, version);
+    if (target.hasRegistryTable) {
+      // Root registry tables: insert the @mstar-harness/engine row + history
+      // link when missing (qc1 F-002), then bump every version cell.
+      next = ensureEngineRegistryRow(next, version);
+      next = bumpRegistryHead(next, current, version);
+    }
     await Bun.write(target.path, next);
     console.log(`changelog: ${target.path}`);
   }
@@ -271,7 +315,11 @@ async function main(): Promise<void> {
   console.log(`Validate with: bun run release:validate -- v${version}`);
 }
 
-main().catch((err) => {
-  console.error(`\nprepare-release failed: ${err instanceof Error ? err.message : err}`);
-  process.exit(1);
-});
+// Run only when executed directly (`bun run scripts/prepare-release.ts`) —
+// importing the module (unit tests) must not start the release flow.
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(`\nprepare-release failed: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  });
+}

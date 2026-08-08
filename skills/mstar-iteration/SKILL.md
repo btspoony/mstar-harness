@@ -45,6 +45,8 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 | **→ 迭代交付完成** | §5.5 exit checklist 全 `[x]` | PR mergeable；required CI 全绿；reviews resolved | Phase 4 开 PR 即宣称完成 |
 | **iteration-start → integration branch** | §1.6 Review & Edit chain | 三角色按序 invoke；**specs** 为主产出；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene + compass `status: locked` | PM 代做专业编辑；并行三角色；product/architect 写 knowledge；临时笔记进 specs |
 
+> **Engine check (when available):** run `mstar iteration gate --status <status.json> --compass <delivery-compass.md>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` in a host hook) to evaluate the transition gate above. On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Note: during the Phase-3 window (`transition: phase-3-close`) the gate exits 1 until the §3.4 close items (`status: completed` + `end_date`) are written — that exit-1 is the expected "close work pending" signal (the exit checklist gates Phase 4, not the Phase-3 entry; qc2 F-003), so proceed with Phase 3 per the table below. Skill text below remains authoritative when the runtime is absent.
+
 **误判信号**：对话里出现 compound 摘要、roadmap 更新、或「所有 plan 已完成」但 **未** 打印 §3.1 / §3.5 checklist → 视为 **Phase 3 未执行**，回到 §3.0。
 
 **per-plan 状态 SSOT**：`{HARNESS_DIR}/status.json`（per-plan Todo/InProgress/InReview/Done）。
@@ -156,6 +158,8 @@ plans: []
 | target_branch | <PR target> |
 ```
 
+> **Engine check (when available):** import `validateCompassFrontmatter` from `@mstar-harness/engine` in a host hook to validate the compass frontmatter above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ### 1.4 更新索引
 
 在 `{ITERATION_DIR}/README.md` 中添加**一行**（首次创建时建立表头；**一行 = 一次迭代**，不拆 compass/workspace 双行）：
@@ -163,6 +167,8 @@ plans: []
 | Iteration | Path | Description | Status |
 |-----------|------|-------------|--------|
 | `<iteration-id>` | [`<iteration-id>/`](<iteration-id>/) | `<简短描述>` | `active` |
+
+> **Engine check (when available):** import `assertIndexRowObligations` from `@mstar-harness/engine` in a host hook to assert the index-row obligations above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### 1.5 登记到 status.json（formal iteration 必填）
 
@@ -219,6 +225,8 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
 4. **Branch metadata gate**：root `metadata.iteration_base_branch`、`metadata.target_branch` 已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
 5. **Control-worktree + lease defaults**（iteration 命令；可被 `Worktree mode: waived` 豁免）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写默认 gitignored 的 harness 进程产物（`status.json`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{SDD_DIR}` 等），并在可写派发前 claim `plans[].execution_lease` / `integration_merge_lease`。可写 Assignment 须含绝对 feature **`Worktree path`** + 绝对 control 系 **`Plan Path`** / **`SDD dir`**（见 **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」）。**禁止**因 feature worktree 在默认 gitignore 下看不到 plans 而推断 `Worktree mode: waived`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；control worktree + lease 仍须满足。**跨 plan 并行安全闸**（**不可**被 `Worktree mode: waived` 豁免）：跨 plan **并行可写 implement** 须满足下列之一——(a) coordination 路径（control 或 waived 时主 checkout `{HARNESS_DIR}/status.json`）上 **same-host 独占写锁可用且每次 status/协调变更持锁**；(b) 默认 **`Plan parallelism: serial`**（**waived 时尤其优先默认串行**；**无 flock / 无共享锁时只触发本条，不豁免 worktree**）；(c) 用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。**禁止**将 `Worktree mode: waived` 当作跨主机无锁并行的授权。细则 → **`references/phase-2-worktree-lease.md`**。
+
+> **Engine check (when available):** run `mstar lease verify <plan-id>` (or `import { validateExecutionLease } from "@mstar-harness/engine"` in a host hook — `validateIntegrationMergeLease` is import-only; no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 任一 false → **stop**。Phase 1 / Prepare 未完成 → 先完成 Phase 1 或 per-plan Prepare，再进入本 Phase。
 
@@ -288,10 +296,10 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 3. **Implement → InReview**（`§ 2.5`；产品编辑在 feature worktree；plans / status / iterations / SDD 经 control 绝对路径）：
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
    - PM 载入 **`mstar-sdd`** 后，按 plan task 顺序 **串行** per-task 循环（**不是**一次派发 dev 做全部 tasks）：
-     1. skill **`mstar-sdd`** → `scripts/sdd-workspace <plan-id>` → `{SDD_DIR}`
-     2. `scripts/task-brief <plan-file> N` → `{SDD_DIR}/task-N-brief.md`；记录 `BASE_SHA`
+     1. `mstar sdd workspace <plan-id>` → `{SDD_DIR}`
+     2. `mstar sdd task-brief <plan-file> N` → `{SDD_DIR}/task-N-brief.md`；记录 `BASE_SHA`
      3. Dispatch **one** implementer subagent（`references/implementer-prompt.md`：brief 路径 + report 路径 + `Model tier`；**禁止**贴整份 plan）
-     4. Implementer `DONE` → `scripts/review-package BASE HEAD` → task diff 文件
+     4. Implementer `DONE` → `mstar sdd review-package BASE HEAD` → task diff 文件
      5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
      6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；更新 `status.json` / plan checkbox
      7. Next task
@@ -320,7 +328,7 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 | 文件交接 | brief / report / diff / `progress.md` 在 `{SDD_DIR}`；dispatch prompt **只给路径**，不贴 plan 全文或 task 历史 |
 | Assignment 字段 | 每个 implement dispatch 须含 `Execution mode: sdd`、`SDD dir`、`Model tier`；§2.0 #5 未 waive 时还须含绝对 `Worktree path` + verified `execution_lease`；**禁止**省略 `Model tier` |
 | 大包 inline | **禁止**把 T1–Tn 或整份 plan 写进 **一个** `fullstack-dev` leaf Assignment 冒充 SDD |
-| 分支 diff | 全部 task 完成后 skill **`mstar-sdd`** → `scripts/review-package MERGE_BASE HEAD` → `{SDD_DIR}/review/` branch diff → plan QC tri（N=3） |
+| 分支 diff | 全部 task 完成后 `mstar sdd review-package MERGE_BASE HEAD` → `{SDD_DIR}/review/` branch diff → plan QC tri（N=3） |
 
 Iteration Phase 2 附加：
 

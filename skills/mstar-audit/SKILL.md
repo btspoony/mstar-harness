@@ -156,6 +156,8 @@ Follow `plan.main.md` template + **plan-quality-bar**. Additional audit-specific
 - **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
 ```
 
+> **Engine check (when available):** run `mstar audit scaffold <findings-file> [--dir <out-dir>]` (or `import { scaffoldAuditPlan, validateAuditStatusBlocks, redactSecrets } from "@mstar-harness/engine"` in a host hook) to scaffold the `audit-<date>/` plan directory (numbered plan files + README index) from findings, validate the audit Status blocks above, and redact credentials from audit excerpts. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## Handoff to execution
 
 Audit plans are **input candidates** for the normal Prepare → Execute flow. The audit skill does not execute them.

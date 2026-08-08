@@ -24,6 +24,8 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 - **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only seats that **raised** blocking findings; each updates **the same** `{SDD_DIR}/review/qcN.md` (`## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` for targeted re-review. Naming → **`mstar-plan-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
 - **Full tri re-review (exception)**：Assignment **`QC re-review: full tri-review`** → new basenames (`qc1-rev2.md` …); PM marks **active wave** in consolidated decision.
 
+> **Engine check (when available):** run `mstar review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]` (or `import { executionModeToN, assertTriIdentity } from "@mstar-harness/engine"` in a host hook) to map `Execution mode` to its QC seat count N above and assert tri identity. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## 三审身份与模型独立性门禁（PM 强制）
 
 在 PM 发出 **initial** QC 三审后、进入汇总前：

@@ -116,6 +116,22 @@ Per **`mstar-iteration` §2.3**（`git fetch` → `git checkout -b <spec_integra
 
 Delegate to **`iteration-drive`**（Phase 2 → **`mstar-iteration` §2**、Phase 3 → **§3** + `references/phase-3-iteration-close.md`、Phase 4/5 → **§4–§5** + `references/phase-4-5-pr-delivery.md`、Phase 5 helper discovery → `mstar-iteration/references/phase5-helper-discovery.md`）。
 
+**Assignment preflight**（`mstar-harness` bin 未安装时静默跳过）: 每次 implement/QC/QA 派发前校验最新 Assignment（**SDD** 下为最新 `{SDD_DIR}/task-N-brief.md` 或临时写盘的 Assignment），同 `iteration-drive`。模式由迭代 compass frontmatter 的 `enforcement` 键决定（Slice 5）：
+
+- **默认（compass 无 `enforcement: hard`）— 可选 warn-only**：exit 1 仅提示，不阻断派发（Slice 3 行为不变）：
+
+```bash
+command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate "<latest-assignment-file>"
+```
+
+- **`enforcement: hard`（迭代 compass frontmatter 声明）— fail-fast**：校验失败即 `exit 1` 阻断派发（bin 缺失仍静默跳过）：
+
+```bash
+if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validate "<latest-assignment-file>" || exit 1; fi
+```
+
+> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
+
 **Loop 特有**：Phase 5 push cadence（HARD）→ **`mstar-iteration` §5.1a**；exit checklist → **`mstar-iteration` §5.2**（`references/phase-4-5-pr-delivery.md` §5.2）。
 
 **Then** report: iteration id, locked direction + scale, plans completed, compound summary, PR link, merge-ready evidence.

@@ -23,6 +23,8 @@ If you were dispatched as an SDD implementer or task reviewer, skip PM orchestra
 
 **Optional:** **`SDD implementer session: sticky`** — same implementer subagent across sequential tasks on one plan/branch; **task reviewers stay fresh per task**. SSOT → **`references/sticky-implementer-session.md`**.
 
+> **Engine check (when available):** import `implementerSessionStickyRules` from `@mstar-harness/engine` in a host hook to validate the sticky resume decision above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 **Narration:** at most one short line between tool calls — ledger and file paths carry the record.
 
 **Continuous execution:** do not check in with the human between tasks. Stop only for BLOCKED, genuine ambiguity, or all tasks complete.
@@ -39,12 +41,12 @@ Batch all findings for the human in one message. If clean, proceed silently.
 ## Per-task loop (PM only)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
-2. skill **`mstar-sdd`** → `scripts/sdd-workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<control_worktree_path>` 或 `scripts/sdd-workspace <plan-id> <control_worktree_path>`；缺 status.json 的 linked worktree 会 fail closed）
-3. `scripts/task-brief <plan> N` → brief file
+2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<control_worktree_path>` 或 `mstar sdd workspace <plan-id> <control_worktree_path>`；缺 status.json 的 linked worktree 会 fail closed）
+3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
-   - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
-   - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
-5. On `DONE`: `scripts/review-package BASE HEAD` → diff file
+    - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
+    - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
+5. On `DONE`: `mstar sdd review-package BASE HEAD` → diff file
 6. Dispatch **fresh** task reviewer — role **`generalPurpose`** (L2; **not** `qc-specialist*`; host role field → `mstar-host` C5) — brief, report, diff, Global Constraints — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
 7. Fix loop for Critical/Important; re-review until approved
 8. Append `progress.md`; update `status.json` `task_commits[]` and `implementer-session.json` `last_task` if sticky
@@ -53,6 +55,8 @@ Batch all findings for the human in one message. If clean, proceed silently.
 **Never** dispatch multiple implementers in parallel (write conflicts).
 
 Detail: **`references/file-handoffs.md`**.
+
+> **Engine check (when available):** run `mstar sdd workspace <plan-id>` / `mstar sdd task-brief <plan-file> <task-number>` / `mstar sdd review-package <base> <head>` (or `import { assertBaseSha, sddWorkspace, taskBrief, reviewPackage } from "@mstar-harness/engine"` in a host hook) to drive the loop steps above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Implementer statuses
 
@@ -81,7 +85,7 @@ Host mapping → **`mstar-host`** references (`model` / Task field).
 
 ## After all tasks
 
-1. `scripts/review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}/review/`
+1. `mstar sdd review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}/review/`
 2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, **N=3** — with branch review-package path and report paths under `{SDD_DIR}/review/` → **`mstar-review-qc`** · **`mstar-dispatch-gates`**. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary. **Mandatory whenever `Execution mode: sdd`** (single-plan or iteration).
 3. Critical/Important QC findings → **one** fix dispatch (full list), then targeted re-review
 4. QA gate → **`mstar-harness-core`** Done rules; PM **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**
@@ -93,6 +97,8 @@ At start: `cat {SDD_DIR}/progress.md`. Tasks marked complete are DONE — do not
 Append on clean review: `Task N: complete (<base>..<head>, review clean)`.
 
 Minor findings → `## Minor (for plan QC)` section in same file.
+
+> **Engine check (when available):** import `readProgressLedger` from `@mstar-harness/engine` in a host hook to read the ledger above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Red flags (NEVER)
 
@@ -107,17 +113,15 @@ Minor findings → `## Minor (for plan QC)` section in same file.
 - Sticky **resume** for task reviewers
 - Resume implementer without `host_agent_id` in `implementer-session.json`
 
-## Scripts
+## CLI
 
-Scripts live under this skill: **`mstar-sdd`** → `scripts/<name>`.
+The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；原 bash 脚本已移除，行为语义不变）。Run the `mstar` binary from any checkout; env vars `MSTAR_CONTROL_ROOT` / `MSTAR_HARNESS_DIR` / `SDD_DIR` are honored exactly as before.
 
-Resolve the loaded **`mstar-sdd`** skill directory first, then run the script by skill-relative path. **Do not** treat `skills/mstar-sdd/scripts/...` as a consumer-project cwd path — that layout exists only in the harness source tree (and OpenCode's bundled `harness-skills/mstar-sdd/scripts/`).
-
-| Script | Usage |
+| Command | Usage |
 |--------|--------|
-| `scripts/sdd-workspace` | `PLAN_ID [CONTROL_ROOT]` → creates `{SDD_DIR}` under control harness when set (`MSTAR_CONTROL_ROOT` or 2nd arg); fail closed on linked worktree without `status.json` |
-| `scripts/task-brief` | `PLAN_FILE TASK_N [OUTFILE]` |
-| `scripts/review-package` | `BASE HEAD [OUTFILE]` |
+| `mstar sdd workspace` | `PLAN_ID [CONTROL_ROOT]` → creates `{SDD_DIR}` under control harness when set (`MSTAR_CONTROL_ROOT` or 2nd arg); fail closed on linked worktree without `status.json` |
+| `mstar sdd task-brief` | `PLAN_FILE TASK_N [OUTFILE]` |
+| `mstar sdd review-package` | `BASE HEAD [OUTFILE]` |
 
 ## References
 

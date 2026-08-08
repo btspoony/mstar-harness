@@ -25,6 +25,8 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/` |
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
 
+> **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve [path]` (`--json` for machine output) to print the resolved dirs — to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ### `{HARNESS_DIR}` 解析顺序（找到即停）
 
 1. `.mstar/` → `{HARNESS_DIR}=.mstar/`, `{PLAN_DIR}=.mstar/plans/`
@@ -46,6 +48,8 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 **Legacy（仅兼容读）**：若以上皆无内容，但 `{HARNESS_DIR}/designs/` 或仓库根 `designs/` **非空**，可作 `{SPECS_DIR}` 使用；init 时**不**新建 `designs/`。
 
+> **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints the resolved specs dir) — to confirm the candidate order (empty-dir-as-absent included). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 可选项目选择：部分 spoke 仓库另跟踪 `{HARNESS_DIR}/roadmap.md` — **非**默认 tracked；仅在项目 opt-in 时提及。
 
 ## 内容边界（摘要）
@@ -65,7 +69,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 PM 在需要持久化追踪时：
 
 1. 建 `.mstar/`、`plans/`、`status.json`（空模板见 **`mstar-plan-artifacts/templates/status.empty.json`**）
-2. 可选 `notes.json`（模板 **`mstar-plan-artifacts/templates/notes.empty.json`**）、`knowledge/`、`iterations/`、`{HARNESS_DIR}/specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 skill **`mstar-sdd`** → `scripts/sdd-workspace` 创建）
+2. 可选 `notes.json`（模板 **`mstar-plan-artifacts/templates/notes.empty.json`**）、`knowledge/`、`iterations/`、`{HARNESS_DIR}/specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建）
 3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（见下文「Git 跟踪策略」）— CLI `init` 可自动添加
 4. Git：**进程本地、结果共享** — 默认跟踪 `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`；`plans/`、`iterations/`、`status.json` 等为**本地会话 SSOT**，默认 gitignored。跨 clone 持久 handoff = knowledge + specs + `{HARNESS_DIR}/AGENTS.md`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 residual 须提升（compound）或写入 tracked results — **勿**默认 `git add` `status.json` / `plans/`。
 
@@ -122,6 +126,8 @@ Legacy `.agents/` 等价：
 # Tracked (results): .agents/AGENTS.md, .agents/knowledge/, .agents/specs/
 ```
 
+> **Engine check (when available):** import `emitGitignoreSnippet` / `validateGitignore` from `@mstar-harness/engine` in a host hook to emit or validate the canonical snippet above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
 - **Iteration base branch**：创建 Spec/iteration 集成分支的祖先分支或 ref；必须显式记录，不能默认 `main` / `master`。
@@ -136,6 +142,8 @@ Legacy `.agents/` 等价：
 ## Plan-Writing Path Gate
 
 Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. Do not introduce external default plan directories.
+
+> **Engine check (when available):** import `assertPlanWritingPath` from `@mstar-harness/engine` in a host hook to enforce the gate above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## 状态与权限（摘要）
 

@@ -1,7 +1,7 @@
 {
   "name": "@mstar-harness/cli",
   "version": "1.8.9",
-  "description": "Morning Star harness installer CLI (OpenCode, Cursor, Codex, ZCode, omp).",
+  "description": "Morning Star harness CLI — installer bootstrap + mstar workflow verbs (path/status/lease/sdd/iteration/dispatch/worktree/lint/design-md/audit/compound/host/skill).",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,12 +19,14 @@
     "dev": "bun run src/index.ts",
     "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/mstar-harness.js",
     "check": "bun run src/index.ts --help",
+    "test": "bun run --cwd ../engine build && bun test",
     "prepublishOnly": "bun run build && bun run check"
   },
   "engines": {
     "bun": ">=1.2.17"
   },
   "dependencies": {
+    "@mstar-harness/engine": "1.8.9",
     "@inquirer/prompts": "^8.4.2",
     "commander": "^14.0.3",
     "picocolors": "^1.1.1"

@@ -1,0 +1,50 @@
+=== tech_debt_summary (computed from open residual_findings) ===
+{
+  "total_open": 3,
+  "by_severity": {
+    "critical": 0,
+    "high": 1,
+    "medium": 1,
+    "low": 0,
+    "nit": 1
+  },
+  "by_target": {
+    "V1.0": 1,
+    "V1.1": 1,
+    "unspecified": 1
+  },
+  "by_plan": {
+    "plan-a": 2,
+    "plan-b": 1
+  }
+}
+
+=== stored metadata.tech_debt_summary ===
+{
+  "updated_at": "2026-08-08",
+  "total_open": 3,
+  "by_severity": {
+    "critical": 0,
+    "high": 1,
+    "medium": 1,
+    "low": 0,
+    "nit": 1
+  },
+  "by_target": {
+    "V1.0": 1,
+    "V1.1": 1,
+    "unspecified": 1
+  },
+  "by_plan": {
+    "plan-a": 2,
+    "plan-b": 1
+  }
+}
+
+=== consistency check ===
+PASS: total_open
+PASS: by_severity
+PASS: by_target
+PASS: by_plan
+
+OVERALL: PASS

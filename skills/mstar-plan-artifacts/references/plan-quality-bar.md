@@ -90,7 +90,7 @@ ALL must hold — commands and expected results, not prose:
 | Plan source | Applies |
 |-------------|---------|
 | PM/architect Prepare | Full bar before `plan(locked)` |
-| SDD task-brief (extracted from plan) | Inherits from plan; task-brief script carries excerpts forward |
+| SDD task-brief (extracted from plan) | Inherits from plan; `mstar sdd task-brief` carries excerpts forward |
 | Audit-generated plan (`mstar-audit`) | Full bar — audit plans are the most context-isolated |
 | Hotfix (`inline`) | Relaxed — see `mstar-phase-gates` hotfix exception |
 

@@ -7,8 +7,10 @@ on:
     tags-ignore:
       - "v*"
     paths:
+      - "packages/engine/**"
       - "packages/cli/**"
       - "packages/opencode/**"
+      - "scripts/**"
       - "skills/**"
       - "agents/**"
       - "commands/**"
@@ -19,8 +21,10 @@ on:
       - ".github/workflows/ci.yml"
   pull_request:
     paths:
+      - "packages/engine/**"
       - "packages/cli/**"
       - "packages/opencode/**"
+      - "scripts/**"
       - "skills/**"
       - "agents/**"
       - "commands/**"
@@ -50,6 +54,27 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: OpenCode dep tree (no commander/inquirer)
+        run: |
+          TREE="$(npm ls --workspace @mstar-harness/opencode 2>&1)" || {
+            echo "::error::npm ls failed for @mstar-harness/opencode (unresolved dep tree)"
+            echo "$TREE"
+            exit 1
+          }
+          echo "$TREE"
+          if echo "$TREE" | bun run ci:dep-guard; then
+            echo "OK — opencode dep tree has no commander/inquirer"
+          else
+            echo "::error::@mstar-harness/opencode dep tree must not contain commander or inquirer (roadmap §8.7 item 5)"
+            exit 1
+          fi
+
+      # Root typecheck resolves @mstar-harness/engine via packages/engine/dist
+      # (types: ./dist/index.d.ts), which is gitignored — build it first.
+      # The engine build is idempotent (rm -rf dist && bun build && bunx tsc).
+      - name: Build engine (declarations for typecheck)
+        run: bun run --cwd packages/engine build
+
       - name: Typecheck
         run: bun run typecheck
 
@@ -62,8 +87,58 @@ jobs:
       - name: CLI smoke check
         run: bun run --cwd packages/cli check
 
+      - name: Test engine
+        run: bun run --cwd packages/engine test
+
+      # The cli test script runs the engine build as a pre-step (tests import
+      # @mstar-harness/engine dist) — use the package script, not raw bun test.
+      - name: Test CLI
+        run: bun run --cwd packages/cli test
+
+      - name: Test OpenCode
+        run: bun run --cwd packages/opencode test
+
+      - name: Test scripts
+        run: bun test scripts/prepare-release.test.ts scripts/ci-dep-guard.test.ts
+
       - name: Pack CLI tarball
         run: bun run cli:pack
 
       - name: Pack OpenCode tarball
         run: bun run opencode:pack
+
+  # Roadmap §8.7 item 2 (risk R2): skills must load without the engine.
+  # Deliberately NO `bun install` — this job runs in a checkout where
+  # @mstar-harness/engine and @mstar-harness/cli are not installed, and the
+  # script asserts no skill references them in its load order (advisory
+  # "Engine check" callouts only).
+  standalone-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.17
+
+      - name: Standalone smoke (engine + cli uninstalled)
+        run: bun run validation:standalone
+
+  # Roadmap §8.7 item 4 (risk R1): pointer callouts in skills/ must reference
+  # real engine exports + real CLI subcommands, and engine spec-citation
+  # comments must resolve to real skill files.
+  drift-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.17
+
+      - name: Pointer drift lint (callouts ↔ engine exports + CLI commands)
+        run: bun run validation:drift

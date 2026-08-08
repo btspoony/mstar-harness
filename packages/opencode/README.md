@@ -32,6 +32,16 @@ npx @mstar-harness/cli init --target opencode
 
 The plugin resolves **only paths inside this package** — not `process.cwd()/skills`, so your app repo root does not affect harness loading.
 
+## Status write lint (hook coverage)
+
+The plugin registers a non-blocking `tool.execute.before` lint for `write`/`edit` tools that target `{HARNESS_DIR}/status.json`: the about-to-be-written (or current on-disk) document is validated against the engine `status.validateStatus` schema and violations are logged as warnings. The hook never blocks and never modifies the write.
+
+Hook coverage follows the engine `resolveHarnessDir` probe order (`.mstar/` → `.agents/` → `.plans/`/`plans/` walking up from the target file). Repos whose harness root is not one of those names — e.g. the `.harness/` layout used by this monorepo itself — are **not** auto-discovered: set **`MSTAR_HARNESS_DIR`** in the OpenCode server environment (absolute path to the harness root) to enable the lint for such repos.
+
+## Dispatch presence lint (hook coverage)
+
+The plugin registers a non-blocking `tool.execute.before` lint for the `task` tool (subagent dispatch): the prompt is parsed for the three core Assignment header fields — `Execute as: <role-id>`, `Delegation: allowed|forbidden`, `Task category: <category>` — and each missing field is logged as a warning (`assignment.presence.missing-*`, `high` for `Execute as`, `medium` otherwise). The hook never blocks and never modifies the prompt; prompts that are not Assignment-shaped (no `## Assignment` heading and none of the three fields) stay silent. Field **presence** only: value-level Assignment validation (Working-branch forms, N→seat mapping, tri identity) is a later-slice extension via `dispatch.validateAssignmentFields`.
+
 ## Quick start
 
 1. Install the plugin (above).

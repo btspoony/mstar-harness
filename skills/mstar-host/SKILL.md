@@ -37,6 +37,8 @@ Detect from **session tool shapes and available commands** — not from plugin m
 
 Order matters: check `cursor` → `opencode` → `omp` → `kimi` → `zcode` → `codex`. `subagent_type` (Cursor) vs `subagent` (OpenCode) vs `agent`/`tasks[]` (omp) is the sharpest split among the Task-based hosts.
 
+> **Engine check (when available):** run `mstar host detect --signals <comma-list>` (or `import { detectHost } from "@mstar-harness/engine"` in a host hook) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## Parallel dispatch (invoke-capable hosts)
 
 When PM dispatches **N >= 2** concurrent assignees (QC tri-review, dual-track implement, etc.) and the host exposes actual invoke / Task / subagent tools, read **`references/parallel-dispatch.md`** in the dispatch round (shared with `mstar-dispatch-gates`). Without a callable invoke tool when dispatch is required → **`Blocked`**; Assignment Markdown alone is not dispatch.
@@ -54,6 +56,8 @@ Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **R
 | **Kimi / ZCode** | Skill **name** / `/skill:<name>` | Plugin mount `./skills/<name>/` from the installed plugin root |
 
 Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and asset paths. Per-host URI / mount detail: `references/<host>.md`.
+
+> **Engine check (when available):** import `resolveSkillRoot` from `@mstar-harness/engine` in a host hook to resolve the loaded skill root per the table above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Conflict order
 

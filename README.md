@@ -4,7 +4,7 @@
 
 # Morning Star
 
-Code Agent Harness Framework
+Harness Workflow Engine · Agent Plugin
 
 English / [中文](README_CN.md)
 
@@ -18,12 +18,23 @@ English / [中文](README_CN.md)
 
 </div>
 
-**Morning Star** is a multi-agent code harness for AI coding hosts.
+**Morning Star** is an Agent Plugin for harness engineering workflows: a TypeScript **Harness Workflow Engine** (`@mstar-harness/engine`) enforces deterministic workflow gates, while `mstar-*` judgment skills drive multi-agent code delivery.
 
-- Start a usable multi-role workflow quickly
-- Run with unified `mstar-*` skills instead of scattered rules
-- Reuse one core process across omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
+- **Deterministic gates, enforced by a TS engine** — path/status/lease/dispatch/sdd/iteration/lint gates run in `@mstar-harness/engine`, not as prompt suggestions
+- **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment
+- **One engine across hosts** — the same engine + skills power omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
+- **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
 - **Recommended host order** (best → usable): **omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex** — omp/OpenCode/Cursor have the richest subagent + Plan UX; Kimi/ZCode work with built-in agent types only; Codex has the most constrained dispatch surface.
+
+**What ships**
+
+| Component | What it is |
+|-----------|------------|
+| Harness Workflow Engine | `@mstar-harness/engine` — TS enforcement of deterministic workflow gates |
+| mstar CLI | `@mstar-harness/cli` — installer bootstrap + `mstar` workflow verbs |
+| `mstar-*` skills | Role, gate, and workflow judgment (single source of truth) |
+| Host adapters | omp, OpenCode, Cursor, Kimi Code, ZCode, Codex |
+
 Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
 ## Install

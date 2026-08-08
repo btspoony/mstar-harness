@@ -9,6 +9,13 @@
  * Reads the surface list from `release-surfaces.ts` (same list
  * `prepare-release.ts` bumps), so a release can never pass a surface it
  * failed to bump.
+ *
+ * Pre-bump timing (D7: no intermediate releases): during an iteration,
+ * `release:validate -- v2.0.0` intentionally exits 1 with all 12 entries
+ * compared (0 MISSING) — every surface still carries the previous version.
+ * The bump happens at release-prep AFTER the iteration, so exit 1 with
+ * 0 MISSING / all-MISMATCH is the expected pre-release state, not a gate
+ * failure.
  */
 import { INSTALL_REF, VERSION_SURFACES } from "./release-surfaces.ts";
 
@@ -48,7 +55,8 @@ for (const { label, path } of VERSION_SURFACES) {
   }
 }
 
-// INSTALL.md ZCode marketplace example must also reflect the release version.
+// INSTALL.md is the 12th compared entry (11 VERSION_SURFACES + INSTALL.md):
+// its ZCode marketplace example must also reflect the release version.
 const install = await Bun.file(INSTALL_REF.path).text();
 const installMatch = install.match(installVersionRe);
 const installVersion = installMatch?.[1];

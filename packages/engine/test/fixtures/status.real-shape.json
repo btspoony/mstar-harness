@@ -1,0 +1,197 @@
+{
+  "version": 1,
+  "updated_at": "2026-08-08",
+  "plans": [
+    {
+      "plan_id": "20260717-kimi-host",
+      "file": ".harness/plans/20260717-kimi-host-support.md",
+      "title": "Kimi Code host full support",
+      "status": "Done"
+    },
+    {
+      "id": "20260728-zero-residual",
+      "plan_id": "20260728-zero-residual",
+      "file": ".harness/plans/20260728-findings-cleanup-zero-residual.md",
+      "title": "Findings cleanup: zero-residual mode",
+      "status": "Done",
+      "owner": "@project-manager",
+      "agents": [
+        "@prompt-engineer"
+      ],
+      "progress": 100,
+      "tags": [
+        "harness",
+        "residuals",
+        "iteration"
+      ],
+      "created_at": "2026-07-28",
+      "updated_at": "2026-07-28",
+      "done_at": "2026-07-28",
+      "notes": [
+        "2026-07-28 registered from CreatePlan zero_residual_mode",
+        "2026-07-28 implemented Findings cleanup zero-residual + version 1.5.6"
+      ],
+      "metadata": {
+        "findings_cleanup": "zero-residual",
+        "task_category": "docs",
+        "execution_mode": "inline"
+      }
+    },
+    {
+      "plan_id": "20260807-agent-plugins-v1",
+      "file": ".harness/plans/20260807-agent-plugins-v1.md",
+      "title": "Agent Plugins v1.0.0 portable package support",
+      "status": "Done",
+      "owner": "@project-manager",
+      "agents": [
+        "@fullstack-dev"
+      ],
+      "progress": 100,
+      "tags": [
+        "agent-plugins",
+        "portable-package",
+        "cli",
+        "release-surfaces"
+      ],
+      "created_at": "2026-08-07",
+      "updated_at": "2026-08-07",
+      "metadata": {
+        "findings_cleanup": "allow-residual",
+        "qa_gate": "pm-acceptance",
+        "execution_mode": "sdd",
+        "working_branch": "feat/agent-plugins-v1",
+        "gates": {
+          "qc": "approve (tri, after fix wave)",
+          "qa": "pm-acceptance passed 2026-08-07",
+          "typecheck": "pass",
+          "release_validate": "pass v1.8.8",
+          "ci": "success (validate run 31184961541, release-prep run 31185014808)"
+        },
+        "review_bundle": ".harness/sdd/20260807-agent-plugins-v1/review/",
+        "sdd_dir": ".harness/sdd/20260807-agent-plugins-v1/",
+        "sdd_progress": ".harness/sdd/20260807-agent-plugins-v1/progress.md",
+        "pr": {
+          "number": 68,
+          "url": "https://github.com/btspoony/mstar-harness/pull/68",
+          "merge_commit": "471db08"
+        }
+      },
+      "task_commits": [
+        {
+          "task": 1,
+          "commit": "ee4881a",
+          "title": "portable manifest + release surface"
+        },
+        {
+          "task": 2,
+          "commit": "1140cac",
+          "title": "CLI plugin validate"
+        },
+        {
+          "task": 3,
+          "commit": "b0f65f6",
+          "title": "docs + fragment"
+        }
+      ],
+      "done_at": "2026-08-07",
+      "notes": [
+        "2026-08-07: QC tri approved after one fix wave (47cf665); QA gate pm-acceptance passed (typecheck, release:validate v1.8.8, plugin validate pos/neg)",
+        "2026-08-07: residual R1-R6 registered (low/nit, accept)",
+        "2026-08-07: PR #68 squash-merged to main (471db08); CI validate + Release prep prepare both success; remote/local feature branches cleaned up"
+      ]
+    },
+    {
+      "plan_id": "20260808-slice1-engine-foundation",
+      "file": ".harness/plans/20260808-slice1-engine-foundation.md",
+      "title": "Slice 1: engine scaffold + core/path/status/lease + CLI + opencode beforeStatusWrite",
+      "status": "InProgress",
+      "owner": "@project-manager",
+      "created_at": "2026-08-08",
+      "metadata": {
+        "primary_spec": ".harness/references/skill-programmatic-roadmap.md",
+        "task_category": "logic",
+        "execution_mode": "sdd",
+        "iteration_refs": [
+          "v2.0.0"
+        ],
+        "spec_integration_branch": "feature/skill-programmatic-split",
+        "merge_target": "feature/skill-programmatic-split",
+        "worktree_path": "/Users/bibi/workspace/ai/worktrees/mstar-harness-skill-engine",
+        "working_branch": "feature/skill-programmatic-split",
+        "plan_path": "/Users/bibi/workspace/ai/mstar-harness/.harness/plans/20260808-slice1-engine-foundation.md",
+        "sdd_dir": "/Users/bibi/workspace/ai/mstar-harness/.harness/sdd/20260808-slice1-engine-foundation",
+        "execution_lease": {
+          "holder": "omp-pm-session-20260808",
+          "claimed_at": "2026-08-08",
+          "worktree_path": "/Users/bibi/workspace/ai/worktrees/mstar-harness-skill-engine",
+          "working_branch": "feature/skill-programmatic-split",
+          "base_sha": "471db08"
+        }
+      }
+    }
+  ],
+  "residual_findings": {
+    "20260722-iter-wt-lease": [
+      {
+        "id": "R1",
+        "title": "Tighten ADR vs status-and-residuals SSOT phrasing",
+        "severity": "low",
+        "source": "QC-#1 qc1.md Suggestion",
+        "scope": "ADR / mstar-plan-artifacts status-and-residuals",
+        "decision": "defer",
+        "owner": "prompt-engineer",
+        "target": "next polish / follow-up plan",
+        "tracking": null
+      },
+      {
+        "id": "R7",
+        "title": "Ops runbook for stale holders / override audit template",
+        "severity": "low",
+        "source": "QC-#3 qc3.md Suggestion S1",
+        "scope": "phase-2-worktree-lease / status-and-residuals",
+        "decision": "defer",
+        "owner": "prompt-engineer",
+        "target": "next polish",
+        "tracking": null
+      }
+    ],
+    "20260807-agent-plugins-v1": [
+      {
+        "id": "R1",
+        "title": "escapesPluginRoot over-rejects literal '..foo'-style first components (conservative false-rejection)",
+        "severity": "low",
+        "source": "QC-2 qc2.md revalidation S-7 / QC-3 qc3.md S-7 @ cea507f..47cf665",
+        "scope": "packages/cli/src/agent-plugins.ts escapesPluginRoot",
+        "decision": "accept",
+        "owner": "@fullstack-dev",
+        "target": "next release",
+        "tracking": null,
+        "detail_doc": null
+      },
+      {
+        "id": "R4",
+        "title": "Root package.json lacks cli:check alias (gate ran packages/cli check equivalent)",
+        "severity": "nit",
+        "source": "QC-3 qc3.md S-2; T3 review",
+        "scope": "package.json scripts",
+        "decision": "accept",
+        "owner": "@project-manager",
+        "target": "next release",
+        "tracking": null,
+        "detail_doc": null
+      }
+    ]
+  },
+  "metadata": {
+    "primary_spec": null,
+    "harness_root": ".harness",
+    "iteration_base_branch": "main",
+    "target_branch": "main",
+    "control_worktree_path": "/Users/bibi/workspace/ai/mstar-harness",
+    "iteration_refs": [
+      "v2.0.0"
+    ],
+    "plan_parallelism": "serial",
+    "worktree_mode": "feature-worktree"
+  }
+}

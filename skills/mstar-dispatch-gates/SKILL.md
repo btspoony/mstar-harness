@@ -66,6 +66,8 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话。PM 须在**同一条 assistant 消息**（或宿主等价机制）发出与 Assignment **条数一致**的 invoke / Task；仅打印 Markdown = **分派未完成**。**几条 Assignment ⇒ 几次 tool 调用**（默认同消息并行）。
 
+> **Engine check (when available):** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (or `import { validateAssignmentFields, assertDefaultBranchProtected } from "@mstar-harness/engine"` in a host hook) to validate the Assignment field contract and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## SDD implement 波次（PM only）
 
 When **`Execution mode: sdd`** (`mstar-sdd`):
@@ -75,6 +77,8 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - File handoffs only — no pasted plan/diff/history in dispatch prompts.
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
 - After all tasks: branch `review-package` in `{SDD_DIR}/review/` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
+
+> **Engine check (when available):** run `mstar review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]` (or `import { executionModeToN, assertTriIdentity } from "@mstar-harness/engine"` in a host hook) to map `Execution mode` to its QC seat count N and assert tri identity for the QC tri above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## 并行规则（摘要）
 
@@ -92,6 +96,8 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - **`Plan parallelism: serial`**：仅强制跨 plan implement **调度串行**；**不** waive control worktree / `execution_lease` / `integration_merge_lease`（`Worktree mode: waived` 才是 lease/worktree 豁免）→ **`mstar-iteration`** §2.0 #5。
 - **Plan QC tri** after SDD task loop（`Execution mode: sdd`）；**单席**仅 `inline` / hotfix。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
 - **Tri 同消息规则**：plan QC tri（SDD 或 Assignment 显式 `QC mode: full tri-review`）时三席 **同一条消息**、**同一套** scope 字段。
+
+> **Engine check (when available):** run `mstar worktree check <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck } from "@mstar-harness/engine"` in a host hook) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Specialist review-and-edit dispatch
 
