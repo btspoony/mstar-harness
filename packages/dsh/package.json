@@ -39,6 +39,8 @@
     "access": "public"
   },
   "devDependencies": {
+    "@cordisjs/plugin-include": "1.0.4",
+    "@cordisjs/plugin-loader": "1.0.0-rc.5",
     "@deepseek-ai/dsh-agent": "^0.0.1",
     "@deepseek-ai/dsh-fs-policy": "^0.0.1",
     "@deepseek-ai/dsh-invariants": "^0.0.1",

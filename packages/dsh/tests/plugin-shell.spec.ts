@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { Context } from 'cordis'
 import * as plugin from '../src/index.ts'
 
 describe('@mstar-harness/dsh function-plugin contract', () => {
@@ -10,8 +11,15 @@ describe('@mstar-harness/dsh function-plugin contract', () => {
     expect('default' in plugin).toBe(false)
   })
 
-  it('apply accepts a registrant context and the validated config without registering', () => {
-    // Scaffold contract: the empty apply must not throw on any registrant context.
-    expect(() => plugin.apply({} as never, {})).not.toThrow()
+  it('apply provides the ctx.dshMstar engine service on a real registrant context', async () => {
+    const ctx = new Context()
+    try {
+      plugin.apply(ctx, {})
+      expect(ctx.dshMstar).toBeDefined()
+      // The service is engine-backed: the single-version invariant holds.
+      expect(ctx.dshMstar.readHarnessVersion()).toBe('2.0.0')
+    } finally {
+      await ctx.fiber.dispose()
+    }
   })
 })

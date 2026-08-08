@@ -10,6 +10,8 @@
 
 import type { Context } from 'cordis'
 import z from 'schemastery'
+import { resolveHarnessDir } from '@mstar-harness/engine'
+import { DshMstar } from './service.ts'
 
 /** Cordis function-plugin name registered by the Loader. */
 export const name = 'dsh'
@@ -22,16 +24,30 @@ export const name = 'dsh'
 export const inject: string[] = []
 
 /** Plugin configuration. */
-export interface Config {}
+export interface Config {
+  /**
+   * Explicit harness root. When set, wins over engine probing (plan-conventions
+   * `{HARNESS_DIR}` resolution order); when absent the plugin probes from the
+   * process cwd (`.mstar/` → `.agents/` → `.plans/`/`plans/`).
+   */
+  harnessDir?: string
+}
 
-/** Schemastery configuration schema for the plugin consumer. */
-export const Config: z<Config> = z.object({})
+/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery). */
+export const Config: z<Config> = z.object({
+  harnessDir: z.string(),
+})
 
 /**
- * Apply the plugin to the registrant context.
+ * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
+ * engine and expose it (plus the engine function surface) as `ctx.dshMstar`
+ * for the gate listeners that land in later tasks of this plan.
  * @param ctx - Cordis context of the composed app.
  * @param config - validated plugin configuration.
  */
-export function apply(_ctx: Context, _config: Config): void {
-  // Status/dispatch/lease gate listeners land in later tasks of this plan.
+export function apply(ctx: Context, config: Config): void {
+  const harnessDir = resolveHarnessDir(process.cwd(), { harnessDir: config.harnessDir })
+  // The Service constructor registers itself on the fiber via reflect.provide,
+  // so construction alone exposes `ctx.dshMstar` (dsh service convention).
+  new DshMstar(ctx, { harnessDir: harnessDir ?? null })
 }
