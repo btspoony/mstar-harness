@@ -17,7 +17,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 | Done row compaction Profile A/B | `references/done-compaction.md` |
 | `status.json`, residual severity, lifecycle, `jq` | `references/status-and-residuals.md` |
 | Empty-repo `status.json` / `notes.json` / Profile B `plans-done.json` templates | `templates/status.empty.json`, `templates/notes.empty.json`, `templates/plans-done.empty.json` (`templates/README.md`) |
-| Tech-debt rollup (read-only) | `scripts/tech-debt-rollup.sh` |
+| Tech-debt rollup (read-only) | engine `techDebtRollup` import (no CLI form; see `references/status-and-residuals.md`) |
 
 **Out of scope:** branch and QC/QA checkout alignment → **`mstar-branch-worktree`**; leaf QC checklist and verdict → **`mstar-roles/references/qc-specialist/`**; PM QC orchestration → **`mstar-review-qc`**; `{HARNESS_DIR}` discovery and init → **`mstar-plan-conventions`**.
 
@@ -36,7 +36,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 
 > **Engine check (when available):** import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook to enforce the cleanup mode above. Skill text below remains authoritative when the runtime is absent.
 
-- **`notes.json`**, optional **`tech_debt_summary`** (rollup view; compute via **`scripts/tech-debt-rollup.sh`**).
+- **`notes.json`**, optional **`tech_debt_summary`** (rollup view; compute via engine `techDebtRollup` — **`references/status-and-residuals.md`**).
 - **Iteration Phase 2 leases** (`metadata.control_worktree_path`, `plans[].execution_lease`, `metadata.integration_merge_lease`): claim-before-`InProgress`, resume vs steal, orphan recovery → **`references/status-and-residuals.md`** (“Iteration execution leases”).
 
 > **Engine check (when available):** run `mstar lease verify <plan-id>` (or `import { validateExecutionLease } from "@mstar-harness/engine"` in a host hook — `validateIntegrationMergeLease` is import-only; no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.

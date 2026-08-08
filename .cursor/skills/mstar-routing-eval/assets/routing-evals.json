@@ -640,7 +640,7 @@
         "metadata.control_worktree_path",
         "Control harness root absolute path on Assignment",
         "Plan Path absolute under control worktree",
-        "SDD dir absolute under control worktree or MSTAR_CONTROL_ROOT for sdd-workspace",
+        "SDD dir absolute under control worktree or MSTAR_CONTROL_ROOT for the SDD workspace CLI",
         "Worktree path absolute feature checkout distinct from control",
         "product/source edits only on feature Worktree path",
         "Execution mode: sdd"

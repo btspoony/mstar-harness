@@ -52,12 +52,12 @@ After each completed task review, PM sets `last_task` to N. **Do not** resume if
 
 Same as default SDD for artifacts and L2 review; only implementer dispatch differs:
 
-1. `task-brief` → `{SDD_DIR}/task-N-brief.md`
+1. `mstar sdd task-brief` → `{SDD_DIR}/task-N-brief.md`
 2. Record `BASE_SHA`
 3. **Implementer dispatch**
    - **First task** (`fresh` or sticky start): normal Task/subagent invoke → save `host_agent_id` to ledger
    - **Next tasks** (`sticky`): host **resume** with same `host_agent_id` + continuation prompt (`implementer-prompt.md` § Continuation)
-4. On `DONE` → `review-package` → **fresh** task reviewer (never resume reviewer)
+4. On `DONE` → `mstar sdd review-package` → **fresh** task reviewer (never resume reviewer)
 5. Append `progress.md`; update ledger `last_task`
 6. Next task
 

@@ -31,7 +31,7 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 �
 | 禁止（PM 线程） | 必须 |
 |-----------------|------|
 | Write/Edit/Shell 产品代码、写测试、跑 QC 审查（Phase 2） | 每条 implement/QC/QA Assignment ⇒ **1 次 `Task`** |
-| **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `task-brief` → implementer → `review-package` → task reviewer → `progress.md` |
+| **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `mstar sdd task-brief` → implementer → `mstar sdd review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮 dispatch：`Subagent invokes issued: N`（N = Assignment 条数） |
 | 最后一个 plan `Done` 后直接开 PR / 汇报结束 | **Phase 3 → 4 → 5** 顺序执行 |
 | Phase 4 开 PR 后停止 | Phase 5 loop 至 merge-ready；**禁止**未过 §5.5 就结束会话 |

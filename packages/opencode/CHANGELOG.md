@@ -119,7 +119,7 @@ See root [CHANGELOG.md](../../CHANGELOG.md) **1.5.6**.
 
 ## 1.5.5
 
-- Version alignment with harness **1.5.5** (bundled skills: control-path harness under default gitignore + `sdd-workspace` `MSTAR_CONTROL_ROOT`).
+- Version alignment with harness **1.5.5** (bundled skills: control-path harness under default gitignore + SDD workspace `MSTAR_CONTROL_ROOT` resolution).
 
 See root [CHANGELOG.md](../../CHANGELOG.md) **1.5.5**.
 
@@ -402,7 +402,7 @@ See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.2**.
 
 ## 0.6.1
 
-- Bundled skills: `tech-debt-rollup.sh`, PM dual fullstack spread defaults, routing-eval v6.
+- Bundled skills: tech-debt rollup script, PM dual fullstack spread defaults, routing-eval v6.
 
 See root [CHANGELOG.md](../../CHANGELOG.md) **0.6.1**.
 

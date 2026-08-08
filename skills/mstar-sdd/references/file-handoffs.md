@@ -4,14 +4,14 @@ PM and subagents move artifacts as **files**, not pasted text. Pasted content st
 
 ## Before implementer dispatch
 
-Resolve scripts from skill **`mstar-sdd`** → `scripts/…` (loaded skill directory). Do **not** run `skills/mstar-sdd/scripts/…` from a consumer project cwd.
+Run the SDD helpers through the engine CLI **`mstar sdd …`** (engine-backed; the former bash scripts are removed — semantics unchanged).
 
-1. `export SDD_DIR=$(<mstar-sdd>/scripts/sdd-workspace <plan-id>)`
-   - Iteration L1 (implementer cwd = feature worktree):  
-     `export MSTAR_CONTROL_ROOT=<control_worktree_path>`  
-     or `sdd-workspace <plan-id> <control_worktree_path>`  
+1. `export SDD_DIR=$(mstar sdd workspace <plan-id>)`
+   - Iteration L1 (implementer cwd = feature worktree):
+     `export MSTAR_CONTROL_ROOT=<control_worktree_path>`
+     or `mstar sdd workspace <plan-id> <control_worktree_path>`
      so `{SDD_DIR}` lands on the control harness (default-gitignored plans/status/sdd). Do not create a second SDD tree under the feature checkout.
-2. `<mstar-sdd>/scripts/task-brief <plan-file> <N> "$SDD_DIR/task-N-brief.md"`
+2. `mstar sdd task-brief <plan-file> <N> "$SDD_DIR/task-N-brief.md"`
 3. Record `BASE_SHA` (`git rev-parse HEAD` before dispatch).
 4. Dispatch implementer with:
    - One line scene-setting (where task fits)
@@ -33,7 +33,7 @@ Implementer writes full report to `task-N-report.md`. Return to PM only:
 ## After implementer DONE
 
 1. `HEAD_SHA=$(git rev-parse HEAD)`
-2. `<mstar-sdd>/scripts/review-package "$BASE_SHA" "$HEAD_SHA" "$SDD_DIR/review-....diff"`
+2. `mstar sdd review-package "$BASE_SHA" "$HEAD_SHA" "$SDD_DIR/review-....diff"`
 3. Dispatch task reviewer with: brief path, report path, diff path, Global Constraints (verbatim from plan).
 
 **Never use `HEAD~1` as BASE** — multi-commit tasks truncate.
@@ -65,7 +65,7 @@ After all tasks:
 ```bash
 MERGE_BASE=$(git merge-base <target-branch> HEAD)
 mkdir -p "$SDD_DIR/review"
-<mstar-sdd>/scripts/review-package "$MERGE_BASE" HEAD "$SDD_DIR/review/branch-review-....diff"
+`mstar sdd review-package "$MERGE_BASE" HEAD "$SDD_DIR/review/branch-review-....diff"`
 ```
 
 Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and open residuals in **local** plan/`status.json` (session SSOT) and promotes cross-clone decisions into tracked knowledge/specs/`AGENTS.md` per `mstar-plan-conventions` git policy.

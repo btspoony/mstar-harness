@@ -34,15 +34,15 @@ Use before publishing or sharing the Morning Star Cursor plugin from this repo.
 
 ## 3c) SDD smoke (1.0.0+)
 
-From **this harness repo root** (not a consumer project) with a fixture plan. Runtime docs name these as skill **`mstar-sdd`** → `scripts/…`; the `skills/mstar-sdd/scripts/…` form below is valid **only** here because this repository vendors the skill tree at `skills/`.
+From **this harness repo root** (not a consumer project) with a fixture plan, after building the CLI (`bun run cli:build` at repo root). The SDD helpers are engine-backed (`mstar sdd …`); the former `skills/mstar-sdd/scripts/…` executables are removed — runtime docs name the CLI path only.
 
 ```bash
-skills/mstar-sdd/scripts/sdd-workspace test-plan-id
-skills/mstar-sdd/scripts/task-brief .harness/plans/10-sdd-1-0-0-release.md 1
-git rev-parse HEAD | xargs -I{} skills/mstar-sdd/scripts/review-package {} {}
+bun run cli:dev -- sdd workspace test-plan-id
+bun run cli:dev -- sdd task-brief .harness/plans/10-sdd-1-0-0-release.md 1
+git rev-parse HEAD | xargs -I{} bun run cli:dev -- sdd review-package {} {}
 ```
 
-- Confirm outputs land under `{SDD_DIR}` printed by `sdd-workspace` (default `.mstar/sdd/<plan-id>/`) and plan-level review artifacts use `{SDD_DIR}/review/`.
+- Confirm outputs land under `{SDD_DIR}` printed by `mstar sdd workspace` (default `.mstar/sdd/<plan-id>/`) and plan-level review artifacts use `{SDD_DIR}/review/`.
 - `git status` must **not** list `{HARNESS_DIR}/sdd/` scratch files or other process artifacts (`plans/`, `iterations/`, `status.json`, … — see `mstar-plan-conventions` git policy).
 - PM-style routing: **`Execution mode: sdd`** → plan QC **N=3** tri + branch review-package in `{SDD_DIR}/review/`; **`inline`/hotfix** → **N=1** `qc.md` in the same bundle. SDD implement/reviewer dispatches are **serial**. Optional **`SDD implementer session: sticky`** (Cursor Task `resume`) — reviewers stay **fresh** per task (`mstar-sdd/references/sticky-implementer-session.md`).
 - Stale path check: raw QC/QA report defaults should not point at `{PLAN_DIR}/reports/` or `plans/reports/`; cross-clone tracked results are `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/`, `{SPECS_DIR}/` — durable gate summaries live in local plan files (gitignored by default).
