@@ -7,7 +7,12 @@ import pc from "picocolors";
 import { Command } from "commander";
 import {
   archiveResiduals,
+  assertDefaultBranchProtected,
+  assertTriIdentity,
   evaluatePhaseGate,
+  executionModeToN,
+  l1PreDispatchCheck,
+  l2PreDispatchCheck,
   pushCadenceProbe,
   resolveHarnessDir,
   resolveSpecsDir,
@@ -15,8 +20,11 @@ import {
   SddScriptError,
   sddWorkspace,
   taskBrief,
+  validateAssignmentFields,
   validateStatus,
   type GateResult,
+  type L1PreDispatchInput,
+  type WorktreeTrack,
 } from "@mstar-harness/engine";
 import { parseCompassFrontmatter } from "./compass";
 import { verifyPlanExecutionLease } from "./lease-verify";
@@ -579,6 +587,202 @@ iterationCommand
       if (violation.fix) console.error(`    fix: ${violation.fix}`);
     }
     process.exitCode = 1;
+  });
+
+const dispatchCommand = program
+  .command("dispatch")
+  .description("Assignment field + default-branch gate checks (engine-backed)");
+
+dispatchCommand
+  .command("validate")
+  .description(
+    "Validate an Assignment markdown file: required header fields + exactly-one branch form, " +
+      "then the default-protected-branch gate (exit 1 on violations, 2 on usage)",
+  )
+  .argument("[assignment-file]", "Assignment markdown file")
+  .option("--branch <branch>", "Branch to check against the default-protected gate (default: $MSTAR_WORKING_BRANCH)")
+  .action((assignmentFile: string | undefined, options: { branch?: string }) => {
+    try {
+      // Optional arg + explicit count check (bash-parity usage exit 2, slice-2
+      // convention: commander's own missing-argument error would exit 1).
+      if (!assignmentFile) {
+        throw new SddScriptError("usage: dispatch validate <assignment-file> [--branch <branch>]", 2);
+      }
+      const file = path.resolve(assignmentFile);
+      if (!fs.existsSync(file)) {
+        throw new Error(`assignment file not found: ${file}`);
+      }
+      const text = fs.readFileSync(file, "utf8");
+      const violations = [...validateAssignmentFields(text).violations];
+      // Default-branch gate: --branch wins, else the MSTAR_WORKING_BRANCH env
+      // var; skipped when neither is set (nothing to check).
+      const branch = options.branch ?? process.env.MSTAR_WORKING_BRANCH;
+      if (branch !== undefined && branch.trim() !== "") {
+        violations.push(...assertDefaultBranchProtected(branch).violations);
+      }
+      printChecklist("dispatch validate", { ok: violations.length === 0, violations });
+      if (violations.length > 0) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "dispatch validate");
+    }
+  });
+
+const worktreeCommand = program
+  .command("worktree")
+  .description("L1/L2 pre-dispatch worktree checks (engine-backed)");
+
+/** Parse the `--tracks` JSON arg into L2 track records (arg-shape errors → usage exit 2). */
+function parseTracksArg(tracksJson: string): WorktreeTrack[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(tracksJson);
+  } catch {
+    throw new SddScriptError("usage: worktree check --l2 --tracks <json> — invalid JSON", 2);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new SddScriptError(
+      "usage: worktree check --l2 --tracks <json> — expected a JSON array of {worktreePath, workingBranch}",
+      2,
+    );
+  }
+  const tracks: WorktreeTrack[] = [];
+  for (const item of parsed) {
+    const record = item as { worktreePath?: unknown; workingBranch?: unknown } | null;
+    if (record === null || typeof record !== "object" || typeof record.worktreePath !== "string" || typeof record.workingBranch !== "string") {
+      throw new SddScriptError(
+        "usage: worktree check --l2 --tracks <json> — every track needs string worktreePath + workingBranch",
+        2,
+      );
+    }
+    tracks.push({ worktreePath: record.worktreePath, workingBranch: record.workingBranch });
+  }
+  return tracks;
+}
+
+worktreeCommand
+  .command("check")
+  .description(
+    "L1: verify the plan's execution_lease worktree vs control path (isolation, existence, branch alignment) from " +
+      "status.json; --l2: verify parallel writable tracks (exit 1 on violations, 2 on usage)",
+  )
+  .option("--plan <plan-id>", "Plan id whose execution_lease drives the L1 input")
+  .option("--status <path>", "status.json path override (default: {HARNESS_DIR}/status.json)")
+  .option("--control <path>", "Control worktree path override (default: status.json metadata.control_worktree_path)")
+  .option("--l2", "Run the L2 within-plan check (parallel writable tracks) instead of L1")
+  .option(
+    "--tracks <json>",
+    'L2 tracks JSON: [{"worktreePath": "/abs/path", "workingBranch": "feature/x"}] (required with --l2)',
+  )
+  .action((options: { plan?: string; status?: string; control?: string; l2?: boolean; tracks?: string }) => {
+    try {
+      if (options.l2) {
+        if (!options.tracks) {
+          throw new SddScriptError("usage: worktree check --l2 --tracks <json>", 2);
+        }
+        const gate = l2PreDispatchCheck({ tracks: parseTracksArg(options.tracks) });
+        printChecklist("worktree L2 check", gate);
+        if (!gate.ok) process.exitCode = 1;
+        return;
+      }
+      if (!options.plan) {
+        throw new SddScriptError("usage: worktree check --plan <plan-id> [--status <path>] [--control <path>]", 2);
+      }
+      const statusPath = options.status ? path.resolve(options.status) : resolveStatusFilePath();
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const doc = readJson(statusPath);
+      const plans = Array.isArray(doc.plans) ? (doc.plans as Array<Record<string, unknown>>) : [];
+      const matches = plans.filter((row) => row?.id === options.plan || row?.plan_id === options.plan);
+      if (matches.length === 0) {
+        console.error(pc.red(`${statusPath}: FAIL plan ${options.plan}`));
+        console.error(`  - [high] worktree.l1.plan-not-found: no plan row with id/plan_id ${options.plan}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (matches.length > 1) {
+        console.error(pc.red(`${statusPath}: FAIL plan ${options.plan}`));
+        console.error("  - [high] worktree.l1.ambiguous: multiple plan rows match (id and plan_id both present)");
+        process.exitCode = 1;
+        return;
+      }
+      const row = matches[0]!;
+      const lease = (row.execution_lease ?? {}) as Record<string, unknown>;
+      const metadata = (doc.metadata ?? {}) as Record<string, unknown>;
+      const input: L1PreDispatchInput = {
+        controlWorktreePath: options.control ? path.resolve(options.control) : String(metadata.control_worktree_path ?? ""),
+        leaseWorktreePath: String(lease.worktree_path ?? ""),
+        leaseWorkingBranch: String(lease.working_branch ?? ""),
+        planId: options.plan,
+      };
+      const gate = l1PreDispatchCheck(input);
+      printChecklist("worktree L1 check", gate);
+      if (!gate.ok) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "worktree check");
+    }
+  });
+
+const reviewCommand = program
+  .command("review")
+  .description("QC seat-mapping checks (engine-backed)");
+
+/** Parse the Assignment's `Execution mode` header field (bold or plain form). */
+function parseAssignmentExecutionMode(assignmentText: string): string {
+  for (const line of assignmentText.split(/\r?\n/)) {
+    const match =
+      line.match(/^\*\*\s*Execution mode\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^Execution mode\s*:\s*(.*)$/);
+    if (match) return match[1]!.trim();
+  }
+  return "";
+}
+
+reviewCommand
+  .command("seats")
+  .description(
+    "Map an Assignment's execution mode to its QC seat count N; with --reviewers, verify tri identity on sdd " +
+      "(exit 1 on violations, 2 on usage)",
+  )
+  .argument("[assignment-file]", "Assignment markdown file")
+  .option("--mode <mode>", "Execution mode override (sdd | inline | targeted; default: the Assignment's Execution mode field)")
+  .option("--reviewers <list>", "Comma-separated reviewer roles (targeted seats; tri-identity checked when mode is sdd)")
+  .action((assignmentFile: string | undefined, options: { mode?: string; reviewers?: string }) => {
+    try {
+      // Optional arg + explicit count check (bash-parity usage exit 2).
+      if (!assignmentFile) {
+        throw new SddScriptError("usage: review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]", 2);
+      }
+      const file = path.resolve(assignmentFile);
+      if (!fs.existsSync(file)) {
+        throw new Error(`assignment file not found: ${file}`);
+      }
+      const text = fs.readFileSync(file, "utf8");
+      const mode = options.mode ?? parseAssignmentExecutionMode(text);
+      const reviewers = (options.reviewers ?? "")
+        .split(",")
+        .map((role) => role.trim())
+        .filter((role) => role !== "");
+      const result = executionModeToN(mode, { seats: reviewers });
+      if (!result.ok) {
+        printChecklist("review seats", result);
+        process.exitCode = 1;
+        return;
+      }
+      // Tri identity on sdd only when an initial-wave reviewer list is given
+      // (dispatch-gates § QC tri-review: exactly qc-specialist/-2/-3).
+      const normalizedMode = mode.trim().toLowerCase().split(/\s+/)[0] ?? "";
+      if (normalizedMode === "sdd" && reviewers.length > 0) {
+        const tri = assertTriIdentity(reviewers);
+        if (!tri.ok) {
+          printChecklist("review seats (tri identity)", tri);
+          process.exitCode = 1;
+          return;
+        }
+      }
+      console.log(pc.green(`seats: ${result.n}`));
+    } catch (error) {
+      failScript(error, "review seats");
+    }
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {
