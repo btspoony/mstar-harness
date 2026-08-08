@@ -74,6 +74,8 @@ per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 
 
 per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。
 
+> **Engine check (when available):** run `mstar iteration gate --status <status.json> --compass <delivery-compass.md>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` in a host hook) to evaluate the iteration phase-transition gate (Phase 2 → 3 → 4) when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## Plan 目录与审查证据（启用 `{PLAN_DIR}` 时）
 
 - 进入 `InReview` 后，QC/QA 原始过程报告默认落入 `{SDD_DIR}/review/`（**SDD 默认 tri** `qc1`…`qc-consolidated`；**inline** 单席 `qc.md`）。**fix 后默认 targeted re-review**。SDD per-task review 在 implement 波次内完成（`mstar-sdd` task reviewer）。PM 将 durable gate summary 回写主 plan / `status.json`，而不是把 raw reports 作为默认 git 产物。
