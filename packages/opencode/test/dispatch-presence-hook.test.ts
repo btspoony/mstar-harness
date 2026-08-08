@@ -675,5 +675,8 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
       console.error = original;
     }
     expect(errors.some((e) => e.includes("[mstar-harness]") && e.includes("hard gate"))).toBe(true);
+    // The GateResult is not silently discarded: the hook surfaces the
+    // hardBlocked state explicitly (host has no refusal channel).
+    expect(errors.some((e) => e.includes("hard-gate blocked (hardBlocked=true)"))).toBe(true);
   });
 });

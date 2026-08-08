@@ -5,23 +5,34 @@
  * - Registers skill paths only inside this package: `harness-skills/` (synced at build / repo postinstall; includes `mstar-host`).
  * - Loads agents from `harness-agents/` only (same sync). Does not use `process.cwd()` so OpenCode project cwd does not matter.
  * - Loads custom commands from `harness-commands/` only (same sync).
- * - Non-blocking `status.json` write lint (roadmap §8.5 `beforeStatusWrite`, v1):
- *   on structured file-write tools targeting `{HARNESS_DIR}/status.json`, runs the
- *   engine `status.validateStatus` and emits a `warn` on violations. Never blocks.
+ * - Dual-mode `status.json` write lint (roadmap §8.5 `beforeStatusWrite`):
+ *   on structured file-write tools targeting `{HARNESS_DIR}/status.json`, runs
+ *   the engine `status.validateStatus`. Default (no `Enforcement: hard`):
+ *   `warn` lines on violations, never blocks. Hard mode (repo iteration
+ *   compass frontmatter `enforcement: hard`, engine
+ *   `status.resolveCompassEnforcement`): error-level lines with a skill-text
+ *   pointer + a GateResult carrying `hardBlocked: true` (the caller MUST
+ *   refuse the write). Never throws raw exceptions in either mode — OpenCode's
+ *   plugin API (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
+ *   `Promise<void>` with no refusal channel, so hard mode is surfaced as the
+ *   error logs + structured result (see `validateStatusWrite`).
  *   Hook coverage follows `resolveHarnessDir` probing (`.mstar/` → `.agents/` →
  *   `.plans/`|`plans/`); repos with a non-probed harness root (e.g. `.harness/`)
  *   MUST set `MSTAR_HARNESS_DIR` in the OpenCode server env — see package README
  *   "Status write lint (hook coverage)" (qc2 F-006).
- * - Non-blocking `beforeDispatch` dispatch lint (roadmap §8.5, v1): on
- *   `task`-tool executions (subagent dispatch), validates the Assignment
- *   header — field presence (`Execute as` / `Delegation` / `Task category`,
- *   backward-compat `assignment.presence.*` codes), full field validation
- *   from the engine (`dispatch.validateAssignmentFields`: exactly-one
- *   Working-branch form, create-form `<base>`, Branch policy reason) and the
- *   default-branch gate (`dispatch.assertDefaultBranchProtected` with the
- *   CLI ea010f1 direct-on-exception wiring). Emits `warn` lines, never
- *   blocks (v1 hard constraint; hard gates are Slice 5 behind
- *   `Enforcement: hard`).
+ * - Dual-mode `beforeDispatch` dispatch lint (roadmap §8.5): on `task`-tool
+ *   executions (subagent dispatch), validates the Assignment header — field
+ *   presence (`Execute as` / `Delegation` / `Task category`, backward-compat
+ *   `assignment.presence.*` codes), full field validation from the engine
+ *   (`dispatch.validateAssignmentFields`: exactly-one Working-branch form,
+ *   create-form `<base>`, Branch policy reason), the default-branch gate
+ *   (`dispatch.assertDefaultBranchProtected` with the CLI ea010f1
+ *   direct-on-exception wiring) and the anti-recursion binding check. The
+ *   Assignment's OWN `Enforcement: hard` flag (bold or plain) switches the
+ *   hook to hard mode: error-level lines + a GateResult carrying
+ *   `hardBlocked: true`; flag absent (or `Enforcement: soft`) stays warn-only.
+ *   Never throws raw exceptions in either mode (refusal-channel limitation as
+ *   above — see `validateDispatchAssignment`).
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import {
@@ -487,14 +498,18 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
     "tool.execute.before": async (input, output) => {
       const args = (output?.args ?? {}) as Record<string, unknown>;
 
-      // beforeDispatch-equivalent (v1): non-blocking Assignment validation
-      // warn on subagent dispatch. OpenCode's `task` tool carries the
+      // beforeDispatch-equivalent (Slice 5, dual-mode): Assignment
+      // validation on subagent dispatch. OpenCode's `task` tool carries the
       // subagent prompt — the harness Assignment markdown — in `args.prompt`;
       // missing core fields (Execute as / Delegation / Task category),
       // branch-form violations, default-protected-branch work and
-      // self-recursion (binding == Execute as) are logged as warnings.
-      // Never blocks, never modifies args (v1 hard constraint). The role
-      // binding key is `subagent` (OpenCode) / `subagent_type` (Cursor).
+      // self-recursion (binding == Execute as) surface per the Assignment's
+      // own enforcement flag: warn lines by default, error lines +
+      // `hardBlocked` result under `Enforcement: hard`. Never modifies args
+      // and never throws in either mode; `tool.execute.before` returns void
+      // on this host (`@opencode-ai/plugin` 1.4.8 — no refusal channel), so a
+      // hard gate degrades to the explicit refusal-channel log below. The
+      // role binding key is `subagent` (OpenCode) / `subagent_type` (Cursor).
       if (input.tool === "task" && typeof args.prompt === "string") {
         const subagentType =
           typeof args.subagent === "string"
@@ -502,13 +517,21 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
             : typeof args.subagent_type === "string"
               ? args.subagent_type
               : "";
-        validateDispatchAssignment(args.prompt, { subagentType });
+        const gate = validateDispatchAssignment(args.prompt, { subagentType });
+        if (gate?.hardBlocked) {
+          defaultStatusLogger(
+            "error",
+            "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
+          );
+        }
         return;
       }
 
-      // Non-blocking status.json write lint (v1): warn only — never modify
-      // args, never throw. Structured file-write tools (`write`/`edit`) carry
-      // the target path in `args.filePath`; bash-heredoc writes are out of v1
+      // status.json write lint (Slice 5, dual-mode): warn-only by default;
+      // hard mode (repo compass `enforcement: hard`) logs error-level lines
+      // + a `hardBlocked` result. Never modifies args and never throws in
+      // either mode. Structured file-write tools (`write`/`edit`) carry the
+      // target path in `args.filePath`; bash-heredoc writes are out of
       // scope. Tool implementations may call `validateStatusWrite` directly.
       if (typeof args.filePath !== "string") return;
 
@@ -524,14 +547,26 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
             doc = undefined;
           }
         }
-        validateStatusWrite(args.filePath, { doc });
+        const gate = validateStatusWrite(args.filePath, { doc });
+        if (gate?.hardBlocked) {
+          defaultStatusLogger(
+            "error",
+            "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
+          );
+        }
       } else if (input.tool === "edit") {
         // v1 limitation (qc2 F-005 / qc3 F-7): validates the PRE-edit on-disk
         // file, not the patched result — an edit that turns a valid file
         // invalid is caught by the subsequent write, and editing an already
         // invalid file re-warns about the state being replaced. Computing the
         // patched doc for `edit` is a later-slice improvement.
-        validateStatusWrite(args.filePath);
+        const gate = validateStatusWrite(args.filePath);
+        if (gate?.hardBlocked) {
+          defaultStatusLogger(
+            "error",
+            "hard-gate blocked (hardBlocked=true) — refusal requires a host refusal channel",
+          );
+        }
       }
     },
 

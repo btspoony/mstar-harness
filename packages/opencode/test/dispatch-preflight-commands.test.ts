@@ -12,7 +12,9 @@
  * command text) and asserts the snippet in the changed sections.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const commandsDir = path.resolve(import.meta.dir, "../../../commands");
@@ -85,4 +87,77 @@ describe("omp iteration commands Slice 5 fail-fast (compass enforcement: hard)",
       expect(content).toContain(FAILFAST_SNIPPET);
     });
   }
+
+  // Real shell smoke test (Slice 5 review finding): the documented fail-fast
+  // snippet is not just rendered text — it must actually exit 1 when the bin
+  // is present and validation fails, and exit 0 silently when the bin is
+  // absent. Runs against a temp PATH with a fake `mstar-harness` bin (exits
+  // 1), never depending on the real mstar-harness install.
+  const makeTempProject = (): { dir: string; binDir: string; cleanup: () => void } => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mstar-preflight-"));
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    return { dir, binDir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  };
+
+  const writeFakeBin = (binDir: string, exitCode: number): void => {
+    fs.writeFileSync(path.join(binDir, "mstar-harness"), `#!/bin/sh\nexit ${exitCode}\n`, {
+      mode: 0o755,
+    });
+  };
+
+  const writeTempAssignment = (dir: string): string => {
+    const assignmentFile = path.join(dir, "assignment.md");
+    // Deliberately invalid: heading + `Enforcement: hard` but no core fields.
+    fs.writeFileSync(assignmentFile, "## Assignment\n\n**Enforcement**: hard\n\nDispatch me.\n", "utf8");
+    return assignmentFile;
+  };
+
+  const runSnippet = (snippet: string, envPath: string): { status: number | null; stderr: string } => {
+    const result = spawnSync("/bin/sh", ["-c", snippet], {
+      env: { PATH: envPath },
+      encoding: "utf8",
+    });
+    return { status: result.status, stderr: result.stderr };
+  };
+
+  test("fail-fast snippet: bin present + validation fails → command exits 1", () => {
+    const { dir, binDir, cleanup } = makeTempProject();
+    try {
+      writeFakeBin(binDir, 1);
+      const snippet = FAILFAST_SNIPPET.replace("<latest-assignment-file>", writeTempAssignment(dir));
+      const { status } = runSnippet(snippet, binDir);
+      expect(status).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("fail-fast snippet: bin present + validation passes → command exits 0", () => {
+    const { dir, binDir, cleanup } = makeTempProject();
+    try {
+      writeFakeBin(binDir, 0);
+      const snippet = FAILFAST_SNIPPET.replace("<latest-assignment-file>", writeTempAssignment(dir));
+      const { status } = runSnippet(snippet, binDir);
+      expect(status).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("fail-fast snippet: bin absent → exit 0 silent skip", () => {
+    const { dir, binDir, cleanup } = makeTempProject();
+    try {
+      // No bin written — and PATH points at an empty dir only, so even a
+      // real mstar-harness install elsewhere cannot satisfy `command -v`.
+      const emptyPath = path.join(dir, "empty");
+      fs.mkdirSync(emptyPath, { recursive: true });
+      const snippet = FAILFAST_SNIPPET.replace("<latest-assignment-file>", writeTempAssignment(dir));
+      const { status, stderr } = runSnippet(snippet, emptyPath);
+      expect(status).toBe(0);
+      expect(stderr).toBe("");
+    } finally {
+      cleanup();
+    }
+  });
 });
