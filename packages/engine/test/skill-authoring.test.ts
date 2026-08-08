@@ -357,9 +357,11 @@ describe("resolveAssetPath", () => {
     expect(resolveAssetPath("my-skill", "scripts/do-thing", "zcode")).toBe(expected);
   });
 
-  test("pi and dsh stay deferred (no adapter stubs in v1)", () => {
+  test("pi stays deferred; dsh resolves via the bundled skill-local root", () => {
     expect(resolveAssetPath("my-skill", "scripts/do-thing", "pi")).toMatch(/deferred/);
-    expect(resolveAssetPath("my-skill", "scripts/do-thing", "dsh")).toMatch(/deferred/);
+    expect(resolveAssetPath("my-skill", "scripts/do-thing", "dsh")).toBe(
+      "skill `my-skill` → scripts/do-thing ($DSH_BUNDLED_SKILL_DIR/my-skill/scripts/do-thing)",
+    );
   });
 
   test("references/ assets resolve the same way (progressive disclosure)", () => {
