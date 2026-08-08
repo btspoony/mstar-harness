@@ -85,8 +85,10 @@ Execute **`mstar-iteration` §1.6**（SSOT）：顺序 `product-manager` → `ar
 **Optional — Assignment preflight**（`mstar-harness` bin 未安装时静默跳过；可选，不改变本命令核心流程）: 在每次角色 invoke 前，若本机装有 CLI，校验最新落盘的 Assignment（临时写盘或既有 brief）：
 
 ```bash
-command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate <latest-assignment-file>
+command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate "<latest-assignment-file>"
 ```
+
+> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
 
 exit 1 仅提示（Slice 3 可选 preflight，不阻断派发；Slice 5 `Enforcement: hard` 前不 fail-fast）。
 
