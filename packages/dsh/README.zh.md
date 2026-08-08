@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-面向 DeepSeek Harness SDK（dsh）的 Morning Star 守护闸门（harness gates）——一个 cordis 函数插件，将 mstar engine 进程内挂载，守护 `{HARNESS_DIR}/status.json` 写入（校验 + 咨询；hard 下按修复逃生放行）并在 `Enforcement: hard` 开启时阻止被禁止的 subagent 派发。随 dsh Loader 应用启动；各闸门通过 seam 的拒绝/咨询通道行使职责，从不改动工具本身。
+让 Morning Star 成为一等公民的 dsh 宿主——一个 cordis 函数插件，将 mstar engine 进程内挂载，实现 engine `HostAdapter`（`host: 'dsh'`），守护 `{HARNESS_DIR}/status.json` 写入（校验 + 咨询；hard 下按修复逃生放行），在 `Enforcement: hard` 开启时阻止被禁止的 subagent 派发，对挂载技能根下的 `SKILL.md` 写入执行技能撰写 lint，通过 dsh skill-local 提供者挂载 mstar `skills/` 镜像（单一规范挂载），并向每个组合后的 agent 步骤追加一条持久化的 `mstar-engine-status` catalog 行。随 dsh Loader 应用启动；一切均通过 seam 的拒绝/咨询通道行使职责，从不改动工具本身。
 
 ## Installation
 
@@ -24,6 +24,8 @@
 | `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖。优先级：Config 优先；否则取 Assignment 自身的 `**Enforcement**: hard` 头字段（仅派发闸门）；否则取迭代 compass frontmatter；否则仅告警。Config `soft` 是唯一的本地回滚——Assignment 级 `soft` 不能覆盖 hard compass。 |
 | `dispatchTools` | `string[]` | `['subagent']` | 派发闸门匹配的委派工具名（dsh subagent 工具的 `toolName` 可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
+| `skillRoots` | `string[]` | 未设置（不注册自定义根） | 向 dsh skill-local 提供者注册的额外技能根（`customSkillDirs` 语义——先于用户根扫描）。开发期：镜像 `<repo-root>/skills` 的绝对路径。 |
+| `bundledSkillDir` | `string` | 未设置 | 向 dsh skill-local 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。规范发布形态——dsh 默认 `$DSH_BUNDLED_SKILL_DIR`；本插件挂载隔离提供者，因此打包根显式注册。 |
 
 ## Gates
 
@@ -39,13 +41,40 @@
 
 在 opencode 字段集之上新增：对声明 `Execution mode: sdd` 或 plan 行为 `InProgress` 的可写派发，对照 `{HARNESS_DIR}/status.json` 运行 `verifyPlanExecutionLease` 与派发上下文比对（`holder`、`worktree_path`、`working_branch`）。违规使用 dsh 侧 `lease.dispatch.*` 命名空间；只读角色完全跳过该检查。**缺失** `status.json` 对 sdd 派发不再是静默放行：发出 `lease.dispatch.unverifiable`（告警模式下为 advisory，hard 下为 deny）——没有状态文件就无法确认 execution_lease。非 SDD 派发保持降级放行（无租约义务）。所有 Assignment 字段读取都限定在 engine `assignmentHeaderRegion` 内（正文中引用的示例不会泄漏进头字段）。
 
+### Skill lint gate
+
+作用于已配置技能根下 `SKILL.md` 文件的 `fs/write-intent` 监听器，对写入前的磁盘文档运行 engine 技能撰写 lint（`lintFrontmatter` + `lintFiveQuestion`——与 CLI `mstar skill lint` 组合一致）。该槽位**内容盲**（intent 瀑布链只携带 `(target, actor)`）：文件缺失 = 首次创建 = 放行；磁盘文档干净 = 静默放行；告警模式下有违规 = 咨询 + 委托；hard 模式下有违规 = **修复逃生**——文档**已经**非法，本次写入可能就是修复本身（error 级日志 + `hard: true, repair: true` 咨询，携带强制执行后的 `hardBlocked` 判定）。强制执行解析方式与其他闸门相同（Config 覆盖优先，否则取迭代 compass，否则仅告警）。闸门从不抛出；读取失败与意外错误降级为放行并发出 `degraded: true` 咨询。类型化 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）位于传入文档分支（`lintSkillWrite`）——当前接线见 Known Limitations。
+
 ## Service
 
-`apply` 构造 `ctx.dshMstar`（engine 支撑：`validateStatus`、`validateResidual`、`findingsCleanupGate`、`resolveCompassEnforcement`、`resolveHarnessDir`、`readHarnessVersion`、`applyEnforcement`）。分层：P1 各闸门是本包内与 engine 同置的包装器，直接导入 engine（同一插件，构建时打包 engine）；`ctx.dshMstar` 是供未来 inject 消费者（宿主适配器、catalog——P2/P3）使用的组合/测试外观。两条路径共用 engine 这唯一语法源。伴随入口 `@mstar-harness/dsh/invariant` 以文档化的空安装器保留包所有权。
+`apply` 构造 `ctx.dshMstar`（engine 支撑：`validateStatus`、`validateResidual`、`findingsCleanupGate`、`resolveCompassEnforcement`、`resolveHarnessDir`、`readHarnessVersion`、`applyEnforcement`）。分层：P1 各闸门是本包内与 engine 同置的包装器，直接导入 engine（同一插件，构建时打包 engine）；`ctx.dshMstar` 是供 inject 消费者使用的组合/测试外观；宿主适配器（下节）是面向宿主的门面。两条路径共用 engine 这唯一语法源。伴随入口 `@mstar-harness/dsh/invariant` 以文档化的空安装器保留包所有权。
+
+## Host adapter
+
+插件以 `DshHostAdapter` 实现 engine `HostAdapter` 契约（`host: 'dsh'`），并以 `ctx.dshHostAdapter` 服务暴露。检测：engine `detectHost` 将 dsh 委派工具名——`ToolSignal` **`subagent`**（模型可见的 dsh subagent 工具）——映射为 `'dsh'`，在 omp 之后、kimi/zcode/codex 之前求值；混合会话按固定顺序让位于更早的行。适配器与插件内闸门共用同一套校验核心（单一代码路径）：`beforeStatusWrite(path, doc)` 在宿主提供文档时校验传入文档，否则走磁盘文档回退（文件缺失 = 首次创建 = 放行）；`beforeDispatch(assignment)` 运行字段 + 分支 + 反递归闸门并携带强制执行后的 `hardBlocked` 判定（租约闸门留在监听器侧——它绑定该钩子不携带的 ToolExecution 会话上下文）；`beforeMerge(lease)` 是 engine `validateIntegrationMergeLease` 的薄包装（向 `status.json` 的预留写入是 P3 seam）。`log` 默认路由到 dsh ctx 日志器 `mstar/host-adapter`。
+
+dsh 的冻结技能根形态（engine `resolveSkillRoot('dsh', …)`，Task 1）为 **`$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]`**——解析器只定义技能相对路径解析器（`resolveAssetPath`）所用的规范形态；它**不**挂载目录。挂载由插件负责（下一节）。
+
+## Skills mount
+
+mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入（roadmap D6）：插件把配置的根注册为**一个**提供者（`providerName: 'mstar'`、`includeDefaultRoots: false`——隔离，绝不看到宿主应用自身的项目/用户技能），上文的 engine 形态是共享的技能根契约。两条 Config 路径填充它：
+
+| 路径 | 机制 | 时机 |
+| --- | --- | --- |
+| 开发期 | `skillRoots: ["<repo-root>/skills"]` → skill-local `customSkillDirs` 条目 | 本地开发 / 测试 |
+| 发布包 | `bundledSkillDir` → skill-local `bundledSkillDir` 条目（规范发布形态——dsh 默认 `$DSH_BUNDLED_SKILL_DIR`）；P3 打包层把镜像复制进 `packages/dsh/skills/` | P3（`20260808-dsh-seams-bundle`） |
+
+`packages/dsh/skills/README.md` 是打包挂载目标，**不含任何技能副本**——技能内容只在仓库根 `skills/` 镜像中存一份（19 个 `mstar-*` + `pm`），mstar 技能在任何地方都保持可独立使用。不重复加载：opencode 插件在自己的包里携带同一批技能，因此 dsh 只能通过这条 skill-local 路径挂载它们。
+
+开发期现实：`@deepseek-ai/dsh-skill-local` 运行时是 peer stub（契约镜像的注册，无文件 watcher），因此挂载通过真实组合（stub + 实际镜像 `skills/` 的 frontmatter，用 engine `lintSkillFrontmatter` 校验）验证；真实运行时组合（真实 seam 包、watcher、`$DSH_BUNDLED_SKILL_DIR` 环境变量流）推迟到 P3 e2e。
+
+## Engine-status catalog
+
+一个咨询式 `agent/pre-step` 瀑布监听器向每个组合后的步骤追加一条 **`mstar-engine-status`** catalog MessageSource（`kind`/`form: 'catalog'` 契约，镜像 dsh tool-skill 先例）：模型可见的 `<mstar_engine_status>` 块渲染水印字段——**engine 版本**（`readHarnessVersion`）、**插件版本**（自身清单，单一版本不变量）、**harness 目录**（解析后的 `{HARNESS_DIR}`，缺失为 `none`）、**enforcement**（compass 模式，`soft` / `hard (compass)`）。监听器先调用 `next()` 并基于委托后的决策追加——从不否决步骤、从不替换已组合的消息。模型可见 ⟺ 已记录：持久化的 `catalog` 形态 source 在模型面向的散文旁记录了其发布的事实，会话日志无需重新解析该块即可重建该行（dsh packages/AGENTS.md）。fiber 销毁即移除监听器（HMR 安全；针对真实会话日志的按会话摘要去重是 P3 项——代码中有 `simplify:` 标记）。
 
 ## Development
 
-命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 入口 bun 打包进 `dist/`（内联 engine 与 schemastery，cordis 保持外部）并输出 tsc 声明。
+命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 条目 bun 打包进 `dist/`（内联 engine 与 schemastery；`cordis` 与功能性 seam 包 `@deepseek-ai/dsh-skill-local` + `@deepseek-ai/dsh-llm` 保持外部）并输出 tsc 声明。
 
 ```sh
 bun test --coverage
@@ -61,19 +90,19 @@ bun run build
 
 #### What the model sees
 
-本插件不贡献任何自身的 system-prompt 或用户消息文本。其模型可见表面仅在闸门触发时产生：派发否决以注册表物化的 `PreToolDecision { kind: 'deny', reason }` 错误呈现；状态闸门的每次决策都以 `mstar/status-gate` 咨询呈现（告警放行、hard 修复逃生或降级放行），派发闸门以 `mstar/dispatch-gate` 咨询呈现（告警放行或降级），因此每次闸门决策都能从会话日志重建。
+每个组合后的步骤携带一条 `mstar-engine-status` catalog 用户消息（`<mstar_engine_status>` 水印块——见 Engine-status catalog 一节）。闸门决策额外添加：派发否决以注册表物化的 `PreToolDecision { kind: 'deny', reason }` 错误呈现；状态闸门以 `mstar/status-gate` 咨询呈现（告警放行、hard 修复逃生或降级放行）；派发闸门以 `mstar/dispatch-gate` 咨询呈现（告警放行或降级）；技能 lint 闸门以 `mstar/skill-lint` 咨询呈现（告警放行、hard 修复逃生或降级放行）。每条模型可见的行都能从会话日志重建（catalog 形态 source + 咨询事件）。
 
 #### Token effect
 
-零直接 token 影响：任何请求都不增删 token；否决与咨询文本仅在闸门触发时存在。
+catalog 向每个组合后的步骤追加一条固定、稳定的用户消息（小的常量块——除每步一行外不随会话长度增长；按会话摘要去重是 P3 项）。否决与咨询文本仅在闸门触发时存在。
 
 #### KV Cache effect
 
-独立：插件不构造 prompt 前缀，既不创建也不失效缓存状态；工具错误文本随违规变化，但从不参与请求前缀。
+catalog 行在委托之后追加到组合步骤消息的**末尾**——请求前缀（system prompt 与先前消息）不受影响，因此插件既不创建也不失效前缀缓存状态；尾部行跨步骤逐字节相同。工具错误文本随违规变化，但从不参与请求前缀。
 
 ## Known Limitations and Deferred Work
 
-- **开发期 peer stubs** —— `@deepseek-ai/dsh-*` 各 seam 在开发/测试期仅为类型 stub（无运行时实现），因此闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证；由真实 seam 包组合的应用是部署目标，不在本包测试套件覆盖内。
+- **开发期 peer stubs** —— `@deepseek-ai/dsh-*` 各 seam 分为 (a) **仅类型/占位 stub**（`dsh-fs`、`dsh-fs-policy`、`dsh-tools`、`dsh-agent`、`dsh-invariants`、`dsh-subagent`）只暴露 seam 类型/peer 名，与 (b) **功能性组合 stub**（`dsh-skill`、`dsh-skill-local`、`dsh-llm`）携带最小开发期运行时（`simplify:` 标记；钉定 dsh-private `9451be2`），使组合、瀑布链与 catalog 消息工厂在测试中真实运行。功能性 stub 在**构建时外部化**（`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-llm`——发布的 `dist/` 导入它们而非内联占位代码）；闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证。替换为真实 seam 包推迟到 P3 e2e（`20260808-dsh-seams-bundle`）；由真实 seam 组合的应用是部署目标，不在本包测试套件覆盖内。
 - **反递归绑定为 Config 声明** —— dsh 在工具执行上下文上不暴露每 agent 角色，故 `dispatchBinding` 声明单一部署级角色；`Execute as` 不同的 Assignment 无法被识别为自我递归，多角色派发方需要按实例拆分插件。
 - **租约闸门有意与 opencode 分叉** —— opencode 的 `beforeDispatch` 不运行租约检查；dsh 租约闸门是新增的（`lease.dispatch.*` 码），且仅对可写 SDD/InProgress 派发触发，故对齐覆盖字段集而非租约面。
 - **engine 单一版本钉定** —— `@mstar-harness/engine` 为精确 `2.0.0` devDependency，构建时打入 `dist/`（绝非运行时依赖）；`readHarnessVersion()` 读取 bundle 旁的 dsh 包清单，按单一版本不变量保持 `2.0.0`。
@@ -82,3 +111,7 @@ bun run build
 - **状态闸门因 seam 设计而内容盲**（qc2 W-001）——`fs/write-intent`/`fs/edit-intent` 瀑布链只携带 `(target, actor)`，从不携带写入内容，因此**首次**把合法 `status.json` 写坏的写入在两种模式下都会通过（闸门只校验写入前的磁盘文档）。hard 模式因此从不否决状态写入：对已非法文档按**修复逃生**放行（error 级咨询，`hard: true, repair: true`），让修复性写入能落地。恢复路径：就地修复文档（闸门允许）或删除 `status.json` 让 harness 重建；hard 部署应监控 `repair: true` 咨询。
 - **缺失 `status.json` 的租约行为**（qc3 F-5）——sdd 可写派发遇到缺失状态文件会发出 `lease.dispatch.unverifiable`（告警下 advisory，hard 下 deny）；非 SDD 派发无租约义务，保持静默降级放行。
 - **闸门匹配跟随 `displayPath`**（qc2 S-007）——状态闸门按 fs target 的解析后 `displayPath` 匹配。后端报告工作区相对路径、harness 目录为符号链接、或远程/URI target 时永不匹配，闸门对其惰性（无误报）；受守护的 harness 写入请使用绝对本地路径。
+- **`lintSkillWrite` 类型化否决尚未接入生产**——传入文档分支的 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）已导出并测试覆盖，但尚无生产调用方：engine `HostAdapter` 没有携带内容的技能写入钩子（只有 `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`），且 fs intent 槽位内容盲。接线随未来携带内容的钩子落地；在此之前监听器路径只通过修复逃生咨询执行（从不否决）。
+- **内容盲的 skill-lint 盲区**——`fs/write-intent` 槽位只携带 `(target, actor)`：首次创建的传入内容不被 lint，合法→非法覆盖在监听器路径上无法检出（它只 lint 写入前的磁盘文档）。告警/hard 咨询只呈现**已存在**的磁盘违规——与状态闸门同类限制。
+- **CLI `HOST_SIGNALS` 缺少 `subagent` token**——engine `ToolSignal` 联合已包含它且 `detectHost` 能处理，但 `packages/cli` 的 `HOST_SIGNALS` 尚未更新，`mstar host detect --signals subagent` 会拒绝，直到上游化时更新 CLI 列表。
+- **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root）随之一并更新。

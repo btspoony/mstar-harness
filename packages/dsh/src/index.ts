@@ -8,10 +8,17 @@
  * @module @mstar-harness/dsh
  */
 
-import { existsSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
-import type { Context } from 'cordis'
+import { existsSync, readFileSync } from 'node:fs'
+import { basename, dirname, join, resolve, sep } from 'node:path'
+import { Service, type Context } from 'cordis'
 import z from 'schemastery'
+import {
+  apply as applySkillLocal,
+  Config as SkillLocalSchema,
+  inject as skillLocalInject,
+  name as skillLocalName,
+} from '@deepseek-ai/dsh-skill-local'
+import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-local'
 import {
   antiRecursionPrecheck,
   applyEnforcement,
@@ -20,22 +27,38 @@ import {
   executionModeToN,
   findingsCleanupGate,
   isReadOnlyAssignmentRole,
+  lintFiveQuestion,
+  lintFrontmatter,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
+  readHarnessVersion,
   readJson,
+  resolveAssetPath,
   resolveCompassEnforcement,
   resolveHarnessDir,
+  resolveSkillRoot,
   validateAssignmentFields,
   validateExecutionLease,
+  validateIntegrationMergeLease,
   validateStatus,
   verifyPlanExecutionLease,
 } from '@mstar-harness/engine'
-import type { GateResult, StatusDoc, ValidationResult } from '@mstar-harness/engine'
+import type {
+  AssignmentFields,
+  GateResult,
+  HostAdapter,
+  IntegrationMergeLease,
+  StatusDoc,
+  ValidationResult,
+} from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { DshMstar } from './service.ts'
+import type { MstarEngineStatusSource } from './types.ts'
 
 // Re-export the service type from the package entry (qc3 F-2a): the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -43,6 +66,7 @@ import { DshMstar } from './service.ts'
 // typed `ctx.dshMstar`.
 export { DshMstar } from './service.ts'
 export type { DshMstarOptions } from './service.ts'
+export type { MstarEngineStatusSource } from './types.ts'
 
 /** Cordis function-plugin name registered by the Loader. */
 export const name = 'dsh'
@@ -62,6 +86,15 @@ const STATUS_FILE = 'status.json'
 
 /** Logger label for the dispatch gate (dsh logger naming: `<scope>/<subject>`). */
 const DISPATCH_LOGGER = 'mstar/dispatch-gate'
+
+/** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
+const HOST_LOGGER = 'mstar/host-adapter'
+
+/** Logger label for the skill lint gate (dsh logger naming: `<scope>/<subject>`). */
+const SKILL_LINT_LOGGER = 'mstar/skill-lint'
+
+/** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
+const CATALOG_LOGGER = 'mstar/engine-status-catalog'
 
 /** Default delegation tool names the dispatch gate matches (tool-subagent default id). */
 const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
@@ -105,6 +138,25 @@ export interface Config {
    * precheck is skipped (an empty binding is not self-recursion).
    */
   dispatchBinding?: string
+  /**
+   * Additional skill roots registered with the dsh skill-local provider
+   * (skill-local `Config.customSkillDirs` semantics — scanned after project
+   * roots and before user roots; roadmap D6 single canonical mount).
+   * Dev-time: the mirror `<repo-root>/skills` absolute path. Each root's
+   * children are skill dirs (`<name>/SKILL.md`) or flat skill files
+   * (`<name>.md`). Absent → no custom-root registration.
+   */
+  skillRoots?: string[]
+  /**
+   * Bundled skill root registered with the dsh skill-local provider
+   * (skill-local `Config.bundledSkillDir` semantics — scanned last, trusted).
+   * Production: a `skills/` dir shipped inside the plugin package (the
+   * canonical published form — dsh defaults `$DSH_BUNDLED_SKILL_DIR` when
+   * default roots are included; this plugin mounts an isolated provider, so
+   * the bundled root is registered explicitly). Absent → no bundled-root
+   * registration.
+   */
+  bundledSkillDir?: string
 }
 
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall), so both dispatch keys preserve omission via `.default(undefined)`. */
@@ -113,6 +165,8 @@ export const Config: z<Config> = z.object({
   enforcement: z.union(['hard', 'soft']),
   dispatchTools: z.array(z.string()).default(undefined as unknown as string[]),
   dispatchBinding: z.string().default(undefined as unknown as string),
+  skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
+  bundledSkillDir: z.string().default(undefined as unknown as string),
 })
 
 /**
@@ -163,7 +217,48 @@ export interface DispatchGateAdvisory {
   degraded?: boolean
 }
 
+/**
+ * Advisory emitted on skill-lint gate decisions (the `mstar/status-gate`
+ * advisory pattern reused for the skill-authoring gate — Task 4). Emitted
+ * when a `SKILL.md` write-intent under a configured skill root finds lint
+ * violations in the pre-write on-disk document (warn mode), when hard mode
+ * allows an ALREADY-invalid document as a repair escape, and when the gate
+ * degrades to allow after an unexpected internal error. Clean passes stay
+ * silent.
+ *
+ * The gate NEVER throws on the listener path (status-gate repair-escape
+ * semantics): the intent waterfall carries no incoming content, so the only
+ * lint signal is the pre-write on-disk state; the typed hard veto lives on
+ * the incoming-document branch (`lintSkillWrite`, `SkillLintVetoError`).
+ */
+export interface SkillLintAdvisory {
+  /** Which intent slot passed the gate (write-intent only — skills have no linted edit slot). */
+  operation: 'write'
+  /** `displayPath` of the guarded SKILL.md. */
+  target: string
+  /** Canonical skill-root form of the target (Task 1 frozen `resolveSkillRoot('dsh', …)` form). */
+  canonical: string
+  /** The lint verdict (warn-mode: `hardBlocked` false; hard repair escape: `hardBlocked` true). */
+  result: GateResult
+  /** Resolved enforcement flag: false for warn-mode advisories, true for hard-mode repair escapes. */
+  hard: boolean
+  /** True when hard mode allowed a write to an ALREADY-invalid document (repair escape). */
+  repair?: boolean
+  /** True when the gate errored internally and degraded to allow (error-containment envelope). */
+  degraded?: boolean
+}
+
 declare module 'cordis' {
+  interface Context {
+    /**
+     * The plugin's engine `HostAdapter` implementation (`host: 'dsh'`) —
+     * provided as a dsh service (constructed in `apply`, same convention as
+     * `ctx.dshMstar`) so host hooks and future inject consumers share the
+     * one instance.
+     */
+    dshHostAdapter: DshHostAdapter
+  }
+
   interface Events {
     /**
      * Advisory: a subagent dispatch passed the dispatch gate in warn mode
@@ -181,6 +276,16 @@ declare module 'cordis' {
      * @mode emit
      */
     'mstar/status-gate'(payload: StatusGateAdvisory): void
+    /**
+     * Advisory: a `SKILL.md` write-intent under a configured skill root
+     * found skill-authoring lint violations in the pre-write on-disk
+     * document (warn mode), was allowed as a hard-mode repair escape, or
+     * degraded to allow. Emitted only when the current document has
+     * violations; clean passes stay silent.
+     * @param payload - the lint verdict and target.
+     * @mode emit
+     */
+    'mstar/skill-lint'(payload: SkillLintAdvisory): void
   }
 }
 
@@ -200,6 +305,12 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * Whether a target is the canonical `{HARNESS_DIR}/status.json`. Matching is by
  * resolved path equality on `displayPath` (the local backend reports absolute
  * paths; remote/URI backends never match and the gate is inert for them).
+ *
+ * simplify: case-sensitive `===` comparison (qc2 S-006) — on case-insensitive
+ * filesystems (macOS/Windows defaults) a case-variant write path escapes the
+ * gate (inert, never a false positive); case-normalized matching would need
+ * the fs backend's canonical-case notion, revisit if case-variant writes
+ * become an observed bypass.
  */
 function isStatusTarget(harnessDir: string, target: FsTarget): boolean {
   return basename(target.displayPath) === STATUS_FILE
@@ -217,24 +328,52 @@ function resolveHard(harnessDir: string, config: Config): boolean {
 }
 
 /**
+ * Validate a PARSED status document through the status-gate pipeline
+ * (engine `validateStatus` + `findingsCleanupGate` per plan row that
+ * CONFIGURES a mode). Shared by {@link validateStatusDoc} (the on-disk
+ * single-read path) and the host adapter's `beforeStatusWrite` (the
+ * incoming document) — the fs-intent gate, the adapter hook and the repair
+ * escape all surface the SAME violation codes.
+ */
+function validateStatusValue(doc: unknown): GateResult {
+  const base = validateStatus(doc as StatusDoc)
+  if (!base.ok) return base
+  const record = asRecord(doc)
+  if (record === undefined) return base
+  const violations: ValidationResult[] = []
+  for (const row of Array.isArray(record.plans) ? record.plans : []) {
+    const metadata = asRecord(row.metadata)
+    const mode = metadata?.['findings_cleanup']
+    if (mode !== 'zero-residual' && mode !== 'allow-residual') continue
+    const planId = typeof row.id === 'string' ? row.id : typeof row.plan_id === 'string' ? row.plan_id : undefined
+    if (planId === undefined) continue
+    violations.push(...findingsCleanupGate(record as StatusDoc, planId, { mode }).violations)
+  }
+  if (violations.length === 0) return base
+  return { ok: false, violations }
+}
+
+/**
  * Run the status gate over the CURRENT on-disk document. The fs intent
  * waterfall carries only `(target, actor)` — never the incoming content — so
  * the vetoable check is the pre-write state (the opencode hook's fallback for
- * the same reason). A missing file (first create) has no document to validate
- * and passes. `findingsCleanupGate` runs per plan row that CONFIGURES a mode
- * (`plans[].metadata.findings_cleanup`); schema violations short-circuit it
- * (the doc must parse for the cleanup gate to be meaningful).
+ * the same reason). `findingsCleanupGate` runs per plan row that CONFIGURES a
+ * mode (`plans[].metadata.findings_cleanup`); schema violations short-circuit
+ * it (the doc must parse for the cleanup gate to be meaningful).
  *
  * Single-read contract (qc3 F-1): the file is parsed exactly once and the
- * parsed doc is passed to `validateStatus` — the previous path-first read
- * then `readJson` re-read was a TOCTOU window (a concurrent writer between
- * the two reads threw a raw error from inside the gate). Malformed JSON is
- * contained here with the engine's `status.invalid-json` shape; never throws.
+ * parsed doc is passed to {@link validateStatusValue} — the previous
+ * path-first read then `readJson` re-read was a TOCTOU window (a concurrent
+ * writer between the two reads threw a raw error from inside the gate).
+ * Malformed JSON is contained here with the engine's `status.invalid-json`
+ * shape; never throws. Missing files are guarded by the callers
+ * (`gateStatusIntent`, {@link DshHostAdapter.statusGate}) — first create has
+ * no document to validate and passes before this function runs.
  */
 function validateStatusDoc(statusPath: string): GateResult {
-  let doc: StatusDoc
+  let doc: unknown
   try {
-    doc = readJson(statusPath) as StatusDoc
+    doc = readJson(statusPath)
   } catch (error) {
     return {
       ok: false,
@@ -246,19 +385,7 @@ function validateStatusDoc(statusPath: string): GateResult {
       }],
     }
   }
-  const base = validateStatus(doc)
-  if (!base.ok) return base
-  const violations: ValidationResult[] = []
-  for (const row of Array.isArray(doc.plans) ? doc.plans : []) {
-    const metadata = asRecord(row.metadata)
-    const mode = metadata?.['findings_cleanup']
-    if (mode !== 'zero-residual' && mode !== 'allow-residual') continue
-    const planId = typeof row.id === 'string' ? row.id : typeof row.plan_id === 'string' ? row.plan_id : undefined
-    if (planId === undefined) continue
-    violations.push(...findingsCleanupGate(doc, planId, { mode }).violations)
-  }
-  if (violations.length === 0) return base
-  return { ok: false, violations }
+  return validateStatusValue(doc)
 }
 
 /**
@@ -281,6 +408,7 @@ function gateStatusIntent(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   operation: 'write' | 'edit',
   target: FsTarget,
 ): void {
@@ -288,8 +416,9 @@ function gateStatusIntent(
     if (harnessDir === null) return
     if (!isStatusTarget(harnessDir, target)) return
     const statusPath = join(harnessDir, STATUS_FILE)
-    if (!existsSync(statusPath)) return // first create: nothing to validate
-    const result = validateStatusDoc(statusPath)
+    // The adapter owns the shared status-gate core (missing file = first
+    // create = pass); this listener adds enforcement + observability.
+    const result = adapter.statusGate(statusPath)
     const hard = resolveHard(harnessDir, config)
     const verdict = applyEnforcement(result, { hard })
     if (!verdict.ok) {
@@ -333,11 +462,12 @@ async function writeIntentListener(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   target: FsTarget,
   _actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateStatusIntent(ctx, harnessDir, config, 'write', target)
+  gateStatusIntent(ctx, harnessDir, config, adapter, 'write', target)
   return await next()
 }
 
@@ -346,18 +476,256 @@ async function editIntentListener(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   target: FsTarget,
   _actor: object | undefined,
   next: () => { version: FsVersion } | undefined | Promise<{ version: FsVersion } | undefined>,
 ): Promise<{ version: FsVersion } | undefined> {
-  gateStatusIntent(ctx, harnessDir, config, 'edit', target)
+  gateStatusIntent(ctx, harnessDir, config, adapter, 'edit', target)
+  return await next()
+}
+
+/**
+ * Typed hard-mode veto for the skill lint gate (the dsh fs-policy veto
+ * channel: "veto = throw"; the write tool turns the throw into an isError
+ * tool result carrying `{ name, code }`). Thrown ONLY by
+ * {@link lintSkillWrite} — the entry that lints a KNOWN incoming document
+ * (the brief's "against the incoming doc when available" branch). The
+ * content-blind `fs/write-intent` listener never throws: it cannot
+ * distinguish a repair from a re-violation, so hard mode degrades to the
+ * status-gate repair escape there (see {@link gateSkillIntent}).
+ */
+export class SkillLintVetoError extends Error {
+  /** Stable code for tool-result serialization (the `{ name, code }` convention). */
+  readonly code = 'skill-lint.veto' as const
+  /** The lint violations that caused the veto. */
+  readonly violations: readonly ValidationResult[]
+
+  constructor(target: string, violations: readonly ValidationResult[]) {
+    super(
+      `SKILL.md write to ${target} vetoed by Enforcement: hard — the incoming document fails the skill-authoring lints:\n${violations.map(formatViolation).join('\n')}`,
+    )
+    this.name = 'SkillLintVetoError'
+    this.violations = violations
+  }
+}
+
+/**
+ * Strip a leading `---`-fenced YAML frontmatter block, returning the body
+ * (five-question lint takes the body; the frontmatter lint takes the full
+ * doc — CLI `mstar skill lint` parity, same semantics).
+ */
+function stripFrontmatter(text: string): string {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
+  if (lines.length === 0 || lines[0].trim() !== '---') return text
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') return lines.slice(i + 1).join('\n')
+  }
+  return text
+}
+
+/**
+ * Lint one SKILL.md document with the engine skill-authoring lints
+ * (`lintFrontmatter` + `lintFiveQuestion` — the CLI `mstar skill lint`
+ * combination; violation codes `lint.frontmatter.*` /
+ * `skill-authoring.five-question.*`). Pure: no enforcement, no I/O.
+ * @param doc - the full SKILL.md text.
+ */
+export function lintSkillDoc(doc: string): GateResult {
+  const violations: ValidationResult[] = []
+  const frontmatter = lintFrontmatter(doc)
+  if (!frontmatter.ok) violations.push(...frontmatter.violations)
+  const body = lintFiveQuestion(stripFrontmatter(doc))
+  if (!body.ok) violations.push(...body.violations)
+  return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
+}
+
+/**
+ * Enforce the skill-authoring lints over a KNOWN document (the brief's
+ * "incoming doc when available" branch): `Enforcement: hard` + violations →
+ * throw the typed {@link SkillLintVetoError} (fs-policy veto channel); warn
+ * mode → return the gate for advisory logging. A repairing write carries a
+ * VALID incoming document and passes by construction — no repair escape is
+ * needed on this branch. The content-blind listener path (where the
+ * incoming doc is never visible) routes through {@link gateSkillIntent}
+ * instead, which applies the status-gate repair-escape decision.
+ * @param doc - the document about to be written (the write's content).
+ * @param options - target display path (veto message) + resolved hard flag.
+ */
+export function lintSkillWrite(doc: string, options: { target: string; hard: boolean }): GateResult {
+  const result = lintSkillDoc(doc)
+  if (options.hard && !result.ok) {
+    throw new SkillLintVetoError(options.target, result.violations)
+  }
+  return result
+}
+
+/**
+ * The configured skill roots the lint gate scopes to (Config `skillRoots`
+ * custom roots + `bundledSkillDir`, same trim/filter semantics as
+ * {@link skillLocalConfig}). Empty when nothing is configured — the gate
+ * is inert.
+ */
+function skillRootsOf(config: Config): string[] {
+  const roots = [...(config.skillRoots ?? []), ...(config.bundledSkillDir !== undefined ? [config.bundledSkillDir] : [])]
+  return roots.map((root) => root.trim()).filter((root) => root !== '')
+}
+
+/**
+ * Whether a target is a `SKILL.md` UNDER one of the configured skill roots
+ * (resolved-path containment — skill-local shapes `<root>/<name>/SKILL.md`).
+ * Matching is by resolved path on `displayPath` (the local backend reports
+ * absolute paths; remote/URI backends never resolve under a local root and
+ * the gate is inert for them — status-gate discipline).
+ *
+ * simplify: case-sensitive containment (qc2 S-006) — on case-insensitive
+ * filesystems a case-variant path escapes the gate (inert, never a false
+ * positive); revisit if case-variant writes become an observed bypass.
+ */
+function isSkillTarget(roots: readonly string[], target: FsTarget): boolean {
+  if (basename(target.displayPath) !== 'SKILL.md') return false
+  const resolvedPath = resolve(target.displayPath)
+  return roots.some((root) => resolvedPath.startsWith(resolve(root) + sep))
+}
+
+/** The skill directory name of a SKILL.md target (the canonical skill id). */
+function skillNameOf(target: FsTarget): string {
+  return basename(dirname(target.displayPath))
+}
+
+/** The canonical skill-root form of a SKILL.md target (Task 1 frozen
+ * `resolveSkillRoot('dsh', …)` form — `$DSH_BUNDLED_SKILL_DIR/<name>/SKILL.md`). */
+function skillCanonicalForm(target: FsTarget): string {
+  return resolveSkillRoot('dsh', { skill: skillNameOf(target), rel: 'SKILL.md' })
+}
+
+/**
+ * Resolve the hard-enforcement flag for the skill lint gate: explicit
+ * Config override wins, else the iteration compass frontmatter (when a
+ * harness dir resolves), else warn-only. {@link resolveHard} parity with a
+ * null-tolerant harness dir — skill roots do not require `{HARNESS_DIR}`.
+ */
+function resolveSkillHard(harnessDir: string | null, config: Config): boolean {
+  if (config.enforcement === 'hard') return true
+  if (config.enforcement === 'soft') return false
+  return harnessDir !== null && resolveCompassEnforcement(harnessDir).hard
+}
+
+/**
+ * Gate one fs write-intent on a `SKILL.md` under a configured skill root.
+ * The slot is content-blind (the intent waterfall carries only
+ * `(target, actor)` — never the incoming content, dsh-private tool-fs
+ * write.ts), so the lint signal is the pre-write on-disk document
+ * (single-read). Enforcement policy (decided here, documented in
+ * task-4-report.md; status-gate repair-escape mirror, qc2 W-001):
+ *
+ * - missing file → pass (first create has no document to lint);
+ * - clean on-disk doc → silent pass (blocking valid-skill writes would
+ *   deadlock normal authoring — the slot cannot see the incoming content);
+ * - violations + warn mode (default) → warn log + advisory + delegate;
+ * - violations + hard mode → REPAIR ESCAPE: the on-disk doc is ALREADY
+ *   invalid, so this write may BE the repair — allow with an error-level
+ *   log + repair advisory (`hard: true, repair: true`). A hard veto there
+ *   would deadlock the repairing write; the typed hard veto lives on the
+ *   incoming-doc branch ({@link lintSkillWrite}) where the document is
+ *   known.
+ *
+ * The gate never throws (except the intentional {@link lintSkillWrite}
+ * veto on the other branch); unexpected internal errors degrade to allow
+ * in BOTH modes with a loud log + `degraded: true` advisory
+ * (error-containment envelope — an untyped throw from the gate would
+ * spuriously block legitimate writes).
+ */
+function gateSkillIntent(ctx: Context, harnessDir: string | null, config: Config, target: FsTarget): void {
+  try {
+    const roots = skillRootsOf(config)
+    if (roots.length === 0) return
+    if (!isSkillTarget(roots, target)) return
+    const skillPath = resolve(target.displayPath)
+    if (!existsSync(skillPath)) return // first create — nothing to lint yet
+    let doc: string
+    try {
+      doc = readFileSync(skillPath, 'utf8')
+    } catch (error) {
+      // Single-read contract: an unreadable on-disk doc is an unexpected
+      // error — degrade to allow with a degraded advisory (never a throw).
+      ctx.logger(SKILL_LINT_LOGGER).error(`skill lint degraded to allow (cannot read ${skillPath}): ${(error as Error).message}`)
+      ctx.emit('mstar/skill-lint', {
+        operation: 'write',
+        target: target.displayPath,
+        canonical: skillCanonicalForm(target),
+        result: { ok: true, violations: [] },
+        hard: false,
+        degraded: true,
+      })
+      return
+    }
+    const result = lintSkillDoc(doc)
+    if (result.ok) return
+    const hard = resolveSkillHard(harnessDir, config)
+    // The advisory carries the ENFORCED verdict (status-gate shape:
+    // `hardBlocked` true on the hard repair escape — the write would have
+    // been blocked, and is allowed as a repair).
+    const verdict = applyEnforcement(result, { hard })
+    // resolveAssetPath renders the canonical skill-relative asset form
+    // (mstar-skill-authoring § Skill-relative script and asset paths) — the
+    // fix instruction for the violating file in the log line below.
+    const fixHint = resolveAssetPath(skillNameOf(target), 'SKILL.md', 'dsh')
+    if (hard) {
+      // Repair escape: the current document is already invalid; this write
+      // may BE the repair — allow, but make the degraded control loud
+      // (error-level log + repair advisory, `hard: true`).
+      ctx.logger(SKILL_LINT_LOGGER).error(
+        `SKILL.md write to ${target.displayPath} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}\n${fixHint}`,
+      )
+      ctx.emit('mstar/skill-lint', { operation: 'write', target: target.displayPath, canonical: skillCanonicalForm(target), result: verdict, hard, repair: true })
+    } else {
+      ctx.logger(SKILL_LINT_LOGGER).warn(
+        `SKILL.md write to ${target.displayPath} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}\n${fixHint}`,
+      )
+      ctx.emit('mstar/skill-lint', { operation: 'write', target: target.displayPath, canonical: skillCanonicalForm(target), result: verdict, hard })
+    }
+  } catch (error) {
+    ctx.logger(SKILL_LINT_LOGGER).error(`skill lint gate degraded to allow: ${(error as Error).message}`)
+    try {
+      ctx.emit('mstar/skill-lint', { operation: 'write', target: target.displayPath, canonical: skillCanonicalForm(target), result: { ok: true, violations: [] }, hard: false, degraded: true })
+    } catch (emitError) {
+      // Best-effort observability: a throwing advisory consumer must not
+      // take the gate down with it (the error log above is the durable
+      // signal).
+      ctx.logger(SKILL_LINT_LOGGER).error(`skill lint degraded advisory emit failed: ${(emitError as Error).message}`)
+    }
+  }
+}
+
+/**
+ * `fs/write-intent` listener for the skill lint gate. Registered with
+ * `prepend` for the same reachability reason as the status gate: the slot
+ * is first-wins by registration order (dsh-fs-policy README), so without
+ * prepend a policy plugin mounted earlier would make this gate unreachable.
+ * Every gate decision (warn advisory, repair escape, degraded allow) calls
+ * `next()` — the skill lint gate never owns the intent decision and must
+ * not terminate the chain (fs-policy's observed-state CAS on skill files
+ * stays live in composed deployments).
+ */
+async function skillWriteIntentListener(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  target: FsTarget,
+  _actor: object | undefined,
+  next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
+): Promise<FsWriteIntent | undefined> {
+  gateSkillIntent(ctx, harnessDir, config, target)
   return await next()
 }
 
 /**
  * True when the text looks like an Assignment (opencode parity: `## Assignment`
  * heading or at least one core field line). Non-Assignment delegation prompts
- * stay silent — no false-positive warnings.
+ * stay silent — no false-positive warnings. Callers MUST pass the engine
+ * `assignmentHeaderRegion` slice (qc2 F-001): a `## Assignment` heading or
+ * field line quoted in the task body must not shape a non-assignment prompt.
  */
 function isAssignmentShaped(assignmentText: string): boolean {
   return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null
@@ -585,6 +953,57 @@ function leaseGateViolations(
 }
 
 /**
+ * The dispatch-gate validation core (opencode `validateDispatchAssignment`
+ * parity — the SAME engine fns, so violation codes are identical): the field
+ * gate (`validateAssignmentFields`; read-only roles skip the branch gate),
+ * the anti-recursion precheck (Config binding) and the default-branch gate.
+ * Extracted from `gateDispatch` so the `tools/pre-execute` listener and the
+ * host adapter's `beforeDispatch` share ONE code path. The lease gate is NOT
+ * here — it binds the ToolExecution context (session id) and joins via
+ * {@link DshHostAdapter.dispatchGate} when the listener passes `exec`.
+ *
+ * Header-region scoping (qc2 F-001): the engine `assignmentHeaderRegion`
+ * slice is computed ONCE and feeds EVERY Assignment parser (fields, branch
+ * forms, direct-on exception) — body-quoted field examples after a
+ * `# Task` / `# Target` / `---` marker never leak into the header fields the
+ * gate validates (the same discipline enforcement / plan-id / lease already
+ * honor). Well-formed assignments (fields in the header) slice to the full
+ * text, so their verdicts are unchanged.
+ *
+ * @returns the violations plus the writable flag (false for read-only
+ * roles — the listener feeds it to the lease gate).
+ */
+function dispatchGateCore(
+  config: Config,
+  prompt: string,
+): { violations: ValidationResult[]; writable: boolean | undefined } {
+  const header = assignmentHeaderRegion(prompt)
+  const violations: ValidationResult[] = []
+  const fields = parseAssignmentFields(header)
+  // Read-only roles (scout/explore) skip the branch-form gate entirely.
+  const writable = isReadOnlyAssignmentRole(fields.executeAs ?? '') ? false : undefined
+  violations.push(...validateAssignmentFields(header, { writable }).violations)
+  // Anti-recursion NEVER red line — binding = the dispatching agent's own
+  // type (Config-declared; dsh exposes no agent role on the execution context).
+  const binding = config.dispatchBinding ?? ''
+  if (binding.trim() !== '') {
+    violations.push(...antiRecursionPrecheck(binding, fields.executeAs ?? '').violations)
+  }
+  // Default-branch gate — the checked branch comes from the Assignment's own
+  // branch forms, else $MSTAR_WORKING_BRANCH (opencode parity); the direct-on
+  // exception is honored only when its branch is the one being checked.
+  if (writable !== false) {
+    const forms = parseAssignmentBranchForms(header)
+    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH
+    if (branch !== undefined && branch.trim() !== '') {
+      const directOnException = parseBranchPolicyDirectOnBranch(header) === branch.trim()
+      violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations)
+    }
+  }
+  return { violations, writable }
+}
+
+/**
  * Run the dispatch gate over one delegation tool call (opencode
  * `validateDispatchAssignment` parity — the SAME engine fns, so violation
  * codes are identical). Returns the veto decision in hard mode, undefined
@@ -596,44 +1015,24 @@ function gateDispatch(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   exec: ToolExecution,
 ): PreToolDecision | undefined {
   const toolName = exec.name
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)
   const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
-  if (prompt === undefined || !isAssignmentShaped(prompt)) return undefined
+  if (prompt === undefined) return undefined
+  // Shape guard + advisory role read run on the header region (qc2 F-001):
+  // a `## Assignment` heading or field line quoted in the task body cannot
+  // shape a non-assignment prompt or leak into the advisory role.
+  const header = assignmentHeaderRegion(prompt)
+  if (!isAssignmentShaped(header)) return undefined
 
-  const violations: ValidationResult[] = []
-  const fields = parseAssignmentFields(prompt)
-  // Read-only roles (scout/explore) skip the branch-form gate entirely.
-  const writable = isReadOnlyAssignmentRole(fields.executeAs ?? '') ? false : undefined
-  violations.push(...validateAssignmentFields(prompt, { writable }).violations)
-  // Anti-recursion NEVER red line — binding = the dispatching agent's own
-  // type (Config-declared; dsh exposes no agent role on the execution context).
-  const binding = config.dispatchBinding ?? ''
-  if (binding.trim() !== '') {
-    violations.push(...antiRecursionPrecheck(binding, fields.executeAs ?? '').violations)
-  }
-  // Default-branch gate — the checked branch comes from the Assignment's own
-  // branch forms, else $MSTAR_WORKING_BRANCH (opencode parity); the direct-on
-  // exception is honored only when its branch is the one being checked.
-  if (writable !== false) {
-    const forms = parseAssignmentBranchForms(prompt)
-    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH
-    if (branch !== undefined && branch.trim() !== '') {
-      const directOnException = parseBranchPolicyDirectOnBranch(prompt) === branch.trim()
-      violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations)
-    }
-  }
-
-  // Lease gate (Task 5, additive — see leaseGateViolations): verify the plan's
-  // execution_lease when the Assignment declares `Execution mode: sdd` or the
-  // plan row is InProgress; violations flow through the SAME enforcement /
-  // deny / advisory path as the field checks above.
-  violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt))
-
-  const result: GateResult = { ok: violations.length === 0, violations }
+  // The adapter owns the shared dispatch-gate core; the exec context is
+  // passed so the lease gate (session-id bound — see leaseGateViolations)
+  // joins the SAME verdict as the field/branch/anti-recursion checks.
+  const result = adapter.dispatchGate(prompt, exec)
   const hard = resolveDispatchHard(harnessDir, config, prompt)
   const verdict = applyEnforcement(result, { hard })
   if (verdict.hardBlocked) {
@@ -646,7 +1045,8 @@ function gateDispatch(
     ctx.logger(DISPATCH_LOGGER).warn(
       `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
     )
-    ctx.emit('mstar/dispatch-gate', { tool: toolName, role: fields.executeAs ?? '', result: verdict, hard })
+    const role = parseAssignmentFields(header).executeAs ?? ''
+    ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
   }
   return undefined
 }
@@ -668,12 +1068,13 @@ async function preExecuteListener(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
+  adapter: DshHostAdapter,
   exec: ToolExecution,
   next: () => Promise<PreToolDecision>,
 ): Promise<PreToolDecision> {
   let veto: PreToolDecision | undefined
   try {
-    veto = gateDispatch(ctx, harnessDir, config, exec)
+    veto = gateDispatch(ctx, harnessDir, config, adapter, exec)
   } catch (error) {
     ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted (degraded, dispatch allowed): ${(error as Error).message}`)
     try {
@@ -688,15 +1089,308 @@ async function preExecuteListener(
 }
 
 /**
+ * Rebuild the canonical Assignment HEADER text from parsed fields (the
+ * engine's OWN header grammar — `parseAssignmentFields` reads exactly these
+ * labels — so the engine parsers round-trip losslessly). The host hook's
+ * engine-typed input is `AssignmentFields`; the shared gate core validates
+ * assignment TEXT, so the fields form is normalized to text before gating.
+ */
+function assignmentTextFromFields(fields: AssignmentFields): string {
+  const lines = ['## Assignment', '']
+  if (fields.executeAs !== undefined) lines.push(`**Execute as**: ${fields.executeAs}`)
+  if (fields.delegation !== undefined) lines.push(`**Delegation**: ${fields.delegation}`)
+  if (fields.taskCategory !== undefined) lines.push(`**Task category**: ${fields.taskCategory}`)
+  if (fields.workingBranch !== undefined) lines.push(`**Working branch**: ${fields.workingBranch}`)
+  if (fields.branchPolicy !== undefined) lines.push(`**Branch policy**: ${fields.branchPolicy}`)
+  return lines.join('\n')
+}
+
+/**
+ * Build the dsh skill-local registration payload from the plugin Config
+ * (roadmap D6 — single canonical mount). Semantics mirror the skill-local
+ * `Config` contract: `skillRoots` → `customSkillDirs` (custom roots),
+ * `bundledSkillDir` → `bundledSkillDir` (bundled root). The provider is
+ * named `mstar` and default roots are excluded (`includeDefaultRoots: false`
+ * — the repository-plugin convention: an isolated provider must see only its
+ * explicit roots, so the mstar mount never claims the host app's own skills;
+ * without this the app's user/project skills would be re-discovered under
+ * the mstar provider). Returns `undefined` when nothing is configured — no
+ * registration happens.
+ * @param config - validated plugin configuration.
+ */
+export function skillLocalConfig(config: Config): SkillLocalConfig | undefined {
+  const customSkillDirs = config.skillRoots?.map((root) => root.trim()).filter((root) => root !== '')
+  const bundledSkillDir = config.bundledSkillDir?.trim()
+  if ((customSkillDirs === undefined || customSkillDirs.length === 0) && bundledSkillDir === undefined) {
+    return undefined
+  }
+  return {
+    providerName: 'mstar',
+    includeDefaultRoots: false,
+    ...(customSkillDirs !== undefined && customSkillDirs.length > 0 ? { customSkillDirs } : {}),
+    ...(bundledSkillDir !== undefined ? { bundledSkillDir } : {}),
+  }
+}
+
+/** Options for {@link DshHostAdapter}. */
+export interface DshHostAdapterOptions {
+  /** Resolved `{HARNESS_DIR}` (null when probing found none — gates stay inert). */
+  readonly harnessDir: string | null
+  /** The plugin Config the gates resolve enforcement + anti-recursion binding from. */
+  readonly config: Config
+  /**
+   * Log sink for `HostAdapter.log`. Defaults to the dsh ctx logger scoped
+   * `mstar/host-adapter` (dsh logger naming: `<scope>/<subject>`).
+   */
+  readonly log?: (level: 'info' | 'warn' | 'error', msg: string) => void
+}
+
+/**
+ * The plugin's `HostAdapter` implementation (engine `host.ts` type-only
+ * contract, roadmap §8.4) — the HOST-FACING facade over the P1 gate
+ * internals: `host: 'dsh'`, `log` → dsh ctx logger, and the optional hooks
+ * wired to the SAME code paths the in-plugin gates use, so host hooks and
+ * gates share ONE validation path:
+ *
+ * - `beforeStatusWrite(path, doc)` — validates the incoming document when
+ *   the host provides it (the write's content — the opencode consumer
+ *   convention for this engine hook), else the current on-disk document at
+ *   `path` via the gate's single-read `validateStatusDoc` semantics (missing
+ *   file = first create = pass). Both inputs flow through
+ *   `validateStatusValue` — the same pipeline the fs-intent gate runs, so
+ *   codes match by construction. Returns the FIRST violation: the engine
+ *   hook shape is one `ValidationResult`; the gate's full violation list
+ *   stays available on the fs-intent slot.
+ * - `beforeDispatch(assignment)` — the dispatch gate validation path
+ *   (validateAssignmentFields + branch gate + anti-recursion; read-only
+ *   roles skip the branch gate). The lease gate stays listener-side: it
+ *   binds the ToolExecution context (session id) this hook's contract does
+ *   not carry. The parsed `AssignmentFields` form is normalized to the
+ *   engine's own header grammar (lossless — the parsers read exactly these
+ *   labels) and gated through the same text path. Enforcement is applied
+ *   like the listener (opencode parity): the returned GateResult carries
+ *   `hardBlocked` so a refusal-capable host can refuse the dispatch.
+ * - `beforeMerge(lease)` — thin wrapper over the engine
+ *   `validateIntegrationMergeLease` (reserve/validate the integration merge
+ *   lease; the reservation WRITE into status.json is a P3 seam).
+ */
+export class DshHostAdapter extends Service implements HostAdapter {
+  /** Engine host identity (roadmap §8.4 `HostId` union). */
+  readonly host = 'dsh' as const
+
+  private readonly harnessDir: string | null
+  private readonly config: Config
+  private readonly logSink: (level: 'info' | 'warn' | 'error', msg: string) => void
+
+  constructor(ctx: Context, options: DshHostAdapterOptions) {
+    // Provided as a dsh service (`ctx.dshHostAdapter`, same convention as
+    // `ctx.dshMstar`): construction self-registers on the fiber.
+    super(ctx, 'dshHostAdapter')
+    this.harnessDir = options.harnessDir
+    this.config = options.config
+    this.logSink = options.log ?? ((level, msg) => {
+      const logger = ctx.logger(HOST_LOGGER)
+      if (level === 'warn') logger.warn(msg)
+      else if (level === 'error') logger.error(msg)
+      else logger.info(msg)
+    })
+  }
+
+  /**
+   * `HostAdapter.log` — the adapter's own reporting channel (the gates keep
+   * their scoped loggers; this is the host-facing sink).
+   * @param level - log level.
+   * @param msg - message.
+   */
+  log(level: 'info' | 'warn' | 'error', msg: string): void {
+    this.logSink(level, msg)
+  }
+
+  /**
+   * Shared status-gate core (plugin-internal): the fs-intent listeners and
+   * the `beforeStatusWrite` on-disk fallback route through this method —
+   * ONE validation code path. Missing file = first create = pass (the
+   * intent waterfall carries no incoming content, so the vetoable signal is
+   * the pre-write on-disk state, qc3 F-1).
+   * @param statusPath - the canonical `{HARNESS_DIR}/status.json` path.
+   */
+  statusGate(statusPath: string): GateResult {
+    if (!existsSync(statusPath)) return { ok: true, violations: [] }
+    return validateStatusDoc(statusPath)
+  }
+
+  /**
+   * Shared dispatch-gate core (plugin-internal): the `tools/pre-execute`
+   * listener and `beforeDispatch` route through this method — ONE
+   * validation code path (field gate + anti-recursion + branch gate;
+   * read-only roles skip the branch gate). The listener passes `exec` so
+   * the lease gate (ToolExecution-bound: session id, in-flight call) joins
+   * the same verdict; the host hook has no exec context and covers the
+   * field/branch/anti-recursion path.
+   * @param prompt - the Assignment text (engine header grammar).
+   * @param exec - the in-flight delegation tool call (listener path only).
+   */
+  dispatchGate(prompt: string, exec?: ToolExecution): GateResult {
+    const { violations, writable } = dispatchGateCore(this.config, prompt)
+    if (exec !== undefined) {
+      violations.push(...leaseGateViolations(this.harnessDir, exec, writable, prompt))
+    }
+    return { ok: violations.length === 0, violations }
+  }
+
+  /**
+   * `HostAdapter.beforeStatusWrite` — see the class doc for the doc-first /
+   * on-disk-fallback semantics. Never throws; a failing gate maps to its
+   * FIRST violation (severity/code/message/fix/aliases preserved — failing
+   * gates always carry ≥1 violation), a passing gate to
+   * `host.beforeStatusWrite.ok` (the engine test convention for this hook).
+   * @param path - the status.json target path.
+   * @param doc - the document about to be written (undefined → validate the
+   * on-disk document at `path`).
+   */
+  async beforeStatusWrite(path: string, doc: unknown): Promise<ValidationResult> {
+    const gate = doc !== undefined ? validateStatusValue(doc) : this.statusGate(path)
+    if (!gate.ok) {
+      const first = gate.violations[0]!
+      return { ok: false, severity: first.severity, code: first.code, message: first.message, fix: first.fix, aliases: first.aliases }
+    }
+    return { ok: true, severity: 'low', code: 'host.beforeStatusWrite.ok', message: `status write to ${path} validated` }
+  }
+
+  /**
+   * `HostAdapter.beforeDispatch` — the dispatch gate validation path (see
+   * the class doc). Accepts the raw Assignment text (full fidelity: the
+   * `Enforcement` header flag participates in enforcement resolution) or the
+   * parsed `AssignmentFields` (engine-typed hook input; normalized to the
+   * engine's header grammar before gating). Returns the enforced GateResult
+   * — `hardBlocked` mirrors the `tools/pre-execute` deny decision under the
+   * same enforcement resolution.
+   * @param assignment - raw Assignment text or parsed header fields.
+   */
+  async beforeDispatch(assignment: AssignmentFields | string): Promise<GateResult> {
+    const prompt = typeof assignment === 'string' ? assignment : assignmentTextFromFields(assignment)
+    const gate = this.dispatchGate(prompt)
+    return applyEnforcement(gate, { hard: resolveDispatchHard(this.harnessDir, this.config, prompt) })
+  }
+
+  /**
+   * `HostAdapter.beforeMerge` — reserve/validate the integration merge
+   * lease. Thin wrapper over the engine `validateIntegrationMergeLease`
+   * (the engine owns the lease shape; the reservation write into
+   * `{HARNESS_DIR}/status.json` is a P3 seam).
+   * @param lease - the `metadata.integration_merge_lease` object.
+   */
+  async beforeMerge(lease: IntegrationMergeLease): Promise<GateResult> {
+    return validateIntegrationMergeLease(lease)
+  }
+}
+
+/** The plugin's own manifest version (single-version invariant; own manifest first). */
+function pluginVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }
+    return typeof pkg.version === 'string' && pkg.version !== '' ? pkg.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+/**
+ * The durable catalog source for the current engine status (the watermark
+ * fields). Computed ONCE at `apply()` and reused per pre-step (qc3 W-002):
+ * every field is boot-resolved — engine + plugin versions are process
+ * -immutable manifest reads and the compass enforcement resolves at boot
+ * like the gates themselves. A mid-session compass change therefore does NOT
+ * re-watermark the catalog until a config reload re-runs `apply` (HMR fiber
+ * restart) — the documented staleness tradeoff that keeps synchronous disk
+ * I/O off the agent-loop hot path.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ */
+function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource {
+  return {
+    kind: 'mstar-engine-status',
+    form: 'catalog',
+    engineVersion: readHarnessVersion(),
+    pluginVersion: pluginVersion(),
+    harnessDir,
+    enforcement: harnessDir !== null ? resolveCompassEnforcement(harnessDir) : { hard: false, source: 'none' },
+  }
+}
+
+/** Model-facing rendering of the engine-status catalog (the `<mstar_engine_status>` block). */
+function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
+  const enforcement = `${source.enforcement.hard ? 'hard' : 'soft'}${source.enforcement.source === 'none' ? '' : ` (${source.enforcement.source})`}`
+  return [
+    '<mstar_engine_status>',
+    `engine version: ${source.engineVersion}`,
+    `plugin version: ${source.pluginVersion}`,
+    `harness dir: ${source.harnessDir ?? 'none'}`,
+    `enforcement: ${enforcement}`,
+    '</mstar_engine_status>',
+  ].join('\n')
+}
+
+/**
+ * Advisory `agent/pre-step` waterfall listener (roadmap §4 D4 — agent
+ * catalog): delegates through `next()` (never `reject` — that would block the
+ * step — and never replaces the delegated messages) and appends ONE
+ * `mstar-engine-status` catalog MessageSource to the composed step messages,
+ * so the durable session log carries the engine status row (model-visible ⟺
+ * logged, MessageSource form). An aborted step publishes nothing: the
+ * delegated decision is returned unchanged (tool-skill precedent; narrowed
+ * abort race — qc2 S-001: an abort after delegation must not surface as a
+ * turn failure).
+ *
+ * Error containment (qc3 W-003): the append path is wrapped — a failure
+ * (e.g. a downstream decider returning a non-iterable `messages` set, or a
+ * throwing message factory) logs and returns the delegated decision
+ * unchanged; the advisory listener never aborts the very step it observes.
+ *
+ * simplify: dev-time stub — every composed step carries the catalog row (no
+ * per-session dedup: the real dsh-session log is unavailable at dev time).
+ * Digest-gated re-emission against the durable log lands with the real
+ * session seam at P3.
+ * @param ctx - registrant context (logger for the containment path).
+ * @param source - the boot-resolved watermark source (computed once at apply,
+ * qc3 W-002).
+ * @param payload - the proposed step the loop is about to enter.
+ * @param next - the remaining pre-step chain; its value is the delegated decision.
+ */
+async function preStepCatalogListener(
+  ctx: Context,
+  source: MstarEngineStatusSource,
+  payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
+  next: () => Promise<PreStepDecision>,
+): Promise<PreStepDecision> {
+  const decision = await next()
+  if (decision.kind === 'reject' || payload.signal.aborted) return decision
+  try {
+    const catalog = createUserMessage({
+      source,
+      content: [{ type: 'text', text: renderEngineStatusCatalog(source) }],
+    })
+    return { kind: 'enter', messages: [...decision.messages, catalog] }
+  } catch (error) {
+    ctx.logger(CATALOG_LOGGER).error(
+      `engine-status catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
+    )
+    return decision
+  }
+}
+
+/**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
- * engine, expose the engine surface as `ctx.dshMstar`, and register the status
- * gate on the fs intent waterfalls + the dispatch gate on `tools/pre-execute`.
+ * engine, expose the engine surface as `ctx.dshMstar`, construct the host
+ * adapter (the gates route through it — one code path with the host hooks),
+ * and register the status gate on the fs intent waterfalls + the dispatch
+ * gate on `tools/pre-execute`.
  *
  * Layering (qc1 F-002): the gates are co-located engine wrappers in this
  * module importing `@mstar-harness/engine` directly (same plugin, engine
  * bundled at build time); `ctx.dshMstar` is the composition/test façade for
- * future inject consumers (host adapters, catalogs) — see the README Service
- * section. The engine is the single grammar for both paths.
+ * future inject consumers (catalogs) — see the README Service section; the
+ * adapter is the host-facing facade. The engine is the single grammar for
+ * both paths.
  * @param ctx - Cordis context of the composed app.
  * @param config - validated plugin configuration.
  */
@@ -705,6 +1399,27 @@ export function apply(ctx: Context, config: Config): void {
   // The Service constructor registers itself on the fiber via reflect.provide,
   // so construction alone exposes `ctx.dshMstar` (dsh service convention).
   new DshMstar(ctx, { harnessDir: harnessDir ?? null })
+  // The host-facing HostAdapter facade — the fs-intent / pre-execute gates
+  // route through it (host hooks and in-plugin gates share ONE code path).
+  // Constructed as a dsh service: `ctx.dshHostAdapter` is available to
+  // inject consumers and host hooks after boot.
+  const adapter = new DshHostAdapter(ctx, { harnessDir, config })
+
+  // Skills mount — single canonical mount (roadmap D6): register configured
+  // skill roots with the dsh skill-local provider contract. The object form
+  // mirrors the module shape the dsh Loader composes for the real
+  // `@deepseek-ai/dsh-skill-local` package (`{ name, inject, Config, apply }`),
+  // so `inject: ['skills']` defers the child fiber until `ctx.skills` exists
+  // regardless of mount order. Dev-time the seam package is a peer stub (no
+  // real runtime) — this call is the contract-typed registration; real-runtime
+  // composition is verified at P3 e2e (README Known Limitations).
+  const skillConfig = skillLocalConfig(config)
+  if (skillConfig !== undefined) {
+    ctx.plugin(
+      { name: skillLocalName, inject: skillLocalInject, Config: SkillLocalSchema, apply: applySkillLocal },
+      skillConfig,
+    )
+  }
 
   // Deploy-time observability (qc2 S-002): when enforcement resolves hard but
   // no dispatchBinding is declared, the anti-recursion red line is off by
@@ -715,11 +1430,27 @@ export function apply(ctx: Context, config: Config): void {
       'Enforcement: hard is active but dispatchBinding is unset — the anti-recursion precheck is skipped (an Assignment whose Execute as equals the dispatching agent cannot be detected)',
     )
   }
+  // Deploy-time observability (qc2 S-004): a renamed dsh subagent tool
+  // (toolName) with dispatchTools unset silently disables BOTH the dispatch
+  // gate and host detection — mirror the dispatchBinding warn so the absence
+  // is surfaced instead of only documented.
+  if (effectiveHard && config.dispatchTools === undefined) {
+    ctx.logger(DISPATCH_LOGGER).warn(
+      'Enforcement: hard is active but dispatchTools is unset — the dispatch gate matches the default tool name "subagent"; a deployment renaming the dsh subagent tool (toolName) without declaring dispatchTools silently disables the gate',
+    )
+  }
 
   // Status gate — fs intent slot (single-slot waterfall; prepend so this
   // decider runs before dsh-fs-policy regardless of mount order).
-  ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
-  ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
+  ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
+  ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
+
+  // Skill-authoring lint gate — fs/write-intent slot scoped to SKILL.md
+  // under the configured skill roots (Task 4; same single-slot waterfall +
+  // prepend + next() delegation contract as the status gate — this gate
+  // also never throws except the intentional incoming-doc veto in
+  // `lintSkillWrite`).
+  ctx.on('fs/write-intent', (target, actor, next) => skillWriteIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
 
   // Dispatch gate — tools/pre-execute waterfall (refusal channel:
   // PreToolDecision.deny returned without next()). Registered prepend for the
@@ -727,5 +1458,23 @@ export function apply(ctx: Context, config: Config): void {
   // listener that returns a decision without next() would short-circuit the
   // chain and make this security gate unreachable — "a deny short-circuits
   // regardless of order" holds only once the listener is reached.
-  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, exec, next), { prepend: true })
+  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, adapter, exec, next), { prepend: true })
+
+  // Engine-status catalog — advisory `agent/pre-step` waterfall listener
+  // (roadmap §4 D4 / P2 agent catalog): calls `next()` (never vetoes or
+  // replaces the delegated messages) and appends one `mstar-engine-status`
+  // catalog MessageSource to the composed step messages, so the session log
+  // carries the engine status row (model-visible ⟺ logged).
+  //
+  // The watermark is computed ONCE at boot (qc3 W-002) — engine/plugin
+  // versions are process-immutable and compass enforcement is boot-resolved
+  // like the gates — so the pre-step hot path does no disk I/O (see
+  // engineStatusSource for the mid-session staleness tradeoff).
+  const catalogSource = engineStatusSource(harnessDir)
+  // The manifest fallback is never silent (qc2 S-005): a '0.0.0' plugin
+  // version would watermark every catalog row wrongly, so it logs at boot.
+  if (catalogSource.pluginVersion === '0.0.0') {
+    ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
+  }
+  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, payload, next))
 }
