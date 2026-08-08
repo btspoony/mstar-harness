@@ -86,6 +86,12 @@ export type PhaseGateOptions = {
  * - all plans Done with missing checklist items → `phase-3-close` (Phase 3
  *   required; missing items listed in `violations`).
  * - all plans Done and both checklists clean → `phase-4-pr-delivery`.
+ *
+ * Note (qc2 F-003): during the Phase-3 window `ok` is false because the
+ * §3.4 close items (`status: completed` + `end_date`) are only written at
+ * the END of close — the exit checklist gates Phase 4, not the Phase-3
+ * entry, so callers (e.g. the CLI, which exits 1) must treat that as "close
+ * work pending", not "don't enter Phase 3".
  */
 export type PhaseGateResult = {
   transition: PhaseTransition;
