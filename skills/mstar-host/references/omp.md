@@ -208,6 +208,14 @@ Cannot emit required **N** → **`Blocked`**.
 | Plugin commands | `/iteration-start`, `/iteration-drive`, `/iteration-loop` (filename-based) |
 | Session entry | `/skill:pm` → `mstar-harness-core` via pm **Read next** |
 
+## In-process engine binding (omp ≥ 17.2.11)
+
+- **Surfaces** (repo root = plugin root): `hooks/pre/mstar-gates.ts` — one `tool_call` pre-hook that returns `{ block: true, reason }` (structured refusal the model sees as the tool error) or `undefined` (pass); `tools/mstar_{status_validate,dispatch_validate,lease_verify,path_resolve,iteration_gate,worktree_check}/index.ts` — six model-callable validator tools (engine validators only, Zod params via `pi.zod`).
+- **Enforcement semantics**: block ONLY under `Enforcement: hard`. The status gate reads the harness compass frontmatter (`enforcement: hard`, active/locked iterations only); the dispatch gate reads each Assignment's own header flag (`assignmentHeaderRegion` — a body example never hardens). Soft / no flag → silent pass. Rollback = unset the flag. Never global.
+- **Engine dependency**: adapters import `@mstar-harness/engine` (root `package.json` `dependencies`). omp git/npm plugin installs run `bun install <spec>` in the plugins tree → declared deps installed; a bare `-l` / `omp plugin link` symlink install without `node_modules` cannot resolve the modules.
+- **Graceful degradation (explicit)**: module load failure → `mstar_*` tools skipped, hook absent (no blocking), `commands/*.md` shell-out fallback intact. Caveat: a partial failure is SILENT — no in-band signal that gates are off; verify with `omp -p '/extensions'`.
+- **Reload**: edits are picked up by a new session (`?mtime` cache-buster); in-session `/reload-plugins` (omp ≥ 17.2.11) applies them without a new session.
+
 ## Files, shell, and approvals
 
 - Prefer host search/edit tools over shell find/sed when available.
