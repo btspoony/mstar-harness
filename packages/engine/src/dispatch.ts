@@ -163,10 +163,13 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
           `keep exactly one of: ${BRANCH_FORMS_HINT}`,
         ),
       );
-    } else if (workingPresent && fields.workingBranch!.startsWith("create")) {
-      // `create <new-branch> from <base>` — <base> is mandatory, never assume `main`.
-      const m = fields.workingBranch!.match(/^create\s+(\S+)(?:\s+from\s+(\S+))?$/);
-      if (!m || m[2] === undefined) {
+    } else if (workingPresent) {
+      // `create <new-branch> from <base>` — <base> is mandatory, never assume
+      // `main`. Case-insensitive create-form token match; values that do not
+      // match the exact form (e.g. "created", "create/foo", "create-user-flow")
+      // are existing-branch names and pass.
+      const m = fields.workingBranch!.match(/^create\s+(\S+)(?:\s+from\s+(\S+))?$/i);
+      if (m && m[2] === undefined) {
         violations.push(
           violation(
             "high",
@@ -177,7 +180,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
         );
       }
     } else if (policyPresent) {
-      const m = fields.branchPolicy!.match(/^direct\s+on\s+(\S+)(?:\s*[—–]\s*(.+))?$/);
+      const m = fields.branchPolicy!.match(/^direct\s+on\s+(\S+)(?:\s*(?:[—–]|--|-)\s*(.+))?$/);
       if (!m) {
         violations.push(
           violation(
@@ -255,6 +258,15 @@ export function executionModeToN(executionMode: string, opts: ExecutionModeToNOp
           "dispatch.execution-mode.missing-seats",
           'execution mode "targeted" requires listed reviewer seats',
           'add "QC re-review: targeted — reviewers: <role-id>, …" to the Assignment and pass the seats',
+        ),
+      );
+    } else if (seats.length > 3) {
+      violations.push(
+        violation(
+          "high",
+          "dispatch.execution-mode.too-many-seats",
+          `execution mode "targeted" lists ${seats.length} reviewer seats — at most 3 (targeted re-review seats are the tri seats, N = 1–3)`,
+          "list at most three reviewer seats for the targeted re-review",
         ),
       );
     } else {

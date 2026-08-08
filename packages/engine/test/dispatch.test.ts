@@ -180,6 +180,42 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
     expect(r.ok).toBe(true);
   });
 
+  test("Branch policy: direct on <branch> - <reason> (ASCII hyphen) is a valid single form", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Branch policy**: direct on main - team hotfix convention
+`;
+    const r = validateAssignmentFields(text);
+    expect(r.ok).toBe(true);
+  });
+
+  test("Branch policy: direct on <branch> -- <reason> (ASCII double hyphen) is a valid single form", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Branch policy**: direct on main -- team hotfix convention
+`;
+    const r = validateAssignmentFields(text);
+    expect(r.ok).toBe(true);
+  });
+
+  test("Branch policy: direct on <branch> – <reason> (en dash) is a valid single form", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Branch policy**: direct on main – team hotfix convention
+`;
+    const r = validateAssignmentFields(text);
+    expect(r.ok).toBe(true);
+  });
+
   test("empty Working branch does not count as a form (treated as absent)", () => {
     const text = `## Assignment
 
@@ -225,8 +261,34 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(true);
   });
 
-  test("create form with dangling words → assignment.field.branch-missing-base", () => {
+  test("create form with dangling words is not a create-form match (treated as existing branch)", () => {
     const r = validateAssignmentFields(assignment({ "Working branch": "create foo from bar extra" }));
+    expect(r.ok).toBe(true);
+    expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
+  });
+
+  test("existing branch names that merely start with 'create' pass as existing-branch forms", () => {
+    for (const name of ["created", "create/foo", "create-user-flow"]) {
+      const r = validateAssignmentFields(assignment({ "Working branch": name }));
+      expect(r.ok).toBe(true);
+      expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
+    }
+  });
+
+  test("capitalized create form 'Create new-branch from main' is a valid create form", () => {
+    const r = validateAssignmentFields(assignment({ "Working branch": "Create new-branch from main" }));
+    expect(r.ok).toBe(true);
+    expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
+  });
+
+  test("uppercase create form without <base> ('CREATE new-branch') → assignment.field.branch-missing-base", () => {
+    const r = validateAssignmentFields(assignment({ "Working branch": "CREATE new-branch" }));
+    expect(r.ok).toBe(false);
+    expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(true);
+  });
+
+  test("create form 'create foo' without <base> → assignment.field.branch-missing-base", () => {
+    const r = validateAssignmentFields(assignment({ "Working branch": "create foo" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(true);
   });
@@ -352,6 +414,21 @@ describe("executionModeToN — N→seat mapping", () => {
     expect(r.ok).toBe(false);
     expect(r.n).toBeUndefined();
     expect(r.violations.some((v) => v.code === "dispatch.execution-mode.missing-seats")).toBe(true);
+  });
+
+  test("targeted with exactly 3 seats → 3 (upper band, full tri)", () => {
+    const seats = ["qc-specialist", "qc-specialist-2", "qc-specialist-3"];
+    const r = executionModeToN("targeted", { seats });
+    expect(r.ok).toBe(true);
+    expect(r.n).toBe(3);
+  });
+
+  test("targeted with 4+ seats → dispatch.execution-mode.too-many-seats", () => {
+    const seats = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "qc-specialist-4"];
+    const r = executionModeToN("targeted", { seats });
+    expect(r.ok).toBe(false);
+    expect(r.n).toBeUndefined();
+    expect(r.violations.some((v) => v.code === "dispatch.execution-mode.too-many-seats")).toBe(true);
   });
 
   test("unknown mode → dispatch.execution-mode.unknown", () => {
