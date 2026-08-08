@@ -87,6 +87,7 @@ export {
   antiRecursionPrecheck,
   assertDefaultBranchProtected,
   assertTriIdentity,
+  assignmentHeaderRegion,
   executionModeToN,
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,

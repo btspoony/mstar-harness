@@ -135,6 +135,28 @@ function enforcementValue(raw: string): string {
 }
 
 /**
+ * Assignment body markers (qc1 F-003 / qc2 F-003): the header region ends at
+ * the FIRST of a `# Task`-style heading (any level — SDD task bodies use
+ * `## Task N` / `### Task N`), a `---` horizontal-rule separator, or a
+ * single-`#` heading (`# Target` / `# Goal` / `# Change`). The `## Assignment`
+ * heading itself is NOT a boundary. Quoted Assignment-field examples in the
+ * task body AFTER a marker must not be read as header fields.
+ */
+const ASSIGNMENT_BODY_START_RE = /^(?:#{1,6}[ \t]+Task\b|-{3,}[ \t]*$|#[ \t])/m;
+
+/**
+ * Slice an Assignment's header region — the text before the first body
+ * marker (see {@link ASSIGNMENT_BODY_START_RE}). Returns the full text when
+ * no marker is present. The Assignment enforcement flag is parsed against
+ * THIS region only, so an example line `**Enforcement**: hard` quoted in the
+ * task body cannot harden the dispatch (qc1 F-003 / qc2 F-003).
+ */
+export function assignmentHeaderRegion(assignmentText: string): string {
+  const marker = assignmentText.match(ASSIGNMENT_BODY_START_RE);
+  return marker !== null ? assignmentText.slice(0, marker.index) : assignmentText;
+}
+
+/**
  * Parse the `Enforcement: hard` flag (roadmap §8.5 C4 + decision D2 — v2
  * hard gates are OPT-IN per Assignment/compass, never global; rollback =
  * unset flag; inert when the engine is absent).
@@ -150,6 +172,11 @@ function enforcementValue(raw: string): string {
  * A present-but-non-hard value (`soft`, empty, malformed) still reports
  * its source so callers can distinguish "explicitly not hard" from
  * "not mentioned" (`source: none`). Never throws.
+ *
+ * Assignment-form callers MUST pass the header region (see
+ * {@link assignmentHeaderRegion}) — this function itself scans the whole
+ * input because the compass form is fed raw frontmatter, which has no
+ * body markers (qc1 F-003 / qc2 F-003).
  */
 export function parseEnforcementFlag(text: string): EnforcementFlag {
   const bold = text.match(ASSIGNMENT_ENFORCEMENT_BOLD_RE);

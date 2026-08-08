@@ -35,6 +35,7 @@ import {
   antiRecursionPrecheck,
   assertDefaultBranchProtected,
   assertTriIdentity,
+  assignmentHeaderRegion,
   executionModeToN,
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,
@@ -855,5 +856,107 @@ enforcement: hard
     for (const input of ["", "*".repeat(10000), "{{{{[[[[)))) ---- \n<<<<", "enforcement" ]) {
       expect(() => parseEnforcementFlag(input)).not.toThrow();
     }
+  });
+});
+
+describe("assignmentHeaderRegion — Assignment header-only scope (qc1 F-003 / qc2 F-003)", () => {
+  // Spec: the Assignment enforcement flag is read from the HEADER region
+  // only — the text before the first body marker (`# Task`-style heading,
+  // `---` separator, or single-`#` heading). An example
+  // `**Enforcement**: hard` line quoted in the task body must not harden.
+  test("no body marker → the full text is the header region", () => {
+    const text = "## Assignment\n\n**Execute as**: fullstack-dev\n**Enforcement**: hard\n";
+    expect(assignmentHeaderRegion(text)).toBe(text);
+  });
+
+  test("cuts at the first `# ` heading (`# Change` etc.)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Enforcement**: hard
+
+# Change
+
+Example: **Enforcement**: soft (body must not count)
+`;
+    const region = assignmentHeaderRegion(text);
+    expect(region).toContain("**Enforcement**: hard");
+    expect(region).not.toContain("# Change");
+    expect(region).not.toContain("Example:");
+  });
+
+  test("cuts at the first `## Task` / `### Task` heading (SDD task bodies)", () => {
+    for (const heading of ["## Task 1: Implement", "### Task 1 — Implement"]) {
+      const text = `## Assignment
+
+**Enforcement**: hard
+
+${heading}
+
+**Enforcement**: soft
+`;
+      const region = assignmentHeaderRegion(text);
+      expect(region).toContain("**Enforcement**: hard");
+      expect(region).not.toContain(heading);
+      expect(region).not.toContain("soft");
+    }
+  });
+
+  test("cuts at a `---` horizontal-rule separator", () => {
+    const text = `## Assignment
+
+**Enforcement**: hard
+
+---
+
+**Enforcement**: soft
+`;
+    const region = assignmentHeaderRegion(text);
+    expect(region).toContain("**Enforcement**: hard");
+    expect(region).not.toContain("---");
+    expect(region).not.toContain("soft");
+  });
+
+  test("the `## Assignment` heading itself is NOT a boundary", () => {
+    const text = `## Assignment
+
+**Enforcement**: hard
+`;
+    expect(assignmentHeaderRegion(text)).toBe(text);
+  });
+
+  test("body marker at the very start → empty header region", () => {
+    expect(assignmentHeaderRegion("# Target\nplan body only\n")).toBe("");
+  });
+
+  test("body example line **Enforcement**: hard does NOT harden (header region only)", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/example
+
+# Change
+
+Example Assignment snippet: **Enforcement**: hard
+`;
+    expect(parseEnforcementFlag(assignmentHeaderRegion(text))).toEqual({ hard: false, source: "none" });
+  });
+
+  test("header **Enforcement**: hard hardens even when a body example quotes a soft flag", () => {
+    const text = `## Assignment
+
+**Enforcement**: hard
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/example
+
+# Change
+
+**Enforcement**: soft (example only)
+`;
+    expect(parseEnforcementFlag(assignmentHeaderRegion(text))).toEqual({ hard: true, source: "assignment" });
   });
 });
