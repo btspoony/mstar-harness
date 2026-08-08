@@ -8,26 +8,52 @@ import { Command } from "commander";
 import {
   archiveResiduals,
   assertDefaultBranchProtected,
+  assertIndexRows,
+  assertLightDarkParity,
+  assertSddTddTriple,
   assertTriIdentity,
+  AUDIT_CATEGORIES,
+  AUDIT_EFFORTS,
+  AUDIT_PRIORITIES,
+  AUDIT_RISKS,
+  completenessLevel,
+  detectHost,
   evaluatePhaseGate,
   executionModeToN,
+  findSimplifyMarkers,
+  findTemporaryMarkers,
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
+  lintFiveQuestion,
+  lintFrontmatter,
+  lintStrategySections,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
+  planQualityBar,
   pushCadenceProbe,
   resolveHarnessDir,
   resolveSpecsDir,
   reviewPackage,
+  scaffoldAuditPlan,
+  scopeGuard,
   SddScriptError,
   sddWorkspace,
   taskBrief,
   validateAssignmentFields,
+  validateDesignTokenFrontmatter,
+  validateSchemaYaml,
   validateStatus,
+  type AuditCategory,
+  type AuditEffort,
+  type AuditFinding,
+  type AuditPriority,
+  type AuditRisk,
   type GateResult,
   type L1PreDispatchInput,
+  type ToolSignal,
+  type ValidationResult,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
 import { parseCompassFrontmatter } from "./compass";
@@ -816,6 +842,429 @@ reviewCommand
       console.log(pc.green(`seats: ${result.n}`));
     } catch (error) {
       failScript(error, "review seats");
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// Slice 4: lint / design-md / audit / compound / host / skill (engine-backed
+// thin wrappers — business logic lives in @mstar-harness/engine)
+// ---------------------------------------------------------------------------
+
+/** Content types `mstar lint` knows, mapped 1:1 to engine lint.* checks. */
+type LintTargetType = "plan" | "skill" | "strategy" | "report" | "code";
+
+/** Build a static string-keyed membership lookup from an enum array. */
+function lookupTable(values: readonly string[]): Record<string, true> {
+  const table: Record<string, true> = {};
+  for (const value of values) table[value] = true;
+  return table;
+}
+
+/** Directories skipped during `mstar lint <dir>` walks (build/vendor trees). */
+const LINT_SKIP_DIRS: Record<string, true> = {
+  node_modules: true,
+  ".git": true,
+  dist: true,
+  coverage: true,
+  ".turbo": true,
+};
+
+/** Code-file extensions linted for `simplify:` / `temporary` markers. */
+const LINT_CODE_EXTENSIONS: Record<string, true> = {
+  ".ts": true, ".tsx": true, ".mts": true, ".cts": true,
+  ".js": true, ".jsx": true, ".mjs": true, ".cjs": true,
+  ".py": true, ".go": true, ".rs": true, ".sh": true, ".bash": true, ".zsh": true,
+  ".rb": true, ".java": true, ".kt": true, ".swift": true,
+};
+
+/**
+ * Classify a lint target by content type (basename first, then plan-location
+ * heuristics, then code extensions). Unclassifiable files (DESIGN.md, task
+ * briefs, prose docs, ...) return `null` — `mstar lint` skips them in dir
+ * walks and rejects them as usage errors when named explicitly.
+ */
+function lintTargetType(filePath: string): LintTargetType | null {
+  const base = path.basename(filePath);
+  if (base === "STRATEGY.md") return "strategy";
+  if (base === "SKILL.md") return "skill";
+  if (/^task-\d+-report\.md$/i.test(base)) return "report";
+  const dir = path.dirname(filePath);
+  if (dir.includes(`${path.sep}plans${path.sep}`) || dir.endsWith(`${path.sep}plans`)) return "plan";
+  if (/^\d{8}-[a-z0-9.-]+\.md$/i.test(base)) return "plan";
+  if (LINT_CODE_EXTENSIONS[path.extname(base).toLowerCase()] === true) return "code";
+  return null;
+}
+
+/** Recursively collect lintable files under a directory (skip build trees). */
+function collectLintTargets(dir: string): string[] {
+  const targets: string[] = [];
+  const walk = (current: string): void => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (LINT_SKIP_DIRS[entry.name] !== true) walk(path.join(current, entry.name));
+      } else if (entry.isFile() && lintTargetType(path.join(current, entry.name)) !== null) {
+        targets.push(path.join(current, entry.name));
+      }
+    }
+  };
+  walk(dir);
+  return targets;
+}
+
+/** Run the content-type engine checks for one lint target. Markers are
+ * advisory info (stdout); violations gate the exit code (stderr). */
+function lintOneFile(filePath: string): { violations: ValidationResult[]; markers: string[] } {
+  const abs = path.resolve(filePath);
+  const text = fs.readFileSync(abs, "utf8");
+  const violations: ValidationResult[] = [];
+  const markers: string[] = [];
+  switch (lintTargetType(abs)) {
+    case "plan":
+      violations.push(...planQualityBar(text).violations);
+      break;
+    case "skill":
+      violations.push(...lintFrontmatter(text).violations);
+      break;
+    case "strategy":
+      violations.push(...lintStrategySections(text).violations);
+      break;
+    case "report":
+      violations.push(...assertSddTddTriple(text).violations);
+      break;
+    case "code": {
+      for (const marker of findSimplifyMarkers(text)) {
+        markers.push(`simplify marker @${marker.line}: ${marker.text}`);
+      }
+      const temporary = findTemporaryMarkers(text);
+      for (const marker of temporary.markers) {
+        const removal = marker.removalPath === null ? "no removal path" : `removal: ${marker.removalPath}`;
+        markers.push(`temporary marker @${marker.line}: ${marker.text} (${removal})`);
+      }
+      violations.push(...temporary.violations);
+      break;
+    }
+    default:
+      throw new SddScriptError(
+        `usage: lint <target> — unsupported file type "${path.basename(abs)}" (lintable: plan files, SKILL.md, STRATEGY.md, task-N-report.md, code files)`,
+        2,
+      );
+  }
+  return { violations, markers };
+}
+
+const lintCommand = program
+  .command("lint")
+  .description(
+    "lint harness artifacts by content type (engine-backed): plan files → quality bar, SKILL.md → frontmatter, " +
+      "STRATEGY.md → required sections, task-N-report.md → SDD TDD triple, code files → simplify:/temporary markers",
+  );
+
+lintCommand
+  .description("Lint <target> (file or dir) — exit 1 on violations, 2 on usage")
+  .argument("[target]", "File or directory to lint")
+  .action((target?: string) => {
+    try {
+      if (!target) throw new SddScriptError("usage: lint <target> (file or dir)", 2);
+      const abs = path.resolve(target);
+      if (!fs.existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
+      const targets = fs.statSync(abs).isDirectory() ? collectLintTargets(abs) : [abs];
+      if (targets.length === 0) {
+        console.log(pc.yellow(`lint: no lintable files under ${target}`));
+        return;
+      }
+      let violations = 0;
+      for (const file of targets) {
+        const label = `lint ${file}`;
+        let result: { violations: ValidationResult[]; markers: string[] };
+        try {
+          result = lintOneFile(file);
+        } catch (error) {
+          if (error instanceof SddScriptError) throw error;
+          console.error(pc.red(`${label}: ERROR — ${(error as Error).message}`));
+          violations++;
+          continue;
+        }
+        for (const marker of result.markers) console.log(`  ${pc.cyan(marker)}`);
+        if (result.violations.length === 0) {
+          console.log(pc.green(`${label}: OK`));
+          continue;
+        }
+        violations += result.violations.length;
+        const count = result.violations.length;
+        console.error(pc.red(`${label}: FAIL (${count} violation${count === 1 ? "" : "s"})`));
+        for (const violation of result.violations) {
+          console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
+          if (violation.fix) console.error(`    fix: ${violation.fix}`);
+        }
+      }
+      if (violations > 0) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "lint");
+    }
+  });
+
+/** Strip a leading `---`-fenced YAML frontmatter block, returning the body
+ * (five-question lint takes the body; the frontmatter lint takes the full doc). */
+function stripFrontmatter(text: string): string {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (lines.length === 0 || lines[0].trim() !== "---") return text;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") return lines.slice(i + 1).join("\n");
+  }
+  return text;
+}
+
+const designMdCommand = program
+  .command("design-md")
+  .description("DESIGN.md token frontmatter / light-dark parity / completeness checks (engine-backed)");
+
+designMdCommand
+  .command("validate")
+  .description(
+    "Validate DESIGN.md in <dir>: token frontmatter, light/dark parity when DESIGN.dark.md exists, " +
+      "and the completeness level (exit 1 on violations, 2 on usage)",
+  )
+  .argument("[dir]", "Directory containing DESIGN.md")
+  .action((dir?: string) => {
+    try {
+      if (!dir) throw new SddScriptError("usage: design-md validate <dir>", 2);
+      const abs = path.resolve(dir);
+      const lightPath = path.join(abs, "DESIGN.md");
+      if (!fs.existsSync(lightPath)) throw new Error(`design file not found: ${lightPath}`);
+      const light = fs.readFileSync(lightPath, "utf8");
+      const violations: ValidationResult[] = [];
+      const tokens = validateDesignTokenFrontmatter(light);
+      printChecklist("design-md validate (tokens)", tokens);
+      violations.push(...tokens.violations);
+      const darkPath = path.join(abs, "DESIGN.dark.md");
+      if (fs.existsSync(darkPath)) {
+        const parity = assertLightDarkParity(light, fs.readFileSync(darkPath, "utf8"));
+        printChecklist("design-md validate (light/dark parity)", parity);
+        violations.push(...parity.violations);
+      }
+      const level = completenessLevel(light);
+      console.log(`design-md completeness level: ${level.level}`);
+      if (level.missing.length > 0) console.log(`  missing for next level: ${level.missing.join(", ")}`);
+      if (level.bodyUnverified) {
+        console.log(pc.yellow("  note: body-only checklist items not verified — Production caps at Standard"));
+      }
+      if (violations.length > 0) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "design-md validate");
+    }
+  });
+
+/**
+ * Parse the `audit scaffold` findings file into engine `AuditFinding`s
+ * (arg-shape errors → usage exit 2). Findings-file contract: a JSON array of
+ * `{title, priority, effort, risk, category, dependsOn?, description}` —
+ * `description` maps to the plan's Impact section.
+ */
+function parseAuditFindings(text: string): AuditFinding[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new SddScriptError("usage: audit scaffold — findings file is not valid JSON", 2);
+  }
+  if (!Array.isArray(parsed)) throw new SddScriptError("usage: audit scaffold — findings file must be a JSON array", 2);
+  return parsed.map((raw, index): AuditFinding => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new SddScriptError(`usage: audit scaffold — findings[${index}] is not an object`, 2);
+    }
+    const finding = raw as Record<string, unknown>;
+    const title = typeof finding.title === "string" ? finding.title.trim() : "";
+    const impact = typeof finding.description === "string" ? finding.description.trim() : "";
+    const priority = typeof finding.priority === "string" ? finding.priority : "";
+    const effort = typeof finding.effort === "string" ? finding.effort : "";
+    const risk = typeof finding.risk === "string" ? finding.risk : "";
+    const category = typeof finding.category === "string" ? finding.category : "";
+    if (title === "" || impact === "") {
+      throw new SddScriptError(`usage: audit scaffold — findings[${index}] needs non-empty title and description`, 2);
+    }
+    if (AUDIT_PRIORITY_LOOKUP[priority] !== true) {
+      throw new SddScriptError(`usage: audit scaffold — findings[${index}].priority must be one of ${AUDIT_PRIORITIES.join("|")}`, 2);
+    }
+    if (AUDIT_EFFORT_LOOKUP[effort] !== true) {
+      throw new SddScriptError(`usage: audit scaffold — findings[${index}].effort must be one of ${AUDIT_EFFORTS.join("|")}`, 2);
+    }
+    if (AUDIT_RISK_LOOKUP[risk] !== true) {
+      throw new SddScriptError(`usage: audit scaffold — findings[${index}].risk must be one of ${AUDIT_RISKS.join("|")}`, 2);
+    }
+    if (AUDIT_CATEGORY_LOOKUP[category] !== true) {
+      throw new SddScriptError(`usage: audit scaffold — findings[${index}].category must be one of ${AUDIT_CATEGORIES.join("|")}`, 2);
+    }
+    const dependsOn = typeof finding.dependsOn === "string" && finding.dependsOn.trim() !== "" ? finding.dependsOn.trim() : undefined;
+    // Enum memberships were validated above — cast the narrowed unions.
+    return {
+      title,
+      category: category as AuditCategory,
+      impact,
+      effort: effort as AuditEffort,
+      risk: risk as AuditRisk,
+      confidence: "MED",
+      evidence: [],
+      priority: priority as AuditPriority,
+      dependsOn,
+    };
+  });
+}
+
+const auditCommand = program
+  .command("audit")
+  .description("audit plan scaffold (engine-backed)");
+
+auditCommand
+  .command("scaffold")
+  .description(
+    "Scaffold an audit-<date>/ plan directory (numbered plan files + README index) from a JSON findings file " +
+      "(exit 2 on usage)",
+  )
+  .argument("[out-dir]", "Output directory for the scaffolded audit plan")
+  .argument("[findings-file]", "JSON file: array of {title, priority, effort, risk, category, dependsOn?, description}")
+  .action((outDir?: string, findingsFile?: string) => {
+    try {
+      if (!outDir || !findingsFile) throw new SddScriptError("usage: audit scaffold <out-dir> <findings-file>", 2);
+      const abs = path.resolve(findingsFile);
+      if (!fs.existsSync(abs)) throw new Error(`findings file not found: ${abs}`);
+      const findings = parseAuditFindings(fs.readFileSync(abs, "utf8"));
+      const result = scaffoldAuditPlan(path.resolve(outDir), findings);
+      const count = result.files.length;
+      console.log(pc.green(`audit scaffold: OK — ${count} plan file${count === 1 ? "" : "s"} in ${result.outDir}`));
+      for (const file of result.files) console.log(`  created: ${file}`);
+    } catch (error) {
+      failScript(error, "audit scaffold");
+    }
+  });
+
+const compoundCommand = program
+  .command("compound")
+  .description("knowledge-doc schema / index / scope checks (engine-backed)");
+
+compoundCommand
+  .command("validate")
+  .description(
+    "Validate a knowledge doc frontmatter (schema.yaml contract); with --knowledge-dir, also assert the " +
+      "knowledge README index rows and guard the doc inside the knowledge scope (exit 1 on violations, 2 on usage)",
+  )
+  .argument("[doc-path]", "Knowledge doc (markdown with YAML frontmatter)")
+  .option("--knowledge-dir <dir>", "Knowledge directory (enables index-row asserts + scope guard)")
+  .action((docPath: string | undefined, options: { knowledgeDir?: string }) => {
+    try {
+      if (!docPath) throw new SddScriptError("usage: compound validate <doc-path> [--knowledge-dir <dir>]", 2);
+      const abs = path.resolve(docPath);
+      if (!fs.existsSync(abs)) throw new Error(`knowledge doc not found: ${abs}`);
+      const text = fs.readFileSync(abs, "utf8");
+      const violations: ValidationResult[] = [];
+      const schema = validateSchemaYaml(text);
+      printChecklist("compound validate (schema)", schema);
+      violations.push(...schema.violations);
+      if (options.knowledgeDir !== undefined) {
+        const knowledgeDir = path.resolve(options.knowledgeDir);
+        const index = assertIndexRows(knowledgeDir);
+        printChecklist("compound validate (index rows)", index);
+        violations.push(...index.violations);
+        const scope = scopeGuard(abs, [knowledgeDir]);
+        printChecklist("compound validate (scope guard)", scope);
+        violations.push(...scope.violations);
+      }
+      if (violations.length > 0) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "compound validate");
+    }
+  });
+
+/** Audit enum membership lookups (engine enum arrays — no drift). */
+const AUDIT_PRIORITY_LOOKUP = lookupTable(AUDIT_PRIORITIES);
+const AUDIT_EFFORT_LOOKUP = lookupTable(AUDIT_EFFORTS);
+const AUDIT_RISK_LOOKUP = lookupTable(AUDIT_RISKS);
+const AUDIT_CATEGORY_LOOKUP = lookupTable(AUDIT_CATEGORIES);
+
+/** Valid `host detect --signals` tokens (mstar-host detection table, ported
+ * verbatim to the engine's ToolSignal enum). */
+const HOST_SIGNALS: readonly ToolSignal[] = [
+  "subagent_type",
+  "question",
+  "task_subagent",
+  "task_agent_batch",
+  "ask",
+  "hub",
+  "Agent",
+  "AgentSwarm",
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "TodoWrite",
+  "plan_slash",
+  "goal",
+  "functions.*",
+  "tool_search",
+];
+
+/** Membership lookup for the signal list above. */
+const HOST_SIGNAL_LOOKUP = lookupTable(HOST_SIGNALS);
+
+const hostCommand = program
+  .command("host")
+  .description("host detection from session tool shapes (engine-backed)");
+
+hostCommand
+  .command("detect")
+  .description(
+    "Detect the active host from --signals (comma-separated tool-shape tokens): prints the host id or " +
+      "'ambiguous' (exit 2 on usage)",
+  )
+  .option("--signals <list>", "Comma-separated tool-shape signals (e.g. question,ask,hub)")
+  .action((options: { signals?: string }) => {
+    try {
+      if (!options.signals) throw new SddScriptError("usage: host detect --signals <comma-list>", 2);
+      const signals = options.signals
+        .split(",")
+        .map((signal) => signal.trim())
+        .filter((signal) => signal !== "");
+      if (signals.length === 0) throw new SddScriptError("usage: host detect --signals <comma-list>", 2);
+      for (const signal of signals) {
+        if (HOST_SIGNAL_LOOKUP[signal] !== true) {
+          throw new SddScriptError(`usage: host detect — unknown signal "${signal}" (valid: ${HOST_SIGNALS.join(", ")})`, 2);
+        }
+      }
+      const result = detectHost(signals as ToolSignal[]);
+      if (result === "ambiguous") {
+        console.log(pc.yellow("host: ambiguous — apply the mstar-host detection table and prompt judgment"));
+      } else {
+        console.log(pc.green(`host: ${result}`));
+      }
+    } catch (error) {
+      failScript(error, "host detect");
+    }
+  });
+
+const skillCommand = program
+  .command("skill")
+  .description("skill-authoring lints (engine-backed)");
+
+skillCommand
+  .command("lint")
+  .description(
+    "Lint <skill-dir>/SKILL.md: frontmatter contract (name lowercase-hyphen, description trigger contract) " +
+      "+ the five-question body (exit 1 on violations, 2 on usage)",
+  )
+  .argument("[skill-dir]", "Skill directory containing SKILL.md")
+  .action((skillDir?: string) => {
+    try {
+      if (!skillDir) throw new SddScriptError("usage: skill lint <skill-dir>", 2);
+      const skillFile = path.join(path.resolve(skillDir), "SKILL.md");
+      if (!fs.existsSync(skillFile)) throw new Error(`SKILL.md not found: ${skillFile}`);
+      const text = fs.readFileSync(skillFile, "utf8");
+      const violations: ValidationResult[] = [];
+      const frontmatter = lintFrontmatter(text);
+      printChecklist("skill lint (frontmatter)", frontmatter);
+      violations.push(...frontmatter.violations);
+      const fiveQuestion = lintFiveQuestion(stripFrontmatter(text));
+      printChecklist("skill lint (five questions)", fiveQuestion);
+      violations.push(...fiveQuestion.violations);
+      if (violations.length > 0) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "skill lint");
     }
   });
 
