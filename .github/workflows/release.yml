@@ -1,8 +1,10 @@
 name: Release
 
 # PR-driven release. Merging a `release vX.Y.Z` PR runs the whole release inline
-# on the pull_request event: validate -> build -> npm publish (provenance) ->
-# create+push the `vX.Y.Z` tag -> GitHub Release.
+# on the pull_request event: validate -> build -> npm publish (provenance) of
+# @mstar-harness/engine + @mstar-harness/cli + @mstar-harness/opencode (engine
+# first — cli/opencode depend on it) -> create+push the `vX.Y.Z` tag -> GitHub
+# Release.
 #
 # No secrets are required for the default flow (the tag is pushed with the
 # workflow's GITHUB_TOKEN). Releases are PR-driven by design: a manual
@@ -60,6 +62,13 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: bun run release:validate -- "v${VERSION}"
 
+      # Root typecheck resolves @mstar-harness/engine via packages/engine/dist
+      # (types: ./dist/index.d.ts), which is gitignored — build it first.
+      # The engine build is idempotent (rm -rf dist && bun build && bunx tsc);
+      # prepublishOnly also rebuilds before publish.
+      - name: Build engine (declarations for typecheck)
+        run: bun run --cwd packages/engine build
+
       - name: Typecheck
         run: bun run typecheck
 
@@ -67,6 +76,12 @@ jobs:
         run: |
           bun run cli:build
           bun run opencode:build
+
+      # Engine must publish FIRST: @mstar-harness/cli and @mstar-harness/opencode
+      # declare it as a hard dependency, so registry resolution during their
+      # install requires engine to already exist at the release version.
+      - name: Publish @mstar-harness/engine
+        run: npm publish --workspace @mstar-harness/engine --access public
 
       - name: Publish @mstar-harness/cli
         run: npm publish --workspace @mstar-harness/cli --access public
