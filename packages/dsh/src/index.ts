@@ -67,6 +67,7 @@ import type {
   GateResult,
   HostAdapter,
   IntegrationMergeLease,
+  SecretFinding,
   StatusDoc,
   ValidationResult,
   WorktreeTrack,
@@ -913,11 +914,17 @@ function validateDesignDoc(doc: string, path: string): GateResult {
   return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
 }
 
-/** Validate an audit plan document: Status-block contract + secret scan. */
-function validateAuditDoc(doc: string, path: string): GateResult {
+/**
+ * Validate an audit plan document: Status-block contract + secret scan.
+ * The findings summary (line + type only — mstar-audit Hard Rule 4 never
+ * reproduces secret values) rides along for the validate tool's `secrets`
+ * output field; the gate path reads only `ok`/`violations`.
+ */
+function validateAuditDoc(doc: string, path: string): GateResult & { findings: SecretFinding[] } {
+  const redacted = redactSecrets(doc, path)
   const violations = [...validateAuditStatusBlocks(doc).violations]
-  violations.push(...auditSecretsViolations(redactSecrets(doc, path).findings, path))
-  return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
+  violations.push(...auditSecretsViolations(redacted.findings, path))
+  return { ok: violations.length === 0, violations, findings: redacted.findings }
 }
 
 /**
@@ -942,11 +949,15 @@ function validateCompoundDoc(doc: string, _path: string, harnessDir: string | nu
  * against the on-disk references layout, plus load-order declarations
  * across every sibling `mstar-*` skill (unreadable sibling SKILL.md files
  * are skipped — best-effort reads for a lint that must never take the gate
- * down).
+ * down). The `skillsRoot` override exists for the validate tool (its
+ * explicit `skills_root` parameter); the gate path keeps the default
+ * (the parent of the roles dir).
+ * @param rolesDir - the mstar-roles skill directory.
+ * @param skillsRoot - directory scanned for sibling `mstar-*` skills
+ * (default: `dirname(rolesDir)`).
  */
-function validateRolesState(rolesDir: string): GateResult {
+function validateRolesState(rolesDir: string, skillsRoot: string = dirname(rolesDir)): GateResult {
   const violations = [...validateRoleMapping(rolesDir).violations]
-  const skillsRoot = dirname(rolesDir)
   const skillTexts: Record<string, string> = {}
   for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('mstar-')) continue
@@ -2371,21 +2382,17 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
         const lightPath = join(abs, 'DESIGN.md')
         if (!existsSync(lightPath)) throw new Error(`design file not found: ${lightPath}`)
         const light = readFileSync(lightPath, 'utf8')
-        const violations: ValidationResult[] = []
-        const tokens = validateDesignTokenFrontmatter(light)
-        violations.push(...tokens.violations)
-        const darkPath = join(abs, 'DESIGN.dark.md')
-        if (existsSync(darkPath)) {
-          const parity = assertLightDarkParity(light, readFileSync(darkPath, 'utf8'))
-          violations.push(...parity.violations)
-        }
+        // Shared gate validator (validateSeamDoc → gateSeamIntent path):
+        // token frontmatter + light/dark parity when the sibling exists.
+        // The tool layers the completeness level on top.
+        const result = validateDesignDoc(light, lightPath)
         const level = completenessLevel(light)
         return {
-          ok: violations.length === 0,
+          ok: result.ok,
           level: level.level,
           level_missing: level.missing,
           body_unverified: level.bodyUnverified,
-          violations: violations.map(iterationViolationView),
+          violations: result.violations.map(iterationViolationView),
         }
       },
     }))
@@ -2435,12 +2442,12 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
         const abs = resolve(args.plan_path)
         if (!existsSync(abs)) throw new Error(`plan file not found: ${abs}`)
         const text = readFileSync(abs, 'utf8')
-        const violations: ValidationResult[] = []
-        const status = validateAuditStatusBlocks(text)
-        violations.push(...status.violations)
-        const redacted = redactSecrets(text, abs)
-        violations.push(...auditSecretsViolations(redacted.findings, abs))
-        return { ok: violations.length === 0, violations: violations.map(iterationViolationView), secrets: redacted.findings }
+        // Shared gate validator (validateSeamDoc → gateSeamIntent path):
+        // Status-block contract + secret scan. The tool layers the findings
+        // summary (line + type only — secret values are never reproduced,
+        // mstar-audit Hard Rule 4) on top.
+        const result = validateAuditDoc(text, abs)
+        return { ok: result.ok, violations: result.violations.map(iterationViolationView), secrets: result.findings }
       },
     }))
 
@@ -2449,8 +2456,9 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
       description:
         'Validate a knowledge doc (mirror of `mstar compound validate`): schema.yaml frontmatter ' +
         'contract; with knowledge_dir also assert the knowledge README index rows and guard the doc ' +
-        'inside the knowledge scope; with repo_root also check referenced paths/modules exist ' +
-        '(compound-refresh Phase 2 — the extra beyond the CLI).',
+        'inside the knowledge scope; reference existence checks run against repo_root when given, ' +
+        'else against the harness-derived root the seam gate uses (compound-refresh Phase 2 — the ' +
+        'knowledge_dir extras beyond the CLI).',
       parameters: {
         doc_path: {
           type: 'string',
@@ -2463,7 +2471,8 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
         },
         repo_root: {
           type: 'string',
-          description: 'Repo root for reference existence checks (the seam gate resolves the parent of {HARNESS_DIR}).',
+          description:
+            'Repo root for reference existence checks (default: the parent of the resolved {HARNESS_DIR} — the seam gate root; none when no harness dir resolves).',
         },
       },
       output: {
@@ -2484,19 +2493,21 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
         const abs = resolve(args.doc_path)
         if (!existsSync(abs)) throw new Error(`knowledge doc not found: ${abs}`)
         const text = readFileSync(abs, 'utf8')
-        const violations: ValidationResult[] = []
-        const schema = validateSchemaYaml(text)
-        violations.push(...schema.violations)
+        // Shared gate validator (validateSeamDoc → gateSeamIntent path):
+        // schema contract + reference existence against the harness-derived
+        // root when the caller gives no explicit repo_root — the tool then
+        // defaults to the SAME checks the fs gate enforces. An explicit
+        // repo_root replaces the derived root (tool-only contract), and
+        // knowledge_dir layers the index/scope asserts on top.
+        const base = validateCompoundDoc(text, abs, args.repo_root !== undefined ? null : harnessDir)
+        const violations = [...base.violations]
+        if (args.repo_root !== undefined) {
+          violations.push(...referenceExists(resolve(args.repo_root), text).violations)
+        }
         if (args.knowledge_dir !== undefined) {
           const knowledgeDir = resolve(args.knowledge_dir)
-          const index = assertIndexRows(knowledgeDir)
-          violations.push(...index.violations)
-          const scope = scopeGuard(abs, [knowledgeDir])
-          violations.push(...scope.violations)
-        }
-        if (args.repo_root !== undefined) {
-          const refs = referenceExists(resolve(args.repo_root), text)
-          violations.push(...refs.violations)
+          violations.push(...assertIndexRows(knowledgeDir).violations)
+          violations.push(...scopeGuard(abs, [knowledgeDir]).violations)
         }
         return { ok: violations.length === 0, violations: violations.map(iterationViolationView) }
       },
@@ -2536,24 +2547,14 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
       async execute(args) {
         const rolesDir = resolve(args.roles_dir)
         if (!existsSync(join(rolesDir, 'SKILL.md'))) throw new Error(`roles dir not found: ${rolesDir}`)
-        const violations: ValidationResult[] = []
-        const mapping = validateRoleMapping(rolesDir)
-        violations.push(...mapping.violations)
-        const skillsRoot = args.skills_root !== undefined ? resolve(args.skills_root) : dirname(rolesDir)
-        const skillTexts: Record<string, string> = {}
-        for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
-          if (!entry.isDirectory() || !entry.name.startsWith('mstar-')) continue
-          const skillFile = join(skillsRoot, entry.name, 'SKILL.md')
-          if (!existsSync(skillFile)) continue
-          try {
-            skillTexts[entry.name] = readFileSync(skillFile, 'utf8')
-          } catch {
-            // skip unreadable sibling — the mapping checks still stand
-          }
-        }
-        const loadOrder = lintLoadOrder(skillTexts)
-        violations.push(...loadOrder.violations)
-        return { ok: violations.length === 0, violations: violations.map(iterationViolationView) }
+        // Shared gate validator (validateSeamDoc → gateSeamIntent path): role
+        // mapping + load-order lint. The tool only overrides the skills_root
+        // the gate derives as the parent of the roles dir.
+        const result = validateRolesState(
+          rolesDir,
+          args.skills_root !== undefined ? resolve(args.skills_root) : undefined,
+        )
+        return { ok: result.ok, violations: result.violations.map(iterationViolationView) }
       },
     }))
   })
