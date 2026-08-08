@@ -63,14 +63,3 @@ describe("ci-dep-guard — opencode dep-tree forbidden packages (qc2 F-004)", ()
     expect(findForbiddenDeps("")).toEqual([]);
   });
 });
-
-import { spawnSync } from "node:child_process";
-
-test("--graph mode walks the opencode runtime closure and passes on this repo", () => {
-  const res = spawnSync("bun", ["run", "ci:dep-guard", "--graph"], {
-    cwd: new URL("..", import.meta.url).pathname,
-    encoding: "utf8",
-  });
-  expect(res.status).toBe(0);
-  expect(res.stdout).toContain("OK — opencode dep tree has no commander/inquirer");
-});

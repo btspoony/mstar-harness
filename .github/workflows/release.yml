@@ -77,14 +77,12 @@ jobs:
           bun run cli:build
           bun run opencode:build
 
-      # Engine must publish FIRST: @mstar-harness/cli and @mstar-harness/opencode
-      # declare it as a hard dependency, so registry resolution during their
-      # install requires engine to already exist at the release version.
+      # Engine is published standalone for direct consumers; cli/opencode
+      # BUNDLE it at build time (devDependency), so their published artifacts
+      # are self-contained — no registry ordering constraint. Keep engine first
+      # for tidy publication history.
       - name: Publish @mstar-harness/engine
         run: npm publish --workspace @mstar-harness/engine --access public
-
-      - name: Rewrite engine dep spec for publish (workspace:* -> version)
-        run: bun run scripts/rewrite-engine-dep-for-publish.mjs
 
       - name: Publish @mstar-harness/cli
         run: npm publish --workspace @mstar-harness/cli --access public
