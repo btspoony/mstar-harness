@@ -72,6 +72,9 @@ jobs:
       - name: Validate release surfaces
         run: bun run release:validate -- "v${{ steps.ver.outputs.version }}"
 
+      - name: Build engine (declarations for typecheck)
+        run: bun run --cwd packages/engine build
+
       - name: Typecheck + pack (release sanity)
         run: |
           mkdir -p /tmp/pack-out
