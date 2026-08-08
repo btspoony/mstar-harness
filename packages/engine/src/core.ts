@@ -34,6 +34,14 @@ export type ValidationResult = {
   code: string;
   message: string;
   fix?: string;
+  /**
+   * Backward-compat alias codes for the same violation, emitted by the
+   * engine's single parser (e.g. the Slice-2 `assignment.presence.*`
+   * namespace kept as aliases on the three core Assignment field
+   * violations — see `dispatch.requireField`). Consumers keyed off either
+   * namespace see exactly ONE violation per missing field.
+   */
+  aliases?: readonly string[];
 };
 
 /**

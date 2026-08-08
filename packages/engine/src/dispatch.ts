@@ -83,12 +83,17 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
 /**
  * Parse `**Field**: value` (or plain `Field: value`) header lines from an
  * Assignment into the dispatch-relevant fields. Only known field labels are
- * captured; values are trimmed.
+ * captured; values are trimmed. List-bullet prefixes (`- **Field**: value`)
+ * are accepted so the engine parser is the SINGLE grammar for Assignment
+ * header fields (the Slice-2 opencode presence parser tolerated bullets;
+ * its acceptance is folded into this parser, not forked — qc1 F-002).
  */
-function parseAssignmentFields(assignmentText: string): AssignmentFields {
+export function parseAssignmentFields(assignmentText: string): AssignmentFields {
   const fields: AssignmentFields = {};
   for (const line of assignmentText.split(/\r?\n/)) {
-    const match = line.match(/^\*\*\s*([^*:]+?)\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^([A-Za-z][A-Za-z -]*?)\s*:\s*(.*)$/);
+    const match =
+      line.match(/^[ \t]*(?:[-*][ \t]+)?\*\*\s*([^*:]+?)\s*\*\*\s*:\s*(.*)$/) ??
+      line.match(/^[ \t]*(?:[-*][ \t]+)?([A-Za-z][A-Za-z -]*?)\s*:\s*(.*)$/);
     if (!match) continue;
     const label = match[1]!.trim();
     const value = match[2]!.trim();
@@ -103,22 +108,138 @@ function parseAssignmentFields(assignmentText: string): AssignmentFields {
   return fields;
 }
 
-/** Presence-shape helper: absent → `missing-<code>`, empty → `invalid-<code>`. */
+/**
+ * Presence-shape helper: absent → `missing-<code>`, empty → `invalid-<code>`.
+ *
+ * The three core field violations carry `assignment.presence.*` ALIAS codes:
+ * the Slice-2 opencode presence namespace is kept as engine aliases (qc1
+ * F-002) — same single parser, one violation per missing field, both
+ * namespaces observable on that one violation.
+ */
 function requireField(violations: ValidationResult[], value: string | undefined, label: string, code: string): void {
   if (value === undefined) {
-    violations.push(
-      violation(
-        "high",
-        `assignment.field.missing-${code}`,
-        `missing required Assignment field: ${label}`,
-        `add "**${label}**: <value>" to the Assignment`,
-      ),
+    const v = violation(
+      "high",
+      `assignment.field.missing-${code}`,
+      `missing required Assignment field: ${label}`,
+      `add "**${label}**: <value>" to the Assignment`,
     );
+    v.aliases = [`assignment.presence.missing-${code}`];
+    violations.push(v);
   } else if (value === "") {
-    violations.push(
-      violation("high", `assignment.field.invalid-${code}`, `${label} must be non-empty`, `fill in "**${label}**: <value>"`),
+    const v = violation(
+      "high",
+      `assignment.field.invalid-${code}`,
+      `${label} must be non-empty`,
+      `fill in "**${label}**: <value>"`,
     );
+    v.aliases = [`assignment.presence.missing-${code}`];
+    violations.push(v);
   }
+}
+
+/**
+ * Parsed branch forms of an Assignment (mstar-branch-worktree § "Assignment
+ * 要求"): `Working branch: <existing>` | `Working branch: create <new> from
+ * <base>` | `Branch policy: direct on <branch> — <reason>`. Exactly one is
+ * required for writable assignments. This is the engine's SINGLE branch-form
+ * grammar — CLI and host hooks consume it instead of re-implementing the
+ * regexes (qc1 F-001 / qc3 F-3).
+ */
+export type AssignmentBranchForms = {
+  /**
+   * `Working branch: <existing>` — the value's first token (create-form
+   * values are excluded and land in {@link createForm} instead).
+   */
+  workingBranch?: string;
+  /** `Working branch: create <new> from <base>` — created branch name (+ base when written). */
+  createForm?: { name: string; base?: string };
+  /**
+   * `Branch policy: direct on <branch> — <reason>` — branch captured by the
+   * loose `direct on <branch>` prefix; `reason` is the strict-form reason
+   * ("" when the value is not a well-formed direct-on form, i.e. no
+   * separator + non-empty reason — mirror of `validateAssignmentFields`).
+   */
+  directOn?: { branch: string; reason: string };
+};
+
+/**
+ * Parse one `Working branch` value into its form. Create-form token match is
+ * case-insensitive (`CREATE <new> from <base>`); values that do not match the
+ * exact form (e.g. "created", "create/foo", "create-user-flow") are
+ * existing-branch names. Dangling create-form typos — `create <new> from`
+ * (trailing `from`, no base) and `create from <base>` (name missing) — are
+ * recognized as create-forms so `validateAssignmentFields` can flag them
+ * (qc2 S-1 / qc3 F-5, fail-open fixed).
+ */
+function parseWorkingBranchValue(
+  value: string,
+): { workingBranch?: string; createForm?: { name: string; base?: string } } {
+  if (value === "") return {};
+  const create = value.match(/^create\s+(\S+)(?:\s+from\s+(\S+))?$/i);
+  if (create) return { createForm: { name: create[1]!, base: create[2] } };
+  // Dangling `from` with no `<base>`: "create feature/x from".
+  const danglingFrom = value.match(/^create\s+(\S+)\s+from$/i);
+  if (danglingFrom) return { createForm: { name: danglingFrom[1]!, base: "" } };
+  // `from` with no `<new>` name: "create from main".
+  const missingName = value.match(/^create\s+from\s+(\S+)$/i);
+  if (missingName) return { createForm: { name: "", base: missingName[1]! } };
+  return { workingBranch: value.split(/\s+/)[0]! };
+}
+
+/**
+ * Parse an Assignment's branch forms via the engine's single parser
+ * (`parseAssignmentFields` + {@link parseWorkingBranchValue}). Consumed by
+ * the CLI `dispatch validate` gate-branch derivation and the opencode hook;
+ * also the internal grammar behind `validateAssignmentFields`.
+ */
+export function parseAssignmentBranchForms(assignmentText: string): AssignmentBranchForms {
+  const fields = parseAssignmentFields(assignmentText);
+  const forms: AssignmentBranchForms = {};
+  if (fields.workingBranch !== undefined && fields.workingBranch !== "") {
+    const parsed = parseWorkingBranchValue(fields.workingBranch);
+    if (parsed.createForm !== undefined) forms.createForm = parsed.createForm;
+    else forms.workingBranch = parsed.workingBranch;
+  }
+  if (fields.branchPolicy !== undefined && fields.branchPolicy !== "") {
+    // Loose prefix capture (gate target) + strict full-form capture (reason).
+    // simplify: separator `\s*` on both sides permits zero-width pathological
+    // spacing ("direct on main -hotfix — reason" splits into branch "main" +
+    // reason "hotfix — reason"); accepted (qc2 S-6) — greedy `\S+` parses
+    // realistic hyphenated branch names correctly. Tighten to `\s+(?:[—–]|--|-)\s*`
+    // if mis-splits ever surface.
+    const direct = fields.branchPolicy.match(/^direct\s+on\s+(\S+)/i);
+    if (direct) {
+      const strict = fields.branchPolicy.match(/^direct\s+on\s+(\S+)(?:\s*(?:[—–]|--|-)\s*(.+))?$/);
+      forms.directOn = { branch: direct[1]!.trim(), reason: strict ? (strict[2] ?? "").trim() : "" };
+    }
+  }
+  return forms;
+}
+
+/**
+ * Parse the Assignment's `Branch policy: direct on <branch> — <reason>`
+ * exception branch. Returns the branch ONLY for the well-formed direct-on
+ * form (branch + non-empty reason; separator set [—–]|--|-); undefined when
+ * absent or malformed — the default-branch gate recognizes explicit
+ * direct-on exceptions only. Single engine grammar shared by CLI + plugin
+ * (qc1 F-001).
+ */
+export function parseBranchPolicyDirectOnBranch(assignmentText: string): string | undefined {
+  const directOn = parseAssignmentBranchForms(assignmentText).directOn;
+  return directOn !== undefined && directOn.reason !== "" ? directOn.branch : undefined;
+}
+
+/**
+ * True when the Assignment's `Execute as` role is a read-only orientation
+ * role (`scout` / `explore`, case-insensitive). Read-only assignments
+ * legitimately omit branch forms (mstar-branch-worktree § "每个可写
+ * Assignment…") — callers pass `validateAssignmentFields(text, { writable:
+ * false })` and skip the default-branch gate for them (qc3 F-1 / qc2 S-5).
+ */
+export function isReadOnlyAssignmentRole(roleId: string): boolean {
+  const role = roleId.trim().toLowerCase();
+  return role === "scout" || role === "explore";
 }
 
 /**
@@ -128,8 +249,10 @@ function requireField(violations: ValidationResult[], value: string | undefined,
  * Required: `Execute as` / `Delegation` / `Task category` present with
  * non-empty values (paste-only shells are caught here — every field missing).
  * Writable assignments must carry EXACTLY ONE branch form; `create <new>
- * from <base>` without `<base>` and `Branch policy` without branch/reason are
- * flagged.
+ * from <base>` without `<base>` (incl. the dangling `create <new> from`
+ * / `create from <base>` typos) and `Branch policy` without branch/reason
+ * are flagged. The three core-field violations carry the legacy
+ * `assignment.presence.*` codes as aliases (qc1 F-002).
  */
 export function validateAssignmentFields(assignmentText: string, opts: ValidateAssignmentFieldsOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
@@ -144,6 +267,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
     const workingPresent = fields.workingBranch !== undefined && fields.workingBranch !== "";
     const policyPresent = fields.branchPolicy !== undefined && fields.branchPolicy !== "";
     const formCount = Number(workingPresent) + Number(policyPresent);
+    const forms = parseAssignmentBranchForms(assignmentText);
 
     if (formCount === 0) {
       violations.push(
@@ -168,20 +292,20 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
       // `main`. Case-insensitive create-form token match; values that do not
       // match the exact form (e.g. "created", "create/foo", "create-user-flow")
       // are existing-branch names and pass.
-      const m = fields.workingBranch!.match(/^create\s+(\S+)(?:\s+from\s+(\S+))?$/i);
-      if (m && m[2] === undefined) {
+      const create = forms.createForm;
+      if (create !== undefined && (create.base === undefined || create.base.trim() === "" || create.name.trim() === "")) {
         violations.push(
           violation(
             "high",
             "assignment.field.branch-missing-base",
-            `create-form Working branch is missing <base>: "${fields.workingBranch}" (expected "create <new-branch> from <base>")`,
-            "write the ancestor branch after `from` (main / existing feature branch / remote-tracking branch / `current`)",
+            `create-form Working branch is incomplete: "${fields.workingBranch}" (expected "create <new-branch> from <base>")`,
+            "write both the new branch name and the ancestor branch after `from` (main / existing feature branch / remote-tracking branch / `current`)",
           ),
         );
       }
     } else if (policyPresent) {
-      const m = fields.branchPolicy!.match(/^direct\s+on\s+(\S+)(?:\s*(?:[—–]|--|-)\s*(.+))?$/);
-      if (!m) {
+      const direct = forms.directOn;
+      if (direct === undefined) {
         violations.push(
           violation(
             "high",
@@ -190,12 +314,12 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
             "start the field with `direct on <branch>`",
           ),
         );
-      } else if ((m[2] ?? "").trim() === "") {
+      } else if (direct.reason === "") {
         violations.push(
           violation(
             "high",
             "assignment.field.branch-policy-missing-reason",
-            `Branch policy "direct on ${m[1]}" is missing the reason`,
+            `Branch policy "direct on ${direct.branch}" is missing the reason`,
             'append "— <reason>" after the branch name',
           ),
         );
@@ -250,7 +374,9 @@ export function executionModeToN(executionMode: string, opts: ExecutionModeToNOp
   } else if (mode === "inline") {
     n = 1;
   } else if (mode === "targeted") {
-    const seats = (opts.seats ?? []).map((s) => s.trim()).filter((s) => s !== "");
+    // Dedupe the listed reviewer seats before counting (qc2 S-3): the same
+    // seat listed twice is still one dispatch seat — N = distinct seats.
+    const seats = [...new Set((opts.seats ?? []).map((s) => s.trim()).filter((s) => s !== ""))];
     if (seats.length === 0) {
       violations.push(
         violation(

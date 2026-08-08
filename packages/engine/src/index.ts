@@ -63,6 +63,7 @@ export {
   withStatusWriteLock,
 } from "./lease.js";
 export type {
+  AssignmentBranchForms,
   AssignmentFields,
   DefaultBranchOptions,
   ExecutionModeToNOptions,
@@ -74,6 +75,10 @@ export {
   assertDefaultBranchProtected,
   assertTriIdentity,
   executionModeToN,
+  isReadOnlyAssignmentRole,
+  parseAssignmentBranchForms,
+  parseAssignmentFields,
+  parseBranchPolicyDirectOnBranch,
   validateAssignmentFields,
 } from "./dispatch.js";
 export type {
