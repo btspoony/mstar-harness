@@ -8,7 +8,7 @@
  * @module @mstar-harness/dsh
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { Service, type Context } from 'cordis'
 import z from 'schemastery'
@@ -28,6 +28,8 @@ import {
   executionModeToN,
   findingsCleanupGate,
   isReadOnlyAssignmentRole,
+  l1PreDispatchCheck,
+  l2PreDispatchCheck,
   lintFiveQuestion,
   lintFrontmatter,
   parseAssignmentBranchForms,
@@ -39,6 +41,7 @@ import {
   resolveAssetPath,
   resolveCompassEnforcement,
   resolveHarnessDir,
+  resolveIterationDir,
   resolveSkillRoot,
   sddWorkspace,
   taskBrief,
@@ -55,6 +58,7 @@ import type {
   IntegrationMergeLease,
   StatusDoc,
   ValidationResult,
+  WorktreeTrack,
 } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
@@ -63,7 +67,13 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { DshMstar } from './service.ts'
 import { parseCompassFrontmatterText } from './compass.ts'
-import type { MstarEngineStatusSource } from './types.ts'
+import type {
+  IterationGateListView,
+  IterationGateViolationView,
+  IterationGateView,
+  MstarEngineStatusSource,
+  MstarIterationGateSource,
+} from './types.ts'
 
 // Re-export the service type from the package entry (qc3 F-2a): the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -798,6 +808,34 @@ function firstToken(value: string): string | undefined {
   return token === '' ? undefined : token
 }
 
+/**
+ * ALL header-region values of a repeated Assignment field label (bold or
+ * plain, optionally list-bulleted — the same line grammar as the engine
+ * `parseAssignmentFields`). Repeated `Worktree path` / `Working branch`
+ * lines declare the L2 parallel-track context (Task 2); empty values are
+ * dropped (consistent with {@link assignmentHeaderValue}: an empty line is
+ * an absent field, never a malformed track).
+ *
+ * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
+ * slice (qc1 F-001 / qc2 F-001): body-quoted field examples after a
+ * `# Task` / `# Target` / `---` marker never leak into the track
+ * declarations — the same header-region discipline the dispatch gate
+ * already honors.
+ * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
+ * @param label - the header field label to read (e.g. `Worktree path`).
+ */
+function assignmentHeaderValues(headerRegion: string, label: string): string[] {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*[ \\t]*:[ \\t]*(.*)$`)
+  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`)
+  const values: string[] = []
+  for (const line of headerRegion.split(/\r?\n/)) {
+    const value = (line.match(bold) ?? line.match(plain))?.[1]
+    if (value !== undefined && value.trim() !== '') values.push(value.trim())
+  }
+  return values
+}
+
 /** A header value that means "no value" (placeholder conventions). Type guard so callers narrow to `string`. */
 function isNaValue(value: string | undefined): value is undefined {
   return value === undefined || /^(?:n\/?a|none)$/i.test(value)
@@ -958,32 +996,149 @@ function leaseGateViolations(
 }
 
 /**
+ * One worktree-gate violation line (dsh-side codes live in the
+ * `worktree.l2.*` namespace beside the engine's `worktree.l1.*` /
+ * `worktree.l2.*` emit).
+ */
+function worktreeViolation(code: string, message: string, fix?: string): ValidationResult {
+  return { ok: false, severity: 'high', code, message, fix }
+}
+
+/**
+ * L2 within-plan track isolation (Task 2; engine `l2PreDispatchCheck`):
+ * when the Assignment declares parallel tracks — ≥2 `Worktree path` header
+ * entries, or the documented parallel-tracks marker (`Dispatch mode:
+ * parallel independent tracks`, mstar-phase-gates 并行标签 /
+ * parallel-writable-pre-dispatch.md step 5) — every declared track must
+ * carry an absolute, distinct worktree path whose checkout branch matches
+ * its Working branch, BEFORE the first concurrent writable dispatch
+ * (N parallel invokes ≠ isolation).
+ *
+ * Track pairing follows the Assignment grammar: one `Working branch` entry
+ * per `Worktree path`, OR a single `Working branch` line applying to every
+ * track (the same-branch multi-dir topology, mstar-branch-worktree
+ * 同分支多目录例外 — git forbids one branch in two linked worktrees, so the
+ * second checkout is a clone). Any other count mismatch is a violation.
+ *
+ * Pure over the header + the filesystem; the engine probes
+ * `git -C <path> branch --show-current` per valid track (bounded, fails
+ * closed). Header-region scoping (qc2 F-001): the caller passes the engine
+ * `assignmentHeaderRegion` slice only.
+ * @param header - `assignmentHeaderRegion(assignmentText)`.
+ */
+function worktreeL2Violations(header: string): ValidationResult[] {
+  const worktreePaths = assignmentHeaderValues(header, 'Worktree path')
+  const workingBranches = assignmentHeaderValues(header, 'Working branch')
+  const dispatchMode = assignmentHeaderValue(header, 'Dispatch mode')
+  // Parallel-track declaration: ≥2 Worktree path entries, or the documented
+  // parallel-tracks marker. A single Worktree path is the serial norm and
+  // never triggers the L2 checklist (no track list to verify against).
+  if (worktreePaths.length < 2 && !/parallel/i.test(dispatchMode ?? '')) return []
+
+  const violations: ValidationResult[] = []
+  const tracks: WorktreeTrack[] = []
+  if (worktreePaths.length === 0 || workingBranches.length === worktreePaths.length) {
+    for (let i = 0; i < worktreePaths.length; i += 1) {
+      tracks.push({ worktreePath: worktreePaths[i]!, workingBranch: workingBranches[i] ?? '' })
+    }
+  } else if (workingBranches.length === 1) {
+    // One Working branch line applies to every track (同分支多目录例外).
+    for (const path of worktreePaths) tracks.push({ worktreePath: path, workingBranch: workingBranches[0]! })
+  } else {
+    violations.push(worktreeViolation(
+      'worktree.l2.track-count-mismatch',
+      `parallel-track declaration pairs ${worktreePaths.length} Worktree path entr${worktreePaths.length === 1 ? 'y' : 'ies'} with ${workingBranches.length} Working branch entries — every track needs its own absolute Worktree path AND Working branch (or one shared branch for all tracks)`,
+      'align the track counts in the Assignment header (one Worktree path + Working branch per track, or a single Working branch for all tracks)',
+    ))
+    const n = Math.min(worktreePaths.length, workingBranches.length)
+    for (let i = 0; i < n; i += 1) {
+      tracks.push({ worktreePath: worktreePaths[i]!, workingBranch: workingBranches[i]! })
+    }
+  }
+  violations.push(...l2PreDispatchCheck({ tracks }).violations)
+  return violations
+}
+
+/**
+ * L1 cross-plan isolation (Task 2; engine `l1PreDispatchCheck`): when the
+ * Assignment resolves a plan id AND status.json carries the L1 metadata —
+ * `metadata.control_worktree_path` plus the plan row's `execution_lease`
+ * (worktree_path + working_branch) — verify the control-vs-feature
+ * topology: control path recorded, lease worktree exists, lease worktree
+ * MUST differ from the control worktree, and the checked-out branch matches
+ * the lease Working branch.
+ *
+ * Fires ONLY when the metadata is present (the brief's "L1 checks (control
+ * vs feature path) when metadata present"): no harness dir, unresolvable
+ * plan id, missing status.json, absent control path, or a lease without the
+ * two path/branch fields all degrade to silence — the exec-bound lease gate
+ * owns lease SHAPE errors (sdd unverifiable/unreadable/plan-not-found) on
+ * the same verdict. The engine probe of the lease worktree is subprocess-
+ * based and fails closed.
+ * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when none).
+ * @param header - `assignmentHeaderRegion(assignmentText)`.
+ */
+function worktreeL1Violations(harnessDir: string | null, header: string): ValidationResult[] {
+  if (harnessDir === null) return []
+  const planId = planIdOf(header)
+  if (planId === undefined || planId === '') return []
+  const statusPath = join(harnessDir, STATUS_FILE)
+  if (!existsSync(statusPath)) return []
+  let doc: StatusDoc
+  try {
+    doc = readJson(statusPath) as StatusDoc
+  } catch {
+    return [] // unreadable status is the lease gate's report (sdd dispatches)
+  }
+  const metadata = asRecord(doc.metadata)
+  const controlWorktreePath = typeof metadata?.control_worktree_path === 'string' ? metadata.control_worktree_path : undefined
+  if (controlWorktreePath === undefined || controlWorktreePath.trim() === '') return []
+  const row = Array.isArray(doc.plans)
+    ? doc.plans.map(asRecord).find((r) => r?.id === planId || r?.plan_id === planId)
+    : undefined
+  const lease = asRecord(row?.execution_lease)
+  const leaseWorktreePath = typeof lease?.worktree_path === 'string' ? lease.worktree_path : undefined
+  const leaseWorkingBranch = typeof lease?.working_branch === 'string' ? lease.working_branch : undefined
+  if (
+    leaseWorktreePath === undefined || leaseWorktreePath.trim() === '' ||
+    leaseWorkingBranch === undefined || leaseWorkingBranch.trim() === ''
+  ) {
+    return [] // no lease metadata to compare — nothing to verify
+  }
+  return l1PreDispatchCheck({ controlWorktreePath, leaseWorktreePath, leaseWorkingBranch, planId }).violations
+}
+
+/**
  * The dispatch-gate validation core (opencode `validateDispatchAssignment`
  * parity — the SAME engine fns, so violation codes are identical): the field
  * gate (`validateAssignmentFields`; read-only roles skip the branch gate),
- * the anti-recursion precheck (Config binding) and the default-branch gate.
+ * the anti-recursion precheck (Config binding), the default-branch gate,
+ * and the worktree L1/L2 checks (Task 2 — additive beyond opencode parity;
+ * the lease gate is exec-bound and joins via {@link DshHostAdapter.dispatchGate}).
  * Extracted from `gateDispatch` so the `tools/pre-execute` listener and the
- * host adapter's `beforeDispatch` share ONE code path. The lease gate is NOT
- * here — it binds the ToolExecution context (session id) and joins via
- * {@link DshHostAdapter.dispatchGate} when the listener passes `exec`.
+ * host adapter's `beforeDispatch` share ONE code path.
  *
  * Header-region scoping (qc2 F-001): the engine `assignmentHeaderRegion`
  * slice is computed ONCE and feeds EVERY Assignment parser (fields, branch
- * forms, direct-on exception) — body-quoted field examples after a
- * `# Task` / `# Target` / `---` marker never leak into the header fields the
- * gate validates (the same discipline enforcement / plan-id / lease already
- * honor). Well-formed assignments (fields in the header) slice to the full
- * text, so their verdicts are unchanged.
+ * forms, direct-on exception, worktree tracks) — body-quoted field examples
+ * after a `# Task` / `# Target` / `---` marker never leak into the header
+ * fields the gate validates (the same discipline enforcement / plan-id /
+ * lease already honor). Well-formed assignments (fields in the header) slice
+ * to the full text, so their verdicts are unchanged.
  *
  * @returns the violations plus the writable flag (false for read-only
  * roles — the listener feeds it to the lease gate).
  */
 function dispatchGateCore(
   config: Config,
+  harnessDir: string | null,
   prompt: string,
 ): { violations: ValidationResult[]; writable: boolean | undefined } {
   const header = assignmentHeaderRegion(prompt)
-  const violations: ValidationResult[] = []
+  // Worktree L2 (declared parallel tracks) + L1 (control vs feature path
+  // when the plan metadata is present) — Task 2; both run on the header
+  // region slice, the engine parsers' single boundary.
+  const violations: ValidationResult[] = [...worktreeL2Violations(header), ...worktreeL1Violations(harnessDir, header)]
   const fields = parseAssignmentFields(header)
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
   const writable = isReadOnlyAssignmentRole(fields.executeAs ?? '') ? false : undefined
@@ -1167,14 +1322,15 @@ export interface DshHostAdapterOptions {
  *   hook shape is one `ValidationResult`; the gate's full violation list
  *   stays available on the fs-intent slot.
  * - `beforeDispatch(assignment)` — the dispatch gate validation path
- *   (validateAssignmentFields + branch gate + anti-recursion; read-only
- *   roles skip the branch gate). The lease gate stays listener-side: it
- *   binds the ToolExecution context (session id) this hook's contract does
- *   not carry. The parsed `AssignmentFields` form is normalized to the
- *   engine's own header grammar (lossless — the parsers read exactly these
- *   labels) and gated through the same text path. Enforcement is applied
- *   like the listener (opencode parity): the returned GateResult carries
- *   `hardBlocked` so a refusal-capable host can refuse the dispatch.
+ *   (validateAssignmentFields + branch gate + anti-recursion + worktree
+ *   L1/L2 checks; read-only roles skip the branch gate). The lease gate
+ *   stays listener-side: it binds the ToolExecution context (session id)
+ *   this hook's contract does not carry. The parsed `AssignmentFields` form
+ *   is normalized to the engine's own header grammar (lossless — the
+ *   parsers read exactly these labels) and gated through the same text path.
+ *   Enforcement is applied like the listener (opencode parity): the
+ *   returned GateResult carries `hardBlocked` so a refusal-capable host can
+ *   refuse the dispatch.
  * - `beforeMerge(lease)` — thin wrapper over the engine
  *   `validateIntegrationMergeLease` (reserve/validate the integration merge
  *   lease; the reservation WRITE into status.json is a P3 seam).
@@ -1227,16 +1383,16 @@ export class DshHostAdapter extends Service implements HostAdapter {
   /**
    * Shared dispatch-gate core (plugin-internal): the `tools/pre-execute`
    * listener and `beforeDispatch` route through this method — ONE
-   * validation code path (field gate + anti-recursion + branch gate;
-   * read-only roles skip the branch gate). The listener passes `exec` so
-   * the lease gate (ToolExecution-bound: session id, in-flight call) joins
-   * the same verdict; the host hook has no exec context and covers the
-   * field/branch/anti-recursion path.
+   * validation code path (field gate + anti-recursion + branch gate +
+   * worktree L1/L2 checks; read-only roles skip the branch gate). The
+   * listener passes `exec` so the lease gate (ToolExecution-bound: session
+   * id, in-flight call) joins the same verdict; the host hook has no exec
+   * context and covers the field/branch/anti-recursion/worktree path.
    * @param prompt - the Assignment text (engine header grammar).
    * @param exec - the in-flight delegation tool call (listener path only).
    */
   dispatchGate(prompt: string, exec?: ToolExecution): GateResult {
-    const { violations, writable } = dispatchGateCore(this.config, prompt)
+    const { violations, writable } = dispatchGateCore(this.config, this.harnessDir, prompt)
     if (exec !== undefined) {
       violations.push(...leaseGateViolations(this.harnessDir, exec, writable, prompt))
     }
@@ -1336,85 +1492,169 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
 }
 
 /**
+ * Locate the steering iteration compass (mirror of the engine's
+ * `resolveCompassEnforcement` scan): the FIRST `{ITERATION_DIR}/<id>/
+ * delivery-compass.md` whose frontmatter `status` is `active` or `locked`.
+ * Completed/status-less/archived compasses do not steer the repo — the
+ * pre-step gate row reports the iteration that is still in flight. Silent
+ * on any read failure (the catalog row is advisory).
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ */
+function steeringCompassPath(harnessDir: string): { iterationId: string; compassPath: string } | undefined {
+  const iterationsDir = resolveIterationDir(harnessDir)
+  if (!existsSync(iterationsDir)) return undefined
+  let entries
+  try {
+    entries = readdirSync(iterationsDir, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const compassPath = join(iterationsDir, entry.name, 'delivery-compass.md')
+    if (!existsSync(compassPath)) continue
+    let content: string
+    try {
+      content = readFileSync(compassPath, 'utf8')
+    } catch {
+      continue
+    }
+    // Frontmatter only: leading `---` fence through the closing fence; only
+    // steering compasses count (resolveCompassEnforcement parity).
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+    if (frontmatter === null || !/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(frontmatter[1]!)) continue
+    return { iterationId: entry.name, compassPath }
+  }
+  return undefined
+}
+
+/**
+ * The boot-cached iteration-gate catalog row (Task 2): `evaluatePhaseGate`
+ * over the control-path status.json + the steering delivery-compass.md,
+ * projected to the Task 1 tool result shape (`IterationGateView`). Computed
+ * ONCE at `apply()` and reused per pre-step (qc3 W-002 discipline — no disk
+ * I/O on the agent-loop hot path). A mid-session status/compass change does
+ * NOT re-evaluate until a config reload re-runs `apply` (HMR fiber
+ * restart) — the documented staleness tradeoff that keeps the hot path
+ * synchronous-I/O-free.
+ *
+ * Returns undefined when the row cannot be built at boot: no harness dir,
+ * missing status.json, no steering compass, or an unreadable/unparseable
+ * document (advisory degrade — the engine-status catalog still appends; a
+ * later tool call can re-evaluate on demand with explicit probes).
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ */
+function iterationGateSource(harnessDir: string | null): MstarIterationGateSource | undefined {
+  if (harnessDir === null) return undefined
+  const statusPath = join(harnessDir, STATUS_FILE)
+  if (!existsSync(statusPath)) return undefined
+  const compass = steeringCompassPath(harnessDir)
+  if (compass === undefined) return undefined
+  try {
+    const statusDoc = readJson(statusPath)
+    const compassDoc = parseCompassFrontmatterText(readFileSync(compass.compassPath, 'utf8'), compass.compassPath)
+    // No git probes at boot: the row reports what the two control docs
+    // prove (the tool remains the explicit-probe surface for branch checks).
+    const result = evaluatePhaseGate(statusDoc, compassDoc)
+    const gate: IterationGateView = {
+      transition: result.transition,
+      all_plans_done: result.allPlansDone,
+      ok: result.ok,
+      entry: iterationGateView(result.entry),
+      exit: iterationGateView(result.exit),
+      violations: result.violations.map(iterationViolationView),
+    }
+    return {
+      kind: 'mstar-iteration-gate',
+      form: 'catalog',
+      iterationId: compass.iterationId,
+      statusPath,
+      compassPath: compass.compassPath,
+      gate,
+    }
+  } catch {
+    return undefined // boot-time degrade — advisory row absent, no hardening
+  }
+}
+
+/** Model-facing rendering of the iteration-gate catalog (the `<mstar_iteration_gate>` block). */
+function renderIterationGateCatalog(source: MstarIterationGateSource): string {
+  const gate = source.gate
+  const codes = gate.violations.map((v) => v.code).join(', ')
+  return [
+    '<mstar_iteration_gate>',
+    `iteration: ${source.iterationId}`,
+    `transition: ${gate.transition}`,
+    `all plans done: ${gate.all_plans_done}`,
+    `gate: ${gate.ok ? 'PASS' : `FAIL (${codes})`}`,
+    '</mstar_iteration_gate>',
+  ].join('\n')
+}
+
+/**
  * Advisory `agent/pre-step` waterfall listener (roadmap §4 D4 — agent
  * catalog): delegates through `next()` (never `reject` — that would block the
- * step — and never replaces the delegated messages) and appends ONE
- * `mstar-engine-status` catalog MessageSource to the composed step messages,
- * so the durable session log carries the engine status row (model-visible ⟺
- * logged, MessageSource form). An aborted step publishes nothing: the
- * delegated decision is returned unchanged (tool-skill precedent; narrowed
- * abort race — qc2 S-001: an abort after delegation must not surface as a
- * turn failure).
+ * step — and never replaces the delegated messages) and appends the
+ * catalog rows to the composed step messages, so the durable session log
+ * carries them (model-visible ⟺ logged, MessageSource form):
+ * one `mstar-engine-status` row always, plus — when a boot-cached gate
+ * verdict exists (Task 2, `iterationGateSource`) — one `mstar-iteration-gate`
+ * row after it. An aborted step publishes nothing: the delegated decision
+ * is returned unchanged (tool-skill precedent; narrowed abort race — qc2
+ * S-001: an abort after delegation must not surface as a turn failure).
  *
  * Error containment (qc3 W-003): the append path is wrapped — a failure
  * (e.g. a downstream decider returning a non-iterable `messages` set, or a
  * throwing message factory) logs and returns the delegated decision
  * unchanged; the advisory listener never aborts the very step it observes.
  *
- * simplify: dev-time stub — every composed step carries the catalog row (no
- * per-session dedup: the real dsh-session log is unavailable at dev time).
- * Digest-gated re-emission against the durable log lands with the real
- * session seam at P3.
+ * simplify: dev-time stub — every composed step carries the catalog rows
+ * (no per-session dedup: the real dsh-session log is unavailable at dev
+ * time). Digest-gated re-emission against the durable log lands with the
+ * real session seam at P3.
  * @param ctx - registrant context (logger for the containment path).
- * @param source - the boot-resolved watermark source (computed once at apply,
- * qc3 W-002).
+ * @param source - the boot-resolved engine-status watermark source (qc3 W-002).
+ * @param iterationGate - the boot-cached iteration-gate source (undefined
+ * when no gate verdict was evaluable at boot — the row is then absent).
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
  */
 async function preStepCatalogListener(
   ctx: Context,
   source: MstarEngineStatusSource,
+  iterationGate: MstarIterationGateSource | undefined,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
   const decision = await next()
   if (decision.kind === 'reject' || payload.signal.aborted) return decision
   try {
-    const catalog = createUserMessage({
+    const messages = [...decision.messages]
+    messages.push(createUserMessage({
       source,
       content: [{ type: 'text', text: renderEngineStatusCatalog(source) }],
-    })
-    return { kind: 'enter', messages: [...decision.messages, catalog] }
+    }))
+    if (iterationGate !== undefined) {
+      messages.push(createUserMessage({
+        source: iterationGate,
+        content: [{ type: 'text', text: renderIterationGateCatalog(iterationGate) }],
+      }))
+    }
+    return { kind: 'enter', messages }
   } catch (error) {
     ctx.logger(CATALOG_LOGGER).error(
-      `engine-status catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
+      `engine-status/iteration-gate catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
     )
     return decision
   }
 }
 
 /**
- * JSON projection of one engine `ValidationResult` for the tool output schema
- * (lossless JSON — `fix` is omitted when absent so `additionalProperties:
- * false` never sees an undefined key).
+ * Map one engine `ValidationResult` to its lossless JSON view (`fix` omitted
+ * when absent so `additionalProperties: false` never sees an undefined key).
+ * The view interfaces live in `types.ts` (shared with the pre-step
+ * iteration-gate catalog row).
  */
-interface IterationGateViolationView {
-  severity: 'critical' | 'high' | 'medium' | 'low' | 'nit'
-  code: string
-  message: string
-  fix?: string
-}
-
-/** JSON projection of one engine gate (`GateResult`). */
-interface IterationGateListView {
-  ok: boolean
-  violations: IterationGateViolationView[]
-}
-
-/**
- * JSON projection of the engine `PhaseGateResult` (snake_case to match the
- * model-facing tool vocabulary of the CLI's `mstar iteration gate`).
- */
-interface IterationGateView {
-  transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery'
-  all_plans_done: boolean
-  ok: boolean
-  entry: IterationGateListView
-  exit: IterationGateListView
-  violations: IterationGateViolationView[]
-}
-
-/** Map one engine `ValidationResult` to its lossless JSON view. */
 function iterationViolationView(v: ValidationResult): IterationGateViolationView {
   return { severity: v.severity, code: v.code, message: v.message, ...(v.fix !== undefined ? { fix: v.fix } : {}) }
 }
@@ -1732,21 +1972,28 @@ export function apply(ctx: Context, config: Config): void {
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
   // (roadmap §4 D4 / P2 agent catalog): calls `next()` (never vetoes or
-  // replaces the delegated messages) and appends one `mstar-engine-status`
-  // catalog MessageSource to the composed step messages, so the session log
-  // carries the engine status row (model-visible ⟺ logged).
+  // replaces the delegated messages) and appends the engine-status row to
+  // the composed step messages, so the session log carries the engine
+  // status (model-visible ⟺ logged).
   //
-  // The watermark is computed ONCE at boot (qc3 W-002) — engine/plugin
-  // versions are process-immutable and compass enforcement is boot-resolved
-  // like the gates — so the pre-step hot path does no disk I/O (see
-  // engineStatusSource for the mid-session staleness tradeoff).
+  // Iteration-gate row (Task 2): the SAME listener appends a second
+  // `mstar-iteration-gate` catalog row when a gate verdict was evaluable at
+  // boot (control-path status.json + steering compass; engine
+  // evaluatePhaseGate, Task 1 tool result shape).
+  //
+  // Both watermarks are computed ONCE at boot (qc3 W-002) — engine/plugin
+  // versions are process-immutable, compass enforcement is boot-resolved
+  // like the gates, and the iteration gate is boot-evaluated — so the
+  // pre-step hot path does no disk I/O (see engineStatusSource /
+  // iterationGateSource for the mid-session staleness tradeoff).
   const catalogSource = engineStatusSource(harnessDir)
   // The manifest fallback is never silent (qc2 S-005): a '0.0.0' plugin
   // version would watermark every catalog row wrongly, so it logs at boot.
   if (catalogSource.pluginVersion === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
-  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, payload, next))
+  const iterationGate = iterationGateSource(harnessDir)
+  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, iterationGate, payload, next))
 
   // v2 seams — sdd + iteration model-facing tools (plan 20260808-dsh-seams-bundle
   // Task 1): `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
