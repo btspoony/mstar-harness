@@ -603,4 +603,56 @@ plans: [plan-a, plan-b]
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("nested flow-style array → throws the precise message (qc2 F-009 / qc3 F-010)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, "---\niteration_id: v1.0.0\nplans: [a, [b]]\n---\n", "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        `nested flow-style array in ${file}: "[a, [b]]" — only flat scalar items are supported (e.g. [a, b])`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("quoted-item-with-comma flow-style array → throws the ambiguity message (qc2 F-009 / qc3 F-010)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, '---\niteration_id: v1.0.0\nplans: ["a, b"]\n---\n', "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        `ambiguous flow-style array in ${file}: "[\\"a, b\\"]" — quoted item containing comma cannot be split unambiguously (flat scalar items only)`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unterminated quote in flow-style array → throws the quote message (qc2 F-009 / qc3 F-010)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, '---\niteration_id: v1.0.0\nplans: ["a]\n---\n', "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        `unterminated " quote in flow-style array in ${file}: "[\\"a]"`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unsupported frontmatter line → throws the line message (qc2 F-009 / qc3 F-010)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, "---\niteration_id: v1.0.0\n- dangling list item without a key\n---\n", "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        `unsupported frontmatter line in ${file}: "- dangling list item without a key"`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
