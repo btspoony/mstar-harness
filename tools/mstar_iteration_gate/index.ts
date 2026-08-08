@@ -8,13 +8,22 @@
  * phase-4-pr-delivery) is computed from the two documents. The `phase`
  * param is therefore informational: it labels the check the caller
  * intends to run and is echoed into the text/details, never passed to the
- * engine. `statusPath` is read as JSON (engine `readJson`); `compassPath`
+ * `statusPath` is read as JSON (engine `readJson`); `compassPath`
  * is a delivery-compass.md whose YAML frontmatter is parsed by the engine
  * `parseCompassFrontmatter` (same parser the CLI uses — no fork). Both
  * paths are resolved against `pi.cwd`.
+ *
+ * Missing files are explicit isError results — the engine `readJson` would
+ * otherwise read a missing status.json as `{}` and the gate would report a
+ * false "gate ok" on nothing (qc2 F-001). `parseCompassFrontmatter` is
+ * imported DYNAMICALLY so the tool stays loadable against published engine
+ * versions that predate the export (2.0.2): a missing parser is a clear
+ * upgrade error instead of a module-load failure that silently drops the
+ * tool (qc3 F-001).
  */
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { evaluatePhaseGate, parseCompassFrontmatter, readJson } from "@mstar-harness/engine";
+import { evaluatePhaseGate, readJson } from "@mstar-harness/engine";
 import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -45,15 +54,39 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
         phase: pi.zod.string(),
         statusPath: pi.zod.string(),
         compassPath: pi.zod.string(),
-      })
-      .optional(),
+      }),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
         if (!params?.phase || !params?.statusPath || !params?.compassPath) {
           return result("mstar_iteration_gate: phase, statusPath and compassPath are required", { ok: false }, true);
         }
-        const statusDoc = readJson(resolve(pi.cwd, params.statusPath));
-        const compassDoc = parseCompassFrontmatter(resolve(pi.cwd, params.compassPath));
+        const statusPath = resolve(pi.cwd, params.statusPath);
+        const compassPath = resolve(pi.cwd, params.compassPath);
+        if (!existsSync(statusPath)) {
+          return result(`status.json not found: ${statusPath}`, { phase: params.phase, status_path: statusPath }, true);
+        }
+        if (!existsSync(compassPath)) {
+          return result(
+            `delivery-compass.md not found: ${compassPath}`,
+            { phase: params.phase, compass_path: compassPath },
+            true,
+          );
+        }
+        // Dynamic engine import (qc3 F-001): published engine 2.0.2 lacks
+        // parseCompassFrontmatter — a static named import would fail at
+        // module link and silently drop the tool from /extensions. The
+        // runtime check degrades to an explicit upgrade error instead.
+        const engine = await import("@mstar-harness/engine");
+        const parseCompassFrontmatter = engine.parseCompassFrontmatter;
+        if (typeof parseCompassFrontmatter !== "function") {
+          return result(
+            "installed @mstar-harness/engine lacks parseCompassFrontmatter — upgrade the engine (next release); CLI fallback: mstar iteration gate",
+            { phase: params.phase, status_path: statusPath, compass_path: compassPath },
+            true,
+          );
+        }
+        const statusDoc = readJson(statusPath);
+        const compassDoc = parseCompassFrontmatter(compassPath);
         const gate = evaluatePhaseGate(statusDoc, compassDoc, {});
         return result(
           gate.ok

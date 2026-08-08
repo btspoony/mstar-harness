@@ -51,8 +51,7 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
         tracks: pi.zod
           .array(pi.zod.object({ worktreePath: pi.zod.string(), workingBranch: pi.zod.string() }))
           .optional(),
-      })
-      .optional(),
+      }),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
         if (params?.kind !== "l1" && params?.kind !== "l2") {

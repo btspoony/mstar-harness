@@ -41,8 +41,7 @@ export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
       .object({
         planId: pi.zod.string(),
         kind: pi.zod.enum(["execution", "integration"]),
-      })
-      .optional(),
+      }),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
         if (!params?.planId) {
@@ -62,6 +61,16 @@ export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
         if (params?.kind === "integration") {
           const metadata = doc.metadata;
           const lease = isPlainObject(metadata) ? metadata.integration_merge_lease : undefined;
+          // Absent lease = the normal unclaimed state (writers delete the key
+          // on release) — informational ok, NOT an engine violation (qc2
+          // F-002). Only a PRESENT lease is validated against the engine gate.
+          if (lease === undefined) {
+            return result(
+              "no active integration merge lease (unclaimed)",
+              { kind: "integration", status_path: statusPath, state: "unclaimed", ok: true, violations: [] },
+              false,
+            );
+          }
           const gate = validateIntegrationMergeLease(lease);
           return result(
             gate.ok ? "integration merge lease OK" : violationLines(gate.violations),

@@ -15,36 +15,34 @@
  * throws or times out, so the handler catches every unexpected error and
  * degrades to a silent pass. A broken engine import or a malformed event
  * passes — hard-gate opt-in is per compass / Assignment, never global, and
- * an engine failure must not harden a workflow that was soft. Invalid JSON
+ * Invalid JSON
  * in write content is NOT a silent pass: Gate 1 reports it as
  * `status.invalid-json` (same shape as the engine's own unparseable-file
  * violation), which can block under a hard compass. A content-less write to
  * a status.json that does not exist yet (fresh scaffold/init) passes
  * silently, mirroring opencode `validateStatusWrite`'s existsSync guard.
+ * Size guard (qc3 F-005): content strings beyond ~2MB are skipped without
+ * parsing — a pathologically large write must not approach omp's 30s
+ * handler timeout (fail-CLOSED in soft mode); the oversized write passes
+ * silently (documented degradation, same as other content-glue limits).
  *
  * No semantic fork: every rule check is an engine call (status.validateStatus,
- * dispatch.validateAssignmentFields / antiRecursionPrecheck /
- * assertDefaultBranchProtected / parseEnforcementFlag …). Local code is
- * shape-guards (path/basename filtering, Assignment-shape detection, task
- * wire-shape extraction), the JSON.parse glue for `input.content`, and
- * reason formatting — the same composition `packages/opencode/src/mstar.ts`
+ * dispatch.composeDispatchGate — the single shared host dispatch-gate
+ * composition, qc1 F-001/F-006 — status.resolveCompassEnforcement …). Local
+ * code is shape-guards (path/basename filtering, task wire-shape
+ * extraction), the JSON.parse glue for `input.content`, and reason
+ * formatting — the same composition `packages/opencode/src/mstar.ts`
  * `validateStatusWrite` / `validateDispatchAssignment` use, with omp's
  * `{ block, reason }` refusal channel instead of the log channel.
  */
 import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
-  antiRecursionPrecheck,
-  assertDefaultBranchProtected,
-  assignmentHeaderRegion,
+  composeDispatchGate,
   isReadOnlyAssignmentRole,
-  parseAssignmentBranchForms,
   parseAssignmentFields,
-  parseBranchPolicyDirectOnBranch,
-  parseEnforcementFlag,
   resolveCompassEnforcement,
   resolveHarnessDir,
-  validateAssignmentFields,
   validateStatus,
 } from "@mstar-harness/engine";
 import type { StatusDoc, ValidationResult } from "@mstar-harness/engine";
@@ -57,22 +55,6 @@ const DISPATCH_SKILL_POINTER = "skill: mstar-dispatch-gates";
 // ---------------------------------------------------------------------------
 // Shape guards (glue only — field parsing/semantics live in the engine)
 // ---------------------------------------------------------------------------
-
-/** `## Assignment` heading marker (same shape-guard as opencode mstar.ts). */
-const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
-/** Assignment header field line (`Execute as` / `Delegation` / `Task category`). */
-const ASSIGNMENT_FIELD_RE =
-  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
-
-/**
- * True when the text looks like an Assignment: carries the `## Assignment`
- * heading or at least one core field line. Non-Assignment prompts pass
- * silently — no false positives. Non-string input is never shaped.
- */
-function isAssignmentShaped(assignmentText: unknown): boolean {
-  if (typeof assignmentText !== "string") return false;
-  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null;
-}
 
 /** Target paths from a write/edit event: `input.path` (string) plus `input.paths` (array). */
 function eventTargetPaths(input: unknown): string[] {
@@ -149,11 +131,22 @@ function violationLine(violation: ValidationResult): string {
 }
 
 /**
+ * Size guard (qc3 F-005): content strings beyond ~2MB are skipped without
+ * parsing — a pathologically large write must not approach omp's 30s handler
+ * timeout (which fails CLOSED even in soft mode). The oversized write passes
+ * silently; documented in the module header.
+ */
+const MAX_STATUS_CONTENT_LENGTH = 2 * 1024 * 1024;
+
+/**
  * Validate the document being written to a gated status.json. `input.content`
  * as a string is the new document: JSON.parse it and run the engine validator
  * on the parsed doc — a parse failure is a violation (`status.invalid-json`,
  * the same code/message shape the engine emits for an unparseable file).
- * Without a content string (edit-style events) the on-disk file is
+ * Parsed `null` / non-object / array content is a `status.invalid-json`
+ * violation too (qc3 F-004 — the JSON literal `null` would otherwise slip
+ * through `validateStatus`'s destructuring into the outer catch's silent
+ * pass). Without a content string (edit-style events) the on-disk file is
  * validated — unless it does not exist yet (fresh scaffold/init write):
  * nothing to validate, silent pass (mirrors opencode `validateStatusWrite`'s
  * existsSync guard → null). Never throws (validateStatus catches its own
@@ -161,6 +154,7 @@ function violationLine(violation: ValidationResult): string {
  */
 function validateStatusWriteDoc(content: unknown, filePath: string): ValidationResult[] {
   if (typeof content === "string") {
+    if (content.length > MAX_STATUS_CONTENT_LENGTH) return []; // size guard — silent pass
     let doc: unknown;
     try {
       doc = JSON.parse(content);
@@ -171,6 +165,16 @@ function validateStatusWriteDoc(content: unknown, filePath: string): ValidationR
           severity: "high",
           code: "status.invalid-json",
           message: (error as Error).message,
+        },
+      ];
+    }
+    if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+      return [
+        {
+          ok: false,
+          severity: "high",
+          code: "status.invalid-json",
+          message: "status.json content must be a JSON object",
         },
       ];
     }
@@ -209,46 +213,22 @@ function gateStatusWrite(eventInput: unknown): { block: true; reason: string } |
 // ---------------------------------------------------------------------------
 
 /**
- * Validate one dispatch entry mirroring the opencode `validateDispatchAssignment`
- * composition (engine calls only): field validation with `writable: false` for
- * read-only roles, anti-recursion precheck against the host role binding
- * (`entry.agent`), and the default-branch gate for writable roles. Returns the
- * entry's violations and its OWN header enforcement flag.
+ * Validate one dispatch entry via the engine's single shared composition
+ * `dispatch.composeDispatchGate` (qc1 F-001/F-006 — the same composition
+ * opencode `validateDispatchAssignment` and `mstar_dispatch_validate` use,
+ * incl. the `$MSTAR_WORKING_BRANCH` env fallback, qc1 F-002 / qc2 F-007 /
+ * qc3 F-008): field validation with `writable: false` for read-only roles,
+ * anti-recursion precheck against the host role binding (`entry.agent`),
+ * and the default-branch gate for writable roles. Returns the entry's
+ * violations and its OWN header enforcement flag (an example
+ * `**Enforcement**: hard` line in the task body never hardens).
  */
 function validateDispatchEntry(entry: DispatchEntry): { violations: ValidationResult[]; hard: boolean } {
   const text = entry.task;
-  // Shape guard: non-Assignment entries (plain task instructions) pass silently.
-  if (!isAssignmentShaped(text)) return { violations: [], hard: false };
-
-  const violations: ValidationResult[] = [];
-  const fields = parseAssignmentFields(text);
   // Read-only roles (scout/explore) skip the branch-form/default-branch gates.
-  const writable = isReadOnlyAssignmentRole(fields.executeAs ?? "") ? false : undefined;
-  violations.push(...validateAssignmentFields(text, { writable }).violations);
-
-  // Anti-recursion NEVER red line: entry.agent (flat form: input.agent) must
-  // not equal the entry's own `Execute as`.
-  const agent = entry.agent ?? "";
-  if (agent.trim() !== "") {
-    violations.push(...antiRecursionPrecheck(agent, fields.executeAs ?? "").violations);
-  }
-
-  // Default-branch gate for writable roles: branch from the entry's own
-  // branch forms; a well-formed direct-on exception is honored only when its
-  // branch is the one being checked.
-  if (writable !== false) {
-    const forms = parseAssignmentBranchForms(text);
-    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch;
-    if (branch !== undefined && branch.trim() !== "") {
-      const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
-      violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
-    }
-  }
-
-  // Enforcement per entry: the entry's OWN header flag (assignmentHeaderRegion
-  // — an example `**Enforcement**: hard` line in the task body never hardens).
-  const enforcement = parseEnforcementFlag(assignmentHeaderRegion(text));
-  return { violations, hard: enforcement.hard };
+  const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
+  const composed = composeDispatchGate(text, { agent: entry.agent, writable });
+  return { violations: composed.violations, hard: composed.enforcement.hard };
 }
 
 /**

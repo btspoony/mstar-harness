@@ -2,24 +2,16 @@
  * mstar_dispatch_validate — validate a Morning Star Assignment document
  * via the engine dispatch gates.
  *
- * Composition mirrors `packages/opencode/src/mstar.ts`
- * `validateDispatchAssignment` (same engine calls, minus the opencode log
- * channel): field validation (`validateAssignmentFields`), anti-recursion
- * precheck when `agent` is provided, and the default-branch gate for
- * writable roles. Read-only roles (scout/explore, or the `readOnlyRole`
- * flag) skip the branch-form and default-branch gates. No local rule
- * logic — every check is an engine call.
+ * Composition is the engine's single shared `dispatch.composeDispatchGate`
+ * (qc1 F-001/F-006 — the same composition the opencode adapter and the omp
+ * blocking hook use): field validation, anti-recursion precheck when `agent`
+ * is provided, the default-branch gate (incl. the `$MSTAR_WORKING_BRANCH`
+ * env fallback) and the header-region enforcement flag. Read-only roles
+ * (scout/explore, or the `readOnlyRole` flag) skip the branch-form and
+ * default-branch gates. No local rule logic — every check is an engine call.
  */
-import {
-  antiRecursionPrecheck,
-  assertDefaultBranchProtected,
-  isReadOnlyAssignmentRole,
-  parseAssignmentBranchForms,
-  parseAssignmentFields,
-  parseBranchPolicyDirectOnBranch,
-  validateAssignmentFields,
-} from "@mstar-harness/engine";
-import type { GateResult, ValidationResult } from "@mstar-harness/engine";
+import { composeDispatchGate, isReadOnlyAssignmentRole, parseAssignmentFields } from "@mstar-harness/engine";
+import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = { assignmentText: string; agent?: string; readOnlyRole?: boolean };
@@ -49,43 +41,31 @@ export default function mstarDispatchValidate(pi: CustomToolAPI): CustomTool {
         assignmentText: pi.zod.string(),
         agent: pi.zod.string().optional(),
         readOnlyRole: pi.zod.boolean().optional(),
-      })
-      .optional(),
+      }),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
         const text = params?.assignmentText ?? "";
         if (text.trim() === "") {
           return result("mstar_dispatch_validate: assignmentText is required", { ok: false }, true);
         }
-        const violations: ValidationResult[] = [];
         const fields = parseAssignmentFields(text);
         const readOnly = params?.readOnlyRole === true || isReadOnlyAssignmentRole(fields.executeAs ?? "");
-        const writable = readOnly ? false : undefined;
-        violations.push(...validateAssignmentFields(text, { writable }).violations);
-        const agent = params?.agent ?? "";
-        if (agent.trim() !== "") {
-          violations.push(...antiRecursionPrecheck(agent, fields.executeAs ?? "").violations);
-        }
-        if (writable !== false) {
-          const forms = parseAssignmentBranchForms(text);
-          const branch =
-            forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;
-          if (branch !== undefined && branch.trim() !== "") {
-            const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
-            violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
-          }
-        }
-        const gate: GateResult = { ok: violations.length === 0, violations };
+        const composed = composeDispatchGate(text, {
+          agent: params?.agent ?? "",
+          writable: readOnly ? false : undefined,
+        });
         return result(
-          gate.ok ? "assignment ok" : violationLines(gate.violations),
+          composed.ok ? "assignment ok" : violationLines(composed.violations),
           {
-            ok: gate.ok,
-            violations: gate.violations,
+            ok: composed.ok,
+            shaped: composed.shaped,
+            enforcement: composed.enforcement,
+            violations: composed.violations,
             execute_as: fields.executeAs ?? null,
             read_only: readOnly,
-            agent: agent.trim() !== "" ? agent : null,
+            agent: (params?.agent ?? "").trim() !== "" ? params?.agent : null,
           },
-          !gate.ok,
+          !composed.ok,
         );
       } catch (error) {
         return result(`mstar_dispatch_validate failed: ${(error as Error).message}`, {}, true);
