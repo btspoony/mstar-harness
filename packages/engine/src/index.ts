@@ -127,3 +127,18 @@ export {
   pushCadenceProbe,
   validateCompassFrontmatter,
 } from "./iteration.js";
+export type {
+  PlanQualityFinding,
+  PlanQualityResult,
+  SimplifyMarker,
+  TemporaryMarker,
+  TemporaryMarkerResult,
+} from "./lint.js";
+export {
+  assertSddTddTriple,
+  findSimplifyMarkers,
+  findTemporaryMarkers,
+  lintSkillFrontmatter,
+  lintStrategySections,
+  planQualityBar,
+} from "./lint.js";
