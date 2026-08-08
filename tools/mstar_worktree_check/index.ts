@@ -55,7 +55,10 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
       .optional(),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
-        if (params?.kind === "l2") {
+        if (params?.kind !== "l1" && params?.kind !== "l2") {
+          return result("mstar_worktree_check: kind required (l1|l2)", { ok: false }, true);
+        }
+        if (params.kind === "l2") {
           const gate = l2PreDispatchCheck({ tracks: params.tracks ?? [] });
           return result(
             gate.ok ? "l2 pre-dispatch check OK" : violationLines(gate.violations),

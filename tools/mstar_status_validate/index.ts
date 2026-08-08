@@ -52,9 +52,14 @@ export default function mstarStatusValidate(pi: CustomToolAPI): CustomTool {
           }
           statusPath = join(harnessDir, "status.json");
         }
-        const doc = readJson(statusPath);
-        const gate = validateStatus(doc);
-        const planCount = Array.isArray(doc.plans) ? doc.plans.length : 0;
+        const gate = validateStatus(statusPath);
+        // plan count only when the gate passed: validateStatus(path) already
+        // proved the file parses, so the re-read cannot throw.
+        let planCount = 0;
+        if (gate.ok) {
+          const doc = readJson(statusPath) as { plans?: unknown };
+          planCount = Array.isArray(doc.plans) ? doc.plans.length : 0;
+        }
         return result(
           gate.ok ? `status.json valid (${planCount} plans)` : violationLines(gate.violations),
           { path: statusPath, plan_count: planCount, ok: gate.ok, violations: gate.violations },

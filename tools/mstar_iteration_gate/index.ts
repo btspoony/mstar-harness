@@ -8,10 +8,13 @@
  * phase-4-pr-delivery) is computed from the two documents. The `phase`
  * param is therefore informational: it labels the check the caller
  * intends to run and is echoed into the text/details, never passed to the
- * engine. `statusPath` / `compassPath` are resolved against `pi.cwd`.
+ * engine. `statusPath` is read as JSON (engine `readJson`); `compassPath`
+ * is a delivery-compass.md whose YAML frontmatter is parsed by the engine
+ * `parseCompassFrontmatter` (same parser the CLI uses — no fork). Both
+ * paths are resolved against `pi.cwd`.
  */
 import { resolve } from "node:path";
-import { evaluatePhaseGate, readJson } from "@mstar-harness/engine";
+import { evaluatePhaseGate, parseCompassFrontmatter, readJson } from "@mstar-harness/engine";
 import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -50,7 +53,7 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
           return result("mstar_iteration_gate: phase, statusPath and compassPath are required", { ok: false }, true);
         }
         const statusDoc = readJson(resolve(pi.cwd, params.statusPath));
-        const compassDoc = readJson(resolve(pi.cwd, params?.compassPath ?? ""));
+        const compassDoc = parseCompassFrontmatter(resolve(pi.cwd, params.compassPath));
         const gate = evaluatePhaseGate(statusDoc, compassDoc, {});
         return result(
           gate.ok
