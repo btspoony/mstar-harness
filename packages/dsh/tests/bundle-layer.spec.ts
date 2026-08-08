@@ -109,7 +109,8 @@ describe('profile bundle layer (Task 4)', () => {
     expect(config.dispatchTools).toBeUndefined()
     expect(config.dispatchBinding).toBeUndefined()
     expect(config.skillRoots).toBeUndefined()
-    // The packaged skill mount points at the Task 5 copy target.
+    // The packaged skill mount ships the empty default root until a
+    // publish-time copy exists (qc3 P-004) — no copy step is wired yet.
     expect(config.bundledSkillDir).toBe('./skills')
   })
 

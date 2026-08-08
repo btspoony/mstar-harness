@@ -79,7 +79,7 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入（ro
 | 路径 | 机制 | 时机 |
 | --- | --- | --- |
 | 开发期 | `skillRoots: ["<repo-root>/skills"]` → skill-local `customSkillDirs` 条目 | 本地开发 / 测试 |
-| 发布包 | `bundledSkillDir` → skill-local `bundledSkillDir` 条目（规范发布形态——dsh 默认 `$DSH_BUNDLED_SKILL_DIR`）；P3 打包层把镜像复制进 `packages/dsh/skills/` | P3（`20260808-dsh-seams-bundle`） |
+| 发布包 | `bundledSkillDir` → skill-local `bundledSkillDir` 条目（规范发布形态——dsh 默认 `$DSH_BUNDLED_SKILL_DIR`）。镜像**尚未**被任何打包步骤复制进 `packages/dsh/skills/`（qc3 P-004）：包只随附技能 README，默认 `./skills` 挂载在发布期复制步骤出现前保持为空——受支持的生产形态是在 profile 层用**绝对 `bundledSkillDir` 覆盖** | 延后（发布期复制） |
 
 `packages/dsh/skills/README.md` 是打包挂载目标，**不含任何技能副本**——技能内容只在仓库根 `skills/` 镜像中存一份（19 个 `mstar-*` + `pm`），mstar 技能在任何地方都保持可独立使用。不重复加载：opencode 插件在自己的包里携带同一批技能，因此 dsh 只能通过这条 skill-local 路径挂载它们。
 
@@ -148,6 +148,9 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **状态闸门因 seam 设计而内容盲**（qc2 W-001）——`fs/write-intent`/`fs/edit-intent` 瀑布链只携带 `(target, actor)`，从不携带写入内容，因此**首次**把合法 `status.json` 写坏的写入在两种模式下都会通过（闸门只校验写入前的磁盘文档）。hard 模式因此从不否决状态写入：对已非法文档按**修复逃生**放行（error 级咨询，`hard: true, repair: true`），让修复性写入能落地。恢复路径：就地修复文档（闸门允许）或删除 `status.json` 让 harness 重建；hard 部署应监控 `repair: true` 咨询。
 - **缺失 `status.json` 的租约行为**（qc3 F-5）——sdd 可写派发遇到缺失状态文件会发出 `lease.dispatch.unverifiable`（告警下 advisory，hard 下 deny）；非 SDD 派发无租约义务，保持静默降级放行。
 - **闸门匹配跟随 `displayPath`**（qc2 S-007）——状态闸门按 fs target 的解析后 `displayPath` 匹配。后端报告工作区相对路径、harness 目录为符号链接、或远程/URI target 时永不匹配，闸门对其惰性（无误报）；受守护的 harness 写入请使用绝对本地路径。
+- **design-md seam 作用域为全局 basename 匹配**（qc2 S-001）——`isSeamTarget('design-md')` 匹配文件系统上任意 `DESIGN.md` / `DESIGN.dark.md`，无论解析出的 `{HARNESS_DIR}` / 仓库根是什么。因此对不遵循 mstar token 格式的外部项目 DESIGN.md 的写入，在 hard 模式下会在 harness 之外记录 error 级修复逃生咨询（`hard: true, repair: true`）——一个嘈杂的误报面（写入从不被阻断）。有意为之（「工件即文件本身，无论设计位于何处」）；在 harness 目录可解析时把作用域收窄到仓库根是可能的后续项。
+- **audit seam 作用域匹配任意深度上的任意 `plans/audit-*` 段**（qc2 S-002）——`isAuditPlanTarget` 扫描所有路径段，因此与 mstar 无关的目录树（例如带有 `plans/audit-*` 布局的依赖或兄弟项目）在写入时会收到 mstar audit 状态块 + 秘密 lint。与 design-md 作用域同类（仅咨询，从不阻断）；该布局是 mstar-audit 文档化的 Phase 4 形态，因此匹配是有意为之。
+- **`<root>/mstar-roles/SKILL.md` 上 skill-lint × roles seam 双重触发**（qc2 S-003）——当某个已配置技能根包含 `mstar-roles` 目录（开发期的仓库根镜像情形，以及发布形态的打包镜像）时，对 `mstar-roles/SKILL.md` 的一次写入会同时触发技能撰写 lint 闸门与 roles seam 闸门（hard 下两条咨询 / 两条修复逃生日志）。两个校验器都合理适用——双重 lint 仅为咨询，并非正确性破坏；「作用域互不重叠」的性质只在四个 seam 之间成立，不跨技能闸门。
 - **内容盲的 skill-lint 盲区**——`fs/write-intent` 槽位只携带 `(target, actor)`：首次创建的传入内容不被 lint，合法→非法覆盖在监听器路径上无法检出（它只 lint 写入前的磁盘文档）。告警/hard 咨询只呈现**已存在**的磁盘违规——与状态闸门同类限制。
 - **`bundledSkillDir` 锚定 cwd**（Task 5 e2e 发现）——skill-local 对相对打包根按普通 `join()` 语义解析到 dsh **进程 cwd**；出厂 patch 默认 `./skills` 只在 dsh 从包根目录启动时能找到打包挂载。受支持的生产形态是在 profile 层用**绝对路径覆盖**（见 `bundle/README.md`）；从其他 cwd 启动的部署在覆盖前没有打包挂载。
 - **profile-bundle registry 安装推迟到发布**——`dsh plugin --profile mstar add <本地路径>` 已验证（Task 5）；公开 registry 形态（`add @mstar-harness/dsh`）走同一 pnpm + reconcile 机制，但本迭代不执行（local-only 约束；roadmap §7）。

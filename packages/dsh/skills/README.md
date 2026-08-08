@@ -5,7 +5,7 @@ This directory is the **packaged skill mount target** for `@mstar-harness/dsh`
 copies**; skill content lives once in the repo-root `skills/` mirror (19
 `mstar-*` + `pm`), and mstar skills stay standalone-usable everywhere.
 
-## How this directory gets populated (at install)
+## How this directory gets populated
 
 | Path | Mechanism | When |
 |---|---|---|
