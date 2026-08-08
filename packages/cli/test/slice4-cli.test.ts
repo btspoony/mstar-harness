@@ -1,7 +1,7 @@
 /**
  * CLI Slice-4 subcommands — thin engine-backed wrappers:
  *   mstar lint <target>, mstar design-md validate <dir>,
- *   mstar audit scaffold <out-dir> <findings-file>, mstar compound validate
+ *   mstar audit scaffold <findings-file> [--dir <out-dir>], mstar compound validate
  *   <doc-path> [--knowledge-dir <dir>], mstar host detect --signals <list>,
  *   mstar skill lint <skill-dir>.
  *
