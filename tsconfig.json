@@ -8,5 +8,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["packages/opencode/src/mstar.ts"]
+  "include": ["packages/opencode/src/mstar.ts", "tools/**/*.ts"]
 }
