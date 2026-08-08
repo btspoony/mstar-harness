@@ -1,0 +1,7 @@
+{
+  "name": "@deepseek-ai/dsh-fs-policy",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Dev-time peer placeholder for @mstar-harness/dsh. The real package is private (not on the npm registry) and ships from the host dsh app at runtime; this stub satisfies the P0 peer name at bun-install time. No runtime or type surface is provided here — seam types consumed by the plugin are declared locally (peer-stubs/dsh-invariants/index.d.ts is the pattern)."
+}
