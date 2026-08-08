@@ -10,9 +10,13 @@
  * document at intent time (the waterfall carries no incoming content), so
  * seeds are written before each dispatch.
  *
- * Contract notes (full detail in task-3-report.md):
- * - Veto = throw in the listener (the fs intent slot has no deny shape);
- *   the throw rejects the waterfall → the tool call fails.
+ * Contract notes (full detail in task-3-report.md + qc-fix-report.md):
+ * - The gate NEVER throws (qc3 F-1 / qc2 W-001): the intent waterfall carries
+ *   no incoming content, so hard mode allows an ALREADY-invalid document as a
+ *   repair escape (error-level log + repair advisory, `hard: true, repair:
+ *   true`) — a veto there would deadlock the repairing write. Unexpected
+ *   internal errors degrade to allow in BOTH modes with a `degraded: true`
+ *   advisory (error-containment envelope).
  * - Warn mode (default): log + advisory emit + `next()` delegation (allow).
  * - The dsh `agent/status` event is lifecycle-only (idle ⇄ running, no-op
  *   invariant) — the advisory emit lands on the plugin-owned
@@ -22,7 +26,7 @@ import { describe, expect, it, afterEach } from 'bun:test'
 import { join } from 'node:path'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { bootApp, INVALID_STATUS, VALID_STATUS, seedHarness, type BootResult } from './harness.ts'
-import { StatusGateError, type StatusGateAdvisory } from '../src/index.ts'
+import type { StatusGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
 
@@ -114,35 +118,39 @@ describe('status gate — warn (default) mode', () => {
 })
 
 describe('status gate — hard mode (Config enforcement: hard)', () => {
-  it('invalid status.json write-intent → typed veto rejecting the waterfall', async () => {
+  it('invalid status.json write-intent → repair-escape advisory (hard+repair), waterfall resolves (write proceeds)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
     const advisories = captureAdvisories(app.ctx)
 
-    const attempt = app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
+    const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
 
-    await expect(attempt).rejects.toBeInstanceOf(StatusGateError)
-    await expect(attempt).rejects.toMatchObject({
-      code: 'STATUS_GATE_HARD_BLOCK',
-      operation: 'write',
-      name: 'StatusGateError',
-    })
-    const error = await attempt.catch((e: unknown) => e) as StatusGateError
-    expect(error.result.hardBlocked).toBe(true) // GateResult.hardBlocked honored
-    expect(error.result.violations.map((v) => v.code)).toContain('status.invalid-plans')
-    expect(advisories).toHaveLength(0) // veto is the signal; advisory is warn-mode only
+    // Repair escape (qc2 W-001): the document is ALREADY invalid, so this
+    // write may be the repair — hard mode allows it with a loud advisory.
+    expect(intent).toBeUndefined()
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.hard).toBe(true) // the resolved hard flag is live again (qc2 S-005)
+    expect(advisories[0]!.repair).toBe(true)
+    expect(advisories[0]!.degraded).toBeUndefined()
+    expect(advisories[0]!.result.hardBlocked).toBe(true) // GateResult.hardBlocked still honored
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('status.invalid-plans')
   })
 
-  it('invalid status.json edit-intent → typed veto', async () => {
+  it('invalid status.json edit-intent → repair-escape advisory (operation edit)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    const advisories = captureAdvisories(app.ctx)
 
-    await expect(
-      app.ctx.waterfall('fs/edit-intent', statusTarget(app.harnessDir), {}, () => undefined),
-    ).rejects.toMatchObject({ code: 'STATUS_GATE_HARD_BLOCK', operation: 'edit' })
+    const intent = await app.ctx.waterfall('fs/edit-intent', statusTarget(app.harnessDir), {}, () => undefined)
+
+    expect(intent).toBeUndefined()
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.operation).toBe('edit')
+    expect(advisories[0]!.hard).toBe(true)
+    expect(advisories[0]!.repair).toBe(true)
   })
 
-  it('hostile inputs veto with their violation codes', async () => {
+  it('hostile inputs surface their violation codes in the repair advisory', async () => {
     const cases: Array<{ name: string; content: string; code: string }> = [
       { name: 'non-JSON', content: 'not json {{{', code: 'status.invalid-json' },
       { name: 'wrong schema version', content: JSON.stringify({ ...VALID_STATUS, version: 2 }), code: 'status.unsupported-version' },
@@ -155,30 +163,37 @@ describe('status gate — hard mode (Config enforcement: hard)', () => {
     for (const fixture of cases) {
       const app = booted = await bootApp({ enforcement: 'hard' })
       await seedHarness(app.harnessDir, { 'status.json': fixture.content })
+      const advisories = captureAdvisories(app.ctx)
 
-      const error = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
-        .catch((e: unknown) => e)
+      const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
 
-      expect(error, fixture.name).toBeInstanceOf(StatusGateError)
-      expect((error as StatusGateError).result.violations.map((v) => v.code), fixture.name).toContain(fixture.code)
+      expect(intent, fixture.name).toBeUndefined()
+      expect(advisories, fixture.name).toHaveLength(1)
+      expect(advisories[0]!.hard, fixture.name).toBe(true)
+      expect(advisories[0]!.repair, fixture.name).toBe(true)
+      expect(advisories[0]!.result.violations.map((v) => v.code), fixture.name).toContain(fixture.code)
       await booted?.dispose()
       booted = undefined
     }
   })
 
-  it('hard via compass frontmatter (no Config override) → veto', async () => {
+  it('hard via compass frontmatter (no Config override) → repair-escape advisory with hard=true', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
       'status.json': JSON.stringify(INVALID_STATUS),
       'iterations/v2.1.0/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
     })
+    const advisories = captureAdvisories(app.ctx)
 
-    await expect(
-      app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined),
-    ).rejects.toMatchObject({ code: 'STATUS_GATE_HARD_BLOCK' })
+    const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
+
+    expect(intent).toBeUndefined()
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.hard).toBe(true)
+    expect(advisories[0]!.repair).toBe(true)
   })
 
-  it('clean document under hard → passes (no violations → hardBlocked false)', async () => {
+  it('clean document under hard → passes silently (no violations → no advisory)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
     const advisories = captureAdvisories(app.ctx)
@@ -201,6 +216,52 @@ describe('status gate — hard mode (Config enforcement: hard)', () => {
   })
 })
 
+describe('status gate — error-containment envelope (qc3 F-1)', () => {
+  /** FsTarget violating the FsTarget contract (non-string displayPath). */
+  const brokenTarget = (harnessDir: string): FsTarget => ({
+    targetKey: join(harnessDir, 'status.json') as FsTarget['targetKey'],
+    displayPath: Symbol('contract-violation') as unknown as string,
+  })
+
+  it('unexpected error inside the gate → degrade to allow with a degraded advisory (warn mode)', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    const advisories = captureAdvisories(app.ctx)
+
+    const intent = await app.ctx.waterfall('fs/write-intent', brokenTarget(app.harnessDir), {}, () => undefined)
+
+    expect(intent).toBeUndefined() // never an untyped throw from the gate
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.degraded).toBe(true)
+    expect(advisories[0]!.hard).toBe(false)
+    expect(advisories[0]!.repair).toBeUndefined()
+    expect(advisories[0]!.result.ok).toBe(true)
+  })
+
+  it('unexpected error inside the gate → degrade to allow in hard mode too (never hardens a soft workflow)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    const advisories = captureAdvisories(app.ctx)
+
+    const intent = await app.ctx.waterfall('fs/write-intent', brokenTarget(app.harnessDir), {}, () => undefined)
+
+    expect(intent).toBeUndefined()
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.degraded).toBe(true)
+    expect(advisories[0]!.result.ok).toBe(true)
+  })
+
+  it('a throwing advisory consumer is contained by the envelope (emit failure cannot block the write)', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    app.ctx.on('mstar/status-gate', () => { throw new Error('consumer boom') })
+
+    const intent = await app.ctx.waterfall('fs/write-intent', brokenTarget(app.harnessDir), {}, () => undefined)
+
+    expect(intent).toBeUndefined() // the emit failure degrades to a log, never a throw
+  })
+})
+
 describe('status gate — findingsCleanupGate when configured', () => {
   /** Schema-valid doc whose plan declares zero-residual and carries an open nit. */
   const CLEANUP_DOC = {
@@ -211,15 +272,20 @@ describe('status gate — findingsCleanupGate when configured', () => {
     },
   }
 
-  it('zero-residual mode configured → open nit vetoes under hard', async () => {
+  it('zero-residual mode configured → open nit surfaces as a repair-escape advisory under hard', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(CLEANUP_DOC) })
+    const advisories = captureAdvisories(app.ctx)
 
-    const error = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
-      .catch((e: unknown) => e)
+    const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
 
-    expect(error).toBeInstanceOf(StatusGateError)
-    expect((error as StatusGateError).result.violations.map((v) => v.code)).toContain('findings.zero-residual-nit')
+    // The document already violates the cleanup gate; the write may BE the
+    // cleanup — hard mode allows it as a repair escape (content-blind seam).
+    expect(intent).toBeUndefined()
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.hard).toBe(true)
+    expect(advisories[0]!.repair).toBe(true)
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('findings.zero-residual-nit')
   })
 
   it('zero-residual mode configured → advisory under warn', async () => {
@@ -249,9 +315,10 @@ describe('status gate — findingsCleanupGate when configured', () => {
 })
 
 describe('status gate — single-slot waterfall composition', () => {
-  it('hard veto short-circuits later deciders; allow delegates to them (fs-policy style)', async () => {
-    // Hard: the veto is terminal — a later decider (fs-policy's observed-state
-    // slot) must never run.
+  it('repair escape and warn allow both delegate to later deciders (fs-policy style)', async () => {
+    // Hard + already-invalid doc: the repair escape must NOT terminate the
+    // chain — the write proceeds, so a later decider (fs-policy's observed-
+    // state slot) still owns the intent decision.
     const app = booted = await bootApp({ enforcement: 'hard' })
     await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
     let secondRan = false
@@ -260,10 +327,9 @@ describe('status gate — single-slot waterfall composition', () => {
       return Promise.resolve({ kind: 'createIfAbsent' } as const)
     })
 
-    await expect(
-      app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined),
-    ).rejects.toMatchObject({ code: 'STATUS_GATE_HARD_BLOCK' })
-    expect(secondRan).toBe(false)
+    const repairIntent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
+    expect(repairIntent).toEqual({ kind: 'createIfAbsent' })
+    expect(secondRan).toBe(true)
 
     // Warn: the gate calls next() — the later decider owns the intent decision
     // (fs-policy's observed-state CAS is preserved for status.json).

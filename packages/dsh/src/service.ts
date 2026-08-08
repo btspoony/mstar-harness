@@ -42,9 +42,13 @@ export interface DshMstarOptions {
 /**
  * Morning Star engine access for dsh gate plugins.
  *
- * The service is constructed (and thereby self-registered) by the `dsh`
- * function plugin's `apply`; it exists so gate listeners and future consumers
- * declare `inject: ['dshMstar']` instead of importing the engine directly.
+ * Layering (qc1 F-002): this service is the composition/test façade for
+ * FUTURE inject consumers (host adapters, catalogs, P2/P3 seams) — the
+ * P1 gates in `index.ts` are co-located engine wrappers that import
+ * `@mstar-harness/engine` directly (same plugin, engine bundled at build
+ * time), so the engine stays the single grammar for both paths. The service
+ * is constructed (and thereby self-registered) by the `dsh` function
+ * plugin's `apply`.
  */
 export class DshMstar extends Service {
   /** Resolved `{HARNESS_DIR}` for this app (null when probing found none). */

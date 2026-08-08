@@ -548,7 +548,7 @@ Survey the codebase, report only.
     expect(advisories).toHaveLength(0) // the veto is the signal; advisory is warn-mode only
   })
 
-  it('engine-failure degrade: a throwing gate never hardens — waterfall falls through to next() (opencode parity)', async () => {
+  it('engine-failure degrade: allow + structured degraded advisory, never a silent pass (qc2 W-003)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     const advisories = captureAdvisories(app.ctx)
     let secondRan = false
@@ -559,15 +559,41 @@ Survey the codebase, report only.
 
     // Any unexpected failure inside the gate (engine or payload access) must
     // degrade to allow in BOTH modes — a hard gate failure never hardens a
-    // workflow that was soft (preExecuteListener catch; opencode parity).
+    // workflow that was soft (preExecuteListener catch; opencode parity). The
+    // degrade is NOT masked as a pass: the plugin-owned advisory carries
+    // `degraded: true` so hard deployments can detect a dead control.
     const broken: ToolExecution = {
       ...subagentExec(MISSING_EXECUTE_AS),
-      get name() { throw new Error('boom: gate internals exploded') },
+      get arguments() { throw new Error('boom: gate internals exploded') },
     }
     const decision = await app.ctx.waterfall('tools/pre-execute', broken, defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(secondRan).toBe(true) // next() was still invoked — chain integrity preserved
-    expect(advisories).toHaveLength(0)
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.degraded).toBe(true)
+    expect(advisories[0]!.hard).toBe(false)
+    expect(advisories[0]!.tool).toBe('subagent')
+    expect(advisories[0]!.result.ok).toBe(true)
+  })
+
+  it('a throwing advisory consumer is contained by the degrade path (emit failure cannot break the chain)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    app.ctx.on('mstar/dispatch-gate', () => { throw new Error('consumer boom') })
+    let secondRan = false
+    app.ctx.on('tools/pre-execute', () => {
+      secondRan = true
+      return Promise.resolve<PreToolDecision>({ kind: 'allow' })
+    })
+
+    const broken: ToolExecution = {
+      ...subagentExec(MISSING_EXECUTE_AS),
+      get arguments() { throw new Error('boom: gate internals exploded') },
+    }
+    const decision = await app.ctx.waterfall('tools/pre-execute', broken, defaultAllow)
+
+    // The degraded emit failure degrades to a log — the chain still delegates.
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(secondRan).toBe(true)
   })
 })

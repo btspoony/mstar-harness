@@ -27,7 +27,7 @@ import { Context } from 'cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import * as plugin from '../src/index.ts'
-import { StatusGateError } from '../src/index.ts'
+import type { StatusGateAdvisory } from '../src/index.ts'
 import { INVALID_STATUS, seedHarness } from './harness.ts'
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
@@ -63,33 +63,46 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
     const harnessDir = join(root, 'harness')
     const ctx = new Context()
+    // Advisory capture proves listener liveness: the status gate never throws
+    // (repair-escape design, qc3 F-1), so a live mount with an invalid on-disk
+    // document emits a repair advisory on BOTH intent slots; a disposed mount
+    // emits nothing.
+    const advisories: StatusGateAdvisory[] = []
+    ctx.on('mstar/status-gate', (payload) => { advisories.push(payload) })
     try {
       await seedHarness(harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
 
       // Mount 1 — every gate is live on the new fiber.
       const fiber = await ctx.plugin(plugin, { enforcement: 'hard', harnessDir })
       expect(ctx.dshMstar).toBeDefined()
-      await expect(
-        ctx.waterfall('fs/write-intent', statusTarget(harnessDir), {}, () => undefined),
-      ).rejects.toBeInstanceOf(StatusGateError)
+      const writeLive = await ctx.waterfall('fs/write-intent', statusTarget(harnessDir), {}, () => undefined)
+      expect(writeLive).toBeUndefined() // repair escape: allowed, advisory emitted
+      const editLive = await ctx.waterfall('fs/edit-intent', statusTarget(harnessDir), {}, () => undefined)
+      expect(editLive).toBeUndefined()
+      expect(advisories.map((a) => a.operation)).toEqual(['write', 'edit'])
+      expect(advisories.every((a) => a.hard === true && a.repair === true)).toBe(true)
       const denied = await ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
       expect(denied).toMatchObject({ kind: 'deny' })
 
-      // Dispose — the status listener, the dispatch listener and the service
-      // are all unwound: no veto, no deny, no service.
+      // Dispose — the status listeners (BOTH slots), the dispatch listener and
+      // the service are all unwound: no advisory, no deny, no service.
       await fiber.dispose()
       expect(ctx.dshMstar).toBeUndefined()
+      const before = advisories.length
       const writeAfter = await ctx.waterfall('fs/write-intent', statusTarget(harnessDir), {}, () => undefined)
       expect(writeAfter).toBeUndefined()
+      const editAfter = await ctx.waterfall('fs/edit-intent', statusTarget(harnessDir), {}, () => undefined)
+      expect(editAfter).toBeUndefined()
+      expect(advisories.length).toBe(before) // edit-intent post-dispose: no advisory (qc1 S-003 / qc3 F-6)
       const dispatchAfter = await ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
       expect(dispatchAfter).toEqual({ kind: 'allow' })
 
       // HMR reload — a fresh fiber restores the full gate set.
       const reloaded = await ctx.plugin(plugin, { enforcement: 'hard', harnessDir })
       expect(ctx.dshMstar).toBeDefined()
-      await expect(
-        ctx.waterfall('fs/write-intent', statusTarget(harnessDir), {}, () => undefined),
-      ).rejects.toBeInstanceOf(StatusGateError)
+      await ctx.waterfall('fs/write-intent', statusTarget(harnessDir), {}, () => undefined)
+      await ctx.waterfall('fs/edit-intent', statusTarget(harnessDir), {}, () => undefined)
+      expect(advisories.length).toBe(before + 2)
       const deniedAgain = await ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
       expect(deniedAgain).toMatchObject({ kind: 'deny' })
       await reloaded.dispose()

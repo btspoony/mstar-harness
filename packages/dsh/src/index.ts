@@ -37,6 +37,13 @@ import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { DshMstar } from './service.ts'
 
+// Re-export the service type from the package entry (qc3 F-2a): the cordis
+// `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
+// must reference it for consumers importing `@mstar-harness/dsh` to see a
+// typed `ctx.dshMstar`.
+export { DshMstar } from './service.ts'
+export type { DshMstarOptions } from './service.ts'
+
 /** Cordis function-plugin name registered by the Loader. */
 export const name = 'dsh'
 
@@ -109,51 +116,32 @@ export const Config: z<Config> = z.object({
 })
 
 /**
- * Typed veto thrown by the status gate's hard path. Rejects the
- * `fs/write-intent`/`fs/edit-intent` waterfall — the dsh fs intent slot has no
- * deny shape, so a throw IS the refusal channel (dsh-fs-policy README; the
- * tool surfaces it as an `isError` tool result carrying `{ name, code }`).
- */
-export class StatusGateError extends Error {
-  /** Stable machine code for the veto (tool-result `code`). */
-  readonly code = 'STATUS_GATE_HARD_BLOCK' as const
-  /** Which intent slot was vetoed. */
-  readonly operation: 'write' | 'edit'
-  /** `displayPath` of the guarded file. */
-  readonly target: string
-  /** The gate verdict that hardened (`hardBlocked: true`). */
-  readonly result: GateResult
-
-  constructor(operation: 'write' | 'edit', target: string, result: GateResult) {
-    super([
-      `status.json ${operation} blocked by Enforcement: hard — the current document fails the status gate`,
-      ...result.violations.map(formatViolation),
-      'refusal channel: fs intent waterfall (veto = throw); skill: mstar-plan-artifacts/references/status-and-residuals.md',
-    ].join('\n'))
-    this.name = 'StatusGateError'
-    this.operation = operation
-    this.target = target
-    this.result = result
-  }
-}
-
-/**
- * Advisory emitted on warn-mode gate passes (the plan's "emit `agent/status`
+ * Advisory emitted on status-gate decisions (the plan's "emit `agent/status`
  * (advisory)" step). Named `mstar/status-gate` instead: the dsh `agent/status`
  * event is a lifecycle-only channel (`{ agent, status }`, idle ⇄ running, with
  * an invariant rejecting no-op transitions) — emitting gate warnings on it
  * would violate the seam contract. Consumers (later tasks, catalogs) observe
  * this event for model-visible/session-log surfacing.
+ *
+ * The status gate NEVER throws (qc3 F-1 / qc2 W-001): the fs intent waterfall
+ * carries no incoming content, so the only hard-mode decision this seam can
+ * make about an ALREADY-invalid document is to allow the write as a repair
+ * escape. Every decision surfaces through this advisory; unexpected internal
+ * errors degrade to an allow with `degraded: true`.
  */
 export interface StatusGateAdvisory {
   /** Which intent slot passed the gate. */
   operation: 'write' | 'edit'
   /** `displayPath` of the guarded file. */
   target: string
-  /** The gate verdict (warn-mode: `hardBlocked` is false). */
+  /** The gate verdict (warn-mode: `hardBlocked` false; hard repair escape: `hardBlocked` true). */
   result: GateResult
-  /** Whether hard enforcement is on (advisory events are warn-mode by construction). */
+  /** Resolved enforcement flag: false for warn-mode advisories, true for hard-mode repair escapes. */
   hard: boolean
+  /** True when hard mode allowed a write/edit to an ALREADY-invalid document (repair escape). */
+  repair?: boolean
+  /** True when the gate errored internally and degraded to allow (error-containment envelope). */
+  degraded?: boolean
 }
 
 /**
@@ -171,6 +159,8 @@ export interface DispatchGateAdvisory {
   result: GateResult
   /** Whether hard enforcement is on (advisory events are warn-mode by construction). */
   hard: boolean
+  /** True when the gate errored internally and degraded to allow (structured degraded advisory, qc2 W-003). */
+  degraded?: boolean
 }
 
 declare module 'cordis' {
@@ -234,12 +224,30 @@ function resolveHard(harnessDir: string, config: Config): boolean {
  * and passes. `findingsCleanupGate` runs per plan row that CONFIGURES a mode
  * (`plans[].metadata.findings_cleanup`); schema violations short-circuit it
  * (the doc must parse for the cleanup gate to be meaningful).
+ *
+ * Single-read contract (qc3 F-1): the file is parsed exactly once and the
+ * parsed doc is passed to `validateStatus` — the previous path-first read
+ * then `readJson` re-read was a TOCTOU window (a concurrent writer between
+ * the two reads threw a raw error from inside the gate). Malformed JSON is
+ * contained here with the engine's `status.invalid-json` shape; never throws.
  */
-function validateStatusDoc(harnessDir: string, statusPath: string): GateResult {
-  const base = validateStatus(statusPath)
+function validateStatusDoc(statusPath: string): GateResult {
+  let doc: StatusDoc
+  try {
+    doc = readJson(statusPath) as StatusDoc
+  } catch (error) {
+    return {
+      ok: false,
+      violations: [{
+        ok: false,
+        severity: 'high',
+        code: 'status.invalid-json',
+        message: (error as Error).message,
+      }],
+    }
+  }
+  const base = validateStatus(doc)
   if (!base.ok) return base
-  // base.ok proves the file parsed as JSON, so the second read cannot throw.
-  const doc = readJson(statusPath) as StatusDoc
   const violations: ValidationResult[] = []
   for (const row of Array.isArray(doc.plans) ? doc.plans : []) {
     const metadata = asRecord(row.metadata)
@@ -254,9 +262,20 @@ function validateStatusDoc(harnessDir: string, statusPath: string): GateResult {
 }
 
 /**
- * Gate one fs intent on `{HARNESS_DIR}/status.json`. Warn mode (default):
- * log + advisory emit + delegate; hard mode: log + throw the typed veto.
- * Non-status targets and absent documents are pure pass-through.
+ * Gate one fs intent on `{HARNESS_DIR}/status.json`. The gate never throws
+ * (qc3 F-1 / qc2 W-001): warn mode logs + advisory emit + delegates; hard
+ * mode with an ALREADY-invalid document logs an error-level REPAIR advisory
+ * and delegates — the intent waterfall carries no incoming content, so a
+ * hard veto here would deadlock the very write that repairs the document.
+ * The coherent content-blind policy: invalid on-disk → allow-as-repair;
+ * valid on-disk → normal validation path (pass). Non-status targets and
+ * absent documents are pure pass-through.
+ *
+ * Error-containment envelope: any unexpected error (TOCTOU race, backend
+ * contract violation on `displayPath`, throwing advisory consumer) degrades
+ * to allow in BOTH modes with a loud log + `degraded: true` advisory — an
+ * untyped throw from the gate would spuriously block legitimate writes (the
+ * fs waterfall has no error containment of its own).
  */
 function gateStatusIntent(
   ctx: Context,
@@ -265,20 +284,37 @@ function gateStatusIntent(
   operation: 'write' | 'edit',
   target: FsTarget,
 ): void {
-  if (harnessDir === null) return
-  if (!isStatusTarget(harnessDir, target)) return
-  const statusPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(statusPath)) return // first create: nothing to validate
-  const result = validateStatusDoc(harnessDir, statusPath)
-  const hard = resolveHard(harnessDir, config)
-  const verdict = applyEnforcement(result, { hard })
-  if (verdict.hardBlocked) {
-    ctx.logger(LOGGER_NAME).error(`status.json ${operation} vetoed (Enforcement: hard):\n${verdict.violations.map(formatViolation).join('\n')}`)
-    throw new StatusGateError(operation, target.displayPath, verdict)
-  }
-  if (!verdict.ok) {
-    ctx.logger(LOGGER_NAME).warn(`status.json ${operation} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`)
-    ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
+  try {
+    if (harnessDir === null) return
+    if (!isStatusTarget(harnessDir, target)) return
+    const statusPath = join(harnessDir, STATUS_FILE)
+    if (!existsSync(statusPath)) return // first create: nothing to validate
+    const result = validateStatusDoc(statusPath)
+    const hard = resolveHard(harnessDir, config)
+    const verdict = applyEnforcement(result, { hard })
+    if (!verdict.ok) {
+      if (verdict.hardBlocked) {
+        // Repair escape: the current document is already invalid; this write
+        // may BE the repair, so allow it — but make the degraded control
+        // loud (error-level log + repair advisory, `hard: true`).
+        ctx.logger(LOGGER_NAME).error(
+          `status.json ${operation} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}`,
+        )
+        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard, repair: true })
+      } else {
+        ctx.logger(LOGGER_NAME).warn(`status.json ${operation} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`)
+        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
+      }
+    }
+  } catch (error) {
+    ctx.logger(LOGGER_NAME).error(`status gate degraded to allow: ${(error as Error).message}`)
+    try {
+      ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: { ok: true, violations: [] }, hard: false, degraded: true })
+    } catch (emitError) {
+      // Best-effort observability: a throwing advisory consumer must not take
+      // the gate down with it (the error log above is the durable signal).
+      ctx.logger(LOGGER_NAME).error(`status gate degraded advisory emit failed: ${(emitError as Error).message}`)
+    }
   }
 }
 
@@ -286,11 +322,12 @@ function gateStatusIntent(
  * `fs/write-intent` listener. Registered with `prepend` so this decider runs
  * BEFORE dsh-fs-policy regardless of mount order: the slot is first-wins by
  * registration order (dsh-fs-policy README), so without prepend a policy
- * plugin mounted earlier would make this gate unreachable. Non-vetoed intents
- * call `next()` — delegating the observed-state intent decision to the
- * remaining chain (fs-policy when mounted; the bare `undefined` default
- * otherwise) rather than terminating the slot with `undefined` (which would
- * silently disable fs-policy's CAS for status.json in composed deployments).
+ * plugin mounted earlier would make this gate unreachable. Every gate
+ * decision (warn advisory, repair escape, degraded allow) calls `next()` —
+ * delegating the observed-state intent decision to the remaining chain
+ * (fs-policy when mounted; the bare `undefined` default otherwise) rather
+ * than terminating the slot with `undefined` (which would silently disable
+ * fs-policy's CAS for status.json in composed deployments).
  */
 async function writeIntentListener(
   ctx: Context,
@@ -357,16 +394,26 @@ function leaseViolation(code: string, message: string, fix?: string): Validation
 }
 
 /**
- * Parse one Assignment header field value with the engine
+ * Parse one Assignment HEADER-REGION field value with the engine
  * `parseAssignmentFields` semantics: a `**Field**: value` (bold) or
  * `Field: value` (plain) line, optionally list-bulleted, at line start.
  * Returns the trimmed value or undefined when the field is absent/empty.
+ *
+ * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)` slice
+ * (qc1 F-001 / qc2 F-003): the engine owns the header/body boundary, so
+ * body-quoted field examples after a `# Task` / `# Target` / `---` marker
+ * never leak into header fields — the same discipline `resolveDispatchHard`
+ * already honors for the Enforcement flag. This module keeps no second
+ * grammar for the boundary (qc1 S-002).
+ *
+ * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
+ * @param label - the header field label to read (e.g. `Plan Path`).
  */
-function assignmentHeaderValue(assignmentText: string, label: string): string | undefined {
+function assignmentHeaderValue(headerRegion: string, label: string): string | undefined {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*[ \\t]*:[ \\t]*(.*)$`, 'm')
   const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`, 'm')
-  const line = assignmentText.match(bold)?.[1] ?? assignmentText.match(plain)?.[1]
+  const line = headerRegion.match(bold)?.[1] ?? headerRegion.match(plain)?.[1]
   if (line === undefined) return undefined
   const value = line.trim()
   return value === '' ? undefined : value
@@ -384,21 +431,24 @@ function isNaValue(value: string | undefined): value is undefined {
 }
 
 /**
- * Resolve the target plan id from the Assignment: `Plan Path` basename
- * (`.md` stripped), else `SDD dir` basename, else a `plan_id` field.
+ * Resolve the target plan id from the Assignment HEADER region: `Plan Path`
+ * basename (`.md` stripped), else `SDD dir` basename, else a `plan_id` field.
+ * @param headerRegion - `assignmentHeaderRegion(assignmentText)` (qc1 F-001:
+ * only the header is read — a plan path quoted in the task body never
+ * resolves a plan id).
  */
-function planIdOf(assignmentText: string): string | undefined {
-  const planPath = assignmentHeaderValue(assignmentText, 'Plan Path')
+function planIdOf(headerRegion: string): string | undefined {
+  const planPath = assignmentHeaderValue(headerRegion, 'Plan Path')
   if (!isNaValue(planPath)) {
     const id = basename(firstToken(planPath) ?? '')
     return id.endsWith('.md') ? id.slice(0, -3) : id
   }
-  const sddDir = assignmentHeaderValue(assignmentText, 'SDD dir')
+  const sddDir = assignmentHeaderValue(headerRegion, 'SDD dir')
   if (!isNaValue(sddDir)) {
     const id = basename(firstToken(sddDir) ?? '')
     return id === '' ? undefined : id
   }
-  const planId = assignmentHeaderValue(assignmentText, 'plan_id')
+  const planId = assignmentHeaderValue(headerRegion, 'plan_id')
   return isNaValue(planId) ? undefined : planId
 }
 
@@ -429,10 +479,14 @@ function sessionIdOf(exec: ToolExecution): string | undefined {
  * dispatching session, worktree and branch vs the Assignment) are dsh-side.
  *
  * Degrade-allow cases (no false positives): no harness dir, unresolvable plan
- * id, missing status.json, and non-SDD assignments whose plan row is absent
- * or not InProgress. Malformed status.json is a violation ONLY for sdd
- * dispatches (the lease state is unverifiable — the status gate already
- * guards the next write); unreadable docs never harden a soft workflow.
+ * id, and non-SDD assignments whose plan row is absent or not InProgress.
+ * Unverifiable lease states (malformed status.json, MISSING status.json, plan
+ * row not registered) are violations ONLY for sdd dispatches (the lease state
+ * cannot be confirmed — the status gate already guards the next write);
+ * unreadable docs never harden a soft workflow. Missing status.json is NOT a
+ * silent fail-open for sdd (qc2 W-002): the claim-before-InProgress red line
+ * needs the plan's execution_lease, and a missing status file cannot confirm
+ * it — `lease.dispatch.unverifiable` fires (advisory in warn, deny under hard).
  */
 function leaseGateViolations(
   harnessDir: string | null,
@@ -441,12 +495,20 @@ function leaseGateViolations(
   prompt: string,
 ): ValidationResult[] {
   if (harnessDir === null || writable === false) return []
-  const mode = assignmentHeaderValue(prompt, 'Execution mode')
+  const header = assignmentHeaderRegion(prompt)
+  const mode = assignmentHeaderValue(header, 'Execution mode')
   const sdd = executionModeToN(mode ?? '').n === 3
-  const planId = planIdOf(prompt)
+  const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
   const statusPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(statusPath)) return []
+  if (!existsSync(statusPath)) {
+    if (!sdd) return []
+    return [leaseViolation(
+      'lease.dispatch.unverifiable',
+      `${statusPath} is missing — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+      'create a valid status.json registering the plan row (first implement dispatch requires a plan row)',
+    )]
+  }
 
   let doc: StatusDoc
   try {
@@ -481,6 +543,12 @@ function leaseGateViolations(
   // fields of a broken lease never produce misleading mismatch noise.
   if (lease !== undefined && validateExecutionLease(lease).ok) {
     const sessionId = sessionIdOf(exec)
+    // Holder contract (qc3 F-4): `lease.holder` must be recorded as the dsh
+    // Agent.id this dispatch runs under. The mstar control-side holder
+    // convention is `<host>:<stable-session-id>` — a lease claimed under that
+    // vocabulary against a bare dsh agent id is a deliberate fail-closed
+    // mismatch (no-steal): deployments must record leases with the dsh agent
+    // id, not the control-side session id.
     if (sessionId !== undefined && lease.holder !== sessionId) {
       violations.push(leaseViolation(
         'lease.dispatch.holder-mismatch',
@@ -488,7 +556,7 @@ function leaseGateViolations(
         'dispatch only from the lease-holding session (or release/override the lease with user authorization + audit note)',
       ))
     }
-    const worktree = assignmentHeaderValue(prompt, 'Worktree path')
+    const worktree = assignmentHeaderValue(header, 'Worktree path')
     const wt = worktree === undefined ? undefined : firstToken(worktree)
     if (isNaValue(wt)) {
       violations.push(leaseViolation(
@@ -503,7 +571,7 @@ function leaseGateViolations(
         'align the Assignment with the lease worktree path (or update the lease)',
       ))
     }
-    const forms = parseAssignmentBranchForms(prompt)
+    const forms = parseAssignmentBranchForms(header)
     const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch
     if (branch !== undefined && branch !== lease.working_branch) {
       violations.push(leaseViolation(
@@ -588,10 +656,13 @@ function gateDispatch(
  * decision: a deny is returned WITHOUT calling `next()` (short-circuits the
  * chain — downstream listeners and the registry default never run); every
  * other path calls `next()` to delegate (the registry's default is
- * `{ kind: 'allow' }`). Engine failures degrade to an error log + allow in
- * BOTH modes (hard gates are opt-in — an engine failure must not harden a
- * workflow that was soft; opencode parity). `next()` itself is invoked outside
- * the guard so a downstream rejection propagates untouched.
+ * `{ kind: 'allow' }`). Engine failures degrade to allow in BOTH modes (hard
+ * gates are opt-in — an engine failure must not harden a workflow that was
+ * soft; opencode parity) but the degrade is NEVER silent (qc2 W-003): the
+ * catch path emits the plugin-owned `mstar/dispatch-gate` advisory with
+ * `degraded: true` + an error log, so a hard deployment can detect a dead
+ * control instead of only finding it in logs. `next()` itself is invoked
+ * outside the guard so a downstream rejection propagates untouched.
  */
 async function preExecuteListener(
   ctx: Context,
@@ -604,7 +675,14 @@ async function preExecuteListener(
   try {
     veto = gateDispatch(ctx, harnessDir, config, exec)
   } catch (error) {
-    ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted: ${(error as Error).message}`)
+    ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted (degraded, dispatch allowed): ${(error as Error).message}`)
+    try {
+      ctx.emit('mstar/dispatch-gate', { tool: exec.name, role: '', result: { ok: true, violations: [] }, hard: false, degraded: true })
+    } catch (emitError) {
+      // Best-effort observability: a throwing advisory consumer must not take
+      // the gate down with it (the error log above is the durable signal).
+      ctx.logger(DISPATCH_LOGGER).error(`dispatch gate degraded advisory emit failed: ${(emitError as Error).message}`)
+    }
   }
   return veto ?? await next()
 }
@@ -612,8 +690,13 @@ async function preExecuteListener(
 /**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
  * engine, expose the engine surface as `ctx.dshMstar`, and register the status
- * hard gate on the fs intent waterfalls + the dispatch hard gate on
- * `tools/pre-execute`.
+ * gate on the fs intent waterfalls + the dispatch gate on `tools/pre-execute`.
+ *
+ * Layering (qc1 F-002): the gates are co-located engine wrappers in this
+ * module importing `@mstar-harness/engine` directly (same plugin, engine
+ * bundled at build time); `ctx.dshMstar` is the composition/test façade for
+ * future inject consumers (host adapters, catalogs) — see the README Service
+ * section. The engine is the single grammar for both paths.
  * @param ctx - Cordis context of the composed app.
  * @param config - validated plugin configuration.
  */
@@ -623,15 +706,26 @@ export function apply(ctx: Context, config: Config): void {
   // so construction alone exposes `ctx.dshMstar` (dsh service convention).
   new DshMstar(ctx, { harnessDir: harnessDir ?? null })
 
-  // Status hard gate — fs intent slot (single-slot waterfall; prepend so this
+  // Deploy-time observability (qc2 S-002): when enforcement resolves hard but
+  // no dispatchBinding is declared, the anti-recursion red line is off by
+  // construction — surface the absence instead of only documenting it.
+  const effectiveHard = config.enforcement === 'hard' || (harnessDir !== null && resolveCompassEnforcement(harnessDir).hard)
+  if (effectiveHard && (config.dispatchBinding ?? '').trim() === '') {
+    ctx.logger(DISPATCH_LOGGER).warn(
+      'Enforcement: hard is active but dispatchBinding is unset — the anti-recursion precheck is skipped (an Assignment whose Execute as equals the dispatching agent cannot be detected)',
+    )
+  }
+
+  // Status gate — fs intent slot (single-slot waterfall; prepend so this
   // decider runs before dsh-fs-policy regardless of mount order).
   ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
   ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
 
-  // Dispatch hard gate — tools/pre-execute waterfall (refusal channel:
-  // PreToolDecision.deny returned without next(); unlike the fs slots there is
-  // no single-slot first-wins convention, so plain registration suffices — a
-  // deny short-circuits the chain regardless of order and the allow path
-  // delegates to the remaining policy listeners).
-  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, exec, next))
+  // Dispatch gate — tools/pre-execute waterfall (refusal channel:
+  // PreToolDecision.deny returned without next()). Registered prepend for the
+  // same reachability reason as the fs slots (qc2 S-001): an earlier-mounted
+  // listener that returns a decision without next() would short-circuit the
+  // chain and make this security gate unreachable — "a deny short-circuits
+  // regardless of order" holds only once the listener is reached.
+  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, exec, next), { prepend: true })
 }

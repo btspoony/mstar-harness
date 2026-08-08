@@ -128,6 +128,36 @@ const SCOUT_SDD = `## Assignment
 Survey the codebase, report only.
 `
 
+/** SDD assignment resolving the plan via the `SDD dir` fallback (no Plan Path). */
+const SDD_VIA_SDD_DIR = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**SDD dir**: /srv/sdd/${PLAN_ID}
+**Worktree path**: ${WORKTREE}
+**Working branch**: ${BRANCH}
+
+Do the thing, evidence-first.
+`
+
+/** Same, but the SDD dir basename is empty (`/`) — unresolvable plan id. */
+const SDD_VIA_SDD_DIR_ROOT = SDD_VIA_SDD_DIR.replace(`/srv/sdd/${PLAN_ID}`, '/')
+
+/** SDD assignment with a resolvable plan but NO Worktree path declaration. */
+const SDD_NO_WORKTREE = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Plan Path**: /srv/plans/${PLAN_ID}.md
+**Working branch**: ${BRANCH}
+
+Do the thing, evidence-first.
+`
+
 /** The lease object stored under `plans[].execution_lease` (SSOT location). */
 const VALID_LEASE = {
   holder: HOLDER,
@@ -276,6 +306,42 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
     expect(violationCodes(advisories[0])).toContain('lease.dispatch.branch-mismatch')
   })
 
+  it('plan id resolves from the SDD dir fallback (no Plan Path) → lease check runs against it', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(SDD_VIA_SDD_DIR, { id: HOLDER }),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('SDD dir with an empty basename → unresolvable plan id, silent pass', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_VIA_SDD_DIR_ROOT), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('SDD assignment without a Worktree path + valid lease → advisory lease.dispatch.worktree-mismatch', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    const advisories = captureAdvisories(app.ctx)
+
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_NO_WORKTREE, { id: HOLDER }), defaultAllow)
+
+    expect(violationCodes(advisories[0])).toContain('lease.dispatch.worktree-mismatch')
+  })
+
   it('non-SDD assignment (inline) + plan not InProgress → no lease check, silent pass even with a lease present', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, { 'status.json': statusDoc({ ...TODO_NO_LEASE, execution_lease: VALID_LEASE }) })
@@ -344,16 +410,146 @@ describe('dispatch gate — lease hostile inputs', () => {
     expect(violationCodes(advisories[0])).toContain('lease.dispatch.plan-not-found')
   })
 
-  it('missing status.json + sdd → no lease state to verify, silent pass (degrade-allow)', async () => {
+  it('missing status.json + sdd → advisory lease.dispatch.unverifiable, dispatch allowed (warn default)', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_ASSIGNMENT), defaultAllow)
 
+    // qc2 W-002: a missing status file is NOT a silent fail-open for sdd —
+    // the execution_lease is unverifiable, so the claim-before-InProgress red
+    // line surfaces an advisory (warn mode).
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('lease.dispatch.unverifiable')
+  })
+
+  it('missing status.json + non-SDD writable dispatch → still a silent pass (degrade-allow for inline)', async () => {
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(INLINE_ASSIGNMENT), defaultAllow)
+
+    // Non-SDD dispatches carry no lease obligation; the degrade-allow is the
+    // documented behavior for them (README Known Limitations).
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
   })
 
+  it('missing status.json + sdd + Enforcement: hard → deny with lease.dispatch.unverifiable', async () => {
+    const app = booted = await bootApp()
+    let secondRan = false
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_HARD), async () => {
+      secondRan = true
+      return { kind: 'allow' }
+    })
+
+    // Under hard the unverifiable lease state is a vetoable violation, the
+    // same enforcement path as the malformed-doc arm (lease.dispatch.unreadable).
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('lease.dispatch.unverifiable')
+    expect(secondRan).toBe(false)
+  })
+
+})
+
+/* ---------------------------------- Task 4 carry-over ---------------------------------- */
+
+describe('dispatch gate — Assignment header-region scoping (qc1 F-001)', () => {
+  /** Valid SDD header, then a `# Target` body quoting DIFFERENT field values. */
+  const BODY_QUOTED_FIELDS = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Plan Path**: /srv/plans/${PLAN_ID}.md
+**Worktree path**: ${WORKTREE}
+**Working branch**: ${BRANCH}
+
+# Target
+
+Do the thing. Quoted examples must never leak into header fields:
+**Worktree path**: /srv/worktrees/other-package
+**Plan Path**: /srv/plans/other.md
+**Working branch**: feature/other-branch
+`
+
+  /** Header WITHOUT `Execution mode`; the body quotes an sdd mode line. */
+  const BODY_QUOTED_MODE = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Plan Path**: /srv/plans/${PLAN_ID}.md
+**Worktree path**: ${WORKTREE}
+**Working branch**: ${BRANCH}
+
+# Target
+
+Do the thing. Quoted example must not trigger the lease gate:
+**Execution mode**: sdd
+`
+
+  /** Header WITH `Execution mode: sdd` but NO plan-id field; the body quotes one. */
+  const BODY_QUOTED_PLAN = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Worktree path**: ${WORKTREE}
+**Working branch**: ${BRANCH}
+
+# Target
+
+Do the thing. Quoted example must not resolve a plan id:
+**Plan Path**: /srv/plans/${PLAN_ID}.md
+`
+
+  it('body-quoted Worktree path / Plan Path / Working branch do not leak into the lease comparisons', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(BODY_QUOTED_FIELDS, { id: HOLDER }),
+      defaultAllow,
+    )
+
+    // The header fields match the lease; the body-quoted mismatches must not
+    // produce worktree/branch violations (engine header-region contract).
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('body-quoted Execution mode: sdd does not trigger the lease gate (header mode only)', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, { 'status.json': statusDoc(TODO_NO_LEASE) })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_MODE), defaultAllow)
+
+    // Header has no Execution mode → not sdd; the Todo plan row is not
+    // InProgress → no lease check. Before the fix the body-quoted mode made
+    // this an sdd dispatch and lease.verify.missing fired.
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('body-quoted Plan Path does not resolve a plan id (unresolvable plan stays silent)', async () => {
+    const app = booted = await bootApp()
+    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_PLAN), defaultAllow)
+
+    // planIdOf reads the header region only; with no header plan id the lease
+    // gate degrades silently even though the body quotes the plan path.
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
 })
 
 /* ---------------------------------- Task 4 carry-over ---------------------------------- */
