@@ -8,7 +8,7 @@
  * @module @mstar-harness/dsh
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { Service, type Context } from 'cordis'
 import z from 'schemastery'
@@ -23,25 +23,42 @@ import {
   antiRecursionPrecheck,
   applyEnforcement,
   assertDefaultBranchProtected,
+  assertIndexRows,
+  assertLightDarkParity,
   assignmentHeaderRegion,
+  completenessLevel,
+  evaluatePhaseGate,
   executionModeToN,
   findingsCleanupGate,
   isReadOnlyAssignmentRole,
+  l1PreDispatchCheck,
+  l2PreDispatchCheck,
   lintFiveQuestion,
   lintFrontmatter,
+  lintLoadOrder,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
   readHarnessVersion,
   readJson,
+  redactSecrets,
+  referenceExists,
   resolveAssetPath,
   resolveCompassEnforcement,
   resolveHarnessDir,
+  resolveIterationDir,
   resolveSkillRoot,
+  scopeGuard,
+  sddWorkspace,
+  taskBrief,
   validateAssignmentFields,
+  validateAuditStatusBlocks,
+  validateDesignTokenFrontmatter,
   validateExecutionLease,
   validateIntegrationMergeLease,
+  validateRoleMapping,
+  validateSchemaYaml,
   validateStatus,
   verifyPlanExecutionLease,
 } from '@mstar-harness/engine'
@@ -50,15 +67,25 @@ import type {
   GateResult,
   HostAdapter,
   IntegrationMergeLease,
+  SecretFinding,
   StatusDoc,
   ValidationResult,
+  WorktreeTrack,
 } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { DshMstar } from './service.ts'
-import type { MstarEngineStatusSource } from './types.ts'
+import { parseCompassFrontmatterText } from './compass.ts'
+import type {
+  IterationGateListView,
+  IterationGateViolationView,
+  IterationGateView,
+  MstarEngineStatusSource,
+  MstarIterationGateSource,
+} from './types.ts'
 
 // Re-export the service type from the package entry (qc3 F-2a): the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -248,6 +275,41 @@ export interface SkillLintAdvisory {
   degraded?: boolean
 }
 
+/** The four artifact seams gated by Task 3 (plan 20260808-dsh-seams-bundle). */
+export type SeamId = 'design-md' | 'audit' | 'compound' | 'roles'
+
+/**
+ * Advisory emitted on seam-gate decisions (Task 3; the `mstar/status-gate` /
+ * `mstar/skill-lint` advisory pattern reused for the design-md / audit /
+ * compound / roles artifact gates — one event with a `seam` discriminator,
+ * consumers filter on it). Emitted when an in-scope artifact write-intent
+ * finds violations in the pre-write on-disk document (warn mode), when hard
+ * mode allows an ALREADY-invalid document as a repair escape, and when the
+ * gate degrades to allow after an unexpected internal error. Clean passes
+ * stay silent.
+ *
+ * The gate NEVER throws on the listener path (status-gate repair-escape
+ * semantics): the intent waterfall carries no incoming content, so the only
+ * lint signal is the pre-write on-disk state; the typed hard veto lives on
+ * the known-document branch (`lintSeamWrite` + friends, `SeamVetoError`).
+ */
+export interface SeamLintAdvisory {
+  /** The artifact seam that decided this intent. */
+  seam: SeamId
+  /** Which intent slot passed the gate (write-intent only — no linted edit slot). */
+  operation: 'write'
+  /** `displayPath` of the guarded file. */
+  target: string
+  /** The gate verdict (warn-mode: `hardBlocked` false; hard repair escape: `hardBlocked` true). */
+  result: GateResult
+  /** Resolved enforcement flag: false for warn-mode advisories, true for hard-mode repair escapes. */
+  hard: boolean
+  /** True when hard mode allowed a write to an ALREADY-invalid document (repair escape). */
+  repair?: boolean
+  /** True when the gate errored internally and degraded to allow (error-containment envelope). */
+  degraded?: boolean
+}
+
 declare module 'cordis' {
   interface Context {
     /**
@@ -286,6 +348,18 @@ declare module 'cordis' {
      * @mode emit
      */
     'mstar/skill-lint'(payload: SkillLintAdvisory): void
+    /**
+     * Advisory: an artifact-scoped write-intent (DESIGN.md / DESIGN.dark.md,
+     * audit plan files under `plans/audit-*`, knowledge docs under
+     * `{HARNESS_DIR}/knowledge/`, mstar-roles SKILL.md + references) found
+     * engine violations in the pre-write on-disk document (warn mode), was
+     * allowed as a hard-mode repair escape, or degraded to allow. Emitted
+     * only when the current document has violations; clean passes stay
+     * silent. The `seam` field discriminates the four gates.
+     * @param payload - the gate verdict, seam, and target.
+     * @mode emit
+     */
+    'mstar/seam-lint'(payload: SeamLintAdvisory): void
   }
 }
 
@@ -600,12 +674,15 @@ function skillCanonicalForm(target: FsTarget): string {
 }
 
 /**
- * Resolve the hard-enforcement flag for the skill lint gate: explicit
+ * Resolve the hard-enforcement flag for the artifact gates: explicit
  * Config override wins, else the iteration compass frontmatter (when a
  * harness dir resolves), else warn-only. {@link resolveHard} parity with a
- * null-tolerant harness dir — skill roots do not require `{HARNESS_DIR}`.
+ * null-tolerant harness dir — the skill roots and the Task 3 artifact
+ * seams (design-md / audit / compound / roles) do not require
+ * `{HARNESS_DIR}` (compound scoping is the only seam that does, and only
+ * for its knowledge-path matcher).
  */
-function resolveSkillHard(harnessDir: string | null, config: Config): boolean {
+function resolveSeamHard(harnessDir: string | null, config: Config): boolean {
   if (config.enforcement === 'hard') return true
   if (config.enforcement === 'soft') return false
   return harnessDir !== null && resolveCompassEnforcement(harnessDir).hard
@@ -662,7 +739,7 @@ function gateSkillIntent(ctx: Context, harnessDir: string | null, config: Config
     }
     const result = lintSkillDoc(doc)
     if (result.ok) return
-    const hard = resolveSkillHard(harnessDir, config)
+    const hard = resolveSeamHard(harnessDir, config)
     // The advisory carries the ENFORCED verdict (status-gate shape:
     // `hardBlocked` true on the hard repair escape — the write would have
     // been blocked, and is allowed as a repair).
@@ -718,6 +795,381 @@ async function skillWriteIntentListener(
 ): Promise<FsWriteIntent | undefined> {
   gateSkillIntent(ctx, harnessDir, config, target)
   return await next()
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 seam gates — design-md / audit / compound / roles
+// ---------------------------------------------------------------------------
+
+/** Per-seam dsh logger names (dsh logger naming: `<scope>/<subject>`). */
+const SEAM_LOGGERS: Record<SeamId, string> = {
+  'design-md': 'mstar/design-md-lint',
+  audit: 'mstar/audit-lint',
+  compound: 'mstar/compound-lint',
+  roles: 'mstar/roles-lint',
+}
+
+/** `index.md` / `README.md` are index files, not lintable documents
+ * (audit-<date>/ index, knowledge/README.md index) — excluded from every
+ * Task 3 seam scope so index writes never false-positive a Status-block /
+ * frontmatter lint. */
+function isIndexFile(path: string): boolean {
+  const base = basename(path)
+  return base === 'README.md' || base === 'index.md'
+}
+
+/** A `.md` document that is not an index file. */
+function isMarkdownDoc(path: string): boolean {
+  return path.endsWith('.md') && !isIndexFile(path)
+}
+
+/** Audit seam scope: `.md` plan files under a `plans/audit-*` directory
+ * (mstar-audit § Phase 4 `{PLAN_DIR}/audit-<date>/` layout; `{PLAN_DIR}`
+ * resolves under any `plans` segment). */
+function isAuditPlanTarget(path: string): boolean {
+  if (!isMarkdownDoc(path)) return false
+  const segments = resolve(path).split(sep)
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i] !== 'plans') continue
+    const next = segments[i + 1]
+    if (next !== undefined && next.startsWith('audit-')) return true
+  }
+  return false
+}
+
+/** Roles seam scope: `mstar-roles/SKILL.md` or any `.md` under
+ * `mstar-roles/references/` (any depth — the skill dir may live at any
+ * install location). */
+function isRolesTarget(path: string): boolean {
+  const segments = resolve(path).split(sep)
+  const idx = segments.indexOf('mstar-roles')
+  if (idx === -1) return false
+  const rest = segments.slice(idx + 1)
+  if (rest.length === 0) return false
+  return rest[0] === 'SKILL.md' || (rest[0] === 'references' && rest[rest.length - 1].endsWith('.md'))
+}
+
+/** The mstar-roles skill dir of a target the roles matcher accepted
+ * (unreachable `-1` falls back to the parent dir defensively). The split
+ * of an absolute path starts with an empty segment, so the rebuild must
+ * re-anchor at the root (path.join would drop the leading separator). */
+function rolesDirOf(path: string): string {
+  const segments = resolve(path).split(sep)
+  const idx = segments.indexOf('mstar-roles')
+  if (idx === -1) return dirname(path)
+  return idx === 0 ? sep : join(sep, ...segments.slice(1, idx + 1))
+}
+
+/** Whether a target is in the seam's artifact scope. Design-md matches by
+ * basename (the artifact is the file itself, wherever the design lives);
+ * audit matches the `plans/audit-*` layout; compound matches
+ * `{HARNESS_DIR}/knowledge/**` (inert without a harness dir); roles
+ * matches the mstar-roles skill layout. */
+function isSeamTarget(seam: SeamId, harnessDir: string | null, target: FsTarget): boolean {
+  const path = resolve(target.displayPath)
+  switch (seam) {
+    case 'design-md': {
+      const base = basename(path)
+      return base === 'DESIGN.md' || base === 'DESIGN.dark.md'
+    }
+    case 'audit':
+      return isAuditPlanTarget(path)
+    case 'compound': {
+      if (harnessDir === null) return false
+      return path.startsWith(resolve(join(harnessDir, 'knowledge')) + sep) && isMarkdownDoc(path)
+    }
+    case 'roles':
+      return isRolesTarget(path)
+  }
+}
+
+/** One audit secret finding mapped to a gate violation (mstar-audit Hard
+ * Rule 4: never reproduce secret values — reference file:line and type). */
+function auditSecretsViolations(findings: readonly { line: number; type: string }[], file: string): ValidationResult[] {
+  return findings.map((f) => ({
+    ok: false,
+    severity: 'high' as const,
+    code: 'audit.secrets.found',
+    message: `credential pattern "${f.type}" found on line ${f.line} in ${file} — audit plan files must never reproduce secret values (mstar-audit Hard Rule 4)`,
+    fix: 'redact the value; reference the file:line and credential type only',
+  }))
+}
+
+/**
+ * Validate a DESIGN.md / DESIGN.dark.md document: token frontmatter plus
+ * light/dark parity against the on-disk sibling when it exists (parity is
+ * inherently cross-file — the sibling is read at validation time; a dark
+ * write with no light sibling skips parity). Shared by the content-blind
+ * listener and the known-document branch.
+ */
+function validateDesignDoc(doc: string, path: string): GateResult {
+  const violations = [...validateDesignTokenFrontmatter(doc).violations]
+  const isDark = basename(path) === 'DESIGN.dark.md'
+  const sibling = join(dirname(path), isDark ? 'DESIGN.md' : 'DESIGN.dark.md')
+  if (existsSync(sibling)) {
+    const light = isDark ? readFileSync(sibling, 'utf8') : doc
+    const dark = isDark ? doc : readFileSync(sibling, 'utf8')
+    violations.push(...assertLightDarkParity(light, dark).violations)
+  }
+  return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
+}
+
+/**
+ * Validate an audit plan document: Status-block contract + secret scan.
+ * The findings summary (line + type only — mstar-audit Hard Rule 4 never
+ * reproduces secret values) rides along for the validate tool's `secrets`
+ * output field; the gate path reads only `ok`/`violations`.
+ */
+function validateAuditDoc(doc: string, path: string): GateResult & { findings: SecretFinding[] } {
+  const redacted = redactSecrets(doc, path)
+  const violations = [...validateAuditStatusBlocks(doc).violations]
+  violations.push(...auditSecretsViolations(redacted.findings, path))
+  return { ok: violations.length === 0, violations, findings: redacted.findings }
+}
+
+/**
+ * Validate a knowledge doc: schema.yaml frontmatter contract + referenced
+ * path/module existence. The repo root for `referenceExists` is derived as
+ * the parent of `{HARNESS_DIR}` — the plan-conventions discovery layout
+ * always places the harness dir directly under the repo root
+ * (`<repo>/.mstar`, `<repo>/.agents`, `<repo>/plans`).
+ * simplify: single-level harness layout — revisit if a nested harness root
+ * becomes an observed deployment.
+ */
+function validateCompoundDoc(doc: string, _path: string, harnessDir: string | null): GateResult {
+  const violations = [...validateSchemaYaml(doc).violations]
+  if (harnessDir !== null) {
+    violations.push(...referenceExists(dirname(harnessDir), doc).violations)
+  }
+  return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
+}
+
+/**
+ * Validate the mstar-roles skill-dir state: role mapping / parameter tables
+ * against the on-disk references layout, plus load-order declarations
+ * across every sibling `mstar-*` skill (unreadable sibling SKILL.md files
+ * are skipped — best-effort reads for a lint that must never take the gate
+ * down). The `skillsRoot` override exists for the validate tool (its
+ * explicit `skills_root` parameter); the gate path keeps the default
+ * (the parent of the roles dir).
+ * @param rolesDir - the mstar-roles skill directory.
+ * @param skillsRoot - directory scanned for sibling `mstar-*` skills
+ * (default: `dirname(rolesDir)`).
+ */
+function validateRolesState(rolesDir: string, skillsRoot: string = dirname(rolesDir)): GateResult {
+  const violations = [...validateRoleMapping(rolesDir).violations]
+  const skillTexts: Record<string, string> = {}
+  for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('mstar-')) continue
+    const skillFile = join(skillsRoot, entry.name, 'SKILL.md')
+    if (!existsSync(skillFile)) continue
+    try {
+      skillTexts[entry.name] = readFileSync(skillFile, 'utf8')
+    } catch {
+      // skip unreadable sibling — the mapping checks still stand
+    }
+  }
+  violations.push(...lintLoadOrder(skillTexts).violations)
+  return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
+}
+
+/** Run one seam's validator over a KNOWN document (or dir state for roles). */
+function validateSeamDoc(seam: SeamId, doc: string, path: string, harnessDir: string | null): GateResult {
+  switch (seam) {
+    case 'design-md':
+      return validateDesignDoc(doc, path)
+    case 'audit':
+      return validateAuditDoc(doc, path)
+    case 'compound':
+      return validateCompoundDoc(doc, path, harnessDir)
+    case 'roles':
+      return validateRolesState(rolesDirOf(path))
+  }
+}
+
+/** Best-effort advisory emit: a throwing consumer must not take the gate
+ * down with it (the error log is the durable signal). */
+function emitSeamAdvisory(
+  ctx: Context,
+  seam: SeamId,
+  target: string,
+  result: GateResult,
+  hard: boolean,
+  extra: { repair?: boolean; degraded?: boolean } = {},
+): void {
+  try {
+    ctx.emit('mstar/seam-lint', { seam, operation: 'write', target, result, hard, ...extra })
+  } catch (emitError) {
+    ctx.logger(SEAM_LOGGERS[seam]).error(`seam lint degraded advisory emit failed: ${(emitError as Error).message}`)
+  }
+}
+
+/**
+ * Gate one fs write-intent on a Task 3 artifact. The slot is content-blind
+ * (the intent waterfall carries only `(target, actor)` — never the incoming
+ * content), so the lint signal is the pre-write on-disk document
+ * (single-read). Enforcement policy (skill-lint gate mirror; documented in
+ * task-3-report.md):
+ *
+ * - missing file → pass (first create has no document to lint);
+ * - clean on-disk doc → silent pass (blocking valid writes would deadlock
+ *   normal authoring — the slot cannot see the incoming content);
+ * - violations + warn mode (default) → warn log + advisory + delegate;
+ * - violations + hard mode → REPAIR ESCAPE: the on-disk doc is ALREADY
+ *   invalid, so this write may BE the repair — allow with an error-level
+ *   log + repair advisory (`hard: true, repair: true`). A hard veto there
+ *   would deadlock the repairing write; the typed hard veto lives on the
+ *   known-document branch (`lintSeamWrite`, `SeamVetoError`) where the
+ *   document is known.
+ *
+ * The gate never throws; unexpected internal errors degrade to allow in
+ * BOTH modes with a loud log + `degraded: true` advisory (error-containment
+ * envelope — an untyped throw from the gate would spuriously block
+ * legitimate writes).
+ */
+function gateSeamIntent(ctx: Context, harnessDir: string | null, config: Config, seam: SeamId, target: FsTarget): void {
+  const logger = ctx.logger(SEAM_LOGGERS[seam])
+  try {
+    if (!isSeamTarget(seam, harnessDir, target)) return
+    const path = resolve(target.displayPath)
+    if (!existsSync(path)) return // first create — nothing to lint yet
+    let doc: string
+    try {
+      doc = readFileSync(path, 'utf8')
+    } catch (error) {
+      logger.error(`seam lint degraded to allow (cannot read ${path}): ${(error as Error).message}`)
+      emitSeamAdvisory(ctx, seam, target.displayPath, { ok: true, violations: [] }, false, { degraded: true })
+      return
+    }
+    const result = validateSeamDoc(seam, doc, path, harnessDir)
+    if (result.ok) return
+    const hard = resolveSeamHard(harnessDir, config)
+    const verdict = applyEnforcement(result, { hard })
+    if (verdict.hardBlocked) {
+      // Repair escape: the current document is already invalid; this write
+      // may BE the repair — allow, but make the degraded control loud.
+      logger.error(
+        `${basename(path)} write to ${target.displayPath} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}`,
+      )
+      emitSeamAdvisory(ctx, seam, target.displayPath, verdict, hard, { repair: true })
+    } else {
+      logger.warn(`${basename(path)} write to ${target.displayPath} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`)
+      emitSeamAdvisory(ctx, seam, target.displayPath, verdict, hard)
+    }
+  } catch (error) {
+    logger.error(`seam lint gate degraded to allow: ${(error as Error).message}`)
+    emitSeamAdvisory(ctx, seam, target.displayPath, { ok: true, violations: [] }, false, { degraded: true })
+  }
+}
+
+/**
+ * `fs/write-intent` listener for one seam gate. Registered with `prepend`
+ * for the same reachability reason as the status gate: the slot is
+ * first-wins by registration order (dsh-fs-policy README), so without
+ * prepend a policy plugin mounted earlier would make this gate unreachable.
+ * Every gate decision (warn advisory, repair escape, degraded allow) calls
+ * `next()` — the seam gates never own the intent decision and must not
+ * terminate the chain (fs-policy's observed-state CAS stays live in
+ * composed deployments).
+ */
+async function seamWriteIntentListener(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  seam: SeamId,
+  target: FsTarget,
+  _actor: object | undefined,
+  next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
+): Promise<FsWriteIntent | undefined> {
+  gateSeamIntent(ctx, harnessDir, config, seam, target)
+  return await next()
+}
+
+/**
+ * Typed hard-mode veto for the seam gates (the dsh fs-policy veto channel:
+ * "veto = throw"; the write tool turns the throw into an isError tool
+ * result carrying `{ name, code }`). Thrown ONLY by {@link lintSeamWrite} —
+ * the entry that lints a KNOWN incoming document (the brief's "hard veto
+ * via throw where the slot semantics allow" branch). The content-blind
+ * `fs/write-intent` listeners never throw: they cannot distinguish a repair
+ * from a re-violation, so hard mode degrades to the repair escape there
+ * (see {@link gateSeamIntent}).
+ */
+export class SeamVetoError extends Error {
+  /** Stable code for tool-result serialization (the `{ name, code }` convention). */
+  readonly code = 'seam.veto' as const
+  /** The seam whose gate vetoed the write. */
+  readonly seam: SeamId
+  /** The violations that caused the veto. */
+  readonly violations: readonly ValidationResult[]
+
+  constructor(seam: SeamId, target: string, violations: readonly ValidationResult[]) {
+    super(
+      `${target} write vetoed by Enforcement: hard — the incoming document fails the ${seam} seam lints:\n${violations.map(formatViolation).join('\n')}`,
+    )
+    this.name = 'SeamVetoError'
+    this.seam = seam
+    this.violations = violations
+  }
+}
+
+/**
+ * Enforce one seam's lints over a KNOWN document (the brief's "incoming
+ * doc when available" branch): `Enforcement: hard` + violations → throw the
+ * typed {@link SeamVetoError} (fs-policy veto channel); warn mode → return
+ * the gate for advisory logging. A repairing write carries a VALID incoming
+ * document and passes by construction — no repair escape is needed on this
+ * branch. The content-blind listener paths (where the incoming doc is never
+ * visible) route through {@link gateSeamIntent} instead, which applies the
+ * repair-escape decision.
+ * @param seam - the artifact seam whose validator runs.
+ * @param doc - the document about to be written (roles: ignored — the
+ * validator checks the whole mstar-roles dir state).
+ * @param options - target display path (veto message) + resolved hard flag
+ * + the plugin harness dir (compound reference checks; null-tolerant).
+ */
+export function lintSeamWrite(
+  seam: SeamId,
+  doc: string,
+  options: { target: string; hard: boolean; harnessDir?: string | null },
+): GateResult {
+  const result = validateSeamDoc(seam, doc, options.target, options.harnessDir ?? null)
+  if (options.hard && !result.ok) {
+    throw new SeamVetoError(seam, options.target, result.violations)
+  }
+  return result
+}
+
+/** {@link lintSeamWrite} bound to the design-md seam. */
+export function lintDesignMdWrite(
+  doc: string,
+  options: { target: string; hard: boolean; harnessDir?: string | null },
+): GateResult {
+  return lintSeamWrite('design-md', doc, options)
+}
+
+/** {@link lintSeamWrite} bound to the audit seam. */
+export function lintAuditWrite(
+  doc: string,
+  options: { target: string; hard: boolean; harnessDir?: string | null },
+): GateResult {
+  return lintSeamWrite('audit', doc, options)
+}
+
+/** {@link lintSeamWrite} bound to the compound seam. */
+export function lintCompoundWrite(
+  doc: string,
+  options: { target: string; hard: boolean; harnessDir?: string | null },
+): GateResult {
+  return lintSeamWrite('compound', doc, options)
+}
+
+/** {@link lintSeamWrite} bound to the roles seam. */
+export function lintRolesWrite(
+  doc: string,
+  options: { target: string; hard: boolean; harnessDir?: string | null },
+): GateResult {
+  return lintSeamWrite('roles', doc, options)
 }
 
 /**
@@ -791,6 +1243,34 @@ function assignmentHeaderValue(headerRegion: string, label: string): string | un
 function firstToken(value: string): string | undefined {
   const token = value.split(/\s+/)[0]
   return token === '' ? undefined : token
+}
+
+/**
+ * ALL header-region values of a repeated Assignment field label (bold or
+ * plain, optionally list-bulleted — the same line grammar as the engine
+ * `parseAssignmentFields`). Repeated `Worktree path` / `Working branch`
+ * lines declare the L2 parallel-track context (Task 2); empty values are
+ * dropped (consistent with {@link assignmentHeaderValue}: an empty line is
+ * an absent field, never a malformed track).
+ *
+ * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
+ * slice (qc1 F-001 / qc2 F-001): body-quoted field examples after a
+ * `# Task` / `# Target` / `---` marker never leak into the track
+ * declarations — the same header-region discipline the dispatch gate
+ * already honors.
+ * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
+ * @param label - the header field label to read (e.g. `Worktree path`).
+ */
+function assignmentHeaderValues(headerRegion: string, label: string): string[] {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*[ \\t]*:[ \\t]*(.*)$`)
+  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`)
+  const values: string[] = []
+  for (const line of headerRegion.split(/\r?\n/)) {
+    const value = (line.match(bold) ?? line.match(plain))?.[1]
+    if (value !== undefined && value.trim() !== '') values.push(value.trim())
+  }
+  return values
 }
 
 /** A header value that means "no value" (placeholder conventions). Type guard so callers narrow to `string`. */
@@ -953,32 +1433,154 @@ function leaseGateViolations(
 }
 
 /**
+ * One worktree-gate violation line (dsh-side codes live in the
+ * `worktree.l2.*` namespace beside the engine's `worktree.l1.*` /
+ * `worktree.l2.*` emit).
+ */
+function worktreeViolation(code: string, message: string, fix?: string): ValidationResult {
+  return { ok: false, severity: 'high', code, message, fix }
+}
+
+/**
+ * L2 within-plan track isolation (Task 2; engine `l2PreDispatchCheck`):
+ * when the Assignment declares parallel tracks — ≥2 `Worktree path` header
+ * entries, or the documented parallel-tracks marker (`Dispatch mode:
+ * parallel independent tracks`, mstar-phase-gates 并行标签 /
+ * parallel-writable-pre-dispatch.md step 5) — every declared track must
+ * carry an absolute, distinct worktree path whose checkout branch matches
+ * its Working branch, BEFORE the first concurrent writable dispatch
+ * (N parallel invokes ≠ isolation).
+ *
+ * Track pairing follows the Assignment grammar: one `Working branch` entry
+ * per `Worktree path`, OR a single `Working branch` line applying to every
+ * track (the same-branch multi-dir topology, mstar-branch-worktree
+ * 同分支多目录例外 — git forbids one branch in two linked worktrees, so the
+ * second checkout is a clone). Any other count mismatch is a violation.
+ *
+ * Pure over the header + the filesystem; the engine probes
+ * `git -C <path> branch --show-current` per valid track (bounded, fails
+ * closed). Header-region scoping (qc2 F-001): the caller passes the engine
+ * `assignmentHeaderRegion` slice only.
+ * @param header - `assignmentHeaderRegion(assignmentText)`.
+ */
+function worktreeL2Violations(header: string): ValidationResult[] {
+  const worktreePaths = assignmentHeaderValues(header, 'Worktree path')
+  const workingBranches = assignmentHeaderValues(header, 'Working branch')
+  const dispatchMode = assignmentHeaderValue(header, 'Dispatch mode')
+  // Parallel-track declaration: ≥2 Worktree path entries, or the documented
+  // canonical parallel-tracks marker (`Dispatch mode: parallel independent
+  // tracks`, mstar-phase-gates 并行标签). A single Worktree path is the
+  // serial norm and never triggers the L2 checklist (no track list to verify
+  // against). The marker match is exact (P3 T2 review — no substring
+  // widening): a Dispatch mode merely CONTAINING "parallel" (e.g. a serial
+  // mode with a parallel-flavored name) must not trigger the L2 checklist.
+  const isParallelTracksMarker = dispatchMode?.trim().toLowerCase() === 'parallel independent tracks'
+  if (worktreePaths.length < 2 && !isParallelTracksMarker) return []
+
+  const violations: ValidationResult[] = []
+  const tracks: WorktreeTrack[] = []
+  if (worktreePaths.length === 0 || workingBranches.length === worktreePaths.length) {
+    for (let i = 0; i < worktreePaths.length; i += 1) {
+      tracks.push({ worktreePath: worktreePaths[i]!, workingBranch: workingBranches[i] ?? '' })
+    }
+  } else if (workingBranches.length === 1) {
+    // One Working branch line applies to every track (同分支多目录例外).
+    for (const path of worktreePaths) tracks.push({ worktreePath: path, workingBranch: workingBranches[0]! })
+  } else {
+    violations.push(worktreeViolation(
+      'worktree.l2.track-count-mismatch',
+      `parallel-track declaration pairs ${worktreePaths.length} Worktree path entr${worktreePaths.length === 1 ? 'y' : 'ies'} with ${workingBranches.length} Working branch entries — every track needs its own absolute Worktree path AND Working branch (or one shared branch for all tracks)`,
+      'align the track counts in the Assignment header (one Worktree path + Working branch per track, or a single Working branch for all tracks)',
+    ))
+    const n = Math.min(worktreePaths.length, workingBranches.length)
+    for (let i = 0; i < n; i += 1) {
+      tracks.push({ worktreePath: worktreePaths[i]!, workingBranch: workingBranches[i]! })
+    }
+  }
+  violations.push(...l2PreDispatchCheck({ tracks }).violations)
+  return violations
+}
+
+/**
+ * L1 cross-plan isolation (Task 2; engine `l1PreDispatchCheck`): when the
+ * Assignment resolves a plan id AND status.json carries the L1 metadata —
+ * `metadata.control_worktree_path` plus the plan row's `execution_lease`
+ * (worktree_path + working_branch) — verify the control-vs-feature
+ * topology: control path recorded, lease worktree exists, lease worktree
+ * MUST differ from the control worktree, and the checked-out branch matches
+ * the lease Working branch.
+ *
+ * Fires ONLY when the metadata is present (the brief's "L1 checks (control
+ * vs feature path) when metadata present"): no harness dir, unresolvable
+ * plan id, missing status.json, absent control path, or a lease without the
+ * two path/branch fields all degrade to silence — the exec-bound lease gate
+ * owns lease SHAPE errors (sdd unverifiable/unreadable/plan-not-found) on
+ * the same verdict. The engine probe of the lease worktree is subprocess-
+ * based and fails closed.
+ * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when none).
+ * @param header - `assignmentHeaderRegion(assignmentText)`.
+ */
+function worktreeL1Violations(harnessDir: string | null, header: string): ValidationResult[] {
+  if (harnessDir === null) return []
+  const planId = planIdOf(header)
+  if (planId === undefined || planId === '') return []
+  const statusPath = join(harnessDir, STATUS_FILE)
+  if (!existsSync(statusPath)) return []
+  let doc: StatusDoc
+  try {
+    doc = readJson(statusPath) as StatusDoc
+  } catch {
+    return [] // unreadable status is the lease gate's report (sdd dispatches)
+  }
+  const metadata = asRecord(doc.metadata)
+  const controlWorktreePath = typeof metadata?.control_worktree_path === 'string' ? metadata.control_worktree_path : undefined
+  if (controlWorktreePath === undefined || controlWorktreePath.trim() === '') return []
+  const row = Array.isArray(doc.plans)
+    ? doc.plans.map(asRecord).find((r) => r?.id === planId || r?.plan_id === planId)
+    : undefined
+  const lease = asRecord(row?.execution_lease)
+  const leaseWorktreePath = typeof lease?.worktree_path === 'string' ? lease.worktree_path : undefined
+  const leaseWorkingBranch = typeof lease?.working_branch === 'string' ? lease.working_branch : undefined
+  if (
+    leaseWorktreePath === undefined || leaseWorktreePath.trim() === '' ||
+    leaseWorkingBranch === undefined || leaseWorkingBranch.trim() === ''
+  ) {
+    return [] // no lease metadata to compare — nothing to verify
+  }
+  return l1PreDispatchCheck({ controlWorktreePath, leaseWorktreePath, leaseWorkingBranch, planId }).violations
+}
+
+/**
  * The dispatch-gate validation core (opencode `validateDispatchAssignment`
  * parity — the SAME engine fns, so violation codes are identical): the field
  * gate (`validateAssignmentFields`; read-only roles skip the branch gate),
- * the anti-recursion precheck (Config binding) and the default-branch gate.
+ * the anti-recursion precheck (Config binding), the default-branch gate,
+ * and the worktree L1/L2 checks (Task 2 — additive beyond opencode parity;
+ * the lease gate is exec-bound and joins via {@link DshHostAdapter.dispatchGate}).
  * Extracted from `gateDispatch` so the `tools/pre-execute` listener and the
- * host adapter's `beforeDispatch` share ONE code path. The lease gate is NOT
- * here — it binds the ToolExecution context (session id) and joins via
- * {@link DshHostAdapter.dispatchGate} when the listener passes `exec`.
+ * host adapter's `beforeDispatch` share ONE code path.
  *
  * Header-region scoping (qc2 F-001): the engine `assignmentHeaderRegion`
  * slice is computed ONCE and feeds EVERY Assignment parser (fields, branch
- * forms, direct-on exception) — body-quoted field examples after a
- * `# Task` / `# Target` / `---` marker never leak into the header fields the
- * gate validates (the same discipline enforcement / plan-id / lease already
- * honor). Well-formed assignments (fields in the header) slice to the full
- * text, so their verdicts are unchanged.
+ * forms, direct-on exception, worktree tracks) — body-quoted field examples
+ * after a `# Task` / `# Target` / `---` marker never leak into the header
+ * fields the gate validates (the same discipline enforcement / plan-id /
+ * lease already honor). Well-formed assignments (fields in the header) slice
+ * to the full text, so their verdicts are unchanged.
  *
  * @returns the violations plus the writable flag (false for read-only
  * roles — the listener feeds it to the lease gate).
  */
 function dispatchGateCore(
   config: Config,
+  harnessDir: string | null,
   prompt: string,
 ): { violations: ValidationResult[]; writable: boolean | undefined } {
   const header = assignmentHeaderRegion(prompt)
-  const violations: ValidationResult[] = []
+  // Worktree L2 (declared parallel tracks) + L1 (control vs feature path
+  // when the plan metadata is present) — Task 2; both run on the header
+  // region slice, the engine parsers' single boundary.
+  const violations: ValidationResult[] = [...worktreeL2Violations(header), ...worktreeL1Violations(harnessDir, header)]
   const fields = parseAssignmentFields(header)
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
   const writable = isReadOnlyAssignmentRole(fields.executeAs ?? '') ? false : undefined
@@ -1162,14 +1764,15 @@ export interface DshHostAdapterOptions {
  *   hook shape is one `ValidationResult`; the gate's full violation list
  *   stays available on the fs-intent slot.
  * - `beforeDispatch(assignment)` — the dispatch gate validation path
- *   (validateAssignmentFields + branch gate + anti-recursion; read-only
- *   roles skip the branch gate). The lease gate stays listener-side: it
- *   binds the ToolExecution context (session id) this hook's contract does
- *   not carry. The parsed `AssignmentFields` form is normalized to the
- *   engine's own header grammar (lossless — the parsers read exactly these
- *   labels) and gated through the same text path. Enforcement is applied
- *   like the listener (opencode parity): the returned GateResult carries
- *   `hardBlocked` so a refusal-capable host can refuse the dispatch.
+ *   (validateAssignmentFields + branch gate + anti-recursion + worktree
+ *   L1/L2 checks; read-only roles skip the branch gate). The lease gate
+ *   stays listener-side: it binds the ToolExecution context (session id)
+ *   this hook's contract does not carry. The parsed `AssignmentFields` form
+ *   is normalized to the engine's own header grammar (lossless — the
+ *   parsers read exactly these labels) and gated through the same text path.
+ *   Enforcement is applied like the listener (opencode parity): the
+ *   returned GateResult carries `hardBlocked` so a refusal-capable host can
+ *   refuse the dispatch.
  * - `beforeMerge(lease)` — thin wrapper over the engine
  *   `validateIntegrationMergeLease` (reserve/validate the integration merge
  *   lease; the reservation WRITE into status.json is a P3 seam).
@@ -1222,16 +1825,16 @@ export class DshHostAdapter extends Service implements HostAdapter {
   /**
    * Shared dispatch-gate core (plugin-internal): the `tools/pre-execute`
    * listener and `beforeDispatch` route through this method — ONE
-   * validation code path (field gate + anti-recursion + branch gate;
-   * read-only roles skip the branch gate). The listener passes `exec` so
-   * the lease gate (ToolExecution-bound: session id, in-flight call) joins
-   * the same verdict; the host hook has no exec context and covers the
-   * field/branch/anti-recursion path.
+   * validation code path (field gate + anti-recursion + branch gate +
+   * worktree L1/L2 checks; read-only roles skip the branch gate). The
+   * listener passes `exec` so the lease gate (ToolExecution-bound: session
+   * id, in-flight call) joins the same verdict; the host hook has no exec
+   * context and covers the field/branch/anti-recursion/worktree path.
    * @param prompt - the Assignment text (engine header grammar).
    * @param exec - the in-flight delegation tool call (listener path only).
    */
   dispatchGate(prompt: string, exec?: ToolExecution): GateResult {
-    const { violations, writable } = dispatchGateCore(this.config, prompt)
+    const { violations, writable } = dispatchGateCore(this.config, this.harnessDir, prompt)
     if (exec !== undefined) {
       violations.push(...leaseGateViolations(this.harnessDir, exec, writable, prompt))
     }
@@ -1331,51 +1934,630 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
 }
 
 /**
+ * Locate the steering iteration compass (mirror of the engine's
+ * `resolveCompassEnforcement` scan): the FIRST `{ITERATION_DIR}/<id>/
+ * delivery-compass.md` whose frontmatter `status` is `active` or `locked`.
+ * Completed/status-less/archived compasses do not steer the repo — the
+ * pre-step gate row reports the iteration that is still in flight. Silent
+ * on any read failure (the catalog row is advisory).
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ */
+function steeringCompassPath(harnessDir: string): { iterationId: string; compassPath: string } | undefined {
+  const iterationsDir = resolveIterationDir(harnessDir)
+  if (!existsSync(iterationsDir)) return undefined
+  let entries
+  try {
+    entries = readdirSync(iterationsDir, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const compassPath = join(iterationsDir, entry.name, 'delivery-compass.md')
+    if (!existsSync(compassPath)) continue
+    let content: string
+    try {
+      content = readFileSync(compassPath, 'utf8')
+    } catch {
+      continue
+    }
+    // Frontmatter only: leading `---` fence through the closing fence; only
+    // steering compasses count (resolveCompassEnforcement parity).
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+    if (frontmatter === null || !/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(frontmatter[1]!)) continue
+    return { iterationId: entry.name, compassPath }
+  }
+  return undefined
+}
+
+/**
+ * The boot-cached iteration-gate catalog row (Task 2): `evaluatePhaseGate`
+ * over the control-path status.json + the steering delivery-compass.md,
+ * projected to the Task 1 tool result shape (`IterationGateView`). Computed
+ * ONCE at `apply()` and reused per pre-step (qc3 W-002 discipline — no disk
+ * I/O on the agent-loop hot path). A mid-session status/compass change does
+ * NOT re-evaluate until a config reload re-runs `apply` (HMR fiber
+ * restart) — the documented staleness tradeoff that keeps the hot path
+ * synchronous-I/O-free.
+ *
+ * Returns undefined when the row cannot be built at boot: no harness dir,
+ * missing status.json, no steering compass, or an unreadable/unparseable
+ * document (advisory degrade — the engine-status catalog still appends; a
+ * later tool call can re-evaluate on demand with explicit probes).
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ */
+function iterationGateSource(harnessDir: string | null): MstarIterationGateSource | undefined {
+  if (harnessDir === null) return undefined
+  const statusPath = join(harnessDir, STATUS_FILE)
+  if (!existsSync(statusPath)) return undefined
+  const compass = steeringCompassPath(harnessDir)
+  if (compass === undefined) return undefined
+  try {
+    const statusDoc = readJson(statusPath)
+    const compassDoc = parseCompassFrontmatterText(readFileSync(compass.compassPath, 'utf8'), compass.compassPath)
+    // No git probes at boot: the row reports what the two control docs
+    // prove (the tool remains the explicit-probe surface for branch checks).
+    const result = evaluatePhaseGate(statusDoc, compassDoc)
+    const gate: IterationGateView = {
+      transition: result.transition,
+      all_plans_done: result.allPlansDone,
+      ok: result.ok,
+      entry: iterationGateView(result.entry),
+      exit: iterationGateView(result.exit),
+      violations: result.violations.map(iterationViolationView),
+    }
+    return {
+      kind: 'mstar-iteration-gate',
+      form: 'catalog',
+      iterationId: compass.iterationId,
+      statusPath,
+      compassPath: compass.compassPath,
+      gate,
+    }
+  } catch {
+    return undefined // boot-time degrade — advisory row absent, no hardening
+  }
+}
+
+/** Model-facing rendering of the iteration-gate catalog (the `<mstar_iteration_gate>` block). */
+function renderIterationGateCatalog(source: MstarIterationGateSource): string {
+  const gate = source.gate
+  const codes = gate.violations.map((v) => v.code).join(', ')
+  return [
+    '<mstar_iteration_gate>',
+    `iteration: ${source.iterationId}`,
+    `transition: ${gate.transition}`,
+    `all plans done: ${gate.all_plans_done}`,
+    `gate: ${gate.ok ? 'PASS' : `FAIL (${codes})`}`,
+    '</mstar_iteration_gate>',
+  ].join('\n')
+}
+
+/**
  * Advisory `agent/pre-step` waterfall listener (roadmap §4 D4 — agent
  * catalog): delegates through `next()` (never `reject` — that would block the
- * step — and never replaces the delegated messages) and appends ONE
- * `mstar-engine-status` catalog MessageSource to the composed step messages,
- * so the durable session log carries the engine status row (model-visible ⟺
- * logged, MessageSource form). An aborted step publishes nothing: the
- * delegated decision is returned unchanged (tool-skill precedent; narrowed
- * abort race — qc2 S-001: an abort after delegation must not surface as a
- * turn failure).
+ * step — and never replaces the delegated messages) and appends the
+ * catalog rows to the composed step messages, so the durable session log
+ * carries them (model-visible ⟺ logged, MessageSource form):
+ * one `mstar-engine-status` row always, plus — when a boot-cached gate
+ * verdict exists (Task 2, `iterationGateSource`) — one `mstar-iteration-gate`
+ * row after it. An aborted step publishes nothing: the delegated decision
+ * is returned unchanged (tool-skill precedent; narrowed abort race — qc2
+ * S-001: an abort after delegation must not surface as a turn failure).
  *
  * Error containment (qc3 W-003): the append path is wrapped — a failure
  * (e.g. a downstream decider returning a non-iterable `messages` set, or a
  * throwing message factory) logs and returns the delegated decision
  * unchanged; the advisory listener never aborts the very step it observes.
  *
- * simplify: dev-time stub — every composed step carries the catalog row (no
- * per-session dedup: the real dsh-session log is unavailable at dev time).
- * Digest-gated re-emission against the durable log lands with the real
- * session seam at P3.
+ * simplify: dev-time stub — every composed step carries the catalog rows
+ * (no per-session dedup: the real dsh-session log is unavailable at dev
+ * time). Digest-gated re-emission against the durable log lands with the
+ * real session seam at P3.
  * @param ctx - registrant context (logger for the containment path).
- * @param source - the boot-resolved watermark source (computed once at apply,
- * qc3 W-002).
+ * @param source - the boot-resolved engine-status watermark source (qc3 W-002).
+ * @param iterationGate - the boot-cached iteration-gate source (undefined
+ * when no gate verdict was evaluable at boot — the row is then absent).
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
  */
 async function preStepCatalogListener(
   ctx: Context,
   source: MstarEngineStatusSource,
+  iterationGate: MstarIterationGateSource | undefined,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
   const decision = await next()
   if (decision.kind === 'reject' || payload.signal.aborted) return decision
   try {
-    const catalog = createUserMessage({
+    const messages = [...decision.messages]
+    messages.push(createUserMessage({
       source,
       content: [{ type: 'text', text: renderEngineStatusCatalog(source) }],
-    })
-    return { kind: 'enter', messages: [...decision.messages, catalog] }
+    }))
+    if (iterationGate !== undefined) {
+      messages.push(createUserMessage({
+        source: iterationGate,
+        content: [{ type: 'text', text: renderIterationGateCatalog(iterationGate) }],
+      }))
+    }
+    return { kind: 'enter', messages }
   } catch (error) {
     ctx.logger(CATALOG_LOGGER).error(
-      `engine-status catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
+      `engine-status/iteration-gate catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
     )
     return decision
   }
+}
+
+/**
+ * Map one engine `ValidationResult` to its lossless JSON view (`fix` omitted
+ * when absent so `additionalProperties: false` never sees an undefined key).
+ * The view interfaces live in `types.ts` (shared with the pre-step
+ * iteration-gate catalog row).
+ */
+function iterationViolationView(v: ValidationResult): IterationGateViolationView {
+  return { severity: v.severity, code: v.code, message: v.message, ...(v.fix !== undefined ? { fix: v.fix } : {}) }
+}
+
+/** Map one engine gate (`GateResult`) to its JSON view. */
+function iterationGateView(gate: GateResult): IterationGateListView {
+  return { ok: gate.ok, violations: gate.violations.map(iterationViolationView) }
+}
+
+/** Violation item schema shared by the iteration-gate output shape. */
+const ITERATION_VIOLATION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'nit'] },
+    code: { type: 'string', required: true },
+    message: { type: 'string', required: true },
+    fix: { type: 'string' },
+  },
+} as const
+
+/**
+ * Register the v2 seam model-facing tools (plan 20260808-dsh-seams-bundle
+ * Task 1): `mstar sdd …` / `mstar iteration gate` equivalents operating
+ * in-app against control-path artifacts.
+ *
+ * The registrations are deferred with `ctx.inject(['tools'], …)` — the same
+ * optional-unit pattern as dsh-tool-todo — so the plugin boots without the
+ * tools service (gates stay active) and registers when the composed dsh app
+ * provides `ctx.tools`. The fs-mutating tools declare
+ * `isConcurrencySafe: () => false` (exclusive — never overlap with sibling
+ * calls, matching the real registry's exclusive default).
+ * @param ctx - registrant context carrying the tool registry.
+ * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when the
+ * probe found none — the tools then let the engine probe from the cwd).
+ */
+function registerSddIterationTools(ctx: Context, harnessDir: string | null): void {
+  ctx.inject(['tools'], (toolsCtx) => {
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_sdd_workspace',
+      description:
+        'Resolve and ensure the SDD workspace dir for a plan id — {HARNESS_DIR}/sdd/<plan-id>/ ' +
+        '(the engine sddWorkspace, mirror of `mstar sdd workspace`). Fails closed when the app ' +
+        'runs from a linked feature worktree without control_root (never creates a second SDD ' +
+        'tree under a feature checkout).',
+      parameters: {
+        plan_id: {
+          type: 'string',
+          required: true,
+          description: 'Plan id whose SDD dir is resolved/created ({HARNESS_DIR}/sdd/<plan-id>/).',
+        },
+        control_root: {
+          type: 'string',
+          description:
+            'Control worktree repo root (CLI 2nd arg / MSTAR_CONTROL_ROOT). Required when the ' +
+            'app runs from a linked feature worktree without {HARNESS_DIR}/status.json.',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            sdd_dir: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: `sdd dir: ${value.sdd_dir}` }],
+      },
+      presentCall: args => ({ card: 'generic', title: 'Resolve SDD workspace', kind: 'other', rawInput: args.plan_id }),
+      // The tool creates a directory — exclusive (never parallel with siblings).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const sddDir = sddWorkspace(args.plan_id, {
+          ...(args.control_root !== undefined ? { controlRoot: args.control_root } : {}),
+          ...(harnessDir !== null ? { harnessDir } : {}),
+        })
+        return { sdd_dir: sddDir }
+      },
+    }))
+
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_sdd_task_brief',
+      description:
+        'Extract the `## Task N` section of a plan file into a brief file (engine taskBrief, ' +
+        'mirror of `mstar sdd task-brief`). Fence-aware: headings inside code fences are ignored.',
+      parameters: {
+        plan_file: {
+          type: 'string',
+          required: true,
+          description: 'Plan markdown file whose `## Task N` section is extracted.',
+        },
+        task_number: {
+          type: 'integer',
+          required: true,
+          description: '1-based task number whose brief is extracted.',
+        },
+        out_file: {
+          type: 'string',
+          description: 'Output file (default: {sdd_dir}/task-N-brief.md when sdd_dir is given).',
+        },
+        sdd_dir: {
+          type: 'string',
+          description: 'SDD dir used for the default out file — the in-app mirror of the SDD_DIR env the CLI reads.',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            brief_file: { type: 'string', required: true },
+            task_number: { type: 'integer', required: true },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: `task ${value.task_number} brief: ${value.brief_file}` }],
+      },
+      presentCall: args => ({ card: 'generic', title: 'Extract SDD task brief', kind: 'other', rawInput: args.plan_file }),
+      // The tool writes a file — exclusive (never parallel with siblings).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        if (args.out_file === undefined && args.sdd_dir === undefined) {
+          throw new Error('mstar_sdd_task_brief: pass out_file or sdd_dir (the in-app mirror of the SDD_DIR env the CLI reads)')
+        }
+        const out = taskBrief(
+          args.plan_file,
+          args.task_number,
+          args.out_file,
+          args.sdd_dir !== undefined ? { sddDir: args.sdd_dir } : {},
+        )
+        return { brief_file: out, task_number: args.task_number }
+      },
+    }))
+
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_iteration_gate',
+      description:
+        'Evaluate the iteration phase-transition gate against a status.json and a delivery-compass.md ' +
+        '(engine evaluatePhaseGate, mirror of `mstar iteration gate`): returns the transition ' +
+        '(phase-2-execute / phase-3-close / phase-4-pr-delivery), the pass/fail verdict, and the ' +
+        '§3.1 entry / §3.5 exit checklists with violation codes.',
+      parameters: {
+        status_path: {
+          type: 'string',
+          required: true,
+          description: 'Path to {HARNESS_DIR}/status.json.',
+        },
+        compass_path: {
+          type: 'string',
+          required: true,
+          description: 'Path to the iteration delivery-compass.md.',
+        },
+        branch: {
+          type: 'string',
+          description: 'Current branch probe (exit §3.5 item 5 — must equal the spec integration branch).',
+        },
+        integration: {
+          type: 'string',
+          description: 'Spec integration branch probe (exit §3.5 item 5).',
+        },
+        target: {
+          type: 'string',
+          description: 'PR base branch probe (exit §3.5 item 6 — must equal the compass target_branch).',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            transition: {
+              type: 'string',
+              required: true,
+              enum: ['phase-2-execute', 'phase-3-close', 'phase-4-pr-delivery'],
+            },
+            all_plans_done: { type: 'boolean', required: true },
+            ok: { type: 'boolean', required: true },
+            entry: {
+              type: 'object',
+              required: true,
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean', required: true },
+                violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+              },
+            },
+            exit: {
+              type: 'object',
+              required: true,
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean', required: true },
+                violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+              },
+            },
+            violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+          },
+        },
+        render: (_args, value) => {
+          const codes = value.violations.map((v) => v.code).join(', ')
+          const text = value.ok
+            ? `iteration gate: PASS (transition ${value.transition})`
+            : `iteration gate: FAIL (transition ${value.transition}) — ${codes}`
+          return [{ type: 'text', text }]
+        },
+      },
+      presentCall: args => ({ card: 'generic', title: 'Evaluate iteration phase gate', kind: 'other', rawInput: args.compass_path }),
+      presentResult: (_args, _result) => ({ card: 'generic', title: 'Iteration gate evaluation' }),
+      // Read-only evaluation — exclusive anyway (the engine result is a pure function of the docs).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        if (!existsSync(args.status_path)) throw new Error(`status file not found: ${args.status_path}`)
+        if (!existsSync(args.compass_path)) throw new Error(`compass file not found: ${args.compass_path}`)
+        const statusDoc = readJson(args.status_path)
+        const compassDoc = parseCompassFrontmatterText(readFileSync(args.compass_path, 'utf8'), args.compass_path)
+        const result = evaluatePhaseGate(statusDoc, compassDoc, {
+          currentBranch: args.branch,
+          specIntegrationBranch: args.integration,
+          prBaseBranch: args.target,
+        })
+        const view: IterationGateView = {
+          transition: result.transition,
+          all_plans_done: result.allPlansDone,
+          ok: result.ok,
+          entry: iterationGateView(result.entry),
+          exit: iterationGateView(result.exit),
+          violations: result.violations.map(iterationViolationView),
+        }
+        return view
+      },
+    }))
+  })
+}
+
+/**
+ * Register the Task 3 on-demand seam validation tools (plan
+ * 20260808-dsh-seams-bundle): `mstar design-md validate` / `mstar compound
+ * validate` CLI mirrors plus the audit / roles validators — thin wrappers
+ * running the engine in-app. The registrations are deferred with
+ * `ctx.inject(['tools'], …)` (same optional-unit pattern as the sdd tools),
+ * so the plugin boots without the tools service (gates stay active).
+ *
+ * `mstar_compound_validate` adds one `repo_root` param beyond the CLI
+ * (`mstar compound validate` has no reference-existence check) — the
+ * compound-refresh Phase 2 check the seam gate runs per write, offered
+ * on-demand. All tools are read-only evaluations — exclusive anyway
+ * (registry default; the engine results are pure functions of the docs).
+ */
+function registerSeamTools(ctx: Context, harnessDir: string | null): void {
+  ctx.inject(['tools'], (toolsCtx) => {
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_design_md_validate',
+      description:
+        'Validate a DESIGN.md in <dir> (mirror of `mstar design-md validate`): token frontmatter, ' +
+        'light/dark parity when DESIGN.dark.md exists, and the completeness level.',
+      parameters: {
+        dir: {
+          type: 'string',
+          required: true,
+          description: 'Directory containing DESIGN.md (and optionally DESIGN.dark.md).',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            level: { type: 'string', required: true, enum: ['BELOW_MVP', 'MVP', 'Standard', 'Production'] },
+            level_missing: { type: 'array', required: true, items: { type: 'string' } },
+            body_unverified: { type: 'boolean', required: true },
+            violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `design-md validate: ${value.ok ? 'PASS' : 'FAIL'} (level ${value.level})` },
+        ],
+      },
+      presentCall: args => ({ card: 'generic', title: 'Validate DESIGN.md', kind: 'other', rawInput: args.dir }),
+      // Read-only evaluation — exclusive anyway (registry default).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const abs = resolve(args.dir)
+        const lightPath = join(abs, 'DESIGN.md')
+        if (!existsSync(lightPath)) throw new Error(`design file not found: ${lightPath}`)
+        const light = readFileSync(lightPath, 'utf8')
+        // Shared gate validator (validateSeamDoc → gateSeamIntent path):
+        // token frontmatter + light/dark parity when the sibling exists.
+        // The tool layers the completeness level on top.
+        const result = validateDesignDoc(light, lightPath)
+        const level = completenessLevel(light)
+        return {
+          ok: result.ok,
+          level: level.level,
+          level_missing: level.missing,
+          body_unverified: level.bodyUnverified,
+          violations: result.violations.map(iterationViolationView),
+        }
+      },
+    }))
+
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_audit_validate',
+      description:
+        'Validate an audit plan file: Status-block contract (validateAuditStatusBlocks) plus the ' +
+        'credential scan of mstar-audit Hard Rule 4 (redactSecrets) — no CLI equivalent, the validator ' +
+        'behind `mstar audit scaffold`.',
+      parameters: {
+        plan_path: {
+          type: 'string',
+          required: true,
+          description: 'Audit plan file (plans/audit-<date>/NNN-*.md).',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+            secrets: {
+              type: 'array',
+              required: true,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  line: { type: 'integer', required: true },
+                  type: { type: 'string', required: true },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `audit validate: ${value.ok ? 'PASS' : 'FAIL'} (${value.secrets.length} secret finding${value.secrets.length === 1 ? '' : 's'})` },
+        ],
+      },
+      presentCall: args => ({ card: 'generic', title: 'Validate audit plan', kind: 'other', rawInput: args.plan_path }),
+      // Read-only evaluation — exclusive anyway (registry default).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const abs = resolve(args.plan_path)
+        if (!existsSync(abs)) throw new Error(`plan file not found: ${abs}`)
+        const text = readFileSync(abs, 'utf8')
+        // Shared gate validator (validateSeamDoc → gateSeamIntent path):
+        // Status-block contract + secret scan. The tool layers the findings
+        // summary (line + type only — secret values are never reproduced,
+        // mstar-audit Hard Rule 4) on top.
+        const result = validateAuditDoc(text, abs)
+        return { ok: result.ok, violations: result.violations.map(iterationViolationView), secrets: result.findings }
+      },
+    }))
+
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_compound_validate',
+      description:
+        'Validate a knowledge doc (mirror of `mstar compound validate`): schema.yaml frontmatter ' +
+        'contract; with knowledge_dir also assert the knowledge README index rows and guard the doc ' +
+        'inside the knowledge scope; reference existence checks run against repo_root when given, ' +
+        'else against the harness-derived root the seam gate uses (compound-refresh Phase 2 — the ' +
+        'knowledge_dir extras beyond the CLI).',
+      parameters: {
+        doc_path: {
+          type: 'string',
+          required: true,
+          description: 'Knowledge doc (markdown with YAML frontmatter).',
+        },
+        knowledge_dir: {
+          type: 'string',
+          description: 'Knowledge directory (enables index-row asserts + scope guard — CLI --knowledge-dir).',
+        },
+        repo_root: {
+          type: 'string',
+          description:
+            'Repo root for reference existence checks (default: the parent of the resolved {HARNESS_DIR} — the seam gate root; none when no harness dir resolves).',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: `compound validate: ${value.ok ? 'PASS' : 'FAIL'}` }],
+      },
+      presentCall: args => ({ card: 'generic', title: 'Validate knowledge doc', kind: 'other', rawInput: args.doc_path }),
+      // Read-only evaluation — exclusive anyway (registry default).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const abs = resolve(args.doc_path)
+        if (!existsSync(abs)) throw new Error(`knowledge doc not found: ${abs}`)
+        const text = readFileSync(abs, 'utf8')
+        // Shared gate validator (validateSeamDoc → gateSeamIntent path):
+        // schema contract + reference existence against the harness-derived
+        // root when the caller gives no explicit repo_root — the tool then
+        // defaults to the SAME checks the fs gate enforces. An explicit
+        // repo_root replaces the derived root (tool-only contract), and
+        // knowledge_dir layers the index/scope asserts on top.
+        const base = validateCompoundDoc(text, abs, args.repo_root !== undefined ? null : harnessDir)
+        const violations = [...base.violations]
+        if (args.repo_root !== undefined) {
+          violations.push(...referenceExists(resolve(args.repo_root), text).violations)
+        }
+        if (args.knowledge_dir !== undefined) {
+          const knowledgeDir = resolve(args.knowledge_dir)
+          violations.push(...assertIndexRows(knowledgeDir).violations)
+          violations.push(...scopeGuard(abs, [knowledgeDir]).violations)
+        }
+        return { ok: violations.length === 0, violations: violations.map(iterationViolationView) }
+      },
+    }))
+
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_roles_validate',
+      description:
+        'Validate the mstar-roles skill-dir state: role mapping / parameter tables against the on-disk ' +
+        'references layout (validateRoleMapping) plus load-order declarations across every sibling ' +
+        'mstar-* skill (lintLoadOrder; skills_root defaults to the parent of roles_dir).',
+      parameters: {
+        roles_dir: {
+          type: 'string',
+          required: true,
+          description: 'The mstar-roles skill directory (contains SKILL.md + references/).',
+        },
+        skills_root: {
+          type: 'string',
+          description: 'Directory containing the mstar-* skill dirs for load-order linting (default: parent of roles_dir).',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: `roles validate: ${value.ok ? 'PASS' : 'FAIL'}` }],
+      },
+      presentCall: args => ({ card: 'generic', title: 'Validate roles mapping', kind: 'other', rawInput: args.roles_dir }),
+      // Read-only evaluation — exclusive anyway (registry default).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const rolesDir = resolve(args.roles_dir)
+        if (!existsSync(join(rolesDir, 'SKILL.md'))) throw new Error(`roles dir not found: ${rolesDir}`)
+        // Shared gate validator (validateSeamDoc → gateSeamIntent path): role
+        // mapping + load-order lint. The tool only overrides the skills_root
+        // the gate derives as the parent of the roles dir.
+        const result = validateRolesState(
+          rolesDir,
+          args.skills_root !== undefined ? resolve(args.skills_root) : undefined,
+        )
+        return { ok: result.ok, violations: result.violations.map(iterationViolationView) }
+      },
+    }))
+  })
 }
 
 /**
@@ -1452,6 +2634,17 @@ export function apply(ctx: Context, config: Config): void {
   // `lintSkillWrite`).
   ctx.on('fs/write-intent', (target, actor, next) => skillWriteIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
 
+  // Task 3 artifact seam gates — fs/write-intent slots scoped per artifact
+  // (design-md / audit / compound / roles; same envelope: warn advisory
+  // default, hard-mode repair escape on the content-blind listener, typed
+  // `SeamVetoError` on the known-document branch, degrade-to-allow). The
+  // scopes are disjoint, so the four listeners never double-decide one
+  // target.
+  const seams: SeamId[] = ['design-md', 'audit', 'compound', 'roles']
+  for (const seam of seams) {
+    ctx.on('fs/write-intent', (target, actor, next) => seamWriteIntentListener(ctx, harnessDir, config, seam, target, actor, next), { prepend: true })
+  }
+
   // Dispatch gate — tools/pre-execute waterfall (refusal channel:
   // PreToolDecision.deny returned without next()). Registered prepend for the
   // same reachability reason as the fs slots (qc2 S-001): an earlier-mounted
@@ -1462,19 +2655,34 @@ export function apply(ctx: Context, config: Config): void {
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
   // (roadmap §4 D4 / P2 agent catalog): calls `next()` (never vetoes or
-  // replaces the delegated messages) and appends one `mstar-engine-status`
-  // catalog MessageSource to the composed step messages, so the session log
-  // carries the engine status row (model-visible ⟺ logged).
+  // replaces the delegated messages) and appends the engine-status row to
+  // the composed step messages, so the session log carries the engine
+  // status (model-visible ⟺ logged).
   //
-  // The watermark is computed ONCE at boot (qc3 W-002) — engine/plugin
-  // versions are process-immutable and compass enforcement is boot-resolved
-  // like the gates — so the pre-step hot path does no disk I/O (see
-  // engineStatusSource for the mid-session staleness tradeoff).
+  // Iteration-gate row (Task 2): the SAME listener appends a second
+  // `mstar-iteration-gate` catalog row when a gate verdict was evaluable at
+  // boot (control-path status.json + steering compass; engine
+  // evaluatePhaseGate, Task 1 tool result shape).
+  //
+  // Both watermarks are computed ONCE at boot (qc3 W-002) — engine/plugin
+  // versions are process-immutable, compass enforcement is boot-resolved
+  // like the gates, and the iteration gate is boot-evaluated — so the
+  // pre-step hot path does no disk I/O (see engineStatusSource /
+  // iterationGateSource for the mid-session staleness tradeoff).
   const catalogSource = engineStatusSource(harnessDir)
   // The manifest fallback is never silent (qc2 S-005): a '0.0.0' plugin
   // version would watermark every catalog row wrongly, so it logs at boot.
   if (catalogSource.pluginVersion === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
-  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, payload, next))
+  const iterationGate = iterationGateSource(harnessDir)
+  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, iterationGate, payload, next))
+
+  // v2 seams — sdd + iteration model-facing tools (plan 20260808-dsh-seams-bundle
+  // Task 1): `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
+  registerSddIterationTools(ctx, harnessDir)
+
+  // Task 3 seam tools — on-demand `mstar_*_validate` equivalents
+  // (design-md / audit / compound / roles).
+  registerSeamTools(ctx, harnessDir)
 }

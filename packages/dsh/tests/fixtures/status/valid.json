@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "updated_at": "2026-08-08",
+  "plans": [
+    {
+      "id": "fixture-plan-1",
+      "title": "Fixture plan",
+      "status": "Todo",
+      "file": "plans/fixture.md"
+    }
+  ],
+  "residual_findings": {},
+  "metadata": {}
+}

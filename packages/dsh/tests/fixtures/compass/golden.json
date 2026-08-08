@@ -1,0 +1,28 @@
+{
+  "delivery-compass.md": {
+    "iteration_id": "v2.1.0",
+    "start_date": "2026-08-08",
+    "end_date": "2026-08-14",
+    "status": "active",
+    "iteration_base_branch": "main",
+    "target_branch": "main",
+    "owner": "some one",
+    "plans": ["plan-20260808-dsh-seams-bundle", "plan-20260808-other"]
+  },
+  "flow-plans.md": {
+    "iteration_id": "v9.9.9",
+    "start_date": "2026-08-01",
+    "status": "locked",
+    "iteration_base_branch": "dev-dsh",
+    "target_branch": null,
+    "plans": ["plan-a", "plan b"]
+  },
+  "empty-plans.md": {
+    "iteration_id": "v9.9.8",
+    "start_date": "2026-07-01",
+    "status": "active",
+    "iteration_base_branch": "main",
+    "target_branch": "main",
+    "plans": []
+  }
+}
