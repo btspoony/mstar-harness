@@ -25,6 +25,10 @@ import * as plugin from '../src/index.ts'
 export interface BootOptions {
   /** `Enforcement` override for the plugin Config (`hard` | `soft`). */
   enforcement?: 'hard' | 'soft'
+  /** Delegation tool names the dispatch gate matches (Config `dispatchTools`). */
+  dispatchTools?: string[]
+  /** The dispatching agent's own harness role (Config `dispatchBinding`). */
+  dispatchBinding?: string
   /** App root override (default: a fresh temp dir). */
   root?: string
 }
@@ -82,6 +86,8 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const configPath = join(root, 'cordis.yml')
   const lines = ["- name: '@mstar-harness/dsh'", '  config:', `    harnessDir: ${JSON.stringify(harnessDir)}`]
   if (options.enforcement !== undefined) lines.push(`    enforcement: ${options.enforcement}`)
+  if (options.dispatchTools !== undefined) lines.push(`    dispatchTools: ${JSON.stringify(options.dispatchTools)}`)
+  if (options.dispatchBinding !== undefined) lines.push(`    dispatchBinding: ${JSON.stringify(options.dispatchBinding)}`)
   await writeFile(configPath, lines.join('\n') + '\n')
 
   const ctx = new Context()

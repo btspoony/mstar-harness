@@ -13,15 +13,25 @@ import { basename, dirname, join, resolve } from 'node:path'
 import type { Context } from 'cordis'
 import z from 'schemastery'
 import {
+  antiRecursionPrecheck,
   applyEnforcement,
+  assertDefaultBranchProtected,
+  assignmentHeaderRegion,
   findingsCleanupGate,
+  isReadOnlyAssignmentRole,
+  parseAssignmentBranchForms,
+  parseAssignmentFields,
+  parseBranchPolicyDirectOnBranch,
+  parseEnforcementFlag,
   readJson,
   resolveCompassEnforcement,
   resolveHarnessDir,
+  validateAssignmentFields,
   validateStatus,
 } from '@mstar-harness/engine'
 import type { GateResult, StatusDoc, ValidationResult } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
+import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { DshMstar } from './service.ts'
 
 /** Cordis function-plugin name registered by the Loader. */
@@ -40,6 +50,19 @@ const LOGGER_NAME = 'mstar/status-gate'
 /** Canonical harness status file name (mstar-plan-artifacts status.json). */
 const STATUS_FILE = 'status.json'
 
+/** Logger label for the dispatch gate (dsh logger naming: `<scope>/<subject>`). */
+const DISPATCH_LOGGER = 'mstar/dispatch-gate'
+
+/** Default delegation tool names the dispatch gate matches (tool-subagent default id). */
+const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
+
+/** `## Assignment` heading marker (opencode parity — shape guard only). */
+const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
+
+/** Shape-guard match of an Assignment header field (opencode parity). */
+const ASSIGNMENT_FIELD_RE =
+  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm
+
 /** Plugin configuration. */
 export interface Config {
   /**
@@ -55,12 +78,31 @@ export interface Config {
    * frontmatter decides, warn-only when no compass hardens (never a global default).
    */
   enforcement?: 'hard' | 'soft'
+  /**
+   * Model-facing delegation tool name(s) the dispatch gate matches. The dsh
+   * subagent tool registers as `subagent` by default, but its `toolName`
+   * config may rename instances (tool-subagent README: each instance needs a
+   * distinct name), so the match list is deployment-settable. Defaults to
+   * `['subagent']`.
+   */
+  dispatchTools?: string[]
+  /**
+   * The dispatching agent's own harness role/type (e.g. `fullstack-dev`), used
+   * as the anti-recursion binding: an Assignment whose `Execute as` equals this
+   * role is a self-dispatch (critical violation — leaf executors must not
+   * re-invoke their own role). dsh exposes no agent role on the tool-execution
+   * context, so the deployment declares it. Absent → the anti-recursion
+   * precheck is skipped (an empty binding is not self-recursion).
+   */
+  dispatchBinding?: string
 }
 
-/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery). */
+/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall), so both dispatch keys preserve omission via `.default(undefined)`. */
 export const Config: z<Config> = z.object({
   harnessDir: z.string(),
   enforcement: z.union(['hard', 'soft']),
+  dispatchTools: z.array(z.string()).default(undefined as unknown as string[]),
+  dispatchBinding: z.string().default(undefined as unknown as string),
 })
 
 /**
@@ -111,8 +153,33 @@ export interface StatusGateAdvisory {
   hard: boolean
 }
 
+/**
+ * Advisory emitted on warn-mode dispatch-gate passes (Task 4; the Task 3
+ * `mstar/status-gate` decision reused for the dispatch gate — dsh's
+ * `agent/status` lifecycle event stays untouched). Consumers (later tasks,
+ * catalogs) observe this event for model-visible/session-log surfacing.
+ */
+export interface DispatchGateAdvisory {
+  /** The matched delegation tool name. */
+  tool: string
+  /** The Assignment's declared `Execute as` ('' when missing). */
+  role: string
+  /** The gate verdict (warn-mode: `hardBlocked` is false). */
+  result: GateResult
+  /** Whether hard enforcement is on (advisory events are warn-mode by construction). */
+  hard: boolean
+}
+
 declare module 'cordis' {
   interface Events {
+    /**
+     * Advisory: a subagent dispatch passed the dispatch gate in warn mode
+     * (violations logged, dispatch allowed). Emitted only when the Assignment
+     * has violations; clean passes stay silent.
+     * @param payload - the gate verdict and dispatch identity.
+     * @mode emit
+     */
+    'mstar/dispatch-gate'(payload: DispatchGateAdvisory): void
     /**
      * Advisory: a `{HARNESS_DIR}/status.json` write/edit intent passed the
      * status gate in warn mode (violations logged, write allowed). Emitted
@@ -248,9 +315,128 @@ async function editIntentListener(
 }
 
 /**
+ * True when the text looks like an Assignment (opencode parity: `## Assignment`
+ * heading or at least one core field line). Non-Assignment delegation prompts
+ * stay silent — no false-positive warnings.
+ */
+function isAssignmentShaped(assignmentText: string): boolean {
+  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null
+}
+
+/**
+ * Resolve the hard-enforcement flag for one dispatch: explicit Config override
+ * wins, else the Assignment's OWN `Enforcement: hard` header flag (opencode
+ * parity — header region only, a body-quoted example never hardens), else the
+ * iteration compass frontmatter, else warn-only.
+ */
+function resolveDispatchHard(harnessDir: string | null, config: Config, assignmentText: string): boolean {
+  if (config.enforcement === 'hard') return true
+  if (config.enforcement === 'soft') return false
+  if (parseEnforcementFlag(assignmentHeaderRegion(assignmentText)).hard) return true
+  return harnessDir !== null && resolveCompassEnforcement(harnessDir).hard
+}
+
+/** The hard-mode veto reason: one line per violation + the refusal channel. */
+function denyReason(tool: string, verdict: GateResult): string {
+  return [
+    `subagent dispatch (${tool}) blocked by Enforcement: hard — the Assignment fails the dispatch gate`,
+    ...verdict.violations.map(formatViolation),
+    'refusal channel: tools/pre-execute PreToolDecision { kind: \'deny\' }; skill: mstar-dispatch-gates',
+  ].join('\n')
+}
+
+/**
+ * Run the dispatch gate over one delegation tool call (opencode
+ * `validateDispatchAssignment` parity — the SAME engine fns, so violation
+ * codes are identical). Returns the veto decision in hard mode, undefined
+ * otherwise (warn mode: log + advisory emit; the caller delegates via `next()`).
+ * Non-subagent tools, non-Assignment prompts and malformed payloads are pure
+ * pass-through (undefined).
+ */
+function gateDispatch(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  exec: ToolExecution,
+): PreToolDecision | undefined {
+  const toolName = exec.name
+  if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
+  const args = asRecord(exec.arguments)
+  const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
+  if (prompt === undefined || !isAssignmentShaped(prompt)) return undefined
+
+  const violations: ValidationResult[] = []
+  const fields = parseAssignmentFields(prompt)
+  // Read-only roles (scout/explore) skip the branch-form gate entirely.
+  const writable = isReadOnlyAssignmentRole(fields.executeAs ?? '') ? false : undefined
+  violations.push(...validateAssignmentFields(prompt, { writable }).violations)
+  // Anti-recursion NEVER red line — binding = the dispatching agent's own
+  // type (Config-declared; dsh exposes no agent role on the execution context).
+  const binding = config.dispatchBinding ?? ''
+  if (binding.trim() !== '') {
+    violations.push(...antiRecursionPrecheck(binding, fields.executeAs ?? '').violations)
+  }
+  // Default-branch gate — the checked branch comes from the Assignment's own
+  // branch forms, else $MSTAR_WORKING_BRANCH (opencode parity); the direct-on
+  // exception is honored only when its branch is the one being checked.
+  if (writable !== false) {
+    const forms = parseAssignmentBranchForms(prompt)
+    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH
+    if (branch !== undefined && branch.trim() !== '') {
+      const directOnException = parseBranchPolicyDirectOnBranch(prompt) === branch.trim()
+      violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations)
+    }
+  }
+
+  const result: GateResult = { ok: violations.length === 0, violations }
+  const hard = resolveDispatchHard(harnessDir, config, prompt)
+  const verdict = applyEnforcement(result, { hard })
+  if (verdict.hardBlocked) {
+    ctx.logger(DISPATCH_LOGGER).error(
+      `subagent dispatch (${toolName}) vetoed (Enforcement: hard):\n${verdict.violations.map(formatViolation).join('\n')}`,
+    )
+    return { kind: 'deny', reason: denyReason(toolName, verdict) }
+  }
+  if (!verdict.ok) {
+    ctx.logger(DISPATCH_LOGGER).warn(
+      `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
+    )
+    ctx.emit('mstar/dispatch-gate', { tool: toolName, role: fields.executeAs ?? '', result: verdict, hard })
+  }
+  return undefined
+}
+
+/**
+ * `tools/pre-execute` listener. The waterfall refusal channel is the returned
+ * decision: a deny is returned WITHOUT calling `next()` (short-circuits the
+ * chain — downstream listeners and the registry default never run); every
+ * other path calls `next()` to delegate (the registry's default is
+ * `{ kind: 'allow' }`). Engine failures degrade to an error log + allow in
+ * BOTH modes (hard gates are opt-in — an engine failure must not harden a
+ * workflow that was soft; opencode parity). `next()` itself is invoked outside
+ * the guard so a downstream rejection propagates untouched.
+ */
+async function preExecuteListener(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  exec: ToolExecution,
+  next: () => Promise<PreToolDecision>,
+): Promise<PreToolDecision> {
+  let veto: PreToolDecision | undefined
+  try {
+    veto = gateDispatch(ctx, harnessDir, config, exec)
+  } catch (error) {
+    ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted: ${(error as Error).message}`)
+  }
+  return veto ?? await next()
+}
+
+/**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
  * engine, expose the engine surface as `ctx.dshMstar`, and register the status
- * hard gate on the fs intent waterfalls.
+ * hard gate on the fs intent waterfalls + the dispatch hard gate on
+ * `tools/pre-execute`.
  * @param ctx - Cordis context of the composed app.
  * @param config - validated plugin configuration.
  */
@@ -264,4 +450,11 @@ export function apply(ctx: Context, config: Config): void {
   // decider runs before dsh-fs-policy regardless of mount order).
   ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
   ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
+
+  // Dispatch hard gate — tools/pre-execute waterfall (refusal channel:
+  // PreToolDecision.deny returned without next(); unlike the fs slots there is
+  // no single-slot first-wins convention, so plain registration suffices — a
+  // deny short-circuits the chain regardless of order and the allow path
+  // delegates to the remaining policy listeners).
+  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, exec, next))
 }
