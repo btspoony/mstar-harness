@@ -1,22 +1,36 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**1.8.9**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.0.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **1.8.9** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **1.8.9** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **1.8.9** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **1.8.9** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **1.8.9** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **1.8.9** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **1.8.9** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.9** |
-| Agent Plugins 清单 | `plugin.json` | **1.8.9** |
+| monorepo 根 | `morning-star`（`package.json`） | **2.0.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.0.0** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.0.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.0.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.0.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **2.0.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.0.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.0.0** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.0** |
+| Agent Plugins 清单 | `plugin.json` | **2.0.0** |
 
-各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)。
+各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [2.0.0] - 2026-08-08
+
+### Harness
+
+- **移除 Bash SDD/rollup 脚本（引擎 CLI 成为文档化路径）**：删除 `skills/mstar-sdd/scripts/{sdd-workspace,task-brief,review-package}` 与 `skills/mstar-plan-artifacts/scripts/tech-debt-rollup.sh`。技能正文改为文档化 `mstar sdd workspace|task-brief|review-package` 与引擎 `techDebtRollup` import（schema 门禁仍为 `mstar status validate`）；奇偶校验测试改为对照由已证明 byte-parity 的移植产物（slice 2）捕获的 golden fixtures。
+- 新增 **`@mstar-harness/engine`** 包脚手架：版本对齐的工作区库（仅 `zod` + `ajv` + `node:*`，无 `bin`），提供类型化 `ValidationResult` 与 `readHarnessVersion()` 占位 core，并纳入发布面清单（10 → 11）、changelog 组装与根 workspaces。
+- **Engine 加固（slice 1 QC 修复波）**：lease 位置/孤儿/双写校验（`lease.verify.*`）移入 `@mstar-harness/engine`（CLI `mstar lease verify` 改为薄包装）；`archiveResiduals` 增加 plan-id 路径穿越防护、状态写锁与追加去重；`withStatusWriteLock` 增加所有权防护（绝不删除其他 writer 的 lockdir）、`holder.pid` 崩溃诊断文件与快速失败的重入检测；`readHarnessVersion` 优先读取模块自身 manifest（发布安装不再回退为 `0.0.0`）；`tech-debt-rollup` 奇偶校验精确镜像 jq `//`（`false`/`0` 边界用例对照 bash oracle）；新增残项关闭完整性（`closed_at` + `closure_note`）与 plan 行 `Done` ⇒ 无 lease 不变量。发布脚本在根 changelog 头部确保 `@mstar-harness/engine` 注册表行与包历史链接。
+- **Harness Workflow Engine 定位（iteration v2.0.0）**：统一 7 个插件 manifest 与 4 个包 manifest 的引擎优先描述；根 plugin.json 新增 `workflow-engine` / `workflow-enforcement` / `deterministic-workflow` / `harness-workflow` 关键词；README.md / README_CN.md 围绕「确定性工作流门禁由 TS 引擎强制执行（而非仅靠 prompt）、判断留在 `mstar-*` skills」重新表述，并新增交付内容表（Harness Workflow Engine / mstar CLI / `mstar-*` skills / 宿主适配）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 2.0.0**。
 
 ## [1.8.9] - 2026-08-07
 

@@ -2,23 +2,37 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **1.8.9** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **2.0.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **1.8.9** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **1.8.9** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **1.8.9** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **1.8.9** |
-| Codex plugin | `.codex-plugin/plugin.json` | **1.8.9** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **1.8.9** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **1.8.9** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **1.8.9** |
-| Agent Plugins manifest | `plugin.json` | **1.8.9** |
+| Monorepo root | `morning-star` (`package.json`) | **2.0.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.0** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **2.0.0** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.0** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.0** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.0** |
+| Agent Plugins manifest | `plugin.json` | **2.0.0** |
 
-Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md).
+Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [2.0.0] - 2026-08-08
+
+### Harness
+
+- **Bash SDD/rollup scripts removed (engine CLI is the documented path)**: `skills/mstar-sdd/scripts/{sdd-workspace,task-brief,review-package}` and `skills/mstar-plan-artifacts/scripts/tech-debt-rollup.sh` are deleted. Skill text now documents `mstar sdd workspace|task-brief|review-package` and the engine `techDebtRollup` import (`mstar status validate` remains the schema gate); parity tests compare engine output against stored golden fixtures captured from the byte-proven ports (slice 2).
+- Added the **`@mstar-harness/engine`** package scaffold: a version-aligned workspace library (`zod` + `ajv`, `node:*` only, no `bin`) with a typed `ValidationResult` + `readHarnessVersion()` placeholder core, wired into the release surface list (10 → 11), changelog assembly, and root workspaces.
+- **Engine hardening (QC fix wave, slice 1)**: lease location/orphan/dual-write verify (`lease.verify.*`) moved into `@mstar-harness/engine` (CLI `mstar lease verify` is now a thin wrapper); `archiveResiduals` gained a plan-id path-traversal guard, the status write lock, and append dedup; `withStatusWriteLock` gained an ownership guard (never removes another writer's lockdir), a `holder.pid` crash-diagnosis file, and fast-fail reentrancy detection; `readHarnessVersion` reads the module's own manifest first (published installs no longer regress to `0.0.0`); `tech-debt-rollup` parity now mirrors jq `//` exactly (`false`/`0` edges tested against the bash oracle); residual closed-lifecycle completeness (`closed_at` + `closure_note`) and plan-row `Done` ⇒ no-lease invariants added. Release prep now ensures the `@mstar-harness/engine` registry row + package-history link in root changelog heads.
+- **Harness Workflow Engine positioning (iteration v2.0.0)**: unified engine-first descriptions across the 7 plugin manifests and the 4 package manifests; added `workflow-engine` / `workflow-enforcement` / `deterministic-workflow` / `harness-workflow` keywords to the root plugin manifest; re-framed README.md / README_CN.md around deterministic workflow gates enforced by a TS engine (not prompts alone) with judgment staying in `mstar-*` skills, plus a What-ships table (Harness Workflow Engine / mstar CLI / `mstar-*` skills / host adapters).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 2.0.0**.
 
 ## [1.8.9] - 2026-08-07
 
