@@ -8,8 +8,8 @@
  * @module @mstar-harness/dsh
  */
 
-import { existsSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { Service, type Context } from 'cordis'
 import z from 'schemastery'
 import {
@@ -27,13 +27,17 @@ import {
   executionModeToN,
   findingsCleanupGate,
   isReadOnlyAssignmentRole,
+  lintFiveQuestion,
+  lintFrontmatter,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
   readJson,
+  resolveAssetPath,
   resolveCompassEnforcement,
   resolveHarnessDir,
+  resolveSkillRoot,
   validateAssignmentFields,
   validateExecutionLease,
   validateIntegrationMergeLease,
@@ -80,6 +84,9 @@ const DISPATCH_LOGGER = 'mstar/dispatch-gate'
 
 /** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
 const HOST_LOGGER = 'mstar/host-adapter'
+
+/** Logger label for the skill lint gate (dsh logger naming: `<scope>/<subject>`). */
+const SKILL_LINT_LOGGER = 'mstar/skill-lint'
 
 /** Default delegation tool names the dispatch gate matches (tool-subagent default id). */
 const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
@@ -202,6 +209,37 @@ export interface DispatchGateAdvisory {
   degraded?: boolean
 }
 
+/**
+ * Advisory emitted on skill-lint gate decisions (the `mstar/status-gate`
+ * advisory pattern reused for the skill-authoring gate — Task 4). Emitted
+ * when a `SKILL.md` write-intent under a configured skill root finds lint
+ * violations in the pre-write on-disk document (warn mode), when hard mode
+ * allows an ALREADY-invalid document as a repair escape, and when the gate
+ * degrades to allow after an unexpected internal error. Clean passes stay
+ * silent.
+ *
+ * The gate NEVER throws on the listener path (status-gate repair-escape
+ * semantics): the intent waterfall carries no incoming content, so the only
+ * lint signal is the pre-write on-disk state; the typed hard veto lives on
+ * the incoming-document branch (`lintSkillWrite`, `SkillLintVetoError`).
+ */
+export interface SkillLintAdvisory {
+  /** Which intent slot passed the gate (write-intent only — skills have no linted edit slot). */
+  operation: 'write'
+  /** `displayPath` of the guarded SKILL.md. */
+  target: string
+  /** Canonical skill-root form of the target (Task 1 frozen `resolveSkillRoot('dsh', …)` form). */
+  canonical: string
+  /** The lint verdict (warn-mode: `hardBlocked` false; hard repair escape: `hardBlocked` true). */
+  result: GateResult
+  /** Resolved enforcement flag: false for warn-mode advisories, true for hard-mode repair escapes. */
+  hard: boolean
+  /** True when hard mode allowed a write to an ALREADY-invalid document (repair escape). */
+  repair?: boolean
+  /** True when the gate errored internally and degraded to allow (error-containment envelope). */
+  degraded?: boolean
+}
+
 declare module 'cordis' {
   interface Context {
     /**
@@ -230,6 +268,16 @@ declare module 'cordis' {
      * @mode emit
      */
     'mstar/status-gate'(payload: StatusGateAdvisory): void
+    /**
+     * Advisory: a `SKILL.md` write-intent under a configured skill root
+     * found skill-authoring lint violations in the pre-write on-disk
+     * document (warn mode), was allowed as a hard-mode repair escape, or
+     * degraded to allow. Emitted only when the current document has
+     * violations; clean passes stay silent.
+     * @param payload - the lint verdict and target.
+     * @mode emit
+     */
+    'mstar/skill-lint'(payload: SkillLintAdvisory): void
   }
 }
 
@@ -420,6 +468,237 @@ async function editIntentListener(
   next: () => { version: FsVersion } | undefined | Promise<{ version: FsVersion } | undefined>,
 ): Promise<{ version: FsVersion } | undefined> {
   gateStatusIntent(ctx, harnessDir, config, adapter, 'edit', target)
+  return await next()
+}
+
+/**
+ * Typed hard-mode veto for the skill lint gate (the dsh fs-policy veto
+ * channel: "veto = throw"; the write tool turns the throw into an isError
+ * tool result carrying `{ name, code }`). Thrown ONLY by
+ * {@link lintSkillWrite} — the entry that lints a KNOWN incoming document
+ * (the brief's "against the incoming doc when available" branch). The
+ * content-blind `fs/write-intent` listener never throws: it cannot
+ * distinguish a repair from a re-violation, so hard mode degrades to the
+ * status-gate repair escape there (see {@link gateSkillIntent}).
+ */
+export class SkillLintVetoError extends Error {
+  /** Stable code for tool-result serialization (the `{ name, code }` convention). */
+  readonly code = 'skill-lint.veto' as const
+  /** The lint violations that caused the veto. */
+  readonly violations: readonly ValidationResult[]
+
+  constructor(target: string, violations: readonly ValidationResult[]) {
+    super(
+      `SKILL.md write to ${target} vetoed by Enforcement: hard — the incoming document fails the skill-authoring lints:\n${violations.map(formatViolation).join('\n')}`,
+    )
+    this.name = 'SkillLintVetoError'
+    this.violations = violations
+  }
+}
+
+/**
+ * Strip a leading `---`-fenced YAML frontmatter block, returning the body
+ * (five-question lint takes the body; the frontmatter lint takes the full
+ * doc — CLI `mstar skill lint` parity, same semantics).
+ */
+function stripFrontmatter(text: string): string {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
+  if (lines.length === 0 || lines[0].trim() !== '---') return text
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') return lines.slice(i + 1).join('\n')
+  }
+  return text
+}
+
+/**
+ * Lint one SKILL.md document with the engine skill-authoring lints
+ * (`lintFrontmatter` + `lintFiveQuestion` — the CLI `mstar skill lint`
+ * combination; violation codes `lint.frontmatter.*` /
+ * `skill-authoring.five-question.*`). Pure: no enforcement, no I/O.
+ * @param doc - the full SKILL.md text.
+ */
+export function lintSkillDoc(doc: string): GateResult {
+  const violations: ValidationResult[] = []
+  const frontmatter = lintFrontmatter(doc)
+  if (!frontmatter.ok) violations.push(...frontmatter.violations)
+  const body = lintFiveQuestion(stripFrontmatter(doc))
+  if (!body.ok) violations.push(...body.violations)
+  return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
+}
+
+/**
+ * Enforce the skill-authoring lints over a KNOWN document (the brief's
+ * "incoming doc when available" branch): `Enforcement: hard` + violations →
+ * throw the typed {@link SkillLintVetoError} (fs-policy veto channel); warn
+ * mode → return the gate for advisory logging. A repairing write carries a
+ * VALID incoming document and passes by construction — no repair escape is
+ * needed on this branch. The content-blind listener path (where the
+ * incoming doc is never visible) routes through {@link gateSkillIntent}
+ * instead, which applies the status-gate repair-escape decision.
+ * @param doc - the document about to be written (the write's content).
+ * @param options - target display path (veto message) + resolved hard flag.
+ */
+export function lintSkillWrite(doc: string, options: { target: string; hard: boolean }): GateResult {
+  const result = lintSkillDoc(doc)
+  if (options.hard && !result.ok) {
+    throw new SkillLintVetoError(options.target, result.violations)
+  }
+  return result
+}
+
+/**
+ * The configured skill roots the lint gate scopes to (Config `skillRoots`
+ * custom roots + `bundledSkillDir`, same trim/filter semantics as
+ * {@link skillLocalConfig}). Empty when nothing is configured — the gate
+ * is inert.
+ */
+function skillRootsOf(config: Config): string[] {
+  const roots = [...(config.skillRoots ?? []), ...(config.bundledSkillDir !== undefined ? [config.bundledSkillDir] : [])]
+  return roots.map((root) => root.trim()).filter((root) => root !== '')
+}
+
+/**
+ * Whether a target is a `SKILL.md` UNDER one of the configured skill roots
+ * (resolved-path containment — skill-local shapes `<root>/<name>/SKILL.md`).
+ * Matching is by resolved path on `displayPath` (the local backend reports
+ * absolute paths; remote/URI backends never resolve under a local root and
+ * the gate is inert for them — status-gate discipline).
+ */
+function isSkillTarget(roots: readonly string[], target: FsTarget): boolean {
+  if (basename(target.displayPath) !== 'SKILL.md') return false
+  const resolvedPath = resolve(target.displayPath)
+  return roots.some((root) => resolvedPath.startsWith(resolve(root) + sep))
+}
+
+/** The skill directory name of a SKILL.md target (the canonical skill id). */
+function skillNameOf(target: FsTarget): string {
+  return basename(dirname(target.displayPath))
+}
+
+/** The canonical skill-root form of a SKILL.md target (Task 1 frozen
+ * `resolveSkillRoot('dsh', …)` form — `$DSH_BUNDLED_SKILL_DIR/<name>/SKILL.md`). */
+function skillCanonicalForm(target: FsTarget): string {
+  return resolveSkillRoot('dsh', { skill: skillNameOf(target), rel: 'SKILL.md' })
+}
+
+/**
+ * Resolve the hard-enforcement flag for the skill lint gate: explicit
+ * Config override wins, else the iteration compass frontmatter (when a
+ * harness dir resolves), else warn-only. {@link resolveHard} parity with a
+ * null-tolerant harness dir — skill roots do not require `{HARNESS_DIR}`.
+ */
+function resolveSkillHard(harnessDir: string | null, config: Config): boolean {
+  if (config.enforcement === 'hard') return true
+  if (config.enforcement === 'soft') return false
+  return harnessDir !== null && resolveCompassEnforcement(harnessDir).hard
+}
+
+/**
+ * Gate one fs write-intent on a `SKILL.md` under a configured skill root.
+ * The slot is content-blind (the intent waterfall carries only
+ * `(target, actor)` — never the incoming content, dsh-private tool-fs
+ * write.ts), so the lint signal is the pre-write on-disk document
+ * (single-read). Enforcement policy (decided here, documented in
+ * task-4-report.md; status-gate repair-escape mirror, qc2 W-001):
+ *
+ * - missing file → pass (first create has no document to lint);
+ * - clean on-disk doc → silent pass (blocking valid-skill writes would
+ *   deadlock normal authoring — the slot cannot see the incoming content);
+ * - violations + warn mode (default) → warn log + advisory + delegate;
+ * - violations + hard mode → REPAIR ESCAPE: the on-disk doc is ALREADY
+ *   invalid, so this write may BE the repair — allow with an error-level
+ *   log + repair advisory (`hard: true, repair: true`). A hard veto there
+ *   would deadlock the repairing write; the typed hard veto lives on the
+ *   incoming-doc branch ({@link lintSkillWrite}) where the document is
+ *   known.
+ *
+ * The gate never throws (except the intentional {@link lintSkillWrite}
+ * veto on the other branch); unexpected internal errors degrade to allow
+ * in BOTH modes with a loud log + `degraded: true` advisory
+ * (error-containment envelope — an untyped throw from the gate would
+ * spuriously block legitimate writes).
+ */
+function gateSkillIntent(ctx: Context, harnessDir: string | null, config: Config, target: FsTarget): void {
+  try {
+    const roots = skillRootsOf(config)
+    if (roots.length === 0) return
+    if (!isSkillTarget(roots, target)) return
+    const skillPath = resolve(target.displayPath)
+    if (!existsSync(skillPath)) return // first create — nothing to lint yet
+    let doc: string
+    try {
+      doc = readFileSync(skillPath, 'utf8')
+    } catch (error) {
+      // Single-read contract: an unreadable on-disk doc is an unexpected
+      // error — degrade to allow with a degraded advisory (never a throw).
+      ctx.logger(SKILL_LINT_LOGGER).error(`skill lint degraded to allow (cannot read ${skillPath}): ${(error as Error).message}`)
+      ctx.emit('mstar/skill-lint', {
+        operation: 'write',
+        target: target.displayPath,
+        canonical: skillCanonicalForm(target),
+        result: { ok: true, violations: [] },
+        hard: false,
+        degraded: true,
+      })
+      return
+    }
+    const result = lintSkillDoc(doc)
+    if (result.ok) return
+    const hard = resolveSkillHard(harnessDir, config)
+    // The advisory carries the ENFORCED verdict (status-gate shape:
+    // `hardBlocked` true on the hard repair escape — the write would have
+    // been blocked, and is allowed as a repair).
+    const verdict = applyEnforcement(result, { hard })
+    // resolveAssetPath renders the canonical skill-relative asset form
+    // (mstar-skill-authoring § Skill-relative script and asset paths) — the
+    // fix instruction for the violating file in the log line below.
+    const fixHint = resolveAssetPath(skillNameOf(target), 'SKILL.md', 'dsh')
+    if (hard) {
+      // Repair escape: the current document is already invalid; this write
+      // may BE the repair — allow, but make the degraded control loud
+      // (error-level log + repair advisory, `hard: true`).
+      ctx.logger(SKILL_LINT_LOGGER).error(
+        `SKILL.md write to ${target.displayPath} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}\n${fixHint}`,
+      )
+      ctx.emit('mstar/skill-lint', { operation: 'write', target: target.displayPath, canonical: skillCanonicalForm(target), result: verdict, hard, repair: true })
+    } else {
+      ctx.logger(SKILL_LINT_LOGGER).warn(
+        `SKILL.md write to ${target.displayPath} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}\n${fixHint}`,
+      )
+      ctx.emit('mstar/skill-lint', { operation: 'write', target: target.displayPath, canonical: skillCanonicalForm(target), result: verdict, hard })
+    }
+  } catch (error) {
+    ctx.logger(SKILL_LINT_LOGGER).error(`skill lint gate degraded to allow: ${(error as Error).message}`)
+    try {
+      ctx.emit('mstar/skill-lint', { operation: 'write', target: target.displayPath, canonical: skillCanonicalForm(target), result: { ok: true, violations: [] }, hard: false, degraded: true })
+    } catch (emitError) {
+      // Best-effort observability: a throwing advisory consumer must not
+      // take the gate down with it (the error log above is the durable
+      // signal).
+      ctx.logger(SKILL_LINT_LOGGER).error(`skill lint degraded advisory emit failed: ${(emitError as Error).message}`)
+    }
+  }
+}
+
+/**
+ * `fs/write-intent` listener for the skill lint gate. Registered with
+ * `prepend` for the same reachability reason as the status gate: the slot
+ * is first-wins by registration order (dsh-fs-policy README), so without
+ * prepend a policy plugin mounted earlier would make this gate unreachable.
+ * Every gate decision (warn advisory, repair escape, degraded allow) calls
+ * `next()` — the skill lint gate never owns the intent decision and must
+ * not terminate the chain (fs-policy's observed-state CAS on skill files
+ * stays live in composed deployments).
+ */
+async function skillWriteIntentListener(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  target: FsTarget,
+  _actor: object | undefined,
+  next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
+): Promise<FsWriteIntent | undefined> {
+  gateSkillIntent(ctx, harnessDir, config, target)
   return await next()
 }
 
@@ -1030,6 +1309,13 @@ export function apply(ctx: Context, config: Config): void {
   // decider runs before dsh-fs-policy regardless of mount order).
   ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
   ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
+
+  // Skill-authoring lint gate — fs/write-intent slot scoped to SKILL.md
+  // under the configured skill roots (Task 4; same single-slot waterfall +
+  // prepend + next() delegation contract as the status gate — this gate
+  // also never throws except the intentional incoming-doc veto in
+  // `lintSkillWrite`).
+  ctx.on('fs/write-intent', (target, actor, next) => skillWriteIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
 
   // Dispatch gate — tools/pre-execute waterfall (refusal channel:
   // PreToolDecision.deny returned without next()). Registered prepend for the
