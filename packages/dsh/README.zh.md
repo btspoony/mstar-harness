@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-面向 DeepSeek Harness SDK（dsh）的 Morning Star 守护闸门（harness gates）——一个 cordis 函数插件，将 mstar engine 进程内挂载，并在 `Enforcement: hard` 开启时拒绝非法的 `{HARNESS_DIR}/status.json` 写入与被禁止的 subagent 派发。随 dsh Loader 应用启动；各闸门通过 seam 的拒绝通道行使否决权，从不改动工具本身。
+面向 DeepSeek Harness SDK（dsh）的 Morning Star 守护闸门（harness gates）——一个 cordis 函数插件，将 mstar engine 进程内挂载，守护 `{HARNESS_DIR}/status.json` 写入（校验 + 咨询；hard 下按修复逃生放行）并在 `Enforcement: hard` 开启时阻止被禁止的 subagent 派发。随 dsh Loader 应用启动；各闸门通过 seam 的拒绝/咨询通道行使职责，从不改动工具本身。
 
 ## Installation
 

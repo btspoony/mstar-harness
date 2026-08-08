@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Morning Star harness gates for the DeepSeek Harness SDK (dsh) — a cordis function plugin that mounts the mstar engine in-process and refuses invalid `{HARNESS_DIR}/status.json` writes and disallowed subagent dispatches when `Enforcement: hard` is on. Boot with a dsh Loader app; the gates veto through the seam's refusal channels, never by patching the tools.
+Morning Star harness gates for the DeepSeek Harness SDK (dsh) — a cordis function plugin that mounts the mstar engine in-process, guards `{HARNESS_DIR}/status.json` writes (validate + advisory; repair-escape under hard) and blocks disallowed subagent dispatches when `Enforcement: hard` is on. Boot with a dsh Loader app; the gates act through the seam's refusal/advisory channels, never by patching the tools.
 
 ## Installation
 
