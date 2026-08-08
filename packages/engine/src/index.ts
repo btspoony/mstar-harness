@@ -14,7 +14,11 @@
  * completeness levels, `audit` validates audit Status blocks, redacts
  * secrets and scaffolds audit-<date>/ plan dirs, and `compound` validates
  * knowledge-doc schema, reference existence, index rows and the
- * compound-refresh scope.
+ * compound-refresh scope. `roles` validates the role reference mapping +
+ * parameter tables and the load-order contract, `host` detects the active
+ * host from tool shapes, resolves skill roots and defines the type-only
+ * `HostAdapter` contract, and `skill-authoring` lints frontmatter +
+ * 5-question bodies and resolves skill-relative asset paths.
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
@@ -197,3 +201,27 @@ export {
   lintStrategySections,
   planQualityBar,
 } from "./lint.js";
+export type {
+  DevTrackParam,
+  QcReviewerParam,
+  RoleFamily,
+  RoleMappingEntry,
+  RoleMappingOptions,
+} from "./roles.js";
+export {
+  DEV_TRACK_PARAMS,
+  QC_REVIEWER_PARAMS,
+  ROLE_MAPPING,
+  SHARED_FAMILIES,
+  lintLoadOrder,
+  validateRoleMapping,
+} from "./roles.js";
+export type { DetectResult, HostAdapter, HostId, SkillRootPaths, ToolSignal } from "./host.js";
+export { detectHost, resolveSkillRoot } from "./host.js";
+export type { FiveQuestionSection } from "./skill-authoring.js";
+export {
+  FIVE_QUESTION_SECTIONS,
+  lintFiveQuestion,
+  lintFrontmatter,
+  resolveAssetPath,
+} from "./skill-authoring.js";
