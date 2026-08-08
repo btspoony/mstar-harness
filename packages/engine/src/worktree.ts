@@ -32,8 +32,23 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
+
+/**
+ * Git probe timeout — bounded so a hung git (dead NFS mount, pathological
+ * repo, stray hook) cannot block `mstar worktree check` or engine callers
+ * indefinitely (qc3 F-4). Default 10s; override via the
+ * `MSTAR_GIT_PROBE_TIMEOUT_MS` env var or a per-call `timeoutMs`.
+ */
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+
+function probeTimeoutMs(): number {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
 
 /** One L2 parallel implement track (mstar-branch-worktree L2 table). */
 export type WorktreeTrack = {
@@ -74,6 +89,12 @@ export type BranchProbeOptions = {
    * subprocess.
    */
   branchOf?: (worktreePath: string) => string | undefined;
+  /**
+   * Git probe timeout in ms (default 10s; `MSTAR_GIT_PROBE_TIMEOUT_MS` env
+   * overrides; per-call value wins). On timeout the probe fails closed into
+   * `branch-probe-failed` — never hangs, never guesses a branch (qc3 F-4).
+   */
+  timeoutMs?: number;
 };
 
 /**
@@ -112,16 +133,23 @@ function gate(violations: ValidationResult[]): GateResult {
 function probeBranch(worktreePath: string, opts: BranchProbeOptions): BranchProbe {
   const precomputed = opts.branchOf?.(worktreePath);
   if (precomputed !== undefined) return { branch: precomputed };
+  const timeout = opts.timeoutMs ?? probeTimeoutMs();
   try {
     const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "branch", "--show-current"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout,
     });
     const branch = stdout.trim();
     if (branch === "") return { error: `no branch checked out (detached HEAD?) at "${worktreePath}"` };
     return { branch };
   } catch (err) {
-    const e = err as { message?: string; stderr?: string | Buffer; status?: number };
+    const e = err as { message?: string; stderr?: string | Buffer; status?: number; killed?: boolean; signal?: string };
+    // execFileSync throws with killed=true + SIGTERM when the timeout fires —
+    // fail closed with an explicit timeout error (qc3 F-4).
+    if (e.killed === true || e.signal !== undefined) {
+      return { error: `git probe timed out after ${timeout}ms (killed by ${e.signal ?? "SIGTERM"})` };
+    }
     const detail = (e.stderr !== undefined ? e.stderr.toString().trim() : "") || e.message || "git probe failed";
     return { error: detail };
   }
@@ -167,7 +195,9 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       ),
     );
   }
-  if (controlWorktreePath !== "" && controlWorktreePath === leaseWorktreePath) {
+  // Normalized comparison (qc2 S-4): trailing slashes / `.` / `..` aliases
+  // of the same directory are the same path — resolve before string equality.
+  if (controlWorktreePath !== "" && leaseWorktreePath !== "" && resolve(controlWorktreePath) === resolve(leaseWorktreePath)) {
     violations.push(
       violation(
         "critical",
@@ -261,7 +291,10 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
       );
       return;
     }
-    if (seenPaths.has(track.worktreePath)) {
+    // Normalized collision check (qc2 S-4): '/a/b/' and '/a/b/../b' alias the
+    // same directory as '/a/b' — resolve before the seen-set comparison.
+    const normalized = resolve(track.worktreePath);
+    if (seenPaths.has(normalized)) {
       violations.push(
         violation(
           "high",
@@ -272,7 +305,7 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
       );
       return;
     }
-    seenPaths.add(track.worktreePath);
+    seenPaths.add(normalized);
     if (!existsSync(track.worktreePath)) {
       violations.push(
         violation(
@@ -317,7 +350,13 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
  */
 export function assertControlVsFeaturePath(controlWorktreePath: string, featureWorktreePath: string): GateResult {
   const violations: ValidationResult[] = [];
-  if (controlWorktreePath === featureWorktreePath) {
+  // Normalized comparison (qc2 S-4): trailing slashes / `.` / `..` aliases
+  // of the same directory are the same path; both-empty stays a match
+  // (nothing recorded, per the lease validator contract).
+  const samePath =
+    (controlWorktreePath === "" && featureWorktreePath === "") ||
+    (controlWorktreePath !== "" && featureWorktreePath !== "" && resolve(controlWorktreePath) === resolve(featureWorktreePath));
+  if (samePath) {
     violations.push(
       violation(
         "critical",

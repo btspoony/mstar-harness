@@ -30,9 +30,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
   assertBranchAlignment,
@@ -130,6 +130,36 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("trailing-slash alias of the control path → worktree.l1.lease-equals-control (qc2 S-4 normalization)", () => {
+    const result = l1PreDispatchCheck({
+      controlWorktreePath: "/a/b/",
+      leaseWorktreePath: "/a/b",
+      leaseWorkingBranch: "feature/a",
+      planId: "p-1",
+    });
+    expect(codesOf(result)).toContain("worktree.l1.lease-equals-control");
+  });
+
+  test("dot-dot alias of the control path → worktree.l1.lease-equals-control (qc2 S-4 normalization)", () => {
+    const result = l1PreDispatchCheck({
+      controlWorktreePath: "/a/b/../b",
+      leaseWorktreePath: "/a/b",
+      leaseWorkingBranch: "feature/a",
+      planId: "p-1",
+    });
+    expect(codesOf(result)).toContain("worktree.l1.lease-equals-control");
+  });
+
+  test("normalized-distinct paths do not trip the gate", () => {
+    const result = l1PreDispatchCheck({
+      controlWorktreePath: "/a/b",
+      leaseWorktreePath: "/a/b/c",
+      leaseWorkingBranch: "feature/a",
+      planId: "p-1",
+    });
+    expect(codesOf(result)).not.toContain("worktree.l1.lease-equals-control");
   });
 
   test("empty control path → worktree.l1.control-missing (control not recorded)", () => {
@@ -320,6 +350,57 @@ describe("l2PreDispatchCheck — within-plan parallel track checklist", () => {
     expect(v?.severity).toBe("high");
   });
 
+  test("trailing-slash alias of a track path collides → worktree.l2.track-path-collision (qc2 S-4 normalization)", () => {
+    const root = tmpRoot("worktree-l2-cols-");
+    try {
+      const wts = worktreeFixture(root, ["track/a"]);
+      const a = wts.get("track/a")!;
+      const result = l2PreDispatchCheck({
+        tracks: [
+          { worktreePath: `${a}/`, workingBranch: "track/a" },
+          { worktreePath: a, workingBranch: "track/a" },
+        ],
+      });
+      expect(result.ok).toBe(false);
+      // exactly one collision violation, nothing else — the duplicate short-circuits
+      expect(codesOf(result)).toEqual(["worktree.l2.track-path-collision"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("dot-dot alias of a track path collides → worktree.l2.track-path-collision (qc2 S-4 normalization)", () => {
+    const root = tmpRoot("worktree-l2-cold-");
+    try {
+      const wts = worktreeFixture(root, ["track/a"]);
+      const a = wts.get("track/a")!;
+      // a == <root>/wt-track/a; <root>/wt-track/../wt-track/a is the same
+      // directory via a dot-dot segment.
+      const alias = join(a, "..", "..", "wt-track", "a");
+      expect(resolve(alias)).toBe(resolve(a));
+      const result = l2PreDispatchCheck({
+        tracks: [
+          { worktreePath: alias, workingBranch: "track/a" },
+          { worktreePath: a, workingBranch: "track/a" },
+        ],
+      });
+      expect(result.ok).toBe(false);
+      expect(codesOf(result)).toEqual(["worktree.l2.track-path-collision"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("normalized-distinct sibling paths do not collide", () => {
+    const result = l2PreDispatchCheck({
+      tracks: [
+        { worktreePath: "/a/b", workingBranch: "track/a" },
+        { worktreePath: "/a/b/c", workingBranch: "track/b" },
+      ],
+    });
+    expect(codesOf(result)).not.toContain("worktree.l2.track-path-collision");
+  });
+
   test("relative path on one track does not skip the other track's checks", () => {
     const root = tmpRoot("worktree-l2-relmixed-");
     try {
@@ -397,6 +478,11 @@ describe("assertControlVsFeaturePath — lease worktree ≠ control path", () =>
     const result = assertControlVsFeaturePath("/repo/control", "/worktrees/p-1");
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
+  });
+
+  test("path aliases of the same dir collide → worktree.control-feature.same (qc2 S-4 normalization)", () => {
+    expect(codesOf(assertControlVsFeaturePath("/repo/control/", "/repo/control"))).toContain("worktree.control-feature.same");
+    expect(codesOf(assertControlVsFeaturePath("/repo/control/../control", "/repo/control"))).toContain("worktree.control-feature.same");
   });
 });
 
@@ -575,5 +661,80 @@ describe("singleReviewSnapshot — one review snapshot precondition (派 QC 前�
 
   test("empty set → ok", () => {
     expect(singleReviewSnapshot([]).ok).toBe(true);
+  });
+});
+
+describe("git probe timeout — bounded probes fail closed (qc3 F-4)", () => {
+  /**
+   * A deliberately slow fake `git` executable: sleeps far beyond the probe
+   * timeout so the probe must be killed by the engine's bounded timeout.
+   */
+  function slowGitFixture(fn: (gitPath: string, lease: string) => void): void {
+    const root = tmpRoot("worktree-probe-timeout-");
+    try {
+      const gitPath = join(root, "fake-git");
+      writeFileSync(gitPath, "#!/bin/sh\nsleep 30\nexit 0\n", { mode: 0o755 });
+      chmodSync(gitPath, 0o755);
+      const lease = join(root, "lease");
+      mkdirSync(lease);
+      const control = join(root, "control");
+      mkdirSync(control);
+      fn(gitPath, lease);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("per-call timeoutMs bounds the probe → worktree.l1.branch-probe-failed with timeout detail", () => {
+    slowGitFixture((gitPath, lease) => {
+      const result = l1PreDispatchCheck(
+        { controlWorktreePath: join(lease, "..", "control"), leaseWorktreePath: lease, leaseWorkingBranch: "feature/a", planId: "p-1" },
+        { gitPath, timeoutMs: 300 },
+      );
+      expect(result.ok).toBe(false);
+      expect(codesOf(result)).toEqual(["worktree.l1.branch-probe-failed"]);
+      expect(findViolation(result, "worktree.l1.branch-probe-failed")?.message).toMatch(/timed out after 300ms/);
+    });
+  });
+
+  test("env override MSTAR_GIT_PROBE_TIMEOUT_MS bounds the probe", () => {
+    const previous = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+    try {
+      process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = "300";
+      slowGitFixture((gitPath, lease) => {
+        const result = l1PreDispatchCheck(
+          { controlWorktreePath: join(lease, "..", "control"), leaseWorktreePath: lease, leaseWorkingBranch: "feature/a", planId: "p-1" },
+          { gitPath },
+        );
+        expect(codesOf(result)).toEqual(["worktree.l1.branch-probe-failed"]);
+        expect(findViolation(result, "worktree.l1.branch-probe-failed")?.message).toMatch(/timed out after 300ms/);
+      });
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+      else process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = previous;
+    }
+  });
+
+  test("invalid env value falls back to the default timeout (fast git still probes fine)", () => {
+    const previous = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+    try {
+      process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = "not-a-number";
+      const root = tmpRoot("worktree-probe-default-");
+      try {
+        const wts = worktreeFixture(root, ["feature/x"]);
+        const result = l1PreDispatchCheck({
+          controlWorktreePath: join(root, "control"),
+          leaseWorktreePath: wts.get("feature/x")!,
+          leaseWorkingBranch: "feature/x",
+          planId: "p-1",
+        });
+        expect(result.ok).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+      else process.env.MSTAR_GIT_PROBE_TIMEOUT_MS = previous;
+    }
   });
 });
