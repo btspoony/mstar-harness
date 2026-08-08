@@ -13,10 +13,14 @@
  * Hard invariant — NEVER throw, NEVER block on failure: omp fails CLOSED
  * (`{ block: true, reason: "Extension <path> failed: …" }`) when a handler
  * throws or times out, so the handler catches every unexpected error and
- * degrades to a silent pass. A broken engine import, a malformed event, or
- * invalid JSON in content all pass — hard-gate opt-in is per compass /
- * Assignment, never global, and an engine failure must not harden a workflow
- * that was soft.
+ * degrades to a silent pass. A broken engine import or a malformed event
+ * passes — hard-gate opt-in is per compass / Assignment, never global, and
+ * an engine failure must not harden a workflow that was soft. Invalid JSON
+ * in write content is NOT a silent pass: Gate 1 reports it as
+ * `status.invalid-json` (same shape as the engine's own unparseable-file
+ * violation), which can block under a hard compass. A content-less write to
+ * a status.json that does not exist yet (fresh scaffold/init) passes
+ * silently, mirroring opencode `validateStatusWrite`'s existsSync guard.
  *
  * No semantic fork: every rule check is an engine call (status.validateStatus,
  * dispatch.validateAssignmentFields / antiRecursionPrecheck /
@@ -27,6 +31,7 @@
  * `validateStatusWrite` / `validateDispatchAssignment` use, with omp's
  * `{ block, reason }` refusal channel instead of the log channel.
  */
+import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   antiRecursionPrecheck,
@@ -148,8 +153,11 @@ function violationLine(violation: ValidationResult): string {
  * as a string is the new document: JSON.parse it and run the engine validator
  * on the parsed doc — a parse failure is a violation (`status.invalid-json`,
  * the same code/message shape the engine emits for an unparseable file).
- * Without a content string (edit-style events) the on-disk file is validated.
- * Never throws (validateStatus catches its own read errors).
+ * Without a content string (edit-style events) the on-disk file is
+ * validated — unless it does not exist yet (fresh scaffold/init write):
+ * nothing to validate, silent pass (mirrors opencode `validateStatusWrite`'s
+ * existsSync guard → null). Never throws (validateStatus catches its own
+ * read errors).
  */
 function validateStatusWriteDoc(content: unknown, filePath: string): ValidationResult[] {
   if (typeof content === "string") {
@@ -168,6 +176,7 @@ function validateStatusWriteDoc(content: unknown, filePath: string): ValidationR
     }
     return validateStatus(doc as StatusDoc).violations;
   }
+  if (!existsSync(filePath)) return []; // fresh scaffold/init write — nothing to validate
   return validateStatus(filePath).violations;
 }
 
