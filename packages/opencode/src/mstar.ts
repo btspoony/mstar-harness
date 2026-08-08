@@ -26,16 +26,19 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import {
   antiRecursionPrecheck,
+  applyEnforcement,
   assertDefaultBranchProtected,
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
+  parseEnforcementFlag,
+  resolveCompassEnforcement,
   resolveHarnessDir,
   validateAssignmentFields,
   validateStatus,
 } from "@mstar-harness/engine";
-import type { GateResult, StatusDoc, ValidationResult } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, StatusDoc, ValidationResult } from "@mstar-harness/engine";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -230,14 +233,32 @@ const defaultStatusLogger: StatusLogger = (level, message) => {
 const STATUS_FILE = "status.json";
 
 /**
- * Non-blocking `status.json` write lint (roadmap §8.5 `beforeStatusWrite`, v1).
+ * `status.json` write lint (roadmap §8.5 `beforeStatusWrite`).
  *
  * Given the target path of a file write, resolves `{HARNESS_DIR}` from the
  * target via the engine (`path.resolveHarnessDir` find-first-stop) and runs
  * `status.validateStatus` on the document about to be written (`opts.doc`) or
- * on the current file. Violations are surfaced as `warn` through the plugin
- * log channel. NEVER throws and NEVER blocks (v1 hard constraint) — unexpected
- * errors degrade to a single `error` log and a `null` return.
+ * on the current file.
+ *
+ * Enforcement (roadmap §8.5 C4/D2, Slice 5):
+ * - **Warn mode (default)** — flag absent: violations are surfaced as `warn`
+ *   through the plugin log channel; `hardBlocked` is false. Unchanged v1
+ *   behavior.
+ * - **Hard mode** — the write context carries `Enforcement: hard` via
+ *   `opts.enforcement`, or (when omitted) the repo's iteration compass
+ *   frontmatter declares `enforcement: hard` (engine
+ *   `status.resolveCompassEnforcement`): violations are surfaced as `error`
+ *   lines with a skill-text pointer and the returned GateResult carries
+ *   `hardBlocked: true` — the caller MUST refuse the write. Never throws a
+ *   raw exception: hard mode is the structured result + error log channel.
+ *
+ * Blocking channel note (documented behavior): OpenCode's plugin API
+ * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns `Promise<void>`
+ * — there is no error/refusal return channel on this host. The plugin
+ * therefore surfaces hard mode as error-level log lines (captured into the
+ * OpenCode server log) + the structured `hardBlocked` result; host bindings
+ * with a refusal channel (pi/dsh when their APIs land) must refuse the write
+ * when `hardBlocked === true`.
  *
  * Returns the engine gate result when the target is the canonical harness
  * `status.json` and something could be validated; `null` otherwise (not a
@@ -245,7 +266,7 @@ const STATUS_FILE = "status.json";
  */
 export function validateStatusWrite(
   targetPath: string,
-  opts: { doc?: unknown; log?: StatusLogger } = {},
+  opts: { doc?: unknown; log?: StatusLogger; enforcement?: EnforcementFlag } = {},
 ): GateResult | null {
   const log = opts.log ?? defaultStatusLogger;
   try {
@@ -263,18 +284,28 @@ export function validateStatusWrite(
           : null;
     if (!result) return null;
 
+    const enforcement: EnforcementFlag = opts.enforcement ?? resolveCompassEnforcement(harnessDir);
     if (!result.ok) {
       for (const violation of result.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
-        log(
-          "warn",
-          `status.json validation: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
-        );
+        if (enforcement.hard) {
+          log(
+            "error",
+            `status.json validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — refusing write per Enforcement: hard (skill: mstar-plan-artifacts/references/status-and-residuals.md)`,
+          );
+        } else {
+          log(
+            "warn",
+            `status.json validation: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
+          );
+        }
       }
     }
-    return result;
+    return applyEnforcement(result, { hard: enforcement.hard });
   } catch (error) {
-    // v1 hard constraint: never throw, never block.
+    // Never throw, never block unexpectedly: unexpected errors degrade to a
+    // single `error` log and a `null` return in BOTH modes (hard gates are
+    // opt-in — an engine failure must not harden a workflow that was soft).
     log("error", `status.json validation aborted: ${(error as Error).message}`);
     return null;
   }
@@ -308,9 +339,9 @@ function isAssignmentShaped(assignmentText: string): boolean {
 }
 
 /**
- * Non-blocking dispatch-side lint (roadmap §8.5 `beforeDispatch`, v1).
+ * Dispatch-side Assignment validation (roadmap §8.5 `beforeDispatch`).
  *
- * Full Assignment validation, warn-only, engine-only:
+ * Full Assignment validation:
  * (1) `dispatch.validateAssignmentFields` — required fields, exactly-one
  * Working-branch form, create-form `<base>`, Branch policy reason; the
  * legacy `assignment.presence.*` codes are engine ALIASES on the three
@@ -320,7 +351,7 @@ function isAssignmentShaped(assignmentText: string): boolean {
  * (2) Anti-recursion NEVER red line via `dispatch.antiRecursionPrecheck`:
  * when the task tool's role binding (`args.subagent` / `args.subagent_type`)
  * equals the Assignment's `Execute as`, a critical-severity violation is
- * logged (warn-only — the hook never blocks) (qc1 F-004 / qc2 S-2).
+ * logged (qc1 F-004 / qc2 S-2).
  * (3) The default-branch gate via `dispatch.assertDefaultBranchProtected` —
  * the checked branch comes from the Assignment's own branch forms
  * (create-form name / Working branch / Branch policy branch, engine
@@ -329,9 +360,26 @@ function isAssignmentShaped(assignmentText: string): boolean {
  * honored only when its branch is the one being checked. Skipped entirely
  * for read-only roles (no writable work on a branch).
  *
- * One `warn` line per violation through the `[mstar-harness]` channel.
- * NEVER throws and NEVER blocks (v1 hard constraint) — unexpected errors
- * degrade to a single `error` log and a `null` return.
+ * Enforcement (roadmap §8.5 C4/D2, Slice 5) — the Assignment's OWN flag
+ * decides (engine `dispatch.parseEnforcementFlag`; per-Assignment, never
+ * global):
+ * - **Warn mode (default)** — no `Enforcement: hard` on the Assignment: one
+ *   `warn` line per violation through the `[mstar-harness]` channel;
+ *   `hardBlocked` is false. Unchanged v1 behavior.
+ * - **Hard mode** — the Assignment carries `Enforcement: hard` (bold or
+ *   plain): one `error` line per violation with a skill-text pointer and the
+ *   returned GateResult carries `hardBlocked: true` — the caller MUST refuse
+ *   the dispatch. Never throws a raw exception: hard mode is the structured
+ *   result + error log channel. `Enforcement: soft` (explicit non-hard)
+ *   stays warn-only; rollback = unset the flag.
+ *
+ * Blocking channel note (documented behavior): OpenCode's plugin API
+ * (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns `Promise<void>`
+ * — no error/refusal return channel on this host. The plugin therefore
+ * surfaces hard mode as error-level log lines (captured into the OpenCode
+ * server log) + the structured `hardBlocked` result; host bindings with a
+ * refusal channel (pi/dsh when their APIs land) must refuse the dispatch
+ * when `hardBlocked === true`.
  *
  * Returns the gate result for Assignment-shaped text, an ok result for
  * text that is not an Assignment, and `null` only when the check aborted.
@@ -350,7 +398,7 @@ export function validateDispatchAssignment(
     // (1) Engine full field validation — read-only roles skip the branch-form gate.
     const writable = isReadOnlyAssignmentRole(fields.executeAs ?? "") ? false : undefined;
     violations.push(...validateAssignmentFields(assignmentText, { writable }).violations);
-    // (2) Anti-recursion NEVER red line (engine gate; warn-only in the hook).
+    // (2) Anti-recursion NEVER red line (engine gate; warn/error in the hook).
     const binding = opts.subagentType ?? "";
     if (binding.trim() !== "") {
       violations.push(...antiRecursionPrecheck(binding, fields.executeAs ?? "").violations);
@@ -367,18 +415,28 @@ export function validateDispatchAssignment(
     }
 
     const result: GateResult = { ok: violations.length === 0, violations };
+    const enforcement: EnforcementFlag = parseEnforcementFlag(assignmentText);
     if (!result.ok) {
       for (const violation of result.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
-        log(
-          "warn",
-          `assignment validation: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
-        );
+        if (enforcement.hard) {
+          log(
+            "error",
+            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — dispatch refused per Enforcement: hard (skill: mstar-dispatch-gates)`,
+          );
+        } else {
+          log(
+            "warn",
+            `assignment validation: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
+          );
+        }
       }
     }
-    return result;
+    return applyEnforcement(result, { hard: enforcement.hard });
   } catch (error) {
-    // v1 hard constraint: never throw, never block.
+    // Never throw, never block unexpectedly: unexpected errors degrade to a
+    // single `error` log and a `null` return in BOTH modes (hard gates are
+    // opt-in — an engine failure must not harden a workflow that was soft).
     log("error", `assignment validation aborted: ${(error as Error).message}`);
     return null;
   }

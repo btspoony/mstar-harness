@@ -64,15 +64,21 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 �
 
 **Continuous execution applies**（上节）。Execute **`mstar-iteration` § Phase 2** exactly：§2.0 前置五道闸（含 branch metadata #4 + control-worktree/lease #5）→ §2.1 session todos → §2.2 read backlog（`status.json` + branch metadata）→ §2.3 integration branch + control worktree（record `metadata.control_worktree_path`；status/SDD via control path）→ §2.4 per-plan loop（**lease-gated parallel** across plan IDs unless `Plan parallelism: serial`；claim/resume `execution_lease`；feature worktree；**SDD** per-task 串行；QC full tri-review **N=3** + QA；serial merge via `integration_merge_lease`；cross-plan sync → compass）→ §2.5 dispatch-first → §2.6 push 纪律。全部 plan `Done` → **STOP**（Phase flow）→ 打印 `## Phase 3: iteration-close`；**不得**进入 Phase 4。
 
-**Optional — Assignment preflight**（`mstar-harness` bin 未安装时静默跳过；可选，不改变本命令核心流程）: 在每次 implement/QC/QA 派发前（**SDD** 下为最新 `{SDD_DIR}/task-N-brief.md` 或临时写盘的 Assignment），若本机装有 CLI，校验最新 Assignment：
+**Assignment preflight**（`mstar-harness` bin 未安装时静默跳过）: 在每次 implement/QC/QA 派发前（**SDD** 下为最新 `{SDD_DIR}/task-N-brief.md` 或临时写盘的 Assignment），若本机装有 CLI，校验最新 Assignment。模式由迭代 compass frontmatter 的 `enforcement` 键决定（Slice 5）：
+
+- **默认（compass 无 `enforcement: hard`）— 可选 warn-only**：exit 1 仅提示，不阻断派发（Slice 3 行为不变）：
 
 ```bash
 command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate "<latest-assignment-file>"
 ```
 
-> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
+- **`enforcement: hard`（迭代 compass frontmatter 声明）— fail-fast**：校验失败即 `exit 1` 阻断派发（bin 缺失仍静默跳过）：
 
-exit 1 仅提示（Slice 3 可选 preflight，不阻断派发；Slice 5 `Enforcement: hard` 前不 fail-fast）。
+```bash
+if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validate "<latest-assignment-file>" || exit 1; fi
+```
+
+> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
 
 ## Phase 3: iteration-close
 

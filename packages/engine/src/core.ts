@@ -48,11 +48,31 @@ export type ValidationResult = {
  * Aggregate of validation checks for one gate (spec: roadmap §8.2 core row).
  * `ok` is the gate verdict over `violations` — a gate with any violation
  * does not pass.
+ *
+ * `hardBlocked` (Slice 5 / roadmap §8.5 C4 + D2) is the hard-enforcement
+ * overlay: `true` when the gate has violations AND the caller requested hard
+ * mode via `applyEnforcement`. Absent/`false` means warn-only — the caller
+ * may proceed with a warning. A caller that can refuse an action MUST refuse
+ * when `hardBlocked === true`.
  */
 export type GateResult = {
   ok: boolean;
   violations: ValidationResult[];
+  hardBlocked?: boolean;
 };
+
+/**
+ * Apply hard-enforcement semantics to a gate result (roadmap §8.5 C4/D2):
+ * `hardBlocked` is `true` exactly when `hard` is requested AND the gate has
+ * violations. `ok` and `violations` are preserved — enforcement is an
+ * overlay on the verdict, never a re-validation. When `hard` is false
+ * (flag absent/unset) the result is warn-only (`hardBlocked: false`), so
+ * rollback is simply unsetting the flag. Returns a NEW result; the input
+ * gate is not mutated.
+ */
+export function applyEnforcement(gate: GateResult, opts: { hard: boolean }): GateResult {
+  return { ...gate, hardBlocked: opts.hard && gate.violations.length > 0 };
+}
 
 /**
  * Read and parse a JSON document. Missing or empty files read as `{}`

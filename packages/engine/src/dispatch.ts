@@ -22,6 +22,9 @@
  *   "QC reviewer" 参数表.
  * - Anti-recursion NEVER red line (role binding == `Execute as`): `mstar-dispatch-gates`
  *   SKILL.md § "承接方反递归红线（NEVER / DO NOT；leaf executor 必读）".
+ * - Hard-gate enforcement (`Enforcement: hard` flag — per Assignment/compass,
+ *   never global; rollback = unset flag): `.harness/references/skill-programmatic-roadmap.md`
+ *   §8.5 C4 + decision D2.
  */
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 
@@ -106,6 +109,56 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
     else if (label === "Branch policy") fields.branchPolicy = value;
   }
   return fields;
+}
+
+/** Where the `Enforcement` flag was declared (roadmap §8.5 C4/D2). */
+export type EnforcementSource = "assignment" | "compass" | "none";
+
+/** Parsed hard-enforcement flag. `hard: false` + `source: none` = flag absent. */
+export type EnforcementFlag = {
+  hard: boolean;
+  source: EnforcementSource;
+};
+
+/** Assignment form: `**Enforcement**: hard` (bold, optional list bullet). */
+const ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
+/** Assignment form: `Enforcement: hard` (plain; distinct from lowercase YAML key). */
+const ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
+/** Compass form: YAML frontmatter key `enforcement: hard` (lowercase key). */
+const COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
+
+/** Trim a raw flag value; YAML values may be single/double-quoted (`enforcement: "hard"`). */
+function enforcementValue(raw: string): string {
+  const value = raw.trim();
+  const unquoted = value.replace(/^(['"])(.*)\1$/, "$2");
+  return unquoted.trim().toLowerCase();
+}
+
+/**
+ * Parse the `Enforcement: hard` flag (roadmap §8.5 C4 + decision D2 — v2
+ * hard gates are OPT-IN per Assignment/compass, never global; rollback =
+ * unset flag; inert when the engine is absent).
+ *
+ * Recognized forms, checked in order:
+ * 1. Assignment header `**Enforcement**: hard` / `Enforcement: hard`
+ *    (bold or plain, optional list bullet; value case-insensitive).
+ * 2. Compass frontmatter YAML key `enforcement: hard` (lowercase key;
+ *    value may be quoted, case-insensitive).
+ *
+ * The Assignment form wins over the compass form when both appear in the
+ * input (per-Assignment precedence — a dispatch's own flag is decisive).
+ * A present-but-non-hard value (`soft`, empty, malformed) still reports
+ * its source so callers can distinguish "explicitly not hard" from
+ * "not mentioned" (`source: none`). Never throws.
+ */
+export function parseEnforcementFlag(text: string): EnforcementFlag {
+  const bold = text.match(ASSIGNMENT_ENFORCEMENT_BOLD_RE);
+  if (bold !== null) return { hard: enforcementValue(bold[1]!) === "hard", source: "assignment" };
+  const plain = text.match(ASSIGNMENT_ENFORCEMENT_PLAIN_RE);
+  if (plain !== null) return { hard: enforcementValue(plain[1]!) === "hard", source: "assignment" };
+  const compass = text.match(COMPASS_ENFORCEMENT_RE);
+  if (compass !== null) return { hard: enforcementValue(compass[1]!) === "hard", source: "compass" };
+  return { hard: false, source: "none" };
 }
 
 /**

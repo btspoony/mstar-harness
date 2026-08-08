@@ -40,6 +40,7 @@ import {
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
+  parseEnforcementFlag,
   validateAssignmentFields,
 } from "../src/dispatch.js";
 
@@ -761,5 +762,98 @@ Delegation: forbidden
 
   test("unrelated prose does not produce fields", () => {
     expect(parseAssignmentFields("This is not an assignment.\n- one: two\nNo fields.")).toEqual({});
+  });
+});
+
+describe("parseEnforcementFlag — Enforcement: hard flag (Slice 5, roadmap §8.5 C4/D2)", () => {
+  // Spec: roadmap §8.5 C4 + decision D2 — v2 hard gates are enabled per
+  // Assignment/compass via `Enforcement: hard` (Assignment header, bold or
+  // plain) or compass frontmatter `enforcement: hard`; the flag is never
+  // global; rollback = unset flag; flag inert when the engine is absent.
+  test("Assignment bold form: **Enforcement**: hard → hard, source assignment", () => {
+    expect(parseEnforcementFlag(`## Assignment\n\n**Execute as**: fullstack-dev\n**Enforcement**: hard\n`)).toEqual({
+      hard: true,
+      source: "assignment",
+    });
+  });
+
+  test("Assignment plain form: Enforcement: hard → hard, source assignment", () => {
+    expect(parseEnforcementFlag("Enforcement: hard\n")).toEqual({ hard: true, source: "assignment" });
+  });
+
+  test("Assignment list-bullet + bold form → hard, source assignment", () => {
+    expect(parseEnforcementFlag("- **Enforcement**: hard\n")).toEqual({ hard: true, source: "assignment" });
+  });
+
+  test("Assignment value is case-insensitive (Hard / HARD → hard)", () => {
+    for (const value of ["Hard", "HARD", "hArD"]) {
+      expect(parseEnforcementFlag(`**Enforcement**: ${value}\n`)).toEqual({
+        hard: true,
+        source: "assignment",
+      });
+    }
+  });
+
+  test("Assignment present but NOT hard (soft / empty / malformed value) → source assignment, hard false", () => {
+    expect(parseEnforcementFlag("**Enforcement**: soft\n")).toEqual({ hard: false, source: "assignment" });
+    expect(parseEnforcementFlag("**Enforcement**: warn\n")).toEqual({ hard: false, source: "assignment" });
+    expect(parseEnforcementFlag("**Enforcement**: hard mode\n")).toEqual({ hard: false, source: "assignment" });
+    expect(parseEnforcementFlag("**Enforcement**:\n")).toEqual({ hard: false, source: "assignment" });
+  });
+
+  test("compass frontmatter form: enforcement: hard → hard, source compass", () => {
+    expect(parseEnforcementFlag("enforcement: hard\n")).toEqual({ hard: true, source: "compass" });
+  });
+
+  test("compass value may be quoted and case-insensitive", () => {
+    expect(parseEnforcementFlag('enforcement: "hard"\n')).toEqual({ hard: true, source: "compass" });
+    expect(parseEnforcementFlag("enforcement: 'HARD'\n")).toEqual({ hard: true, source: "compass" });
+  });
+
+  test("compass present but not hard (soft / true / empty) → source compass, hard false", () => {
+    expect(parseEnforcementFlag("enforcement: soft\n")).toEqual({ hard: false, source: "compass" });
+    expect(parseEnforcementFlag("enforcement: true\n")).toEqual({ hard: false, source: "compass" });
+    expect(parseEnforcementFlag("enforcement:\n")).toEqual({ hard: false, source: "compass" });
+  });
+
+  test("no flag anywhere → { hard: false, source: none }", () => {
+    expect(parseEnforcementFlag("## Assignment\n\n**Execute as**: fullstack-dev\n")).toEqual({
+      hard: false,
+      source: "none",
+    });
+    expect(parseEnforcementFlag("iteration_id: 20260808-demo\nstatus: active\n")).toEqual({
+      hard: false,
+      source: "none",
+    });
+    expect(parseEnforcementFlag("")).toEqual({ hard: false, source: "none" });
+  });
+
+  test("Assignment form wins over compass form when both appear (per-Assignment precedence)", () => {
+    expect(parseEnforcementFlag("enforcement: hard\n\n**Enforcement**: soft\n")).toEqual({
+      hard: false,
+      source: "assignment",
+    });
+    expect(parseEnforcementFlag("**Enforcement**: hard\nenforcement: soft\n")).toEqual({
+      hard: true,
+      source: "assignment",
+    });
+  });
+
+  test("compass frontmatter block inside a full compass file is detected", () => {
+    const compass = `---
+iteration_id: 20260808-demo
+status: active
+enforcement: hard
+---
+
+# Delivery Compass
+`;
+    expect(parseEnforcementFlag(compass)).toEqual({ hard: true, source: "compass" });
+  });
+
+  test("never throws on hostile input", () => {
+    for (const input of ["", "*".repeat(10000), "{{{{[[[[)))) ---- \n<<<<", "enforcement" ]) {
+      expect(() => parseEnforcementFlag(input)).not.toThrow();
+    }
   });
 });

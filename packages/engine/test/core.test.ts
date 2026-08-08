@@ -20,12 +20,14 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   SEVERITY_ORDER,
+  applyEnforcement,
   harnessVersionFrom,
   readHarnessVersion,
   readJson,
   resolveProjectRoot,
   writeJson,
 } from "../src/core.js";
+import type { GateResult } from "../src/core.js";
 
 describe("Severity enum + total order", () => {
   test("SEVERITY_ORDER lists exactly the five allowed values, heavy → light", () => {
@@ -93,6 +95,59 @@ describe("ValidationResult / GateResult shapes", () => {
     expect(fail.ok).toBe(false);
     expect(fail.violations).toHaveLength(1);
     expect(fail.violations[0].severity).toBe("critical");
+  });
+});
+
+describe("applyEnforcement — GateResult hard-mode semantics (Slice 5, roadmap §8.5 C4/D2)", () => {
+  // Spec: roadmap §8.5 C4/D2 — v2 hard gates are opt-in per
+  // Assignment/compass via the `Enforcement: hard` flag; `hardBlocked` is
+  // true when violations exist AND the caller requested hard mode; never
+  // global; rollback = unset flag; flag inert when the engine is absent.
+  const violated: GateResult = {
+    ok: false,
+    violations: [
+      {
+        ok: false,
+        severity: "high",
+        code: "assignment.field.missing-execute-as",
+        message: "missing required Assignment field: Execute as",
+      },
+    ],
+  };
+  const clean: GateResult = { ok: true, violations: [] };
+
+  test("hard mode + violations → hardBlocked true, ok/violations preserved", () => {
+    const result = applyEnforcement(violated, { hard: true });
+    expect(result.hardBlocked).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0].code).toBe("assignment.field.missing-execute-as");
+  });
+
+  test("hard mode + no violations → hardBlocked false (nothing to block)", () => {
+    const result = applyEnforcement(clean, { hard: true });
+    expect(result.hardBlocked).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("warn mode (flag absent/unset) + violations → hardBlocked false — warn-only, never blocks", () => {
+    const result = applyEnforcement(violated, { hard: false });
+    expect(result.hardBlocked).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.violations).toHaveLength(1);
+  });
+
+  test("does not mutate the input gate — returns a new result", () => {
+    const before = JSON.stringify(violated);
+    const result = applyEnforcement(violated, { hard: true });
+    expect(result).not.toBe(violated);
+    expect(JSON.stringify(violated)).toBe(before);
+    expect(violated.hardBlocked).toBeUndefined();
+  });
+
+  test("empty violations array with hard mode is never blocked (flag inert on clean gates)", () => {
+    expect(applyEnforcement({ ok: true, violations: [] }, { hard: true }).hardBlocked).toBe(false);
   });
 });
 

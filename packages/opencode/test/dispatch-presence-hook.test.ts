@@ -31,6 +31,7 @@ import {
   validateDispatchAssignment,
   type StatusLogger,
 } from "../src/mstar.js";
+import type { GateResult } from "@mstar-harness/engine";
 
 const completeAssignment = `## Assignment
 
@@ -159,6 +160,38 @@ Just some prose about the weather and a few bullet points:
 - one
 - two
 No harness structure anywhere.
+`;
+
+/** Invalid assignment (missing Execute as) with `**Enforcement**: hard` — must hard-block. */
+const hardMissingExecuteAs = `## Assignment
+
+**Enforcement**: hard
+**Delegation**: allowed (reviewer)
+**Task category**: docs
+
+Review the doc.
+`;
+
+/** Fully valid assignment carrying `**Enforcement**: hard` — nothing to block. */
+const hardCompleteAssignment = `## Assignment
+
+**Enforcement**: hard
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/example
+
+Do the thing, evidence-first.
+`;
+
+/** Explicit non-hard value — warn-only, never blocks (rollback = unset flag). */
+const softEnforcementAssignment = `## Assignment
+
+**Enforcement**: soft
+**Delegation**: allowed (reviewer)
+**Task category**: docs
+
+Review the doc.
 `;
 
 const captureWarnings = (): { warnings: string[]; log: StatusLogger } => {
@@ -552,5 +585,95 @@ describe("plugin wiring (tool.execute.before)", () => {
       warnings = restore2();
     }
     expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
+  });
+});
+
+describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", () => {
+  // Spec: roadmap §8.5 C4 + D2 — v2 hard gates are opt-in per Assignment via
+  // `Enforcement: hard`; the hook returns the GateResult with hardBlocked
+  // and surfaces error-level logs, NEVER a raw exception; flag absent →
+  // warn-only (unchanged); flag inert when the engine is absent.
+  const capture = (): { entries: Array<[string, string]>; log: StatusLogger } => {
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    return { entries, log };
+  };
+
+  test("invalid assignment + Enforcement: hard → hardBlocked true, error logs, no raw throw", () => {
+    const { entries, log } = capture();
+    let result: GateResult | null = null;
+    expect(() => {
+      result = validateDispatchAssignment(hardMissingExecuteAs, { log });
+    }).not.toThrow();
+    expect(result!.ok).toBe(false);
+    expect(result!.hardBlocked).toBe(true);
+    // Missing Execute as (branch form absent too — no Working branch field).
+    expect(entries.some(([level, text]) => level === "error" && text.includes("assignment.field.missing-execute-as"))).toBe(true);
+    // Hard mode must not emit warn-level lines for the same violations.
+    expect(entries.some(([level]) => level === "warn")).toBe(false);
+    // Skill-text pointer present in the error.
+    expect(entries.some(([, text]) => text.includes("Enforcement: hard"))).toBe(true);
+  });
+
+  test("invalid assignment + plain-form Enforcement: hard → hardBlocked true", () => {
+    const { entries, log } = capture();
+    const result = validateDispatchAssignment(hardMissingExecuteAs.replace("**Enforcement**: hard", "Enforcement: hard"), { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.hardBlocked).toBe(true);
+    expect(entries.some(([level]) => level === "error")).toBe(true);
+  });
+
+  test("valid assignment + Enforcement: hard → ok, hardBlocked false, silent", () => {
+    const { entries, log } = capture();
+    const result = validateDispatchAssignment(hardCompleteAssignment, { log });
+    expect(result!.ok).toBe(true);
+    expect(result!.hardBlocked).toBe(false);
+    expect(entries).toEqual([]);
+  });
+
+  test("invalid assignment WITHOUT the flag → warn-only, hardBlocked false (unchanged v1 behavior)", () => {
+    const { entries, log } = capture();
+    const result = validateDispatchAssignment(missingExecuteAs, { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.hardBlocked).toBe(false);
+    expect(entries.some(([level]) => level === "warn")).toBe(true);
+    expect(entries.some(([level]) => level === "error")).toBe(false);
+  });
+
+  test("Enforcement: soft (explicit non-hard) → warn-only, hardBlocked false", () => {
+    const { entries, log } = capture();
+    const result = validateDispatchAssignment(softEnforcementAssignment, { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.hardBlocked).toBe(false);
+    expect(entries.some(([level]) => level === "warn")).toBe(true);
+    expect(entries.some(([level]) => level === "error")).toBe(false);
+  });
+
+  test("hard mode never suppresses the violation codes — the structured result stays complete", () => {
+    const { log } = capture();
+    const result = validateDispatchAssignment(hardMissingExecuteAs, { log });
+    expect(result!.violations.some((v) => v.code === "assignment.field.missing-execute-as")).toBe(true);
+    expect(result!.violations.some((v) => v.code === "assignment.field.missing-delegation")).toBe(false);
+  });
+
+  test("plugin wiring: task tool with hard assignment logs error-level lines, never throws", async () => {
+    const plugin = await MorningStarHarnessPlugin();
+    const beforeExecute = plugin["tool.execute.before"];
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (message?: unknown) => {
+      errors.push(String(message));
+    };
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c1" },
+        { args: { subagent_type: "reviewer", prompt: hardMissingExecuteAs } },
+      );
+    } finally {
+      console.error = original;
+    }
+    expect(errors.some((e) => e.includes("[mstar-harness]") && e.includes("hard gate"))).toBe(true);
   });
 });

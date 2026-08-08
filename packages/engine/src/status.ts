@@ -30,11 +30,12 @@
  *   § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
  *   `scripts/tech-debt-rollup.sh`; the TS port must be byte-identical.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { readJson, writeJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
-import { resolveHarnessDir, assertSafePathComponent } from "./path.js";
+import { resolveHarnessDir, resolveIterationDir, assertSafePathComponent } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
+import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 
 /**
  * Loose shape of a parsed status.json document. All fields are `unknown`
@@ -614,6 +615,43 @@ export function findingsCleanupGate(
   }
 
   return { ok: violations.length === 0, violations };
+}
+
+/**
+ * Resolve the repo-level hard-enforcement flag from the iteration compass
+ * (roadmap §8.5 C4/D2): `{ITERATION_DIR}/<id>/delivery-compass.md` files are
+ * scanned; the FIRST compass whose frontmatter declares `enforcement: hard`
+ * hardens the gate in this repo. A compass declaring a non-hard value, or
+ * no compass at all, leaves the flag unset (`source: none`) — hard gates
+ * are never the default and the flag is inert when the engine is absent.
+ * Frontmatter is `---`-fenced; hard declarations in the compass BODY do not
+ * count (the frontmatter is the schema surface — see iteration.compassSchema).
+ */
+export function resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
+  const iterationsDir = resolveIterationDir(harnessDir);
+  if (!existsSync(iterationsDir)) return { hard: false, source: "none" };
+  let entries;
+  try {
+    entries = readdirSync(iterationsDir, { withFileTypes: true });
+  } catch {
+    return { hard: false, source: "none" };
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const compassPath = join(iterationsDir, entry.name, "delivery-compass.md");
+    if (!existsSync(compassPath)) continue;
+    let content: string;
+    try {
+      content = readFileSync(compassPath, "utf8");
+    } catch {
+      continue;
+    }
+    // Frontmatter only: leading `---` fence through the closing fence.
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const flag = parseEnforcementFlag(frontmatter !== null ? frontmatter[1]! : "");
+    if (flag.hard) return flag;
+  }
+  return { hard: false, source: "none" };
 }
 
 /** Count values into a string-keyed map, keys sorted ascending (jq group_by order for strings). */

@@ -21,7 +21,7 @@
  * 5-question bodies and resolves skill-relative asset paths.
  */
 export type { GateResult, Severity, ValidationResult } from "./core.js";
-export { SEVERITY_ORDER, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
+export { SEVERITY_ORDER, applyEnforcement, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type { HarnessKind, ResolveHarnessDirOptions, ResolveSpecsDirOptions } from "./path.js";
 export {
   assertPlanWritingPath,
@@ -48,6 +48,7 @@ export {
   archiveResiduals,
   findingsCleanupGate,
   normalizeSeverity,
+  resolveCompassEnforcement,
   techDebtRollup,
   validatePlanRow,
   validateResidual,
@@ -76,6 +77,8 @@ export type {
   AssignmentBranchForms,
   AssignmentFields,
   DefaultBranchOptions,
+  EnforcementFlag,
+  EnforcementSource,
   ExecutionModeToNOptions,
   ExecutionModeToNResult,
   ValidateAssignmentFieldsOptions,
@@ -89,6 +92,7 @@ export {
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
+  parseEnforcementFlag,
   validateAssignmentFields,
 } from "./dispatch.js";
 export type {

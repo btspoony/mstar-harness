@@ -82,15 +82,21 @@ Produce harness artifacts per **`mstar-iteration` §1.3–§1.5**（template: `m
 
 Execute **`mstar-iteration` §1.6**（SSOT）：顺序 `product-manager` → `architect` → `writing-specialist` → PM lock（**禁止**并行三角色；OpenCode plain role id — `mstar-host/references/opencode.md` § Role-mention hygiene）；**禁止** `{KNOWLEDGE_DIR}/` 新增；writing-specialist specs corpus hygiene（`iteration-artifact-boundaries.md` + `iteration-corpus-hygiene.md`）。Tool rule → **`mstar-dispatch-gates`** specialist review-and-edit（每角色 1 invoke，等磁盘修订返回）。Exception: user explicitly waives subagent dispatch ("PM-only review").
 
-**Optional — Assignment preflight**（`mstar-harness` bin 未安装时静默跳过；可选，不改变本命令核心流程）: 在每次角色 invoke 前，若本机装有 CLI，校验最新落盘的 Assignment（临时写盘或既有 brief）：
+**Assignment preflight**（`mstar-harness` bin 未安装时静默跳过）: 在每次角色 invoke 前，若本机装有 CLI，校验最新落盘的 Assignment（临时写盘或既有 brief）。模式由迭代 compass frontmatter 的 `enforcement` 键决定（Slice 5）：
+
+- **默认（compass 无 `enforcement: hard`）— 可选 warn-only**：exit 1 仅提示，不阻断派发（Slice 3 行为不变）：
 
 ```bash
 command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate "<latest-assignment-file>"
 ```
 
-> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
+- **`enforcement: hard`（迭代 compass frontmatter 声明）— fail-fast**：校验失败即 `exit 1` 阻断派发（bin 缺失仍静默跳过）：
 
-exit 1 仅提示（Slice 3 可选 preflight，不阻断派发；Slice 5 `Enforcement: hard` 前不 fail-fast）。
+```bash
+if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validate "<latest-assignment-file>" || exit 1; fi
+```
+
+> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
 
 **Prepare gate (per plan in compass)**:
 

@@ -19,6 +19,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MorningStarHarnessPlugin, validateStatusWrite, type StatusLogger } from "../src/mstar.js";
+import type { GateResult } from "@mstar-harness/engine";
 
 /**
  * Ambient MSTAR_HARNESS_DIR is pinned out for the whole file (qc3 F-4):
@@ -246,6 +247,143 @@ describe("plugin wiring (tool.execute.before)", () => {
       expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
     } finally {
       rmSync(statusPath, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("hard mode (compass enforcement: hard — Slice 5, roadmap §8.5 C4/D2)", () => {
+  // Spec: roadmap §8.5 C4 + D2 — v2 hard gates are opt-in per
+  // Assignment/compass; compass frontmatter `enforcement: hard` in the repo
+  // makes invalid status writes refused (structured result with
+  // `hardBlocked`, error-level logs, never a raw throw); flag absent →
+  // warn-only (unchanged); explicit `opts.enforcement` (write context)
+  // overrides the compass probe.
+  const capture = (): { entries: Array<[string, string]>; log: StatusLogger } => {
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    return { entries, log };
+  };
+
+  /** Create a project with `.mstar/status.json` + an iteration compass. */
+  const makeHardRepo = (hard: boolean): { project: string; statusPath: string } => {
+    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    const harness = join(project, ".mstar");
+    mkdirSync(join(harness, "iterations", "20260808-demo"), { recursive: true });
+    const enforcement = hard ? "enforcement: hard\n" : "";
+    writeFileSync(
+      join(harness, "iterations", "20260808-demo", "delivery-compass.md"),
+      `---\niteration_id: 20260808-demo\nstatus: active\n${enforcement}---\n\n# Delivery Compass\n`,
+      "utf8",
+    );
+    const statusPath = join(harness, "status.json");
+    writeFileSync(statusPath, JSON.stringify(validDoc, null, 2));
+    return { project, statusPath };
+  };
+
+  test("repo compass enforcement: hard + invalid write → hardBlocked true, error logs, no raw throw", () => {
+    const { project, statusPath } = makeHardRepo(true);
+    try {
+      const { entries, log } = capture();
+      let result: GateResult | null = null;
+      expect(() => {
+        result = validateStatusWrite(statusPath, { doc: invalidDoc, log });
+      }).not.toThrow();
+      expect(result!.ok).toBe(false);
+      expect(result!.hardBlocked).toBe(true);
+      expect(
+        entries.some(([level, text]) => level === "error" && text.includes("status.dual-write-residuals")),
+      ).toBe(true);
+      // No warn-level lines for the same violations in hard mode.
+      expect(entries.some(([level]) => level === "warn")).toBe(false);
+      // Skill-text pointer present.
+      expect(entries.some(([, text]) => text.includes("Enforcement: hard"))).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("repo compass enforcement: hard + valid write → ok, hardBlocked false, silent", () => {
+    const { project, statusPath } = makeHardRepo(true);
+    try {
+      const { entries, log } = capture();
+      const result = validateStatusWrite(statusPath, { doc: validDoc, log });
+      expect(result!.ok).toBe(true);
+      expect(result!.hardBlocked).toBe(false);
+      expect(entries).toEqual([]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("no compass enforcement in the repo → warn-only, hardBlocked false (unchanged v1 behavior)", () => {
+    const { project, statusPath } = makeHardRepo(false);
+    try {
+      const { entries, log } = capture();
+      const result = validateStatusWrite(statusPath, { doc: invalidDoc, log });
+      expect(result!.ok).toBe(false);
+      expect(result!.hardBlocked).toBe(false);
+      expect(entries.some(([level]) => level === "warn")).toBe(true);
+      expect(entries.some(([level]) => level === "error")).toBe(false);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit write-context enforcement (opts.enforcement) overrides the compass probe", () => {
+    // No compass at all — the explicit flag decides.
+    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    mkdirSync(join(project, ".mstar"));
+    const statusPath = join(project, ".mstar", "status.json");
+    try {
+      const { entries, log } = capture();
+      const hard = validateStatusWrite(statusPath, {
+        doc: invalidDoc,
+        log,
+        enforcement: { hard: true, source: "assignment" },
+      });
+      expect(hard!.hardBlocked).toBe(true);
+      expect(entries.some(([level]) => level === "error")).toBe(true);
+
+      // Explicit non-hard override wins over a hard compass.
+      const { project: hardProject, statusPath: hardStatusPath } = makeHardRepo(true);
+      try {
+        const soft = validateStatusWrite(hardStatusPath, {
+          doc: invalidDoc,
+          log,
+          enforcement: { hard: false, source: "none" },
+        });
+        expect(soft!.hardBlocked).toBe(false);
+      } finally {
+        rmSync(hardProject, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin wiring: write tool in a hard repo logs error-level lines, never throws", async () => {
+    const { project, statusPath } = makeHardRepo(true);
+    try {
+      const plugin = await MorningStarHarnessPlugin();
+      const beforeWrite = plugin["tool.execute.before"];
+      const errors: string[] = [];
+      const original = console.error;
+      console.error = (message?: unknown) => {
+        errors.push(String(message));
+      };
+      try {
+        await beforeWrite!(
+          { tool: "write", sessionID: "s1", callID: "c1" },
+          { args: { filePath: statusPath, content: JSON.stringify(invalidDoc) } },
+        );
+      } finally {
+        console.error = original;
+      }
+      expect(errors.some((e) => e.includes("[mstar-harness]") && e.includes("hard gate"))).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
     }
   });
 });
