@@ -629,3 +629,21 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
     },
   };
 };
+
+/**
+ * OpenCode plugin entry (v1 PluginModule).
+ *
+ * OpenCode's legacy loader treats **every function export** on the package
+ * entry as a plugin (`getLegacyPlugins` → `Object.values(mod)`). Our named
+ * helpers (`validateStatusWrite` / `validateDispatchAssignment`) are also
+ * functions — when invoked with `PluginInput` they return `null` / a
+ * GateResult, which then gets pushed into the hooks list and blows up as
+ * `plugin config hook failed: null is not an object (evaluating 'N.config')`.
+ *
+ * Default-exporting `{ server }` makes `readV1Plugin` win and skip the legacy
+ * scan, so only `MorningStarHarnessPlugin` is registered. Named helper
+ * exports stay available for tests and direct callers.
+ */
+export default {
+  server: MorningStarHarnessPlugin,
+};
