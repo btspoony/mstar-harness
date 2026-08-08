@@ -16,7 +16,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 const commandsDir = path.resolve(import.meta.dir, "../../../commands");
-const PREFLIGHT_SNIPPET = "command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate";
+// Quoted placeholder (qc2 W-2): agent-substituted paths must not enter the
+// shell unquoted — the snippet itself is the documented safe form.
+const PREFLIGHT_SNIPPET = 'command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate "<latest-assignment-file>"';
 const iterationCommands = ["iteration-start.md", "iteration-drive.md", "iteration-loop.md"] as const;
 
 describe("omp iteration commands optional dispatch preflight", () => {

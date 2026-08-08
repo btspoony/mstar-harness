@@ -8,22 +8,26 @@
  *   D2 (v1 = non-blocking lints; hard gates are v2 opt-in).
  * - Assignment core fields (`Execute as` / `Delegation` / `Task category`
  *   presence): roadmap §4.3 dispatch/gates layer + Slice 2 Global
- *   Constraint; presence codes (`assignment.presence.*`) stay observable
- *   for backward compat.
+ *   Constraint; the legacy presence codes (`assignment.presence.*`) stay
+ *   observable as ALIASES on the engine's core-field violations (qc1 F-002)
+ *   — the local presence parser is removed, one engine parser owns the
+ *   grammar.
  * - Full field validation (exactly-one Working-branch form, create-form
  *   `<base>`, Branch policy reason) + default-branch gate: Slice 3 via
  *   `dispatch.validateAssignmentFields` / `dispatch.assertDefaultBranchProtected`,
  *   direct-on exception wiring per the CLI fix ea010f1
- *   (`mstar dispatch validate`).
+ *   (`mstar dispatch validate`); gate branch derived from the Assignment's
+ *   own branch forms (qc3 F-2); read-only roles skip both branch gates
+ *   (qc3 F-1); anti-recursion binding check via `antiRecursionPrecheck`
+ *   (qc1 F-004).
  *
- * The exported `validateAssignmentPresence` / `validateDispatchAssignment`
- * helpers are the hook module; the plugin wiring (`tool.execute.before` on
- * the opencode `task` tool) is exercised end-to-end at the bottom.
+ * The exported `validateDispatchAssignment` helper is the hook module; the
+ * plugin wiring (`tool.execute.before` on the opencode `task` tool) is
+ * exercised end-to-end at the bottom.
  */
 import { describe, expect, test } from "bun:test";
 import {
   MorningStarHarnessPlugin,
-  validateAssignmentPresence,
   validateDispatchAssignment,
   type StatusLogger,
 } from "../src/mstar.js";
@@ -128,6 +132,27 @@ const createWithoutBase = `## Assignment
 Create the branch.
 `;
 
+/** Dangling create form — trailing `from`, no base (qc2 S-1 / qc3 F-5). */
+const createDanglingFrom = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: create feature/x from
+
+Create the branch.
+`;
+
+/** Read-only orientation assignment — no branch form is legitimate (qc3 F-1 / qc2 S-5). */
+const scoutAssignment = `## Assignment
+
+**Execute as**: scout
+**Delegation**: forbidden
+**Task category**: deep
+
+Survey the codebase.
+`;
+
 /** Not an assignment at all — must stay silent (no false positives). */
 const garbageText = `This is not an assignment at all.
 Just some prose about the weather and a few bullet points:
@@ -144,80 +169,6 @@ const captureWarnings = (): { warnings: string[]; log: StatusLogger } => {
   return { warnings, log };
 };
 
-describe("validateAssignmentPresence (exported hook module)", () => {
-  test("complete assignment → ok, no violations", () => {
-    const result = validateAssignmentPresence(completeAssignment);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("missing Execute as → high violation with presence code", () => {
-    const result = validateAssignmentPresence(missingExecuteAs);
-    expect(result.ok).toBe(false);
-    expect(result.violations).toHaveLength(1);
-    const violation = result.violations[0];
-    expect(violation.code).toBe("assignment.presence.missing-execute-as");
-    expect(violation.severity).toBe("high");
-    expect(violation.message).toContain("Execute as");
-    expect(violation.fix).toBeTruthy();
-  });
-
-  test("missing Delegation → medium violation with presence code", () => {
-    const result = validateAssignmentPresence(missingDelegation);
-    expect(result.ok).toBe(false);
-    expect(result.violations).toHaveLength(1);
-    const violation = result.violations[0];
-    expect(violation.code).toBe("assignment.presence.missing-delegation");
-    expect(violation.severity).toBe("medium");
-  });
-
-  test("missing Task category → medium violation with presence code", () => {
-    const result = validateAssignmentPresence(missingTaskCategory);
-    expect(result.ok).toBe(false);
-    expect(result.violations).toHaveLength(1);
-    const violation = result.violations[0];
-    expect(violation.code).toBe("assignment.presence.missing-task-category");
-    expect(violation.severity).toBe("medium");
-  });
-
-  test("assignment-shaped text missing all three → exactly 3 violations", () => {
-    const result = validateAssignmentPresence(missingAllFields);
-    expect(result.ok).toBe(false);
-    expect(result.violations).toHaveLength(3);
-    const codes = result.violations.map((v) => v.code).sort();
-    expect(codes).toEqual([
-      "assignment.presence.missing-delegation",
-      "assignment.presence.missing-execute-as",
-      "assignment.presence.missing-task-category",
-    ]);
-  });
-
-  test("garbage text → ok, no violations (no false positives)", () => {
-    const result = validateAssignmentPresence(garbageText);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("empty and header-only text → silent, never throws", () => {
-    expect(validateAssignmentPresence("").ok).toBe(true);
-    expect(validateAssignmentPresence("no fields here").ok).toBe(true);
-    // Heading present → assignment-shaped even with no fields.
-    const headingOnly = validateAssignmentPresence("## Assignment\n\nnothing else");
-    expect(headingOnly.ok).toBe(false);
-    expect(headingOnly.violations).toHaveLength(3);
-  });
-
-  test("non-bold plain field lines are recognized (presence only)", () => {
-    const plain = `## Assignment\nExecute as: fullstack-dev\nDelegation: forbidden\nTask category: logic\n`;
-    expect(validateAssignmentPresence(plain).ok).toBe(true);
-    // Empty value counts as missing.
-    const emptyValue = `## Assignment\nExecute as: fullstack-dev\nDelegation:\nTask category: logic\n`;
-    const result = validateAssignmentPresence(emptyValue);
-    expect(result.ok).toBe(false);
-    expect(result.violations.map((v) => v.code)).toEqual(["assignment.presence.missing-delegation"]);
-  });
-});
-
 describe("validateDispatchAssignment (warn-only wrapper, full validation)", () => {
   test("complete assignment (core fields + branch form) → no warnings, ok result", () => {
     const { warnings, log } = captureWarnings();
@@ -227,47 +178,55 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
     expect(warnings).toEqual([]);
   });
 
-  test("missing Execute as → presence code + engine field code + branch-missing warns", () => {
+  test("missing Execute as → engine field code + branch-missing warn; presence code is an alias on the field violation", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(missingExecuteAs, { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(3);
-    // Backward-compat presence code stays observable.
-    expect(warnings.some((w) => w.includes("assignment.presence.missing-execute-as"))).toBe(true);
-    // Engine full-validation codes now also fire.
+    // Single parser: NO stacked presence warning — one violation per missing field.
+    expect(warnings).toHaveLength(2);
     expect(warnings.some((w) => w.includes("assignment.field.missing-execute-as"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.presence.missing-execute-as"))).toBe(false);
+    const executeAs = result!.violations.find((v) => v.code === "assignment.field.missing-execute-as");
+    expect(executeAs?.aliases).toContain("assignment.presence.missing-execute-as");
     expect(warnings.some((w) => w.includes("[high]"))).toBe(true);
     expect(warnings.some((w) => w.includes("(fix:"))).toBe(true);
   });
 
-  test("missing Delegation / Task category → presence + field codes warn", () => {
-    for (const [fixture, presenceCode, fieldCode] of [
-      [missingDelegation, "assignment.presence.missing-delegation", "assignment.field.missing-delegation"],
-      [missingTaskCategory, "assignment.presence.missing-task-category", "assignment.field.missing-task-category"],
+  test("missing Delegation / Task category → single engine field code each (presence alias on the violation)", () => {
+    for (const [fixture, fieldCode, presenceCode] of [
+      [missingDelegation, "assignment.field.missing-delegation", "assignment.presence.missing-delegation"],
+      [missingTaskCategory, "assignment.field.missing-task-category", "assignment.presence.missing-task-category"],
     ] as const) {
       const { warnings, log } = captureWarnings();
       const result = validateDispatchAssignment(fixture, { log });
       expect(result!.ok).toBe(false);
-      expect(warnings.some((w) => w.includes(presenceCode))).toBe(true);
       expect(warnings.some((w) => w.includes(fieldCode))).toBe(true);
+      expect(warnings.some((w) => w.includes(presenceCode))).toBe(false);
+      const violation = result!.violations.find((v) => v.code === fieldCode);
+      expect(violation?.aliases).toContain(presenceCode);
     }
   });
 
-  test("missing all three → 3 presence + 3 engine field warnings", () => {
+  test("missing all three → 3 engine field warnings, no stacked presence lines", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(missingAllFields, { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(6);
+    // The fixture still carries a Working branch — no branch-missing.
+    expect(warnings).toHaveLength(3);
     for (const code of [
-      "assignment.presence.missing-execute-as",
-      "assignment.presence.missing-delegation",
-      "assignment.presence.missing-task-category",
       "assignment.field.missing-execute-as",
       "assignment.field.missing-delegation",
       "assignment.field.missing-task-category",
     ]) {
       expect(warnings.some((w) => w.includes(code))).toBe(true);
+    }
+    // Every core-field violation carries its legacy presence alias.
+    for (const v of result!.violations) {
+      if (v.code.startsWith("assignment.field.missing-")) {
+        expect(v.aliases).toHaveLength(1);
+        expect(v.aliases![0]).toMatch(/^assignment\.presence\.missing-/);
+      }
     }
   });
 
@@ -289,15 +248,15 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
 
   test("field fragment without heading is linted, not silent", () => {
     // A bare `Execute as:` line is Assignment-shaped — the other two fields
-    // still warn (presence + engine), unlike true garbage.
+    // still warn (engine field codes only; presence codes are aliases).
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment("Execute as: [unbalanced", { log });
     expect(result!.ok).toBe(false);
-    expect(warnings).toHaveLength(5);
-    expect(warnings.some((w) => w.includes("assignment.presence.missing-delegation"))).toBe(true);
-    expect(warnings.some((w) => w.includes("assignment.presence.missing-task-category"))).toBe(true);
+    expect(warnings).toHaveLength(3);
     expect(warnings.some((w) => w.includes("assignment.field.missing-delegation"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.field.missing-task-category"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.presence."))).toBe(false);
   });
 });
 
@@ -318,6 +277,59 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
     expect(warnings[0]).toContain("assignment.field.branch-missing-base");
     // The created branch (feature/x) itself is not default-protected — no gate warn.
     expect(warnings[0]).not.toContain("dispatch.default-branch.protected");
+  });
+
+  test("dangling create form ('create feature/x from') → branch-missing-base warn (qc2 S-1 / qc3 F-5)", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(createDanglingFrom, { log });
+    expect(result!.ok).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("assignment.field.branch-missing-base");
+  });
+
+  test("read-only scout assignment without a branch form → no branch-missing warn (qc3 F-1 / qc2 S-5)", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(scoutAssignment, { log });
+    expect(result!.ok).toBe(true);
+    expect(result!.violations).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  test("read-only role match is case-insensitive (Execute as: Scout)", () => {
+    const { warnings, log } = captureWarnings();
+    const text = scoutAssignment.replace("**Execute as**: scout", "**Execute as**: Scout");
+    const result = validateDispatchAssignment(text, { log });
+    expect(result!.ok).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  test("env fallback: MSTAR_WORKING_BRANCH=main supplies the gate branch", () => {
+    const previous = process.env.MSTAR_WORKING_BRANCH;
+    try {
+      process.env.MSTAR_WORKING_BRANCH = "main";
+      const { warnings, log } = captureWarnings();
+      const result = validateDispatchAssignment(noBranchForm, { log });
+      expect(result!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(true);
+      expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_WORKING_BRANCH;
+      else process.env.MSTAR_WORKING_BRANCH = previous;
+    }
+  });
+
+  test("directOnException match via env: policy on main + env main → no protected warn", () => {
+    const previous = process.env.MSTAR_WORKING_BRANCH;
+    try {
+      process.env.MSTAR_WORKING_BRANCH = "main";
+      const { warnings, log } = captureWarnings();
+      const result = validateDispatchAssignment(directOnMainPolicy, { log });
+      expect(result!.ok).toBe(true);
+      expect(warnings).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_WORKING_BRANCH;
+      else process.env.MSTAR_WORKING_BRANCH = previous;
+    }
   });
 
   test("directOnException match: Branch policy direct on main — reason → no gate warn", () => {
@@ -354,34 +366,40 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
     expect(result!.ok).toBe(true);
     expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(false);
   });
+});
 
-  test("env fallback: MSTAR_WORKING_BRANCH=main supplies the gate branch", () => {
-    const previous = process.env.MSTAR_WORKING_BRANCH;
-    try {
-      process.env.MSTAR_WORKING_BRANCH = "main";
-      const { warnings, log } = captureWarnings();
-      const result = validateDispatchAssignment(noBranchForm, { log });
-      expect(result!.ok).toBe(false);
-      expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(true);
-      expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
-    } finally {
-      if (previous === undefined) delete process.env.MSTAR_WORKING_BRANCH;
-      else process.env.MSTAR_WORKING_BRANCH = previous;
-    }
+describe("anti-recursion precheck in validateDispatchAssignment (qc1 F-004 / qc2 S-2)", () => {
+  test("subagent binding == Execute as → critical warn (warn-only)", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(completeAssignment, { log, subagentType: "fullstack-dev" });
+    expect(result!.ok).toBe(false);
+    const anti = result!.violations.find((v) => v.code === "dispatch.anti-recursion.self-type");
+    expect(anti?.severity).toBe("critical");
+    expect(warnings.some((w) => w.includes("[critical]") && w.includes("dispatch.anti-recursion.self-type"))).toBe(true);
+    // Branch-gate + field validation still fire alongside.
+    expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(false);
   });
 
-  test("directOnException match via env: policy on main + env main → no protected warn", () => {
-    const previous = process.env.MSTAR_WORKING_BRANCH;
-    try {
-      process.env.MSTAR_WORKING_BRANCH = "main";
-      const { warnings, log } = captureWarnings();
-      const result = validateDispatchAssignment(directOnMainPolicy, { log });
-      expect(result!.ok).toBe(true);
-      expect(warnings).toEqual([]);
-    } finally {
-      if (previous === undefined) delete process.env.MSTAR_WORKING_BRANCH;
-      else process.env.MSTAR_WORKING_BRANCH = previous;
-    }
+  test("different subagent binding → no anti-recursion warn", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(completeAssignment, { log, subagentType: "qc-specialist" });
+    expect(result!.ok).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  test("missing Execute as with a binding → no anti-recursion violation (empty role is not self-recursion)", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(missingExecuteAs, { log, subagentType: "fullstack-dev" });
+    expect(result!.violations.some((v) => v.code === "dispatch.anti-recursion.self-type")).toBe(false);
+    // Field + branch warnings still fire.
+    expect(warnings.some((w) => w.includes("assignment.field.missing-execute-as"))).toBe(true);
+  });
+
+  test("empty binding → no anti-recursion check (hook default)", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(completeAssignment, { log });
+    expect(result!.ok).toBe(true);
+    expect(warnings).toEqual([]);
   });
 });
 
@@ -398,7 +416,7 @@ describe("plugin wiring (tool.execute.before)", () => {
     };
   };
 
-  test("task tool with incomplete assignment warns; complete stays silent", async () => {
+  test("task tool with incomplete assignment warns; complete with a non-matching subagent stays silent", async () => {
     const plugin = await MorningStarHarnessPlugin();
     const beforeExecute = plugin["tool.execute.before"];
     expect(beforeExecute).toBeDefined();
@@ -417,10 +435,44 @@ describe("plugin wiring (tool.execute.before)", () => {
     }
     expect(
       warnings.some(
-        (w) => w.includes("[mstar-harness]") && w.includes("assignment.presence.missing-execute-as"),
+        (w) => w.includes("[mstar-harness]") && w.includes("assignment.field.missing-execute-as"),
       ),
     ).toBe(true);
 
+    const restore2 = captureConsoleWarn();
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c2" },
+        { args: { subagent_type: "reviewer", prompt: completeAssignment } },
+      );
+    } finally {
+      warnings = restore2();
+    }
+    expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
+  });
+
+  test("task tool dispatch with subagent == Execute as → critical anti-recursion warn (warn-only, never blocks)", async () => {
+    const plugin = await MorningStarHarnessPlugin();
+    const beforeExecute = plugin["tool.execute.before"];
+
+    // OpenCode `args.subagent` key.
+    const restore = captureConsoleWarn();
+    let warnings: string[];
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c1" },
+        { args: { subagent: "fullstack-dev", prompt: completeAssignment } },
+      );
+    } finally {
+      warnings = restore();
+    }
+    expect(
+      warnings.some(
+        (w) => w.includes("[mstar-harness]") && w.includes("dispatch.anti-recursion.self-type") && w.includes("[critical]"),
+      ),
+    ).toBe(true);
+
+    // Cursor-style `args.subagent_type` key.
     const restore2 = captureConsoleWarn();
     try {
       await beforeExecute!(
@@ -430,7 +482,7 @@ describe("plugin wiring (tool.execute.before)", () => {
     } finally {
       warnings = restore2();
     }
-    expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
+    expect(warnings.some((w) => w.includes("dispatch.anti-recursion.self-type"))).toBe(true);
   });
 
   test("task tool without a prompt arg, or garbage prompt, never warns or throws", async () => {
@@ -451,6 +503,24 @@ describe("plugin wiring (tool.execute.before)", () => {
     expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
   });
 
+  test("task tool with read-only scout prompt → silent (no branch-missing warn)", async () => {
+    const plugin = await MorningStarHarnessPlugin();
+    const beforeExecute = plugin["tool.execute.before"];
+
+    const restore = captureConsoleWarn();
+    let warnings: string[];
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c1" },
+        // Non-matching binding — the scout role itself is not re-invoked.
+        { args: { subagent: "reviewer", prompt: scoutAssignment } },
+      );
+    } finally {
+      warnings = restore();
+    }
+    expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
+  });
+
   test("task tool with default-protected Working branch warns; direct-on exception stays silent", async () => {
     const plugin = await MorningStarHarnessPlugin();
     const beforeExecute = plugin["tool.execute.before"];
@@ -460,7 +530,8 @@ describe("plugin wiring (tool.execute.before)", () => {
     try {
       await beforeExecute!(
         { tool: "task", sessionID: "s1", callID: "c1" },
-        { args: { subagent_type: "fullstack-dev", prompt: workingBranchMain } },
+        // Non-matching binding so only the branch gate fires.
+        { args: { subagent_type: "reviewer", prompt: workingBranchMain } },
       );
     } finally {
       warnings = restore();
@@ -475,7 +546,7 @@ describe("plugin wiring (tool.execute.before)", () => {
     try {
       await beforeExecute!(
         { tool: "task", sessionID: "s1", callID: "c2" },
-        { args: { subagent_type: "fullstack-dev", prompt: directOnMainPolicy } },
+        { args: { subagent_type: "reviewer", prompt: directOnMainPolicy } },
       );
     } finally {
       warnings = restore2();

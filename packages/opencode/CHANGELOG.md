@@ -6,6 +6,11 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+### Changed
+
+- `beforeDispatch` Assignment lint is engine-only: local `validateAssignmentPresence` parser removed (qc1 F-002); branch-form parsing via engine `parseAssignmentBranchForms` / `parseBranchPolicyDirectOnBranch` (qc1 F-001); read-only roles (scout/explore) skip the branch-form + default-branch gates (qc3 F-1 / qc2 S-5).
+- `antiRecursionPrecheck` wired into the hook: task dispatch whose role binding (`args.subagent` / `args.subagent_type`) equals the Assignment's `Execute as` warns at critical severity, warn-only (qc1 F-004 / qc2 S-2).
+
 ## [1.8.8] - 2026-08-06
 
 ### Bundled harness skills (`harness-skills/` at publish)
