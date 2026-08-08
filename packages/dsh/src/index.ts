@@ -24,6 +24,7 @@ import {
   applyEnforcement,
   assertDefaultBranchProtected,
   assignmentHeaderRegion,
+  evaluatePhaseGate,
   executionModeToN,
   findingsCleanupGate,
   isReadOnlyAssignmentRole,
@@ -39,6 +40,8 @@ import {
   resolveCompassEnforcement,
   resolveHarnessDir,
   resolveSkillRoot,
+  sddWorkspace,
+  taskBrief,
   validateAssignmentFields,
   validateExecutionLease,
   validateIntegrationMergeLease,
@@ -55,9 +58,11 @@ import type {
 } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { DshMstar } from './service.ts'
+import { parseCompassFrontmatterText } from './compass.ts'
 import type { MstarEngineStatusSource } from './types.ts'
 
 // Re-export the service type from the package entry (qc3 F-2a): the cordis
@@ -1379,6 +1384,271 @@ async function preStepCatalogListener(
 }
 
 /**
+ * JSON projection of one engine `ValidationResult` for the tool output schema
+ * (lossless JSON — `fix` is omitted when absent so `additionalProperties:
+ * false` never sees an undefined key).
+ */
+interface IterationGateViolationView {
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'nit'
+  code: string
+  message: string
+  fix?: string
+}
+
+/** JSON projection of one engine gate (`GateResult`). */
+interface IterationGateListView {
+  ok: boolean
+  violations: IterationGateViolationView[]
+}
+
+/**
+ * JSON projection of the engine `PhaseGateResult` (snake_case to match the
+ * model-facing tool vocabulary of the CLI's `mstar iteration gate`).
+ */
+interface IterationGateView {
+  transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery'
+  all_plans_done: boolean
+  ok: boolean
+  entry: IterationGateListView
+  exit: IterationGateListView
+  violations: IterationGateViolationView[]
+}
+
+/** Map one engine `ValidationResult` to its lossless JSON view. */
+function iterationViolationView(v: ValidationResult): IterationGateViolationView {
+  return { severity: v.severity, code: v.code, message: v.message, ...(v.fix !== undefined ? { fix: v.fix } : {}) }
+}
+
+/** Map one engine gate (`GateResult`) to its JSON view. */
+function iterationGateView(gate: GateResult): IterationGateListView {
+  return { ok: gate.ok, violations: gate.violations.map(iterationViolationView) }
+}
+
+/** Violation item schema shared by the iteration-gate output shape. */
+const ITERATION_VIOLATION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'nit'] },
+    code: { type: 'string', required: true },
+    message: { type: 'string', required: true },
+    fix: { type: 'string' },
+  },
+} as const
+
+/**
+ * Register the v2 seam model-facing tools (plan 20260808-dsh-seams-bundle
+ * Task 1): `mstar sdd …` / `mstar iteration gate` equivalents operating
+ * in-app against control-path artifacts.
+ *
+ * The registrations are deferred with `ctx.inject(['tools'], …)` — the same
+ * optional-unit pattern as dsh-tool-todo — so the plugin boots without the
+ * tools service (gates stay active) and registers when the composed dsh app
+ * provides `ctx.tools`. The fs-mutating tools declare
+ * `isConcurrencySafe: () => false` (exclusive — never overlap with sibling
+ * calls, matching the real registry's exclusive default).
+ * @param ctx - registrant context carrying the tool registry.
+ * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when the
+ * probe found none — the tools then let the engine probe from the cwd).
+ */
+function registerSddIterationTools(ctx: Context, harnessDir: string | null): void {
+  ctx.inject(['tools'], (toolsCtx) => {
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_sdd_workspace',
+      description:
+        'Resolve and ensure the SDD workspace dir for a plan id — {HARNESS_DIR}/sdd/<plan-id>/ ' +
+        '(the engine sddWorkspace, mirror of `mstar sdd workspace`). Fails closed when the app ' +
+        'runs from a linked feature worktree without control_root (never creates a second SDD ' +
+        'tree under a feature checkout).',
+      parameters: {
+        plan_id: {
+          type: 'string',
+          required: true,
+          description: 'Plan id whose SDD dir is resolved/created ({HARNESS_DIR}/sdd/<plan-id>/).',
+        },
+        control_root: {
+          type: 'string',
+          description:
+            'Control worktree repo root (CLI 2nd arg / MSTAR_CONTROL_ROOT). Required when the ' +
+            'app runs from a linked feature worktree without {HARNESS_DIR}/status.json.',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            sdd_dir: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: `sdd dir: ${value.sdd_dir}` }],
+      },
+      presentCall: args => ({ card: 'generic', title: 'Resolve SDD workspace', kind: 'other', rawInput: args.plan_id }),
+      // The tool creates a directory — exclusive (never parallel with siblings).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const sddDir = sddWorkspace(args.plan_id, {
+          ...(args.control_root !== undefined ? { controlRoot: args.control_root } : {}),
+          ...(harnessDir !== null ? { harnessDir } : {}),
+        })
+        return { sdd_dir: sddDir }
+      },
+    }))
+
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_sdd_task_brief',
+      description:
+        'Extract the `## Task N` section of a plan file into a brief file (engine taskBrief, ' +
+        'mirror of `mstar sdd task-brief`). Fence-aware: headings inside code fences are ignored.',
+      parameters: {
+        plan_file: {
+          type: 'string',
+          required: true,
+          description: 'Plan markdown file whose `## Task N` section is extracted.',
+        },
+        task_number: {
+          type: 'integer',
+          required: true,
+          description: '1-based task number whose brief is extracted.',
+        },
+        out_file: {
+          type: 'string',
+          description: 'Output file (default: {sdd_dir}/task-N-brief.md when sdd_dir is given).',
+        },
+        sdd_dir: {
+          type: 'string',
+          description: 'SDD dir used for the default out file — the in-app mirror of the SDD_DIR env the CLI reads.',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            brief_file: { type: 'string', required: true },
+            task_number: { type: 'integer', required: true },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: `task ${value.task_number} brief: ${value.brief_file}` }],
+      },
+      presentCall: args => ({ card: 'generic', title: 'Extract SDD task brief', kind: 'other', rawInput: args.plan_file }),
+      // The tool writes a file — exclusive (never parallel with siblings).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        if (args.out_file === undefined && args.sdd_dir === undefined) {
+          throw new Error('mstar_sdd_task_brief: pass out_file or sdd_dir (the in-app mirror of the SDD_DIR env the CLI reads)')
+        }
+        const out = taskBrief(
+          args.plan_file,
+          args.task_number,
+          args.out_file,
+          args.sdd_dir !== undefined ? { sddDir: args.sdd_dir } : {},
+        )
+        return { brief_file: out, task_number: args.task_number }
+      },
+    }))
+
+    toolsCtx.tools.register(defineTool({
+      name: 'mstar_iteration_gate',
+      description:
+        'Evaluate the iteration phase-transition gate against a status.json and a delivery-compass.md ' +
+        '(engine evaluatePhaseGate, mirror of `mstar iteration gate`): returns the transition ' +
+        '(phase-2-execute / phase-3-close / phase-4-pr-delivery), the pass/fail verdict, and the ' +
+        '§3.1 entry / §3.5 exit checklists with violation codes.',
+      parameters: {
+        status_path: {
+          type: 'string',
+          required: true,
+          description: 'Path to {HARNESS_DIR}/status.json.',
+        },
+        compass_path: {
+          type: 'string',
+          required: true,
+          description: 'Path to the iteration delivery-compass.md.',
+        },
+        branch: {
+          type: 'string',
+          description: 'Current branch probe (exit §3.5 item 5 — must equal the spec integration branch).',
+        },
+        integration: {
+          type: 'string',
+          description: 'Spec integration branch probe (exit §3.5 item 5).',
+        },
+        target: {
+          type: 'string',
+          description: 'PR base branch probe (exit §3.5 item 6 — must equal the compass target_branch).',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            transition: {
+              type: 'string',
+              required: true,
+              enum: ['phase-2-execute', 'phase-3-close', 'phase-4-pr-delivery'],
+            },
+            all_plans_done: { type: 'boolean', required: true },
+            ok: { type: 'boolean', required: true },
+            entry: {
+              type: 'object',
+              required: true,
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean', required: true },
+                violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+              },
+            },
+            exit: {
+              type: 'object',
+              required: true,
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean', required: true },
+                violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+              },
+            },
+            violations: { type: 'array', required: true, items: ITERATION_VIOLATION_SCHEMA },
+          },
+        },
+        render: (_args, value) => {
+          const codes = value.violations.map((v) => v.code).join(', ')
+          const text = value.ok
+            ? `iteration gate: PASS (transition ${value.transition})`
+            : `iteration gate: FAIL (transition ${value.transition}) — ${codes}`
+          return [{ type: 'text', text }]
+        },
+      },
+      presentCall: args => ({ card: 'generic', title: 'Evaluate iteration phase gate', kind: 'other', rawInput: args.compass_path }),
+      presentResult: (_args, _result) => ({ card: 'generic', title: 'Iteration gate evaluation' }),
+      // Read-only evaluation — exclusive anyway (the engine result is a pure function of the docs).
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        if (!existsSync(args.status_path)) throw new Error(`status file not found: ${args.status_path}`)
+        if (!existsSync(args.compass_path)) throw new Error(`compass file not found: ${args.compass_path}`)
+        const statusDoc = readJson(args.status_path)
+        const compassDoc = parseCompassFrontmatterText(readFileSync(args.compass_path, 'utf8'), args.compass_path)
+        const result = evaluatePhaseGate(statusDoc, compassDoc, {
+          currentBranch: args.branch,
+          specIntegrationBranch: args.integration,
+          prBaseBranch: args.target,
+        })
+        const view: IterationGateView = {
+          transition: result.transition,
+          all_plans_done: result.allPlansDone,
+          ok: result.ok,
+          entry: iterationGateView(result.entry),
+          exit: iterationGateView(result.exit),
+          violations: result.violations.map(iterationViolationView),
+        }
+        return view
+      },
+    }))
+  })
+}
+
+/**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
  * engine, expose the engine surface as `ctx.dshMstar`, construct the host
  * adapter (the gates route through it — one code path with the host hooks),
@@ -1477,4 +1747,8 @@ export function apply(ctx: Context, config: Config): void {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
   ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, payload, next))
+
+  // v2 seams — sdd + iteration model-facing tools (plan 20260808-dsh-seams-bundle
+  // Task 1): `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
+  registerSddIterationTools(ctx, harnessDir)
 }

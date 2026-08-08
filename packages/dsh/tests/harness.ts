@@ -91,7 +91,16 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   // The dsh skill registry row mounts first (real dsh app layout): the
   // `@mstar-harness/dsh` plugin mounts skill-local as a child, which injects
   // the `skills` service.
-  const lines = ["- name: '@deepseek-ai/dsh-skill'", "- name: '@mstar-harness/dsh'", '  config:', `    harnessDir: ${JSON.stringify(harnessDir)}`]
+  const lines = [
+    "- name: '@deepseek-ai/dsh-skill'",
+    // The tool registry row mounts before the plugin so `ctx.tools` exists
+    // when the v2 seams register their model-facing tools (Task 1 of plan
+    // 20260808-dsh-seams-bundle; the real dsh app always composes dsh-tools).
+    "- name: '@deepseek-ai/dsh-tools'",
+    "- name: '@mstar-harness/dsh'",
+    '  config:',
+    `    harnessDir: ${JSON.stringify(harnessDir)}`,
+  ]
   if (options.enforcement !== undefined) lines.push(`    enforcement: ${options.enforcement}`)
   if (options.dispatchTools !== undefined) lines.push(`    dispatchTools: ${JSON.stringify(options.dispatchTools)}`)
   if (options.dispatchBinding !== undefined) lines.push(`    dispatchBinding: ${JSON.stringify(options.dispatchBinding)}`)
@@ -108,6 +117,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // The `ctx.skills` registry seam — dev-time peer stub (real package ships
     // from the composed dsh app at runtime).
     ['@deepseek-ai/dsh-skill', await import('@deepseek-ai/dsh-skill')],
+    // The `ctx.tools` registry seam — dev-time functional peer stub whose
+    // default export provides the ToolRegistry service (real package ships
+    // from the composed dsh app at runtime).
+    ['@deepseek-ai/dsh-tools', await import('@deepseek-ai/dsh-tools')],
   ])
   ctx.loader.internal = {
     version: 'v2',
