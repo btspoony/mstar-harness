@@ -30,6 +30,7 @@
         "@deepseek-ai/dsh-fs": "^0.0.1",
         "@deepseek-ai/dsh-fs-policy": "^0.0.1",
         "@deepseek-ai/dsh-invariants": "^0.0.1",
+        "@deepseek-ai/dsh-llm": "^0.0.1",
         "@deepseek-ai/dsh-skill": "^0.0.1",
         "@deepseek-ai/dsh-skill-local": "^0.0.1",
         "@deepseek-ai/dsh-subagent": "^0.0.1",
@@ -46,6 +47,7 @@
         "@deepseek-ai/dsh-agent": "^0.0.1",
         "@deepseek-ai/dsh-fs": "^0.0.1",
         "@deepseek-ai/dsh-fs-policy": "^0.0.1",
+        "@deepseek-ai/dsh-llm": "^0.0.1",
         "@deepseek-ai/dsh-skill": "^0.0.1",
         "@deepseek-ai/dsh-skill-local": "^0.0.1",
         "@deepseek-ai/dsh-subagent": "^0.0.1",
@@ -67,6 +69,10 @@
     },
     "packages/dsh/peer-stubs/dsh-invariants": {
       "name": "@deepseek-ai/dsh-invariants",
+      "version": "0.0.1",
+    },
+    "packages/dsh/peer-stubs/dsh-llm": {
+      "name": "@deepseek-ai/dsh-llm",
       "version": "0.0.1",
     },
     "packages/dsh/peer-stubs/dsh-skill": {
@@ -115,6 +121,8 @@
     "@deepseek-ai/dsh-fs-policy": ["@deepseek-ai/dsh-fs-policy@workspace:packages/dsh/peer-stubs/dsh-fs-policy"],
 
     "@deepseek-ai/dsh-invariants": ["@deepseek-ai/dsh-invariants@workspace:packages/dsh/peer-stubs/dsh-invariants"],
+
+    "@deepseek-ai/dsh-llm": ["@deepseek-ai/dsh-llm@workspace:packages/dsh/peer-stubs/dsh-llm"],
 
     "@deepseek-ai/dsh-skill": ["@deepseek-ai/dsh-skill@workspace:packages/dsh/peer-stubs/dsh-skill"],
 

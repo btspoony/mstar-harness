@@ -33,6 +33,7 @@ import {
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
+  readHarnessVersion,
   readJson,
   resolveAssetPath,
   resolveCompassEnforcement,
@@ -54,7 +55,10 @@ import type {
 } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { DshMstar } from './service.ts'
+import type { MstarEngineStatusSource } from './types.ts'
 
 // Re-export the service type from the package entry (qc3 F-2a): the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -62,6 +66,7 @@ import { DshMstar } from './service.ts'
 // typed `ctx.dshMstar`.
 export { DshMstar } from './service.ts'
 export type { DshMstarOptions } from './service.ts'
+export type { MstarEngineStatusSource } from './types.ts'
 
 /** Cordis function-plugin name registered by the Loader. */
 export const name = 'dsh'
@@ -1252,6 +1257,74 @@ export class DshHostAdapter extends Service implements HostAdapter {
   }
 }
 
+/** The plugin's own manifest version (single-version invariant; own manifest first). */
+function pluginVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }
+    return typeof pkg.version === 'string' && pkg.version !== '' ? pkg.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+/** The durable catalog source for the current engine status (the watermark fields). */
+function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource {
+  return {
+    kind: 'mstar-engine-status',
+    form: 'catalog',
+    engineVersion: readHarnessVersion(),
+    pluginVersion: pluginVersion(),
+    harnessDir,
+    enforcement: harnessDir !== null ? resolveCompassEnforcement(harnessDir) : { hard: false, source: 'none' },
+  }
+}
+
+/** Model-facing rendering of the engine-status catalog (the `<mstar_engine_status>` block). */
+function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
+  const enforcement = `${source.enforcement.hard ? 'hard' : 'soft'}${source.enforcement.source === 'none' ? '' : ` (${source.enforcement.source})`}`
+  return [
+    '<mstar_engine_status>',
+    `engine version: ${source.engineVersion}`,
+    `plugin version: ${source.pluginVersion}`,
+    `harness dir: ${source.harnessDir ?? 'none'}`,
+    `enforcement: ${enforcement}`,
+    '</mstar_engine_status>',
+  ].join('\n')
+}
+
+/**
+ * Advisory `agent/pre-step` waterfall listener (roadmap §4 D4 — agent
+ * catalog): delegates through `next()` (never `reject` — that would block the
+ * step — and never replaces the delegated messages) and appends ONE
+ * `mstar-engine-status` catalog MessageSource to the composed step messages,
+ * so the durable session log carries the engine status row (model-visible ⟺
+ * logged, MessageSource form). An aborted step publishes nothing (tool-skill
+ * precedent).
+ *
+ * simplify: dev-time stub — every composed step carries the catalog row (no
+ * per-session dedup: the real dsh-session log is unavailable at dev time).
+ * Digest-gated re-emission against the durable log lands with the real
+ * session seam at P3.
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ * @param payload - the proposed step the loop is about to enter.
+ * @param next - the remaining pre-step chain; its value is the delegated decision.
+ */
+async function preStepCatalogListener(
+  harnessDir: string | null,
+  payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
+  next: () => Promise<PreStepDecision>,
+): Promise<PreStepDecision> {
+  const decision = await next()
+  if (decision.kind === 'reject') return decision
+  payload.signal.throwIfAborted()
+  const source = engineStatusSource(harnessDir)
+  const catalog = createUserMessage({
+    source,
+    content: [{ type: 'text', text: renderEngineStatusCatalog(source) }],
+  })
+  return { kind: 'enter', messages: [...decision.messages, catalog] }
+}
+
 /**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
  * engine, expose the engine surface as `ctx.dshMstar`, construct the host
@@ -1324,4 +1397,11 @@ export function apply(ctx: Context, config: Config): void {
   // chain and make this security gate unreachable — "a deny short-circuits
   // regardless of order" holds only once the listener is reached.
   ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, adapter, exec, next), { prepend: true })
+
+  // Engine-status catalog — advisory `agent/pre-step` waterfall listener
+  // (roadmap §4 D4 / P2 agent catalog): calls `next()` (never vetoes or
+  // replaces the delegated messages) and appends one `mstar-engine-status`
+  // catalog MessageSource to the composed step messages, so the session log
+  // carries the engine status row (model-visible ⟺ logged).
+  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(harnessDir, payload, next))
 }
