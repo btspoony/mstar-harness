@@ -30,11 +30,11 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 
 - **Lifecycle**: open → verified close → **`archived/residuals/<plan-id>.json`**; machine **`severity`** enum in reference.
 
-> **Engine check (when available):** run `mstar status archive-residuals <plan-id>` (or `import { archiveResiduals } from "@mstar-harness/engine"` in a host hook). Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar status archive-residuals <plan-id>` (or `import { archiveResiduals } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 - **Findings cleanup**: Assignment **`Findings cleanup: zero-residual | allow-residual`** (+ optional `metadata.findings_cleanup`); iteration Phase 2 defaults to **`zero-residual`** → **`references/status-and-residuals.md`** (“Findings cleanup modes”).
 
-> **Engine check (when available):** import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook to enforce the cleanup mode above. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook to enforce the cleanup mode above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 - **`notes.json`**, optional **`tech_debt_summary`** (rollup view; compute via engine `techDebtRollup` — **`references/status-and-residuals.md`**).
 - **Iteration Phase 2 leases** (`metadata.control_worktree_path`, `plans[].execution_lease`, `metadata.integration_merge_lease`): claim-before-`InProgress`, resume vs steal, orphan recovery → **`references/status-and-residuals.md`** (“Iteration execution leases”).

@@ -48,7 +48,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 **Legacy（仅兼容读）**：若以上皆无内容，但 `{HARNESS_DIR}/designs/` 或仓库根 `designs/` **非空**，可作 `{SPECS_DIR}` 使用；init 时**不**新建 `designs/`。
 
-> **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints the resolved specs dir) — to confirm the candidate order (empty-dir-as-absent included). Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints the resolved specs dir) — to confirm the candidate order (empty-dir-as-absent included). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 可选项目选择：部分 spoke 仓库另跟踪 `{HARNESS_DIR}/roadmap.md` — **非**默认 tracked；仅在项目 opt-in 时提及。
 
@@ -126,7 +126,7 @@ Legacy `.agents/` 等价：
 # Tracked (results): .agents/AGENTS.md, .agents/knowledge/, .agents/specs/
 ```
 
-> **Engine check (when available):** import `emitGitignoreSnippet` / `validateGitignore` from `@mstar-harness/engine` in a host hook to emit or validate the canonical snippet above. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** import `emitGitignoreSnippet` / `validateGitignore` from `@mstar-harness/engine` in a host hook to emit or validate the canonical snippet above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
