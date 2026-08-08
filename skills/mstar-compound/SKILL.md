@@ -83,6 +83,8 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 6. **Indexes** — `{KNOWLEDGE_DIR}/README.md` 加行（Document / Source Plan / Description / Status）；可选 `status.json` `knowledge_refs`。**iteration-close gate**：每篇新 doc 必须 Phase 6
 7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐 `/pm compound-refresh <scope>`（不自动跑，仅 flag）
 
+> **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertIndexRows } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert every doc has its `{KNOWLEDGE_DIR}/README.md` index row (Phase 6 Indexes). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## Support files
 
 读 `references/compound-workflow.md`（Q1–Q8 + Phase 1–7）、`references/schema.yaml`（frontmatter）、`references/category-mapping.md`（track/path 映射）、`references/concepts-vocabulary.md`（CONCEPTS.md 规则）、`assets/resolution-template.md`（track 正文结构）。

@@ -58,6 +58,8 @@ A good strategy document is opinionated and concise. It should fit in one screen
 <Major past decisions with context — why, not just what>
 ```
 
+> **Engine check (when available):** run `mstar lint <STRATEGY.md>` (or `import { lintStrategySections } from "@mstar-harness/engine"` in a host hook) to check the six required sections above (Vision, What we build, What we don't build, Guiding Principles, Technology Direction, Decision Log). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ### Optional sections
 
 - **Current Focus** — what the team is working on now

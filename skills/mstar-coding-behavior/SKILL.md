@@ -58,6 +58,8 @@ This signals intent — the simplicity is deliberate, not an oversight — and g
 - Do not confuse "minimum" with "temporary." A small implementation must still align with the long-term target state, stable interfaces, and known follow-up plan.
 - If a workaround is unavoidable, label it `simplify:` / `temporary`, explain why, and record the removal path in the plan/status artifact before claiming the task complete.
 
+> **Engine check (when available):** run `mstar lint <target>` (or `import { findSimplifyMarkers, findTemporaryMarkers } from "@mstar-harness/engine"` in a host hook) to check the marker convention above — every `simplify:` / `temporary` comment is reported, and `temporary` markers without a recorded plan/status removal path are violations. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 **Simplicity anti-patterns — stop and reconsider when you spot these:**
 
 | Anti-pattern | Signal |
@@ -133,6 +135,9 @@ Do not perform agreement. State the technical action, the verification result, o
 ## Integration Notes
 
 - **SDD implementer reports** (`mstar-sdd`): completion evidence must include TDD triple — test file(s), command, output — in `task-N-report.md`; fix rounds add the same for new/changed tests.
+
+> **Engine check (when available):** run `mstar lint <task-N-report.md>` (or `import { assertSddTddTriple } from "@mstar-harness/engine"` in a host hook) to assert the TDD triple above — test file(s), runnable command, and output evidence must all be present in the report. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 - This skill must not be used to bypass branch constraints, QC/QA gate definitions, assignment authority, or `Done` ownership rules.
 
 ## Anti-Bloat Rule for Prompt Maintenance

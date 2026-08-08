@@ -17,6 +17,8 @@ Knowledge documents in `{KNOWLEDGE_DIR}` age. Code changes, conventions evolve, 
 
 **SSOT**: `mstar-plan-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md` + `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`（引用更新）。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
 
+> **Engine check (when available):** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (or `import { scopeGuard, compoundRefreshScope } from "@mstar-harness/engine"` in a host hook) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`, `{HARNESS_DIR}/status.json`) and guard every write against it. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## When to use
 
 | Trigger | Example |
