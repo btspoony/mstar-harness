@@ -36,6 +36,7 @@ import { join } from "node:path";
 import {
   assertIndexRowObligations,
   evaluatePhaseGate,
+  parseCompassFrontmatter,
   pushCadenceProbe,
   validateCompassFrontmatter,
   type CompassDoc,
@@ -520,5 +521,86 @@ describe("assertIndexRowObligations — one row per iteration (mstar-iteration �
     const result = assertIndexRowObligations(join(tmpRoot("mstar-index-"), "does-not-exist"));
     expect(result.ok).toBe(false);
     expect(result.violations.some((v) => v.code === "INDEX_ITERATIONS_DIR_MISSING")).toBe(true);
+  });
+});
+
+describe("parseCompassFrontmatter — flat YAML frontmatter parser (shared CLI + omp tool)", () => {
+  test("real delivery-compass.md frontmatter round-trips to a flat doc (scalar keys + plans block list)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(
+        file,
+        `---
+iteration_id: v9.9.9
+start_date: 2026-08-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans:
+  - plan-a
+  - plan-b
+---
+
+# v9.9.9 Delivery Compass
+`,
+        "utf8",
+      );
+      expect(parseCompassFrontmatter(file)).toEqual({
+        iteration_id: "v9.9.9",
+        start_date: "2026-08-01",
+        status: "active",
+        iteration_base_branch: "main",
+        target_branch: "main",
+        plans: ["plan-a", "plan-b"],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("flow-style plans array and quoted values round-trip", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(
+        file,
+        `---
+iteration_id: "v1.0.0"
+status: locked
+plans: [plan-a, plan-b]
+---`,
+        "utf8",
+      );
+      expect(parseCompassFrontmatter(file)).toEqual({
+        iteration_id: "v1.0.0",
+        status: "locked",
+        plans: ["plan-a", "plan-b"],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unterminated frontmatter fence → throws with the file path", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, "---\niteration_id: v9.9.9\nstatus: active\n", "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(`unterminated YAML frontmatter in ${file}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("missing frontmatter fence → throws with the file path", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, "# v9.9.9 Delivery Compass\n", "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(`no YAML frontmatter fence in ${file}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

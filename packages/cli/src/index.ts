@@ -32,6 +32,7 @@ import {
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
+  parseCompassFrontmatter,
   planQualityBar,
   pushCadenceProbe,
   resolveHarnessDir,
@@ -57,7 +58,6 @@ import {
   type ValidationResult,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
-import { parseCompassFrontmatter } from "./compass";
 import { verifyPlanExecutionLease } from "./lease-verify";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";

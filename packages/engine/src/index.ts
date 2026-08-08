@@ -139,6 +139,7 @@ export type {
 export {
   assertIndexRowObligations,
   evaluatePhaseGate,
+  parseCompassFrontmatter,
   pushCadenceProbe,
   validateCompassFrontmatter,
 } from "./iteration.js";
