@@ -35,7 +35,6 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { isOpenResidual, type StatusDoc } from "./status.js";
 
@@ -104,15 +103,109 @@ export type PhaseGateResult = {
   violations: ValidationResult[];
 };
 
-const compassSchema = z.object({
-  iteration_id: z.string().min(1),
-  start_date: z.string().regex(DATE_RE),
-  status: z.enum(COMPASS_STATUSES),
-  iteration_base_branch: z.string().min(1),
-  target_branch: z.string().min(1),
-  plans: z.array(z.string().min(1)).optional(),
-  end_date: z.string().regex(DATE_RE).optional(),
-});
+/** Narrowed shape of a valid compass frontmatter (mirrors the zod 4 schema semantics previously used). */
+type CompassShape = {
+  iteration_id: string;
+  start_date: string;
+  status: string;
+  iteration_base_branch: string;
+  target_branch: string;
+  plans?: string[];
+  end_date?: string;
+};
+
+type CompassShapeIssue = {
+  path: (string | number)[];
+  message: string;
+};
+
+type CompassShapeResult =
+  | { ok: true; data: CompassShape }
+  | { ok: false; issues: CompassShapeIssue[] };
+
+function typeName(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+/**
+ * Hand-rolled compass frontmatter schema validator (zero external runtime
+ * deps — replaces the previous zod 4 `z.object(...)` schema with identical
+ * observable semantics: required non-empty strings, YYYY-MM-DD dates,
+ * status enum, optional array of non-empty plan ids, unknown keys ignored,
+ * issues reported in schema key order).
+ */
+function validateCompassShape(doc: Record<string, unknown>): CompassShapeResult {
+  const issues: CompassShapeIssue[] = [];
+
+  const expectString = (key: string, opts: { regex?: RegExp; min?: number } = {}): void => {
+    const value = doc[key];
+    if (typeof value !== "string") {
+      issues.push({ path: [key], message: `expected string, received ${typeName(value)}` });
+      return;
+    }
+    if (opts.min !== undefined && value.length < opts.min) {
+      issues.push({ path: [key], message: `string must contain at least ${opts.min} character(s)` });
+      return;
+    }
+    if (opts.regex !== undefined && !opts.regex.test(value)) {
+      issues.push({ path: [key], message: `string must match ${opts.regex}` });
+    }
+  };
+
+  expectString("iteration_id", { min: 1 });
+  expectString("start_date", { regex: DATE_RE });
+
+  const status = doc.status;
+  if (typeof status !== "string" || !(COMPASS_STATUSES as readonly string[]).includes(status)) {
+    issues.push({
+      path: ["status"],
+      message: `expected one of ${COMPASS_STATUSES.map((s) => `'${s}'`).join(" | ")}, received ${typeName(status)}`,
+    });
+  }
+
+  expectString("iteration_base_branch", { min: 1 });
+  expectString("target_branch", { min: 1 });
+
+  const plans = doc.plans;
+  if (plans !== undefined) {
+    if (!Array.isArray(plans)) {
+      issues.push({ path: ["plans"], message: `expected array, received ${typeName(plans)}` });
+    } else {
+      plans.forEach((entry, index) => {
+        if (typeof entry !== "string") {
+          issues.push({ path: ["plans", index], message: `expected string, received ${typeName(entry)}` });
+        } else if (entry.length < 1) {
+          issues.push({ path: ["plans", index], message: "string must contain at least 1 character(s)" });
+        }
+      });
+    }
+  }
+
+  const end_date = doc.end_date;
+  if (end_date !== undefined) {
+    if (typeof end_date !== "string") {
+      issues.push({ path: ["end_date"], message: `expected string, received ${typeName(end_date)}` });
+    } else if (!DATE_RE.test(end_date)) {
+      issues.push({ path: ["end_date"], message: `string must match ${DATE_RE}` });
+    }
+  }
+
+  if (issues.length > 0) return { ok: false, issues };
+  return {
+    ok: true,
+    data: {
+      iteration_id: doc.iteration_id as string,
+      start_date: doc.start_date as string,
+      status: status as string,
+      iteration_base_branch: doc.iteration_base_branch as string,
+      target_branch: doc.target_branch as string,
+      ...(plans !== undefined ? { plans: plans as string[] } : {}),
+      ...(end_date !== undefined ? { end_date: end_date as string } : {}),
+    },
+  };
+}
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -142,11 +235,11 @@ export function validateCompassFrontmatter(doc: unknown): GateResult {
       ],
     };
   }
-  const parsed = compassSchema.safeParse(doc);
-  if (!parsed.success) {
+  const parsed = validateCompassShape(doc);
+  if (!parsed.ok) {
     return {
       ok: false,
-      violations: parsed.error.issues.map((issue) => {
+      violations: parsed.issues.map((issue) => {
         const field = issue.path.join(".") || "(root)";
         return violation(
           "medium",
