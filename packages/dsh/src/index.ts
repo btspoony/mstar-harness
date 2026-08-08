@@ -17,6 +17,7 @@ import {
   applyEnforcement,
   assertDefaultBranchProtected,
   assignmentHeaderRegion,
+  executionModeToN,
   findingsCleanupGate,
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,
@@ -27,7 +28,9 @@ import {
   resolveCompassEnforcement,
   resolveHarnessDir,
   validateAssignmentFields,
+  validateExecutionLease,
   validateStatus,
+  verifyPlanExecutionLease,
 } from '@mstar-harness/engine'
 import type { GateResult, StatusDoc, ValidationResult } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
@@ -346,6 +349,174 @@ function denyReason(tool: string, verdict: GateResult): string {
 }
 
 /**
+ * One lease-gate violation line (dsh-side codes live in the `lease.dispatch.*`
+ * namespace; the engine emits `lease.verify.*` / `lease.execution-lease.*`).
+ */
+function leaseViolation(code: string, message: string, fix?: string): ValidationResult {
+  return { ok: false, severity: 'high', code, message, fix }
+}
+
+/**
+ * Parse one Assignment header field value with the engine
+ * `parseAssignmentFields` semantics: a `**Field**: value` (bold) or
+ * `Field: value` (plain) line, optionally list-bulleted, at line start.
+ * Returns the trimmed value or undefined when the field is absent/empty.
+ */
+function assignmentHeaderValue(assignmentText: string, label: string): string | undefined {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*[ \\t]*:[ \\t]*(.*)$`, 'm')
+  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`, 'm')
+  const line = assignmentText.match(bold)?.[1] ?? assignmentText.match(plain)?.[1]
+  if (line === undefined) return undefined
+  const value = line.trim()
+  return value === '' ? undefined : value
+}
+
+/** First whitespace-delimited token of a header value (paths in this convention never contain spaces). */
+function firstToken(value: string): string | undefined {
+  const token = value.split(/\s+/)[0]
+  return token === '' ? undefined : token
+}
+
+/** A header value that means "no value" (placeholder conventions). Type guard so callers narrow to `string`. */
+function isNaValue(value: string | undefined): value is undefined {
+  return value === undefined || /^(?:n\/?a|none)$/i.test(value)
+}
+
+/**
+ * Resolve the target plan id from the Assignment: `Plan Path` basename
+ * (`.md` stripped), else `SDD dir` basename, else a `plan_id` field.
+ */
+function planIdOf(assignmentText: string): string | undefined {
+  const planPath = assignmentHeaderValue(assignmentText, 'Plan Path')
+  if (!isNaValue(planPath)) {
+    const id = basename(firstToken(planPath) ?? '')
+    return id.endsWith('.md') ? id.slice(0, -3) : id
+  }
+  const sddDir = assignmentHeaderValue(assignmentText, 'SDD dir')
+  if (!isNaValue(sddDir)) {
+    const id = basename(firstToken(sddDir) ?? '')
+    return id === '' ? undefined : id
+  }
+  const planId = assignmentHeaderValue(assignmentText, 'plan_id')
+  return isNaValue(planId) ? undefined : planId
+}
+
+/** The dispatching session's stable id, when the seam exposes it (dsh Agent.id). */
+function sessionIdOf(exec: ToolExecution): string | undefined {
+  const agent = asRecord(exec.agent)
+  const id = agent?.id
+  return typeof id === 'string' && id.trim() !== '' ? id : undefined
+}
+
+/**
+ * Lease gate (Task 5) — ADDITIVE beyond the opencode parity field set:
+ * opencode's `validateDispatchAssignment` does NOT run lease checks at
+ * dispatch, so every violation emitted here is dsh-only and clearly scoped:
+ * the check fires ONLY for WRITABLE dispatches whose Assignment declares
+ * `Execution mode: sdd` (engine `executionModeToN` semantics — sdd maps to
+ * N=3; the function's violation path is intentionally unused so
+ * `dispatch.execution-mode.*` codes stay out of the parity field set) OR
+ * whose plan row is `InProgress`.
+ *
+ * Contract (status-and-residuals.md § Pre-dispatch re-verify): before any
+ * writable implement dispatch, reread `{HARNESS_DIR}/status.json` and confirm
+ * the session still passes verify-held-lease — `holder`, `worktree_path` and
+ * `working_branch` must match the Assignment; mismatch or absent lease →
+ * STOP. Engine `verifyPlanExecutionLease` + `validateExecutionLease` carry
+ * the presence/shape checks (missing / orphan / dual-write / non-ssot /
+ * invalid fields); the dispatch-context comparisons (holder vs the
+ * dispatching session, worktree and branch vs the Assignment) are dsh-side.
+ *
+ * Degrade-allow cases (no false positives): no harness dir, unresolvable plan
+ * id, missing status.json, and non-SDD assignments whose plan row is absent
+ * or not InProgress. Malformed status.json is a violation ONLY for sdd
+ * dispatches (the lease state is unverifiable — the status gate already
+ * guards the next write); unreadable docs never harden a soft workflow.
+ */
+function leaseGateViolations(
+  harnessDir: string | null,
+  exec: ToolExecution,
+  writable: boolean | undefined,
+  prompt: string,
+): ValidationResult[] {
+  if (harnessDir === null || writable === false) return []
+  const mode = assignmentHeaderValue(prompt, 'Execution mode')
+  const sdd = executionModeToN(mode ?? '').n === 3
+  const planId = planIdOf(prompt)
+  if (planId === undefined || planId === '') return []
+  const statusPath = join(harnessDir, STATUS_FILE)
+  if (!existsSync(statusPath)) return []
+
+  let doc: StatusDoc
+  try {
+    doc = readJson(statusPath) as StatusDoc
+  } catch (error) {
+    if (!sdd) return []
+    return [leaseViolation(
+      'lease.dispatch.unreadable',
+      `cannot read ${statusPath}: ${(error as Error).message} — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+      'restore a valid status.json (the status gate refuses invalid writes)',
+    )]
+  }
+
+  const row = Array.isArray(doc.plans)
+    ? doc.plans.map(asRecord).find((r) => r?.id === planId || r?.plan_id === planId)
+    : undefined
+  if (row === undefined) {
+    if (!sdd) return []
+    return [leaseViolation(
+      'lease.dispatch.plan-not-found',
+      `plan ${planId} is not registered in ${STATUS_FILE} — cannot verify its execution_lease before writable dispatch`,
+      'register the plan row in status.json (first implement dispatch requires a plan row)',
+    )]
+  }
+  if (!sdd && row.status !== 'InProgress') return []
+
+  const verify = verifyPlanExecutionLease(row, planId)
+  const violations = [...verify.violations]
+  const lease = asRecord(verify.lease)
+  // Dispatch-context comparisons need a structurally valid lease — the shape
+  // violations (when present) already surfaced above; skip comparisons so raw
+  // fields of a broken lease never produce misleading mismatch noise.
+  if (lease !== undefined && validateExecutionLease(lease).ok) {
+    const sessionId = sessionIdOf(exec)
+    if (sessionId !== undefined && lease.holder !== sessionId) {
+      violations.push(leaseViolation(
+        'lease.dispatch.holder-mismatch',
+        `execution_lease.holder "${String(lease.holder)}" differs from this session "${sessionId}" — the active lease belongs to another agent; no-steal: STOP, do not dispatch`,
+        'dispatch only from the lease-holding session (or release/override the lease with user authorization + audit note)',
+      ))
+    }
+    const worktree = assignmentHeaderValue(prompt, 'Worktree path')
+    const wt = worktree === undefined ? undefined : firstToken(worktree)
+    if (isNaValue(wt)) {
+      violations.push(leaseViolation(
+        'lease.dispatch.worktree-mismatch',
+        'Assignment declares no Worktree path — cannot confirm this dispatch matches execution_lease.worktree_path',
+        'add the absolute Worktree path to the Assignment (must equal the lease worktree_path)',
+      ))
+    } else if (resolve(wt) !== resolve(String(lease.worktree_path ?? ''))) {
+      violations.push(leaseViolation(
+        'lease.dispatch.worktree-mismatch',
+        `Assignment Worktree path "${wt}" differs from execution_lease.worktree_path "${String(lease.worktree_path)}"`,
+        'align the Assignment with the lease worktree path (or update the lease)',
+      ))
+    }
+    const forms = parseAssignmentBranchForms(prompt)
+    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch
+    if (branch !== undefined && branch !== lease.working_branch) {
+      violations.push(leaseViolation(
+        'lease.dispatch.branch-mismatch',
+        `Assignment Working branch "${branch}" differs from execution_lease.working_branch "${String(lease.working_branch)}"`,
+        'align the Assignment with the lease working branch (or update the lease)',
+      ))
+    }
+  }
+  return violations
+}
+
+/**
  * Run the dispatch gate over one delegation tool call (opencode
  * `validateDispatchAssignment` parity — the SAME engine fns, so violation
  * codes are identical). Returns the veto decision in hard mode, undefined
@@ -387,6 +558,12 @@ function gateDispatch(
       violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations)
     }
   }
+
+  // Lease gate (Task 5, additive — see leaseGateViolations): verify the plan's
+  // execution_lease when the Assignment declares `Execution mode: sdd` or the
+  // plan row is InProgress; violations flow through the SAME enforcement /
+  // deny / advisory path as the field checks above.
+  violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt))
 
   const result: GateResult = { ok: violations.length === 0, violations }
   const hard = resolveDispatchHard(harnessDir, config, prompt)
