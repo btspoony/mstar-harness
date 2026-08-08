@@ -153,6 +153,8 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 2. **Feature worktree (per plan)** — one distinct sibling directory per active `plan_id`, e.g. `<repo-parent>/worktrees/<plan-id>` or team `.worktrees/<plan-id>`; Assignment **`Worktree path`** must match lease `worktree_path`.
 3. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
 
+> **Engine check (when available):** run `mstar worktree check <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck, assertControlVsFeaturePath, assertBranchAlignment } from "@mstar-harness/engine"` in a host hook) to verify the L1/L2 isolation rules above (lease worktree ≠ control path; checked-out branch matches `Working branch`). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+
 ## 同仓并发写入与 Git worktree（强制）
 
 **首要场景是开发阶段（L2；迭代多 plan 时另见上文 L1）**：多条可写流 **并发** 改 **同一仓库** 时，用 worktree 做 **写入侧目录隔离**。派发前清单 → **`references/parallel-writable-pre-dispatch.md`**。下列规则针对该类开发并发；**QC / QA 阶段的检出约定**见下一小节。
@@ -186,6 +188,8 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 - **`Review range` / `Diff basis`**：审查的 diff/提交范围（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。
 - **逐字对齐（强制）**：三份 QC Assignment 与 QA Assignment 间 **`plan_id`** 与 **`Review range` / `Diff basis`**（连同 `Review cwd` / `Working branch`）**必须完全相同**；**`qa-engineer`** 验证同一 feature 时**复用同一组字段**。**热修 / QC 单审**路径也须含**同一组字段**，仅承接方份数为 1。
 - 三审并行时三名 reviewer **共用同一组**字段（对业务仓**只读 diff 审查**）；一般不必为每位 reviewer 各开 worktree，除非宿主/环境要求进程级隔离。
+
+> **Engine check (when available):** import `assertQcAlignment` / `singleReviewSnapshot` from `@mstar-harness/engine` in a host hook to assert the QC/QA alignment fields above (byte-identical `plan_id` + `Review range` / `Diff basis` across tri + QA; single review snapshot before dispatch). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### 多 worktree 并行 → 单一待审快照（派 QC 前置）
 
