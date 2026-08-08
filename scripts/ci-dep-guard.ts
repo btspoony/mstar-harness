@@ -32,7 +32,7 @@ export function findForbiddenDeps(tree: string): string[] {
   return matches;
 }
 
-function readStdin(): Promise<string> {
+async function readStdin(): Promise<string> {
   return new Promise<string>((resolve) => {
     let data = "";
     process.stdin.setEncoding("utf8");
@@ -44,8 +44,63 @@ function readStdin(): Promise<string> {
   });
 }
 
+/**
+ * `--graph` mode: compute the RUNTIME dependency closure of
+ * `@mstar-harness/opencode` directly from manifests + the installed tree
+ * (node_modules), instead of `npm ls`. npm does not understand the
+ * `workspace:*` protocol (declared for @mstar-harness/engine so bun always
+ * resolves it locally), so npm ls is unusable for this gate. The walk:
+ * - `workspace:*` specs resolve to the workspace member by scanning the
+ *   package manifests under `packages/` (name fields);
+ * - every other spec resolves to `node_modules/<name>` (hoisted root),
+ *   recursing through `dependencies` only (runtime closure, devDeps excluded);
+ * - forbidden-package semantics stay identical (FORBIDDEN_DEP_RE).
+ */
+async function graphClosure(entry = "packages/opencode/package.json"): Promise<string> {
+  const { readdirSync } = await import("node:fs");
+  const workspaceByName = new Map<string, string>();
+  for (const dir of readdirSync("packages", { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    const p = `packages/${dir.name}/package.json`;
+    try {
+      const manifest = JSON.parse((await Bun.file(p).text()) as string);
+      if (typeof manifest.name === "string") workspaceByName.set(manifest.name, p);
+    } catch {
+      // not a package.json — skip
+    }
+  }
+  const seen = new Set<string>();
+  const names: string[] = [];
+  const visit = async (manifestPath: string): Promise<void> => {
+    const manifest = JSON.parse(await Bun.file(manifestPath).text()) as {
+      name?: string;
+      dependencies?: Record<string, string>;
+    };
+    if (manifest.name && seen.has(manifest.name)) return;
+    if (manifest.name) seen.add(manifest.name);
+    if (manifest.name) names.push(manifest.name);
+    for (const [depName, spec] of Object.entries(manifest.dependencies ?? {})) {
+      if (spec === "workspace:*") {
+        const member = workspaceByName.get(depName);
+        if (!member) throw new Error(`workspace:* dep ${depName} not found in packages/*`);
+        await visit(member);
+        continue;
+      }
+      const installed = `node_modules/${depName}/package.json`;
+      if (!(await Bun.file(installed).exists())) {
+        throw new Error(`dep ${depName}@${spec} not installed (run bun install)`);
+      }
+      await visit(installed);
+    }
+  };
+  await visit(entry);
+  return names.map((n) => `├── ${n}`).join("\n");
+}
+
 async function main(): Promise<void> {
-  const hits = findForbiddenDeps(await readStdin());
+  const graphMode = process.argv.includes("--graph");
+  const tree = graphMode ? await graphClosure() : await readStdin();
+  const hits = findForbiddenDeps(tree);
   if (hits.length > 0) {
     console.error("@mstar-harness/opencode dep tree must not contain commander or inquirer (roadmap §8.7 item 5):");
     for (const hit of hits) console.error(`  ${hit}`);
