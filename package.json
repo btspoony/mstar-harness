@@ -22,7 +22,9 @@
     "opencode:pack": "npm pack --workspace @mstar-harness/opencode",
     "release:prepare": "bun run scripts/prepare-release.ts",
     "release:validate": "bun run scripts/validate-release-version.ts",
-    "release:check": "bun run typecheck && bun run cli:pack && bun run opencode:pack"
+    "release:check": "bun run typecheck && bun run cli:pack && bun run opencode:pack",
+    "validation:standalone": "bun run scripts/standalone-smoke.ts",
+    "validation:drift": "bun run scripts/drift-lint.ts"
   },
   "packageManager": "bun@1.2.17",
   "devDependencies": {
