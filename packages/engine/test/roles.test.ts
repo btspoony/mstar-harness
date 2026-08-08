@@ -48,6 +48,14 @@ import type { GateResult } from "../src/core.js";
  * the control checkout path → this checkout's own `skills/` (identical at
  * the base commit). Returns `null` when no corpus is available so corpus
  * tests skip instead of failing on machines without the harness checkout.
+ *
+ * Documented trade-off (qc3 F-007, kept intentionally): the two
+ * `test.skipIf(CORPUS === null)` corpus tests are env-conditional — a CI
+ * machine without the checkout would pass with them disabled. They run in
+ * this checkout via the upward walk, and the checked-in fixtures (e.g.
+ * lint.test.ts FRONTMATTER_REAL_*) keep the invariants covered
+ * unconditionally; a checked-in full-corpus fixture is the future upgrade
+ * path if machine-independent enforcement is required.
  */
 function resolveCorpusRoot(): string | null {
   const fromEnv = process.env.MSTAR_CONTROL_SKILLS;

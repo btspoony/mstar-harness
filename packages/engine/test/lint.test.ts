@@ -25,6 +25,8 @@
  *   Guiding Principles, Technology Direction, Decision Log).
  */
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   assertSddTddTriple,
   findSimplifyMarkers,
@@ -33,6 +35,31 @@ import {
   lintStrategySections,
   planQualityBar,
 } from "../src/lint.js";
+
+/**
+ * Locate the read-only skill corpus: `MSTAR_CONTROL_SKILLS` env override →
+ * the control checkout path → this checkout's own `skills/` (identical at
+ * the base commit). Returns `null` when no corpus is available so the
+ * corpus regression test skips instead of failing on machines without the
+ * harness checkout (same pattern as roles.test.ts).
+ */
+function resolveCorpusRoot(): string | null {
+  const fromEnv = process.env.MSTAR_CONTROL_SKILLS;
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+  const control = "/Users/bibi/workspace/ai/mstar-harness/skills";
+  if (existsSync(join(control, "mstar-roles", "SKILL.md"))) return control;
+  let dir = import.meta.dir;
+  for (;;) {
+    const candidate = join(dir, "skills");
+    if (existsSync(join(candidate, "mstar-roles", "SKILL.md"))) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+const CORPUS = resolveCorpusRoot();
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -429,6 +456,36 @@ describe("assertSddTddTriple", () => {
     const result = assertSddTddTriple(TRIPLE_ALT_FORMS);
     expect(result.ok).toBe(true);
   });
+
+  test("prose 'OK' alone is not output evidence", () => {
+    const result = assertSddTddTriple(`## Task 1 report
+Covering test file(s): packages/engine/test/lint.test.ts
+Command run: \`bun test packages/engine/test/lint.test.ts\`
+OK, moving on — everything looks fine.
+`);
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.sdd-tdd.missing-output"]);
+  });
+
+  test("'N ok' verdicts count as output evidence", () => {
+    const result = assertSddTddTriple(`## Task 1 report
+Covering test file(s): packages/engine/test/lint.test.ts
+Command run: \`bun test packages/engine/test/lint.test.ts\`
+\`\`\`
+12 ok
+\`\`\`
+`);
+    expect(result.ok).toBe(true);
+  });
+
+  test("TAP-style 'ok N - name' lines count as output evidence", () => {
+    const result = assertSddTddTriple(`## Task 1 report
+Covering test file(s): test/lint.test.ts
+Command run: bun test test/lint.test.ts
+ok 1 - findSimplifyMarkers
+`);
+    expect(result.ok).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -474,6 +531,13 @@ describe("planQualityBar", () => {
   test("plural placeholder forms (TODOs:) are still flagged, normalized to the singular token", () => {
     const result = planQualityBar("# Plan\n- [ ] TODOs: wire the gate\n");
     expect(result.findings).toEqual([{ token: "TODO", line: 2, text: "- [ ] TODOs: wire the gate" }]);
+  });
+
+  test("negation does not leak across a comma: 'no TBD yet, and TODO...' still flags TODO", () => {
+    const result = planQualityBar("This plan has no TBD yet, and TODO items remain.");
+    expect(result.ok).toBe(false);
+    expect(result.findings.map((f) => f.token)).toEqual(["TODO"]);
+    expect(result.findings[0].line).toBe(1);
   });
 
   test("clean plan passes", () => {
@@ -547,6 +611,28 @@ describe("lintSkillFrontmatter", () => {
     expect(lintSkillFrontmatter(FRONTMATTER_REAL_STRATEGY).ok).toBe(true);
     expect(lintSkillFrontmatter(FRONTMATTER_REAL_DESIGN_MD).ok).toBe(true);
   });
+
+  test.skipIf(CORPUS === null)(
+    "real corpus: every skills/*/SKILL.md frontmatter passes (20-skill smoke, durable)",
+    () => {
+      const corpus = CORPUS as string;
+      const failed: string[] = [];
+      let checked = 0;
+      for (const entry of readdirSync(corpus)) {
+        const dir = join(corpus, entry);
+        if (!statSync(dir).isDirectory()) continue;
+        const skillMd = join(dir, "SKILL.md");
+        if (!existsSync(skillMd)) continue;
+        const frontmatter = /^---\r?\n[\s\S]*?\r?\n---/.exec(readFileSync(skillMd, "utf8"));
+        if (frontmatter === null) continue;
+        checked++;
+        const result = lintSkillFrontmatter(frontmatter[0]);
+        if (!result.ok) failed.push(`${entry}: ${result.violations.map((v) => v.code).join(", ")}`);
+      }
+      expect(checked).toBeGreaterThan(10);
+      expect(failed).toEqual([]);
+    },
+  );
 
   test("all-caps US acronym and I/O are not pronoun false positives", () => {
     expect(lintSkillFrontmatter(FRONTMATTER_US_ACRONYM).ok).toBe(true);

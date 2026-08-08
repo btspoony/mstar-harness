@@ -128,6 +128,13 @@ const REMOVAL_PATH_PATTERNS: readonly RegExp[] = [
  * "temporarily" is not a label). Removal-path detection uses the pattern set
  * above; a version mention alone ("remove in v2.0.0") is NOT a plan/status
  * artifact reference and is reported, per the strict convention wording.
+ *
+ * Accepted false-positive (documented trade-off): the `;` / `--` comment
+ * introducers (Lisp/SQL comment syntax) can match code lines such as
+ * `foo(); temporary = 1;` — the `;` introducer + `\s*temporary\b` looks
+ * like a marker even though `temporary` is a variable name. Errs toward
+ * flagging (a violation prompts a removal path, which the code line won't
+ * carry); do not special-case it without a real FP report.
  */
 export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
   const markers: TemporaryMarker[] = [];
@@ -175,10 +182,12 @@ const COMMAND_PROMPT_RE = /^\s*[$>]\s*\S/;
 const RUNNER_RE =
   /\b(?:bun|pnpm|npm|yarn|npx|bunx)\s+(?:test|run|exec)\b|\b(?:npx|bunx)\s+[\w./-]+\b|\b(?:tsc|vitest|jest|mocha|pytest)\b|\bgo\s+test\b|\bcargo\s+test\b/i;
 
-/** Output evidence: check marks, PASS/FAIL/OK/ERROR tokens, result counts
- * ("12 pass", "0 fail", "23 tests passed"), or exit-code statements. */
+/** Output evidence: check marks, PASS/FAIL tokens, result counts ("12
+ * pass", "0 fail", "23 tests passed"), `N ok` / TAP `ok N` / "all ok"
+ * verdicts, or exit-code statements. Bare `OK`/`ERROR` prose ("OK, moving
+ * on") deliberately does NOT count — output-shaped forms only (qc2 F-004). */
 const OUTPUT_TOKEN_RE =
-  /[✓✔✗✘]|\b(?:PASS|FAIL|OK|ERROR)\b|\b\d+\s+(?:pass(?:es|ed)?|fail(?:s|ed|ing)?|skipped|tests?)\b|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+/i;
+  /[✓✔✗✘]|\b(?:PASS|FAIL)\b|\b\d+\s+(?:pass(?:es|ed)?|fail(?:s|ed|ing)?|skipped|tests?|ok)\b|\bok\s+\d+\b|\ball\s+ok\b|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+/i;
 
 /**
  * Assert the SDD TDD triple is present in a `task-N-report.md` text
@@ -200,10 +209,11 @@ const OUTPUT_TOKEN_RE =
  *   npm/yarn/npx/bunx test|run|exec, npx/bunx exec, tsc/vitest/jest/mocha/
  *   pytest/go test/cargo test). Prose "run the tests" names no runner and
  *   does not count (plan-quality-bar marks it a weak step anyway).
- * - output: check marks, PASS/FAIL/OK/ERROR tokens, counts ("12 pass"),
- *   exit-code statements. Prose like "the output looked good" carries none.
- *   Line-based and fence-insensitive: real output usually lives in fenced
- *   blocks, so fence content is scanned too.
+ * - output: check marks, PASS/FAIL tokens, counts ("12 pass"), `N ok` /
+ *   TAP `ok N` / "all ok" verdicts, exit-code statements. Bare prose
+ *   `OK`/`ERROR` ("OK, moving on") does NOT count — output evidence must
+ *   look like output. Line-based and fence-insensitive: real output usually
+ *   lives in fenced blocks, so fence content is scanned too.
  */
 export function assertSddTddTriple(reportText: string): GateResult {
   const violations: ValidationResult[] = [];
@@ -269,7 +279,7 @@ export type PlanQualityResult = GateResult & { findings: PlanQualityFinding[] };
  * self-review "Placeholder scan: no TBD" + plan-quality-bar.md): TBD, TODO,
  * TBA (singular/plural) — word-boundary, case-insensitive. `FIXME`/`XXX` are
  * deliberately NOT flagged (code-marker territory, not plan placeholders). */
-const PLACEHOLDER_TOKEN_RE = /\b(TBDs?|TODOs?|TBAs?)\b/i;
+const PLACEHOLDER_TOKEN_RE = /\b(TBDs?|TODOs?|TBAs?)\b/gi;
 /** Prose ellipsis placeholder ("a.ts, b.ts, ..."). Intentional ellipsis can
  * use U+2026 `…`, which is exempt. */
 const ELLIPSIS_RE = /\.\.\./;
@@ -296,9 +306,9 @@ function stripInlineCode(line: string): string {
  *   forms included) and the prose ellipsis `...`. One finding per line per
  *   token (a line with two TBDs yields one finding).
  * - negation guard: a token preceded by a negation word (`no/not/without/
- *   none`) in the same parenthetical segment is an absence assertion
- *   ("no TBD/placeholder/TODO" states the rule), not a placeholder — not
- *   flagged.
+ *   none`) in the same segment (split at `(`/`[`/`{`/`.`/`;`/`,`/line
+ *   start) is an absence assertion ("no TBD/placeholder/TODO" states the
+ *   rule), not a placeholder — not flagged.
  * - exemptions: fenced code blocks (```` ``` ```` / `~~~`) and inline code
  *   spans are skipped — `...` in a file-list or example is not a placeholder.
  * - out of scope (judgment stays prompt): "add tests" without code, and
@@ -317,23 +327,32 @@ export function planQualityBar(planText: string): PlanQualityResult {
     }
     if (inFence) continue;
     const stripped = stripInlineCode(lines[i]);
-    const wordMatch = PLACEHOLDER_TOKEN_RE.exec(stripped);
-    let token: string | null = null;
-    if (wordMatch) {
-      // Negation guard: "no TBD/placeholder/TODO" asserts absence (a mention
-      // of the rule), not a placeholder. A negation word earlier in the same
-      // parenthetical segment (split at `(`/`[`/`{`/`.`/`;`/line start)
-      // suppresses the finding.
-      const segmentStart = Math.max(
-        stripped.lastIndexOf("(", wordMatch.index - 1),
-        stripped.lastIndexOf("[", wordMatch.index - 1),
-        stripped.lastIndexOf("{", wordMatch.index - 1),
-        stripped.lastIndexOf(".", wordMatch.index - 1),
-        stripped.lastIndexOf(";", wordMatch.index - 1),
+    // Negation guard: "no TBD/placeholder/TODO" asserts absence (a mention
+    // of the rule), not a placeholder. A negation word earlier in the same
+    // segment (split at `(`/`[`/`{`/`.`/`;`/`,`/line start) suppresses the
+    // finding — the comma split keeps "no TBD yet, and TODO items remain"
+    // flagging TODO (qc2 F-005).
+    const segmentStartBefore = (index: number) =>
+      Math.max(
+        stripped.lastIndexOf("(", index - 1),
+        stripped.lastIndexOf("[", index - 1),
+        stripped.lastIndexOf("{", index - 1),
+        stripped.lastIndexOf(".", index - 1),
+        stripped.lastIndexOf(";", index - 1),
+        stripped.lastIndexOf(",", index - 1),
       );
-      const negated = NEGATION_RE.test(stripped.slice(segmentStart + 1, wordMatch.index));
-      if (!negated) token = wordMatch[0].replace(/s$/i, "").toUpperCase();
-    } else if (ELLIPSIS_RE.test(stripped)) {
+    // Every placeholder on the line is checked — a negated first token must
+    // not hide a later unnegated one ("no TBD yet, and TODO remains").
+    let token: string | null = null;
+    for (const wordMatch of stripped.matchAll(PLACEHOLDER_TOKEN_RE)) {
+      if (wordMatch.index === undefined) continue;
+      const negated = NEGATION_RE.test(stripped.slice(segmentStartBefore(wordMatch.index) + 1, wordMatch.index));
+      if (!negated) {
+        token = wordMatch[0].replace(/s$/i, "").toUpperCase();
+        break;
+      }
+    }
+    if (token === null && ELLIPSIS_RE.test(stripped)) {
       token = "...";
     }
     if (token !== null) {
