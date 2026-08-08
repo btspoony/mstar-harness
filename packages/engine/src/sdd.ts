@@ -74,10 +74,24 @@ function isFile(file: string): boolean {
   }
 }
 
+/**
+ * Git capture ceiling for `gitOut` / `reviewPackage` (qc3 W-2): Node's
+ * default 1 MiB `maxBuffer` ENOBUFS'd on large review ranges where the bash
+ * original (which streams into the file via redirection) has no cap. 64 MiB
+ * keeps byte parity for realistic iteration-close ranges while bounding
+ * memory; captures beyond that fail as SddScriptError via the CLI.
+ */
+const GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
+
 /** Run git, returning trimmed stdout or null on failure. */
 function gitOut(cwd: string, args: string[]): string | null {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    return execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: GIT_CAPTURE_MAX_BYTES,
+    }).trim();
   } catch {
     return null;
   }
@@ -98,6 +112,15 @@ function probeHarnessWithStatus(root: string): string | null {
  * Port of the bash `is_linked_worktree` check: a linked worktree from
  * `git worktree add` has `--git-dir` ≠ `--git-common-dir` (or a
  * `.git/worktrees/` / `worktrees/` git dir path).
+ *
+ * The `/worktrees/` substring branches mirror the bash `case` glob
+ * (sdd-workspace:62-64: git-dir matching `.git` + `/worktrees/` + suffix,
+ * or `/worktrees/` + suffix) byte for byte — bash parity is the contract,
+ * so a MAIN checkout cloned into a directory literally named `worktrees`
+ * is ALSO classified as linked by both (fail-closed until CONTROL_ROOT is
+ * given). The realpath comparison below would classify such a checkout
+ * correctly, but the substring branches short-circuit first exactly like
+ * bash; see the parity test "repo under a directory named 'worktrees'".
  */
 function isLinkedWorktree(root: string): boolean {
   const gitDirRaw = gitOut(root, ["rev-parse", "--git-dir"]);
@@ -158,6 +181,15 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
   // default gitignore»): a linked worktree without CONTROL_ROOT must never
   // resolve or create any SDD tree under the feature checkout — the harness
   // override and the status probe both run only after this guard passes.
+  //
+  // INTENTIONAL DIVERGENCE from bash (qc2 F-004, pinned by the parity test
+  // "stray status.json in a linked worktree"): the bash original probes
+  // `status.json` FIRST (sdd-workspace:71), so a linked feature checkout
+  // with a stray `.mstar/status.json` resolves and creates the second SDD
+  // tree under the feature checkout — exactly the hazard this guard exists
+  // to refuse. The TS port refuses regardless of the probe result; bash
+  // parity holds only for linked worktrees WITHOUT status.json (both fail
+  // closed with identical text).
   if (!controlRoot && isLinkedWorktree(root)) {
     // Verbatim bash fail-closed message (byte parity on stderr).
     throw new SddScriptError(
@@ -285,7 +317,8 @@ export function reviewPackage(base: string, head: string, outFile?: string, opts
     out = join(sddDir, `review-${shortBase}..${shortHead}.diff`);
   }
 
-  const run = (args: string[]): Buffer => execFileSync("git", args, { cwd });
+  const run = (args: string[]): Buffer =>
+    execFileSync("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES });
   // Bash `{ echo …; git …; } > file` layout, byte-for-byte.
   const parts: Buffer[] = [
     Buffer.from(`# Review package: ${base}..${head}\n\n## Commits\n`),
