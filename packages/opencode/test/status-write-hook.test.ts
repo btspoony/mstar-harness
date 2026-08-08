@@ -179,6 +179,18 @@ describe("validateStatusWrite (exported hook module)", () => {
       rmSync(project, { recursive: true, force: true });
     }
   });
+
+  test("non-string targetPath stays silent (no paths[0] abort)", () => {
+    // Bun path.resolve(object) → `The "paths[0]" property must be of type string, got object`.
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    for (const bad of [{ path: "/tmp/.mstar/status.json" }, ["/tmp/.mstar/status.json"], 123, null, undefined] as unknown[]) {
+      expect(validateStatusWrite(bad as string, { log })).toBeNull();
+    }
+    expect(entries.filter(([, msg]) => msg.includes("status.json validation aborted"))).toEqual([]);
+  });
 });
 
 describe("plugin wiring (tool.execute.before)", () => {
@@ -247,6 +259,46 @@ describe("plugin wiring (tool.execute.before)", () => {
       expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
     } finally {
       rmSync(statusPath, { recursive: true, force: true });
+    }
+  });
+
+  test("write tool accepts args.path alias and object content; getter re-access stays quiet", async () => {
+    const plugin = await MorningStarHarnessPlugin();
+    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    mkdirSync(join(project, ".mstar"));
+    const statusPath = join(project, ".mstar", "status.json");
+    try {
+      const beforeWrite = plugin["tool.execute.before"];
+      expect(beforeWrite).toBeDefined();
+
+      const errors: string[] = [];
+      const originalError = console.error;
+      console.error = (message?: unknown) => {
+        errors.push(String(message));
+      };
+      try {
+        // path alias + already-parsed object content
+        await beforeWrite!(
+          { tool: "write", sessionID: "s1", callID: "c1" },
+          { args: { path: statusPath, content: invalidDoc } },
+        );
+        // Getter that flips type after the typeof snapshot would previously
+        // reach path.resolve(object) and log status.json validation aborted.
+        let reads = 0;
+        const flakyArgs = {
+          get filePath() {
+            reads += 1;
+            return reads === 1 ? statusPath : ({ path: statusPath } as unknown as string);
+          },
+          content: JSON.stringify(validDoc),
+        };
+        await beforeWrite!({ tool: "write", sessionID: "s1", callID: "c2" }, { args: flakyArgs });
+      } finally {
+        console.error = originalError;
+      }
+      expect(errors.filter((e) => e.includes("status.json validation aborted"))).toEqual([]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
     }
   });
 });

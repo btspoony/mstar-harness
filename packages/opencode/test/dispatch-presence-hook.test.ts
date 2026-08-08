@@ -279,6 +279,20 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
     expect(warnings).toEqual([]);
   });
 
+  test("non-string prompt stays silent (no assignmentText.match abort)", () => {
+    // Host tool args are `any`; RegExp.test coerces objects then `.match` throws.
+    // Exported helper must fail soft — same abort line the user saw on OpenCode boot.
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    for (const bad of [{ text: "Execute as: x" }, 123, true, ["Execute as: x"], null, undefined] as unknown[]) {
+      const result = validateDispatchAssignment(bad as string, { log });
+      expect(result).toEqual({ ok: true, violations: [] });
+    }
+    expect(entries.filter(([, msg]) => msg.includes("assignment validation aborted"))).toEqual([]);
+  });
+
   test("field fragment without heading is linted, not silent", () => {
     // A bare `Execute as:` line is Assignment-shaped — the other two fields
     // still warn (engine field codes only; presence codes are aliases).
