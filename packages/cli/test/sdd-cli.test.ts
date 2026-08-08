@@ -14,9 +14,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -55,14 +55,15 @@ interface RunResult {
 }
 
 /**
- * Spawn env with ambient MSTAR_HARNESS_DIR pinned out (qc3 F-4): the CLI
- * resolves harness dirs from that env var ahead of probing, so an ambient
- * value would redirect every fixture to the env dir and fail spuriously.
+ * Spawn env with ambient harness env vars pinned out (qc3 F-4): the CLI
+ * resolves harness dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead
+ * of probing (an ambient value would redirect every fixture to the env dir
+ * and fail spuriously), and SDD_DIR redirects default outfile paths.
  */
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR") continue;
+    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
     if (value !== undefined) env[key] = value;
   }
   return env;
@@ -107,7 +108,7 @@ function gitFixture(root: string): { base: string; head: string } {
   return { base, head };
 }
 
-/** Create a git repo + a linked worktree at `worktree` (branch `feature/linked`). */
+/** Create a git repo at `root` + a linked worktree at `root/linked` (branch `feature/linked`). */
 function linkedWorktreeFixture(root: string): string {
   git(["init", "-q"], root);
   git(["config", "user.email", "sdd-cli-test@example.com"], root);
@@ -115,8 +116,9 @@ function linkedWorktreeFixture(root: string): string {
   writeFileSync(join(root, "base.txt"), "base\n");
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base commit"], root);
-  const linked = join(dirname(root), `${basename(root)}-linked`);
-  mkdirSync(dirname(linked), { recursive: true });
+  // Inside the tmp root so the caller's single rmSync(root) cleans it up
+  // (qc3 S-3: a sibling dir outside the tmp root leaked on every run).
+  const linked = join(root, "linked");
   git(["worktree", "add", "-q", linked, "-b", "feature/linked"], root);
   return linked;
 }
@@ -180,6 +182,17 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("CONTROL_ROOT");
       expect(result.stderr).toContain("not a directory");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("missing <plan-id> → exit 2 usage error (qc2 F-005: commander must not bypass the bash exit-2 usage contract)", () => {
+    const root = tmpRoot("mstar-sdd-ws-usage-");
+    try {
+      const result = runCli(["sdd", "workspace"], { cwd: root });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("usage: sdd-workspace");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -273,6 +286,17 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("missing required args → exit 2 usage error (qc2 F-005)", () => {
+    const root = tmpRoot("mstar-sdd-brief-usage-");
+    try {
+      const result = runCli(["sdd", "task-brief"], { cwd: root });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("usage: task-brief");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD", () => {
@@ -317,6 +341,17 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
       const result = runCli(["sdd", "review-package", base, head], { cwd: root });
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("set SDD_DIR or pass OUTFILE");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("missing BASE/HEAD → exit 2 usage error (qc2 F-005)", () => {
+    const root = tmpRoot("mstar-sdd-rp-usage-");
+    try {
+      const result = runCli(["sdd", "review-package"], { cwd: root });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("usage: review-package");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
