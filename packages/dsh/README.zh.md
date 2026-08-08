@@ -20,8 +20,8 @@
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `harnessDir` | `string` | 探测（`.mstar/` → `.agents/` → `plans/`） | 显式 harness 根目录；优先于 engine 探测。 |
-| `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖；`hard` 强制否决，`soft` 回滚 compass/Assignment 的 hard 标记。 |
+| `harnessDir` | `string` | 探测（`.mstar/` → `.agents/` → `.plans/` → `plans/`） | 显式 harness 根目录；优先于 engine 探测。 |
+| `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖。优先级：Config 优先；否则取 Assignment 自身的 `**Enforcement**: hard` 头字段（仅派发闸门）；否则取迭代 compass frontmatter；否则仅告警。Config `soft` 是唯一的本地回滚——Assignment 级 `soft` 不能覆盖 hard compass。 |
 | `dispatchTools` | `string[]` | `['subagent']` | 派发闸门匹配的委派工具名（dsh subagent 工具的 `toolName` 可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
 
@@ -29,19 +29,19 @@
 
 ### Status gate
 
-`fs/write-intent` + `fs/edit-intent` 监听器（以 `prepend` 注册，确保先于 dsh-fs-policy 执行）对 `{HARNESS_DIR}/status.json` 的写入把关：基于当前磁盘文档运行 `validateStatus` + 按 plan 的 `findingsCleanupGate`。fs intent 槽没有 deny 形态——hard 否决即**抛出** `StatusGateError`（`code: 'STATUS_GATE_HARD_BLOCK'`），拒绝瀑布链并使工具调用失败。告警模式（默认）记录日志、发出 `mstar/status-gate` 咨询事件并通过 `next()` 委托。
+`fs/write-intent` + `fs/edit-intent` 监听器（以 `prepend` 注册，确保先于 dsh-fs-policy 执行）对 `{HARNESS_DIR}/status.json` 的写入把关：基于当前磁盘文档运行 `validateStatus` + 按 plan 的 `findingsCleanupGate`（文档只解析一次——无 TOCTOU 双重读取）。闸门**从不抛出**（qc3 F-1）：每次决策都以 `mstar/status-gate` 咨询事件呈现，并通过 `next()` 委托 intent 瀑布链。告警模式（默认）在有违规时记录日志并发出事件。hard 模式对**已非法**的文档按**修复逃生（repair escape）**放行（error 级日志 + `hard: true, repair: true` 咨询）——intent 瀑布链不携带写入内容，若对非法文档硬否决，反而会卡死修复性写入本身。意外内部错误在两种模式下都降级为放行并发出 `degraded: true` 咨询（错误隔离包络）；首次破坏文档的写入本身无法在此 seam 上被否决（见 Known Limitations）。
 
 ### Dispatch gate
 
-`tools/pre-execute` 监听器作用于委派工具：解析载荷中的 Assignment 文本，运行与 opencode 对齐的字段校验器（`validateAssignmentFields`、`antiRecursionPrecheck`、`assertDefaultBranchProtected`）以及 dsh 租约闸门。拒绝通道为**不调用** `next()` 而返回 `PreToolDecision { kind: 'deny', reason }`；告警模式记录日志、发出 `mstar/dispatch-gate` 并委托。非 Assignment 提示与非委派工具保持惰性。两种模式下 engine 故障都降级为放行。
+`tools/pre-execute` 监听器作用于委派工具：解析载荷中的 Assignment 文本，运行与 opencode 对齐的字段校验器（`validateAssignmentFields`、`antiRecursionPrecheck`、`assertDefaultBranchProtected`）以及 dsh 租约闸门。拒绝通道为**不调用** `next()` 而返回 `PreToolDecision { kind: 'deny', reason }`；告警模式记录日志、发出 `mstar/dispatch-gate` 并委托。非 Assignment 提示与非委派工具保持惰性。两种模式下 engine 故障都降级为放行，且降级**可观测**：catch 路径发出 `degraded: true` 的插件自有咨询 + error 日志，使 hard 部署能察觉控制失效而非静默放行（qc2 W-003）。以 `prepend` 注册，防止更早挂载的决策监听器把本闸门短路在不可达处。
 
 ### Lease gate
 
-在 opencode 字段集之上新增：对声明 `Execution mode: sdd` 或 plan 行为 `InProgress` 的可写派发，对照 `{HARNESS_DIR}/status.json` 运行 `verifyPlanExecutionLease` 与派发上下文比对（`holder`、`worktree_path`、`working_branch`）。违规使用 dsh 侧 `lease.dispatch.*` 命名空间；只读角色完全跳过该检查。
+在 opencode 字段集之上新增：对声明 `Execution mode: sdd` 或 plan 行为 `InProgress` 的可写派发，对照 `{HARNESS_DIR}/status.json` 运行 `verifyPlanExecutionLease` 与派发上下文比对（`holder`、`worktree_path`、`working_branch`）。违规使用 dsh 侧 `lease.dispatch.*` 命名空间；只读角色完全跳过该检查。**缺失** `status.json` 对 sdd 派发不再是静默放行：发出 `lease.dispatch.unverifiable`（告警模式下为 advisory，hard 下为 deny）——没有状态文件就无法确认 execution_lease。非 SDD 派发保持降级放行（无租约义务）。所有 Assignment 字段读取都限定在 engine `assignmentHeaderRegion` 内（正文中引用的示例不会泄漏进头字段）。
 
 ## Service
 
-`apply` 构造 `ctx.dshMstar`（engine 支撑：`validateStatus`、`validateResidual`、`findingsCleanupGate`、`resolveCompassEnforcement`、`resolveHarnessDir`、`readHarnessVersion`、`applyEnforcement`）。伴随入口 `@mstar-harness/dsh/invariant` 以文档化的空安装器保留包所有权。
+`apply` 构造 `ctx.dshMstar`（engine 支撑：`validateStatus`、`validateResidual`、`findingsCleanupGate`、`resolveCompassEnforcement`、`resolveHarnessDir`、`readHarnessVersion`、`applyEnforcement`）。分层：P1 各闸门是本包内与 engine 同置的包装器，直接导入 engine（同一插件，构建时打包 engine）；`ctx.dshMstar` 是供未来 inject 消费者（宿主适配器、catalog——P2/P3）使用的组合/测试外观。两条路径共用 engine 这唯一语法源。伴随入口 `@mstar-harness/dsh/invariant` 以文档化的空安装器保留包所有权。
 
 ## Development
 
@@ -61,7 +61,7 @@ bun run build
 
 #### What the model sees
 
-本插件不贡献任何自身的 system-prompt 或用户消息文本。其模型可见表面仅在闸门触发时产生：状态否决以工具 `isError` 结果呈现，携带 `{ name: 'StatusGateError', code: 'STATUS_GATE_HARD_BLOCK' }` 及每条违规一行；派发否决以注册表物化的 `PreToolDecision { kind: 'deny', reason }` 错误呈现；告警模式放行产生日志行与 `mstar/status-gate` / `mstar/dispatch-gate` 咨询事件，因此每次闸门决策都能从会话日志重建。
+本插件不贡献任何自身的 system-prompt 或用户消息文本。其模型可见表面仅在闸门触发时产生：派发否决以注册表物化的 `PreToolDecision { kind: 'deny', reason }` 错误呈现；状态闸门的每次决策都以 `mstar/status-gate` 咨询呈现（告警放行、hard 修复逃生或降级放行），派发闸门以 `mstar/dispatch-gate` 咨询呈现（告警放行或降级），因此每次闸门决策都能从会话日志重建。
 
 #### Token effect
 
@@ -79,3 +79,6 @@ bun run build
 - **engine 单一版本钉定** —— `@mstar-harness/engine` 为精确 `2.0.0` devDependency，构建时打入 `dist/`（绝非运行时依赖）；`readHarnessVersion()` 读取 bundle 旁的 dsh 包清单，按单一版本不变量保持 `2.0.0`。
 - **Schemastery 空数组物化** —— 省略的可选 ARRAY Config 键会物化为 `[]`；派发键通过 `.default(undefined)` 保留省略语义，未来任何可选数组键都必须同样处理。
 - **载荷边界** —— 派发闸门校验委派载荷（Assignment 文本），而非子代理的运行时行为；如需向模型可见的子活动建面，事后经 `subagent/start` 观察仍为可选项。
+- **状态闸门因 seam 设计而内容盲**（qc2 W-001）——`fs/write-intent`/`fs/edit-intent` 瀑布链只携带 `(target, actor)`，从不携带写入内容，因此**首次**把合法 `status.json` 写坏的写入在两种模式下都会通过（闸门只校验写入前的磁盘文档）。hard 模式因此从不否决状态写入：对已非法文档按**修复逃生**放行（error 级咨询，`hard: true, repair: true`），让修复性写入能落地。恢复路径：就地修复文档（闸门允许）或删除 `status.json` 让 harness 重建；hard 部署应监控 `repair: true` 咨询。
+- **缺失 `status.json` 的租约行为**（qc3 F-5）——sdd 可写派发遇到缺失状态文件会发出 `lease.dispatch.unverifiable`（告警下 advisory，hard 下 deny）；非 SDD 派发无租约义务，保持静默降级放行。
+- **闸门匹配跟随 `displayPath`**（qc2 S-007）——状态闸门按 fs target 的解析后 `displayPath` 匹配。后端报告工作区相对路径、harness 目录为符号链接、或远程/URI target 时永不匹配，闸门对其惰性（无误报）；受守护的 harness 写入请使用绝对本地路径。
