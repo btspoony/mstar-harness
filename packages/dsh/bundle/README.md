@@ -68,12 +68,21 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 ## Known constraints
 
 - `bundledSkillDir: ./skills` resolves against the dsh **process cwd** at
-  boot (skill-local `path.resolve` semantics). A deployment that launches dsh
-  from another cwd must override it with an absolute path in the profile's
-  `cordis.patch.yml`.
+  boot (skill-local `join` semantics — confirmed by the Task 5 e2e,
+  `tests/e2e-session.spec.ts` § bundledSkillDir: a relative bundled root
+  discovers skills under the launch cwd, which for the test suite is the
+  package root). A deployment that launches dsh from another cwd therefore
+  resolves `./skills` under THAT cwd (typically an empty/absent directory →
+  no bundled mount); override it with an absolute path in the profile's
+  `cordis.patch.yml` — the supported production form.
 - The patch ships only neutral defaults; deployment-owned values
   (`harnessDir`, `enforcement`, `dispatchTools`, `dispatchBinding`,
   `skillRoots`) belong in the user's profile layer, restating kept fields.
-- Local install resolves through the profile pnpm forwarder; the `dsh
-  plugin --profile mstar add <spec>` public-registry path is exercised once
-  the package is published (open decision — see the plan's Task 5 e2e).
+- Local install **verified at Task 5** (no push, no publish): from the repo
+  checkout, `DSH_HOME=<temp> dsh plugin --profile mstar add <packages/dsh>`
+  exits 0 — pnpm links the local checkout, the reconcile step joins
+  `@mstar-harness/dsh` to `dsh.profile.bundles`, and
+  `dsh --profile mstar --dump-config` composes the `mstar` row over
+  dsh-base. The public-registry path (`add @mstar-harness/dsh`) runs through
+  the same reconcile mechanism once the package is published; it is **not
+  executed this iteration** (local-only constraint).
