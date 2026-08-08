@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/engine",
-  "version": "1.8.8",
+  "version": "1.8.9",
   "description": "Morning Star harness engine — deterministic library for harness checks (version, path, status, lease, validation).",
   "license": "MIT",
   "repository": {

@@ -11,6 +11,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 - `beforeDispatch` Assignment lint is engine-only: local `validateAssignmentPresence` parser removed (qc1 F-002); branch-form parsing via engine `parseAssignmentBranchForms` / `parseBranchPolicyDirectOnBranch` (qc1 F-001); read-only roles (scout/explore) skip the branch-form + default-branch gates (qc3 F-1 / qc2 S-5).
 - `antiRecursionPrecheck` wired into the hook: task dispatch whose role binding (`args.subagent` / `args.subagent_type`) equals the Assignment's `Execute as` warns at critical severity, warn-only (qc1 F-004 / qc2 S-2).
 
+## [1.8.9] - 2026-08-07
+
+### Harness
+
+- **Phase 5 checkout**: merge-ready product fixes edit **directly** on the control / `spec_integration_branch` checkout; **forbid** opening a separate Phase 5 feature/fix worktree or applying Phase 2's "no product edits on control" rule. SSOT stays in `mstar-iteration` (`phase-4-5-pr-delivery` §5.0); **not** in the general `mstar-branch-worktree` skill.
+
+- Version alignment with harness **1.8.9** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **1.8.9**.
+
 ## [1.8.8] - 2026-08-06
 
 ### Bundled harness skills (`harness-skills/` at publish)
