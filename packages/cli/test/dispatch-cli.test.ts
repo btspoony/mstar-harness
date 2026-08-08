@@ -6,7 +6,9 @@
  *
  * Exit codes: 0 = OK, 1 = violations / file errors, 2 = usage (missing
  * <assignment-file> arg, slice-2 in-handler convention). The default-branch
- * gate reads `--branch` first, then `$MSTAR_WORKING_BRANCH`.
+ * gate reads `--branch` first, then `$MSTAR_WORKING_BRANCH`, and honors a
+ * well-formed `Branch policy: direct on <branch> — <reason>` exception when
+ * its branch matches the branch being checked.
  *
  * Each case runs the real CLI as a subprocess against a temp assignment
  * fixture and asserts the exit code + reported violation codes.
@@ -131,6 +133,40 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("dispatch.default-branch.protected");
     });
+  });
+
+  test("Branch policy direct on main + --branch main → exit 0 (direct-on exception honored)", () => {
+    withAssignment(
+      assignment({ "Working branch": "", "Branch policy": "direct on main -- team hotfix convention" }),
+      (file) => {
+        const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("dispatch validate: OK");
+        expect(result.stderr).not.toContain("dispatch.default-branch.protected");
+      },
+    );
+  });
+
+  test("Branch policy direct on main + --branch master → dispatch.default-branch.protected, exit 1 (exception branch mismatch)", () => {
+    withAssignment(
+      assignment({ "Working branch": "", "Branch policy": "direct on main -- team hotfix convention" }),
+      (file) => {
+        const result = runCli(["dispatch", "validate", file, "--branch", "master"]);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("dispatch.default-branch.protected");
+      },
+    );
+  });
+
+  test("Branch policy direct on main + MSTAR_WORKING_BRANCH=main → exit 0 (env fallback also wired)", () => {
+    withAssignment(
+      assignment({ "Working branch": "", "Branch policy": "direct on main -- team hotfix convention" }),
+      (file) => {
+        const result = runCli(["dispatch", "validate", file], { env: { MSTAR_WORKING_BRANCH: "main" } });
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("OK");
+      },
+    );
   });
 
   test("--branch feature/x → exit 0 (default-branch gate passes)", () => {

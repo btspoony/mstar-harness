@@ -5,8 +5,8 @@
  * (parallel writable tracks) — mstar-branch-worktree L1/L2 tables.
  *
  * Exit codes: 0 = OK, 1 = violations / status errors, 2 = usage (missing
- * --plan in L1, missing/invalid --tracks JSON in L2; slice-2 in-handler
- * convention).
+ * plan-id/--plan in L1, missing/invalid --tracks JSON in L2; slice-2
+ * in-handler convention).
  *
  * Each case runs the real CLI as a subprocess against temp fixtures: a
  * real git repo + linked worktree for branch probes, plain dirs otherwise.
@@ -188,10 +188,59 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     }
   });
 
-  test("missing --plan → usage, exit 2", () => {
+  test("positional plan-id: worktree check <plan-id> --status <path> → OK, exit 0", () => {
+    const root = tmpRoot("mstar-wt-l1-pos-");
+    try {
+      const linked = worktreeFixture(root);
+      const statusPath = writeStatus(root, {
+        metadata: { control_worktree_path: root },
+        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked) }],
+      });
+      const result = runCli(["worktree", "check", "plan-a", "--status", statusPath]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("worktree L1 check: OK");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("two matching plan rows (id + plan_id) → worktree.l1.ambiguous, exit 1", () => {
+    const root = tmpRoot("mstar-wt-l1-amb-");
+    try {
+      const statusPath = writeStatus(root, {
+        metadata: { control_worktree_path: root },
+        plans: [
+          { id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(root) },
+          { plan_id: "plan-a", title: "Plan A (legacy)", status: "InProgress", execution_lease: LEASE(root) },
+        ],
+      });
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree.l1.ambiguous");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("no --control and no metadata.control_worktree_path → worktree.l1.control-missing, exit 1", () => {
+    const root = tmpRoot("mstar-wt-l1-ctrlmiss-");
+    try {
+      const statusPath = writeStatus(root, {
+        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(root) }],
+      });
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree.l1.control-missing");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("missing plan-id and --plan → usage, exit 2", () => {
     const result = runCli(["worktree", "check"]);
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("usage: worktree check --plan");
+    expect(result.stderr).toContain("usage: worktree check <plan-id>");
   });
 });
 

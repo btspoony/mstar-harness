@@ -589,6 +589,27 @@ iterationCommand
     process.exitCode = 1;
   });
 
+/**
+ * Parse the Assignment's `Branch policy: direct on <branch> — <reason>`
+ * form (mstar-branch-worktree § Git 功能分支门禁). Returns the exception
+ * branch only for the well-formed direct-on form (branch + reason, same
+ * separator set as the engine's `validateAssignmentFields`); undefined when
+ * absent or malformed — the default-branch gate recognizes explicit
+ * direct-on exceptions only.
+ */
+function parseBranchPolicyDirectOnBranch(assignmentText: string): string | undefined {
+  for (const line of assignmentText.split(/\r?\n/)) {
+    const match =
+      line.match(/^\*\*\s*Branch policy\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^Branch policy\s*:\s*(.*)$/);
+    if (match) {
+      const form = match[1]!.trim().match(/^direct\s+on\s+(\S+)(?:\s*(?:[—–]|--|-)\s*(.+))?$/);
+      if (form && (form[2] ?? "").trim() !== "") return form[1]!.trim();
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 const dispatchCommand = program
   .command("dispatch")
   .description("Assignment field + default-branch gate checks (engine-backed)");
@@ -615,10 +636,13 @@ dispatchCommand
       const text = fs.readFileSync(file, "utf8");
       const violations = [...validateAssignmentFields(text).violations];
       // Default-branch gate: --branch wins, else the MSTAR_WORKING_BRANCH env
-      // var; skipped when neither is set (nothing to check).
+      // var; skipped when neither is set (nothing to check). A well-formed
+      // `Branch policy: direct on <branch> — <reason>` exception is honored
+      // only when its branch is the one being checked.
       const branch = options.branch ?? process.env.MSTAR_WORKING_BRANCH;
       if (branch !== undefined && branch.trim() !== "") {
-        violations.push(...assertDefaultBranchProtected(branch).violations);
+        const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
+        violations.push(...assertDefaultBranchProtected(branch, { directOnException }).violations);
       }
       printChecklist("dispatch validate", { ok: violations.length === 0, violations });
       if (violations.length > 0) process.exitCode = 1;
@@ -665,6 +689,7 @@ worktreeCommand
     "L1: verify the plan's execution_lease worktree vs control path (isolation, existence, branch alignment) from " +
       "status.json; --l2: verify parallel writable tracks (exit 1 on violations, 2 on usage)",
   )
+  .argument("[plan-id]", "Plan id whose execution_lease drives the L1 input (alternative to --plan)")
   .option("--plan <plan-id>", "Plan id whose execution_lease drives the L1 input")
   .option("--status <path>", "status.json path override (default: {HARNESS_DIR}/status.json)")
   .option("--control <path>", "Control worktree path override (default: status.json metadata.control_worktree_path)")
@@ -673,55 +698,62 @@ worktreeCommand
     "--tracks <json>",
     'L2 tracks JSON: [{"worktreePath": "/abs/path", "workingBranch": "feature/x"}] (required with --l2)',
   )
-  .action((options: { plan?: string; status?: string; control?: string; l2?: boolean; tracks?: string }) => {
-    try {
-      if (options.l2) {
-        if (!options.tracks) {
-          throw new SddScriptError("usage: worktree check --l2 --tracks <json>", 2);
+  .action(
+    (
+      planId: string | undefined,
+      options: { plan?: string; status?: string; control?: string; l2?: boolean; tracks?: string },
+    ) => {
+      try {
+        if (options.l2) {
+          if (!options.tracks) {
+            throw new SddScriptError("usage: worktree check --l2 --tracks <json>", 2);
+          }
+          const gate = l2PreDispatchCheck({ tracks: parseTracksArg(options.tracks) });
+          printChecklist("worktree L2 check", gate);
+          if (!gate.ok) process.exitCode = 1;
+          return;
         }
-        const gate = l2PreDispatchCheck({ tracks: parseTracksArg(options.tracks) });
-        printChecklist("worktree L2 check", gate);
+        // plan-id positional or --plan (option wins when both are given).
+        const plan = options.plan ?? planId;
+        if (!plan) {
+          throw new SddScriptError("usage: worktree check <plan-id> [--status <path>] [--control <path>] (or --plan <plan-id>)", 2);
+        }
+        const statusPath = options.status ? path.resolve(options.status) : resolveStatusFilePath();
+        if (!fs.existsSync(statusPath)) {
+          throw new Error(`status file not found: ${statusPath}`);
+        }
+        const doc = readJson(statusPath);
+        const plans = Array.isArray(doc.plans) ? (doc.plans as Array<Record<string, unknown>>) : [];
+        const matches = plans.filter((row) => row?.id === plan || row?.plan_id === plan);
+        if (matches.length === 0) {
+          console.error(pc.red(`${statusPath}: FAIL plan ${plan}`));
+          console.error(`  - [high] worktree.l1.plan-not-found: no plan row with id/plan_id ${plan}`);
+          process.exitCode = 1;
+          return;
+        }
+        if (matches.length > 1) {
+          console.error(pc.red(`${statusPath}: FAIL plan ${plan}`));
+          console.error("  - [high] worktree.l1.ambiguous: multiple plan rows match (id and plan_id both present)");
+          process.exitCode = 1;
+          return;
+        }
+        const row = matches[0]!;
+        const lease = (row.execution_lease ?? {}) as Record<string, unknown>;
+        const metadata = (doc.metadata ?? {}) as Record<string, unknown>;
+        const input: L1PreDispatchInput = {
+          controlWorktreePath: options.control ? path.resolve(options.control) : String(metadata.control_worktree_path ?? ""),
+          leaseWorktreePath: String(lease.worktree_path ?? ""),
+          leaseWorkingBranch: String(lease.working_branch ?? ""),
+          planId: plan,
+        };
+        const gate = l1PreDispatchCheck(input);
+        printChecklist("worktree L1 check", gate);
         if (!gate.ok) process.exitCode = 1;
-        return;
+      } catch (error) {
+        failScript(error, "worktree check");
       }
-      if (!options.plan) {
-        throw new SddScriptError("usage: worktree check --plan <plan-id> [--status <path>] [--control <path>]", 2);
-      }
-      const statusPath = options.status ? path.resolve(options.status) : resolveStatusFilePath();
-      if (!fs.existsSync(statusPath)) {
-        throw new Error(`status file not found: ${statusPath}`);
-      }
-      const doc = readJson(statusPath);
-      const plans = Array.isArray(doc.plans) ? (doc.plans as Array<Record<string, unknown>>) : [];
-      const matches = plans.filter((row) => row?.id === options.plan || row?.plan_id === options.plan);
-      if (matches.length === 0) {
-        console.error(pc.red(`${statusPath}: FAIL plan ${options.plan}`));
-        console.error(`  - [high] worktree.l1.plan-not-found: no plan row with id/plan_id ${options.plan}`);
-        process.exitCode = 1;
-        return;
-      }
-      if (matches.length > 1) {
-        console.error(pc.red(`${statusPath}: FAIL plan ${options.plan}`));
-        console.error("  - [high] worktree.l1.ambiguous: multiple plan rows match (id and plan_id both present)");
-        process.exitCode = 1;
-        return;
-      }
-      const row = matches[0]!;
-      const lease = (row.execution_lease ?? {}) as Record<string, unknown>;
-      const metadata = (doc.metadata ?? {}) as Record<string, unknown>;
-      const input: L1PreDispatchInput = {
-        controlWorktreePath: options.control ? path.resolve(options.control) : String(metadata.control_worktree_path ?? ""),
-        leaseWorktreePath: String(lease.worktree_path ?? ""),
-        leaseWorkingBranch: String(lease.working_branch ?? ""),
-        planId: options.plan,
-      };
-      const gate = l1PreDispatchCheck(input);
-      printChecklist("worktree L1 check", gate);
-      if (!gate.ok) process.exitCode = 1;
-    } catch (error) {
-      failScript(error, "worktree check");
-    }
-  });
+    },
+  );
 
 const reviewCommand = program
   .command("review")
