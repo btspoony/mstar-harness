@@ -10,11 +10,12 @@ copies**; skill content lives once in the repo-root `skills/` mirror (19
 | Path | Mechanism | When |
 |---|---|---|
 | Dev-time | The plugin Config `skillRoots` points at the mirror `<repo-root>/skills` (absolute path). The plugin registers it with the dsh skill-local provider as a `customSkillDirs` entry. | Local development / tests |
-| Published package | A packaging step (P3 profile-bundle layer) copies the repo-root `skills/` mirror into this directory, and the plugin Config `bundledSkillDir` points here. The plugin registers it as the skill-local `bundledSkillDir` entry (the canonical published form — dsh defaults `$DSH_BUNDLED_SKILL_DIR`). | P3 (`20260808-dsh-seams-bundle`) |
+| Published package | **Not populated yet** (qc3 P-004): the package ships this README only, so the default `bundledSkillDir: ./skills` mounts empty until a publish-time copy step exists. The supported production form is an **absolute `bundledSkillDir` override in the profile layer** pointing at a populated mirror. | Publish-time copy (deferred; not part of this plan) |
 
 Neither path is wired yet at dev time: the real `@deepseek-ai/dsh-skill-local`
-runtime ships from the composed dsh app (peer dependency), and the P3 bundle
-layer performs the copy. Until then this README is the only file here.
+runtime ships from the composed dsh app (peer dependency). No packaging step
+copies the repo-root mirror into this directory — until one exists, this
+README is the only file here.
 
 ## Canonical skill-root form (frozen, Task 1)
 

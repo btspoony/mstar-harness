@@ -63,7 +63,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 | `dispatchTools` | unset (plugin default `['subagent']`) | delegation tool names the dispatch gate matches |
 | `dispatchBinding` | unset | the dispatching agent's role for the anti-recursion precheck |
 | `skillRoots` | unset | additional skill roots (dev-time mirror) |
-| `bundledSkillDir` | `./skills` | packaged skill mount (the repo-root `skills/` mirror, copied here by the P3 packaging step) |
+| `bundledSkillDir` | `./skills` | packaged skill mount — ships **empty** (this README only) until a publish-time copy step populates `skills/`; the supported production form is an **absolute path override in the profile layer** (qc3 P-004) |
 
 ## Known constraints
 

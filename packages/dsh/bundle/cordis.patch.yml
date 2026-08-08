@@ -12,8 +12,9 @@
     - id: mstar
       name: '@mstar-harness/dsh'
       config:
-        # Packaged skill mount (Task 5 copies the repo-root skills/ mirror
-        # here). Skill-local resolves this against the dsh process cwd at
-        # boot — a deployment launching from another cwd must override it
-        # with an absolute path in the profile layer.
+        # Packaged skill mount — ships EMPTY (skills/README.md only) until a
+        # publish-time copy step exists; the supported production form is an
+        # absolute path override in the profile layer. Skill-local resolves
+        # this against the dsh process cwd at boot — a deployment launching
+        # from another cwd must override it.
         bundledSkillDir: ./skills
