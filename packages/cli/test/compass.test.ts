@@ -1,19 +1,19 @@
 /**
- * Compass frontmatter parser parity — sync guard for the dsh in-app mirror
- * (qc1 F-002 of plan 20260808-dsh-seams-bundle).
+ * Compass frontmatter parser parity — engine-parity guard for the shared
+ * parser (upstream 2.0.3 moved the parser into the engine as
+ * `iteration.parseCompassFrontmatter`; the CLI re-imports from there and the
+ * dsh plugin mirrors that import — no local copy anywhere).
  *
- * THIS module (`src/compass.ts`) is the single parser home; the dsh plugin
- * mirrors it in `packages/dsh/src/compass.ts`. Both sides assert the SAME
- * shared fixtures + golden vectors (lives in `packages/dsh/tests/fixtures/
- * compass/` — referenced by relative path, so a contract change updates one
- * fixture set and both suites re-verify). A drift on either side fails that
- * side's package suite.
+ * Both sides assert the SAME shared fixtures + golden vectors (lives in
+ * `packages/dsh/tests/fixtures/compass/` — referenced by relative path, so a
+ * contract change updates one fixture set and both suites re-verify). A
+ * drift on either side fails that side's package suite.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseCompassFrontmatter } from "../src/compass.ts";
+import { parseCompassFrontmatter } from "@mstar-harness/engine";
 
 /** Shared compass fixtures/golden asserted by BOTH the CLI and dsh suites. */
 const FIXTURES = resolve(import.meta.dir, "../../dsh/tests/fixtures/compass");
