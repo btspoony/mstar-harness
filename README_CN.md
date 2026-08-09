@@ -37,6 +37,10 @@ Harness Workflow Engine · Agent Plugin
 
 更新说明：[CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
+## dsh provider（私有）
+
+dsh provider（`@mstar-harness/dsh` —— 让 dsh 成为 Morning Star 一等宿主的 cordis 插件：engine `HostAdapter`、进程内硬门禁、skills 挂载、profile bundle）的文档在 [`packages/dsh/`](packages/dsh/README.md) 下。目前为**私有（内测阶段）**，暂不并入本公开 README；下方内容（自「安装」起）保持原有公开说明不变。
+
 ## 安装
 
 ```bash

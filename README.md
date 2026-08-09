@@ -37,6 +37,10 @@ English / [中文](README_CN.md)
 
 Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
+## dsh provider (private)
+
+The dsh provider (`@mstar-harness/dsh` — the cordis plugin that makes dsh a first-class Morning Star host: engine `HostAdapter`, in-process hard gates, skills mount, profile bundle) is documented under [`packages/dsh/`](packages/dsh/README.md). It is currently **private (internal testing)** and intentionally not folded into this public README; everything below (Install onward) describes the original public surface unchanged.
+
 ## Install
 
 ```bash
