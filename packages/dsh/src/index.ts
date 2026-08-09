@@ -1982,13 +1982,20 @@ function pluginVersion(): string {
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
 function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource {
+  const iteration = harnessDir !== null ? iterationGateSource(harnessDir) : undefined
   return {
     kind: 'mstar-engine-status',
     form: 'catalog',
     version: pluginVersion(),
     harnessDir,
     enforcement: harnessDir !== null ? resolveCompassEnforcement(harnessDir) : { hard: false, source: 'none' },
-    ...(harnessDir !== null ? { iteration: iterationGateSource(harnessDir) } : {}),
+    // The iteration section is OPTIONAL: when the row cannot be built (no
+    // status.json / no steering compass / unreadable docs) the key must be
+    // ABSENT, never `iteration: undefined` — the agent loop appends the
+    // composed message to the real session, whose `Session.append` rejects
+    // event data that is not losslessly JSON-serializable (undefined-valued
+    // object properties included) with a hard round failure.
+    ...(iteration !== undefined ? { iteration } : {}),
     state: harnessDir !== null ? harnessStateSource(harnessDir) : null,
   }
 }

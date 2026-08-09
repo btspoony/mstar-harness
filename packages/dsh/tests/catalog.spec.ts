@@ -146,6 +146,28 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
     expect(text).toContain('enforcement: soft')
   })
 
+  it('omits the iteration section when the iteration-gate row cannot be built — the appended message stays losslessly JSON-serializable (Session.append boundary)', async () => {
+    // Default boot fixture: explicit harnessDir but NO status.json and NO
+    // steering compass, so `iterationGateSource` cannot build its row. The
+    // unified source must then carry the optional `iteration` key ABSENT —
+    // never `iteration: undefined`: the agent loop appends the composed
+    // message to the real session, whose `Session.append` rejects event
+    // data with undefined-valued object properties as non-lossless JSON
+    // (round failure: `session event "user/message" carries
+    // non-JSON-serializable data`).
+    const app = booted = await bootApp()
+
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+
+    const catalog = lastMessage(decision)
+    const source = catalog?.source as Record<string, unknown>
+    expect(source).toMatchObject({ kind: 'mstar-engine-status' })
+    expect(Object.keys(source).every((key) => source[key] !== undefined)).toBe(true)
+    expect('iteration' in source).toBe(false)
+    const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
+    expect(text).not.toContain('iteration:')
+  })
+
   it('delegates a rejected step without appending (advisory — never vetoes, never publishes on a blocked step)', async () => {
     const app = booted = await bootApp()
     const inbox = [inboxMessage()]
