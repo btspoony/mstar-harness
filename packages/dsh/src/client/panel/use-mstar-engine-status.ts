@@ -72,10 +72,20 @@ function selectEngineStatus(snapshot: ConversationSnapshot): MstarEngineStatusVi
  * view ring hands it to every `conversation.view` entry); the hook rides it as
  * a selector over the conversation snapshot, so a snapshot bump (new catalog
  * row) re-runs the selection and refreshes the panel.
+ *
+ * The hook never throws (spec §5 degradation path; Task 3 contract): a
+ * throwing session face or an absent one degrades to the explicit empty
+ * signal instead of bubbling a crash — the strict-session slot normally
+ * guarantees a session, the guard is belt-and-suspenders.
  */
 export function useMstarEngineStatus(useSession: SnapshotSelectorHook<ConversationSnapshot>): MstarEngineStatusView {
-  const view = useSession(selectEngineStatus, sameView)
-  // Absent session face → explicit empty signal (spec §3 maps the no-session
-  // case to the shell; this guard keeps the panel from crashing regardless).
-  return view ?? EMPTY
+  try {
+    const view = useSession(selectEngineStatus, sameView)
+    // Absent session face → explicit empty signal (spec §3 maps the no-session
+    // case to the shell; this guard keeps the panel from crashing regardless).
+    return view ?? EMPTY
+  } catch {
+    // Throwing session face → same explicit empty signal (never a crash).
+    return EMPTY
+  }
 }

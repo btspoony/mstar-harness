@@ -35,17 +35,24 @@ or a custom profile).
   browser client half (`dshClient` + `exports["./client"]`) discovered
   automatically by `ClientModuleHostService` — no separate profile layer or
   install step. It registers a **`conversation.view`** view-ring tab
-  (`id: 'mstar-workflow'`, `order: 20`) that renders the latest
-  `mstar-engine-status` catalog row as a structured panel (watermark +
-  iteration gate + workspace state + freshness; refresh follows the session
-  snapshot, no polling). Bundle served at `/plugins/@mstar-harness/dsh/client.js`
-  (closure-factory CJS). **Known limitations**: structured segmented
-  presentation only this iteration — the graphical workflow canvas
-  (react-flow DAG) is the NEXT iteration scope (compass Roadmap Position);
-  no custom top-level slot (the `conversation.view` tab is the only
-  session-level panel seat without dsh-private layout changes); no-session →
-  shell hero (strict-session view ring). See
-  `.mstar/iterations/iter-20260809-dsh-workflow-viz/guides/install-verification.md`
+  (`id: 'mstar-workflow'`, `order: 20`) labeled **"MStar 工作流" / "MStar
+  Workflow"** rendering the latest `mstar-engine-status` catalog row as the
+  **MStar Workflow layout** — header (version / harness dir / enforcement
+  evenly spread), right sidebar (plans / residuals / knowledge / leases /
+  branches+policy / direction), and a **react-flow cyclic workflow graph**
+  (phase ring + plan state machine, current-phase highlight, legend, zoom/pan;
+  pure `projectGraph` projection, never throws, explicit degraded states);
+  refresh follows the session snapshot, no polling. Bundle served at
+  `/plugins/@mstar-harness/dsh/client.js` (closure-factory CJS; `@xyflow/react`
+  inlined; build asserts no `import.meta` / ESM statements — the loader runs
+  plugin bundles as classic scripts). **Known limitations**: the graph's
+  Phase 1/5 nodes are schema-only (the engine phase gate never emits their
+  transitions); the loop edge is planning semantics; no historical back-scan
+  of resumed long logs; no custom top-level slot (the `conversation.view` tab
+  is the only session-level panel seat without dsh-private layout changes);
+  no-session → shell hero (strict-session view ring); browser UI observation
+  is the user-restart acceptance. See
+  `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`
   for the verified install run.
 
 ## Skill loading

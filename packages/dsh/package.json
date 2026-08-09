@@ -69,6 +69,7 @@
   "devDependencies": {
     "@cordisjs/plugin-include": "1.0.4",
     "@cordisjs/plugin-loader": "1.0.0-rc.5",
+    "@xyflow/react": "^12.11.2",
     "@deepseek-ai/dsh-agent": "^0.0.1",
     "@deepseek-ai/dsh-commands": "^0.0.1",
     "@deepseek-ai/dsh-fs": "^0.0.1",

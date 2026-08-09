@@ -27,6 +27,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
@@ -232,21 +233,19 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).toContain('enforcement: hard (iteration compass)')
   })
 
-  it('renders the iteration phase section with transition + gate verdict + violation codes', () => {
-    expect(html).toContain('data-mstar-section="iteration"')
-    expect(html).toContain('iter-20260809-dsh-workflow-viz')
-    expect(html).toContain('data-field="transition"')
-    expect(html).toContain('phase-2-execute')
-    expect(html).toContain('data-field="all-plans-done"')
-    expect(html).toContain('all plans done')
-    expect(html).toContain('false')
-    expect(html).toContain('PASS')
-    expect(html).toContain('data-gate-verdict="PASS"')
+  it('renders the graph region with the iteration gate folded into the graph + footer (T2)', () => {
+    // Iteration/gate detail moved into the main-area graph (spec §1.1/§2.3/§2.6):
+    // transition → current-phase highlight; ok → PASS badge; violations → footer list.
+    expect(html).toContain('data-graph-canvas')
+    expect(html).toContain('data-graph-node="phase:autonomous-execute"')
+    expect(html).toContain('data-graph-node-state="current"')
+    expect(html).toContain('data-graph-verdict="pass"')
+    expect(html).toContain('data-graph-violations="2"')
+    expect(html).toContain('data-mstar-gate-summary')
+    expect(html).toContain('data-graph-violations-count="2"')
     expect(html).toContain('data-violation-code="PLAN-3"')
     expect(html).toContain('data-violation-code="EXIT-1"')
     expect(html).toContain('plan 20260809-dsh-workflow-viz-panel not complete')
-    expect(html).toContain('/proj/.mstar/status.json')
-    expect(html).toContain('delivery-compass.md')
   })
 
   it('renders the state section: plans board, residuals, branches, policy, leases, knowledge, direction', () => {
@@ -302,9 +301,11 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('harness: none')
   })
 
-  it('no gate (harness present, iteration key absent) → no-compass note, state still renders', () => {
+  it('no gate (harness present, iteration key absent) → graph renders schema skeleton + no-compass note, state still renders', () => {
     const html = panelHtml(noGateSource)
     expect(html).toContain('data-mstar-panel="panel"')
+    expect(html).toContain('data-graph-canvas')
+    expect(html).toContain('data-graph-empty="no-compass"')
     expect(html).toContain('No steering compass / status.json')
     expect(html).toContain('data-mstar-section="state"')
     expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
@@ -314,13 +315,14 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-mstar-empty="no-knowledge"')
   })
 
-  it('iteration: null (schema-drift variant of "absent") → same no-gate degradation, never a crash (AC-3)', () => {
+  it('iteration: null (schema-drift variant of "absent") → same no-compass degradation, never a crash (AC-3)', () => {
     const html = panelHtml({
       ...noGateSource,
       iteration: null,
     } as unknown as MstarEngineStatusSource)
     expect(html).toContain('data-mstar-panel="panel"')
-    expect(html).toContain('data-mstar-empty="no-gate"')
+    expect(html).toContain('data-graph-canvas')
+    expect(html).toContain('data-graph-empty="no-compass"')
     expect(html).toContain('No steering compass / status.json')
     expect(html).toContain('data-mstar-section="state"')
   })
@@ -349,9 +351,9 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
 })
 
 describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)', () => {
-  it('gate.ok false → data-gate-verdict="FAIL" + FAIL (n) count from the failed sub-phase', () => {
+  it('gate.ok false → FAIL badge on the current node + FAIL (n) in the gate summary', () => {
     const html = panelHtml(failGateSource)
-    expect(html).toContain('data-gate-verdict="FAIL"')
+    expect(html).toContain('data-graph-verdict="fail"')
     expect(html).toContain('FAIL (2)')
     // The violation list still renders in FAIL mode (gate-level violations unchanged).
     expect(html).toContain('data-violation-code="PLAN-3"')
@@ -360,16 +362,16 @@ describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)',
 
   it('renders the panel body in zh when the locale flips (not just the tab label)', () => {
     const html = panelHtml(fullSource, undefined, undefined, 'zh')
-    expect(html).toContain('data-mstar-section="iteration"')
-    expect(html).toContain('迭代')
+    expect(html).toContain('data-graph-canvas')
+    expect(html).toContain('自主执行')
     expect(html).toContain('违规 (2)')
     expect(html).toContain('data-mstar-section="state"')
     expect(html).toContain('工作区状态')
     expect(html).toContain('3 篇文档')
     expect(html).toContain('最后更新')
-    // en titles must not leak into the zh body.
+    // en graph labels must not leak into the zh body.
+    expect(html).not.toContain('Autonomous Execute')
     expect(html).not.toContain('Workspace state')
-    expect(html).not.toContain('Iteration')
   })
 })
 
@@ -454,7 +456,7 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
   it('registers the mstar-panel dictionaries on apply', () => {
     const { ctx, locale } = makeCtx()
     apply(ctx)
-    expect(locale.bind(NS)('view.mstar-workflow')).toBe('工作流')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
   it('registers the conversation.view tab (id mstar-workflow, order 20, label follows locale)', () => {
@@ -469,12 +471,313 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
     const tab = entries[0]!
     expect(tab.options.id).toBe('mstar-workflow')
     expect(tab.options.order).toBe(20)
-    expect(resolveSlotLabel(tab.options.label)).toBe('工作流')
+    expect(resolveSlotLabel(tab.options.label)).toBe('MStar 工作流')
 
     // Label thunk re-reads per projection: locale switch flips the tab.
     locale.setLocale('en')
-    expect(resolveSlotLabel(tab.options.label)).toBe('Workflow')
+    expect(resolveSlotLabel(tab.options.label)).toBe('MStar Workflow')
 
     disposeDeclarer()
+  })
+})
+
+describe('workflow panel — T1 layout: header / sidebar / main grid (spec panel-layout-graph §1)', () => {
+  const html = panelHtml(fullSource)
+
+  it('header renders version / harness dir / enforcement as three evenly-spread cells', () => {
+    expect(html).toContain('data-mstar-header')
+    const cells = [...html.matchAll(/data-mstar-header-cell="([^"]+)"/g)].map((m) => m[1]!)
+    expect(cells).toEqual(['version', 'harness', 'enforcement'])
+    // Caption label (uppercased via CSS) + value per cell.
+    expect(html).toContain('>version<')
+    expect(html).toContain('>harness<')
+    expect(html).toContain('>enforcement<')
+    expect(html).toContain('mstar 2.0.4')
+    expect(html).toContain('harness: /proj/.mstar')
+    expect(html).toContain('enforcement: hard (iteration compass)')
+  })
+
+  it('root + header CSS pin the hard grid metrics (even spread, 300px sidebar, <860px stack, ramp spacing, zero bare hex)', () => {
+    const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
+    expect(cssText).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))')
+    expect(cssText).toContain('grid-template-columns: minmax(0, 1fr) 300px')
+    expect(cssText).toMatch(/grid-template-areas:\s*'header header'\s*'main\s+sidebar'/)
+    expect(cssText).toMatch(/@media \(max-width: 860px\)/)
+    // Spacing ramp tokens defined at the panel root (spec §1.2).
+    expect(cssText).toMatch(/--mstar-space-[1-6]:\s*\d+px/)
+    // Theming is dsw-token driven only — no bare hex (dark mode = token value flip).
+    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+  })
+
+  it('sidebar renders the plans / residuals / knowledge / leases status areas', () => {
+    expect(html).toContain('data-mstar-sidebar')
+    expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
+    expect(html).toContain('data-residual-severity="high"')
+    expect(html).toContain('data-knowledge-docs="3"')
+    expect(html).toContain('data-lease-plan="20260809-dsh-workflow-viz-panel"')
+    // The state digest content lives INSIDE the sidebar region (data-plan-id also
+    // appears earlier in the graph node plan rows, so order is pinned against the
+    // sidebar's own state section marker).
+    expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-section="state"'))
+  })
+
+  it('main area renders the react-flow graph canvas inside the graph region (T2 fills the graph)', () => {
+    expect(html).toContain('data-mstar-graph')
+    expect(html).toContain('data-graph-canvas')
+    expect(html).toContain('data-graph-nodes-draggable="false"')
+  })
+})
+
+describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflow" (spec panel-layout-graph §1.1)', () => {
+  it('view.mstar-workflow label flips with the locale', () => {
+    const locale = new LocaleService()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar Workflow')
+    locale.setLocale('zh')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
+  })
+
+  it('zh body renders localized header captions and the graph phase labels', () => {
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('版本')
+    expect(zhHtml).toContain('harness 目录')
+    expect(zhHtml).toContain('执行策略')
+    expect(zhHtml).toContain('自主执行')
+    expect(zhHtml).toContain('迭代收口')
+  })
+})
+
+describe('workflow panel — T2 graph: react-flow loop canvas (spec panel-layout-graph §2/§4)', () => {
+  const html = panelHtml(fullSource)
+
+  it('mounts the GraphCanvas in the main graph region, read-only interaction (nodesDraggable=false)', () => {
+    expect(html).toContain('data-mstar-graph')
+    expect(html).toContain('data-graph-canvas')
+    expect(html).toContain('data-graph-nodes-draggable="false"')
+  })
+
+  it('renders all 5 phase-ring nodes with current highlighted, next marked, PASS badge on current', () => {
+    for (const id of ['iteration-start', 'autonomous-execute', 'iteration-close', 'pr-delivery', 'merge-ready']) {
+      expect(html).toContain(`data-graph-node="phase:${id}"`)
+    }
+    expect(html).toContain('data-graph-node-state="current"')
+    expect(html).toContain('data-graph-node-state="next"')
+    // Phase 1/5 schema-only nodes stay unlit (idle) — engine never emits those transitions (spec §2.3).
+    expect(html).toContain('data-graph-node-state="idle"')
+    expect(html).toContain('data-graph-verdict="pass"')
+    expect(html).toContain('data-graph-violations="2"')
+    expect(html).toContain('Autonomous Execute')
+    expect(html).toContain('Iteration Close')
+  })
+
+  it('renders the plan state machine buckets with lit markers, counts and plan rows', () => {
+    expect(html).toContain('data-graph-node="state:InProgress"')
+    expect(html).toContain('data-graph-node="state:Done"')
+    expect(html).toContain('data-graph-lit="true"')
+    expect(html).toContain('data-graph-count="1"')
+    expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
+    expect(html).toContain('data-plan-status="InProgress"')
+  })
+
+  it('renders the legend + gate summary footer with the collapsible violations list', () => {
+    expect(html).toContain('data-mstar-legend')
+    expect(html).toContain('data-mstar-graph-footer')
+    expect(html).toContain('data-mstar-gate-summary')
+    expect(html).toContain('data-graph-violations-count="2"')
+    expect(html).toContain('data-violation-code="PLAN-3"')
+    expect(html).toContain('data-violation-code="EXIT-1"')
+  })
+
+  it('the connector edge links the current phase to the active plan bucket', () => {
+    // InProgress is the only lit non-Done/Blocked bucket in the panel fixture → connector target.
+    // (The marker uses '→' — React HTML-escapes '>' inside attribute values.)
+    expect(html).toContain('data-graph-connector="phase:autonomous-execute→state:InProgress"')
+  })
+
+  it('no-harness branch does NOT mount the canvas (mount gated on the empty-state branch, T1 minor-1)', () => {
+    const g = panelHtml(noHarnessSource)
+    expect(g).toContain('data-mstar-panel="no-harness"')
+    expect(g).toContain('data-mstar-graph')
+    expect(g).not.toContain('data-graph-canvas')
+  })
+
+  it('no iteration → schema ring + no-compass note, state machine still renders, no verdict badge', () => {
+    const g = panelHtml(noGateSource)
+    expect(g).toContain('data-graph-canvas')
+    expect(g).toContain('data-graph-empty="no-compass"')
+    expect(g).toContain('data-graph-node="state:InProgress"')
+    expect(g).not.toContain('data-graph-verdict="pass"')
+  })
+
+  it('state null → machine skeleton + no-state note; graph still mounts (spec §2.5)', () => {
+    const g = panelHtml({ ...fullSource, state: null })
+    expect(g).toContain('data-graph-canvas')
+    expect(g).toContain('data-graph-empty="no-state"')
+  })
+
+  it('plans missing → machine skeleton + no-plans note (spec §2.5)', () => {
+    const g = panelHtml({
+      ...fullSource,
+      state: { ...fullSource.state!, plans: undefined },
+    } as unknown as MstarEngineStatusSource)
+    expect(g).toContain('data-graph-canvas')
+    expect(g).toContain('data-graph-empty="no-plans"')
+  })
+
+  it('renders the iteration id as the phase-ring caption (T2 minor-1, spec §2.6)', () => {
+    expect(html).toContain('data-graph-iteration-id="iter-20260809-dsh-workflow-viz"')
+    // The locale label + the id render inside the same caption element (zh body too).
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-graph-iteration-id="iter-20260809-dsh-workflow-viz"')
+  })
+
+  it('legend includes the idle (unlit) swatch, en + zh (T2 minor-2, spec §4)', () => {
+    expect(html).toContain('data-mstar-legend-item="idle"')
+    expect(html).toContain('unlit (schema)')
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-mstar-legend-item="idle"')
+    expect(zhHtml).toContain('未点亮（schema）')
+  })
+})
+
+describe('workflow panel — T3 data projection integration (spec panel-layout-graph §2.1/§2.5)', () => {
+  const html = panelHtml(fullSource)
+
+  /** Render the panel against a live snapshot store (same helper shape as the data-wiring block). */
+  function renderStore(store: { getSnapshot(): ConversationSnapshot }, lang: 'en' | 'zh' = 'en'): string {
+    const locale = new LocaleService()
+    locale.register(NS, { zh, en })
+    locale.setLocale(lang)
+    return renderToStaticMarkup(createElement(PanelView, {
+      ...kitProps({ useSession: bindUseSession(store) }),
+      t: locale.bind(NS),
+    }))
+  }
+
+  /** The `data-graph-node-state` value of one node div, from static HTML. */
+  function nodeState(h: string, nodeId: string): string | null {
+    const start = h.indexOf(`data-graph-node="${nodeId}"`)
+    if (start === -1) return null
+    const end = h.indexOf('data-graph-node="', start + 1)
+    const slice = end === -1 ? h.slice(start) : h.slice(start, end)
+    const m = slice.match(/data-graph-node-state="([^"]+)"/)
+    return m === null ? null : m[1]!
+  }
+
+  it('graph, header and sidebar all render from the SAME catalog row (single source of truth)', () => {
+    // Header watermark = source.version / harnessDir / enforcement.
+    expect(html).toContain('mstar 2.0.4')
+    expect(html).toContain('harness: /proj/.mstar')
+    // Sidebar plan board rows = state.plans verbatim.
+    expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
+    expect(html).toContain('data-plan-status="InProgress"')
+    // Graph InProgress bucket lit with the same plan row + count.
+    expect(html).toContain('data-graph-node="state:InProgress"')
+    expect(html).toContain('data-graph-lit="true"')
+    expect(html).toContain('data-graph-count="1"')
+    expect(html).toContain('data-plan-status="InProgress"')
+    // Current-phase highlight follows iteration.gate.transition; the connector
+    // picks the same active bucket the sidebar board shows.
+    expect(html).toContain('data-graph-node="phase:autonomous-execute"')
+    expect(html).toContain('data-graph-node-state="current"')
+    expect(html).toContain('data-graph-connector="phase:autonomous-execute→state:InProgress"')
+  })
+
+  it('a new catalog row with a new transition re-lights the ring (current + next move)', () => {
+    const phase2 = {
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition: 'phase-2-execute' } },
+    }
+    const store = createSnapshotStore(snapshotFor(phase2, 1_720_000_000_000))
+    const before = renderStore(store)
+    expect(nodeState(before, 'phase:autonomous-execute')).toBe('current')
+    expect(nodeState(before, 'phase:iteration-close')).toBe('next')
+    expect(nodeState(before, 'phase:iteration-start')).toBe('idle')
+
+    // Snapshot bump: server re-emission with phase-3-close → highlight moves.
+    const phase3 = {
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' } },
+    }
+    store.set(snapshotFor(phase3, 1_720_002_000_000))
+    const after = renderStore(store)
+    expect(nodeState(after, 'phase:iteration-close')).toBe('current')
+    expect(nodeState(after, 'phase:pr-delivery')).toBe('next')
+    expect(nodeState(after, 'phase:autonomous-execute')).toBe('idle')
+    // The connector edge follows the new current phase.
+    expect(after).toContain('data-graph-connector="phase:iteration-close→state:InProgress"')
+  })
+
+  it('a new catalog row with changed plans re-buckets the machine + moves the connector', () => {
+    const beforeSource = {
+      ...fullSource,
+      state: { ...fullSource.state!, plans: [{ id: 'plan-b', status: 'InProgress' }] },
+    }
+    const store = createSnapshotStore(snapshotFor(beforeSource, 1_720_000_000_000))
+    const before = renderStore(store)
+    expect(before).toContain('data-graph-count="1"')
+    expect(before).toContain('data-graph-connector="phase:autonomous-execute→state:InProgress"')
+
+    const afterSource = {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: 'plan-b', status: 'InProgress' },
+          { id: 'plan-c', status: 'InReview' },
+          { id: 'plan-d', status: 'InReview' },
+        ],
+      },
+    }
+    store.set(snapshotFor(afterSource, 1_720_002_000_000))
+    const after = renderStore(store)
+    // InReview bucket lit with 2 plans; connector moves to the most-populated bucket.
+    expect(after).toContain('data-graph-node="state:InReview"')
+    expect(after).toContain('data-graph-lit="true"')
+    expect(after).toContain('data-graph-count="2"')
+    expect(after).toContain('data-plan-id="plan-c"')
+    expect(after).toContain('data-graph-connector="phase:autonomous-execute→state:InReview"')
+  })
+
+  it('new violations on a fresh row update the footer count + list', () => {
+    const clean = {
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, violations: [] } },
+    }
+    const store = createSnapshotStore(snapshotFor(clean, 1_720_000_000_000))
+    const before = renderStore(store)
+    expect(before).toContain('data-graph-violations-count="0"')
+    expect(before).toContain('no violations')
+
+    const failing = {
+      ...fullSource,
+      iteration: {
+        ...fullSource.iteration!,
+        gate: {
+          ...fullSource.iteration!.gate,
+          violations: [{ severity: 'high', code: 'EXIT-9', message: 'new violation row' }],
+        },
+      },
+    }
+    store.set(snapshotFor(failing, 1_720_002_000_000))
+    const after = renderStore(store)
+    expect(after).toContain('data-graph-violations-count="1"')
+    expect(after).toContain('data-violation-code="EXIT-9"')
+  })
+
+  it('missing / garbage fields degrade the WHOLE panel (header + graph + sidebar) without crashing', () => {
+    const noIteration = panelHtml({ ...fullSource, iteration: undefined } as unknown as MstarEngineStatusSource)
+    expect(noIteration).toContain('data-mstar-header')
+    expect(noIteration).toContain('data-graph-canvas')
+    expect(noIteration).toContain('data-graph-empty="no-compass"')
+    expect(noIteration).toContain('data-mstar-sidebar')
+    expect(noIteration).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
+
+    const garbageIteration = panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusSource)
+    expect(garbageIteration).toContain('data-mstar-header')
+    expect(garbageIteration).toContain('data-graph-canvas')
+    expect(garbageIteration).toContain('data-graph-empty="no-compass"')
+    expect(garbageIteration).toContain('data-mstar-section="state"')
   })
 })

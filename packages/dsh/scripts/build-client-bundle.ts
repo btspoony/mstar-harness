@@ -64,6 +64,27 @@ function hashClass(local: string): string {
 }
 
 /**
+ * Inline `<style data-plugin>` injection source for a css text blob: the tag
+ * is created once per factory materialization (the loader removes plugin-owned
+ * tags on unload). Shared by the CSS-modules loader and the plain-`.css`
+ * loader (react-flow's base stylesheet, spec §3.2 — the bundle must inline it:
+ * a second emitted asset would never be served by the closure loader).
+ */
+function styleInjectionContents(cssText: string, tagId: string): string {
+  return [
+    `const css = ${JSON.stringify(cssText)};`,
+    `const tagId = ${JSON.stringify(tagId)};`,
+    `if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(tagId) + ']') === null) {`,
+    `  const tag = document.createElement('style');`,
+    `  tag.dataset.plugin = ${JSON.stringify(ID)};`,
+    `  tag.dataset.pluginCss = tagId;`,
+    `  tag.textContent = css;`,
+    `  document.head.appendChild(tag);`,
+    `}`,
+  ].join('\n')
+}
+
+/**
  * Compile one `*.module.css` file into a JS module: the css text (comments
  * stripped, class tokens hashed) plus a `<style data-plugin>` injection that
  * runs at factory materialization, and the hashed class map as the default
@@ -86,15 +107,7 @@ function cssModuleContents(fileId: string): { contents: string; loader: 'js' } {
   })
   const tagId = `${ID}/${basename(fileId)}`
   const contents = [
-    `const css = ${JSON.stringify(css)};`,
-    `const tagId = ${JSON.stringify(tagId)};`,
-    `if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(tagId) + ']') === null) {`,
-    `  const tag = document.createElement('style');`,
-    `  tag.dataset.plugin = ${JSON.stringify(ID)};`,
-    `  tag.dataset.pluginCss = tagId;`,
-    `  tag.textContent = css;`,
-    `  document.head.appendChild(tag);`,
-    `}`,
+    styleInjectionContents(css, tagId),
     `export default ${JSON.stringify(classMap)};`,
   ].join('\n')
   return { contents, loader: 'js' }
@@ -106,9 +119,28 @@ const result = await build({
   target: 'browser',
   format: 'cjs',
   external: [...CLIENT_EXTERNALS],
+  // Plain `.css` imports (e.g. `@xyflow/react/dist/style.css`) load as TEXT
+  // modules: GraphCanvas imports the stylesheet string and injects it as a
+  // `<style data-plugin>` tag at factory materialization (spec §3.2 — a second
+  // emitted asset would never be served by the closure loader). `*.module.css`
+  // is unaffected: the css-modules plugin below wins for those paths.
+  loader: { '.css': 'text' },
   // zustand/immer-style deps read process.env.NODE_ENV; honor the build env
-  // like the snapshot recipe (artifacts default to production).
-  define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production') },
+  // like the snapshot recipe (artifacts default to production). zustand v4
+  // ALSO reads `import.meta.env.MODE` (its store `destroy` deprecation
+  // branch) — the web loader executes plugin bundles as a CLASSIC <script>
+  // (client-modules defaultLoadBundle, no `type="module"`), where a literal
+  // `import.meta` is a SyntaxError that kills the whole bundle at parse time
+  // (the panel never registers). Defining the full `import.meta.env` object
+  // erases every reference; the emitted code keeps a plain-object read.
+  define: {
+    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+    'import.meta.env': JSON.stringify({
+      MODE: process.env.NODE_ENV ?? 'production',
+      DEV: (process.env.NODE_ENV ?? 'production') !== 'production',
+      PROD: (process.env.NODE_ENV ?? 'production') === 'production',
+    }),
+  },
   // Closure-factory handoff (spec §6.2): `module`/`exports` are declared
   // inside the factory body because bun's cjs emission assigns module.exports
   // itself; the factory returns that surface to the loader.
@@ -144,6 +176,22 @@ if (!result.success) {
 }
 if (result.outputs.length !== 1 || !result.outputs[0]!.path.endsWith(`/${OUT_FILE}`)) {
   throw new Error(`client bundle build: expected exactly one ${OUT_FILE} output, got ${result.outputs.map((o) => o.path).join(', ')}`)
+}
+
+// Inline bundle-contract assertions (spec §3.2 #2 verify-only + the
+// classic-script guard): the emitted text must carry the inlined graph lib,
+// must not value-import `@deepseek-ai/*` (purity gate), and must contain NO
+// `import.meta` / ESM statements — the web loader executes this file as a
+// classic <script>, where either is a parse-time SyntaxError.
+const bundleText = readFileSync(result.outputs[0]!.path, 'utf8')
+if (!/xyflow|reactflow/i.test(bundleText)) {
+  throw new Error('client bundle contract: @xyflow/react is NOT inlined — check CLIENT_EXTERNALS / the loader module table')
+}
+if (/require\(\s*["']@deepseek-ai\//.test(bundleText)) {
+  throw new Error('client bundle contract: a @deepseek-ai/* VALUE import survived the purity gate')
+}
+if (bundleText.includes('import.meta') || /(^|\n)\s*(import|export)\s/.test(bundleText)) {
+  throw new Error('client bundle contract: emitted bundle contains import.meta / ESM statements — the classic-script loader would fail to parse it')
 }
 
 // Declarations for `exports["./client"].types` (spec §6.2): the tsc-emitted
