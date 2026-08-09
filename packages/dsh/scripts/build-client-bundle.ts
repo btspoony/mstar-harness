@@ -126,8 +126,21 @@ const result = await build({
   // is unaffected: the css-modules plugin below wins for those paths.
   loader: { '.css': 'text' },
   // zustand/immer-style deps read process.env.NODE_ENV; honor the build env
-  // like the snapshot recipe (artifacts default to production).
-  define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production') },
+  // like the snapshot recipe (artifacts default to production). zustand v4
+  // ALSO reads `import.meta.env.MODE` (its store `destroy` deprecation
+  // branch) — the web loader executes plugin bundles as a CLASSIC <script>
+  // (client-modules defaultLoadBundle, no `type="module"`), where a literal
+  // `import.meta` is a SyntaxError that kills the whole bundle at parse time
+  // (the panel never registers). Defining the full `import.meta.env` object
+  // erases every reference; the emitted code keeps a plain-object read.
+  define: {
+    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+    'import.meta.env': JSON.stringify({
+      MODE: process.env.NODE_ENV ?? 'production',
+      DEV: (process.env.NODE_ENV ?? 'production') !== 'production',
+      PROD: (process.env.NODE_ENV ?? 'production') === 'production',
+    }),
+  },
   // Closure-factory handoff (spec §6.2): `module`/`exports` are declared
   // inside the factory body because bun's cjs emission assigns module.exports
   // itself; the factory returns that surface to the loader.
@@ -163,6 +176,22 @@ if (!result.success) {
 }
 if (result.outputs.length !== 1 || !result.outputs[0]!.path.endsWith(`/${OUT_FILE}`)) {
   throw new Error(`client bundle build: expected exactly one ${OUT_FILE} output, got ${result.outputs.map((o) => o.path).join(', ')}`)
+}
+
+// Inline bundle-contract assertions (spec §3.2 #2 verify-only + the
+// classic-script guard): the emitted text must carry the inlined graph lib,
+// must not value-import `@deepseek-ai/*` (purity gate), and must contain NO
+// `import.meta` / ESM statements — the web loader executes this file as a
+// classic <script>, where either is a parse-time SyntaxError.
+const bundleText = readFileSync(result.outputs[0]!.path, 'utf8')
+if (!/xyflow|reactflow/i.test(bundleText)) {
+  throw new Error('client bundle contract: @xyflow/react is NOT inlined — check CLIENT_EXTERNALS / the loader module table')
+}
+if (/require\(\s*["']@deepseek-ai\//.test(bundleText)) {
+  throw new Error('client bundle contract: a @deepseek-ai/* VALUE import survived the purity gate')
+}
+if (bundleText.includes('import.meta') || /(^|\n)\s*(import|export)\s/.test(bundleText)) {
+  throw new Error('client bundle contract: emitted bundle contains import.meta / ESM statements — the classic-script loader would fail to parse it')
 }
 
 // Declarations for `exports["./client"].types` (spec §6.2): the tsc-emitted
