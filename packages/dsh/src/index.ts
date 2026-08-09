@@ -20,13 +20,12 @@ import {
 } from '@deepseek-ai/dsh-skill-local'
 import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-local'
 import {
-  antiRecursionPrecheck,
   applyEnforcement,
-  assertDefaultBranchProtected,
   assertIndexRows,
   assertLightDarkParity,
   assignmentHeaderRegion,
   completenessLevel,
+  composeDispatchGate,
   evaluatePhaseGate,
   executionModeToN,
   findingsCleanupGate,
@@ -38,7 +37,7 @@ import {
   lintLoadOrder,
   parseAssignmentBranchForms,
   parseAssignmentFields,
-  parseBranchPolicyDirectOnBranch,
+  parseCompassFrontmatter,
   parseEnforcementFlag,
   readHarnessVersion,
   readJson,
@@ -52,7 +51,6 @@ import {
   scopeGuard,
   sddWorkspace,
   taskBrief,
-  validateAssignmentFields,
   validateAuditStatusBlocks,
   validateDesignTokenFrontmatter,
   validateExecutionLease,
@@ -78,7 +76,6 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { DshMstar } from './service.ts'
-import { parseCompassFrontmatterText } from './compass.ts'
 import type {
   IterationGateListView,
   IterationGateViolationView,
@@ -1551,22 +1548,26 @@ function worktreeL1Violations(harnessDir: string | null, header: string): Valida
 }
 
 /**
- * The dispatch-gate validation core (opencode `validateDispatchAssignment`
- * parity — the SAME engine fns, so violation codes are identical): the field
- * gate (`validateAssignmentFields`; read-only roles skip the branch gate),
- * the anti-recursion precheck (Config binding), the default-branch gate,
- * and the worktree L1/L2 checks (Task 2 — additive beyond opencode parity;
- * the lease gate is exec-bound and joins via {@link DshHostAdapter.dispatchGate}).
+ * The dispatch-gate validation core — the engine's SINGLE dispatch-gate
+ * composition (`dispatch.composeDispatchGate`, opencode/omp/CLI parity — the
+ * SAME composition, so violation codes are identical by construction): shape
+ * guard + field gate (read-only roles skip the branch gate) +
+ * anti-recursion precheck (Config binding) + default-branch gate +
+ * header-region enforcement. The dsh-side additions layer ON TOP: the
+ * worktree L1/L2 checks (Task 2 — additive beyond opencode parity; the
+ * lease gate is exec-bound and joins via {@link DshHostAdapter.dispatchGate}).
  * Extracted from `gateDispatch` so the `tools/pre-execute` listener and the
  * host adapter's `beforeDispatch` share ONE code path.
  *
  * Header-region scoping (qc2 F-001): the engine `assignmentHeaderRegion`
- * slice is computed ONCE and feeds EVERY Assignment parser (fields, branch
- * forms, direct-on exception, worktree tracks) — body-quoted field examples
- * after a `# Task` / `# Target` / `---` marker never leak into the header
- * fields the gate validates (the same discipline enforcement / plan-id /
- * lease already honor). Well-formed assignments (fields in the header) slice
- * to the full text, so their verdicts are unchanged.
+ * slice is computed ONCE and feeds the composition AND the worktree parsers
+ * (fields, branch forms, direct-on exception, worktree tracks) — body-quoted
+ * field examples after a `# Task` / `# Target` / `---` marker never leak
+ * into the header fields the gate validates (the same discipline
+ * enforcement / plan-id / lease already honor). Well-formed assignments
+ * (fields in the header) slice to the full text, so their verdicts are
+ * unchanged. The composition never throws: unexpected failures degrade to
+ * the silent non-shaped result.
  *
  * @returns the violations plus the writable flag (false for read-only
  * roles — the listener feeds it to the lease gate).
@@ -1581,27 +1582,15 @@ function dispatchGateCore(
   // when the plan metadata is present) — Task 2; both run on the header
   // region slice, the engine parsers' single boundary.
   const violations: ValidationResult[] = [...worktreeL2Violations(header), ...worktreeL1Violations(harnessDir, header)]
-  const fields = parseAssignmentFields(header)
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
-  const writable = isReadOnlyAssignmentRole(fields.executeAs ?? '') ? false : undefined
-  violations.push(...validateAssignmentFields(header, { writable }).violations)
-  // Anti-recursion NEVER red line — binding = the dispatching agent's own
-  // type (Config-declared; dsh exposes no agent role on the execution context).
-  const binding = config.dispatchBinding ?? ''
-  if (binding.trim() !== '') {
-    violations.push(...antiRecursionPrecheck(binding, fields.executeAs ?? '').violations)
-  }
-  // Default-branch gate — the checked branch comes from the Assignment's own
-  // branch forms, else $MSTAR_WORKING_BRANCH (opencode parity); the direct-on
-  // exception is honored only when its branch is the one being checked.
-  if (writable !== false) {
-    const forms = parseAssignmentBranchForms(header)
-    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH
-    if (branch !== undefined && branch.trim() !== '') {
-      const directOnException = parseBranchPolicyDirectOnBranch(header) === branch.trim()
-      violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations)
-    }
-  }
+  const writable = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? '') ? false : undefined
+  // Engine single composition: shape guard + validateAssignmentFields
+  // (writable) + antiRecursionPrecheck (agent = the dispatching agent's own
+  // type, Config-declared — dsh exposes no agent role on the execution
+  // context) + default-branch gate (Assignment branch forms, else
+  // $MSTAR_WORKING_BRANCH; direct-on exception only when its branch is the
+  // one being checked) + header-region enforcement. Never throws.
+  violations.push(...composeDispatchGate(header, { agent: config.dispatchBinding ?? '', writable }).violations)
   return { violations, writable }
 }
 
@@ -1764,8 +1753,8 @@ export interface DshHostAdapterOptions {
  *   hook shape is one `ValidationResult`; the gate's full violation list
  *   stays available on the fs-intent slot.
  * - `beforeDispatch(assignment)` — the dispatch gate validation path
- *   (validateAssignmentFields + branch gate + anti-recursion + worktree
- *   L1/L2 checks; read-only roles skip the branch gate). The lease gate
+ *   (engine `composeDispatchGate` — fields + branch gate + anti-recursion —
+ *   plus worktree L1/L2 checks; read-only roles skip the branch gate). The lease gate
  *   stays listener-side: it binds the ToolExecution context (session id)
  *   this hook's contract does not carry. The parsed `AssignmentFields` form
  *   is normalized to the engine's own header grammar (lossless — the
@@ -1994,7 +1983,7 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateSourc
   if (compass === undefined) return undefined
   try {
     const statusDoc = readJson(statusPath)
-    const compassDoc = parseCompassFrontmatterText(readFileSync(compass.compassPath, 'utf8'), compass.compassPath)
+    const compassDoc = parseCompassFrontmatter(compass.compassPath)
     // No git probes at boot: the row reports what the two control docs
     // prove (the tool remains the explicit-probe surface for branch checks).
     const result = evaluatePhaseGate(statusDoc, compassDoc)
@@ -2310,7 +2299,7 @@ function registerSddIterationTools(ctx: Context, harnessDir: string | null): voi
         if (!existsSync(args.status_path)) throw new Error(`status file not found: ${args.status_path}`)
         if (!existsSync(args.compass_path)) throw new Error(`compass file not found: ${args.compass_path}`)
         const statusDoc = readJson(args.status_path)
-        const compassDoc = parseCompassFrontmatterText(readFileSync(args.compass_path, 'utf8'), args.compass_path)
+        const compassDoc = parseCompassFrontmatter(args.compass_path)
         const result = evaluatePhaseGate(statusDoc, compassDoc, {
           currentBranch: args.branch,
           specIntegrationBranch: args.integration,
