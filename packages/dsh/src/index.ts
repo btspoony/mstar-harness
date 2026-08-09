@@ -40,7 +40,6 @@ import {
   parseAssignmentFields,
   parseCompassFrontmatter,
   parseEnforcementFlag,
-  readHarnessVersion,
   readJson,
   redactSecrets,
   referenceExists,
@@ -1944,13 +1943,13 @@ function pluginVersion(): string {
 
 /**
  * The durable catalog source for the current engine status (the watermark
- * fields). Every field is boot/workspace-resolved — engine + plugin versions
- * are process-immutable manifest reads and the compass enforcement resolves
- * like the gates themselves. With an explicit `harnessDir` config the source
- * is built ONCE at `apply()` (boot-stable, qc3 W-002); without one it is
- * built on the FIRST pre-step of each workspace and cached per workspace
- * root. A mid-session compass change therefore does NOT re-watermark the
- * catalog until a config reload re-runs `apply` (HMR fiber
+ * fields). Every field is boot/workspace-resolved — the unified mstar
+ * version is a process-immutable manifest read and the compass enforcement
+ * resolves like the gates themselves. With an explicit `harnessDir` config
+ * the source is built ONCE at `apply()` (boot-stable, qc3 W-002); without
+ * one it is built on the FIRST pre-step of each workspace and cached per
+ * workspace root. A mid-session compass change therefore does NOT
+ * re-watermark the catalog until a config reload re-runs `apply` (HMR fiber
  * restart) — the documented staleness tradeoff that keeps synchronous disk
  * I/O off the agent-loop hot path (one Map lookup per step after the first).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
@@ -1959,8 +1958,7 @@ function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource 
   return {
     kind: 'mstar-engine-status',
     form: 'catalog',
-    engineVersion: readHarnessVersion(),
-    pluginVersion: pluginVersion(),
+    version: pluginVersion(),
     harnessDir,
     enforcement: harnessDir !== null ? resolveCompassEnforcement(harnessDir) : { hard: false, source: 'none' },
   }
@@ -1975,14 +1973,14 @@ interface CatalogSources {
 /**
  * Build the catalog sources for one harness dir (boot for the explicit
  * config, first-use per workspace otherwise). Logs the manifest fallback
- * once per build — a '0.0.0' plugin version would watermark every catalog
+ * once per build — a '0.0.0' version would watermark every catalog
  * row wrongly, so the fallback is never silent.
  * @param ctx - registrant context (logger for the manifest fallback).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
 function buildCatalogSources(ctx: Context, harnessDir: string | null): CatalogSources {
   const source = engineStatusSource(harnessDir)
-  if (source.pluginVersion === '0.0.0') {
+  if (source.version === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
   return { source, iterationGate: iterationGateSource(harnessDir) }
@@ -2002,8 +2000,7 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
   const enforcement = `${source.enforcement.hard ? 'hard' : 'soft'}${source.enforcement.source === 'none' ? '' : ` (${source.enforcement.source})`}`
   return [
     '<mstar_engine_status>',
-    `engine version: ${source.engineVersion}`,
-    `plugin version: ${source.pluginVersion}`,
+    `mstar version: ${source.version}`,
     `harness dir: ${source.harnessDir ?? 'none'}`,
     `enforcement: ${enforcement}`,
     '</mstar_engine_status>',
@@ -2924,13 +2921,14 @@ export function apply(ctx: Context, config: Config): void {
   // evaluatePhaseGate tool result shape).
   //
   // Watermark resolution: with an explicit `harnessDir` config the sources
-  // are computed ONCE at boot (engine/plugin versions are
-  // process-immutable, compass enforcement is boot-resolved like the
-  // gates, and the iteration gate is boot-evaluated) and reused per step —
-  // the pre-step hot path does no disk I/O. WITHOUT the config the sources
-  // are built on the first pre-step of each workspace and cached per
-  // workspace root (the same staleness tradeoff, workspace-scoped — see
-  // engineStatusSource / iterationGateSource / buildCatalogSources).
+  // are computed ONCE at boot (the unified mstar version is a
+  // process-immutable manifest read, compass enforcement is boot-resolved
+  // like the gates, and the iteration gate is boot-evaluated) and reused
+  // per step — the pre-step hot path does no disk I/O. WITHOUT the config
+  // the sources are built on the first pre-step of each workspace and
+  // cached per workspace root (the same staleness tradeoff,
+  // workspace-scoped — see engineStatusSource / iterationGateSource /
+  // buildCatalogSources).
   const bootSources = bootHarnessDir !== null ? buildCatalogSources(ctx, bootHarnessDir) : undefined
   // Per-workspace catalog cache for the no-config path (keyed by the
   // session workspace root; '' for agent-less events).

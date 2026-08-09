@@ -13,14 +13,14 @@
  * MUST call `next()` and build on the delegated decision; it never returns
  * `reject` (would block the step) and never replaces the delegated messages
  * (would drop them). It appends one `catalog`-form MessageSource named
- * `mstar-engine-status` whose content is the engine version
- * (`readHarnessVersion`), the compass enforcement mode
- * (`resolveCompassEnforcement`), the harness dir, and the plugin package
- * version — so the model-visible row is reconstructable from the session log
+ * `mstar-engine-status` whose content is the unified mstar version
+ * (own manifest, single-version invariant with the bundled engine), the
+ * compass enforcement mode (`resolveCompassEnforcement`), the harness dir,
+ * — so the model-visible row is reconstructable from the session log
  * (MessageSource form; model-visible ⟺ logged). The watermark is
- * boot-resolved (qc3 W-002) and the append is error-contained (qc3 W-003);
- * an aborted step returns the delegated decision unchanged (qc2 S-001).
- * Fiber disposal removes the listener (HMR-safe).
+ * boot/workspace-resolved (qc3 W-002) and the append is error-contained
+ * (qc3 W-003); an aborted step returns the delegated decision unchanged
+ * (qc2 S-001). Fiber disposal removes the listener (HMR-safe).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -30,7 +30,6 @@ import { join } from 'node:path'
 import { Context } from 'cordis'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { readHarnessVersion } from '@mstar-harness/engine'
 import * as plugin from '../src/index.ts'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
 
@@ -41,7 +40,7 @@ afterEach(async () => {
   booted = undefined
 })
 
-/** The plugin's own manifest version (the catalog's `pluginVersion` field). */
+/** The plugin's own manifest version (the catalog's `version` field). */
 const PLUGIN_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
 
 /** One pre-existing user message the loop pulled from the inbox. */
@@ -85,16 +84,14 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
     expect(catalog?.source).toMatchObject({
       kind: 'mstar-engine-status',
       form: 'catalog',
-      engineVersion: readHarnessVersion(),
-      pluginVersion: PLUGIN_VERSION,
+      version: PLUGIN_VERSION,
       harnessDir: app.harnessDir,
       enforcement: { hard: false, source: 'none' },
     })
     // The composed session log carries the model-facing text.
     expect(catalog?.content[0]?.type).toBe('text')
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
-    expect(text).toContain(`engine version: ${readHarnessVersion()}`)
-    expect(text).toContain(`plugin version: ${PLUGIN_VERSION}`)
+    expect(text).toContain(`mstar version: ${PLUGIN_VERSION}`)
     expect(text).toContain(`harness dir: ${app.harnessDir}`)
     expect(text).toContain('enforcement: soft')
   })

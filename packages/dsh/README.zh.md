@@ -61,7 +61,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 - **seam lint**——harness 下 `DESIGN.md` / audit plan / 知识文档 / roles 目录的写入运行各自的 artifact 级 engine lint。
 - **模型可见工具**——`mstar_sdd_workspace`、`mstar_sdd_task_brief`、`mstar_iteration_gate`、`mstar_design_md_validate`、`mstar_audit_validate`、`mstar_compound_validate`、`mstar_roles_validate` 注册到 `ctx.tools`。
 - **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；handler 把命令正文 steer 进接收 agent）。
-- **pre-step catalog 行**——每个组合后的 agent 步骤都会追加 `mstar-engine-status` 水印（engine/插件版本、harness 目录、enforcement），并在解析到迭代 steering compass 时追加 `mstar-iteration-gate` 行。
+- **pre-step catalog 行**——每个组合后的 agent 步骤都会追加 `mstar-engine-status` 水印（统一 mstar 版本、harness 目录、enforcement），并在解析到迭代 steering compass 时追加 `mstar-iteration-gate` 行。
 
 ### Enforcement semantics
 
@@ -134,7 +134,7 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入：�
 
 ## Engine-status catalog
 
-一个咨询式 `agent/pre-step` 瀑布监听器向每个组合后的步骤追加一条 **`mstar-engine-status`** catalog MessageSource（`kind`/`form: 'catalog'` 契约，镜像 dsh tool-skill 先例）：模型可见的 `<mstar_engine_status>` 块渲染水印字段——**engine 版本**（`readHarnessVersion`）、**插件版本**（自身清单，单一版本不变量）、**harness 目录**（解析后的 `{HARNESS_DIR}`，缺失为 `none`）、**enforcement**（compass 模式，`soft` / `hard (compass)`）。监听器先调用 `next()` 并基于委托后的决策追加——从不否决步骤、从不替换已组合的消息。模型可见 ⟺ 已记录：持久化的 `catalog` 形态 source 在模型面向的散文旁记录了其发布的事实，会话日志无需重新解析该块即可重建该行（dsh packages/AGENTS.md）。fiber 销毁即移除监听器（HMR 安全；针对真实会话日志的按会话摘要去重是 P3 项——代码中有 `simplify:` 标记）。
+一个咨询式 `agent/pre-step` 瀑布监听器向每个组合后的步骤追加一条 **`mstar-engine-status`** catalog MessageSource（`kind`/`form: 'catalog'` 契约，镜像 dsh tool-skill 先例）：模型可见的 `<mstar_engine_status>` 块渲染水印字段——**mstar 版本**（插件自身清单；单一版本不变量把打包的 engine 钉在同一版本）、**harness 目录**（解析后的 `{HARNESS_DIR}`，缺失为 `none`）、**enforcement**（compass 模式，`soft` / `hard (compass)`）。监听器先调用 `next()` 并基于委托后的决策追加——从不否决步骤、从不替换已组合的消息。模型可见 ⟺ 已记录：持久化的 `catalog` 形态 source 在模型面向的散文旁记录了其发布的事实，会话日志无需重新解析该块即可重建该行（dsh packages/AGENTS.md）。fiber 销毁即移除监听器（HMR 安全；针对真实会话日志的按会话摘要去重是 P3 项——代码中有 `simplify:` 标记）。
 
 ## Development
 

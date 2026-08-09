@@ -88,7 +88,7 @@ repair escape). Config `soft` is the only local rollback. Hard gates are never
 a global default.
 
 Every composed agent step carries the **`<mstar_engine_status>`** catalog
-watermark (engine version, plugin version, harness dir, enforcement), plus the
+watermark (unified mstar version, harness dir, enforcement), plus the
 **`<mstar_iteration_gate>`** row when a steering compass resolved at boot.
 
 ## PM dispatch

@@ -61,7 +61,7 @@ The registry rows mount before the plugin so `ctx.skills` / `ctx.tools` / `ctx.c
 - **Seam lints** — `DESIGN.md` / audit-plan / knowledge-doc / roles-dir writes under the harness get their artifact-specific engine lints.
 - **Model-facing tools** — `mstar_sdd_workspace`, `mstar_sdd_task_brief`, `mstar_iteration_gate`, `mstar_design_md_validate`, `mstar_audit_validate`, `mstar_compound_validate`, `mstar_roles_validate` register on `ctx.tools`.
 - **Bundled commands** — `ctx.commands` registrations for `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit` (from the packaged `harness-commands/` mirror; handlers steer the command body into the receiving agent).
-- **Pre-step catalog rows** — every composed agent step appends the `mstar-engine-status` watermark (engine/plugin version, harness dir, enforcement) and, when a steering iteration compass resolves, the `mstar-iteration-gate` row.
+- **Pre-step catalog rows** — every composed agent step appends the `mstar-engine-status` watermark (unified mstar version, harness dir, enforcement) and, when a steering iteration compass resolves, the `mstar-iteration-gate` row.
 
 ### Enforcement semantics
 
@@ -134,7 +134,7 @@ Every engine module attaches to a dsh surface — delivered except the lint modu
 
 ## Engine-status catalog
 
-An advisory `agent/pre-step` waterfall listener appends one **`mstar-engine-status`** catalog MessageSource to every composed step (the `kind`/`form: 'catalog'` contract, mirroring the dsh tool-skill precedent): the model-visible `<mstar_engine_status>` block renders the watermark fields — **engine version** (`readHarnessVersion`), **plugin version** (own manifest, single-version invariant), **harness dir** (resolved `{HARNESS_DIR}`, `none` when absent), and **enforcement** (compass mode, `soft` / `hard (compass)`). The listener calls `next()` first and builds on the delegated decision — it never vetoes a step and never replaces the composed messages. Model-visible ⟺ logged: the durable `catalog`-form source records the facts it published beside the model-facing prose, so the session log reconstructs the row without re-parsing the block (dsh packages/AGENTS.md). Fiber disposal removes the listener (HMR-safe; per-session digest dedup against the real session log is a P3 item — `simplify:` marker in code).
+An advisory `agent/pre-step` waterfall listener appends one **`mstar-engine-status`** catalog MessageSource to every composed step (the `kind`/`form: 'catalog'` contract, mirroring the dsh tool-skill precedent): the model-visible `<mstar_engine_status>` block renders the watermark fields — **mstar version** (plugin own manifest; the single-version invariant pins the bundled engine to the same version), **harness dir** (resolved `{HARNESS_DIR}`, `none` when absent), and **enforcement** (compass mode, `soft` / `hard (compass)`). The listener calls `next()` first and builds on the delegated decision — it never vetoes a step and never replaces the composed messages. Model-visible ⟺ logged: the durable `catalog`-form source records the facts it published beside the model-facing prose, so the session log reconstructs the row without re-parsing the block (dsh packages/AGENTS.md). Fiber disposal removes the listener (HMR-safe; per-session digest dedup against the real session log is a P3 item — `simplify:` marker in code).
 
 ## Development
 

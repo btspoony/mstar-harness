@@ -26,10 +26,12 @@ import type { EnforcementFlag } from '@mstar-harness/engine'
 export interface MstarEngineStatusSource {
   readonly kind: 'mstar-engine-status'
   readonly form: 'catalog'
-  /** Engine version (`@mstar-harness/engine` `readHarnessVersion`). */
-  readonly engineVersion: string
-  /** The `@mstar-harness/dsh` plugin package version (own manifest). */
-  readonly pluginVersion: string
+  /**
+   * The unified mstar version: the `@mstar-harness/dsh` plugin package
+   * version (own manifest). The single-version invariant pins the bundled
+   * `@mstar-harness/engine` to the same version, so one field covers both.
+   */
+  readonly version: string
   /** Resolved `{HARNESS_DIR}` (null when probing found none). */
   readonly harnessDir: string | null
   /** Repo-level hard-enforcement flag from the iteration compass. */
