@@ -1,0 +1,156 @@
+/* Morning Star workflow panel — inherits dsh web's visual language
+ * (dsw design tokens: surfaces, borders, labels, status states). */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  font: var(--dsw-font-xs-13);
+  line-height: 1.5;
+}
+
+.watermark {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  letter-spacing: 0.02em;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.subTitle {
+  margin: 4px 0 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 500;
+}
+
+.defList {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.defTerm {
+  color: var(--dsw-alias-label-caption);
+}
+
+.defValue {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.planList,
+.residualList,
+.leaseList,
+.violationList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planId,
+.leasePlan,
+.leaseHolder,
+.leaseWorktree,
+.residualSeverity,
+.residualCount,
+.violationCode,
+.knowledgeCategories {
+  display: inline-block;
+}
+
+.planStatus {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.planStatus[data-status='Done'] {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.planStatus[data-status='InProgress'] {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.violationCode {
+  margin-right: 8px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.violationList [data-severity='critical'],
+.violationList [data-severity='high'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.leaseWorktree {
+  margin-left: 8px;
+  color: var(--dsw-alias-label-caption);
+}
+
+.knowledge {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+}
+
+.knowledgeCategories {
+  color: var(--dsw-alias-label-caption);
+}
+
+.direction {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.empty {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+}
+
+.freshness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}

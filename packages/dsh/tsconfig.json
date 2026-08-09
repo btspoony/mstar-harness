@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true,
     "strict": true,
+    "jsx": "react",
     "skipLibCheck": true,
     "types": ["bun-types"],
     "declaration": true,
