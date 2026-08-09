@@ -10,6 +10,7 @@ on:
       - "packages/engine/**"
       - "packages/cli/**"
       - "packages/opencode/**"
+      - "packages/dsh/**"
       - "scripts/**"
       - "skills/**"
       - "agents/**"
@@ -24,6 +25,7 @@ on:
       - "packages/engine/**"
       - "packages/cli/**"
       - "packages/opencode/**"
+      - "packages/dsh/**"
       - "scripts/**"
       - "skills/**"
       - "agents/**"
@@ -73,7 +75,7 @@ jobs:
       # (types: ./dist/index.d.ts), which is gitignored — build it first.
       # The engine build is idempotent (rm -rf dist && bun build && bunx tsc).
       - name: Build engine (declarations for typecheck)
-        run: bun run --cwd packages/engine build
+        run: bun run engine:build
 
       - name: Typecheck
         run: bun run typecheck
@@ -88,7 +90,7 @@ jobs:
         run: bun run --cwd packages/cli check
 
       - name: Test engine
-        run: bun run --cwd packages/engine test
+        run: bun run engine:test
 
       # The cli test script runs the engine build as a pre-step (tests import
       # @mstar-harness/engine dist) — use the package script, not raw bun test.
@@ -97,6 +99,12 @@ jobs:
 
       - name: Test OpenCode
         run: bun run --cwd packages/opencode test
+
+      # The dsh test imports @mstar-harness/engine dist (built above) and
+      # needs the harness-skills/harness-commands mirrors (synced by
+      # postinstall's dsh:bundle-assets) — use the package script.
+      - name: Test dsh
+        run: bun run --cwd packages/dsh test
 
       - name: Test scripts
         run: bun test scripts/prepare-release.test.ts scripts/ci-dep-guard.test.ts

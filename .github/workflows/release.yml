@@ -67,7 +67,7 @@ jobs:
       # The engine build is idempotent (rm -rf dist && bun build && bunx tsc);
       # prepublishOnly also rebuilds before publish.
       - name: Build engine (declarations for typecheck)
-        run: bun run --cwd packages/engine build
+        run: bun run engine:build
 
       - name: Typecheck
         run: bun run typecheck

@@ -73,7 +73,7 @@ jobs:
         run: bun run release:validate -- "v${{ steps.ver.outputs.version }}"
 
       - name: Build engine (declarations for typecheck)
-        run: bun run --cwd packages/engine build
+        run: bun run engine:build
 
       - name: Typecheck + pack (release sanity)
         run: |
