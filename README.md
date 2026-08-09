@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="Morning Star Harness" width="96">
 
-# Morning Star
+# [Morning Star](https://github.com/btspoony/mstar-harness)
 
 Harness Workflow Engine · Agent Plugin
 

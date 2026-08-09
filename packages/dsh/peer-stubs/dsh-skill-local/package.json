@@ -1,0 +1,9 @@
+{
+  "name": "@deepseek-ai/dsh-skill-local",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Dev-time minimal functional stand-in for @mstar-harness/dsh. The real package is private (not on the npm registry) and ships from the host dsh app at runtime; this stub mirrors the consumed contract surface of the local filesystem skill provider — the full Config shape (customSkillDirs / bundledSkillDir semantics) and the `{ name, inject, Config, apply }` plugin module — with just enough behavior for real-composition tests: root-ranked discovery of `<root>/<name>/SKILL.md` (or `<name>.md`) entries and frontmatter parsing (name + description). Mirrors dsh-private commit 9451be2 (2026-08-07 snapshot)."
+}

@@ -1,0 +1,20 @@
+# The mstar profile-bundle patch: ONE insert of the mstar plugin row over the
+# dsh-base layer (profile `dsh.profile.bundles` order — dsh-base first, this
+# bundle second; later layers win per row).
+#
+# A patch replaces the targeted row's whole `config` rather than merging into
+# it, so a user-level override must restate every field it keeps (see
+# bundle/README.md). The row ships only neutral defaults: deployment-owned
+# fields (harnessDir, enforcement, dispatchTools, dispatchBinding, skillRoots)
+# stay unset and belong to the profile's own cordis.patch.yml.
+
+- insert:
+    - id: mstar
+      name: '@mstar-harness/dsh'
+      config:
+        # Packaged skill mount — ships EMPTY (skills/README.md only) until a
+        # publish-time copy step exists; the supported production form is an
+        # absolute path override in the profile layer. Skill-local resolves
+        # this against the dsh process cwd at boot — a deployment launching
+        # from another cwd must override it.
+        bundledSkillDir: ./skills

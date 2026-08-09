@@ -1,0 +1,8 @@
+{
+  "name": "@deepseek-ai/dsh-agent",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "types": "index.d.ts",
+  "description": "Dev-time type-only shim for @mstar-harness/dsh. The real package is private (not on the npm registry) and ships from the host dsh app at runtime; this stub provides the consumed type surface (PreStepDecision + the agent/pre-step waterfall event, contract-typed via the cordis Events augmentation). Mirrors dsh-private commit 9451be2 (2026-08-07 snapshot); runtime re-export wiring lands with later tasks."
+}

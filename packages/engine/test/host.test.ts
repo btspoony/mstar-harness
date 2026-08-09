@@ -16,10 +16,15 @@
  *   Codex plugin-mounted `skills/<name>/`, OpenCode package-internal
  *   `harness-skills/<name>/` (never `process.cwd()/skills/`), Kimi/ZCode
  *   plugin mount `./skills/<name>/` from the installed plugin root.
+ * - dsh row: `.harness/references/dsh-adapter-roadmap.md` §4 D5 (this
+ *   iteration) — dsh detection via its model-facing `subagent` delegation
+ *   tool; skill root resolves via the skill-local bundled root
+ *   `$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]` (dsh-skill-local
+ *   `bundledSkillDir` default; single canonical mount per roadmap D6).
  * - HostAdapter: `.harness/references/skill-programmatic-roadmap.md` §8.4 —
  *   `{ host, beforeStatusWrite?, beforeDispatch?, beforeMerge?, log }`,
- *   all hooks optional, no concrete adapters in the engine, pi/dsh
- *   deferred.
+ *   all hooks optional, no concrete adapters in the engine, pi deferred
+ *   (dsh's adapter ships in the dsh plugin).
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -46,6 +51,7 @@ describe("detectHost", () => {
       ["task_agent_batch", "omp"],
       ["ask", "omp"],
       ["hub", "omp"],
+      ["subagent", "dsh"],
       ["AgentSwarm", "kimi"],
       ["Agent", "zcode"],
       ["AskUserQuestion", "zcode"],
@@ -78,6 +84,17 @@ describe("detectHost", () => {
     expect(detectHost(["task_agent_batch", "AgentSwarm"])).toBe("omp");
     expect(detectHost(["hub", "Agent"])).toBe("omp");
     expect(detectHost(["ask", "tool_search"])).toBe("omp");
+  });
+
+  test("ordered evaluation: dsh row (subagent tool) after omp, before kimi/zcode/codex", () => {
+    expect(detectHost(["subagent", "AgentSwarm"])).toBe("dsh");
+    expect(detectHost(["subagent", "TodoWrite"])).toBe("dsh");
+    expect(detectHost(["subagent", "plan_slash"])).toBe("dsh");
+  });
+
+  test("ordered evaluation: earlier rows (opencode/omp) beat the dsh signal", () => {
+    expect(detectHost(["question", "subagent"])).toBe("opencode");
+    expect(detectHost(["task_agent_batch", "subagent"])).toBe("omp");
   });
 
   test("ordered evaluation: AgentSwarm is Kimi-only once earlier rows are ruled out", () => {
@@ -146,9 +163,20 @@ describe("resolveSkillRoot", () => {
     );
   });
 
-  test("pi and dsh are deferred — no adapter stubs in v1 (roadmap §8.4)", () => {
+  test("dsh resolves via the skill-local bundled root $DSH_BUNDLED_SKILL_DIR (roadmap D5/D6)", () => {
+    expect(resolveSkillRoot("dsh", { skill: "mstar-plan-conventions" })).toBe(
+      "$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions",
+    );
+    expect(resolveSkillRoot("dsh", { skill: "mstar-plan-conventions", rel: "SKILL.md" })).toBe(
+      "$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions/SKILL.md",
+    );
+    expect(resolveSkillRoot("dsh", { skill: "mstar-plan-conventions", rel: "" })).toBe(
+      "$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions",
+    );
+  });
+
+  test("pi stays deferred — no adapter stubs in v1 (roadmap §8.4)", () => {
     expect(resolveSkillRoot("pi", { skill: "mstar-host" })).toMatch(/deferred/);
-    expect(resolveSkillRoot("dsh", { skill: "mstar-host" })).toMatch(/deferred/);
   });
 });
 
