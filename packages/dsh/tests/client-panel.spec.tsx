@@ -1,5 +1,5 @@
 /**
- * Render tests for the Morning Star workflow-viz panel page (Task 2):
+ * Render tests for the Morning Star workflow-viz panel page (Task 2 + Task 3):
  * the `conversation.view` view tab that renders the `mstar-engine-status`
  * catalog source (spec `panel-contract.md` §2/§3/§4).
  *
@@ -12,6 +12,10 @@
  *   hints, never a crash, never guessed values;
  * - partial source degradation: missing version/enforcement → `unknown`;
  *   null knowledge / empty lists → `none` without crashing;
+ * - data wiring (Task 3, spec §5): the component reads the catalog row
+ *   through `useMstarEngineStatus(useSession)` — the fixture source rides a
+ *   stub conversation snapshot (`createSnapshotStore`), and a snapshot bump
+ *   (new catalog row) re-renders the panel with fresh data + freshness;
  * - plugin entry: `apply(ctx)` registers the `mstar-panel` dictionaries and
  *   the `conversation.view` tab (`id: 'mstar-workflow'`, `order: 20`,
  *   locale-following label thunk).
@@ -24,8 +28,11 @@
 import { describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-import { SlotsService } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+import {
+  createSnapshotStore, SlotsService,
+  type ClientContext, type ConversationNode, type ConversationSnapshot, type SessionId,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
@@ -126,10 +133,9 @@ const degradedSource = {
   enforcement: undefined,
 } as unknown as MstarEngineStatusSource
 
-/** Session-standard kit the view ring hands every conversation.view entry (stub faces, unused in pure render). */
+/** Session-standard kit the view ring hands every conversation.view entry (stub faces; unused by the pure render). */
 function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
   return {
-    useSession: (() => null) as never,
     sessionId: 's-1' as SessionId,
     useProjection: (() => null) as never,
     useSessions: (() => null) as never,
@@ -138,7 +144,44 @@ function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
   }
 }
 
-/** Render the panel to static HTML with the locale seat + fixture inputs (copy pinned to en). */
+/**
+ * Plain selector binding over the stub snapshot store — the dev-time twin of
+ * the real uSES binding (web-react `bindSnapshotSelector`): selection applies
+ * to the store's current snapshot; a `store.set` bump is picked up on the next
+ * render, mirroring the snapshot-bump refresh semantics (spec §5).
+ */
+function bindUseSession(store: { getSnapshot(): ConversationSnapshot }): SnapshotSelectorHook<ConversationSnapshot> {
+  return function useSelector<S>(sel: (s: ConversationSnapshot) => S): S {
+    return sel(store.getSnapshot())
+  }
+}
+
+/** Build a conversation snapshot carrying the fixture source as the newest catalog row (spec §5 data path). */
+function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number | null): ConversationSnapshot {
+  const nodes: ConversationNode[] = [
+    { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
+  ]
+  if (source !== null) {
+    nodes.push({
+      kind: 'context',
+      seq: 2,
+      time: lastUpdated ?? 1_720_001_000_000,
+      content: [],
+      source,
+      form: 'catalog',
+    })
+  }
+  return {
+    sessionId: 's-1' as SessionId,
+    nodes,
+    running: false,
+    openState: 'open',
+    composerPhase: 'active',
+    blank: false,
+  }
+}
+
+/** Render the panel to static HTML through the real data path: snapshot store → useSession → hook → PanelView (copy pinned to en). */
 function panelHtml(
   source: MstarEngineStatusSource | null,
   locale: LocaleService = new LocaleService(),
@@ -146,11 +189,10 @@ function panelHtml(
 ): string {
   locale.register(NS, { zh, en })
   locale.setLocale('en')
+  const store = createSnapshotStore(snapshotFor(source, lastUpdated))
   return renderToStaticMarkup(createElement(PanelView, {
-    ...kitProps(),
+    ...kitProps({ useSession: bindUseSession(store) }),
     t: locale.bind(NS),
-    source,
-    lastUpdated,
   }))
 }
 
@@ -266,6 +308,58 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-direction')
     expect(html).toContain('data-mstar-empty="no-leases"')
     expect(html).toContain('data-mstar-empty="no-knowledge"')
+  })
+})
+
+describe('workflow panel — data wiring through the hook (spec §5)', () => {
+  /** Render the panel against a live snapshot store (real PanelView + useMstarEngineStatus path). */
+  function renderAgainst(store: { getSnapshot(): ConversationSnapshot }, locale: LocaleService): string {
+    return renderToStaticMarkup(createElement(PanelView, {
+      ...kitProps({ useSession: bindUseSession(store) }),
+      t: locale.bind(NS),
+    }))
+  }
+
+  it('renders the LATEST catalog row when the snapshot carries several (spec §2.4)', () => {
+    const store = createSnapshotStore<ConversationSnapshot>({
+      sessionId: 's-1' as SessionId,
+      nodes: [
+        { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
+        { kind: 'context', seq: 2, time: 1_720_000_000_000, content: [], source: { ...fullSource, version: '2.0.3' }, form: 'catalog' },
+        { kind: 'context', seq: 4, time: 1_720_001_000_000, content: [], source: fullSource, form: 'catalog' },
+      ],
+      running: false,
+      openState: 'open',
+      composerPhase: 'active',
+      blank: false,
+    })
+    const locale = new LocaleService()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const html = renderAgainst(store, locale)
+    expect(html).toContain('mstar 2.0.4')
+    expect(html).not.toContain('mstar 2.0.3')
+  })
+
+  it('a new catalog row (snapshot bump = refresh signal) re-renders the panel with fresh data', () => {
+    const locale = new LocaleService()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const store = createSnapshotStore(snapshotFor(fullSource, 1_720_000_000_000))
+
+    const before = renderAgainst(store, locale)
+    expect(before).toContain('mstar 2.0.4')
+    expect(before).toContain('harness: /proj/.mstar')
+    expect(before).toContain('data-mstar-freshness')
+
+    // Server re-emission appends a newer row → snapshot bump → hook re-scans → re-render.
+    const refreshed = { ...fullSource, version: '2.0.5', harnessDir: '/proj2/.mstar' }
+    store.set(snapshotFor(refreshed, 1_720_002_000_000))
+    const after = renderAgainst(store, locale)
+    expect(after).toContain('mstar 2.0.5')
+    expect(after).toContain('harness: /proj2/.mstar')
+    expect(after).not.toContain('harness: /proj/.mstar')
+    expect(after).toContain('data-mstar-freshness')
   })
 })
 
