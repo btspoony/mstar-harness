@@ -1,0 +1,16 @@
+{
+  "name": "@deepseek-ai/dsh-client-ui-slots",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "description": "Dev-time functional stand-in for @mstar-harness/dsh. The real package is private (not on the npm registry) and ships from the host dsh app at runtime; this stub provides the consumed type seats (SlotMap / LocaleNamespaceMap / standard-props kits / ComposedProps machinery) and a minimal SlotCore with the load-time registration contract the mstar panel depends on (undeclared target throws; list id/order/label; children declaration). Mirrors dsh-private commit 9451be2 (2026-08-07 snapshot)."
+}
