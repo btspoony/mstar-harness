@@ -139,9 +139,28 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入：�
 
 该行是 **digest 门控**的：按 agent+workspace，每个 turn 只注入一次，仅当渲染文本变化时重新注入——20 步的 turn 只显示一次 catalog，而不是 20 次。source 共享**同一**按工作区缓存条目：显式 `harnessDir` 时在 boot 构建（否则在工作区首次 pre-step 构建），并按 TTL 刷新（`catalogTtlMs`，默认 60 秒）——刷新间隔之间热路径只是时间戳比较 + Map 命中，会话中 plan/compass/residual 的变化在一个间隔内落地。
 
+## Web 客户端插件（工作流面板）
+
+本包为 dsh **web** profile 提供浏览器客户端半体，在**已安装的 `mstar` bundle 行**上被自动发现（package.json 的 `dshClient` 声明 + `exports["./client"]` → `dist/client.js`）——**无需独立 profile 层或安装步骤**（spec §6.1）。web 应用在 `/plugins/@mstar-harness/dsh/client.js` 提供该 bundle，并经 closure-factory loader 握手加载（`window.__ModuleLoader__.load({ id, factory })`）。
+
+客户端入口在 **`conversation.view`** view ring 注册一个 tab（`id: 'mstar-workflow'`、`order: 20`——trajectory 先例形态），渲染会话日志中最新一条 `mstar-engine-status` catalog 行（spec §2/§5）：水印行（版本 / harness 目录 / enforcement）、**迭代相位段**（transition、all-plans-done、gate 判定 + 违规码、status/compass 锚点）、**工作区状态段**（plan 看板、residual 计数、分支/策略锚点、活跃租约、知识摘要、方向一句话）与新鲜度标记（`last-updated HH:MM:SS` + catalog 重发刷新说明）。刷新 = 会话快照订阅（`useSession`）：新 catalog 行 bump 快照、面板随之重渲染——不轮询、不手动刷新。空态显式降级（等待首条 catalog 行 / 无 harness / 无 gate）；无活跃会话时 strict-session view ring 不挂载（shell hero）——spec §3。
+
+安装 / 验证（客户端半体与服务器半体走同一条 bundle 行安装）：
+
+```sh
+cd <repo>/packages/dsh
+bun run build               # dist/client.js（closure-factory CJS）+ dist/client.d.ts
+dsh plugin --profile web add <abs packages/dsh path>   # 同一 profile bundle 安装
+dsh web                     # 启动 → 服务 /plugins/@mstar-harness/dsh/client.js
+```
+
+本地已验证（install-verification guide）：boot 图包含客户端 entry（`@mstar-harness/dsh` 携声明的 inject 面）、`/plugins/<id>/client.js` 路由服务的正是构建产物（rev = 内容 sha1）、浏览器握手 materialize 出插件入口（`inject` + `apply` + CSS 注入）——见 `.mstar/iterations/iter-20260809-dsh-workflow-viz/guides/install-verification.md`。
+
+**Known Limitations**（本迭代）：面板为 catalog 的**结构化分段呈现**（水印 + 闸门 + 状态三段）——**图形化流程画（react-flow DAG）为下迭代范围**（compass Roadmap Position），本迭代刻意不引入；不回溯 resumed 长日志的历史行（服务端每 turn 首步必重发，digest 门控）；无自定义顶层槽位（不改 dsh-private 布局的前提下，`conversation.view` tab 是唯一的会话级面板位——spec §1）。
+
 ## Development
 
-命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 条目 bun 打包进 `dist/`（内联 engine 与 schemastery；`cordis` 与运行时 seam 导入——`@deepseek-ai/dsh-skill-local`、`@deepseek-ai/dsh-tools`（`defineTool`）、`@deepseek-ai/dsh-llm`——保持外部）并输出 tsc 声明。
+命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 条目 bun 打包进 `dist/`（内联 engine 与 schemastery；`cordis` 与运行时 seam 导入——`@deepseek-ai/dsh-skill-local`、`@deepseek-ai/dsh-tools`（`defineTool`）、`@deepseek-ai/dsh-llm`——保持外部），运行 `build-client`（`scripts/build-client-bundle.ts`——按 spec §6.2 产出的 closure-factory CJS 浏览器 bundle `dist/client.js`）并输出 tsc 声明。
 
 ```sh
 bun test --coverage
@@ -190,3 +209,4 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **CLI `HOST_SIGNALS` 缺少 `subagent` token**——engine `ToolSignal` 联合已包含它且 `detectHost` 能处理，但 `packages/cli` 的 `HOST_SIGNALS` 尚未更新，`mstar host detect --signals subagent` 会拒绝，直到上游化时更新 CLI 列表。
 - **入口 `src/index.ts` 保持单体**——模块拆分延后：2600+ 行的入口原样交付，因为此时拆分会对已评审、全量测试的表面引入失稳风险且零行为收益；拆分仍是后续项。
 - **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。
+- **工作流面板为结构化分段呈现（本迭代）**——dsh web 客户端插件以结构化面板（水印 / 迭代闸门 / 工作区状态）渲染 `mstar-engine-status` catalog；图形化流程画（react-flow DAG）为**下迭代**范围（compass Roadmap Position）——本迭代不引入 react-flow 依赖、不改面板渲染形态。
