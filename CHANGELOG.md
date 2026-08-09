@@ -2,24 +2,35 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **2.0.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **2.0.3** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **2.0.2** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.2** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **2.0.2** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.2** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.2** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.2** |
-| Agent Plugins manifest | `plugin.json` | **2.0.2** |
+| Monorepo root | `morning-star` (`package.json`) | **2.0.3** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.3** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.3** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.3** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.3** |
+| Codex plugin | `.codex-plugin/plugin.json` | **2.0.3** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.3** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.3** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.3** |
+| Agent Plugins manifest | `plugin.json` | **2.0.3** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [2.0.3] - 2026-08-09
+
+### Harness
+
+- omp plugin: in-process engine binding — model-callable mstar_* validator tools + blocking tool_call gate hook (Enforcement: hard only; commands shell-out stays as fallback).
+- engine: `iteration.parseCompassFrontmatter` moved from CLI (shared single parser; CLI re-imports from engine).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 2.0.3**.
 
 ## [2.0.2] - 2026-08-08
 
