@@ -18,7 +18,7 @@ import * as React from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MstarEngineStatusSource } from '../../types.ts'
-import { cls } from './classes.ts'
+import css from './panel.module.css'
 import { bool, str } from './guards.ts'
 import { IterationSection } from './iteration-section.tsx'
 import { StateSection } from './state-section.tsx'
@@ -52,32 +52,32 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
   const { source, lastUpdated } = useMstarEngineStatus(useSession)
   if (source === null || source === undefined) {
     return (
-      <div className={cls('root')} data-mstar-panel="waiting">
-        <p className={cls('empty')} data-mstar-empty="waiting">{t('empty.waiting')}</p>
+      <div className={css.root} data-mstar-panel="waiting">
+        <p className={css.empty} data-mstar-empty="waiting">{t('empty.waiting')}</p>
       </div>
     )
   }
   const noHarness = source.harnessDir === null && source.state === null && source.iteration === undefined
   return (
-    <div className={cls('root')} data-mstar-panel={noHarness ? 'no-harness' : 'panel'}>
-      <header className={cls('watermark')} data-mstar-watermark>
+    <div className={css.root} data-mstar-panel={noHarness ? 'no-harness' : 'panel'}>
+      <header className={css.watermark} data-mstar-watermark>
         <span>{t('watermark.version', { version: str(source.version) ?? t('panel.unknown') })}</span>
         <span>{t('watermark.harness', { dir: source.harnessDir ?? t('watermark.none') })}</span>
         <span>{t('watermark.enforcement', { value: enforcementLabel(t, source.enforcement) })}</span>
       </header>
       {noHarness
-        ? <p className={cls('empty')} data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
+        ? <p className={css.empty} data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
         : (
           <>
             {source.iteration === undefined
-              ? <p className={cls('empty')} data-mstar-empty="no-gate">{t('iteration.no-compass')}</p>
+              ? <p className={css.empty} data-mstar-empty="no-gate">{t('iteration.no-compass')}</p>
               : <IterationSection t={t} iteration={source.iteration} />}
             {source.state === null
-              ? <p className={cls('empty')} data-mstar-empty="no-state">{t('state.none')}</p>
+              ? <p className={css.empty} data-mstar-empty="no-state">{t('state.none')}</p>
               : <StateSection t={t} state={source.state} />}
           </>
         )}
-      <footer className={cls('freshness')} data-mstar-freshness>
+      <footer className={css.freshness} data-mstar-freshness>
         {typeof lastUpdated === 'number'
           ? <span>{t('freshness.last-updated', { time: formatTime(lastUpdated) })}</span>
           : null}

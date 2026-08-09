@@ -15,6 +15,10 @@
       "types": "./dist/invariant.d.ts",
       "default": "./dist/invariant.js"
     },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
     "./bundle/cordis.patch.yml": "./bundle/cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -29,10 +33,19 @@
       "patch": "./bundle/cordis.patch.yml"
     }
   },
+  "dshClient": {
+    "inject": [
+      "@deepseek-ai/dsh-client-runtime",
+      "@deepseek-ai/dsh-client-ui-conversation",
+      "@deepseek-ai/dsh-client-locale"
+    ],
+    "platform": "web"
+  },
   "scripts": {
     "test": "bun test",
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external cordis --external @deepseek-ai/dsh-skill-local --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bunx tsc",
+    "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external cordis --external @deepseek-ai/dsh-skill-local --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bun run build-client && bunx tsc",
+    "build-client": "bun run scripts/build-client-bundle.ts",
     "prepare": "bun run build",
     "prepublishOnly": "bun run build"
   },
@@ -66,6 +79,7 @@
     "@deepseek-ai/dsh-tools": "^0.0.1",
     "@mstar-harness/engine": "2.0.4",
     "@types/node": "^25.6.0",
+    "@types/react": "~18.3.1",
     "js-yaml": "^4.1.0",
     "bun-types": "^1.2.17",
     "cordis": "^4.0.0-rc.7",

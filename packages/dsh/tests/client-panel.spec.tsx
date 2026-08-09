@@ -21,8 +21,9 @@
  *   locale-following label thunk).
  *
  * Renderer: `react-dom/server.renderToStaticMarkup` over the real component
- * (dev-time peer-stub seams; CSS module class names fall back to plain names
- * under `bun test` — see `src/client/panel/classes.ts`).
+ * (dev-time peer-stub seams; the `*.module.css` import resolves to the raw
+ * file-path string under `bun test`, so class attributes are dropped —
+ * assertions pin `data-mstar-*` attributes, never class names).
  */
 
 import { describe, expect, it } from 'bun:test'
