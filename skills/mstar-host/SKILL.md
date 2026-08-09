@@ -1,6 +1,6 @@
 ---
 name: mstar-host
-description: Morning Star host adapter (OpenCode, Cursor, Codex, Kimi, ZCode, omp). Use after mstar-harness-core whenever host entry, clarify, dispatch, or plan UX differs by platform - OpenCode question/task-tool subagent invoke, Cursor /pm and CreatePlan/SwitchMode dual-write and Task parallel QC, Codex plugin skills plus Plan/Goal Mode, Kimi Agent/AgentSwarm with built-in subagent types only (coder/explore/plan) and role-in-prompt binding, ZCode Agent/AskUserQuestion/EnterPlanMode with built-in subagent types and role-in-prompt binding, omp task/ask/hub preferring live-schema role agents (agents/*.md) with C5b skill-load binding (generic task/scout only as fallback), sandboxed tools, and tool discovery. Auto-detect host from session tools; then Read references/<host>.md. Always load after mstar-harness-core.
+description: Morning Star host adapter (OpenCode, Cursor, Codex, Kimi, ZCode, omp, dsh). Use after mstar-harness-core whenever host entry, clarify, dispatch, or plan UX differs by platform - OpenCode question/task-tool subagent invoke, Cursor /pm and CreatePlan/SwitchMode dual-write and Task parallel QC, Codex plugin skills plus Plan/Goal Mode, Kimi Agent/AgentSwarm with built-in subagent types only (coder/explore/plan) and role-in-prompt binding, ZCode Agent/AskUserQuestion/EnterPlanMode with built-in subagent types and role-in-prompt binding, omp task/ask/hub preferring live-schema role agents (agents/*.md) with C5b skill-load binding (generic task/scout only as fallback), dsh (DeepSeek Harness) subagent tool with in-process engine gates and bundled mstar commands, sandboxed tools, and tool discovery. Auto-detect host from session tools; then Read references/<host>.md. Always load after mstar-harness-core.
 ---
 
 # Morning Star Host Adapter
@@ -30,12 +30,13 @@ Detect from **session tool shapes and available commands** — not from plugin m
 | **`subagent_type`** param on the Task tool (plus **CreatePlan**/**SwitchMode** when Plan mode is active) | `cursor` | `references/cursor.md`; Plan mode also `references/cursor-plan-mode-bridge.md` |
 | **`question`** tool, or **`task`** tool with **`subagent`** (singular) — no `tasks[]` batch | `opencode` | `references/opencode.md` |
 | **`task`** tool with **`agent`** / **`tasks[]`** batch, **`ask`**, **`hub`** | `omp` | `references/omp.md`; Plan mode also `references/omp-plan-mode-bridge.md` |
+| **`subagent`** tool (dsh's model-facing delegation tool — `@deepseek-ai/dsh-tool-subagent` default `toolName`) | `dsh` | `references/dsh.md` |
 | **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** + **`AgentSwarm`** (Kimi-only) | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
 | **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** / **`TodoWrite`**, **no `AgentSwarm`** | `zcode` | `references/zcode.md`; Plan mode also `references/zcode-plan-mode-bridge.md` |
 | `/plan`, `/goal` slash commands; **Goal tools**; `functions.*` / `codex_app.*` tool namespaces; `tool_search`; Browser plugin tools | `codex` | `references/codex.md`; Plan/Goal mode also `references/codex-plan-goal-mode-bridge.md` |
-| Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, **`codex.md`**, **`kimi.md`**, **`zcode.md`**, and **`omp.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
+| Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, **`codex.md`**, **`kimi.md`**, **`zcode.md`**, **`omp.md`**, and **`dsh.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
 
-Order matters: check `cursor` → `opencode` → `omp` → `kimi` → `zcode` → `codex`. `subagent_type` (Cursor) vs `subagent` (OpenCode) vs `agent`/`tasks[]` (omp) is the sharpest split among the Task-based hosts.
+Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. `subagent_type` (Cursor) vs `subagent` (OpenCode) vs `agent`/`tasks[]` (omp) is the sharpest split among the Task-based hosts; dsh's `subagent` tool (roadmap §4 D5) collides with no other row, so it sits with the agent-tool hosts.
 
 > **Engine check (when available):** run `mstar host detect --signals <comma-list>` (or `import { detectHost } from "@mstar-harness/engine"` in a host hook) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -53,6 +54,7 @@ Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **R
 | **Cursor** | Skill **name** via plugin skills | Global `~/.cursor/plugins/local/morning-star-harness/skills/<name>/`; project `.cursor/plugins/morning-star-harness/skills/<name>/` |
 | **Codex** | Skill **name** via plugin | Plugin-mounted `skills/<name>/`; project command skills under `.agents/skills/<name>/` |
 | **OpenCode** | Skill **name** via `@mstar-harness/opencode` | Package-internal `harness-skills/<name>/` — never `process.cwd()/skills/` |
+| **dsh** | Skill **name** via the mstar skill-local provider (`providerName: mstar`) | `$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]` — the packaged `harness-skills/` mirror mounted package-relative by `@mstar-harness/dsh`; never app cwd |
 | **Kimi / ZCode** | Skill **name** / `/skill:<name>` | Plugin mount `./skills/<name>/` from the installed plugin root |
 
 Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and asset paths. Per-host URI / mount detail: `references/<host>.md`.
