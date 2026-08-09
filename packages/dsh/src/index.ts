@@ -2644,8 +2644,15 @@ function registerMstarCommands(ctx: Context): void {
         name: parsed.name,
         description: parsed.description,
         handler: (invocation: CommandInvocation) => {
+          // The command body is delivered to the model as a USER message —
+          // the dsh-plan-mode /permission command precedent (`source:
+          // { kind: 'user' }`). A plugin-source message reads as injected
+          // context (trajectory UI labels it "Plugin · …"), and the model
+          // treats it as system-provided context rather than a task to
+          // execute; a user-source message is what makes the model act on
+          // the mstar command body.
           const message = createUserMessage({
-            source: { kind: 'plugin', plugin: '@mstar-harness/dsh' },
+            source: { kind: 'user' },
             content: [{ type: 'text', text: parsed.body }],
           })
           invocation.agent.steer(message)

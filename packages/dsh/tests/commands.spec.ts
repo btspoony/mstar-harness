@@ -63,7 +63,7 @@ describe('bundled mstar commands (omp parity)', () => {
     expect(names).toEqual([...MSTAR_COMMANDS].sort())
   })
 
-  it('executes each command: the handler steers the command body into the receiving agent', async () => {
+  it('executes each command: the handler steers the command body into the receiving agent as a USER message', async () => {
     const dir = packagedCommandsDir()
     if (dir === undefined) return
     booted = await bootApp()
@@ -71,14 +71,17 @@ describe('bundled mstar commands (omp parity)', () => {
     for (const name of MSTAR_COMMANDS) {
       const result = await booted.ctx.commands.execute(agent, `/${name}`, new AbortController().signal)
       expect(result?.result.kind).toBe('success')
-      // The steered message is a user message whose text is the command body
-      // (the mirror's `<name>.md` body — identical to the repo-root command).
+      // The steered message is a USER-source message (the dsh-plan-mode
+      // /permission precedent — `source: { kind: 'user' }`), so the model
+      // treats the command body as a task to execute, not injected context;
+      // its text is the mirror's `<name>.md` body (identical to the
+      // repo-root command).
       const expectedBody = readFileSync(join(dir, `${name}.md`), 'utf8')
         .replace(/^---[\s\S]*?---\r?\n?/, '')
         .trim()
       expect(steered).toHaveLength(MSTAR_COMMANDS.indexOf(name) + 1)
       const message = steered.at(-1)!
-      expect(message.source.kind).toBe('plugin')
+      expect(message.source.kind).toBe('user')
       expect(message.content[0]?.type === 'text' ? message.content[0].text : '').toBe(expectedBody)
     }
   })

@@ -21,8 +21,9 @@ or a custom profile).
 - Plugin commands: the plugin registers the bundled **`harness-commands/`**
   mirror as slash commands on `ctx.commands` — **`/iteration-start`**,
   **`/iteration-drive`**, **`/iteration-loop`**, **`/codebase-audit`**. Each
-  command steers its command body into the receiving agent (the mstar
-  workflow prompt), returning a success result.
+  command steers its command body into the receiving agent as a USER-source
+  message (the mstar workflow prompt — the model executes it as a task, not
+  injected context), returning a success result.
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
   `project-manager.md`.

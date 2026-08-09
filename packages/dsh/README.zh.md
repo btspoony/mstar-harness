@@ -110,7 +110,7 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入：�
 
 ## Commands
 
-插件把 bundled 的 mstar 命令（omp/opencode 对齐面）注册到 `ctx.commands`：`harness-commands/*.md`——仓库根 `commands/` 镜像（`iteration-start`、`iteration-drive`、`iteration-loop`、`codebase-audit`）由 `bundle-assets` 在构建/postinstall 时同步（gitignore）。每条注册读取命令的 `name`/`description` frontmatter；handler 把**命令正文 steer 进接收 agent** 作为用户消息（dsh-commands 的「经接收 Agent 显式调度模型可见工作」路径），返回成功结果。注册以 `ctx.inject(['commands'], …)` 延迟进行——与工具注册相同的可选单元模式——插件在无 commands 服务时也能启动；镜像缺失（未跑 `bundle-assets`）则不注册任何命令。
+插件把 bundled 的 mstar 命令（omp/opencode 对齐面）注册到 `ctx.commands`：`harness-commands/*.md`——仓库根 `commands/` 镜像（`iteration-start`、`iteration-drive`、`iteration-loop`、`codebase-audit`）由 `bundle-assets` 在构建/postinstall 时同步（gitignore）。每条注册读取命令的 `name`/`description` frontmatter；handler 把**命令正文以 USER source 消息 steer 进接收 agent**（dsh-plan-mode 命令先例——`source: { kind: 'user' }`，模型把正文当作要执行的任务而非注入上下文；即 dsh-commands 的「经接收 Agent 显式调度模型可见工作」路径），返回成功结果。注册以 `ctx.inject(['commands'], …)` 延迟进行——与工具注册相同的可选单元模式——插件在无 commands 服务时也能启动；镜像缺失（未跑 `bundle-assets`）则不注册任何命令。
 
 ## Engine seam mapping
 
