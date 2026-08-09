@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="Morning Star Harness" width="96">
 
-# Morning Star (启明星)
+# [Morning Star (启明星)](https://github.com/btspoony/mstar-harness)
 
 Harness Workflow Engine · Agent Plugin
 
