@@ -27,6 +27,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
@@ -454,7 +455,7 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
   it('registers the mstar-panel dictionaries on apply', () => {
     const { ctx, locale } = makeCtx()
     apply(ctx)
-    expect(locale.bind(NS)('view.mstar-workflow')).toBe('工作流')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
   it('registers the conversation.view tab (id mstar-workflow, order 20, label follows locale)', () => {
@@ -469,12 +470,76 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
     const tab = entries[0]!
     expect(tab.options.id).toBe('mstar-workflow')
     expect(tab.options.order).toBe(20)
-    expect(resolveSlotLabel(tab.options.label)).toBe('工作流')
+    expect(resolveSlotLabel(tab.options.label)).toBe('MStar 工作流')
 
     // Label thunk re-reads per projection: locale switch flips the tab.
     locale.setLocale('en')
-    expect(resolveSlotLabel(tab.options.label)).toBe('Workflow')
+    expect(resolveSlotLabel(tab.options.label)).toBe('MStar Workflow')
 
     disposeDeclarer()
+  })
+})
+
+describe('workflow panel — T1 layout: header / sidebar / main grid (spec panel-layout-graph §1)', () => {
+  const html = panelHtml(fullSource)
+
+  it('header renders version / harness dir / enforcement as three evenly-spread cells', () => {
+    expect(html).toContain('data-mstar-header')
+    const cells = [...html.matchAll(/data-mstar-header-cell="([^"]+)"/g)].map((m) => m[1]!)
+    expect(cells).toEqual(['version', 'harness', 'enforcement'])
+    // Caption label (uppercased via CSS) + value per cell.
+    expect(html).toContain('>version<')
+    expect(html).toContain('>harness<')
+    expect(html).toContain('>enforcement<')
+    expect(html).toContain('mstar 2.0.4')
+    expect(html).toContain('harness: /proj/.mstar')
+    expect(html).toContain('enforcement: hard (iteration compass)')
+  })
+
+  it('root + header CSS pin the hard grid metrics (even spread, 300px sidebar, <860px stack, ramp spacing, zero bare hex)', () => {
+    const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
+    expect(cssText).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))')
+    expect(cssText).toContain('grid-template-columns: minmax(0, 1fr) 300px')
+    expect(cssText).toMatch(/grid-template-areas:\s*'header header'\s*'main sidebar'/)
+    expect(cssText).toMatch(/@media \(max-width: 860px\)/)
+    // Spacing ramp tokens defined at the panel root (spec §1.2).
+    expect(cssText).toMatch(/--mstar-space-[1-6]:\s*\d+px/)
+    // Theming is dsw-token driven only — no bare hex (dark mode = token value flip).
+    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+  })
+
+  it('sidebar renders the plans / residuals / knowledge / leases status areas', () => {
+    expect(html).toContain('data-mstar-sidebar')
+    expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
+    expect(html).toContain('data-residual-severity="high"')
+    expect(html).toContain('data-knowledge-docs="3"')
+    expect(html).toContain('data-lease-plan="20260809-dsh-workflow-viz-panel"')
+    // The state content lives INSIDE the sidebar region.
+    expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-plan-id='))
+  })
+
+  it('main area renders the graph placeholder container with a localized note (T2 fills the graph)', () => {
+    expect(html).toContain('data-mstar-graph')
+    expect(html).toContain('data-mstar-graph-placeholder')
+    expect(html).toContain('workflow loop graph arrives in Task 2')
+  })
+})
+
+describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflow" (spec panel-layout-graph §1.1)', () => {
+  it('view.mstar-workflow label flips with the locale', () => {
+    const locale = new LocaleService()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar Workflow')
+    locale.setLocale('zh')
+    expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
+  })
+
+  it('zh body renders localized header captions and the graph placeholder note', () => {
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('版本')
+    expect(zhHtml).toContain('harness 目录')
+    expect(zhHtml).toContain('执行策略')
+    expect(zhHtml).toContain('图区占位')
   })
 })
