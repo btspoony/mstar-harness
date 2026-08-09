@@ -52,6 +52,7 @@ export type PanelKey =
   | 'graph.legend.state-idle'
   | 'graph.legend.verdict-pass'
   | 'graph.legend.verdict-fail'
+  | 'graph.iteration-id'
   | 'graph.current'
   | 'graph.next'
   | 'graph.pass'
@@ -123,6 +124,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'graph.legend.state-idle': '未点亮（schema）',
   'graph.legend.verdict-pass': 'gate PASS',
   'graph.legend.verdict-fail': 'gate FAIL',
+  'graph.iteration-id': '迭代',
   'graph.current': '当前',
   'graph.next': '下一步',
   'graph.pass': 'PASS',
@@ -189,6 +191,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'graph.legend.state-idle': 'unlit (schema)',
   'graph.legend.verdict-pass': 'gate PASS',
   'graph.legend.verdict-fail': 'gate FAIL',
+  'graph.iteration-id': 'iteration',
   'graph.current': 'current',
   'graph.next': 'next',
   'graph.pass': 'PASS',

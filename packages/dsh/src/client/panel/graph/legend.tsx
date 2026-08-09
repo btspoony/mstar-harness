@@ -22,6 +22,7 @@ export function Legend({ t }: LegendProps) {
     { key: 'connector', swatch: css.swatchConnector, label: t('graph.legend.edge-connector') },
     { key: 'current', swatch: css.swatchCurrent, label: t('graph.legend.state-current') },
     { key: 'next', swatch: css.swatchNext, label: t('graph.legend.state-next') },
+    { key: 'idle', swatch: css.swatchIdle, label: t('graph.legend.state-idle') },
     { key: 'pass', swatch: css.swatchPass, label: t('graph.legend.verdict-pass') },
     { key: 'fail', swatch: css.swatchFail, label: t('graph.legend.verdict-fail') },
   ]
@@ -30,7 +31,7 @@ export function Legend({ t }: LegendProps) {
       <span className={css.legendTitle}>{t('graph.legend.title')}</span>
       <ul className={css.legendList}>
         {items.map((item) => (
-          <li key={item.key} className={css.legendItem}>
+          <li key={item.key} className={css.legendItem} data-mstar-legend-item={item.key}>
             <span className={`${css.legendSwatch} ${item.swatch}`} />
             {item.label}
           </li>

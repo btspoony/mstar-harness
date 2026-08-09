@@ -230,6 +230,31 @@
   font: var(--dsw-font-xxxs-11);
 }
 
+/* --- phase-ring caption: the iteration id (spec §2.6: `iterationId` 作环 caption) --- */
+
+.ringCaption {
+  position: absolute;
+  top: var(--mstar-space-1);
+  left: 24px;
+  display: flex;
+  align-items: baseline;
+  gap: var(--mstar-space-2);
+  max-width: 320px;
+  font: var(--dsw-font-xxxs-11);
+}
+
+.ringCaptionLabel {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.ringCaptionId {
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-primary);
+}
+
 /* --- graph footer: legend left, gate summary right (spec §1.1/§4) --- */
 
 .footer {
@@ -308,6 +333,12 @@
 
 .swatchNext {
   border: 2px dashed var(--dsw-alias-border-l2);
+}
+
+/* Unlit (schema) node — dim, mirrors the .phaseIdle/.stateUnlit treatment. */
+.swatchIdle {
+  background: var(--dsw-alias-border-l2);
+  opacity: 0.55;
 }
 
 .swatchPass {

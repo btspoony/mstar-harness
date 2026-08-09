@@ -8,7 +8,8 @@
  * dashed border, idle = dim, unknown = dim + `?`), plan-state box nodes (lit
  * = fill + count badge + plan id rows, unknown bucket warn style), solid
  * forward edges, dashed loop edge (merge-ready → iteration-start), dotted
- * connector edge (current phase → active plan bucket).
+ * connector edge (current phase → active plan bucket). The iteration id
+ * renders as the phase-ring caption (spec §2.6).
  *
  * Interaction contract (panel read-only constraint): `nodesDraggable={false}`
  * (+ non-connectable / non-selectable), pan + wheel zoom + default controls
@@ -214,6 +215,12 @@ export function GraphCanvas({ view, t }: GraphCanvasProps) {
           <Background gap={24} />
           <Controls showInteractive={false} />
         </ReactFlow>
+        {view.iterationId !== null && (
+          <div className={css.ringCaption} data-graph-iteration-id={view.iterationId}>
+            <span className={css.ringCaptionLabel}>{t('graph.iteration-id')}</span>
+            <span className={css.ringCaptionId}>{view.iterationId}</span>
+          </div>
+        )}
         {view.connector !== null && (
           <div
             className={css.connectorBadge}
