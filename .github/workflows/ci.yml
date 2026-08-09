@@ -90,7 +90,7 @@ jobs:
         run: bun run --cwd packages/cli check
 
       - name: Test engine
-        run: bun run engine:test
+        run: bun run --cwd packages/engine test
 
       # The cli test script runs the engine build as a pre-step (tests import
       # @mstar-harness/engine dist) — use the package script, not raw bun test.
