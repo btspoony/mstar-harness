@@ -18,6 +18,22 @@ Harness Workflow Engine · Agent Plugin
 
 </div>
 
+<!-- ============ dsh provider（私有）—— 公开发布前删除整个块 ============ -->
+
+## 🔒 dsh provider（私有 · 内测）
+
+dsh provider（`@mstar-harness/dsh` —— 让 dsh 成为 Morning Star 一等宿主的 cordis 插件：engine `HostAdapter`、进程内硬门禁、skills 挂载、profile bundle）目前为**私有（内测阶段）**，暂不并入本公开 README。文档在 [`packages/dsh/`](packages/dsh/README.md)。
+
+**从本仓库安装（一行）：**
+
+```sh
+dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh
+```
+
+<!-- ============ dsh-private-end ============ -->
+
+---
+
 **Morning Star / 启明星** 是面向 harness 工程工作流的 Agent Plugin：TypeScript **Harness Workflow Engine**（`@mstar-harness/engine`）强制执行确定性工作流门禁，`mstar-*` 判断型 skills 驱动多智能体代码交付。
 
 - **确定性门禁，由 TS 引擎强制执行** —— path/status/lease/dispatch/sdd/iteration/lint 门禁运行在 `@mstar-harness/engine` 中，而非仅靠 prompt 建议
@@ -36,10 +52,6 @@ Harness Workflow Engine · Agent Plugin
 | 宿主适配 | omp、OpenCode、Cursor、Kimi Code、ZCode、Codex |
 
 更新说明：[CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
-
-## dsh provider（私有）
-
-dsh provider（`@mstar-harness/dsh` —— 让 dsh 成为 Morning Star 一等宿主的 cordis 插件：engine `HostAdapter`、进程内硬门禁、skills 挂载、profile bundle）的文档在 [`packages/dsh/`](packages/dsh/README.md) 下。目前为**私有（内测阶段）**，暂不并入本公开 README；下方内容（自「安装」起）保持原有公开说明不变。
 
 ## 安装
 
