@@ -12,12 +12,13 @@
  *
  * Engine-version compatibility (hotfix): `composeDispatchGate` is loaded
  * LAZILY (module-level cached dynamic import, `loadComposeDispatchGate`) —
- * published engine 2.0.2 predates the export, and a static named import
- * would fail at module link and drop the WHOLE hook (both gates). When the
- * export is missing, Gate 2 (task dispatch) is skipped entirely — no
- * blocking, no violations — with a one-time `pi.logger.warn`; Gate 1
- * (status) keeps working. `dispatchGateLoader` is the exported test seam:
- * smoke scripts replace its `load` to simulate an old engine build.
+ * the export exists only in the engine release containing it, so a static
+ * named import would fail at module link on older engines and drop the
+ * WHOLE hook (both gates). When the export is missing, Gate 2 (task
+ * dispatch) is skipped entirely — no blocking, no violations — with a
+ * one-time `pi.logger.warn`; Gate 1 (status) keeps working.
+ * `dispatchGateLoader` is the exported test seam: smoke scripts replace
+ * its `load` to simulate an old engine build (or an import failure).
  *
  * Hard invariant — NEVER throw, NEVER block on failure: omp fails CLOSED
  * (`{ block: true, reason: "Extension <path> failed: …" }`) when a handler
@@ -222,11 +223,13 @@ function gateStatusWrite(eventInput: unknown): { block: true; reason: string } |
 
 /**
  * Engine-version compat: `composeDispatchGate` is the ONLY engine export the
- * hook needs that postdates the published 2.0.2 — everything else is
- * statically imported above. A static named import would fail at module link
- * on old engines and drop the WHOLE hook (both gates), so it is loaded
- * lazily and cached; any build lacking the export resolves to `null` and
- * Gate 2 skips itself (see `gateTaskDispatch`).
+ * hook needs that postdates the engine release containing it — everything
+ * else is statically imported above. A static named import would fail at
+ * module link on older engines and drop the WHOLE hook (both gates), so it
+ * is loaded lazily and cached. The loader returns a DISCRIMINATED result so
+ * a missing export (`missing`) is never conflated with a real import
+ * failure (`error`): Gate 2 skips itself either way (see `gateTaskDispatch`),
+ * but the two produce different one-time warnings.
  */
 type DispatchGateFn = (text: string, options?: { agent?: string; writable?: boolean }) => {
   ok: boolean;
@@ -235,44 +238,62 @@ type DispatchGateFn = (text: string, options?: { agent?: string; writable?: bool
   violations: ValidationResult[];
 };
 
-let cachedDispatchGate: Promise<DispatchGateFn | null> | null = null;
+type ComposeDispatchGateLoad =
+  | { status: "ok"; gate: DispatchGateFn }
+  | { status: "missing" }
+  | { status: "error"; error: unknown };
 
-export function loadComposeDispatchGate(): Promise<DispatchGateFn | null> {
+let cachedDispatchGate: Promise<ComposeDispatchGateLoad> | null = null;
+
+export function loadComposeDispatchGate(): Promise<ComposeDispatchGateLoad> {
   cachedDispatchGate ??= import("@mstar-harness/engine")
     .then((mod) =>
-      typeof mod.composeDispatchGate === "function" ? (mod.composeDispatchGate as DispatchGateFn) : null,
+      typeof mod.composeDispatchGate === "function"
+        ? ({ status: "ok", gate: mod.composeDispatchGate as DispatchGateFn } as const)
+        : ({ status: "missing" } as const),
     )
-    .catch(() => null);
+    .catch((error: unknown) => ({ status: "error", error } as const));
   return cachedDispatchGate;
 }
 
 /**
  * Test seam for the degradation path: smoke scripts replace `load` to
- * simulate an engine build without `composeDispatchGate` (ESM namespace
- * bindings are read-only, so the holder indirection is what makes the
- * missing-export case stub-able). Runtime default is the cached loader.
+ * simulate an engine build without `composeDispatchGate` (missing) or a
+ * broken engine import (error) — ESM namespace bindings are read-only, so
+ * the holder indirection is what makes the degrade cases stub-able.
+ * Runtime default is the cached loader.
  */
-export const dispatchGateLoader: { load: () => Promise<DispatchGateFn | null> } = {
+export const dispatchGateLoader: { load: () => Promise<ComposeDispatchGateLoad> } = {
   load: loadComposeDispatchGate,
 };
 
-/** One-time degradation warning (module-level flag): emitted via the
- * extension logger on the first task event while `composeDispatchGate` is
- * missing. Defensive — the logger may be absent, and the degrade path must
- * never throw (optional chaining + local try/catch). */
+/** One-time degradation warnings (module-level flags): emitted via the
+ * extension logger on the first task event while Gate 2 is unavailable —
+ * one message for a missing `composeDispatchGate` export (upgrade hint), a
+ * DIFFERENT one for a real engine import failure (no upgrade claim — the
+ * module itself is broken). Defensive — the logger may be absent, and the
+ * degrade path must never throw (optional chaining + local try/catch). */
 let dispatchGateWarned = false;
+let dispatchGateImportErrorWarned = false;
 
-function warnDispatchGateDegraded(logger: unknown): void {
-  if (dispatchGateWarned) return;
-  dispatchGateWarned = true;
+function warnDispatchGateDegraded(logger: unknown, reason: "missing" | "error", error?: unknown): void {
+  if (reason === "missing") {
+    if (dispatchGateWarned) return;
+    dispatchGateWarned = true;
+  } else {
+    if (dispatchGateImportErrorWarned) return;
+    dispatchGateImportErrorWarned = true;
+  }
+  const message =
+    reason === "missing"
+      ? "mstar-gates: installed engine lacks composeDispatchGate — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)"
+      : `mstar-gates: task dispatch gate (Gate 2) disabled: engine import failed — ${error instanceof Error ? error.message : String(error)}; status gate unaffected`;
   try {
     (
       logger as
         | { warn?: (message: string, context?: Record<string, unknown>) => void }
         | undefined
-    )?.warn?.(
-      "mstar-gates: installed engine lacks composeDispatchGate — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)",
-    );
+    )?.warn?.(message);
   } catch {
     // degrade path must never throw
   }
@@ -305,19 +326,21 @@ function validateDispatchEntry(
  * `Enforcement: hard` in its header AND has violations. Per-entry violations
  * only — soft entries never block; no hard violations → silent pass.
  *
- * When the engine build lacks `composeDispatchGate` (predating the export),
- * Gate 2 is SKIPPED entirely — no blocking, no violations — with a one-time
- * warning; Gate 1 (status) keeps working (engine-version compatibility).
+ * When the engine build lacks `composeDispatchGate` (predating the export)
+ * or the engine import itself fails, Gate 2 is SKIPPED entirely — no
+ * blocking, no violations — with a one-time warning; Gate 1 (status) keeps
+ * working (engine-version compatibility).
  */
 async function gateTaskDispatch(
   eventInput: unknown,
-  warnDegraded: () => void,
+  warnDegraded: (reason: "missing" | "error", error?: unknown) => void,
 ): Promise<{ block: true; reason: string } | undefined> {
-  const composeDispatchGate = await dispatchGateLoader.load();
-  if (composeDispatchGate === null) {
-    warnDegraded();
+  const load = await dispatchGateLoader.load();
+  if (load.status !== "ok") {
+    warnDegraded(load.status, load.status === "error" ? load.error : undefined);
     return undefined;
   }
+  const composeDispatchGate = load.gate;
   const blocked: string[] = [];
   for (const entry of taskDispatchEntries(eventInput)) {
     const { violations, hard } = validateDispatchEntry(entry, composeDispatchGate);
@@ -336,7 +359,8 @@ async function gateTaskDispatch(
 // ---------------------------------------------------------------------------
 
 export default function mstarGates(pi: ExtensionAPI): void {
-  const warnDegraded = (): void => warnDispatchGateDegraded(pi.logger);
+  const warnDegraded = (reason: "missing" | "error", error?: unknown): void =>
+    warnDispatchGateDegraded(pi.logger, reason, error);
   pi.on("tool_call", async (event) => {
     try {
       const toolName = event?.toolName ?? "";
