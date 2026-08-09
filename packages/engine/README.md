@@ -19,7 +19,7 @@ const version = readHarnessVersion(); // "1.8.8" — monorepo root package.json
 ## Scope
 
 - Importable library only — **no `bin`**; the CLI (`@mstar-harness/cli`) wraps engine functions as thin `mstar …` subcommands.
-- Dependencies: `node:*` only (zero external runtime deps — all validators hand-rolled; ajv pruned as phantom, zod removed 2026-08-08).
+- Dependencies: `node:*` only (zero external runtime deps — all validators hand-rolled; ajv and zod were pruned as phantom dependencies).
 - Skill prose stays authoritative; engine exports are the machine-checkable mirror of the rules the `mstar-*` skills state.
 
 ## License

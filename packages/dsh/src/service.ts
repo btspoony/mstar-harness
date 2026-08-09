@@ -42,7 +42,7 @@ export interface DshMstarOptions {
 /**
  * Morning Star engine access for dsh gate plugins.
  *
- * Layering (qc1 F-002): this service is the composition/test façade for
+ * Layering: this service is the composition/test façade for
  * FUTURE inject consumers (host adapters, catalogs, P2/P3 seams) — the
  * P1 gates in `index.ts` are co-located engine wrappers that import
  * `@mstar-harness/engine` directly (same plugin, engine bundled at build

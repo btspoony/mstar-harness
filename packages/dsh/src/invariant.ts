@@ -31,9 +31,9 @@ export const inject = ['invariants']
  * HMR, skills-mount disposal, sdd-iteration-tools.spec.ts / worktree-l2.spec.ts
  * / misc-seams.spec.ts tool lifetimes, e2e-session.spec.ts full-app boot),
  * not by an invariant companion. The profile-bundle manifest
- * (`dsh.bundle.patch` in package.json) and the `skills/README.md` mount
- * target are static package contents, not runtime state. A config↔listener
- * presence check would duplicate those tests.
+ * (`dsh.bundle.patch` in package.json) and the packaged `harness-skills/` /
+ * `harness-commands/` mirrors are static package contents, not runtime state.
+ * A config↔listener presence check would duplicate those tests.
  */
 const install: InvariantInstaller = () => {}
 

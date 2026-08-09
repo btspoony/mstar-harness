@@ -89,7 +89,7 @@ import type {
   MstarIterationGateSource,
 } from './types.ts'
 
-// Re-export the service type from the package entry (qc3 F-2a): the cordis
+// Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
 // must reference it for consumers importing `@mstar-harness/dsh` to see a
 // typed `ctx.dshMstar`.
@@ -144,7 +144,7 @@ export interface Config {
    */
   harnessDir?: string
   /**
-   * Per-deployment enforcement override (roadmap §8.5 C4/D2). `hard` forces
+   * Per-deployment enforcement override. `hard` forces
    * hard gates, `soft` forces warn-only even when an active iteration compass
    * declares `enforcement: hard` (local rollback); absent → the compass
    * frontmatter decides, warn-only when no compass hardens (never a global default).
@@ -170,7 +170,7 @@ export interface Config {
   /**
    * Additional skill roots registered with the dsh skill-local provider
    * (skill-local `Config.customSkillDirs` semantics — scanned after project
-   * roots and before user roots; roadmap D6 single canonical mount).
+   * roots and before user roots — single canonical mount).
    * Dev-time: the mirror `<repo-root>/skills` absolute path. Each root's
    * children are skill dirs (`<name>/SKILL.md`) or flat skill files
    * (`<name>.md`). Absent → no custom-root registration.
@@ -206,7 +206,7 @@ export const Config: z<Config> = z.object({
  * would violate the seam contract. Consumers (later tasks, catalogs) observe
  * this event for model-visible/session-log surfacing.
  *
- * The status gate NEVER throws (qc3 F-1 / qc2 W-001): the fs intent waterfall
+ * The status gate NEVER throws: the fs intent waterfall
  * carries no incoming content, so the only hard-mode decision this seam can
  * make about an ALREADY-invalid document is to allow the write as a repair
  * escape. Every decision surfaces through this advisory; unexpected internal
@@ -228,8 +228,7 @@ export interface StatusGateAdvisory {
 }
 
 /**
- * Advisory emitted on warn-mode dispatch-gate passes (Task 4; the Task 3
- * `mstar/status-gate` decision reused for the dispatch gate — dsh's
+ * Advisory emitted on warn-mode dispatch-gate passes (the * `mstar/status-gate` decision reused for the dispatch gate — dsh's
  * `agent/status` lifecycle event stays untouched). Consumers (later tasks,
  * catalogs) observe this event for model-visible/session-log surfacing.
  */
@@ -242,13 +241,13 @@ export interface DispatchGateAdvisory {
   result: GateResult
   /** Whether hard enforcement is on (advisory events are warn-mode by construction). */
   hard: boolean
-  /** True when the gate errored internally and degraded to allow (structured degraded advisory, qc2 W-003). */
+  /** True when the gate errored internally and degraded to allow (structured degraded advisory). */
   degraded?: boolean
 }
 
 /**
  * Advisory emitted on skill-lint gate decisions (the `mstar/status-gate`
- * advisory pattern reused for the skill-authoring gate — Task 4). Emitted
+ * advisory pattern reused for the skill-authoring gate). Emitted
  * when a `SKILL.md` write-intent under a configured skill root finds lint
  * violations in the pre-write on-disk document (warn mode), when hard mode
  * allows an ALREADY-invalid document as a repair escape, and when the gate
@@ -265,7 +264,7 @@ export interface SkillLintAdvisory {
   operation: 'write'
   /** `displayPath` of the guarded SKILL.md. */
   target: string
-  /** Canonical skill-root form of the target (Task 1 frozen `resolveSkillRoot('dsh', …)` form). */
+  /** Canonical skill-root form of the target (`resolveSkillRoot('dsh', …)` form). */
   canonical: string
   /** The lint verdict (warn-mode: `hardBlocked` false; hard repair escape: `hardBlocked` true). */
   result: GateResult
@@ -277,11 +276,11 @@ export interface SkillLintAdvisory {
   degraded?: boolean
 }
 
-/** The four artifact seams gated by Task 3 (plan 20260808-dsh-seams-bundle). */
+/** The four artifact seams (design-md / audit / compound / roles). */
 export type SeamId = 'design-md' | 'audit' | 'compound' | 'roles'
 
 /**
- * Advisory emitted on seam-gate decisions (Task 3; the `mstar/status-gate` /
+ * Advisory emitted on seam-gate decisions (the `mstar/status-gate` /
  * `mstar/skill-lint` advisory pattern reused for the design-md / audit /
  * compound / roles artifact gates — one event with a `seam` discriminator,
  * consumers filter on it). Emitted when an in-scope artifact write-intent
@@ -382,7 +381,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * resolved path equality on `displayPath` (the local backend reports absolute
  * paths; remote/URI backends never match and the gate is inert for them).
  *
- * simplify: case-sensitive `===` comparison (qc2 S-006) — on case-insensitive
+ * simplify: case-sensitive `===` comparison — on case-insensitive
  * filesystems (macOS/Windows defaults) a case-variant write path escapes the
  * gate (inert, never a false positive); case-normalized matching would need
  * the fs backend's canonical-case notion, revisit if case-variant writes
@@ -437,7 +436,7 @@ function validateStatusValue(doc: unknown): GateResult {
  * mode (`plans[].metadata.findings_cleanup`); schema violations short-circuit
  * it (the doc must parse for the cleanup gate to be meaningful).
  *
- * Single-read contract (qc3 F-1): the file is parsed exactly once and the
+ * Single-read contract: the file is parsed exactly once and the
  * parsed doc is passed to {@link validateStatusValue} — the previous
  * path-first read then `readJson` re-read was a TOCTOU window (a concurrent
  * writer between the two reads threw a raw error from inside the gate).
@@ -466,7 +465,7 @@ function validateStatusDoc(statusPath: string): GateResult {
 
 /**
  * Gate one fs intent on `{HARNESS_DIR}/status.json`. The gate never throws
- * (qc3 F-1 / qc2 W-001): warn mode logs + advisory emit + delegates; hard
+ * Warn mode logs + advisory emit + delegates; hard
  * mode with an ALREADY-invalid document logs an error-level REPAIR advisory
  * and delegates — the intent waterfall carries no incoming content, so a
  * hard veto here would deadlock the very write that repairs the document.
@@ -655,7 +654,7 @@ function skillRootsOf(config: Config): string[] {
  * absolute paths; remote/URI backends never resolve under a local root and
  * the gate is inert for them — status-gate discipline).
  *
- * simplify: case-sensitive containment (qc2 S-006) — on case-insensitive
+ * simplify: case-sensitive containment — on case-insensitive
  * filesystems a case-variant path escapes the gate (inert, never a false
  * positive); revisit if case-variant writes become an observed bypass.
  */
@@ -670,7 +669,7 @@ function skillNameOf(target: FsTarget): string {
   return basename(dirname(target.displayPath))
 }
 
-/** The canonical skill-root form of a SKILL.md target (Task 1 frozen
+/** The canonical skill-root form of a SKILL.md target (frozen
  * `resolveSkillRoot('dsh', …)` form — `$DSH_BUNDLED_SKILL_DIR/<name>/SKILL.md`). */
 function skillCanonicalForm(target: FsTarget): string {
   return resolveSkillRoot('dsh', { skill: skillNameOf(target), rel: 'SKILL.md' })
@@ -680,7 +679,7 @@ function skillCanonicalForm(target: FsTarget): string {
  * Resolve the hard-enforcement flag for the artifact gates: explicit
  * Config override wins, else the iteration compass frontmatter (when a
  * harness dir resolves), else warn-only. {@link resolveHard} parity with a
- * null-tolerant harness dir — the skill roots and the Task 3 artifact
+ * null-tolerant harness dir — the skill roots and the artifact
  * seams (design-md / audit / compound / roles) do not require
  * `{HARNESS_DIR}` (compound scoping is the only seam that does, and only
  * for its knowledge-path matcher).
@@ -697,7 +696,7 @@ function resolveSeamHard(harnessDir: string | null, config: Config): boolean {
  * `(target, actor)` — never the incoming content, dsh-private tool-fs
  * write.ts), so the lint signal is the pre-write on-disk document
  * (single-read). Enforcement policy (decided here, documented in
- * task-4-report.md; status-gate repair-escape mirror, qc2 W-001):
+ * status-gate repair-escape mirror):
  *
  * - missing file → pass (first create has no document to lint);
  * - clean on-disk doc → silent pass (blocking valid-skill writes would
@@ -801,7 +800,7 @@ async function skillWriteIntentListener(
 }
 
 // ---------------------------------------------------------------------------
-// Task 3 seam gates — design-md / audit / compound / roles
+// Artifact seam gates — design-md / audit / compound / roles
 // ---------------------------------------------------------------------------
 
 /** Per-seam dsh logger names (dsh logger naming: `<scope>/<subject>`). */
@@ -814,7 +813,7 @@ const SEAM_LOGGERS: Record<SeamId, string> = {
 
 /** `index.md` / `README.md` are index files, not lintable documents
  * (audit-<date>/ index, knowledge/README.md index) — excluded from every
- * Task 3 seam scope so index writes never false-positive a Status-block /
+ * Seam scope so index writes never false-positive a Status-block /
  * frontmatter lint. */
 function isIndexFile(path: string): boolean {
   const base = basename(path)
@@ -1008,7 +1007,7 @@ function emitSeamAdvisory(
 }
 
 /**
- * Gate one fs write-intent on a Task 3 artifact. The slot is content-blind
+ * Gate one fs write-intent on a gated artifact. The slot is content-blind
  * (the intent waterfall carries only `(target, actor)` — never the incoming
  * content), so the lint signal is the pre-write on-disk document
  * (single-read). Enforcement policy (skill-lint gate mirror; documented in
@@ -1179,7 +1178,7 @@ export function lintRolesWrite(
  * True when the text looks like an Assignment (opencode parity: `## Assignment`
  * heading or at least one core field line). Non-Assignment delegation prompts
  * stay silent — no false-positive warnings. Callers MUST pass the engine
- * `assignmentHeaderRegion` slice (qc2 F-001): a `## Assignment` heading or
+ * `assignmentHeaderRegion` slice: a `## Assignment` heading or
  * field line quoted in the task body must not shape a non-assignment prompt.
  */
 function isAssignmentShaped(assignmentText: string): boolean {
@@ -1223,11 +1222,11 @@ function leaseViolation(code: string, message: string, fix?: string): Validation
  * Returns the trimmed value or undefined when the field is absent/empty.
  *
  * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)` slice
- * (qc1 F-001 / qc2 F-003): the engine owns the header/body boundary, so
+ * The engine owns the header/body boundary, so
  * body-quoted field examples after a `# Task` / `# Target` / `---` marker
  * never leak into header fields — the same discipline `resolveDispatchHard`
  * already honors for the Enforcement flag. This module keeps no second
- * grammar for the boundary (qc1 S-002).
+ * grammar for the boundary.
  *
  * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
  * @param label - the header field label to read (e.g. `Plan Path`).
@@ -1252,12 +1251,12 @@ function firstToken(value: string): string | undefined {
  * ALL header-region values of a repeated Assignment field label (bold or
  * plain, optionally list-bulleted — the same line grammar as the engine
  * `parseAssignmentFields`). Repeated `Worktree path` / `Working branch`
- * lines declare the L2 parallel-track context (Task 2); empty values are
+ * lines declare the L2 parallel-track context; empty values are
  * dropped (consistent with {@link assignmentHeaderValue}: an empty line is
  * an absent field, never a malformed track).
  *
  * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
- * slice (qc1 F-001 / qc2 F-001): body-quoted field examples after a
+ * slice: body-quoted field examples after a
  * `# Task` / `# Target` / `---` marker never leak into the track
  * declarations — the same header-region discipline the dispatch gate
  * already honors.
@@ -1284,7 +1283,7 @@ function isNaValue(value: string | undefined): value is undefined {
 /**
  * Resolve the target plan id from the Assignment HEADER region: `Plan Path`
  * basename (`.md` stripped), else `SDD dir` basename, else a `plan_id` field.
- * @param headerRegion - `assignmentHeaderRegion(assignmentText)` (qc1 F-001:
+ * @param headerRegion - `assignmentHeaderRegion(assignmentText)` (
  * only the header is read — a plan path quoted in the task body never
  * resolves a plan id).
  */
@@ -1311,7 +1310,7 @@ function sessionIdOf(exec: ToolExecution): string | undefined {
 }
 
 /**
- * Lease gate (Task 5) — ADDITIVE beyond the opencode parity field set:
+ * Lease gate — ADDITIVE beyond the opencode parity field set:
  * opencode's `validateDispatchAssignment` does NOT run lease checks at
  * dispatch, so every violation emitted here is dsh-only and clearly scoped:
  * the check fires ONLY for WRITABLE dispatches whose Assignment declares
@@ -1335,7 +1334,7 @@ function sessionIdOf(exec: ToolExecution): string | undefined {
  * row not registered) are violations ONLY for sdd dispatches (the lease state
  * cannot be confirmed — the status gate already guards the next write);
  * unreadable docs never harden a soft workflow. Missing status.json is NOT a
- * silent fail-open for sdd (qc2 W-002): the claim-before-InProgress red line
+ * silent fail-open for sdd: the claim-before-InProgress red line
  * needs the plan's execution_lease, and a missing status file cannot confirm
  * it — `lease.dispatch.unverifiable` fires (advisory in warn, deny under hard).
  */
@@ -1394,7 +1393,7 @@ function leaseGateViolations(
   // fields of a broken lease never produce misleading mismatch noise.
   if (lease !== undefined && validateExecutionLease(lease).ok) {
     const sessionId = sessionIdOf(exec)
-    // Holder contract (qc3 F-4): `lease.holder` must be recorded as the dsh
+    // Holder contract: `lease.holder` must be recorded as the dsh
     // Agent.id this dispatch runs under. The mstar control-side holder
     // convention is `<host>:<stable-session-id>` — a lease claimed under that
     // vocabulary against a bare dsh agent id is a deliberate fail-closed
@@ -1445,7 +1444,7 @@ function worktreeViolation(code: string, message: string, fix?: string): Validat
 }
 
 /**
- * L2 within-plan track isolation (Task 2; engine `l2PreDispatchCheck`):
+ * L2 within-plan track isolation (engine `l2PreDispatchCheck`):
  * when the Assignment declares parallel tracks — ≥2 `Worktree path` header
  * entries, or the documented parallel-tracks marker (`Dispatch mode:
  * parallel independent tracks`, mstar-phase-gates 并行标签 /
@@ -1462,7 +1461,7 @@ function worktreeViolation(code: string, message: string, fix?: string): Validat
  *
  * Pure over the header + the filesystem; the engine probes
  * `git -C <path> branch --show-current` per valid track (bounded, fails
- * closed). Header-region scoping (qc2 F-001): the caller passes the engine
+ * closed). Header-region scoping: the caller passes the engine
  * `assignmentHeaderRegion` slice only.
  * @param header - `assignmentHeaderRegion(assignmentText)`.
  */
@@ -1505,7 +1504,7 @@ function worktreeL2Violations(header: string): ValidationResult[] {
 }
 
 /**
- * L1 cross-plan isolation (Task 2; engine `l1PreDispatchCheck`): when the
+ * L1 cross-plan isolation (engine `l1PreDispatchCheck`): when the
  * Assignment resolves a plan id AND status.json carries the L1 metadata —
  * `metadata.control_worktree_path` plus the plan row's `execution_lease`
  * (worktree_path + working_branch) — verify the control-vs-feature
@@ -1560,12 +1559,12 @@ function worktreeL1Violations(harnessDir: string | null, header: string): Valida
  * guard + field gate (read-only roles skip the branch gate) +
  * anti-recursion precheck (Config binding) + default-branch gate +
  * header-region enforcement. The dsh-side additions layer ON TOP: the
- * worktree L1/L2 checks (Task 2 — additive beyond opencode parity; the
+ * worktree L1/L2 checks (additive beyond opencode parity; the
  * lease gate is exec-bound and joins via {@link DshHostAdapter.dispatchGate}).
  * Extracted from `gateDispatch` so the `tools/pre-execute` listener and the
  * host adapter's `beforeDispatch` share ONE code path.
  *
- * Header-region scoping (qc2 F-001): the engine `assignmentHeaderRegion`
+ * Header-region scoping: the engine `assignmentHeaderRegion`
  * slice is computed ONCE and feeds the composition AND the worktree parsers
  * (fields, branch forms, direct-on exception, worktree tracks) — body-quoted
  * field examples after a `# Task` / `# Target` / `---` marker never leak
@@ -1585,7 +1584,7 @@ function dispatchGateCore(
 ): { violations: ValidationResult[]; writable: boolean | undefined } {
   const header = assignmentHeaderRegion(prompt)
   // Worktree L2 (declared parallel tracks) + L1 (control vs feature path
-  // when the plan metadata is present) — Task 2; both run on the header
+  // when the plan metadata is present) — both run on the header
   // region slice, the engine parsers' single boundary.
   const violations: ValidationResult[] = [...worktreeL2Violations(header), ...worktreeL1Violations(harnessDir, header)]
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
@@ -1620,7 +1619,7 @@ function gateDispatch(
   const args = asRecord(exec.arguments)
   const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
   if (prompt === undefined) return undefined
-  // Shape guard + advisory role read run on the header region (qc2 F-001):
+  // Shape guard + advisory role read run on the header region:
   // a `## Assignment` heading or field line quoted in the task body cannot
   // shape a non-assignment prompt or leak into the advisory role.
   const header = assignmentHeaderRegion(prompt)
@@ -1655,7 +1654,7 @@ function gateDispatch(
  * other path calls `next()` to delegate (the registry's default is
  * `{ kind: 'allow' }`). Engine failures degrade to allow in BOTH modes (hard
  * gates are opt-in — an engine failure must not harden a workflow that was
- * soft; opencode parity) but the degrade is NEVER silent (qc2 W-003): the
+ * soft; opencode parity) but the degrade is NEVER silent: the
  * catch path emits the plugin-owned `mstar/dispatch-gate` advisory with
  * `degraded: true` + an error log, so a hard deployment can detect a dead
  * control instead of only finding it in logs. `next()` itself is invoked
@@ -1706,7 +1705,7 @@ function assignmentTextFromFields(fields: AssignmentFields): string {
  * The plugin package's own `harness-skills/` mirror (synced from the repo
  * root by `bundle-assets` at build/postinstall; gitignored). Resolved
  * package-relative via `import.meta.url` — NOT cwd-anchored — so the shipped
- * bundled mount works from any launch cwd (this resolves the Task 5
+ * bundled mount works from any launch cwd (this resolves the
  * cwd-anchoring limitation for the default; an explicit `bundledSkillDir`
  * still wins). Returns undefined when the mirror is absent (e.g. a checkout
  * where `bundle-assets` has not run — the default mount is then inert).
@@ -1736,7 +1735,7 @@ function packagedCommandsDir(): string | undefined {
 
 /**
  * Build the dsh skill-local registration payload from the plugin Config
- * (roadmap D6 — single canonical mount). Semantics mirror the skill-local
+ * (single canonical mount). Semantics mirror the skill-local
  * `Config` contract: `skillRoots` → `customSkillDirs` (custom roots),
  * `bundledSkillDir` → `bundledSkillDir` (bundled root). The provider is
  * named `mstar` and default roots are excluded (`includeDefaultRoots: false`
@@ -1749,7 +1748,7 @@ function packagedCommandsDir(): string | undefined {
  * The bundled default is the package's OWN `harness-skills/` mirror (synced
  * from the repo root by `bundle-assets` at build/postinstall; gitignored),
  * resolved package-relative — NOT cwd-anchored — so a deployment launching
- * from any cwd gets the bundled mount (this resolves the Task 5
+ * from any cwd gets the bundled mount (this resolves the
  * cwd-anchoring limitation for the shipped default; an explicit
  * `bundledSkillDir` still wins).
  * @param config - validated plugin configuration.
@@ -1783,7 +1782,7 @@ export interface DshHostAdapterOptions {
 
 /**
  * The plugin's `HostAdapter` implementation (engine `host.ts` type-only
- * contract, roadmap §8.4) — the HOST-FACING facade over the P1 gate
+ * contract) — the HOST-FACING facade over the gate
  * internals: `host: 'dsh'`, `log` → dsh ctx logger, and the optional hooks
  * wired to the SAME code paths the in-plugin gates use, so host hooks and
  * gates share ONE validation path:
@@ -1812,7 +1811,7 @@ export interface DshHostAdapterOptions {
  *   lease; the reservation WRITE into status.json is a P3 seam).
  */
 export class DshHostAdapter extends Service implements HostAdapter {
-  /** Engine host identity (roadmap §8.4 `HostId` union). */
+  /** Engine host identity (`HostId` union). */
   readonly host = 'dsh' as const
 
   private readonly harnessDir: string | null
@@ -1848,7 +1847,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * the `beforeStatusWrite` on-disk fallback route through this method —
    * ONE validation code path. Missing file = first create = pass (the
    * intent waterfall carries no incoming content, so the vetoable signal is
-   * the pre-write on-disk state, qc3 F-1).
+   * the pre-write on-disk state).
    * @param statusPath - the canonical `{HARNESS_DIR}/status.json` path.
    */
   statusGate(statusPath: string): GateResult {
@@ -1934,7 +1933,7 @@ function pluginVersion(): string {
 
 /**
  * The durable catalog source for the current engine status (the watermark
- * fields). Computed ONCE at `apply()` and reused per pre-step (qc3 W-002):
+ * fields). Computed ONCE at `apply()` and reused per pre-step:
  * every field is boot-resolved — engine + plugin versions are process
  * -immutable manifest reads and the compass enforcement resolves at boot
  * like the gates themselves. A mid-session compass change therefore does NOT
@@ -2005,10 +2004,10 @@ function steeringCompassPath(harnessDir: string): { iterationId: string; compass
 }
 
 /**
- * The boot-cached iteration-gate catalog row (Task 2): `evaluatePhaseGate`
+ * The boot-cached iteration-gate catalog row: `evaluatePhaseGate`
  * over the control-path status.json + the steering delivery-compass.md,
- * projected to the Task 1 tool result shape (`IterationGateView`). Computed
- * ONCE at `apply()` and reused per pre-step (qc3 W-002 discipline — no disk
+ * projected to the tool result shape (`IterationGateView`). Computed
+ * ONCE at `apply()` and reused per pre-step (no disk
  * I/O on the agent-loop hot path). A mid-session status/compass change does
  * NOT re-evaluate until a config reload re-runs `apply` (HMR fiber
  * restart) — the documented staleness tradeoff that keeps the hot path
@@ -2068,18 +2067,18 @@ function renderIterationGateCatalog(source: MstarIterationGateSource): string {
 }
 
 /**
- * Advisory `agent/pre-step` waterfall listener (roadmap §4 D4 — agent
+ * Advisory `agent/pre-step` waterfall listener (agent
  * catalog): delegates through `next()` (never `reject` — that would block the
  * step — and never replaces the delegated messages) and appends the
  * catalog rows to the composed step messages, so the durable session log
  * carries them (model-visible ⟺ logged, MessageSource form):
  * one `mstar-engine-status` row always, plus — when a boot-cached gate
- * verdict exists (Task 2, `iterationGateSource`) — one `mstar-iteration-gate`
+ * verdict exists (`iterationGateSource`) — one `mstar-iteration-gate`
  * row after it. An aborted step publishes nothing: the delegated decision
- * is returned unchanged (tool-skill precedent; narrowed abort race — qc2
- * S-001: an abort after delegation must not surface as a turn failure).
+ * is returned unchanged (tool-skill precedent; a narrowed abort race —
+ * an abort after delegation must not surface as a turn failure).
  *
- * Error containment (qc3 W-003): the append path is wrapped — a failure
+ * Error containment: the append path is wrapped — a failure
  * (e.g. a downstream decider returning a non-iterable `messages` set, or a
  * throwing message factory) logs and returns the delegated decision
  * unchanged; the advisory listener never aborts the very step it observes.
@@ -2089,7 +2088,7 @@ function renderIterationGateCatalog(source: MstarIterationGateSource): string {
  * time). Digest-gated re-emission against the durable log lands with the
  * real session seam at P3.
  * @param ctx - registrant context (logger for the containment path).
- * @param source - the boot-resolved engine-status watermark source (qc3 W-002).
+ * @param source - the boot-resolved engine-status watermark source.
  * @param iterationGate - the boot-cached iteration-gate source (undefined
  * when no gate verdict was evaluable at boot — the row is then absent).
  * @param payload - the proposed step the loop is about to enter.
@@ -2153,8 +2152,7 @@ const ITERATION_VIOLATION_SCHEMA = {
 } as const
 
 /**
- * Register the v2 seam model-facing tools (plan 20260808-dsh-seams-bundle
- * Task 1): `mstar sdd …` / `mstar iteration gate` equivalents operating
+ * Register the v2 seam model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents operating
  * in-app against control-path artifacts.
  *
  * The registrations are deferred with `ctx.inject(['tools'], …)` — the same
@@ -2365,7 +2363,7 @@ function registerSddIterationTools(ctx: Context, harnessDir: string | null): voi
 }
 
 /**
- * Register the Task 3 on-demand seam validation tools (plan
+ * Register the on-demand seam validation tools (
  * 20260808-dsh-seams-bundle): `mstar design-md validate` / `mstar compound
  * validate` CLI mirrors plus the audit / roles validators — thin wrappers
  * running the engine in-app. The registrations are deferred with
@@ -2665,7 +2663,7 @@ function registerMstarCommands(ctx: Context): void {
  * and register the status gate on the fs intent waterfalls + the dispatch
  * gate on `tools/pre-execute`.
  *
- * Layering (qc1 F-002): the gates are co-located engine wrappers in this
+ * Layering: the gates are co-located engine wrappers in this
  * module importing `@mstar-harness/engine` directly (same plugin, engine
  * bundled at build time); `ctx.dshMstar` is the composition/test façade for
  * future inject consumers (catalogs) — see the README Service section; the
@@ -2690,7 +2688,7 @@ export function apply(ctx: Context, config: Config): void {
   // registered from `harness-commands/` when the commands service exists.
   registerMstarCommands(ctx)
 
-  // Skills mount — single canonical mount (roadmap D6): register configured
+  // Skills mount — single canonical mount: register configured
   // skill roots with the dsh skill-local provider contract. The object form
   // mirrors the module shape the dsh Loader composes for the real
   // `@deepseek-ai/dsh-skill-local` package (`{ name, inject, Config, apply }`),
@@ -2706,7 +2704,7 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
-  // Deploy-time observability (qc2 S-002): when enforcement resolves hard but
+  // Deploy-time observability: when enforcement resolves hard but
   // no dispatchBinding is declared, the anti-recursion red line is off by
   // construction — surface the absence instead of only documenting it.
   const effectiveHard = config.enforcement === 'hard' || (harnessDir !== null && resolveCompassEnforcement(harnessDir).hard)
@@ -2715,7 +2713,7 @@ export function apply(ctx: Context, config: Config): void {
       'Enforcement: hard is active but dispatchBinding is unset — the anti-recursion precheck is skipped (an Assignment whose Execute as equals the dispatching agent cannot be detected)',
     )
   }
-  // Deploy-time observability (qc2 S-004): a renamed dsh subagent tool
+  // Deploy-time observability: a renamed dsh subagent tool
   // (toolName) with dispatchTools unset silently disables BOTH the dispatch
   // gate and host detection — mirror the dispatchBinding warn so the absence
   // is surfaced instead of only documented.
@@ -2731,13 +2729,13 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
 
   // Skill-authoring lint gate — fs/write-intent slot scoped to SKILL.md
-  // under the configured skill roots (Task 4; same single-slot waterfall +
+  // under the configured skill roots (same single-slot waterfall +
   // prepend + next() delegation contract as the status gate — this gate
   // also never throws except the intentional incoming-doc veto in
   // `lintSkillWrite`).
   ctx.on('fs/write-intent', (target, actor, next) => skillWriteIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
 
-  // Task 3 artifact seam gates — fs/write-intent slots scoped per artifact
+  // Artifact seam gates — fs/write-intent slots scoped per artifact
   // (design-md / audit / compound / roles; same envelope: warn advisory
   // default, hard-mode repair escape on the content-blind listener, typed
   // `SeamVetoError` on the known-document branch, degrade-to-allow). The
@@ -2750,30 +2748,30 @@ export function apply(ctx: Context, config: Config): void {
 
   // Dispatch gate — tools/pre-execute waterfall (refusal channel:
   // PreToolDecision.deny returned without next()). Registered prepend for the
-  // same reachability reason as the fs slots (qc2 S-001): an earlier-mounted
+  // same reachability reason as the fs slots: an earlier-mounted
   // listener that returns a decision without next() would short-circuit the
   // chain and make this security gate unreachable — "a deny short-circuits
   // regardless of order" holds only once the listener is reached.
   ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, adapter, exec, next), { prepend: true })
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
-  // (roadmap §4 D4 / P2 agent catalog): calls `next()` (never vetoes or
+  // (agent catalog): calls `next()` (never vetoes or
   // replaces the delegated messages) and appends the engine-status row to
   // the composed step messages, so the session log carries the engine
   // status (model-visible ⟺ logged).
   //
-  // Iteration-gate row (Task 2): the SAME listener appends a second
+  // Iteration-gate row: the SAME listener appends a second
   // `mstar-iteration-gate` catalog row when a gate verdict was evaluable at
   // boot (control-path status.json + steering compass; engine
-  // evaluatePhaseGate, Task 1 tool result shape).
+  // evaluatePhaseGate tool result shape).
   //
-  // Both watermarks are computed ONCE at boot (qc3 W-002) — engine/plugin
+  // Both watermarks are computed ONCE at boot — engine/plugin
   // versions are process-immutable, compass enforcement is boot-resolved
   // like the gates, and the iteration gate is boot-evaluated — so the
   // pre-step hot path does no disk I/O (see engineStatusSource /
   // iterationGateSource for the mid-session staleness tradeoff).
   const catalogSource = engineStatusSource(harnessDir)
-  // The manifest fallback is never silent (qc2 S-005): a '0.0.0' plugin
+  // The manifest fallback is never silent: a '0.0.0' plugin
   // version would watermark every catalog row wrongly, so it logs at boot.
   if (catalogSource.pluginVersion === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
@@ -2781,11 +2779,10 @@ export function apply(ctx: Context, config: Config): void {
   const iterationGate = iterationGateSource(harnessDir)
   ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, iterationGate, payload, next))
 
-  // v2 seams — sdd + iteration model-facing tools (plan 20260808-dsh-seams-bundle
-  // Task 1): `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
+  // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
   registerSddIterationTools(ctx, harnessDir)
 
-  // Task 3 seam tools — on-demand `mstar_*_validate` equivalents
+  // Seam tools — on-demand `mstar_*_validate` equivalents
   // (design-md / audit / compound / roles).
   registerSeamTools(ctx, harnessDir)
 }

@@ -13,7 +13,7 @@ row over the dsh-base layer.
 Two profile-bundle install forms into the shipped `web` profile
 (`dsh plugin --profile web add <spec>`; `dsh web` boots it):
 
-Local checkout install (this iteration — local-only, no npm publish yet):
+Local checkout install (local-only — no npm publish yet):
 
 ```sh
 cd <repo>/packages/dsh
@@ -79,10 +79,10 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 
 - The plugin's DEFAULT bundled root is its own `harness-skills/` mirror,
   resolved package-relative via `import.meta.url` — it works from any launch
-  cwd (this resolves the Task 5 cwd-anchoring finding for the default). An
+  cwd (the default is not cwd-anchored). An
   explicit RELATIVE `bundledSkillDir` override resolves against the dsh
-  **process cwd** at boot (skill-local `join` semantics — confirmed by the
-  Task 5 e2e, `tests/e2e-session.spec.ts` § bundledSkillDir), so deployments
+  **process cwd** at boot (skill-local `join` semantics — covered by
+  `tests/e2e-session.spec.ts` § bundledSkillDir), so deployments
   overriding the default should pass an **absolute path** in the profile's
   `cordis.patch.yml`.
 - The bundled `harness-skills/` + `harness-commands/` mirrors are build-time
@@ -93,7 +93,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
   (`harnessDir`, `enforcement`, `dispatchTools`, `dispatchBinding`,
   `skillRoots`, `bundledSkillDir`) belong in the user's profile layer,
   restating kept fields.
-- Local install **verified at Task 5** (no push, no publish): from the repo
+- Local install **verified**: from the repo
   checkout, `DSH_HOME=<temp> dsh plugin --profile web add <packages/dsh>`
   exits 0 — pnpm links the local checkout, the reconcile step joins
   `@mstar-harness/dsh` to `dsh.profile.bundles`, and
@@ -102,4 +102,4 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
   runs through the same pnpm + reconcile mechanism (verified against the real
   remote); it builds via the `prepare` script, which pnpm ≥10 blocks until an
   `allowBuilds` entry is added (see Install). No public-registry install is
-  offered this iteration (local-only constraint).
+  offered yet.

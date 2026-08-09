@@ -1,15 +1,15 @@
 /**
- * `mstar-engine-status` catalog source (plan 20260808-dsh-host-adapter
- * Task 5): a durable `catalog`-form MessageSource the plugin appends to
+ * `mstar-engine-status` catalog source: a durable `catalog`-form
+ * MessageSource the plugin appends to
  * every composed step at `agent/pre-step`, so the model-visible engine-status
  * row is reconstructable from the session log without re-parsing its prose
  * (model-visible ⟺ logged — dsh packages/AGENTS.md). Merge-extensible
  * `MessageSourceMap` augmentation mirroring the `@deepseek-ai/dsh-tool-skill`
  * precedent (declare module '@deepseek-ai/dsh-llm' + catalog-form source).
  *
- * `mstar-iteration-gate` (plan 20260808-dsh-seams-bundle Task 2) is the
- * sibling catalog row: the boot-cached `evaluatePhaseGate` verdict (Task 1
- * tool result shape) appended after the engine-status row on the same
+ * `mstar-iteration-gate` is the sibling catalog row: the boot-cached
+ * `evaluatePhaseGate` verdict (tool result shape) appended after the
+ * engine-status row on the same
  * pre-step listener.
  *
  * @module @mstar-harness/dsh
@@ -53,7 +53,7 @@ export interface IterationGateListView {
 /**
  * JSON projection of the engine `PhaseGateResult` (snake_case to match the
  * model-facing tool vocabulary of the CLI's `mstar iteration gate` — the
- * Task 1 tool result shape reused verbatim by the pre-step catalog row).
+ * tool result shape reused verbatim by the pre-step catalog row).
  */
 export interface IterationGateView {
   transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery'
@@ -66,8 +66,8 @@ export interface IterationGateView {
 
 /**
  * Durable provenance for one iteration-gate catalog row (plan
- * 20260808-dsh-seams-bundle Task 2): the gate verdict is cached at BOOT —
- * no disk I/O on the agent-loop hot path (qc3 W-002) — so the row documents
+ * The gate verdict is cached at BOOT — no disk I/O on the agent-loop
+ * hot path — so the row documents
  * the files it evaluated at boot, and a mid-session status/compass change
  * does not re-watermark until a config reload re-runs `apply`.
  */
@@ -80,7 +80,7 @@ export interface MstarIterationGateSource {
   readonly statusPath: string
   /** The steering `{ITERATION_DIR}/<id>/delivery-compass.md` evaluated at boot. */
   readonly compassPath: string
-  /** Cached `evaluatePhaseGate` result (Task 1 tool result shape). */
+  /** Cached `evaluatePhaseGate` result (tool result shape). */
   readonly gate: IterationGateView
 }
 
