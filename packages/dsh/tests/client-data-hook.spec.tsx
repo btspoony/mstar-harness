@@ -129,4 +129,9 @@ describe('useMstarEngineStatus — empty states (spec §3, §5)', () => {
     const noSession = (() => undefined) as unknown as SnapshotSelectorHook<ConversationSnapshot>
     expect(useMstarEngineStatus(noSession)).toEqual({ source: null, lastUpdated: null })
   })
+
+  it('a throwing session face → explicit empty signal, never a crash (hook never throws)', () => {
+    const throwing = (() => { throw new Error('session exploded') }) as unknown as SnapshotSelectorHook<ConversationSnapshot>
+    expect(useMstarEngineStatus(throwing)).toEqual({ source: null, lastUpdated: null })
+  })
 })

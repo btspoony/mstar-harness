@@ -624,4 +624,160 @@ describe('workflow panel — T2 graph: react-flow loop canvas (spec panel-layout
     expect(g).toContain('data-graph-canvas')
     expect(g).toContain('data-graph-empty="no-plans"')
   })
+
+  it('renders the iteration id as the phase-ring caption (T2 minor-1, spec §2.6)', () => {
+    expect(html).toContain('data-graph-iteration-id="iter-20260809-dsh-workflow-viz"')
+    // The locale label + the id render inside the same caption element (zh body too).
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-graph-iteration-id="iter-20260809-dsh-workflow-viz"')
+  })
+
+  it('legend includes the idle (unlit) swatch, en + zh (T2 minor-2, spec §4)', () => {
+    expect(html).toContain('data-mstar-legend-item="idle"')
+    expect(html).toContain('unlit (schema)')
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-mstar-legend-item="idle"')
+    expect(zhHtml).toContain('未点亮（schema）')
+  })
+})
+
+describe('workflow panel — T3 data projection integration (spec panel-layout-graph §2.1/§2.5)', () => {
+  const html = panelHtml(fullSource)
+
+  /** Render the panel against a live snapshot store (same helper shape as the data-wiring block). */
+  function renderStore(store: { getSnapshot(): ConversationSnapshot }, lang: 'en' | 'zh' = 'en'): string {
+    const locale = new LocaleService()
+    locale.register(NS, { zh, en })
+    locale.setLocale(lang)
+    return renderToStaticMarkup(createElement(PanelView, {
+      ...kitProps({ useSession: bindUseSession(store) }),
+      t: locale.bind(NS),
+    }))
+  }
+
+  /** The `data-graph-node-state` value of one node div, from static HTML. */
+  function nodeState(h: string, nodeId: string): string | null {
+    const start = h.indexOf(`data-graph-node="${nodeId}"`)
+    if (start === -1) return null
+    const end = h.indexOf('data-graph-node="', start + 1)
+    const slice = end === -1 ? h.slice(start) : h.slice(start, end)
+    const m = slice.match(/data-graph-node-state="([^"]+)"/)
+    return m === null ? null : m[1]!
+  }
+
+  it('graph, header and sidebar all render from the SAME catalog row (single source of truth)', () => {
+    // Header watermark = source.version / harnessDir / enforcement.
+    expect(html).toContain('mstar 2.0.4')
+    expect(html).toContain('harness: /proj/.mstar')
+    // Sidebar plan board rows = state.plans verbatim.
+    expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
+    expect(html).toContain('data-plan-status="InProgress"')
+    // Graph InProgress bucket lit with the same plan row + count.
+    expect(html).toContain('data-graph-node="state:InProgress"')
+    expect(html).toContain('data-graph-lit="true"')
+    expect(html).toContain('data-graph-count="1"')
+    expect(html).toContain('data-plan-status="InProgress"')
+    // Current-phase highlight follows iteration.gate.transition; the connector
+    // picks the same active bucket the sidebar board shows.
+    expect(html).toContain('data-graph-node="phase:autonomous-execute"')
+    expect(html).toContain('data-graph-node-state="current"')
+    expect(html).toContain('data-graph-connector="phase:autonomous-execute→state:InProgress"')
+  })
+
+  it('a new catalog row with a new transition re-lights the ring (current + next move)', () => {
+    const phase2 = {
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition: 'phase-2-execute' } },
+    }
+    const store = createSnapshotStore(snapshotFor(phase2, 1_720_000_000_000))
+    const before = renderStore(store)
+    expect(nodeState(before, 'phase:autonomous-execute')).toBe('current')
+    expect(nodeState(before, 'phase:iteration-close')).toBe('next')
+    expect(nodeState(before, 'phase:iteration-start')).toBe('idle')
+
+    // Snapshot bump: server re-emission with phase-3-close → highlight moves.
+    const phase3 = {
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' } },
+    }
+    store.set(snapshotFor(phase3, 1_720_002_000_000))
+    const after = renderStore(store)
+    expect(nodeState(after, 'phase:iteration-close')).toBe('current')
+    expect(nodeState(after, 'phase:pr-delivery')).toBe('next')
+    expect(nodeState(after, 'phase:autonomous-execute')).toBe('idle')
+    // The connector edge follows the new current phase.
+    expect(after).toContain('data-graph-connector="phase:iteration-close→state:InProgress"')
+  })
+
+  it('a new catalog row with changed plans re-buckets the machine + moves the connector', () => {
+    const beforeSource = {
+      ...fullSource,
+      state: { ...fullSource.state!, plans: [{ id: 'plan-b', status: 'InProgress' }] },
+    }
+    const store = createSnapshotStore(snapshotFor(beforeSource, 1_720_000_000_000))
+    const before = renderStore(store)
+    expect(before).toContain('data-graph-count="1"')
+    expect(before).toContain('data-graph-connector="phase:autonomous-execute→state:InProgress"')
+
+    const afterSource = {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: 'plan-b', status: 'InProgress' },
+          { id: 'plan-c', status: 'InReview' },
+          { id: 'plan-d', status: 'InReview' },
+        ],
+      },
+    }
+    store.set(snapshotFor(afterSource, 1_720_002_000_000))
+    const after = renderStore(store)
+    // InReview bucket lit with 2 plans; connector moves to the most-populated bucket.
+    expect(after).toContain('data-graph-node="state:InReview"')
+    expect(after).toContain('data-graph-lit="true"')
+    expect(after).toContain('data-graph-count="2"')
+    expect(after).toContain('data-plan-id="plan-c"')
+    expect(after).toContain('data-graph-connector="phase:autonomous-execute→state:InReview"')
+  })
+
+  it('new violations on a fresh row update the footer count + list', () => {
+    const clean = {
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, violations: [] } },
+    }
+    const store = createSnapshotStore(snapshotFor(clean, 1_720_000_000_000))
+    const before = renderStore(store)
+    expect(before).toContain('data-graph-violations-count="0"')
+    expect(before).toContain('no violations')
+
+    const failing = {
+      ...fullSource,
+      iteration: {
+        ...fullSource.iteration!,
+        gate: {
+          ...fullSource.iteration!.gate,
+          violations: [{ severity: 'high', code: 'EXIT-9', message: 'new violation row' }],
+        },
+      },
+    }
+    store.set(snapshotFor(failing, 1_720_002_000_000))
+    const after = renderStore(store)
+    expect(after).toContain('data-graph-violations-count="1"')
+    expect(after).toContain('data-violation-code="EXIT-9"')
+  })
+
+  it('missing / garbage fields degrade the WHOLE panel (header + graph + sidebar) without crashing', () => {
+    const noIteration = panelHtml({ ...fullSource, iteration: undefined } as unknown as MstarEngineStatusSource)
+    expect(noIteration).toContain('data-mstar-header')
+    expect(noIteration).toContain('data-graph-canvas')
+    expect(noIteration).toContain('data-graph-empty="no-compass"')
+    expect(noIteration).toContain('data-mstar-sidebar')
+    expect(noIteration).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
+
+    const garbageIteration = panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusSource)
+    expect(garbageIteration).toContain('data-mstar-header')
+    expect(garbageIteration).toContain('data-graph-canvas')
+    expect(garbageIteration).toContain('data-graph-empty="no-compass"')
+    expect(garbageIteration).toContain('data-mstar-section="state"')
+  })
 })

@@ -206,6 +206,31 @@ describe('projectGraph — transition degradation (spec §2.3 / §2.5)', () => {
     expect(v.degraded.transition).toBe(true)
   })
 
+  it('gate present but not an object → transition degraded, ring idle (never guessed)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, gate: 42 },
+    } as unknown as MstarEngineStatusSource)
+    expect(v.currentPhase).toBeNull()
+    expect(v.phases.every((p) => p.state === 'idle')).toBe(true)
+    expect(v.degraded.transition).toBe(true)
+  })
+
+  it('gate.violations non-array → no violation count/list, verdict still from gate.ok', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: {
+        ...fullSource.iteration!,
+        gate: { ...fullSource.iteration!.gate, violations: 'nope' },
+      } as unknown as MstarEngineStatusSource['iteration'],
+    })
+    const current = v.phases.find((p) => p.state === 'current')!
+    expect(current.verdict).toBe('pass')
+    expect(current.violationCount).toBeNull()
+    expect(v.violations).toEqual([])
+    expect(v.degraded.transition).toBe(false)
+  })
+
   it('iteration absent → ring idle + iteration/transition degraded, state machine unaffected', () => {
     const v = projectGraph({
       ...fullSource,
