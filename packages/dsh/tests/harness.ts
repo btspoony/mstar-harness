@@ -45,8 +45,9 @@ export interface BootOptions {
   cordisYml?: string
   /**
    * Explicit harness-dir override: a string sets that value, `null` OMITS
-   * the config key entirely (the plugin probes from the process cwd — the
-   * shipped patch's no-harnessDir default), `undefined` (default) uses the
+   * the config key entirely (the plugin then resolves per session
+   * workspace at event time — never from the process cwd — so boot-time
+   * gates/catalog are explicit-only), `undefined` (default) uses the
    * temp `root/harness` dir.
    */
   harnessDir?: string | null

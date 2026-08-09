@@ -35,7 +35,13 @@ declare module 'cordis' {
 
 /** Options for constructing the service (resolved plugin config). */
 export interface DshMstarOptions {
-  /** Resolved `{HARNESS_DIR}` (null when no harness dir was found). */
+  /**
+   * The boot-resolved `{HARNESS_DIR}`: the explicit `harnessDir` config root
+   * (null when unset). The plugin never probes from the process cwd —
+   * without the explicit config the harness dir resolves per session
+   * workspace at event time (the gates / pre-step catalog / tools), so the
+   * boot value is only the config-known part.
+   */
   readonly harnessDir: string | null
 }
 
@@ -51,7 +57,11 @@ export interface DshMstarOptions {
  * plugin's `apply`.
  */
 export class DshMstar extends Service {
-  /** Resolved `{HARNESS_DIR}` for this app (null when probing found none). */
+  /**
+   * The boot-resolved `{HARNESS_DIR}` (the explicit config root, null when
+   * unset — per-workspace resolution happens at event time, never from the
+   * process cwd).
+   */
   readonly harnessDir: string | null
 
   constructor(ctx: Context, options: DshMstarOptions) {
@@ -98,7 +108,9 @@ export class DshMstar extends Service {
   }
 
   /**
-   * Resolve `{HARNESS_DIR}` per plan-conventions resolution order.
+   * Resolve `{HARNESS_DIR}` per plan-conventions resolution order. This is
+   * the generic engine mirror — callers pass the workspace root they probe
+   * from explicitly; the plugin itself never probes from the process cwd.
    * @param startDir - directory to probe from (defaults to the process cwd).
    * @param opts - explicit harness-dir override or environment fallback.
    */

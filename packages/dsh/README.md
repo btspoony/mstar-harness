@@ -31,7 +31,7 @@ dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `harnessDir` | `string` | probed (`.mstar/` → `.agents/` → `.plans/` → `plans/`) | Explicit harness root; wins over engine probing. |
+| `harnessDir` | `string` | per-session workspace probe (`.mstar/` → `.agents/` → `.plans/` → `plans/`, from the session workspace root — **never the launch cwd**) | Explicit harness root; wins over engine probing. **Required for repos whose harness root is not a probed name** — e.g. this mstar-workflow repo itself uses `.harness/` (maintenance root, deliberately NOT probed); without the override the probe walks up from the session workspace to a global `~/.mstar` or an unrelated `.agents/`. |
 | `enforcement` | `'hard' \| 'soft'` | compass, else warn-only | Per-deployment override. Precedence: Config wins; else the Assignment's own `**Enforcement**: hard` header flag (dispatch gate only); else the iteration compass frontmatter; else warn-only. Config `soft` is the ONLY local rollback — an Assignment-level `soft` does NOT override a hard compass. |
 | `dispatchTools` | `string[]` | `['subagent']` | Delegation tool names the dispatch gate matches (the dsh subagent tool's `toolName` may rename instances). |
 | `dispatchBinding` | `string` | unset (precheck skipped) | The dispatching agent's own harness role; an Assignment whose `Execute as` equals it is self-recursion. |

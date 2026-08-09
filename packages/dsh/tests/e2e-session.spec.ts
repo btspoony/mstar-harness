@@ -528,9 +528,11 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
 
   it('the shipped default (./skills, no deployment keys) boots safely: engine-status watermark always appends', async () => {
     // Exactly the shipped patch config minus deployment keys: harnessDir
-    // omitted (the plugin probes `{HARNESS_DIR}` from the launch cwd — on
-    // this machine the walk reaches the user's global `~/.mstar` install),
-    // no enforcement (warn-only by construction), bundledSkillDir ./skills.
+    // omitted (the plugin never probes from the launch cwd — without the
+    // config the harness dir resolves per session workspace at event time;
+    // this agent-less step has no workspace, so the watermark shows
+    // `harness dir: none`), no enforcement (warn-only by construction),
+    // bundledSkillDir ./skills.
     // The boot must settle and the advisory catalog must still append; the
     // resolved harness dir / enforcement / gate row are environment state,
     // so only the process-immutable watermark is asserted.

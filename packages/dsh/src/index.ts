@@ -139,8 +139,11 @@ const ASSIGNMENT_FIELD_RE =
 export interface Config {
   /**
    * Explicit harness root. When set, wins over engine probing (plan-conventions
-   * `{HARNESS_DIR}` resolution order); when absent the plugin probes from the
-   * process cwd (`.mstar/` → `.agents/` → `.plans/`/`plans/`).
+   * `{HARNESS_DIR}` resolution order); when absent the plugin probes from
+   * the SESSION workspace root (`agent.session.header.cwd`) — never the
+   * process cwd — walking `.mstar/` → `.agents/` → `.plans/`/`plans/`.
+   * Required for repos whose harness root is not a probed name (e.g. a
+   * `.harness/` maintenance root).
    */
   harnessDir?: string
   /**
@@ -535,28 +538,28 @@ function gateStatusIntent(
  */
 async function writeIntentListener(
   ctx: Context,
-  harnessDir: string | null,
+  resolver: HarnessResolver,
   config: Config,
   adapter: DshHostAdapter,
   target: FsTarget,
-  _actor: object | undefined,
+  actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateStatusIntent(ctx, harnessDir, config, adapter, 'write', target)
+  gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'write', target)
   return await next()
 }
 
 /** `fs/edit-intent` listener — same gate and delegation contract as {@link writeIntentListener}. */
 async function editIntentListener(
   ctx: Context,
-  harnessDir: string | null,
+  resolver: HarnessResolver,
   config: Config,
   adapter: DshHostAdapter,
   target: FsTarget,
-  _actor: object | undefined,
+  actor: object | undefined,
   next: () => { version: FsVersion } | undefined | Promise<{ version: FsVersion } | undefined>,
 ): Promise<{ version: FsVersion } | undefined> {
-  gateStatusIntent(ctx, harnessDir, config, adapter, 'edit', target)
+  gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'edit', target)
   return await next()
 }
 
@@ -789,13 +792,13 @@ function gateSkillIntent(ctx: Context, harnessDir: string | null, config: Config
  */
 async function skillWriteIntentListener(
   ctx: Context,
-  harnessDir: string | null,
+  resolver: HarnessResolver,
   config: Config,
   target: FsTarget,
-  _actor: object | undefined,
+  actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateSkillIntent(ctx, harnessDir, config, target)
+  gateSkillIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, target)
   return await next()
 }
 
@@ -1076,14 +1079,14 @@ function gateSeamIntent(ctx: Context, harnessDir: string | null, config: Config,
  */
 async function seamWriteIntentListener(
   ctx: Context,
-  harnessDir: string | null,
+  resolver: HarnessResolver,
   config: Config,
   seam: SeamId,
   target: FsTarget,
-  _actor: object | undefined,
+  actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateSeamIntent(ctx, harnessDir, config, seam, target)
+  gateSeamIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, seam, target)
   return await next()
 }
 
@@ -1662,7 +1665,7 @@ function gateDispatch(
  */
 async function preExecuteListener(
   ctx: Context,
-  harnessDir: string | null,
+  resolver: HarnessResolver,
   config: Config,
   adapter: DshHostAdapter,
   exec: ToolExecution,
@@ -1670,7 +1673,7 @@ async function preExecuteListener(
 ): Promise<PreToolDecision> {
   let veto: PreToolDecision | undefined
   try {
-    veto = gateDispatch(ctx, harnessDir, config, adapter, exec)
+    veto = gateDispatch(ctx, resolver.forAgent(exec.agent), config, adapter, exec)
   } catch (error) {
     ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted (degraded, dispatch allowed): ${(error as Error).message}`)
     try {
@@ -1769,8 +1772,12 @@ export function skillLocalConfig(config: Config): SkillLocalConfig | undefined {
 
 /** Options for {@link DshHostAdapter}. */
 export interface DshHostAdapterOptions {
-  /** Resolved `{HARNESS_DIR}` (null when probing found none — gates stay inert). */
-  readonly harnessDir: string | null
+  /**
+   * The per-workspace `{HARNESS_DIR}` resolver (explicit config wins; the
+   * probe never starts from the process cwd). The exec-bound gate paths
+   * resolve per the calling session's workspace.
+   */
+  readonly resolver: HarnessResolver
   /** The plugin Config the gates resolve enforcement + anti-recursion binding from. */
   readonly config: Config
   /**
@@ -1814,7 +1821,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
   /** Engine host identity (`HostId` union). */
   readonly host = 'dsh' as const
 
-  private readonly harnessDir: string | null
+  private readonly resolver: HarnessResolver
   private readonly config: Config
   private readonly logSink: (level: 'info' | 'warn' | 'error', msg: string) => void
 
@@ -1822,7 +1829,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // Provided as a dsh service (`ctx.dshHostAdapter`, same convention as
     // `ctx.dshMstar`): construction self-registers on the fiber.
     super(ctx, 'dshHostAdapter')
-    this.harnessDir = options.harnessDir
+    this.resolver = options.resolver
     this.config = options.config
     this.logSink = options.log ?? ((level, msg) => {
       const logger = ctx.logger(HOST_LOGGER)
@@ -1867,9 +1874,10 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * @param exec - the in-flight delegation tool call (listener path only).
    */
   dispatchGate(prompt: string, exec?: ToolExecution): GateResult {
-    const { violations, writable } = dispatchGateCore(this.config, this.harnessDir, prompt)
+    const harnessDir = this.resolver.forAgent(exec?.agent)
+    const { violations, writable } = dispatchGateCore(this.config, harnessDir, prompt)
     if (exec !== undefined) {
-      violations.push(...leaseGateViolations(this.harnessDir, exec, writable, prompt))
+      violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt))
     }
     return { ok: violations.length === 0, violations }
   }
@@ -1906,7 +1914,10 @@ export class DshHostAdapter extends Service implements HostAdapter {
   async beforeDispatch(assignment: AssignmentFields | string): Promise<GateResult> {
     const prompt = typeof assignment === 'string' ? assignment : assignmentTextFromFields(assignment)
     const gate = this.dispatchGate(prompt)
-    return applyEnforcement(gate, { hard: resolveDispatchHard(this.harnessDir, this.config, prompt) })
+    // The hook contract carries no exec/session context, so the harness dir
+    // resolves to the explicit config or null (never a process-cwd probe) —
+    // the exec-bound `tools/pre-execute` listener is the per-workspace path.
+    return applyEnforcement(gate, { hard: resolveDispatchHard(this.resolver.forWorkspace(undefined), this.config, prompt) })
   }
 
   /**
@@ -1933,13 +1944,15 @@ function pluginVersion(): string {
 
 /**
  * The durable catalog source for the current engine status (the watermark
- * fields). Computed ONCE at `apply()` and reused per pre-step:
- * every field is boot-resolved — engine + plugin versions are process
- * -immutable manifest reads and the compass enforcement resolves at boot
- * like the gates themselves. A mid-session compass change therefore does NOT
- * re-watermark the catalog until a config reload re-runs `apply` (HMR fiber
+ * fields). Every field is boot/workspace-resolved — engine + plugin versions
+ * are process-immutable manifest reads and the compass enforcement resolves
+ * like the gates themselves. With an explicit `harnessDir` config the source
+ * is built ONCE at `apply()` (boot-stable, qc3 W-002); without one it is
+ * built on the FIRST pre-step of each workspace and cached per workspace
+ * root. A mid-session compass change therefore does NOT re-watermark the
+ * catalog until a config reload re-runs `apply` (HMR fiber
  * restart) — the documented staleness tradeoff that keeps synchronous disk
- * I/O off the agent-loop hot path.
+ * I/O off the agent-loop hot path (one Map lookup per step after the first).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
 function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource {
@@ -1951,6 +1964,37 @@ function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource 
     harnessDir,
     enforcement: harnessDir !== null ? resolveCompassEnforcement(harnessDir) : { hard: false, source: 'none' },
   }
+}
+
+/** The per-workspace catalog sources (engine-status watermark + iteration-gate row). */
+interface CatalogSources {
+  source: MstarEngineStatusSource
+  iterationGate: MstarIterationGateSource | undefined
+}
+
+/**
+ * Build the catalog sources for one harness dir (boot for the explicit
+ * config, first-use per workspace otherwise). Logs the manifest fallback
+ * once per build — a '0.0.0' plugin version would watermark every catalog
+ * row wrongly, so the fallback is never silent.
+ * @param ctx - registrant context (logger for the manifest fallback).
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ */
+function buildCatalogSources(ctx: Context, harnessDir: string | null): CatalogSources {
+  const source = engineStatusSource(harnessDir)
+  if (source.pluginVersion === '0.0.0') {
+    ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
+  }
+  return { source, iterationGate: iterationGateSource(harnessDir) }
+}
+
+/** Look up or lazily build the catalog sources for one workspace cache key. */
+function catalogSourcesFor(ctx: Context, cache: Map<string, CatalogSources>, key: string, harnessDir: string | null): CatalogSources {
+  const cached = cache.get(key)
+  if (cached !== undefined) return cached
+  const sources = buildCatalogSources(ctx, harnessDir)
+  cache.set(key, sources)
+  return sources
 }
 
 /** Model-facing rendering of the engine-status catalog (the `<mstar_engine_status>` block). */
@@ -2004,16 +2048,17 @@ function steeringCompassPath(harnessDir: string): { iterationId: string; compass
 }
 
 /**
- * The boot-cached iteration-gate catalog row: `evaluatePhaseGate`
+ * The cached iteration-gate catalog row: `evaluatePhaseGate`
  * over the control-path status.json + the steering delivery-compass.md,
  * projected to the tool result shape (`IterationGateView`). Computed
- * ONCE at `apply()` and reused per pre-step (no disk
- * I/O on the agent-loop hot path). A mid-session status/compass change does
- * NOT re-evaluate until a config reload re-runs `apply` (HMR fiber
- * restart) — the documented staleness tradeoff that keeps the hot path
- * synchronous-I/O-free.
+ * ONCE per harness dir — at `apply()` when the explicit `harnessDir`
+ * config is set, else on the first pre-step of each workspace root — and
+ * reused per pre-step (no disk I/O on the agent-loop hot path). A
+ * mid-session status/compass change does NOT re-evaluate until a config
+ * reload re-runs `apply` (HMR fiber restart) — the documented staleness
+ * tradeoff that keeps the hot path synchronous-I/O-free.
  *
- * Returns undefined when the row cannot be built at boot: no harness dir,
+ * Returns undefined when the row cannot be built: no harness dir,
  * missing status.json, no steering compass, or an unreadable/unparseable
  * document (advisory degrade — the engine-status catalog still appends; a
  * later tool call can re-evaluate on demand with explicit probes).
@@ -2072,7 +2117,7 @@ function renderIterationGateCatalog(source: MstarIterationGateSource): string {
  * step — and never replaces the delegated messages) and appends the
  * catalog rows to the composed step messages, so the durable session log
  * carries them (model-visible ⟺ logged, MessageSource form):
- * one `mstar-engine-status` row always, plus — when a boot-cached gate
+ * one `mstar-engine-status` row always, plus — when a cached gate
  * verdict exists (`iterationGateSource`) — one `mstar-iteration-gate`
  * row after it. An aborted step publishes nothing: the delegated decision
  * is returned unchanged (tool-skill precedent; a narrowed abort race —
@@ -2088,31 +2133,50 @@ function renderIterationGateCatalog(source: MstarIterationGateSource): string {
  * time). Digest-gated re-emission against the durable log lands with the
  * real session seam at P3.
  * @param ctx - registrant context (logger for the containment path).
- * @param source - the boot-resolved engine-status watermark source.
- * @param iterationGate - the boot-cached iteration-gate source (undefined
- * when no gate verdict was evaluable at boot — the row is then absent).
+ * @param resolver - the per-workspace `{HARNESS_DIR}` resolver (the probe
+ * never starts from the process cwd).
+ * @param bootHarnessDir - the boot-resolved `{HARNESS_DIR}` (explicit
+ * config or null at boot — null when probing is deferred per workspace).
+ * @param bootSources - the boot-built catalog sources (explicit-config
+ * case; reused while the resolved dir equals the boot dir — boot-stable).
+ * @param cache - per-workspace catalog sources cache (no-config case:
+ * built on first use of each workspace root and cached).
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
  */
 async function preStepCatalogListener(
   ctx: Context,
-  source: MstarEngineStatusSource,
-  iterationGate: MstarIterationGateSource | undefined,
+  resolver: HarnessResolver,
+  bootHarnessDir: string | null,
+  bootSources: CatalogSources | undefined,
+  cache: Map<string, CatalogSources>,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
   const decision = await next()
   if (decision.kind === 'reject' || payload.signal.aborted) return decision
   try {
+    // The watermark harness dir resolves from the WORKSPACE of the session
+    // whose agent enters the step (the session cwd) — never the process
+    // cwd. With an explicit config the resolution equals the boot dir and
+    // the boot-built sources are reused (boot-stable, qc3 W-002); without
+    // one the sources are built on the first pre-step of each workspace and
+    // cached per workspace root (the boot-resolved staleness tradeoff
+    // becomes workspace-resolved: no disk I/O after the first step).
+    const cwd = sessionCwdOf(payload.agent)
+    const harnessDir = resolver.forWorkspace(cwd)
+    const sources = harnessDir !== null && harnessDir === bootHarnessDir && bootSources !== undefined
+      ? bootSources
+      : catalogSourcesFor(ctx, cache, cwd ?? '', harnessDir)
     const messages = [...decision.messages]
     messages.push(createUserMessage({
-      source,
-      content: [{ type: 'text', text: renderEngineStatusCatalog(source) }],
+      source: sources.source,
+      content: [{ type: 'text', text: renderEngineStatusCatalog(sources.source) }],
     }))
-    if (iterationGate !== undefined) {
+    if (sources.iterationGate !== undefined) {
       messages.push(createUserMessage({
-        source: iterationGate,
-        content: [{ type: 'text', text: renderIterationGateCatalog(iterationGate) }],
+        source: sources.iterationGate,
+        content: [{ type: 'text', text: renderIterationGateCatalog(sources.iterationGate) }],
       }))
     }
     return { kind: 'enter', messages }
@@ -2162,10 +2226,11 @@ const ITERATION_VIOLATION_SCHEMA = {
  * `isConcurrencySafe: () => false` (exclusive — never overlap with sibling
  * calls, matching the real registry's exclusive default).
  * @param ctx - registrant context carrying the tool registry.
- * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when the
- * probe found none — the tools then let the engine probe from the cwd).
+ * @param resolver - the per-workspace `{HARNESS_DIR}` resolver (the tools
+ * resolve per the calling session's workspace — never the process cwd;
+ * explicit config wins).
  */
-function registerSddIterationTools(ctx: Context, harnessDir: string | null): void {
+function registerSddIterationTools(ctx: Context, resolver: HarnessResolver): void {
   ctx.inject(['tools'], (toolsCtx) => {
     toolsCtx.tools.register(defineTool({
       name: 'mstar_sdd_workspace',
@@ -2200,8 +2265,13 @@ function registerSddIterationTools(ctx: Context, harnessDir: string | null): voi
       presentCall: args => ({ card: 'generic', title: 'Resolve SDD workspace', kind: 'other', rawInput: args.plan_id }),
       // The tool creates a directory — exclusive (never parallel with siblings).
       isConcurrencySafe: () => false,
-      async execute(args) {
+      async execute(args, exec) {
+        // The workspace root is the calling session's cwd (never the
+        // process cwd); the explicit config wins when set.
+        const ws = sessionCwdOf(exec.agent)
+        const harnessDir = resolver.forWorkspace(ws)
         const sddDir = sddWorkspace(args.plan_id, {
+          ...(ws !== undefined ? { cwd: ws } : {}),
           ...(args.control_root !== undefined ? { controlRoot: args.control_root } : {}),
           ...(harnessDir !== null ? { harnessDir } : {}),
         })
@@ -2375,8 +2445,12 @@ function registerSddIterationTools(ctx: Context, harnessDir: string | null): voi
  * compound-refresh Phase 2 check the seam gate runs per write, offered
  * on-demand. All tools are read-only evaluations — exclusive anyway
  * (registry default; the engine results are pure functions of the docs).
+ * @param ctx - registrant context carrying the tool registry.
+ * @param resolver - the per-workspace `{HARNESS_DIR}` resolver (the
+ * compound default root resolves per the calling session's workspace —
+ * never the process cwd; explicit config wins).
  */
-function registerSeamTools(ctx: Context, harnessDir: string | null): void {
+function registerSeamTools(ctx: Context, resolver: HarnessResolver): void {
   ctx.inject(['tools'], (toolsCtx) => {
     toolsCtx.tools.register(defineTool({
       name: 'mstar_design_md_validate',
@@ -2521,7 +2595,7 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
       presentCall: args => ({ card: 'generic', title: 'Validate knowledge doc', kind: 'other', rawInput: args.doc_path }),
       // Read-only evaluation — exclusive anyway (registry default).
       isConcurrencySafe: () => false,
-      async execute(args) {
+      async execute(args, exec) {
         const abs = resolve(args.doc_path)
         if (!existsSync(abs)) throw new Error(`knowledge doc not found: ${abs}`)
         const text = readFileSync(abs, 'utf8')
@@ -2531,7 +2605,7 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
         // defaults to the SAME checks the fs gate enforces. An explicit
         // repo_root replaces the derived root (tool-only contract), and
         // knowledge_dir layers the index/scope asserts on top.
-        const base = validateCompoundDoc(text, abs, args.repo_root !== undefined ? null : harnessDir)
+        const base = validateCompoundDoc(text, abs, args.repo_root !== undefined ? null : resolver.forAgent(exec.agent))
         const violations = [...base.violations]
         if (args.repo_root !== undefined) {
           violations.push(...referenceExists(resolve(args.repo_root), text).violations)
@@ -2664,8 +2738,73 @@ function registerMstarCommands(ctx: Context): void {
 }
 
 /**
+ * Per-workspace `{HARNESS_DIR}` resolution for the plugin.
+ *
+ * The probe NEVER starts from the process cwd — it starts from the WORKSPACE
+ * root of the session whose agent drives the event (the session cwd,
+ * `agent.session.header.cwd` — the dsh workspace the user opened). An
+ * explicit `harnessDir` config still wins outright (resolved once at boot;
+ * a relative value is launch-cwd anchored — config path anchoring, not
+ * probing — matching the `bundledSkillDir` precedent and the engine's
+ * `resolve(startDir, explicit)` semantics). Probing results are memoized
+ * per workspace root, so the agent-loop hot path does one Map lookup after
+ * the first event of each workspace.
+ *
+ * An event without a session workspace (no agent / no header cwd) resolves
+ * to the explicit config or `null` — never a process-cwd probe: without a
+ * workspace there is nothing to probe FROM.
+ */
+export class HarnessResolver {
+  private readonly explicit: string | null
+  private readonly cache = new Map<string, string | null>()
+
+  constructor(explicit: string | undefined) {
+    this.explicit = explicit !== undefined && explicit.trim() !== ''
+      ? resolve(process.cwd(), explicit)
+      : null
+  }
+
+  /**
+   * Resolve for one workspace root (the session cwd).
+   * @param cwd - the workspace root; `undefined` when the event carries no session.
+   * @returns the resolved `{HARNESS_DIR}` (explicit override, else the probe
+   * from the workspace root), or `null` when none resolves.
+   */
+  forWorkspace(cwd: string | undefined): string | null {
+    if (this.explicit !== null) return this.explicit
+    if (cwd === undefined || cwd.trim() === '') return null
+    const hit = this.cache.get(cwd)
+    if (hit !== undefined) return hit
+    const resolved = resolveHarnessDir(cwd)
+    this.cache.set(cwd, resolved)
+    return resolved
+  }
+
+  /**
+   * Resolve for one agent: the workspace root is the agent's session cwd.
+   * @param agent - the agent handle an event carries (structural read).
+   */
+  forAgent(agent: unknown): string | null {
+    return this.forWorkspace(sessionCwdOf(agent))
+  }
+}
+
+/** The workspace root of one agent — the session cwd (structural read; never trusts the runtime shape). */
+function sessionCwdOf(agent: unknown): string | undefined {
+  const session = (agent as { session?: { header?: { cwd?: unknown } } } | null | undefined)?.session
+  const cwd = session?.header?.cwd
+  return typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined
+}
+
+/** The tool-execution actor of one fs-intent event, when it carries an agent. */
+function actorAgentOf(actor: object | undefined): unknown {
+  return (actor as { agent?: unknown } | undefined)?.agent
+}
+
+/**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
- * engine, expose the engine surface as `ctx.dshMstar`, construct the host
+ * engine (per-workspace — the probe never starts from the process cwd),
+ * expose the engine surface as `ctx.dshMstar`, construct the host
  * adapter (the gates route through it — one code path with the host hooks),
  * and register the status gate on the fs intent waterfalls + the dispatch
  * gate on `tools/pre-execute`.
@@ -2680,15 +2819,25 @@ function registerMstarCommands(ctx: Context): void {
  * @param config - validated plugin configuration.
  */
 export function apply(ctx: Context, config: Config): void {
-  const harnessDir = resolveHarnessDir(process.cwd(), { harnessDir: config.harnessDir })
+  // Per-workspace `{HARNESS_DIR}` resolution: the probe NEVER starts from
+  // the process cwd — it starts from the WORKSPACE root of the session
+  // whose agent drives each event (the session cwd). At boot there is no
+  // session yet, so the boot value is the explicit config or null; every
+  // event path (fs intents, tools/pre-execute, agent/pre-step, tool
+  // executes) resolves per its own session workspace, memoized per
+  // workspace root. Repos whose harness root is not a probed name
+  // (`.mstar/` → `.agents/` → `.plans/`/`plans/` — e.g. this repo's
+  // `.harness/`) declare `config.harnessDir`, which wins outright.
+  const resolver = new HarnessResolver(config.harnessDir)
+  const bootHarnessDir = resolver.forWorkspace(undefined)
   // The Service constructor registers itself on the fiber via reflect.provide,
   // so construction alone exposes `ctx.dshMstar` (dsh service convention).
-  new DshMstar(ctx, { harnessDir: harnessDir ?? null })
+  new DshMstar(ctx, { harnessDir: bootHarnessDir })
   // The host-facing HostAdapter facade — the fs-intent / pre-execute gates
   // route through it (host hooks and in-plugin gates share ONE code path).
   // Constructed as a dsh service: `ctx.dshHostAdapter` is available to
   // inject consumers and host hooks after boot.
-  const adapter = new DshHostAdapter(ctx, { harnessDir, config })
+  const adapter = new DshHostAdapter(ctx, { resolver, config })
 
   // Bundled mstar commands — the omp/opencode slash-command parity surface
   // (iteration-start / iteration-drive / iteration-loop / codebase-audit),
@@ -2714,7 +2863,9 @@ export function apply(ctx: Context, config: Config): void {
   // Deploy-time observability: when enforcement resolves hard but
   // no dispatchBinding is declared, the anti-recursion red line is off by
   // construction — surface the absence instead of only documenting it.
-  const effectiveHard = config.enforcement === 'hard' || (harnessDir !== null && resolveCompassEnforcement(harnessDir).hard)
+  // (Boot-time the only known enforcement source is the explicit Config
+  // override — compass hard is per-workspace and resolves at event time.)
+  const effectiveHard = config.enforcement === 'hard' || (bootHarnessDir !== null && resolveCompassEnforcement(bootHarnessDir).hard)
   if (effectiveHard && (config.dispatchBinding ?? '').trim() === '') {
     ctx.logger(DISPATCH_LOGGER).warn(
       'Enforcement: hard is active but dispatchBinding is unset — the anti-recursion precheck is skipped (an Assignment whose Execute as equals the dispatching agent cannot be detected)',
@@ -2732,15 +2883,15 @@ export function apply(ctx: Context, config: Config): void {
 
   // Status gate — fs intent slot (single-slot waterfall; prepend so this
   // decider runs before dsh-fs-policy regardless of mount order).
-  ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
-  ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, harnessDir, config, adapter, target, actor, next), { prepend: true })
+  ctx.on('fs/write-intent', (target, actor, next) => writeIntentListener(ctx, resolver, config, adapter, target, actor, next), { prepend: true })
+  ctx.on('fs/edit-intent', (target, actor, next) => editIntentListener(ctx, resolver, config, adapter, target, actor, next), { prepend: true })
 
   // Skill-authoring lint gate — fs/write-intent slot scoped to SKILL.md
   // under the configured skill roots (same single-slot waterfall +
   // prepend + next() delegation contract as the status gate — this gate
   // also never throws except the intentional incoming-doc veto in
   // `lintSkillWrite`).
-  ctx.on('fs/write-intent', (target, actor, next) => skillWriteIntentListener(ctx, harnessDir, config, target, actor, next), { prepend: true })
+  ctx.on('fs/write-intent', (target, actor, next) => skillWriteIntentListener(ctx, resolver, config, target, actor, next), { prepend: true })
 
   // Artifact seam gates — fs/write-intent slots scoped per artifact
   // (design-md / audit / compound / roles; same envelope: warn advisory
@@ -2750,7 +2901,7 @@ export function apply(ctx: Context, config: Config): void {
   // target.
   const seams: SeamId[] = ['design-md', 'audit', 'compound', 'roles']
   for (const seam of seams) {
-    ctx.on('fs/write-intent', (target, actor, next) => seamWriteIntentListener(ctx, harnessDir, config, seam, target, actor, next), { prepend: true })
+    ctx.on('fs/write-intent', (target, actor, next) => seamWriteIntentListener(ctx, resolver, config, seam, target, actor, next), { prepend: true })
   }
 
   // Dispatch gate — tools/pre-execute waterfall (refusal channel:
@@ -2759,7 +2910,7 @@ export function apply(ctx: Context, config: Config): void {
   // listener that returns a decision without next() would short-circuit the
   // chain and make this security gate unreachable — "a deny short-circuits
   // regardless of order" holds only once the listener is reached.
-  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, harnessDir, config, adapter, exec, next), { prepend: true })
+  ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, resolver, config, adapter, exec, next), { prepend: true })
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
   // (agent catalog): calls `next()` (never vetoes or
@@ -2768,28 +2919,29 @@ export function apply(ctx: Context, config: Config): void {
   // status (model-visible ⟺ logged).
   //
   // Iteration-gate row: the SAME listener appends a second
-  // `mstar-iteration-gate` catalog row when a gate verdict was evaluable at
-  // boot (control-path status.json + steering compass; engine
+  // `mstar-iteration-gate` catalog row when a gate verdict is evaluable
+  // (control-path status.json + steering compass; engine
   // evaluatePhaseGate tool result shape).
   //
-  // Both watermarks are computed ONCE at boot — engine/plugin
-  // versions are process-immutable, compass enforcement is boot-resolved
-  // like the gates, and the iteration gate is boot-evaluated — so the
-  // pre-step hot path does no disk I/O (see engineStatusSource /
-  // iterationGateSource for the mid-session staleness tradeoff).
-  const catalogSource = engineStatusSource(harnessDir)
-  // The manifest fallback is never silent: a '0.0.0' plugin
-  // version would watermark every catalog row wrongly, so it logs at boot.
-  if (catalogSource.pluginVersion === '0.0.0') {
-    ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
-  }
-  const iterationGate = iterationGateSource(harnessDir)
-  ctx.on('agent/pre-step', (payload, next) => preStepCatalogListener(ctx, catalogSource, iterationGate, payload, next))
+  // Watermark resolution: with an explicit `harnessDir` config the sources
+  // are computed ONCE at boot (engine/plugin versions are
+  // process-immutable, compass enforcement is boot-resolved like the
+  // gates, and the iteration gate is boot-evaluated) and reused per step —
+  // the pre-step hot path does no disk I/O. WITHOUT the config the sources
+  // are built on the first pre-step of each workspace and cached per
+  // workspace root (the same staleness tradeoff, workspace-scoped — see
+  // engineStatusSource / iterationGateSource / buildCatalogSources).
+  const bootSources = bootHarnessDir !== null ? buildCatalogSources(ctx, bootHarnessDir) : undefined
+  // Per-workspace catalog cache for the no-config path (keyed by the
+  // session workspace root; '' for agent-less events).
+  const catalogCache = new Map<string, CatalogSources>()
+  ctx.on('agent/pre-step', (payload, next) =>
+    preStepCatalogListener(ctx, resolver, bootHarnessDir, bootSources, catalogCache, payload, next))
 
   // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
-  registerSddIterationTools(ctx, harnessDir)
+  registerSddIterationTools(ctx, resolver)
 
   // Seam tools — on-demand `mstar_*_validate` equivalents
   // (design-md / audit / compound / roles).
-  registerSeamTools(ctx, harnessDir)
+  registerSeamTools(ctx, resolver)
 }

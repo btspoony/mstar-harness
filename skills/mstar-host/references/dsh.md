@@ -126,9 +126,11 @@ dispatch.
 
 - `{HARNESS_DIR}` resolves via the engine `resolveHarnessDir` (`.mstar/` →
   `.agents/` → `.plans/`/`plans/`), with the plugin Config `harnessDir`
-  override winning. Repos using a non-standard harness root (e.g. `.harness/`)
-  MUST set Config `harnessDir` (absolute path) — the gates are inert without
-  a resolvable harness dir.
+  override winning. The probe starts from the SESSION workspace root (the
+  session cwd — **never the dsh launch/process cwd**), so the watermark and
+  gates follow the workspace the session actually works in. Repos using a
+  non-standard harness root (e.g. `.harness/`) MUST set Config `harnessDir`
+  (absolute path) — the gates are inert without a resolvable harness dir.
 - The dispatch gate needs the dispatching agent's own role for the
   anti-recursion precheck: declare it via Config **`dispatchBinding`** (dsh
   exposes no per-agent role on the tool-execution context). Under hard

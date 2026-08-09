@@ -18,16 +18,26 @@ export type PreStepDecision =
 
 /**
  * The public live-agent handle (consumed surface: the command-handler
- * steering path — `@deepseek-ai/dsh-commands` `CommandInvocation.agent`).
- * Mirrors the real `Agent` interface; only the members the plugin's command
- * handlers use are declared here (the real surface also carries
- * `session`/`inbox`/`cancel`/`whenIdle`/`runMaintenance`/`ctx`).
+ * steering path — `@deepseek-ai/dsh-commands` `CommandInvocation.agent` —
+ * and the workspace-root read — `agent.session.header.cwd`, the session
+ * workspace the harness-dir probe starts from). Mirrors the real `Agent`
+ * interface; only the members the plugin uses are declared here (the real
+ * surface also carries `inbox`/`cancel`/`whenIdle`/`runMaintenance`/`ctx`).
  */
 export interface Agent {
   /** The single identity shared with the session. */
   readonly id: string
   /** The current lifecycle state. */
   readonly status: 'idle' | 'running'
+  /**
+   * The live session this agent drives (consumed surface: the session cwd
+   * = the workspace root the harness-dir probe starts from — never the
+   * process cwd).
+   */
+  readonly session: {
+    /** The session header, carrying the project cwd when recorded. */
+    readonly header: { readonly cwd?: string }
+  }
   /**
    * Queue model-facing context for the next pre-step without waking the
    * driver (the command-handler delivery channel: a slash command steers

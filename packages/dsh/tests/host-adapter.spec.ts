@@ -35,7 +35,7 @@ import type { HostAdapter } from '@mstar-harness/engine'
 import type { AssignmentFields } from '@mstar-harness/engine'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { DshHostAdapter, type Config } from '../src/index.ts'
+import { DshHostAdapter, HarnessResolver, type Config } from '../src/index.ts'
 import type { DispatchGateAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { bootApp, INVALID_STATUS, VALID_STATUS, seedHarness, type BootResult } from './harness.ts'
 
@@ -152,7 +152,9 @@ const BARE_FIELDS_TEXT = `## Assignment
  */
 function makeAdapter(opts: { config?: Config; log?: (level: 'info' | 'warn' | 'error', msg: string) => void } = {}): DshHostAdapter {
   return new DshHostAdapter(new Context(), {
-    harnessDir: booted!.harnessDir,
+    // Explicit harness dir through the resolver (the boot app's configured
+    // root — per-workspace probing is covered by workspace-resolution.spec).
+    resolver: new HarnessResolver(booted!.harnessDir),
     config: opts.config ?? {},
     log: opts.log,
   })
