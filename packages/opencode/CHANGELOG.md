@@ -6,6 +6,42 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-08-09
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- Version alignment with harness **2.0.4** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.0.4**.
+
+## [2.0.3] - 2026-08-09
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- Version alignment with harness **2.0.3** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.0.3**.
+
+## [2.0.2] - 2026-08-08
+
+### Fixed
+
+- OpenCode plugin entry now default-exports `{ server: MorningStarHarnessPlugin }` so helper function exports are not registered as plugins (fixes `plugin config hook failed: N.config` / `N.dispose` on startup).
+
+- Version alignment with harness **2.0.2** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.0.2**.
+
+## [2.0.1] - 2026-08-08
+
+### Fixed
+
+- OpenCode plugin hooks no longer abort-log on non-string `task`/`write` args: Assignment and `status.json` validators refuse non-string input before `.match` / `path.resolve`, and the `tool.execute.before` hook snapshots `prompt`/`filePath` once (avoids getter/Proxy type flips).
+
+- Version alignment with harness **2.0.1** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.0.1**.
+
 ## [2.0.0] - 2026-08-08
 
 ### Bundled harness skills (`harness-skills/` at publish)

@@ -37,21 +37,15 @@
  */
 import type { Plugin } from "@opencode-ai/plugin";
 import {
-  antiRecursionPrecheck,
   applyEnforcement,
-  assertDefaultBranchProtected,
-  assignmentHeaderRegion,
+  composeDispatchGate,
   isReadOnlyAssignmentRole,
-  parseAssignmentBranchForms,
   parseAssignmentFields,
-  parseBranchPolicyDirectOnBranch,
-  parseEnforcementFlag,
   resolveCompassEnforcement,
   resolveHarnessDir,
-  validateAssignmentFields,
   validateStatus,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, StatusDoc, ValidationResult } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, StatusDoc } from "@mstar-harness/engine";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -285,6 +279,10 @@ export function validateStatusWrite(
 ): GateResult | null {
   const log = opts.log ?? defaultStatusLogger;
   try {
+    // Host tool args are `any` — refuse non-string paths before path.resolve
+    // (Bun: `The "paths[0]" property must be of type string, got object`).
+    if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
+
     const resolved = path.resolve(targetPath);
     if (path.basename(resolved) !== STATUS_FILE) return null;
 
@@ -327,57 +325,34 @@ export function validateStatusWrite(
 }
 
 /**
- * `## Assignment` heading marker: a document carrying this heading is treated
- * as Assignment-shaped and linted even when none of the three fields is found.
- */
-const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
-
-/**
- * Shape-guard match of an Assignment header field, tolerating optional list
- * bullets and `**bold**` markers around the key (`- **Execute as**: x`).
- * The value must be non-empty (`(\S.*)`) — a bare `Delegation:` counts as
- * missing. Shape detection ONLY: field parsing/semantics live in the engine
- * (`parseAssignmentFields` / `validateAssignmentFields`) — no local parser
- * (qc1 F-002).
- */
-const ASSIGNMENT_FIELD_RE =
-  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
-
-/**
- * True when the text looks like an Assignment: carries the `## Assignment`
- * heading or at least one core field line (`Execute as` / `Delegation` /
- * `Task category`). Non-Assignment prompts (plain task instructions) stay
- * silent — no false-positive warnings.
- */
-function isAssignmentShaped(assignmentText: string): boolean {
-  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null;
-}
-
-/**
  * Dispatch-side Assignment validation (roadmap §8.5 `beforeDispatch`).
  *
- * Full Assignment validation:
- * (1) `dispatch.validateAssignmentFields` — required fields, exactly-one
+ * Delegates the entire composition to the engine's single shared
+ * `dispatch.composeDispatchGate` (qc1 F-001/F-006 — no local composition
+ * left in the host adapter):
+ * (1) Shape guard — `## Assignment` heading or a core field line
+ * (`Execute as` / `Delegation` / `Task category`); non-Assignment prompts
+ * stay silent (no false positives).
+ * (2) `validateAssignmentFields` — required fields, exactly-one
  * Working-branch form, create-form `<base>`, Branch policy reason; the
  * legacy `assignment.presence.*` codes are engine ALIASES on the three
  * core-field violations (single parser — no local presence parser, qc1
- * F-002); read-only roles (scout/explore) pass `writable: false` so no
+ * F-002). Read-only roles (scout/explore) pass `writable: false` so no
  * spurious `branch-missing` fires (qc3 F-1 / qc2 S-5).
- * (2) Anti-recursion NEVER red line via `dispatch.antiRecursionPrecheck`:
- * when the task tool's role binding (`args.subagent` / `args.subagent_type`)
- * equals the Assignment's `Execute as`, a critical-severity violation is
- * logged (qc1 F-004 / qc2 S-2).
- * (3) The default-branch gate via `dispatch.assertDefaultBranchProtected` —
- * the checked branch comes from the Assignment's own branch forms
- * (create-form name / Working branch / Branch policy branch, engine
- * `parseAssignmentBranchForms`), else `$MSTAR_WORKING_BRANCH` (qc3 F-2);
- * a well-formed `Branch policy: direct on <branch> — <reason>` exception is
- * honored only when its branch is the one being checked. Skipped entirely
- * for read-only roles (no writable work on a branch).
+ * (3) Anti-recursion NEVER red line — when the task tool's role binding
+ * (`args.subagent` / `args.subagent_type`) equals the Assignment's
+ * `Execute as`, a critical-severity violation is logged (qc1 F-004 /
+ * qc2 S-2).
+ * (4) The default-branch gate — the checked branch comes from the
+ * Assignment's own branch forms (create-form name / Working branch /
+ * Branch policy branch), else `$MSTAR_WORKING_BRANCH`; a well-formed
+ * `Branch policy: direct on <branch> — <reason>` exception is honored only
+ * when its branch is the one being checked. Skipped entirely for read-only
+ * roles (no writable work on a branch).
  *
  * Enforcement (roadmap §8.5 C4/D2, Slice 5) — the Assignment's OWN flag
- * decides (engine `dispatch.parseEnforcementFlag`; per-Assignment, never
- * global):
+ * decides (engine `dispatch.parseEnforcementFlag` via
+ * `composeDispatchGate`; per-Assignment, never global):
  * - **Warn mode (default)** — no `Enforcement: hard` on the Assignment: one
  *   `warn` line per violation through the `[mstar-harness]` channel;
  *   `hardBlocked` is false. Unchanged v1 behavior.
@@ -409,38 +384,21 @@ export function validateDispatchAssignment(
 ): GateResult | null {
   const log = opts.log ?? defaultStatusLogger;
   try {
-    // Shape guard: non-Assignment prompts stay silent (no false positives).
-    if (!isAssignmentShaped(assignmentText)) return { ok: true, violations: [] };
-
-    const violations: ValidationResult[] = [];
-    const fields = parseAssignmentFields(assignmentText);
-    // (1) Engine full field validation — read-only roles skip the branch-form gate.
-    const writable = isReadOnlyAssignmentRole(fields.executeAs ?? "") ? false : undefined;
-    violations.push(...validateAssignmentFields(assignmentText, { writable }).violations);
-    // (2) Anti-recursion NEVER red line (engine gate; warn/error in the hook).
-    const binding = opts.subagentType ?? "";
-    if (binding.trim() !== "") {
-      violations.push(...antiRecursionPrecheck(binding, fields.executeAs ?? "").violations);
+    // Non-string host args (typed string here, but tool args are `any`) stay
+    // silent with the exact v1 result shape (`assignmentText.match is not a
+    // function` regression guard — qc1 F-004).
+    if (typeof assignmentText !== "string") {
+      return { ok: true, violations: [] };
     }
-    // (3) Default-branch gate — branch derived from the Assignment's forms.
-    if (writable !== false) {
-      const forms = parseAssignmentBranchForms(assignmentText);
-      const branch =
-        forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;
-      if (branch !== undefined && branch.trim() !== "") {
-        const directOnException = parseBranchPolicyDirectOnBranch(assignmentText) === branch.trim();
-        violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
-      }
-    }
+    // Read-only roles (scout/explore) skip the branch-form/default-branch
+    // gates — the engine composition's `writable` flag.
+    const writable = isReadOnlyAssignmentRole(parseAssignmentFields(assignmentText).executeAs ?? "") ? false : undefined;
+    const composed = composeDispatchGate(assignmentText, { agent: opts.subagentType ?? "", writable });
 
-    const result: GateResult = { ok: violations.length === 0, violations };
-    // Header region only: an example `**Enforcement**: hard` line quoted in
-    // the task body must not harden the dispatch (qc1 F-003 / qc2 F-003).
-    const enforcement: EnforcementFlag = parseEnforcementFlag(assignmentHeaderRegion(assignmentText));
-    if (!result.ok) {
-      for (const violation of result.violations) {
+    if (!composed.ok) {
+      for (const violation of composed.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
-        if (enforcement.hard) {
+        if (composed.enforcement.hard) {
           log(
             "error",
             `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
@@ -453,7 +411,7 @@ export function validateDispatchAssignment(
         }
       }
     }
-    return applyEnforcement(result, { hard: enforcement.hard });
+    return composed;
   } catch (error) {
     // Never throw, never block unexpectedly: unexpected errors degrade to a
     // single `error` log and a `null` return in BOTH modes (hard gates are
@@ -506,7 +464,16 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
     },
 
     "tool.execute.before": async (input, output) => {
+      // Snapshot once: host `args` may be getter/Proxy-backed; re-reading
+      // `args.prompt` / `args.filePath` between a typeof check and the call
+      // can observe a different type (then `.match` / `path.resolve` throw
+      // into the abort log channel).
       const args = (output?.args ?? {}) as Record<string, unknown>;
+      const prompt = args.prompt;
+      const rawFilePath = args.filePath;
+      const rawPath = args.path;
+      const filePath =
+        typeof rawFilePath === "string" ? rawFilePath : typeof rawPath === "string" ? rawPath : undefined;
 
       // beforeDispatch-equivalent (Slice 5, dual-mode): Assignment
       // validation on subagent dispatch. OpenCode's `task` tool carries the
@@ -520,14 +487,14 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       // on this host (`@opencode-ai/plugin` 1.4.8 — no refusal channel), so a
       // hard gate degrades to the explicit refusal-channel log below. The
       // role binding key is `subagent` (OpenCode) / `subagent_type` (Cursor).
-      if (input.tool === "task" && typeof args.prompt === "string") {
+      if (input.tool === "task" && typeof prompt === "string") {
         const subagentType =
           typeof args.subagent === "string"
             ? args.subagent
             : typeof args.subagent_type === "string"
               ? args.subagent_type
               : "";
-        const gate = validateDispatchAssignment(args.prompt, { subagentType });
+        const gate = validateDispatchAssignment(prompt, { subagentType });
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",
@@ -541,13 +508,14 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       // hard mode (repo compass `enforcement: hard`) logs error-level lines
       // + a `hardBlocked` result. Never modifies args and never throws in
       // either mode. Structured file-write tools (`write`/`edit`) carry the
-      // target path in `args.filePath`; bash-heredoc writes are out of
-      // scope. Tool implementations may call `validateStatusWrite` directly.
-      if (typeof args.filePath !== "string") return;
+      // target path in `args.filePath` (fallback `args.path`); bash-heredoc
+      // writes are out of scope. Tool implementations may call
+      // `validateStatusWrite` directly.
+      if (typeof filePath !== "string") return;
 
       if (input.tool === "write") {
-        // Validate the document about to be written when it parses as JSON;
-        // otherwise fall back to the current on-disk state.
+        // Validate the document about to be written when it is already an
+        // object or parses as JSON; otherwise fall back to on-disk state.
         const rawContent = args.content;
         let doc: unknown;
         if (typeof rawContent === "string") {
@@ -556,8 +524,10 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
           } catch {
             doc = undefined;
           }
+        } else if (rawContent !== null && typeof rawContent === "object") {
+          doc = rawContent;
         }
-        const gate = validateStatusWrite(args.filePath, { doc });
+        const gate = validateStatusWrite(filePath, { doc });
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",
@@ -570,7 +540,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
         // invalid is caught by the subsequent write, and editing an already
         // invalid file re-warns about the state being replaced. Computing the
         // patched doc for `edit` is a later-slice improvement.
-        const gate = validateStatusWrite(args.filePath);
+        const gate = validateStatusWrite(filePath);
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",
@@ -606,4 +576,22 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
       });
     },
   };
+};
+
+/**
+ * OpenCode plugin entry (v1 PluginModule).
+ *
+ * OpenCode's legacy loader treats **every function export** on the package
+ * entry as a plugin (`getLegacyPlugins` → `Object.values(mod)`). Our named
+ * helpers (`validateStatusWrite` / `validateDispatchAssignment`) are also
+ * functions — when invoked with `PluginInput` they return `null` / a
+ * GateResult, which then gets pushed into the hooks list and blows up as
+ * `plugin config hook failed: null is not an object (evaluating 'N.config')`.
+ *
+ * Default-exporting `{ server }` makes `readV1Plugin` win and skip the legacy
+ * scan, so only `MorningStarHarnessPlugin` is registered. Named helper
+ * exports stay available for tests and direct callers.
+ */
+export default {
+  server: MorningStarHarnessPlugin,
 };

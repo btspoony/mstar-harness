@@ -625,3 +625,91 @@ export function assertIndexRowObligations(iterationsDir: string): GateResult {
   }
   return { ok: violations.length === 0, violations };
 }
+
+/**
+ * Parse the YAML frontmatter of a delivery-compass.md into a flat doc.
+ *
+ * The compass frontmatter is a flat YAML subset (scalar keys plus one
+ * `plans:` list-of-scalars — see `skills/mstar-iteration/references/
+ * iteration-compass-template.md` Fields guide); `validateCompassFrontmatter`
+ * validates the parsed doc. The engine deliberately has no YAML dependency,
+ * so this hand-rolled flat-subset parser lives here — the single shared
+ * parser used by the CLI and the omp `mstar_iteration_gate` tool (no fork).
+ *
+ * Throws with the file path on structural errors (no fence / unterminated
+ * fence / unsupported line) so callers can fail with a precise message.
+ */
+export function parseCompassFrontmatter(filePath: string): Record<string, unknown> {
+  const content = readFileSync(filePath, "utf8");
+  const lines = content.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") {
+    throw new Error(`no YAML frontmatter fence in ${filePath} (expected first line "---")`);
+  }
+  const end = lines.indexOf("---", 1);
+  if (end === -1) {
+    throw new Error(`unterminated YAML frontmatter in ${filePath} (no closing "---")`);
+  }
+  const doc: Record<string, unknown> = {};
+  let listKey: string | null = null;
+  for (let i = 1; i < end; i += 1) {
+    const line = lines[i] ?? "";
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    // `- item` lines (optionally indented) continue the most recent
+    // `key:` list (plans:).
+    if (listKey !== null && /^\s*-\s+/.test(line)) {
+      const item = line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, "");
+      if (!Array.isArray(doc[listKey])) doc[listKey] = [];
+      (doc[listKey] as string[]).push(item);
+      continue;
+    }
+    listKey = null;
+    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
+    if (!kv) {
+      throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
+    }
+    const value = kv[2]!.trim();
+    // A flat flow-style array (`plans: []` / `plans: [a, b]`) becomes an
+    // array of trimmed string items; anything else stays a scalar (empty
+    // value → null, like before).
+    doc[kv[1]!] =
+      value === "" ? null : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
+    listKey = value === "" ? kv[1] : null;
+  }
+  return doc;
+}
+
+function parseFlowArray(raw: string, filePath: string): string[] {
+  const inner = raw.slice(1, -1);
+  if (/[[\]]/.test(inner)) {
+    throw new Error(
+      `nested flow-style array in ${filePath}: ${JSON.stringify(raw)} — only flat scalar items are supported (e.g. [a, b])`,
+    );
+  }
+  // Quote-aware scan BEFORE the naive split: a comma inside a quoted item
+  // (single OR double quotes) must stay part of its item, so `["a, b"]` /
+  // `['a, b']` cannot be split unambiguously and are rejected here (a
+  // post-split `item.includes(",")` check would be dead — split(",") items
+  // can never contain a comma). A different quote char inside a quoted item
+  // is a literal character (YAML parity), not a toggle.
+  let quote: string | null = null;
+  for (const ch of inner) {
+    if (ch === '"' || ch === "'") {
+      if (quote === null) quote = ch;
+      else if (quote === ch) quote = null;
+    } else if (ch === "," && quote !== null) {
+      throw new Error(
+        `ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} — quoted item containing comma cannot be split unambiguously (flat scalar items only)`,
+      );
+    }
+  }
+  if (quote !== null) {
+    throw new Error(`unterminated ${quote} quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
+  }
+  const items: string[] = [];
+  for (const part of inner.split(",")) {
+    const item = part.trim().replace(/^["']|["']$/g, "");
+    if (item === "") continue;
+    items.push(item);
+  }
+  return items;
+}

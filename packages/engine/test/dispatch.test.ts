@@ -36,6 +36,7 @@ import {
   assertDefaultBranchProtected,
   assertTriIdentity,
   assignmentHeaderRegion,
+  composeDispatchGate,
   executionModeToN,
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,
@@ -958,5 +959,124 @@ Example Assignment snippet: **Enforcement**: hard
 **Enforcement**: soft (example only)
 `;
     expect(parseEnforcementFlag(assignmentHeaderRegion(text))).toEqual({ hard: true, source: "assignment" });
+  });
+});
+
+describe("composeDispatchGate — shared host dispatch-gate composition (qc1 F-001/F-006, qc2 F-005/F-007, qc3 F-007/F-008)", () => {
+  /** Writable assignment with NO branch form — branch-missing + env-fallback targets. */
+  const noBranchText = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+`;
+
+  test("shaped writable assignment → shaped true, ok, no violations", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT);
+    expect(result.shaped).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+    expect(result.hardBlocked).toBe(false);
+    expect(result.enforcement).toEqual({ hard: false, source: "none" });
+  });
+
+  test("non-shaped text → silent shaped false result (no violations, ok)", () => {
+    const result = composeDispatchGate("This is not an assignment at all.\n\nJust a plain task prompt.");
+    expect(result).toEqual({
+      ok: true,
+      violations: [],
+      shaped: false,
+      enforcement: { hard: false, source: "none" },
+    });
+  });
+
+  test("writable text without a branch form → branch-missing violation", () => {
+    const result = composeDispatchGate(noBranchText);
+    expect(result.shaped).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(true);
+  });
+
+  test("read-only (writable: false) → no branch-form or default-branch violations", () => {
+    const result = composeDispatchGate(noBranchText, { writable: false });
+    expect(result.shaped).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("agent == Execute as → critical anti-recursion violation", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { agent: "fullstack-dev" });
+    expect(result.ok).toBe(false);
+    const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.self-type");
+    expect(anti?.severity).toBe("critical");
+  });
+
+  test("different agent binding → no anti-recursion violation", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { agent: "qc-specialist" });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("MSTAR_WORKING_BRANCH env fallback supplies the gate branch (set/unset, restored)", () => {
+    const previous = process.env.MSTAR_WORKING_BRANCH;
+    try {
+      process.env.MSTAR_WORKING_BRANCH = "main";
+      const result = composeDispatchGate(noBranchText);
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(true);
+      expect(result.violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(true);
+
+      delete process.env.MSTAR_WORKING_BRANCH;
+      const without = composeDispatchGate(noBranchText);
+      expect(without.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.MSTAR_WORKING_BRANCH;
+      else process.env.MSTAR_WORKING_BRANCH = previous;
+    }
+  });
+
+  test("header `Enforcement: hard` with violations → enforcement.hard true + hardBlocked true", () => {
+    const text = `## Assignment
+
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: main
+**Enforcement**: hard
+`;
+    const result = composeDispatchGate(text);
+    expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
+    expect(result.hardBlocked).toBe(true);
+    expect(result.ok).toBe(false);
+  });
+
+  test("body-only `Enforcement: hard` example → hard false (header region only)", () => {
+    const text = `## Assignment
+
+**Delegation**: forbidden
+**Task category**: docs
+
+# Change
+
+An example Assignment template line: **Enforcement**: hard
+`;
+    const result = composeDispatchGate(text);
+    expect(result.enforcement.hard).toBe(false);
+    expect(result.hardBlocked).toBe(false);
+    expect(result.ok).toBe(false); // missing Execute as still a real violation
+  });
+
+  test("valid assignment + header Enforcement: hard → ok, hardBlocked false", () => {
+    const text = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+**Enforcement**: hard
+`;
+    const result = composeDispatchGate(text);
+    expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
+    expect(result.ok).toBe(true);
+    expect(result.hardBlocked).toBe(false);
   });
 });

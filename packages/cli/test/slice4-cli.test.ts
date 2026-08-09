@@ -467,7 +467,8 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       // cwd = a temp dir outside any git repo → documented "unknown" fallback
-      const result = runCli(["audit", "scaffold", findingsFile], dir);
+      // (--date pinned: without it the audit-<date> dir derives from "today", a calendar flake)
+      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08"], dir);
       expect(result.exitCode).toBe(0);
       expect(existsSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"))).toBe(true);
       const plan = readFileSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"), "utf8");
