@@ -9,12 +9,49 @@
  * env fallback) and the header-region enforcement flag. Read-only roles
  * (scout/explore, or the `readOnlyRole` flag) skip the branch-form and
  * default-branch gates. No local rule logic — every check is an engine call.
+ *
+ * `composeDispatchGate` is imported DYNAMICALLY (module-level cached loader,
+ * `loadComposeDispatchGate`) so the tool stays loadable against published
+ * engine versions that predate the export (2.0.2): a missing export is a
+ * clear upgrade error instead of a module-load failure that silently drops
+ * the tool (parity with `mstar_iteration_gate`).
  */
-import { composeDispatchGate, isReadOnlyAssignmentRole, parseAssignmentFields } from "@mstar-harness/engine";
+import { isReadOnlyAssignmentRole, parseAssignmentFields } from "@mstar-harness/engine";
 import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = { assignmentText: string; agent?: string; readOnlyRole?: boolean };
+
+/**
+ * Engine-version compat (parity with the omp hook): `composeDispatchGate`
+ * postdates published engine 2.0.2 — a static named import would fail at
+ * module link and silently drop the tool from /extensions. The loader
+ * resolves to `null` on builds lacking the export; `execute` turns that
+ * into an explicit upgrade error.
+ */
+type DispatchGateFn = (text: string, options?: { agent?: string; writable?: boolean }) => {
+  ok: boolean;
+  shaped: boolean;
+  enforcement: { hard: boolean };
+  violations: ValidationResult[];
+};
+
+let cachedDispatchGate: Promise<DispatchGateFn | null> | null = null;
+
+export function loadComposeDispatchGate(): Promise<DispatchGateFn | null> {
+  cachedDispatchGate ??= import("@mstar-harness/engine")
+    .then((mod) =>
+      typeof mod.composeDispatchGate === "function" ? (mod.composeDispatchGate as DispatchGateFn) : null,
+    )
+    .catch(() => null);
+  return cachedDispatchGate;
+}
+
+/** Test seam (smoke scripts): replace `load` to simulate an engine build
+ * without `composeDispatchGate`. */
+export const composeDispatchGateLoader: { load: () => Promise<DispatchGateFn | null> } = {
+  load: loadComposeDispatchGate,
+};
 
 function violationLines(violations: readonly ValidationResult[]): string {
   return violations
@@ -47,6 +84,18 @@ export default function mstarDispatchValidate(pi: CustomToolAPI): CustomTool {
         const text = params?.assignmentText ?? "";
         if (text.trim() === "") {
           return result("mstar_dispatch_validate: assignmentText is required", { ok: false }, true);
+        }
+        // Dynamic engine load (qc3 F-001 parity with mstar_iteration_gate):
+        // published engine 2.0.2 lacks composeDispatchGate — a static named
+        // import would fail at module link and silently drop the tool. The
+        // runtime check degrades to an explicit upgrade error instead.
+        const composeDispatchGate = await composeDispatchGateLoader.load();
+        if (composeDispatchGate === null) {
+          return result(
+            "installed @mstar-harness/engine lacks composeDispatchGate — upgrade the engine (next release); CLI fallback: mstar dispatch validate",
+            { ok: false },
+            true,
+          );
         }
         const fields = parseAssignmentFields(text);
         const readOnly = params?.readOnlyRole === true || isReadOnlyAssignmentRole(fields.executeAs ?? "");

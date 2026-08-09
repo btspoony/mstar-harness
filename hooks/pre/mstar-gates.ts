@@ -10,6 +10,15 @@
  * `Enforcement: hard` per dispatch entry) AND engine validation produced
  * violations. Everything else returns `undefined` — silent pass.
  *
+ * Engine-version compatibility (hotfix): `composeDispatchGate` is loaded
+ * LAZILY (module-level cached dynamic import, `loadComposeDispatchGate`) —
+ * published engine 2.0.2 predates the export, and a static named import
+ * would fail at module link and drop the WHOLE hook (both gates). When the
+ * export is missing, Gate 2 (task dispatch) is skipped entirely — no
+ * blocking, no violations — with a one-time `pi.logger.warn`; Gate 1
+ * (status) keeps working. `dispatchGateLoader` is the exported test seam:
+ * smoke scripts replace its `load` to simulate an old engine build.
+ *
  * Hard invariant — NEVER throw, NEVER block on failure: omp fails CLOSED
  * (`{ block: true, reason: "Extension <path> failed: …" }`) when a handler
  * throws or times out, so the handler catches every unexpected error and
@@ -38,7 +47,6 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
-  composeDispatchGate,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
   resolveCompassEnforcement,
@@ -213,6 +221,64 @@ function gateStatusWrite(eventInput: unknown): { block: true; reason: string } |
 // ---------------------------------------------------------------------------
 
 /**
+ * Engine-version compat: `composeDispatchGate` is the ONLY engine export the
+ * hook needs that postdates the published 2.0.2 — everything else is
+ * statically imported above. A static named import would fail at module link
+ * on old engines and drop the WHOLE hook (both gates), so it is loaded
+ * lazily and cached; any build lacking the export resolves to `null` and
+ * Gate 2 skips itself (see `gateTaskDispatch`).
+ */
+type DispatchGateFn = (text: string, options?: { agent?: string; writable?: boolean }) => {
+  ok: boolean;
+  shaped: boolean;
+  enforcement: { hard: boolean };
+  violations: ValidationResult[];
+};
+
+let cachedDispatchGate: Promise<DispatchGateFn | null> | null = null;
+
+export function loadComposeDispatchGate(): Promise<DispatchGateFn | null> {
+  cachedDispatchGate ??= import("@mstar-harness/engine")
+    .then((mod) =>
+      typeof mod.composeDispatchGate === "function" ? (mod.composeDispatchGate as DispatchGateFn) : null,
+    )
+    .catch(() => null);
+  return cachedDispatchGate;
+}
+
+/**
+ * Test seam for the degradation path: smoke scripts replace `load` to
+ * simulate an engine build without `composeDispatchGate` (ESM namespace
+ * bindings are read-only, so the holder indirection is what makes the
+ * missing-export case stub-able). Runtime default is the cached loader.
+ */
+export const dispatchGateLoader: { load: () => Promise<DispatchGateFn | null> } = {
+  load: loadComposeDispatchGate,
+};
+
+/** One-time degradation warning (module-level flag): emitted via the
+ * extension logger on the first task event while `composeDispatchGate` is
+ * missing. Defensive — the logger may be absent, and the degrade path must
+ * never throw (optional chaining + local try/catch). */
+let dispatchGateWarned = false;
+
+function warnDispatchGateDegraded(logger: unknown): void {
+  if (dispatchGateWarned) return;
+  dispatchGateWarned = true;
+  try {
+    (
+      logger as
+        | { warn?: (message: string, context?: Record<string, unknown>) => void }
+        | undefined
+    )?.warn?.(
+      "mstar-gates: installed engine lacks composeDispatchGate — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)",
+    );
+  } catch {
+    // degrade path must never throw
+  }
+}
+
+/**
  * Validate one dispatch entry via the engine's single shared composition
  * `dispatch.composeDispatchGate` (qc1 F-001/F-006 — the same composition
  * opencode `validateDispatchAssignment` and `mstar_dispatch_validate` use,
@@ -223,7 +289,10 @@ function gateStatusWrite(eventInput: unknown): { block: true; reason: string } |
  * violations and its OWN header enforcement flag (an example
  * `**Enforcement**: hard` line in the task body never hardens).
  */
-function validateDispatchEntry(entry: DispatchEntry): { violations: ValidationResult[]; hard: boolean } {
+function validateDispatchEntry(
+  entry: DispatchEntry,
+  composeDispatchGate: DispatchGateFn,
+): { violations: ValidationResult[]; hard: boolean } {
   const text = entry.task;
   // Read-only roles (scout/explore) skip the branch-form/default-branch gates.
   const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
@@ -235,11 +304,23 @@ function validateDispatchEntry(entry: DispatchEntry): { violations: ValidationRe
  * Block a `task` tool_call when any Assignment-shaped entry carries
  * `Enforcement: hard` in its header AND has violations. Per-entry violations
  * only — soft entries never block; no hard violations → silent pass.
+ *
+ * When the engine build lacks `composeDispatchGate` (pre-2.0.3), Gate 2 is
+ * SKIPPED entirely — no blocking, no violations — with a one-time warning;
+ * Gate 1 (status) keeps working (engine-version compatibility).
  */
-function gateTaskDispatch(eventInput: unknown): { block: true; reason: string } | undefined {
+async function gateTaskDispatch(
+  eventInput: unknown,
+  warnDegraded: () => void,
+): Promise<{ block: true; reason: string } | undefined> {
+  const composeDispatchGate = await dispatchGateLoader.load();
+  if (composeDispatchGate === null) {
+    warnDegraded();
+    return undefined;
+  }
   const blocked: string[] = [];
   for (const entry of taskDispatchEntries(eventInput)) {
-    const { violations, hard } = validateDispatchEntry(entry);
+    const { violations, hard } = validateDispatchEntry(entry, composeDispatchGate);
     if (!hard || violations.length === 0) continue;
     const label = entry.name !== "" ? `"${entry.name}"` : entry.agent !== "" ? `agent "${entry.agent}"` : "(unnamed)";
     for (const violation of violations) {
@@ -255,6 +336,7 @@ function gateTaskDispatch(eventInput: unknown): { block: true; reason: string } 
 // ---------------------------------------------------------------------------
 
 export default function mstarGates(pi: ExtensionAPI): void {
+  const warnDegraded = (): void => warnDispatchGateDegraded(pi.logger);
   pi.on("tool_call", async (event) => {
     try {
       const toolName = event?.toolName ?? "";
@@ -262,7 +344,7 @@ export default function mstarGates(pi: ExtensionAPI): void {
       if (toolName === "write" || toolName === "edit") {
         block = gateStatusWrite(event?.input);
       } else if (toolName === "task") {
-        block = gateTaskDispatch(event?.input);
+        block = await gateTaskDispatch(event?.input, warnDegraded);
       }
       return block;
     } catch {
