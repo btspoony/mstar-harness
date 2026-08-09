@@ -38,9 +38,9 @@ dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.
 
 - **确定性门禁，由 TS 引擎强制执行** —— path/status/lease/dispatch/sdd/iteration/lint 门禁运行在 `@mstar-harness/engine` 中，而非仅靠 prompt 建议
 - **判断留在 `mstar-*` skills** —— skills 仍是角色、门禁与工作流判断的唯一事实来源（SSOT）
-- **一个引擎跨宿主** —— 同一引擎 + skills 驱动 omp、OpenCode、Cursor、Kimi Code、ZCode、Codex、dsh（DeepSeek Harness）
+- **一个引擎跨宿主** —— 同一引擎 + skills 驱动 dsh（DeepSeek Harness）、omp、OpenCode、Cursor、Kimi Code、ZCode、Codex
 - **Agent Plugin 打包** —— 一条命令安装；可移植到任意 Agent Plugins v1.0.0 客户端
-- **推荐宿主顺序**（最佳 → 可用）：**omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex** —— omp/OpenCode/Cursor 的 subagent + Plan UX 最完整；Kimi/ZCode 仅支持内置 agent 类型；Codex 派发面最受限。dsh（DeepSeek Harness）是基于 cordis 的宿主，带进程内 engine 门禁（经其 profile bundle 安装，不走 CLI）。
+- **推荐宿主**（最佳 → 可用）：**dsh = omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex**
 
 **交付内容**
 
@@ -49,7 +49,7 @@ dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.
 | Harness Workflow Engine | `@mstar-harness/engine` —— 确定性工作流门禁的 TS 强制执行层 |
 | mstar CLI | `@mstar-harness/cli` —— 安装引导 + `mstar` 工作流动词 |
 | `mstar-*` skills | 角色、门禁与工作流判断（唯一事实来源） |
-| 宿主适配 | omp、OpenCode、Cursor、Kimi Code、ZCode、Codex、dsh |
+| 宿主适配 | dsh、omp、OpenCode、Cursor、Kimi Code、ZCode、Codex |
 
 更新说明：[CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
@@ -62,13 +62,13 @@ npx @mstar-harness/cli init
 
 | 宿主 | 命令 |
 |------|------|
+| dsh（DeepSeek Harness） | `dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh`（repo 安装；发布形态：`dsh plugin --profile web add @mstar-harness/dsh`） |
 | omp | `npx @mstar-harness/cli init --target omp`（链接 `~/.mstar/harness`）或 `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
 | Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理安装 **morning-star-harness** |
 | Codex | `npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal` |
-| dsh（DeepSeek Harness） | `dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh`（repo 安装；发布形态：`dsh plugin --profile web add @mstar-harness/dsh`） |
 | Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根（`plugin.json` + `skills/` 即便携包） |
 
 仓库根提供便携式 **Agent Plugins v1.0.0** manifest（`plugin.json`），`skills/` 为 Agent Skills 组件。可用 `npx @mstar-harness/cli plugin validate` 校验。
@@ -89,13 +89,13 @@ npx @mstar-harness/cli init
 
 | 宿主 | 进入 PM |
 |------|---------|
+| dsh（DeepSeek Harness） | `pm` skill（经 mstar skill 提供者；无自动加载） |
 | omp | 每会话 `/skill:pm`（无自动加载） |
 | OpenCode | `agent.project-manager`（`agents/project-manager.md`） |
 | Cursor | `/pm` |
 | Kimi | 新会话自动加载 `pm`；或 `/skill:pm` |
 | ZCode | 每会话 `/morning-star-harness:pm`（无自动加载） |
 | Codex | `/pm` |
-| dsh（DeepSeek Harness） | `pm` skill（经 mstar skill 提供者；无自动加载） |
 
 ### 迭代
 
@@ -116,11 +116,11 @@ npx @mstar-harness/cli init
 
 | 宿主 | 命令加载 |
 |------|----------|
+| dsh（DeepSeek Harness） | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（打包的 `harness-commands/`，经 `ctx.commands`） |
 | omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（插件 `commands/` 文件名命令） |
-| Cursor / OpenCode | 从 `commands/` 打包（OpenCode：插件 `harness-commands/`） |
+| OpenCode / Cursor | 从 `commands/` 打包（OpenCode：插件 `harness-commands/`） |
 | Kimi / ZCode | 插件 manifest：`/morning-star-harness:iteration-start` · `:codebase-audit` 等 |
 | Codex project | `.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链） |
-| dsh（DeepSeek Harness） | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（打包的 `harness-commands/`，经 `ctx.commands`） |
 | Codex global | **不**装 project 命令 — 用 `--scope project` |
 
 Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
@@ -205,7 +205,7 @@ flowchart TD
 | `mstar-skill-authoring` | 通用 skill 撰写契约（SkillsBench 门控） |
 | `mstar-audit` | 只读代码库审计 → 优先级改进计划 |
 | `mstar-roles` | 角色提示词 + 加载清单 |
-| `mstar-host` | 宿主适配（omp / OpenCode / Cursor / Kimi / ZCode / Codex / dsh） |
+| `mstar-host` | 宿主适配（dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex） |
 | `pm` | `/pm` / `/skill:pm` / 宿主 PM 入口 |
 
 消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。细则 → `mstar-plan-conventions`。
