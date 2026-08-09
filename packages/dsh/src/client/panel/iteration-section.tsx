@@ -28,6 +28,10 @@ function phaseVerdict(
 }
 
 export function IterationSection({ t, iteration }: IterationSectionProps) {
+  // Total degradation contract (spec §2.4 / AC-3): a null iteration renders
+  // nothing — never derefs (PanelView routes null to the no-gate hint; this
+  // guard keeps the section itself total for any caller).
+  if (iteration == null) return null
   const gate = iteration.gate
   const violations = Array.isArray(gate?.violations) ? gate.violations : []
   const verdict = bool(gate?.ok) === null
@@ -63,9 +67,9 @@ export function IterationSection({ t, iteration }: IterationSectionProps) {
         ? <p className={css.empty} data-mstar-empty="no-violations">{t('iteration.no-violations')}</p>
         : (
           <ul className={css.violationList}>
-            {violations.map(violation => (
+            {violations.map((violation, i) => (
               <li
-                key={str(violation.code) ?? 'violation'}
+                key={str(violation.code) ?? `violation-${i}`}
                 data-violation-code={str(violation.code) ?? 'unknown'}
                 data-severity={str(violation.severity) ?? 'unknown'}
               >

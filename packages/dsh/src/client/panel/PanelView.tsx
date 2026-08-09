@@ -8,10 +8,10 @@
  * §5) — the render body is a pure function of (source, lastUpdated, t).
  *
  * Empty states (spec §3): no catalog row → waiting hint; harness missing
- * (`harnessDir` null + `state` null + no `iteration`) → no-harness hint;
- * gate missing (`iteration` key absent) → no-compass note while the state
- * section still renders. The no-session case is shell-handled by the
- * strict-session view ring.
+ * (`harnessDir` null + `state` null + no `iteration`, absent or null) →
+ * no-harness hint; gate missing (`iteration` absent or null) → no-compass
+ * note while the state section still renders. The no-session case is
+ * shell-handled by the strict-session view ring.
  */
 
 import * as React from 'react'
@@ -57,7 +57,7 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
       </div>
     )
   }
-  const noHarness = source.harnessDir === null && source.state === null && source.iteration === undefined
+  const noHarness = source.harnessDir === null && source.state === null && source.iteration == null
   return (
     <div className={css.root} data-mstar-panel={noHarness ? 'no-harness' : 'panel'}>
       <header className={css.watermark} data-mstar-watermark>
@@ -69,7 +69,7 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
         ? <p className={css.empty} data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
         : (
           <>
-            {source.iteration === undefined
+            {source.iteration == null
               ? <p className={css.empty} data-mstar-empty="no-gate">{t('iteration.no-compass')}</p>
               : <IterationSection t={t} iteration={source.iteration} />}
             {source.state === null

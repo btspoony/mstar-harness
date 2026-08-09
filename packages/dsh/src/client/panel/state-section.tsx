@@ -30,8 +30,8 @@ export function StateSection({ t, state }: StateSectionProps) {
         ? <p className={css.empty} data-mstar-empty="no-plans">{t('state.none')}</p>
         : (
           <ul className={css.planList}>
-            {plans.map(plan => (
-              <li key={str(plan.id) ?? 'plan'} data-plan-id={str(plan.id) ?? 'unknown'} data-plan-status={str(plan.status) ?? 'unknown'}>
+            {plans.map((plan, i) => (
+              <li key={str(plan.id) ?? `plan-${i}`} data-plan-id={str(plan.id) ?? 'unknown'} data-plan-status={str(plan.status) ?? 'unknown'}>
                 <span className={css.planStatus} data-status={str(plan.status) ?? 'unknown'}>{str(plan.status) ?? t('panel.unknown')}</span>
                 <span className={css.planId}>{str(plan.id) ?? t('panel.unknown')}</span>
               </li>
@@ -44,8 +44,8 @@ export function StateSection({ t, state }: StateSectionProps) {
         ? <p className={css.empty} data-mstar-empty="no-residuals">{t('state.none')}</p>
         : (
           <ul className={css.residualList}>
-            {residuals.map(residual => (
-              <li key={str(residual.severity) ?? 'residual'} data-residual-severity={str(residual.severity) ?? 'unknown'}>
+            {residuals.map((residual, i) => (
+              <li key={str(residual.severity) ?? `residual-${i}`} data-residual-severity={str(residual.severity) ?? 'unknown'}>
                 <span className={css.residualSeverity}>{str(residual.severity) ?? t('panel.unknown')}</span>
                 <span className={css.residualCount} data-residual-count={count(residual.count) === null ? 'unknown' : String(residual.count)}>
                   {count(residual.count) === null ? t('panel.unknown') : String(residual.count)}
@@ -80,8 +80,8 @@ export function StateSection({ t, state }: StateSectionProps) {
         ? <p className={css.empty} data-mstar-empty="no-leases">{t('state.none')}</p>
         : (
           <ul className={css.leaseList}>
-            {leases.map(lease => (
-              <li key={str(lease.planId) ?? 'lease'} data-lease-plan={str(lease.planId) ?? 'unknown'}>
+            {leases.map((lease, i) => (
+              <li key={str(lease.planId) ?? `lease-${i}`} data-lease-plan={str(lease.planId) ?? 'unknown'}>
                 <span className={css.leasePlan}>{str(lease.planId) ?? t('panel.unknown')}</span>
                 <span className={css.leaseHolder}>{str(lease.holder) ?? t('panel.unknown')}</span>
                 {str(lease.worktreePath) !== null
