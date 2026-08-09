@@ -2,11 +2,10 @@
  * Morning Star workflow panel page — the `conversation.view` tab component
  * (spec §4.2): pure render of the latest `mstar-engine-status` catalog row.
  *
- * Inputs: the session standard kit (`ConvViewProps`), the typed `t` seat
- * (`locale: 'mstar-panel'`) and the catalog row + message time. Task 3
- * replaces the `source`/`lastUpdated` props with the `useMstarEngineStatus()`
- * hook backed by `useSession`; the render itself stays a pure function of
- * (source, lastUpdated, t).
+ * Inputs: the session standard kit (`ConvViewProps`) and the typed `t` seat
+ * (`locale: 'mstar-panel'`). The catalog row + message time come from the
+ * `useMstarEngineStatus()` hook riding the kit's `useSession` selector (spec
+ * §5) — the render body is a pure function of (source, lastUpdated, t).
  *
  * Empty states (spec §3): no catalog row → waiting hint; harness missing
  * (`harnessDir` null + `state` null + no `iteration`) → no-harness hint;
@@ -23,17 +22,11 @@ import { cls } from './classes.ts'
 import { bool, str } from './guards.ts'
 import { IterationSection } from './iteration-section.tsx'
 import { StateSection } from './state-section.tsx'
+import { useMstarEngineStatus } from './use-mstar-engine-status.ts'
 
 export interface MstarPanelViewProps extends ConvViewProps {
   /** Namespace-bound translate seat (`locale: 'mstar-panel'`). */
   t: TranslateNS<'mstar-panel'>
-  /**
-   * Latest `mstar-engine-status` catalog row; null = none logged yet
-   * (waiting state). T2: test-injected; T3: `useMstarEngineStatus()` output.
-   */
-  source?: MstarEngineStatusSource | null
-  /** Catalog message time (Unix ms) for the freshness marker; null = unknown. */
-  lastUpdated?: number | null
 }
 
 /** Enforcement flag label: hard/soft (+ provenance source), unknown when missing (spec §2.1). */
@@ -55,7 +48,8 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString('en-GB')
 }
 
-export function PanelView({ t, source, lastUpdated }: MstarPanelViewProps) {
+export function PanelView({ t, useSession }: MstarPanelViewProps) {
+  const { source, lastUpdated } = useMstarEngineStatus(useSession)
   if (source === null || source === undefined) {
     return (
       <div className={cls('root')} data-mstar-panel="waiting">
