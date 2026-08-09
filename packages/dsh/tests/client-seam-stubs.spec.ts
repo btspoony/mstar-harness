@@ -1,7 +1,7 @@
 /**
  * Smoke spec for the dsh client-seam peer stubs (T1): proves the dev-time
  * stand-ins type-check and behave like the consumed faces of the panel contract
- * (spec §4/§5/§6.4), pinned to dsh-private commit 9451be2 (2026-08-07).
+ * (spec §4/§5/§6.4), pinned to dsh-private commit 347a99b (2026-08-07).
  *
  * Coverage:
  * - subpath imports (`@deepseek-ai/dsh-client-runtime/client` etc.) resolve

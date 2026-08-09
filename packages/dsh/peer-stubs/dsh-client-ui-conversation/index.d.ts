@@ -5,7 +5,7 @@
  *
  * The real package is private and ships from the composed dsh app at runtime;
  * this declaration mirrors exactly the consumed surface of the seam, pinned to
- * dsh-private commit 9451be2 (2026-08-07 snapshot):
+ * dsh-private commit 347a99b (2026-08-07 snapshot):
  *
  * - the `'conversation.view'` SlotMap row — `{ kind: 'list'; scope: 'session' }`
  *   with the `ConvViewOwnerProps` owner share (the view ring: one list entry

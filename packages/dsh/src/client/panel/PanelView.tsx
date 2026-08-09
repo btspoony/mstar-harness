@@ -52,7 +52,7 @@ function enforcementLabel(
 
 /** Freshness timestamp: local HH:MM:SS (spec §5). */
 function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString()
+  return new Date(ms).toLocaleTimeString('en-GB')
 }
 
 export function PanelView({ t, source, lastUpdated }: MstarPanelViewProps) {

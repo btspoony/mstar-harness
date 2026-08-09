@@ -6,7 +6,7 @@
  *
  * The real package is private and ships from the composed dsh app at runtime;
  * this stub mirrors the consumed contract surface pinned to dsh-private commit
- * 9451be2 (2026-08-07 snapshot), with just enough runtime for dev-time
+ * 347a99b (2026-08-07 snapshot), with just enough runtime for dev-time
  * composition tests: `register` with the load-time validations the panel
  * depends on (undeclared target throws; list `id` uniqueness; ascending
  * `order` sort; children declaration with disposer cascade) and the

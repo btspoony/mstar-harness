@@ -5,7 +5,7 @@
  *
  * The real package is private and ships from the composed dsh app at runtime;
  * this stub mirrors the consumed contract surface pinned to dsh-private commit
- * 9451be2 (2026-08-07 snapshot):
+ * 347a99b (2026-08-07 snapshot):
  *
  * - `ClientContext` = cordis `Context` with the merged service faces the panel
  *   consumes (`ctx.slots` / `ctx.sessions` here; `ctx.locale` merges in the
