@@ -1,23 +1,33 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.0.3**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.0.4**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **2.0.3** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.0.3** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.0.3** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.0.3** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.0.3** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **2.0.3** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.0.3** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.0.3** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.3** |
-| Agent Plugins 清单 | `plugin.json` | **2.0.3** |
+| monorepo 根 | `morning-star`（`package.json`） | **2.0.4** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.0.4** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.0.4** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.0.4** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.0.4** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **2.0.4** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.0.4** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.0.4** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.4** |
+| Agent Plugins 清单 | `plugin.json` | **2.0.4** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [2.0.4] - 2026-08-09
+
+### Harness
+
+- omp 插件：engine 版本兼容 —— 阻断 hook 与 `mstar_dispatch_validate` 不再静态导入 `composeDispatchGate`；在早于该导出的 engine 上，任务派发 gate（Gate 2）跳过并打印一次性警告（状态 gate 保持生效），派发工具返回显式升级错误而非静默消失（与 `mstar_iteration_gate` 对齐）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 2.0.4**。
 
 ## [2.0.3] - 2026-08-09
 
