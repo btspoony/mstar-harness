@@ -429,8 +429,8 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     expect(statusRow?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
     const statusText = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
     expect(statusText).toContain('<mstar_engine_status>')
-    expect(statusText).toContain('engine version: 2.0.0')
-    expect(statusText).toContain('plugin version: 2.0.0')
+    expect(statusText).toContain('engine version: 2.0.4')
+    expect(statusText).toContain('plugin version: 2.0.4')
     expect(statusText).toContain(`harness dir: ${harnessDir}`)
     expect(statusText).toContain('enforcement: soft') // no compass hardens, no Config override
 
@@ -544,7 +544,7 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
     expect(statusRow).toBeDefined()
     const text = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')
-    expect(text).toContain('engine version: 2.0.0')
-    expect(text).toContain('plugin version: 2.0.0')
+    expect(text).toContain('engine version: 2.0.4')
+    expect(text).toContain('plugin version: 2.0.4')
   })
 })
