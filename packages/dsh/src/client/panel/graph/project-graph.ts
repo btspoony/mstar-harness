@@ -119,7 +119,9 @@ export function projectGraph(source: MstarEngineStatusSource | null): GraphView 
     iterationId = str(row.iterationId)
     const gate = row.gate as { transition?: unknown; ok?: unknown; violations?: unknown } | null | undefined
     const transition = gate === null || typeof gate !== 'object' ? null : str(gate.transition)
-    const phaseId = transition === null ? undefined : TRANSITION_TO_PHASE[transition]
+    const phaseId = transition === null || !Object.hasOwn(TRANSITION_TO_PHASE, transition)
+      ? undefined
+      : TRANSITION_TO_PHASE[transition]
     if (phaseId === undefined) {
       // Missing/illegal transition → ring stays idle + unknown marker (never guessed, spec §2.3).
       degraded.transition = true
