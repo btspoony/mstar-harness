@@ -127,6 +127,30 @@ const noGateSource: MstarEngineStatusSource = {
   },
 }
 
+/**
+ * Gate verdict FAIL (spec §2.2): `ok: false` on the gate + a failed exit
+ * sub-phase with violations ⇒ `data-gate-verdict="FAIL"` and the `FAIL (n)`
+ * count branch of `phaseVerdict` — neither is exercised by the ok:true
+ * fixture (QC2-003).
+ */
+const failGateSource: MstarEngineStatusSource = {
+  ...fullSource,
+  iteration: {
+    ...fullSource.iteration!,
+    gate: {
+      ...fullSource.iteration!.gate,
+      ok: false,
+      exit: {
+        ok: false,
+        violations: [
+          { severity: 'high', code: 'EXIT-3', message: 'exit gate not satisfied' },
+          { severity: 'low', code: 'EXIT-4', message: 'compass wording drift' },
+        ],
+      },
+    },
+  },
+}
+
 /** Runtime-shape degradation: version/enforcement missing ⇒ `unknown` (spec §2.4). */
 const degradedSource = {
   ...fullSource,
@@ -182,14 +206,15 @@ function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number
   }
 }
 
-/** Render the panel to static HTML through the real data path: snapshot store → useSession → hook → PanelView (copy pinned to en). */
+/** Render the panel to static HTML through the real data path: snapshot store → useSession → hook → PanelView (default copy pinned to en). */
 function panelHtml(
   source: MstarEngineStatusSource | null,
   locale: LocaleService = new LocaleService(),
   lastUpdated: number | null = 1_720_001_000_000,
+  lang: 'en' | 'zh' = 'en',
 ): string {
   locale.register(NS, { zh, en })
-  locale.setLocale('en')
+  locale.setLocale(lang)
   const store = createSnapshotStore(snapshotFor(source, lastUpdated))
   return renderToStaticMarkup(createElement(PanelView, {
     ...kitProps({ useSession: bindUseSession(store) }),
@@ -289,6 +314,17 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-mstar-empty="no-knowledge"')
   })
 
+  it('iteration: null (schema-drift variant of "absent") → same no-gate degradation, never a crash (AC-3)', () => {
+    const html = panelHtml({
+      ...noGateSource,
+      iteration: null,
+    } as unknown as MstarEngineStatusSource)
+    expect(html).toContain('data-mstar-panel="panel"')
+    expect(html).toContain('data-mstar-empty="no-gate"')
+    expect(html).toContain('No steering compass / status.json')
+    expect(html).toContain('data-mstar-section="state"')
+  })
+
   it('missing version / enforcement degrade to unknown, no guessed values', () => {
     const html = panelHtml(degradedSource)
     expect(html).toContain('mstar unknown')
@@ -309,6 +345,31 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-direction')
     expect(html).toContain('data-mstar-empty="no-leases"')
     expect(html).toContain('data-mstar-empty="no-knowledge"')
+  })
+})
+
+describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)', () => {
+  it('gate.ok false → data-gate-verdict="FAIL" + FAIL (n) count from the failed sub-phase', () => {
+    const html = panelHtml(failGateSource)
+    expect(html).toContain('data-gate-verdict="FAIL"')
+    expect(html).toContain('FAIL (2)')
+    // The violation list still renders in FAIL mode (gate-level violations unchanged).
+    expect(html).toContain('data-violation-code="PLAN-3"')
+    expect(html).toContain('data-violation-code="EXIT-1"')
+  })
+
+  it('renders the panel body in zh when the locale flips (not just the tab label)', () => {
+    const html = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(html).toContain('data-mstar-section="iteration"')
+    expect(html).toContain('迭代')
+    expect(html).toContain('违规 (2)')
+    expect(html).toContain('data-mstar-section="state"')
+    expect(html).toContain('工作区状态')
+    expect(html).toContain('3 篇文档')
+    expect(html).toContain('最后更新')
+    // en titles must not leak into the zh body.
+    expect(html).not.toContain('Workspace state')
+    expect(html).not.toContain('Iteration')
   })
 })
 
