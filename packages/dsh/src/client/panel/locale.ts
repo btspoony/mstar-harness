@@ -16,6 +16,9 @@ export type PanelKey =
   | 'view.mstar-workflow'
   | 'empty.waiting'
   | 'empty.no-harness'
+  | 'header.version'
+  | 'header.harness'
+  | 'header.enforcement'
   | 'watermark.version'
   | 'watermark.harness'
   | 'watermark.enforcement'
@@ -23,6 +26,7 @@ export type PanelKey =
   | 'watermark.soft'
   | 'watermark.none'
   | 'panel.unknown'
+  | 'graph.placeholder'
   | 'iteration.title'
   | 'iteration.id'
   | 'iteration.transition'
@@ -64,9 +68,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** zh dictionary (repo bilingual convention; zh is the stub fallback locale). */
 export const zh: LocaleDictOf<'mstar-panel'> = {
-  'view.mstar-workflow': '工作流',
+  'view.mstar-workflow': 'MStar 工作流',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
+  'header.version': '版本',
+  'header.harness': 'harness 目录',
+  'header.enforcement': '执行策略',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
   'watermark.enforcement': 'enforcement: {value}',
@@ -74,6 +81,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'watermark.soft': 'soft',
   'watermark.none': '无',
   'panel.unknown': '未知',
+  'graph.placeholder': '图区占位 —— 工作流循环图在 Task 2 接入',
   'iteration.title': '迭代',
   'iteration.id': 'id',
   'iteration.transition': 'transition',
@@ -110,9 +118,12 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
 
 /** en dictionary (default locale). */
 export const en: LocaleDictOf<'mstar-panel'> = {
-  'view.mstar-workflow': 'Workflow',
+  'view.mstar-workflow': 'MStar Workflow',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
+  'header.version': 'version',
+  'header.harness': 'harness',
+  'header.enforcement': 'enforcement',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
   'watermark.enforcement': 'enforcement: {value}',
@@ -120,6 +131,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'watermark.soft': 'soft',
   'watermark.none': 'none',
   'panel.unknown': 'unknown',
+  'graph.placeholder': 'Graph canvas placeholder — workflow loop graph arrives in Task 2',
   'iteration.title': 'Iteration',
   'iteration.id': 'id',
   'iteration.transition': 'transition',

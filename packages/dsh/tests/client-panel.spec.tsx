@@ -500,7 +500,7 @@ describe('workflow panel — T1 layout: header / sidebar / main grid (spec panel
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
     expect(cssText).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))')
     expect(cssText).toContain('grid-template-columns: minmax(0, 1fr) 300px')
-    expect(cssText).toMatch(/grid-template-areas:\s*'header header'\s*'main sidebar'/)
+    expect(cssText).toMatch(/grid-template-areas:\s*'header header'\s*'main\s+sidebar'/)
     expect(cssText).toMatch(/@media \(max-width: 860px\)/)
     // Spacing ramp tokens defined at the panel root (spec §1.2).
     expect(cssText).toMatch(/--mstar-space-[1-6]:\s*\d+px/)
