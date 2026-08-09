@@ -7,7 +7,7 @@
     "strict": true,
     "jsx": "react-jsx",
     "skipLibCheck": true,
-    "types": ["bun-types"],
+    "types": ["bun-types", "react"],
     "declaration": true,
     "emitDeclarationOnly": true,
     "rootDir": "src",
