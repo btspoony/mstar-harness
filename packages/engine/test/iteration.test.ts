@@ -36,6 +36,7 @@ import { join } from "node:path";
 import {
   assertIndexRowObligations,
   evaluatePhaseGate,
+  parseCompassFrontmatter,
   pushCadenceProbe,
   validateCompassFrontmatter,
   type CompassDoc,
@@ -520,5 +521,138 @@ describe("assertIndexRowObligations — one row per iteration (mstar-iteration �
     const result = assertIndexRowObligations(join(tmpRoot("mstar-index-"), "does-not-exist"));
     expect(result.ok).toBe(false);
     expect(result.violations.some((v) => v.code === "INDEX_ITERATIONS_DIR_MISSING")).toBe(true);
+  });
+});
+
+describe("parseCompassFrontmatter — flat YAML frontmatter parser (shared CLI + omp tool)", () => {
+  test("real delivery-compass.md frontmatter round-trips to a flat doc (scalar keys + plans block list)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(
+        file,
+        `---
+iteration_id: v9.9.9
+start_date: 2026-08-01
+status: active
+iteration_base_branch: main
+target_branch: main
+plans:
+  - plan-a
+  - plan-b
+---
+
+# v9.9.9 Delivery Compass
+`,
+        "utf8",
+      );
+      expect(parseCompassFrontmatter(file)).toEqual({
+        iteration_id: "v9.9.9",
+        start_date: "2026-08-01",
+        status: "active",
+        iteration_base_branch: "main",
+        target_branch: "main",
+        plans: ["plan-a", "plan-b"],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("flow-style plans array and quoted values round-trip", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(
+        file,
+        `---
+iteration_id: "v1.0.0"
+status: locked
+plans: [plan-a, plan-b]
+---`,
+        "utf8",
+      );
+      expect(parseCompassFrontmatter(file)).toEqual({
+        iteration_id: "v1.0.0",
+        status: "locked",
+        plans: ["plan-a", "plan-b"],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unterminated frontmatter fence → throws with the file path", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, "---\niteration_id: v9.9.9\nstatus: active\n", "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(`unterminated YAML frontmatter in ${file}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("missing frontmatter fence → throws with the file path", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, "# v9.9.9 Delivery Compass\n", "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(`no YAML frontmatter fence in ${file}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("nested flow-style array → throws the precise message (qc2 F-009 / qc3 F-010)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, "---\niteration_id: v1.0.0\nplans: [a, [b]]\n---\n", "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        `nested flow-style array in ${file}: "[a, [b]]" — only flat scalar items are supported (e.g. [a, b])`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("quoted-item-with-comma flow-style array → throws the ambiguity message (qc2 F-009 / qc3 F-010)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, '---\niteration_id: v1.0.0\nplans: ["a, b"]\n---\n', "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        `ambiguous flow-style array in ${file}: "[\\"a, b\\"]" — quoted item containing comma cannot be split unambiguously (flat scalar items only)`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unterminated quote in flow-style array → throws the quote message (qc2 F-009 / qc3 F-010)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, '---\niteration_id: v1.0.0\nplans: ["a]\n---\n', "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        `unterminated " quote in flow-style array in ${file}: "[\\"a]"`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unsupported frontmatter line → throws the line message (qc2 F-009 / qc3 F-010)", () => {
+    const dir = tmpRoot("mstar-compass-");
+    try {
+      const file = join(dir, "delivery-compass.md");
+      writeFileSync(file, "---\niteration_id: v1.0.0\n- dangling list item without a key\n---\n", "utf8");
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        `unsupported frontmatter line in ${file}: "- dangling list item without a key"`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

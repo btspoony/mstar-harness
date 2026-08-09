@@ -25,22 +25,20 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** Every runtime export the plugin imports, throwing like a dead engine. */
+/**
+ * Every runtime export the plugin imports, throwing like a dead engine.
+ * Mirrors the CURRENT import surface of src/mstar.ts (dispatch composition
+ * is a single engine call now — `composeDispatchGate`; qc1 F-001).
+ */
 const ENGINE_STUB = `const unavailable = () => {
   throw new Error("engine unavailable");
 };
-export const antiRecursionPrecheck = unavailable;
 export const applyEnforcement = unavailable;
-export const assertDefaultBranchProtected = unavailable;
-export const assignmentHeaderRegion = unavailable;
+export const composeDispatchGate = unavailable;
 export const isReadOnlyAssignmentRole = unavailable;
-export const parseAssignmentBranchForms = unavailable;
 export const parseAssignmentFields = unavailable;
-export const parseBranchPolicyDirectOnBranch = unavailable;
-export const parseEnforcementFlag = unavailable;
 export const resolveCompassEnforcement = unavailable;
 export const resolveHarnessDir = unavailable;
-export const validateAssignmentFields = unavailable;
 export const validateStatus = unavailable;
 `;
 

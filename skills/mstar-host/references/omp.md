@@ -208,6 +208,17 @@ Cannot emit required **N** → **`Blocked`**.
 | Plugin commands | `/iteration-start`, `/iteration-drive`, `/iteration-loop` (filename-based) |
 | Session entry | `/skill:pm` → `mstar-harness-core` via pm **Read next** |
 
+## In-process engine binding (omp ≥ 17.2.11)
+
+- **Surfaces** (repo root = plugin root): `hooks/pre/mstar-gates.ts` — one `tool_call` pre-hook that returns `{ block: true, reason }` (structured refusal the model sees as the tool error) or `undefined` (pass); `tools/mstar_{status_validate,dispatch_validate,lease_verify,path_resolve,iteration_gate,worktree_check}/index.ts` — six model-callable validator tools (engine validators only, Zod params via `pi.zod`).
+- **Enforcement semantics**: block ONLY under `Enforcement: hard`. The status gate reads the harness compass frontmatter (`enforcement: hard`, active/locked iterations only); the dispatch gate reads each Assignment's own header flag (`assignmentHeaderRegion` — a body example never hardens). Soft / no flag → silent pass. Rollback = unset the flag. Never global.
+- **Engine dependency**: the adapters import the published engine package (root `package.json` `dependencies` entry). omp git/npm plugin installs run `bun install <spec>` in the plugins tree → declared deps installed; a bare `-l` / `omp plugin link` symlink install without `node_modules` cannot resolve the modules.
+- **Graceful degradation (explicit)**: module load failure → `mstar_*` tools skipped, hook absent (no blocking), `commands/*.md` shell-out fallback intact. Caveat: a partial failure is SILENT — no in-band signal that gates are off; verify with `omp -p '/extensions'`.
+- **`MSTAR_HARNESS_DIR` override**: the hook and tools discover `{HARNESS_DIR}` via `resolveHarnessDir`, which probes only `.mstar/` → `.agents/` → `.plans/`/`plans/` roots. Repos using a non-standard harness root (e.g. this plugin repo's own `.harness/`) MUST export `MSTAR_HARNESS_DIR` (absolute path) in the omp session env — without it the status gate does not cover those roots and tools like `mstar_path_resolve` / `mstar_lease_verify` error out (parity with the opencode binding).
+- **Edit-path limitation**: the status gate validates the on-disk file for `edit` events (pre-edit state) — a corrupting edit is caught by the next write or `mstar_status_validate` (known v1 limitation, parity with opencode).
+- **`mstar_iteration_gate` engine requirement**: the tool requires an engine build exporting `parseCompassFrontmatter` (next published release). On older engines the tool reports an explicit upgrade error instead of loading — no silent absence; CLI fallback: `mstar iteration gate`.
+- **Reload**: edits are picked up by a new session (`?mtime` cache-buster); in-session `/reload-plugins` (omp ≥ 17.2.11) applies them without a new session.
+
 ## Files, shell, and approvals
 
 - Prefer host search/edit tools over shell find/sed when available.

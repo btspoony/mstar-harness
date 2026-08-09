@@ -76,6 +76,8 @@ export {
 export type {
   AssignmentBranchForms,
   AssignmentFields,
+  ComposeDispatchGateOptions,
+  ComposeDispatchGateResult,
   DefaultBranchOptions,
   EnforcementFlag,
   EnforcementSource,
@@ -88,6 +90,7 @@ export {
   assertDefaultBranchProtected,
   assertTriIdentity,
   assignmentHeaderRegion,
+  composeDispatchGate,
   executionModeToN,
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,
@@ -139,6 +142,7 @@ export type {
 export {
   assertIndexRowObligations,
   evaluatePhaseGate,
+  parseCompassFrontmatter,
   pushCadenceProbe,
   validateCompassFrontmatter,
 } from "./iteration.js";

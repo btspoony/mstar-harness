@@ -26,6 +26,7 @@
  *   never global; rollback = unset flag): `.harness/references/skill-programmatic-roadmap.md`
  *   §8.5 C4 + decision D2.
  */
+import { applyEnforcement } from "./core.js";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 
 /**
@@ -519,6 +520,130 @@ export function assertTriIdentity(reviewerRoles: readonly string[]): GateResult 
       ),
     ],
   };
+}
+
+/**
+ * `## Assignment` heading marker (shared shape-guard — qc1 F-006): a
+ * document carrying this heading is treated as Assignment-shaped and linted
+ * even when none of the three core fields is found.
+ */
+const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
+
+/**
+ * Shape-guard match of an Assignment header field, tolerating optional list
+ * bullets and `**bold**` markers around the key (`- **Execute as**: x`).
+ * The value must be non-empty (`(\S.*)`) — a bare `Delegation:` counts as
+ * missing. Shape detection ONLY: field parsing/semantics live in
+ * `parseAssignmentFields` / `validateAssignmentFields`.
+ */
+const ASSIGNMENT_FIELD_RE =
+  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
+
+/**
+ * True when the text looks like an Assignment: carries the `## Assignment`
+ * heading or at least one core field line (`Execute as` / `Delegation` /
+ * `Task category`). Non-Assignment prompts stay silent — no false positives.
+ * This is the SINGLE shape-guard grammar shared by the omp hook and the
+ * opencode adapter via {@link composeDispatchGate} (qc1 F-006).
+ */
+function isAssignmentShaped(assignmentText: string): boolean {
+  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null;
+}
+
+/**
+ * Options for {@link composeDispatchGate}.
+ */
+export type ComposeDispatchGateOptions = {
+  /**
+   * Host role-binding field (omp task entry `agent` / opencode `subagent` /
+   * cursor `subagent_type`); the anti-recursion precheck runs only when
+   * non-empty.
+   */
+  agent?: string;
+  /**
+   * `false` for read-only roles (scout/explore) — skips the branch-form and
+   * default-branch gates. Default: `true` (writable).
+   */
+  writable?: boolean;
+};
+
+/**
+ * Result of {@link composeDispatchGate}: a GateResult plus the shape verdict
+ * and the header-region enforcement flag.
+ */
+export type ComposeDispatchGateResult = GateResult & {
+  /** Assignment-shaped text was recognized (heading or core-field regex). */
+  shaped: boolean;
+  /** Enforcement parsed from the Assignment HEADER region only (never the body). */
+  enforcement: EnforcementFlag;
+};
+
+/**
+ * Shared host dispatch-gate composition (qc1 F-001/F-006, qc2 F-005/F-007,
+ * qc3 F-007/F-008) — the SINGLE dispatch-validation composition consumed by
+ * the opencode adapter (`validateDispatchAssignment`), the omp blocking hook
+ * (Gate 2) and the `mstar_dispatch_validate` tool:
+ *
+ * 1. Shape guard: `## Assignment` heading OR any core field line
+ *    (`Execute as` / `Delegation` / `Task category`). Text that is not
+ *    Assignment-shaped passes silently (`shaped: false`).
+ * 2. `validateAssignmentFields` with `writable: false` when `opts.writable
+ *    === false` (read-only roles), else the writable default.
+ * 3. Anti-recursion precheck when `opts.agent` is non-empty.
+ * 4. Default-branch gate for writable text: the branch comes from the
+ *    Assignment's own branch forms (create-form name / Working branch /
+ *    Branch policy branch), else `$MSTAR_WORKING_BRANCH`; a well-formed
+ *    `Branch policy: direct on <branch> — <reason>` exception is honored
+ *    only when its branch is the one being checked.
+ * 5. Enforcement flag parsed from the Assignment HEADER region only; the
+ *    result carries `hardBlocked` via `applyEnforcement`.
+ *
+ * Never throws on text errors: unexpected failures degrade to the same
+ * silent non-shaped result.
+ */
+export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptions = {}): ComposeDispatchGateResult {
+  const silent: ComposeDispatchGateResult = {
+    ok: true,
+    violations: [],
+    shaped: false,
+    enforcement: { hard: false, source: "none" },
+  };
+  try {
+    if (!isAssignmentShaped(text)) return silent;
+
+    const violations: ValidationResult[] = [];
+    const writable = opts.writable !== false;
+
+    // (2) Engine full field validation — read-only roles skip the branch-form gate.
+    violations.push(...validateAssignmentFields(text, { writable }).violations);
+
+    // (3) Anti-recursion NEVER red line (engine gate; warn/error in adapters).
+    const agent = (opts.agent ?? "").trim();
+    if (agent !== "") {
+      violations.push(...antiRecursionPrecheck(agent, parseAssignmentFields(text).executeAs ?? "").violations);
+    }
+
+    // (4) Default-branch gate for writable text — branch from the
+    // Assignment's own forms, else $MSTAR_WORKING_BRANCH (env fallback
+    // shared by all adapters, qc1 F-002 / qc2 F-007 / qc3 F-008).
+    if (writable) {
+      const forms = parseAssignmentBranchForms(text);
+      const branch =
+        forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;
+      if (branch !== undefined && branch.trim() !== "") {
+        const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
+        violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
+      }
+    }
+
+    // (5) Header region only: an example `**Enforcement**: hard` line quoted
+    // in the task body must not harden the dispatch (qc1 F-003 / qc2 F-003).
+    const enforcement = parseEnforcementFlag(assignmentHeaderRegion(text));
+    const gate: GateResult = { ok: violations.length === 0, violations };
+    return { ...applyEnforcement(gate, { hard: enforcement.hard }), shaped: true, enforcement };
+  } catch {
+    return silent;
+  }
 }
 
 /**
