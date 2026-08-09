@@ -139,9 +139,60 @@ An advisory `agent/pre-step` waterfall listener appends ONE **`mstar-engine-stat
 
 The row is **digest-gated**: per agent+workspace it is injected once per turn and re-injected only when its rendered text changed — a 20-step turn shows the catalog once, not 20 times. The source shares ONE per-workspace cache entry, built at boot for an explicit `harnessDir` (else on the workspace's first pre-step) and TTL-refreshed (`catalogTtlMs`, default 60 s) — the hot path is a timestamp compare + Map lookup between refreshes, and a mid-session plan/compass/residual change lands within one interval.
 
+## Web client plugin (workflow panel)
+
+The package ships a browser client half for the dsh **web** profile, discovered
+automatically on the already-installed `mstar` bundle row (package.json
+`dshClient` declaration + `exports["./client"]` → `dist/client.js`) — **no
+separate profile layer or install step** (spec §6.1). The web app serves the
+bundle at `/plugins/@mstar-harness/dsh/client.js` and loads it through the
+closure-factory loader handoff (`window.__ModuleLoader__.load({ id, factory })`).
+
+The client entry registers a **`conversation.view`** view-ring tab
+(`id: 'mstar-workflow'`, `order: 20` — the trajectory precedent shape) that
+renders the latest `mstar-engine-status` catalog row from the session log
+(spec §2/§5): the watermark line (version / harness dir / enforcement), the
+**iteration phase-gate section** (transition, all-plans-done, gate verdict +
+violation codes, status/compass anchors), the **workspace-state section**
+(plan board, residual counts, branch/policy anchors, active leases, knowledge
+digest, direction one-liner), and the freshness marker (`last-updated
+HH:MM:SS` + the catalog-re-emission refresh note). Refresh = conversation
+snapshot subscription (`useSession`): a new catalog row bumps the snapshot
+and the panel re-renders — no polling, no manual refresh. Empty states
+degrade explicitly (waiting for the first catalog row / no harness / no
+gate); with no active session the strict-session view ring is not mounted
+(shell hero) — spec §3.
+
+Install / verify (the client half rides the same bundle-row install as the
+server half):
+
+```sh
+cd <repo>/packages/dsh
+bun run build               # dist/client.js (closure-factory CJS) + dist/client.d.ts
+# corepack machines (repo root declares packageManager: bun): prefix with COREPACK_ENABLE_PROJECT_SPEC=0
+dsh plugin --profile web add <abs packages/dsh path>   # same profile bundle install
+dsh web                     # boot → /plugins/@mstar-harness/dsh/client.js served
+```
+
+Verified locally (install-verification guide): the boot graph contains the
+client entry (`@mstar-harness/dsh` with the declared inject faces), the
+`/plugins/<id>/client.js` route serves the exact built bundle (rev = content
+sha1), and the browser handoff materializes the plugin entry (`inject` +
+`apply` + CSS injection) — see
+`.mstar/iterations/iter-20260809-dsh-workflow-viz/guides/install-verification.md`.
+
+**Known Limitations** (this iteration): the panel is a **structured segmented
+presentation** of the catalog (watermark + gate + state sections) — the
+**graphical workflow canvas (react-flow DAG) is NEXT-iteration scope**
+(compass Roadmap Position), deliberately not introduced here; no historical
+back-scan of a resumed long log (the server re-emits the row at every turn's
+first step, digest-gated); no custom top-level slot (the `conversation.view`
+tab is the only session-level panel seat available without dsh-private
+layout changes — spec §1).
+
 ## Development
 
-Commands (from `packages/dsh`): the coverage gate is per-file 100% on `src/` (dsh testing policy); the build bun-bundles the src entries into `dist/` (engine + schemastery inlined; `cordis` and the runtime seam imports — `@deepseek-ai/dsh-skill-local`, `@deepseek-ai/dsh-tools` (`defineTool`), `@deepseek-ai/dsh-llm` — external) and emits tsc declarations.
+Commands (from `packages/dsh`): the coverage gate is per-file 100% on `src/` (dsh testing policy); the build bun-bundles the src entries into `dist/` (engine + schemastery inlined; `cordis` and the runtime seam imports — `@deepseek-ai/dsh-skill-local`, `@deepseek-ai/dsh-tools` (`defineTool`), `@deepseek-ai/dsh-llm` — external), runs `build-client` (`scripts/build-client-bundle.ts` — the closure-factory CJS browser bundle per spec §6.2, `dist/client.js`) and emits tsc declarations.
 
 ```sh
 bun test --coverage
@@ -190,3 +241,4 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming.
 - **Entry `src/index.ts` stays monolithic** — the module-split is deferred: the 2600+ line entry ships as-is because a split at this point would destabilize a reviewed, fully-tested surface for zero behavioral gain; the split remains a follow-up.
 - **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root / `references/dsh.md`) updates with it.
+- **Workflow panel is structured-segmented (this iteration)** — the dsh web client plugin renders the `mstar-engine-status` catalog as a structured panel (watermark / iteration gate / workspace state); the graphical workflow canvas (react-flow DAG) is the NEXT iteration scope (compass Roadmap Position) — no react-flow dependency or panel render-shape change lands here.

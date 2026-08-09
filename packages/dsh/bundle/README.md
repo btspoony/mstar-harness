@@ -76,6 +76,35 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 | `bundledSkillDir` | unset → plugin resolves its OWN packaged `harness-skills/` mirror package-relative | bundled skill mount — the repo-root `skills/` mirror synced by `bundle-assets` at build/postinstall (gitignored), resolved package-relative (NOT cwd-anchored). An explicit value wins; a RELATIVE override stays cwd-anchored, so pass an absolute path in the profile layer |
 | `catalogTtlMs` | unset → `60000` | pre-step catalog cache refresh interval (ms) — how often the per-workspace unified `mstar-engine-status` catalog row (watermark + iteration gate + workspace-state digest) re-reads `status.json` / the compass / the knowledge index; the hot path is a timestamp compare + cache hit between refreshes |
 
+## Client half (workflow panel)
+
+The same bundle row carries a browser client half for the dsh **web** profile:
+`dshClient` (`platform: 'web'`, declared inject faces) + `exports["./client"]`
+(`dist/client.js`) in package.json. The `ClientModuleHostService` discovers it
+automatically on the **already-installed `mstar` bundle row** — no separate
+profile layer, no second install step (spec §6.1; mechanism-guide §1.1). At
+boot the web app serves the closure-factory CJS bundle at
+`/plugins/@mstar-harness/dsh/client.js` (rev = content sha1) and loads it via
+`window.__ModuleLoader__.load({ id, factory })`.
+
+The client entry registers a `conversation.view` view-ring tab
+(`id: 'mstar-workflow'`, `order: 20`) that renders the latest
+`mstar-engine-status` catalog row as a structured panel (watermark +
+iteration gate + workspace state + freshness). Build step: `bun run
+build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
+CLIENT_EXTERNALS external, CSS modules hashed + `<style data-plugin>`
+injection, purity gate); the full `bun run build` runs it after the node
+half. Verified locally: boot graph entry, the `/plugins/<id>/client.js`
+route serving the exact built bundle, and the browser-handoff
+materialization (`inject`/`apply`/CSS injection) — see
+`.mstar/iterations/iter-20260809-dsh-workflow-viz/guides/install-verification.md`.
+
+Known limitations (this iteration): the panel is a **structured segmented
+presentation** — the graphical workflow canvas (react-flow DAG) is the NEXT
+iteration scope (compass Roadmap Position); no historical back-scan of
+resumed long logs; no custom top-level slot (the `conversation.view` tab is
+the only session-level panel seat without dsh-private layout changes).
+
 ## Known constraints
 
 - The plugin's DEFAULT bundled root is its own `harness-skills/` mirror,
