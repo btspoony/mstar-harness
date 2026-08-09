@@ -97,8 +97,9 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
   })
 
   it('renders the compass enforcement mode as the watermark (active hard compass → hard)', async () => {
-    // The watermark is boot-resolved (qc3 W-002) — the compass must exist
-    // before apply() runs.
+    // The watermark is built at boot for the explicit config (the cache is
+    // pre-seeded at apply) — the compass must exist before apply() runs to
+    // be seen by the boot build.
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -127,11 +128,12 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
     expect(text).toContain('enforcement: hard (compass)')
   })
 
-  it('keeps the watermark process-stable — a compass appearing after boot does not re-watermark (qc3 W-002)', async () => {
+  it('keeps the watermark stable within the catalog TTL — a compass appearing after boot does not re-watermark immediately (qc3 W-002, TTL-bounded)', async () => {
     const app = booted = await bootApp()
-    // Enforcement is boot-resolved; a compass that appears mid-session does
-    // not change the catalog row until a config reload re-runs apply() (the
-    // documented staleness tradeoff for keeping disk I/O off the hot path).
+    // The cache is built at boot for the explicit config; a compass that
+    // appears after boot does not change the catalog row until the catalog
+    // TTL expires (Config `catalogTtlMs`, default 60000 — the documented
+    // staleness tradeoff for keeping disk I/O off the hot path).
     await seedHarness(app.harnessDir, {
       'iterations/20260808-catalog-test/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
     })

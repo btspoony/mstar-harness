@@ -162,10 +162,6 @@ const stepPayload = (messages: UserMessage[]) => ({
 const lastMessage = (decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined =>
   decision.messages.at(-1)
 
-/** The second-to-last message (the engine-status row when the gate row is last). */
-const secondLastMessage = (decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined =>
-  decision.messages.at(-2)
-
 /** status.json with an InProgress plan carrying a valid execution_lease. */
 const LEASE_STATUS = JSON.stringify({
   version: 1,
@@ -420,12 +416,13 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    expect(decision.messages.length).toBe(inbox.length + 2)
-    expect(decision.messages.slice(0, -2)).toEqual(inbox)
+    // engine-status + iteration-gate + harness-state rows.
+    expect(decision.messages.length).toBe(inbox.length + 3)
+    expect(decision.messages.slice(0, -3)).toEqual(inbox)
 
     // Engine-status row: the catalog watermark (unified mstar version,
     // harness dir, enforcement) — AC-6 shape.
-    const statusRow = secondLastMessage(decision)
+    const statusRow = decision.messages.at(-3)
     expect(statusRow?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
     const statusText = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
     expect(statusText).toContain('<mstar_engine_status>')
@@ -435,7 +432,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
 
     // Iteration-gate row: the boot-evaluated phase gate in the Task 1 tool
     // result shape (transition / all_plans_done / ok / codes).
-    const gate = lastMessage(decision)
+    const gate = decision.messages.at(-2)
     expect(gate?.source).toMatchObject({
       kind: 'mstar-iteration-gate',
       form: 'catalog',
@@ -456,6 +453,19 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     expect(gateText).toContain('iteration: e2e-iter')
     expect(gateText).toContain('transition: phase-2-execute')
     expect(gateText).toContain('gate: PASS')
+
+    // Harness-state row: the workspace digest (plan registry, residuals,
+    // branch anchors from status.json metadata + compass frontmatter
+    // fallback — the fixture metadata is empty, so the compass fills base
+    // and target).
+    const state = decision.messages.at(-1)
+    expect(state?.source).toMatchObject({ kind: 'mstar-harness-state', form: 'catalog' })
+    const stateText = state?.content[0]?.type === 'text' ? state.content[0].text : ''
+    expect(stateText).toContain('<mstar_harness_state>')
+    expect(stateText).toContain('plans: fixture-plan-1(Todo)')
+    expect(stateText).toContain('residuals: none open')
+    expect(stateText).toContain('branch: dev-dsh → dev-dsh')
+    expect(stateText).toContain('leases: none active')
   })
 })
 

@@ -17,9 +17,9 @@
  *     session agent gates the WORKSPACE's status.json; an agent-less actor
  *     is inert (no harness dir).
  *  4. Staleness — the catalog source is stable per workspace after first
- *     use (a compass appearing after the first pre-step of a workspace
- *     does not re-watermark); a NEW workspace resolves fresh on its own
- *     first use.
+ *     use within the catalog TTL (a compass appearing after the first
+ *     pre-step of a workspace does not re-watermark until the TTL
+ *     expires); a NEW workspace resolves fresh on its own first use.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { mkdir, mkdtemp } from 'node:fs/promises'
@@ -197,18 +197,20 @@ describe('fs/write-intent — the status gate follows the session workspace (no 
  * ========================================================================== */
 
 describe('agent/pre-step — per-workspace source staleness (no config)', () => {
-  it('a compass appearing after a workspace\'s first pre-step does not re-watermark; a NEW workspace resolves fresh', async () => {
+  it('a compass appearing after a workspace\'s first pre-step does not re-watermark within the catalog TTL; a NEW workspace resolves fresh', async () => {
     const ws = await makeWorkspace('dsh-ws-stale-')
     await mkdir(join(ws, '.agents'), { recursive: true })
     booted = await bootApp({ harnessDir: null })
 
-    // First pre-step of ws: no compass yet → soft.
+    // First pre-step of ws: no compass yet → soft (cache built on first use).
     const first = await booted.ctx.waterfall('agent/pre-step', stepPayload([], ws), defaultEnter([]))
     expect(first.kind).toBe('enter')
     if (first.kind !== 'enter') return
     expect(lastMessage(first)?.source).toMatchObject({ enforcement: { hard: false, source: 'none' } })
 
-    // A hard compass appears AFTER the first use — the cached source stands.
+    // A hard compass appears AFTER the first use — the cached source stands
+    // until the catalog TTL expires (default 60000; the test runs well
+    // inside the window).
     await seedHarness(join(ws, '.agents'), {
       'iterations/ws-stale/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
     })

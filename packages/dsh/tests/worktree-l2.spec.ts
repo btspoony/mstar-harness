@@ -215,12 +215,13 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
 
     // Advisory: the delegated decision wins — enter, with every inbox message preserved.
     expect(decision.kind).toBe('enter')
-    expect(decision.kind === 'enter' && decision.messages.length).toBe(inbox.length + 2)
-    expect(decision.kind === 'enter' && decision.messages.slice(0, -2)).toEqual(inbox)
+    expect(decision.kind === 'enter' && decision.messages.length).toBe(inbox.length + 3)
+    expect(decision.kind === 'enter' && decision.messages.slice(0, -3)).toEqual(inbox)
 
-    // Row order: engine-status first, iteration-gate appended after it.
-    expect(secondLastMessage(decision)?.source).toMatchObject({ kind: 'mstar-engine-status' })
-    const gate = lastMessage(decision)
+    // Row order: engine-status first, iteration-gate after it, harness-state last.
+    expect(decision.messages.at(-3)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+    const gate = decision.messages.at(-2)
+    expect(decision.messages.at(-1)?.source).toMatchObject({ kind: 'mstar-harness-state' })
     expect(gate?.role).toBe('user')
     expect(gate?.source).toMatchObject({
       kind: 'mstar-iteration-gate',
@@ -268,7 +269,7 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
-    const gate = lastMessage(decision)
+    const gate = decision.messages.at(-2)
     expect(gate?.source).toMatchObject({ kind: 'mstar-iteration-gate' })
     const source = gate?.source
     if (source === undefined) return
@@ -296,8 +297,9 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
 
     expect(decision.kind).toBe('enter')
-    expect(decision.kind === 'enter' && decision.messages.slice(0, -2)).toEqual(replaced)
-    expect(decision.kind === 'enter' && decision.messages.at(-1)?.source).toMatchObject({ kind: 'mstar-iteration-gate' })
+    expect(decision.kind === 'enter' && decision.messages.slice(0, -3)).toEqual(replaced)
+    expect(decision.kind === 'enter' && decision.messages.at(-2)?.source).toMatchObject({ kind: 'mstar-iteration-gate' })
+    expect(decision.kind === 'enter' && decision.messages.at(-1)?.source).toMatchObject({ kind: 'mstar-harness-state' })
   })
 
   it('aborted step → the delegated decision returns unchanged, no catalog rows (advisory never publishes on a blocked step)', async () => {
@@ -328,9 +330,10 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
     expect(before.kind === 'enter' && before.messages.length).toBe(inbox.length + 1)
     expect(lastMessage(before)?.source).toMatchObject({ kind: 'mstar-engine-status' })
 
-    // A compass + status.json appearing mid-session does NOT re-watermark:
-    // the gate result is boot-resolved (no disk I/O on the agent-loop hot
-    // path; the staleness clears on the next config reload → apply()).
+    // A compass + status.json appearing mid-session does NOT re-watermark
+    // within the catalog TTL: the cache is built at boot (no disk I/O on
+    // the agent-loop hot path between refreshes; a change lands after
+    // `catalogTtlMs` expires — Config `catalogTtlMs`, default 60000).
     await seedHarness(app.harnessDir, {
       'status.json': JSON.stringify(statusWithPlans([PLAN_TODO])),
       'iterations/iter-20260808-wt/delivery-compass.md': COMPASS_ACTIVE,

@@ -81,10 +81,14 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { DshMstar } from './service.ts'
 import type {
+  HarnessLeaseView,
+  HarnessPlanView,
+  HarnessResidualView,
   IterationGateListView,
   IterationGateViolationView,
   IterationGateView,
   MstarEngineStatusSource,
+  MstarHarnessStateSource,
   MstarIterationGateSource,
 } from './types.ts'
 
@@ -94,7 +98,7 @@ import type {
 // typed `ctx.dshMstar`.
 export { DshMstar } from './service.ts'
 export type { DshMstarOptions } from './service.ts'
-export type { MstarEngineStatusSource } from './types.ts'
+export type { MstarEngineStatusSource, MstarHarnessStateSource } from './types.ts'
 
 /** Cordis function-plugin name registered by the Loader. */
 export const name = 'dsh'
@@ -123,6 +127,15 @@ const SKILL_LINT_LOGGER = 'mstar/skill-lint'
 
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
 const CATALOG_LOGGER = 'mstar/engine-status-catalog'
+
+/** Default catalog cache refresh interval (ms) — see Config `catalogTtlMs`. */
+const DEFAULT_CATALOG_TTL_MS = 60_000
+
+/** Catalog cache key for the explicit-`harnessDir` app-wide entry (one entry for every session). */
+const EXPLICIT_CACHE_KEY = '\u0000explicit'
+
+/** Residual severity vocabulary (mstar-plan-artifacts severity SSOT order). */
+const RESIDUAL_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
 
 /** Default delegation tool names the dispatch gate matches (tool-subagent default id). */
 const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
@@ -188,6 +201,16 @@ export interface Config {
    * registration.
    */
   bundledSkillDir?: string
+  /**
+   * Catalog refresh interval in milliseconds — how often the per-workspace
+   * pre-step catalog cache (engine-status watermark, iteration-gate row,
+   * harness-state row) re-reads status.json / the compass / the knowledge
+   * index. Default 60000: a mid-session plan/compass/residual change lands
+   * within one TTL (the hot path stays a timestamp compare + cache hit
+   * between refreshes; a bounded sync re-read per workspace at most once
+   * per interval). Absent → 60000.
+   */
+  catalogTtlMs?: number
 }
 
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall), so both dispatch keys preserve omission via `.default(undefined)`. */
@@ -198,6 +221,7 @@ export const Config: z<Config> = z.object({
   dispatchBinding: z.string().default(undefined as unknown as string),
   skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
   bundledSkillDir: z.string().default(undefined as unknown as string),
+  catalogTtlMs: z.number().default(undefined as unknown as number),
 })
 
 /**
@@ -1946,12 +1970,12 @@ function pluginVersion(): string {
  * fields). Every field is boot/workspace-resolved — the unified mstar
  * version is a process-immutable manifest read and the compass enforcement
  * resolves like the gates themselves. With an explicit `harnessDir` config
- * the source is built ONCE at `apply()` (boot-stable, qc3 W-002); without
- * one it is built on the FIRST pre-step of each workspace and cached per
- * workspace root. A mid-session compass change therefore does NOT
- * re-watermark the catalog until a config reload re-runs `apply` (HMR fiber
- * restart) — the documented staleness tradeoff that keeps synchronous disk
- * I/O off the agent-loop hot path (one Map lookup per step after the first).
+ * the source is built ONCE at `apply()`; without one it is built on the
+ * FIRST pre-step of each workspace. The whole cache entry is then
+ * TTL-refreshed (Config `catalogTtlMs`, default 60000 — a mid-session
+ * compass change lands within one interval). The documented staleness
+ * tradeoff keeps synchronous disk I/O off the agent-loop hot path: a
+ * timestamp compare + Map lookup per step between refreshes.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
 function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource {
@@ -1964,17 +1988,25 @@ function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource 
   }
 }
 
-/** The per-workspace catalog sources (engine-status watermark + iteration-gate row). */
+/** The per-workspace catalog sources (engine-status watermark + iteration-gate row + harness-state row). */
 interface CatalogSources {
   source: MstarEngineStatusSource
   iterationGate: MstarIterationGateSource | undefined
+  harnessState: MstarHarnessStateSource | undefined
+}
+
+/** One TTL cache entry: the sources plus the build timestamp. */
+interface CatalogCacheEntry {
+  sources: CatalogSources
+  builtAt: number
 }
 
 /**
  * Build the catalog sources for one harness dir (boot for the explicit
- * config, first-use per workspace otherwise). Logs the manifest fallback
- * once per build — a '0.0.0' version would watermark every catalog
- * row wrongly, so the fallback is never silent.
+ * config, first-use per workspace otherwise, then TTL-refreshed — see
+ * `catalogSourcesFor`). Logs the manifest fallback once per build — a
+ * '0.0.0' version would watermark every catalog row wrongly, so the
+ * fallback is never silent.
  * @param ctx - registrant context (logger for the manifest fallback).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
@@ -1983,15 +2015,31 @@ function buildCatalogSources(ctx: Context, harnessDir: string | null): CatalogSo
   if (source.version === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
-  return { source, iterationGate: iterationGateSource(harnessDir) }
+  return {
+    source,
+    iterationGate: iterationGateSource(harnessDir),
+    harnessState: harnessStateSource(harnessDir),
+  }
 }
 
-/** Look up or lazily build the catalog sources for one workspace cache key. */
-function catalogSourcesFor(ctx: Context, cache: Map<string, CatalogSources>, key: string, harnessDir: string | null): CatalogSources {
-  const cached = cache.get(key)
-  if (cached !== undefined) return cached
+/**
+ * Look up the catalog sources for one cache key with a TTL: within the
+ * interval the cached build is reused (the agent-loop hot path is a
+ * timestamp compare + Map lookup); after it the sources are rebuilt from
+ * disk (one bounded sync re-read per workspace per interval — the
+ * mid-session plan/compass/residual staleness window the user opted into;
+ * Config `catalogTtlMs`).
+ * @param ctx - registrant context (logger for the manifest fallback).
+ * @param cache - the per-workspace TTL cache.
+ * @param key - cache key (the explicit-config key, else the session cwd).
+ * @param harnessDir - the resolved `{HARNESS_DIR}` for this key.
+ * @param ttlMs - refresh interval in milliseconds.
+ */
+function catalogSourcesFor(ctx: Context, cache: Map<string, CatalogCacheEntry>, key: string, harnessDir: string | null, ttlMs: number): CatalogSources {
+  const entry = cache.get(key)
+  if (entry !== undefined && Date.now() - entry.builtAt < ttlMs) return entry.sources
   const sources = buildCatalogSources(ctx, harnessDir)
-  cache.set(key, sources)
+  cache.set(key, { sources, builtAt: Date.now() })
   return sources
 }
 
@@ -2005,6 +2053,177 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
     `enforcement: ${enforcement}`,
     '</mstar_engine_status>',
   ].join('\n')
+}
+
+/**
+ * The workspace-state catalog source: the plan registry, open residual
+ * counts, branch/policy anchors, active leases, knowledge index digest and
+ * the steering compass direction one-liner — the "where are we" facts the
+ * model would otherwise have to read status.json / the compass / the
+ * knowledge index for. Built from the SAME cached cycle as the sibling
+ * rows (one status.json + compass + knowledge-index read per cache
+ * refresh). Returns undefined when the workspace has no harness dir or no
+ * status.json (the row is absent — advisory degrade, same as the
+ * iteration-gate row).
+ * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
+ */
+function harnessStateSource(harnessDir: string | null): MstarHarnessStateSource | undefined {
+  if (harnessDir === null) return undefined
+  const statusPath = join(harnessDir, STATUS_FILE)
+  if (!existsSync(statusPath)) return undefined
+  try {
+    const doc = readJson(statusPath) as StatusDoc
+    const str = (value: unknown): string | null =>
+      typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+    const plans: HarnessPlanView[] = []
+    const leases: HarnessLeaseView[] = []
+    if (Array.isArray(doc.plans)) {
+      for (const row of doc.plans.map(asRecord)) {
+        if (row === undefined) continue
+        const id = typeof row.plan_id === 'string' ? row.plan_id : typeof row.id === 'string' ? row.id : undefined
+        if (id === undefined) continue
+        plans.push({ id, status: typeof row.status === 'string' ? row.status : '' })
+        const lease = asRecord(row.execution_lease)
+        if (lease !== undefined && typeof lease.holder === 'string') {
+          leases.push({
+            planId: id,
+            holder: lease.holder,
+            worktreePath: str(lease.worktree_path),
+          })
+        }
+      }
+    }
+    // Open residual findings (root `residual_findings[<plan-id>]` SSOT —
+    // mstar-plan-artifacts): count by severity, non-zero severities only.
+    const residuals: HarnessResidualView[] = []
+    const residualMap = asRecord(doc.residual_findings)
+    if (residualMap !== undefined) {
+      const counts = new Map<string, number>()
+      for (const planId of Object.keys(residualMap)) {
+        const findings = residualMap[planId]
+        if (!Array.isArray(findings)) continue
+        for (const finding of findings) {
+          const severity = asRecord(finding)?.severity
+          if (typeof severity === 'string' && (RESIDUAL_SEVERITIES as readonly string[]).includes(severity)) {
+            counts.set(severity, (counts.get(severity) ?? 0) + 1)
+          }
+        }
+      }
+      for (const severity of RESIDUAL_SEVERITIES) {
+        const count = counts.get(severity)
+        if (count !== undefined && count > 0) residuals.push({ severity, count })
+      }
+    }
+    const metadata = asRecord(doc.metadata)
+    const compass = steeringCompassPath(harnessDir)
+    let compassFields: Record<string, unknown> | undefined
+    if (compass !== undefined) {
+      try {
+        compassFields = parseCompassFrontmatter(compass.compassPath)
+      } catch {
+        compassFields = undefined
+      }
+    }
+    return {
+      kind: 'mstar-harness-state',
+      form: 'catalog',
+      plans,
+      residuals,
+      iterationBaseBranch: str(metadata?.iteration_base_branch) ?? str(compassFields?.iteration_base_branch) ?? null,
+      targetBranch: str(metadata?.target_branch) ?? str(compassFields?.target_branch) ?? null,
+      specIntegrationBranch: str(metadata?.spec_integration_branch),
+      pushPolicy: str(metadata?.push_policy),
+      worktreeMode: str(metadata?.worktree_mode),
+      controlWorktreePath: str(metadata?.control_worktree_path),
+      leases,
+      knowledge: knowledgeDigest(harnessDir),
+      direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
+    }
+  } catch {
+    return undefined // advisory degrade — the row is absent, never hardening
+  }
+}
+
+/**
+ * Knowledge index digest: `{HARNESS_DIR}/knowledge/README.md` rows →
+ * doc count + distinct categories (the first path segment of each row's
+ * Document cell). Null when the index is absent or unreadable (advisory).
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ */
+function knowledgeDigest(harnessDir: string): { docCount: number; categories: string[] } | null {
+  const indexPath = join(harnessDir, 'knowledge', 'README.md')
+  if (!existsSync(indexPath)) return null
+  try {
+    const categories = new Set<string>()
+    let docCount = 0
+    for (const line of readFileSync(indexPath, 'utf8').split(/\r?\n/)) {
+      const row = line.trim().match(/^\|(.+)\|$/)
+      if (row === null) continue
+      const cells = row[1]!.split('|').map((cell) => cell.trim()).filter((cell) => cell !== '')
+      if (cells.length < 4) continue
+      const path = cells[0]!.replace(/^`|`$/g, '')
+      const category = path.split('/')[0]
+      if (category === undefined || category === '' || !path.includes('/')) continue
+      categories.add(category)
+      docCount += 1
+    }
+    if (docCount === 0) return null
+    return { docCount, categories: [...categories].sort() }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Steering compass direction one-liner: the first paragraph under the
+ * `## Direction lock` heading (the problem statement bullet), markdown
+ * emphasis stripped, truncated to ~160 chars. Null when unavailable.
+ * @param compassPath - the steering `delivery-compass.md` path.
+ */
+function compassDirection(compassPath: string): string | null {
+  try {
+    const content = readFileSync(compassPath, 'utf8')
+    const section = content.match(/^## Direction lock[^\n]*\n+([\s\S]*?)(?=\n## |$)/m)
+    if (section === null) return null
+    const paragraph = section[1]!
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line !== '')
+    if (paragraph === undefined) return null
+    const cleaned = paragraph
+      .replace(/^[-*]\s+/, '')
+      .replace(/\*\*[^*]+:\*\*\s*/, '') // strip a leading `**Label:** ` prefix (e.g. "Problem statement:")
+      .replace(/\*\*/g, '')
+      .trim()
+    if (cleaned === '') return null
+    return cleaned.length > 160 ? `${cleaned.slice(0, 157)}…` : cleaned
+  } catch {
+    return null
+  }
+}
+
+/** Model-facing rendering of the harness-state catalog (the `<mstar_harness_state>` block). */
+function renderHarnessStateCatalog(source: MstarHarnessStateSource): string {
+  const lines = ['<mstar_harness_state>']
+  lines.push(`plans: ${source.plans.length === 0 ? 'none registered' : source.plans.map((p) => `${p.id}(${p.status})`).join(' ')}`)
+  lines.push(`residuals: ${source.residuals.length === 0 ? 'none open' : source.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')}`)
+  if (source.iterationBaseBranch !== null && source.targetBranch !== null) {
+    const integration = source.specIntegrationBranch !== null ? ` (spec integration: ${source.specIntegrationBranch})` : ''
+    lines.push(`branch: ${source.iterationBaseBranch} → ${source.targetBranch}${integration}`)
+  }
+  const policy = [
+    source.pushPolicy !== null ? `push ${source.pushPolicy}` : null,
+    source.worktreeMode !== null ? `worktree ${source.worktreeMode}` : null,
+    source.controlWorktreePath !== null ? `control ${source.controlWorktreePath}` : null,
+  ].filter((part): part is string => part !== null).join('; ')
+  if (policy !== '') lines.push(`policy: ${policy}`)
+  lines.push(`leases: ${source.leases.length === 0 ? 'none active' : source.leases.map((l) => `${l.planId} → ${l.holder}${l.worktreePath !== null ? ` (${l.worktreePath})` : ''}`).join('; ')}`)
+  if (source.knowledge !== null) {
+    lines.push(`knowledge: ${source.knowledge.docCount} doc${source.knowledge.docCount === 1 ? '' : 's'} (${source.knowledge.categories.join(', ')})`)
+  }
+  if (source.direction !== null) lines.push(`direction: ${source.direction}`)
+  lines.push('</mstar_harness_state>')
+  return lines.join('\n')
 }
 
 /**
@@ -2116,7 +2335,9 @@ function renderIterationGateCatalog(source: MstarIterationGateSource): string {
  * carries them (model-visible ⟺ logged, MessageSource form):
  * one `mstar-engine-status` row always, plus — when a cached gate
  * verdict exists (`iterationGateSource`) — one `mstar-iteration-gate`
- * row after it. An aborted step publishes nothing: the delegated decision
+ * row after it, plus — when the workspace has a harness state
+ * (`harnessStateSource`) — one `mstar-harness-state` row last. An aborted
+ * step publishes nothing: the delegated decision
  * is returned unchanged (tool-skill precedent; a narrowed abort race —
  * an abort after delegation must not surface as a turn failure).
  *
@@ -2132,21 +2353,21 @@ function renderIterationGateCatalog(source: MstarIterationGateSource): string {
  * @param ctx - registrant context (logger for the containment path).
  * @param resolver - the per-workspace `{HARNESS_DIR}` resolver (the probe
  * never starts from the process cwd).
- * @param bootHarnessDir - the boot-resolved `{HARNESS_DIR}` (explicit
- * config or null at boot — null when probing is deferred per workspace).
- * @param bootSources - the boot-built catalog sources (explicit-config
- * case; reused while the resolved dir equals the boot dir — boot-stable).
- * @param cache - per-workspace catalog sources cache (no-config case:
- * built on first use of each workspace root and cached).
+ * @param explicitKey - the app-wide cache key when an explicit
+ * `harnessDir` config is set (undefined → per-session-cwd keys).
+ * @param cache - per-workspace TTL catalog sources cache (boot pre-seeded
+ * for the explicit-config case; otherwise built on first use of each
+ * workspace root and TTL-refreshed — Config `catalogTtlMs`).
+ * @param ttlMs - catalog refresh interval in milliseconds.
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
  */
 async function preStepCatalogListener(
   ctx: Context,
   resolver: HarnessResolver,
-  bootHarnessDir: string | null,
-  bootSources: CatalogSources | undefined,
-  cache: Map<string, CatalogSources>,
+  explicitKey: string | undefined,
+  cache: Map<string, CatalogCacheEntry>,
+  ttlMs: number,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
@@ -2155,16 +2376,15 @@ async function preStepCatalogListener(
   try {
     // The watermark harness dir resolves from the WORKSPACE of the session
     // whose agent enters the step (the session cwd) — never the process
-    // cwd. With an explicit config the resolution equals the boot dir and
-    // the boot-built sources are reused (boot-stable, qc3 W-002); without
-    // one the sources are built on the first pre-step of each workspace and
-    // cached per workspace root (the boot-resolved staleness tradeoff
-    // becomes workspace-resolved: no disk I/O after the first step).
+    // cwd. With an explicit config the whole app shares one cache entry
+    // (pre-seeded at boot); without one each workspace root gets its own
+    // entry, built on first use and TTL-refreshed (Config `catalogTtlMs` —
+    // a mid-session plan/compass/residual change lands within one interval;
+    // the hot path is a timestamp compare + Map lookup between refreshes).
     const cwd = sessionCwdOf(payload.agent)
     const harnessDir = resolver.forWorkspace(cwd)
-    const sources = harnessDir !== null && harnessDir === bootHarnessDir && bootSources !== undefined
-      ? bootSources
-      : catalogSourcesFor(ctx, cache, cwd ?? '', harnessDir)
+    const key = explicitKey ?? cwd ?? ''
+    const sources = catalogSourcesFor(ctx, cache, key, harnessDir, ttlMs)
     const messages = [...decision.messages]
     messages.push(createUserMessage({
       source: sources.source,
@@ -2176,10 +2396,16 @@ async function preStepCatalogListener(
         content: [{ type: 'text', text: renderIterationGateCatalog(sources.iterationGate) }],
       }))
     }
+    if (sources.harnessState !== undefined) {
+      messages.push(createUserMessage({
+        source: sources.harnessState,
+        content: [{ type: 'text', text: renderHarnessStateCatalog(sources.harnessState) }],
+      }))
+    }
     return { kind: 'enter', messages }
   } catch (error) {
     ctx.logger(CATALOG_LOGGER).error(
-      `engine-status/iteration-gate catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
+      `engine-status/iteration-gate/harness-state catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
     )
     return decision
   }
@@ -2918,23 +3144,29 @@ export function apply(ctx: Context, config: Config): void {
   // Iteration-gate row: the SAME listener appends a second
   // `mstar-iteration-gate` catalog row when a gate verdict is evaluable
   // (control-path status.json + steering compass; engine
-  // evaluatePhaseGate tool result shape).
+  // evaluatePhaseGate tool result shape); the harness-state row
+  // (`mstar-harness-state` — plan registry / residuals / branch / leases /
+  // knowledge / direction) appends last when the workspace has a
+  // status.json.
   //
-  // Watermark resolution: with an explicit `harnessDir` config the sources
-  // are computed ONCE at boot (the unified mstar version is a
-  // process-immutable manifest read, compass enforcement is boot-resolved
-  // like the gates, and the iteration gate is boot-evaluated) and reused
-  // per step — the pre-step hot path does no disk I/O. WITHOUT the config
-  // the sources are built on the first pre-step of each workspace and
-  // cached per workspace root (the same staleness tradeoff,
-  // workspace-scoped — see engineStatusSource / iterationGateSource /
-  // buildCatalogSources).
-  const bootSources = bootHarnessDir !== null ? buildCatalogSources(ctx, bootHarnessDir) : undefined
-  // Per-workspace catalog cache for the no-config path (keyed by the
-  // session workspace root; '' for agent-less events).
-  const catalogCache = new Map<string, CatalogSources>()
+  // Watermark resolution: with an explicit `harnessDir` config one
+  // app-wide cache entry is built ONCE at boot (the unified mstar version
+  // is a process-immutable manifest read, compass enforcement is
+  // boot-resolved like the gates, and the iteration gate is
+  // boot-evaluated); without the config each workspace root gets its own
+  // entry, built on its first pre-step. Every entry is then TTL-refreshed
+  // (Config `catalogTtlMs`, default 60000): the pre-step hot path is a
+  // timestamp compare + Map lookup between refreshes, and a mid-session
+  // status/compass/residual change lands within one interval (see
+  // catalogSourcesFor / buildCatalogSources).
+  const ttlMs = config.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS
+  const explicitKey = bootHarnessDir !== null ? EXPLICIT_CACHE_KEY : undefined
+  const catalogCache = new Map<string, CatalogCacheEntry>()
+  if (explicitKey !== undefined) {
+    catalogCache.set(explicitKey, { sources: buildCatalogSources(ctx, bootHarnessDir), builtAt: Date.now() })
+  }
   ctx.on('agent/pre-step', (payload, next) =>
-    preStepCatalogListener(ctx, resolver, bootHarnessDir, bootSources, catalogCache, payload, next))
+    preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, payload, next))
 
   // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
   registerSddIterationTools(ctx, resolver)

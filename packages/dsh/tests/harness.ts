@@ -33,6 +33,8 @@ export interface BootOptions {
   skillRoots?: string[]
   /** Bundled skill root registered with skill-local (Config `bundledSkillDir`). */
   bundledSkillDir?: string
+  /** Catalog cache refresh interval in ms (Config `catalogTtlMs`). */
+  catalogTtlMs?: number
   /** App root override (default: a fresh temp dir). */
   root?: string
   /**
@@ -133,6 +135,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   if (options.dispatchBinding !== undefined) configLines.push(`    dispatchBinding: ${JSON.stringify(options.dispatchBinding)}`)
   if (options.skillRoots !== undefined) configLines.push(`    skillRoots: ${JSON.stringify(options.skillRoots)}`)
   if (options.bundledSkillDir !== undefined) configLines.push(`    bundledSkillDir: ${JSON.stringify(options.bundledSkillDir)}`)
+  if (options.catalogTtlMs !== undefined) configLines.push(`    catalogTtlMs: ${options.catalogTtlMs}`)
   if (configLines.length > 0) {
     lines.push('  config:')
     lines.push(...configLines)

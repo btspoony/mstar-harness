@@ -46,6 +46,62 @@ export interface IterationGateViolationView {
   fix?: string
 }
 
+/** One registered plan row of the harness-state catalog (id + status). */
+export interface HarnessPlanView {
+  readonly id: string
+  readonly status: string
+}
+
+/** Open residual finding counts by severity (non-zero severities only). */
+export interface HarnessResidualView {
+  readonly severity: 'critical' | 'high' | 'medium' | 'low' | 'nit'
+  readonly count: number
+}
+
+/** One active plan execution lease of the harness-state catalog. */
+export interface HarnessLeaseView {
+  readonly planId: string
+  readonly holder: string
+  readonly worktreePath: string | null
+}
+
+/**
+ * Durable provenance for one `mstar-harness-state` catalog row — the
+ * workspace-state digest the pre-step listener appends after the
+ * engine-status and iteration-gate rows: the plan registry, open residual
+ * counts, branch/policy anchors, active leases, knowledge index digest and
+ * the steering compass direction one-liner. All fields come from the same
+ * per-workspace cached build as the sibling rows (one status.json /
+ * compass / knowledge-index read per cache refresh — the TTL-bounded
+ * staleness tradeoff documented on `buildCatalogSources`).
+ */
+export interface MstarHarnessStateSource {
+  readonly kind: 'mstar-harness-state'
+  readonly form: 'catalog'
+  /** Registered plan rows (`plan_id`/`id` + `status`), status.json order. */
+  readonly plans: readonly HarnessPlanView[]
+  /** Open `residual_findings` counts by severity (non-zero only). */
+  readonly residuals: readonly HarnessResidualView[]
+  /** `metadata.iteration_base_branch` (compass frontmatter fallback), null when absent. */
+  readonly iterationBaseBranch: string | null
+  /** `metadata.target_branch` (compass frontmatter fallback), null when absent. */
+  readonly targetBranch: string | null
+  /** `metadata.spec_integration_branch`, null when absent. */
+  readonly specIntegrationBranch: string | null
+  /** `metadata.push_policy`, null when absent. */
+  readonly pushPolicy: string | null
+  /** `metadata.worktree_mode`, null when absent. */
+  readonly worktreeMode: string | null
+  /** `metadata.control_worktree_path`, null when absent. */
+  readonly controlWorktreePath: string | null
+  /** Active plan execution leases (holder + worktree). */
+  readonly leases: readonly HarnessLeaseView[]
+  /** Knowledge index digest (docs count + categories), null when no index. */
+  readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
+  /** Steering compass direction one-liner (problem statement digest), null when unavailable. */
+  readonly direction: string | null
+}
+
 /** JSON projection of one engine gate (`GateResult`). */
 export interface IterationGateListView {
   ok: boolean
@@ -68,10 +124,11 @@ export interface IterationGateView {
 
 /**
  * Durable provenance for one iteration-gate catalog row (plan
- * The gate verdict is cached at BOOT — no disk I/O on the agent-loop
- * hot path — so the row documents
- * the files it evaluated at boot, and a mid-session status/compass change
- * does not re-watermark until a config reload re-runs `apply`.
+ * The gate verdict is cached with a TTL — no disk I/O on the agent-loop
+ * hot path between refreshes — so the row documents
+ * the files it evaluated at the last refresh, and a mid-session
+ * status/compass change lands within the catalog TTL (`Config
+ * `catalogTtlMs`).
  */
 export interface MstarIterationGateSource {
   readonly kind: 'mstar-iteration-gate'
@@ -90,5 +147,6 @@ declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'mstar-engine-status': MstarEngineStatusSource
     'mstar-iteration-gate': MstarIterationGateSource
+    'mstar-harness-state': MstarHarnessStateSource
   }
 }
