@@ -9,23 +9,26 @@
  *
  * Layout (spec panel-layout-graph §1.1): root grid `"header header" /
  * "main sidebar"` — header = 3 evenly-spread basics (version / harness dir /
- * enforcement), main = graph region (placeholder for the Task 2 react-flow
- * loop; currently hosts the iteration gate detail), sidebar = workspace-state
+ * enforcement), main = the react-flow loop graph (`GraphCanvas` over the
+ * `projectGraph` projection) + freshness footer, sidebar = workspace-state
  * digest (plans / residuals / branches+policy / leases / knowledge /
  * direction). Below 860px the sidebar stacks under the main area.
  *
- * Empty states (spec §3): no catalog row → waiting hint; harness missing
- * (`harnessDir` null + `state` null + no `iteration`, absent or null) →
- * no-harness hint while the header still renders; gate missing (`iteration`
- * absent or null) → no-compass note while the sidebar still renders. The
- * no-session case is shell-handled by the strict-session view ring.
+ * Graph mount gating (spec §2.5, T1 review minor-1): the canvas mounts ONLY
+ * in the harness-present branch — the `data-mstar-graph` anchor also exists
+ * on the no-harness hint container, but no GraphCanvas is rendered there.
+ * Degradation stays total: `projectGraph` never throws; no iteration →
+ * schema ring + no-compass note; `state` null / plans missing → machine
+ * skeleton + notes. The no-session case is shell-handled by the
+ * strict-session view ring.
  */
 
 import * as React from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './panel.module.css'
-import { IterationSection } from './iteration-section.tsx'
+import { GraphCanvas } from './graph/GraphCanvas.tsx'
+import { projectGraph } from './graph/project-graph.ts'
 import { PanelHeader } from './panel-header.tsx'
 import { Sidebar } from './sidebar.tsx'
 import { useMstarEngineStatus } from './use-mstar-engine-status.ts'
@@ -59,7 +62,9 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
     </footer>
   )
   if (noHarness) {
-    // No harness → no graph region (spec §2.5): header + hint in a single-column root.
+    // No harness → no graph region (spec §2.5): header + hint in a single-column
+    // root. The `data-mstar-graph` anchor is present for the T1 layout contract,
+    // but the GraphCanvas mount is gated to the harness-present branch below.
     return (
       <div className={css.root} data-mstar-panel="no-harness">
         <PanelHeader t={t} source={source} />
@@ -75,15 +80,7 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
       <PanelHeader t={t} source={source} />
       <main className={css.main} data-mstar-graph>
         <div className={css.graph}>
-          {source.iteration == null
-            ? <p className={css.empty} data-mstar-empty="no-gate">{t('iteration.no-compass')}</p>
-            : (
-              // Graph area placeholder — Task 2 swaps this frame for GraphCanvas.
-              <div className={css.graphPlaceholder} data-mstar-graph-placeholder>
-                <p className={css.graphPlaceholderNote}>{t('graph.placeholder')}</p>
-                <IterationSection t={t} iteration={source.iteration} />
-              </div>
-            )}
+          <GraphCanvas view={projectGraph(source)} t={t} />
         </div>
         {freshness}
       </main>

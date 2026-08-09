@@ -64,6 +64,27 @@ function hashClass(local: string): string {
 }
 
 /**
+ * Inline `<style data-plugin>` injection source for a css text blob: the tag
+ * is created once per factory materialization (the loader removes plugin-owned
+ * tags on unload). Shared by the CSS-modules loader and the plain-`.css`
+ * loader (react-flow's base stylesheet, spec §3.2 — the bundle must inline it:
+ * a second emitted asset would never be served by the closure loader).
+ */
+function styleInjectionContents(cssText: string, tagId: string): string {
+  return [
+    `const css = ${JSON.stringify(cssText)};`,
+    `const tagId = ${JSON.stringify(tagId)};`,
+    `if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(tagId) + ']') === null) {`,
+    `  const tag = document.createElement('style');`,
+    `  tag.dataset.plugin = ${JSON.stringify(ID)};`,
+    `  tag.dataset.pluginCss = tagId;`,
+    `  tag.textContent = css;`,
+    `  document.head.appendChild(tag);`,
+    `}`,
+  ].join('\n')
+}
+
+/**
  * Compile one `*.module.css` file into a JS module: the css text (comments
  * stripped, class tokens hashed) plus a `<style data-plugin>` injection that
  * runs at factory materialization, and the hashed class map as the default
@@ -86,15 +107,7 @@ function cssModuleContents(fileId: string): { contents: string; loader: 'js' } {
   })
   const tagId = `${ID}/${basename(fileId)}`
   const contents = [
-    `const css = ${JSON.stringify(css)};`,
-    `const tagId = ${JSON.stringify(tagId)};`,
-    `if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(tagId) + ']') === null) {`,
-    `  const tag = document.createElement('style');`,
-    `  tag.dataset.plugin = ${JSON.stringify(ID)};`,
-    `  tag.dataset.pluginCss = tagId;`,
-    `  tag.textContent = css;`,
-    `  document.head.appendChild(tag);`,
-    `}`,
+    styleInjectionContents(css, tagId),
     `export default ${JSON.stringify(classMap)};`,
   ].join('\n')
   return { contents, loader: 'js' }
@@ -106,6 +119,12 @@ const result = await build({
   target: 'browser',
   format: 'cjs',
   external: [...CLIENT_EXTERNALS],
+  // Plain `.css` imports (e.g. `@xyflow/react/dist/style.css`) load as TEXT
+  // modules: GraphCanvas imports the stylesheet string and injects it as a
+  // `<style data-plugin>` tag at factory materialization (spec §3.2 — a second
+  // emitted asset would never be served by the closure loader). `*.module.css`
+  // is unaffected: the css-modules plugin below wins for those paths.
+  loader: { '.css': 'text' },
   // zustand/immer-style deps read process.env.NODE_ENV; honor the build env
   // like the snapshot recipe (artifacts default to production).
   define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production') },

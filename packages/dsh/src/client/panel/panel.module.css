@@ -132,24 +132,6 @@
   flex-direction: column;
 }
 
-/* T1 graph-area placeholder frame — Task 2 swaps it for the react-flow canvas. */
-.graphPlaceholder {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-3);
-  padding: var(--mstar-space-4);
-  border: 1px dashed var(--dsw-alias-border-l2);
-  border-radius: 8px;
-}
-
-.graphPlaceholderNote {
-  margin: 0;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-  letter-spacing: 0.03em;
-}
-
 /* --- sidebar: fixed 300px column, own scroll (spec §1.1) --- */
 
 .sidebar {
