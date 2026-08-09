@@ -2,13 +2,17 @@
 
 English | [中文](README.zh.md)
 
-Morning Star as a first-class dsh host — a cordis function plugin that mounts the mstar engine in-process, implements the engine `HostAdapter` (`host: 'dsh'`), guards `{HARNESS_DIR}/status.json` writes (validate + advisory; repair-escape under hard), blocks disallowed subagent dispatches when `Enforcement: hard` is on, lints `SKILL.md` writes under the mounted skill roots, mounts the mstar `skills/` mirror through the dsh skill-local provider (single canonical mount), and appends a durable `mstar-engine-status` catalog row to every composed agent step. Boot with a dsh Loader app; everything acts through the seam's refusal/advisory channels, never by patching the tools.
+[Morning Star](https://github.com/btspoony/mstar-harness) as a first-class dsh host — a cordis function plugin that mounts the mstar engine in-process, implements the engine `HostAdapter` (`host: 'dsh'`), guards `{HARNESS_DIR}/status.json` writes (validate + advisory; repair-escape under hard), blocks disallowed subagent dispatches when `Enforcement: hard` is on, lints `SKILL.md` writes under the mounted skill roots, mounts the mstar `skills/` mirror through the dsh skill-local provider (single canonical mount), and appends a durable `mstar-engine-status` catalog row to every composed agent step. Boot with a dsh Loader app; everything acts through the seam's refusal/advisory channels, never by patching the tools.
 
-## Installation
+## Usage
+
+How a dsh app consumes the plugin — install paths, configuration, what mounts at boot, and the enforcement semantics.
+
+### Install paths
 
 The package ships as a workspace package (`workspaces: ["packages/*"]`) with the engine bundled into `dist/` at build time (`bun run build`; dist is gitignored). Two install shapes:
 
-**As a cordis plugin** in a dsh app's `cordis.yml`:
+**(a) Cordis plugin row** in a dsh app's `cordis.yml` (id/name + config snippet — see the minimal example below):
 
 ```yaml
 - name: '@mstar-harness/dsh'
@@ -16,24 +20,19 @@ The package ships as a workspace package (`workspaces: ["packages/*"]`) with the
     harnessDir: .mstar
 ```
 
-**As a profile bundle** (`dsh --profile mstar`), through the `dsh.bundle.patch` manifest. Local checkout (this iteration — local-only, no npm publish yet):
+**(b) Profile bundle** (`dsh --profile mstar`), through the `dsh.bundle.patch` manifest — a patch layer mounted over the dsh-base profile defaults:
 
 ```sh
+# local checkout (this iteration — local-only, no npm publish yet)
 cd <repo>/packages/dsh
 dsh plugin --profile mstar add .
-```
-
-Published package (later, once `@mstar-harness/dsh` is on the registry):
-
-```sh
+# published package (once @mstar-harness/dsh is on the registry)
 dsh plugin --profile mstar add @mstar-harness/dsh
 ```
 
-Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add .` runs from the package checkout; pnpm must be on PATH. Details, layer position, and the shipped defaults live in [`bundle/README.md`](bundle/README.md) — the local path is **verified** (Task 5), the registry path is deferred until publish.
+Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add .` runs from the package checkout; pnpm must be on PATH. Details, layer position, and the shipped defaults live in [`bundle/README.md`](bundle/README.md) — the local path is **verified** (Task 5), the registry path is deferred until publish. `cordis` and the `@deepseek-ai/dsh-*` seams are peerDependencies — the composed dsh app provides them.
 
-`cordis` and the `@deepseek-ai/dsh-*` seams are peerDependencies — the composed dsh app provides them.
-
-## Configuration
+### Configuration
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -44,6 +43,33 @@ Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add 
 | `skillRoots` | `string[]` | unset (no custom-root registration) | Additional skill roots registered with the dsh skill-local provider (`customSkillDirs` semantics — scanned before user roots). Dev-time: the mirror `<repo-root>/skills` absolute path. |
 | `bundledSkillDir` | `string` | unset | Bundled skill root registered with the dsh skill-local provider (`bundledSkillDir` semantics — scanned last, trusted). The canonical published form — dsh defaults `$DSH_BUNDLED_SKILL_DIR`; this plugin mounts an isolated provider, so the bundled root is registered explicitly. |
 
+`bundledSkillDir` is **cwd-anchored**: a relative root resolves with `join()` semantics against the dsh process cwd at boot, so the shipped `./skills` default only finds the packaged mount when dsh launches from the package root. The supported production form is an **absolute path override in the profile layer** (see `bundle/README.md`).
+
+### Minimal cordis.yml
+
+```yaml
+- name: '@deepseek-ai/dsh-skill'   # skill registry (ctx.skills)
+- name: '@deepseek-ai/dsh-tools'   # tool registry (ctx.tools)
+- name: '@mstar-harness/dsh'
+  config:
+    harnessDir: .mstar
+```
+
+The registry rows mount before the plugin so `ctx.skills` / `ctx.tools` exist when the mstar gates and seam tools register — the row set the full-app e2e fixture boots.
+
+### What the plugin does when mounted
+
+- **Status gate** — `fs/write-intent` + `fs/edit-intent` listeners validate `{HARNESS_DIR}/status.json` writes (engine `validateStatus` + per-plan `findingsCleanupGate` over the pre-write document).
+- **Dispatch gate** — a `tools/pre-execute` listener on the delegation tool(s) validates subagent Assignment text through the engine's single `composeDispatchGate` composition (field gate, anti-recursion precheck, default-branch gate — opencode/omp/CLI parity, so violation codes are identical by construction) plus the dsh lease gate and worktree L1/L2 checks.
+- **Skill-authoring lint** — `SKILL.md` writes under the configured skill roots run the engine skill-authoring lints (`lintFrontmatter` + `lintFiveQuestion`).
+- **Seam lints** — `DESIGN.md` / audit-plan / knowledge-doc / roles-dir writes under the harness get their artifact-specific engine lints.
+- **Model-facing tools** — `mstar_sdd_workspace`, `mstar_sdd_task_brief`, `mstar_iteration_gate`, `mstar_design_md_validate`, `mstar_audit_validate`, `mstar_compound_validate`, `mstar_roles_validate` register on `ctx.tools`.
+- **Pre-step catalog rows** — every composed agent step appends the `mstar-engine-status` watermark (engine/plugin version, harness dir, enforcement) and, when a steering iteration compass resolves, the `mstar-iteration-gate` row.
+
+### Enforcement semantics
+
+Warn-only by default: gate violations log and emit advisory events (`mstar/status-gate`, `mstar/dispatch-gate`, `mstar/skill-lint`, seam advisories) and the action proceeds. `Enforcement: hard` — from the iteration compass frontmatter, the Assignment header, or the plugin Config (`enforcement: hard`) — escalates violations to a **real veto/deny** through the cordis refusal channels: subagent dispatch returns `PreToolDecision { kind: 'deny', reason }` without delegating; status/skill-lint writes are never hard-vetoed because the intent waterfall is content-blind — an already-invalid document is allowed as a **repair escape** (`hard: true, repair: true` advisory) so the repairing write can land. Config `soft` is the only local rollback; hard gates are never a global default.
+
 ## Gates
 
 ### Status gate
@@ -52,7 +78,7 @@ Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add 
 
 ### Dispatch gate
 
-`tools/pre-execute` listener on the delegation tool(s): parses the payload's Assignment text and runs the opencode-parity field validators (`validateAssignmentFields`, `antiRecursionPrecheck`, `assertDefaultBranchProtected`) plus the dsh lease gate. The refusal channel is `PreToolDecision { kind: 'deny', reason }` returned **without** calling `next()`; warn mode logs, emits `mstar/dispatch-gate`, and delegates. Non-Assignment prompts and non-delegation tools are inert. Engine failures degrade to allow in both modes **observably**: the catch path emits the plugin-owned advisory with `degraded: true` + an error log, so a hard deployment can detect a dead control instead of a silent pass (qc2 W-003). Registered `prepend` so an earlier-mounted decision can never short-circuit this gate out of reach.
+`tools/pre-execute` listener on the delegation tool(s): parses the payload's Assignment text and runs the engine's SINGLE dispatch-gate composition (`composeDispatchGate` — shape guard, `validateAssignmentFields`, `antiRecursionPrecheck`, default-branch gate, header-region enforcement; the same composition the opencode/omp/CLI bindings use, so violation codes are identical by construction) over the header region, plus the dsh-side worktree L1/L2 checks and the lease gate. The refusal channel is `PreToolDecision { kind: 'deny', reason }` returned **without** calling `next()`; warn mode logs, emits `mstar/dispatch-gate`, and delegates. Non-Assignment prompts and non-delegation tools are inert. Engine failures degrade to allow in both modes **observably**: the catch path emits the plugin-owned advisory with `degraded: true` + an error log, so a hard deployment can detect a dead control instead of a silent pass (qc2 W-003). Registered `prepend` so an earlier-mounted decision can never…
 
 ### Lease gate
 
@@ -95,13 +121,13 @@ Every engine module attaches to a dsh surface — all delivered (v2.1.0; epic ro
 | path (resolveHarnessDir, assertPlanWritingPath) | `fs/write-intent` on `{HARNESS_DIR}` writes | delivered (P1) |
 | status (validateStatus, validateResidual, findingsCleanupGate) | `fs/write-intent` + `fs/edit-intent` on status.json | delivered (P1) |
 | lease (verifyPlanExecutionLease, validateIntegrationMergeLease) | exec lease: `tools/pre-execute` (inside the dispatch gate); merge lease: `HostAdapter.beforeMerge` | delivered (P1 exec / P3 merge) |
-| dispatch (validateAssignmentFields, antiRecursionPrecheck, isReadOnlyAssignmentRole) | `tools/pre-execute` on the subagent tool (`PreToolDecision.deny` to block); `agent/pre-step` advisory | delivered (P1) |
+| dispatch (composeDispatchGate, validateAssignmentFields, antiRecursionPrecheck, isReadOnlyAssignmentRole) | `tools/pre-execute` on the subagent tool (`PreToolDecision.deny` to block); `agent/pre-step` advisory | delivered (P1) |
 | host (detectHost, resolveSkillRoot, HostAdapter) | engine host.ts + plugin adapter (`host: dsh`) | delivered (P2) |
 | skill-authoring (lintFrontmatter, lintFiveQuestion) | skill-local roots + `fs/write-intent` on SKILL.md | delivered (P2) |
 | lint (lintSkillFrontmatter, planQualityBar, assertSddTddTriple) | `fs/write-intent` plan/tdd + seam tools | delivered (P2 skill / P3 plan) |
 | agent catalog | MessageSourceMap `mstar-engine-status` (model-visible ⟺ logged) | delivered (P2) |
 | sdd (sddWorkspace, taskBrief, reviewPackage) | `defineTool` wrappers registered on `ctx.tools`; `agent/pre-step` | delivered (P3) |
-| iteration (evaluatePhaseGate, pushCadenceProbe, validateCompassFrontmatter) | `agent/pre-step` + iteration gate | delivered (P3) |
+| iteration (evaluatePhaseGate, pushCadenceProbe, validateCompassFrontmatter, parseCompassFrontmatter) | `agent/pre-step` + iteration gate | delivered (P3) |
 | worktree (l1/l2PreDispatchCheck, assertQcAlignment) | `tools/pre-execute` L1/L2 (inside the dispatch gate) | delivered (P3) |
 | design-md / audit / compound / roles | `fs/write-intent` + `defineTool` wrappers on `ctx.tools` | delivered (P3) |
 
@@ -142,7 +168,8 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **Dev-time peer stubs** — the `@deepseek-ai/dsh-*` seams split into (a) **type-only / placeholder stubs** (`dsh-fs`, `dsh-fs-policy`, `dsh-agent`, `dsh-invariants`, `dsh-subagent`) exposing the seam types/peer names only, and (b) **functional composition stubs** (`dsh-skill`, `dsh-skill-local`, `dsh-tools` (`defineTool`), `dsh-llm`) carrying minimal dev-time runtimes (`simplify:` markers; pinned to dsh-private `9451be2`) so composition, waterfalls, the catalog message factory, and the v2 seam tools actually run in tests. **All four runtime seam imports are externalized at build time** (`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining the stand-in code; verified in the Task 6 pack review); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. Swapping in the real seam packages for the plugin's own suite is NOT planned — a composed app with real seams is the deployment target (this package's suite deliberately runs the pinned stubs for hermetic composition tests).
 - **Anti-recursion binding is Config-declared** — dsh exposes no per-agent role on the tool-execution context, so `dispatchBinding` declares one deployment-wide role; an Assignment with a different `Execute as` cannot be caught as self-recursion, and multi-role dispatchers need per-instance plugins.
 - **Lease gate diverges from opencode by design** — opencode's `beforeDispatch` runs no lease checks; the dsh lease gate is additive (`lease.dispatch.*` codes) and fires only for writable SDD/InProgress dispatches, so parity covers the field set, not the lease surface.
-- **Engine single-version pin** — `@mstar-harness/engine` is an exact `2.0.0` devDependency bundled into `dist/` (never a runtime dependency); `readHarnessVersion()` reads the dsh package manifest next to the bundle, which stays `2.0.0` by the single-version invariant.
+- **Shared engine composition adopted (2.0.4 sync)** — the dispatch gate core is the engine's single `composeDispatchGate` (opencode/omp/CLI parity, so field/branch/anti-recursion violation codes are identical by construction), and the compass frontmatter parser is the engine's shared `parseCompassFrontmatter` (the local dsh mirror and the CLI copy are deleted — no fork left to drift). Both run over the dsh header-region slice per the qc2 F-001 discipline; the lease + worktree L1/L2 checks stay dsh-side additions on top.
+- **Engine single-version pin** — `@mstar-harness/engine` is an exact `2.0.4` devDependency bundled into `dist/` (never a runtime dependency); `readHarnessVersion()` reads the dsh package manifest next to the bundle, which stays `2.0.4` by the single-version invariant.
 - **Schemastery empty-array materialization** — an omitted optional ARRAY Config key materializes as `[]`; the dispatch keys preserve omission via `.default(undefined)`, and any future optional array key must do the same.
 - **Payload boundary** — the dispatch gate validates the delegation payload (Assignment text), not the child's runtime behavior; post-publish observation via `subagent/start` remains an option if model-visible child activity needs surfacing.
 - **Status gate is content-blind by seam design** (qc2 W-001) — the `fs/write-intent`/`fs/edit-intent` waterfall carries only `(target, actor)`, never the incoming content, so the write that FIRST corrupts a valid `status.json` passes in BOTH modes (the gate validates the pre-write document only). Hard mode therefore never vetoes status writes: an already-invalid document is allowed as a **repair escape** (error-level advisory with `hard: true, repair: true`) so the repairing write can land. Recovery path: repair the document in place (the gate allows it) or delete `status.json` and let the harness re-create it; monitor hard-mode deployments for `repair: true` advisories.
