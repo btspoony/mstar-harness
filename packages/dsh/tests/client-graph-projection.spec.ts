@@ -407,6 +407,25 @@ describe('projectGraph — totality (spec §2.1 / §2.5)', () => {
     expect(() => projectGraph({ iteration: { gate: { transition: { deep: true } } } } as unknown as MstarEngineStatusSource)).not.toThrow()
   })
 
+  it('prototype-key transitions (__proto__/constructor/toString/hasOwnProperty) degrade, never crash', () => {
+    // Plain-object lookups hit Object.prototype inherited values (truthy) for these
+    // keys — they must take the illegal-transition path, not the current-node path.
+    for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+      const source = {
+        ...fullSource,
+        iteration: {
+          ...fullSource.iteration!,
+          gate: { ...fullSource.iteration!.gate, transition: key },
+        },
+      } as unknown as MstarEngineStatusSource
+      expect(() => projectGraph(source)).not.toThrow()
+      const v = projectGraph(source)
+      expect(v.currentPhase).toBeNull()
+      expect(v.phases.every((p) => p.state === 'idle')).toBe(true)
+      expect(v.degraded.transition).toBe(true)
+    }
+  })
+
   it('iterationId missing → null, not a fabricated string', () => {
     const v = projectGraph({
       ...fullSource,
