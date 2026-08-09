@@ -37,7 +37,7 @@ dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
 | `skillRoots` | `string[]` | 未设置（不注册自定义根） | 向 dsh skill-local 提供者注册的额外技能根（`customSkillDirs` 语义——先于用户根扫描）。开发期：镜像 `<repo-root>/skills` 的绝对路径。 |
 | `bundledSkillDir` | `string` | 打包的 `harness-skills/` 镜像（包相对路径） | 向 dsh skill-local 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。默认取包内自带的 `harness-skills/` 镜像（`bundle-assets` 同步；gitignore）——包相对路径，**非** cwd 锚定。显式值优先。 |
-| `catalogTtlMs` | `number` | `60000` | pre-step catalog 缓存刷新间隔（毫秒）：按工作区缓存的 catalog 行（engine-status 水印、iteration-gate、harness-state）多久重读一次 `status.json` / compass / 知识索引。刷新间隔之间热路径只是时间戳比较 + Map 命中；会话中 plan/compass/residual 的变化会在一个间隔内落地。 |
+| `catalogTtlMs` | `number` | `60000` | pre-step catalog 缓存刷新间隔（毫秒）：按工作区缓存的统一 `mstar-engine-status` 行（水印 + 迭代闸门 + 工作区摘要）多久重读一次 `status.json` / compass / 知识索引。刷新间隔之间热路径只是时间戳比较 + Map 命中；会话中 plan/compass/residual 的变化会在一个间隔内落地。 |
 
 `bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像（见 Skills mount）——显式 Config 值仍然优先。相对覆盖仍是 **cwd 锚定**（skill-local 以 `join()` 语义相对 dsh **进程 cwd** 解析），因此覆盖默认的部署应在 **profile 层传绝对路径**（见 `bundle/README.md`）。
 
@@ -62,7 +62,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 - **seam lint**——harness 下 `DESIGN.md` / audit plan / 知识文档 / roles 目录的写入运行各自的 artifact 级 engine lint。
 - **模型可见工具**——`mstar_sdd_workspace`、`mstar_sdd_task_brief`、`mstar_iteration_gate`、`mstar_design_md_validate`、`mstar_audit_validate`、`mstar_compound_validate`、`mstar_roles_validate` 注册到 `ctx.tools`。
 - **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；handler 把命令正文 steer 进接收 agent）。
-- **pre-step catalog 行**——每个组合后的 agent 步骤都会追加 `mstar-engine-status` 水印（统一 mstar 版本、harness 目录、enforcement），在解析到迭代 steering compass 时追加 `mstar-iteration-gate` 行，在工作区有 `status.json` 时追加 `mstar-harness-state` 行（plan 注册表、open residual、分支/政策锚点、活跃 lease、知识摘要、compass 方向）。所有行共享一次按工作区 TTL 缓存的构建（`catalogTtlMs`，默认 60 秒）。
+- **pre-step catalog 行**——每个组合后的 agent 步骤都会追加**一条**统一的 `mstar-engine-status` catalog 消息：水印（统一 mstar 版本、harness 目录、enforcement）、迭代相位闸门段（解析到 steering compass 时）与工作区状态摘要段（工作区有 `status.json` 时：plan 注册表、open residual、分支/政策锚点、活跃 lease、知识摘要、compass 方向）。该行是 digest 门控的（每 turn 注入一次、变化时才重发），并共享一次按工作区 TTL 缓存的构建（`catalogTtlMs`，默认 60 秒）。
 
 ### Enforcement semantics
 
@@ -135,9 +135,9 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入：�
 
 ## Engine-status catalog
 
-一个咨询式 `agent/pre-step` 瀑布监听器向每个组合后的步骤追加一条 **`mstar-engine-status`** catalog MessageSource（`kind`/`form: 'catalog'` 契约，镜像 dsh tool-skill 先例）：模型可见的 `<mstar_engine_status>` 块渲染水印字段——**mstar 版本**（插件自身清单；单一版本不变量把打包的 engine 钉在同一版本）、**harness 目录**（解析后的 `{HARNESS_DIR}`，缺失为 `none`）、**enforcement**（compass 模式，`soft` / `hard (compass)`）。监听器先调用 `next()` 并基于委托后的决策追加——从不否决步骤、从不替换已组合的消息。模型可见 ⟺ 已记录：持久化的 `catalog` 形态 source 在模型面向的散文旁记录了其发布的事实，会话日志无需重新解析该块即可重建该行（dsh packages/AGENTS.md）。fiber 销毁即移除监听器（HMR 安全；针对真实会话日志的按会话摘要去重是 P3 项——代码中有 `simplify:` 标记）。
+一个咨询式 `agent/pre-step` 瀑布监听器向每个组合后的步骤追加**一条** **`mstar-engine-status`** catalog MessageSource（`kind`/`form: 'catalog'` 契约，镜像 dsh tool-skill 先例）：模型可见的 `<mstar_engine_status>` 块渲染水印字段——**mstar 版本**（插件自身清单；单一版本不变量把打包的 engine 钉在同一版本）、**harness 目录**（解析后的 `{HARNESS_DIR}`，缺失为 `none`）、**enforcement**（compass 模式，`soft` / `hard (compass)`）——以及 **迭代相位闸门段**（当 steering compass + `status.json` 可解析时：迭代 id、transition、all-plans-done、闸门判定 + 违规码——即 `mstar iteration gate` 工具结果形态）与 **工作区状态摘要段**（当工作区有 `status.json` 时）：**plans**（`id(status)` 注册表）、**residuals**（按 severity 的 open 计数）、**branch**（base → target、spec 集成）、**policy**（push 政策、worktree 模式、control 根）、**leases**（活跃 plan 执行租约：持有者 + worktree）、**knowledge**（知识索引文档数与分类）与 **direction**（steering compass 的 problem statement 一句话）。监听器先调用 `next()` 并基于委托后的决策追加——从不否决步骤、从不替换已组合的消息。模型可见 ⟺ 已记录：持久化的 `catalog` 形态 source 在模型面向的散文旁记录了其发布的事实，会话日志无需重新解析该块即可重建该行（dsh packages/AGENTS.md）。fiber 销毁即移除监听器（HMR 安全）。
 
-同一监听器还会追加 **`mstar-iteration-gate`** 行（当 steering compass + `status.json` 可解析时：迭代 id、transition、all-plans-done、闸门判定 + 违规码——即 `mstar iteration gate` 工具结果形态）与 **`mstar-harness-state`** 行（当工作区有 `status.json` 时）：`<mstar_harness_state>` 块渲染工作区摘要——**plans**（`id(status)` 注册表）、**residuals**（按 severity 的 open 计数）、**branch**（base → target、spec 集成）、**policy**（push 政策、worktree 模式、control 根）、**leases**（活跃 plan 执行租约：持有者 + worktree）、**knowledge**（知识索引文档数与分类）与 **direction**（steering compass 的 problem statement 一句话）。三行共享**同一**按工作区缓存条目：显式 `harnessDir` 时在 boot 构建（否则在工作区首次 pre-step 构建），并按 TTL 刷新（`catalogTtlMs`，默认 60 秒）——刷新间隔之间热路径只是时间戳比较 + Map 命中，会话中 plan/compass/residual 的变化在一个间隔内落地。
+该行是 **digest 门控**的：按 agent+workspace，每个 turn 只注入一次，仅当渲染文本变化时重新注入——20 步的 turn 只显示一次 catalog，而不是 20 次。source 共享**同一**按工作区缓存条目：显式 `harnessDir` 时在 boot 构建（否则在工作区首次 pre-step 构建），并按 TTL 刷新（`catalogTtlMs`，默认 60 秒）——刷新间隔之间热路径只是时间戳比较 + Map 命中，会话中 plan/compass/residual 的变化在一个间隔内落地。
 
 ## Development
 

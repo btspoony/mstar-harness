@@ -74,7 +74,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 | `dispatchBinding` | unset | the dispatching agent's role for the anti-recursion precheck |
 | `skillRoots` | unset | additional skill roots (custom mirrors) |
 | `bundledSkillDir` | unset → plugin resolves its OWN packaged `harness-skills/` mirror package-relative | bundled skill mount — the repo-root `skills/` mirror synced by `bundle-assets` at build/postinstall (gitignored), resolved package-relative (NOT cwd-anchored). An explicit value wins; a RELATIVE override stays cwd-anchored, so pass an absolute path in the profile layer |
-| `catalogTtlMs` | unset → `60000` | pre-step catalog cache refresh interval (ms) — how often the per-workspace catalog rows (engine-status watermark, iteration-gate, harness-state) re-read `status.json` / the compass / the knowledge index; the hot path is a timestamp compare + cache hit between refreshes |
+| `catalogTtlMs` | unset → `60000` | pre-step catalog cache refresh interval (ms) — how often the per-workspace unified `mstar-engine-status` catalog row (watermark + iteration gate + workspace-state digest) re-reads `status.json` / the compass / the knowledge index; the hot path is a timestamp compare + cache hit between refreshes |
 
 ## Known constraints
 

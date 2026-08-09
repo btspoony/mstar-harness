@@ -1,19 +1,22 @@
 /**
- * `mstar-harness-state` catalog row — the workspace-state digest appended
- * at `agent/pre-step` after the engine-status and iteration-gate rows: the
- * plan registry, open residual counts, branch/policy anchors, active
- * leases, knowledge index digest and the steering compass direction
- * one-liner. All fields come from the same per-workspace cached build as
- * the sibling rows (one status.json / compass / knowledge-index read per
- * cache refresh — TTL-bounded, Config `catalogTtlMs`).
+ * The unified `mstar-engine-status` catalog row — ONE injection per step
+ * carrying the watermark (version, harness dir, enforcement), the iteration
+ * phase-gate section (when a steering compass + status.json resolve) and
+ * the workspace-state digest section (plan registry, open residual counts,
+ * branch/policy anchors, active leases, knowledge index digest, compass
+ * direction). All fields come from the same per-workspace cached build (one
+ * status.json / compass / knowledge-index read per cache refresh —
+ * TTL-bounded, Config `catalogTtlMs`), and the row is digest-gated: injected
+ * once per turn, re-injected only when its rendered text changed.
  *
  * Covered:
  *  1. Full digest — seeded status.json (plans + residuals + metadata +
- *     lease) + compass (direction) + knowledge index render every line.
- *  2. Absent row — no harness dir or no status.json → no `mstar-harness-state`
- *     row (advisory degrade, sibling-row semantics).
- *  3. TTL refresh — a status.json change lands within `catalogTtlMs`
- *     (plan status + residual changes re-render after the interval).
+ *     lease) + compass (direction) + knowledge index render every section.
+ *  2. Absent state — no status.json / no harness dir → the row exists with
+ *     `state: null` (the state lines are absent; watermark stays).
+ *  3. TTL refresh — a status.json change lands within `catalogTtlMs`.
+ *  4. Digest gating — same turn unchanged → no re-injection; same turn with
+ *     a TTL-refreshed change → re-injection; new turn → re-injection.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { mkdir, mkdtemp } from 'node:fs/promises'
@@ -33,10 +36,12 @@ afterEach(async () => {
 /* ---------------------------------- helpers ---------------------------------- */
 
 /** A pre-step payload whose agent carries a session cwd (the workspace). */
-const stepPayload = (messages: UserMessage[], cwd?: string) => ({
-  agent: cwd === undefined ? {} : { session: { header: { cwd } } },
+const stepPayload = (messages: UserMessage[], cwd?: string, turn = 1, agentId?: string) => ({
+  agent: agentId !== undefined
+    ? { id: agentId, session: { header: { cwd } } }
+    : cwd === undefined ? {} : { session: { header: { cwd } } },
   messages,
-  turn: 1,
+  turn,
   step: 1,
   signal: new AbortController().signal,
 })
@@ -49,16 +54,11 @@ const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>)
 const lastMessage = (decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined =>
   decision.messages.at(-1)
 
-/** The harness-state row of an enter decision (undefined when absent). */
-function stateRowOf(decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined {
-  return decision.messages.find((m) => m.source.kind === 'mstar-harness-state')
-}
-
 /** The rendered text of one row. */
 const textOf = (row: UserMessage | undefined): string =>
   row?.content[0]?.type === 'text' ? row.content[0].text : ''
 
-/** A status.json exercising every state-row feature (plans, residuals, metadata, lease). */
+/** A status.json exercising every state-section feature (plans, residuals, metadata, lease). */
 const RICH_STATUS = JSON.stringify({
   version: 1,
   updated_at: '2026-08-08',
@@ -126,11 +126,11 @@ const KNOWLEDGE_README = [
 ].join('\n')
 
 /* ===========================================================================
- * 1. Full digest — every line renders from the seeded workspace state
+ * 1. Full digest — every section renders from the seeded workspace state
  * ========================================================================== */
 
-describe('mstar-harness-state — the workspace digest row at agent/pre-step', () => {
-  it('renders plans, residuals, branch/policy anchors, leases, knowledge and direction', async () => {
+describe('mstar-engine-status — the unified catalog row (watermark + gate + state)', () => {
+  it('renders the watermark, iteration gate and the full workspace-state digest in ONE row', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -146,13 +146,23 @@ describe('mstar-harness-state — the workspace digest row at agent/pre-step', (
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    // engine-status + iteration-gate + harness-state.
-    expect(decision.messages.length).toBe(inbox.length + 3)
+    // ONE unified row.
+    expect(decision.messages.length).toBe(inbox.length + 1)
 
-    const row = stateRowOf(decision)
-    expect(row?.source).toMatchObject({
-      kind: 'mstar-harness-state',
-      form: 'catalog',
+    const row = lastMessage(decision)
+    expect(row?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
+    const source = row?.source
+    if (source === undefined || source.kind !== 'mstar-engine-status') return
+
+    // Iteration gate section (steering compass + status.json resolve).
+    expect(source.iteration).toMatchObject({
+      iterationId: 'v2.2.0',
+      statusPath: join(harnessDir, 'status.json'),
+      gate: { transition: 'phase-2-execute', all_plans_done: false },
+    })
+
+    // Workspace-state section.
+    expect(source.state).toMatchObject({
       plans: [
         { id: 'plan-a', status: 'InProgress' },
         { id: 'plan-b', status: 'Done' },
@@ -171,7 +181,11 @@ describe('mstar-harness-state — the workspace digest row at agent/pre-step', (
       knowledge: { docCount: 3, categories: ['architecture-patterns', 'conventions'] },
     })
     const text = textOf(row)
-    expect(text).toContain('<mstar_harness_state>')
+    expect(text).toContain('<mstar_engine_status>')
+    expect(text).toContain('mstar version: 2.0.4')
+    expect(text).toContain('harness dir:')
+    expect(text).toContain('iteration: v2.2.0')
+    expect(text).toContain('gate: PASS')
     expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
     expect(text).toContain('residuals: high 1, nit 1')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
@@ -179,7 +193,7 @@ describe('mstar-harness-state — the workspace digest row at agent/pre-step', (
     expect(text).toContain('leases: plan-a → dsh-session-1 (/worktrees/plan-a)')
     expect(text).toContain('knowledge: 3 docs (architecture-patterns, conventions)')
     expect(text).toContain('direction: The dsh host plugin needs richer in-session harness context for operators.')
-    expect(text).toContain('</mstar_harness_state>')
+    expect(text).toContain('</mstar_engine_status>')
   })
 
   it('falls back to compass frontmatter for base/target branches when metadata is empty', async () => {
@@ -194,18 +208,20 @@ describe('mstar-harness-state — the workspace digest row at agent/pre-step', (
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
-    const row = stateRowOf(decision)
-    expect(row?.source).toMatchObject({ iterationBaseBranch: 'dev-dsh', targetBranch: 'dev-dsh' })
+    const row = lastMessage(decision)
+    const source = row?.source
+    if (source === undefined || source.kind !== 'mstar-engine-status') return
+    expect(source.state).toMatchObject({ iterationBaseBranch: 'dev-dsh', targetBranch: 'dev-dsh' })
     expect(textOf(row)).toContain('branch: dev-dsh → dev-dsh')
   })
 })
 
 /* ===========================================================================
- * 2. Absent row — no harness dir or no status.json
+ * 2. Absent state — the row exists, the state section is null
  * ========================================================================== */
 
-describe('mstar-harness-state — advisory degrade (row absent)', () => {
-  it('no status.json → no state row (engine-status still appends)', async () => {
+describe('mstar-engine-status — advisory degrade (state section null)', () => {
+  it('no status.json → the row still appends with state: null (watermark only)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-absent-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -215,42 +231,64 @@ describe('mstar-harness-state — advisory degrade (row absent)', () => {
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    expect(stateRowOf(decision)).toBeUndefined()
-    expect(decision.messages.length).toBe(1) // engine-status only
-    expect(decision.messages[0]!.source.kind).toBe('mstar-engine-status')
+    expect(decision.messages).toHaveLength(1)
+    const row = lastMessage(decision)
+    const source = row?.source
+    if (source === undefined || source.kind !== 'mstar-engine-status') return
+    expect(source.state).toBeNull()
+    expect(source.iteration).toBeUndefined()
+    const text = textOf(row)
+    expect(text).toContain('<mstar_engine_status>')
+    expect(text).not.toContain('plans:')
   })
 
-  it('no harness dir (agent-less, no config) → no state row', async () => {
+  it('no harness dir (agent-less, no config) → the row appends with harnessDir null and state null', async () => {
     booted = await bootApp({ harnessDir: null })
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    expect(stateRowOf(decision)).toBeUndefined()
+    expect(decision.messages).toHaveLength(1)
+    const row = lastMessage(decision)
+    const source = row?.source
+    if (source === undefined || source.kind !== 'mstar-engine-status') return
+    expect(source.harnessDir).toBeNull()
+    expect(source.state).toBeNull()
+    expect(textOf(row)).toContain('harness dir: none')
   })
 })
 
 /* ===========================================================================
- * 3. TTL refresh — status.json changes land within catalogTtlMs
+ * 3. TTL refresh + 4. digest gating
  * ========================================================================== */
 
-describe('mstar-harness-state — TTL refresh (Config catalogTtlMs)', () => {
-  it('a plan status + residual change re-renders after the interval', async () => {
+describe('mstar-engine-status — TTL refresh and digest-gated re-emission', () => {
+  it('same turn unchanged → no re-injection; TTL-refreshed change → re-injection; new turn → re-injection', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-ttl-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [{ id: 'plan-a', status: 'Todo' }], residual_findings: {}, metadata: {} }),
     })
-    // 50ms refresh interval: the test proves both the cache hit (immediate
-    // re-use) and the bounded re-read (after the interval).
+    // 50ms refresh interval: proves both the cache hit (immediate reuse)
+    // and the bounded re-read (after the interval).
     booted = await bootApp({ root, catalogTtlMs: 50 })
+    const agentId = 'digest-agent'
 
-    const first = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    expect(textOf(stateRowOf(first))).toContain('plans: plan-a(Todo)')
+    // Turn 1, step 1: the row is injected.
+    const first = await booted.ctx.waterfall('agent/pre-step', stepPayload([], undefined, 1, agentId), defaultEnter([]))
+    expect(textOf(lastMessage(first))).toContain('plans: plan-a(Todo)')
 
-    // Within the TTL the cached row stands even after a status change.
+    // Same turn, unchanged (within the TTL): NO re-injection — the digest
+    // gate suppresses the identical row (the 20-step-turn case).
+    const sameTurn = await booted.ctx.waterfall('agent/pre-step', stepPayload([], undefined, 1, agentId), defaultEnter([]))
+    expect(sameTurn.kind).toBe('enter')
+    if (sameTurn.kind !== 'enter') return
+    expect(sameTurn.messages).toHaveLength(0)
+
+    // Same turn, TTL-refreshed change (status + residual changed): the row
+    // re-appears with the new state.
     await seedHarness(harnessDir, {
       'status.json': JSON.stringify({
         version: 1,
@@ -260,14 +298,18 @@ describe('mstar-harness-state — TTL refresh (Config catalogTtlMs)', () => {
         metadata: {},
       }),
     })
-    const second = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    expect(textOf(stateRowOf(second))).toContain('plans: plan-a(Todo)')
-
-    // After the TTL the row refreshes from disk.
     await new Promise((resolve) => setTimeout(resolve, 80))
-    const third = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const thirdText = textOf(stateRowOf(third))
-    expect(thirdText).toContain('plans: plan-a(Done)')
-    expect(thirdText).toContain('residuals: critical 1')
+    const changed = await booted.ctx.waterfall('agent/pre-step', stepPayload([], undefined, 1, agentId), defaultEnter([]))
+    const changedText = textOf(lastMessage(changed))
+    expect(changedText).toContain('plans: plan-a(Done)')
+    expect(changedText).toContain('residuals: critical 1')
+
+    // New turn: full re-injection even when nothing changed.
+    const newTurn = await booted.ctx.waterfall('agent/pre-step', stepPayload([], undefined, 2, agentId), defaultEnter([]))
+    expect(textOf(lastMessage(newTurn))).toContain('plans: plan-a(Done)')
+
+    // A different agent keeps an independent digest (its own injection).
+    const other = await booted.ctx.waterfall('agent/pre-step', stepPayload([], undefined, 1, 'other-agent'), defaultEnter([]))
+    expect(textOf(lastMessage(other))).toContain('plans: plan-a(Done)')
   })
 })

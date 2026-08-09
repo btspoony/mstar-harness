@@ -416,56 +416,56 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    // engine-status + iteration-gate + harness-state rows.
-    expect(decision.messages.length).toBe(inbox.length + 3)
-    expect(decision.messages.slice(0, -3)).toEqual(inbox)
+    // ONE unified catalog row (watermark + iteration gate + workspace state).
+    expect(decision.messages.length).toBe(inbox.length + 1)
+    expect(decision.messages.slice(0, -1)).toEqual(inbox)
 
-    // Engine-status row: the catalog watermark (unified mstar version,
-    // harness dir, enforcement) — AC-6 shape.
-    const statusRow = decision.messages.at(-3)
-    expect(statusRow?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
-    const statusText = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
-    expect(statusText).toContain('<mstar_engine_status>')
-    expect(statusText).toContain('mstar version: 2.0.4')
-    expect(statusText).toContain(`harness dir: ${harnessDir}`)
-    expect(statusText).toContain('enforcement: soft') // no compass hardens, no Config override
+    const row = decision.messages.at(-1)
+    expect(row?.role).toBe('user')
+    expect(row?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
+    const source = row?.source
+    if (source === undefined || source.kind !== 'mstar-engine-status') return
 
-    // Iteration-gate row: the boot-evaluated phase gate in the Task 1 tool
-    // result shape (transition / all_plans_done / ok / codes).
-    const gate = decision.messages.at(-2)
-    expect(gate?.source).toMatchObject({
-      kind: 'mstar-iteration-gate',
-      form: 'catalog',
+    // Watermark fields — AC-6 shape.
+    expect(source.version).toBe('2.0.4')
+    expect(source.harnessDir).toBe(harnessDir)
+    expect(source.enforcement).toEqual({ hard: false, source: 'none' })
+
+    // Iteration phase-gate section: the boot-evaluated gate in the Task 1
+    // tool result shape (transition / all_plans_done / ok / codes).
+    expect(source.iteration).toMatchObject({
       iterationId: 'e2e-iter',
       statusPath: join(harnessDir, 'status.json'),
+      gate: {
+        transition: 'phase-2-execute',
+        all_plans_done: false,
+        ok: true,
+        entry: { ok: false },
+      },
     })
-    const source = gate?.source
-    expect(source).toBeDefined()
-    if (source === undefined) return
-    expect(source.gate).toMatchObject({
-      transition: 'phase-2-execute',
-      all_plans_done: false,
-      ok: true,
-      entry: { ok: false },
-    })
-    const gateText = gate?.content[0]?.type === 'text' ? gate.content[0].text : ''
-    expect(gateText).toContain('<mstar_iteration_gate>')
-    expect(gateText).toContain('iteration: e2e-iter')
-    expect(gateText).toContain('transition: phase-2-execute')
-    expect(gateText).toContain('gate: PASS')
 
-    // Harness-state row: the workspace digest (plan registry, residuals,
-    // branch anchors from status.json metadata + compass frontmatter
-    // fallback — the fixture metadata is empty, so the compass fills base
-    // and target).
-    const state = decision.messages.at(-1)
-    expect(state?.source).toMatchObject({ kind: 'mstar-harness-state', form: 'catalog' })
-    const stateText = state?.content[0]?.type === 'text' ? state.content[0].text : ''
-    expect(stateText).toContain('<mstar_harness_state>')
-    expect(stateText).toContain('plans: fixture-plan-1(Todo)')
-    expect(stateText).toContain('residuals: none open')
-    expect(stateText).toContain('branch: dev-dsh → dev-dsh')
-    expect(stateText).toContain('leases: none active')
+    // Workspace-state section: plan registry, residuals, branch anchors
+    // (the fixture metadata is empty, so the compass fills base/target).
+    expect(source.state).toMatchObject({
+      plans: [{ id: 'fixture-plan-1', status: 'Todo' }],
+      residuals: [],
+      iterationBaseBranch: 'dev-dsh',
+      targetBranch: 'dev-dsh',
+    })
+
+    // The composed session log carries the model-facing block.
+    const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
+    expect(text).toContain('<mstar_engine_status>')
+    expect(text).toContain('mstar version: 2.0.4')
+    expect(text).toContain(`harness dir: ${harnessDir}`)
+    expect(text).toContain('enforcement: soft') // no compass hardens, no Config override
+    expect(text).toContain('iteration: e2e-iter')
+    expect(text).toContain('transition: phase-2-execute')
+    expect(text).toContain('gate: PASS')
+    expect(text).toContain('plans: fixture-plan-1(Todo)')
+    expect(text).toContain('residuals: none open')
+    expect(text).toContain('branch: dev-dsh → dev-dsh')
+    expect(text).toContain('leases: none active')
   })
 })
 

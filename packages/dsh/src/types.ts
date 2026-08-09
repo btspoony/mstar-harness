@@ -18,10 +18,11 @@
 import type { EnforcementFlag } from '@mstar-harness/engine'
 
 /**
- * Durable provenance for one engine-status catalog row. The catalog is a
- * `catalog`-form context, so it records the facts it published beside the
- * model-facing prose: a consumer presenting the row must not re-parse the
- * `<mstar_engine_status>` block, whose framing exists for the model.
+ * Durable provenance for the ONE unified engine-status catalog row. The
+ * catalog is a `catalog`-form context, so it records the facts it published
+ * beside the model-facing prose: a consumer presenting the row must not
+ * re-parse the `<mstar_engine_status>` block, whose framing exists for the
+ * model.
  */
 export interface MstarEngineStatusSource {
   readonly kind: 'mstar-engine-status'
@@ -36,6 +37,18 @@ export interface MstarEngineStatusSource {
   readonly harnessDir: string | null
   /** Repo-level hard-enforcement flag from the iteration compass. */
   readonly enforcement: EnforcementFlag
+  /**
+   * Iteration phase-gate section: present when a steering compass +
+   * `status.json` resolve (the `mstar iteration gate` tool result shape).
+   */
+  readonly iteration?: MstarIterationGateView
+  /**
+   * Workspace-state digest section: the plan registry, open residual
+   * counts, branch/policy anchors, active leases, knowledge index digest
+   * and the steering compass direction one-liner. Null when the workspace
+   * has no harness dir or no `status.json` (the state lines are absent).
+   */
+  readonly state: MstarHarnessState | null
 }
 
 /** JSON projection of one engine `ValidationResult` (lossless — `fix` omitted when absent). */
@@ -46,7 +59,39 @@ export interface IterationGateViolationView {
   fix?: string
 }
 
-/** One registered plan row of the harness-state catalog (id + status). */
+/** JSON projection of one engine gate (`GateResult`). */
+export interface IterationGateListView {
+  ok: boolean
+  violations: IterationGateViolationView[]
+}
+
+/**
+ * JSON projection of the engine `PhaseGateResult` (snake_case to match the
+ * model-facing tool vocabulary of the CLI's `mstar iteration gate` — the
+ * tool result shape reused verbatim by the pre-step catalog row).
+ */
+export interface IterationGateView {
+  transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery'
+  all_plans_done: boolean
+  ok: boolean
+  entry: IterationGateListView
+  exit: IterationGateListView
+  violations: IterationGateViolationView[]
+}
+
+/** The iteration phase-gate section of the unified engine-status row. */
+export interface MstarIterationGateView {
+  /** Iteration id whose steering compass was evaluated. */
+  readonly iterationId: string
+  /** Control-path `{HARNESS_DIR}/status.json` evaluated. */
+  readonly statusPath: string
+  /** The steering `{ITERATION_DIR}/<id>/delivery-compass.md` evaluated. */
+  readonly compassPath: string
+  /** Cached `evaluatePhaseGate` result (tool result shape). */
+  readonly gate: IterationGateView
+}
+
+/** One registered plan row of the harness-state digest (id + status). */
 export interface HarnessPlanView {
   readonly id: string
   readonly status: string
@@ -58,7 +103,7 @@ export interface HarnessResidualView {
   readonly count: number
 }
 
-/** One active plan execution lease of the harness-state catalog. */
+/** One active plan execution lease of the harness-state digest. */
 export interface HarnessLeaseView {
   readonly planId: string
   readonly holder: string
@@ -66,18 +111,15 @@ export interface HarnessLeaseView {
 }
 
 /**
- * Durable provenance for one `mstar-harness-state` catalog row — the
- * workspace-state digest the pre-step listener appends after the
- * engine-status and iteration-gate rows: the plan registry, open residual
- * counts, branch/policy anchors, active leases, knowledge index digest and
- * the steering compass direction one-liner. All fields come from the same
- * per-workspace cached build as the sibling rows (one status.json /
- * compass / knowledge-index read per cache refresh — the TTL-bounded
- * staleness tradeoff documented on `buildCatalogSources`).
+ * The workspace-state digest section of the unified engine-status row: the
+ * plan registry, open residual counts, branch/policy anchors, active
+ * leases, knowledge index digest and the steering compass direction
+ * one-liner. All fields come from the same per-workspace cached build as
+ * the rest of the row (one status.json / compass / knowledge-index read
+ * per cache refresh — the TTL-bounded staleness tradeoff documented on
+ * `buildCatalogSources`).
  */
-export interface MstarHarnessStateSource {
-  readonly kind: 'mstar-harness-state'
-  readonly form: 'catalog'
+export interface MstarHarnessState {
   /** Registered plan rows (`plan_id`/`id` + `status`), status.json order. */
   readonly plans: readonly HarnessPlanView[]
   /** Open `residual_findings` counts by severity (non-zero only). */
@@ -102,51 +144,8 @@ export interface MstarHarnessStateSource {
   readonly direction: string | null
 }
 
-/** JSON projection of one engine gate (`GateResult`). */
-export interface IterationGateListView {
-  ok: boolean
-  violations: IterationGateViolationView[]
-}
-
-/**
- * JSON projection of the engine `PhaseGateResult` (snake_case to match the
- * model-facing tool vocabulary of the CLI's `mstar iteration gate` — the
- * tool result shape reused verbatim by the pre-step catalog row).
- */
-export interface IterationGateView {
-  transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery'
-  all_plans_done: boolean
-  ok: boolean
-  entry: IterationGateListView
-  exit: IterationGateListView
-  violations: IterationGateViolationView[]
-}
-
-/**
- * Durable provenance for one iteration-gate catalog row (plan
- * The gate verdict is cached with a TTL — no disk I/O on the agent-loop
- * hot path between refreshes — so the row documents
- * the files it evaluated at the last refresh, and a mid-session
- * status/compass change lands within the catalog TTL (`Config
- * `catalogTtlMs`).
- */
-export interface MstarIterationGateSource {
-  readonly kind: 'mstar-iteration-gate'
-  readonly form: 'catalog'
-  /** Iteration id whose steering compass was evaluated at boot. */
-  readonly iterationId: string
-  /** Control-path `{HARNESS_DIR}/status.json` evaluated at boot. */
-  readonly statusPath: string
-  /** The steering `{ITERATION_DIR}/<id>/delivery-compass.md` evaluated at boot. */
-  readonly compassPath: string
-  /** Cached `evaluatePhaseGate` result (tool result shape). */
-  readonly gate: IterationGateView
-}
-
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'mstar-engine-status': MstarEngineStatusSource
-    'mstar-iteration-gate': MstarIterationGateSource
-    'mstar-harness-state': MstarHarnessStateSource
   }
 }

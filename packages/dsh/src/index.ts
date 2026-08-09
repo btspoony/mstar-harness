@@ -88,8 +88,8 @@ import type {
   IterationGateViolationView,
   IterationGateView,
   MstarEngineStatusSource,
-  MstarHarnessStateSource,
-  MstarIterationGateSource,
+  MstarHarnessState,
+  MstarIterationGateView,
 } from './types.ts'
 
 // Re-export the service type from the package entry: the cordis
@@ -98,7 +98,7 @@ import type {
 // typed `ctx.dshMstar`.
 export { DshMstar } from './service.ts'
 export type { DshMstarOptions } from './service.ts'
-export type { MstarEngineStatusSource, MstarHarnessStateSource } from './types.ts'
+export type { MstarEngineStatusSource, MstarHarnessState, MstarIterationGateView } from './types.ts'
 
 /** Cordis function-plugin name registered by the Loader. */
 export const name = 'dsh'
@@ -1966,16 +1966,19 @@ function pluginVersion(): string {
 }
 
 /**
- * The durable catalog source for the current engine status (the watermark
- * fields). Every field is boot/workspace-resolved — the unified mstar
- * version is a process-immutable manifest read and the compass enforcement
- * resolves like the gates themselves. With an explicit `harnessDir` config
+ * The durable source for the ONE unified engine-status catalog row (the
+ * watermark + iteration gate + workspace-state digest). Every field is
+ * boot/workspace-resolved — the unified mstar version is a
+ * process-immutable manifest read, the compass enforcement resolves like
+ * the gates themselves, and the iteration/state sections come from the
+ * same per-workspace cached build. With an explicit `harnessDir` config
  * the source is built ONCE at `apply()`; without one it is built on the
  * FIRST pre-step of each workspace. The whole cache entry is then
  * TTL-refreshed (Config `catalogTtlMs`, default 60000 — a mid-session
- * compass change lands within one interval). The documented staleness
- * tradeoff keeps synchronous disk I/O off the agent-loop hot path: a
- * timestamp compare + Map lookup per step between refreshes.
+ * status/compass/residual change lands within one interval). The
+ * documented staleness tradeoff keeps synchronous disk I/O off the
+ * agent-loop hot path: a timestamp compare + Map lookup per step between
+ * refreshes.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
 function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource {
@@ -1985,41 +1988,32 @@ function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource 
     version: pluginVersion(),
     harnessDir,
     enforcement: harnessDir !== null ? resolveCompassEnforcement(harnessDir) : { hard: false, source: 'none' },
+    ...(harnessDir !== null ? { iteration: iterationGateSource(harnessDir) } : {}),
+    state: harnessDir !== null ? harnessStateSource(harnessDir) : null,
   }
 }
 
-/** The per-workspace catalog sources (engine-status watermark + iteration-gate row + harness-state row). */
-interface CatalogSources {
-  source: MstarEngineStatusSource
-  iterationGate: MstarIterationGateSource | undefined
-  harnessState: MstarHarnessStateSource | undefined
-}
-
-/** One TTL cache entry: the sources plus the build timestamp. */
+/** One TTL cache entry: the unified source plus the build timestamp. */
 interface CatalogCacheEntry {
-  sources: CatalogSources
+  sources: MstarEngineStatusSource
   builtAt: number
 }
 
 /**
- * Build the catalog sources for one harness dir (boot for the explicit
- * config, first-use per workspace otherwise, then TTL-refreshed — see
- * `catalogSourcesFor`). Logs the manifest fallback once per build — a
+ * Build the unified catalog source for one harness dir (boot for the
+ * explicit config, first-use per workspace otherwise, then TTL-refreshed —
+ * see `catalogSourcesFor`). Logs the manifest fallback once per build — a
  * '0.0.0' version would watermark every catalog row wrongly, so the
  * fallback is never silent.
  * @param ctx - registrant context (logger for the manifest fallback).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
-function buildCatalogSources(ctx: Context, harnessDir: string | null): CatalogSources {
+function buildCatalogSources(ctx: Context, harnessDir: string | null): MstarEngineStatusSource {
   const source = engineStatusSource(harnessDir)
   if (source.version === '0.0.0') {
     ctx.logger(CATALOG_LOGGER).warn('plugin manifest version unavailable — falling back to 0.0.0 for the engine-status catalog watermark')
   }
-  return {
-    source,
-    iterationGate: iterationGateSource(harnessDir),
-    harnessState: harnessStateSource(harnessDir),
-  }
+  return source
 }
 
 /**
@@ -2035,7 +2029,7 @@ function buildCatalogSources(ctx: Context, harnessDir: string | null): CatalogSo
  * @param harnessDir - the resolved `{HARNESS_DIR}` for this key.
  * @param ttlMs - refresh interval in milliseconds.
  */
-function catalogSourcesFor(ctx: Context, cache: Map<string, CatalogCacheEntry>, key: string, harnessDir: string | null, ttlMs: number): CatalogSources {
+function catalogSourcesFor(ctx: Context, cache: Map<string, CatalogCacheEntry>, key: string, harnessDir: string | null, ttlMs: number): MstarEngineStatusSource {
   const entry = cache.get(key)
   if (entry !== undefined && Date.now() - entry.builtAt < ttlMs) return entry.sources
   const sources = buildCatalogSources(ctx, harnessDir)
@@ -2043,16 +2037,46 @@ function catalogSourcesFor(ctx: Context, cache: Map<string, CatalogCacheEntry>, 
   return sources
 }
 
-/** Model-facing rendering of the engine-status catalog (the `<mstar_engine_status>` block). */
+/** Model-facing rendering of the unified engine-status catalog (the `<mstar_engine_status>` block). */
 function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
   const enforcement = `${source.enforcement.hard ? 'hard' : 'soft'}${source.enforcement.source === 'none' ? '' : ` (${source.enforcement.source})`}`
-  return [
+  const lines = [
     '<mstar_engine_status>',
     `mstar version: ${source.version}`,
     `harness dir: ${source.harnessDir ?? 'none'}`,
     `enforcement: ${enforcement}`,
-    '</mstar_engine_status>',
-  ].join('\n')
+  ]
+  const iteration = source.iteration
+  if (iteration !== undefined) {
+    const gate = iteration.gate
+    const codes = gate.violations.map((v) => v.code).join(', ')
+    lines.push(`iteration: ${iteration.iterationId}`)
+    lines.push(`transition: ${gate.transition}`)
+    lines.push(`all plans done: ${gate.all_plans_done}`)
+    lines.push(`gate: ${gate.ok ? 'PASS' : `FAIL (${codes})`}`)
+  }
+  const state = source.state
+  if (state !== null) {
+    lines.push(`plans: ${state.plans.length === 0 ? 'none registered' : state.plans.map((p) => `${p.id}(${p.status})`).join(' ')}`)
+    lines.push(`residuals: ${state.residuals.length === 0 ? 'none open' : state.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')}`)
+    if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
+      const integration = state.specIntegrationBranch !== null ? ` (spec integration: ${state.specIntegrationBranch})` : ''
+      lines.push(`branch: ${state.iterationBaseBranch} → ${state.targetBranch}${integration}`)
+    }
+    const policy = [
+      state.pushPolicy !== null ? `push ${state.pushPolicy}` : null,
+      state.worktreeMode !== null ? `worktree ${state.worktreeMode}` : null,
+      state.controlWorktreePath !== null ? `control ${state.controlWorktreePath}` : null,
+    ].filter((part): part is string => part !== null).join('; ')
+    if (policy !== '') lines.push(`policy: ${policy}`)
+    lines.push(`leases: ${state.leases.length === 0 ? 'none active' : state.leases.map((l) => `${l.planId} → ${l.holder}${l.worktreePath !== null ? ` (${l.worktreePath})` : ''}`).join('; ')}`)
+    if (state.knowledge !== null) {
+      lines.push(`knowledge: ${state.knowledge.docCount} doc${state.knowledge.docCount === 1 ? '' : 's'} (${state.knowledge.categories.join(', ')})`)
+    }
+    if (state.direction !== null) lines.push(`direction: ${state.direction}`)
+  }
+  lines.push('</mstar_engine_status>')
+  return lines.join('\n')
 }
 
 /**
@@ -2067,10 +2091,10 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
  * iteration-gate row).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
-function harnessStateSource(harnessDir: string | null): MstarHarnessStateSource | undefined {
-  if (harnessDir === null) return undefined
+function harnessStateSource(harnessDir: string | null): MstarHarnessState | null {
+  if (harnessDir === null) return null
   const statusPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(statusPath)) return undefined
+  if (!existsSync(statusPath)) return null
   try {
     const doc = readJson(statusPath) as StatusDoc
     const str = (value: unknown): string | null =>
@@ -2125,8 +2149,6 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessStateSource 
       }
     }
     return {
-      kind: 'mstar-harness-state',
-      form: 'catalog',
       plans,
       residuals,
       iterationBaseBranch: str(metadata?.iteration_base_branch) ?? str(compassFields?.iteration_base_branch) ?? null,
@@ -2140,7 +2162,7 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessStateSource 
       direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
     }
   } catch {
-    return undefined // advisory degrade — the row is absent, never hardening
+    return null // advisory degrade — the state section is absent, never hardening
   }
 }
 
@@ -2202,37 +2224,13 @@ function compassDirection(compassPath: string): string | null {
   }
 }
 
-/** Model-facing rendering of the harness-state catalog (the `<mstar_harness_state>` block). */
-function renderHarnessStateCatalog(source: MstarHarnessStateSource): string {
-  const lines = ['<mstar_harness_state>']
-  lines.push(`plans: ${source.plans.length === 0 ? 'none registered' : source.plans.map((p) => `${p.id}(${p.status})`).join(' ')}`)
-  lines.push(`residuals: ${source.residuals.length === 0 ? 'none open' : source.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')}`)
-  if (source.iterationBaseBranch !== null && source.targetBranch !== null) {
-    const integration = source.specIntegrationBranch !== null ? ` (spec integration: ${source.specIntegrationBranch})` : ''
-    lines.push(`branch: ${source.iterationBaseBranch} → ${source.targetBranch}${integration}`)
-  }
-  const policy = [
-    source.pushPolicy !== null ? `push ${source.pushPolicy}` : null,
-    source.worktreeMode !== null ? `worktree ${source.worktreeMode}` : null,
-    source.controlWorktreePath !== null ? `control ${source.controlWorktreePath}` : null,
-  ].filter((part): part is string => part !== null).join('; ')
-  if (policy !== '') lines.push(`policy: ${policy}`)
-  lines.push(`leases: ${source.leases.length === 0 ? 'none active' : source.leases.map((l) => `${l.planId} → ${l.holder}${l.worktreePath !== null ? ` (${l.worktreePath})` : ''}`).join('; ')}`)
-  if (source.knowledge !== null) {
-    lines.push(`knowledge: ${source.knowledge.docCount} doc${source.knowledge.docCount === 1 ? '' : 's'} (${source.knowledge.categories.join(', ')})`)
-  }
-  if (source.direction !== null) lines.push(`direction: ${source.direction}`)
-  lines.push('</mstar_harness_state>')
-  return lines.join('\n')
-}
-
 /**
  * Locate the steering iteration compass (mirror of the engine's
  * `resolveCompassEnforcement` scan): the FIRST `{ITERATION_DIR}/<id>/
  * delivery-compass.md` whose frontmatter `status` is `active` or `locked`.
  * Completed/status-less/archived compasses do not steer the repo — the
- * pre-step gate row reports the iteration that is still in flight. Silent
- * on any read failure (the catalog row is advisory).
+ * pre-step gate section reports the iteration that is still in flight.
+ * Silent on any read failure (the catalog row is advisory).
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  */
 function steeringCompassPath(harnessDir: string): { iterationId: string; compassPath: string } | undefined {
@@ -2280,7 +2278,7 @@ function steeringCompassPath(harnessDir: string): { iterationId: string; compass
  * later tool call can re-evaluate on demand with explicit probes).
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  */
-function iterationGateSource(harnessDir: string | null): MstarIterationGateSource | undefined {
+function iterationGateSource(harnessDir: string | null): MstarIterationGateView | undefined {
   if (harnessDir === null) return undefined
   const statusPath = join(harnessDir, STATUS_FILE)
   if (!existsSync(statusPath)) return undefined
@@ -2301,43 +2299,35 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateSourc
       violations: result.violations.map(iterationViolationView),
     }
     return {
-      kind: 'mstar-iteration-gate',
-      form: 'catalog',
       iterationId: compass.iterationId,
       statusPath,
       compassPath: compass.compassPath,
       gate,
     }
   } catch {
-    return undefined // boot-time degrade — advisory row absent, no hardening
+    return undefined // degrade — the iteration section is absent, no hardening
   }
-}
-
-/** Model-facing rendering of the iteration-gate catalog (the `<mstar_iteration_gate>` block). */
-function renderIterationGateCatalog(source: MstarIterationGateSource): string {
-  const gate = source.gate
-  const codes = gate.violations.map((v) => v.code).join(', ')
-  return [
-    '<mstar_iteration_gate>',
-    `iteration: ${source.iterationId}`,
-    `transition: ${gate.transition}`,
-    `all plans done: ${gate.all_plans_done}`,
-    `gate: ${gate.ok ? 'PASS' : `FAIL (${codes})`}`,
-    '</mstar_iteration_gate>',
-  ].join('\n')
 }
 
 /**
  * Advisory `agent/pre-step` waterfall listener (agent
  * catalog): delegates through `next()` (never `reject` — that would block the
- * step — and never replaces the delegated messages) and appends the
- * catalog rows to the composed step messages, so the durable session log
- * carries them (model-visible ⟺ logged, MessageSource form):
- * one `mstar-engine-status` row always, plus — when a cached gate
- * verdict exists (`iterationGateSource`) — one `mstar-iteration-gate`
- * row after it, plus — when the workspace has a harness state
- * (`harnessStateSource`) — one `mstar-harness-state` row last. An aborted
- * step publishes nothing: the delegated decision
+ * step — and never replaces the delegated messages) and appends the ONE
+ * unified `mstar-engine-status` catalog message to the composed step
+ * messages, so the durable session log carries it (model-visible ⟺ logged,
+ * MessageSource form): the `<mstar_engine_status>` block renders the
+ * watermark fields (version, harness dir, enforcement), plus the iteration
+ * phase-gate section when a steering compass + status.json resolve, plus
+ * the workspace-state digest section when the workspace has a status.json.
+ *
+ * Digest-gated re-emission (the documented P3 dedup, landed early): per
+ * agent+workspace, the row is injected ONCE per turn — later steps of the
+ * same turn append it again only when its rendered text CHANGED (a TTL
+ * refresh picked up new state). The durable session log therefore carries
+ * the row on the first step of every turn plus each change, not on every
+ * step; a 20-step turn shows the catalog once, not 20 times.
+ *
+ * An aborted step publishes nothing: the delegated decision
  * is returned unchanged (tool-skill precedent; a narrowed abort race —
  * an abort after delegation must not surface as a turn failure).
  *
@@ -2346,10 +2336,9 @@ function renderIterationGateCatalog(source: MstarIterationGateSource): string {
  * throwing message factory) logs and returns the delegated decision
  * unchanged; the advisory listener never aborts the very step it observes.
  *
- * simplify: dev-time stub — every composed step carries the catalog rows
- * (no per-session dedup: the real dsh-session log is unavailable at dev
- * time). Digest-gated re-emission against the durable log lands with the
- * real session seam at P3.
+ * simplify: dev-time stub — the digest is in-memory per app (the real
+ * dsh-session log is unavailable at dev time; digest state resets on
+ * fiber disposal, which is also HMR-correct).
  * @param ctx - registrant context (logger for the containment path).
  * @param resolver - the per-workspace `{HARNESS_DIR}` resolver (the probe
  * never starts from the process cwd).
@@ -2359,6 +2348,8 @@ function renderIterationGateCatalog(source: MstarIterationGateSource): string {
  * for the explicit-config case; otherwise built on first use of each
  * workspace root and TTL-refreshed — Config `catalogTtlMs`).
  * @param ttlMs - catalog refresh interval in milliseconds.
+ * @param digests - per agent+workspace turn digests (last rendered text)
+ * for the digest-gated re-emission.
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
  */
@@ -2368,6 +2359,7 @@ async function preStepCatalogListener(
   explicitKey: string | undefined,
   cache: Map<string, CatalogCacheEntry>,
   ttlMs: number,
+  digests: Map<string, TurnDigest>,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
@@ -2386,29 +2378,36 @@ async function preStepCatalogListener(
     const key = explicitKey ?? cwd ?? ''
     const sources = catalogSourcesFor(ctx, cache, key, harnessDir, ttlMs)
     const messages = [...decision.messages]
-    messages.push(createUserMessage({
-      source: sources.source,
-      content: [{ type: 'text', text: renderEngineStatusCatalog(sources.source) }],
-    }))
-    if (sources.iterationGate !== undefined) {
-      messages.push(createUserMessage({
-        source: sources.iterationGate,
-        content: [{ type: 'text', text: renderIterationGateCatalog(sources.iterationGate) }],
-      }))
+    const text = renderEngineStatusCatalog(sources)
+    // Digest gate: inject the ONE unified row on the first step of a turn,
+    // or when its rendered text changed since the last injection (a TTL
+    // refresh picked up new state). Per agent+workspace, so different
+    // sessions/workspaces keep independent digests.
+    const digestKey = agentDigestKey(payload.agent, cwd)
+    const prior = digests.get(digestKey)
+    if (prior === undefined || prior.turn !== payload.turn || prior.text !== text) {
+      messages.push(createUserMessage({ source: sources, content: [{ type: 'text', text }] }))
     }
-    if (sources.harnessState !== undefined) {
-      messages.push(createUserMessage({
-        source: sources.harnessState,
-        content: [{ type: 'text', text: renderHarnessStateCatalog(sources.harnessState) }],
-      }))
-    }
+    digests.set(digestKey, { turn: payload.turn, text })
     return { kind: 'enter', messages }
   } catch (error) {
     ctx.logger(CATALOG_LOGGER).error(
-      `engine-status/iteration-gate/harness-state catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
+      `engine-status catalog append failed (degraded, step delegates unchanged): ${(error as Error).message}`,
     )
     return decision
   }
+}
+
+/** Per agent+workspace turn digest: the rendered catalog text as of the last injection. */
+interface TurnDigest {
+  turn: number
+  text: string
+}
+
+/** Digest key of one agent: the agent id + its session workspace (dev stubs without an id share the `<unknown>` bucket per workspace). */
+function agentDigestKey(agent: unknown, cwd: string | undefined): string {
+  const id = (agent as { id?: unknown } | null | undefined)?.id
+  return `${typeof id === 'string' ? id : '<unknown>'}\u0000${cwd ?? ''}`
 }
 
 /**
@@ -3137,17 +3136,10 @@ export function apply(ctx: Context, config: Config): void {
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
   // (agent catalog): calls `next()` (never vetoes or
-  // replaces the delegated messages) and appends the engine-status row to
-  // the composed step messages, so the session log carries the engine
-  // status (model-visible ⟺ logged).
-  //
-  // Iteration-gate row: the SAME listener appends a second
-  // `mstar-iteration-gate` catalog row when a gate verdict is evaluable
-  // (control-path status.json + steering compass; engine
-  // evaluatePhaseGate tool result shape); the harness-state row
-  // (`mstar-harness-state` — plan registry / residuals / branch / leases /
-  // knowledge / direction) appends last when the workspace has a
-  // status.json.
+  // replaces the delegated messages) and appends the ONE unified
+  // `mstar-engine-status` catalog message to the composed step messages,
+  // so the session log carries the engine status + iteration phase gate +
+  // workspace-state digest (model-visible ⟺ logged).
   //
   // Watermark resolution: with an explicit `harnessDir` config one
   // app-wide cache entry is built ONCE at boot (the unified mstar version
@@ -3159,14 +3151,22 @@ export function apply(ctx: Context, config: Config): void {
   // timestamp compare + Map lookup between refreshes, and a mid-session
   // status/compass/residual change lands within one interval (see
   // catalogSourcesFor / buildCatalogSources).
+  //
+  // Digest-gated re-emission: per agent+workspace the row is injected once
+  // per turn and re-injected only when its rendered text changed (a
+  // 20-step turn shows the catalog once, not 20 times — see
+  // preStepCatalogListener / agentDigestKey).
   const ttlMs = config.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS
   const explicitKey = bootHarnessDir !== null ? EXPLICIT_CACHE_KEY : undefined
   const catalogCache = new Map<string, CatalogCacheEntry>()
   if (explicitKey !== undefined) {
     catalogCache.set(explicitKey, { sources: buildCatalogSources(ctx, bootHarnessDir), builtAt: Date.now() })
   }
+  // Per agent+workspace turn digests for the digest-gated re-emission
+  // (inject once per turn; re-inject only when the row changed).
+  const catalogDigests = new Map<string, TurnDigest>()
   ctx.on('agent/pre-step', (payload, next) =>
-    preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, payload, next))
+    preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, catalogDigests, payload, next))
 
   // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
   registerSddIterationTools(ctx, resolver)

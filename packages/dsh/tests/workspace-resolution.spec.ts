@@ -16,10 +16,10 @@
  *  3. Status gate — no-config boot: an fs intent whose actor carries the
  *     session agent gates the WORKSPACE's status.json; an agent-less actor
  *     is inert (no harness dir).
- *  4. Staleness — the catalog source is stable per workspace after first
- *     use within the catalog TTL (a compass appearing after the first
- *     pre-step of a workspace does not re-watermark until the TTL
- *     expires); a NEW workspace resolves fresh on its own first use.
+ *  4. Digest/staleness — within one turn an unchanged workspace does not
+ *     re-inject the catalog row (digest-gated re-emission); a NEW
+ *     workspace resolves fresh on its own first use (independent cache +
+ *     digest key).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { mkdir, mkdtemp } from 'node:fs/promises'
@@ -197,7 +197,7 @@ describe('fs/write-intent — the status gate follows the session workspace (no 
  * ========================================================================== */
 
 describe('agent/pre-step — per-workspace source staleness (no config)', () => {
-  it('a compass appearing after a workspace\'s first pre-step does not re-watermark within the catalog TTL; a NEW workspace resolves fresh', async () => {
+  it('within one turn an unchanged workspace does not re-inject; a NEW workspace resolves fresh', async () => {
     const ws = await makeWorkspace('dsh-ws-stale-')
     await mkdir(join(ws, '.agents'), { recursive: true })
     booted = await bootApp({ harnessDir: null })
@@ -208,19 +208,16 @@ describe('agent/pre-step — per-workspace source staleness (no config)', () => 
     if (first.kind !== 'enter') return
     expect(lastMessage(first)?.source).toMatchObject({ enforcement: { hard: false, source: 'none' } })
 
-    // A hard compass appears AFTER the first use — the cached source stands
-    // until the catalog TTL expires (default 60000; the test runs well
-    // inside the window).
-    await seedHarness(join(ws, '.agents'), {
-      'iterations/ws-stale/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
-    })
+    // Same turn + unchanged → the digest gate suppresses the identical row
+    // (the within-TTL staleness is moot: the row is simply not re-injected
+    // until it changes or a new turn starts).
     const second = await booted.ctx.waterfall('agent/pre-step', stepPayload([], ws), defaultEnter([]))
     expect(second.kind).toBe('enter')
     if (second.kind !== 'enter') return
-    expect(lastMessage(second)?.source).toMatchObject({ enforcement: { hard: false, source: 'none' } })
+    expect(second.messages).toHaveLength(0)
 
     // A NEW workspace with the hard compass seeded BEFORE its first use
-    // resolves fresh (per-workspace first-use build).
+    // resolves fresh (per-workspace first-use build + independent digest).
     const ws2 = await makeWorkspace('dsh-ws-stale-2-')
     await seedHarness(join(ws2, '.agents'), {
       'iterations/ws-stale-2/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',

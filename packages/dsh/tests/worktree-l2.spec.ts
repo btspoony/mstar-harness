@@ -93,11 +93,11 @@ const inboxMessage = (): UserMessage => createUserMessage({
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
   () => Promise.resolve<PreStepDecision>({ kind: 'enter', messages })
 
-/** A `agent/pre-step` payload the agent loop would dispatch. */
-const stepPayload = (messages: UserMessage[]) => ({
+/** A `agent/pre-step` payload the agent loop would dispatch (turn defaults to 1). */
+const stepPayload = (messages: UserMessage[], turn = 1) => ({
   agent: {},
   messages,
-  turn: 1,
+  turn,
   step: 1,
   signal: new AbortController().signal,
 })
@@ -215,27 +215,24 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
 
     // Advisory: the delegated decision wins — enter, with every inbox message preserved.
     expect(decision.kind).toBe('enter')
-    expect(decision.kind === 'enter' && decision.messages.length).toBe(inbox.length + 3)
-    expect(decision.kind === 'enter' && decision.messages.slice(0, -3)).toEqual(inbox)
+    expect(decision.kind === 'enter' && decision.messages.length).toBe(inbox.length + 1)
+    expect(decision.kind === 'enter' && decision.messages.slice(0, -1)).toEqual(inbox)
 
-    // Row order: engine-status first, iteration-gate after it, harness-state last.
-    expect(decision.messages.at(-3)?.source).toMatchObject({ kind: 'mstar-engine-status' })
-    const gate = decision.messages.at(-2)
-    expect(decision.messages.at(-1)?.source).toMatchObject({ kind: 'mstar-harness-state' })
-    expect(gate?.role).toBe('user')
-    expect(gate?.source).toMatchObject({
-      kind: 'mstar-iteration-gate',
-      form: 'catalog',
+    // ONE unified catalog row: watermark + iteration-gate section + state section.
+    const row = lastMessage(decision)
+    expect(row?.role).toBe('user')
+    expect(row?.source).toMatchObject({ kind: 'mstar-engine-status', form: 'catalog' })
+    const source = row?.source
+    expect(source).toBeDefined()
+    if (source === undefined || source.kind !== 'mstar-engine-status') return
+    expect(source.iteration).toMatchObject({
       iterationId: 'iter-20260808-wt',
       statusPath: join(app.harnessDir, 'status.json'),
       compassPath: join(app.harnessDir, 'iterations/iter-20260808-wt/delivery-compass.md'),
     })
     // The cached view reuses the Task 1 tool result shape (transition /
     // all_plans_done / ok / entry / exit / violations).
-    const source = gate?.source
-    expect(source).toBeDefined()
-    if (source === undefined) return
-    expect(source.gate).toMatchObject({
+    expect(source.iteration!.gate).toMatchObject({
       transition: 'phase-2-execute',
       all_plans_done: false,
       ok: true,
@@ -243,16 +240,16 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
       exit: { ok: false },
       violations: [],
     })
-    expect(source.gate.entry.violations.map((v) => v.code)).toContain('PLAN_NOT_DONE')
+    expect(source.iteration!.gate.entry.violations.map((v) => v.code)).toContain('PLAN_NOT_DONE')
     // Boot-time evaluation passes NO git probes (documented in
     // iterationGateSource): the exit branch/base items are unverifiable.
-    const exitCodes = source.gate.exit.violations.map((v) => v.code)
+    const exitCodes = source.iteration!.gate.exit.violations.map((v) => v.code)
     expect(exitCodes).toContain('EXIT_BRANCH_UNVERIFIABLE')
     expect(exitCodes).toContain('EXIT_PR_BASE_UNVERIFIABLE')
-    // The composed session log carries the model-facing gate line.
-    expect(gate?.content[0]?.type).toBe('text')
-    const text = gate?.content[0]?.type === 'text' ? gate.content[0].text : ''
-    expect(text).toContain('<mstar_iteration_gate>')
+    // The composed session log carries the model-facing gate lines.
+    expect(row?.content[0]?.type).toBe('text')
+    const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
+    expect(text).toContain('<mstar_engine_status>')
     expect(text).toContain('iteration: iter-20260808-wt')
     expect(text).toContain('transition: phase-2-execute')
     expect(text).toContain('all plans done: false')
@@ -269,14 +266,14 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
-    const gate = decision.messages.at(-2)
-    expect(gate?.source).toMatchObject({ kind: 'mstar-iteration-gate' })
-    const source = gate?.source
-    if (source === undefined) return
-    expect(source.gate).toMatchObject({ transition: 'phase-3-close', all_plans_done: true, ok: false })
-    const codes = source.gate.violations.map((v) => v.code)
+    const row = lastMessage(decision)
+    expect(row?.source).toMatchObject({ kind: 'mstar-engine-status' })
+    const source = row?.source
+    if (source === undefined || source.kind !== 'mstar-engine-status') return
+    expect(source.iteration!.gate).toMatchObject({ transition: 'phase-3-close', all_plans_done: true, ok: false })
+    const codes = source.iteration!.gate.violations.map((v) => v.code)
     expect(codes).toContain('EXIT_STATUS_NOT_COMPLETED')
-    const text = gate?.content[0]?.type === 'text' ? gate.content[0].text : ''
+    const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
     expect(text).toContain('gate: FAIL')
     expect(text).toContain('EXIT_STATUS_NOT_COMPLETED')
   })
@@ -297,9 +294,8 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
 
     expect(decision.kind).toBe('enter')
-    expect(decision.kind === 'enter' && decision.messages.slice(0, -3)).toEqual(replaced)
-    expect(decision.kind === 'enter' && decision.messages.at(-2)?.source).toMatchObject({ kind: 'mstar-iteration-gate' })
-    expect(decision.kind === 'enter' && decision.messages.at(-1)?.source).toMatchObject({ kind: 'mstar-harness-state' })
+    expect(decision.kind === 'enter' && decision.messages.slice(0, -1)).toEqual(replaced)
+    expect(decision.kind === 'enter' && decision.messages.at(-1)?.source).toMatchObject({ kind: 'mstar-engine-status' })
   })
 
   it('aborted step → the delegated decision returns unchanged, no catalog rows (advisory never publishes on a blocked step)', async () => {
@@ -338,7 +334,7 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
       'status.json': JSON.stringify(statusWithPlans([PLAN_TODO])),
       'iterations/iter-20260808-wt/delivery-compass.md': COMPASS_ACTIVE,
     })
-    const after = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+    const after = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, 2), defaultEnter(inbox))
     expect(after.kind === 'enter' && after.messages.length).toBe(inbox.length + 1)
     expect(lastMessage(after)?.source).toMatchObject({ kind: 'mstar-engine-status' })
   })

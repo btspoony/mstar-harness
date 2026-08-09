@@ -87,13 +87,14 @@ waterfall is content-blind (an already-invalid document is allowed as a
 repair escape). Config `soft` is the only local rollback. Hard gates are never
 a global default.
 
-Every composed agent step carries the **`<mstar_engine_status>`** catalog
-watermark (unified mstar version, harness dir, enforcement), the
-**`<mstar_iteration_gate>`** row when a steering compass resolved, and the
-**`<mstar_harness_state>`** row (plan registry, open residuals, branch/policy
-anchors, active leases, knowledge digest, compass direction) when the
-workspace has a `status.json`. All three rows share one per-workspace
-TTL-cached build (`catalogTtlMs`, default 60 s).
+Every composed agent step carries ONE **`<mstar_engine_status>`** catalog
+message: the watermark (unified mstar version, harness dir, enforcement),
+the iteration phase-gate section when a steering compass resolved, and the
+workspace-state digest section (plan registry, open residuals,
+branch/policy anchors, active leases, knowledge digest, compass direction)
+when the workspace has a `status.json`. The row is digest-gated (once per
+turn, re-injected only when it changed) over one per-workspace TTL-cached
+build (`catalogTtlMs`, default 60 s).
 
 ## PM dispatch
 
