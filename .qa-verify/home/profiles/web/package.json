@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "@mstar-harness/dsh": "link:/Users/bibi/workspace/ai/mstar-workflow/.worktrees/mstar-workflow-workflow-viz/packages/dsh"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@mstar-harness/dsh"
+      ]
+    }
+  }
+}
