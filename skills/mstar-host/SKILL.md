@@ -36,7 +36,7 @@ Detect from **session tool shapes and available commands** — not from plugin m
 | `/plan`, `/goal` slash commands; **Goal tools**; `functions.*` / `codex_app.*` tool namespaces; `tool_search`; Browser plugin tools | `codex` | `references/codex.md`; Plan/Goal mode also `references/codex-plan-goal-mode-bridge.md` |
 | Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, **`codex.md`**, **`kimi.md`**, **`zcode.md`**, **`omp.md`**, and **`dsh.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
 
-Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. `subagent_type` (Cursor) vs `subagent` (OpenCode) vs `agent`/`tasks[]` (omp) is the sharpest split among the Task-based hosts; dsh's `subagent` tool (roadmap §4 D5) collides with no other row, so it sits with the agent-tool hosts.
+Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. `subagent_type` (Cursor) vs `subagent` (OpenCode) vs `agent`/`tasks[]` (omp) is the sharpest split among the Task-based hosts; dsh's `subagent` tool collides with no other row, so it sits with the agent-tool hosts.
 
 > **Engine check (when available):** run `mstar host detect --signals <comma-list>` (or `import { detectHost } from "@mstar-harness/engine"` in a host hook) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 

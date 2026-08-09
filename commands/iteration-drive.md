@@ -78,7 +78,7 @@ command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate "<la
 if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validate "<latest-assignment-file>" || exit 1; fi
 ```
 
-> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
+> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开。
 
 ## Phase 3: iteration-close
 
