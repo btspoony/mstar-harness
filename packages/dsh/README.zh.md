@@ -150,6 +150,7 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入：�
 ```sh
 cd <repo>/packages/dsh
 bun run build               # dist/client.js（closure-factory CJS）+ dist/client.d.ts
+# corepack 机器（仓库根声明 packageManager: bun）：命令前加 COREPACK_ENABLE_PROJECT_SPEC=0
 dsh plugin --profile web add <abs packages/dsh path>   # 同一 profile bundle 安装
 dsh web                     # 启动 → 服务 /plugins/@mstar-harness/dsh/client.js
 ```

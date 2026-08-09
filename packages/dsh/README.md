@@ -169,6 +169,7 @@ server half):
 ```sh
 cd <repo>/packages/dsh
 bun run build               # dist/client.js (closure-factory CJS) + dist/client.d.ts
+# corepack machines (repo root declares packageManager: bun): prefix with COREPACK_ENABLE_PROJECT_SPEC=0
 dsh plugin --profile web add <abs packages/dsh path>   # same profile bundle install
 dsh web                     # boot → /plugins/@mstar-harness/dsh/client.js served
 ```
