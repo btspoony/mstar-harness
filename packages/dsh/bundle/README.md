@@ -10,26 +10,34 @@ row over the dsh-base layer.
 
 ## Install
 
-Local checkout (this iteration — local-only, no npm publish yet):
+Two profile-bundle install forms into the shipped `web` profile
+(`dsh plugin --profile web add <spec>`; `dsh web` boots it):
+
+Local checkout install (this iteration — local-only, no npm publish yet):
 
 ```sh
 cd <repo>/packages/dsh
-dsh plugin --profile mstar add .
+dsh plugin --profile web add .
 ```
 
-Published package (later, once `@mstar-harness/dsh` is on the registry):
+Repo URL install (the git repo hosting the package, pnpm `path:` spec selecting the monorepo subdirectory):
 
 ```sh
-dsh plugin --profile mstar add @mstar-harness/dsh
+dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh
 ```
 
 `dsh plugin --profile <name> add <spec>` initializes the profile on first use
-(`@deepseek-ai/dsh-base` as the first bundle), forwards `<spec>` to pnpm in
-the profile directory, and reconciles the profile's `dsh.profile.bundles`
-layer list from the installed state: any dependency whose package.json
-declares `dsh.bundle` joins the layer stack. Relative specs (`.`, and
-`file:`/`link:` forms) anchor to the invoking directory, so `add .` must run
-from the package checkout. pnpm must be on PATH.
+(`web` starts from the shipped template: `@deepseek-ai/dsh-base` +
+`@deepseek-ai/dsh-web-app`), forwards `<spec>` to pnpm in the profile
+directory, and reconciles the profile's `dsh.profile.bundles` layer list from
+the installed state: any dependency whose package.json declares `dsh.bundle`
+joins the layer stack. Relative specs (`.`, and `file:`/`link:` forms) anchor
+to the invoking directory, so `add .` must run from the package checkout.
+pnpm must be on PATH. Git-hosted specs build on install via the package
+`prepare` script (`bun run build` → `dist/`), which pnpm ≥10 blocks until
+allowed — the first `add` fails with pnpm's `allowBuilds` hint; add the
+printed key under `allowBuilds` in the profile's `pnpm-workspace.yaml`, then
+re-run.
 
 Bundle resolution is two-anchored: a bundle name resolves from the dsh
 installation first, then from the profile directory. During local
@@ -42,9 +50,11 @@ so the profile-local copy installed by `add` is the one mounted.
 config:
 
 1. `@deepseek-ai/dsh-base` — the shared dsh core.
-2. This bundle — inserts the `mstar` plugin row (`id: mstar`,
+2. `@deepseek-ai/dsh-web-app` — the shipped web app layer (the `web` profile
+   template the install targets; absent from a hand-made profile).
+3. This bundle — inserts the `mstar` plugin row (`id: mstar`,
    `name: @mstar-harness/dsh`).
-3. The profile's own `cordis.patch.yml`, then `$DSH_HOME/cordis.patch.yml`
+4. The profile's own `cordis.patch.yml`, then `$DSH_HOME/cordis.patch.yml`
    (the home-level layer outranks the per-profile layer).
 
 Patches are id-targeted and the last write wins per row. **A patch replaces
@@ -62,27 +72,34 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 | `enforcement` | **unset — default OFF** | `hard` / `soft` override; absent → the iteration compass decides, warn-only when no compass hardens (never a global always-on hard gate) |
 | `dispatchTools` | unset (plugin default `['subagent']`) | delegation tool names the dispatch gate matches |
 | `dispatchBinding` | unset | the dispatching agent's role for the anti-recursion precheck |
-| `skillRoots` | unset | additional skill roots (dev-time mirror) |
-| `bundledSkillDir` | `./skills` | packaged skill mount — ships **empty** (this README only) until a publish-time copy step populates `skills/`; the supported production form is an **absolute path override in the profile layer** (qc3 P-004) |
+| `skillRoots` | unset | additional skill roots (custom mirrors) |
+| `bundledSkillDir` | unset → plugin resolves its OWN packaged `harness-skills/` mirror package-relative | bundled skill mount — the repo-root `skills/` mirror synced by `bundle-assets` at build/postinstall (gitignored), resolved package-relative (NOT cwd-anchored). An explicit value wins; a RELATIVE override stays cwd-anchored, so pass an absolute path in the profile layer |
 
 ## Known constraints
 
-- `bundledSkillDir: ./skills` resolves against the dsh **process cwd** at
-  boot (skill-local `join` semantics — confirmed by the Task 5 e2e,
-  `tests/e2e-session.spec.ts` § bundledSkillDir: a relative bundled root
-  discovers skills under the launch cwd, which for the test suite is the
-  package root). A deployment that launches dsh from another cwd therefore
-  resolves `./skills` under THAT cwd (typically an empty/absent directory →
-  no bundled mount); override it with an absolute path in the profile's
-  `cordis.patch.yml` — the supported production form.
+- The plugin's DEFAULT bundled root is its own `harness-skills/` mirror,
+  resolved package-relative via `import.meta.url` — it works from any launch
+  cwd (this resolves the Task 5 cwd-anchoring finding for the default). An
+  explicit RELATIVE `bundledSkillDir` override resolves against the dsh
+  **process cwd** at boot (skill-local `join` semantics — confirmed by the
+  Task 5 e2e, `tests/e2e-session.spec.ts` § bundledSkillDir), so deployments
+  overriding the default should pass an **absolute path** in the profile's
+  `cordis.patch.yml`.
+- The bundled `harness-skills/` + `harness-commands/` mirrors are build-time
+  syncs (`bundle-assets`; repo-root `skills/` + `commands/`; gitignored) —
+  a checkout without the sync mounts no bundled skills and registers no
+  commands (inert, not an error).
 - The patch ships only neutral defaults; deployment-owned values
   (`harnessDir`, `enforcement`, `dispatchTools`, `dispatchBinding`,
-  `skillRoots`) belong in the user's profile layer, restating kept fields.
+  `skillRoots`, `bundledSkillDir`) belong in the user's profile layer,
+  restating kept fields.
 - Local install **verified at Task 5** (no push, no publish): from the repo
-  checkout, `DSH_HOME=<temp> dsh plugin --profile mstar add <packages/dsh>`
+  checkout, `DSH_HOME=<temp> dsh plugin --profile web add <packages/dsh>`
   exits 0 — pnpm links the local checkout, the reconcile step joins
   `@mstar-harness/dsh` to `dsh.profile.bundles`, and
-  `dsh --profile mstar --dump-config` composes the `mstar` row over
-  dsh-base. The public-registry path (`add @mstar-harness/dsh`) runs through
-  the same reconcile mechanism once the package is published; it is **not
-  executed this iteration** (local-only constraint).
+  `dsh --profile web --dump-config` composes the `mstar` row over the web
+  template layers. The repo-URL path (`add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh`)
+  runs through the same pnpm + reconcile mechanism (verified against the real
+  remote); it builds via the `prepare` script, which pnpm ≥10 blocks until an
+  `allowBuilds` entry is added (see Install). No public-registry install is
+  offered this iteration (local-only constraint).

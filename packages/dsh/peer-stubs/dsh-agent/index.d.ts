@@ -16,6 +16,28 @@ export type PreStepDecision =
   | { kind: 'reject' }
   | { kind: 'enter'; messages: UserMessage[] }
 
+/**
+ * The public live-agent handle (consumed surface: the command-handler
+ * steering path — `@deepseek-ai/dsh-commands` `CommandInvocation.agent`).
+ * Mirrors the real `Agent` interface; only the members the plugin's command
+ * handlers use are declared here (the real surface also carries
+ * `session`/`inbox`/`cancel`/`whenIdle`/`runMaintenance`/`ctx`).
+ */
+export interface Agent {
+  /** The single identity shared with the session. */
+  readonly id: string
+  /** The current lifecycle state. */
+  readonly status: 'idle' | 'running'
+  /**
+   * Queue model-facing context for the next pre-step without waking the
+   * driver (the command-handler delivery channel: a slash command steers
+   * its mstar command body into the receiving agent).
+   */
+  steer(message: UserMessage): void
+  /** Queue an ordinary follow-up turn and wake the driver. */
+  followup(message: UserMessage): void
+}
+
 declare module 'cordis' {
   interface Events {
     /**

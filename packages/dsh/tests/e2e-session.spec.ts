@@ -521,9 +521,9 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
     expect(skills.some((s) => s.name === 'broken-skill')).toBe(false)
   })
 
-  it('the shipped bundle patch declares bundledSkillDir: ./skills — the cwd-anchored default this spec documents', () => {
+  it('the shipped bundle patch ships no bundledSkillDir config key — the plugin resolves its own packaged harness-skills mirror', () => {
     const patch = readFileSync(new URL('../bundle/cordis.patch.yml', import.meta.url), 'utf8')
-    expect(patch).toContain('bundledSkillDir: ./skills')
+    expect(patch).not.toContain('bundledSkillDir:')
   })
 
   it('the shipped default (./skills, no deployment keys) boots safely: engine-status watermark always appends', async () => {

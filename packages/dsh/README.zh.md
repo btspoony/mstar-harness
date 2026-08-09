@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-让 [Morning Star](https://github.com/btspoony/mstar-harness) 成为一等公民的 dsh 宿主——一个 cordis 函数插件，将 mstar engine 进程内挂载，实现 engine `HostAdapter`（`host: 'dsh'`），守护 `{HARNESS_DIR}/status.json` 写入（校验 + 咨询；hard 下按修复逃生放行），在 `Enforcement: hard` 开启时阻止被禁止的 subagent 派发，对挂载技能根下的 `SKILL.md` 写入执行技能撰写 lint，通过 dsh skill-local 提供者挂载 mstar `skills/` 镜像（单一规范挂载），并向每个组合后的 agent 步骤追加一条持久化的 `mstar-engine-status` catalog 行。随 dsh Loader 应用启动；一切均通过 seam 的拒绝/咨询通道行使职责，从不改动工具本身。
+让 [Morning Star](https://github.com/btspoony/mstar-harness) 成为一等公民的 dsh（DeepSeek Harness）宿主——一个 cordis 函数插件，将 mstar engine 进程内挂载，实现 engine `HostAdapter`（`host: 'dsh'`），守护 `{HARNESS_DIR}/status.json` 写入（校验 + 咨询；hard 下按修复逃生放行），在 `Enforcement: hard` 开启时阻止被禁止的 subagent 派发，对挂载技能根下的 `SKILL.md` 写入执行技能撰写 lint，通过 dsh skill-local 提供者挂载 mstar `skills/` 镜像（单一规范挂载），并向每个组合后的 agent 步骤追加一条持久化的 `mstar-engine-status` catalog 行。随 dsh Loader 应用启动；一切均通过 seam 的拒绝/咨询通道行使职责，从不改动工具本身。
 
 ## Usage
 
@@ -10,27 +10,22 @@ dsh 应用如何使用本插件——安装路径、配置、挂载时发生什�
 
 ### Install paths
 
-本包以 workspace 包形式发布（`workspaces: ["packages/*"]`），构建时把 engine 打进 `dist/`（`bun run build`；dist 已被 gitignore）。两种安装形态：
+本包以 workspace 包形式发布（`workspaces: ["packages/*"]`），构建时把 engine 打进 `dist/`（`bun run build`；dist 已被 gitignore）。唯一安装途径是 **profile bundle**，装进现成的 `web` profile（`dsh --profile web`——开箱即用的 web 应用 profile，即 `dsh web`），经 `dsh.bundle.patch` 清单——一个叠在 dsh-base 默认层之上的补丁层——分两种 spec 形态：
 
-**（a）cordis 插件行**——写进 dsh 应用的 `cordis.yml`（id/name + config 片段，见下方最小示例）：
-
-```yaml
-- name: '@mstar-harness/dsh'
-  config:
-    harnessDir: .mstar
-```
-
-**（b）profile bundle**（`dsh --profile mstar`），经 `dsh.bundle.patch` 清单——一个叠在 dsh-base profile 默认层之上的补丁层：
+**（a）local checkout 安装**——包检出本身（本迭代——local-only，尚未 npm 发布）：
 
 ```sh
-# 本地检出（本迭代——local-only，尚未 npm 发布）
 cd <repo>/packages/dsh
-dsh plugin --profile mstar add .
-# 发布后的包（待 @mstar-harness/dsh 上 registry）
-dsh plugin --profile mstar add @mstar-harness/dsh
+dsh plugin --profile web add .
 ```
 
-相对 spec（`.`、`file:`/`link:`）锚定调用目录，因此 `add .` 须在包检出目录内执行；pnpm 须在 PATH 上。细节、层位置与出厂默认见 [`bundle/README.md`](bundle/README.md)——本地路径**已验证**（Task 5），registry 路径推迟到发布。`cordis` 与 `@deepseek-ai/dsh-*` 各 seam 均为 peerDependencies——由组合后的 dsh 应用提供。
+**（b）repo url 安装**——托管该包的 git 仓库，pnpm `path:` spec 选取 monorepo 子目录：
+
+```sh
+dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh
+```
+
+`dsh plugin --profile <name> add <spec>` 首次使用时初始化 profile（`web` 从出厂模板起步：`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`），把 `<spec>` 转发给 profile 目录中的 pnpm，并按已安装状态对账 `dsh.profile.bundles` 层列表：任何 package.json 声明 `dsh.bundle` 的依赖都会加入层栈。相对 spec（`.`、`file:`/`link:`）锚定调用目录，因此 `add .` 须在包检出目录内执行；pnpm 须在 PATH 上。git 托管的 spec 在安装时经包的 `prepare` 脚本（`bun run build` → `dist/`）构建，pnpm ≥10 会先阻止该构建——首次 `add` 会以 pnpm 的 `allowBuilds` 提示失败；把打印出的 key 加入 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 下，再重跑。细节、层位置与出厂默认见 [`bundle/README.md`](bundle/README.md)——local checkout **已验证**（Task 5）；repo url 形态走同一 pnpm + reconcile 机制。`cordis` 与 `@deepseek-ai/dsh-*` 各 seam 均为 peerDependencies——由组合后的 dsh 应用提供。
 
 ### Configuration
 
@@ -41,21 +36,22 @@ dsh plugin --profile mstar add @mstar-harness/dsh
 | `dispatchTools` | `string[]` | `['subagent']` | 派发闸门匹配的委派工具名（dsh subagent 工具的 `toolName` 可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
 | `skillRoots` | `string[]` | 未设置（不注册自定义根） | 向 dsh skill-local 提供者注册的额外技能根（`customSkillDirs` 语义——先于用户根扫描）。开发期：镜像 `<repo-root>/skills` 的绝对路径。 |
-| `bundledSkillDir` | `string` | 未设置 | 向 dsh skill-local 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。规范发布形态——dsh 默认 `$DSH_BUNDLED_SKILL_DIR`；本插件挂载隔离提供者，因此打包根显式注册。 |
+| `bundledSkillDir` | `string` | 打包的 `harness-skills/` 镜像（包相对路径） | 向 dsh skill-local 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。默认取包内自带的 `harness-skills/` 镜像（`bundle-assets` 同步；gitignore）——包相对路径，**非** cwd 锚定。显式值优先。 |
 
-`bundledSkillDir` 是 **cwd 锚定**的：相对根在启动时以 `join()` 语义相对 dsh **进程 cwd** 解析，因此出厂 `./skills` 默认只在 dsh 从包根目录启动时找得到打包挂载。受支持的生产形态是 **profile 层里的绝对路径覆盖**（见 `bundle/README.md`）。
+`bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像（见 Skills mount）——显式 Config 值仍然优先。相对覆盖仍是 **cwd 锚定**（skill-local 以 `join()` 语义相对 dsh **进程 cwd** 解析），因此覆盖默认的部署应在 **profile 层传绝对路径**（见 `bundle/README.md`）。
 
-### Minimal cordis.yml
+### 组合后的行集合
+
+profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base` 层，本 bundle 的补丁在其上插入 `mstar` 行并携带中性默认（即全应用 e2e fixture 启动的行集合）：
 
 ```yaml
-- name: '@deepseek-ai/dsh-skill'   # skill 注册表（ctx.skills）
-- name: '@deepseek-ai/dsh-tools'   # tool 注册表（ctx.tools）
-- name: '@mstar-harness/dsh'
-  config:
-    harnessDir: .mstar
+- name: '@deepseek-ai/dsh-skill'   # skill 注册表（ctx.skills）——dsh-base 行
+- name: '@deepseek-ai/dsh-tools'   # tool 注册表（ctx.tools）——dsh-base 行
+- name: '@deepseek-ai/dsh-commands' # command 注册表（ctx.commands）——dsh-base 行
+- name: '@mstar-harness/dsh'       # 本 bundle 补丁插入（config: {}——插件默认生效）
 ```
 
-注册表行先于插件挂载，使 mstar 各闸门与 seam 工具注册时 `ctx.skills` / `ctx.tools` 已存在——即全应用 e2e fixture 启动的行集合。
+注册表行先于插件挂载，使 mstar 各闸门、seam 工具与 bundled 命令注册时 `ctx.skills` / `ctx.tools` / `ctx.commands` 已存在。
 
 ### What the plugin does when mounted
 
@@ -64,6 +60,7 @@ dsh plugin --profile mstar add @mstar-harness/dsh
 - **技能撰写 lint**——已配置技能根下的 `SKILL.md` 写入运行 engine 技能撰写 lint（`lintFrontmatter` + `lintFiveQuestion`）。
 - **seam lint**——harness 下 `DESIGN.md` / audit plan / 知识文档 / roles 目录的写入运行各自的 artifact 级 engine lint。
 - **模型可见工具**——`mstar_sdd_workspace`、`mstar_sdd_task_brief`、`mstar_iteration_gate`、`mstar_design_md_validate`、`mstar_audit_validate`、`mstar_compound_validate`、`mstar_roles_validate` 注册到 `ctx.tools`。
+- **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；handler 把命令正文 steer 进接收 agent）。
 - **pre-step catalog 行**——每个组合后的 agent 步骤都会追加 `mstar-engine-status` 水印（engine/插件版本、harness 目录、enforcement），并在解析到迭代 steering compass 时追加 `mstar-iteration-gate` 行。
 
 ### Enforcement semantics
@@ -104,31 +101,35 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入（ro
 
 | 路径 | 机制 | 时机 |
 | --- | --- | --- |
-| 开发期 | `skillRoots: ["<repo-root>/skills"]` → skill-local `customSkillDirs` 条目 | 本地开发 / 测试 |
-| 发布包 | `bundledSkillDir` → skill-local `bundledSkillDir` 条目（规范发布形态——dsh 默认 `$DSH_BUNDLED_SKILL_DIR`）。镜像**尚未**被任何打包步骤复制进 `packages/dsh/skills/`（qc3 P-004）：包只随附技能 README，默认 `./skills` 挂载在发布期复制步骤出现前保持为空——受支持的生产形态是在 profile 层用**绝对 `bundledSkillDir` 覆盖** | 延后（发布期复制） |
+| Bundled 默认 | `bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像——仓库根 `skills/`（19 个 `mstar-*` + `pm`）由 `bundle-assets` 在构建/postinstall 时同步（gitignore），按**包相对路径**解析（非 cwd 锚定——解决 Task 5 的 cwd 锚定局限） | 发布包 / 无覆盖的任何部署 |
+| 自定义根 | `skillRoots` / 显式 `bundledSkillDir` → skill-local `customSkillDirs` / `bundledSkillDir` 条目（显式值优先） | 本地开发 / 测试 / 使用不同镜像的部署 |
 
-`packages/dsh/skills/README.md` 是打包挂载目标，**不含任何技能副本**——技能内容只在仓库根 `skills/` 镜像中存一份（19 个 `mstar-*` + `pm`），mstar 技能在任何地方都保持可独立使用。不重复加载：opencode 插件在自己的包里携带同一批技能，因此 dsh 只能通过这条 skill-local 路径挂载它们。
+打包镜像是**单一规范挂载**：技能内容只在仓库根 `skills/` 镜像中存一份并同步进包（与 opencode 的 `harness-skills/` 相同），mstar 技能在任何地方都保持可独立使用。不重复加载：opencode 插件在自己的包里携带同一批技能，因此 dsh 只能通过这条 skill-local 路径挂载它们。
 
 开发期现实：`@deepseek-ai/dsh-skill-local` 运行时是 peer stub（契约镜像的注册，无文件 watcher），因此挂载通过真实组合（stub + 实际镜像 `skills/` 的 frontmatter，用 engine `lintSkillFrontmatter` 校验）验证；真实运行时组合（真实 seam 包、watcher、`$DSH_BUNDLED_SKILL_DIR` 环境变量流）是部署目标，不在本包测试套件覆盖内。
 
+## Commands
+
+插件把 bundled 的 mstar 命令（omp/opencode 对齐面）注册到 `ctx.commands`：`harness-commands/*.md`——仓库根 `commands/` 镜像（`iteration-start`、`iteration-drive`、`iteration-loop`、`codebase-audit`）由 `bundle-assets` 在构建/postinstall 时同步（gitignore）。每条注册读取命令的 `name`/`description` frontmatter；handler 把**命令正文 steer 进接收 agent** 作为用户消息（dsh-commands 的「经接收 Agent 显式调度模型可见工作」路径），返回成功结果。注册以 `ctx.inject(['commands'], …)` 延迟进行——与工具注册相同的可选单元模式——插件在无 commands 服务时也能启动；镜像缺失（未跑 `bundle-assets`）则不注册任何命令。
+
 ## Engine seam mapping
 
-每个 engine 模块都挂到一条 dsh 表面——全部交付（v2.1.0；epic roadmap `dsh-adapter-roadmap.md` §4）：
+每个 engine 模块都挂到一条 dsh 表面——除 lint 模块的 plan/tdd fs 闸门外均已交付（roadmap §7 延后项；v2.1.0；epic roadmap `dsh-adapter-roadmap.md` §4）：
 
 | Engine 模块 | dsh seam | 状态 |
 |---|---|---|
 | core（applyEnforcement、GateResult/Severity） | 跨切面否决/拒绝 | 已交付（P1） |
-| path（resolveHarnessDir、assertPlanWritingPath） | 对 `{HARNESS_DIR}` 写入的 `fs/write-intent` | 已交付（P1） |
+| path（resolveHarnessDir） | harness 目录探测 + `{HARNESS_DIR}/status.json` 目标匹配 | 已交付（P1） |
 | status（validateStatus、validateResidual、findingsCleanupGate） | status.json 的 `fs/write-intent` + `fs/edit-intent` | 已交付（P1） |
 | lease（verifyPlanExecutionLease、validateIntegrationMergeLease） | exec 租约：`tools/pre-execute`（派发闸门内）；merge 租约：`HostAdapter.beforeMerge` | 已交付（P1 exec / P3 merge） |
-| dispatch（composeDispatchGate、validateAssignmentFields、antiRecursionPrecheck、isReadOnlyAssignmentRole） | 作用于 subagent 工具的 `tools/pre-execute`（`PreToolDecision.deny` 阻断）；`agent/pre-step` 咨询 | 已交付（P1） |
-| host（detectHost、resolveSkillRoot、HostAdapter） | engine host.ts + 插件适配器（`host: dsh`） | 已交付（P2） |
+| dispatch（composeDispatchGate、isReadOnlyAssignmentRole、parseAssignmentFields） | 作用于 subagent 工具的 `tools/pre-execute`（`PreToolDecision.deny` 阻断）；`agent/pre-step` 咨询 | 已交付（P1） |
+| host（resolveSkillRoot、HostAdapter） | engine host.ts 检测行 + 插件适配器（`host: 'dsh'`） | 已交付（P2） |
 | skill-authoring（lintFrontmatter、lintFiveQuestion） | skill-local 根 + 对 SKILL.md 的 `fs/write-intent` | 已交付（P2） |
-| lint（lintSkillFrontmatter、planQualityBar、assertSddTddTriple） | plan/tdd 的 `fs/write-intent` + seam 工具 | 已交付（P2 skill / P3 plan） |
+| lint（lintSkillFrontmatter、planQualityBar、assertSddTddTriple） | 未接线——plan/tdd 的 fs 闸门为延后项（roadmap §7）；`lintSkillFrontmatter` 仅运行于 skills-mount 测试套件 | 延后 |
 | agent catalog | MessageSourceMap `mstar-engine-status`（模型可见 ⟺ 已记录） | 已交付（P2） |
-| sdd（sddWorkspace、taskBrief、reviewPackage） | 注册在 `ctx.tools` 上的 `defineTool` 包装；`agent/pre-step` | 已交付（P3） |
-| iteration（evaluatePhaseGate、pushCadenceProbe、validateCompassFrontmatter、parseCompassFrontmatter） | `agent/pre-step` + iteration 闸门 | 已交付（P3） |
-| worktree（l1/l2PreDispatchCheck、assertQcAlignment） | `tools/pre-execute` L1/L2（派发闸门内） | 已交付（P3） |
+| sdd（sddWorkspace、taskBrief） | 注册在 `ctx.tools` 上的 `defineTool` 包装 | 已交付（P3） |
+| iteration（evaluatePhaseGate、parseCompassFrontmatter） | `agent/pre-step` + iteration 闸门 | 已交付（P3） |
+| worktree（l1PreDispatchCheck、l2PreDispatchCheck） | `tools/pre-execute` L1/L2（派发闸门内） | 已交付（P3） |
 | design-md / audit / compound / roles | `fs/write-intent` + 注册在 `ctx.tools` 上的 `defineTool` 包装 | 已交付（P3） |
 
 ## Engine-status catalog
@@ -165,7 +166,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 
 ## Known Limitations and Deferred Work
 
-- **开发期 peer stubs** —— `@deepseek-ai/dsh-*` 各 seam 分为 (a) **仅类型/占位 stub**（`dsh-fs`、`dsh-fs-policy`、`dsh-agent`、`dsh-invariants`、`dsh-subagent`）只暴露 seam 类型/peer 名，与 (b) **功能性组合 stub**（`dsh-skill`、`dsh-skill-local`、`dsh-tools`（`defineTool`）、`dsh-llm`）携带最小开发期运行时（`simplify:` 标记；钉定 dsh-private `9451be2`），使组合、瀑布链、catalog 消息工厂与 v2 seam 工具在测试中真实运行。**全部四个运行时 seam 导入在构建时外部化**（`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm`——发布的 `dist/` 导入它们而非内联占位代码；Task 6 pack 审查已验证）；闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证。本包自测**不计划**替换为真实 seam 包——由真实 seam 组合的应用是部署目标（本包套件刻意运行钉定 stub 以获得封闭式组合测试）。
+- **开发期 peer stubs** —— `@deepseek-ai/dsh-*` 各 seam 分为 (a) **仅类型/占位 stub**（`dsh-fs`、`dsh-agent`、`dsh-invariants`）只暴露 seam 类型/peer 名，与 (b) **功能性组合 stub**（`dsh-skill`、`dsh-skill-local`、`dsh-tools`（`defineTool`）、`dsh-commands`、`dsh-llm`）携带最小开发期运行时（`simplify:` 标记；钉定 dsh-private `9451be2`），使组合、瀑布链、catalog 消息工厂、bundled 命令注册与 v2 seam 工具在测试中真实运行。**全部运行时 seam 导入在构建时外部化**（`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm`——发布的 `dist/` 导入它们而非内联占位代码；Task 6 pack 审查已验证）；闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证。本包自测**不计划**替换为真实 seam 包——由真实 seam 组合的应用是部署目标（本包套件刻意运行钉定 stub 以获得封闭式组合测试）。
 - **反递归绑定为 Config 声明** —— dsh 在工具执行上下文上不暴露每 agent 角色，故 `dispatchBinding` 声明单一部署级角色；`Execute as` 不同的 Assignment 无法被识别为自我递归，多角色派发方需要按实例拆分插件。
 - **租约闸门有意与 opencode 分叉** —— opencode 的 `beforeDispatch` 不运行租约检查；dsh 租约闸门是新增的（`lease.dispatch.*` 码），且仅对可写 SDD/InProgress 派发触发，故对齐覆盖字段集而非租约面。
 - **已采纳 engine 共享组合（2.0.4 同步）** —— 派发闸门核心即 engine 的单一 `composeDispatchGate`（与 opencode/omp/CLI 对齐，字段/分支/反递归违规码按构造即相同），compass frontmatter 解析器即 engine 的共享 `parseCompassFrontmatter`（本地 dsh 镜像与 CLI 副本均已删除——不再有可漂移的分叉）。两者都按 qc2 F-001 纪律运行在 dsh 头区域切片上；租约 + worktree L1/L2 检查仍为叠加上去的 dsh 侧扩展。
@@ -179,9 +180,10 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **audit seam 作用域匹配任意深度上的任意 `plans/audit-*` 段**（qc2 S-002）——`isAuditPlanTarget` 扫描所有路径段，因此与 mstar 无关的目录树（例如带有 `plans/audit-*` 布局的依赖或兄弟项目）在写入时会收到 mstar audit 状态块 + 秘密 lint。与 design-md 作用域同类（仅咨询，从不阻断）；该布局是 mstar-audit 文档化的 Phase 4 形态，因此匹配是有意为之。
 - **`<root>/mstar-roles/SKILL.md` 上 skill-lint × roles seam 双重触发**（qc2 S-003）——当某个已配置技能根包含 `mstar-roles` 目录（开发期的仓库根镜像情形，以及发布形态的打包镜像）时，对 `mstar-roles/SKILL.md` 的一次写入会同时触发技能撰写 lint 闸门与 roles seam 闸门（hard 下两条咨询 / 两条修复逃生日志）。两个校验器都合理适用——双重 lint 仅为咨询，并非正确性破坏；「作用域互不重叠」的性质只在四个 seam 之间成立，不跨技能闸门。
 - **内容盲的 skill-lint 盲区**——`fs/write-intent` 槽位只携带 `(target, actor)`：首次创建的传入内容不被 lint，合法→非法覆盖在监听器路径上无法检出（它只 lint 写入前的磁盘文档）。告警/hard 咨询只呈现**已存在**的磁盘违规——与状态闸门同类限制。
-- **`bundledSkillDir` 锚定 cwd**（Task 5 e2e 发现）——skill-local 对相对打包根按普通 `join()` 语义解析到 dsh **进程 cwd**；出厂 patch 默认 `./skills` 只在 dsh 从包根目录启动时能找到打包挂载。受支持的生产形态是在 profile 层用**绝对路径覆盖**（见 `bundle/README.md`）；从其他 cwd 启动的部署在覆盖前没有打包挂载。
-- **profile-bundle registry 安装推迟到发布**——`dsh plugin --profile mstar add <本地路径>` 已验证（Task 5）；公开 registry 形态（`add @mstar-harness/dsh`）走同一 pnpm + reconcile 机制，但本迭代不执行（local-only 约束；roadmap §7）。
+- **显式相对 `bundledSkillDir` 覆盖锚定 cwd**（Task 5 e2e 发现）——skill-local 对相对打包根按普通 `join()` 语义解析到 dsh **进程 cwd**。插件的**默认**打包根是包内自带的 `harness-skills/` 镜像，按包相对路径解析（**非** cwd 锚定——任意启动 cwd 都可用）；只有显式的**相对**覆盖继承 cwd 锚定，因此覆盖默认的部署应在 **profile 层传绝对路径**（见 `bundle/README.md`）。
+- **Bundled 镜像是构建期同步**——`harness-skills/` + `harness-commands/` 由 `bundle-assets` 在构建/postinstall 时产出（仓库根 `skills/` + `commands/` 镜像；gitignore）。未跑 `bundle-assets` 的检出不挂载 bundled 技能、不注册命令（默认挂载惰性，而非报错）。
+- **profile-bundle 安装到 `web` profile：local checkout 与 repo url，无 registry 途径**——`dsh plugin --profile web add <本地检出>` 已验证（Task 5）；repo url 形态（`add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh`）走同一 pnpm + reconcile 机制，并已对真实远端验证（pnpm 解析 `path:` spec，reconcile 步骤把 `@mstar-harness/dsh` 并入 `dsh.profile.bundles`）；不提供公开 registry 安装（local-only 约束；roadmap §7）。git 托管的安装经包的 `prepare` 脚本构建，pnpm ≥10 会先阻止——须在 profile 的 `pnpm-workspace.yaml` 中加入 `allowBuilds` key（首次 `add` 以 pnpm 提示失败，重跑即成功）。
 - **`lintSkillWrite` 类型化否决尚未接入生产**——传入文档分支的 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）已导出并测试覆盖，但尚无生产调用方：engine `HostAdapter` 没有携带内容的技能写入钩子（只有 `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`），且 fs intent 槽位内容盲。接线随未来携带内容的钩子落地；在此之前监听器路径只通过修复逃生咨询执行（从不否决）。（roadmap §7 延后项，qc2 S-002。）
 - **CLI `HOST_SIGNALS` 缺少 `subagent` token**——engine `ToolSignal` 联合已包含它且 `detectHost` 能处理，但 `packages/cli` 的 `HOST_SIGNALS` 尚未更新，`mstar host detect --signals subagent` 会拒绝，直到上游化时更新 CLI 列表。（roadmap §7 延后项，qc2 S-003——上游 PR 批次。）
 - **入口 `src/index.ts` 保持单体**——保留 qc1 F-003 模块拆分延后：2600+ 行的入口在本迭代原样交付，因为在**最后任务**拆分会对已评审、全量测试的表面引入失稳风险且零行为收益；拆分仍是 roadmap 后续项（roadmap §7）。
-- **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root）随之一并更新。
+- **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。

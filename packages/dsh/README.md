@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-[Morning Star](https://github.com/btspoony/mstar-harness) as a first-class dsh host — a cordis function plugin that mounts the mstar engine in-process, implements the engine `HostAdapter` (`host: 'dsh'`), guards `{HARNESS_DIR}/status.json` writes (validate + advisory; repair-escape under hard), blocks disallowed subagent dispatches when `Enforcement: hard` is on, lints `SKILL.md` writes under the mounted skill roots, mounts the mstar `skills/` mirror through the dsh skill-local provider (single canonical mount), and appends a durable `mstar-engine-status` catalog row to every composed agent step. Boot with a dsh Loader app; everything acts through the seam's refusal/advisory channels, never by patching the tools.
+[Morning Star](https://github.com/btspoony/mstar-harness) as a first-class dsh (DeepSeek Harness) host — a cordis function plugin that mounts the mstar engine in-process, implements the engine `HostAdapter` (`host: 'dsh'`), guards `{HARNESS_DIR}/status.json` writes (validate + advisory; repair-escape under hard), blocks disallowed subagent dispatches when `Enforcement: hard` is on, lints `SKILL.md` writes under the mounted skill roots, mounts the mstar `skills/` mirror through the dsh skill-local provider (single canonical mount), and appends a durable `mstar-engine-status` catalog row to every composed agent step. Boot with a dsh Loader app; everything acts through the seam's refusal/advisory channels, never by patching the tools.
 
 ## Usage
 
@@ -10,27 +10,22 @@ How a dsh app consumes the plugin — install paths, configuration, what mounts 
 
 ### Install paths
 
-The package ships as a workspace package (`workspaces: ["packages/*"]`) with the engine bundled into `dist/` at build time (`bun run build`; dist is gitignored). Two install shapes:
+The package ships as a workspace package (`workspaces: ["packages/*"]`) with the engine bundled into `dist/` at build time (`bun run build`; dist is gitignored). The only install path is the **profile bundle**, added to the shipped `web` profile (`dsh --profile web` — the ready-made web app profile, `dsh web`), through the `dsh.bundle.patch` manifest — a patch layer mounted over the dsh-base defaults — in two spec forms:
 
-**(a) Cordis plugin row** in a dsh app's `cordis.yml` (id/name + config snippet — see the minimal example below):
-
-```yaml
-- name: '@mstar-harness/dsh'
-  config:
-    harnessDir: .mstar
-```
-
-**(b) Profile bundle** (`dsh --profile mstar`), through the `dsh.bundle.patch` manifest — a patch layer mounted over the dsh-base profile defaults:
+**(a) Local checkout install** — the package checkout itself (this iteration — local-only, no npm publish yet):
 
 ```sh
-# local checkout (this iteration — local-only, no npm publish yet)
 cd <repo>/packages/dsh
-dsh plugin --profile mstar add .
-# published package (once @mstar-harness/dsh is on the registry)
-dsh plugin --profile mstar add @mstar-harness/dsh
+dsh plugin --profile web add .
 ```
 
-Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add .` runs from the package checkout; pnpm must be on PATH. Details, layer position, and the shipped defaults live in [`bundle/README.md`](bundle/README.md) — the local path is **verified** (Task 5), the registry path is deferred until publish. `cordis` and the `@deepseek-ai/dsh-*` seams are peerDependencies — the composed dsh app provides them.
+**(b) Repo URL install** — the git repo hosting the package, pnpm `path:` spec selecting the monorepo subdirectory:
+
+```sh
+dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh
+```
+
+`dsh plugin --profile <name> add <spec>` initializes the profile on first use (`web` starts from the shipped template: `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`), forwards `<spec>` to pnpm in the profile directory, and reconciles the profile's `dsh.profile.bundles` layer list from the installed state: any dependency whose package.json declares `dsh.bundle` joins the layer stack. Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add .` runs from the package checkout; pnpm must be on PATH. Git-hosted specs build on install via the package `prepare` script (`bun run build` → `dist/`), which pnpm ≥10 blocks until allowed — the first `add` fails with pnpm's `allowBuilds` hint; add the printed key under `allowBuilds` in the profile's `pnpm-workspace.yaml`, then re-run. Details, layer position, and the shipped defaults live in [`bundle/README.md`](bundle/README.md) — the local checkout is **verified** (Task 5); the repo-URL form runs through the same pnpm + reconcile mechanism. `cordis` and the `@deepseek-ai/dsh-*` seams are peerDependencies — the composed dsh app provides them.
 
 ### Configuration
 
@@ -41,21 +36,22 @@ Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add 
 | `dispatchTools` | `string[]` | `['subagent']` | Delegation tool names the dispatch gate matches (the dsh subagent tool's `toolName` may rename instances). |
 | `dispatchBinding` | `string` | unset (precheck skipped) | The dispatching agent's own harness role; an Assignment whose `Execute as` equals it is self-recursion. |
 | `skillRoots` | `string[]` | unset (no custom-root registration) | Additional skill roots registered with the dsh skill-local provider (`customSkillDirs` semantics — scanned before user roots). Dev-time: the mirror `<repo-root>/skills` absolute path. |
-| `bundledSkillDir` | `string` | unset | Bundled skill root registered with the dsh skill-local provider (`bundledSkillDir` semantics — scanned last, trusted). The canonical published form — dsh defaults `$DSH_BUNDLED_SKILL_DIR`; this plugin mounts an isolated provider, so the bundled root is registered explicitly. |
+| `bundledSkillDir` | `string` | packaged `harness-skills/` mirror (package-relative) | Bundled skill root registered with the dsh skill-local provider (`bundledSkillDir` semantics — scanned last, trusted). Defaults to the package's OWN `harness-skills/` mirror (synced by `bundle-assets`; gitignored) — package-relative, NOT cwd-anchored. An explicit value wins. |
 
-`bundledSkillDir` is **cwd-anchored**: a relative root resolves with `join()` semantics against the dsh process cwd at boot, so the shipped `./skills` default only finds the packaged mount when dsh launches from the package root. The supported production form is an **absolute path override in the profile layer** (see `bundle/README.md`).
+`bundledSkillDir` defaults to the package's OWN `harness-skills/` mirror (see Skills mount) — an explicit Config value still wins. A relative override remains **cwd-anchored** (skill-local `join()` semantics against the dsh process cwd), so deployments overriding the default should pass an **absolute path in the profile layer** (see `bundle/README.md`).
 
-### Minimal cordis.yml
+### Composed row set
+
+The profile bundle composes the following rows — the registry rows come from the `@deepseek-ai/dsh-base` layer, and this bundle's patch inserts the `mstar` row over them with neutral defaults (the row set the full-app e2e fixture boots):
 
 ```yaml
-- name: '@deepseek-ai/dsh-skill'   # skill registry (ctx.skills)
-- name: '@deepseek-ai/dsh-tools'   # tool registry (ctx.tools)
-- name: '@mstar-harness/dsh'
-  config:
-    harnessDir: .mstar
+- name: '@deepseek-ai/dsh-skill'   # skill registry (ctx.skills) — dsh-base row
+- name: '@deepseek-ai/dsh-tools'   # tool registry (ctx.tools) — dsh-base row
+- name: '@deepseek-ai/dsh-commands' # command registry (ctx.commands) — dsh-base row
+- name: '@mstar-harness/dsh'       # this bundle's patch insert (config: {} — plugin defaults apply)
 ```
 
-The registry rows mount before the plugin so `ctx.skills` / `ctx.tools` exist when the mstar gates and seam tools register — the row set the full-app e2e fixture boots.
+The registry rows mount before the plugin so `ctx.skills` / `ctx.tools` / `ctx.commands` exist when the mstar gates, seam tools, and bundled commands register.
 
 ### What the plugin does when mounted
 
@@ -64,6 +60,7 @@ The registry rows mount before the plugin so `ctx.skills` / `ctx.tools` exist wh
 - **Skill-authoring lint** — `SKILL.md` writes under the configured skill roots run the engine skill-authoring lints (`lintFrontmatter` + `lintFiveQuestion`).
 - **Seam lints** — `DESIGN.md` / audit-plan / knowledge-doc / roles-dir writes under the harness get their artifact-specific engine lints.
 - **Model-facing tools** — `mstar_sdd_workspace`, `mstar_sdd_task_brief`, `mstar_iteration_gate`, `mstar_design_md_validate`, `mstar_audit_validate`, `mstar_compound_validate`, `mstar_roles_validate` register on `ctx.tools`.
+- **Bundled commands** — `ctx.commands` registrations for `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit` (from the packaged `harness-commands/` mirror; handlers steer the command body into the receiving agent).
 - **Pre-step catalog rows** — every composed agent step appends the `mstar-engine-status` watermark (engine/plugin version, harness dir, enforcement) and, when a steering iteration compass resolves, the `mstar-iteration-gate` row.
 
 ### Enforcement semantics
@@ -104,31 +101,35 @@ The mstar skills mount through the dsh skill-local provider as a **single canoni
 
 | Path | Mechanism | When |
 | --- | --- | --- |
-| Dev-time | `skillRoots: ["<repo-root>/skills"]` → skill-local `customSkillDirs` entry | Local development / tests |
-| Published package | `bundledSkillDir` → skill-local `bundledSkillDir` entry (canonical published form — dsh defaults `$DSH_BUNDLED_SKILL_DIR`). The mirror is **not** copied into `packages/dsh/skills/` by any packaging step yet (qc3 P-004): the package ships the skills README only, so the default `./skills` mount stays empty until a publish-time copy exists — the supported production form is an **absolute `bundledSkillDir` override in the profile layer** | Deferred (publish-time copy) |
+| Bundled default | `bundledSkillDir` defaults to the package's OWN `harness-skills/` mirror — the repo-root `skills/` (19 `mstar-*` + `pm`) synced by `bundle-assets` at build/postinstall (gitignored), resolved **package-relative** (not cwd-anchored — resolves the Task 5 cwd-anchoring limitation) | Published package / any deployment without an override |
+| Custom roots | `skillRoots` / explicit `bundledSkillDir` → skill-local `customSkillDirs` / `bundledSkillDir` entries (explicit values win) | Local development / tests / deployments with a different mirror |
 
-`packages/dsh/skills/README.md` is the packaged mount target and intentionally contains **no skill copies** — skill content lives once in the repo-root `skills/` mirror (19 `mstar-*` + `pm`), and mstar skills stay standalone-usable everywhere. No double-loading: the opencode plugin ships the same skills in its own package, so dsh must mount them ONLY through this single skill-local path.
+The packaged mirror is a **single canonical mount**: skill content lives once in the repo-root `skills/` mirror and is synced into the package (like opencode's `harness-skills/`), so mstar skills stay standalone-usable everywhere. No double-loading: the opencode plugin ships the same skills in its own package, so dsh must mount them ONLY through this single skill-local path.
 
 Dev-time reality: the `@deepseek-ai/dsh-skill-local` runtime is a peer-stub (contract-mirroring registration, no file watcher), so the mount is verified through real composition against the stub + the actual mirror `skills/` frontmatter (engine `lintSkillFrontmatter`); real-runtime composition (real seam packages, watcher, `$DSH_BUNDLED_SKILL_DIR` env flow) is the deployment target, not covered by this package's suite.
 
+## Commands
+
+The plugin registers the bundled mstar commands (omp/opencode parity surface) on `ctx.commands`: `harness-commands/*.md` — the repo-root `commands/` mirror (`iteration-start`, `iteration-drive`, `iteration-loop`, `codebase-audit`) synced by `bundle-assets` at build/postinstall (gitignored). Each registration reads the command's `name`/`description` frontmatter; the handler **steers the command body into the receiving agent** as a user message (the dsh-commands "explicitly schedule model-visible work through the receiving Agent" path), returning a success result. Registration is deferred with `ctx.inject(['commands'], …)` — the same optional-unit pattern as the tools — so the plugin boots without the commands service; an absent mirror (no `bundle-assets` run) registers nothing.
+
 ## Engine seam mapping
 
-Every engine module attaches to a dsh surface — all delivered (v2.1.0; epic roadmap `dsh-adapter-roadmap.md` §4):
+Every engine module attaches to a dsh surface — delivered except the lint module's plan/tdd fs gates (roadmap §7 deferral; v2.1.0; epic roadmap `dsh-adapter-roadmap.md` §4):
 
 | Engine module | dsh seam | Status |
 |---|---|---|
 | core (applyEnforcement, GateResult/Severity) | cross-cutting veto/reject | delivered (P1) |
-| path (resolveHarnessDir, assertPlanWritingPath) | `fs/write-intent` on `{HARNESS_DIR}` writes | delivered (P1) |
+| path (resolveHarnessDir) | harness-dir probing + `{HARNESS_DIR}/status.json` target matching | delivered (P1) |
 | status (validateStatus, validateResidual, findingsCleanupGate) | `fs/write-intent` + `fs/edit-intent` on status.json | delivered (P1) |
 | lease (verifyPlanExecutionLease, validateIntegrationMergeLease) | exec lease: `tools/pre-execute` (inside the dispatch gate); merge lease: `HostAdapter.beforeMerge` | delivered (P1 exec / P3 merge) |
-| dispatch (composeDispatchGate, validateAssignmentFields, antiRecursionPrecheck, isReadOnlyAssignmentRole) | `tools/pre-execute` on the subagent tool (`PreToolDecision.deny` to block); `agent/pre-step` advisory | delivered (P1) |
-| host (detectHost, resolveSkillRoot, HostAdapter) | engine host.ts + plugin adapter (`host: dsh`) | delivered (P2) |
+| dispatch (composeDispatchGate, isReadOnlyAssignmentRole, parseAssignmentFields) | `tools/pre-execute` on the subagent tool (`PreToolDecision.deny` to block); `agent/pre-step` advisory | delivered (P1) |
+| host (resolveSkillRoot, HostAdapter) | engine host.ts detection row + plugin adapter (`host: 'dsh'`) | delivered (P2) |
 | skill-authoring (lintFrontmatter, lintFiveQuestion) | skill-local roots + `fs/write-intent` on SKILL.md | delivered (P2) |
-| lint (lintSkillFrontmatter, planQualityBar, assertSddTddTriple) | `fs/write-intent` plan/tdd + seam tools | delivered (P2 skill / P3 plan) |
+| lint (lintSkillFrontmatter, planQualityBar, assertSddTddTriple) | not wired — plan/tdd fs gates are a deferral (roadmap §7); `lintSkillFrontmatter` runs only in the skills-mount test suite | deferred |
 | agent catalog | MessageSourceMap `mstar-engine-status` (model-visible ⟺ logged) | delivered (P2) |
-| sdd (sddWorkspace, taskBrief, reviewPackage) | `defineTool` wrappers registered on `ctx.tools`; `agent/pre-step` | delivered (P3) |
-| iteration (evaluatePhaseGate, pushCadenceProbe, validateCompassFrontmatter, parseCompassFrontmatter) | `agent/pre-step` + iteration gate | delivered (P3) |
-| worktree (l1/l2PreDispatchCheck, assertQcAlignment) | `tools/pre-execute` L1/L2 (inside the dispatch gate) | delivered (P3) |
+| sdd (sddWorkspace, taskBrief) | `defineTool` wrappers registered on `ctx.tools` | delivered (P3) |
+| iteration (evaluatePhaseGate, parseCompassFrontmatter) | `agent/pre-step` + iteration gate | delivered (P3) |
+| worktree (l1PreDispatchCheck, l2PreDispatchCheck) | `tools/pre-execute` L1/L2 (inside the dispatch gate) | delivered (P3) |
 | design-md / audit / compound / roles | `fs/write-intent` + `defineTool` wrappers on `ctx.tools` | delivered (P3) |
 
 ## Engine-status catalog
@@ -165,7 +166,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 
 ## Known Limitations and Deferred Work
 
-- **Dev-time peer stubs** — the `@deepseek-ai/dsh-*` seams split into (a) **type-only / placeholder stubs** (`dsh-fs`, `dsh-fs-policy`, `dsh-agent`, `dsh-invariants`, `dsh-subagent`) exposing the seam types/peer names only, and (b) **functional composition stubs** (`dsh-skill`, `dsh-skill-local`, `dsh-tools` (`defineTool`), `dsh-llm`) carrying minimal dev-time runtimes (`simplify:` markers; pinned to dsh-private `9451be2`) so composition, waterfalls, the catalog message factory, and the v2 seam tools actually run in tests. **All four runtime seam imports are externalized at build time** (`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining the stand-in code; verified in the Task 6 pack review); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. Swapping in the real seam packages for the plugin's own suite is NOT planned — a composed app with real seams is the deployment target (this package's suite deliberately runs the pinned stubs for hermetic composition tests).
+- **Dev-time peer stubs** — the `@deepseek-ai/dsh-*` seams split into (a) **type-only / placeholder stubs** (`dsh-fs`, `dsh-agent`, `dsh-invariants`) exposing the seam types/peer names only, and (b) **functional composition stubs** (`dsh-skill`, `dsh-skill-local`, `dsh-tools` (`defineTool`), `dsh-commands`, `dsh-llm`) carrying minimal dev-time runtimes (`simplify:` markers; pinned to dsh-private `9451be2`) so composition, waterfalls, the catalog message factory, the bundled-command registrations, and the v2 seam tools actually run in tests. **All runtime seam imports are externalized at build time** (`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining the stand-in code; verified in the Task 6 pack review); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. Swapping in the real seam packages for the plugin's own suite is NOT planned — a composed app with real seams is the deployment target (this package's suite deliberately runs the pinned stubs for hermetic composition tests).
 - **Anti-recursion binding is Config-declared** — dsh exposes no per-agent role on the tool-execution context, so `dispatchBinding` declares one deployment-wide role; an Assignment with a different `Execute as` cannot be caught as self-recursion, and multi-role dispatchers need per-instance plugins.
 - **Lease gate diverges from opencode by design** — opencode's `beforeDispatch` runs no lease checks; the dsh lease gate is additive (`lease.dispatch.*` codes) and fires only for writable SDD/InProgress dispatches, so parity covers the field set, not the lease surface.
 - **Shared engine composition adopted (2.0.4 sync)** — the dispatch gate core is the engine's single `composeDispatchGate` (opencode/omp/CLI parity, so field/branch/anti-recursion violation codes are identical by construction), and the compass frontmatter parser is the engine's shared `parseCompassFrontmatter` (the local dsh mirror and the CLI copy are deleted — no fork left to drift). Both run over the dsh header-region slice per the qc2 F-001 discipline; the lease + worktree L1/L2 checks stay dsh-side additions on top.
@@ -179,9 +180,10 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **audit seam scope matches any `plans/audit-*` segment at any depth** (qc2 S-002) — `isAuditPlanTarget` scans all path segments, so a tree unrelated to mstar (e.g. a dependency or sibling project with a `plans/audit-*` layout) gets mstar audit Status-block + secret lints on write. Same class as the design-md scope (advisory-only, never blocking); the layout is mstar-audit's documented Phase 4 shape, so the match is intentional.
 - **skill-lint × roles-seam double-fire on `<root>/mstar-roles/SKILL.md`** (qc2 S-003) — when a configured skill root contains the `mstar-roles` dir (the repo-root mirror case in dev, and the bundled mirror in the published form), one write to `mstar-roles/SKILL.md` fires BOTH the skill-authoring lint gate and the roles seam gate (two advisories / two repair-escape logs in hard). Both validators legitimately apply — the double-lint is advisory-only, not a correctness break; the "scopes are disjoint" property holds among the four seams only, not across the skill gate.
 - **Content-blind skill-lint blind spots** — the `fs/write-intent` slot carries only `(target, actor)`: first-create incoming content is not linted, and valid→invalid overwrites are not detected on the listener path (it lints the pre-write on-disk document only). Warn/hard advisories surface pre-existing on-disk violations only — the same class of limitation as the status gate.
-- **`bundledSkillDir` is cwd-anchored** (Task 5 e2e finding) — skill-local resolves a relative bundled root with plain `join()` semantics against the dsh **process cwd** at boot; the shipped patch default `./skills` only finds the packaged mount when dsh launches from the package root. The supported production form is an **absolute path override in the profile layer** (see `bundle/README.md`); a deployment launching from another cwd gets no bundled mount until overridden.
-- **Profile-bundle registry install deferred to publish** — `dsh plugin --profile mstar add <local path>` is verified (Task 5); the public-registry form (`add @mstar-harness/dsh`) runs through the same pnpm + reconcile mechanism but is not executed this iteration (local-only constraint; roadmap §7).
+- **Explicit relative `bundledSkillDir` overrides are cwd-anchored** (Task 5 e2e finding) — skill-local resolves a relative bundled root with plain `join()` semantics against the dsh **process cwd** at boot. The plugin's DEFAULT bundled root is the package's OWN `harness-skills/` mirror resolved package-relative (NOT cwd-anchored — works from any launch cwd); only an explicit RELATIVE override inherits the cwd anchoring, so deployments overriding the default should pass an **absolute path in the profile layer** (see `bundle/README.md`).
+- **Bundled mirror is a build-time sync** — `harness-skills/` + `harness-commands/` are produced by `bundle-assets` at build/postinstall (repo-root `skills/` + `commands/` mirrors; gitignored). A checkout where `bundle-assets` has not run mounts no bundled skills and registers no commands (the default mount is inert, not an error).
+- **Profile-bundle install into the `web` profile: local checkout and repo URL, no registry path** — `dsh plugin --profile web add <local checkout>` is verified (Task 5), and the repo-URL form (`add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh`) runs through the same pnpm + reconcile mechanism and was verified against the real remote (pnpm resolves the `path:` spec, the reconcile step joins `@mstar-harness/dsh` to `dsh.profile.bundles`); no public-registry install is offered (local-only constraint; roadmap §7). Git-hosted installs build via the package `prepare` script, which pnpm ≥10 blocks until allowed — the `allowBuilds` key must be added to the profile's `pnpm-workspace.yaml` (the first `add` fails with pnpm's hint, then succeeds on re-run).
 - **`lintSkillWrite` typed veto not production-wired** — the incoming-document hard veto (`SkillLintVetoError`, code `skill-lint.veto`) is exported and test-covered, but has no production caller yet: the engine `HostAdapter` has no content-carrying skill-write hook (only `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`), and the fs intent slot is content-blind. Wiring lands with a future content-carrying hook; until then the listener path enforces only via the repair-escape advisory (never a veto). (Roadmap §7 deferral, qc2 S-002.)
 - **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming. (Roadmap §7 deferral, qc2 S-003 — upstream PR batch.)
 - **Entry `src/index.ts` stays monolithic** — the qc1 F-003 module-split deferral is kept: the 2600+ line entry ships as-is for this iteration because a split at the FINAL task would destabilize a reviewed, fully-tested surface for zero behavioral gain; the split remains a roadmap follow-up (roadmap §7).
-- **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root) updates with it.
+- **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root / `references/dsh.md`) updates with it.

@@ -109,9 +109,10 @@ describe('profile bundle layer (Task 4)', () => {
     expect(config.dispatchTools).toBeUndefined()
     expect(config.dispatchBinding).toBeUndefined()
     expect(config.skillRoots).toBeUndefined()
-    // The packaged skill mount ships the empty default root until a
-    // publish-time copy exists (qc3 P-004) — no copy step is wired yet.
-    expect(config.bundledSkillDir).toBe('./skills')
+    // bundledSkillDir stays unset too: the plugin resolves its OWN packaged
+    // `harness-skills/` mirror package-relative (bundle-assets sync), so the
+    // patch ships no cwd-anchored default.
+    expect(config.bundledSkillDir).toBeUndefined()
   })
 
   it('accepts the shipped row config through the plugin Config schema', () => {
@@ -126,13 +127,14 @@ describe('profile bundle layer (Task 4)', () => {
       { id: 'llm', name: '@deepseek-ai/dsh-llm' },
       { id: 'skill', name: '@deepseek-ai/dsh-skill' },
     ]
-    // 1. The bundle layer inserts the mstar row with its shipped config.
+    // 1. The bundle layer inserts the mstar row with its neutral config
+    //    (empty — the plugin's packaged defaults apply).
     const afterBundle = applyPatch(base, loadBundlePatch())
     const row = afterBundle.find((entry) => entry.id === 'mstar')
     expect(row?.name).toBe('@mstar-harness/dsh')
-    expect(row?.config).toEqual({ bundledSkillDir: './skills' })
+    expect(row?.config).toEqual({})
     // 2. A user-level id-targeted patch replaces the WHOLE config: the
-    // shipped key is gone — replacement, not merge.
+    //    shipped keys are gone — replacement, not merge.
     const afterUser = applyPatch(afterBundle, [{ id: 'mstar', config: { enforcement: 'soft' } }])
     const finalRow = afterUser.find((entry) => entry.id === 'mstar')
     expect(finalRow?.config).toEqual({ enforcement: 'soft' })

@@ -117,6 +117,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
         // when the v2 seams register their model-facing tools (Task 1 of plan
         // 20260808-dsh-seams-bundle; the real dsh app always composes dsh-tools).
         "- name: '@deepseek-ai/dsh-tools'",
+        // The command registry row mounts before the plugin so `ctx.commands`
+        // exists when the bundled mstar commands register (the real dsh app
+        // always composes dsh-commands).
+        "- name: '@deepseek-ai/dsh-commands'",
         "- name: '@mstar-harness/dsh'",
       ]
   const configLines: string[] = []
@@ -147,6 +151,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // default export provides the ToolRegistry service (real package ships
     // from the composed dsh app at runtime).
     ['@deepseek-ai/dsh-tools', await import('@deepseek-ai/dsh-tools')],
+    // The `ctx.commands` registry seam — dev-time functional peer stub whose
+    // named exports provide the CommandService (real package ships from the
+    // composed dsh app at runtime).
+    ['@deepseek-ai/dsh-commands', await import('@deepseek-ai/dsh-commands')],
   ])
   ctx.loader.internal = {
     version: 'v2',

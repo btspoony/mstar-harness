@@ -17,6 +17,7 @@
  * `ctx.skills` (the plan acceptance).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -38,6 +39,15 @@ afterEach(async () => {
 
 /** The repo-root mirror `skills/` dir (byte-identical to the control mirror). */
 const MIRROR_SKILLS = fileURLToPath(new URL('../../../skills/', import.meta.url))
+
+/** The dsh package root (the packaged `harness-skills/` mirror lives under it). */
+const PKG_DIR = fileURLToPath(new URL('..', import.meta.url))
+
+/** The packaged `harness-skills/` mirror path, when synced by `bundle-assets`. */
+function packagedBundled(): string | undefined {
+  const dir = join(PKG_DIR, 'harness-skills')
+  return existsSync(dir) ? dir : undefined
+}
 
 /** Real mirror skills asserted to be mounted and lint-clean. */
 const MIRROR_SKILLS_SAMPLE = ['mstar-plan-conventions', 'mstar-harness-core', 'mstar-sdd'] as const
@@ -68,15 +78,29 @@ Body of temp-two.
 }
 
 describe('skillLocalConfig — registration payload contract shape', () => {
-  it('returns undefined (no registration) when no skill roots are configured', () => {
-    expect(skillLocalConfig({})).toBeUndefined()
-    expect(skillLocalConfig({ skillRoots: [] })).toBeUndefined()
-    expect(skillLocalConfig({ skillRoots: ['', '  '] })).toBeUndefined()
+  it('defaults the bundled root to the packaged harness-skills mirror when no roots are configured', () => {
+    // The packaged mirror (synced by bundle-assets; gitignored) is the
+    // canonical bundled default — an explicit root still wins (below).
+    const payload = skillLocalConfig({})
+    if (payload === undefined) {
+      // bundle-assets has not run in this checkout — no packaged mirror.
+      expect(existsSync(join(PKG_DIR, 'harness-skills'))).toBe(false)
+      return
+    }
+    expect(payload.providerName).toBe('mstar')
+    expect(payload.includeDefaultRoots).toBe(false)
+    expect(payload.bundledSkillDir).toBe(join(PKG_DIR, 'harness-skills'))
+    expect(payload.customSkillDirs).toBeUndefined()
   })
 
   it('maps skillRoots to the skill-local customSkillDirs semantics', () => {
     const payload = skillLocalConfig({ skillRoots: ['/mirror/skills'] })
-    expect(payload).toEqual({ providerName: 'mstar', includeDefaultRoots: false, customSkillDirs: ['/mirror/skills'] })
+    expect(payload).toEqual({
+      providerName: 'mstar',
+      includeDefaultRoots: false,
+      customSkillDirs: ['/mirror/skills'],
+      ...(packagedBundled() !== undefined ? { bundledSkillDir: packagedBundled() } : {}),
+    })
   })
 
   it('maps bundledSkillDir through with its own semantics', () => {
@@ -176,15 +200,34 @@ describe('skills mount via the plugin (real composition)', () => {
     expect(bundled!.source).toBe('bundled')
   })
 
-  it('does not mount anything when no skill roots are configured', async () => {
+  it('mounts the packaged harness-skills mirror by default (no skill roots configured)', async () => {
+    const packaged = packagedBundled()
+    if (packaged === undefined) {
+      // bundle-assets has not run — no packaged mirror to mount.
+      expect(existsSync(join(PKG_DIR, 'harness-skills'))).toBe(false)
+      return
+    }
     booted = await bootApp()
-    expect(await booted.ctx.skills.list()).toEqual([])
+    const skills = await booted.ctx.skills.list()
+    // The canonical packaged mirror: the mstar skills are discoverable as
+    // BUNDLED sources without any deployment config.
+    const planConventions = skills.find((skill) => skill.name === 'mstar-plan-conventions')
+    expect(planConventions).toBeDefined()
+    expect(planConventions!.source).toBe('bundled')
+    expect(planConventions!.provider).toBe('mstar')
   })
 
-  it('a missing skill root degrades to an empty catalog (ENOENT resilience)', async () => {
+  it('a missing skill root degrades to just the packaged mirror (ENOENT resilience)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-skills-'))
     booted = await bootApp({ skillRoots: [join(root, 'does-not-exist')] })
-    expect(await booted.ctx.skills.list()).toEqual([])
+    const skills = await booted.ctx.skills.list()
+    // The missing custom root contributes nothing; the packaged default
+    // mirror still mounts (when synced).
+    const packaged = packagedBundled()
+    if (packaged !== undefined) {
+      expect(skills.some((skill) => skill.name === 'mstar-plan-conventions')).toBe(true)
+    }
+    expect(skills.some((skill) => skill.name === 'temp-one')).toBe(false)
   })
 
   it('a vanished skill file loads as undefined (get ENOENT path)', async () => {

@@ -10,8 +10,9 @@
     "packages/dsh/peer-stubs/*"
   ],
   "scripts": {
-    "postinstall": "bun run opencode:bundle-assets",
+    "postinstall": "bun run opencode:bundle-assets && bun run dsh:bundle-assets",
     "opencode:bundle-assets": "bun run --cwd packages/opencode bundle-assets",
+    "dsh:bundle-assets": "bun run --cwd packages/dsh bundle-assets",
     "typecheck": "bunx tsc --pretty false",
     "cli:dev": "MSTAR_CLI_PROJECT_ROOT=$PWD bun run --cwd packages/cli dev",
     "cli:build": "bun run --cwd packages/cli build",

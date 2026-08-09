@@ -1,5 +1,5 @@
 /**
- * Morning Star harness gates for the DeepSeek Harness SDK (dsh).
+ * Morning Star harness gates for dsh (DeepSeek Harness).
  *
  * Cordis function plugin: named exports only — the dsh Loader discards the plugin's namespace
  * (dropping `inject` metadata) when a default export is present, so this module never
@@ -10,6 +10,7 @@
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Service, type Context } from 'cordis'
 import z from 'schemastery'
 import {
@@ -73,6 +74,10 @@ import type {
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+// Type-only: loads the `ctx.commands` cordis augmentation + the command
+// handler invocation shape from the (peer-stub / real) dsh-commands seam —
+// the runtime registration goes through `ctx.inject(['commands'], …)`.
+import type { CommandInvocation } from '@deepseek-ai/dsh-commands'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { DshMstar } from './service.ts'
@@ -638,7 +643,8 @@ export function lintSkillWrite(doc: string, options: { target: string; hard: boo
  * is inert.
  */
 function skillRootsOf(config: Config): string[] {
-  const roots = [...(config.skillRoots ?? []), ...(config.bundledSkillDir !== undefined ? [config.bundledSkillDir] : [])]
+  const bundled = config.bundledSkillDir?.trim() ?? packagedSkillsDir()
+  const roots = [...(config.skillRoots ?? []), ...(bundled !== undefined ? [bundled] : [])]
   return roots.map((root) => root.trim()).filter((root) => root !== '')
 }
 
@@ -1697,6 +1703,38 @@ function assignmentTextFromFields(fields: AssignmentFields): string {
 }
 
 /**
+ * The plugin package's own `harness-skills/` mirror (synced from the repo
+ * root by `bundle-assets` at build/postinstall; gitignored). Resolved
+ * package-relative via `import.meta.url` — NOT cwd-anchored — so the shipped
+ * bundled mount works from any launch cwd (this resolves the Task 5
+ * cwd-anchoring limitation for the default; an explicit `bundledSkillDir`
+ * still wins). Returns undefined when the mirror is absent (e.g. a checkout
+ * where `bundle-assets` has not run — the default mount is then inert).
+ */
+function packagedSkillsDir(): string | undefined {
+  try {
+    const dir = fileURLToPath(new URL('../harness-skills', import.meta.url))
+    return existsSync(dir) ? dir : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The plugin package's own `harness-commands/` mirror (synced from the repo
+ * root by `bundle-assets` at build/postinstall; gitignored). Package-relative
+ * like {@link packagedSkillsDir}. Returns undefined when absent.
+ */
+function packagedCommandsDir(): string | undefined {
+  try {
+    const dir = fileURLToPath(new URL('../harness-commands', import.meta.url))
+    return existsSync(dir) ? dir : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Build the dsh skill-local registration payload from the plugin Config
  * (roadmap D6 — single canonical mount). Semantics mirror the skill-local
  * `Config` contract: `skillRoots` → `customSkillDirs` (custom roots),
@@ -1707,11 +1745,18 @@ function assignmentTextFromFields(fields: AssignmentFields): string {
  * without this the app's user/project skills would be re-discovered under
  * the mstar provider). Returns `undefined` when nothing is configured — no
  * registration happens.
+ *
+ * The bundled default is the package's OWN `harness-skills/` mirror (synced
+ * from the repo root by `bundle-assets` at build/postinstall; gitignored),
+ * resolved package-relative — NOT cwd-anchored — so a deployment launching
+ * from any cwd gets the bundled mount (this resolves the Task 5
+ * cwd-anchoring limitation for the shipped default; an explicit
+ * `bundledSkillDir` still wins).
  * @param config - validated plugin configuration.
  */
 export function skillLocalConfig(config: Config): SkillLocalConfig | undefined {
   const customSkillDirs = config.skillRoots?.map((root) => root.trim()).filter((root) => root !== '')
-  const bundledSkillDir = config.bundledSkillDir?.trim()
+  const bundledSkillDir = config.bundledSkillDir?.trim() ?? packagedSkillsDir()
   if ((customSkillDirs === undefined || customSkillDirs.length === 0) && bundledSkillDir === undefined) {
     return undefined
   }
@@ -2549,6 +2594,70 @@ function registerSeamTools(ctx: Context, harnessDir: string | null): void {
   })
 }
 
+/** Frontmatter field value of one command markdown (`name`/`description`/`agent`). */
+function commandFrontmatterField(frontmatter: string, label: string): string | undefined {
+  const match = new RegExp(`^${label}[ \\t]*:[ \\t]*(.+)$`, 'm').exec(frontmatter)
+  return match?.[1]?.trim()
+}
+
+/**
+ * Parse one bundled mstar command markdown (`harness-commands/<name>.md`):
+ * the `---` frontmatter block yields `name` + `description` (registration
+ * metadata); the body is the command content the handler steers into the
+ * receiving agent. Returns undefined for files without a parseable block.
+ */
+function parseCommandMarkdown(content: string): { name: string; description: string; body: string } | undefined {
+  const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/)
+  if (lines.length === 0 || lines[0]!.trim() !== '---') return undefined
+  let end = -1
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i]!.trim() === '---') { end = i; break }
+  }
+  if (end === -1) return undefined
+  const frontmatter = lines.slice(1, end).join('\n')
+  const name = commandFrontmatterField(frontmatter, 'name')
+  const description = commandFrontmatterField(frontmatter, 'description')
+  if (name === undefined || description === undefined) return undefined
+  return { name, description, body: lines.slice(end + 1).join('\n').trim() }
+}
+
+/**
+ * Register the bundled mstar commands (`harness-commands/*.md`, synced from
+ * the repo root by `bundle-assets`; gitignored) on `ctx.commands` — the
+ * omp/opencode slash-command parity surface (`/iteration-start`,
+ * `/iteration-drive`, `/iteration-loop`, `/codebase-audit`). Each command
+ * handler steers the command body into the receiving agent as a user message
+ * (the dsh-commands "explicitly schedule model-visible work through the
+ * receiving Agent" path), returning a success result. The registration is
+ * deferred with `ctx.inject(['commands'], …)` — the same optional-unit
+ * pattern as the tools — so the plugin boots without the commands service.
+ * Absent mirror (no `bundle-assets` run) → no registrations.
+ * @param ctx - registrant context carrying the commands service.
+ */
+function registerMstarCommands(ctx: Context): void {
+  const dir = packagedCommandsDir()
+  if (dir === undefined) return
+  ctx.inject(['commands'], (commandsCtx) => {
+    for (const file of readdirSync(dir).sort()) {
+      if (!file.endsWith('.md')) continue
+      const parsed = parseCommandMarkdown(readFileSync(join(dir, file), 'utf8'))
+      if (parsed === undefined) continue
+      commandsCtx.commands.register({
+        name: parsed.name,
+        description: parsed.description,
+        handler: (invocation: CommandInvocation) => {
+          const message = createUserMessage({
+            source: { kind: 'plugin', plugin: '@mstar-harness/dsh' },
+            content: [{ type: 'text', text: parsed.body }],
+          })
+          invocation.agent.steer(message)
+          return { kind: 'success', text: `mstar ${parsed.name} started` }
+        },
+      })
+    }
+  })
+}
+
 /**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
  * engine, expose the engine surface as `ctx.dshMstar`, construct the host
@@ -2575,6 +2684,11 @@ export function apply(ctx: Context, config: Config): void {
   // Constructed as a dsh service: `ctx.dshHostAdapter` is available to
   // inject consumers and host hooks after boot.
   const adapter = new DshHostAdapter(ctx, { harnessDir, config })
+
+  // Bundled mstar commands — the omp/opencode slash-command parity surface
+  // (iteration-start / iteration-drive / iteration-loop / codebase-audit),
+  // registered from `harness-commands/` when the commands service exists.
+  registerMstarCommands(ctx)
 
   // Skills mount — single canonical mount (roadmap D6): register configured
   // skill roots with the dsh skill-local provider contract. The object form
