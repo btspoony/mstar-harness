@@ -305,9 +305,9 @@ function validateDispatchEntry(
  * `Enforcement: hard` in its header AND has violations. Per-entry violations
  * only — soft entries never block; no hard violations → silent pass.
  *
- * When the engine build lacks `composeDispatchGate` (pre-2.0.3), Gate 2 is
- * SKIPPED entirely — no blocking, no violations — with a one-time warning;
- * Gate 1 (status) keeps working (engine-version compatibility).
+ * When the engine build lacks `composeDispatchGate` (predating the export),
+ * Gate 2 is SKIPPED entirely — no blocking, no violations — with a one-time
+ * warning; Gate 1 (status) keeps working (engine-version compatibility).
  */
 async function gateTaskDispatch(
   eventInput: unknown,
