@@ -210,9 +210,12 @@ render unlit; the loop edge is planning semantics (one iteration closes, the
 next opens); no historical back-scan of a resumed long log (the server
 re-emits the row at every turn's first step, digest-gated); no custom
 top-level slot (the `conversation.view` tab is the only session-level panel
-seat available without dsh-private layout changes — spec §1). Browser UI
-observation is the user-restart acceptance (R1 folded into this iteration's
-AC-1/2) — rerun steps in the install-verification guide §8.
+seat available without dsh-private layout changes — spec §1). Panel
+acceptance is dual-track: in-loop browser harness verification against the
+rebuilt bundle (see iteration guides
+`iter-20260810-panel-fix-agentflow/guides/`) plus user-restart final GUI
+acceptance — rerun steps in the install-verification guide §8. R1 (browser
+observation) closed and archived 2026-08-10.
 
 ## Development
 

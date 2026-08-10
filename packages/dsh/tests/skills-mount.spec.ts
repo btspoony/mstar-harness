@@ -28,6 +28,7 @@ import SkillService from '@deepseek-ai/dsh-skill'
 import { Config as SkillLocalSchema } from '@deepseek-ai/dsh-skill-local'
 import * as plugin from '../src/index.ts'
 import { DshHostAdapter, skillLocalConfig } from '../src/index.ts'
+import { resolvePackagedSkillsDir } from '../src/gates/_shared.ts'
 import { bootApp, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -147,6 +148,45 @@ describe('resolveSkillRoot (frozen canonical form, Task 1)', () => {
   it('appends relative paths for skill assets', () => {
     expect(resolveSkillRoot('dsh', { skill: 'mstar-plan-conventions', rel: 'references/plan-files-and-reports.md' }))
       .toBe('$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions/references/plan-files-and-reports.md')
+  })
+})
+
+describe('resolvePackagedSkillsDir — dual-depth direct resolution (qc N-2 / S-2)', () => {
+  // The exact file URL strings the pure helper receives as `import.meta.url`
+  // when called from a module at that depth: the REAL `src/gates/_shared.ts`
+  // URL (source-layout depth) and a simulated `dist/index.js` URL (the
+  // shipped form — `package.json` `main: ./dist/index.js`, dist-layout
+  // depth). The dist file itself need not exist — it only anchors the probe.
+  const SOURCE_DEPTH_URL = new URL('../src/gates/_shared.ts', import.meta.url).href
+  const DIST_DEPTH_URL = new URL('../dist/index.js', import.meta.url).href
+  const CANONICAL_MIRROR = join(PKG_DIR, 'harness-skills')
+
+  it('source layout (src/gates/_shared.ts) resolves to the canonical mirror — never src/harness-skills', () => {
+    const dir = resolvePackagedSkillsDir(SOURCE_DEPTH_URL)
+    // First candidate at source depth is `src/harness-skills` — a NON-canonical
+    // path (`bundle-assets` only ever generates the mirror at
+    // `packages/dsh/harness-skills`); the probe must skip it and land on
+    // `../../harness-skills` (qc3 S-8 shallow-first semantics; a stale
+    // `src/harness-skills` would fail this guard loudly).
+    expect(dir).not.toBe(join(PKG_DIR, 'src', 'harness-skills'))
+    if (existsSync(CANONICAL_MIRROR)) {
+      expect(dir).toBe(CANONICAL_MIRROR)
+    } else {
+      expect(dir).toBeUndefined()
+    }
+  })
+
+  it('dist layout (dist/index.js) resolves to the same canonical mirror', () => {
+    const dir = resolvePackagedSkillsDir(DIST_DEPTH_URL)
+    if (existsSync(CANONICAL_MIRROR)) {
+      expect(dir).toBe(CANONICAL_MIRROR)
+    } else {
+      expect(dir).toBeUndefined()
+    }
+  })
+
+  it('both depths agree — a single canonical mount from either layout', () => {
+    expect(resolvePackagedSkillsDir(SOURCE_DEPTH_URL)).toBe(resolvePackagedSkillsDir(DIST_DEPTH_URL))
   })
 })
 
