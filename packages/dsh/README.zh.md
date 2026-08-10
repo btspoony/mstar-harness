@@ -161,7 +161,7 @@ dsh web                     # 启动 → 服务 /plugins/@mstar-harness/dsh/clie
 
 本地已验证（install-verification guide）：boot 图包含客户端 entry（`@mstar-harness/dsh` 携声明的 inject 面）、`/plugins/<id>/client.js` 路由服务的正是构建产物（rev = 内容 sha1）、浏览器握手 materialize 出插件入口（`inject` + `apply` + CSS 注入，经典脚本语义）——见 `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`。
 
-**Known Limitations**（本迭代）：图中 Phase 1（iteration-start）与 Phase 5（merge-ready）节点为 **schema-only——engine 相位门从不发射它们的 transition**（只评估 Phase 2→3→4），故恒为未点亮；loop 边是规划语义（一次迭代收口、下一轮开启）；不回溯 resumed 长日志的历史行（服务端每 turn 首步必重发，digest 门控）；无自定义顶层槽位（不改 dsh-private 布局的前提下，`conversation.view` tab 是唯一的会话级面板位——spec §1）。浏览器 UI 观察为**用户重启验收**（R1 并入本轮 AC-1/2）——重跑步骤见 install-verification guide §8。
+**Known Limitations**（本迭代）：图中 Phase 1（iteration-start）与 Phase 5（merge-ready）节点为 **schema-only——engine 相位门从不发射它们的 transition**（只评估 Phase 2→3→4），故恒为未点亮；loop 边是规划语义（一次迭代收口、下一轮开启）；不回溯 resumed 长日志的历史行（服务端每 turn 首步必重发，digest 门控）；无自定义顶层槽位（不改 dsh-private 布局的前提下，`conversation.view` tab 是唯一的会话级面板位——spec §1）。面板验收为双轨：in-loop 浏览器 harness 验证（对重建 bundle，见迭代 guides `iter-20260810-panel-fix-agentflow/guides/`）+ 用户重启后 GUI 终验——重跑步骤见 install-verification guide §8。R1（浏览器观察）已于 2026-08-10 关闭归档。
 
 ## Development
 
