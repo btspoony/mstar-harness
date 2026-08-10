@@ -1,12 +1,25 @@
 ---
 name: iteration-start
-description: Start a new harness iteration — research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch.
+description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch; then auto-continue Phase 2→5 (execute → close → PR → merge-ready) unless `pause` arg given."
 agent: project-manager
 ---
 
 # Start Iteration
 
-Start a new Morning Star harness iteration. **Not Done until the Review & Edit chain runs via dispatched roles and PM lock — not when compass files are first written.**
+Start a new Morning Star harness iteration. **Phase 1 is not complete until the Review & Edit chain runs via dispatched roles and PM lock — not when compass files are first written.** By default, after Phase 1 lock + integration branch, **auto-continue into Phase 2→5** (execute → close → PR → merge-ready); pass **`pause`** to stop after Phase 1 and resume later with `/iteration-drive`.
+
+## Args
+
+```text
+/iteration-start [direction] [pause]
+```
+
+| Arg | Meaning | Default |
+|-----|---------|---------|
+| `direction` | Iteration direction hint — constrains §2 candidates and seeds §3 grill-me; **not** a lock (start stays interactive) | Research → grill-me converges with user |
+| `pause` | Stop after Phase 1 (lock + integration branch); run `/iteration-drive` later to resume | **Auto-continue** into Phase 2→5 |
+
+**Parse**: if any token is exactly `pause` (case-insensitive), treat as the `pause` flag; the remaining tokens (joined) are the `direction` hint. `/iteration-start pause` = pause with empty direction.
 
 ## PM invariants（本命令全程有效 — 读完再动手）
 
@@ -20,9 +33,11 @@ Start a new Morning Star harness iteration. **Not Done until the Review & Edit c
 
 派发细则 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch）+ **`mstar-host`**（宿主 invoke 能力）。**不得**在 PM 线程加载其他 role reference 代劳。
 
-**完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-commit checklist 全 `[x]` — 不是初稿落盘。
+**Phase 1 完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-commit checklist 全 `[x]` — 不是初稿落盘。**Command Done**（§7 auto-continue）= Phase 5 §5.5 exit checklist 全 `[x]`（同 `iteration-drive`）；`pause` 时 = Phase 1 完成。
 
 Detailed workflow → **`mstar-iteration` § Phase 1**；per-plan Prepare gates → **`mstar-phase-gates`**（specify → clarify → plan）。
+
+**Phase 2–5 auto-continue（§7）invariants** → **`iteration-drive`**「PM invariants」表（不写产品代码 / 不 inline 大包 / 每 Assignment 1 invoke / Phase 3→4→5 顺序 / Phase 5 dispatch 改代码）。
 
 ## Path split（HARD — 路由）
 
@@ -30,6 +45,8 @@ Detailed workflow → **`mstar-iteration` § Phase 1**；per-plan Prepare gates 
 |------------|--------|
 | **Cursor Plan mode**（CreatePlan / Plan 会话活跃） | §0 Boot → **§P** — **先**空白 CreatePlan，再 **feedback-driven** 自主改同一份 plan；grill-me **仅**在用户明确结束反馈后、仍有阻塞疑问时；**Build 前不执行** Review 链 / commit / integration 分支 |
 | **其它**（Agent、OpenCode、非 Plan） | §0 Boot → §1–§6（Research → Explore → grill-me → Write → Review → branch） |
+
+**Both paths converge at §6**（integration branch）。Default → §7 auto-continue Phase 2→5；`pause` → command ends at §6。
 
 ## 0. Boot
 
@@ -58,11 +75,9 @@ Command-unique 补充（bridge 未枚举）：
 
 Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`）+ glob for planning artifacts（`**/roadmap*.md`、`**/deferred*.md`、`**/features*.md`、`**/backlog*.md`、`**/TODO*.md`、`**/*.plan.md`）；read matches with iteration-level / deferred-scope information；read `STRATEGY.md`（if exists）。Prioritize deferred / incomplete items from prior iterations。
 
-**Optional — codebase audit**: if a prior `/codebase-audit` run exists under `{PLAN_DIR}/audit-<date>/`, read its findings index as evidence-grounded direction candidates for §2（not mandatory；one source among many）。
-
 ## 2. Explore Directions
 
-Scope **2–4** candidates targeting **product completeness**（default to deferred items from previous iterations；allow substantive refactoring where it accelerates product maturity）。**非 Plan 路径**（Plan mode 已由 §P 处理）。
+Scope **2–4** candidates targeting **product completeness**（default to deferred items from previous iterations；allow substantive refactoring where it accelerates product maturity）。**If `direction` arg given** — narrow candidates to that hint (still scope 2–4 unless the hint is explicitly singular); record the hint in grill-me context。**非 Plan 路径**（Plan mode 已由 §P 处理）。
 
 ## 3. Lock Direction — bundled `grill-me`
 
@@ -72,7 +87,7 @@ Scope **2–4** candidates targeting **product completeness**（default to defer
 
 This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md`. **Only this command step**（及 §P.3.5 deferred grill）references it — **do not** load it from `mstar-harness-core` or other `mstar-*` skills.
 
-**Before this step:** Read `skills/grill-me/SKILL.md`. Run **grill-me** to stress-test candidate directions with the user: walk through trade-offs, converge on a **single iteration direction** with shared understanding, document locked direction + success criteria + non-goals。Confirm delivery branch policy（`iteration_base_branch`、`target_branch`）per **`mstar-iteration` §1.2** — **Do not default to `main` / `master` just because those names exist.**
+**Before this step:** Read `skills/grill-me/SKILL.md`. Run **grill-me** to stress-test candidate directions with the user: walk through trade-offs, converge on a **single iteration direction** with shared understanding, document locked direction + success criteria + non-goals。**If `direction` arg given** — seed grill-me with it as the recommended direction (still interactive: user may correct/refine; the hint does **not** skip grill-me)。Confirm delivery branch policy（`iteration_base_branch`、`target_branch`）per **`mstar-iteration` §1.2** — **Do not default to `main` / `master` just because those names exist.**
 
 ## 4. Write Compass & Plans
 
@@ -130,6 +145,34 @@ git checkout -b <spec_integration_branch> <iteration_base_branch>
 - Register `iteration_base_branch`, `spec_integration_branch`, and `target_branch` in compass frontmatter **and** `{HARNESS_DIR}/status.json` root `metadata`
 - Commit all documents to the integration branch and push to remote
 
-**Phase 2 note**：control worktree + `execution_lease` 门控在 Phase 2 入口（`iteration-drive` / `iteration-loop`）——见 **`mstar-iteration/references/phase-2-worktree-lease.md`**。
-
 **STOP** if `iteration_base_branch` or `target_branch` is missing. Ask the user or derive only from an already documented project/iteration policy; never silently substitute `main`.
+
+---
+
+## 7. Phase 2–5: Execute → close → PR → merge-ready（auto-continue）
+
+**`pause` arg → command ends here.** Phase 1 locked + integration branch pushed；run `/iteration-drive` later to resume。
+
+**Default（no `pause`）→ auto-continue** into Phase 2→5。
+
+### Phase 2 boot（load before delegating）
+
+1. `mstar-iteration` → **§ Phase 2–5**（§2 Autonomous Execute、§3 close、§4 PR、§5 merge-ready）
+2. **`mstar-sdd`** — before first implement dispatch（per-task loop SSOT）
+3. `mstar-review-qc` — before first QC dispatch
+4. `mstar-compound` — before Phase 3 §3.2
+5. `mstar-branch-worktree` + **`mstar-iteration/references/phase-2-worktree-lease.md`** — control worktree + lease（§2.0 #5 未 waive）
+
+### Delegate to `iteration-drive` Phase 2→5
+
+Execute **`iteration-drive`** Phase 2–5 exactly：Phase 2 → **`mstar-iteration` §2**（§2.0 五道闸 → §2.6 push 纪律；SDD per-task；QC tri N=3 + QA）、Phase 3 → **§3** + `references/phase-3-iteration-close.md`、Phase 4/5 → **§4–§5** + `references/phase-4-5-pr-delivery.md`、Phase 5 helper discovery → `mstar-iteration/references/phase5-helper-discovery.md`。
+
+**Continuous execution（HARD）**：自 Phase 2 进入至 Phase 5 §5.5 exit，PM **连续编排**（**`mstar-iteration` §2.6**），进度汇报后下一条必须是 dispatch 或下一 phase 步骤，不向用户例行 yes/no check-in。合法 STOP 仅限：branch metadata 缺失、真冲突 / secrets / 不可逆范围缺口、Phase 5 多轮仍无法 merge-ready、用户本轮显式打断。
+
+**Assignment preflight**：同 §5（每次 implement/QC/QA 派发前校验；`mstar-harness` bin 未安装时静默跳过）。
+
+**Done = Phase 5 §5.5 exit checklist 全 `[x]`**（同 `iteration-drive`）。
+
+**Then** report: iteration id, direction lock summary, plans completed, compound summary, PR link, merge-ready evidence（CI snapshot + review resolution + Greptile if applicable）。
+
+PR merge itself may remain manual unless user authorized auto-merge.
