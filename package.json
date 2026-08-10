@@ -6,8 +6,7 @@
   "type": "module",
   "main": "packages/opencode/src/mstar.ts",
   "workspaces": [
-    "packages/*",
-    "packages/dsh/peer-stubs/*"
+    "packages/*"
   ],
   "scripts": {
     "postinstall": "bun run opencode:bundle-assets && bun run dsh:bundle-assets",

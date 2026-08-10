@@ -173,7 +173,7 @@ bunx tsc --noEmit
 bun run build
 ```
 
-开发期 seam 表面（类型、事件形态）通过 `peer-stubs/` 镜像钉定的 dsh-private 快照；dsh-private 基线移动时需同步更新 stub。
+开发期 seam 表面（类型、事件形态、运行时）是来自本地 dsh 源码树的**真实** `@deepseek-ai/dsh-*` 包，由 link farm（`bun run dsh:link`，dsh-advisor 模式）symlink 进仓库根 `node_modules/@deepseek-ai/`；dsh 基线（`$DSH_SOURCE_DIR` / `$DSH_HOME/source/current`）移动后需重新运行。
 
 ## Model Experience
 
@@ -193,7 +193,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 
 ## Known Limitations and Deferred Work
 
-- **开发期 peer stubs** —— `@deepseek-ai/dsh-*` 各 seam 分为 (a) **仅类型/占位 stub**（`dsh-fs`、`dsh-agent`、`dsh-invariants`）只暴露 seam 类型/peer 名，与 (b) **功能性组合 stub**（`dsh-skill`、`dsh-skill-local`、`dsh-tools`（`defineTool`）、`dsh-commands`、`dsh-llm`）携带最小开发期运行时（`simplify:` 标记；钉定 dsh-private 快照），使组合、瀑布链、catalog 消息工厂、bundled 命令注册与 v2 seam 工具在测试中真实运行。**全部运行时 seam 导入在构建时外部化**（`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm`——发布的 `dist/` 导入它们而非内联占位代码；已由 pack 审查验证）；闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证。本包自测**不计划**替换为真实 seam 包——由真实 seam 组合的应用是部署目标（本包套件刻意运行钉定 stub 以获得封闭式组合测试）。
+- **开发期 seam 直接 link 真实 dsh 源码树** —— `@deepseek-ai/dsh-*` 各 seam 仅为 peerDependencies（运行时由宿主提供）；开发期 typecheck/测试/构建通过 **link farm**（`scripts/setup-dsh-links.ts`，dsh-advisor 模式）解析：把本地 dsh 源码树（`$DSH_SOURCE_DIR` → `$DSH_HOME/source/current` → `~/.dsh/source/current`）中所有 `@deepseek-ai/*` 包（跳过带 bin 的包；幂等——用 `bun run dsh:link` 重建、`bun run dsh:link:check` 校验；已接入 `prepare`，位于 build 之前）symlink 进仓库根 `node_modules/@deepseek-ai/`。**全部运行时 seam 导入在构建时外部化**（`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm`——发布的 `dist/` 导入它们而非内联占位代码）；闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证。本包套件直接运行 link 树的**真实** seam 包——不再有提交的 `peer-stubs/` 占位；无本地 dsh 树的机器运行 `dsh:link` 会硬失败并提示设置 `DSH_SOURCE_DIR`（CI 按可用性跳过 dsh 步骤——CI 不跑 dsh）。
 - **反递归绑定为 Config 声明** —— dsh 在工具执行上下文上不暴露每 agent 角色，故 `dispatchBinding` 声明单一部署级角色；`Execute as` 不同的 Assignment 无法被识别为自我递归，多角色派发方需要按实例拆分插件。
 - **租约闸门有意与 opencode 分叉** —— opencode 的 `beforeDispatch` 不运行租约检查；dsh 租约闸门是新增的（`lease.dispatch.*` 码），且仅对可写 SDD/InProgress 派发触发，故对齐覆盖字段集而非租约面。
 - **已采纳 engine 共享组合** —— 派发闸门核心即 engine 的单一 `composeDispatchGate`（与 opencode/omp/CLI 对齐，字段/分支/反递归违规码按构造即相同），compass frontmatter 解析器即 engine 的共享 `parseCompassFrontmatter`（本地 dsh 镜像与 CLI 副本均已删除——不再有可漂移的分叉）。两者都运行在 dsh 头区域切片上；租约 + worktree L1/L2 检查仍为叠加上去的 dsh 侧扩展。

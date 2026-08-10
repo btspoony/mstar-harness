@@ -5,9 +5,10 @@
  * with only the module-import seam replaced by a modules map — entry parsing,
  * config validation, fiber mounting, and settlement are the shipping code.
  *
- * Seam limitation: at dev time the dsh seam packages are peer-stubs (no
- * runtime implementations), so this boot composes the plugin + engine only;
- * Tasks 3–5 extend the same boot with real seam packages when available.
+ * Seam boundary: at dev time the dsh seam packages resolve from a real dsh
+ * source tree via the link farm (scripts/setup-dsh-links.ts), so this boot
+ * composes the plugin + engine + the REAL registry seams; Tasks 3–5 extend
+ * the same boot with the linked seam packages.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { writeFile } from 'node:fs/promises'

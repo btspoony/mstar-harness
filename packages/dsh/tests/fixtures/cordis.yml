@@ -5,17 +5,19 @@
 # plugin so `ctx.skills`, `ctx.tools`, and `ctx.commands` exist when the
 # plugin's gates, v2 seam tools, and bundled mstar commands register.
 #
-# Dev-time the dsh seam packages are peer-stubs: only the FUNCTIONAL stubs
-# are mounted as rows. The remaining seams (dsh-agent / dsh-llm) are
-# type-only or placeholder stubs without a mountable plugin shape, so their
-# waterfall events (agent/pre-step, tools/pre-execute, fs/write-intent) are
-# produced through the same `ctx.waterfall` dispatch the real packages
-# perform — the documented dev-time stub boundary shared by the whole suite.
+# Dev-time the dsh seam packages resolve from a real dsh source tree via the
+# link farm (scripts/setup-dsh-links.ts): the mountable registry rows below
+# are the REAL packages. The remaining seams (dsh-agent / dsh-llm) are not
+# mounted as rows (this composition needs no plugin shape from them), so
+# their waterfall events (agent/pre-step, tools/pre-execute, fs/write-intent)
+# are produced through the same `ctx.waterfall` dispatch the real packages
+# perform — the documented dev-time seam boundary shared by the whole suite.
 #
 # The mstar row carries no `config:` block here: boot-time state (temp
 # harness dir, enforcement, skill roots) is appended by the test boot.
 
 - name: '@deepseek-ai/dsh-skill'
+- name: '@deepseek-ai/dsh-system-prompt'
 - name: '@deepseek-ai/dsh-tools'
 - name: '@deepseek-ai/dsh-commands'
 - name: '@mstar-harness/dsh'

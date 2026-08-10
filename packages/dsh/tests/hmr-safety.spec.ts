@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from 'cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
-import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
@@ -54,8 +54,8 @@ const subagentExec = (prompt: string): ToolExecution => ({
   name: 'subagent',
   arguments: { description: 'probe', prompt },
   signal: new AbortController().signal,
-  token: Symbol('dsh.tool.execution'),
-})
+  token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+} as unknown as ToolExecution)
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
@@ -79,13 +79,13 @@ const inboxMessage = (): UserMessage =>
   createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'probe' }] })
 
 /** A `agent/pre-step` payload the agent loop would dispatch. */
-const stepPayload = (messages: UserMessage[]): { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal } => ({
+const stepPayload = (messages: UserMessage[]): never => ({
   agent: {},
   messages,
   turn: 1,
   step: 1,
   signal: new AbortController().signal,
-})
+} as never)
 
 /** The loop's default pre-step decision: enter the step with the inbox messages. */
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>

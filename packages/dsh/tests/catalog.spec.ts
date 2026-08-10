@@ -60,7 +60,7 @@ const stepPayload = (messages: UserMessage[], signal = new AbortController().sig
   turn: 1,
   step: 1,
   signal,
-})
+} as never)
 
 /** The last message of an enter decision (the appended catalog when present). */
 const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>

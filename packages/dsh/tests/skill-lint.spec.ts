@@ -24,8 +24,9 @@
  * - Unexpected internal errors degrade to allow in BOTH modes with a
  *   `degraded: true` advisory (error-containment envelope).
  *
- * Harness approach (status-gate.spec.ts parity): the real dsh seam packages
- * are dev-time peer-stubs, so the waterfall is simulated with the same
+ * Harness approach (status-gate.spec.ts parity): the dsh seam packages
+ * resolve from a real dsh source tree via the link farm, and the waterfall
+ * is simulated with the same
  * `ctx.waterfall('fs/write-intent', target, exec, () => undefined)` dispatch
  * the real `@deepseek-ai/dsh-tool-fs` write tool performs.
  */

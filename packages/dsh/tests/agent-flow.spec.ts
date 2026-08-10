@@ -28,7 +28,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from 'cordis'
-import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import {
@@ -135,8 +135,8 @@ function subagentExec(prompt: string): ToolExecution {
     name: 'subagent',
     arguments: { description: 'probe', prompt },
     signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution'),
-  }
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
 }
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
@@ -652,7 +652,9 @@ const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>)
 
 /** A `agent/pre-step` payload the agent loop would dispatch. */
 function stepPayload(messages: UserMessage[], signal = new AbortController().signal) {
-  return { agent: {}, messages, turn: 1, step: 1, signal }
+  // The real agent/pre-step payload type demands a full Agent — the tests
+  // emit a minimal stand-in (the plugin reads only the fields it needs).
+  return { agent: {}, messages, turn: 1, step: 1, signal } as never
 }
 
 /** Narrow an enter decision to its appended engine-status catalog row. */

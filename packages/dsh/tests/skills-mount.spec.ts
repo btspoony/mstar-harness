@@ -2,8 +2,9 @@
  * Task 3 — skills mounting via skill-local (single canonical mount) (plan
  * 20260808-dsh-host-adapter).
  *
- * Dev-time reality: the dsh seam packages are peer-stubs (no real runtime),
- * so the plugin's registration call is implemented against the CONTRACT —
+ * Dev-time reality: the dsh seam packages resolve from a real dsh source
+ * tree via the link farm (scripts/setup-dsh-links.ts), so the plugin's
+ * registration call is implemented against the CONTRACT —
  * the skill-local `{ name, inject, Config, apply }` plugin module and the
  * `customSkillDirs` / `bundledSkillDir` Config semantics. Verification is
  * threefold (brief): (a) contract-shape tests — the registration payload

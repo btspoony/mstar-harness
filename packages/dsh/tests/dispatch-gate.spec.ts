@@ -3,8 +3,9 @@
  * tool (plan 20260808-dsh-package-core).
  *
  * Harness approach: same real-composition boot as Task 3 — the dsh seam
- * packages are dev-time peer-stubs (no runtime), so the waterfall is simulated
- * with the typed harness: the exact `ctx.waterfall('tools/pre-execute', exec,
+ * packages resolve from a real dsh source tree via the link farm, and the
+ * waterfall is simulated with the typed harness: the exact
+ * `ctx.waterfall('tools/pre-execute', exec,
  * () => Promise.resolve({ kind: 'allow' }))` dispatch the real ToolRegistry
  * performs (core/tools index.ts, dsh-private 9451be2). Unlike the fs intent
  * slots (veto = throw), the tools/pre-execute refusal channel is the
@@ -17,7 +18,7 @@
  * codes per case (acceptance: parity with the opencode validated field set).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
@@ -201,8 +202,8 @@ function toolExec(name: string, args: unknown): ToolExecution {
     name,
     arguments: args,
     signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution'),
-  }
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
 }
 
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */

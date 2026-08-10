@@ -449,12 +449,19 @@ function agentIdOf(value: unknown): string | undefined {
   return typeof id === 'string' && id.trim() !== '' ? id : undefined
 }
 
-/** Probe a value for a settle outcome: explicit `outcome` / `isError` / `error` keys. */
+/**
+ * Probe a value for a settle outcome: explicit `outcome` / `isError` / `error`
+ * keys. A REAL tool result (the registry's automatic `tools/post-execute`
+ * payload) carries `content`/`value` and must never map — deriving a settle
+ * from an ordinary tool result would fabricate settlement on every call; only
+ * minimal outcome markers (host-emitted settle payloads) map.
+ */
 function outcomeOf(value: unknown): SettleOutcome | undefined {
   const rec = asRecord(value)
   if (rec === undefined) return undefined
   const outcome = rec.outcome
   if (outcome === 'ok' || outcome === 'error' || outcome === 'denied') return outcome
+  if (rec.content !== undefined || rec.value !== undefined) return undefined
   if (rec.isError === true) return 'error'
   if (rec.isError === false) return 'ok'
   if (rec.error !== undefined) return 'error'
@@ -517,35 +524,44 @@ function settleFromArgs(exec: unknown, result: unknown): MappedSettle | undefine
 
 /**
  * Register the defensive `tools/post-execute` settle listener (spec §2.1.2 —
- * Tier 2, best-effort). The seam is NOT part of the verified dsh-tools
- * consumer surface, so the registration is defensive and error-contained: an
- * unmapped payload logs once and records nothing; a throwing record never
- * propagates. A host that emits the seam upgrades the ledger to dispatch +
- * settle; one that never does leaves the ledger dispatch-only (the
- * settle-unavailable trace is logged once at registration and documented).
+ * Tier 2, best-effort). The real dsh-tools registry ALWAYS dispatches the
+ * seam (a composed app's default listeners delegate to accept), so the
+ * listener MUST delegate via `next()` on every path — returning without
+ * calling `next` bails the waterfall and breaks every tool call. Observational
+ * only: an unmapped payload records nothing (warned at most once per process
+ * — the seam fires on every tool call, so per-call warn spam is avoided) and
+ * a throwing record never propagates. A host emission that carries a real
+ * outcome upgrades the ledger to dispatch + settle; the mstar tools' own
+ * results carry no outcome and leave the ledger dispatch-only.
  *
  * Cordis typing note: `ctx.on` only accepts declared event keys and
  * `tools/post-execute` is undeclared — the registration casts through the
- * runtime-accepted event-name string (the event bus dispatches any name; a
- * host that never emits simply never triggers the listener).
+ * runtime-accepted event-name string (the event bus dispatches any name).
  * @param ctx - registrant context (fiber disposal unwinds the listener).
  * @param resolver - per-workspace `{HARNESS_DIR}` resolver (the payload's
  * agent workspace — never the process cwd).
  */
 export function registerSettleListener(ctx: Context, resolver: HarnessResolver): void {
-  const listener = (exec: unknown, result: unknown): void => {
+  let unmappedWarned = false
+  const listener = (exec: unknown, result: unknown, next?: () => unknown): unknown => {
     try {
       const mapped = settleFromArgs(exec, result)
-      if (mapped === undefined) {
+      if (mapped !== undefined) {
+        const harnessDir = resolver.forAgent(agentHandleOf(exec) ?? agentHandleOf(result))
+        if (harnessDir !== null) {
+          recordSettle({ harnessDir, agent: mapped.agent, outcome: mapped.outcome, durationMs: mapped.durationMs })
+        }
+      } else if (!unmappedWarned) {
+        unmappedWarned = true
         log('warn', `${SETTLE_SEAM} payload did not map to a settle event (unverified shape) — nothing recorded`)
-        return
       }
-      const harnessDir = resolver.forAgent(agentHandleOf(exec) ?? agentHandleOf(result))
-      if (harnessDir === null) return
-      recordSettle({ harnessDir, agent: mapped.agent, outcome: mapped.outcome, durationMs: mapped.durationMs })
     } catch (error) {
       log('error', `settle record failed (contained): ${errorMessage(error)}`)
     }
+    // Waterfall dispatch (real registry) hands a `next` — delegate so the
+    // chain continues (returning without calling next bails the waterfall);
+    // a direct host emission (plain `emit`) has no `next` and stays silent.
+    return next === undefined ? undefined : next()
   }
   ctx.on(SETTLE_SEAM as never, listener as never)
   // The ~300-char settle-unavailable trace is emitted at most ONCE per

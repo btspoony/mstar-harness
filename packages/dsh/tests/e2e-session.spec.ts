@@ -3,8 +3,9 @@
  * composed dsh app (plan 20260808-dsh-seams-bundle).
  *
  * Boots the full-app fixture cordis.yml through the real Loader (dsh-skill +
- * dsh-tools functional peer stubs + the mstar plugin — the committed
- * `tests/fixtures/cordis.yml` replaces the inline row list), mounts the
+ * dsh-system-prompt + dsh-tools + dsh-commands from the linked dsh source
+ * tree + the mstar plugin — the committed `tests/fixtures/cordis.yml`
+ * replaces the inline row list), mounts the
  * repo-root mirror skills/, and simulates one complete session:
  *
  *  1. status gate — invalid status.json write refused under hard mode
@@ -34,7 +35,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
-import type { CallId, PreToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { PreToolDecision, ToolExecution, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
@@ -133,8 +135,8 @@ function subagentExec(prompt: string): ToolExecution {
     name: 'subagent',
     arguments: { description: 'probe', prompt },
     signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution'),
-  }
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
 }
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
@@ -157,7 +159,7 @@ const stepPayload = (messages: UserMessage[]) => ({
   turn: 1,
   step: 1,
   signal: new AbortController().signal,
-})
+} as never)
 
 /** The last message of an enter decision (the appended rows when present). */
 const lastMessage = (decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined =>
@@ -202,7 +204,7 @@ describe('full dsh app boot — fixture cordis.yml composition', () => {
       'mstar_compound_validate',
       'mstar_roles_validate',
     ]) {
-      expect(booted.ctx.tools.lookup(name), name).toBeDefined()
+      expect(booted.ctx.tools.get(name), name).toBeDefined()
     }
     // The mirror skills/ mount is live through ctx.skills.
     const skills = await booted.ctx.skills.list()
@@ -483,7 +485,7 @@ describe('v2 seam tools — callable in-app over the committed fixtures', () => 
     if (result.isError) return
     expect(result.value).toEqual({ sdd_dir: realpathSync(join(app.harnessDir, 'sdd', 'e2e-fixture-plan')) })
     expect(existsSync(join((result.value as { sdd_dir: string }).sdd_dir, '.gitignore'))).toBe(true)
-    expect(result.content[0]!.text).toContain('sdd dir:')
+    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('sdd dir:')
   })
 
   it('mstar_iteration_gate evaluates the committed fixtures (PASS, phase-2-execute)', async () => {
@@ -501,7 +503,7 @@ describe('v2 seam tools — callable in-app over the committed fixtures', () => 
       ok: true,
       entry: { ok: false },
     })
-    expect(result.content[0]!.text).toContain('PASS')
+    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('PASS')
   })
 })
 
@@ -572,10 +574,10 @@ describe('agent-flow — settle verification gate (real call + Tier-2 wiring)', 
 
   it('a real subagent call through the composed registry records a dispatch; settle stays absent at dev time; a simulated host emission records the settle (Tier-2 live)', async () => {
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
-    // Dev-time reality: the peer-stub tool registry ships no delegation tool,
-    // so the test registers the `subagent` tool it would have mounted — the
-    // composed pipeline (pre-execute waterfall → validation → body → render)
-    // is the shipping registry code (harness.ts / dsh-tools peer-stub).
+    // Dev-time reality: the linked dsh-tools registry ships no delegation
+    // tool, so the test registers the `subagent` tool it would have mounted —
+    // the composed pipeline (pre-execute waterfall → validation → body →
+    // render) is the shipping registry code (link-farm dsh-tools).
     booted.ctx.tools.register(defineTool({
       name: 'subagent',
       description: 'delegate a task to a subagent',
@@ -595,7 +597,7 @@ describe('agent-flow — settle verification gate (real call + Tier-2 wiring)', 
       callId,
       name: 'subagent',
       arguments: { description: 'probe', prompt: fixture('assignments/valid.md') },
-      agent: { id: 'e2e-agent' },
+      agent: { id: 'e2e-agent' } as unknown as import('@deepseek-ai/dsh-agent').Agent,
       signal,
     })
     expect(result.isError).toBe(false)
@@ -606,10 +608,9 @@ describe('agent-flow — settle verification gate (real call + Tier-2 wiring)', 
     expect(view!.events).toHaveLength(1)
     expect(view!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', agent: 'e2e-agent' })
 
-    // Settle unavailable at dev time: the peer-stub registry emits NO
-    // `tools/post-execute` (its pre-execute pipeline settles without a
-    // post-execute event — the documented dispatch-only degrade). The ledger
-    // must NOT fabricate settlement.
+    // Settle unavailable at dev time: the mstar tools' own results carry no
+    // outcome, so the defensive `tools/post-execute` settle listener records
+    // nothing (the ledger must NOT fabricate settlement).
     expect(view!.events.some((e) => e.kind === 'settle')).toBe(false)
 
     // Tier-2 wiring live: a HOST that emits the seam upgrades the ledger —

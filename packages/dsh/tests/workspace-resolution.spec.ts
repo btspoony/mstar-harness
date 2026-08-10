@@ -71,7 +71,7 @@ const stepPayload = (messages: UserMessage[], cwd?: string) => ({
   turn: 1,
   step: 1,
   signal: new AbortController().signal,
-})
+} as never)
 
 /** The loop's default pre-step decision: enter the step with the inbox messages. */
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
