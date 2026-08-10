@@ -173,9 +173,20 @@ graph, plan `20260810-panel-canvas-zones`) lays out three zones — the
 / inactive dimmed states, and the branch panel: iteration base / target /
 spec integration, rendered only while active), the **tasks zone** (6-column
 kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
-badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone**
-(pending skeleton — entities and flow arrows land in plan
-`20260810-panel-agent-flow-zone`) — under a bottom **fixed footer bar** (zone
+badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the six EXPECTED_ROLE_FLOW stage/phase
+columns rendering the subagent **entity cards** aggregated from actual
+dispatch evidence — agent display name / role chip / task tag
+(`planId#taskId`) / status point / ×N count; running entities carry the
+business glow-pulse highlight, un-evidenced stages render the dashed
+"待执行" pending placeholder with their expected role chips, and the header
+shows the `N executing · M pending` summary; flow arrows: dim expected
+skeleton arrows between consecutive columns, small `→` in-column handoff
+arrows between same-column cards, and the ANIMATED **next** edge — a
+business dash-flow arrow (`@keyframes agent-dash-flow` in the zones css,
+killed by the root `prefers-reduced-motion` rule) from the latest running
+entity's stage column to the next constant-order column, drawn ONLY while a
+running entity exists — plan `20260810-panel-agent-flow-zone`) — under a
+bottom **fixed footer bar** (zone
 legend + gate verdict/violation summary with a collapsible violations list),
 with the agent-flow event strip as a canvas-corner **`AgentEventDock`**
 (absolute bottom-left, mounted only when events exist — hidden entirely at 0
@@ -198,9 +209,10 @@ emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
 the web loader executes plugin bundles as classic `<script>`s, where a
 literal `import.meta` is a parse-time SyntaxError (a zustand v4
 `import.meta.env` read is defined away at build; see the iteration
-install-verification guide §6). Bundle size at this plan's wrap-up: **84,959 B
-raw / 16,810 B gzip** (re-measure per the iteration install-verification
-guide — the bundle keeps shrinking as later panel plans land).
+install-verification guide §6). Bundle size at this plan's wrap-up: **107,850 B
+raw / 20,966 B gzip** (re-measure per the iteration install-verification
+guide — the bundle shrank to ~85 KB when react-flow was removed and grew
+back with the agent-execution zone's entity rendering).
 
 Install / verify (the client half rides the same bundle-row install as the
 server half):
@@ -223,8 +235,8 @@ sha1), and the browser handoff materializes the plugin entry (`inject` +
 **Known Limitations** (this iteration): the iteration stepper's Step 1
 (iteration-start) and Step 5 (merge-ready) can never be the **current** step —
 the engine phase gate only evaluates Phase 2→3→4, so they always render idle;
-the agent-execution zone is a pending skeleton until plan
-`20260810-panel-agent-flow-zone` lands its entity rendering; no historical
+the agent-entity status derivation is a best-effort heuristic (running =
+dispatch with no paired settle; settle pairing is never faked); no historical
 back-scan of a resumed long log (the server re-emits the row at every turn's
 first step, digest-gated); no custom top-level slot (the `conversation.view`
 tab is the only session-level panel seat available without dsh-private layout
