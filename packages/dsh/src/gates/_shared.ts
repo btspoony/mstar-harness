@@ -5,7 +5,9 @@
  * configuration contract (`Config` interface + schemastery schema), the
  * per-workspace `{HARNESS_DIR}` resolver (+ session helpers), the shared
  * violation/record helpers, the seam hard-enforcement resolution, the
- * packaged skills-dir resolution and the canonical status file name.
+ * packaged skills-dir resolution, the skill-local registration payload,
+ * the iteration-gate view mapping (shared by the catalog and the tools),
+ * and the canonical status file name.
  *
  * Module boundary (plan `20260810-dsh-entry-split`): gates import from this
  * module by explicit relative path (no barrel); the entry re-exports the
@@ -16,7 +18,9 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import z from 'schemastery'
 import { resolveCompassEnforcement, resolveHarnessDir } from '@mstar-harness/engine'
-import type { ValidationResult } from '@mstar-harness/engine'
+import type { GateResult, ValidationResult } from '@mstar-harness/engine'
+import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-local'
+import type { IterationGateListView, IterationGateViolationView } from '../types.ts'
 /** Canonical harness status file name (mstar-plan-artifacts status.json). */
 export const STATUS_FILE = 'status.json'
 /** Plugin configuration. */
@@ -219,4 +223,51 @@ export function sessionCwdOf(agent: unknown): string | undefined {
 /** The tool-execution actor of one fs-intent event, when it carries an agent. */
 export function actorAgentOf(actor: object | undefined): unknown {
   return (actor as { agent?: unknown } | undefined)?.agent
+}
+/**
+ * Map one engine `ValidationResult` to its lossless JSON view (`fix` omitted
+ * when absent so `additionalProperties: false` never sees an undefined key).
+ * The view interfaces live in `types.ts` (shared with the pre-step
+ * iteration-gate catalog row).
+ */
+export function iterationViolationView(v: ValidationResult): IterationGateViolationView {
+  return { severity: v.severity, code: v.code, message: v.message, ...(v.fix !== undefined ? { fix: v.fix } : {}) }
+}
+
+/** Map one engine gate (`GateResult`) to its JSON view. */
+export function iterationGateView(gate: GateResult): IterationGateListView {
+  return { ok: gate.ok, violations: gate.violations.map(iterationViolationView) }
+}
+/**
+ * Build the dsh skill-local registration payload from the plugin Config
+ * (single canonical mount). Semantics mirror the skill-local
+ * `Config` contract: `skillRoots` → `customSkillDirs` (custom roots),
+ * `bundledSkillDir` → `bundledSkillDir` (bundled root). The provider is
+ * named `mstar` and default roots are excluded (`includeDefaultRoots: false`
+ * — the repository-plugin convention: an isolated provider must see only its
+ * explicit roots, so the mstar mount never claims the host app's own skills;
+ * without this the app's user/project skills would be re-discovered under
+ * the mstar provider). Returns `undefined` when nothing is configured — no
+ * registration happens.
+ *
+ * The bundled default is the package's OWN `harness-skills/` mirror (synced
+ * from the repo root by `bundle-assets` at build/postinstall; gitignored),
+ * resolved package-relative — NOT cwd-anchored — so a deployment launching
+ * from any cwd gets the bundled mount (this resolves the
+ * cwd-anchoring limitation for the shipped default; an explicit
+ * `bundledSkillDir` still wins).
+ * @param config - validated plugin configuration.
+ */
+export function skillLocalConfig(config: Config): SkillLocalConfig | undefined {
+  const customSkillDirs = config.skillRoots?.map((root) => root.trim()).filter((root) => root !== '')
+  const bundledSkillDir = config.bundledSkillDir?.trim() ?? packagedSkillsDir()
+  if ((customSkillDirs === undefined || customSkillDirs.length === 0) && bundledSkillDir === undefined) {
+    return undefined
+  }
+  return {
+    providerName: 'mstar',
+    includeDefaultRoots: false,
+    ...(customSkillDirs !== undefined && customSkillDirs.length > 0 ? { customSkillDirs } : {}),
+    ...(bundledSkillDir !== undefined ? { bundledSkillDir } : {}),
+  }
 }

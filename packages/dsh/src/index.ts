@@ -18,7 +18,6 @@ import {
   inject as skillLocalInject,
   name as skillLocalName,
 } from '@deepseek-ai/dsh-skill-local'
-import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-local'
 import {
   applyEnforcement,
   assertIndexRows,
@@ -67,8 +66,6 @@ import type {
   HarnessLeaseView,
   HarnessPlanView,
   HarnessResidualView,
-  IterationGateListView,
-  IterationGateViolationView,
   IterationGateView,
   MstarEngineStatusSource,
   MstarHarnessState,
@@ -82,6 +79,9 @@ import {
   packagedSkillsDir,
   HarnessResolver,
   sessionCwdOf,
+  iterationViolationView,
+  iterationGateView,
+  skillLocalConfig,
 } from './gates/_shared.ts'
 import { writeIntentListener, editIntentListener } from './gates/status.ts'
 import { validateStatusValue, validateStatusDoc } from './gates/status.ts'
@@ -99,7 +99,7 @@ import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 export { DshMstar } from './service.ts'
 export type { DshMstarOptions } from './service.ts'
 export type { MstarEngineStatusSource, MstarHarnessState, MstarIterationGateView } from './types.ts'
-export { Config, HarnessResolver } from './gates/_shared.ts'
+export { Config, HarnessResolver, skillLocalConfig } from './gates/_shared.ts'
 export type { StatusGateAdvisory } from './gates/status.ts'
 export { SkillLintVetoError, lintSkillDoc, lintSkillWrite } from './gates/skill-lint.ts'
 export type { SkillLintAdvisory } from './gates/skill-lint.ts'
@@ -756,40 +756,6 @@ function packagedCommandsDir(): string | undefined {
   }
 }
 
-/**
- * Build the dsh skill-local registration payload from the plugin Config
- * (single canonical mount). Semantics mirror the skill-local
- * `Config` contract: `skillRoots` → `customSkillDirs` (custom roots),
- * `bundledSkillDir` → `bundledSkillDir` (bundled root). The provider is
- * named `mstar` and default roots are excluded (`includeDefaultRoots: false`
- * — the repository-plugin convention: an isolated provider must see only its
- * explicit roots, so the mstar mount never claims the host app's own skills;
- * without this the app's user/project skills would be re-discovered under
- * the mstar provider). Returns `undefined` when nothing is configured — no
- * registration happens.
- *
- * The bundled default is the package's OWN `harness-skills/` mirror (synced
- * from the repo root by `bundle-assets` at build/postinstall; gitignored),
- * resolved package-relative — NOT cwd-anchored — so a deployment launching
- * from any cwd gets the bundled mount (this resolves the
- * cwd-anchoring limitation for the shipped default; an explicit
- * `bundledSkillDir` still wins).
- * @param config - validated plugin configuration.
- */
-export function skillLocalConfig(config: Config): SkillLocalConfig | undefined {
-  const customSkillDirs = config.skillRoots?.map((root) => root.trim()).filter((root) => root !== '')
-  const bundledSkillDir = config.bundledSkillDir?.trim() ?? packagedSkillsDir()
-  if ((customSkillDirs === undefined || customSkillDirs.length === 0) && bundledSkillDir === undefined) {
-    return undefined
-  }
-  return {
-    providerName: 'mstar',
-    includeDefaultRoots: false,
-    ...(customSkillDirs !== undefined && customSkillDirs.length > 0 ? { customSkillDirs } : {}),
-    ...(bundledSkillDir !== undefined ? { bundledSkillDir } : {}),
-  }
-}
-
 /** Options for {@link DshHostAdapter}. */
 export interface DshHostAdapterOptions {
   /**
@@ -1412,21 +1378,6 @@ interface TurnDigest {
 function agentDigestKey(agent: unknown, cwd: string | undefined): string {
   const id = (agent as { id?: unknown } | null | undefined)?.id
   return `${typeof id === 'string' ? id : '<unknown>'}\u0000${cwd ?? ''}`
-}
-
-/**
- * Map one engine `ValidationResult` to its lossless JSON view (`fix` omitted
- * when absent so `additionalProperties: false` never sees an undefined key).
- * The view interfaces live in `types.ts` (shared with the pre-step
- * iteration-gate catalog row).
- */
-function iterationViolationView(v: ValidationResult): IterationGateViolationView {
-  return { severity: v.severity, code: v.code, message: v.message, ...(v.fix !== undefined ? { fix: v.fix } : {}) }
-}
-
-/** Map one engine gate (`GateResult`) to its JSON view. */
-function iterationGateView(gate: GateResult): IterationGateListView {
-  return { ok: gate.ok, violations: gate.violations.map(iterationViolationView) }
 }
 
 /** Violation item schema shared by the iteration-gate output shape. */
