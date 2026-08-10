@@ -579,11 +579,340 @@ describe('projectGraph — agents zone skeleton (spec §4, plan 2)', () => {
     }
   })
 
-  it('agentFlow with events → plain skeleton (degraded false, empty false; lit/count land in plan 3)', () => {
+  it('agentFlow with events → plain skeleton (degraded false, empty false; entities/edges land in this plan)', () => {
     const agents = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev' })])).agents
     expect(agents.degraded).toBe(false)
     expect(agents.empty).toBe(false)
     expect(agents.stages).toHaveLength(6)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Agents zone entities (spec §4): aggregation / fallback key / card fields /
+ * status derivation (verdict priority → paired settle → running).
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents zone entities (spec §4)', () => {
+  it('aggregates the same agent across dispatches: one card, count + latest ts', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
+      dispatchRow({ ts: 4, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
+      dispatchRow({ ts: 2, role: 'generalPurpose', agent: 'a1' }),
+    ]))
+    const [a1] = view.agents.entities
+    expect(a1!.key).toBe('a1')
+    expect(a1!.count).toBe(3)
+    expect(a1!.ts).toBe(6)
+  })
+
+  it('card identity fields come from the LATEST dispatch (name/role/task/stage/ts)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
+      dispatchRow({ ts: 4, role: 'generalPurpose', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
+    ]))
+    const [a1] = view.agents.entities
+    expect(a1!.name).toBe('a1') // agent ?? role
+    expect(a1!.agent).toBe('a1')
+    expect(a1!.role).toBe('fullstack-dev')
+    expect(a1!.task).toBe('plan-x#T2')
+    expect(a1!.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+  })
+
+  it('fallback key = role+ts when the agent id is missing (host-hook path)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 5, role: 'fullstack-dev' }),
+      dispatchRow({ ts: 3, role: 'fullstack-dev' }),
+    ]))
+    expect(view.agents.entities.map((e) => e.key)).toEqual(['fullstack-dev+5', 'fullstack-dev+3'])
+    expect(view.agents.entities.map((e) => e.name)).toEqual(['fullstack-dev', 'fullstack-dev'])
+    expect(view.agents.entities.map((e) => e.agent)).toEqual([null, null])
+  })
+
+  it('identical fallback keys (same role+ts) aggregate into one card', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 5, role: 'fullstack-dev' }),
+      dispatchRow({ ts: 5, role: 'fullstack-dev' }),
+    ]))
+    expect(view.agents.entities).toHaveLength(1)
+    expect(view.agents.entities[0]!.key).toBe('fullstack-dev+5')
+    expect(view.agents.entities[0]!.count).toBe(2)
+  })
+
+  it('task tag: planId#taskId; planId alone when taskId missing; null when planId missing', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
+      dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a3' }),
+    ]))
+    const byKey = new Map(view.agents.entities.map((e) => [e.key, e]))
+    expect(byKey.get('a1')!.task).toBe('plan-x#T1')
+    expect(byKey.get('a2')!.task).toBe('plan-x')
+    expect(byKey.get('a3')!.task).toBeNull()
+  })
+})
+
+describe('projectGraph — agents zone status derivation (spec §4)', () => {
+  it('latest-dispatch verdict denied wins even with a paired settle', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'denied' }),
+    ]))
+    expect(view.agents.entities[0]!.status).toBe('denied')
+  })
+
+  it('latest-dispatch verdict advisory → advisory (verdict priority, settle ignored)', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'error' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
+    ]))
+    expect(view.agents.entities[0]!.status).toBe('advisory')
+  })
+
+  it('paired settle ok → settled', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities[0]!.status).toBe('settled')
+  })
+
+  it('paired settle error → error; settle outcome denied → settled at the ENTITY level', () => {
+    const errorView = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'error' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(errorView.agents.entities[0]!.status).toBe('error')
+    const deniedView = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a2', outcome: 'denied' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a2' }),
+    ]))
+    expect(deniedView.agents.entities[0]!.status).toBe('settled')
+  })
+
+  it('no paired settle → running; a dispatch after the last settle is running again', () => {
+    const running = projectGraph(flowSource([
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(running.agents.entities[0]!.status).toBe('running')
+    // File order: D(t9) → S(t8) → D(t7). The settle pairs the OLDER dispatch
+    // (most recent same-agent dispatch before it in file order); the latest
+    // dispatch (t9) has no pair → running (honest).
+    const again = projectGraph(flowSource([
+      dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1' }),
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(again.agents.entities[0]!.status).toBe('running')
+  })
+
+  it('different agents never pair; the settle-only agent stays running', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a2', outcome: 'ok' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities[0]!.status).toBe('running')
+  })
+
+  it('settle-only flow → NO entities (settle rows never produce cards)', () => {
+    const agents = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      settleRow({ ts: 7, agent: 'a2', outcome: 'error' }),
+    ])).agents
+    expect(agents.entities).toEqual([])
+    expect(agents.degraded).toBe(false)
+    expect(agents.empty).toBe(false)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Agents zone edges (spec §4): expected skeleton arrows / actual same-plan
+ * handoffs / next determination (multiple-running rule).
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents zone edges (spec §4)', () => {
+  it('expected: 5 skeleton arrows across consecutive EXPECTED_ROLE_FLOW stages', () => {
+    const agents = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev' })])).agents
+    expect(agents.edges.filter((e) => e.kind === 'expected').map((e) => [e.source, e.target])).toEqual([
+      ['iteration-start:review-edit-chain', 'autonomous-execute:sdd-implement'],
+      ['autonomous-execute:sdd-implement', 'autonomous-execute:sdd-task-review'],
+      ['autonomous-execute:sdd-task-review', 'autonomous-execute:qc-tri'],
+      ['autonomous-execute:qc-tri', 'autonomous-execute:qa-gate'],
+      ['autonomous-execute:qa-gate', 'autonomous-execute:ops-on-demand'],
+    ])
+  })
+
+  it('actual: same-plan ts-ascending adjacent dispatch entity pairs', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 5, role: 'qc-specialist', agent: 'a3', planId: 'plan-x' }),
+      dispatchRow({ ts: 3, role: 'generalPurpose', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    const actual = view.agents.edges.filter((e) => e.kind === 'actual')
+    expect(actual.map((e) => [e.source, e.target])).toEqual([
+      ['a1', 'a2'],
+      ['a2', 'a3'],
+    ])
+    expect(actual.every((e) => e.entityKey === null)).toBe(true)
+  })
+
+  it('actual: different plans never cross; plan-less dispatches excluded', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 5, role: 'qc-specialist', agent: 'b1', planId: 'plan-y' }),
+      dispatchRow({ ts: 4, role: 'generalPurpose', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'noplan' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    const actual = view.agents.edges.filter((e) => e.kind === 'actual')
+    expect(actual.map((e) => [e.source, e.target])).toEqual([['a1', 'a2']])
+  })
+
+  it('actual: a self-pair (the same entity twice in a plan) is skipped', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 4, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    expect(view.agents.edges.filter((e) => e.kind === 'actual')).toEqual([])
+  })
+})
+
+describe('projectGraph — agents zone next edge (spec §4)', () => {
+  it('next: the latest running entity → the next constant-order stage column', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'generalPurpose', agent: 'a2' }),
+      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([
+      { kind: 'next', source: 'autonomous-execute:sdd-task-review', target: 'autonomous-execute:qc-tri', entityKey: 'a2' },
+    ])
+  })
+
+  it('next: multiple running with equal ts → the smallest entity key wins', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'b-agent' }),
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a-agent' }),
+    ]))
+    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([
+      { kind: 'next', source: 'autonomous-execute:sdd-implement', target: 'autonomous-execute:sdd-task-review', entityKey: 'a-agent' },
+    ])
+  })
+
+  it('next: no running entity → no next edge (honest)', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 20, agent: 'a1', outcome: 'ok' }),
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
+  })
+
+  it('next: running at the LAST stage (ops-on-demand) → no next edge', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'a1' }),
+    ]))
+    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
+  })
+
+  it('next: running with an unexpected role (no stage) → no next edge', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'scout', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities[0]!.status).toBe('running')
+    expect(view.agents.entities[0]!.stage).toBeNull()
+    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Agents zone counts + the spec §8 degradation matrix (never throw, never
+ * guess: degraded → no claims; empty / settle-only → full pending skeleton).
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents zone counts (spec §4)', () => {
+  it('executing = running entity count; settled/error/denied are not executing', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 20, agent: 's1', outcome: 'ok' }),
+      dispatchRow({ ts: 19, role: 'fullstack-dev', agent: 's1' }),
+      dispatchRow({ ts: 18, role: 'fullstack-dev', agent: 'r1' }),
+      settleRow({ ts: 17, agent: 'e1', outcome: 'error' }),
+      dispatchRow({ ts: 16, role: 'generalPurpose', agent: 'e1' }),
+      dispatchRow({ ts: 15, role: 'qc-specialist', agent: 'd1', verdict: 'denied' }),
+    ]))
+    const byKey = new Map(view.agents.entities.map((e) => [e.key, e.status]))
+    expect(byKey.get('s1')).toBe('settled')
+    expect(byKey.get('r1')).toBe('running')
+    expect(byKey.get('e1')).toBe('error')
+    expect(byKey.get('d1')).toBe('denied')
+    expect(view.agents.executing).toBe(1)
+  })
+
+  it('pending = expected roles of stages with NO dispatch evidence', () => {
+    // Evidence: fullstack-dev (sdd-implement, 3 roles) + generalPurpose
+    // (sdd-task-review, 1 role); total expected roles = 12 → pending 8.
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a1' }),
+      dispatchRow({ ts: 1, role: 'generalPurpose', agent: 'a2' }),
+    ])).agents
+    expect(agents.pending).toBe(8)
+    expect(agents.executing).toBe(2)
+  })
+
+  it('evidence comes from ALL dispatch rows, not only each entity\'s latest', () => {
+    // a1 dispatched as fullstack-dev (t1) then re-dispatched as
+    // generalPurpose (t3) — BOTH stages stay evidenced.
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 3, role: 'generalPurpose', agent: 'a1' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
+    ])).agents
+    expect(agents.pending).toBe(12 - 3 - 1) // 8
+  })
+})
+
+describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
+  it('degraded (agentFlow null / unreadable) → skeleton, NO entity/pending claims (0/0)', () => {
+    const degraded = projectGraph(fullSource).agents // agentFlow: null
+    expect(degraded.degraded).toBe(true)
+    expect(degraded.entities).toEqual([])
+    expect(degraded.executing).toBe(0)
+    expect(degraded.pending).toBe(0)
+    expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(5)
+  })
+
+  it('empty ledger → empty + full pending skeleton (0 executing, 12 pending)', () => {
+    const agents = projectGraph(flowSource([])).agents
+    expect(agents.empty).toBe(true)
+    expect(agents.degraded).toBe(false)
+    expect(agents.entities).toEqual([])
+    expect(agents.executing).toBe(0)
+    expect(agents.pending).toBe(12)
+  })
+
+  it('only-settle ledger → no entity cards + full pending skeleton (摘要 0 执行中 · M 待执行)', () => {
+    const agents = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      settleRow({ ts: 7, agent: 'a2', outcome: 'error' }),
+    ])).agents
+    expect(agents.degraded).toBe(false)
+    expect(agents.empty).toBe(false)
+    expect(agents.entities).toEqual([])
+    expect(agents.executing).toBe(0)
+    expect(agents.pending).toBe(12)
+    expect(agents.stages).toHaveLength(6)
+  })
+
+  it('anonymous dispatch rows (no agent, no role) are skipped — never ghost cards', () => {
+    const view = projectGraph(flowSource([
+      { kind: 'dispatch', ts: 9, role: 42 }, // garbage role → '' → anonymous
+      { kind: 'dispatch', ts: 8 },           // fully anonymous
+      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities.map((e) => e.key)).toEqual(['a1'])
+    expect(view.agents.executing).toBe(1)
+  })
+
+  it('all-garbage agent-flow rows → total function: no entities, never throws', () => {
+    const agents = projectGraph(flowSource([42, null, 'garbage', { kind: 'banana' }, { kind: 'dispatch' }])).agents
+    expect(agents.degraded).toBe(false)
+    expect(agents.entities).toEqual([])
+    expect(agents.executing).toBe(0)
   })
 })
 
