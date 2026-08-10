@@ -115,7 +115,10 @@ function defaultWorkspaceRoot(startDir: string): string {
     }).trim();
     if (!cdup) return startDir; // already at the git top-level
     let boundary = startDir;
-    for (const segment of cdup.split("/")) {
+    // Windows-normalized separator split — defensive only: this repo has no
+    // Windows target, and git emits "/" here (backslashes never occur), so
+    // the regex just guards a future caller from feeding `\` separators.
+    for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".") boundary = dirname(boundary);
     }
     return resolve(boundary);
