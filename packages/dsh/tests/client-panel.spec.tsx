@@ -12,6 +12,12 @@
  * - full-tab layout (spec panel-zones §2): root fills the Tab without page
  *   scroll (`overflow: hidden`), sidebar is its own scroll container with a
  *   fixed bottom meta dock; zero bare hex/rgb in the panel CSS;
+ * - T4 theme audit (spec panel-zones §7): EVERY color-family declaration is a
+ *   --dsw-* token (no bare color of any form), spacing/font ride the
+ *   --mstar-space-* / --dsw-font-xxxs-11..xs-13 ramps, hover feedback sits in
+ *   120–150ms (state switches ≤200ms), `prefers-reduced-motion` kills all
+ *   transitions/animations, and the panel CSS carries no theme-specific color
+ *   overrides (dark mode = host token flip);
  * - empty states: no catalog row (waiting), no harness, no gate — distinct
  *   hints, never a crash, never guessed values;
  * - partial source degradation: missing version/enforcement → `unknown`;
@@ -591,6 +597,99 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html).toContain('data-mstar-graph')
     expect(html).toContain('data-graph-canvas')
     expect(html).toContain('data-graph-nodes-draggable="false"')
+  })
+})
+
+describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, reduced-motion (spec panel-zones §7)', () => {
+  const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
+
+  /** Strip comments; collect the VALUE of every declaration on the given property set. */
+  function declValues(propertyRe: RegExp): string[] {
+    const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
+    const values: string[] = []
+    for (const m of stripped.matchAll(propertyRe)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      values.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    return values
+  }
+
+  it('every color-family declaration is a --dsw-* token — zero bare colors of ANY form (spec §7)', () => {
+    // Full-file scan, not spot checks: color / background / border(-side)
+    // declarations must all resolve through var(--dsw-alias-*|--dsw-static-*).
+    const colorRe = /\b(?:color|background(?:-color)?|border(?:-(?:top|right|bottom|left))?(?:-color)?)\s*:/g
+    const colors = declValues(colorRe)
+    expect(colors.length).toBeGreaterThan(0)
+    for (const value of colors) {
+      if (value === '0' || value === 'none') continue // structural border reset, not a color
+      expect(value).toMatch(/var\(--dsw-(?:alias|static)-/)
+    }
+    // Zero bare colors of any form: hex, rgb/rgba, hsl/hsla, hwb, lab, lch, color().
+    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(/)
+  })
+
+  it('spacing rides the --mstar-space-1..6 ramp — no bare px gaps/paddings/margins (spec §7)', () => {
+    const spacingRe = /\b(?:gap|padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?)\s*:/g
+    const spacing = declValues(spacingRe)
+    expect(spacing.length).toBeGreaterThan(0)
+    for (const value of spacing) {
+      if (value === '' || /^0(\s+0)*$/.test(value)) continue // zero reset
+      expect(value).toMatch(/var\(--mstar-space-/)
+    }
+    // The ramp itself is the spec §1.2 hard metrics (4/8/12/16/24/32px).
+    const ramp: ReadonlyArray<readonly [number, string]> = [
+      [1, '4px'], [2, '8px'], [3, '12px'], [4, '16px'], [5, '24px'], [6, '32px'],
+    ]
+    for (const [n, px] of ramp) {
+      expect(cssText).toContain(`--mstar-space-${n}: ${px}`)
+    }
+  })
+
+  it('font sizes ride the --dsw-font-xxxs-11 / xxs-12 / xs-13 ramp (spec §7)', () => {
+    const fonts = declValues(/\bfont\s*:/g)
+    expect(fonts.length).toBeGreaterThan(0)
+    for (const value of fonts) {
+      expect(value).toMatch(/var\(--dsw-font-(?:xxxs-11|xxs-12|xs-13)\)/)
+    }
+  })
+
+  it('hover feedback is 120–150ms, state switches ≤200ms — every transition duration in window (spec §7)', () => {
+    const transitions = [...cssText.matchAll(/transition:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
+    expect(transitions.length).toBeGreaterThan(0)
+    for (const t of transitions) {
+      if (/^none/.test(t)) continue // reduced-motion kill switch
+      const durations = [...t.matchAll(/(\d+)ms/g)].map((m) => Number(m[1]!))
+      expect(durations.length).toBeGreaterThan(0)
+      for (const d of durations) {
+        expect(d).toBeGreaterThanOrEqual(120)
+        expect(d).toBeLessThanOrEqual(200)
+      }
+    }
+    // At least one hover-affordance transition sits in the 120–150ms window.
+    expect(cssText).toMatch(/transition:\s*[^;]*\b1[2-5]0ms/)
+  })
+
+  it('prefers-reduced-motion disables every transition and animation (spec §1.2/§7)', () => {
+    expect(cssText).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)
+    expect(cssText).toMatch(/transition:\s*none\s*!important/)
+    expect(cssText).toMatch(/animation:\s*none\s*!important/)
+  })
+
+  it('section titles are uppercase + letter-spaced; chip radius is unified (spec §7)', () => {
+    expect(cssText).toMatch(/\.sectionTitle\s*\{[\s\S]*?text-transform:\s*uppercase/)
+    expect(cssText).toMatch(/\.sectionTitle\s*\{[\s\S]*?letter-spacing:\s*0\.03em/)
+    expect(cssText).toMatch(/\.subTitle\s*\{[\s\S]*?text-transform:\s*uppercase/)
+    const radii = [...cssText.matchAll(/border-radius:\s*([^;]+)/g)].map((m) => m[1]!.trim())
+    expect(radii.length).toBeGreaterThan(0)
+    for (const r of radii) expect(['999px', '8px']).toContain(r)
+  })
+
+  it('dark mode is a host token flip — no theme-specific color overrides in the panel CSS (spec §7)', () => {
+    // The panel carries zero colors of its own, so `body[data-ds-dark-theme]`
+    // readability comes from the host's token values — a `data-ds-dark-theme`
+    // selector with a hard-coded override in the panel CSS would be a leak.
+    expect(cssText).not.toContain('data-ds-dark-theme')
   })
 })
 
