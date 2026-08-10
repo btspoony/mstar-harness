@@ -5,9 +5,13 @@
  *
  * Coverage:
  * - full fixture (iteration + state + freshness): every section renders —
- *   watermark line, iteration phase/transition/gate verdict + violation
- *   codes, plan status board, residual counts, branch/policy/lease anchors,
- *   knowledge digest, direction one-liner, last-updated marker;
+ *   the sidebar meta dock (version/harness, header removed), iteration
+ *   phase/transition/gate verdict + violation codes, plan status board,
+ *   residual counts, branch/policy/lease anchors, knowledge digest,
+ *   direction one-liner, last-updated marker;
+ * - full-tab layout (spec panel-zones §2): root fills the Tab without page
+ *   scroll (`overflow: hidden`), sidebar is its own scroll container with a
+ *   fixed bottom meta dock; zero bare hex/rgb in the panel CSS;
  * - empty states: no catalog row (waiting), no harness, no gate — distinct
  *   hints, never a crash, never guessed values;
  * - partial source degradation: missing version/enforcement → `unknown`;
@@ -258,11 +262,14 @@ function panelHtml(
 describe('workflow panel — full fixture renders every section (spec §2)', () => {
   const html = panelHtml(fullSource)
 
-  it('renders the watermark line (version / harness dir / enforcement)', () => {
+  it('renders the sidebar meta dock (version / harness dir, watermark preserved)', () => {
+    expect(html).toContain('data-mstar-meta')
+    expect(html).toContain('data-mstar-meta-version')
+    expect(html).toContain('data-mstar-meta-harness')
+    // `data-mstar-watermark` moved here from the removed header (anchor lineage).
     expect(html).toContain('data-mstar-watermark')
     expect(html).toContain('mstar 2.0.4')
     expect(html).toContain('harness: /proj/.mstar')
-    expect(html).toContain('enforcement: hard (iteration compass)')
   })
 
   it('renders the graph region with the iteration gate folded into the graph + footer (T2)', () => {
@@ -326,11 +333,14 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('Waiting for the first engine-status catalog')
   })
 
-  it('no harness (harnessDir null + state null + no iteration) → no-harness hint + watermark none', () => {
+  it('no harness (harnessDir null + state null + no iteration) → no-harness hint + freshness, no meta dock', () => {
     const html = panelHtml(noHarnessSource)
     expect(html).toContain('data-mstar-panel="no-harness"')
     expect(html).toContain('No Morning Star harness detected')
-    expect(html).toContain('harness: none')
+    expect(html).toContain('data-mstar-freshness')
+    // No sidebar / meta dock in the no-harness branch (hint + freshness only).
+    expect(html).not.toContain('data-mstar-meta')
+    expect(html).not.toContain('data-mstar-sidebar')
   })
 
   it('no gate (harness present, iteration key absent) → graph renders schema skeleton + no-compass note, state still renders', () => {
@@ -359,10 +369,9 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-mstar-section="state"')
   })
 
-  it('missing version / enforcement degrade to unknown, no guessed values', () => {
+  it('missing version degrades the meta dock to unknown, no guessed values', () => {
     const html = panelHtml(degradedSource)
     expect(html).toContain('mstar unknown')
-    expect(html).toContain('enforcement: unknown')
   })
 
   it('partial state (null direction, empty lists) renders without crashing', () => {
@@ -516,44 +525,54 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
   })
 })
 
-describe('workflow panel — T1 layout: header / sidebar / main grid (spec panel-layout-graph §1)', () => {
+describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab (spec panel-zones §2)', () => {
   const html = panelHtml(fullSource)
 
-  it('header renders version / harness dir / enforcement as three evenly-spread cells', () => {
-    expect(html).toContain('data-mstar-header')
-    const cells = [...html.matchAll(/data-mstar-header-cell="([^"]+)"/g)].map((m) => m[1]!)
-    expect(cells).toEqual(['version', 'harness', 'enforcement'])
-    // Caption label (uppercased via CSS) + value per cell.
-    expect(html).toContain('>version<')
-    expect(html).toContain('>harness<')
-    expect(html).toContain('>enforcement<')
+  it('the sidebar meta dock renders version + harness dir (header removed)', () => {
+    // The old 3-cell header is gone; version/harness live in the sidebar bottom dock.
+    expect(html).not.toContain('data-mstar-header')
+    expect(html).not.toContain('data-mstar-header-cell')
+    expect(html).toContain('data-mstar-meta')
+    expect(html).toContain('data-mstar-meta-version')
+    expect(html).toContain('data-mstar-meta-harness')
     expect(html).toContain('mstar 2.0.4')
     expect(html).toContain('harness: /proj/.mstar')
-    expect(html).toContain('enforcement: hard (iteration compass)')
   })
 
-  it('root + header CSS pin the hard grid metrics (even spread, 300px sidebar, <860px stack, ramp spacing, zero bare hex)', () => {
+  it('root + sidebar CSS pin the full-tab layout (no page scroll, 300px sidebar, internal sidebar scroll, zero bare hex)', () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
-    expect(cssText).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))')
+    // Root fills the Tab and never scrolls — main is the only overflow scroll source.
     expect(cssText).toContain('grid-template-columns: minmax(0, 1fr) 300px')
-    expect(cssText).toMatch(/grid-template-areas:\s*'header header'\s*'main\s+sidebar'/)
+    expect(cssText).toMatch(/grid-template-areas:\s*'main sidebar'/)
+    expect(cssText).toContain('height: 100%')
+    expect(cssText).toContain('min-height: 0')
+    expect(cssText).toContain('overflow: hidden')
+    expect(cssText).toContain('overflow: auto')
     expect(cssText).toMatch(/@media \(max-width: 860px\)/)
+    // Sidebar is its own scroll container (digest region), not the page.
+    expect(cssText).toContain('overflow-y: auto')
+    expect(cssText).toContain('flex: 1')
     // Spacing ramp tokens defined at the panel root (spec §1.2).
     expect(cssText).toMatch(/--mstar-space-[1-6]:\s*\d+px/)
     // Theming is dsw-token driven only — no bare hex (dark mode = token value flip).
     expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(cssText).not.toMatch(/rgb\(|rgba\(/)
   })
 
-  it('sidebar renders the plans / residuals / knowledge / leases status areas', () => {
+  it('sidebar renders the plans / residuals / knowledge / leases status areas + the fixed meta dock', () => {
     expect(html).toContain('data-mstar-sidebar')
+    expect(html).toContain('data-mstar-sidebar-scroll')
     expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
     expect(html).toContain('data-residual-severity="high"')
     expect(html).toContain('data-knowledge-docs="3"')
     expect(html).toContain('data-lease-plan="20260809-dsh-workflow-viz-panel"')
-    // The state digest content lives INSIDE the sidebar region (data-plan-id also
-    // appears earlier in the graph node plan rows, so order is pinned against the
-    // sidebar's own state section marker).
+    // The digest content lives INSIDE the sidebar scroll region; the meta dock
+    // follows it (data-plan-id also appears earlier in the graph node plan rows,
+    // so order is pinned against the sidebar's own state section marker).
     expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-section="state"'))
+    expect(html.indexOf('data-mstar-section="state"')).toBeLessThan(html.indexOf('data-mstar-meta'))
+    // The meta dock renders inside the sidebar (watermark lineage preserved).
+    expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-watermark'))
   })
 
   it('main area renders the react-flow graph canvas inside the graph region (T2 fills the graph)', () => {
@@ -573,11 +592,18 @@ describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflo
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
-  it('zh body renders localized header captions and the graph phase labels', () => {
+  it('zh body renders the meta dock + graph phase labels (header captions removed)', () => {
     const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
-    expect(zhHtml).toContain('版本')
-    expect(zhHtml).toContain('harness 目录')
-    expect(zhHtml).toContain('执行策略')
+    // zh/en dual-locale coverage of the meta dock: anchors + watermark values
+    // (zh `watermark.*` values are identical to en — both render from the dock).
+    expect(zhHtml).toContain('data-mstar-meta-version')
+    expect(zhHtml).toContain('data-mstar-meta-harness')
+    expect(zhHtml).toContain('mstar 2.0.4')
+    expect(zhHtml).toContain('harness: /proj/.mstar')
+    // The deleted header captions must not leak into the zh body.
+    expect(zhHtml).not.toContain('版本')
+    expect(zhHtml).not.toContain('harness 目录')
+    expect(zhHtml).not.toContain('执行策略')
     expect(zhHtml).toContain('自主执行')
     expect(zhHtml).toContain('迭代收口')
   })
@@ -700,8 +726,8 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
     return m === null ? null : m[1]!
   }
 
-  it('graph, header and sidebar all render from the SAME catalog row (single source of truth)', () => {
-    // Header watermark = source.version / harnessDir / enforcement.
+  it('graph, meta dock and sidebar all render from the SAME catalog row (single source of truth)', () => {
+    // Meta dock watermark = source.version / harnessDir (was the header).
     expect(html).toContain('mstar 2.0.4')
     expect(html).toContain('harness: /proj/.mstar')
     // Sidebar plan board rows = state.plans verbatim.
@@ -801,16 +827,16 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
     expect(after).toContain('data-violation-code="EXIT-9"')
   })
 
-  it('missing / garbage fields degrade the WHOLE panel (header + graph + sidebar) without crashing', () => {
+  it('missing / garbage fields degrade the WHOLE panel (meta dock + graph + sidebar) without crashing', () => {
     const noIteration = panelHtml({ ...fullSource, iteration: undefined } as unknown as MstarEngineStatusSource)
-    expect(noIteration).toContain('data-mstar-header')
+    expect(noIteration).toContain('data-mstar-meta')
     expect(noIteration).toContain('data-graph-canvas')
     expect(noIteration).toContain('data-graph-empty="no-compass"')
     expect(noIteration).toContain('data-mstar-sidebar')
     expect(noIteration).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
 
     const garbageIteration = panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusSource)
-    expect(garbageIteration).toContain('data-mstar-header')
+    expect(garbageIteration).toContain('data-mstar-meta')
     expect(garbageIteration).toContain('data-graph-canvas')
     expect(garbageIteration).toContain('data-graph-empty="no-compass"')
     expect(garbageIteration).toContain('data-mstar-section="state"')

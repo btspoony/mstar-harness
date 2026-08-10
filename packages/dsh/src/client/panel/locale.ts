@@ -24,14 +24,8 @@ export type PanelKey =
   | 'view.mstar-workflow'
   | 'empty.waiting'
   | 'empty.no-harness'
-  | 'header.version'
-  | 'header.harness'
-  | 'header.enforcement'
   | 'watermark.version'
   | 'watermark.harness'
-  | 'watermark.enforcement'
-  | 'watermark.hard'
-  | 'watermark.soft'
   | 'watermark.none'
   | 'panel.unknown'
   | 'graph.phase.iteration-start'
@@ -109,14 +103,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar 工作流',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
-  'header.version': '版本',
-  'header.harness': 'harness 目录',
-  'header.enforcement': '执行策略',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
-  'watermark.enforcement': 'enforcement: {value}',
-  'watermark.hard': 'hard',
-  'watermark.soft': 'soft',
   'watermark.none': '无',
   'panel.unknown': '未知',
   'graph.phase.iteration-start': '迭代启动',
@@ -189,14 +177,8 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar Workflow',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
-  'header.version': 'version',
-  'header.harness': 'harness',
-  'header.enforcement': 'enforcement',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
-  'watermark.enforcement': 'enforcement: {value}',
-  'watermark.hard': 'hard',
-  'watermark.soft': 'soft',
   'watermark.none': 'none',
   'panel.unknown': 'unknown',
   'graph.phase.iteration-start': 'Iteration Start',
