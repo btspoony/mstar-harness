@@ -182,7 +182,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     })
     const text = textOf(row)
     expect(text).toContain('<mstar_engine_status>')
-    expect(text).toContain('mstar version: 2.0.5')
+    expect(text).toContain('mstar version: 2.0.6')
     expect(text).toContain('harness dir:')
     expect(text).toContain('iteration: v2.2.0')
     expect(text).toContain('gate: PASS')

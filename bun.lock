@@ -13,7 +13,7 @@
     },
     "packages/cli": {
       "name": "@mstar-harness/cli",
-      "version": "2.0.5",
+      "version": "2.0.6",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
       },
@@ -26,7 +26,7 @@
     },
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
-      "version": "2.0.4",
+      "version": "2.0.6",
       "devDependencies": {
         "@cordisjs/plugin-include": "1.0.4",
         "@cordisjs/plugin-loader": "1.0.0-rc.5",
@@ -38,7 +38,7 @@
         "@deepseek-ai/dsh-skill": "^0.0.1",
         "@deepseek-ai/dsh-skill-local": "^0.0.1",
         "@deepseek-ai/dsh-tools": "^0.0.1",
-        "@mstar-harness/engine": "2.0.5",
+        "@mstar-harness/engine": "2.0.6",
         "@types/node": "^25.6.0",
         "@types/react": "~18.3.1",
         "@xyflow/react": "^12.11.2",
@@ -112,7 +112,7 @@
     },
     "packages/engine": {
       "name": "@mstar-harness/engine",
-      "version": "2.0.5",
+      "version": "2.0.6",
       "devDependencies": {
         "@types/node": "^25.6.0",
         "bun-types": "^1.2.17",
@@ -121,7 +121,7 @@
     },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
-      "version": "2.0.5",
+      "version": "2.0.6",
       "dependencies": {
         "@mstar-harness/engine": "1.8.8",
         "@opencode-ai/plugin": "1.4.8",

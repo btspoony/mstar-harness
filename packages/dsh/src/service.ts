@@ -119,7 +119,7 @@ export class DshMstar extends Service {
   }
 
   /**
-   * Read the harness version (single-version invariant — 2.0.5).
+   * Read the harness version (single-version invariant — 2.0.6).
    * @returns the version string of the bundled/workspace engine manifest.
    */
   readHarnessVersion(): string {
