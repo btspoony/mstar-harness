@@ -2,7 +2,7 @@
 
 > **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and the host reference + this bridge. When plan management is required, also read **`mstar-plan-conventions`** and **`mstar-plan-artifacts`** before creating or claiming any durable plan state. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-plan-conventions`. On conflict, **`mstar-harness-core`** wins.
 
-Each per-host bridge (`cursor-plan-mode-bridge.md`, `codex-plan-goal-mode-bridge.md`, `kimi-plan-mode-bridge.md`, `zcode-plan-mode-bridge.md`, `omp-plan-mode-bridge.md`) loads this core and adds its host-specific plan UX (plan tooling, approval gate, todo UI, command surfaces).
+Each per-host bridge (`cursor-plan-mode-bridge.md`, `kimi-plan-mode-bridge.md`, `zcode-plan-mode-bridge.md`, `omp-plan-mode-bridge.md`) loads this core and adds its host-specific plan UX (plan tooling, approval gate, todo UI, command surfaces). Codex Plan Mode reads this core directly via `references/codex.md` (no per-host codex plan bridge; the `/goal` rule is host-agnostic in `mstar-host` SKILL.md).
 
 ## Dual-write SSOT rule
 
