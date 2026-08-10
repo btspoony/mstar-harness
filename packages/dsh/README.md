@@ -149,19 +149,41 @@ bundle at `/plugins/@mstar-harness/dsh/client.js` and loads it through the
 closure-factory loader handoff (`window.__ModuleLoader__.load({ id, factory })`).
 
 The client entry registers a **`conversation.view`** view-ring tab
-(`id: 'mstar-workflow'`, `order: 20` — the trajectory precedent shape) that
-renders the latest `mstar-engine-status` catalog row from the session log
-(spec §2/§5): the watermark line (version / harness dir / enforcement), the
-**iteration phase-gate section** (transition, all-plans-done, gate verdict +
-violation codes, status/compass anchors), the **workspace-state section**
-(plan board, residual counts, branch/policy anchors, active leases, knowledge
-digest, direction one-liner), and the freshness marker (`last-updated
-HH:MM:SS` + the catalog-re-emission refresh note). Refresh = conversation
-snapshot subscription (`useSession`): a new catalog row bumps the snapshot
-and the panel re-renders — no polling, no manual refresh. Empty states
-degrade explicitly (waiting for the first catalog row / no harness / no
-gate); with no active session the strict-session view ring is not mounted
-(shell hero) — spec §3.
+(`id: 'mstar-workflow'`, `order: 20` — the trajectory precedent shape), labeled
+**"MStar Workflow"** (en) / **"MStar 工作流"** (zh) through the `mstar-panel`
+locale namespace. The panel is the **MStar Workflow layout**: a header with
+three evenly-spread basics (version / harness dir / enforcement), a fixed
+300px right sidebar for routine state (plans / residuals / knowledge / leases
+/ branches+policy / direction), a **react-flow cyclic workflow graph** as the
+main body, and a freshness footer (`last-updated HH:MM:SS` + the
+catalog-re-emission refresh note). Below 860px the sidebar stacks under the
+main area.
+
+The graph is a pure render of the latest `mstar-engine-status` catalog row
+(from the `useSession` snapshot — refresh follows the snapshot, no polling): a
+**phase ring** (iteration-start → autonomous-execute → iteration-close →
+pr-delivery → merge-ready, with a loop edge back to start) and a **plan state
+machine** (Todo → InProgress → InReview → Done / InProgress ⇄ Blocked /
+unknown bucket), with the current phase highlighted (color + glow + verdict
+badge — colorblind-safe triple encoding) and a dotted connector to the
+focused plan bucket; a legend, the gate verdict/violation footer, zoom/pan and
+fitView are included. Projection is the pure `projectGraph(source)` function
+(schema constants strictly separated from catalog evidence; never throws;
+missing fields degrade to explicit empty/last-known states, never guessed
+values) producing a data-only `GraphView`; `GraphCanvas` maps it onto
+`@xyflow/react` nodes/edges (static layout table, `nodesDraggable={false}`).
+
+**Dependency**: `@xyflow/react@^12.11.2` is a **devDependency inlined into
+`dist/client.js` at build time** (MIT; transitive `@xyflow/system` / `zustand`
+/ `classcat` all MIT; peer `react >= 17` matches the repo's React 18) —
+`CLIENT_EXTERNALS` is unchanged (the loader module table has no xyflow entry,
+so externalizing would 404). The build script asserts the inline: the bundle
+carries the xyflow markers, zero `@deepseek-ai/*` value imports, and **no
+`import.meta` / ESM statements** — the web loader executes plugin bundles as
+classic `<script>`s, where a literal `import.meta` is a parse-time
+SyntaxError (a zustand v4 `import.meta.env` read is defined away at build;
+see the iteration install-verification guide §6). Bundle size recorded in the
+iteration guide: 438,954 B raw / 94,150 B gzip.
 
 Install / verify (the client half rides the same bundle-row install as the
 server half):
@@ -178,17 +200,19 @@ Verified locally (install-verification guide): the boot graph contains the
 client entry (`@mstar-harness/dsh` with the declared inject faces), the
 `/plugins/<id>/client.js` route serves the exact built bundle (rev = content
 sha1), and the browser handoff materializes the plugin entry (`inject` +
-`apply` + CSS injection) — see
-`.mstar/iterations/iter-20260809-dsh-workflow-viz/guides/install-verification.md`.
+`apply` + CSS injection under classic-script semantics) — see
+`.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
 
-**Known Limitations** (this iteration): the panel is a **structured segmented
-presentation** of the catalog (watermark + gate + state sections) — the
-**graphical workflow canvas (react-flow DAG) is NEXT-iteration scope**
-(compass Roadmap Position), deliberately not introduced here; no historical
-back-scan of a resumed long log (the server re-emits the row at every turn's
-first step, digest-gated); no custom top-level slot (the `conversation.view`
-tab is the only session-level panel seat available without dsh-private
-layout changes — spec §1).
+**Known Limitations** (this iteration): the graph's Phase 1 (iteration-start)
+and Phase 5 (merge-ready) nodes are **schema-only — the engine phase gate
+never emits their transitions** (it evaluates Phase 2→3→4), so they always
+render unlit; the loop edge is planning semantics (one iteration closes, the
+next opens); no historical back-scan of a resumed long log (the server
+re-emits the row at every turn's first step, digest-gated); no custom
+top-level slot (the `conversation.view` tab is the only session-level panel
+seat available without dsh-private layout changes — spec §1). Browser UI
+observation is the user-restart acceptance (R1 folded into this iteration's
+AC-1/2) — rerun steps in the install-verification guide §8.
 
 ## Development
 
@@ -241,4 +265,4 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming.
 - **Entry `src/index.ts` stays monolithic** — the module-split is deferred: the 2600+ line entry ships as-is because a split at this point would destabilize a reviewed, fully-tested surface for zero behavioral gain; the split remains a follow-up.
 - **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root / `references/dsh.md`) updates with it.
-- **Workflow panel is structured-segmented (this iteration)** — the dsh web client plugin renders the `mstar-engine-status` catalog as a structured panel (watermark / iteration gate / workspace state); the graphical workflow canvas (react-flow DAG) is the NEXT iteration scope (compass Roadmap Position) — no react-flow dependency or panel render-shape change lands here.
+- **Workflow panel graph is schema-driven for phases 1/5** — the react-flow loop graph renders the phase ring + plan state machine from `mstar-engine-status` catalog evidence; the iteration-start / merge-ready nodes are schema constants the engine gate never lights (transition covers Phase 2→3→4 only), and the loop edge is planning semantics — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.

@@ -88,22 +88,37 @@ boot the web app serves the closure-factory CJS bundle at
 `window.__ModuleLoader__.load({ id, factory })`.
 
 The client entry registers a `conversation.view` view-ring tab
-(`id: 'mstar-workflow'`, `order: 20`) that renders the latest
-`mstar-engine-status` catalog row as a structured panel (watermark +
-iteration gate + workspace state + freshness). Build step: `bun run
+(`id: 'mstar-workflow'`, `order: 20`), labeled **"MStar 工作流" / "MStar
+Workflow"**, rendering the latest `mstar-engine-status` catalog row as the
+**MStar Workflow layout**: header (version / harness dir / enforcement evenly
+spread), right sidebar (plans / residuals / knowledge / leases /
+branches+policy / direction), and a **react-flow cyclic workflow graph** as
+the main body — phase ring (iteration-start → autonomous-execute →
+iteration-close → pr-delivery → merge-ready, loop edge) + plan state machine
+(Todo → InProgress → InReview → Done / InProgress ⇄ Blocked / unknown bucket)
+projected from the catalog by the pure `projectGraph` function (schema
+constants vs catalog evidence strictly separated; never throws; explicit
+degraded states), with current-phase highlight + legend + zoom/pan +
+freshness footer. Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
 CLIENT_EXTERNALS external, CSS modules hashed + `<style data-plugin>`
-injection, purity gate); the full `bun run build` runs it after the node
-half. Verified locally: boot graph entry, the `/plugins/<id>/client.js`
+injection, purity gate, `@xyflow/react` inlined, and inline assertions that
+the bundle carries the xyflow markers, zero `@deepseek-ai/*` value imports
+and no `import.meta` / ESM statements — the web loader executes plugin
+bundles as classic `<script>`s); the full `bun run build` runs it after the
+node half. Verified locally: boot graph entry, the `/plugins/<id>/client.js`
 route serving the exact built bundle, and the browser-handoff
-materialization (`inject`/`apply`/CSS injection) — see
-`.mstar/iterations/iter-20260809-dsh-workflow-viz/guides/install-verification.md`.
+materialization (`inject`/`apply`/CSS injection under classic-script
+semantics) — see
+`.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
 
-Known limitations (this iteration): the panel is a **structured segmented
-presentation** — the graphical workflow canvas (react-flow DAG) is the NEXT
-iteration scope (compass Roadmap Position); no historical back-scan of
-resumed long logs; no custom top-level slot (the `conversation.view` tab is
-the only session-level panel seat without dsh-private layout changes).
+Known limitations (this iteration): the graph's Phase 1 / Phase 5 nodes are
+**schema-only** — the engine phase gate never emits their transitions (it
+evaluates Phase 2→3→4), and the loop edge is planning semantics; no
+historical back-scan of resumed long logs; no custom top-level slot (the
+`conversation.view` tab is the only session-level panel seat without
+dsh-private layout changes). Browser UI observation is the user-restart
+acceptance (R1 folded into this iteration's AC-1/2).
 
 ## Known constraints
 

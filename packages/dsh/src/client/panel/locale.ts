@@ -4,6 +4,10 @@
  * merged into the ui-slots `LocaleNamespaceMap` so the framework synthesizes
  * a typed `t` seat for the panel component (dictionary keys are checked
  * against the union by `LocaleDictOf`).
+ *
+ * T2 (spec panel-layout-graph §4): the iteration/gate detail moved into the
+ * graph — the `iteration.*` keys were replaced by the `graph.*` family (phase
+ * ring labels, plan-state bucket labels, legend, verdicts, degraded notes).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -16,6 +20,9 @@ export type PanelKey =
   | 'view.mstar-workflow'
   | 'empty.waiting'
   | 'empty.no-harness'
+  | 'header.version'
+  | 'header.harness'
+  | 'header.enforcement'
   | 'watermark.version'
   | 'watermark.harness'
   | 'watermark.enforcement'
@@ -23,20 +30,38 @@ export type PanelKey =
   | 'watermark.soft'
   | 'watermark.none'
   | 'panel.unknown'
-  | 'iteration.title'
-  | 'iteration.id'
-  | 'iteration.transition'
-  | 'iteration.plans-done'
-  | 'iteration.gate'
-  | 'iteration.pass'
-  | 'iteration.fail'
-  | 'iteration.entry'
-  | 'iteration.exit'
-  | 'iteration.status-path'
-  | 'iteration.compass-path'
-  | 'iteration.violations'
-  | 'iteration.no-violations'
-  | 'iteration.no-compass'
+  | 'graph.phase.iteration-start'
+  | 'graph.phase.autonomous-execute'
+  | 'graph.phase.iteration-close'
+  | 'graph.phase.pr-delivery'
+  | 'graph.phase.merge-ready'
+  | 'graph.state.Todo'
+  | 'graph.state.InProgress'
+  | 'graph.state.InReview'
+  | 'graph.state.Done'
+  | 'graph.state.Blocked'
+  | 'graph.state.unknown'
+  | 'graph.legend.title'
+  | 'graph.legend.phases'
+  | 'graph.legend.plan-states'
+  | 'graph.legend.edge-forward'
+  | 'graph.legend.edge-loop'
+  | 'graph.legend.edge-connector'
+  | 'graph.legend.state-current'
+  | 'graph.legend.state-next'
+  | 'graph.legend.state-idle'
+  | 'graph.legend.verdict-pass'
+  | 'graph.legend.verdict-fail'
+  | 'graph.iteration-id'
+  | 'graph.current'
+  | 'graph.next'
+  | 'graph.pass'
+  | 'graph.fail'
+  | 'graph.violations'
+  | 'graph.no-violations'
+  | 'graph.no-compass'
+  | 'graph.no-plans'
+  | 'graph.no-state'
   | 'state.title'
   | 'state.plans'
   | 'state.residuals'
@@ -64,9 +89,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** zh dictionary (repo bilingual convention; zh is the stub fallback locale). */
 export const zh: LocaleDictOf<'mstar-panel'> = {
-  'view.mstar-workflow': '工作流',
+  'view.mstar-workflow': 'MStar 工作流',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
+  'header.version': '版本',
+  'header.harness': 'harness 目录',
+  'header.enforcement': '执行策略',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
   'watermark.enforcement': 'enforcement: {value}',
@@ -74,20 +102,38 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'watermark.soft': 'soft',
   'watermark.none': '无',
   'panel.unknown': '未知',
-  'iteration.title': '迭代',
-  'iteration.id': 'id',
-  'iteration.transition': 'transition',
-  'iteration.plans-done': 'all plans done',
-  'iteration.gate': 'gate',
-  'iteration.pass': 'PASS',
-  'iteration.fail': 'FAIL',
-  'iteration.entry': 'entry',
-  'iteration.exit': 'exit',
-  'iteration.status-path': 'status',
-  'iteration.compass-path': 'compass',
-  'iteration.violations': '违规 ({count})',
-  'iteration.no-violations': '无违规',
-  'iteration.no-compass': '无 steering compass / status.json',
+  'graph.phase.iteration-start': '迭代启动',
+  'graph.phase.autonomous-execute': '自主执行',
+  'graph.phase.iteration-close': '迭代收口',
+  'graph.phase.pr-delivery': 'PR 交付',
+  'graph.phase.merge-ready': '合并就绪',
+  'graph.state.Todo': '待办',
+  'graph.state.InProgress': '进行中',
+  'graph.state.InReview': '审查中',
+  'graph.state.Done': '完成',
+  'graph.state.Blocked': '受阻',
+  'graph.state.unknown': '未知',
+  'graph.legend.title': '图例',
+  'graph.legend.phases': '阶段环',
+  'graph.legend.plan-states': 'plan 状态机',
+  'graph.legend.edge-forward': '正向流转',
+  'graph.legend.edge-loop': '循环 —— 下一轮迭代',
+  'graph.legend.edge-connector': '当前阶段焦点',
+  'graph.legend.state-current': '当前阶段',
+  'graph.legend.state-next': '下一步',
+  'graph.legend.state-idle': '未点亮（schema）',
+  'graph.legend.verdict-pass': 'gate PASS',
+  'graph.legend.verdict-fail': 'gate FAIL',
+  'graph.iteration-id': '迭代',
+  'graph.current': '当前',
+  'graph.next': '下一步',
+  'graph.pass': 'PASS',
+  'graph.fail': 'FAIL',
+  'graph.violations': '违规 ({count})',
+  'graph.no-violations': '无违规',
+  'graph.no-compass': '无 steering compass / status.json',
+  'graph.no-plans': '无 plan 行（状态机骨架）',
+  'graph.no-state': '无工作区状态摘要',
   'state.title': '工作区状态',
   'state.plans': '计划',
   'state.residuals': '未决残留',
@@ -110,9 +156,12 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
 
 /** en dictionary (default locale). */
 export const en: LocaleDictOf<'mstar-panel'> = {
-  'view.mstar-workflow': 'Workflow',
+  'view.mstar-workflow': 'MStar Workflow',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
+  'header.version': 'version',
+  'header.harness': 'harness',
+  'header.enforcement': 'enforcement',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
   'watermark.enforcement': 'enforcement: {value}',
@@ -120,20 +169,38 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'watermark.soft': 'soft',
   'watermark.none': 'none',
   'panel.unknown': 'unknown',
-  'iteration.title': 'Iteration',
-  'iteration.id': 'id',
-  'iteration.transition': 'transition',
-  'iteration.plans-done': 'all plans done',
-  'iteration.gate': 'gate',
-  'iteration.pass': 'PASS',
-  'iteration.fail': 'FAIL',
-  'iteration.entry': 'entry',
-  'iteration.exit': 'exit',
-  'iteration.status-path': 'status',
-  'iteration.compass-path': 'compass',
-  'iteration.violations': 'violations ({count})',
-  'iteration.no-violations': 'no violations',
-  'iteration.no-compass': 'No steering compass / status.json',
+  'graph.phase.iteration-start': 'Iteration Start',
+  'graph.phase.autonomous-execute': 'Autonomous Execute',
+  'graph.phase.iteration-close': 'Iteration Close',
+  'graph.phase.pr-delivery': 'PR Delivery',
+  'graph.phase.merge-ready': 'Merge Ready',
+  'graph.state.Todo': 'Todo',
+  'graph.state.InProgress': 'In Progress',
+  'graph.state.InReview': 'In Review',
+  'graph.state.Done': 'Done',
+  'graph.state.Blocked': 'Blocked',
+  'graph.state.unknown': 'Unknown',
+  'graph.legend.title': 'Legend',
+  'graph.legend.phases': 'Phase ring',
+  'graph.legend.plan-states': 'Plan state machine',
+  'graph.legend.edge-forward': 'forward transition',
+  'graph.legend.edge-loop': 'loop — next iteration',
+  'graph.legend.edge-connector': 'current-phase focus',
+  'graph.legend.state-current': 'current phase',
+  'graph.legend.state-next': 'next phase',
+  'graph.legend.state-idle': 'unlit (schema)',
+  'graph.legend.verdict-pass': 'gate PASS',
+  'graph.legend.verdict-fail': 'gate FAIL',
+  'graph.iteration-id': 'iteration',
+  'graph.current': 'current',
+  'graph.next': 'next',
+  'graph.pass': 'PASS',
+  'graph.fail': 'FAIL',
+  'graph.violations': 'violations ({count})',
+  'graph.no-violations': 'no violations',
+  'graph.no-compass': 'No steering compass / status.json',
+  'graph.no-plans': 'no plan rows (state machine skeleton)',
+  'graph.no-state': 'no workspace state digest',
   'state.title': 'Workspace state',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
