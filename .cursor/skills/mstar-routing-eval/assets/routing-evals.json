@@ -957,6 +957,28 @@
         "parks unrelated fixable findings as residual alongside blocker defer",
         "assignment uses non-English field keys"
       ]
+    },
+    {
+      "id": "iteration-start-auto-continue-phase2",
+      "prompt": "iteration-start：Phase 1 已完成——grill-me 收敛了方向，compass 已 locked，integration branch 已 push。继续推进，不要等我再发指令",
+      "expected_route": [
+        "@project-manager",
+        "@fullstack-dev"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "Phase 2 boot (mstar-sdd, mstar-review-qc, mstar-branch-worktree, phase-2-worktree-lease)",
+        "continuous execution — Phase 1 lock then immediate Phase 2 dispatch without asking user to run /iteration-drive",
+        "SDD per-task implement dispatch (not inline whole-plan)",
+        "in-flight dispatch as turn closure (no confirmation question)"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "stops after Phase 1 and asks user to run /iteration-drive",
+        "ends turn with a confirmation question instead of dispatch",
+        "inline whole-plan dispatch instead of SDD per-task",
+        "assignment uses non-English field keys"
+      ]
     }
   ]
 }

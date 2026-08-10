@@ -11,9 +11,8 @@ Run a **full** Morning Star iteration with minimal human intervention. **Done = 
 **vs other commands:**
 
 | Command | Scope |
-|---------|--------|
-| `iteration-start` | Phase 1 only; **grill-me** with user |
-| `iteration-drive` | Phase 2→5 on an already locked iteration |
+| `iteration-start` | Phase 1 (**grill-me** with user) → **auto-continue** Phase 2→5（`pause` 止于 Phase 1） |
+| `iteration-drive` | Phase 2→5 re-entry / resume on an already locked iteration |
 | **`iteration-loop`** | Phase 1→5 end-to-end; **autonomous** direction lock |
 
 Phase gate SSOT → **`mstar-iteration`** §1–§5. This command is a **consumer**; it does not redefine skill semantics.

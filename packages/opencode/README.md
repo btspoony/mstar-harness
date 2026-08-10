@@ -46,7 +46,7 @@ The plugin registers a non-blocking `tool.execute.before` lint for the `task` to
 
 1. Install the plugin (above).
 2. In OpenCode, start with the **Project Manager** agent (`project-manager`).
-3. For a full iteration: run **`/iteration-start`** then **`/iteration-drive`**, or one-shot **`/iteration-loop`** (autonomous Phase 1→5).
+3. For a full iteration: run **`/iteration-start`** (Phase 1 grill-me → auto-continues Phase 2→5; add `pause` to stop after Phase 1), or one-shot **`/iteration-loop`** (autonomous Phase 1→5). Use **`/iteration-drive`** to resume an interrupted iteration.
 
 Entry skill: **`mstar-harness-core`** (loaded before other `mstar-*` skills).
 
