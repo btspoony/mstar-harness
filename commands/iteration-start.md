@@ -85,6 +85,8 @@ Scope **2–4** candidates targeting **product completeness**（default to defer
 
 **Direction lock mode: `interactive`**（`mstar-iteration` §1.2 默认；本命令不使用 `autonomous`）。
 
+This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md`. **Only this command step**（及 §P.3.5 deferred grill）references it — **do not** load it from `mstar-harness-core` or other `mstar-*` skills.
+
 **Before this step:** Read `skills/grill-me/SKILL.md`. Run **grill-me** to stress-test candidate directions with the user: walk through trade-offs, converge on a **single iteration direction** with shared understanding, document locked direction + success criteria + non-goals。**If `direction` arg given** — seed grill-me with it as the recommended direction (still interactive: user may correct/refine; the hint does **not** skip grill-me)。Confirm delivery branch policy（`iteration_base_branch`、`target_branch`）per **`mstar-iteration` §1.2** — **Do not default to `main` / `master` just because those names exist.**
 
 ## 4. Write Compass & Plans
