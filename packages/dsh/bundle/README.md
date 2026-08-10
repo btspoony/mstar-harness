@@ -90,16 +90,19 @@ boot the web app serves the closure-factory CJS bundle at
 The client entry registers a `conversation.view` view-ring tab
 (`id: 'mstar-workflow'`, `order: 20`), labeled **"MStar 工作流" / "MStar
 Workflow"**, rendering the latest `mstar-engine-status` catalog row as the
-**MStar Workflow layout**: header (version / harness dir / enforcement evenly
-spread), right sidebar (plans / residuals / knowledge / leases /
-branches+policy / direction), and a **react-flow cyclic workflow graph** as
-the main body — phase ring (iteration-start → autonomous-execute →
-iteration-close → pr-delivery → merge-ready, loop edge) + plan state machine
-(Todo → InProgress → InReview → Done / InProgress ⇄ Blocked / unknown bucket)
-projected from the catalog by the pure `projectGraph` function (schema
-constants vs catalog evidence strictly separated; never throws; explicit
-degraded states), with current-phase highlight + legend + zoom/pan +
-freshness footer. Build step: `bun run
+**MStar Workflow layout**: a right sidebar (plans ≤5 time-desc + `+N more`,
+open residual findings ≤10 with severity chips + overflow hint, policy with
+enforcement first, leases, knowledge, direction) over a bottom **fixed meta
+dock** (version + harness dir; the former header row was removed), and a
+**react-flow cyclic workflow graph** as the main body — phase ring
+(iteration-start → autonomous-execute → iteration-close → pr-delivery →
+merge-ready, loop edge) + plan state machine (Todo → InProgress → InReview →
+Done / InProgress ⇄ Blocked / unknown bucket) projected from the catalog by
+the pure `projectGraph` function (schema constants vs catalog evidence
+strictly separated; never throws; explicit degraded states), with
+current-phase highlight + legend + zoom/pan + freshness footer. The branches
+block left the sidebar (moved to the iteration zone by plan
+`20260810-panel-canvas-zones`). Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
 CLIENT_EXTERNALS external, CSS modules hashed + `<style data-plugin>`
 injection, purity gate, `@xyflow/react` inlined, and inline assertions that

@@ -1,0 +1,11 @@
+---
+category: Harness
+packages: root
+---
+
+- **dsh plugin**: the MStar workflow panel sidebar was reworked (info-layout direction #1) — the header row is gone, version + harness dir now live in a bottom **fixed meta dock** (small muted, does not scroll with the sidebar digest); the sidebar is capped and reordered (plans ≤5 in time-desc order + `+N more`, open residual findings ≤10 with severity chips + overflow hint, policy with **enforcement first** then push / worktree / control worktree, leases, knowledge, direction); the branches block moved out of the sidebar to the iteration zone (plan `20260810-panel-canvas-zones`). Catalog evidence: `HarnessPlanView.doneAt` (from `done_at`) and `MstarHarnessState.residualFindings` (open-lifecycle filtered, severity-ordered, capped at 10) — model-visible text stays compact.
+- **dsh plugin**: the sidebar/底栏 theme audit is locked in — every color-family declaration in `panel.module.css` resolves through a `--dsw-*` token (zero bare colors of any form, including CSS Color 4 `color()`), spacing rides the `--mstar-space-*` ramp, motion 120–200ms with `prefers-reduced-motion` off-switch; dark mode is the host's `body[data-ds-dark-theme]` token flip (no panel-side theme overrides). Verified by a browser harness run (light + dark computed-style probes on sidebar/底栏 background, text, border and status colors — 46 PASS / 0 FAIL, evidence in the iteration guide).
+
+<!-- CN -->
+- **dsh 插件**：MStar 工作流面板 sidebar 重构（信息布局方向 #1）——header 行移除，版本 + harness 目录迁至**底部 fixed 小面板**（小字号 muted、不随 sidebar digest 滚动）；sidebar 收口并重排（计划 ≤5 时间倒序 + `+N more`、未决残留 findings ≤10 带 severity chip + 溢出提示、策略区 **enforcement 首位** + push / worktree / control worktree、租约、知识、方向）；branches 区块移出 sidebar 迁入迭代区（plan `20260810-panel-canvas-zones`）。catalog 证据：`HarnessPlanView.doneAt`（读 `done_at`）与 `MstarHarnessState.residualFindings`（open 生命周期过滤、severity 排序、上限 10）——模型可见文本保持紧凑。
+- **dsh 插件**：sidebar/底栏主题审计固化——`panel.module.css` 全部 color-family 声明经 `--dsw-*` token 解析（零裸色任意形式，含 CSS Color 4 `color()`），间距走 `--mstar-space-*` ramp，动效 120–200ms 且 `prefers-reduced-motion` 关闭；暗色 = 宿主 `body[data-ds-dark-theme]` token 翻转（面板侧无主题覆盖）。已由浏览器 harness 实跑验证（light + dark 双主题计算样式探针覆盖 sidebar/底栏背景、文字、边框、状态色——46 PASS / 0 FAIL，证据见迭代 guide）。
