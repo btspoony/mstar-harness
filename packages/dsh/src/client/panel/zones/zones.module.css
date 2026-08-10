@@ -642,3 +642,174 @@
   font: var(--dsw-font-xxxs-11);
   font-weight: 600;
 }
+
+/* --- task board kanban (spec §3/§5/§7): 6 columns + count badges + plan
+   cards + dim inter-column flow arrows + Done-cap overflow hint + muted
+   no-plans empty state. Colors are --dsw-* tokens only (the unknown catch-all
+   column is muted NEUTRAL — deliberately NOT the warn/orange treatment);
+   spacing rides the --mstar-space-* ramp; hover feedback sits in the
+   120–150ms window (the panel root's reduced-motion rule kills all motion). --- */
+
+.tasksHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+.tasksTotal {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Horizontal 6-column row; the tasks zone is the flex center of the three-zone
+   grid, so the row scrolls internally when the zone is too narrow. */
+.kanban {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+}
+
+.kanbanColumn {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  min-width: 150px;
+  max-width: 200px;
+  padding: var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.kanbanColumn:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* unknown catch-all column (spec §3/§8): muted NEUTRAL — dimmed, dashed,
+   caption-colored. NOT the react-flow-era orange `stateUnknown` bucket. */
+[data-kanban-column='unknown'] {
+  border-style: dashed;
+  color: var(--dsw-alias-label-caption);
+  opacity: 0.7;
+}
+
+.kanbanColumnHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.kanbanColumnTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.kanbanCount {
+  flex: none;
+  min-width: 18px;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.kanbanCards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  padding: var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.planCard:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.planCardId {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status chip — the sidebar `data-status` coloring convention, shared
+   semantics (Done = success, InProgress = business, others neutral). */
+.planCardStatus {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  transition: color 150ms ease, border-color 150ms ease;   /* hover 120–150ms */
+}
+
+.planCardStatus[data-status='Done'] {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.planCardStatus[data-status='InProgress'] {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/* Dim inter-column flow arrow (spec §2.4): the chain → and the Blocked ⇄. */
+.kanbanArrow {
+  flex: none;
+  align-self: center;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+/* Done-cap overflow hint (spec §3): `+N more`, dashed placeholder. */
+.kanbanMore {
+  padding: var(--mstar-space-1) var(--mstar-space-2);
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+}

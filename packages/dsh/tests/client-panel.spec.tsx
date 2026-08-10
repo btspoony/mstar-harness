@@ -847,8 +847,14 @@ describe('workflow panel — T2 zone dashboard: three zones + fixed footer + cor
     expect(html).toContain('data-step="5"')
     expect(html).toContain('data-iteration-active="true"')
     expect(html).toContain('data-iteration-branches')
-    // tasks/agents keep their muted placeholders until Task 4 / plan 3.
-    expect(html).toContain('Task kanban pending')
+    // tasks renders the real kanban (Task 4): the board + 6 columns + counts
+    // + the fixture's cards; agents keeps its muted placeholder until plan 3.
+    expect(html).toContain('data-mstar-kanban')
+    expect(html).toContain('data-kanban-column="Todo"')
+    expect(html).toContain('data-kanban-column="unknown"')
+    expect(html).toContain('data-tasks-total="2"')
+    expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
+    expect(html).toContain('data-plan-status="InProgress"')
     // fullSource.agentFlow === null → agents zone shows the degraded muted note.
     expect(html).toContain('No agent-flow evidence (ledger missing)')
   })
@@ -887,20 +893,29 @@ describe('workflow panel — T2 zone dashboard: three zones + fixed footer + cor
     expect(g).not.toContain('data-graph-verdict="pass"')
   })
 
-  it('state null → tasks zone stays a muted frame; no no-state orange note (spec §8)', () => {
+  it('state null → tasks zone stays a muted 6-column skeleton; no no-state orange note (spec §8)', () => {
     const g = panelHtml({ ...fullSource, state: null })
     expect(g).toContain('data-mstar-canvas')
     expect(g).toContain('data-zone="tasks"')
+    // spec §8: state null → the same 6-column skeleton with count 0 + the
+    // muted `data-zone-empty="no-plans"` note — never an orange box.
+    expect(g.match(/data-kanban-column="/g)).toHaveLength(6)
+    expect(g.match(/data-kanban-count="0"/g)).toHaveLength(6)
+    expect(g).toContain('data-zone-empty="no-plans"')
+    expect(g).toContain('no plans')
     expect(g).not.toContain('data-graph-empty="no-state"')
   })
 
-  it('plans missing → same muted tasks frame; no no-plans orange note (spec §8)', () => {
+  it('plans missing → same muted tasks skeleton + no-plans note; no no-plans orange note (spec §8)', () => {
     const g = panelHtml({
       ...fullSource,
       state: { ...fullSource.state!, plans: undefined },
     } as unknown as MstarEngineStatusSource)
     expect(g).toContain('data-mstar-canvas')
     expect(g).toContain('data-zone="tasks"')
+    expect(g.match(/data-kanban-column="/g)).toHaveLength(6)
+    expect(g).toContain('data-zone-empty="no-plans"')
+    expect(g).toContain('no plans')
     expect(g).not.toContain('data-graph-empty="no-plans"')
   })
 
@@ -1351,5 +1366,192 @@ describe('workflow panel — T2 event dock: canvas-corner agent-flow events (spe
     expect(after).toContain('data-agent-event-count="3"')
     expect(after).toContain('plan-1#T2')
     expect(after).not.toContain('No agent-flow evidence (ledger missing)')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T4 task board kanban (spec panel-zones §3/§8): the 6 PLAN_STATE_IDS columns
+ * with localized headers + count badges, plan cards (data-plan-id /
+ * data-plan-status — the anchors shared with the sidebar), the dim inter-
+ * column flow arrows (chain + Blocked ⇄), the Done cap hint (the projection
+ * applied sortPlans + PLAN_CAP — the render surfaces the +N more), the muted
+ * no-plans empty state, and the unknown column's muted NEUTRAL (non-orange)
+ * treatment. The sort/cap assertions here are RENDER-layer only — the
+ * projection-side tests in client-graph-projection.spec.ts are independent
+ * (compass Risk Register).
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + arrows + Done cap + empty state (spec panel-zones §3/§8)', () => {
+  /** The tasks zone slice: from the zone frame to the agents zone frame. */
+  function tasksSlice(html: string): string {
+    const start = html.indexOf('data-zone="tasks"')
+    const end = html.indexOf('data-zone="agents"')
+    return start === -1 || end === -1 ? html : html.slice(start, end)
+  }
+
+  /** One column's slice: from its `data-kanban-column` anchor to the next one. */
+  function columnSlice(html: string, id: string): string {
+    const start = html.indexOf(`data-kanban-column="${id}"`)
+    const next = html.indexOf('data-kanban-column=', start + 1)
+    return start === -1 ? '' : next === -1 ? html.slice(start) : html.slice(start, next)
+  }
+
+  /** A plan-status spread covering every bucket (unknown = non-5-state status). */
+  const kanbanSource: MstarEngineStatusSource = {
+    ...fullSource,
+    state: {
+      ...fullSource.state!,
+      plans: [
+        { id: 'plan-todo-1', status: 'Todo', doneAt: null },
+        { id: 'plan-todo-2', status: 'Todo', doneAt: null },
+        { id: 'plan-ip-1', status: 'InProgress', doneAt: null },
+        { id: 'plan-ir-1', status: 'InReview', doneAt: null },
+        { id: 'plan-done-1', status: 'Done', doneAt: '2026-08-01' },
+        { id: 'plan-blocked-1', status: 'Blocked', doneAt: null },
+        { id: 'plan-weird-1', status: 'Paused', doneAt: null },
+      ],
+    },
+  }
+  const html = panelHtml(kanbanSource)
+
+  it('renders 6 columns in PLAN_STATE_IDS order with count badges and the total', () => {
+    expect(html).toContain('data-mstar-kanban')
+    const cols = [...html.matchAll(/data-kanban-column="([^"]+)"/g)].map((m) => m[1]!)
+    expect(cols).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'Blocked', 'unknown'])
+    // Header total (spec §3 — plan total across all columns, unknown included).
+    expect(html).toContain('data-tasks-total="7"')
+    expect(html).toContain('7 plans')
+    // Count badges: Todo 2, one plan in each other bucket.
+    expect(html).toContain('data-kanban-count="2"')
+    expect(html.match(/data-kanban-count="1"/g)).toHaveLength(5)
+  })
+
+  it('buckets plan cards into their columns: data-plan-id / data-plan-status (shared anchors)', () => {
+    const todo = columnSlice(html, 'Todo')
+    expect(todo).toContain('data-plan-id="plan-todo-1"')
+    expect(todo).toContain('data-plan-id="plan-todo-2"')
+    expect(todo).toContain('data-plan-status="Todo"')
+    expect(todo).not.toContain('data-plan-id="plan-ip-1"')
+    const ip = columnSlice(html, 'InProgress')
+    expect(ip).toContain('data-plan-id="plan-ip-1"')
+    expect(ip).toContain('data-plan-status="InProgress"')
+    expect(ip).not.toContain('data-plan-id="plan-todo-1"')
+    // The non-5-state status (Paused) lands in the unknown bucket (spec §3).
+    const unknown = columnSlice(html, 'unknown')
+    expect(unknown).toContain('data-plan-id="plan-weird-1"')
+    expect(unknown).toContain('data-plan-status="Paused"')
+  })
+
+  it('unknown column is muted NEUTRAL (spec §3) — never the warn/orange treatment', () => {
+    const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
+    const unknownRule = cssText.match(/\[data-kanban-column='unknown'\]\s*\{[\s\S]*?\}/)
+    expect(unknownRule).not.toBeNull()
+    // Muted neutral: caption-colored text + dimmed, dashed frame.
+    expect(unknownRule![0]).toContain('--dsw-alias-label-caption')
+    expect(unknownRule![0]).toContain('opacity')
+    // NOT orange: no warn/error/business state token in the unknown rule.
+    expect(unknownRule![0]).not.toMatch(/--dsw-alias-state-(?:warn|error|business)/)
+  })
+
+  it('renders the dim inter-column flow arrows: chain → + Blocked ⇄ (spec §2.4)', () => {
+    const k = tasksSlice(html)
+    expect(k.match(/data-kanban-arrow=/g)).toHaveLength(4)
+    expect(k).toContain('data-kanban-arrow="Todo-InProgress"')
+    expect(k).toContain('data-kanban-arrow="InProgress-InReview"')
+    expect(k).toContain('data-kanban-arrow="InReview-Done"')
+    expect(k).toContain('data-kanban-arrow="InProgress-Blocked"')
+    // The bidirectional glyph rides the Blocked back-edge.
+    expect(k).toContain('⇄')
+    // Arrows sit in the column gaps (chain: between the first four columns).
+    const pos = (s: string) => k.indexOf(s)
+    expect(pos('data-kanban-column="Todo"')).toBeLessThan(pos('data-kanban-arrow="Todo-InProgress"'))
+    expect(pos('data-kanban-arrow="Todo-InProgress"')).toBeLessThan(pos('data-kanban-column="InProgress"'))
+    expect(pos('data-kanban-column="InProgress"')).toBeLessThan(pos('data-kanban-arrow="InProgress-Blocked"'))
+    expect(pos('data-kanban-arrow="InProgress-Blocked"')).toBeLessThan(pos('data-kanban-column="Blocked"'))
+  })
+
+  it('Done cap 5: 7 Done plans → top-5 in plan-sort order + count 7 + +2 more hint (data-kanban-truncated)', () => {
+    const doneOverflow: MstarEngineStatusSource = {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: '20260807-plan', status: 'Done', doneAt: '2026-08-07' },
+          { id: '20260806-plan', status: 'Done', doneAt: '2026-08-06' },
+          { id: '20260805-plan', status: 'Done', doneAt: '2026-08-05' },
+          { id: '20260804-plan', status: 'Done', doneAt: '2026-08-04' },
+          { id: '20260803-plan', status: 'Done', doneAt: '2026-08-03' },
+          { id: '20260802-plan', status: 'Done', doneAt: '2026-08-02' },
+          { id: '20260801-plan', status: 'Done', doneAt: '2026-08-01' },
+        ],
+      },
+    }
+    const g = panelHtml(doneOverflow)
+    const done = columnSlice(g, 'Done')
+    // Full count on the badge, top PLAN_CAP cards rendered (spec §3).
+    expect(done).toContain('data-kanban-count="7"')
+    expect(done.match(/data-plan-id="/g)).toHaveLength(5)
+    // Plan-sort order (shared key, projection-side): doneAt digitized DESC.
+    expect(done.indexOf('data-plan-id="20260807-plan"')).toBeLessThan(done.indexOf('data-plan-id="20260806-plan"'))
+    expect(done.indexOf('data-plan-id="20260806-plan"')).toBeLessThan(done.indexOf('data-plan-id="20260803-plan"'))
+    // Overflow hint: the hidden count + the localized +N more wording.
+    expect(done).toContain('data-kanban-truncated="2"')
+    expect(done).toContain('+2 more')
+    expect(done).not.toContain('data-plan-id="20260802-plan"')
+    expect(done).not.toContain('data-plan-id="20260801-plan"')
+    // The projection-level assertions stay independent (Risk Register) — this
+    // pins the RENDER of the capped column only.
+  })
+
+  it('Done cap boundary: exactly 5 Done plans → no truncation hint', () => {
+    const five: MstarEngineStatusSource = {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: Array.from({ length: 5 }, (_, i) => ({
+          id: `2026080${i + 1}-plan`,
+          status: 'Done',
+          doneAt: `2026-08-0${i + 1}`,
+        })),
+      },
+    }
+    const done = columnSlice(panelHtml(five), 'Done')
+    expect(done.match(/data-plan-id="/g)).toHaveLength(5)
+    expect(done).not.toContain('data-kanban-truncated')
+    expect(done).not.toContain('+1 more')
+  })
+
+  it('non-Done columns are never sorted or capped — input order preserved (spec §3)', () => {
+    const unsorted: MstarEngineStatusSource = {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: 'plan-z', status: 'Todo', doneAt: null },
+          { id: 'plan-a', status: 'Todo', doneAt: null },
+          { id: 'plan-m', status: 'Todo', doneAt: null },
+        ],
+      },
+    }
+    const todo = columnSlice(panelHtml(unsorted), 'Todo')
+    // Input order (plan-z, plan-a, plan-m) — NOT the id lex DESC the Done
+    // column would apply.
+    expect(todo.indexOf('data-plan-id="plan-z"')).toBeLessThan(todo.indexOf('data-plan-id="plan-a"'))
+    expect(todo.indexOf('data-plan-id="plan-a"')).toBeLessThan(todo.indexOf('data-plan-id="plan-m"'))
+    expect(todo).not.toContain('data-kanban-truncated')
+  })
+
+  it('zh locale: localized column headers, total label and the muted no-plans note', () => {
+    const zhHtml = panelHtml(kanbanSource, undefined, undefined, 'zh')
+    const zhTasks = tasksSlice(zhHtml)
+    // Column headers ride the zone.state.* keys (en is the raw status word).
+    for (const label of ['待办', '进行中', '审查中', '已完成', '受阻', '未知']) {
+      expect(zhTasks).toContain(label)
+    }
+    expect(zhTasks).toContain('7 个计划')
+    // The empty note localizes too (state null → muted no-plans, spec §8).
+    const zhEmpty = panelHtml({ ...fullSource, state: null }, undefined, undefined, 'zh')
+    expect(tasksSlice(zhEmpty)).toContain('暂无计划')
+    expect(zhEmpty).toContain('data-zone-empty="no-plans"')
   })
 })
