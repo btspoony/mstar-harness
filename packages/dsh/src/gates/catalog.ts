@@ -39,7 +39,7 @@ import type {
   MstarIterationGateView,
 } from '../types.ts'
 import { STATUS_FILE, asRecord, sessionCwdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
-import { readAgentFlow } from './agent-flow.ts'
+import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
 const CATALOG_LOGGER = 'mstar/engine-status-catalog'
 
@@ -217,7 +217,13 @@ function renderAgentFlowLine(flow: AgentFlowView): string {
     : `${[latest.role, [latest.planId, latest.taskId !== null ? `#${latest.taskId}` : null]
         .filter((part): part is string => part !== null)
         .join('')].filter((part) => part !== '').join('→')} ${hhmm(latest.ts)}`
-  return `agent flow: ${flow.events.length} events; by role: ${roles}; latest: ${latestText}`
+  // Window-full marker (qc3 F-004 fix-wave): the read window caps at
+  // AGENT_FLOW_DEFAULT_LIMIT (50), so an events array AT the cap reads like
+  // a total — annotate it. The marker is approximate when the ledger holds
+  // exactly `limit` events (the window is full either way; distinguishing
+  // would need an extra full-ledger read the compact line must not do).
+  const windowFull = flow.events.length >= AGENT_FLOW_DEFAULT_LIMIT
+  return `agent flow: ${flow.events.length} events${windowFull ? ` (latest ${AGENT_FLOW_DEFAULT_LIMIT})` : ''}; by role: ${roles}; latest: ${latestText}`
 }
 
 /** Local HH:MM for a timestamp (the agent-flow line's time-of-day). */
@@ -309,10 +315,12 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
       direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
       // Actual subagent flow evidence — read on the same per-workspace cache
       // cycle as the sibling state rows (one bounded ledger read per TTL
-      // refresh; spec §2.2). Missing/unreadable ledger → null (advisory —
-      // the agent-flow line is simply absent). The state section as a whole
-      // is still gated on status.json (missing status → state null → agentFlow
-      // absent too — documented).
+      // refresh; spec §2.2). Fix-wave (qc1 F-001): a MISSING ledger reads as
+      // the EMPTY view (recording hasn't started — the panel shows the
+      // no-dispatches-yet empty state per the plan promise); only an
+      // UNREADABLE ledger → null (advisory — the agent-flow line is absent).
+      // The state section as a whole is still gated on status.json (missing
+      // status → state null → agentFlow absent too — documented).
       agentFlow: readAgentFlow(harnessDir, 50),
     }
   } catch {

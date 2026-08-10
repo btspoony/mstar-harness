@@ -9,18 +9,38 @@
  * core — the ONE validation path behind the `tools/pre-execute` listener
  * (exec-bound) and the host `beforeDispatch` hook (exec-less). Every
  * Assignment-shaped dispatch that reaches the gate records, INCLUDING hard
- * denies (verdict derivation below); non-Assignment delegation never reaches
- * the gate and stays silent. Recording is advisory: every record path is
- * try/catch-contained and logs only (`mstar/agent-flow`) — a failing ledger
- * never blocks a dispatch (documented degrade).
+ * denies (verdict derivation below). The shape guard (spec §2.1.1) now lives
+ * at the shared core itself, so non-Assignment text stays silent on BOTH
+ * surfaces (the listener's own guard plus the core's guard for the exec-less
+ * host-hook path) — no phantom records. Known tradeoff (qc1 F-005, accepted):
+ * the SAME logical dispatch that crosses BOTH surfaces (a host that calls
+ * `beforeDispatch` and then runs the identical text through an in-loop
+ * `subagent` tool call) records TWO dispatch events — the surfaces are
+ * designed mutually exclusive; the double record is documented, not
+ * deduplicated. Recording is advisory: every record path is try/catch-
+ * contained and logs only (`mstar/agent-flow`) — a failing ledger never
+ * blocks a dispatch (documented degrade).
  *
  * File / bounds (spec §2.1.3): `{HARNESS_DIR}/agent-flow.jsonl` (JSON Lines;
- * harness dirs are gitignored by convention). One event per line; after every
- * append the file is truncated to the most recent `AGENT_FLOW_MAX_EVENTS`
- * (500) lines (read-all → tail → overwrite — bounded small file).
+ * harness dirs are gitignored by convention). One event per line. SINGLE
+ * WRITER ASSUMPTION (qc2 F-1 / qc3 F-001 — documented, advisory): each
+ * harness dir is written by ONE dsh process (a single plugin instance /
+ * app). Concurrent writers (e.g. two dsh sessions on the same repo) can lose
+ * events: `appendFileSync` is a near-atomic O_APPEND write, but the
+ * size-gated truncation below is a read-modify-write. The loss is bounded to
+ * the panel under-reporting actual flow — NEVER a gate impact (recording is
+ * advisory). After every append the file is truncated to the most recent
+ * `AGENT_FLOW_MAX_EVENTS` (500) lines; to keep the common small-file path
+ * append-only, truncation is gated by a SIZE threshold (≈500 lines' typical
+ * size, `AGENT_FLOW_SIZE_GATE_BYTES`) and the truncating overwrite is an
+ * ATOMIC temp-file + `renameSync` replace (narrows the read-modify-write
+ * window to the single append step).
  * `readAgentFlow` returns the latest-first view (default limit 50) with a
- * role × outcome summary; missing/unreadable file → null; malformed lines are
- * skipped, never fatal.
+ * role × outcome summary. Semantics (fix-wave qc1 F-001): a MISSING ledger
+ * file → empty view `{ events: [], summary: [] }` (recording hasn't started
+ * — the panel shows the "no actual dispatches yet" empty state, per the plan
+ * promise); only an UNREADABLE file → null (evidence-missing degrade).
+ * Malformed lines are skipped, never fatal.
  *
  * Settle (spec §2.1.2 — Tier 2, best-effort): `tools/post-execute` is NOT
  * part of the verified dsh-tools consumer surface (the peer-stub declares
@@ -37,14 +57,14 @@
  * relative path; the public exports (`recordDispatch` / `recordSettle` /
  * `readAgentFlow` + constants + types) are re-exported verbatim by the entry.
  */
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Context } from 'cordis'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'
 import { asRecord, type HarnessResolver } from './_shared.ts'
-import { planIdOf, sessionIdOf } from './dispatch.ts'
+import { isNaValue, planIdOf, sessionIdOf } from './dispatch.ts'
 
 /** The agent-flow ledger file name under `{HARNESS_DIR}`. */
 export const AGENT_FLOW_FILE = 'agent-flow.jsonl'
@@ -52,6 +72,16 @@ export const AGENT_FLOW_FILE = 'agent-flow.jsonl'
 export const AGENT_FLOW_MAX_EVENTS = 500
 /** Default read limit (the catalog passes 50 per spec §2.2). */
 export const AGENT_FLOW_DEFAULT_LIMIT = 50
+/**
+ * The append size gate (qc2 F-1 / qc3 F-001/003 — fix-wave): the truncation
+ * read-modify-write runs only when the file exceeds ~500 lines' typical
+ * size (conservative ≈ 500 × 128 B average line); smaller files stay
+ * append-only. The bound is therefore approximate ("~500 events") — a file
+ * of unusually tiny events can grow past 500 lines under the gate until its
+ * BYTES cross the threshold (documented tradeoff; the gate keeps the common
+ * small-file append path free of a full read per dispatch).
+ */
+export const AGENT_FLOW_SIZE_GATE_BYTES = 64 * 1024
 /** Logger label for the agent-flow ledger (dsh logger naming: `<scope>/<subject>`). */
 export const AGENT_FLOW_LOGGER = 'mstar/agent-flow'
 /**
@@ -62,7 +92,8 @@ export const AGENT_FLOW_LOGGER = 'mstar/agent-flow'
 export const SETTLE_SEAM = 'tools/post-execute'
 /**
  * The human-readable settle-unavailable trace (spec §2.1.2 verification
- * gate): logged once when the defensive settle listener is registered and
+ * gate): logged ONCE per logger binding (≈ once per apply — a module-level
+ * flag, qc1 F-006) when the defensive settle listener is registered and
  * documented as the ledger's dispatch-only degrade. A host that emits
  * `tools/post-execute` upgrades the ledger to dispatch + settle; one that
  * never does leaves this trace as the visible confirmation.
@@ -113,10 +144,18 @@ export type AgentFlowEvent =
 /** Module-scoped log sink (bound to `mstar/agent-flow` by the entry at apply). */
 type AgentFlowLogSink = (level: 'info' | 'warn' | 'error', message: string) => void
 let logSink: AgentFlowLogSink | undefined
+/**
+ * Whether the settle-unavailable trace has been logged for the CURRENT sink
+ * binding (qc1 F-006: the ~300-char note is emitted at most once per apply,
+ * not on every registration).
+ */
+let settleNoteLogged = false
 
 /**
  * Bind the module's log sink (called once at apply; tests may rebind to
- * capture ledger logs).
+ * capture ledger logs). Rebinding RESETS the once-per-apply settle trace
+ * flag — each binding is a fresh "apply" (production binds once; tests bind
+ * per case for deterministic capture).
  * @param sink - the sink (entry binds `ctx.logger('mstar/agent-flow')`);
  * `undefined` clears the binding (restores the pre-bind no-op state).
  * @returns the PREVIOUS sink (tests restore it in a `finally`).
@@ -124,6 +163,7 @@ let logSink: AgentFlowLogSink | undefined
 export function setAgentFlowLogger(sink: AgentFlowLogSink | undefined): AgentFlowLogSink | undefined {
   const prior = logSink
   logSink = sink
+  settleNoteLogged = false
   return prior
 }
 
@@ -137,24 +177,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** A header value that means "no value" (placeholder conventions). */
-function isNaValue(value: string | undefined): value is undefined {
-  return value === undefined || /^(?:n\/?a|none)$/i.test(value)
-}
-
 /**
  * Best-effort extraction of the targeted `Task N` from the Assignment BODY
  * (spec §2.1.1 — `taskIdOf`). The engine `assignmentHeaderRegion` boundary is
  * reused: only text AFTER the header region is scanned, so a `## Task N`
- * example quoted in the header never resolves a task id. The FIRST numbered
- * task heading in the body wins (assignments target one task); normalized to
- * `T<n>` (matches the panel render `planId#taskId`, e.g. `20260810-x#T2`).
+ * example quoted in the header never resolves a task id. Only a LEVEL-2
+ * heading (`^## Task N`) matches (qc2 F-8: an example or sub-heading at
+ * another depth before the real task must not resolve — lower false-hit
+ * surface); normalized to `T<n>` (matches the panel render `planId#taskId`,
+ * e.g. `20260810-x#T2`).
  * @param prompt - the full Assignment text.
  */
 export function taskIdOf(prompt: string): string | undefined {
   const header = assignmentHeaderRegion(prompt)
   const body = prompt.slice(header.length)
-  const match = body.match(/^#{1,6}[ \t]+Task[ \t]+(\d+)\b[^\n]*$/m)
+  const match = body.match(/^##[ \t]+Task[ \t]+(\d+)\b[^\n]*$/m)
   if (match === null) return undefined
   return `T${match[1]!}`
 }
@@ -172,22 +209,33 @@ function verdictOf(violations: readonly unknown[], hard: boolean): DispatchVerdi
 }
 
 /**
- * Append one event to `{HARNESS_DIR}/agent-flow.jsonl` and truncate the file
- * to the most recent `AGENT_FLOW_MAX_EVENTS` lines (read-all → tail →
- * overwrite — the documented bounded-file tradeoff). May throw (fs) — callers
- * contain.
+ * Append one event to `{HARNESS_DIR}/agent-flow.jsonl` and keep the file
+ * bounded (spec §2.1.3 — fix-wave qc2 F-1 / qc3 F-001/003). Common path is
+ * append-ONLY: after the single `appendFileSync` (a near-atomic O_APPEND
+ * write), the file is `stat`-gated — below `AGENT_FLOW_SIZE_GATE_BYTES`
+ * (≈500 lines' typical size) the file is NOT re-read (no read-modify-write
+ * per dispatch). Only when the size crosses the gate is the file read and,
+ * if it holds more than `AGENT_FLOW_MAX_EVENTS` lines, truncated — and the
+ * truncating overwrite is an ATOMIC temp-file + `renameSync` replace (write
+ * `agent-flow.jsonl.tmp` → rename), so concurrent readers never observe a
+ * torn file and the cross-process loss window is narrowed to the single
+ * append step (see the module doc single-writer note). May throw (fs) —
+ * callers contain.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param event - the v1 event to record.
  */
 function appendEvent(harnessDir: string, event: AgentFlowEvent): void {
   const file = join(harnessDir, AGENT_FLOW_FILE)
   appendFileSync(file, `${JSON.stringify(event)}\n`)
+  if (statSync(file).size <= AGENT_FLOW_SIZE_GATE_BYTES) return
   // Truncate: keep only the most recent MAX lines (JSON Lines; a trailing
   // newline produces one empty tail element that must not count as a line).
   const content = readFileSync(file, 'utf8')
   const lines = content.replace(/\n$/, '').split('\n')
   if (lines.length > AGENT_FLOW_MAX_EVENTS) {
-    writeFileSync(file, `${lines.slice(-AGENT_FLOW_MAX_EVENTS).join('\n')}\n`)
+    const tmp = `${file}.tmp`
+    writeFileSync(tmp, `${lines.slice(-AGENT_FLOW_MAX_EVENTS).join('\n')}\n`)
+    renameSync(tmp, file)
   }
 }
 
@@ -343,23 +391,30 @@ function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
 }
 
 /**
- * Read the agent-flow ledger as the catalog view (spec §2.1.3): the latest
- * events first (bounded by `limit`, default 50) plus the role × outcome
- * summary over the SAME window (so `by role` counts sum to the event count).
- * Returns null when the file is missing or unreadable (advisory degrade —
- * the catalog renders no agent-flow line). Malformed lines are skipped, never
- * fatal.
+ * Read the agent-flow ledger as the catalog view (spec §2.1.3 — fix-wave
+ * qc1 F-001 / qc2 F-6): the latest events first (bounded by `limit`) plus
+ * the role × outcome summary over the SAME window (so `by role` counts sum
+ * to the event count). A MISSING ledger file returns the EMPTY view
+ * `{ events: [], summary: [] }` — recording hasn't started (it begins at
+ * plan merge), and the panel renders its "no actual dispatches yet" empty
+ * state instead of an evidence-missing degrade; only an UNREADABLE file
+ * returns null (advisory degrade — the catalog renders no agent-flow line).
+ * Malformed lines are skipped, never fatal.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
- * @param limit - view bound (default `AGENT_FLOW_DEFAULT_LIMIT`).
+ * @param limit - explicit window bound: `undefined` → `AGENT_FLOW_DEFAULT_LIMIT`;
+ * otherwise `Math.max(0, Math.floor(limit))` — `0` requests the EMPTY window.
  */
 export function readAgentFlow(harnessDir: string, limit?: number): AgentFlowView | null {
   const file = join(harnessDir, AGENT_FLOW_FILE)
-  if (!existsSync(file)) return null
+  if (!existsSync(file)) {
+    // Missing ledger = no records yet — the empty view, never a degrade.
+    return { events: [], summary: [] }
+  }
   let content: string
   try {
     content = readFileSync(file, 'utf8')
   } catch {
-    return null
+    return null // unreadable (EACCES / io error) — advisory degrade only
   }
   const events: AgentFlowEvent[] = []
   for (const line of content.split(/\r?\n/)) {
@@ -372,7 +427,9 @@ export function readAgentFlow(harnessDir: string, limit?: number): AgentFlowView
       continue // malformed line — skip, never crash the catalog
     }
   }
-  const n = typeof limit === 'number' && limit > 0 ? Math.floor(limit) : AGENT_FLOW_DEFAULT_LIMIT
+  // Explicit limit semantics (qc2 F-6): undefined → default; otherwise a
+  // non-negative floor — `0` → the empty window.
+  const n = limit === undefined ? AGENT_FLOW_DEFAULT_LIMIT : Math.max(0, Math.floor(limit))
   const latestFirst = events.reverse().slice(0, n)
   return {
     events: latestFirst.map(eventView),
@@ -491,5 +548,11 @@ export function registerSettleListener(ctx: Context, resolver: HarnessResolver):
     }
   }
   ctx.on(SETTLE_SEAM as never, listener as never)
-  log('info', SETTLE_SEAM_UNAVAILABLE_NOTE)
+  // The ~300-char settle-unavailable trace is emitted at most ONCE per
+  // logger binding (≈ once per apply — qc1 F-006): repeated registrations
+  // (tests, HMR) must not re-spam the info log with the same note.
+  if (!settleNoteLogged) {
+    settleNoteLogged = true
+    log('info', SETTLE_SEAM_UNAVAILABLE_NOTE)
+  }
 }

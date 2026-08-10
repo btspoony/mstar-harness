@@ -135,16 +135,28 @@ footer event strip are pure consumers of this evidence.
   record path behind both dispatch surfaces — the `tools/pre-execute` listener
   (exec-bound; the lease gate joins here) and the host `beforeDispatch` hook
   (exec-less). Every Assignment-shaped dispatch that reaches the gate records,
-  including hard denies (verdict derived: ok / advisory / denied);
-  non-Assignment delegation never reaches the gate and stays silent. Recording
-  is advisory (try/catch-contained, logs only `mstar/agent-flow`) — a failing
-  ledger never blocks dispatch.
+  including hard denies (verdict derived: ok / advisory / denied); the shape
+  guard lives at the shared core, so non-Assignment text stays silent on BOTH
+  surfaces (the listener's own guard plus the core's guard for the exec-less
+  hook path — no phantom records). Recording is advisory (try/catch-contained,
+  logs only `mstar/agent-flow`) — a failing ledger never blocks dispatch.
+  Known tradeoff: the same logical dispatch crossing BOTH surfaces (a host
+  `beforeDispatch` followed by the identical text as an in-loop subagent tool
+  call) records two dispatch events — the surfaces are mutually exclusive by
+  design; the double record is documented, not deduplicated.
 - **File / bounds**: events append to `{HARNESS_DIR}/agent-flow.jsonl` (JSON
-  Lines, one event per line; harness dirs are gitignored by convention). After
-  each append the file truncates to the most recent **500** events; the catalog
-  read returns the latest-first view with a default window of **50** and a
-  role × outcome summary. Missing/unreadable file → absent evidence; malformed
-  lines are skipped, never fatal.
+  Lines, one event per line; harness dirs are gitignored by convention). The
+  ledger assumes ONE dsh process writes each harness dir (single-writer):
+  concurrent dsh sessions on the same repo can lose events (the append itself
+  is near-atomic O_APPEND, but truncation is a read-modify-write) — the loss
+  only under-reports actual flow in the panel, never a gate impact. After each
+  append the file truncates to the most recent **500** events; truncation is
+  size-gated (≈500 lines' typical size — small files stay append-only) and
+  performed as an atomic temp-file rename. The catalog read returns the
+  latest-first view with a default window of **50** and a role × outcome
+  summary. A MISSING file reads as the empty view ("no actual dispatches yet"
+  — recording starts at plan merge); an unreadable file is absent evidence;
+  malformed lines are skipped, never fatal.
 - **Settle is two-tier, never faked**:
   - **Tier-1 baseline**: dispatch-only records (settle events optional).
   - **Tier-2 best-effort**: `tools/post-execute` is NOT part of the verified

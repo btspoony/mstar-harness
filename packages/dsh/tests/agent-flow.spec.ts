@@ -23,7 +23,7 @@
  *   the view carries no undefined-valued keys (Session.append lossless JSON).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -39,7 +39,13 @@ import {
   recordDispatch,
   recordSettle,
 } from '../src/index.ts'
-import { registerSettleListener, setAgentFlowLogger, SETTLE_SEAM_UNAVAILABLE_NOTE, taskIdOf } from '../src/gates/agent-flow.ts'
+import {
+  AGENT_FLOW_SIZE_GATE_BYTES,
+  registerSettleListener,
+  setAgentFlowLogger,
+  SETTLE_SEAM_UNAVAILABLE_NOTE,
+  taskIdOf,
+} from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
 import { HarnessResolver } from '../src/index.ts'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
@@ -184,6 +190,9 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       const parsed = JSON.parse(line) as Record<string, unknown>
       expect(parsed).toMatchObject({ v: 1, kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })
       expect(Object.values(parsed).every((v) => v !== undefined)).toBe(true)
+      // Regression (qc2 F-7): the serialized line must NEVER carry prompt
+      // body text — the record persists only derived fields.
+      expect(line).not.toContain('Implement the ledger')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -249,7 +258,7 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
     }
   })
 
-  it('readAgentFlow is latest-first and bounded by the limit (default 50)', async () => {
+  it('readAgentFlow is latest-first and bounded by the limit (default 50); limit 0 → the empty window (qc2 F-6)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-agentflow-limit-')
     try {
       for (let i = 0; i < 60; i += 1) {
@@ -260,6 +269,11 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       expect(defaultView!.events[0]!.ts).toBeGreaterThanOrEqual(defaultView!.events[49]!.ts)
       const small = readAgentFlow(harnessDir, 10)
       expect(small!.events).toHaveLength(10)
+      // Explicit semantics: 0 requests the EMPTY window (not a silent
+      // fallback to the default).
+      expect(readAgentFlow(harnessDir, 0)).toEqual({ events: [], summary: [] })
+      // Negative/NaN-like values floor to 0 → the empty window too.
+      expect(readAgentFlow(harnessDir, -3)).toEqual({ events: [], summary: [] })
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -278,6 +292,32 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       // The view reflects the truncated tail (the first recorded event is gone).
       const view = readAgentFlow(harnessDir, 500)
       expect(view!.events).toHaveLength(AGENT_FLOW_MAX_EVENTS)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('size gate (qc2 F-1 / qc3 F-001/003): a tiny-line ledger below the threshold keeps >500 lines (append-only fast path); the truncating read-modify-write still runs once the file crosses the gate', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-sizegate-')
+    try {
+      const file = join(harnessDir, AGENT_FLOW_FILE)
+      // ~60 B settle lines: 600 of them ≈ 36 KiB stay BELOW the 64 KiB gate,
+      // so the append path must NOT read-modify-write — all 600 lines persist
+      // even though they exceed AGENT_FLOW_MAX_EVENTS (the documented
+      // approximate bound under the size gate).
+      for (let i = 0; i < 600; i += 1) recordSettle({ harnessDir, outcome: 'error' })
+      expect(statSync(file).size).toBeLessThan(AGENT_FLOW_SIZE_GATE_BYTES)
+      let lines = readFileSync(file, 'utf8').replace(/\n$/, '').split('\n')
+      expect(lines.length).toBe(600)
+      expect(readAgentFlow(harnessDir, 700)!.events).toHaveLength(600)
+      // Now push the file past the gate with normal-size dispatch lines
+      // (~163 B × 525 ≈ 86 KiB > 64 KiB): the read-modify-write resumes and
+      // truncates back to the most recent 500 events.
+      for (let i = 0; i < 525; i += 1) {
+        recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+      }
+      lines = readFileSync(file, 'utf8').replace(/\n$/, '').split('\n')
+      expect(lines.length).toBe(AGENT_FLOW_MAX_EVENTS)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -307,11 +347,18 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
     }
   })
 
-  it('missing file / missing harness dir → null (advisory degrade)', async () => {
+  it('missing file → EMPTY view (the panel empty state); ONLY an unreadable ledger → null (qc1 F-001 fix-wave)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-agentflow-missing-')
     try {
+      // Missing ledger = recording hasn't started (it begins at plan merge) —
+      // the empty view, never an evidence-missing degrade.
+      expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] })
+      expect(readAgentFlow(join(root, 'does-not-exist'))).toEqual({ events: [], summary: [] })
+      // Unreadable (a DIRECTORY at the ledger path — readFileSync throws
+      // EISDIR while existsSync reports presence) → null: only genuine
+      // unreadability degrades.
+      await mkdir(join(harnessDir, AGENT_FLOW_FILE))
       expect(readAgentFlow(harnessDir)).toBeNull()
-      expect(readAgentFlow(join(root, 'does-not-exist'))).toBeNull()
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -361,11 +408,19 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
  * 2. taskIdOf — best-effort body Task N extraction
  * ========================================================================== */
 
-describe('taskIdOf — body `Task N` best-effort extraction', () => {
-  it('extracts the first numbered Task heading from the BODY, normalized to T<n>', () => {
+describe('taskIdOf — body `Task N` best-effort extraction (level-2 headings only, qc2 F-8)', () => {
+  it('extracts the first LEVEL-2 numbered Task heading from the BODY, normalized to T<n>', () => {
     expect(taskIdOf(VALID_PLANNED)).toBe('T2')
-    expect(taskIdOf(`## Assignment\n\n**Execute as**: fullstack-dev\n\n### Task 7\n\nwork`)).toBe('T7')
+    expect(taskIdOf(`## Assignment\n\n**Execute as**: fullstack-dev\n\n## Task 7\n\nwork`)).toBe('T7')
     expect(taskIdOf(`## Assignment\n\n**Execute as**: fullstack-dev\n\nDo the thing.`)).toBeUndefined()
+  })
+
+  it('a non-level-2 task heading in the body does NOT resolve (qc2 F-8: narrower false-hit surface)', () => {
+    // Level-1, level-3+ headings (or an indented example) are not the
+    // assignment's task heading — only `^## Task N` matches.
+    expect(taskIdOf(`## Assignment\n\n**Execute as**: fullstack-dev\n\n### Task 7\n\nwork`)).toBeUndefined()
+    expect(taskIdOf(`## Assignment\n\n**Execute as**: fullstack-dev\n\n# Task 7\n\nwork`)).toBeUndefined()
+    expect(taskIdOf(`## Assignment\n\n**Execute as**: fullstack-dev\n\n  ## Task 7\n\nwork`)).toBeUndefined()
   })
 
   it('a `## Task N` quoted in the HEADER region never resolves (header-region scoping)', () => {
@@ -449,7 +504,21 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
       defaultAllow,
     )
 
-    expect(readAgentFlow(app.harnessDir)).toBeNull()
+    // No ledger file was ever created — the missing file now reads as the
+    // EMPTY view (qc1 F-001), still proving "nothing recorded".
+    expect(readAgentFlow(app.harnessDir)).toEqual({ events: [], summary: [] })
+  })
+
+  it('the host-hook path stays silent for non-Assignment text (qc2 F-2: shape guard at the shared core)', async () => {
+    const app = booted = await bootApp()
+
+    const result = await app.ctx.dshHostAdapter.beforeDispatch(GARBAGE_PROMPT)
+
+    // The gate still validates (ok, no violations for non-assignment text),
+    // but no phantom dispatch event lands — same semantics as the listener
+    // path (spec §2.1.1 "非 Assignment 不记录" now holds for BOTH surfaces).
+    expect(result.ok).toBe(true)
+    expect(readAgentFlow(app.harnessDir)).toEqual({ events: [], summary: [] })
   })
 
   it('no harness dir → no record, gate unchanged (degrade is silent)', async () => {
@@ -538,9 +607,29 @@ describe('agent-flow settle — defensive tools/post-execute listener (Tier-2)',
 
       emitUndeclared(ctx, SETTLE_SEAM, { something: 'unrelated' })
 
-      expect(readAgentFlow(harnessDir)).toBeNull()
+      expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] }) // no record
       expect(captured).toHaveLength(2) // registration note + unmapped warning
       expect(captured[1]).toContain('did not map to a settle event')
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('the settle-unavailable trace logs ONCE per logger binding, not per registration (qc1 F-006)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-once-')
+    const ctx = new Context()
+    const captured: string[] = []
+    const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
+    try {
+      registerSettleListener(ctx, new HarnessResolver(harnessDir))
+      registerSettleListener(ctx, new HarnessResolver(harnessDir))
+
+      // Two registrations under ONE binding → the ~300-char note is emitted
+      // exactly once (a second apply would rebind the sink and log again).
+      expect(captured).toHaveLength(1)
+      expect(captured[0]).toBe(SETTLE_SEAM_UNAVAILABLE_NOTE)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -624,12 +713,12 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     expect(text.split('\n').filter((l) => l.startsWith('agent flow:')).length).toBe(1)
   })
 
-  it('no ledger → state.agentFlow null and NO agent-flow line', async () => {
+  it('no ledger → state.agentFlow is the EMPTY view and NO agent-flow line (qc1 F-001 fix-wave: missing file reads as empty, not null)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-none-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     // state is gated on status.json — seed it so the state section exists
-    // with an absent ledger (the degrade under test).
+    // with an absent ledger (the missing-file empty view under test).
     await seedHarness(harnessDir, {
       'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
     })
@@ -638,8 +727,26 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
     const { row, source } = catalogRowOf(decision)
 
-    expect(source.state!.agentFlow).toBeNull()
+    expect(source.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(textOf(row)).not.toContain('agent flow:')
+  })
+
+  it('a full 50-event window renders the model-line window marker (qc3 F-004: "N events (latest 50)")', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-window-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    const lines: string[] = []
+    for (let i = 0; i < 55; i += 1) lines.push(dispatchLine({ ts: 1_700_000_000_000 + i }))
+    await seedHarness(harnessDir, {
+      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+      [AGENT_FLOW_FILE]: `${lines.join('\n')}\n`,
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+
+    expect(source.state!.agentFlow!.events).toHaveLength(50)
+    expect(textOf(row)).toContain('agent flow: 50 events (latest 50)')
   })
 
   it('zero events (malformed-only ledger) → no agent-flow line, state stays present', async () => {

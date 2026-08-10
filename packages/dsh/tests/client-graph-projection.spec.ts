@@ -564,7 +564,7 @@ describe('projectGraph — flow degraded/empty (spec agent-flow-catalog-graph §
     expect(projectGraph(noHarnessSource).flow.degraded).toBe(true)
   })
 
-  it('agentFlow present with 0 events → empty (recording starts at plan merge)', () => {
+  it('agentFlow empty view (0 events) → empty, NOT degraded (qc1 F-001 fix-wave: a MISSING ledger file now reads as this empty view — the panel shows the no-dispatches-yet state, recording starts at plan merge)', () => {
     const flow = projectGraph(flowSource([])).flow
     expect(flow.degraded).toBe(false)
     expect(flow.empty).toBe(true)

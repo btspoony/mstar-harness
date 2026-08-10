@@ -43,7 +43,7 @@
 
 import * as React from 'react'
 import {
-  Background, Controls, Handle, Position, ReactFlow,
+  Background, Controls, Handle, Position, ReactFlow, useViewport,
   type Edge, type Node, type NodeProps,
 } from '@xyflow/react'
 import xyflowCss from '@xyflow/react/dist/style.css'
@@ -126,6 +126,33 @@ type PhaseFlowNode = Node<PhaseNodeData, 'phase'>
 type StateFlowNode = Node<StateNodeData, 'state'>
 type FlowStageFlowNode = Node<FlowStageNodeData, 'flow-stage'>
 type FlowUnexpectedFlowNode = Node<FlowUnexpectedNodeData, 'flow-unexpected'>
+
+/**
+ * A note anchored to a FLOW-coordinate point (qc1 F-007 fix-wave): rendered
+ * as a child of `<ReactFlow>` (so `useViewport` has context) and positioned
+ * via the live viewport transform — container `left/top` = `tx + flowX·zoom`.
+ * Node positions live in ReactFlow's viewport-transform coordinate space, so
+ * a fixed container coordinate (the old `.noteFlow { left: 1180px }`) only
+ * aligned with the target slot at the identity transform; this tracks pan and
+ * zoom, keeping the note exactly on its slot at zoom=1 AND at every other
+ * zoom/pan (and the slot never overlaps other content — see `.noteFlow`).
+ */
+function FlowViewportNote({
+  flowX, flowY, className, dataGraphEmpty, children,
+}: {
+  flowX: number
+  flowY: number
+  className: string
+  dataGraphEmpty: string
+  children: React.ReactNode
+}) {
+  const { x, y, zoom } = useViewport()
+  return (
+    <div className={className} data-graph-empty={dataGraphEmpty} style={{ left: x + flowX * zoom, top: y + flowY * zoom }}>
+      {children}
+    </div>
+  )
+}
 
 /**
  * Invisible connection-point handles (T3 fix loop — browser harness FAIL
@@ -464,6 +491,12 @@ function buildEdges(view: GraphView): Edge[] {
         className: css.edgeFlowUnexpected,
       })
     }
+    // else (qc2 F-5, documented — no behavior change): the current phase has
+    // NO pipeline stage (Phase 3–5 dispatch no regular stage —
+    // EXPECTED_ROLE_FLOW defines none), so the unexpected evidence edge has
+    // no honest origin and none is drawn (never guess a source phase). The
+    // unexpected node still mounts, and the footer unexpected re-list carries
+    // the full signal — the node is not a broken-edge bug.
   }
   return edges
 }
@@ -503,6 +536,32 @@ export function GraphCanvas({ view, t }: GraphCanvasProps) {
         >
           <Background gap={24} />
           <Controls showInteractive={false} />
+          {/* Agent-flow degraded/empty notes render INSIDE <ReactFlow>
+              (children of the flow component) via FlowViewportNote: they
+              anchor to the unexpected-node slot in FLOW coordinates, so the
+              live viewport transform positions them (qc1 F-007 fix-wave — a
+              fixed container left only aligned at the identity transform).
+              The degraded and empty states are mutually exclusive. */}
+          {view.flow.degraded && (
+            <FlowViewportNote
+              flowX={FLOW_UNEXPECTED_POSITION.x}
+              flowY={FLOW_UNEXPECTED_POSITION.y}
+              className={`${css.note} ${css.noteFlow}`}
+              dataGraphEmpty="flow-degraded"
+            >
+              {t('flow.degraded')}
+            </FlowViewportNote>
+          )}
+          {view.flow.empty && (
+            <FlowViewportNote
+              flowX={FLOW_UNEXPECTED_POSITION.x}
+              flowY={FLOW_UNEXPECTED_POSITION.y}
+              className={`${css.note} ${css.noteFlow}`}
+              dataGraphEmpty="flow-empty"
+            >
+              {t('flow.empty')}
+            </FlowViewportNote>
+          )}
         </ReactFlow>
         {view.iterationId !== null && (
           <div className={css.ringCaption} data-graph-iteration-id={view.iterationId}>
@@ -531,16 +590,6 @@ export function GraphCanvas({ view, t }: GraphCanvasProps) {
         {view.degraded.plans && (
           <div className={`${css.note} ${css.notePlans}`} data-graph-empty="no-plans">
             {t('graph.no-plans')}
-          </div>
-        )}
-        {view.flow.degraded && (
-          <div className={`${css.note} ${css.noteFlow}`} data-graph-empty="flow-degraded">
-            {t('flow.degraded')}
-          </div>
-        )}
-        {view.flow.empty && (
-          <div className={`${css.note} ${css.noteFlow}`} data-graph-empty="flow-empty">
-            {t('flow.empty')}
           </div>
         )}
       </div>

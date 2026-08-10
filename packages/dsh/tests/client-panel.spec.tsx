@@ -869,7 +869,11 @@ describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline
     return end === -1 ? h.slice(start) : h.slice(start, end)
   }
 
-  it('renders the 6 expected-stage skeleton nodes + degraded note when the ledger is absent (agentFlow null)', () => {
+  it('renders the 6 expected-stage skeleton nodes + degraded note when the ledger is UNREADABLE (agentFlow null)', () => {
+    // The fixture simulates the server's degraded case (null agentFlow —
+    // only an unreadable ledger yields null post-fix-wave qc1 F-001; a
+    // MISSING ledger arrives as the empty view and renders the empty note
+    // instead, pinned in the next test block).
     const html = panelHtml(fullSource) // fullSource.agentFlow === null → degraded
     for (const id of [
       'iteration-start:review-edit-chain',

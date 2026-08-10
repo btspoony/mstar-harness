@@ -336,13 +336,17 @@
   bottom: 24px;
 }
 
-/* Agent-flow degraded/empty note (spec agent-flow-catalog-graph §2.4): parked
- * at the unexpected-node slot (x ≈ 1180, right of the pipeline column) — that
- * slot is only occupied when unexpected events exist, which can never co-occur
- * with the degraded/empty note (both imply zero events). */
+/* Agent-flow degraded/empty note (spec agent-flow-catalog-graph §2.4):
+ * rendered INSIDE the ReactFlow viewport (FlowViewportNote) anchored to the
+ * unexpected-node slot (FLOW_UNEXPECTED_POSITION ≈ x 1180 / y 280, flow
+ * coordinates) with the INLINE left/top computed from the live viewport
+ * transform (qc1 F-007 fix-wave — a fixed container `left: 1180px` only
+ * aligned at the identity transform). That slot is only occupied when
+ * unexpected events exist, which can never co-occur with the degraded/empty
+ * note (both imply zero events). `position: absolute` keeps the note in the
+ * flow container's coordinate space. */
 .noteFlow {
-  top: 46%;
-  left: 1180px;
+  position: absolute;
 }
 
 .connectorBadge {
@@ -687,9 +691,12 @@
 }
 
 /* Settle rows carry no role (T1 sets '') — the row's role cell shows this
- * glyph (the settle record itself is the completion marker). */
+ * glyph (the settle record itself is the completion marker). NEUTRAL color
+ * (qc2 F-4 fix-wave): the ✓ marks the record, not success — an error/denied
+ * outcome must not read as a green success; the status chip carries all
+ * outcome semantics. */
 .flowSettleGlyph {
-  color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-label-secondary);
   font-weight: 600;
 }
 

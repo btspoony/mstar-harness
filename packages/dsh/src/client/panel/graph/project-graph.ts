@@ -379,9 +379,12 @@ function flowEventOf(
  *   §2.3); an unpaired settle (no prior same-agent dispatch in the window)
  *   stays an independent settle marker. The panel never depends on the
  *   pairing's correctness;
- * - degradation: `state.agentFlow` missing/unreadable → `degraded` (skeleton
- *   + no events — the panel shows the evidence-missing note); present with 0
- *   events → `empty` (recording starts at plan merge — the empty-state note).
+ * - degradation: `state.agentFlow` null/unreadable (the server returns null
+ *   ONLY for an unreadable ledger — fix-wave qc1 F-001) → `degraded`
+ *   (skeleton + no events — the panel shows the evidence-missing note); a
+ *   MISSING ledger file reads as the server's empty view → present with 0
+ *   events → `empty` (recording starts at plan merge — the empty-state note,
+ *   per the plan promise).
  */
 export function projectFlow(source: MstarEngineStatusSource | null): GraphFlowView {
   const stages = flowStageSkeleton()
@@ -392,11 +395,16 @@ export function projectFlow(source: MstarEngineStatusSource | null): GraphFlowVi
     ? null
     : rawAgentFlow.events
   if (rawEvents === null || !Array.isArray(rawEvents)) {
-    // Ledger missing/unreadable → skeleton + degraded marker (panel note; never a throw).
+    // Ledger unreadable / absent agentFlow (non-object / non-array) →
+    // skeleton + degraded marker (panel note; never a throw). Fix-wave
+    // (qc1 F-001): a MISSING ledger file arrives as the server's EMPTY view
+    // (events: []) → the `empty` branch below, NOT this degrade — the panel
+    // keeps the plan's promised "no actual dispatches yet" empty state.
     return { stages, events: [], unexpected: [], degraded: true, empty: false }
   }
   if (rawEvents.length === 0) {
-    // Ledger exists but nothing recorded yet (recording starts at plan merge — spec §3).
+    // Ledger exists (or the server's empty view for a missing ledger) but
+    // nothing recorded yet (recording starts at plan merge — spec §3).
     return { stages, events: [], unexpected: [], degraded: false, empty: true }
   }
 
