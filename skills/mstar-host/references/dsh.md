@@ -123,16 +123,34 @@ build (`catalogTtlMs`, default 60 s).
 
 Harness **dispatch** on dsh = a `subagent` tool call with the full Assignment
 text (role binding in the prompt — `Execute as` / `Act as` + skill load;
-there is no separate `agent` field, the Assignment body IS the prompt). N
-parallel assignees = N `subagent` calls (the dispatch gate counts each
+there is no separate `agent` field, the Assignment body IS the prompt). **N
+assignees = N `subagent` calls = N independent delegations** (dispatch-gate
+口径: one assistant message carries all N invokes — the gate counts each
 dispatched Assignment). Paste-only Assignment without an invoke is **not**
 dispatch.
+
+**Execution: concurrent via background dispatch.** The `subagent` tool does
+**not** declare `isConcurrencySafe` → fail-closed `exclusive` classification,
+so same-message invokes are issued one-at-a-time (the next invoke starts only
+after the previous one settles). Foreground invokes (no `run_in_background`)
+settle only when the child completes → end-to-end serial (wall ≈ N× single
+seat). **Background invokes (`run_in_background: true`) settle at task start
+(task id returned) and their child agents run CONCURRENTLY in background
+tasks** — for N≥2 dispatch (QC tri-review) use `run_in_background: true`:
+parallel execution, wall ≈ single seat (not N×). **Future path (upstream
+suggestion, not editable from this repo):** dsh-private declares
+`isConcurrencySafe: () => true` on the tool-subagent so same-message
+foreground invokes can also run concurrently — needs dsh maintainer
+evaluation (roadmap §7e).
 
 ### QC default
 
 - **`Execution mode: sdd`**: **N=3** `subagent` dispatches — one per QC seat
   (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`), each body **Act as**
-  the respective QC role + QC skill load. Cannot emit required **N** →
+  the respective QC role + QC skill load. **Dispatch all three with
+  `run_in_background: true` → the seats run CONCURRENTLY** (background
+  children; wall ≈ single seat); foreground (no `run_in_background`) would run
+  serially (wall ≈ 3× single seat). Cannot emit required **N** →
   **`Blocked`**.
 - **`inline`**: **N=1**.
 
@@ -150,13 +168,20 @@ dispatch.
 | Plugin commands | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit` (registered from `harness-commands/`) |
 | Session entry | `pm` skill → `mstar-harness-core` via pm **Read next** |
 
+## Command delivery degradation (dsh host quirk, reported 2026-08-10)
+
+The dsh web client resolves slash commands against a client-side lexicon; when a command is NOT claimed client-side (lexicon fetch timing, args parsing, manual typing), the model receives the **bare text** (`/iteration-loop <方向> …`) with NO command body — unlike opencode/cursor/omp where the body always arrives.
+
+**Rule:** when a user message begins with a registered mstar command name (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = Phase 2–5 on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity).
+
 ## Harness dir and environment
 
 - `{HARNESS_DIR}` resolves via the engine `resolveHarnessDir` (`.mstar/` →
   `.agents/` → `.plans/`/`plans/`), with the plugin Config `harnessDir`
   override winning. The probe starts from the SESSION workspace root (the
-  session cwd — **never the dsh launch/process cwd**), so the watermark and
-  gates follow the workspace the session actually works in. Repos using a
+  session cwd — **never the dsh launch/process cwd**) and **STOPS there** — it
+  never walks above the session workspace, so the watermark and gates follow
+  the workspace the session actually works in. Repos using a
   non-standard harness root (e.g. `.harness/`) MUST set Config `harnessDir`
   (absolute path) — the gates are inert without a resolvable harness dir.
 - The dispatch gate needs the dispatching agent's own role for the

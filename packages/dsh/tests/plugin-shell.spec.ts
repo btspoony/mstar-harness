@@ -17,7 +17,7 @@ describe('@mstar-harness/dsh function-plugin contract', () => {
       plugin.apply(ctx, {})
       expect(ctx.dshMstar).toBeDefined()
       // The service is engine-backed: the single-version invariant holds.
-      expect(ctx.dshMstar.readHarnessVersion()).toBe('2.0.4')
+      expect(ctx.dshMstar.readHarnessVersion()).toBe('2.0.5')
     } finally {
       await ctx.fiber.dispose()
     }

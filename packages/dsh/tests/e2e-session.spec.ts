@@ -427,7 +427,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     if (source === undefined || source.kind !== 'mstar-engine-status') return
 
     // Watermark fields — AC-6 shape.
-    expect(source.version).toBe('2.0.4')
+    expect(source.version).toBe('2.0.5')
     expect(source.harnessDir).toBe(harnessDir)
     expect(source.enforcement).toEqual({ hard: false, source: 'none' })
 
@@ -456,7 +456,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     // The composed session log carries the model-facing block.
     const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')
-    expect(text).toContain('mstar version: 2.0.4')
+    expect(text).toContain('mstar version: 2.0.5')
     expect(text).toContain(`harness dir: ${harnessDir}`)
     expect(text).toContain('enforcement: soft') // no compass hardens, no Config override
     expect(text).toContain('iteration: e2e-iter')
@@ -481,7 +481,7 @@ describe('v2 seam tools — callable in-app over the committed fixtures', () => 
     expect(result.isError).toBe(false)
     if (result.isError) return
     expect(result.value).toEqual({ sdd_dir: realpathSync(join(app.harnessDir, 'sdd', 'e2e-fixture-plan')) })
-    expect(existsSync(join(result.value.sdd_dir, '.gitignore'))).toBe(true)
+    expect(existsSync(join((result.value as { sdd_dir: string }).sdd_dir, '.gitignore'))).toBe(true)
     expect(result.content[0]!.text).toContain('sdd dir:')
   })
 
@@ -555,6 +555,6 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
     expect(statusRow).toBeDefined()
     const text = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')
-    expect(text).toContain('mstar version: 2.0.4')
+    expect(text).toContain('mstar version: 2.0.5')
   })
 })

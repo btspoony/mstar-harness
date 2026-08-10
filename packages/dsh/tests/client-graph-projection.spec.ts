@@ -19,6 +19,7 @@
 
 import { describe, expect, it } from 'bun:test'
 import type { MstarEngineStatusSource } from '../src/types'
+import type { EnforcementSource } from '@mstar-harness/engine'
 import { projectGraph } from '../src/client/panel/graph/project-graph'
 import {
   PHASE_EDGES, PLAN_STATE_EDGES,
@@ -31,7 +32,7 @@ const fullSource: MstarEngineStatusSource = {
   form: 'catalog',
   version: '2.0.4',
   harnessDir: '/proj/.mstar',
-  enforcement: { hard: true, source: 'iteration compass' },
+  enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
   iteration: {
     iterationId: 'iter-20260809-mstar-panel-beautify',
     statusPath: '/proj/.mstar/status.json',
@@ -93,7 +94,7 @@ const noHarnessSource: MstarEngineStatusSource = {
   form: 'catalog',
   version: '2.0.4',
   harnessDir: null,
-  enforcement: { hard: false, source: 'iteration compass' },
+  enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: null,
 }
 
@@ -319,8 +320,8 @@ describe('projectGraph — plan state machine (spec §2.4)', () => {
           { id: 'plan-x', status: 42 },
           { id: 'plan-y' },
           { id: 'plan-z', status: 'Done' },
-        ] as unknown as MstarEngineStatusSource['state'],
-      },
+        ],
+      } as unknown as MstarEngineStatusSource['state'],
     })
     const unknown = v.planStates.find((s) => s.id === 'unknown')!
     expect(unknown.lit).toBe(true)

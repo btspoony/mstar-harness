@@ -76,6 +76,18 @@ function tmpRoot(prefix: string): string {
 }
 
 /**
+ * Minimal valid git work tree (no `git init` subprocess): the engine's
+ * default boundary runs `git rev-parse --show-cdup`, which only needs a
+ * valid `.git` layout (HEAD + config + objects/ + refs/) — no commits.
+ */
+function gitInit(root: string): void {
+  mkdirSync(join(root, ".git", "objects"), { recursive: true });
+  mkdirSync(join(root, ".git", "refs"), { recursive: true });
+  writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(join(root, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
+}
+
+/**
  * Monorepo root (walk up from this test dir to the nearest ancestor holding
  * `skills/`), for byte-parity tests against the skill SSOT files (qc3 F-5).
  */
@@ -161,13 +173,16 @@ describe("resolveHarnessDir — resolution order (plan-conventions § {HARNESS_D
     }
   });
 
-  test("walks up from a nested startDir to the first match", () => {
+  test("walks up from a nested startDir to the first match within an explicit workspaceRoot", () => {
     const root = tmpRoot("path-harness-walkup-");
     try {
       mkdirSync(join(root, ".mstar"));
       const nested = join(root, "a", "b", "c");
       mkdirSync(nested, { recursive: true });
-      expect(resolveHarnessDir(nested)).toBe(resolve(root, ".mstar"));
+      // Roadmap §7c / plan 20260810-harness-root-boundary: the walk-up is
+      // now bounded — a non-git start without workspaceRoot probes only
+      // itself, so the nested probe must carry the workspace boundary.
+      expect(resolveHarnessDir(nested, { workspaceRoot: root })).toBe(resolve(root, ".mstar"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -259,6 +274,124 @@ describe("resolveHarnessDir — explicit override (slice-2 finding 2026-08-08)",
       withEnv(undefined, () => {
         expect(resolveHarnessDir(root)).toBe(resolve(root, ".mstar"));
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveHarnessDir — workspace-root stop boundary (roadmap §7c / plan 20260810-harness-root-boundary)", () => {
+  test("(a) explicit workspaceRoot: a `.mstar` fixture in the parent chain ABOVE the boundary is never returned", () => {
+    const root = tmpRoot("path-boundary-a-");
+    try {
+      // "global" fixture: `.mstar` sits above the workspace root, exactly
+      // like the `~/.mstar` CLI-install root the defect adopted.
+      mkdirSync(join(root, ".mstar"));
+      const workspace = join(root, "project");
+      const probe = join(workspace, "src", "deep");
+      mkdirSync(probe, { recursive: true });
+      // probe starts inside the workspace; the boundary stops the walk-up.
+      expect(resolveHarnessDir(probe, { workspaceRoot: workspace })).toBeNull();
+      // a harness BELOW the start still wins (never the fixture above).
+      mkdirSync(join(workspace, ".mstar"));
+      expect(resolveHarnessDir(probe, { workspaceRoot: workspace })).toBe(resolve(workspace, ".mstar"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("(b) workspaceRoot = probe start (boundary = start, no walk-up): only a `.mstar` above → null", () => {
+    const root = tmpRoot("path-boundary-b-");
+    try {
+      mkdirSync(join(root, ".mstar"));
+      const probe = join(root, "sub");
+      mkdirSync(probe, { recursive: true });
+      expect(resolveHarnessDir(probe, { workspaceRoot: probe })).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("(b2) boundary at start still finds a harness AT the start itself", () => {
+    const root = tmpRoot("path-boundary-b2-");
+    try {
+      mkdirSync(join(root, ".mstar"));
+      const probe = join(root, "sub");
+      mkdirSync(join(probe, ".mstar"), { recursive: true });
+      expect(resolveHarnessDir(probe, { workspaceRoot: probe })).toBe(resolve(probe, ".mstar"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("(c) explicit workspaceRoot: subdir probe still finds the repo-root `.mstar`", () => {
+    const root = tmpRoot("path-boundary-c-");
+    try {
+      mkdirSync(join(root, ".mstar"));
+      const probe = join(root, "src", "deep");
+      mkdirSync(probe, { recursive: true });
+      expect(resolveHarnessDir(probe, { workspaceRoot: root })).toBe(resolve(root, ".mstar"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("(c2) default git boundary: a `.git` repo-root harness still resolves from a subdir without explicit workspaceRoot", () => {
+    const root = tmpRoot("path-boundary-c2-");
+    try {
+      // Real git repo fixture: default boundary = `git rev-parse
+      // --show-cdup` from the start dir = the repo root.
+      gitInit(root);
+      mkdirSync(join(root, ".mstar"));
+      const probe = join(root, "src", "deep");
+      mkdirSync(probe, { recursive: true });
+      expect(resolveHarnessDir(probe)).toBe(resolve(root, ".mstar"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("(c3) non-git start without workspaceRoot probes only itself (deliberate tightening — no walk-up)", () => {
+    const root = tmpRoot("path-boundary-c3-");
+    try {
+      mkdirSync(join(root, ".mstar"));
+      const probe = join(root, "sub");
+      mkdirSync(probe, { recursive: true });
+      // tmp root is not a git repo → default boundary = start → null even
+      // though `.mstar` exists one level up.
+      expect(resolveHarnessDir(probe)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("(d) explicit overrides still win when the boundary would otherwise forbid them", () => {
+    const root = tmpRoot("path-boundary-d-");
+    try {
+      const workspace = join(root, "project");
+      const probe = join(workspace, "src");
+      mkdirSync(probe, { recursive: true });
+      const outside = join(root, "outside-harness");
+      mkdirSync(outside, { recursive: true });
+      // opts.harnessDir points ABOVE the workspaceRoot → override authority.
+      expect(resolveHarnessDir(probe, { workspaceRoot: workspace, harnessDir: outside })).toBe(outside);
+      // env override too.
+      withEnv(outside, () => {
+        expect(resolveHarnessDir(probe, { workspaceRoot: workspace })).toBe(outside);
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("(d2) relative workspaceRoot resolves against the start dir", () => {
+    const root = tmpRoot("path-boundary-d2-");
+    try {
+      mkdirSync(join(root, ".mstar"));
+      const probe = join(root, "sub");
+      mkdirSync(probe, { recursive: true });
+      // ".." = the parent of the start dir — a boundary at the tmp root.
+      expect(resolveHarnessDir(probe, { workspaceRoot: ".." })).toBe(resolve(root, ".mstar"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

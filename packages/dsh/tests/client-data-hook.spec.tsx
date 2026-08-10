@@ -19,9 +19,10 @@ import { describe, expect, it } from 'bun:test'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   createSnapshotStore,
-  type ConversationNode, type ConversationSnapshot, type SessionId,
+  type ContextMessageNode, type ConversationNode, type ConversationSnapshot, type SessionId,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { MstarEngineStatusSource } from '../src/types'
+import type { EnforcementSource } from '@mstar-harness/engine'
 import { useMstarEngineStatus } from '../src/client/panel/use-mstar-engine-status'
 
 const sessionId = 's-1' as SessionId
@@ -32,7 +33,7 @@ const sourceA: MstarEngineStatusSource = {
   form: 'catalog',
   version: '2.0.4',
   harnessDir: '/proj/.mstar',
-  enforcement: { hard: true, source: 'iteration compass' },
+  enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
   state: null,
 }
 const sourceB: MstarEngineStatusSource = {
@@ -93,7 +94,7 @@ describe('useMstarEngineStatus — catalog row selection (spec §2.4, §5)', () 
       newer,
     ]))
     const view = useMstarEngineStatus(bindUseSession(store))
-    expect(view.source).toBe(newer.source)
+    expect(view.source).toBe((newer as ContextMessageNode).source as MstarEngineStatusSource)
     expect(view.lastUpdated).toBe(1_720_001_000_000)
   })
 

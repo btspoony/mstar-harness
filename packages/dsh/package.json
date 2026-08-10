@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/dsh",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "Morning Star harness dsh (DeepSeek Harness) cordis function plugin — in-process engine gates (status/dispatch/lease) with hard refusal channels.",
   "license": "MIT",
   "type": "module",
@@ -43,6 +43,7 @@
   },
   "scripts": {
     "test": "bun test",
+    "typecheck:tests": "bunx tsc --noEmit -p tests/tsconfig.json",
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
     "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external cordis --external @deepseek-ai/dsh-skill-local --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bun run build-client && bunx tsc",
     "build-client": "bun run scripts/build-client-bundle.ts",
@@ -78,7 +79,7 @@
     "@deepseek-ai/dsh-skill": "^0.0.1",
     "@deepseek-ai/dsh-skill-local": "^0.0.1",
     "@deepseek-ai/dsh-tools": "^0.0.1",
-    "@mstar-harness/engine": "2.0.4",
+    "@mstar-harness/engine": "2.0.5",
     "@types/node": "^25.6.0",
     "@types/react": "~18.3.1",
     "js-yaml": "^4.1.0",

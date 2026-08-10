@@ -31,7 +31,7 @@ dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `harnessDir` | `string` | 按会话工作区探测（`.mstar/` → `.agents/` → `.plans/` → `plans/`，从会话工作区根目录开始——**绝不从启动 cwd**） | 显式 harness 根目录；优先于 engine 探测。**harness 根不在探测名列表中的仓库必须配置**——例如本 mstar-workflow 仓库自身用 `.harness/`（维护根，刻意不探测）；不覆盖时探测会从会话工作区一路向上走到全局 `~/.mstar` 或无关的 `.agents/`。 |
+| `harnessDir` | `string` | 按会话工作区探测（`.mstar/` → `.agents/` → `.plans/` → `plans/`，从会话工作区根目录开始——**绝不从启动 cwd**） | 显式 harness 根目录；优先于 engine 探测。**harness 根不在探测名列表中的仓库必须配置**——例如本 mstar-workflow 仓库自身用 `.harness/`（维护根，刻意不探测）；探测从会话工作区根开始（绝不从启动 cwd）并在那里**停止**——永不越过会话工作区向上，因此其上方的 harness 目录（如全局 `~/.mstar`）永远不会被采纳。 |
 | `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖。优先级：Config 优先；否则取 Assignment 自身的 `**Enforcement**: hard` 头字段（仅派发闸门）；否则取迭代 compass frontmatter；否则仅告警。Config `soft` 是唯一的本地回滚——Assignment 级 `soft` 不能覆盖 hard compass。 |
 | `dispatchTools` | `string[]` | `['subagent']` | 派发闸门匹配的委派工具名（dsh subagent 工具的 `toolName` 可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
@@ -197,7 +197,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **反递归绑定为 Config 声明** —— dsh 在工具执行上下文上不暴露每 agent 角色，故 `dispatchBinding` 声明单一部署级角色；`Execute as` 不同的 Assignment 无法被识别为自我递归，多角色派发方需要按实例拆分插件。
 - **租约闸门有意与 opencode 分叉** —— opencode 的 `beforeDispatch` 不运行租约检查；dsh 租约闸门是新增的（`lease.dispatch.*` 码），且仅对可写 SDD/InProgress 派发触发，故对齐覆盖字段集而非租约面。
 - **已采纳 engine 共享组合** —— 派发闸门核心即 engine 的单一 `composeDispatchGate`（与 opencode/omp/CLI 对齐，字段/分支/反递归违规码按构造即相同），compass frontmatter 解析器即 engine 的共享 `parseCompassFrontmatter`（本地 dsh 镜像与 CLI 副本均已删除——不再有可漂移的分叉）。两者都运行在 dsh 头区域切片上；租约 + worktree L1/L2 检查仍为叠加上去的 dsh 侧扩展。
-- **engine 单一版本钉定** —— `@mstar-harness/engine` 为精确 `2.0.4` devDependency，构建时打入 `dist/`（绝非运行时依赖）；`readHarnessVersion()` 读取 bundle 旁的 dsh 包清单，按单一版本不变量保持 `2.0.4`。
+- **engine 单一版本钉定** —— `@mstar-harness/engine` 为精确 `2.0.5` devDependency，构建时打入 `dist/`（绝非运行时依赖）；`readHarnessVersion()` 读取 bundle 旁的 dsh 包清单，按单一版本不变量保持 `2.0.5`。
 - **Schemastery 空数组物化** —— 省略的可选 ARRAY Config 键会物化为 `[]`；派发键通过 `.default(undefined)` 保留省略语义，未来任何可选数组键都必须同样处理。
 - **载荷边界** —— 派发闸门校验委派载荷（Assignment 文本），而非子代理的运行时行为；如需向模型可见的子活动建面，事后经 `subagent/start` 观察仍为可选项。
 - **状态闸门因 seam 设计而内容盲**——`fs/write-intent`/`fs/edit-intent` 瀑布链只携带 `(target, actor)`，从不携带写入内容，因此**首次**把合法 `status.json` 写坏的写入在两种模式下都会通过（闸门只校验写入前的磁盘文档）。hard 模式因此从不否决状态写入：对已非法文档按**修复逃生**放行（error 级咨询，`hard: true, repair: true`），让修复性写入能落地。恢复路径：就地修复文档（闸门允许）或删除 `status.json` 让 harness 重建；hard 部署应监控 `repair: true` 咨询。
@@ -212,6 +212,6 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **profile-bundle 安装到 `web` profile：local checkout 与 repo url，无 registry 途径**——`dsh plugin --profile web add <本地检出>` 已验证；repo url 形态（`add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh`）走同一 pnpm + reconcile 机制，并已对真实远端验证（pnpm 解析 `path:` spec，reconcile 步骤把 `@mstar-harness/dsh` 并入 `dsh.profile.bundles`）；暂不提供公开 registry 安装。git 托管的安装经包的 `prepare` 脚本构建，pnpm ≥10 会先阻止——须在 profile 的 `pnpm-workspace.yaml` 中加入 `allowBuilds` key（首次 `add` 以 pnpm 提示失败，重跑即成功）。
 - **`lintSkillWrite` 类型化否决尚未接入生产**——传入文档分支的 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）已导出并测试覆盖，但尚无生产调用方：engine `HostAdapter` 没有携带内容的技能写入钩子（只有 `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`），且 fs intent 槽位内容盲。接线随未来携带内容的钩子落地；在此之前监听器路径只通过修复逃生咨询执行（从不否决）。
 - **CLI `HOST_SIGNALS` 缺少 `subagent` token**——engine `ToolSignal` 联合已包含它且 `detectHost` 能处理，但 `packages/cli` 的 `HOST_SIGNALS` 尚未更新，`mstar host detect --signals subagent` 会拒绝，直到上游化时更新 CLI 列表。
-- **入口 `src/index.ts` 保持单体**——模块拆分延后：2600+ 行的入口原样交付，因为此时拆分会对已评审、全量测试的表面引入失稳风险且零行为收益；拆分仍是后续项。
+- **入口是 `src/gates/*` 之上的模块索引**——拆分已交付：`src/index.ts`（371 行）从各 gate 模块（`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`）原样 re-export 冻结的 27 名导出面，并保留插件 manifest、单一 cordis augmentation 点、命令注册与 `apply()` 启动接线。导出面（17 值导出 + 10 type-only 名；`Config` 计一次）由 `tests/export-surface.spec.ts` 冻结——运行时值导出集 + `typecheck:tests`（`bunx tsc --noEmit -p tests/tsconfig.json`）下的值命名空间恒等与逐名类型探测。
 - **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。
 - **工作流面板图中 Phase 1/5 为 schema 驱动**——react-flow 循环图从 `mstar-engine-status` catalog 证据渲染阶段环 + plan 状态机；iteration-start / merge-ready 节点是 engine 闸门永不点亮的 schema 常量（transition 只覆盖 Phase 2→3→4），loop 边为规划语义——已记录于迭代 guide，非缺陷。完整面板限制清单见 Web 客户端插件一节。

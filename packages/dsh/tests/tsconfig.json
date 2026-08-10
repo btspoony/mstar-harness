@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "types": ["bun-types", "react"],
+    "noEmit": true
+  },
+  "include": ["**/*.ts", "**/*.tsx", "../src/client/css-modules.d.ts"]
+}

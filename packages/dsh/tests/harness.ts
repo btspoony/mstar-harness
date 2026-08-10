@@ -179,3 +179,28 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     },
   }
 }
+
+/**
+ * Canonical value of one `mstar_*_validate` / `mstar_sdd_*` / seam tool
+ * result. The dsh-tools seam types the successful `value` as lossless
+ * `JsonValue` (includes `null` + primitives), so specs must narrow it to the
+ * object contract the tools actually return before property access.
+ */
+export interface ToolResultValue {
+  ok: boolean
+  violations: Array<{ code: string; severity?: string; message?: string }>
+  secrets?: Array<{ type: string }>
+  level?: string
+  level_missing?: string[]
+  entry?: ToolResultValue
+  exit?: ToolResultValue
+  sdd_dir?: string
+  brief_file?: string
+  [key: string]: unknown
+}
+
+/** Narrow one successful tool result to its canonical value (throws on failure). */
+export function valueOf(result: import('@deepseek-ai/dsh-tools').ToolExecutionResult): ToolResultValue {
+  if (result.isError) throw new Error(`tool call failed: ${result.error?.message ?? 'unknown error'}`)
+  return result.value as ToolResultValue
+}

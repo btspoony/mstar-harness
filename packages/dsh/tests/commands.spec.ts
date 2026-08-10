@@ -43,6 +43,9 @@ function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
     agent: {
       id: 'test-agent',
       status: 'idle',
+      // The Agent contract requires the live session (cwd read); the command
+      // handler only steers — an empty session header is enough for the fake.
+      session: { header: {} },
       steer: (message: UserMessage) => { steered.push(message) },
       followup: () => {},
     },

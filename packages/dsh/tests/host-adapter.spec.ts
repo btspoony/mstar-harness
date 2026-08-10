@@ -33,6 +33,7 @@ import { join } from 'node:path'
 import { Context } from 'cordis'
 import type { HostAdapter } from '@mstar-harness/engine'
 import type { AssignmentFields } from '@mstar-harness/engine'
+import type { IntegrationMergeLease } from '@mstar-harness/engine'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { DshHostAdapter, HarnessResolver, type Config } from '../src/index.ts'
@@ -452,7 +453,7 @@ describe('beforeMerge — integration merge lease (thin engine validateIntegrati
     booted = await bootApp()
     const adapter = makeAdapter()
 
-    const result = await adapter.beforeMerge({ holder: 'h' })
+    const result = await adapter.beforeMerge({ holder: 'h' } as IntegrationMergeLease)
     const codes = result.violations.map((v) => v.code)
 
     expect(result.ok).toBe(false)

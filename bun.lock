@@ -13,7 +13,7 @@
     },
     "packages/cli": {
       "name": "@mstar-harness/cli",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
       },
@@ -38,7 +38,7 @@
         "@deepseek-ai/dsh-skill": "^0.0.1",
         "@deepseek-ai/dsh-skill-local": "^0.0.1",
         "@deepseek-ai/dsh-tools": "^0.0.1",
-        "@mstar-harness/engine": "2.0.4",
+        "@mstar-harness/engine": "2.0.5",
         "@types/node": "^25.6.0",
         "@types/react": "~18.3.1",
         "@xyflow/react": "^12.11.2",
@@ -112,7 +112,7 @@
     },
     "packages/engine": {
       "name": "@mstar-harness/engine",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "devDependencies": {
         "@types/node": "^25.6.0",
         "bun-types": "^1.2.17",
@@ -121,7 +121,7 @@
     },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "dependencies": {
         "@mstar-harness/engine": "1.8.8",
         "@opencode-ai/plugin": "1.4.8",
@@ -786,6 +786,8 @@
     "zod": ["zod@4.1.8", "", {}, "sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ=="],
 
     "zustand": ["zustand@4.5.7", "", { "dependencies": { "use-sync-external-store": "^1.2.2" }, "peerDependencies": { "@types/react": ">=16.8", "immer": ">=9.0.6", "react": ">=16.8" }, "optionalPeers": ["@types/react", "immer", "react"] }, "sha512-CHOUy7mu3lbD6o6LJLfllpjkzhHXSBlX8B9+qPddUsIfeF5S/UZ5q0kmCsnRqT1UHFQZchNFDDzMbQsuesHWlw=="],
+
+    "@mstar-harness/dsh/@mstar-harness/engine": ["@mstar-harness/engine@2.0.4", "", {}, "sha512-GPxI2xrdTx3D0xpV5065dybx2rHjU6tBaPo8V31T6/0EPS1l79TvXjGN1ZmGIECdVhRzbltNPNESx4b8BY12Ng=="],
 
     "@oh-my-pi/omp-stats/react": ["react@19.2.7", "", {}, "sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ=="],
 
