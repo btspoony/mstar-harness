@@ -101,8 +101,9 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 
 | Path | When |
 |------|------|
-| `/iteration-start` → `/iteration-drive` | First iteration, or need human direction lock before execute |
-| `/iteration-loop` | Full Phase 1→5 with minimal check-ins (optional `direction`, `scale` S\|M\|L\|XL) |
+| `/iteration-start` | Phase 1 (interactive grill-me) then auto-continues Phase 2→5; `pause` to stop after Phase 1 |
+| `/iteration-drive` | Resume Phase 2→5 on an already-locked iteration |
+| `/iteration-loop` | Full Phase 1→5 autonomous (no grill-me; optional `direction`, `scale` S\|M\|L\|XL) |
 
 ### Codebase audit
 
@@ -136,11 +137,11 @@ flowchart TD
     C --> B
     B -->|Yes| D["PM: initialize/load HARNESS_DIR and PLAN_DIR"]
     D --> E{"Iteration scope needed"}
-    E -->|Deep / first iteration| F["iteration-start: compass, plans, review chain"]
+    E -->|Deep / first iteration| F["iteration-start: grill-me → compass → review → lock"]
     E -->|Fast autonomous loop| F2["iteration-loop: Phase 1→5 continuous"]
     F --> G["PM: lock compass and create integration branch"]
     F2 --> G
-    G --> H["iteration-drive or loop continues: execute → close → PR → merge-ready"]
+    G --> H["Phase 2→5: execute → close → PR → merge-ready"]
     E -->|No| I["PM: select active plan from status.json"]
     H --> I
     I --> J{"Any plan not Done"}

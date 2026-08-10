@@ -101,8 +101,9 @@ npx @mstar-harness/cli init
 
 | 路径 | 何时 |
 |------|------|
-| `/iteration-start` → `/iteration-drive` | 首次迭代，或需要人工方向锁定后再执行 |
-| `/iteration-loop` | Phase 1→5 连续少确认（可选 `direction`、`scale` S\|M\|L\|XL） |
+| `/iteration-start` | Phase 1（交互式 grill-me）后自动推进 Phase 2→5；`pause` 可止于 Phase 1 |
+| `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→5 |
+| `/iteration-loop` | Phase 1→5 全自动（无 grill-me；可选 `direction`、`scale` S\|M\|L\|XL） |
 
 ### 代码库审计
 
@@ -136,11 +137,11 @@ flowchart TD
     C --> B
     B -->|是| D["PM: 初始化或加载 HARNESS_DIR 与 PLAN_DIR"]
     D --> E{"是否需要 iteration scope"}
-    E -->|深度 / 首次 iteration| F["iteration-start: compass、plans、review chain"]
+    E -->|深度 / 首次 iteration| F["iteration-start: grill-me → compass → review → lock"]
     E -->|快速自动化闭环| F2["iteration-loop: Phase 1→5 连续"]
     F --> G["PM: 锁定 compass 并创建 integration branch"]
     F2 --> G
-    G --> H["iteration-drive 或 loop 继续: execute → close → PR → merge-ready"]
+    G --> H["Phase 2→5: execute → close → PR → merge-ready"]
     E -->|否| I["PM: 从 status.json 选择 active plan"]
     H --> I
     I --> J{"是否仍有 plan 未 Done"}

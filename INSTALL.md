@@ -280,7 +280,7 @@ Register the harness as a marketplace (without the CLI). Create `~/.zcode/cli/pl
       "name": "morning-star-harness",
       "source": { "source": "github", "repo": "btspoony/mstar-harness", "ref": "main" },
       "description": "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "category": "Productivity"
     }
   ]
@@ -375,7 +375,8 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
    - omp: use `/skill:pm` (no session auto-load).
 
 2. **Run an iteration** (see [README — Harness Commands](README.md#harness-commands))
-   - **Deep / first iteration:** `/iteration-start` (Phase 1) → `/iteration-drive` (Phase 2–5).
+   - **Deep / first iteration:** `/iteration-start` (Phase 1 grill-me → auto-continues Phase 2→5; `pause` to stop after Phase 1).
+   - **Resume interrupted iteration:** `/iteration-drive` (Phase 2→5 re-entry).
    - **Fast autonomous loop:** `/iteration-loop` (Phase 1→5, optional `direction` + `scale`).
 
 3. **Project knowledge** — bootstrap or refresh via the `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`), not a separate install step.
