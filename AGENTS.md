@@ -165,6 +165,13 @@ If one of these checks fails, stop and report why.
   - Add/update trigger phrases when scenarios expand.
 - If a change alters behavior (not just wording), include evaluation evidence.
 
+## Local scratch layout (`.tmp/`, `.worktrees/`)
+
+统一本地布局约定（gitignored，用完即清）：
+
+- 临时文件（一次性探针、日志、浏览器 profile、验证脚本等）→ 仓库根 **`.tmp/*`**，用完即清，不跨轮次残留
+- Git feature worktrees → **`.worktrees/*`**（每 plan 一个子目录，如 `.worktrees/<plan-id>-<slug>`，`git worktree add .worktrees/<slug> -b feature/<plan-slug>`）；合并后 `git worktree remove` 并 `git worktree prune`
+
 ## Local maintenance workspace (`.harness/`, gitignored)
 
 Use **`.harness/`** only for **in-progress maint work** on this repo (not published runtime skills):

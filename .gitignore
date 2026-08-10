@@ -1,10 +1,11 @@
 node_modules
+/.tmp/
+/.worktrees/
 secrets.env
 .secrets/
 .harness/
 .mstar/
 .gitnexus/
-.wt-*/
 
 # ZCode client workspace state
 .zcode/
