@@ -26,7 +26,7 @@ export function Sidebar({ t, state, source }: SidebarProps) {
       <div className={css.sidebarScroll} data-mstar-sidebar-scroll>
         {state === null
           ? <p className={css.empty} data-mstar-empty="no-state">{t('state.none')}</p>
-          : <StateSection t={t} state={state} />}
+          : <StateSection t={t} state={state} enforcement={source.enforcement} />}
       </div>
       <PanelMeta t={t} source={source} />
     </aside>

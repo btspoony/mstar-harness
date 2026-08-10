@@ -106,7 +106,10 @@ const fullSource: MstarEngineStatusSource = {
       { severity: 'high', count: 2 },
       { severity: 'medium', count: 1 },
     ],
-    residualFindings: [],
+    residualFindings: [
+      { planId: '20260808-dsh-package-core', id: 'R1', severity: 'high', title: 'doneAt passthrough untested' },
+      { planId: '20260809-dsh-workflow-viz-panel', id: 'R2', severity: 'medium', title: 'header removal doc drift' },
+    ],
     iterationBaseBranch: 'dev-dsh',
     targetBranch: 'dev-dsh',
     specIntegrationBranch: 'iteration/iter-20260809-dsh-workflow-viz',
@@ -287,26 +290,35 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).toContain('plan 20260809-dsh-workflow-viz-panel not complete')
   })
 
-  it('renders the state section: plans board, residuals, branches, policy, leases, knowledge, direction', () => {
+  it('renders the state section: plans board, residual findings, policy (enforcement first), leases, knowledge, direction', () => {
     expect(html).toContain('data-mstar-section="state"')
     // Plan status board: id(status) rows.
     expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
     expect(html).toContain('data-plan-status="InProgress"')
     expect(html).toContain('data-plan-id="20260808-dsh-package-core"')
     expect(html).toContain('data-plan-status="Done"')
-    // Residual counts by severity.
-    expect(html).toContain('data-residual-severity="high"')
-    expect(html).toContain('data-residual-severity="medium"')
-    expect(html).toContain('data-residual-count="2"')
-    expect(html).toContain('data-residual-count="1"')
-    // Branch anchors.
-    expect(html).toContain('data-field="iteration-base-branch"')
-    expect(html).toContain('iteration/iter-20260809-dsh-workflow-viz')
-    // Policy anchors.
+    // Residual findings: R# id + severity chip + title/planId (spec §5).
+    expect(html).toContain('data-residual-finding')
+    expect(html).toContain('data-residual-finding-id="R1"')
+    expect(html).toContain('data-residual-finding-id="R2"')
+    expect(html).toContain('data-residual-finding-severity="high"')
+    expect(html).toContain('data-residual-finding-severity="medium"')
+    expect(html).toContain('doneAt passthrough untested')
+    expect(html).toContain('data-residual-finding-plan="20260809-dsh-workflow-viz-panel"')
+    // Policy anchors — enforcement FIRST (from source.enforcement, spec §2.1).
+    expect(html).toContain('data-field="enforcement"')
+    expect(html).toContain('hard (iteration compass)')
+    expect(html.indexOf('data-field="enforcement"')).toBeLessThan(html.indexOf('data-field="push-policy"'))
     expect(html).toContain('data-field="push-policy"')
     expect(html).toContain('push authorized')
     expect(html).toContain('data-field="worktree-mode"')
     expect(html).toContain('feature-worktree')
+    expect(html).toContain('data-field="control-worktree-path"')
+    // Branches block removed from the sidebar (moved to the iteration zone,
+    // plan 20260810-panel-canvas-zones) — the branch anchors are gone.
+    expect(html).not.toContain('data-field="iteration-base-branch"')
+    expect(html).not.toContain('data-field="target-branch"')
+    expect(html).not.toContain('data-field="spec-integration-branch"')
     // Lease anchors.
     expect(html).toContain('data-lease-plan="20260809-dsh-workflow-viz-panel"')
     expect(html).toContain('dsh-web-mstar-workflow')
@@ -563,7 +575,7 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html).toContain('data-mstar-sidebar')
     expect(html).toContain('data-mstar-sidebar-scroll')
     expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
-    expect(html).toContain('data-residual-severity="high"')
+    expect(html).toContain('data-residual-finding-severity="high"')
     expect(html).toContain('data-knowledge-docs="3"')
     expect(html).toContain('data-lease-plan="20260809-dsh-workflow-viz-panel"')
     // The digest content lives INSIDE the sidebar scroll region; the meta dock
@@ -579,6 +591,88 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html).toContain('data-mstar-graph')
     expect(html).toContain('data-graph-canvas')
     expect(html).toContain('data-graph-nodes-draggable="false"')
+  })
+})
+
+describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings cap, policy enforcement (spec panel-zones §3/§5)', () => {
+  /** Sidebar state-section slice: from `data-mstar-section="state"` to the meta dock — excludes the graph's own plan rows. */
+  function stateSlice(html: string): string {
+    const start = html.indexOf('data-mstar-section="state"')
+    const end = html.indexOf('data-mstar-meta')
+    return start === -1 || end === -1 ? html : html.slice(start, end)
+  }
+
+  it('plan board caps at 5 in spec §3 order with a +N more note; ≤5 renders no note', () => {
+    const many = panelHtml({
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: 'plan-1', status: 'Todo', doneAt: null },
+          { id: 'plan-2', status: 'InProgress', doneAt: null },
+          { id: 'plan-3', status: 'InProgress', doneAt: null },
+          { id: 'plan-4', status: 'InReview', doneAt: null },
+          { id: 'plan-5', status: 'InReview', doneAt: null },
+          { id: 'plan-6', status: 'Done', doneAt: '2026-08-08' },
+          { id: 'plan-7', status: 'Done', doneAt: '2026-08-09' },
+        ],
+      },
+    })
+    const s = stateSlice(many)
+    // Spec §3 order: doneAt digitized DESC first (plan-7, plan-6), then the
+    // no-doneAt plans by id lex DESC (plan-5 … plan-3 fill the 5-row cap).
+    expect(s.indexOf('data-plan-id="plan-7"')).toBeLessThan(s.indexOf('data-plan-id="plan-6"'))
+    expect(s.indexOf('data-plan-id="plan-6"')).toBeLessThan(s.indexOf('data-plan-id="plan-5"'))
+    expect(s).toContain('data-plan-id="plan-4"')
+    expect(s).toContain('data-plan-id="plan-3"')
+    // Cap 5 → the two lowest rows hide behind the +N more note.
+    expect(s).toContain('data-plan-truncated')
+    expect(s).toContain('+2 more')
+    expect(s).not.toContain('data-plan-id="plan-2"')
+    expect(s).not.toContain('data-plan-id="plan-1"')
+    // The fixture (2 plans) renders no truncation note.
+    expect(stateSlice(panelHtml(fullSource))).not.toContain('data-plan-truncated')
+  })
+
+  it('residual findings cap at 10 with an overflow hint; ≤10 renders none (spec §5)', () => {
+    const findings = Array.from({ length: 12 }, (_, i) => ({
+      planId: 'plan-x',
+      id: `R${i + 1}`,
+      severity: 'nit' as string,
+      title: `finding ${i + 1}`,
+    }))
+    const s = stateSlice(panelHtml({
+      ...fullSource,
+      state: { ...fullSource.state!, residualFindings: findings },
+    }))
+    expect(s).toContain('data-residual-truncated')
+    expect(s).toContain('+2 more')
+    expect(s).toContain('data-residual-finding-id="R1"')
+    expect(s).toContain('data-residual-finding-id="R10"')
+    expect(s).not.toContain('data-residual-finding-id="R11"')
+    expect(s).not.toContain('data-residual-finding-id="R12"')
+    // Fixture: 2 findings → no overflow hint.
+    expect(stateSlice(panelHtml(fullSource))).not.toContain('data-residual-truncated')
+  })
+
+  it('residualFindings null (root key unreadable) degrades to the none note, never a crash', () => {
+    const s = stateSlice(panelHtml(noGateSource))
+    expect(s).toContain('data-mstar-empty="no-residuals"')
+    expect(s).toContain('none')
+  })
+
+  it('enforcement missing / garbage degrades the policy row to unknown, never a crash', () => {
+    // Missing (degradedSource carries enforcement: undefined) → unknown value.
+    expect(panelHtml(degradedSource)).toContain('data-field="enforcement">unknown')
+    // Garbage (non-object) → same unknown degrade.
+    const garbage = panelHtml({ ...fullSource, enforcement: 'not-an-object' } as unknown as MstarEngineStatusSource)
+    expect(garbage).toContain('data-field="enforcement">unknown')
+  })
+
+  it('soft enforcement renders soft + provenance source (spec §2.1)', () => {
+    const soft = panelHtml({ ...fullSource, enforcement: { hard: false, source: 'iteration compass' as EnforcementSource } })
+    expect(soft).toContain('data-field="enforcement"')
+    expect(soft).toContain('soft (iteration compass)')
   })
 })
 
@@ -600,10 +694,13 @@ describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflo
     expect(zhHtml).toContain('data-mstar-meta-harness')
     expect(zhHtml).toContain('mstar 2.0.4')
     expect(zhHtml).toContain('harness: /proj/.mstar')
-    // The deleted header captions must not leak into the zh body.
+    // The deleted header captions must not leak into the zh body; the
+    // enforcement caption now lives in the sidebar POLICY section (moved from
+    // the header — T3), so it IS expected in the zh body.
     expect(zhHtml).not.toContain('版本')
     expect(zhHtml).not.toContain('harness 目录')
-    expect(zhHtml).not.toContain('执行策略')
+    expect(zhHtml).toContain('执行策略')
+    expect(zhHtml).toContain('data-field="enforcement"')
     expect(zhHtml).toContain('自主执行')
     expect(zhHtml).toContain('迭代收口')
   })

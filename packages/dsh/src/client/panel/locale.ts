@@ -76,15 +76,16 @@ export type PanelKey =
   | 'state.title'
   | 'state.plans'
   | 'state.residuals'
-  | 'state.branches'
   | 'state.policy'
   | 'state.leases'
   | 'state.knowledge'
   | 'state.direction'
   | 'state.none'
-  | 'state.branch.iteration-base'
-  | 'state.branch.target'
-  | 'state.branch.spec-integration'
+  | 'state.enforcement'
+  | 'state.enforcement.hard'
+  | 'state.enforcement.soft'
+  | 'state.plans.more'
+  | 'state.residual.more'
   | 'state.policy.push'
   | 'state.policy.worktree'
   | 'state.policy.control-worktree'
@@ -155,15 +156,16 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.title': '工作区状态',
   'state.plans': '计划',
   'state.residuals': '未决残留',
-  'state.branches': '分支',
   'state.policy': '策略',
   'state.leases': '租约',
   'state.knowledge': '知识',
   'state.direction': '方向',
   'state.none': '无',
-  'state.branch.iteration-base': 'iteration base',
-  'state.branch.target': 'target',
-  'state.branch.spec-integration': 'spec integration',
+  'state.enforcement': '执行策略',
+  'state.enforcement.hard': 'hard',
+  'state.enforcement.soft': 'soft',
+  'state.plans.more': '+{count} 更多',
+  'state.residual.more': '+{count} 更多',
   'state.policy.push': 'push',
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',
@@ -229,15 +231,16 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.title': 'Workspace state',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
-  'state.branches': 'Branches',
   'state.policy': 'Policy',
   'state.leases': 'Leases',
   'state.knowledge': 'Knowledge',
   'state.direction': 'Direction',
   'state.none': 'none',
-  'state.branch.iteration-base': 'iteration base',
-  'state.branch.target': 'target',
-  'state.branch.spec-integration': 'spec integration',
+  'state.enforcement': 'enforcement',
+  'state.enforcement.hard': 'hard',
+  'state.enforcement.soft': 'soft',
+  'state.plans.more': '+{count} more',
+  'state.residual.more': '+{count} more',
   'state.policy.push': 'push',
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',
