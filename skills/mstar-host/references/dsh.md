@@ -52,13 +52,8 @@ or a custom profile).
   is the only session-level panel seat without dsh-private layout changes);
   no-session → shell hero (strict-session view ring). Panel acceptance is
   dual-track: in-loop browser harness verification (agent-browser/CDP against
-  the rebuilt bundle — see
-  `.mstar/iterations/iter-20260810-panel-fix-agentflow/guides/`
-  (maintainer-local evidence — `.mstar/` is gitignored, so the path is
-  unresolved in consumer checkouts)) plus user-restart final GUI acceptance.
-  See
-  `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`
-  for the verified install run.
+  the rebuilt bundle, iteration guides record the verified runs) plus
+  user-restart final GUI acceptance.
 
 ## Skill loading
 

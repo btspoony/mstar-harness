@@ -150,7 +150,7 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 **Naming conventions (PM / ops; examples only — paths MUST be canonical absolute)**
 
 1. **Control worktree** — usually the primary checkout or a PM-designated path on `spec_integration_branch`; record once in `metadata.control_worktree_path`.
-2. **Feature worktree (per plan)** — one distinct sibling directory per active `plan_id`, e.g. `<repo-parent>/worktrees/<plan-id>` or team `.worktrees/<plan-id>`; Assignment **`Worktree path`** must match lease `worktree_path`.
+2. **Feature worktree (per plan)** — one distinct subdirectory under the workspace root **`.worktrees/`** per active `plan_id` (e.g. `.worktrees/<plan-id>-<slug>`; AGENTS.md「Local scratch layout」), gitignored by the repo convention; Assignment **`Worktree path`** must match lease `worktree_path`.
 3. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
 
 > **Engine check (when available):** run `mstar worktree check <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck, assertControlVsFeaturePath, assertBranchAlignment } from "@mstar-harness/engine"` in a host hook) to verify the L1/L2 isolation rules above (lease worktree ≠ control path; checked-out branch matches `Working branch`). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
