@@ -141,6 +141,14 @@ export interface AgentZoneStage {
   phase: PhaseId
   stage: string
   roles: readonly string[]
+  /**
+   * Dispatch evidence (spec §4): any dispatch row's role maps to this stage —
+   * the render shows the dashed "待执行" placeholder ONLY for un-evidenced
+   * stages (the `pending` count is the same per-stage test). Evidence comes
+   * from ALL dispatch rows, not just each entity's latest — an agent
+   * re-dispatched under another role still lights its earlier stage.
+   */
+  evidenced: boolean
 }
 
 /**
@@ -595,6 +603,7 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     phase: s.phase,
     stage: s.stage,
     roles: s.roles,
+    evidenced: false,
   }))
   const state = source == null ? null : (source as { state?: unknown }).state
   const agentFlow = state == null ? undefined : (state as { agentFlow?: unknown }).agentFlow
@@ -609,6 +618,20 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
   const entries = classifyFlowRows(rawEvents)
   const empty = rawEvents.length === 0
 
+  // Evidence (spec §4): a stage is evidenced when any dispatch row's role maps
+  // to it (roles are unique across stages, so this equals literal role
+  // membership). Counted from ALL dispatch rows — an agent re-dispatched under
+  // another role still lights its earlier stage. The same set drives the
+  // per-stage `evidenced` flag (the render's pending-placeholder decision) and
+  // the `pending` count — no drift.
+  const evidenced = new Set<string>()
+  for (const e of entries) {
+    if (e.view.kind === 'dispatch' && e.view.stage !== null) {
+      evidenced.add(`${e.view.stage.phase}:${e.view.stage.stage}`)
+    }
+  }
+  for (const s of stages) s.evidenced = evidenced.has(s.id)
+
   // Shared settle→dispatch pairing (one walk, spec §4): the settle status per
   // paired dispatch index; entity status looks up its latest dispatch's pair.
   // `view.status` already carries settleStatus(outcome) for settle rows, so
@@ -621,17 +644,7 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
   const edges = [...expectedEdges(stages), ...actualEdges(entries), ...nextEdges(entities, stages)]
 
   const executing = entities.filter((e) => e.status === 'running').length
-  // Pending = expected roles of stages with NO dispatch evidence (spec §4). A
-  // stage has evidence when any dispatch row's role maps to it (roles are
-  // unique across stages, so this equals literal role membership). Counted
-  // from ALL dispatch rows — an agent re-dispatched under another role still
-  // lights its earlier stage.
-  const evidenced = new Set<string>()
-  for (const e of entries) {
-    if (e.view.kind === 'dispatch' && e.view.stage !== null) {
-      evidenced.add(`${e.view.stage.phase}:${e.view.stage.stage}`)
-    }
-  }
+  // Pending = expected roles of stages with NO dispatch evidence (spec §4).
   const pending = stages.reduce((sum, s) => sum + (evidenced.has(s.id) ? 0 : s.roles.length), 0)
 
   return { stages, degraded: false, empty, entities, edges, executing, pending }

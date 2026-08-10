@@ -864,6 +864,24 @@ describe('projectGraph — agents zone counts (spec §4)', () => {
     ])).agents
     expect(agents.pending).toBe(12 - 3 - 1) // 8
   })
+
+  it('stage.evidenced flags the SAME stages as the pending count (render placeholder decision)', () => {
+    // Evidence: fullstack-dev (sdd-implement) + generalPurpose
+    // (sdd-task-review); the re-dispatched a1 lights its earlier stage too.
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 3, role: 'generalPurpose', agent: 'a1' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
+    ])).agents
+    const byId = new Map(agents.stages.map((s) => [s.id, s.evidenced]))
+    expect(byId.get('autonomous-execute:sdd-implement')).toBe(true)
+    expect(byId.get('autonomous-execute:sdd-task-review')).toBe(true)
+    for (const id of ['iteration-start:review-edit-chain', 'autonomous-execute:qc-tri', 'autonomous-execute:qa-gate', 'autonomous-execute:ops-on-demand']) {
+      expect(byId.get(id)).toBe(false)
+    }
+    // The count equals the sum of un-evidenced stage roles (no drift).
+    const unEvidenced = agents.stages.filter((s) => !s.evidenced).reduce((sum, s) => sum + s.roles.length, 0)
+    expect(unEvidenced).toBe(agents.pending)
+  })
 })
 
 describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
@@ -874,6 +892,9 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     expect(degraded.executing).toBe(0)
     expect(degraded.pending).toBe(0)
     expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(5)
+    // No evidence claims on a degraded skeleton either (render shows no
+    // pending placeholders, no cards — spec §8).
+    expect(degraded.stages.every((s) => !s.evidenced)).toBe(true)
   })
 
   it('empty ledger → empty + full pending skeleton (0 executing, 12 pending)', () => {

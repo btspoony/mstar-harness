@@ -745,10 +745,10 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     expect(root).toMatch(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\*\s*\{[\s\S]*?transition:\s*none\s*!important[\s\S]*?animation:\s*none\s*!important/,
     )
-    // The zones css carries no own motion of its own: no animation yet (the
-    // plan-3 dash-flow lands under the same root rule) and no self-contained
-    // reduced-motion block (the root rule is the single coverage point).
-    expect(cssText).not.toMatch(/animation:/)
+    // The zones css DECLARES its own animations (the plan-3 next-edge dash
+    // flow + the running-card pulse) but carries NO self-contained
+    // reduced-motion block — the root rule (`* { animation: none !important }`
+    // inside the media query, asserted above) is the single coverage point.
     expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
   })
 
@@ -923,14 +923,15 @@ describe('workflow panel — T2 zone dashboard: three zones + fixed footer + cor
     expect(html).toContain('data-iteration-active="true"')
     expect(html).toContain('data-iteration-branches')
     // tasks renders the real kanban (Task 4): the board + 6 columns + counts
-    // + the fixture's cards; agents keeps its muted placeholder until plan 3.
+    // + the fixture's cards.
     expect(html).toContain('data-mstar-kanban')
     expect(html).toContain('data-kanban-column="Todo"')
     expect(html).toContain('data-kanban-column="unknown"')
     expect(html).toContain('data-tasks-total="2"')
     expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
     expect(html).toContain('data-plan-status="InProgress"')
-    // fullSource.agentFlow === null → agents zone shows the degraded muted note.
+    // fullSource.agentFlow === null → agents zone shows the degraded muted note
+    // (plan 3 T2 renders the real zone; this fixture has no ledger evidence).
     expect(html).toContain('No agent-flow evidence (ledger missing)')
   })
 
@@ -1470,8 +1471,13 @@ describe('workflow panel — T2 event dock: canvas-corner agent-flow events (spe
     expect(html).toContain('data-mstar-flow-unexpected')
     expect(html).toContain('Unexpected roles')
     expect(html).toContain('scout')
-    // With evidence present, the agents zone shows the generic pending placeholder.
-    expect(html).toContain('Agent flow zone (entities / flow) pending')
+    // With evidence present, the agents zone renders REAL entity cards (plan
+    // 3 T2 — the placeholder is gone): a1 settled in sdd-implement, a2 scout
+    // (running, unexpected role) in the trailing unexpected column.
+    expect(html).toContain('data-agent-entity="a1"')
+    expect(html).toContain('data-agent-entity="a2"')
+    expect(html).toContain('data-agent-stage="unexpected"')
+    expect(html).toContain('data-agent-summary')
   })
 
   it('the unexpected section mounts only on unexpected-role evidence (never a guessed warning)', () => {
@@ -1545,6 +1551,205 @@ describe('workflow panel — T2 event dock: canvas-corner agent-flow events (spe
     expect(after).toContain('data-agent-event-count="3"')
     expect(after).toContain('plan-1#T2')
     expect(after).not.toContain('No agent-flow evidence (ledger missing)')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T2 agent flow zone (spec panel-zones §4/§8, plan 20260810-panel-agent-flow-
+ * zone): the 6 EXPECTED_ROLE_FLOW stage columns + entity cards (name/role
+ * chip/task tag/status point/×N) + the summary row + pending placeholders +
+ * expected/actual/next arrows (the next edge animated — dash-flow keyframes
+ * declared in the zones css, killed by the root reduced-motion rule) + the
+ * optional unexpected-role column + the three muted degradation anchors.
+ * ------------------------------------------------------------------------- */
+
+/** A running pipeline: one settled implement + three running stages — the
+ * latest running (a2) lights the next edge sdd-task-review → qc-tri. */
+const pipelineEvents: AgentFlowEventView[] = [
+  flowSettle({ ts: 5_000, agent: 'a1', outcome: 'ok' }),
+  flowDispatch({ ts: 4_000, agent: 'a1', role: 'fullstack-dev', planId: 'plan-1', taskId: 'T2' }),
+  flowDispatch({ ts: 3_000, agent: 'a2', role: 'generalPurpose', planId: 'plan-1', taskId: 'T3' }),
+  flowDispatch({ ts: 2_000, agent: 'a3', role: 'qc-specialist', planId: 'plan-1', taskId: 'T4' }),
+  flowDispatch({ ts: 1_000, agent: 'a4', role: 'qa-engineer', planId: 'plan-1', taskId: 'T5' }),
+]
+
+/** Two same-plan same-role dispatches in ONE stage — an in-column handoff
+ * arrow (a2 → a1) plus the next edge sdd-implement → sdd-task-review. */
+const handoffEvents: AgentFlowEventView[] = [
+  flowDispatch({ ts: 4_000, agent: 'a1', role: 'fullstack-dev', planId: 'plan-1', taskId: 'T1' }),
+  flowDispatch({ ts: 3_000, agent: 'a2', role: 'fullstack-dev', planId: 'plan-1', taskId: 'T2' }),
+]
+
+/** The agents zone slice: from the zone frame to the fixed footer bar. */
+function agentsSlice(html: string): string {
+  const start = html.indexOf('data-zone="agents"')
+  const end = html.indexOf('data-mstar-graph-footer')
+  return start === -1 || end === -1 ? html : html.slice(start, end)
+}
+
+describe('workflow panel — T2 agent flow zone: stage columns + entity cards + arrows + next animation (spec panel-zones §4/§8)', () => {
+  it('renders the 6 EXPECTED_ROLE_FLOW stage columns with stage labels + phase tags', () => {
+    const a = agentsSlice(panelHtml(flowSource(pipelineEvents)))
+    for (const id of [
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+    ]) {
+      expect(a).toContain(`data-agent-stage="${id}"`)
+    }
+    // Phase tags ride the zone.phase.* keys (en).
+    expect(a).toContain('data-agent-stage-phase="iteration-start"')
+    expect(a).toContain('data-agent-stage-phase="autonomous-execute"')
+    expect(a).toContain('Iteration Start')
+    expect(a).toContain('Autonomous Execute')
+  })
+
+  it('renders entity cards: name / role chip / task tag / status point / ×N', () => {
+    const a = agentsSlice(panelHtml(flowSource(pipelineEvents)))
+    for (const key of ['a1', 'a2', 'a3', 'a4']) expect(a).toContain(`data-agent-entity="${key}"`)
+    // Role chips + task tags (planId#taskId).
+    expect(a).toContain('fullstack-dev')
+    expect(a).toContain('generalPurpose')
+    expect(a).toContain('qc-specialist')
+    expect(a).toContain('qa-engineer')
+    expect(a).toContain('plan-1#T2')
+    expect(a).toContain('plan-1#T3')
+    // Status points: a1 settled (paired ✓), a2–a4 running.
+    expect(a).toContain('data-agent-status="settled"')
+    expect(a).toContain('✓')
+    expect(a.match(/data-agent-running="true"/g)).toHaveLength(3)
+    expect(a).toContain('data-agent-status="running"')
+  })
+
+  it('summary row: N executing · M pending from the projection', () => {
+    const a = agentsSlice(panelHtml(flowSource(pipelineEvents)))
+    expect(a).toContain('data-agent-summary')
+    expect(a).toContain('data-agent-summary-executing="3"')
+    expect(a).toContain('data-agent-summary-pending="4"')
+    expect(a).toContain('3 executing · 4 pending')
+  })
+
+  it('un-evidenced stages render the dashed 待执行 placeholder with expected role chips', () => {
+    // pipelineEvents evidence: sdd-implement / sdd-task-review / qc-tri /
+    // qa-gate → only review-edit-chain (3 roles) + ops-on-demand (1) pending.
+    const a = agentsSlice(panelHtml(flowSource(pipelineEvents)))
+    expect(a.match(/data-agent-pending=/g)).toHaveLength(2)
+    expect(a).toContain('data-agent-pending="iteration-start:review-edit-chain"')
+    expect(a).toContain('data-agent-pending="autonomous-execute:ops-on-demand"')
+    // Expected role chips inside the placeholders (data-role anchors).
+    expect(a).toContain('data-role="product-manager"')
+    expect(a).toContain('data-role="architect"')
+    expect(a).toContain('data-role="writing-specialist"')
+    expect(a).toContain('data-role="ops-engineer"')
+    expect(a).toContain('pending')
+  })
+
+  it('arrows: 5 expected skeleton gaps; the next edge replaces its gap and carries the animation anchors', () => {
+    const a = agentsSlice(panelHtml(flowSource(pipelineEvents)))
+    // 6 columns → 5 gaps; the next edge (sdd-task-review → qc-tri) replaces
+    // one expected arrow → 4 expected + 1 next. (`>` is SSR-escaped `&gt;`.)
+    expect(a.match(/data-agent-expected-edge=/g)).toHaveLength(4)
+    expect(a).toContain('data-agent-expected-edge="iteration-start:review-edit-chain-&gt;autonomous-execute:sdd-implement"')
+    expect(a).not.toContain('data-agent-expected-edge="autonomous-execute:sdd-task-review-&gt;autonomous-execute:qc-tri"')
+    // The animated next edge: anchors + the running card it highlights.
+    expect(a).toContain('data-agent-next-edge="autonomous-execute:sdd-task-review-&gt;autonomous-execute:qc-tri"')
+    expect(a).toContain('data-agent-next-from="a2"')
+    expect(a).toContain('data-agent-next-label')
+    // No next edge without a running entity / at the last column (honest) —
+    // a settle-only source has none.
+    expect(agentsSlice(panelHtml(flowSource([flowSettle({ ts: 8, agent: 'a1', outcome: 'ok' })])))).not.toContain('data-agent-next-edge')
+  })
+
+  it('in-column handoff arrows render between same-column cards (data-agent-actual-edge)', () => {
+    const a = agentsSlice(panelHtml(flowSource(handoffEvents)))
+    // a2 → a1 handoff inside sdd-implement (same plan, ts-ascending pair).
+    expect(a).toContain('data-agent-actual-edge="a2-&gt;a1"')
+    // The next edge highlights the same column (latest running a1).
+    expect(a).toContain('data-agent-next-edge="autonomous-execute:sdd-implement-&gt;autonomous-execute:sdd-task-review"')
+    expect(a).toContain('data-agent-next-from="a1"')
+    // Cross-column pairs never render in-column arrows: pipelineEvents has 3
+    // actual edges (a4→a3, a3→a2, a2→a1) all across columns → no anchors.
+    expect(agentsSlice(panelHtml(flowSource(pipelineEvents)))).not.toContain('data-agent-actual-edge')
+  })
+
+  it('unexpected-role entities get a trailing dim column, never dropped (card visible next to the count)', () => {
+    const a = agentsSlice(panelHtml(flowSource(flowEvents)))
+    // a2 (scout) has no stage → the unexpected column + its card.
+    expect(a).toContain('data-agent-stage="unexpected"')
+    expect(a).toContain('data-agent-entity="a2"')
+    expect(a).toContain('data-agent-running="true"')
+    expect(a).toContain('Unexpected roles')
+    // The zone summary counts it honestly (executing 1 — a1 settled, a2 running).
+    expect(a).toContain('data-agent-summary-executing="1"')
+    expect(a).toContain('1 executing · 9 pending')
+  })
+
+  it('degradation matrix (spec §8) — three muted anchors, never orange, never a crash', () => {
+    // degraded: unreadable ledger → muted evidence-missing note + empty stage
+    // skeleton (0/0 summary, NO entity/pending claims).
+    const degraded = agentsSlice(panelHtml(fullSource))
+    expect(degraded).toContain('data-zone-empty="degraded"')
+    expect(degraded).toContain('No agent-flow evidence (ledger missing)')
+    expect(degraded).toContain('data-agent-summary')
+    expect(degraded).toContain('data-agent-summary-executing="0"')
+    expect(degraded).toContain('data-agent-summary-pending="0"')
+    expect(degraded).not.toContain('data-agent-entity')
+    expect(degraded).not.toContain('data-agent-pending')
+    // empty: 0 events → full pending skeleton + muted no-dispatches note.
+    const empty = agentsSlice(panelHtml(flowSource([])))
+    expect(empty).toContain('data-zone-empty="empty"')
+    expect(empty).toContain('No actual dispatches yet (recording starts at agent-flow plan merge)')
+    expect(empty.match(/data-agent-pending=/g)).toHaveLength(6)
+    expect(empty).toContain('data-agent-summary-executing="0"')
+    expect(empty).toContain('data-agent-summary-pending="12"')
+    expect(empty).toContain('0 executing · 12 pending')
+    expect(empty).not.toContain('data-agent-entity')
+    // settle-only: no cards + full pending skeleton + the same muted note.
+    const settleOnly = agentsSlice(panelHtml(flowSource([
+      flowSettle({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      flowSettle({ ts: 7, agent: 'a2', outcome: 'error' }),
+    ])))
+    expect(settleOnly).toContain('data-zone-empty="settle-only"')
+    expect(settleOnly).not.toContain('data-agent-entity')
+    expect(settleOnly.match(/data-agent-pending=/g)).toHaveLength(6)
+    expect(settleOnly).toContain('0 executing · 12 pending')
+    // Garbage agentFlow → degraded, never a crash.
+    const garbage = agentsSlice(panelHtml({
+      ...fullSource,
+      state: { ...fullSource.state!, agentFlow: 42 },
+    } as unknown as MstarEngineStatusSource))
+    expect(garbage).toContain('data-zone-empty="degraded"')
+  })
+
+  it('zh locale: summary row, pending label, phase tags and the next label localize', () => {
+    const a = agentsSlice(panelHtml(flowSource(pipelineEvents), undefined, undefined, 'zh'))
+    expect(a).toContain('data-agent-summary')
+    expect(a).toContain('3 执行中 · 4 待执行')
+    expect(a).toContain('待执行')
+    expect(a).toContain('迭代启动')
+    expect(a).toContain('自主执行')
+    expect(a).toContain('data-agent-next-label')
+    // en phase labels must not leak into the zh body.
+    expect(a).not.toContain('Autonomous Execute')
+  })
+
+  it('css: horizontal scroll, min column width, token-only colors, and the next-edge dash animation (killed by the root reduced-motion rule)', () => {
+    const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
+    // 区内横向滚动: the pipeline row is the internal scroll body.
+    expect(cssText).toMatch(/\.agentFlow\s*\{[\s\S]*?overflow-x:\s*auto/)
+    expect(cssText).toMatch(/\.agentStage\s*\{[\s\S]*?width:\s*\d+px/)
+    // The next edge dash-flow animation is DECLARED (keyframes + animation);
+    // the panel root's prefers-reduced-motion rule (panel.module.css) kills it.
+    expect(cssText).toContain('@keyframes agent-dash-flow')
+    expect(cssText).toMatch(/animation:\s*agent-dash-flow\s+700ms\s+linear\s+infinite/)
+    expect(cssText).toContain('@keyframes agent-card-pulse')
+    // Token-only colors in the new rules (the full-file scan already runs in
+    // the T2 css test — spot-check the next-edge highlight).
+    expect(cssText).toContain('--dsw-alias-state-business-primary')
+    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/)
   })
 })
 

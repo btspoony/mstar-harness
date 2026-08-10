@@ -26,6 +26,12 @@
  * `zone.tasks.no-plans` (the muted empty note) and `zone.tasks.more` (the
  * Done-column `+N more` overflow hint). `zone.tasks.placeholder` is gone with
  * the placeholder.
+ *
+ * T2 (spec panel-zones §4, plan 20260810-panel-agent-flow-zone): the agents
+ * zone is filled in — `zone.agents.summary` (`N executing · M pending`),
+ * `zone.agents.pending-label` (the dashed "待执行" placeholder chip) and
+ * `zone.agents.next` (the animated next-edge label). `zone.agents.placeholder`
+ * is gone with the placeholder.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -85,7 +91,9 @@ export type PanelKey =
   | 'zone.state.Blocked'
   | 'zone.state.unknown'
   | 'zone.agents.title'
-  | 'zone.agents.placeholder'
+  | 'zone.agents.summary'
+  | 'zone.agents.pending-label'
+  | 'zone.agents.next'
   | 'flow.title'
   | 'flow.empty'
   | 'flow.degraded'
@@ -174,7 +182,9 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.state.Blocked': '受阻',
   'zone.state.unknown': '未知',
   'zone.agents.title': '代理执行',
-  'zone.agents.placeholder': '代理执行区（实体 / 流转）待实现',
+  'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
+  'zone.agents.pending-label': '待执行',
+  'zone.agents.next': 'next',
   'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -258,7 +268,9 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.state.Blocked': 'Blocked',
   'zone.state.unknown': 'unknown',
   'zone.agents.title': 'Agent Flow',
-  'zone.agents.placeholder': 'Agent flow zone (entities / flow) pending',
+  'zone.agents.summary': '{executing} executing · {pending} pending',
+  'zone.agents.pending-label': 'pending',
+  'zone.agents.next': 'next',
   'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',

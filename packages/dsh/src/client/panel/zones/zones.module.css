@@ -819,3 +819,328 @@
   font: var(--dsw-font-xxxs-11);
   font-variant-numeric: tabular-nums;
 }
+
+/* --- agent flow zone (spec §4/§7): the 6 EXPECTED_ROLE_FLOW stage columns +
+   entity cards + pending placeholders + expected/actual/next arrows + the
+   ANIMATED next edge. Colors are --dsw-* tokens only; spacing rides the
+   --mstar-space-* ramp; motion is killed by the root reduced-motion rule. --- */
+
+.agentsHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+/* Summary row (spec §4): `N executing · M pending` — projection counts. */
+.agentsSummary {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The horizontal 6-column pipeline (spec §4 — 区内横向滚动): the agents zone
+   is the fixed-right grid cell, so the row scrolls internally; the page /
+   zone frame never scrolls. */
+.agentFlow {
+  display: flex;
+  align-items: stretch;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  padding-bottom: var(--mstar-space-1);
+}
+
+.agentStage {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  width: 172px;               /* stage min column width */
+  padding: var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.agentStage:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.agentStageHeader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.agentStageLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Phase tag (spec §4): the stage's owning phase name. */
+.agentStagePhase {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.agentStageCards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Entity card (spec §4): name / role chip / task tag / status point / ×N. */
+.agentCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  padding: var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.agentCard:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* Running card (spec §4): business ring + soft glow pulse — the "执行中高亮"
+   treatment. The pulse is motion, so the root reduced-motion rule kills it. */
+.agentCardRunning {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  animation: agent-card-pulse 1.6s ease-in-out infinite;
+}
+
+.agentCardRunning:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+@keyframes agent-card-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  }
+  50% {
+    box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary), 0 0 6px 0 var(--dsw-alias-state-business-primary);
+  }
+}
+
+.agentCardLine {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.agentCardName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+/* ×N count badge (spec §4 — count > 1 only); the name's flex:1 pushes it
+   right without a non-ramp margin. */
+.agentCount {
+  flex: none;
+  min-width: 18px;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.agentRoleChip {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.agentTaskTag {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status point (spec §4): dot colored by status; running glows (business),
+   settled shows the ✓ (success), error/denied carry error, advisory warn. */
+.agentStatusDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.agentStatusRunning {
+  color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+.agentStatusSettled {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  background: none;
+  color: var(--dsw-alias-state-success-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.agentStatusError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.agentStatusAdvisory {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+/* Dashed "待执行" placeholder (spec §4): expected role chips of an
+   un-evidenced stage. */
+.agentPending {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  padding: var(--mstar-space-2);
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-caption);
+}
+
+.agentPendingLabel {
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.agentRoleChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agentRoleChipPending {
+  padding: 0 var(--mstar-space-1);
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* In-column handoff arrow (spec §4): small `→` between same-column cards. */
+.agentActualArrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  width: 16px;
+  height: 14px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+/* Expected skeleton arrow (spec §4): dim solid line + arrow glyph between
+   consecutive stage columns. */
+.agentExpectedEdge {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+/* Next edge (spec §4): business-highlighted, dash-flow ANIMATED arrow with
+   the "next" label — replaces the expected arrow on the highlighted gap. The
+   dash flow is a background-position animation (period 9px); the root
+   reduced-motion rule kills it for reduced-motion users. */
+.agentNextEdge {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  color: var(--dsw-alias-state-business-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.agentNextDash {
+  width: 24px;
+  height: 3px;
+  border-radius: 2px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--dsw-alias-state-business-primary) 0 5px,
+    transparent 5px 9px
+  );
+  animation: agent-dash-flow 700ms linear infinite;
+}
+
+@keyframes agent-dash-flow {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 9px 0;
+  }
+}
+
+.agentNextGlyph {
+  color: var(--dsw-alias-state-business-primary);
+  font-weight: 600;
+}
+
+.agentNextLabel {
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
+  color: var(--dsw-alias-state-business-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
