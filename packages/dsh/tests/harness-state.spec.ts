@@ -47,12 +47,12 @@ const stepPayload = (messages: UserMessage[], cwd?: string, turn = 1, agentId?: 
 })
 
 /** The loop's default pre-step decision: enter the step with the inbox messages. */
-const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
-  () => Promise.resolve<PreStepDecision>({ kind: 'enter', messages })
+const defaultEnter = (messages: UserMessage[]): (() => Promise<{ kind: 'enter'; messages: UserMessage[] }>) =>
+  () => Promise.resolve({ kind: 'enter', messages })
 
 /** The last message of an enter decision (the appended rows when present). */
-const lastMessage = (decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined =>
-  decision.messages.at(-1)
+const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>
+  decision.kind === 'enter' ? decision.messages.at(-1) : undefined
 
 /** The rendered text of one row. */
 const textOf = (row: UserMessage | undefined): string =>

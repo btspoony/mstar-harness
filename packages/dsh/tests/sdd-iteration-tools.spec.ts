@@ -15,7 +15,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CallId, ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -144,9 +144,9 @@ describe('mstar_sdd_workspace', () => {
     if (result.isError) return
     // sddWorkspace returns the physical path (symlinks resolved — `cd && pwd`
     // semantics), so the expectation is realpathed too.
-    expect(result.value).toEqual({ sdd_dir: realpathSync(join(app.harnessDir, 'sdd', 'fixture-plan-1')) })
-    expect(existsSync(join(result.value.sdd_dir, '.gitignore'))).toBe(true)
-    expect(readFileSync(join(result.value.sdd_dir, '.gitignore'), 'utf8')).toBe('*\n')
+    expect(valueOf(result) as { sdd_dir: string }).toEqual({ sdd_dir: realpathSync(join(app.harnessDir, 'sdd', 'fixture-plan-1')) })
+    expect(existsSync(join(valueOf(result).sdd_dir!, '.gitignore'))).toBe(true)
+    expect(readFileSync(join(valueOf(result).sdd_dir!, '.gitignore'), 'utf8')).toBe('*\n')
     // Native projection mirrors the CLI's `sdd dir: <path>` output.
     expect(result.content[0]?.type).toBe('text')
     expect(result.content[0]!.text).toContain('sdd dir:')
@@ -226,7 +226,7 @@ describe('mstar_sdd_task_brief', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value).toEqual({ brief_file: outFile, task_number: 1 })
+    expect(valueOf(result) as unknown as { brief_file: string; task_number: number }).toEqual({ brief_file: outFile, task_number: 1 })
     const brief = readFileSync(outFile, 'utf8')
     expect(brief).toContain('Step one')
     expect(brief).toContain('Step two')
@@ -260,7 +260,7 @@ describe('mstar_sdd_task_brief', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.brief_file).toBe(join(sddDir, 'task-2-brief.md'))
+    expect(valueOf(result).brief_file).toBe(join(sddDir, 'task-2-brief.md'))
     expect(existsSync(join(sddDir, 'task-2-brief.md'))).toBe(true)
   })
 
@@ -354,15 +354,15 @@ describe('mstar_iteration_gate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value).toMatchObject({
+    expect(valueOf(result)).toMatchObject({
       transition: 'phase-2-execute',
       all_plans_done: false,
       ok: true,
       violations: [],
     })
     // Execution in progress: entry warnings (PLAN_NOT_DONE) do not fail the gate.
-    expect(result.value.entry.ok).toBe(false)
-    expect(result.value.entry.violations.map((v) => v.code)).toContain('PLAN_NOT_DONE')
+    expect(valueOf(result).entry!.ok).toBe(false)
+    expect(valueOf(result).entry!.violations.map((v) => v.code)).toContain('PLAN_NOT_DONE')
     expect(result.content[0]!.text).toContain('PASS')
   })
 
@@ -381,7 +381,7 @@ describe('mstar_iteration_gate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value).toMatchObject({
+    expect(valueOf(result)).toMatchObject({
       transition: 'phase-4-pr-delivery',
       all_plans_done: true,
       ok: true,
@@ -407,10 +407,10 @@ describe('mstar_iteration_gate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value).toMatchObject({ transition: 'phase-3-close', all_plans_done: true, ok: false })
-    expect(result.value.entry.ok).toBe(false)
-    expect(result.value.exit.ok).toBe(false)
-    const codes = result.value.violations.map((v) => v.code)
+    expect(valueOf(result)).toMatchObject({ transition: 'phase-3-close', all_plans_done: true, ok: false })
+    expect(valueOf(result).entry!.ok).toBe(false)
+    expect(valueOf(result).exit!.ok).toBe(false)
+    const codes = valueOf(result).violations.map((v) => v.code)
     expect(codes).toContain('COMPASS_END_DATE_REQUIRED')
     // The render carries the failing codes (acceptance: pass/fail with codes).
     expect(result.content[0]!.text).toContain('FAIL')
@@ -434,8 +434,8 @@ describe('mstar_iteration_gate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    expect(result.value.violations.map((v) => v.code)).toContain('OPEN_RESIDUALS')
+    expect(valueOf(result).ok).toBe(false)
+    expect(valueOf(result).violations.map((v) => v.code)).toContain('OPEN_RESIDUALS')
   })
 
   it('fails with EXIT_BRANCH_MISMATCH when the working branch probe disagrees', async () => {
@@ -455,8 +455,8 @@ describe('mstar_iteration_gate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    expect(result.value.violations.map((v) => v.code)).toContain('EXIT_BRANCH_MISMATCH')
+    expect(valueOf(result).ok).toBe(false)
+    expect(valueOf(result).violations.map((v) => v.code)).toContain('EXIT_BRANCH_MISMATCH')
   })
 
   it('reports PLAN_NOT_IN_STATUS on entry while the running gate still passes', async () => {
@@ -473,8 +473,8 @@ describe('mstar_iteration_gate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value).toMatchObject({ transition: 'phase-2-execute', all_plans_done: false, ok: true })
-    expect(result.value.entry.violations.map((v) => v.code)).toContain('PLAN_NOT_IN_STATUS')
+    expect(valueOf(result)).toMatchObject({ transition: 'phase-2-execute', all_plans_done: false, ok: true })
+    expect(valueOf(result).entry!.violations.map((v) => v.code)).toContain('PLAN_NOT_IN_STATUS')
   })
 
   it('hostile: missing status/compass files → failure results', async () => {
