@@ -75,7 +75,8 @@ const skillTarget = (root: string, name: string): FsTarget => ({
 })
 
 /** One pre-existing user message the agent loop pulled from the inbox. */
-const inboxMessage = (): UserMessage => createUserMessage({ content: [{ type: 'text', text: 'probe' }] })
+const inboxMessage = (): UserMessage =>
+  createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'probe' }] })
 
 /** A `agent/pre-step` payload the agent loop would dispatch. */
 const stepPayload = (messages: UserMessage[]): { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal } => ({

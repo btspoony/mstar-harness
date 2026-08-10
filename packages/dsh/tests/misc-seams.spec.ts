@@ -27,7 +27,7 @@ import {
   lintRolesWrite,
   type SeamLintAdvisory,
 } from '../src/index.ts'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -853,10 +853,10 @@ describe('mstar_design_md_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(true)
-    expect(result.value.violations).toEqual([])
-    expect(['BELOW_MVP', 'MVP', 'Standard', 'Production']).toContain(result.value.level)
-    expect(Array.isArray(result.value.level_missing)).toBe(true)
+    expect(valueOf(result).ok).toBe(true)
+    expect(valueOf(result).violations).toEqual([])
+    expect(['BELOW_MVP', 'MVP', 'Standard', 'Production']).toContain(valueOf(result).level!)
+    expect(Array.isArray(valueOf(result).level_missing)).toBe(true)
     expect(result.content[0]!.text).toContain('design-md validate:')
   })
 
@@ -870,8 +870,8 @@ describe('mstar_design_md_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    expect(result.value.violations.map((v: { code: string }) => v.code)).toContain('design-md.tokens.color-format')
+    expect(valueOf(result).ok).toBe(false)
+    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('design-md.tokens.color-format')
   })
 
   it('missing DESIGN.md → error result', async () => {
@@ -896,9 +896,9 @@ describe('mstar_audit_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(true)
-    expect(result.value.violations).toEqual([])
-    expect(result.value.secrets).toEqual([])
+    expect(valueOf(result).ok).toBe(true)
+    expect(valueOf(result).violations).toEqual([])
+    expect(valueOf(result).secrets).toEqual([])
   })
 
   it('broken plan with a secret → violations + secrets findings', async () => {
@@ -910,11 +910,11 @@ describe('mstar_audit_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    const codes = result.value.violations.map((v: { code: string }) => v.code)
+    expect(valueOf(result).ok).toBe(false)
+    const codes = valueOf(result).violations.map((v: { code: string }) => v.code)
     expect(codes).not.toContain('audit.status.missing-block')
     expect(codes).toContain('audit.secrets.found')
-    expect(result.value.secrets.some((s: { type: string }) => s.type === 'password')).toBe(true)
+    expect(valueOf(result).secrets!.some((s: { type: string }) => s.type === 'password')).toBe(true)
   })
 
   it('missing plan file → error result', async () => {
@@ -938,8 +938,8 @@ describe('mstar_compound_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(true)
-    expect(result.value.violations).toEqual([])
+    expect(valueOf(result).ok).toBe(true)
+    expect(valueOf(result).violations).toEqual([])
   })
 
   it('broken doc → schema violations', async () => {
@@ -951,8 +951,8 @@ describe('mstar_compound_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    expect(result.value.violations.map((v: { code: string }) => v.code)).toContain('compound.schema.missing-field')
+    expect(valueOf(result).ok).toBe(false)
+    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('compound.schema.missing-field')
   })
 
   it('with knowledge_dir → index + scope checks (CLI --knowledge-dir mirror)', async () => {
@@ -968,8 +968,8 @@ describe('mstar_compound_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    const codes = result.value.violations.map((v: { code: string }) => v.code)
+    expect(valueOf(result).ok).toBe(false)
+    const codes = valueOf(result).violations.map((v: { code: string }) => v.code)
     expect(codes).toContain('compound.scope.outside')
     // The index has no README.md → compound.index.missing-readme.
     expect(codes).toContain('compound.index.missing-readme')
@@ -985,8 +985,8 @@ describe('mstar_compound_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    expect(result.value.violations.map((v: { code: string }) => v.code)).toContain('compound.reference.missing-file')
+    expect(valueOf(result).ok).toBe(false)
+    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('compound.reference.missing-file')
   })
 
   it('missing doc → error result', async () => {
@@ -1010,8 +1010,8 @@ describe('mstar_roles_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(true)
-    expect(result.value.violations).toEqual([])
+    expect(valueOf(result).ok).toBe(true)
+    expect(valueOf(result).violations).toEqual([])
   })
 
   it('broken roles dir → violations', async () => {
@@ -1023,8 +1023,8 @@ describe('mstar_roles_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    expect(result.value.violations.map((v: { code: string }) => v.code)).toContain('roles.mapping.reference.missing')
+    expect(valueOf(result).ok).toBe(false)
+    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('roles.mapping.reference.missing')
   })
 
   it('load-order lint via skills_root (defaults to the sibling dir)', async () => {
@@ -1036,8 +1036,8 @@ describe('mstar_roles_validate', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(result.value.ok).toBe(false)
-    expect(result.value.violations.map((v: { code: string }) => v.code)).toContain('roles.loadorder.core.missing')
+    expect(valueOf(result).ok).toBe(false)
+    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('roles.loadorder.core.missing')
   })
 
   it('missing roles dir → error result', async () => {

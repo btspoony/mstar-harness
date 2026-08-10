@@ -50,7 +50,7 @@ function packagedBundled(): string | undefined {
 }
 
 /** Real mirror skills asserted to be mounted and lint-clean. */
-const MIRROR_SKILLS_SAMPLE = ['mstar-plan-conventions', 'mstar-harness-core', 'mstar-sdd'] as const
+const MIRROR_SKILLS_SAMPLE: string[] = ['mstar-plan-conventions', 'mstar-harness-core', 'mstar-sdd']
 
 /** Seed a temp skill root with two skills: `<dir>/SKILL.md` and `<name>.md` shapes. */
 async function seedSkillRoot(): Promise<string> {

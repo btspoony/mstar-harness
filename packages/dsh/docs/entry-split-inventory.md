@@ -71,7 +71,7 @@
 - `Context.dshHostAdapter: DshHostAdapter`
 - `Events`：`'mstar/dispatch-gate'`、`'mstar/status-gate'`、`'mstar/skill-lint'`、`'mstar/seam-lint'`（各携带对应 Advisory payload）
 
-**合计：28 个不同具名导出 + 1 个 augmentation**。冻结于 `tests/export-surface.spec.ts`：运行时精确值导出集 + 编译期全命名空间恒等（`keyof typeof entry` 与 28 名联合互包含）+ augmentation 探测。
+**合计：27 个不同具名导出（28 个导出形态，`Config` 值+类型同名）+ 1 个 augmentation**。冻结于 `tests/export-surface.spec.ts`：运行时精确值导出集（`Object.keys`，17 名）+ 编译期值命名空间恒等（`keyof typeof entry` 仅见运行时值导出，与 17 名联合互包含；10 个 type-only 名逐个 `EntryTypes.X` 探测）+ augmentation 探测。
 
 ---
 
@@ -98,7 +98,7 @@
 - 头部注释（禁 default export 契约）、`name`/`inject` manifest、`declare module 'cordis'` augmentation（单一 augmentation 点）。
 - **`apply()` 启动接线**（不搬移）：resolver 构造、`DshMstar`/`DshHostAdapter` service 构造、skill-local mount、boot 观测 warn、5 个事件槽注册（fs×3 组 + pre-execute + pre-step）、catalog cache/digest 装配、两个工具注册调用。
 - **命令注册**（§16，非 gate 实现，属启动接线）：`registerMstarCommands` + `parseCommandMarkdown` + `commandFrontmatterField` + `packagedCommandsDir` 留在 entry。
-- 全部 28 个公开导出改为从 gates/_shared/service/types **原样 re-export**（`export { X } from './gates/…'`），零签名变化。
+- 全部 27 个不同具名导出（28 个导出形态，`Config` 值+类型同名）改为从 gates/_shared/service/types **原样 re-export**（`export { X } from './gates/…'`），零签名变化。
 
 ### 3.3 依赖图（运行时边）
 

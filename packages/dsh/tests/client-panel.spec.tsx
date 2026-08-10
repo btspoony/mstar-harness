@@ -39,6 +39,7 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
 import type { MstarEngineStatusSource } from '../src/types'
+import type { EnforcementSource } from '@mstar-harness/engine'
 import { apply } from '../src/client/index'
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelView } from '../src/client/panel/PanelView'
@@ -49,7 +50,7 @@ const fullSource: MstarEngineStatusSource = {
   form: 'catalog',
   version: '2.0.4',
   harnessDir: '/proj/.mstar',
-  enforcement: { hard: true, source: 'iteration compass' },
+  enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
   iteration: {
     iterationId: 'iter-20260809-dsh-workflow-viz',
     statusPath: '/proj/.mstar/status.json',
@@ -102,7 +103,7 @@ const noHarnessSource: MstarEngineStatusSource = {
   form: 'catalog',
   version: '2.0.4',
   harnessDir: null,
-  enforcement: { hard: false, source: 'iteration compass' },
+  enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: null,
 }
 
@@ -112,7 +113,7 @@ const noGateSource: MstarEngineStatusSource = {
   form: 'catalog',
   version: '2.0.4',
   harnessDir: '/proj/.mstar',
-  enforcement: { hard: false, source: 'iteration compass' },
+  enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: {
     plans: [{ id: '20260809-dsh-workflow-viz-panel', status: 'InProgress' }],
     residuals: [],
@@ -163,6 +164,7 @@ const degradedSource = {
 function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
   return {
     sessionId: 's-1' as SessionId,
+    useSession: (() => null) as never,
     useProjection: (() => null) as never,
     useSessions: (() => null) as never,
     useWorkspaces: (() => null) as never,
@@ -688,7 +690,7 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
     const phase2 = {
       ...fullSource,
       iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition: 'phase-2-execute' } },
-    }
+    } as unknown as MstarEngineStatusSource
     const store = createSnapshotStore(snapshotFor(phase2, 1_720_000_000_000))
     const before = renderStore(store)
     expect(nodeState(before, 'phase:autonomous-execute')).toBe('current')
@@ -699,7 +701,7 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
     const phase3 = {
       ...fullSource,
       iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' } },
-    }
+    } as unknown as MstarEngineStatusSource
     store.set(snapshotFor(phase3, 1_720_002_000_000))
     const after = renderStore(store)
     expect(nodeState(after, 'phase:iteration-close')).toBe('current')
@@ -759,7 +761,7 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
           violations: [{ severity: 'high', code: 'EXIT-9', message: 'new violation row' }],
         },
       },
-    }
+    } as unknown as MstarEngineStatusSource
     store.set(snapshotFor(failing, 1_720_002_000_000))
     const after = renderStore(store)
     expect(after).toContain('data-graph-violations-count="1"')

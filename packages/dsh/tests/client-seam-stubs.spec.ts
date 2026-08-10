@@ -26,16 +26,13 @@ import {
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
 import type { ConvViewProps, ViewTab } from '@deepseek-ai/dsh-client-ui-conversation/client'
+// The plugin's OWN `LocaleNamespaceMap` augmentation (src/client/panel/locale.ts)
+// is the single declaration of the `'mstar-panel'` namespace — importing it
+// here exercises the real typed `t` seat instead of re-declaring a conflicting
+// key union (a second `declare module` for the same namespace would collide
+// under `typecheck:tests`).
+import { NS, type PanelKey } from '../src/client/panel/locale.ts'
 
-/** The panel's locale namespace (spec §4.3): key union + ui-slots merge surface. */
-type PanelKey = 'view.mstar-workflow' | 'empty.waiting' | 'empty.no-harness'
-declare module '@deepseek-ai/dsh-client-ui-slots' {
-  interface LocaleNamespaceMap {
-    'mstar-panel': PanelKey
-  }
-}
-
-const NS = 'mstar-panel'
 const zh = {
   'view.mstar-workflow': '工作流',
   'empty.waiting': '等待首条 engine-status catalog…',
@@ -45,7 +42,7 @@ const en = {
   'view.mstar-workflow': 'Workflow',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
-} satisfies Record<PanelKey, string>
+} satisfies Record<string, string>
 
 /** The panel's view component shape (spec §4.2): session standard kit + typed t seat, pure read. */
 const PanelView = (_props: ConvViewProps & { t: (key: PanelKey) => string }) => null
@@ -85,7 +82,12 @@ describe('dsh client-seam peer stubs — slot registry (conversation.view)', () 
   it('inject waits for the declaration, then the panel entry registers the view tab (spec §4.1 shape)', () => {
     const slots = new SlotsService()
     const locale = new LocaleService()
-    locale.register(NS, { zh, en })
+    // Untyped single-locale register: the fixture registers only the 3 keys it
+    // asserts, while the typed 2-arg form would demand the full 60-key
+    // `LocaleDictOf<'mstar-panel'>` union (the real plugin dicts are covered
+    // by client-panel.spec.tsx).
+    locale.register(NS, 'zh', zh)
+    locale.register(NS, 'en', en)
     const t = locale.bind(NS)
 
     let injected = false

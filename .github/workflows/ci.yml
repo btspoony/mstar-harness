@@ -106,6 +106,12 @@ jobs:
       - name: Test dsh
         run: bun run --cwd packages/dsh test
 
+      # The export-surface type layer (value-namespace identity + type-only
+      # probes + cordis augmentation) is enforced by tsc over the tests —
+      # bun test alone never typechecks the spec.
+      - name: Typecheck dsh tests
+        run: bun run --cwd packages/dsh typecheck:tests
+
       - name: Test scripts
         run: bun test scripts/prepare-release.test.ts scripts/ci-dep-guard.test.ts
 

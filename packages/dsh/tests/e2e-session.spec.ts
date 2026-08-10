@@ -481,7 +481,7 @@ describe('v2 seam tools — callable in-app over the committed fixtures', () => 
     expect(result.isError).toBe(false)
     if (result.isError) return
     expect(result.value).toEqual({ sdd_dir: realpathSync(join(app.harnessDir, 'sdd', 'e2e-fixture-plan')) })
-    expect(existsSync(join(result.value.sdd_dir, '.gitignore'))).toBe(true)
+    expect(existsSync(join((result.value as { sdd_dir: string }).sdd_dir, '.gitignore'))).toBe(true)
     expect(result.content[0]!.text).toContain('sdd dir:')
   })
 
