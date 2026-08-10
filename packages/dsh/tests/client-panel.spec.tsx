@@ -18,7 +18,13 @@
  *   (new catalog row) re-renders the panel with fresh data + freshness;
  * - plugin entry: `apply(ctx)` registers the `mstar-panel` dictionaries and
  *   the `conversation.view` tab (`id: 'mstar-workflow'`, `order: 20`,
- *   locale-following label thunk).
+ *   locale-following label thunk);
+ * - T3 flow column (spec agent-flow-catalog-graph §2.4): the expected/actual
+ *   agent-flow pipeline — 6 flow-stage skeleton nodes + lit/count from
+ *   dispatch evidence, the evidence-driven unexpected node, the event footer
+ *   strip (role → planId#taskId rows, status coloring, settled markers,
+ *   unexpected re-list), degraded/empty notes, legend flow-* items, zh labels,
+ *   and garbage-proof totality.
  *
  * Renderer: `react-dom/server.renderToStaticMarkup` over the real component
  * (dev-time peer-stub seams; the `*.module.css` import resolves to the raw
@@ -39,6 +45,7 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
 import type { MstarEngineStatusSource } from '../src/types'
+import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { apply } from '../src/client/index'
 import { en, NS, zh } from '../src/client/panel/locale'
@@ -783,5 +790,227 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
     expect(garbageIteration).toContain('data-graph-canvas')
     expect(garbageIteration).toContain('data-graph-empty="no-compass"')
     expect(garbageIteration).toContain('data-mstar-section="state"')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T3 flow column (spec agent-flow-catalog-graph §2.4): GraphCanvas renders the
+ * expected/actual agent-flow pipeline — the 6 flow-stage skeleton nodes +
+ * lit/count from dispatch evidence, the evidence-driven unexpected node, the
+ * event footer strip (role → planId#taskId, status coloring, settled markers,
+ * unexpected re-list), the degraded/empty notes, the legend flow-* items and
+ * the zh labels. The projection itself is unit-tested in
+ * client-graph-projection.spec.ts — these pin the RENDER layer through the
+ * real data path (snapshot store → useSession → PanelView → GraphCanvas).
+ * ------------------------------------------------------------------------- */
+
+/** One dispatch row as the T1 ledger view emits it (spec §2.2). */
+function flowDispatch(over: {
+  ts: number
+  role: string
+  agent?: string
+  planId?: string
+  taskId?: string
+  verdict?: 'ok' | 'advisory' | 'denied'
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'dispatch',
+    agent: over.agent ?? null,
+    role: over.role,
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
+    taskCategory: null,
+    ...(over.verdict !== undefined ? { verdict: over.verdict } : {}),
+  }
+}
+
+/** One settle row (spec §2.2 — settles carry no role). */
+function flowSettle(over: {
+  ts: number
+  agent?: string
+  outcome?: 'ok' | 'error' | 'denied'
+  durationMs?: number
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'settle',
+    agent: over.agent ?? null,
+    role: '',
+    planId: null,
+    taskId: null,
+    taskCategory: null,
+    ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
+    ...(over.durationMs !== undefined ? { durationMs: over.durationMs } : {}),
+  }
+}
+
+/** fullSource with `state.agentFlow` carrying the given events (latest-first). */
+function flowSource(events: readonly AgentFlowEventView[]): MstarEngineStatusSource {
+  return {
+    ...fullSource,
+    state: { ...fullSource.state!, agentFlow: { events, summary: [] } as AgentFlowView },
+  }
+}
+
+/** A believable mixed event window (latest-first): paired settle → lit implement dispatch → unexpected scout. */
+const flowEvents: AgentFlowEventView[] = [
+  flowSettle({ ts: 1_720_000_004_000, agent: 'a1', outcome: 'ok', durationMs: 340 }),
+  flowDispatch({ ts: 1_720_000_003_000, agent: 'a1', role: 'frontend-dev', planId: 'plan-1', taskId: 'T2', verdict: 'ok' }),
+  flowDispatch({ ts: 1_720_000_001_000, agent: 'a2', role: 'scout', planId: 'plan-9', taskId: 'T1' }),
+]
+
+describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline (spec agent-flow-catalog-graph §2.4)', () => {
+  /** The opening-div slice of one flow node (avoids colliding with the state machine's lit/count attrs). */
+  function flowNodeSlice(h: string, nodeId: string): string {
+    const start = h.indexOf(`data-graph-node="flow:${nodeId}"`)
+    if (start === -1) return ''
+    const end = h.indexOf('data-graph-node="', start + 1)
+    return end === -1 ? h.slice(start) : h.slice(start, end)
+  }
+
+  it('renders the 6 expected-stage skeleton nodes + degraded note when the ledger is absent (agentFlow null)', () => {
+    const html = panelHtml(fullSource) // fullSource.agentFlow === null → degraded
+    for (const id of [
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+    ]) {
+      expect(html).toContain(`data-graph-node="flow:${id}"`)
+    }
+    // Schema skeleton only — nothing lit without evidence, and the unlit
+    // marker lives on the flow node itself.
+    expect(flowNodeSlice(html, 'autonomous-execute:sdd-implement')).toContain('data-graph-lit="false"')
+    expect(flowNodeSlice(html, 'iteration-start:review-edit-chain')).toContain('data-graph-lit="false"')
+    // Degraded note + empty event strip.
+    expect(html).toContain('data-graph-empty="flow-degraded"')
+    expect(html).toContain('No agent-flow evidence (ledger missing)')
+    expect(html).toContain('data-graph-flow-count="0"')
+    expect(html).toContain('Agent flow events')
+    // No unexpected node without unexpected evidence.
+    expect(html).not.toContain('data-graph-node="flow:unexpected"')
+  })
+
+  it('lights stages + count badges from dispatch evidence (exact stage mapping)', () => {
+    const html = panelHtml(flowSource([
+      flowDispatch({ ts: 3, role: 'fullstack-dev' }),
+      flowDispatch({ ts: 2, role: 'fullstack-dev' }),
+      flowDispatch({ ts: 1, role: 'product-manager' }),
+    ]))
+    const implement = flowNodeSlice(html, 'autonomous-execute:sdd-implement')
+    expect(implement).toContain('data-graph-lit="true"')
+    expect(implement).toContain('data-graph-count="2"')
+    const review = flowNodeSlice(html, 'iteration-start:review-edit-chain')
+    expect(review).toContain('data-graph-lit="true"')
+    expect(review).toContain('data-graph-count="1"')
+    // Unrelated stages stay unlit schema boxes.
+    expect(flowNodeSlice(html, 'autonomous-execute:qc-tri')).toContain('data-graph-lit="false"')
+    // Roles chips render from the schema vocab.
+    expect(html).toContain('data-flow-role="frontend-dev"')
+    expect(html).toContain('data-flow-role="generalPurpose"')
+    expect(html).toContain('data-graph-flow-phase="autonomous-execute"')
+  })
+
+  it('renders the event footer strip: role → planId#taskId rows, status coloring, settled ✓, unexpected re-list', () => {
+    const html = panelHtml(flowSource(flowEvents))
+    expect(html).toContain('data-graph-flow-count="3"')
+    expect(html).toContain('data-graph-flow-unexpected-count="1"')
+    expect(html).toContain('data-mstar-flow-events')
+    // Row attributes: kind / status / expected / settled.
+    expect(html).toContain('data-graph-flow-event-kind="dispatch"')
+    expect(html).toContain('data-graph-flow-event-kind="settle"')
+    expect(html).toContain('data-graph-flow-event-status="dispatched"')
+    expect(html).toContain('data-graph-flow-event-status="ok"')
+    expect(html).toContain('data-graph-flow-event-expected="true"')
+    expect(html).toContain('data-graph-flow-event-expected="false"')
+    // The paired dispatch carries the settled ✓ marker.
+    expect(html).toContain('data-graph-flow-event-settled="true"')
+    // Row cells: role → planId#taskId, status labels, settle duration.
+    expect(html).toContain('frontend-dev')
+    expect(html).toContain('plan-1#T2')
+    expect(html).toContain('dispatched')
+    expect(html).toContain('settled ok')
+    expect(html).toContain('340ms')
+    // Unexpected events are re-listed in their own warn section.
+    expect(html).toContain('data-mstar-flow-unexpected')
+    expect(html).toContain('Unexpected roles')
+    expect(html).toContain('scout')
+    // The unexpected node + warn-edge source render on evidence.
+    expect(html).toContain('data-graph-node="flow:unexpected"')
+    expect(flowNodeSlice(html, 'unexpected')).toContain('data-graph-count="1"')
+    // With evidence present, no degraded/empty note.
+    expect(html).not.toContain('data-graph-empty="flow-degraded"')
+    expect(html).not.toContain('data-graph-empty="flow-empty"')
+  })
+
+  it('mounts the unexpected node only on unexpected-role evidence (never a guessed warning)', () => {
+    expect(panelHtml(flowSource(flowEvents))).toContain('data-graph-node="flow:unexpected"')
+    const clean = panelHtml(flowSource([flowDispatch({ ts: 1, role: 'frontend-dev' })]))
+    expect(clean).not.toContain('data-graph-node="flow:unexpected"')
+    expect(clean).toContain('data-graph-node="flow:autonomous-execute:sdd-implement"')
+  })
+
+  it('empty ledger (0 events) → empty-state note, skeleton unlit, strip count 0', () => {
+    const html = panelHtml(flowSource([]))
+    expect(html).toContain('data-graph-empty="flow-empty"')
+    expect(html).toContain('No actual dispatches yet (recording starts at agent-flow plan merge)')
+    expect(html).toContain('data-graph-flow-count="0"')
+    expect(flowNodeSlice(html, 'autonomous-execute:sdd-implement')).toContain('data-graph-lit="false"')
+  })
+
+  it('garbage agentFlow → degraded note, never a crash', () => {
+    const html = panelHtml({
+      ...fullSource,
+      state: { ...fullSource.state!, agentFlow: 42 },
+    } as unknown as MstarEngineStatusSource)
+    expect(html).toContain('data-graph-canvas')
+    expect(html).toContain('data-graph-empty="flow-degraded"')
+    expect(html).toContain('data-graph-node="flow:autonomous-execute:sdd-implement"')
+  })
+
+  it('legend includes the flow-expected / flow-actual / flow-unexpected swatches, en + zh', () => {
+    const html = panelHtml(fullSource)
+    expect(html).toContain('data-mstar-legend-item="flow-expected"')
+    expect(html).toContain('data-mstar-legend-item="flow-actual"')
+    expect(html).toContain('data-mstar-legend-item="flow-unexpected"')
+    expect(html).toContain('expected stage (hollow)')
+    expect(html).toContain('actual dispatch (filled)')
+    expect(html).toContain('unexpected role (outlined)')
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-mstar-legend-item="flow-expected"')
+    expect(zhHtml).toContain('预期 stage（空心）')
+    expect(zhHtml).toContain('实际派发（实心）')
+    expect(zhHtml).toContain('未匹配角色（描边）')
+  })
+
+  it('zh locale localizes the flow strip labels + status colors', () => {
+    const zhHtml = panelHtml(flowSource(flowEvents), undefined, undefined, 'zh')
+    expect(zhHtml).toContain('Agent 流转事件')
+    expect(zhHtml).toContain('已派发')
+    expect(zhHtml).toContain('已结算')
+    expect(zhHtml).toContain('未匹配角色')
+    expect(zhHtml).toContain('3 条')
+  })
+
+  it('a new catalog row with fresh agentFlow events updates the strip (data path)', () => {
+    const locale = new LocaleService()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const store = createSnapshotStore(snapshotFor(fullSource, 1_720_000_000_000))
+    const renderStore = () => renderToStaticMarkup(createElement(PanelView, {
+      ...kitProps({ useSession: bindUseSession(store) }),
+      t: locale.bind(NS),
+    }))
+    expect(renderStore()).toContain('data-graph-flow-count="0"')
+    expect(renderStore()).toContain('data-graph-empty="flow-degraded"')
+    store.set(snapshotFor(flowSource(flowEvents), 1_720_000_004_000))
+    const after = renderStore()
+    expect(after).toContain('data-graph-flow-count="3"')
+    expect(after).not.toContain('data-graph-empty="flow-degraded"')
+    expect(after).toContain('data-graph-node="flow:unexpected"')
+    expect(after).toContain('plan-1#T2')
   })
 })
