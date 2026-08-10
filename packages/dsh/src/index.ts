@@ -9,7 +9,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type Context } from 'cordis'
 import {
@@ -79,11 +79,6 @@ export const name = 'dsh'
  */
 export const inject: string[] = []
 
-
-
-
-
-
 declare module 'cordis' {
   interface Context {
     /**
@@ -136,7 +131,6 @@ declare module 'cordis' {
     'mstar/seam-lint'(payload: SeamLintAdvisory): void
   }
 }
-
 
 /**
  * The plugin package's own `harness-commands/` mirror (synced from the repo
