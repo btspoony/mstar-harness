@@ -150,6 +150,12 @@ dispatch.
 | Plugin commands | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit` (registered from `harness-commands/`) |
 | Session entry | `pm` skill → `mstar-harness-core` via pm **Read next** |
 
+## Command delivery degradation (dsh host quirk, reported 2026-08-10)
+
+The dsh web client resolves slash commands against a client-side lexicon; when a command is NOT claimed client-side (lexicon fetch timing, args parsing, manual typing), the model receives the **bare text** (`/iteration-loop <方向> …`) with NO command body — unlike opencode/cursor/omp where the body always arrives.
+
+**Rule:** when a user message begins with a registered mstar command name (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = Phase 2–5 on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity).
+
 ## Harness dir and environment
 
 - `{HARNESS_DIR}` resolves via the engine `resolveHarnessDir` (`.mstar/` →
