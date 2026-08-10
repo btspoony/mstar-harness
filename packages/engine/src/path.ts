@@ -11,11 +11,23 @@
  * covers repos whose harness root is not one of the probed names (slice-2
  * plan finding 2026-08-08) — `.harness` is intentionally NOT probed.
  *
+ * Workspace-root stop boundary (roadmap §7c, plan
+ * 20260810-harness-root-boundary): `resolveHarnessDir` NEVER walks above the
+ * workspace root — an optional `opts.workspaceRoot` stops the upward probe
+ * (a harness dir above it is never returned; the `~/.mstar` global-collision
+ * defect is the special case). The default boundary is the git top-level of
+ * `startDir` (sync `git rev-parse --show-cdup`; non-git start falls back
+ * to `startDir` itself — probes only itself, never upward; deliberate
+ * tightening). Callers with a session-workspace boundary (dsh
+ * `HarnessResolver.forWorkspace`) pass `workspaceRoot` explicitly; the engine
+ * git-probes only for this single default resolution, never during the walk.
+ *
  * All skill-derived artifacts (status.json empty template, gitignore snippet)
  * are embedded constants: the engine never reads skill files at runtime
  * (roadmap §8.5 standalone rule).
  */
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readJson, writeJson, type ValidationResult } from "./core.js";
 
@@ -30,16 +42,33 @@ export type ResolveHarnessDirOptions = {
    * (the caller may scaffold it).
    */
   harnessDir?: string;
+  /**
+   * Workspace-root stop boundary (roadmap §7c / plan
+   * 20260810-harness-root-boundary). The upward probe keeps walking only
+   * while `dir` is at or below this root — a harness dir above it is never
+   * returned (the `~/.mstar` global-collision defect is the special case).
+   * Resolved against `startDir` when relative. When omitted, the default
+   * boundary is the git top-level of `startDir` (sync `git rev-parse
+   * --show-cdup`; on failure / non-git start it falls back to
+   * `startDir` itself — a non-git start probes only itself, never upward;
+   * deliberate tightening). The boundary is an explicit caller value: the
+   * engine git-probes only for this default resolution, never during the
+   * walk.
+   */
+  workspaceRoot?: string;
 };
 
 /**
  * Resolve `{HARNESS_DIR}` per plan-conventions § {HARNESS_DIR} 解析顺序
  * (find-first-stop): `.mstar/` → `.agents/` → `.plans/`/`plans/`, walking up
- * from `startDir`. Harness candidates are dir-existence (the empty-dir rule
- * applies to `{SPECS_DIR}` only). An explicit override via `opts.harnessDir`
- * or `MSTAR_HARNESS_DIR` wins over probing.
+ * from `startDir` but NEVER above the workspace root (`opts.workspaceRoot`,
+ * default = git top-level of `startDir`). Harness candidates are
+ * dir-existence (the empty-dir rule applies to `{SPECS_DIR}` only). An
+ * explicit override via `opts.harnessDir` or `MSTAR_HARNESS_DIR` wins over
+ * probing and short-circuits before any boundary logic.
  *
- * Returns the absolute harness dir, or `null` when no candidate exists.
+ * Returns the absolute harness dir, or `null` when no candidate exists
+ * within the workspace boundary.
  */
 export function resolveHarnessDir(
   startDir: string = process.cwd(),
@@ -48,15 +77,58 @@ export function resolveHarnessDir(
   const start = resolve(startDir);
   const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
   if (explicit) return resolve(start, explicit);
+  const boundary = resolve(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
   let dir = start;
   for (;;) {
+    // Stop boundary: never probe a harness dir above the workspace root.
+    if (!isAtOrBelow(dir, boundary)) return null;
     for (const candidate of [join(dir, ".mstar"), join(dir, ".agents"), join(dir, ".plans"), join(dir, "plans")]) {
       if (isDirectory(candidate)) return candidate;
     }
+    if (dir === boundary) return null; // probed the boundary itself; stop here
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/**
+ * Default workspace-root boundary for `resolveHarnessDir` (roadmap §7c):
+ * the git top-level of `startDir`, resolved synchronously via
+ * `git rev-parse --show-cdup` (the relative upward path to the work-tree
+ * top — lexical, so it stays comparable with the `resolve()`-based walk
+ * even when `startDir` sits under a symlinked mount like macOS `/var`,
+ * where `--show-toplevel` would answer with the physical `/private/var/...`
+ * path). On failure (not a git work tree, or git unavailable) it falls back
+ * to `startDir` itself — a non-git start probes only itself and never walks
+ * up (deliberate tightening). The boundary is always an explicit caller
+ * value in the end: callers (e.g. dsh `HarnessResolver.forWorkspace`) pass
+ * `opts.workspaceRoot` directly; this default is the CLI/engine-surface
+ * resolution.
+ */
+function defaultWorkspaceRoot(startDir: string): string {
+  try {
+    const cdup = execFileSync("git", ["rev-parse", "--show-cdup"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!cdup) return startDir; // already at the git top-level
+    let boundary = startDir;
+    for (const segment of cdup.split("/")) {
+      if (segment && segment !== ".") boundary = dirname(boundary);
+    }
+    return resolve(boundary);
+  } catch {
+    // not a git work tree (or git unavailable) — fall through to startDir
+  }
+  return startDir;
+}
+
+/** True when `dir` is `root` itself or a descendant of `root` (lexical). */
+function isAtOrBelow(dir: string, root: string): boolean {
+  const rel = relative(root, dir);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /**
