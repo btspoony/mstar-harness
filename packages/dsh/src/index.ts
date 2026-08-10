@@ -12,7 +12,6 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Service, type Context } from 'cordis'
-import z from 'schemastery'
 import {
   apply as applySkillLocal,
   Config as SkillLocalSchema,
@@ -29,7 +28,6 @@ import {
   composeDispatchGate,
   evaluatePhaseGate,
   executionModeToN,
-  findingsCleanupGate,
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
@@ -45,7 +43,6 @@ import {
   referenceExists,
   resolveAssetPath,
   resolveCompassEnforcement,
-  resolveHarnessDir,
   resolveIterationDir,
   resolveSkillRoot,
   scopeGuard,
@@ -57,7 +54,6 @@ import {
   validateIntegrationMergeLease,
   validateRoleMapping,
   validateSchemaYaml,
-  validateStatus,
   verifyPlanExecutionLease,
 } from '@mstar-harness/engine'
 import type {
@@ -91,6 +87,20 @@ import type {
   MstarHarnessState,
   MstarIterationGateView,
 } from './types.ts'
+import {
+  Config,
+  STATUS_FILE,
+  asRecord,
+  formatViolation,
+  packagedSkillsDir,
+  resolveSeamHard,
+  HarnessResolver,
+  sessionCwdOf,
+  actorAgentOf,
+} from './gates/_shared.ts'
+import { writeIntentListener, editIntentListener } from './gates/status.ts'
+import { validateStatusValue, validateStatusDoc } from './gates/status.ts'
+import type { StatusGateAdvisory } from './gates/status.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -99,6 +109,8 @@ import type {
 export { DshMstar } from './service.ts'
 export type { DshMstarOptions } from './service.ts'
 export type { MstarEngineStatusSource, MstarHarnessState, MstarIterationGateView } from './types.ts'
+export { Config, HarnessResolver } from './gates/_shared.ts'
+export type { StatusGateAdvisory } from './gates/status.ts'
 
 /** Cordis function-plugin name registered by the Loader. */
 export const name = 'dsh'
@@ -109,12 +121,6 @@ export const name = 'dsh'
  * `tools/pre-execute`), not on injected services; `inject` grows if a service seam is needed.
  */
 export const inject: string[] = []
-
-/** Logger label for the status gate (dsh logger naming: `<scope>/<subject>`). */
-const LOGGER_NAME = 'mstar/status-gate'
-
-/** Canonical harness status file name (mstar-plan-artifacts status.json). */
-const STATUS_FILE = 'status.json'
 
 /** Logger label for the dispatch gate (dsh logger naming: `<scope>/<subject>`). */
 const DISPATCH_LOGGER = 'mstar/dispatch-gate'
@@ -147,111 +153,7 @@ const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
 const ASSIGNMENT_FIELD_RE =
   /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm
 
-/** Plugin configuration. */
-export interface Config {
-  /**
-   * Explicit harness root. When set, wins over engine probing (plan-conventions
-   * `{HARNESS_DIR}` resolution order); when absent the plugin probes from
-   * the SESSION workspace root (`agent.session.header.cwd`) — never the
-   * process cwd — walking `.mstar/` → `.agents/` → `.plans/`/`plans/`.
-   * Required for repos whose harness root is not a probed name (e.g. a
-   * `.harness/` maintenance root).
-   */
-  harnessDir?: string
-  /**
-   * Per-deployment enforcement override. `hard` forces
-   * hard gates, `soft` forces warn-only even when an active iteration compass
-   * declares `enforcement: hard` (local rollback); absent → the compass
-   * frontmatter decides, warn-only when no compass hardens (never a global default).
-   */
-  enforcement?: 'hard' | 'soft'
-  /**
-   * Model-facing delegation tool name(s) the dispatch gate matches. The dsh
-   * subagent tool registers as `subagent` by default, but its `toolName`
-   * config may rename instances (tool-subagent README: each instance needs a
-   * distinct name), so the match list is deployment-settable. Defaults to
-   * `['subagent']`.
-   */
-  dispatchTools?: string[]
-  /**
-   * The dispatching agent's own harness role/type (e.g. `fullstack-dev`), used
-   * as the anti-recursion binding: an Assignment whose `Execute as` equals this
-   * role is a self-dispatch (critical violation — leaf executors must not
-   * re-invoke their own role). dsh exposes no agent role on the tool-execution
-   * context, so the deployment declares it. Absent → the anti-recursion
-   * precheck is skipped (an empty binding is not self-recursion).
-   */
-  dispatchBinding?: string
-  /**
-   * Additional skill roots registered with the dsh skill-local provider
-   * (skill-local `Config.customSkillDirs` semantics — scanned after project
-   * roots and before user roots — single canonical mount).
-   * Dev-time: the mirror `<repo-root>/skills` absolute path. Each root's
-   * children are skill dirs (`<name>/SKILL.md`) or flat skill files
-   * (`<name>.md`). Absent → no custom-root registration.
-   */
-  skillRoots?: string[]
-  /**
-   * Bundled skill root registered with the dsh skill-local provider
-   * (skill-local `Config.bundledSkillDir` semantics — scanned last, trusted).
-   * Production: a `skills/` dir shipped inside the plugin package (the
-   * canonical published form — dsh defaults `$DSH_BUNDLED_SKILL_DIR` when
-   * default roots are included; this plugin mounts an isolated provider, so
-   * the bundled root is registered explicitly). Absent → no bundled-root
-   * registration.
-   */
-  bundledSkillDir?: string
-  /**
-   * Catalog refresh interval in milliseconds — how often the per-workspace
-   * pre-step catalog cache (engine-status watermark, iteration-gate row,
-   * harness-state row) re-reads status.json / the compass / the knowledge
-   * index. Default 60000: a mid-session plan/compass/residual change lands
-   * within one TTL (the hot path stays a timestamp compare + cache hit
-   * between refreshes; a bounded sync re-read per workspace at most once
-   * per interval). Absent → 60000.
-   */
-  catalogTtlMs?: number
-}
 
-/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall), so both dispatch keys preserve omission via `.default(undefined)`. */
-export const Config: z<Config> = z.object({
-  harnessDir: z.string(),
-  enforcement: z.union(['hard', 'soft']),
-  dispatchTools: z.array(z.string()).default(undefined as unknown as string[]),
-  dispatchBinding: z.string().default(undefined as unknown as string),
-  skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
-  bundledSkillDir: z.string().default(undefined as unknown as string),
-  catalogTtlMs: z.number().default(undefined as unknown as number),
-})
-
-/**
- * Advisory emitted on status-gate decisions (the plan's "emit `agent/status`
- * (advisory)" step). Named `mstar/status-gate` instead: the dsh `agent/status`
- * event is a lifecycle-only channel (`{ agent, status }`, idle ⇄ running, with
- * an invariant rejecting no-op transitions) — emitting gate warnings on it
- * would violate the seam contract. Consumers (later tasks, catalogs) observe
- * this event for model-visible/session-log surfacing.
- *
- * The status gate NEVER throws: the fs intent waterfall
- * carries no incoming content, so the only hard-mode decision this seam can
- * make about an ALREADY-invalid document is to allow the write as a repair
- * escape. Every decision surfaces through this advisory; unexpected internal
- * errors degrade to an allow with `degraded: true`.
- */
-export interface StatusGateAdvisory {
-  /** Which intent slot passed the gate. */
-  operation: 'write' | 'edit'
-  /** `displayPath` of the guarded file. */
-  target: string
-  /** The gate verdict (warn-mode: `hardBlocked` false; hard repair escape: `hardBlocked` true). */
-  result: GateResult
-  /** Resolved enforcement flag: false for warn-mode advisories, true for hard-mode repair escapes. */
-  hard: boolean
-  /** True when hard mode allowed a write/edit to an ALREADY-invalid document (repair escape). */
-  repair?: boolean
-  /** True when the gate errored internally and degraded to allow (error-containment envelope). */
-  degraded?: boolean
-}
 
 /**
  * Advisory emitted on warn-mode dispatch-gate passes (the * `mstar/status-gate` decision reused for the dispatch gate — dsh's
@@ -390,201 +292,7 @@ declare module 'cordis' {
   }
 }
 
-/** One violation line for logs and the typed veto message. */
-function formatViolation(violation: ValidationResult): string {
-  return `[${violation.severity}] ${violation.code}: ${violation.message}${violation.fix !== undefined ? ` (fix: ${violation.fix})` : ''}`
-}
 
-/** Narrow an unknown value to a record. */
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined
-}
-
-/**
- * Whether a target is the canonical `{HARNESS_DIR}/status.json`. Matching is by
- * resolved path equality on `displayPath` (the local backend reports absolute
- * paths; remote/URI backends never match and the gate is inert for them).
- *
- * simplify: case-sensitive `===` comparison — on case-insensitive
- * filesystems (macOS/Windows defaults) a case-variant write path escapes the
- * gate (inert, never a false positive); case-normalized matching would need
- * the fs backend's canonical-case notion, revisit if case-variant writes
- * become an observed bypass.
- */
-function isStatusTarget(harnessDir: string, target: FsTarget): boolean {
-  return basename(target.displayPath) === STATUS_FILE
-    && resolve(dirname(target.displayPath)) === resolve(harnessDir)
-}
-
-/**
- * Resolve the hard-enforcement flag: explicit Config override wins, else the
- * iteration compass frontmatter (`resolveCompassEnforcement`), else warn-only.
- */
-function resolveHard(harnessDir: string, config: Config): boolean {
-  if (config.enforcement === 'hard') return true
-  if (config.enforcement === 'soft') return false
-  return resolveCompassEnforcement(harnessDir).hard
-}
-
-/**
- * Validate a PARSED status document through the status-gate pipeline
- * (engine `validateStatus` + `findingsCleanupGate` per plan row that
- * CONFIGURES a mode). Shared by {@link validateStatusDoc} (the on-disk
- * single-read path) and the host adapter's `beforeStatusWrite` (the
- * incoming document) — the fs-intent gate, the adapter hook and the repair
- * escape all surface the SAME violation codes.
- */
-function validateStatusValue(doc: unknown): GateResult {
-  const base = validateStatus(doc as StatusDoc)
-  if (!base.ok) return base
-  const record = asRecord(doc)
-  if (record === undefined) return base
-  const violations: ValidationResult[] = []
-  for (const row of Array.isArray(record.plans) ? record.plans : []) {
-    const metadata = asRecord(row.metadata)
-    const mode = metadata?.['findings_cleanup']
-    if (mode !== 'zero-residual' && mode !== 'allow-residual') continue
-    const planId = typeof row.id === 'string' ? row.id : typeof row.plan_id === 'string' ? row.plan_id : undefined
-    if (planId === undefined) continue
-    violations.push(...findingsCleanupGate(record as StatusDoc, planId, { mode }).violations)
-  }
-  if (violations.length === 0) return base
-  return { ok: false, violations }
-}
-
-/**
- * Run the status gate over the CURRENT on-disk document. The fs intent
- * waterfall carries only `(target, actor)` — never the incoming content — so
- * the vetoable check is the pre-write state (the opencode hook's fallback for
- * the same reason). `findingsCleanupGate` runs per plan row that CONFIGURES a
- * mode (`plans[].metadata.findings_cleanup`); schema violations short-circuit
- * it (the doc must parse for the cleanup gate to be meaningful).
- *
- * Single-read contract: the file is parsed exactly once and the
- * parsed doc is passed to {@link validateStatusValue} — the previous
- * path-first read then `readJson` re-read was a TOCTOU window (a concurrent
- * writer between the two reads threw a raw error from inside the gate).
- * Malformed JSON is contained here with the engine's `status.invalid-json`
- * shape; never throws. Missing files are guarded by the callers
- * (`gateStatusIntent`, {@link DshHostAdapter.statusGate}) — first create has
- * no document to validate and passes before this function runs.
- */
-function validateStatusDoc(statusPath: string): GateResult {
-  let doc: unknown
-  try {
-    doc = readJson(statusPath)
-  } catch (error) {
-    return {
-      ok: false,
-      violations: [{
-        ok: false,
-        severity: 'high',
-        code: 'status.invalid-json',
-        message: (error as Error).message,
-      }],
-    }
-  }
-  return validateStatusValue(doc)
-}
-
-/**
- * Gate one fs intent on `{HARNESS_DIR}/status.json`. The gate never throws
- * Warn mode logs + advisory emit + delegates; hard
- * mode with an ALREADY-invalid document logs an error-level REPAIR advisory
- * and delegates — the intent waterfall carries no incoming content, so a
- * hard veto here would deadlock the very write that repairs the document.
- * The coherent content-blind policy: invalid on-disk → allow-as-repair;
- * valid on-disk → normal validation path (pass). Non-status targets and
- * absent documents are pure pass-through.
- *
- * Error-containment envelope: any unexpected error (TOCTOU race, backend
- * contract violation on `displayPath`, throwing advisory consumer) degrades
- * to allow in BOTH modes with a loud log + `degraded: true` advisory — an
- * untyped throw from the gate would spuriously block legitimate writes (the
- * fs waterfall has no error containment of its own).
- */
-function gateStatusIntent(
-  ctx: Context,
-  harnessDir: string | null,
-  config: Config,
-  adapter: DshHostAdapter,
-  operation: 'write' | 'edit',
-  target: FsTarget,
-): void {
-  try {
-    if (harnessDir === null) return
-    if (!isStatusTarget(harnessDir, target)) return
-    const statusPath = join(harnessDir, STATUS_FILE)
-    // The adapter owns the shared status-gate core (missing file = first
-    // create = pass); this listener adds enforcement + observability.
-    const result = adapter.statusGate(statusPath)
-    const hard = resolveHard(harnessDir, config)
-    const verdict = applyEnforcement(result, { hard })
-    if (!verdict.ok) {
-      if (verdict.hardBlocked) {
-        // Repair escape: the current document is already invalid; this write
-        // may BE the repair, so allow it — but make the degraded control
-        // loud (error-level log + repair advisory, `hard: true`).
-        ctx.logger(LOGGER_NAME).error(
-          `status.json ${operation} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}`,
-        )
-        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard, repair: true })
-      } else {
-        ctx.logger(LOGGER_NAME).warn(`status.json ${operation} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`)
-        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
-      }
-    }
-  } catch (error) {
-    ctx.logger(LOGGER_NAME).error(`status gate degraded to allow: ${(error as Error).message}`)
-    try {
-      ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: { ok: true, violations: [] }, hard: false, degraded: true })
-    } catch (emitError) {
-      // Best-effort observability: a throwing advisory consumer must not take
-      // the gate down with it (the error log above is the durable signal).
-      ctx.logger(LOGGER_NAME).error(`status gate degraded advisory emit failed: ${(emitError as Error).message}`)
-    }
-  }
-}
-
-/**
- * `fs/write-intent` listener. Registered with `prepend` so this decider runs
- * BEFORE dsh-fs-policy regardless of mount order: the slot is first-wins by
- * registration order (dsh-fs-policy README), so without prepend a policy
- * plugin mounted earlier would make this gate unreachable. Every gate
- * decision (warn advisory, repair escape, degraded allow) calls `next()` —
- * delegating the observed-state intent decision to the remaining chain
- * (fs-policy when mounted; the bare `undefined` default otherwise) rather
- * than terminating the slot with `undefined` (which would silently disable
- * fs-policy's CAS for status.json in composed deployments).
- */
-async function writeIntentListener(
-  ctx: Context,
-  resolver: HarnessResolver,
-  config: Config,
-  adapter: DshHostAdapter,
-  target: FsTarget,
-  actor: object | undefined,
-  next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
-): Promise<FsWriteIntent | undefined> {
-  gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'write', target)
-  return await next()
-}
-
-/** `fs/edit-intent` listener — same gate and delegation contract as {@link writeIntentListener}. */
-async function editIntentListener(
-  ctx: Context,
-  resolver: HarnessResolver,
-  config: Config,
-  adapter: DshHostAdapter,
-  target: FsTarget,
-  actor: object | undefined,
-  next: () => { version: FsVersion } | undefined | Promise<{ version: FsVersion } | undefined>,
-): Promise<{ version: FsVersion } | undefined> {
-  gateStatusIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, adapter, 'edit', target)
-  return await next()
-}
 
 /**
  * Typed hard-mode veto for the skill lint gate (the dsh fs-policy veto
@@ -703,20 +411,6 @@ function skillCanonicalForm(target: FsTarget): string {
 
 /**
  * Resolve the hard-enforcement flag for the artifact gates: explicit
- * Config override wins, else the iteration compass frontmatter (when a
- * harness dir resolves), else warn-only. {@link resolveHard} parity with a
- * null-tolerant harness dir — the skill roots and the artifact
- * seams (design-md / audit / compound / roles) do not require
- * `{HARNESS_DIR}` (compound scoping is the only seam that does, and only
- * for its knowledge-path matcher).
- */
-function resolveSeamHard(harnessDir: string | null, config: Config): boolean {
-  if (config.enforcement === 'hard') return true
-  if (config.enforcement === 'soft') return false
-  return harnessDir !== null && resolveCompassEnforcement(harnessDir).hard
-}
-
-/**
  * Gate one fs write-intent on a `SKILL.md` under a configured skill root.
  * The slot is content-blind (the intent waterfall carries only
  * `(target, actor)` — never the incoming content, dsh-private tool-fs
@@ -1727,23 +1421,6 @@ function assignmentTextFromFields(fields: AssignmentFields): string {
   return lines.join('\n')
 }
 
-/**
- * The plugin package's own `harness-skills/` mirror (synced from the repo
- * root by `bundle-assets` at build/postinstall; gitignored). Resolved
- * package-relative via `import.meta.url` — NOT cwd-anchored — so the shipped
- * bundled mount works from any launch cwd (this resolves the
- * cwd-anchoring limitation for the default; an explicit `bundledSkillDir`
- * still wins). Returns undefined when the mirror is absent (e.g. a checkout
- * where `bundle-assets` has not run — the default mount is then inert).
- */
-function packagedSkillsDir(): string | undefined {
-  try {
-    const dir = fileURLToPath(new URL('../harness-skills', import.meta.url))
-    return existsSync(dir) ? dir : undefined
-  } catch {
-    return undefined
-  }
-}
 
 /**
  * The plugin package's own `harness-commands/` mirror (synced from the repo
@@ -2966,89 +2643,6 @@ function registerMstarCommands(ctx: Context): void {
   })
 }
 
-/**
- * Per-workspace `{HARNESS_DIR}` resolution for the plugin.
- *
- * The probe NEVER starts from the process cwd — it starts from the WORKSPACE
- * root of the session whose agent drives the event (the session cwd,
- * `agent.session.header.cwd` — the dsh workspace the user opened) AND stops
- * there: `workspaceRoot = 探测起点` (roadmap §7c), so the walk-up never
- * leaves the session workspace (the `~/.mstar` global-collision defect is
- * the special case) and the dsh boundary deliberately diverges from the
- * CLI's git-top-level boundary. An
- * explicit `harnessDir` config still wins outright (resolved once at boot;
- * a relative value is launch-cwd anchored — config path anchoring, not
- * probing — matching the `bundledSkillDir` precedent and the engine's
- * `resolve(startDir, explicit)` semantics). Probing results are memoized
- * per workspace root, so the agent-loop hot path does one Map lookup after
- * the first event of each workspace.
- *
- * An event without a session workspace (no agent / no header cwd) resolves
- * to the explicit config or `null` — never a process-cwd probe: without a
- * workspace there is nothing to probe FROM.
- */
-export class HarnessResolver {
-  private readonly explicit: string | null
-  private readonly cache = new Map<string, string | null>()
-
-  constructor(explicit: string | undefined) {
-    this.explicit = explicit !== undefined && explicit.trim() !== ''
-      ? resolve(process.cwd(), explicit)
-      : null
-  }
-
-  /**
-   * Resolve for one workspace root (the session cwd).
-   * @param cwd - the workspace root; `undefined` when the event carries no session.
-   * @returns the resolved `{HARNESS_DIR}` (explicit override, else the probe
-   * from the workspace root), or `null` when none resolves.
-   *
-   * Boundary (roadmap §7c): the probe stops AT the workspace root —
-   * `workspaceRoot = 探测起点` (the session cwd itself), so it never walks up
-   * beyond the session workspace (the `~/.mstar` global-collision special
-   * case), and it does NOT inherit the engine's default git-top-level
-   * boundary (the CLI surface). An empty/missing `cwd` keeps the current
-   * contract: `null`, never a process-cwd probe.
-   */
-  forWorkspace(cwd: string | undefined): string | null {
-    if (this.explicit !== null) return this.explicit
-    if (cwd === undefined || cwd.trim() === '') return null
-    // Normalize a possibly-relative session cwd to an absolute path BEFORE
-    // probing: inside `resolveHarnessDir` the `workspaceRoot` option is
-    // resolved against the probe start, so a relative cwd (e.g. `packages/app`
-    // when the dsh process cwd sits above the workspace) would anchor the
-    // boundary BELOW the probe start and null out even a workspace-local
-    // harness. The absolute path is also the canonical memoize key — two
-    // spellings of one workspace share a cache row.
-    const abs = resolve(cwd)
-    const hit = this.cache.get(abs)
-    if (hit !== undefined) return hit
-    // The probe start is the boundary: never walk up from the session cwd.
-    const resolved = resolveHarnessDir(abs, { workspaceRoot: abs })
-    this.cache.set(abs, resolved)
-    return resolved
-  }
-
-  /**
-   * Resolve for one agent: the workspace root is the agent's session cwd.
-   * @param agent - the agent handle an event carries (structural read).
-   */
-  forAgent(agent: unknown): string | null {
-    return this.forWorkspace(sessionCwdOf(agent))
-  }
-}
-
-/** The workspace root of one agent — the session cwd (structural read; never trusts the runtime shape). */
-function sessionCwdOf(agent: unknown): string | undefined {
-  const session = (agent as { session?: { header?: { cwd?: unknown } } } | null | undefined)?.session
-  const cwd = session?.header?.cwd
-  return typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined
-}
-
-/** The tool-execution actor of one fs-intent event, when it carries an agent. */
-function actorAgentOf(actor: object | undefined): unknown {
-  return (actor as { agent?: unknown } | undefined)?.agent
-}
 
 /**
  * Apply the plugin to the registrant context: resolve `{HARNESS_DIR}` via the
