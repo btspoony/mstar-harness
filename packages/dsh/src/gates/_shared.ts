@@ -134,12 +134,21 @@ export function resolveSeamHard(harnessDir: string | null, config: Config): bool
  * where `bundle-assets` has not run — the default mount is then inert).
  */
 export function packagedSkillsDir(): string | undefined {
-  try {
-    const dir = fileURLToPath(new URL('../harness-skills', import.meta.url))
-    return existsSync(dir) ? dir : undefined
-  } catch {
-    return undefined
+  // The module moved from `src/_shared.ts` (one level below the package root)
+  // into `src/gates/_shared.ts` (two levels below in the source layout, but
+  // still inlined one level below in the bundled `dist/index.js`). Probe both
+  // depths — same dual-depth pattern as `pluginVersion()` — so the mirror
+  // resolves identically from source and from the bundle (behavior-preserving
+  // move; the dist path is the original one).
+  for (const rel of ['../harness-skills', '../../harness-skills'] as const) {
+    try {
+      const dir = fileURLToPath(new URL(rel, import.meta.url))
+      if (existsSync(dir)) return dir
+    } catch {
+      // no mirror at this depth — try the next
+    }
   }
+  return undefined
 }
 /**
  * Per-workspace `{HARNESS_DIR}` resolution for the plugin.
