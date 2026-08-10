@@ -33,9 +33,8 @@ import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, actorAgentOf }
 import type { Config } from './_shared.ts'
 // Type-only (erased at runtime — no cycle): the adapter owns the shared
 // status-gate core and is constructed by the entry `apply`; the listener
-// signatures type their adapter parameter through the entry until the adapter
-// moves into `src/gates/` (Task 3).
-import type { DshHostAdapter } from '../index.ts'
+// signatures type their adapter parameter through the adapter module.
+import type { DshHostAdapter } from './adapter.ts'
 /** Logger label for the status gate (dsh logger naming: `<scope>/<subject>`). */
 const LOGGER_NAME = 'mstar/status-gate'
 /**
