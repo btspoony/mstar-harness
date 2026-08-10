@@ -20,7 +20,7 @@
  *   overrides (dark mode = host token flip);
  * - empty states: no catalog row (waiting), no harness, no gate — distinct
  *   hints, never a crash, never guessed values;
- * - partial source degradation: missing version/enforcement → `unknown`;
+ * - partial source degradation: missing version → `unknown`;
  *   null knowledge / empty lists → `none` without crashing;
  * - data wiring (Task 3, spec §5): the component reads the catalog row
  *   through `useMstarEngineStatus(useSession)` — the fixture source rides a
@@ -196,7 +196,7 @@ const failGateSource: MstarEngineStatusSource = {
   },
 }
 
-/** Runtime-shape degradation: version/enforcement missing ⇒ `unknown` (spec §2.4). */
+/** Runtime-shape degradation: missing version ⇒ `unknown` (spec §2.4); the meta dock renders version + harness dir only. */
 const degradedSource = {
   ...fullSource,
   version: undefined,

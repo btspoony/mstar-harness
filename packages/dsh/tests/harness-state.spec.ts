@@ -315,6 +315,7 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
     const source = row?.source
     if (source === undefined || source.kind !== 'mstar-engine-status') return
     const state = source.state
+    expect(source.state).not.toBeNull()
     if (state === null) return
     expect(state.residualFindings).toEqual([
       { planId: 'plan-a', id: 'R-missing', severity: 'critical', title: 'no lifecycle key' },
@@ -355,6 +356,7 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
     const source = row?.source
     if (source === undefined || source.kind !== 'mstar-engine-status') return
     const state = source.state
+    expect(source.state).not.toBeNull()
     if (state === null) return
     expect(state.residualFindings).toEqual([
       { planId: 'plan-a', id: '', severity: 'critical', title: '' },
@@ -392,6 +394,7 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
     const source = row?.source
     if (source === undefined || source.kind !== 'mstar-engine-status') return
     const state = source.state
+    expect(source.state).not.toBeNull()
     if (state === null) return
     const findings = state.residualFindings
     if (findings === null) return
@@ -439,6 +442,7 @@ describe('mstar-engine-status — doneAt passthrough (spec §6)', () => {
     const source = row?.source
     if (source === undefined || source.kind !== 'mstar-engine-status') return
     const state = source.state
+    expect(source.state).not.toBeNull()
     if (state === null) return
     expect(state.plans).toEqual([
       { id: 'plan-a', status: 'Done', doneAt: '2026-08-09' },

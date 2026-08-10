@@ -62,7 +62,8 @@
   }
 }
 
-/* Centered empty state (no catalog row yet). */
+/* Centered empty state (no catalog row yet). Full-tab like .root: the page
+ * never scrolls (overflow hidden — waiting branch shares the invariant). */
 .emptyRoot {
   display: flex;
   align-items: center;
@@ -71,6 +72,7 @@
   min-height: 0;
   width: 100%;
   padding: var(--mstar-space-4);
+  overflow: hidden;
 }
 
 /* --- main: graph region + bottom footer (spec panel-zones §2) --- */
