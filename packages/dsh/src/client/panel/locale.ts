@@ -24,14 +24,8 @@ export type PanelKey =
   | 'view.mstar-workflow'
   | 'empty.waiting'
   | 'empty.no-harness'
-  | 'header.version'
-  | 'header.harness'
-  | 'header.enforcement'
   | 'watermark.version'
   | 'watermark.harness'
-  | 'watermark.enforcement'
-  | 'watermark.hard'
-  | 'watermark.soft'
   | 'watermark.none'
   | 'panel.unknown'
   | 'graph.phase.iteration-start'
@@ -82,15 +76,16 @@ export type PanelKey =
   | 'state.title'
   | 'state.plans'
   | 'state.residuals'
-  | 'state.branches'
   | 'state.policy'
   | 'state.leases'
   | 'state.knowledge'
   | 'state.direction'
   | 'state.none'
-  | 'state.branch.iteration-base'
-  | 'state.branch.target'
-  | 'state.branch.spec-integration'
+  | 'state.enforcement'
+  | 'state.enforcement.hard'
+  | 'state.enforcement.soft'
+  | 'state.plans.more'
+  | 'state.residual.more'
   | 'state.policy.push'
   | 'state.policy.worktree'
   | 'state.policy.control-worktree'
@@ -109,14 +104,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar 工作流',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
-  'header.version': '版本',
-  'header.harness': 'harness 目录',
-  'header.enforcement': '执行策略',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
-  'watermark.enforcement': 'enforcement: {value}',
-  'watermark.hard': 'hard',
-  'watermark.soft': 'soft',
   'watermark.none': '无',
   'panel.unknown': '未知',
   'graph.phase.iteration-start': '迭代启动',
@@ -167,15 +156,16 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.title': '工作区状态',
   'state.plans': '计划',
   'state.residuals': '未决残留',
-  'state.branches': '分支',
   'state.policy': '策略',
   'state.leases': '租约',
   'state.knowledge': '知识',
   'state.direction': '方向',
   'state.none': '无',
-  'state.branch.iteration-base': 'iteration base',
-  'state.branch.target': 'target',
-  'state.branch.spec-integration': 'spec integration',
+  'state.enforcement': '执行策略',
+  'state.enforcement.hard': 'hard',
+  'state.enforcement.soft': 'soft',
+  'state.plans.more': '+{count} 更多',
+  'state.residual.more': '+{count} 更多',
   'state.policy.push': 'push',
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',
@@ -189,14 +179,8 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar Workflow',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
-  'header.version': 'version',
-  'header.harness': 'harness',
-  'header.enforcement': 'enforcement',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
-  'watermark.enforcement': 'enforcement: {value}',
-  'watermark.hard': 'hard',
-  'watermark.soft': 'soft',
   'watermark.none': 'none',
   'panel.unknown': 'unknown',
   'graph.phase.iteration-start': 'Iteration Start',
@@ -247,15 +231,16 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.title': 'Workspace state',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
-  'state.branches': 'Branches',
   'state.policy': 'Policy',
   'state.leases': 'Leases',
   'state.knowledge': 'Knowledge',
   'state.direction': 'Direction',
   'state.none': 'none',
-  'state.branch.iteration-base': 'iteration base',
-  'state.branch.target': 'target',
-  'state.branch.spec-integration': 'spec integration',
+  'state.enforcement': 'enforcement',
+  'state.enforcement.hard': 'hard',
+  'state.enforcement.soft': 'soft',
+  'state.plans.more': '+{count} more',
+  'state.residual.more': '+{count} more',
   'state.policy.push': 'push',
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',

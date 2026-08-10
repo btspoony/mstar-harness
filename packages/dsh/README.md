@@ -151,13 +151,16 @@ closure-factory loader handoff (`window.__ModuleLoader__.load({ id, factory })`)
 The client entry registers a **`conversation.view`** view-ring tab
 (`id: 'mstar-workflow'`, `order: 20` — the trajectory precedent shape), labeled
 **"MStar Workflow"** (en) / **"MStar 工作流"** (zh) through the `mstar-panel`
-locale namespace. The panel is the **MStar Workflow layout**: a header with
-three evenly-spread basics (version / harness dir / enforcement), a fixed
-300px right sidebar for routine state (plans / residuals / knowledge / leases
-/ branches+policy / direction), a **react-flow cyclic workflow graph** as the
-main body, and a freshness footer (`last-updated HH:MM:SS` + the
-catalog-re-emission refresh note). Below 860px the sidebar stacks under the
-main area.
+locale namespace. The panel is the **MStar Workflow layout**: a fixed 300px
+right sidebar — plans (≤5, time-desc, `+N more`), open residual findings (≤10,
+severity chips, overflow hint), policy (**enforcement first**, then push /
+worktree / control worktree), leases, knowledge, direction — over a bottom
+**fixed meta dock** (version + harness dir; small muted, does not scroll with
+the sidebar digest; the former header row was removed), a **react-flow cyclic
+workflow graph** as the main body, and a freshness footer (`last-updated
+HH:MM:SS` + the catalog-re-emission refresh note). The branches block moved
+out of the sidebar to the iteration zone (plan `20260810-panel-canvas-zones`).
+Below 860px the sidebar stacks under the main area.
 
 The graph is a pure render of the latest `mstar-engine-status` catalog row
 (from the `useSession` snapshot — refresh follows the snapshot, no polling): a

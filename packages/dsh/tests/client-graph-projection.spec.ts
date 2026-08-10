@@ -56,13 +56,14 @@ const fullSource: MstarEngineStatusSource = {
   },
   state: {
     plans: [
-      { id: 'plan-a', status: 'Todo' },
-      { id: 'plan-b', status: 'InProgress' },
-      { id: 'plan-c', status: 'Done' },
-      { id: 'plan-d', status: 'Blocked' },
-      { id: 'plan-e', status: 'custom-stalled' },
+      { id: 'plan-a', status: 'Todo', doneAt: null },
+      { id: 'plan-b', status: 'InProgress', doneAt: null },
+      { id: 'plan-c', status: 'Done', doneAt: '2026-08-08' },
+      { id: 'plan-d', status: 'Blocked', doneAt: null },
+      { id: 'plan-e', status: 'custom-stalled', doneAt: null },
     ],
     residuals: [],
+    residualFindings: null,
     iterationBaseBranch: 'dev-dsh',
     targetBranch: 'dev-dsh',
     specIntegrationBranch: 'iteration/iter-20260809-mstar-panel-beautify',
@@ -81,7 +82,7 @@ const focusedSource: MstarEngineStatusSource = {
   ...fullSource,
   state: {
     ...fullSource.state!,
-    plans: [{ id: 'plan-b', status: 'InProgress' }],
+    plans: [{ id: 'plan-b', status: 'InProgress', doneAt: null }],
   },
 }
 
@@ -352,8 +353,8 @@ describe('projectGraph — connector (spec §2.4)', () => {
       state: {
         ...fullSource.state!,
         plans: [
-          { id: 'plan-a', status: 'Todo' },
-          { id: 'plan-b', status: 'InProgress' },
+          { id: 'plan-a', status: 'Todo', doneAt: null },
+          { id: 'plan-b', status: 'InProgress', doneAt: null },
         ],
       },
     })
@@ -366,8 +367,8 @@ describe('projectGraph — connector (spec §2.4)', () => {
       state: {
         ...fullSource.state!,
         plans: [
-          { id: 'plan-c', status: 'Done' },
-          { id: 'plan-d', status: 'Blocked' },
+          { id: 'plan-c', status: 'Done', doneAt: null },
+          { id: 'plan-d', status: 'Blocked', doneAt: null },
         ],
       },
     })
@@ -379,7 +380,7 @@ describe('projectGraph — connector (spec §2.4)', () => {
       ...fullSource,
       state: {
         ...fullSource.state!,
-        plans: [{ id: 'plan-e', status: 'custom-stalled' }],
+        plans: [{ id: 'plan-e', status: 'custom-stalled', doneAt: null }],
       },
     })
     expect(v.connector).toEqual({ source: 'autonomous-execute', target: 'unknown' })

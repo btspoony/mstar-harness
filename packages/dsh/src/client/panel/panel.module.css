@@ -1,8 +1,11 @@
 /* Morning Star workflow panel — inherits dsh web's visual language
  * (dsw design tokens: surfaces, borders, labels, status states). Layout
- * contract (spec panel-layout-graph §1.1): root grid "header header" /
- * "main sidebar" with a fixed 300px sidebar (<860px single-column stack);
- * header = three evenly-spread cells (repeat(3, minmax(0,1fr))).
+ * contract (spec panel-zones §2): root grid "main sidebar" fills the Tab
+ * (height 100%, overflow hidden — the page never scrolls); a fixed 300px
+ * sidebar with its own internal scroll (<860px it stacks under main); the
+ * sidebar bottom holds a fixed meta dock (version + harness dir) that does
+ * NOT scroll with the digest. The main area is the only content-overflow
+ * scroll source (zone skeleton filled by plan 20260810-panel-canvas-zones).
  *
  * Hard metrics (spec §1.2): spacing comes ONLY from the --mstar-space-1..6
  * ramp defined at the root (a panel-scope ramp — not invented --dsw-* names);
@@ -29,31 +32,27 @@
   --mstar-space-5: 24px;
   --mstar-space-6: 32px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;   /* main + sidebar */
-  grid-template-rows: auto minmax(0, 1fr);        /* header + body */
-  grid-template-areas:
-    'header header'
-    'main   sidebar';
+  grid-template-columns: minmax(0, 1fr) 300px;   /* main + fixed-width sidebar */
+  grid-template-rows: minmax(0, 1fr);             /* single full-height body row */
+  grid-template-areas: 'main sidebar';
   height: 100%;
   min-height: 0;
   width: 100%;
   padding: 0;                                     /* padding pushed into the areas */
-  overflow: hidden;
+  overflow: hidden;                               /* full-tab: page never scrolls */
 }
 
-/* No harness → no graph region (spec §2.5): single-column header + hint. */
+/* No harness → no graph region (spec §2.5): single-column hint + freshness. */
 .root[data-mstar-panel='no-harness'] {
   grid-template-columns: 1fr;
-  grid-template-areas:
-    'header'
-    'main';
+  grid-template-areas: 'main';
 }
 
 @media (max-width: 860px) {
   .root {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
-      'header'
       'main'
       'sidebar';
   }
@@ -63,7 +62,8 @@
   }
 }
 
-/* Centered empty state (no catalog row yet). */
+/* Centered empty state (no catalog row yet). Full-tab like .root: the page
+ * never scrolls (overflow hidden — waiting branch shares the invariant). */
 .emptyRoot {
   display: flex;
   align-items: center;
@@ -72,47 +72,10 @@
   min-height: 0;
   width: 100%;
   padding: var(--mstar-space-4);
+  overflow: hidden;
 }
 
-/* --- header: three evenly-spread cells (spec §1.1) --- */
-
-.header {
-  grid-area: header;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: stretch;
-  min-width: 0;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
-}
-
-.headerCell {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: var(--mstar-space-1);
-  min-width: 0;
-  padding: var(--mstar-space-3) var(--mstar-space-4);
-}
-
-.headerCell + .headerCell {
-  border-left: 1px solid var(--dsw-alias-border-l1);
-}
-
-.headerLabel {
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.headerValue {
-  color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-xs-13);
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-/* --- main: graph region + bottom footer (spec §1.1) --- */
+/* --- main: graph region + bottom footer (spec panel-zones §2) --- */
 
 .main {
   grid-area: main;
@@ -121,7 +84,7 @@
   min-width: 0;
   min-height: 0;
   padding: var(--mstar-space-4);
-  overflow-y: auto;
+  overflow: auto;                                 /* main is the only overflow scroll source */
 }
 
 .graph {
@@ -132,17 +95,46 @@
   flex-direction: column;
 }
 
-/* --- sidebar: fixed 300px column, own scroll (spec §1.1) --- */
+/* --- sidebar: fixed 300px column, full height, own scroll (spec panel-zones §2) --- */
 
 .sidebar {
   grid-area: sidebar;
   display: flex;
   flex-direction: column;
-  gap: var(--mstar-space-4);
   min-width: 0;
-  overflow-y: auto;
-  padding: var(--mstar-space-4);
+  min-height: 0;
   border-left: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* Scrolling digest region: the ONLY sidebar scroller — the meta dock below
+ * stays fixed (does not scroll with the digest). */
+.sidebarScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-4);
+  padding: var(--mstar-space-4);
+}
+
+/* --- sidebar bottom meta dock: version + harness dir (spec §5) --- */
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  flex: none;
+  padding: var(--mstar-space-3) var(--mstar-space-4);
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.metaLine {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* --- shared section content --- */
@@ -206,8 +198,9 @@
 .leasePlan,
 .leaseHolder,
 .leaseWorktree,
-.residualSeverity,
-.residualCount,
+.findingSeverity,
+.findingTitle,
+.findingPlan,
 .violationCode,
 .knowledgeCategories {
   display: inline-block;
@@ -246,6 +239,42 @@
 .violationList [data-severity='critical'],
 .violationList [data-severity='high'] {
   color: var(--dsw-alias-state-error-primary);
+}
+
+/* Residual finding row (spec §5): severity chip + title + owning plan id. */
+.findingSeverity {
+  margin-right: var(--mstar-space-2);
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.findingSeverity[data-severity='critical'],
+.findingSeverity[data-severity='high'] {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.findingSeverity[data-severity='medium'] {
+  border-color: var(--dsw-alias-state-warn-label);
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.findingTitle {
+  margin-right: var(--mstar-space-2);
+}
+
+.findingPlan {
+  color: var(--dsw-alias-label-caption);
+}
+
+/* `+N more` overflow notes (plan board / residual findings caps, spec §5). */
+.truncated {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
 }
 
 .leaseWorktree {

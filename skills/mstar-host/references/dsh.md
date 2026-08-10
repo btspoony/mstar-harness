@@ -37,11 +37,17 @@ or a custom profile).
   install step. It registers a **`conversation.view`** view-ring tab
   (`id: 'mstar-workflow'`, `order: 20`) labeled **"MStar 工作流" / "MStar
   Workflow"** rendering the latest `mstar-engine-status` catalog row as the
-  **MStar Workflow layout** — header (version / harness dir / enforcement
-  evenly spread), right sidebar (plans / residuals / knowledge / leases /
-  branches+policy / direction), and a **react-flow cyclic workflow graph**
-  (phase ring + plan state machine, current-phase highlight, legend, zoom/pan;
-  pure `projectGraph` projection, never throws, explicit degraded states);
+  **MStar Workflow layout** — a right sidebar (plans ≤5 in time-desc order +
+  `+N more`, open residual findings ≤10 with severity chips + overflow hint,
+  policy with **enforcement first** then push / worktree / control worktree,
+  leases, knowledge, direction) over a bottom **fixed meta dock** (version +
+  harness dir; small muted, hairline-separated, does NOT scroll with the
+  sidebar digest — the former header row was removed), and a **react-flow
+  cyclic workflow graph** (phase ring + plan state machine, current-phase
+  highlight, legend, zoom/pan; pure `projectGraph` projection, never throws,
+  explicit degraded states); the branches block left the sidebar in plan
+  `20260810-panel-sidebar-info` (its anchor fields stay in the catalog source;
+  the iteration zone renders them via plan `20260810-panel-canvas-zones`);
   refresh follows the session snapshot, no polling. Bundle served at
   `/plugins/@mstar-harness/dsh/client.js` (closure-factory CJS; `@xyflow/react`
   inlined; build asserts no `import.meta` / ESM statements — the loader runs

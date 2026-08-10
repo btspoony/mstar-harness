@@ -91,10 +91,28 @@ export interface MstarIterationGateView {
   readonly gate: IterationGateView
 }
 
-/** One registered plan row of the harness-state digest (id + status). */
+/** One registered plan row of the harness-state digest (id + status + completion date). */
 export interface HarnessPlanView {
   readonly id: string
   readonly status: string
+  /**
+   * The `status.json` plan row `done_at` (trimmed string). ALWAYS-present
+   * nullable scalar: a missing/empty `done_at` projects to `null` (lossless
+   * JSON — never an `undefined` property; the omit pattern is reserved for
+   * optional fields like `verdict?`).
+   */
+  readonly doneAt: string | null
+}
+
+/** One open residual finding of the harness-state digest (`planId` = the owning `residual_findings` root key). */
+export interface ResidualFindingView {
+  readonly planId: string
+  /** The finding's `id` (e.g. `R1`); '' when the source entry carries none. */
+  readonly id: string
+  /** The finding's `severity` (one of the residual severity enum when known). */
+  readonly severity: string
+  /** The finding's `title`; '' when the source entry carries none. */
+  readonly title: string
 }
 
 /** Open residual finding counts by severity (non-zero severities only). */
@@ -124,6 +142,15 @@ export interface MstarHarnessState {
   readonly plans: readonly HarnessPlanView[]
   /** Open `residual_findings` counts by severity (non-zero only). */
   readonly residuals: readonly HarnessResidualView[]
+  /**
+   * Open residual findings detail (planId + R# + severity + title), severity
+   * ordered (critical→nit) and capped at 10. Null when the
+   * `residual_findings` root key is missing/unreadable (advisory — same null
+   * pattern as `knowledge`); `[]` when the key exists but has no open
+   * entries. Independent of the `residuals` rollup (which stays
+   * backward-compatible).
+   */
+  readonly residualFindings: readonly ResidualFindingView[] | null
   /** `metadata.iteration_base_branch` (compass frontmatter fallback), null when absent. */
   readonly iterationBaseBranch: string | null
   /** `metadata.target_branch` (compass frontmatter fallback), null when absent. */

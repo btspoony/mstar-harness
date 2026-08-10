@@ -7,12 +7,12 @@
  * `useMstarEngineStatus()` hook riding the kit's `useSession` selector (spec
  * §5) — the render body is a pure function of (source, lastUpdated, t).
  *
- * Layout (spec panel-layout-graph §1.1): root grid `"header header" /
- * "main sidebar"` — header = 3 evenly-spread basics (version / harness dir /
- * enforcement), main = the react-flow loop graph (`GraphCanvas` over the
- * `projectGraph` projection) + freshness footer, sidebar = workspace-state
- * digest (plans / residuals / branches+policy / leases / knowledge /
- * direction). Below 860px the sidebar stacks under the main area.
+ * Layout (spec panel-zones §2): root grid `"main sidebar"` fills the Tab
+ * (height 100%, overflow hidden — the page never scrolls); main = the graph
+ * region (zone skeleton filled by plan 20260810-panel-canvas-zones) +
+ * freshness footer, sidebar = workspace-state digest with the bottom fixed
+ * meta dock (version + harness dir). Below 860px the sidebar stacks under
+ * the main area.
  *
  * Graph mount gating (spec §2.5, T1 review minor-1): the canvas mounts ONLY
  * in the harness-present branch — the `data-mstar-graph` anchor also exists
@@ -29,7 +29,6 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './panel.module.css'
 import { GraphCanvas } from './graph/GraphCanvas.tsx'
 import { projectGraph } from './graph/project-graph.ts'
-import { PanelHeader } from './panel-header.tsx'
 import { Sidebar } from './sidebar.tsx'
 import { useMstarEngineStatus } from './use-mstar-engine-status.ts'
 
@@ -62,12 +61,12 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
     </footer>
   )
   if (noHarness) {
-    // No harness → no graph region (spec §2.5): header + hint in a single-column
-    // root. The `data-mstar-graph` anchor is present for the T1 layout contract,
-    // but the GraphCanvas mount is gated to the harness-present branch below.
+    // No harness → no graph region (spec §2.5): hint + freshness in a
+    // single-column root. The `data-mstar-graph` anchor is present for the
+    // layout contract, but the GraphCanvas mount is gated to the
+    // harness-present branch below.
     return (
       <div className={css.root} data-mstar-panel="no-harness">
-        <PanelHeader t={t} source={source} />
         <main className={css.main} data-mstar-graph>
           <p className={css.empty} data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
           {freshness}
@@ -77,14 +76,13 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
   }
   return (
     <div className={css.root} data-mstar-panel="panel">
-      <PanelHeader t={t} source={source} />
       <main className={css.main} data-mstar-graph>
         <div className={css.graph}>
           <GraphCanvas view={projectGraph(source)} t={t} />
         </div>
         {freshness}
       </main>
-      <Sidebar t={t} state={source.state} />
+      <Sidebar t={t} state={source.state} source={source} />
     </div>
   )
 }
