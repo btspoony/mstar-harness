@@ -18,10 +18,17 @@
  *   (new catalog row) re-renders the panel with fresh data + freshness;
  * - plugin entry: `apply(ctx)` registers the `mstar-panel` dictionaries and
  *   the `conversation.view` tab (`id: 'mstar-workflow'`, `order: 20`,
- *   locale-following label thunk).
+ *   locale-following label thunk);
+ * - T3 flow column (spec agent-flow-catalog-graph §2.4): the expected/actual
+ *   agent-flow pipeline — 6 flow-stage skeleton nodes + lit/count from
+ *   dispatch evidence, the evidence-driven unexpected node, the event footer
+ *   strip (role → planId#taskId rows, status coloring, settled markers,
+ *   unexpected re-list), degraded/empty notes, legend flow-* items, zh labels,
+ *   and garbage-proof totality.
  *
  * Renderer: `react-dom/server.renderToStaticMarkup` over the real component
- * (dev-time peer-stub seams; the `*.module.css` import resolves to the raw
+ * (dev-time seams linked from the dsh source tree; the `*.module.css` import
+ * resolves to the raw
  * file-path string under `bun test`, so class attributes are dropped —
  * assertions pin `data-mstar-*` attributes, never class names).
  */
@@ -31,16 +38,35 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import {
-  createSnapshotStore, SlotsService,
-  type ClientContext, type ConversationNode, type ConversationSnapshot, type SessionId,
-} from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, ConversationNode, ConversationSnapshot, SessionId, SlotsService } from '@deepseek-ai/dsh-client-runtime/client'
+import type { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
+import { clientExports } from './client-bundles.ts'
+import { Context } from 'cordis'
 import type { MstarEngineStatusSource } from '../src/types'
+import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { apply } from '../src/client/index'
+
+// The REAL client service values — loaded from the browser bundles through the
+// loader shim; SlotsService / LocaleService are cordis services (ctx).
+type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
+const { createSnapshotStore, SlotsService: SlotsServiceCtor } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
+  Pick<RuntimeClientExports, 'createSnapshotStore' | 'SlotsService'>
+type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
+const { LocaleService: LocaleServiceCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
+  Pick<LocaleClientExports, 'LocaleService'>
+
+/** One real SlotsService over a fresh cordis context (services are ctx-bound). */
+function newSlots(): SlotsService {
+  return new SlotsServiceCtor(new Context())
+}
+
+/** One real LocaleService over a fresh cordis context. */
+function newLocale(): LocaleService {
+  return new LocaleServiceCtor(new Context())
+}
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelView } from '../src/client/panel/PanelView'
 
@@ -94,6 +120,7 @@ const fullSource: MstarEngineStatusSource = {
       categories: ['architecture-patterns', 'conventions', 'tooling-decisions'],
     },
     direction: 'dsh is highly customizable (client plugins + slot registry)',
+    agentFlow: null,
   },
 }
 
@@ -126,6 +153,7 @@ const noGateSource: MstarEngineStatusSource = {
     leases: [],
     knowledge: null,
     direction: null,
+    agentFlow: null,
   },
 }
 
@@ -169,7 +197,7 @@ function kitProps(overrides?: Partial<ConvViewProps>): ConvViewProps {
     useSessions: (() => null) as never,
     useWorkspaces: (() => null) as never,
     ...overrides,
-  }
+  } as unknown as ConvViewProps
 }
 
 /**
@@ -197,7 +225,7 @@ function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number
       content: [],
       source,
       form: 'catalog',
-    })
+    } as unknown as ConversationNode)
   }
   return {
     sessionId: 's-1' as SessionId,
@@ -206,13 +234,13 @@ function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number
     openState: 'open',
     composerPhase: 'active',
     blank: false,
-  }
+  } as unknown as ConversationSnapshot
 }
 
 /** Render the panel to static HTML through the real data path: snapshot store → useSession → hook → PanelView (default copy pinned to en). */
 function panelHtml(
   source: MstarEngineStatusSource | null,
-  locale: LocaleService = new LocaleService(),
+  locale: LocaleService = newLocale(),
   lastUpdated: number | null = 1_720_001_000_000,
   lang: 'en' | 'zh' = 'en',
 ): string {
@@ -391,15 +419,15 @@ describe('workflow panel — data wiring through the hook (spec §5)', () => {
       sessionId: 's-1' as SessionId,
       nodes: [
         { kind: 'user', seq: 1, time: 1_719_999_000_000, content: [], source: null },
-        { kind: 'context', seq: 2, time: 1_720_000_000_000, content: [], source: { ...fullSource, version: '2.0.3' }, form: 'catalog' },
-        { kind: 'context', seq: 4, time: 1_720_001_000_000, content: [], source: fullSource, form: 'catalog' },
+        { kind: 'context', seq: 2, time: 1_720_000_000_000, content: [], source: { ...fullSource, version: '2.0.3' }, form: 'catalog' } as unknown as ConversationNode,
+        { kind: 'context', seq: 4, time: 1_720_001_000_000, content: [], source: fullSource, form: 'catalog' } as unknown as ConversationNode,
       ],
       running: false,
       openState: 'open',
       composerPhase: 'active',
       blank: false,
-    })
-    const locale = new LocaleService()
+    } as unknown as ConversationSnapshot)
+    const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
     const html = renderAgainst(store, locale)
@@ -408,7 +436,7 @@ describe('workflow panel — data wiring through the hook (spec §5)', () => {
   })
 
   it('a new catalog row (snapshot bump = refresh signal) re-renders the panel with fresh data', () => {
-    const locale = new LocaleService()
+    const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
     const store = createSnapshotStore(snapshotFor(fullSource, 1_720_000_000_000))
@@ -430,16 +458,15 @@ describe('workflow panel — data wiring through the hook (spec §5)', () => {
 })
 
 describe('workflow panel — plugin entry registers locale + conversation.view tab (spec §4)', () => {
-  /** Minimal cordis context over the stub services (slots + locale + sessions faces). */
+  /** Real cordis context over the real services (slots + locale + sessions faces). */
   function makeCtx(): { ctx: ClientContext; slots: SlotsService; locale: LocaleService } {
-    const slots = new SlotsService()
-    const locale = new LocaleService()
-    const ctx = {
-      effect: (fn: () => unknown) => { fn() },
-      slots,
-      locale,
-      sessions: {},
-    } as unknown as ClientContext
+    const ctx = new Context() as unknown as ClientContext
+    const slots = new SlotsServiceCtor(ctx)
+    const locale = new LocaleServiceCtor(ctx)
+    // LocaleService is a plain class (not a cordis Service) — attach the
+    // faces the plugin's client entry injects (slots registers itself).
+    ;(ctx as unknown as Record<string, unknown>).locale = locale
+    ;(ctx as unknown as Record<string, unknown>).sessions = {}
     return { ctx, slots, locale }
   }
 
@@ -448,16 +475,19 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
     slots.register({
       name: 'root' as 'conversation.view',
       children: { 'conversation.session': { kind: 'single', scope: 'session' } } as never,
-    }, () => null)
+    } as never, () => null)
     return slots.register({
       name: 'conversation.session' as 'conversation.view',
       children: { 'conversation.view': { kind: 'list', scope: 'session' } },
-    }, () => null)
+    } as never, () => null)
   }
 
   it('registers the mstar-panel dictionaries on apply', () => {
     const { ctx, locale } = makeCtx()
     apply(ctx)
+    // Pin zh: the real LocaleService's initial locale is browser/persisted
+    // derived (the removed peer-stub defaulted to the first-registered one).
+    locale.setLocale('zh')
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
@@ -468,6 +498,7 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
     expect(slots.entries('conversation.view')).toHaveLength(0)
 
     const disposeDeclarer = declareViewRing(slots)
+    locale.setLocale('zh')
     const entries = slots.entries('conversation.view')
     expect(entries).toHaveLength(1)
     const tab = entries[0]!
@@ -532,7 +563,7 @@ describe('workflow panel — T1 layout: header / sidebar / main grid (spec panel
 
 describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflow" (spec panel-layout-graph §1.1)', () => {
   it('view.mstar-workflow label flips with the locale', () => {
-    const locale = new LocaleService()
+    const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar Workflow')
@@ -648,7 +679,7 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
 
   /** Render the panel against a live snapshot store (same helper shape as the data-wiring block). */
   function renderStore(store: { getSnapshot(): ConversationSnapshot }, lang: 'en' | 'zh' = 'en'): string {
-    const locale = new LocaleService()
+    const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale(lang)
     return renderToStaticMarkup(createElement(PanelView, {
@@ -781,5 +812,283 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
     expect(garbageIteration).toContain('data-graph-canvas')
     expect(garbageIteration).toContain('data-graph-empty="no-compass"')
     expect(garbageIteration).toContain('data-mstar-section="state"')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T3 flow column (spec agent-flow-catalog-graph §2.4): GraphCanvas renders the
+ * expected/actual agent-flow pipeline — the 6 flow-stage skeleton nodes +
+ * lit/count from dispatch evidence, the evidence-driven unexpected node, the
+ * event footer strip (role → planId#taskId, status coloring, settled markers,
+ * unexpected re-list), the degraded/empty notes, the legend flow-* items and
+ * the zh labels. The projection itself is unit-tested in
+ * client-graph-projection.spec.ts — these pin the RENDER layer through the
+ * real data path (snapshot store → useSession → PanelView → GraphCanvas).
+ * ------------------------------------------------------------------------- */
+
+/** One dispatch row as the T1 ledger view emits it (spec §2.2). */
+function flowDispatch(over: {
+  ts: number
+  role: string
+  agent?: string
+  planId?: string
+  taskId?: string
+  verdict?: 'ok' | 'advisory' | 'denied'
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'dispatch',
+    agent: over.agent ?? null,
+    role: over.role,
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
+    taskCategory: null,
+    ...(over.verdict !== undefined ? { verdict: over.verdict } : {}),
+  }
+}
+
+/** One settle row (spec §2.2 — settles carry no role). */
+function flowSettle(over: {
+  ts: number
+  agent?: string
+  outcome?: 'ok' | 'error' | 'denied'
+  durationMs?: number
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'settle',
+    agent: over.agent ?? null,
+    role: '',
+    planId: null,
+    taskId: null,
+    taskCategory: null,
+    ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
+    ...(over.durationMs !== undefined ? { durationMs: over.durationMs } : {}),
+  }
+}
+
+/** fullSource with `state.agentFlow` carrying the given events (latest-first). */
+function flowSource(events: readonly AgentFlowEventView[]): MstarEngineStatusSource {
+  return {
+    ...fullSource,
+    state: { ...fullSource.state!, agentFlow: { events, summary: [] } as AgentFlowView },
+  }
+}
+
+/** A believable mixed event window (latest-first): paired settle → lit implement dispatch → unexpected scout. */
+const flowEvents: AgentFlowEventView[] = [
+  flowSettle({ ts: 1_720_000_004_000, agent: 'a1', outcome: 'ok', durationMs: 340 }),
+  flowDispatch({ ts: 1_720_000_003_000, agent: 'a1', role: 'frontend-dev', planId: 'plan-1', taskId: 'T2', verdict: 'ok' }),
+  flowDispatch({ ts: 1_720_000_001_000, agent: 'a2', role: 'scout', planId: 'plan-9', taskId: 'T1' }),
+]
+
+describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline (spec agent-flow-catalog-graph §2.4)', () => {
+  /** The opening-div slice of one flow node (avoids colliding with the state machine's lit/count attrs). */
+  function flowNodeSlice(h: string, nodeId: string): string {
+    const start = h.indexOf(`data-graph-node="flow:${nodeId}"`)
+    if (start === -1) return ''
+    const end = h.indexOf('data-graph-node="', start + 1)
+    return end === -1 ? h.slice(start) : h.slice(start, end)
+  }
+
+  it('renders the 6 expected-stage skeleton nodes + degraded note when the ledger is UNREADABLE (agentFlow null)', () => {
+    // The fixture simulates the server's degraded case (null agentFlow —
+    // only an unreadable ledger yields null post-fix-wave qc1 F-001; a
+    // MISSING ledger arrives as the empty view and renders the empty note
+    // instead, pinned in the next test block).
+    const html = panelHtml(fullSource) // fullSource.agentFlow === null → degraded
+    for (const id of [
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+    ]) {
+      expect(html).toContain(`data-graph-node="flow:${id}"`)
+    }
+    // Schema skeleton only — nothing lit without evidence, and the unlit
+    // marker lives on the flow node itself.
+    expect(flowNodeSlice(html, 'autonomous-execute:sdd-implement')).toContain('data-graph-lit="false"')
+    expect(flowNodeSlice(html, 'iteration-start:review-edit-chain')).toContain('data-graph-lit="false"')
+    // Degraded note + empty event strip.
+    expect(html).toContain('data-graph-empty="flow-degraded"')
+    expect(html).toContain('No agent-flow evidence (ledger missing)')
+    expect(html).toContain('data-graph-flow-count="0"')
+    expect(html).toContain('Agent flow events')
+    // No unexpected node without unexpected evidence.
+    expect(html).not.toContain('data-graph-node="flow:unexpected"')
+  })
+
+  it('lights stages + count badges from dispatch evidence (exact stage mapping)', () => {
+    const html = panelHtml(flowSource([
+      flowDispatch({ ts: 3, role: 'fullstack-dev' }),
+      flowDispatch({ ts: 2, role: 'fullstack-dev' }),
+      flowDispatch({ ts: 1, role: 'product-manager' }),
+    ]))
+    const implement = flowNodeSlice(html, 'autonomous-execute:sdd-implement')
+    expect(implement).toContain('data-graph-lit="true"')
+    expect(implement).toContain('data-graph-count="2"')
+    const review = flowNodeSlice(html, 'iteration-start:review-edit-chain')
+    expect(review).toContain('data-graph-lit="true"')
+    expect(review).toContain('data-graph-count="1"')
+    // Unrelated stages stay unlit schema boxes.
+    expect(flowNodeSlice(html, 'autonomous-execute:qc-tri')).toContain('data-graph-lit="false"')
+    // Roles chips render from the schema vocab.
+    expect(html).toContain('data-flow-role="frontend-dev"')
+    expect(html).toContain('data-flow-role="generalPurpose"')
+    expect(html).toContain('data-graph-flow-phase="autonomous-execute"')
+  })
+
+  it('renders the event footer strip: role → planId#taskId rows, status coloring, settled ✓, unexpected re-list', () => {
+    const html = panelHtml(flowSource(flowEvents))
+    expect(html).toContain('data-graph-flow-count="3"')
+    expect(html).toContain('data-graph-flow-unexpected-count="1"')
+    expect(html).toContain('data-mstar-flow-events')
+    // Row attributes: kind / status / expected / settled.
+    expect(html).toContain('data-graph-flow-event-kind="dispatch"')
+    expect(html).toContain('data-graph-flow-event-kind="settle"')
+    expect(html).toContain('data-graph-flow-event-status="dispatched"')
+    expect(html).toContain('data-graph-flow-event-status="ok"')
+    expect(html).toContain('data-graph-flow-event-expected="true"')
+    expect(html).toContain('data-graph-flow-event-expected="false"')
+    // The paired dispatch carries the settled ✓ marker.
+    expect(html).toContain('data-graph-flow-event-settled="true"')
+    // Row cells: role → planId#taskId, status labels, settle duration.
+    expect(html).toContain('frontend-dev')
+    expect(html).toContain('plan-1#T2')
+    expect(html).toContain('dispatched')
+    expect(html).toContain('settled ok')
+    expect(html).toContain('340ms')
+    // Unexpected events are re-listed in their own warn section.
+    expect(html).toContain('data-mstar-flow-unexpected')
+    expect(html).toContain('Unexpected roles')
+    expect(html).toContain('scout')
+    // The unexpected node + warn-edge source render on evidence.
+    expect(html).toContain('data-graph-node="flow:unexpected"')
+    expect(flowNodeSlice(html, 'unexpected')).toContain('data-graph-count="1"')
+    // With evidence present, no degraded/empty note.
+    expect(html).not.toContain('data-graph-empty="flow-degraded"')
+    expect(html).not.toContain('data-graph-empty="flow-empty"')
+  })
+
+  it('mounts the unexpected node only on unexpected-role evidence (never a guessed warning)', () => {
+    expect(panelHtml(flowSource(flowEvents))).toContain('data-graph-node="flow:unexpected"')
+    const clean = panelHtml(flowSource([flowDispatch({ ts: 1, role: 'frontend-dev' })]))
+    expect(clean).not.toContain('data-graph-node="flow:unexpected"')
+    expect(clean).toContain('data-graph-node="flow:autonomous-execute:sdd-implement"')
+  })
+
+  it('renders hidden connection-point handles on every node type (ReactFlow v12 edge prerequisite — T3 fix loop)', () => {
+    const html = panelHtml(flowSource(flowEvents))
+    const slice = (prefix: string, nodeId: string) => {
+      const start = html.indexOf(`data-graph-node="${prefix}:${nodeId}"`)
+      if (start === -1) return ''
+      const end = html.indexOf('data-graph-node="', start + 1)
+      return end === -1 ? html.slice(start) : html.slice(start, end)
+    }
+    // Pipeline stages: target(top) + source(bottom) for the chain, and
+    // source(right) as the unexpected warn edge origin (buildEdges binds by
+    // these ids — an edge whose endpoint exposes no handle is dropped by
+    // @xyflow/react, so this is the render-side prerequisite for edges).
+    for (const id of [
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+    ]) {
+      const stage = slice('flow', id)
+      expect(stage).toContain('data-handleid="target:top"')
+      expect(stage).toContain('data-handleid="source:bottom"')
+      expect(stage).toContain('data-handleid="source:right"')
+    }
+    // The unexpected warn node receives the edge on its left side.
+    expect(slice('flow', 'unexpected')).toContain('data-handleid="target:left"')
+    // Phase ring: vertical loop, bottom→top.
+    expect(slice('phase', 'iteration-start')).toContain('data-handleid="target:top"')
+    expect(slice('phase', 'iteration-start')).toContain('data-handleid="source:bottom"')
+    expect(slice('phase', 'merge-ready')).toContain('data-handleid="source:bottom"')
+    // State machine topology: vertical chain bottom→top + the side-by-side
+    // Blocked branch right↔left; Done is terminal (target only); unknown is
+    // sink-only — it accepts the connector edge inbound (target:top, when
+    // unknown is the most-planned lit bucket) but exposes no source handles
+    // (no outbound edges; T3-review M1).
+    const inProgress = slice('state', 'InProgress')
+    expect(inProgress).toContain('data-handleid="target:top"')
+    expect(inProgress).toContain('data-handleid="source:bottom"')
+    expect(inProgress).toContain('data-handleid="source:right"')
+    expect(inProgress).toContain('data-handleid="target:right"')
+    const blocked = slice('state', 'Blocked')
+    expect(blocked).toContain('data-handleid="target:left"')
+    expect(blocked).toContain('data-handleid="source:left"')
+    const done = slice('state', 'Done')
+    expect(done).toContain('data-handleid="target:top"')
+    expect(done).not.toContain('data-handleid="source:bottom"')
+    const unknown = slice('state', 'unknown')
+    expect(unknown).toContain('data-handleid="target:top"')
+    expect(unknown).not.toContain('data-handleid="source:')
+  })
+
+  it('empty ledger (0 events) → empty-state note, skeleton unlit, strip count 0', () => {
+    const html = panelHtml(flowSource([]))
+    expect(html).toContain('data-graph-empty="flow-empty"')
+    expect(html).toContain('No actual dispatches yet (recording starts at agent-flow plan merge)')
+    expect(html).toContain('data-graph-flow-count="0"')
+    expect(flowNodeSlice(html, 'autonomous-execute:sdd-implement')).toContain('data-graph-lit="false"')
+  })
+
+  it('garbage agentFlow → degraded note, never a crash', () => {
+    const html = panelHtml({
+      ...fullSource,
+      state: { ...fullSource.state!, agentFlow: 42 },
+    } as unknown as MstarEngineStatusSource)
+    expect(html).toContain('data-graph-canvas')
+    expect(html).toContain('data-graph-empty="flow-degraded"')
+    expect(html).toContain('data-graph-node="flow:autonomous-execute:sdd-implement"')
+  })
+
+  it('legend includes the flow-expected / flow-actual / flow-unexpected swatches, en + zh', () => {
+    const html = panelHtml(fullSource)
+    expect(html).toContain('data-mstar-legend-item="flow-expected"')
+    expect(html).toContain('data-mstar-legend-item="flow-actual"')
+    expect(html).toContain('data-mstar-legend-item="flow-unexpected"')
+    expect(html).toContain('expected stage (hollow)')
+    expect(html).toContain('actual dispatch (filled)')
+    expect(html).toContain('unexpected role (outlined)')
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-mstar-legend-item="flow-expected"')
+    expect(zhHtml).toContain('预期 stage（空心）')
+    expect(zhHtml).toContain('实际派发（实心）')
+    expect(zhHtml).toContain('未匹配角色（描边）')
+  })
+
+  it('zh locale localizes the flow strip labels + status colors', () => {
+    const zhHtml = panelHtml(flowSource(flowEvents), undefined, undefined, 'zh')
+    expect(zhHtml).toContain('Agent 流转事件')
+    expect(zhHtml).toContain('已派发')
+    expect(zhHtml).toContain('已结算')
+    expect(zhHtml).toContain('未匹配角色')
+    expect(zhHtml).toContain('3 条')
+  })
+
+  it('a new catalog row with fresh agentFlow events updates the strip (data path)', () => {
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const store = createSnapshotStore(snapshotFor(fullSource, 1_720_000_000_000))
+    const renderStore = () => renderToStaticMarkup(createElement(PanelView, {
+      ...kitProps({ useSession: bindUseSession(store) }),
+      t: locale.bind(NS),
+    }))
+    expect(renderStore()).toContain('data-graph-flow-count="0"')
+    expect(renderStore()).toContain('data-graph-empty="flow-degraded"')
+    store.set(snapshotFor(flowSource(flowEvents), 1_720_000_004_000))
+    const after = renderStore()
+    expect(after).toContain('data-graph-flow-count="3"')
+    expect(after).not.toContain('data-graph-empty="flow-degraded"')
+    expect(after).toContain('data-graph-node="flow:unexpected"')
+    expect(after).toContain('plan-1#T2')
   })
 })

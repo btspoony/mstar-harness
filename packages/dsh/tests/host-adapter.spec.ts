@@ -35,7 +35,7 @@ import type { HostAdapter } from '@mstar-harness/engine'
 import type { AssignmentFields } from '@mstar-harness/engine'
 import type { IntegrationMergeLease } from '@mstar-harness/engine'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
-import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { DshHostAdapter, HarnessResolver, type Config } from '../src/index.ts'
 import type { DispatchGateAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { bootApp, INVALID_STATUS, VALID_STATUS, seedHarness, type BootResult } from './harness.ts'
@@ -191,8 +191,8 @@ function subagentExec(prompt: string): ToolExecution {
     name: 'subagent',
     arguments: { description: 'probe', prompt },
     signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution'),
-  }
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
 }
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */

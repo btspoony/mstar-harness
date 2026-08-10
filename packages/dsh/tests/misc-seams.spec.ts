@@ -7,9 +7,9 @@
  * (CLI `mstar design-md validate` / `mstar compound validate` mirrors).
  *
  * Composition: the app boots through the real Loader with the dsh-tools
- * functional peer stub mounted (same harness as sdd-iteration-tools.spec),
- * so gate listeners and tool registrations exercise the shipping plugin
- * path.
+ * registry linked from the dsh source tree (same harness as
+ * sdd-iteration-tools.spec), so gate listeners and tool registrations
+ * exercise the shipping plugin path.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
@@ -17,7 +17,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Context } from 'cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
-import type { CallId, ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import * as plugin from '../src/index.ts'
 import {
   SeamVetoError,
@@ -809,13 +810,14 @@ function run(ctx: BootResult['ctx'], name: string, args: Record<string, unknown>
 }
 
 /** Assert the generic-card presentCall contract (title / kind / rawInput). */
-function expectGenericCall(view: ToolCallView | undefined, rawInput: unknown): void {
-  expect(view).toBeDefined()
-  expect(view!.card).toBe('generic')
-  expect(typeof view!.title).toBe('string')
-  expect(view!.title!.length).toBeGreaterThan(0)
-  expect(view!.kind).toBe('other')
-  expect(view!.rawInput).toEqual(rawInput)
+function expectGenericCall(view: unknown, rawInput: unknown): void {
+  const card = view as { card?: string; title?: string; kind?: string; rawInput?: unknown } | undefined
+  expect(card).toBeDefined()
+  expect(card!.card).toBe('generic')
+  expect(typeof card!.title).toBe('string')
+  expect(card!.title!.length).toBeGreaterThan(0)
+  expect(card!.kind).toBe('other')
+  expect(card!.rawInput).toEqual(rawInput)
 }
 
 describe('seam tool registration — real composition', () => {
@@ -824,7 +826,7 @@ describe('seam tool registration — real composition', () => {
     const names = ['mstar_design_md_validate', 'mstar_audit_validate', 'mstar_compound_validate', 'mstar_roles_validate']
     const seen = new Set<string>()
     for (const name of names) {
-      const tool = app.ctx.tools.lookup(name)
+      const tool = app.ctx.tools.get(name)
       expect(tool).toBeDefined()
       expect(tool!.description.length).toBeGreaterThan(0)
       expect(seen.has(name)).toBe(false)
@@ -834,10 +836,10 @@ describe('seam tool registration — real composition', () => {
 
   it('presentCall renders a generic card with the primary path', async () => {
     const app = booted = await bootApp()
-    expectGenericCall(app.ctx.tools.lookup('mstar_design_md_validate')!.presentCall?.({ dir: '/d' }), '/d')
-    expectGenericCall(app.ctx.tools.lookup('mstar_audit_validate')!.presentCall?.({ plan_path: '/p.md' }), '/p.md')
-    expectGenericCall(app.ctx.tools.lookup('mstar_compound_validate')!.presentCall?.({ doc_path: '/k.md' }), '/k.md')
-    expectGenericCall(app.ctx.tools.lookup('mstar_roles_validate')!.presentCall?.({ roles_dir: '/roles' }), '/roles')
+    expectGenericCall(app.ctx.tools.get('mstar_design_md_validate')!.presentCall?.({ dir: '/d' }), '/d')
+    expectGenericCall(app.ctx.tools.get('mstar_audit_validate')!.presentCall?.({ plan_path: '/p.md' }), '/p.md')
+    expectGenericCall(app.ctx.tools.get('mstar_compound_validate')!.presentCall?.({ doc_path: '/k.md' }), '/k.md')
+    expectGenericCall(app.ctx.tools.get('mstar_roles_validate')!.presentCall?.({ roles_dir: '/roles' }), '/roles')
   })
 })
 
@@ -857,7 +859,7 @@ describe('mstar_design_md_validate', () => {
     expect(valueOf(result).violations).toEqual([])
     expect(['BELOW_MVP', 'MVP', 'Standard', 'Production']).toContain(valueOf(result).level!)
     expect(Array.isArray(valueOf(result).level_missing)).toBe(true)
-    expect(result.content[0]!.text).toContain('design-md validate:')
+    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('design-md validate:')
   })
 
   it('broken design → ok false + violations', async () => {

@@ -24,7 +24,7 @@
  * () => Promise.resolve({ kind: 'allow' }))`).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
@@ -209,8 +209,8 @@ function toolExec(name: string, args: unknown, agent?: unknown): ToolExecution {
     arguments: args,
     agent,
     signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution'),
-  }
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
 }
 
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */

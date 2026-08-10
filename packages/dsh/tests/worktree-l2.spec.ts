@@ -40,7 +40,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
-import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
@@ -100,7 +100,7 @@ const stepPayload = (messages: UserMessage[], turn = 1) => ({
   turn,
   step: 1,
   signal: new AbortController().signal,
-})
+} as never)
 
 /** The last message of an enter decision (the appended rows when present). */
 const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>
@@ -131,8 +131,8 @@ function toolExec(name: string, args: unknown): ToolExecution {
     name,
     arguments: args,
     signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution'),
-  }
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
 }
 
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */
@@ -308,7 +308,7 @@ describe('pre-step iteration gate — catalog composition (real Loader boot)', (
 
     const decision = await app.ctx.waterfall(
       'agent/pre-step',
-      { agent: {}, messages: [], turn: 1, step: 1, signal: controller.signal },
+      { agent: {}, messages: [], turn: 1, step: 1, signal: controller.signal } as never,
       defaultEnter([]),
     )
 

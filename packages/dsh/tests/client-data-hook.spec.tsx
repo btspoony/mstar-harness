@@ -17,13 +17,16 @@
 
 import { describe, expect, it } from 'bun:test'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import {
-  createSnapshotStore,
-  type ContextMessageNode, type ConversationNode, type ConversationSnapshot, type SessionId,
-} from '@deepseek-ai/dsh-client-runtime/client'
+import type { ContextMessageNode, ConversationNode, ConversationSnapshot, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import { clientExports } from './client-bundles.ts'
 import type { MstarEngineStatusSource } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { useMstarEngineStatus } from '../src/client/panel/use-mstar-engine-status'
+
+// The REAL `createSnapshotStore` from the runtime browser bundle (loader shim).
+type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
+const { createSnapshotStore } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
+  Pick<RuntimeClientExports, 'createSnapshotStore'>
 
 const sessionId = 's-1' as SessionId
 
@@ -56,12 +59,12 @@ function otherKindCatalogRow(): ConversationNode {
     content: [],
     source: { kind: 'mstar-iteration-gate', form: 'catalog' },
     form: 'catalog',
-  }
+  } as unknown as ConversationNode
 }
 
 /** One `mstar-engine-status` catalog row carrying the given source + message time. */
 function engineRow(seq: number, time: number, source: MstarEngineStatusSource): ConversationNode {
-  return { kind: 'context', seq, time, content: [], source, form: 'catalog' }
+  return { kind: 'context', seq, time, content: [], source, form: 'catalog' } as unknown as ConversationNode
 }
 
 /** A minimal immutable snapshot (the shape `useSession` hands the selector). */
@@ -73,7 +76,7 @@ function snapshot(nodes: readonly ConversationNode[]): ConversationSnapshot {
     openState: 'open',
     composerPhase: 'active',
     blank: false,
-  }
+  } as unknown as ConversationSnapshot
 }
 
 /** Plain selector binding over the stub store — the dev-time twin of the uSES binding (see `web-react/src/bind.ts`). */

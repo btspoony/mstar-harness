@@ -210,9 +210,12 @@ render unlit; the loop edge is planning semantics (one iteration closes, the
 next opens); no historical back-scan of a resumed long log (the server
 re-emits the row at every turn's first step, digest-gated); no custom
 top-level slot (the `conversation.view` tab is the only session-level panel
-seat available without dsh-private layout changes — spec §1). Browser UI
-observation is the user-restart acceptance (R1 folded into this iteration's
-AC-1/2) — rerun steps in the install-verification guide §8.
+seat available without dsh-private layout changes — spec §1). Panel
+acceptance is dual-track: in-loop browser harness verification against the
+rebuilt bundle (see iteration guides
+`iter-20260810-panel-fix-agentflow/guides/`) plus user-restart final GUI
+acceptance — rerun steps in the install-verification guide §8. R1 (browser
+observation) closed and archived 2026-08-10.
 
 ## Development
 
@@ -224,7 +227,7 @@ bunx tsc --noEmit
 bun run build
 ```
 
-The dev-time seam surfaces (types, event shapes) mirror a pinned dsh-private snapshot through `peer-stubs/`; re-sync the stubs when the dsh-private baseline moves.
+The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepseek-ai/dsh-*` packages from a local dsh source tree, linked into the repo-root `node_modules/@deepseek-ai/` by the link farm (`bun run dsh:link`, dsh-advisor pattern); re-run it after the dsh baseline (`$DSH_SOURCE_DIR` / `$DSH_HOME/source/current`) moves.
 
 ## Model Experience
 
@@ -244,7 +247,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 
 ## Known Limitations and Deferred Work
 
-- **Dev-time peer stubs** — the `@deepseek-ai/dsh-*` seams split into (a) **type-only / placeholder stubs** (`dsh-fs`, `dsh-agent`, `dsh-invariants`) exposing the seam types/peer names only, and (b) **functional composition stubs** (`dsh-skill`, `dsh-skill-local`, `dsh-tools` (`defineTool`), `dsh-commands`, `dsh-llm`) carrying minimal dev-time runtimes (`simplify:` markers; pinned to a dsh-private snapshot) so composition, waterfalls, the catalog message factory, the bundled-command registrations, and the v2 seam tools actually run in tests. **All runtime seam imports are externalized at build time** (`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining the stand-in code); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. Swapping in the real seam packages for the plugin's own suite is NOT planned — a composed app with real seams is the deployment target (this package's suite deliberately runs the pinned stubs for hermetic composition tests).
+- **Dev-time seams link the real dsh source tree** — the `@deepseek-ai/dsh-*` seams are peerDependencies only (the host provides them at runtime); dev-time typecheck/tests/build resolve them through the **link farm** (`scripts/setup-dsh-links.ts`, dsh-advisor pattern): every `@deepseek-ai/*` package of a local dsh source tree (`$DSH_SOURCE_DIR` → `$DSH_HOME/source/current` → `~/.dsh/source/current`) is symlinked into the repo-root `node_modules/@deepseek-ai/` (bin-declaring packages skipped; idempotent — re-run with `bun run dsh:link`, verify with `bun run dsh:link:check`; wired into `prepare` before the build). **All runtime seam imports are externalized at build time** (`--external cordis / @deepseek-ai/dsh-skill-local / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. The suite runs against the REAL seam packages from the linked tree — no committed `peer-stubs/` stand-ins; a machine without a local dsh tree hard-fails `dsh:link` with a `DSH_SOURCE_DIR` hint (CI skips dsh steps by availability — dsh is not run in CI).
 - **Anti-recursion binding is Config-declared** — dsh exposes no per-agent role on the tool-execution context, so `dispatchBinding` declares one deployment-wide role; an Assignment with a different `Execute as` cannot be caught as self-recursion, and multi-role dispatchers need per-instance plugins.
 - **Lease gate diverges from opencode by design** — opencode's `beforeDispatch` runs no lease checks; the dsh lease gate is additive (`lease.dispatch.*` codes) and fires only for writable SDD/InProgress dispatches, so parity covers the field set, not the lease surface.
 - **Shared engine composition adopted** — the dispatch gate core is the engine's single `composeDispatchGate` (opencode/omp/CLI parity, so field/branch/anti-recursion violation codes are identical by construction), and the compass frontmatter parser is the engine's shared `parseCompassFrontmatter` (no local fork — nothing left to drift). Both run over the dsh header-region slice; the lease + worktree L1/L2 checks stay dsh-side additions on top.

@@ -1,7 +1,9 @@
 /**
- * Workflow graph canvas styles (spec panel-layout-graph §2.6 / §4): the
- * react-flow viewport (phase ring left, plan state machine right — static
- * layout table) plus the graph footer (legend left, gate summary right).
+ * Workflow graph canvas styles (spec panel-layout-graph §2.6 / §4 +
+ * agent-flow-catalog-graph §2.4): the react-flow viewport (phase ring left,
+ * plan state machine center-right, agent-flow pipeline right — static layout
+ * table) plus the graph footer (legend left, gate summary right, agent-flow
+ * event strip below).
  *
  * Hard metrics (spec §1.2): spacing from the --mstar-space-* ramp only;
  * EVERY color is a verified --dsw-* alias token — zero bare hex, so dark mode
@@ -172,6 +174,89 @@
   color: var(--dsw-alias-label-caption);
 }
 
+/* --- agent-flow pipeline nodes (spec agent-flow-catalog-graph §2.4):
+   expected stage box (stage label + phase + roles chips + count badge;
+   lit = business border, unlit = dim) and the unexpected warn box --- */
+
+.flowStageNode {
+  min-width: 168px;
+  max-width: 224px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  padding: var(--mstar-space-2) var(--mstar-space-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  transition: border-color 150ms ease, opacity 150ms ease;
+}
+
+.flowStageLit {
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-label-primary);
+}
+
+.flowStageUnlit {
+  opacity: 0.55;
+  color: var(--dsw-alias-label-caption);
+}
+
+.flowStageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+}
+
+.flowStageCount {
+  display: inline-block;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--dsw-alias-state-business-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.flowStagePhase {
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.flowRoleList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flowRoleChip {
+  display: inline-block;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.flowUnexpectedNode {
+  min-width: 140px;
+  max-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  padding: var(--mstar-space-2) var(--mstar-space-3);
+  border: 1px dashed var(--dsw-alias-state-warn-label);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-state-warn-label);
+  font: var(--dsw-font-xxxs-11);
+}
+
 /* --- edges: forward solid, loop dashed, connector dotted (spec §2.6) --- */
 
 .edgeForward path {
@@ -193,6 +278,38 @@
   stroke-dasharray: 2 4;
   fill: none;
   opacity: 0.7;
+}
+
+/* --- agent-flow pipeline edges (spec agent-flow-catalog-graph §2.4):
+   skeleton dim, lit highlight, unexpected warn dash --- */
+
+.edgeFlow path {
+  stroke: var(--dsw-alias-border-l2);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.edgeFlowLit path {
+  stroke: var(--dsw-alias-state-business-primary);
+  stroke-width: 2;
+  fill: none;
+}
+
+.edgeFlowUnexpected path {
+  stroke: var(--dsw-alias-state-warn-label);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  fill: none;
+}
+
+/* --- invisible connection-point handles (T3 fix loop): every schematic node
+   exposes <Handle> elements so ReactFlow v12 renders its edges (an edge whose
+   endpoint exposes no handle bounds is dropped — see GraphCanvas.tsx); the
+   handles are measured like visible ones but never painted or interactive. */
+
+.flowHandle {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* --- degraded / focus overlays (spec §2.5 ring-center note, §4) --- */
@@ -217,6 +334,19 @@
 .notePlans {
   right: 24px;
   bottom: 24px;
+}
+
+/* Agent-flow degraded/empty note (spec agent-flow-catalog-graph §2.4):
+ * rendered INSIDE the ReactFlow viewport (FlowViewportNote) anchored to the
+ * unexpected-node slot (FLOW_UNEXPECTED_POSITION ≈ x 1180 / y 280, flow
+ * coordinates) with the INLINE left/top computed from the live viewport
+ * transform (qc1 F-007 fix-wave — a fixed container `left: 1180px` only
+ * aligned at the identity transform). That slot is only occupied when
+ * unexpected events exist, which can never co-occur with the degraded/empty
+ * note (both imply zero events). `position: absolute` keeps the note in the
+ * flow container's coordinate space. */
+.noteFlow {
+  position: absolute;
 }
 
 .connectorBadge {
@@ -255,15 +385,23 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* --- graph footer: legend left, gate summary right (spec §1.1/§4) --- */
+/* --- graph footer: legend left, gate summary right, agent-flow event strip
+   below (spec §1.1/§4 + agent-flow-catalog-graph §2.4) --- */
 
 .footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-3);
+  padding-top: var(--mstar-space-3);
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.footerRow {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--mstar-space-4);
-  padding-top: var(--mstar-space-3);
-  border-top: 1px solid var(--dsw-alias-border-l1);
+  min-width: 0;
 }
 
 .legend {
@@ -349,6 +487,22 @@
   background: var(--dsw-alias-state-error-primary);
 }
 
+/* Agent-flow legend swatches (spec agent-flow-catalog-graph §2.4): hollow
+ * circle = expected stage, filled = actual dispatch, dashed outline =
+ * unexpected role — mirrors the node treatments. */
+.swatchFlowExpected {
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
+}
+
+.swatchFlowActual {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.swatchFlowUnexpected {
+  border: 1px dashed var(--dsw-alias-state-warn-label);
+}
+
 .gateSummary {
   display: flex;
   flex-direction: column;
@@ -403,4 +557,160 @@
 .violationList [data-severity='critical'],
 .violationList [data-severity='high'] {
   color: var(--dsw-alias-state-error-primary);
+}
+
+/* --- agent-flow event strip (spec agent-flow-catalog-graph §2.4):
+   collapsible <details> footer list — one row per event (role → planId#taskId,
+   ts, status-colored label + dot, agent, settled ✓); ≤50 rows scroll inside
+   the strip; unexpected events re-listed in their own warn section --- */
+
+.flowDetails {
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.flowDetails summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.flowSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-2);
+}
+
+.flowTitle {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.flowCount {
+  color: var(--dsw-alias-label-caption);
+}
+
+.flowUnexpectedBadge {
+  display: inline-block;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-state-warn-label);
+  border-radius: 999px;
+  color: var(--dsw-alias-state-warn-label);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.flowEventList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: var(--mstar-space-1) 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  list-style: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.flowEventRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-1) var(--mstar-space-2);
+}
+
+.flowEventRole {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.flowEventTarget {
+  overflow-wrap: anywhere;
+}
+
+.flowEventTime {
+  color: var(--dsw-alias-label-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.flowEventAgent {
+  color: var(--dsw-alias-label-caption);
+}
+
+.flowEventDuration {
+  color: var(--dsw-alias-label-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status chip: colored dot (currentColor) + colored label — the 5 statuses
+ * from the projection (dispatch → in-flight/advisory/denied; settle →
+ * settled-ok/error/denied). */
+.flowStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  font-weight: 600;
+}
+
+.flowStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.flowStatusDispatched {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.flowStatusAdvisory {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.flowStatusDenied {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.flowStatusOk {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.flowStatusError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Unreachable-in-practice fallback (the projection's status union is closed);
+ * kept for the total-function default branch. */
+.flowStatusUnknown {
+  color: var(--dsw-alias-label-caption);
+}
+
+/* The settled ✓ on a paired dispatch row — a completion marker, not a label. */
+.flowSettledMark {
+  color: var(--dsw-alias-state-success-primary);
+  font-weight: 600;
+}
+
+/* Settle rows carry no role (T1 sets '') — the row's role cell shows this
+ * glyph (the settle record itself is the completion marker). NEUTRAL color
+ * (qc2 F-4 fix-wave): the ✓ marks the record, not success — an error/denied
+ * outcome must not read as a green success; the status chip carries all
+ * outcome semantics. */
+.flowSettleGlyph {
+  color: var(--dsw-alias-label-secondary);
+  font-weight: 600;
+}
+
+.flowUnexpectedSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin-top: var(--mstar-space-2);
+  padding-top: var(--mstar-space-2);
+  border-top: 1px dashed var(--dsw-alias-state-warn-label);
+}
+
+.flowUnexpectedHeading {
+  color: var(--dsw-alias-state-warn-label);
+  font-weight: 600;
+  letter-spacing: 0.03em;
 }

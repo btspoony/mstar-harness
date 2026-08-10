@@ -6,11 +6,12 @@
  * map — entry parsing, config validation, fiber mounting, and settlement are
  * the shipping code.
  *
- * Seam limitation (documented in the Task 2 report): at dev time the dsh seam
- * packages are peer-stubs (no runtime implementations), so the fs intent
- * waterfalls are simulated with a minimal typed harness — the same
- * `ctx.waterfall` dispatch the real `@deepseek-ai/dsh-tool-fs` write/edit
- * tools perform (`ctx.waterfall('fs/write-intent', target, exec, () => undefined)`).
+ * Seam boundary: dev-time the dsh seam packages resolve from a real dsh
+ * source tree via the link farm (`scripts/setup-dsh-links.ts` → repo-root
+ * `node_modules/@deepseek-ai/`), but this suite deliberately drives the fs
+ * intent waterfalls with a minimal typed harness — the same `ctx.waterfall`
+ * dispatch the real `@deepseek-ai/dsh-tool-fs` write/edit tools perform
+ * (`ctx.waterfall('fs/write-intent', target, exec, () => undefined)`).
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -20,6 +21,28 @@ import { Context } from 'cordis'
 import Loader from '@cordisjs/plugin-loader'
 import Include from '@cordisjs/plugin-include'
 import * as plugin from '../src/index.ts'
+
+/**
+ * Bun (JavaScriptCore) compatibility shim for the REAL dsh seam packages.
+ *
+ * The real packages' lossless-JSON guards (dsh-session `snapshotJsonValue`,
+ * dsh-tools schema validation) detect intrinsic prototypes by comparing
+ * `Function.prototype.toString` against V8's exact `function Object() { [native code] }`
+ * format. JavaScriptCore (Bun) prints native functions with newlines
+ * (`function Object() {\n    [native code]\n}`), so under Bun every plain
+ * object is rejected as non-intrinsic and tool results/schemas fail
+ * materialization. This normalizes the native-code format to the V8 spelling
+ * the real packages compare against — test-runtime only (dsh hosts run Node).
+ */
+{
+  const intrinsicToString = Function.prototype.toString
+  Function.prototype.toString = function toStringCompat(this: Function): string {
+    const rendered = intrinsicToString.call(this)
+    return rendered.includes('[native code]')
+      ? `function ${this.name || 'anonymous'}() { [native code] }`
+      : rendered
+  }
+}
 
 /** Boot options for {@link bootApp}. */
 export interface BootOptions {
@@ -116,6 +139,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     ? (await readFile(options.cordisYml, 'utf8')).replace(/\s+$/, '').split('\n')
     : [
         "- name: '@deepseek-ai/dsh-skill'",
+        // The real dsh-tools ToolRegistry service injects `systemPrompt`
+        // (unlike the removed peer-stub), so the system-prompt row mounts
+        // before the tool registry row.
+        "- name: '@deepseek-ai/dsh-system-prompt'",
         // The tool registry row mounts before the plugin so `ctx.tools` exists
         // when the v2 seams register their model-facing tools (Task 1 of plan
         // 20260808-dsh-seams-bundle; the real dsh app always composes dsh-tools).
@@ -148,16 +175,20 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   ctx.loader.builtins.include = Include
   const modules = new Map<string, unknown>([
     ['@mstar-harness/dsh', plugin],
-    // The `ctx.skills` registry seam — dev-time peer stub (real package ships
-    // from the composed dsh app at runtime).
+    // The `ctx.skills` registry seam — the REAL package, linked from a local
+    // dsh source tree by the link farm (`scripts/setup-dsh-links.ts`); the
+    // host app provides it at runtime via peerDependencies.
     ['@deepseek-ai/dsh-skill', await import('@deepseek-ai/dsh-skill')],
-    // The `ctx.tools` registry seam — dev-time functional peer stub whose
-    // default export provides the ToolRegistry service (real package ships
-    // from the composed dsh app at runtime).
+    // The `ctx.systemPrompt` service seam the real dsh-tools ToolRegistry
+    // injects — the REAL package (link farm).
+    ['@deepseek-ai/dsh-system-prompt', await import('@deepseek-ai/dsh-system-prompt')],
+    // The `ctx.tools` registry seam — the REAL package (link farm) whose
+    // default export provides the ToolRegistry service (the host app provides
+    // it at runtime via peerDependencies).
     ['@deepseek-ai/dsh-tools', await import('@deepseek-ai/dsh-tools')],
-    // The `ctx.commands` registry seam — dev-time functional peer stub whose
-    // named exports provide the CommandService (real package ships from the
-    // composed dsh app at runtime).
+    // The `ctx.commands` registry seam — the REAL package (link farm) whose
+    // named exports provide the CommandService (the host app provides it at
+    // runtime via peerDependencies).
     ['@deepseek-ai/dsh-commands', await import('@deepseek-ai/dsh-commands')],
   ])
   ctx.loader.internal = {

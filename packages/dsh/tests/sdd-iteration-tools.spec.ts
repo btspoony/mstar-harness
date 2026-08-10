@@ -5,8 +5,9 @@
  * the engine in-app against control-path artifacts.
  *
  * Composition: the app boots through the real Loader with the
- * `@deepseek-ai/dsh-tools` functional peer stub mounted (its default export
- * provides the `ctx.tools` registry), so registration and execution exercise
+ * `@deepseek-ai/dsh-tools` registry linked from the dsh source tree (its
+ * default export provides the `ctx.tools` service), so registration and
+ * execution exercise
  * the shipping plugin path — tools are looked up and executed through the
  * registry, never called directly.
  */
@@ -14,7 +15,8 @@ import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CallId, ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { bootApp, seedHarness, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -35,13 +37,14 @@ function run(ctx: BootResult['ctx'], name: string, args: Record<string, unknown>
 }
 
 /** Assert the generic-card presentCall contract (title / kind / rawInput). */
-function expectGenericCall(view: ToolCallView | undefined, rawInput: unknown): void {
-  expect(view).toBeDefined()
-  expect(view!.card).toBe('generic')
-  expect(typeof view!.title).toBe('string')
-  expect(view!.title!.length).toBeGreaterThan(0)
-  expect(view!.kind).toBe('other')
-  expect(view!.rawInput).toEqual(rawInput)
+function expectGenericCall(view: unknown, rawInput: unknown): void {
+  const card = view as { card?: string; title?: string; kind?: string; rawInput?: unknown } | undefined
+  expect(card).toBeDefined()
+  expect(card!.card).toBe('generic')
+  expect(typeof card!.title).toBe('string')
+  expect(card!.title!.length).toBeGreaterThan(0)
+  expect(card!.kind).toBe('other')
+  expect(card!.rawInput).toEqual(rawInput)
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +109,7 @@ describe('sdd/iteration tool registration — real composition', () => {
     const names = ['mstar_sdd_workspace', 'mstar_sdd_task_brief', 'mstar_iteration_gate']
     const seen = new Set<string>()
     for (const name of names) {
-      const tool = app.ctx.tools.lookup(name)
+      const tool = app.ctx.tools.get(name)
       expect(tool).toBeDefined()
       expect(tool!.description.length).toBeGreaterThan(0)
       expect(seen.has(name)).toBe(false)
@@ -116,18 +119,18 @@ describe('sdd/iteration tool registration — real composition', () => {
 
   it('declares generic presentCall cards (title / kind / rawInput) with valid args', async () => {
     const app = booted = await bootApp()
-    expectGenericCall(app.ctx.tools.lookup('mstar_sdd_workspace')!.presentCall?.({ plan_id: 'plan-a' }), 'plan-a')
-    expectGenericCall(app.ctx.tools.lookup('mstar_sdd_task_brief')!.presentCall?.({ plan_file: 'plan.md', task_number: 1 }), 'plan.md')
+    expectGenericCall(app.ctx.tools.get('mstar_sdd_workspace')!.presentCall?.({ plan_id: 'plan-a' }), 'plan-a')
+    expectGenericCall(app.ctx.tools.get('mstar_sdd_task_brief')!.presentCall?.({ plan_file: 'plan.md', task_number: 1 }), 'plan.md')
     expectGenericCall(
-      app.ctx.tools.lookup('mstar_iteration_gate')!.presentCall?.({ status_path: 's.json', compass_path: 'c.md' }),
+      app.ctx.tools.get('mstar_iteration_gate')!.presentCall?.({ status_path: 's.json', compass_path: 'c.md' }),
       'c.md',
     )
   })
 
   it('presentCall falls back softly on hostile args (no throw, undefined = generic card)', async () => {
     const app = booted = await bootApp()
-    expect(app.ctx.tools.lookup('mstar_sdd_workspace')!.presentCall?.({})).toBeUndefined()
-    expect(app.ctx.tools.lookup('mstar_iteration_gate')!.presentCall?.({ status_path: 42 })).toBeUndefined()
+    expect(app.ctx.tools.get('mstar_sdd_workspace')!.presentCall?.({})).toBeUndefined()
+    expect(app.ctx.tools.get('mstar_iteration_gate')!.presentCall?.({ status_path: 42 })).toBeUndefined()
   })
 })
 
@@ -149,7 +152,7 @@ describe('mstar_sdd_workspace', () => {
     expect(readFileSync(join(valueOf(result).sdd_dir!, '.gitignore'), 'utf8')).toBe('*\n')
     // Native projection mirrors the CLI's `sdd dir: <path>` output.
     expect(result.content[0]?.type).toBe('text')
-    expect(result.content[0]!.text).toContain('sdd dir:')
+    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('sdd dir:')
   })
 
   it('resolves against the plugin harness dir even without {HARNESS_DIR}/status.json', async () => {
@@ -178,8 +181,8 @@ describe('mstar_sdd_workspace', () => {
 
     expect(result.isError).toBe(true)
     if (!result.isError) return
-    expect(result.error.code).toBe('INVALID_ARGS')
-    expect(result.error.message).toContain('plan_id is required')
+    expect(result.error.info?.code).toBe('INVALID_ARGS')
+    expect(result.error.message).toContain('missing required property \"plan_id\"')
   })
 
   it('hostile: non-string plan_id → INVALID_ARGS', async () => {
@@ -188,8 +191,8 @@ describe('mstar_sdd_workspace', () => {
 
     expect(result.isError).toBe(true)
     if (!result.isError) return
-    expect(result.error.code).toBe('INVALID_ARGS')
-    expect(result.error.message).toContain('plan_id must be a string')
+    expect(result.error.info?.code).toBe('INVALID_ARGS')
+    expect(result.error.message).toContain('\"plan_id\" must be a string')
   })
 
   it('hostile: nonexistent control_root → failure result', async () => {
@@ -231,7 +234,7 @@ describe('mstar_sdd_task_brief', () => {
     expect(brief).toContain('Step one')
     expect(brief).toContain('Step two')
     expect(brief).not.toContain('Step three')
-    expect(result.content[0]!.text).toContain('task 1 brief:')
+    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('task 1 brief:')
   })
 
   it('extracts a later section and stops at the previous heading boundary', async () => {
@@ -330,8 +333,8 @@ describe('mstar_sdd_task_brief', () => {
 
     expect(result.isError).toBe(true)
     if (!result.isError) return
-    expect(result.error.code).toBe('INVALID_ARGS')
-    expect(result.error.message).toContain('task_number must be an integer')
+    expect(result.error.info?.code).toBe('INVALID_ARGS')
+    expect(result.error.message).toContain('\"task_number\" must be an integer')
   })
 })
 
@@ -363,7 +366,7 @@ describe('mstar_iteration_gate', () => {
     // Execution in progress: entry warnings (PLAN_NOT_DONE) do not fail the gate.
     expect(valueOf(result).entry!.ok).toBe(false)
     expect(valueOf(result).entry!.violations.map((v) => v.code)).toContain('PLAN_NOT_DONE')
-    expect(result.content[0]!.text).toContain('PASS')
+    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('PASS')
   })
 
   it('passes on an all-done fixture (transition phase-4-pr-delivery)', async () => {
@@ -413,8 +416,8 @@ describe('mstar_iteration_gate', () => {
     const codes = valueOf(result).violations.map((v) => v.code)
     expect(codes).toContain('COMPASS_END_DATE_REQUIRED')
     // The render carries the failing codes (acceptance: pass/fail with codes).
-    expect(result.content[0]!.text).toContain('FAIL')
-    expect(result.content[0]!.text).toContain('COMPASS_END_DATE_REQUIRED')
+    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('FAIL')
+    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('COMPASS_END_DATE_REQUIRED')
   })
 
   it('fails with OPEN_RESIDUALS on open plan residuals', async () => {
@@ -556,8 +559,8 @@ describe('mstar_iteration_gate', () => {
 
     expect(result.isError).toBe(true)
     if (!result.isError) return
-    expect(result.error.code).toBe('INVALID_ARGS')
-    expect(result.error.message).toContain('status_path is required')
+    expect(result.error.info?.code).toBe('INVALID_ARGS')
+    expect(result.error.message).toContain('missing required property \"status_path\"')
   })
 
   it('hostile: non-string status_path → INVALID_ARGS', async () => {
@@ -566,8 +569,8 @@ describe('mstar_iteration_gate', () => {
 
     expect(result.isError).toBe(true)
     if (!result.isError) return
-    expect(result.error.code).toBe('INVALID_ARGS')
-    expect(result.error.message).toContain('status_path must be a string')
+    expect(result.error.info?.code).toBe('INVALID_ARGS')
+    expect(result.error.message).toContain('\"status_path\" must be a string')
   })
 })
 

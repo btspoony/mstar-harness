@@ -17,7 +17,7 @@
  */
 import { existsSync } from 'node:fs'
 import { Service, type Context } from 'cordis'
-import { applyEnforcement, validateIntegrationMergeLease } from '@mstar-harness/engine'
+import { applyEnforcement, assignmentHeaderRegion, validateIntegrationMergeLease } from '@mstar-harness/engine'
 import type {
   AssignmentFields,
   GateResult,
@@ -28,7 +28,14 @@ import type {
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { HarnessResolver, Config } from './_shared.ts'
 import { validateStatusDoc, validateStatusValue } from './status.ts'
-import { dispatchGateCore, leaseGateViolations, assignmentTextFromFields, resolveDispatchHard } from './dispatch.ts'
+import {
+  dispatchGateCore,
+  leaseGateViolations,
+  assignmentTextFromFields,
+  isAssignmentShaped,
+  resolveDispatchHard,
+} from './dispatch.ts'
+import { recordDispatch, AGENT_FLOW_LOGGER } from './agent-flow.ts'
 /** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
 const HOST_LOGGER = 'mstar/host-adapter'
 /** Options for {@link DshHostAdapter}. */
@@ -133,12 +140,41 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * context and covers the field/branch/anti-recursion/worktree path.
    * @param prompt - the Assignment text (engine header grammar).
    * @param exec - the in-flight delegation tool call (listener path only).
+   * @param hard - the caller's ONE `resolveDispatchHard` resolution (qc1
+   * F-002 / qc2 F-3 / qc3 F-002 fix-wave): passed in so the record block and
+   * the caller's enforcement decision share a single compass resolution;
+   * when omitted (external callers) the adapter resolves it itself.
    */
-  dispatchGate(prompt: string, exec?: ToolExecution): GateResult {
+  dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean): GateResult {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const { violations, writable } = dispatchGateCore(this.config, harnessDir, prompt)
     if (exec !== undefined) {
       violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt))
+    }
+    // Agent-flow ledger — the ONE recording point for both dispatch paths
+    // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
+    // listener AND the host `beforeDispatch` hook). Recorded UNCONDITIONALLY
+    // for Assignment-shaped text (verdict derivation covers clean / advisory
+    // / hard deny) and advisory-only: `recordDispatch` is fully
+    // try/catch-contained and this belt-and-braces guard keeps a ledger bug
+    // from ever reaching the gate. The SHAPE GUARD lives here too (qc2 F-2
+    // fix-wave): the listener path guards before calling, and the exec-less
+    // host-hook path must stay equally silent for non-Assignment text — no
+    // phantom records on either surface (spec §2.1.1 "非 Assignment 不记录").
+    if (harnessDir !== null && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
+      try {
+        recordDispatch({
+          harnessDir,
+          exec,
+          prompt,
+          violations,
+          hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
+        })
+      } catch (error) {
+        this.ctx.logger(AGENT_FLOW_LOGGER).error(
+          `agent-flow dispatch record failed (contained — dispatch proceeds): ${(error as Error).message}`,
+        )
+      }
     }
     return { ok: violations.length === 0, violations }
   }
@@ -174,11 +210,16 @@ export class DshHostAdapter extends Service implements HostAdapter {
    */
   async beforeDispatch(assignment: AssignmentFields | string): Promise<GateResult> {
     const prompt = typeof assignment === 'string' ? assignment : assignmentTextFromFields(assignment)
-    const gate = this.dispatchGate(prompt)
     // The hook contract carries no exec/session context, so the harness dir
     // resolves to the explicit config or null (never a process-cwd probe) —
     // the exec-bound `tools/pre-execute` listener is the per-workspace path.
-    return applyEnforcement(gate, { hard: resolveDispatchHard(this.resolver.forWorkspace(undefined), this.config, prompt) })
+    // `hard` resolves ONCE (qc1 F-002 / qc2 F-3 / qc3 F-002 fix-wave) and is
+    // shared by the record block (via dispatchGate) and this enforcement
+    // decision — no duplicate compass read per dispatch.
+    const harnessDir = this.resolver.forWorkspace(undefined)
+    const hard = resolveDispatchHard(harnessDir, this.config, prompt)
+    const gate = this.dispatchGate(prompt, undefined, hard)
+    return applyEnforcement(gate, { hard })
   }
 
   /**

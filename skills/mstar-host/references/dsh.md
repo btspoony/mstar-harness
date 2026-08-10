@@ -50,8 +50,13 @@ or a custom profile).
   transitions); the loop edge is planning semantics; no historical back-scan
   of resumed long logs; no custom top-level slot (the `conversation.view` tab
   is the only session-level panel seat without dsh-private layout changes);
-  no-session → shell hero (strict-session view ring); browser UI observation
-  is the user-restart acceptance. See
+  no-session → shell hero (strict-session view ring). Panel acceptance is
+  dual-track: in-loop browser harness verification (agent-browser/CDP against
+  the rebuilt bundle — see
+  `.mstar/iterations/iter-20260810-panel-fix-agentflow/guides/`
+  (maintainer-local evidence — `.mstar/` is gitignored, so the path is
+  unresolved in consumer checkouts)) plus user-restart final GUI acceptance.
+  See
   `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`
   for the verified install run.
 
@@ -118,6 +123,61 @@ branch/policy anchors, active leases, knowledge digest, compass direction)
 when the workspace has a `status.json`. The row is digest-gated (once per
 turn, re-injected only when it changed) over one per-workspace TTL-cached
 build (`catalogTtlMs`, default 60 s).
+
+## Agent-flow ledger
+
+The plugin records ACTUAL subagent dispatch (and best-effort settle) events —
+the evidence of what really happened, distinct from the client-side expected
+role flow. The workflow panel's third-column expected/actual pipeline and the
+footer event strip are pure consumers of this evidence.
+
+- **Recording point (one core)**: `DshHostAdapter.dispatchGate` is the SINGLE
+  record path behind both dispatch surfaces — the `tools/pre-execute` listener
+  (exec-bound; the lease gate joins here) and the host `beforeDispatch` hook
+  (exec-less). Every Assignment-shaped dispatch that reaches the gate records,
+  including hard denies (verdict derived: ok / advisory / denied); the shape
+  guard lives at the shared core, so non-Assignment text stays silent on BOTH
+  surfaces (the listener's own guard plus the core's guard for the exec-less
+  hook path — no phantom records). Recording is advisory (try/catch-contained,
+  logs only `mstar/agent-flow`) — a failing ledger never blocks dispatch.
+  Known tradeoff: the same logical dispatch crossing BOTH surfaces (a host
+  `beforeDispatch` followed by the identical text as an in-loop subagent tool
+  call) records two dispatch events — the surfaces are mutually exclusive by
+  design; the double record is documented, not deduplicated.
+- **File / bounds**: events append to `{HARNESS_DIR}/agent-flow.jsonl` (JSON
+  Lines, one event per line; harness dirs are gitignored by convention). The
+  ledger assumes ONE dsh process writes each harness dir (single-writer):
+  concurrent dsh sessions on the same repo can lose events (the append itself
+  is near-atomic O_APPEND, but truncation is a read-modify-write) — the loss
+  only under-reports actual flow in the panel, never a gate impact. After each
+  append the file truncates to the most recent **500** events; truncation is
+  size-gated (≈500 lines' typical size — small files stay append-only) and
+  performed as an atomic temp-file rename. The catalog read returns the
+  latest-first view with a default window of **50** and a role × outcome
+  summary. A MISSING file reads as the empty view ("no actual dispatches yet"
+  — recording starts at plan merge); an unreadable file is absent evidence;
+  malformed lines are skipped, never fatal.
+- **Settle is two-tier, never faked**:
+  - **Tier-1 baseline**: dispatch-only records (settle events optional).
+  - **Tier-2 best-effort**: `tools/post-execute` is NOT part of the verified
+    dsh-tools consumer surface (the peer-stub declares only
+    `tools/pre-execute`). A defensive listener records a settle ONLY when a
+    host actually emits the seam (payload shape-probed; unmapped payloads are
+    dropped with a one-line log — the verification gate proves both halves:
+    listener records on host emission, and the dev-time registry emits no
+    post-execute). A host that never emits leaves the ledger dispatch-only
+    (documented degrade); the panel must not fabricate settlement.
+- **Catalog**: `state.agentFlow` carries the ledger view (`events` ≤ 50,
+  latest-first, + `summary`); the model-facing `<mstar_engine_status>` text
+  renders ONE compact `agent flow: …` line only when events > 0 (role totals
+  top-5 + latest dispatch with HH:MM — the event detail lives in the
+  structured source, never the model text); staleness follows the row's normal
+  60 s TTL.
+- **Maintainer view**: change the ledger shape (event schema, bounds, settle
+  seam) and update the projections together — `gates/agent-flow.ts` (record /
+  read / settle listener), `gates/catalog.ts` (agent-flow line + `source`
+  view) and `client/panel/graph/project-graph.ts` (pipeline/edges) — the panel
+  renders ONLY what the evidence shows.
 
 ## PM dispatch
 

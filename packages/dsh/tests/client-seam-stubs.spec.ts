@@ -19,12 +19,11 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { Context } from 'cordis'
+import { clientExports } from './client-bundles.ts'
 import { resolveSlotLabel, SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
-import {
-  createSnapshotStore, SlotsService,
-  type ContextMessageNode, type ConversationNode, type ConversationSnapshot, type SessionId,
-} from '@deepseek-ai/dsh-client-runtime/client'
-import { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
+import type { ContextMessageNode, ConversationNode, ConversationSnapshot, SessionId, SlotsService } from '@deepseek-ai/dsh-client-runtime/client'
+import type { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
 import type { ConvViewProps, ViewTab } from '@deepseek-ai/dsh-client-ui-conversation/client'
 // The plugin's OWN `LocaleNamespaceMap` augmentation (src/client/panel/locale.ts)
 // is the single declaration of the `'mstar-panel'` namespace — importing it
@@ -32,6 +31,18 @@ import type { ConvViewProps, ViewTab } from '@deepseek-ai/dsh-client-ui-conversa
 // key union (a second `declare module` for the same namespace would collide
 // under `typecheck:tests`).
 import { NS, type PanelKey } from '../src/client/panel/locale.ts'
+
+// The REAL client service values — loaded from the browser bundles through the
+// loader shim (tests/client-bundles.ts): the `/client` subpath entries are
+// `window.__ModuleLoader__` browser bundles, not Node ESM modules. The real
+// SlotsService / LocaleService are cordis services (constructed with a
+// Context), unlike the removed peer-stub stand-ins.
+type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
+const { createSnapshotStore, SlotsService: SlotsServiceCtor } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
+  Pick<RuntimeClientExports, 'createSnapshotStore' | 'SlotsService'>
+type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
+const { LocaleService: LocaleServiceCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
+  Pick<LocaleClientExports, 'LocaleService'>
 
 const zh = {
   'view.mstar-workflow': '工作流',
@@ -57,11 +68,11 @@ function declareViewRing(slots: SlotsService): () => void {
   slots.register({
     name: 'root' as 'conversation.view',
     children: { 'conversation.session': { kind: 'single', scope: 'session' } } as never,
-  }, () => null)
+  } as never, () => null)
   return slots.register({
     name: 'conversation.session' as 'conversation.view',
     children: { 'conversation.view': { kind: 'list', scope: 'session' } },
-  }, () => null)
+  } as never, () => null)
 }
 
 /** Project the view-ring tabs exactly like ui-conversation's `views.list()` (spec §3.2). */
@@ -80,14 +91,19 @@ describe('dsh client-seam peer stubs — slot registry (conversation.view)', () 
   })
 
   it('inject waits for the declaration, then the panel entry registers the view tab (spec §4.1 shape)', () => {
-    const slots = new SlotsService()
-    const locale = new LocaleService()
+    const ctx = new Context()
+    const slots = new SlotsServiceCtor(ctx)
+    const locale = new LocaleServiceCtor(ctx)
     // Untyped single-locale register: the fixture registers only the 3 keys it
     // asserts, while the typed 2-arg form would demand the full 60-key
     // `LocaleDictOf<'mstar-panel'>` union (the real plugin dicts are covered
     // by client-panel.spec.tsx).
     locale.register(NS, 'zh', zh)
     locale.register(NS, 'en', en)
+    // The real LocaleService's initial locale follows the browser/persisted
+    // preference (the removed peer-stub defaulted to the first-registered
+    // locale) — pin zh explicitly for the deterministic assertion.
+    locale.setLocale('zh')
     const t = locale.bind(NS)
 
     let injected = false
@@ -122,11 +138,12 @@ describe('dsh client-seam peer stubs — slot registry (conversation.view)', () 
   })
 
   it('disposing the declarer collapses the child slot (disposer cascade)', () => {
-    const slots = new SlotsService()
+    const ctx = new Context()
+    const slots = new SlotsServiceCtor(ctx)
     const disposeDeclarer = declareViewRing(slots)
-    expect(slots.specDynamic('conversation.view')).not.toBeUndefined()
+    expect(slots.spec('conversation.view')).not.toBeUndefined()
     disposeDeclarer()
-    expect(slots.specDynamic('conversation.view')).toBeUndefined()
+    expect(slots.spec('conversation.view')).toBeUndefined()
     expect(() => slots.register({ name: 'conversation.view', id: 'x' }, () => null))
       .toThrow(/not declared/)
   })
@@ -134,14 +151,14 @@ describe('dsh client-seam peer stubs — slot registry (conversation.view)', () 
 
 describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
   const sessionId = 's-1' as SessionId
-  const engineRow: ContextMessageNode = {
+  const engineRow = {
     kind: 'context',
     seq: 2,
     time: 1_720_000_000_000,
     content: [],
     source: { kind: 'mstar-engine-status', form: 'catalog', version: '2.0.4', harnessDir: '/proj/.mstar', state: null },
     form: 'catalog',
-  }
+  } as unknown as ContextMessageNode
 
   /** The panel's discriminator (spec §2.4): latest `mstar-engine-status` catalog row. */
   const latestEngineStatus = (nodes: readonly ConversationNode[]) =>
@@ -162,7 +179,7 @@ describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
       openState: 'open',
       composerPhase: 'active',
       blank: false,
-    })
+    } as unknown as ConversationSnapshot)
     // useSession-shaped selector over the test double (the framework hook is a
     // uSES selector over the same bare source).
     const nodes = store.getSnapshot().nodes
@@ -177,7 +194,7 @@ describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
       openState: 'open',
       composerPhase: 'active',
       blank: false,
-    })
+    } as unknown as ConversationSnapshot)
     expect(latestEngineStatus(store.getSnapshot().nodes)).toBeUndefined()
 
     const newer: ContextMessageNode = {
@@ -197,7 +214,7 @@ describe('dsh client-seam peer stubs — catalog reading (spec §5)', () => {
       openState: 'open',
       composerPhase: 'active',
       blank: false,
-    })
+    } as unknown as ConversationSnapshot)
     expect(latestEngineStatus(store.getSnapshot().nodes)).toBe(newer)
   })
 })
