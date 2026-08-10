@@ -979,6 +979,50 @@
         "inline whole-plan dispatch instead of SDD per-task",
         "assignment uses non-English field keys"
       ]
+    },
+    {
+      "id": "iteration-start-direction-hint-parse",
+      "prompt": "/iteration-start 补齐 deferred auth 缺口。请开局。",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "direction hint parsed as '补齐 deferred auth 缺口' (not treated as pause flag)",
+        "§2 candidates narrowed toward the auth-deferred hint while still scoping 2-4",
+        "grill-me seeded with the direction hint as recommended direction (start stays interactive)",
+        "auto-continue into Phase 2 (no separate /iteration-drive invocation required)"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "treats the Chinese direction text as the pause flag",
+        "skips grill-me and auto-locks the direction (start must stay interactive)",
+        "ignores the direction hint entirely",
+        "assignment uses non-English field keys"
+      ]
+    },
+    {
+      "id": "iteration-start-pause-stops-at-phase1",
+      "prompt": "/iteration-start pause。开局一个新迭代。",
+      "expected_route": [
+        "@project-manager",
+        "@product-manager",
+        "@architect",
+        "@writing-specialist"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "pause flag parsed — no auto-continue into Phase 2",
+        "Phase 1 full run: research → grill-me → compass → sequential Review & Edit chain → PM lock → integration branch",
+        "command ends at §6 with a note to run /iteration-drive to resume"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "auto-continues into Phase 2 despite the pause flag",
+        "treats pause as a direction hint",
+        "skips the Review & Edit chain or PM lock",
+        "assignment uses non-English field keys"
+      ]
     }
   ]
 }

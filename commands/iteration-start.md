@@ -1,6 +1,6 @@
 ---
 name: iteration-start
-description: "Start a new harness iteration — research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch; then auto-continue Phase 2→5 (execute → close → PR → merge-ready) unless `pause` arg given."
+description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch; then auto-continue Phase 2→5 (execute → close → PR → merge-ready) unless `pause` arg given."
 agent: project-manager
 ---
 
@@ -11,12 +11,15 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 ## Args
 
 ```text
-/iteration-start [pause]
+/iteration-start [direction] [pause]
 ```
 
 | Arg | Meaning | Default |
 |-----|---------|---------|
+| `direction` | Iteration direction hint — constrains §2 candidates and seeds §3 grill-me; **not** a lock (start stays interactive) | Research → grill-me converges with user |
 | `pause` | Stop after Phase 1 (lock + integration branch); run `/iteration-drive` later to resume | **Auto-continue** into Phase 2→5 |
+
+**Parse**: if any token is exactly `pause` (case-insensitive), treat as the `pause` flag; the remaining tokens (joined) are the `direction` hint. `/iteration-start pause` = pause with empty direction.
 
 ## PM invariants（本命令全程有效 — 读完再动手）
 
@@ -72,11 +75,9 @@ Command-unique 补充（bridge 未枚举）：
 
 Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`）+ glob for planning artifacts（`**/roadmap*.md`、`**/deferred*.md`、`**/features*.md`、`**/backlog*.md`、`**/TODO*.md`、`**/*.plan.md`）；read matches with iteration-level / deferred-scope information；read `STRATEGY.md`（if exists）。Prioritize deferred / incomplete items from prior iterations。
 
-**Optional — codebase audit**: if a prior `/codebase-audit` run exists under `{PLAN_DIR}/audit-<date>/`, read its findings index as evidence-grounded direction candidates for §2（not mandatory；one source among many）。
-
 ## 2. Explore Directions
 
-Scope **2–4** candidates targeting **product completeness**（default to deferred items from previous iterations；allow substantive refactoring where it accelerates product maturity）。**非 Plan 路径**（Plan mode 已由 §P 处理）。
+Scope **2–4** candidates targeting **product completeness**（default to deferred items from previous iterations；allow substantive refactoring where it accelerates product maturity）。**If `direction` arg given** — narrow candidates to that hint (still scope 2–4 unless the hint is explicitly singular); record the hint in grill-me context。**非 Plan 路径**（Plan mode 已由 §P 处理）。
 
 ## 3. Lock Direction — bundled `grill-me`
 
@@ -84,9 +85,7 @@ Scope **2–4** candidates targeting **product completeness**（default to defer
 
 **Direction lock mode: `interactive`**（`mstar-iteration` §1.2 默认；本命令不使用 `autonomous`）。
 
-This command bundles a **non-`mstar-*`** skill at `skills/grill-me/SKILL.md`. **Only this command step**（及 §P.3.5 deferred grill）references it — **do not** load it from `mstar-harness-core` or other `mstar-*` skills.
-
-**Before this step:** Read `skills/grill-me/SKILL.md`. Run **grill-me** to stress-test candidate directions with the user: walk through trade-offs, converge on a **single iteration direction** with shared understanding, document locked direction + success criteria + non-goals。Confirm delivery branch policy（`iteration_base_branch`、`target_branch`）per **`mstar-iteration` §1.2** — **Do not default to `main` / `master` just because those names exist.**
+**Before this step:** Read `skills/grill-me/SKILL.md`. Run **grill-me** to stress-test candidate directions with the user: walk through trade-offs, converge on a **single iteration direction** with shared understanding, document locked direction + success criteria + non-goals。**If `direction` arg given** — seed grill-me with it as the recommended direction (still interactive: user may correct/refine; the hint does **not** skip grill-me)。Confirm delivery branch policy（`iteration_base_branch`、`target_branch`）per **`mstar-iteration` §1.2** — **Do not default to `main` / `master` just because those names exist.**
 
 ## 4. Write Compass & Plans
 
