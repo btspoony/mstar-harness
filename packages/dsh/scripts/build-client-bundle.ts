@@ -68,10 +68,13 @@ export function hashClass(local: string): string {
 }
 
 /**
- * Vendored WHATWG `CSS.escape` (CSSOM "serialize-an-identifier"): the
- * Mathias Bynens css.escape v1.5.1 algorithm (MIT). node/bun expose no global
- * `CSS.escape` (verified: `CSS is not defined` / `undefined`), so the build
- * script carries its own byte-identical copy of the browser serializer.
+ * Vendored WHATWG `CSS.escape` (CSSOM "serialize-an-identifier"): an
+ * output-identical reimplementation of the Mathias Bynens css.escape v1.5.1
+ * algorithm (MIT) — upstream: https://github.com/mathiasbynens/css.escape
+ * Copyright (c) 2013 Mathias Bynens <https://mathiasbynens.be/>
+ * node/bun expose no global `CSS.escape` (verified: `CSS is not defined` /
+ * `undefined`), so the build script carries its own copy of the browser
+ * serializer.
  *
  * Applied to the css TEXT only — `20fd0e45_root` → `\32 0fd0e45_root` (the
  * digit-leading case this plan fixes), while letter-leading names
@@ -141,16 +144,24 @@ export function cssEscapeIdentifier(value: string): string {
  * Anchored on the DIGIT, not on 8 hex: a letter-leading hash class
  * (`.f83e09fa_emptyRoot`) is legal and must not be flagged, and declaration
  * values (`.5s`, `opacity: 0.5`) cannot match the `_` + letter tail.
+ *
+ * Shape contract — coupled to `hashClass`'s `padStart(8)` output
+ * (`8hex_local`): the `[0-9a-f]{7}` tail assumes an 8-hex hash. If
+ * `hashClass` ever changes shape (hash width, separator, prefix), this guard
+ * silently stops matching its own target; the artifact layer (this regex and
+ * the pinned spec samples) must be updated in the same change.
  */
 export const UNESCAPED_DIGIT_HASH_SELECTOR = /\.[0-9][0-9a-f]{7}_[A-Za-z_]/
 
 /** Throw unless `text` is free of unescaped digit-leading hash class selectors. */
 export function assertNoUnescapedDigitHashSelector(text: string, what: string): void {
-  if (UNESCAPED_DIGIT_HASH_SELECTOR.test(text)) {
+  const hit = text.match(UNESCAPED_DIGIT_HASH_SELECTOR)
+  if (hit) {
     throw new Error(
       `client bundle contract: ${what} contains an unescaped digit-leading hash class selector `
-      + `(e.g. \`.20fd0e45_root\`) — the browser would silently drop the whole rule; class selectors `
-      + `in css text must go through cssEscapeIdentifier (\`.\\32 0fd0e45_root\`)`,
+      + `${JSON.stringify(hit[0])} at index ${text.indexOf(hit[0])} — the browser would silently drop `
+      + `the whole rule; class selectors in css text must go through cssEscapeIdentifier `
+      + `(e.g. \`.\\32 0fd0e45_root\`)`,
     )
   }
 }
@@ -162,17 +173,21 @@ export function assertNoUnescapedDigitHashSelector(text: string, what: string): 
  * proof the class map and the css text stayed in sync), and (ii) no unescaped
  * digit-leading hash class selector survives.
  */
-export function assertCssModuleTransform(classMap: Record<string, string>, css: string): void {
+export function assertCssModuleTransform(
+  classMap: Record<string, string>,
+  css: string,
+  fileId: string,
+): void {
   for (const [local, hashed] of Object.entries(classMap)) {
     const canonical = `.${cssEscapeIdentifier(hashed)}`
     if (!css.includes(canonical)) {
       throw new Error(
-        `client bundle contract: classMap[${JSON.stringify(local)}] = ${JSON.stringify(hashed)} `
+        `client bundle contract (${fileId}): classMap[${JSON.stringify(local)}] = ${JSON.stringify(hashed)} `
         + `is missing from the css text in its canonical escaped form ${JSON.stringify(canonical)}`,
       )
     }
   }
-  assertNoUnescapedDigitHashSelector(css, 'css-module transform output')
+  assertNoUnescapedDigitHashSelector(css, `css-module transform output (${fileId})`)
 }
 
 /**
@@ -239,7 +254,7 @@ function cssModuleContents(fileId: string): { contents: string; loader: 'js' } {
   // Transform-layer regression assertion (plan Scope item 2): fails the build
   // the moment a classMap value stops matching the css text or an unescaped
   // digit-leading selector appears.
-  assertCssModuleTransform(classMap, css)
+  assertCssModuleTransform(classMap, css, fileId)
   const tagId = `${ID}/${basename(fileId)}`
   const contents = [
     styleInjectionContents(css, tagId),
@@ -251,6 +266,11 @@ function cssModuleContents(fileId: string): { contents: string; loader: 'js' } {
 // Run only when executed directly (`bun run build-client`): the pure
 // transform / escape / assertion functions above are exported so unit tests
 // can import this module side-effect free. Tests must never trigger a build.
+// NOTE (qc3 S-1): this guard supports direct execution under bun only —
+// `import.meta.main` is undefined in non-bun runtimes, so running this script
+// directly there silently no-ops (no build, no error). If the build ever moves
+// to tsdown or another runtime with direct execution, add a loud failure guard
+// (throw) instead of relying on `import.meta.main`.
 if (import.meta.main) {
   const result = await build({
     entrypoints: [ENTRY],

@@ -61,6 +61,11 @@ describe('cssEscapeIdentifier — vendored WHATWG CSS.escape (CSSOM serialize-an
     expect(cssEscapeIdentifier('\t')).toBe('\\9 ') // control char
     expect(cssEscapeIdentifier('\u0000x')).toBe('\uFFFdx') // NULL → replacement char
   })
+
+  it('escapes punctuation / whitespace inside identifiers (character escapes)', () => {
+    expect(cssEscapeIdentifier('a!b')).toBe('a\\!b') // `!` is not CSSOM-passable
+    expect(cssEscapeIdentifier('a b')).toBe('a\\ b') // space (U+0020) escapes as `\ ` + char
+  })
 })
 
 describe('transformCssModule — the exact css-modules transform the build runs', () => {
@@ -90,7 +95,7 @@ describe('transformCssModule — the exact css-modules transform the build runs'
     ]) {
       const { classMap, css } = transformCssModule(readFileSync(file, 'utf8'))
       expect(Object.keys(classMap).length).toBeGreaterThan(0)
-      expect(() => assertCssModuleTransform(classMap, css)).not.toThrow()
+      expect(() => assertCssModuleTransform(classMap, css, file)).not.toThrow()
       expect(UNESCAPED_DIGIT_HASH_SELECTOR.test(css)).toBe(false)
     }
   })
@@ -99,25 +104,63 @@ describe('transformCssModule — the exact css-modules transform the build runs'
 describe('assertion guards — negative control: injected unescaped digit-leading selector must fail', () => {
   const INJECTED = '.20fd0e45_root { display: grid; }'
 
+  it('guard is pinned to every digit-leading hashClass sample (never misses its own target)', () => {
+    // Shape-contract pin (qc1 F-003): the guard assumes `hashClass`'s
+    // `8hex_local` output. If `hashClass` ever changes shape (hash width,
+    // separator, prefix), these pins fail loudly instead of the guard silently
+    // missing its own output. The samples are digit-leading by construction
+    // (hashClass describe block above).
+    for (const local of ['root', 'canvas', 'legend']) {
+      const hashed = hashClass(local)
+      expect(hashed[0]).toMatch(/[0-9]/)
+      expect(UNESCAPED_DIGIT_HASH_SELECTOR.test(`.${hashed}`)).toBe(true)
+    }
+  })
+
   it('transform-layer guard throws on injected unescaped `.20fd0e45_root`', () => {
     // Raw injected selector: rejected by the guard as a whole (the
     // canonical-form check fires first — either way the injection is blocked).
-    expect(() => assertCssModuleTransform({ root: '20fd0e45_root' }, INJECTED)).toThrow()
+    expect(() =>
+      assertCssModuleTransform({ root: '20fd0e45_root' }, INJECTED, 'test-sample.module.css'),
+    ).toThrow()
     // Targeted negative control: with the canonical escaped form ALSO present,
     // the unescaped-digit regex check is the one that must fire.
     const injectedAlongsideEscaped =
       '.\\32 0fd0e45_root { display: grid; } .20fd0e45_root { color: red; }'
     expect(() =>
-      assertCssModuleTransform({ root: '20fd0e45_root' }, injectedAlongsideEscaped),
+      assertCssModuleTransform(
+        { root: '20fd0e45_root' },
+        injectedAlongsideEscaped,
+        'test-sample.module.css',
+      ),
     ).toThrow(/unescaped digit-leading/)
   })
 
   it('transform-layer guard accepts the canonical escaped form and rejects a classMap/css mismatch', () => {
     const escaped = '.\\32 0fd0e45_root { display: grid; }'
-    expect(() => assertCssModuleTransform({ root: '20fd0e45_root' }, escaped)).not.toThrow()
     expect(() =>
-      assertCssModuleTransform({ root: '20fd0e45_root', sidebar: 'c87acfc7_sidebar' }, escaped),
+      assertCssModuleTransform({ root: '20fd0e45_root' }, escaped, 'test-sample.module.css'),
+    ).not.toThrow()
+    expect(() =>
+      assertCssModuleTransform(
+        { root: '20fd0e45_root', sidebar: 'c87acfc7_sidebar' },
+        escaped,
+        'test-sample.module.css',
+      ),
     ).toThrow(/classMap/)
+  })
+
+  it('declaration value `.5s` never hooks the digit-anchored guard (whole pipeline)', () => {
+    // `.5s` (no leading zero) is a legal transition duration; the regex needs
+    // `.` + digit + 7 hex + `_` + letter, so it cannot match — the
+    // transform-layer assertion accepts the css untouched.
+    expect(() =>
+      assertCssModuleTransform(
+        { root: '20fd0e45_root' },
+        '.\\32 0fd0e45_root { transition: opacity .5s ease; }',
+        'test-sample.module.css',
+      ),
+    ).not.toThrow()
   })
 
   it('artifact-layer guard rejects a bundleText sample containing injected unescaped `.20fd0e45_root`', () => {
