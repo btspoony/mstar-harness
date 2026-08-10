@@ -42,24 +42,41 @@ or a custom profile).
   policy with **enforcement first** then push / worktree / control worktree,
   leases, knowledge, direction) over a bottom **fixed meta dock** (version +
   harness dir; small muted, hairline-separated, does NOT scroll with the
-  sidebar digest — the former header row was removed), and a **react-flow
-  cyclic workflow graph** (phase ring + plan state machine, current-phase
-  highlight, legend, zoom/pan; pure `projectGraph` projection, never throws,
-  explicit degraded states); the branches block left the sidebar in plan
-  `20260810-panel-sidebar-info` (its anchor fields stay in the catalog source;
-  the iteration zone renders them via plan `20260810-panel-canvas-zones`);
-  refresh follows the session snapshot, no polling. Bundle served at
-  `/plugins/@mstar-harness/dsh/client.js` (closure-factory CJS; `@xyflow/react`
-  inlined; build asserts no `import.meta` / ESM statements — the loader runs
-  plugin bundles as classic scripts). **Known limitations**: the graph's
-  Phase 1/5 nodes are schema-only (the engine phase gate never emits their
-  transitions); the loop edge is planning semantics; no historical back-scan
-  of resumed long logs; no custom top-level slot (the `conversation.view` tab
-  is the only session-level panel seat without dsh-private layout changes);
-  no-session → shell hero (strict-session view ring). Panel acceptance is
-  dual-track: in-loop browser harness verification (agent-browser/CDP against
-  the rebuilt bundle, iteration guides record the verified runs) plus
-  user-restart final GUI acceptance.
+  sidebar digest — the former header row was removed), and an **HTML/CSS zone
+  dashboard** (the react-flow cyclic graph was removed in plan
+  `20260810-panel-canvas-zones`): the canvas fills the Tab (the page never
+  scrolls; the zone container is the only scroll body) with an **iteration
+  zone** (Step 1–5 stepper + `Step N/5` badge + active-highlight / inactive
+  dimmed state + the branch panel — iteration base / target / spec
+  integration, rendered only while active), a **tasks zone** (6-column
+  kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
+  badges, Done ≤5 + `+N more`), an **agent-execution zone** (pending skeleton
+  — entity cards and flow arrows land in plan
+  `20260810-panel-agent-flow-zone`), a bottom **fixed footer bar** (zone
+  legend + gate summary with collapsible violations) and a canvas-corner
+  **`AgentEventDock`** (absolute bottom-left, mounted ONLY when agent-flow
+  events exist — hidden entirely at 0 events, no placeholder); below 1200px
+  the zones stack vertically. Pure `projectGraph` projection (never throws,
+  explicit degraded states — muted empty states, never orange warn boxes).
+  The branches block left the sidebar in plan `20260810-panel-sidebar-info`
+  (its anchor fields stay in the catalog source; the iteration zone renders
+  them via plan `20260810-panel-canvas-zones`); refresh follows the session
+  snapshot, no polling. Bundle served at
+  `/plugins/@mstar-harness/dsh/client.js` (closure-factory CJS with NO graph
+  library inlined — react-flow removed; the build asserts the bundle contains
+  no `xyflow`/`reactflow` markers, no `@deepseek-ai/*` value imports, and no
+  `import.meta` / ESM statements — the loader runs plugin bundles as classic
+  scripts). **Known limitations**: the stepper's Step 1 (iteration-start) and
+  Step 5 (merge-ready) can never be the CURRENT step — the engine phase gate
+  only evaluates Phase 2→3→4, so they always render idle; the agent-execution
+  zone is a placeholder until plan `20260810-panel-agent-flow-zone` lands its
+  entity rendering; no historical back-scan of resumed long logs; no custom
+  top-level slot (the `conversation.view` tab is the only session-level panel
+  seat without dsh-private layout changes); no-session → shell hero
+  (strict-session view ring). Panel acceptance is dual-track: in-loop browser
+  harness verification (agent-browser/CDP against the rebuilt bundle,
+  iteration guides record the verified runs) plus user-restart final GUI
+  acceptance.
 
 ## Skill loading
 
@@ -129,8 +146,10 @@ build (`catalogTtlMs`, default 60 s).
 
 The plugin records ACTUAL subagent dispatch (and best-effort settle) events —
 the evidence of what really happened, distinct from the client-side expected
-role flow. The workflow panel's third-column expected/actual pipeline and the
-footer event strip are pure consumers of this evidence.
+role flow. The workflow panel's agent-execution zone (the expected role-stage
+skeleton — entity cards land in plan `20260810-panel-agent-flow-zone`) and
+the canvas-corner `AgentEventDock` event strip are pure consumers of this
+evidence.
 
 - **Recording point (one core)**: `DshHostAdapter.dispatchGate` is the SINGLE
   record path behind both dispatch surfaces — the `tools/pre-execute` listener
@@ -177,8 +196,8 @@ footer event strip are pure consumers of this evidence.
 - **Maintainer view**: change the ledger shape (event schema, bounds, settle
   seam) and update the projections together — `gates/agent-flow.ts` (record /
   read / settle listener), `gates/catalog.ts` (agent-flow line + `source`
-  view) and `client/panel/graph/project-graph.ts` (pipeline/edges) — the panel
-  renders ONLY what the evidence shows.
+  view) and `client/panel/graph/project-graph.ts` (the ZoneView flow/agents
+  projection) — the panel renders ONLY what the evidence shows.
 
 ## PM dispatch
 

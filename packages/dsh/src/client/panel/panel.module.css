@@ -1,11 +1,12 @@
 /* Morning Star workflow panel — inherits dsh web's visual language
  * (dsw design tokens: surfaces, borders, labels, status states). Layout
- * contract (spec panel-zones §2): root grid "main sidebar" fills the Tab
+ * contract (spec panel-zones §2, v3): root grid "main sidebar" fills the Tab
  * (height 100%, overflow hidden — the page never scrolls); a fixed 300px
  * sidebar with its own internal scroll (<860px it stacks under main); the
  * sidebar bottom holds a fixed meta dock (version + harness dir) that does
- * NOT scroll with the digest. The main area is the only content-overflow
- * scroll source (zone skeleton filled by plan 20260810-panel-canvas-zones).
+ * NOT scroll with the digest. The main column hosts the WorkflowCanvas (the
+ * canvas's own zone scroll container is the ONLY scroll body — spec §2) plus
+ * the fixed freshness footer; `.main` itself never scrolls.
  *
  * Hard metrics (spec §1.2): spacing comes ONLY from the --mstar-space-1..6
  * ramp defined at the root (a panel-scope ramp — not invented --dsw-* names);
@@ -75,7 +76,7 @@
   overflow: hidden;
 }
 
-/* --- main: graph region + bottom footer (spec panel-zones §2) --- */
+/* --- main: WorkflowCanvas column + fixed freshness footer (spec panel-zones §2, v3) --- */
 
 .main {
   grid-area: main;
@@ -84,15 +85,7 @@
   min-width: 0;
   min-height: 0;
   padding: var(--mstar-space-4);
-  overflow: auto;                                 /* main is the only overflow scroll source */
-}
-
-.graph {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  display: flex;
-  flex-direction: column;
+  overflow: hidden;                               /* main never scrolls — the canvas zone container is the ONLY scroll body */
 }
 
 /* --- sidebar: fixed 300px column, full height, own scroll (spec panel-zones §2) --- */

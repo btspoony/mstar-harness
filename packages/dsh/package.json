@@ -82,7 +82,6 @@
   "devDependencies": {
     "@cordisjs/plugin-include": "1.0.4",
     "@cordisjs/plugin-loader": "1.0.0-rc.5",
-    "@xyflow/react": "^12.11.2",
     "@mstar-harness/engine": "2.0.6",
     "@types/node": "^25.6.0",
     "@types/react": "~18.3.1",

@@ -95,32 +95,45 @@ Workflow"**, rendering the latest `mstar-engine-status` catalog row as the
 **MStar Workflow layout**: a right sidebar (plans ≤5 time-desc + `+N more`,
 open residual findings ≤10 with severity chips + overflow hint, policy with
 enforcement first, leases, knowledge, direction) over a bottom **fixed meta
-dock** (version + harness dir; the former header row was removed), and a
-**react-flow cyclic workflow graph** as the main body — phase ring
-(iteration-start → autonomous-execute → iteration-close → pr-delivery →
-merge-ready, loop edge) + plan state machine (Todo → InProgress → InReview →
-Done / InProgress ⇄ Blocked / unknown bucket) projected from the catalog by
-the pure `projectGraph` function (schema constants vs catalog evidence
-strictly separated; never throws; explicit degraded states), with
-current-phase highlight + legend + zoom/pan + freshness footer. The branches
-block left the sidebar (moved to the iteration zone by plan
-`20260810-panel-canvas-zones`). Build step: `bun run
+dock** (version + harness dir; the former header row was removed), and an
+**HTML/CSS zone dashboard** as the main body — the react-flow cyclic graph
+was removed in plan `20260810-panel-canvas-zones`. The canvas fills the Tab
+(the page never scrolls; the zone container is the only scroll body) and
+lays out three zones projected from the catalog by the pure `projectGraph`
+function (schema constants vs catalog evidence strictly separated; never
+throws; explicit degraded states — muted empty states, never orange warn
+boxes): an **iteration zone** (Step 1–5 stepper + `Step N/5` badge,
+active-highlight / inactive dimmed states, and the branch panel — iteration
+base / target / spec integration, rendered only while active; the branches
+block left the sidebar for this in plan `20260810-panel-sidebar-info`), a
+**tasks zone** (6-column kanban: Todo / InProgress / InReview / Done /
+Blocked / unknown with count badges, Done ≤5 + `+N more`), an
+**agent-execution zone** (pending skeleton — entity cards and flow arrows
+land in plan `20260810-panel-agent-flow-zone`), a bottom **fixed footer bar**
+(zone legend + gate verdict/violation summary with a collapsible violations
+list) and a canvas-corner **AgentEventDock** (agent-flow event strip,
+absolute bottom-left, mounted only when events exist — hidden entirely at 0
+events), plus the freshness footer. Below 1200px the zones stack vertically.
+Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
 CLIENT_EXTERNALS external, CSS modules hashed + `<style data-plugin>`
-injection, purity gate, `@xyflow/react` inlined, and inline assertions that
-the bundle carries the xyflow markers, zero `@deepseek-ai/*` value imports
-and no `import.meta` / ESM statements — the web loader executes plugin
-bundles as classic `<script>`s); the full `bun run build` runs it after the
-node half. Verified locally: boot graph entry, the `/plugins/<id>/client.js`
-route serving the exact built bundle, and the browser-handoff
-materialization (`inject`/`apply`/CSS injection under classic-script
-semantics) — see
+injection, purity gate, and inline assertions that the bundle carries **no
+`xyflow`/`reactflow` markers** (negative assertion — the react-flow library
+and its plain-`.css` text loader were removed with the graph layer), zero
+`@deepseek-ai/*` value imports and no `import.meta` / ESM statements — the
+web loader executes plugin bundles as classic `<script>`s); the full `bun run
+build` runs it after the node half. Verified locally: boot graph entry, the
+`/plugins/<id>/client.js` route serving the exact built bundle, and the
+browser-handoff materialization (`inject`/`apply`/CSS injection under
+classic-script semantics) — see
 `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
 
-Known limitations (this iteration): the graph's Phase 1 / Phase 5 nodes are
-**schema-only** — the engine phase gate never emits their transitions (it
-evaluates Phase 2→3→4), and the loop edge is planning semantics; no
-historical back-scan of resumed long logs; no custom top-level slot (the
+Known limitations (this iteration): the iteration stepper's Step 1
+(iteration-start) and Step 5 (merge-ready) can never be the current step —
+the engine phase gate only evaluates Phase 2→3→4, so they always render idle;
+the agent-execution zone is a pending skeleton until plan
+`20260810-panel-agent-flow-zone` lands its entity rendering; no historical
+back-scan of resumed long logs; no custom top-level slot (the
 `conversation.view` tab is the only session-level panel seat without
 dsh-private layout changes). Browser UI observation is the user-restart
 acceptance (R1 folded into this iteration's AC-1/2).
