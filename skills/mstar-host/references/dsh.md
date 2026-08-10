@@ -123,16 +123,34 @@ build (`catalogTtlMs`, default 60 s).
 
 Harness **dispatch** on dsh = a `subagent` tool call with the full Assignment
 text (role binding in the prompt — `Execute as` / `Act as` + skill load;
-there is no separate `agent` field, the Assignment body IS the prompt). N
-parallel assignees = N `subagent` calls (the dispatch gate counts each
+there is no separate `agent` field, the Assignment body IS the prompt). **N
+assignees = N `subagent` calls = N independent delegations** (dispatch-gate
+口径: one assistant message carries all N invokes — the gate counts each
 dispatched Assignment). Paste-only Assignment without an invoke is **not**
 dispatch.
+
+**Execution: concurrent via background dispatch.** The `subagent` tool does
+**not** declare `isConcurrencySafe` → fail-closed `exclusive` classification,
+so same-message invokes are issued one-at-a-time (the next invoke starts only
+after the previous one settles). Foreground invokes (no `run_in_background`)
+settle only when the child completes → end-to-end serial (wall ≈ N× single
+seat). **Background invokes (`run_in_background: true`) settle at task start
+(task id returned) and their child agents run CONCURRENTLY in background
+tasks** — for N≥2 dispatch (QC tri-review) use `run_in_background: true`:
+parallel execution, wall ≈ single seat (not N×). **Future path (upstream
+suggestion, not editable from this repo):** dsh-private declares
+`isConcurrencySafe: () => true` on the tool-subagent so same-message
+foreground invokes can also run concurrently — needs dsh maintainer
+evaluation (roadmap §7e).
 
 ### QC default
 
 - **`Execution mode: sdd`**: **N=3** `subagent` dispatches — one per QC seat
   (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`), each body **Act as**
-  the respective QC role + QC skill load. Cannot emit required **N** →
+  the respective QC role + QC skill load. **Dispatch all three with
+  `run_in_background: true` → the seats run CONCURRENTLY** (background
+  children; wall ≈ single seat); foreground (no `run_in_background`) would run
+  serially (wall ≈ 3× single seat). Cannot emit required **N** →
   **`Blocked`**.
 - **`inline`**: **N=1**.
 
