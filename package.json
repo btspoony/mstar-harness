@@ -1,6 +1,6 @@
 {
   "name": "morning-star",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "Morning Star — harness engineering workflow platform: TS Harness Workflow Engine + judgment skills, shipped as an Agent Plugin",
   "private": true,
   "type": "module",

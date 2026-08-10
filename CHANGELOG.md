@@ -2,24 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **2.0.4** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **2.0.5** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **2.0.4** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.4** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.4** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.4** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.4** |
-| Codex plugin | `.codex-plugin/plugin.json` | **2.0.4** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.4** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.4** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.4** |
-| Agent Plugins manifest | `plugin.json` | **2.0.4** |
+| Monorepo root | `morning-star` (`package.json`) | **2.0.5** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.5** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.5** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.5** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.5** |
+| Codex plugin | `.codex-plugin/plugin.json` | **2.0.5** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.5** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.5** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.5** |
+| Agent Plugins manifest | `plugin.json` | **2.0.5** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [2.0.5] - 2026-08-10
+
+### Harness
+
+- `/iteration-start`: accepts an optional `direction` hint (constrains §2 candidates, seeds §3 grill-me — start stays interactive) and a `pause` flag; auto-continues into Phase 2→5 (execute → close → PR → merge-ready) after Phase 1 lock + integration branch, by default. `/iteration-drive` remains standalone for re-entry/resume on an already-locked iteration. Updated `iteration-loop` vs-commands table, README/README_CN command tables + workflow diagrams, OpenCode package quick start; added routing eval `iteration-start-auto-continue-phase2`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 2.0.5**.
 
 ## [2.0.4] - 2026-08-09
 

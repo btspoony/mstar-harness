@@ -1,23 +1,33 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.0.4**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.0.5**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **2.0.4** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.0.4** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.0.4** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.0.4** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.0.4** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **2.0.4** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.0.4** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.0.4** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.4** |
-| Agent Plugins 清单 | `plugin.json` | **2.0.4** |
+| monorepo 根 | `morning-star`（`package.json`） | **2.0.5** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.0.5** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.0.5** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.0.5** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.0.5** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **2.0.5** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.0.5** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.0.5** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.5** |
+| Agent Plugins 清单 | `plugin.json` | **2.0.5** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [2.0.5] - 2026-08-10
+
+### Harness
+
+- `/iteration-start`：新增可选 `direction` 提示（约束 §2 候选、种子 §3 grill-me —— start 仍为交互式）与 `pause` 标志；Phase 1 锁定 + integration branch 后默认自动推进 Phase 2→5（execute → close → PR → merge-ready）。`/iteration-drive` 仍作为独立 re-entry/resume 命令保留。同步更新 `iteration-loop` 对比表、README/README_CN 命令表与流程图、OpenCode 包 quick start；新增 routing eval `iteration-start-auto-continue-phase2`。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 2.0.5**。
 
 ## [2.0.4] - 2026-08-09
 
