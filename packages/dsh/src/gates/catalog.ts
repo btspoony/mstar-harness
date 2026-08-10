@@ -37,6 +37,7 @@ import type {
   MstarEngineStatusSource,
   MstarHarnessState,
   MstarIterationGateView,
+  ResidualFindingView,
 } from '../types.ts'
 import { STATUS_FILE, asRecord, sessionCwdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
@@ -51,6 +52,25 @@ export const EXPLICIT_CACHE_KEY = '\u0000explicit'
 
 /** Residual severity vocabulary (mstar-plan-artifacts severity SSOT order). */
 const RESIDUAL_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
+
+/**
+ * Engine `isOpenResidual` parity (packages/engine/src/status.ts lines
+ * 159–163): an entry is open when `lifecycle` is missing, `null` or `false`
+ * (the jq `//` default covers `false` too — `lifecycle: false` counts as
+ * open), otherwise it must be the STRING `'open'`. The engine does not
+ * export this from the public surface, so the catalog implements the same
+ * semantics locally (iteration non-goals forbid engine changes).
+ */
+function isOpenResidualParity(entry: Record<string, unknown>): boolean {
+  const lifecycle = entry.lifecycle
+  const effective = lifecycle === false || lifecycle === null || lifecycle === undefined ? 'open' : lifecycle
+  return effective === 'open'
+}
+
+/** Severity sort index for a residual finding (critical first). */
+function residualSeverityIndex(severity: string): number {
+  return (RESIDUAL_SEVERITIES as readonly string[]).indexOf(severity)
+}
 
 /** The plugin's own manifest version (single-version invariant; own manifest first). */
 function pluginVersion(): string {
@@ -259,7 +279,13 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
         if (row === undefined) continue
         const id = typeof row.plan_id === 'string' ? row.plan_id : typeof row.id === 'string' ? row.id : undefined
         if (id === undefined) continue
-        plans.push({ id, status: typeof row.status === 'string' ? row.status : '' })
+        plans.push({
+          id,
+          status: typeof row.status === 'string' ? row.status : '',
+          // done_at passthrough: trimmed string; missing/empty → null (an
+          // ALWAYS-present nullable scalar — lossless JSON, never omitted).
+          doneAt: str(row.done_at),
+        })
         const lease = asRecord(row.execution_lease)
         if (lease !== undefined && typeof lease.holder === 'string') {
           leases.push({
@@ -291,6 +317,36 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
         if (count !== undefined && count > 0) residuals.push({ severity, count })
       }
     }
+    // Open residual findings DETAIL (spec §6): planId = the owning root key;
+    // open-lifecycle filtered with engine `isOpenResidual` parity (missing /
+    // null / false / 'open' → open; resolved/waived/superseded/duplicate →
+    // closed); unknown severities skipped (same discipline as the rollup);
+    // severity ordered critical→nit (stable sort keeps the source order
+    // within one severity); capped at 10. The root key missing/unreadable →
+    // null (advisory — same pattern as `knowledge`); key present with no
+    // open entries → [].
+    let residualFindings: ResidualFindingView[] | null = null
+    if (residualMap !== undefined) {
+      residualFindings = []
+      for (const planId of Object.keys(residualMap)) {
+        const findings = residualMap[planId]
+        if (!Array.isArray(findings)) continue
+        for (const finding of findings) {
+          const entry = asRecord(finding)
+          if (entry === undefined || !isOpenResidualParity(entry)) continue
+          const severity = entry.severity
+          if (typeof severity !== 'string' || residualSeverityIndex(severity) === -1) continue
+          residualFindings.push({
+            planId,
+            id: typeof entry.id === 'string' ? entry.id : '',
+            severity,
+            title: typeof entry.title === 'string' ? entry.title : '',
+          })
+        }
+      }
+      residualFindings.sort((a, b) => residualSeverityIndex(a.severity) - residualSeverityIndex(b.severity))
+      residualFindings = residualFindings.slice(0, 10)
+    }
     const metadata = asRecord(doc.metadata)
     const compass = steeringCompassPath(harnessDir)
     let compassFields: Record<string, unknown> | undefined
@@ -304,6 +360,7 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
     return {
       plans,
       residuals,
+      residualFindings,
       iterationBaseBranch: str(metadata?.iteration_base_branch) ?? str(compassFields?.iteration_base_branch) ?? null,
       targetBranch: str(metadata?.target_branch) ?? str(compassFields?.target_branch) ?? null,
       specIntegrationBranch: str(metadata?.spec_integration_branch),

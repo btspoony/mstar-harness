@@ -95,13 +95,14 @@ const fullSource: MstarEngineStatusSource = {
   },
   state: {
     plans: [
-      { id: '20260809-dsh-workflow-viz-panel', status: 'InProgress' },
-      { id: '20260808-dsh-package-core', status: 'Done' },
+      { id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null },
+      { id: '20260808-dsh-package-core', status: 'Done', doneAt: '2026-08-08' },
     ],
     residuals: [
       { severity: 'high', count: 2 },
       { severity: 'medium', count: 1 },
     ],
+    residualFindings: [],
     iterationBaseBranch: 'dev-dsh',
     targetBranch: 'dev-dsh',
     specIntegrationBranch: 'iteration/iter-20260809-dsh-workflow-viz',
@@ -142,8 +143,9 @@ const noGateSource: MstarEngineStatusSource = {
   harnessDir: '/proj/.mstar',
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: {
-    plans: [{ id: '20260809-dsh-workflow-viz-panel', status: 'InProgress' }],
+    plans: [{ id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null }],
     residuals: [],
+    residualFindings: null,
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,
@@ -745,7 +747,7 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
   it('a new catalog row with changed plans re-buckets the machine + moves the connector', () => {
     const beforeSource = {
       ...fullSource,
-      state: { ...fullSource.state!, plans: [{ id: 'plan-b', status: 'InProgress' }] },
+      state: { ...fullSource.state!, plans: [{ id: 'plan-b', status: 'InProgress', doneAt: null }] },
     }
     const store = createSnapshotStore(snapshotFor(beforeSource, 1_720_000_000_000))
     const before = renderStore(store)
@@ -757,9 +759,9 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
       state: {
         ...fullSource.state!,
         plans: [
-          { id: 'plan-b', status: 'InProgress' },
-          { id: 'plan-c', status: 'InReview' },
-          { id: 'plan-d', status: 'InReview' },
+          { id: 'plan-b', status: 'InProgress', doneAt: null },
+          { id: 'plan-c', status: 'InReview', doneAt: null },
+          { id: 'plan-d', status: 'InReview', doneAt: null },
         ],
       },
     }
