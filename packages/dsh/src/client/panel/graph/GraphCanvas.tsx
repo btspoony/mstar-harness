@@ -14,8 +14,11 @@
  * loop edge (merge-ready → iteration-start), dotted connector edge (current
  * phase → active plan bucket), and the pipeline skeleton edges (stage order —
  * dim when unlit, business highlight when either endpoint stage is lit, warn
- * dash from the current phase's stage to the unexpected node). The iteration
- * id renders as the phase-ring caption (spec §2.6).
+ * dash from the current phase's stage to the unexpected node). Every node
+ * type also renders hidden `<Handle>` connection points (T3 fix loop) —
+ * ReactFlow v12 drops edges whose endpoints expose no handle bounds, so the
+ * schematic boxes carry invisible handles that `buildEdges` binds by id. The
+ * iteration id renders as the phase-ring caption (spec §2.6).
  *
  * Agent-flow event detail renders as a collapsible footer strip (spec
  * agent-flow-catalog-graph §2.4): ≤50 event rows (role → planId#taskId, ts,
@@ -40,7 +43,7 @@
 
 import * as React from 'react'
 import {
-  Background, Controls, ReactFlow,
+  Background, Controls, Handle, Position, ReactFlow,
   type Edge, type Node, type NodeProps,
 } from '@xyflow/react'
 import xyflowCss from '@xyflow/react/dist/style.css'
@@ -124,6 +127,26 @@ type StateFlowNode = Node<StateNodeData, 'state'>
 type FlowStageFlowNode = Node<FlowStageNodeData, 'flow-stage'>
 type FlowUnexpectedFlowNode = Node<FlowUnexpectedNodeData, 'flow-unexpected'>
 
+/**
+ * Invisible connection-point handles (T3 fix loop — browser harness FAIL
+ * `flow_edges_count`): @xyflow/react v12 computes an edge path only when BOTH
+ * endpoint nodes expose handle bounds (`getEdgePosition` → `getHandle$1` →
+ * `null` for a node with no `<Handle>` DOM). The schematic node types render
+ * no visible connection dots, so every edge was silently dropped
+ * (`edges=0`). Each node now renders hidden `<Handle>` elements with stable
+ * ids that `buildEdges` binds via `sourceHandle` / `targetHandle` — measured
+ * by `getHandleBounds` exactly like visible handles, but never painted and
+ * never interactive (`pointer-events: none` + the panel's
+ * `nodesConnectable={false}`).
+ */
+type HandleSpec = { type: 'source' | 'target'; position: Position; id: string }
+
+const FLOW_HANDLE = css.flowHandle
+
+function FlowHandle({ type, position, id }: HandleSpec) {
+  return <Handle type={type} position={position} id={id} className={FLOW_HANDLE} />
+}
+
 /** Phase pill node: title + state chip + (current) verdict badge. */
 function PhaseNode({ data }: NodeProps<PhaseFlowNode>) {
   const { phase, t } = data
@@ -135,6 +158,8 @@ function PhaseNode({ data }: NodeProps<PhaseFlowNode>) {
     : phase.state === 'next' ? t('graph.next') : phase.state === 'unknown' ? t('panel.unknown') : ''
   return (
     <div className={`${css.phaseNode} ${stateClass}`} data-graph-node={`phase:${phase.id}`}>
+      <FlowHandle type="target" position={Position.Top} id="target:top" />
+      <FlowHandle type="source" position={Position.Bottom} id="source:bottom" />
       <span className={css.nodeTitle}>{t(`graph.phase.${phase.id}`)}</span>
       <span className={css.nodeStateChip} data-graph-node-state={phase.state}>{chipLabel}</span>
       {phase.state === 'current' && phase.verdict !== 'unknown' && (
@@ -150,6 +175,37 @@ function PhaseNode({ data }: NodeProps<PhaseFlowNode>) {
   )
 }
 
+/**
+ * Plan-state machine connection points (spec §2.6 topology): the vertical
+ * chain Todo→InProgress→InReview→Done runs bottom→top; InProgress→Blocked
+ * and Blocked→InProgress run right↔left (side-by-side column). `unknown` is
+ * terminal + disconnected (no handles, no edges).
+ */
+const STATE_HANDLES: Record<PlanStateId, readonly HandleSpec[]> = {
+  Todo: [
+    { type: 'target', position: Position.Top, id: 'target:top' },
+    { type: 'source', position: Position.Bottom, id: 'source:bottom' },
+  ],
+  InProgress: [
+    { type: 'target', position: Position.Top, id: 'target:top' },
+    { type: 'source', position: Position.Bottom, id: 'source:bottom' },
+    { type: 'source', position: Position.Right, id: 'source:right' },
+    { type: 'target', position: Position.Right, id: 'target:right' },
+  ],
+  InReview: [
+    { type: 'target', position: Position.Top, id: 'target:top' },
+    { type: 'source', position: Position.Bottom, id: 'source:bottom' },
+  ],
+  Done: [
+    { type: 'target', position: Position.Top, id: 'target:top' },
+  ],
+  Blocked: [
+    { type: 'target', position: Position.Left, id: 'target:left' },
+    { type: 'source', position: Position.Left, id: 'source:left' },
+  ],
+  unknown: [],
+}
+
 /** Plan-state box node: bucket label + count badge + plan id rows. */
 function StateNode({ data }: NodeProps<StateFlowNode>) {
   const { state, t } = data
@@ -158,6 +214,7 @@ function StateNode({ data }: NodeProps<StateFlowNode>) {
     : state.lit ? css.stateLit : css.stateUnlit
   return (
     <div className={`${css.stateNode} ${stateClass}`} data-graph-node={`state:${state.id}`} data-graph-lit={state.lit}>
+      {STATE_HANDLES[state.id].map((h) => <FlowHandle key={h.id} {...h} />)}
       <div className={css.stateHeader}>
         <span className={css.nodeTitle}>{t(`graph.state.${state.id}`)}</span>
         {state.lit && (
@@ -184,6 +241,9 @@ function FlowStageNode({ data }: NodeProps<FlowStageFlowNode>) {
   const stateClass = stage.lit ? css.flowStageLit : css.flowStageUnlit
   return (
     <div className={`${css.flowStageNode} ${stateClass}`} data-graph-node={`flow:${stage.id}`} data-graph-lit={stage.lit}>
+      <FlowHandle type="target" position={Position.Top} id="target:top" />
+      <FlowHandle type="source" position={Position.Bottom} id="source:bottom" />
+      <FlowHandle type="source" position={Position.Right} id="source:right" />
       <div className={css.flowStageHeader}>
         <span className={css.nodeTitle}>{stage.stage}</span>
         {stage.lit && (
@@ -209,6 +269,7 @@ function FlowUnexpectedNode({ data }: NodeProps<FlowUnexpectedFlowNode>) {
   const { unexpected, t } = data
   return (
     <div className={css.flowUnexpectedNode} data-graph-node="flow:unexpected">
+      <FlowHandle type="target" position={Position.Left} id="target:left" />
       <div className={css.flowStageHeader}>
         <span className={css.nodeTitle}>{t('flow.unexpected')}</span>
         <span className={css.flowStageCount} data-graph-count={unexpected.length}>{unexpected.length}</span>
@@ -333,14 +394,21 @@ function buildEdges(view: GraphView): Edge[] {
     source: `phase:${e.source}`,
     target: `phase:${e.target}`,
     type: 'smoothstep',
+    sourceHandle: 'source:bottom',
+    targetHandle: 'target:top',
     className: e.kind === 'loop' ? css.edgeLoop : css.edgeForward,
   }))
   for (const e of view.planEdges) {
+    // Handle binding follows the topology (spec §2.6): vertical chain
+    // bottom→top, the side-by-side Blocked branch right↔left.
+    const horizontal = (e.source === 'InProgress' && e.target === 'Blocked') || (e.source === 'Blocked' && e.target === 'InProgress')
     edges.push({
       id: `state:${e.source}->${e.target}`,
       source: `state:${e.source}`,
       target: `state:${e.target}`,
       type: 'smoothstep',
+      sourceHandle: horizontal && e.source === 'Blocked' ? 'source:left' : horizontal ? 'source:right' : 'source:bottom',
+      targetHandle: horizontal && e.target === 'Blocked' ? 'target:left' : horizontal ? 'target:right' : 'target:top',
       className: css.edgeForward,
     })
   }
@@ -350,6 +418,8 @@ function buildEdges(view: GraphView): Edge[] {
       source: `phase:${view.connector.source}`,
       target: `state:${view.connector.target}`,
       type: 'smoothstep',
+      sourceHandle: 'source:bottom',
+      targetHandle: 'target:top',
       className: css.edgeConnector,
     })
   }
@@ -366,6 +436,8 @@ function buildEdges(view: GraphView): Edge[] {
       source: `flow:${source.id}`,
       target: `flow:${target.id}`,
       type: 'smoothstep',
+      sourceHandle: 'source:bottom',
+      targetHandle: 'target:top',
       className: lit ? css.edgeFlowLit : css.edgeFlow,
     })
   }
@@ -380,6 +452,8 @@ function buildEdges(view: GraphView): Edge[] {
         source: `flow:${currentStage.id}`,
         target: 'flow:unexpected',
         type: 'smoothstep',
+        sourceHandle: 'source:right',
+        targetHandle: 'target:left',
         className: css.edgeFlowUnexpected,
       })
     }

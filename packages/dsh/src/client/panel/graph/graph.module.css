@@ -302,6 +302,16 @@
   fill: none;
 }
 
+/* --- invisible connection-point handles (T3 fix loop): every schematic node
+   exposes <Handle> elements so ReactFlow v12 renders its edges (an edge whose
+   endpoint exposes no handle bounds is dropped — see GraphCanvas.tsx); the
+   handles are measured like visible ones but never painted or interactive. */
+
+.flowHandle {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* --- degraded / focus overlays (spec §2.5 ring-center note, §4) --- */
 
 .note {

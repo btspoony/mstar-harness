@@ -953,6 +953,54 @@ describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline
     expect(clean).toContain('data-graph-node="flow:autonomous-execute:sdd-implement"')
   })
 
+  it('renders hidden connection-point handles on every node type (ReactFlow v12 edge prerequisite — T3 fix loop)', () => {
+    const html = panelHtml(flowSource(flowEvents))
+    const slice = (prefix: string, nodeId: string) => {
+      const start = html.indexOf(`data-graph-node="${prefix}:${nodeId}"`)
+      if (start === -1) return ''
+      const end = html.indexOf('data-graph-node="', start + 1)
+      return end === -1 ? html.slice(start) : html.slice(start, end)
+    }
+    // Pipeline stages: target(top) + source(bottom) for the chain, and
+    // source(right) as the unexpected warn edge origin (buildEdges binds by
+    // these ids — an edge whose endpoint exposes no handle is dropped by
+    // @xyflow/react, so this is the render-side prerequisite for edges).
+    for (const id of [
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+    ]) {
+      const stage = slice('flow', id)
+      expect(stage).toContain('data-handleid="target:top"')
+      expect(stage).toContain('data-handleid="source:bottom"')
+      expect(stage).toContain('data-handleid="source:right"')
+    }
+    // The unexpected warn node receives the edge on its left side.
+    expect(slice('flow', 'unexpected')).toContain('data-handleid="target:left"')
+    // Phase ring: vertical loop, bottom→top.
+    expect(slice('phase', 'iteration-start')).toContain('data-handleid="target:top"')
+    expect(slice('phase', 'iteration-start')).toContain('data-handleid="source:bottom"')
+    expect(slice('phase', 'merge-ready')).toContain('data-handleid="source:bottom"')
+    // State machine topology: vertical chain bottom→top + the side-by-side
+    // Blocked branch right↔left; Done is terminal (target only); unknown is
+    // disconnected (no handles at all).
+    const inProgress = slice('state', 'InProgress')
+    expect(inProgress).toContain('data-handleid="target:top"')
+    expect(inProgress).toContain('data-handleid="source:bottom"')
+    expect(inProgress).toContain('data-handleid="source:right"')
+    expect(inProgress).toContain('data-handleid="target:right"')
+    const blocked = slice('state', 'Blocked')
+    expect(blocked).toContain('data-handleid="target:left"')
+    expect(blocked).toContain('data-handleid="source:left"')
+    const done = slice('state', 'Done')
+    expect(done).toContain('data-handleid="target:top"')
+    expect(done).not.toContain('data-handleid="source:bottom"')
+    expect(slice('state', 'unknown')).not.toContain('data-handleid')
+  })
+
   it('empty ledger (0 events) → empty-state note, skeleton unlit, strip count 0', () => {
     const html = panelHtml(flowSource([]))
     expect(html).toContain('data-graph-empty="flow-empty"')
