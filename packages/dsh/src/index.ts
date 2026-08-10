@@ -3013,11 +3013,19 @@ export class HarnessResolver {
   forWorkspace(cwd: string | undefined): string | null {
     if (this.explicit !== null) return this.explicit
     if (cwd === undefined || cwd.trim() === '') return null
-    const hit = this.cache.get(cwd)
+    // Normalize a possibly-relative session cwd to an absolute path BEFORE
+    // probing: inside `resolveHarnessDir` the `workspaceRoot` option is
+    // resolved against the probe start, so a relative cwd (e.g. `packages/app`
+    // when the dsh process cwd sits above the workspace) would anchor the
+    // boundary BELOW the probe start and null out even a workspace-local
+    // harness. The absolute path is also the canonical memoize key — two
+    // spellings of one workspace share a cache row.
+    const abs = resolve(cwd)
+    const hit = this.cache.get(abs)
     if (hit !== undefined) return hit
     // The probe start is the boundary: never walk up from the session cwd.
-    const resolved = resolveHarnessDir(cwd, { workspaceRoot: cwd })
-    this.cache.set(cwd, resolved)
+    const resolved = resolveHarnessDir(abs, { workspaceRoot: abs })
+    this.cache.set(abs, resolved)
     return resolved
   }
 

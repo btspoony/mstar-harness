@@ -30,7 +30,7 @@
 import { describe, expect, it, afterEach } from 'bun:test'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
@@ -179,6 +179,32 @@ describe('HarnessResolver — workspace-root boundary: probe stops at the sessio
     await mkdir(join(ws, '.agents'), { recursive: true }) // workspace-local harness
     const resolver = new HarnessResolver(undefined)
     expect(resolver.forWorkspace(ws)).toBe(join(ws, '.agents'))
+  })
+
+  it('a RELATIVE session cwd still resolves a workspace-local harness (regression: a relative cwd pushed the boundary BELOW the probe start → null)', async () => {
+    // Real-world geometry: the dsh process cwd sits ABOVE the session
+    // workspace, so the session carries a relative cwd like `packages/app`
+    // (no leading `..`). Under the buggy code `resolve(start, workspaceRoot)`
+    // anchored the relative boundary to the START, landing BELOW the probe
+    // start and nulling out even a workspace-local harness. Reproduce it by
+    // chdir'ing to a synthetic process cwd for this test only (restored
+    // after — this file's other tests use absolute paths).
+    const base = await makeWorkspace('dsh-ws-relbase-')
+    const ws = join(base, 'packages', 'app')
+    await mkdir(join(ws, '.agents'), { recursive: true })
+    const rel = relative(base, ws) // e.g. `packages/app` — the relative session cwd
+    const prev = process.cwd()
+    process.chdir(base)
+    try {
+      // After chdir the process cwd is the realpath'd form (`/private/var/…`
+      // on macOS), so compare against the resolver's own canonical form.
+      const abs = resolve(rel)
+      const resolver = new HarnessResolver(undefined)
+      expect(resolver.forWorkspace(rel)).toBe(join(abs, '.agents'))
+      expect(resolver.forAgent({ session: { header: { cwd: rel } } })).toBe(join(abs, '.agents'))
+    } finally {
+      process.chdir(prev)
+    }
   })
 
   it('explicit config.harnessDir stays authoritative even OUTSIDE the workspace boundary', async () => {
