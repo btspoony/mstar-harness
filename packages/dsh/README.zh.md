@@ -141,7 +141,7 @@ mstar 技能通过 dsh skill-local 提供者以**单一规范挂载**接入：�
 
 ## Web 客户端插件（工作流面板）
 
-本包为 dsh **web** profile 提供浏览器客户端半体，在**已安装的 `mstar` bundle 行**上被自动发现（package.json 的 `dshClient` 声明 + `exports["./client"]` → `dist/client.js`）——**无需独立 profile 层或安装步骤**（spec §6.1）。web 应用在 `/plugins/@mstar-harness/dsh/client.js` 提供该 bundle，并经 closure-factory loader 握手加载（`window.__ModuleLoader__.load({ id, factory })`）。
+本包为 dsh **web** profile 提供浏览器客户端半体，在**已安装的 `mstar` bundle 行**上被自动发现（package.json 的 `dsh.client` 声明 + `exports["./client"]` → `dist/client.js`——上游 web `dsh.client` 发现逻辑扫描 loader entries，并把每个客户端的 `exports["./client"]` 解析进 boot 图）——**无需独立 profile 层或安装步骤**（spec §6.1）。web 应用在 `/plugins/@mstar-harness/dsh/client.js` 提供该 bundle，并经 closure-factory loader 握手加载（`window.__ModuleLoader__.load({ id, factory })`）。
 
 客户端入口在 **`conversation.view`** view ring 注册一个 tab（`id: 'mstar-workflow'`、`order: 20`——trajectory 先例形态），经 `mstar-panel` locale 命名空间命名为 **"MStar 工作流"**（zh）/ **"MStar Workflow"**（en）。面板即 **MStar 工作流布局**：右侧固定 300px sidebar——计划（≤5 时间倒序 + `+N more`）、未决残留 findings（≤10、severity chip、溢出提示）、策略（**enforcement 首位** + push / worktree / control worktree）、租约、知识、方向——其下为**底部 fixed 小面板**（版本 + harness 目录；小字号 muted、不随 sidebar digest 滚动；原 header 行已移除），主体为 **react-flow 循环工作流图**，外加新鲜度 footer（`last-updated HH:MM:SS` + catalog 重发刷新说明）。branches 区块已移出 sidebar 迁入迭代区（plan `20260810-panel-canvas-zones`）。860px 以下 sidebar 堆叠到主区下方。
 

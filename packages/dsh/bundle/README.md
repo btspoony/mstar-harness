@@ -79,10 +79,12 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 ## Client half (workflow panel)
 
 The same bundle row carries a browser client half for the dsh **web** profile:
-`dshClient` (`platform: 'web'`, declared inject faces) + `exports["./client"]`
+`dsh.client` (`platform: 'web'`, declared inject faces) + `exports["./client"]`
 (`dist/client.js`) in package.json. The `ClientModuleHostService` discovers it
 automatically on the **already-installed `mstar` bundle row** — no separate
-profile layer, no second install step (spec §6.1; mechanism-guide §1.1). At
+profile layer, no second install step (spec §6.1; mechanism-guide §1.1 — the
+upstream discovery reads the nested `dsh.client` declaration and resolves each
+client's `exports["./client"]` into the boot graph). At
 boot the web app serves the closure-factory CJS bundle at
 `/plugins/@mstar-harness/dsh/client.js` (rev = content sha1) and loads it via
 `window.__ModuleLoader__.load({ id, factory })`.

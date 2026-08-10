@@ -32,7 +32,7 @@ or a custom profile).
   validators **`mstar_design_md_validate`** / **`mstar_audit_validate`** /
   **`mstar_compound_validate`** / **`mstar_roles_validate`** on `ctx.tools`.
 - Web client plugin (workflow panel): the same `mstar` bundle row carries a
-  browser client half (`dshClient` + `exports["./client"]`) discovered
+  browser client half (`dsh.client` + `exports["./client"]`) discovered
   automatically by `ClientModuleHostService` — no separate profile layer or
   install step. It registers a **`conversation.view`** view-ring tab
   (`id: 'mstar-workflow'`, `order: 20`) labeled **"MStar 工作流" / "MStar

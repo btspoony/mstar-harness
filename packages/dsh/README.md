@@ -143,9 +143,11 @@ The row is **digest-gated**: per agent+workspace it is injected once per turn an
 
 The package ships a browser client half for the dsh **web** profile, discovered
 automatically on the already-installed `mstar` bundle row (package.json
-`dshClient` declaration + `exports["./client"]` → `dist/client.js`) — **no
-separate profile layer or install step** (spec §6.1). The web app serves the
-bundle at `/plugins/@mstar-harness/dsh/client.js` and loads it through the
+`dsh.client` declaration + `exports["./client"]` → `dist/client.js` — the
+upstream web `dsh.client` discovery scans loader entries and resolves each
+client's `exports["./client"]` into the boot graph) — **no separate profile
+layer or install step** (spec §6.1). The web app serves the bundle at
+`/plugins/@mstar-harness/dsh/client.js` and loads it through the
 closure-factory loader handoff (`window.__ModuleLoader__.load({ id, factory })`).
 
 The client entry registers a **`conversation.view`** view-ring tab
