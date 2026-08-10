@@ -2,24 +2,35 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **2.0.5** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **2.0.6** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **2.0.5** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.5** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.5** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.5** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.5** |
-| Codex plugin | `.codex-plugin/plugin.json` | **2.0.5** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.5** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.5** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.5** |
-| Agent Plugins manifest | `plugin.json` | **2.0.5** |
+| Monorepo root | `morning-star` (`package.json`) | **2.0.6** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.0.6** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.0.6** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.0.6** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **2.0.6** |
+| Codex plugin | `.codex-plugin/plugin.json` | **2.0.6** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **2.0.6** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **2.0.6** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.6** |
+| Agent Plugins manifest | `plugin.json` | **2.0.6** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [2.0.6] - 2026-08-10
+
+### Harness
+
+- Added a **host-agnostic full-flow goal rule** in `mstar-host`: any host exposing a `/goal` command (Codex Goal Mode, omp, future code agents) must set the goal to running the **complete flow to its end** — whether advancing an iteration (start → per-plan cycles → close → PR delivery → merge-ready loop) or non-iteration work (specify → clarify → plan → tasks → implement → plan QC tri + QA gate → Done) — never a sub-stage goal.
+- Removed the Codex-specific `references/codex-plan-goal-mode-bridge.md`; goal text rules now live host-agnostically in `mstar-host` SKILL.md, and Codex Plan Mode reads `references/_shared/plan-mode-bridge-core.md` directly.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 2.0.6**.
 
 ## [2.0.5] - 2026-08-10
 

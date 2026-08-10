@@ -1,23 +1,34 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.0.5**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.0.6**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **2.0.5** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.0.5** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.0.5** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.0.5** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.0.5** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **2.0.5** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.0.5** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.0.5** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.5** |
-| Agent Plugins 清单 | `plugin.json` | **2.0.5** |
+| monorepo 根 | `morning-star`（`package.json`） | **2.0.6** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.0.6** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.0.6** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.0.6** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.0.6** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **2.0.6** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.0.6** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.0.6** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.6** |
+| Agent Plugins 清单 | `plugin.json` | **2.0.6** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [2.0.6] - 2026-08-10
+
+### Harness
+
+- `mstar-host` 新增**宿主无关的全流程 goal 规则**：凡暴露 `/goal` 指令的宿主（Codex Goal Mode、omp 及未来 code agent），无论推进 iteration 还是非 iteration，都必须将「完整走完全流程」设置为 goal（iteration：start → per-plan cycles → close → PR delivery → merge-ready loop；per-plan：specify → clarify → plan → tasks → implement → plan QC tri + QA gate → Done），不得只设子阶段 goal。
+- 移除 Codex 专属 `references/codex-plan-goal-mode-bridge.md`：goal 文本规则改为宿主无关，统一收在 `mstar-host` SKILL.md；Codex Plan Mode 直接读 `references/_shared/plan-mode-bridge-core.md`。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 2.0.6**。
 
 ## [2.0.5] - 2026-08-10
 
