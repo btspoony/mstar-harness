@@ -400,3 +400,245 @@
   font-weight: 600;
   letter-spacing: 0.03em;
 }
+
+/* --- iteration zone (spec §3/§8): active business ring / disabled dim + Step
+   stepper + branch panel. Colors are --dsw-* tokens only; spacing rides the
+   --mstar-space-* ramp; the root reduced-motion rule kills all motion. --- */
+
+/* Active iteration frame (spec §3): business border + 1px glow ring — the
+ * "business glow" the zone header/stepper describe. */
+.iterationActive {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+/* Hover keeps the business ring (the active frame is the affordance, spec §7). */
+.iterationActive:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+/* Disabled iteration (spec §8): the WHOLE zone dims — a dimmed zone, never an
+ * orange warn frame. Flat on hover too (no affordance while disabled). */
+.zoneDisabled {
+  opacity: 0.55;
+}
+
+.zoneDisabled:hover {
+  border-color: var(--dsw-alias-border-l1);
+}
+
+.iterationHeader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+}
+
+.iterationMeta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+}
+
+.iterationId {
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.iterationActiveNote {
+  color: var(--dsw-alias-state-business-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.iterationStepLabel {
+  color: var(--dsw-alias-state-business-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.iterationInactiveNote {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* Step 1–5 stepper (spec §3): vertical list; each item = badge rail (badge +
+ * connector to the next step) + body (phase name + state chip + verdict). */
+.stepper {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stepItem {
+  display: flex;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+.stepRail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 22px;
+}
+
+.stepBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Connector to the NEXT step: dim by default; the segment leading INTO the
+ * current step is lit (spec §3 — honest: no "completed" checkmarks, the
+ * schema only knows current/next/idle). */
+.stepConnector {
+  flex: 1;
+  width: 2px;
+  min-height: var(--mstar-space-2);
+  background: var(--dsw-alias-border-l1);
+}
+
+.stepConnectorLit {
+  flex: 1;
+  width: 2px;
+  min-height: var(--mstar-space-2);
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.stepBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  padding-bottom: var(--mstar-space-2);
+}
+
+.stepPhase {
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* State chip (spec §3): current = business glow + border highlight, next =
+ * dashed, idle = dim — driven by the step row's `data-step-state`. */
+.stepChip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+[data-step-state='current'] .stepBadge,
+[data-step-state='current'] .stepChip {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+[data-step-state='current'] .stepChip {
+  font-weight: 600;
+}
+
+[data-step-state='next'] .stepBadge,
+[data-step-state='next'] .stepChip {
+  border: 1px dashed var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+[data-step-state='idle'] .stepBadge {
+  border-color: var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-caption);
+}
+
+/* Current-step verdict badge (spec §3): PASS/FAIL/unknown pill, rendered on
+ * the current step only. */
+.verdictBadge {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+[data-iteration-verdict='pass'] {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+[data-iteration-verdict='fail'] {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Branch panel (spec §3/§5): the branches moved from the sidebar, rendered
+ * only while the iteration is active. */
+.branches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  padding-top: var(--mstar-space-2);
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.branchesTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.branchList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.branchRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+.branchLabel {
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.branchValue {
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}

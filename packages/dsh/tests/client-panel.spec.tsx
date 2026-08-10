@@ -840,8 +840,14 @@ describe('workflow panel — T2 zone dashboard: three zones + fixed footer + cor
     }
     expect(html).toContain('data-zone-header')
     expect(html).toContain('data-zone-empty')
-    // Placeholder copy (muted empty states — no orange boxes, no crashes).
-    expect(html).toContain('Iteration zone (Step N / branches) pending')
+    // The iteration zone renders its real content (Task 3): the Step 1–5
+    // stepper + active header + branch panel — no longer a placeholder.
+    expect(html).toContain('data-mstar-iteration-steps')
+    expect(html).toContain('data-step="1"')
+    expect(html).toContain('data-step="5"')
+    expect(html).toContain('data-iteration-active="true"')
+    expect(html).toContain('data-iteration-branches')
+    // tasks/agents keep their muted placeholders until Task 4 / plan 3.
     expect(html).toContain('Task kanban pending')
     // fullSource.agentFlow === null → agents zone shows the degraded muted note.
     expect(html).toContain('No agent-flow evidence (ledger missing)')
@@ -943,6 +949,128 @@ describe('workflow panel — T2 zone dashboard: three zones + fixed footer + cor
       if (value === '' || /^0(\s+0)*$/.test(value)) continue // zero reset, not a metric
       expect(value).toMatch(/var\(--mstar-space-/)
     }
+  })
+})
+
+describe('workflow panel — T3 iteration zone: Step stepper + header + branches + disabled (spec panel-zones §3/§8)', () => {
+  const html = panelHtml(fullSource)
+
+  it('active zone: header carries the iteration id, active note and Step N/5 label', () => {
+    // fullSource: transition phase-2-execute → autonomous-execute → currentStep 2.
+    expect(html).toContain('data-zone="iteration"')
+    expect(html).toContain('data-iteration-active="true"')
+    expect(html).toContain('data-iteration-id="iter-20260809-dsh-workflow-viz"')
+    expect(html).toContain('data-iteration-active-note')
+    expect(html).toContain('active iteration')
+    expect(html).toContain('data-iteration-step-label="Step 2/5"')
+    expect(html).toContain('Step 2/5')
+    // The inactive note must not leak into the active zone.
+    expect(html).not.toContain('data-iteration-inactive-note')
+    expect(html).not.toContain('iteration inactive')
+  })
+
+  it('stepper: 5 steps in order, current/next/idle states, current-step verdict badge', () => {
+    // All five Step N rows (1-based, PHASE_IDS order).
+    for (const n of [1, 2, 3, 4, 5]) expect(html).toContain(`data-step="${n}"`)
+    // Phase names ride the zone.phase.* keys (the graph.phase.* wording moved).
+    expect(html).toContain('Iteration Start')
+    expect(html).toContain('Autonomous Execute')
+    expect(html).toContain('Iteration Close')
+    expect(html).toContain('PR Delivery')
+    expect(html).toContain('Merge Ready')
+    // States: exactly one current (step 2) + one next (step 3), three idle.
+    expect(html.match(/data-step-state="current"/g)).toHaveLength(1)
+    expect(html.match(/data-step-state="next"/g)).toHaveLength(1)
+    expect(html.match(/data-step-state="idle"/g)).toHaveLength(3)
+    expect(html).toMatch(/data-step="2"[^>]*data-step-state="current"/)
+    expect(html).toMatch(/data-step="3"[^>]*data-step-state="next"/)
+    // State chips (localized labels).
+    expect(html).toContain('current')
+    expect(html).toContain('next')
+    expect(html).toContain('idle')
+    // Current-step verdict badge (fixture gate.ok → pass).
+    expect(html).toContain('data-iteration-verdict="pass"')
+    // Connectors: 4 between the 5 steps; only the segment leading INTO the
+    // current step is lit (spec §3 — no "completed" checkmarks).
+    expect(html.match(/data-step-connector="true"/g)).toHaveLength(4)
+    expect(html).toContain('data-step-connector-state="lit"')
+    expect(html.match(/data-step-connector-state="dim"/g)).toHaveLength(3)
+  })
+
+  it('FAIL gate → the current-step verdict badge carries data-iteration-verdict="fail"', () => {
+    const failHtml = panelHtml(failGateSource)
+    expect(failHtml).toContain('data-iteration-active="true"')
+    expect(failHtml).toContain('data-iteration-verdict="fail"')
+  })
+
+  it('branch panel renders only while active: three data-branch rows with the state values', () => {
+    expect(html).toContain('data-iteration-branches')
+    expect(html).toContain('data-branches-title')
+    expect(html).toContain('Branches')
+    // Three rows (spec §3 — state.iterationBaseBranch / targetBranch / specIntegrationBranch).
+    expect(html).toContain('data-branch="iteration-base"')
+    expect(html).toContain('data-branch="target"')
+    expect(html).toContain('data-branch="spec-integration"')
+    expect(html).toContain('iteration base')
+    expect(html).toContain('target')
+    expect(html).toContain('spec integration')
+    expect(html).toContain('dev-dsh')
+    expect(html).toContain('iteration/iter-20260809-dsh-workflow-viz')
+  })
+
+  it('disabled state (no iteration / unresolvable transition): dimmed zone + muted note, 5 idle steps, no branches, no orange frame', () => {
+    const g = panelHtml(noGateSource)
+    expect(g).toContain('data-zone="iteration"')
+    expect(g).toContain('data-iteration-active="false"')
+    expect(g).toContain('data-iteration-inactive-note')
+    expect(g).toContain('iteration inactive')
+    // All five steps stay as the idle skeleton (spec §8) — no current/next.
+    expect(g.match(/data-step-state="idle"/g)).toHaveLength(5)
+    expect(g).not.toContain('data-step-state="current"')
+    expect(g).not.toContain('data-step-state="next"')
+    // The Step N/5 label and the verdict badge are current-step-only → absent.
+    expect(g).not.toContain('data-iteration-step-label')
+    expect(g).not.toContain('data-iteration-verdict')
+    // Branches render ONLY while active (spec §3) → no branch anchors at all.
+    expect(g).not.toContain('data-iteration-branches')
+    expect(g).not.toContain('data-branch=')
+    // A dimmed zone, not an orange warn frame (the react-flow note stays gone).
+    expect(g).not.toContain('data-graph-empty="no-compass"')
+    expect(g).not.toContain('No steering compass / status.json')
+  })
+
+  it('garbage iteration field → the same muted disabled zone, never a crash', () => {
+    const garbage = panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusSource)
+    expect(garbage).toContain('data-mstar-canvas')
+    expect(garbage).toContain('data-zone="iteration"')
+    expect(garbage).toContain('data-iteration-active="false"')
+    expect(garbage).toContain('iteration inactive')
+    expect(garbage).not.toContain('data-branch=')
+  })
+
+  it('zh locale: phase names, Step N/5 label, state chips and branch labels localize', () => {
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-iteration-active="true"')
+    expect(zhHtml).toContain('data-iteration-step-label="步骤 2/5"')
+    expect(zhHtml).toContain('正在激活的迭代')
+    expect(zhHtml).toContain('迭代启动')
+    expect(zhHtml).toContain('自主执行')
+    expect(zhHtml).toContain('迭代收口')
+    expect(zhHtml).toContain('PR 交付')
+    expect(zhHtml).toContain('合并就绪')
+    expect(zhHtml).toContain('当前')
+    expect(zhHtml).toContain('下一步')
+    expect(zhHtml).toContain('待命')
+    expect(zhHtml).toContain('分支')
+    expect(zhHtml).toContain('迭代 base')
+    expect(zhHtml).toContain('目标分支')
+    expect(zhHtml).toContain('spec 集成分支')
+    // en phase labels must not leak into the zh body.
+    expect(zhHtml).not.toContain('Autonomous Execute')
+    // The zh disabled note localizes too.
+    const zhInactive = panelHtml(noGateSource, undefined, undefined, 'zh')
+    expect(zhInactive).toContain('data-iteration-active="false"')
+    expect(zhInactive).toContain('迭代未激活')
   })
 })
 

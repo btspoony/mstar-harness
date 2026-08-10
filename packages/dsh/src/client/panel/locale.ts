@@ -12,6 +12,13 @@
  * gate-summary keys, and the new `zone.*` family covers the three zone
  * titles/placeholders + the zone-semantic legend. The `flow.*` key family
  * (agent-flow event dock) is unchanged.
+ *
+ * T3 (spec panel-zones §3): the iteration zone is filled in — `zone.phase.*`
+ * (the 5 PHASE_IDS names, the `graph.phase.*` wording moved into the zone
+ * namespace), `zone.iteration.*` (active/inactive notes, Step N/5 label,
+ * Step N badge, step-state chips) and `zone.branches.*` (the branch panel
+ * moved from the sidebar). `zone.iteration.placeholder` is gone with the
+ * placeholder.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -43,7 +50,22 @@ export type PanelKey =
   | 'zone.legend.flow-actual'
   | 'zone.legend.flow-unexpected'
   | 'zone.iteration.title'
-  | 'zone.iteration.placeholder'
+  | 'zone.iteration.active'
+  | 'zone.iteration.inactive'
+  | 'zone.iteration.step-label'
+  | 'zone.iteration.step-badge'
+  | 'zone.iteration.step.current'
+  | 'zone.iteration.step.next'
+  | 'zone.iteration.step.idle'
+  | 'zone.phase.iteration-start'
+  | 'zone.phase.autonomous-execute'
+  | 'zone.phase.iteration-close'
+  | 'zone.phase.pr-delivery'
+  | 'zone.phase.merge-ready'
+  | 'zone.branches.title'
+  | 'zone.branches.iteration-base'
+  | 'zone.branches.target'
+  | 'zone.branches.spec-integration'
   | 'zone.tasks.title'
   | 'zone.tasks.placeholder'
   | 'zone.agents.title'
@@ -108,7 +130,22 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-actual': '实际派发（实心）',
   'zone.legend.flow-unexpected': '未匹配角色（描边）',
   'zone.iteration.title': '迭代',
-  'zone.iteration.placeholder': '迭代区（Step N / 分支）待实现',
+  'zone.iteration.active': '正在激活的迭代',
+  'zone.iteration.inactive': '迭代未激活',
+  'zone.iteration.step-label': '步骤 {n}/{total}',
+  'zone.iteration.step-badge': '步骤 {n}',
+  'zone.iteration.step.current': '当前',
+  'zone.iteration.step.next': '下一步',
+  'zone.iteration.step.idle': '待命',
+  'zone.phase.iteration-start': '迭代启动',
+  'zone.phase.autonomous-execute': '自主执行',
+  'zone.phase.iteration-close': '迭代收口',
+  'zone.phase.pr-delivery': 'PR 交付',
+  'zone.phase.merge-ready': '合并就绪',
+  'zone.branches.title': '分支',
+  'zone.branches.iteration-base': '迭代 base',
+  'zone.branches.target': '目标分支',
+  'zone.branches.spec-integration': 'spec 集成分支',
   'zone.tasks.title': '任务',
   'zone.tasks.placeholder': '任务 kanban 待实现',
   'zone.agents.title': '代理执行',
@@ -168,7 +205,22 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-actual': 'actual dispatch (filled)',
   'zone.legend.flow-unexpected': 'unexpected role (outlined)',
   'zone.iteration.title': 'Iteration',
-  'zone.iteration.placeholder': 'Iteration zone (Step N / branches) pending',
+  'zone.iteration.active': 'active iteration',
+  'zone.iteration.inactive': 'iteration inactive',
+  'zone.iteration.step-label': 'Step {n}/{total}',
+  'zone.iteration.step-badge': 'Step {n}',
+  'zone.iteration.step.current': 'current',
+  'zone.iteration.step.next': 'next',
+  'zone.iteration.step.idle': 'idle',
+  'zone.phase.iteration-start': 'Iteration Start',
+  'zone.phase.autonomous-execute': 'Autonomous Execute',
+  'zone.phase.iteration-close': 'Iteration Close',
+  'zone.phase.pr-delivery': 'PR Delivery',
+  'zone.phase.merge-ready': 'Merge Ready',
+  'zone.branches.title': 'Branches',
+  'zone.branches.iteration-base': 'iteration base',
+  'zone.branches.target': 'target',
+  'zone.branches.spec-integration': 'spec integration',
   'zone.tasks.title': 'Tasks',
   'zone.tasks.placeholder': 'Task kanban pending',
   'zone.agents.title': 'Agent Flow',
