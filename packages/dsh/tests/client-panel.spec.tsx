@@ -986,7 +986,9 @@ describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline
     expect(slice('phase', 'merge-ready')).toContain('data-handleid="source:bottom"')
     // State machine topology: vertical chain bottom→top + the side-by-side
     // Blocked branch right↔left; Done is terminal (target only); unknown is
-    // disconnected (no handles at all).
+    // sink-only — it accepts the connector edge inbound (target:top, when
+    // unknown is the most-planned lit bucket) but exposes no source handles
+    // (no outbound edges; T3-review M1).
     const inProgress = slice('state', 'InProgress')
     expect(inProgress).toContain('data-handleid="target:top"')
     expect(inProgress).toContain('data-handleid="source:bottom"')
@@ -998,7 +1000,9 @@ describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline
     const done = slice('state', 'Done')
     expect(done).toContain('data-handleid="target:top"')
     expect(done).not.toContain('data-handleid="source:bottom"')
-    expect(slice('state', 'unknown')).not.toContain('data-handleid')
+    const unknown = slice('state', 'unknown')
+    expect(unknown).toContain('data-handleid="target:top"')
+    expect(unknown).not.toContain('data-handleid="source:')
   })
 
   it('empty ledger (0 events) → empty-state note, skeleton unlit, strip count 0', () => {

@@ -179,7 +179,10 @@ function PhaseNode({ data }: NodeProps<PhaseFlowNode>) {
  * Plan-state machine connection points (spec §2.6 topology): the vertical
  * chain Todo→InProgress→InReview→Done runs bottom→top; InProgress→Blocked
  * and Blocked→InProgress run right↔left (side-by-side column). `unknown` is
- * terminal + disconnected (no handles, no edges).
+ * terminal: it accepts the connector edge inbound (`target:top` — when
+ * `unknown` is the most-planned lit bucket the connector edge targets it,
+ * and a handle-less target would be silently dropped by ReactFlow v12) but
+ * exposes NO source handles (no outbound edges).
  */
 const STATE_HANDLES: Record<PlanStateId, readonly HandleSpec[]> = {
   Todo: [
@@ -203,7 +206,11 @@ const STATE_HANDLES: Record<PlanStateId, readonly HandleSpec[]> = {
     { type: 'target', position: Position.Left, id: 'target:left' },
     { type: 'source', position: Position.Left, id: 'source:left' },
   ],
-  unknown: [],
+  unknown: [
+    // Sink-only: inbound connector edge (current phase → active bucket when
+    // unknown is the most-planned lit bucket); no outbound edges.
+    { type: 'target', position: Position.Top, id: 'target:top' },
+  ],
 }
 
 /** Plan-state box node: bucket label + count badge + plan id rows. */
