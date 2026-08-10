@@ -29,11 +29,12 @@
  *   assert existence, not just path shape, because upstream `resolveMeta`
  *   joins the export path onto the package root and READS it at activation —
  *   a dangling export is a missing boot entry exactly like the root cause).
- *   Trade-off: `bun test` then requires a built bundle; when `dist/` is
- *   absent the test fails with a build hint instead of silently passing.
- *   `dist/` is a gitignored build artifact (the package's
- *   `prepare`/`prepublishOnly` scripts build it), so existence is the real
- *   contract, not a convenience.
+ *   Trade-off: the test then requires a built bundle; `bun run test` builds
+ *   it first via the `pretest` hook (`build-client`), and a direct `bun test`
+ *   on a fresh checkout fails with an actionable hint (run `bun run build`
+ *   first) instead of a bare false. `dist/` is a gitignored build artifact
+ *   (the package's `prepare`/`prepublishOnly` scripts build it), so existence
+ *   is the real contract, not a convenience.
  */
 import { describe, expect, it } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
@@ -85,6 +86,14 @@ describe('manifest contract: dsh.client (upstream client-modules discovery)', ()
     const resolved = join(PKG_DIR, defaultPath as string)
     // path-shape sanity on top of existence: must stay inside the package root
     expect(normalize(relative(PKG_DIR, resolved))).not.toMatch(/^\.\./)
-    expect(existsSync(resolved)).toBe(true)
+    // Existence is the real contract (upstream resolveMeta READS the file at
+    // activation — a dangling export is a missing boot entry exactly like the
+    // root cause). A missing dist is an actionable setup error, not a contract
+    // failure: `bun run test` auto-builds via the `pretest` hook; a direct
+    // `bun test` on a fresh checkout gets this hint.
+    expect(
+      existsSync(resolved),
+      `missing built client bundle at ${resolved} — run \`bun run build\` first (build-client + dist), then \`bun test\``,
+    ).toBe(true)
   })
 })

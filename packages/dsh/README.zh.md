@@ -173,6 +173,8 @@ bunx tsc --noEmit
 bun run build
 ```
 
+`bun run test` 会先构建客户端 bundle（`pretest` 钩子执行 `build-client`——manifest-contract 套件断言 `dist/client.js` 存在）；fresh checkout 下直接 `bun test` 会以 `bun run build` 提示失败而非裸断言。
+
 开发期 seam 表面（类型、事件形态、运行时）是来自本地 dsh 源码树的**真实** `@deepseek-ai/dsh-*` 包，由 link farm（`bun run dsh:link`，dsh-advisor 模式）symlink 进仓库根 `node_modules/@deepseek-ai/`；dsh 基线（`$DSH_SOURCE_DIR` / `$DSH_HOME/source/current`）移动后需重新运行。
 
 ## Model Experience

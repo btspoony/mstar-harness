@@ -42,6 +42,7 @@
     }
   },
   "scripts": {
+    "pretest": "bun run build-client",
     "test": "bun test",
     "typecheck:tests": "bunx tsc --noEmit -p tests/tsconfig.json",
     "dsh:link": "bun run scripts/setup-dsh-links.ts",

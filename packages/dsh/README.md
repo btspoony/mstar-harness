@@ -232,6 +232,11 @@ bunx tsc --noEmit
 bun run build
 ```
 
+`bun run test` builds the client bundle first (the `pretest` hook runs
+`build-client` — the manifest-contract suite asserts `dist/client.js` exists);
+a direct `bun test` on a fresh checkout fails with a `bun run build` hint
+instead of a bare assertion.
+
 The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepseek-ai/dsh-*` packages from a local dsh source tree, linked into the repo-root `node_modules/@deepseek-ai/` by the link farm (`bun run dsh:link`, dsh-advisor pattern); re-run it after the dsh baseline (`$DSH_SOURCE_DIR` / `$DSH_HOME/source/current`) moves.
 
 ## Model Experience
