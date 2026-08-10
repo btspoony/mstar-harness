@@ -84,8 +84,12 @@ export interface DispatchGateAdvisory {
  * stay silent — no false-positive warnings. Callers MUST pass the engine
  * `assignmentHeaderRegion` slice: a `## Assignment` heading or
  * field line quoted in the task body must not shape a non-assignment prompt.
+ * Exported for the agent-flow ledger's shape guard (qc2 F-2 — the shared
+ * `DshHostAdapter.dispatchGate` core applies the SAME guard on both dispatch
+ * surfaces, so the exec-less host-hook path records nothing for
+ * non-Assignment text either).
  */
-function isAssignmentShaped(assignmentText: string): boolean {
+export function isAssignmentShaped(assignmentText: string): boolean {
   return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null
 }
 
@@ -179,19 +183,21 @@ function assignmentHeaderValues(headerRegion: string, label: string): string[] {
   return values
 }
 
-/** A header value that means "no value" (placeholder conventions). Type guard so callers narrow to `string`. */
-function isNaValue(value: string | undefined): value is undefined {
+/** A header value that means "no value" (placeholder conventions). Type guard so callers narrow to `string`. Shared with the agent-flow ledger (qc1 F-003 — one grammar, no copy-paste drift). */
+export function isNaValue(value: string | undefined): value is undefined {
   return value === undefined || /^(?:n\/?a|none)$/i.test(value)
 }
 
 /**
  * Resolve the target plan id from the Assignment HEADER region: `Plan Path`
  * basename (`.md` stripped), else `SDD dir` basename, else a `plan_id` field.
+ * Exported for the agent-flow ledger's dispatch derivation (the ledger
+ * records the same plan identity the gate resolved — one grammar).
  * @param headerRegion - `assignmentHeaderRegion(assignmentText)` (
  * only the header is read — a plan path quoted in the task body never
  * resolves a plan id).
  */
-function planIdOf(headerRegion: string): string | undefined {
+export function planIdOf(headerRegion: string): string | undefined {
   const planPath = assignmentHeaderValue(headerRegion, 'Plan Path')
   if (!isNaValue(planPath)) {
     const id = basename(firstToken(planPath) ?? '')
@@ -206,8 +212,13 @@ function planIdOf(headerRegion: string): string | undefined {
   return isNaValue(planId) ? undefined : planId
 }
 
-/** The dispatching session's stable id, when the seam exposes it (dsh Agent.id). */
-function sessionIdOf(exec: ToolExecution): string | undefined {
+/**
+ * The dispatching session's stable id, when the seam exposes it (dsh
+ * Agent.id). Exported for the agent-flow ledger's dispatch derivation (the
+ * ledger records the same agent identity the lease gate compares — one
+ * grammar).
+ */
+export function sessionIdOf(exec: ToolExecution): string | undefined {
   const agent = asRecord(exec.agent)
   const id = agent?.id
   return typeof id === 'string' && id.trim() !== '' ? id : undefined
@@ -532,8 +543,11 @@ function gateDispatch(
   // The adapter owns the shared dispatch-gate core; the exec context is
   // passed so the lease gate (session-id bound — see leaseGateViolations)
   // joins the SAME verdict as the field/branch/anti-recursion checks.
-  const result = adapter.dispatchGate(prompt, exec)
+  // `hard` resolves ONCE per dispatch (qc1 F-002 / qc2 F-3 / qc3 F-002 —
+  // fix-wave): the adapter's record block and this gate decision share the
+  // single resolution instead of each re-reading the compass.
   const hard = resolveDispatchHard(harnessDir, config, prompt)
+  const result = adapter.dispatchGate(prompt, exec, hard)
   const verdict = applyEnforcement(result, { hard })
   if (verdict.hardBlocked) {
     ctx.logger(DISPATCH_LOGGER).error(

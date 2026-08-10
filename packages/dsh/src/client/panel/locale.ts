@@ -8,6 +8,10 @@
  * T2 (spec panel-layout-graph §4): the iteration/gate detail moved into the
  * graph — the `iteration.*` keys were replaced by the `graph.*` family (phase
  * ring labels, plan-state bucket labels, legend, verdicts, degraded notes).
+ *
+ * T3 (spec agent-flow-catalog-graph §2.4): the expected/actual agent-flow
+ * pipeline — `flow.*` keys (event strip title, status labels, degraded/empty
+ * notes, unexpected) + `graph.legend.flow-*` legend labels.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -52,6 +56,19 @@ export type PanelKey =
   | 'graph.legend.state-idle'
   | 'graph.legend.verdict-pass'
   | 'graph.legend.verdict-fail'
+  | 'graph.legend.flow-expected'
+  | 'graph.legend.flow-actual'
+  | 'graph.legend.flow-unexpected'
+  | 'flow.title'
+  | 'flow.empty'
+  | 'flow.degraded'
+  | 'flow.unexpected'
+  | 'flow.in-flight'
+  | 'flow.settled-ok'
+  | 'flow.error'
+  | 'flow.advisory'
+  | 'flow.denied'
+  | 'flow.event-count'
   | 'graph.iteration-id'
   | 'graph.current'
   | 'graph.next'
@@ -124,6 +141,19 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'graph.legend.state-idle': '未点亮（schema）',
   'graph.legend.verdict-pass': 'gate PASS',
   'graph.legend.verdict-fail': 'gate FAIL',
+  'graph.legend.flow-expected': '预期 stage（空心）',
+  'graph.legend.flow-actual': '实际派发（实心）',
+  'graph.legend.flow-unexpected': '未匹配角色（描边）',
+  'flow.title': 'Agent 流转事件',
+  'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
+  'flow.degraded': 'agentFlow 证据缺失',
+  'flow.unexpected': '未匹配角色',
+  'flow.in-flight': '已派发',
+  'flow.settled-ok': '已结算',
+  'flow.error': '出错',
+  'flow.advisory': '提示',
+  'flow.denied': '拒绝',
+  'flow.event-count': '{count} 条',
   'graph.iteration-id': '迭代',
   'graph.current': '当前',
   'graph.next': '下一步',
@@ -191,6 +221,19 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'graph.legend.state-idle': 'unlit (schema)',
   'graph.legend.verdict-pass': 'gate PASS',
   'graph.legend.verdict-fail': 'gate FAIL',
+  'graph.legend.flow-expected': 'expected stage (hollow)',
+  'graph.legend.flow-actual': 'actual dispatch (filled)',
+  'graph.legend.flow-unexpected': 'unexpected role (outlined)',
+  'flow.title': 'Agent flow events',
+  'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
+  'flow.degraded': 'No agent-flow evidence (ledger missing)',
+  'flow.unexpected': 'Unexpected roles',
+  'flow.in-flight': 'dispatched',
+  'flow.settled-ok': 'settled ok',
+  'flow.error': 'error',
+  'flow.advisory': 'advisory',
+  'flow.denied': 'denied',
+  'flow.event-count': '{count} events',
   'graph.iteration-id': 'iteration',
   'graph.current': 'current',
   'graph.next': 'next',

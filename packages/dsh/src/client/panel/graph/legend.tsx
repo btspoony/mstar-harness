@@ -1,8 +1,8 @@
 /**
- * Graph legend (spec panel-layout-graph §4): the footer-left readibility aid —
- * phase ring / plan state machine / edge kinds / highlight meanings as
- * swatch + label rows. Pure render of the `t` seat; every label is a
- * `graph.legend.*` locale key.
+ * Graph legend (spec panel-layout-graph §4 + agent-flow-catalog-graph §2.4):
+ * the footer-left readibility aid — phase ring / plan state machine / agent
+ * flow pipeline / edge kinds / highlight meanings as swatch + label rows.
+ * Pure render of the `t` seat; every label is a `graph.legend.*` locale key.
  */
 
 import * as React from 'react'
@@ -25,6 +25,12 @@ export function Legend({ t }: LegendProps) {
     { key: 'idle', swatch: css.swatchIdle, label: t('graph.legend.state-idle') },
     { key: 'pass', swatch: css.swatchPass, label: t('graph.legend.verdict-pass') },
     { key: 'fail', swatch: css.swatchFail, label: t('graph.legend.verdict-fail') },
+    // Agent-flow pipeline (spec agent-flow-catalog-graph §2.4): hollow =
+    // expected stage skeleton, filled = actual dispatch evidence, outlined =
+    // unexpected (off-pipeline) role events.
+    { key: 'flow-expected', swatch: css.swatchFlowExpected, label: t('graph.legend.flow-expected') },
+    { key: 'flow-actual', swatch: css.swatchFlowActual, label: t('graph.legend.flow-actual') },
+    { key: 'flow-unexpected', swatch: css.swatchFlowUnexpected, label: t('graph.legend.flow-unexpected') },
   ]
   return (
     <div className={css.legend} data-mstar-legend>

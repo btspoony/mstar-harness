@@ -142,6 +142,55 @@ export interface MstarHarnessState {
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
   /** Steering compass direction one-liner (problem statement digest), null when unavailable. */
   readonly direction: string | null
+  /**
+   * Actual subagent flow evidence (the agent-flow ledger read — spec
+   * §2.1.3/§2.2): the latest dispatch/settle events (≤50) plus a role ×
+   * outcome summary over the same window. Null when the ledger file is
+   * missing or unreadable (advisory degrade — the agent-flow line is absent
+   * from the model text). Rendered text stays ~1 compact line (only when
+   * `events.length > 0`); the event detail lives in this structured source
+   * only. Same TTL as the rest of the state section (the catalog cache
+   * refreshes the ledger read at most once per `catalogTtlMs`).
+   */
+  readonly agentFlow: AgentFlowView | null
+}
+
+/**
+ * One agent-flow ledger event in the catalog view. Optional dispatch/settle
+ * fields are OMITTED (never `undefined`-valued properties — `Session.append`
+ * rejects non-lossless JSON) using the `iterationViolationView` omit pattern.
+ */
+export interface AgentFlowEventView {
+  readonly ts: number
+  readonly kind: 'dispatch' | 'settle'
+  /** The session's stable id; null when the event carried none. */
+  readonly agent: string | null
+  /** Assignment `Execute as` ('' for settle rows — settles carry no role). */
+  readonly role: string
+  readonly planId: string | null
+  readonly taskId: string | null
+  readonly taskCategory: string | null
+  /** Dispatch gate verdict (dispatch events only). */
+  readonly verdict?: 'ok' | 'advisory' | 'denied'
+  /** resolveDispatchHard result (dispatch events only). */
+  readonly hard?: boolean
+  /** Settle outcome (settle events only). */
+  readonly outcome?: 'ok' | 'error' | 'denied'
+  /** Settle duration in ms (settle events only, when recorded). */
+  readonly durationMs?: number | null
+}
+
+/** One role × outcome count of the agent-flow summary (count desc). */
+export interface AgentFlowSummaryRow {
+  readonly role: string
+  readonly outcome: string
+  readonly count: number
+}
+
+/** The catalog's agent-flow evidence: latest events first (≤ limit) + summary. */
+export interface AgentFlowView {
+  readonly events: readonly AgentFlowEventView[]
+  readonly summary: readonly AgentFlowSummaryRow[]
 }
 
 declare module '@deepseek-ai/dsh-llm' {

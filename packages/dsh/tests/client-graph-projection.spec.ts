@@ -1,11 +1,15 @@
 /**
- * Pure projection tests for `projectGraph` (spec panel-layout-graph §2.1–§2.5):
- * the total function maps an `mstar-engine-status` catalog source to a
- * `GraphView` — phase ring (schema constants + `gate.transition` evidence),
- * plan state machine (schema constants + `state.plans[].status` evidence),
- * current-phase highlight + next edge, PASS/FAIL verdict + violation count,
- * and the connector (current phase → most-populated lit non-Done/Blocked
- * bucket, machine-order tie-break).
+ * Pure projection tests for `projectGraph` (spec panel-layout-graph §2.1–§2.5
+ * + agent-flow-catalog-graph §2.3/§2.4): the total function maps an
+ * `mstar-engine-status` catalog source to a `GraphView` — phase ring (schema
+ * constants + `gate.transition` evidence), plan state machine (schema
+ * constants + `state.plans[].status` evidence), current-phase highlight +
+ * next edge, PASS/FAIL verdict + violation count, the connector (current
+ * phase → most-populated lit non-Done/Blocked bucket, machine-order
+ * tie-break), and the flow section (`state.agentFlow` evidence projected onto
+ * the `EXPECTED_ROLE_FLOW` skeleton: stage lit/count, latest-first events
+ * ≤50, unexpected off-pipeline-role dispatches, status coloring, the
+ * best-effort settle→dispatch pairing, degraded/empty flags).
  *
  * Degradation contract (AC-3, §2.5): missing/illegal fields set the matching
  * `degraded` flag and render as `unknown`/idle — the function NEVER throws and
@@ -19,10 +23,11 @@
 
 import { describe, expect, it } from 'bun:test'
 import type { MstarEngineStatusSource } from '../src/types'
+import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { projectGraph } from '../src/client/panel/graph/project-graph'
 import {
-  PHASE_EDGES, PLAN_STATE_EDGES,
+  EXPECTED_ROLE_FLOW, PHASE_EDGES, PLAN_STATE_EDGES,
   type PhaseId, type PlanStateId,
 } from '../src/client/panel/graph/schema'
 
@@ -67,6 +72,7 @@ const fullSource: MstarEngineStatusSource = {
     leases: [],
     knowledge: null,
     direction: null,
+    agentFlow: null,
   },
 }
 
@@ -444,5 +450,365 @@ describe('projectGraph — GraphView shape (spec §2.2)', () => {
     const stateIds: PlanStateId[] = view.planStates.map((s) => s.id)
     expect(phaseIds).toContain('merge-ready')
     expect(stateIds).toContain('unknown')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Flow projection (spec agent-flow-catalog-graph §2.3/§2.4): `state.agentFlow`
+ * evidence projected onto the EXPECTED_ROLE_FLOW skeleton — stage lit/count,
+ * latest-first events (≤50), unexpected off-pipeline-role dispatches, status
+ * coloring, the best-effort settle→dispatch pairing, and degraded/empty.
+ * ------------------------------------------------------------------------- */
+
+/** One dispatch row as the T1 ledger view emits it (spec §2.2). */
+function dispatchRow(over: {
+  ts: number
+  role: string
+  agent?: string
+  planId?: string
+  taskId?: string
+  verdict?: 'ok' | 'advisory' | 'denied'
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'dispatch',
+    agent: over.agent ?? null,
+    role: over.role,
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
+    taskCategory: null,
+    ...(over.verdict !== undefined ? { verdict: over.verdict } : {}),
+  }
+}
+
+/** One settle row as the T1 ledger view emits it (spec §2.2 — carries no role). */
+function settleRow(over: {
+  ts: number
+  agent?: string
+  outcome?: 'ok' | 'error' | 'denied'
+  durationMs?: number
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'settle',
+    agent: over.agent ?? null,
+    role: '',
+    planId: null,
+    taskId: null,
+    taskCategory: null,
+    ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
+    ...(over.durationMs !== undefined ? { durationMs: over.durationMs } : {}),
+  }
+}
+
+/** A full source whose `state.agentFlow` carries the given events (latest-first). */
+function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
+  return {
+    ...fullSource,
+    state: {
+      ...fullSource.state!,
+      // The ledger view type is satisfied by the projection's guarded reads;
+      // garbage rows are passed through the unknown-typed events array.
+      agentFlow: { events, summary: [] } as unknown as AgentFlowView,
+    },
+  }
+}
+
+describe('projectGraph — EXPECTED_ROLE_FLOW schema (spec agent-flow-catalog-graph §2.3)', () => {
+  it('is the fixed 6-stage pipeline with the spec\'d exact role vocabularies', () => {
+    expect(EXPECTED_ROLE_FLOW).toHaveLength(6)
+    expect(EXPECTED_ROLE_FLOW.map((s) => `${s.phase}:${s.stage}`)).toEqual([
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+    ])
+    expect(EXPECTED_ROLE_FLOW[0]!.roles).toEqual(['product-manager', 'architect', 'writing-specialist'])
+    expect(EXPECTED_ROLE_FLOW[1]!.roles).toEqual(['fullstack-dev', 'fullstack-dev-2', 'frontend-dev'])
+    // sdd-task-review = the mstar-sdd L2 reviewer role generalPurpose (NOT qc-specialist*).
+    expect(EXPECTED_ROLE_FLOW[2]!.roles).toEqual(['generalPurpose'])
+    expect(EXPECTED_ROLE_FLOW[3]!.roles).toEqual(['qc-specialist', 'qc-specialist-2', 'qc-specialist-3'])
+    expect(EXPECTED_ROLE_FLOW[4]!.roles).toEqual(['qa-engineer'])
+    expect(EXPECTED_ROLE_FLOW[5]!.roles).toEqual(['ops-engineer'])
+    // Phase 3–5 have no stages (no routine subagent dispatch) — every stage
+    // lives in Phase 1–2 (spec §2.3).
+    for (const s of EXPECTED_ROLE_FLOW) {
+      expect(['iteration-start', 'autonomous-execute']).toContain(s.phase)
+    }
+  })
+})
+
+describe('projectGraph — flow degraded/empty (spec agent-flow-catalog-graph §2.4)', () => {
+  it('agentFlow null (ledger absent) → degraded skeleton, no events, nothing lit', () => {
+    const flow = projectGraph(fullSource).flow
+    expect(flow.degraded).toBe(true)
+    expect(flow.empty).toBe(false)
+    expect(flow.events).toEqual([])
+    expect(flow.unexpected).toEqual([])
+    expect(flow.stages).toHaveLength(6)
+    expect(flow.stages.every((s) => !s.lit && s.count === 0)).toBe(true)
+    expect(flow.stages.map((s) => s.id)).toEqual([
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+    ])
+  })
+
+  it('source null / state null → same degraded marker (total function)', () => {
+    expect(projectGraph(null).flow.degraded).toBe(true)
+    expect(projectGraph(noHarnessSource).flow.degraded).toBe(true)
+  })
+
+  it('agentFlow empty view (0 events) → empty, NOT degraded (qc1 F-001 fix-wave: a MISSING ledger file now reads as this empty view — the panel shows the no-dispatches-yet state, recording starts at plan merge)', () => {
+    const flow = projectGraph(flowSource([])).flow
+    expect(flow.degraded).toBe(false)
+    expect(flow.empty).toBe(true)
+    expect(flow.events).toEqual([])
+    expect(flow.stages.every((s) => !s.lit)).toBe(true)
+  })
+
+  it('unreadable agentFlow (non-object / events non-array) → degraded, never throws', () => {
+    const project = (agentFlow: unknown) => projectGraph({
+      ...fullSource,
+      state: { ...fullSource.state!, agentFlow },
+    } as unknown as MstarEngineStatusSource).flow
+    for (const bad of [42, 'nope', [], { events: 'nope' }, { events: 42 }, { no: 'events' }]) {
+      expect(() => project(bad)).not.toThrow()
+      expect(project(bad).degraded).toBe(true)
+      expect(project(bad).empty).toBe(false)
+      expect(project(bad).events).toEqual([])
+      expect(project(bad).stages.every((s) => !s.lit)).toBe(true)
+    }
+  })
+})
+
+describe('projectGraph — flow stage lighting (spec agent-flow-catalog-graph §2.3)', () => {
+  it('each expected role lights its stage with count; exact stage mapping', () => {
+    const flow = projectGraph(flowSource([
+      dispatchRow({ ts: 6, role: 'frontend-dev' }),    // sdd-implement
+      dispatchRow({ ts: 5, role: 'generalPurpose' }),  // sdd-task-review
+      dispatchRow({ ts: 4, role: 'qc-specialist-2' }), // qc-tri (exact string)
+      dispatchRow({ ts: 3, role: 'product-manager' }), // review-edit-chain
+      dispatchRow({ ts: 2, role: 'qa-engineer' }),     // qa-gate
+      dispatchRow({ ts: 1, role: 'ops-engineer' }),    // ops-on-demand
+    ])).flow
+    const byId = new Map(flow.stages.map((s) => [s.id, s]))
+    for (const id of [
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+    ]) {
+      expect(byId.get(id)!.lit).toBe(true)
+      expect(byId.get(id)!.count).toBe(1)
+    }
+    const byRole = new Map(flow.events.map((e) => [e.role, e]))
+    expect(byRole.get('frontend-dev')!.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    expect(byRole.get('generalPurpose')!.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-task-review' })
+    expect(byRole.get('qc-specialist-2')!.stage).toEqual({ phase: 'autonomous-execute', stage: 'qc-tri' })
+    expect(byRole.get('product-manager')!.stage).toEqual({ phase: 'iteration-start', stage: 'review-edit-chain' })
+    expect(byRole.get('qa-engineer')!.stage).toEqual({ phase: 'autonomous-execute', stage: 'qa-gate' })
+    expect(byRole.get('ops-engineer')!.stage).toEqual({ phase: 'autonomous-execute', stage: 'ops-on-demand' })
+    expect(flow.events.every((e) => e.expected)).toBe(true)
+    expect(flow.unexpected).toEqual([])
+  })
+
+  it('multiple dispatches of one role accumulate the stage count', () => {
+    const flow = projectGraph(flowSource([
+      dispatchRow({ ts: 3, role: 'fullstack-dev' }),
+      dispatchRow({ ts: 2, role: 'fullstack-dev' }),
+      dispatchRow({ ts: 1, role: 'frontend-dev' }),
+    ])).flow
+    const implement = flow.stages.find((s) => s.id === 'autonomous-execute:sdd-implement')!
+    expect(implement.lit).toBe(true)
+    expect(implement.count).toBe(3)
+  })
+
+  it('exact-string matching: qc-specialist-4 / fullstack-dev-9 are NOT folded → unexpected', () => {
+    const flow = projectGraph(flowSource([
+      dispatchRow({ ts: 3, role: 'qc-specialist-4' }),
+      dispatchRow({ ts: 2, role: 'fullstack-dev-9' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev' }),
+    ])).flow
+    const qcTri = flow.stages.find((s) => s.id === 'autonomous-execute:qc-tri')!
+    const implement = flow.stages.find((s) => s.id === 'autonomous-execute:sdd-implement')!
+    expect(qcTri.lit).toBe(false)
+    expect(qcTri.count).toBe(0)
+    expect(implement.count).toBe(1)
+    expect(flow.unexpected.map((e) => e.role)).toEqual(['qc-specialist-4', 'fullstack-dev-9'])
+    const qc4 = flow.events.find((e) => e.role === 'qc-specialist-4')!
+    expect(qc4.expected).toBe(false)
+    expect(qc4.stage).toBeNull()
+  })
+
+  it('settle rows carry no role: they never light a stage, never flag unexpected', () => {
+    const flow = projectGraph(flowSource([
+      dispatchRow({ ts: 3, role: 'frontend-dev', agent: 'a1' }),
+      settleRow({ ts: 2, agent: 'a1', outcome: 'ok' }),
+      dispatchRow({ ts: 1, role: 'scout' }), // off-pipeline dispatch → unexpected
+    ])).flow
+    const implement = flow.stages.find((s) => s.id === 'autonomous-execute:sdd-implement')!
+    expect(implement.count).toBe(1) // settles never count toward a stage
+    const settle = flow.events.find((e) => e.kind === 'settle')!
+    expect(settle.role).toBe('')
+    expect(settle.expected).toBe(false)
+    expect(settle.stage).toBeNull()
+    // unexpected = off-pipeline-role DISPATCHES only — settles never appear.
+    expect(flow.unexpected.map((e) => e.role)).toEqual(['scout'])
+  })
+
+  it('a dispatch with a missing role (\'\') is unplaceable → unexpected', () => {
+    const flow = projectGraph(flowSource([dispatchRow({ ts: 1, role: '' })])).flow
+    expect(flow.events[0]!.expected).toBe(false)
+    expect(flow.events[0]!.stage).toBeNull()
+    expect(flow.unexpected.map((e) => e.role)).toEqual([''])
+  })
+})
+
+describe('projectGraph — flow status coloring (spec agent-flow-catalog-graph §2.4)', () => {
+  it('dispatch verdict → dispatched|advisory|denied; settle outcome → ok|error|denied', () => {
+    const flow = projectGraph(flowSource([
+      dispatchRow({ ts: 6, role: 'fullstack-dev', verdict: 'ok' }),
+      dispatchRow({ ts: 5, role: 'fullstack-dev', verdict: 'advisory' }),
+      dispatchRow({ ts: 4, role: 'fullstack-dev', verdict: 'denied' }),
+      settleRow({ ts: 3, outcome: 'ok' }),
+      settleRow({ ts: 2, outcome: 'error' }),
+      settleRow({ ts: 1, outcome: 'denied' }),
+    ])).flow
+    expect(flow.events.map((e) => e.status)).toEqual(['dispatched', 'advisory', 'denied', 'ok', 'error', 'denied'])
+  })
+
+  it('missing/illegal verdict or outcome degrades to the kind base (never a guessed error/denied)', () => {
+    const flow = projectGraph(flowSource([
+      dispatchRow({ ts: 4, role: 'fullstack-dev' }), // no verdict
+      { ts: 3, kind: 'dispatch', agent: null, role: 'fullstack-dev', planId: null, taskId: null, taskCategory: null, verdict: 'banana' },
+      settleRow({ ts: 2 }),                          // no outcome
+      { ts: 1, kind: 'settle', agent: null, role: '', planId: null, taskId: null, taskCategory: null, outcome: 'bogus' },
+    ])).flow
+    expect(flow.events.map((e) => e.status)).toEqual(['dispatched', 'dispatched', 'ok', 'ok'])
+  })
+})
+
+describe('projectGraph — flow event window & ids (spec agent-flow-catalog-graph §2.4)', () => {
+  it('keeps only the latest 50 events, latest-first', () => {
+    const events = Array.from({ length: 60 }, (_, i) => dispatchRow({ ts: 60 - i, role: 'fullstack-dev' }))
+    const flow = projectGraph(flowSource(events)).flow
+    expect(flow.events).toHaveLength(50)
+    expect(flow.events[0]!.ts).toBe(60)
+    expect(flow.events[49]!.ts).toBe(11)
+    expect(flow.stages.find((s) => s.id === 'autonomous-execute:sdd-implement')!.count).toBe(50)
+    expect(flow.degraded).toBe(false)
+    expect(flow.empty).toBe(false)
+  })
+
+  it('id = `${ts}-${kind}-${index}` — unique even for equal ts+kind, stable across projections', () => {
+    const events = [
+      dispatchRow({ ts: 5, role: 'fullstack-dev' }),
+      dispatchRow({ ts: 5, role: 'fullstack-dev' }),
+      settleRow({ ts: 5 }),
+    ]
+    const ids = projectGraph(flowSource(events)).flow.events.map((e) => e.id)
+    expect(ids).toEqual(['5-dispatch-0', '5-dispatch-1', '5-settle-2'])
+    // Same source → same ids (React keys stay stable).
+    expect(projectGraph(flowSource(events)).flow.events.map((e) => e.id)).toEqual(ids)
+  })
+
+  it('unexpected list preserves the latest-first event order', () => {
+    const flow = projectGraph(flowSource([
+      dispatchRow({ ts: 4, role: 'scout' }),
+      dispatchRow({ ts: 3, role: 'general' }),
+      dispatchRow({ ts: 2, role: 'fullstack-dev' }),
+      settleRow({ ts: 1 }),
+    ])).flow
+    expect(flow.unexpected.map((e) => e.ts)).toEqual([4, 3])
+  })
+})
+
+describe('projectGraph — flow settled pairing heuristic (spec agent-flow-catalog-graph §2.3)', () => {
+  it('a settle pairs with the most recent same-agent dispatch BEFORE it in file order', () => {
+    // File order: D1(a1, t1) → D2(a1, t3) → S1(a1, t4); the catalog is latest-first.
+    const flow = projectGraph(flowSource([
+      settleRow({ ts: 4, agent: 'a1', outcome: 'ok' }),
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
+    ])).flow
+    const [s1, d2, d1] = flow.events
+    expect(d1!.settled).toBe(false)
+    expect(d2!.settled).toBe(true)
+    expect(s1!.settled).toBe(false) // settle rows are never "settled" themselves
+  })
+
+  it('different agents never pair', () => {
+    const flow = projectGraph(flowSource([
+      settleRow({ ts: 2, agent: 'a2', outcome: 'ok' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
+    ])).flow
+    expect(flow.events[1]!.settled).toBe(false)
+  })
+
+  it('a later dispatch of the same agent resets the pairing target', () => {
+    // File order: D1(a1,t1) → D2(a1,t3) → S1(a1,t4) → S2(a1,t5).
+    const flow = projectGraph(flowSource([
+      settleRow({ ts: 5, agent: 'a1', outcome: 'ok' }),
+      settleRow({ ts: 4, agent: 'a1', outcome: 'ok' }),
+      dispatchRow({ ts: 3, role: 'frontend-dev', agent: 'a1' }),
+      dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a1' }),
+    ])).flow
+    const [s2, s1, d2, d1] = flow.events
+    expect(d1!.settled).toBe(false)
+    expect(d2!.settled).toBe(true) // both settles pair to the most recent same-agent dispatch
+    expect(s1!.settled).toBe(false)
+    expect(s2!.settled).toBe(false)
+  })
+
+  it('an unpaired settle marks nothing; agent-less rows never pair', () => {
+    const flow = projectGraph(flowSource([
+      settleRow({ ts: 3, agent: 'a1', outcome: 'ok' }), // no prior a1 dispatch in the window
+      settleRow({ ts: 2, outcome: 'ok' }),              // agent null
+      dispatchRow({ ts: 1, role: 'fullstack-dev' }),    // agent null
+    ])).flow
+    expect(flow.events.every((e) => !e.settled)).toBe(true)
+  })
+})
+
+describe('projectGraph — flow totality (spec agent-flow-catalog-graph §2.4)', () => {
+  it('never throws on garbage rows; unclassifiable rows are skipped, valid rows still project', () => {
+    const source = flowSource([
+      42,
+      null,
+      'garbage',
+      { kind: 'banana', ts: 9 },                  // unclassifiable kind → skipped
+      { kind: 'dispatch', role: 42, ts: 8 },      // valid kind, garbage fields → degraded row
+      { kind: 'settle', outcome: 42, ts: 7 },     // valid kind, garbage outcome → base status
+      dispatchRow({ ts: 6, role: 'fullstack-dev', verdict: 'ok' }),
+      settleRow({ ts: 5, outcome: 'error', durationMs: 120 }),
+    ])
+    expect(() => projectGraph(source)).not.toThrow()
+    const flow = projectGraph(source).flow
+    expect(flow.events.map((e) => e.ts)).toEqual([8, 7, 6, 5])
+    expect(flow.events.map((e) => e.kind)).toEqual(['dispatch', 'settle', 'dispatch', 'settle'])
+    expect(flow.events.map((e) => e.status)).toEqual(['dispatched', 'ok', 'dispatched', 'error'])
+    expect(flow.events[3]!.durationMs).toBe(120)
+    expect(flow.unexpected.map((e) => e.role)).toEqual(['']) // the role-42 dispatch degrades to ''
+    expect(flow.stages.find((s) => s.id === 'autonomous-execute:sdd-implement')!.count).toBe(1)
+    expect(flow.degraded).toBe(false)
+    expect(flow.empty).toBe(false)
+  })
+
+  it('GraphView.flow is always present with the documented shape', () => {
+    const flow = projectGraph(fullSource).flow
+    const stageIds: string[] = flow.stages.map((s) => s.id)
+    expect(stageIds).toContain('autonomous-execute:sdd-implement')
+    expect(Array.isArray(flow.events)).toBe(true)
+    expect(Array.isArray(flow.unexpected)).toBe(true)
+    expect(typeof flow.degraded).toBe('boolean')
+    expect(typeof flow.empty).toBe('boolean')
   })
 })
