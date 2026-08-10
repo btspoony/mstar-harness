@@ -5,13 +5,13 @@
  * a typed `t` seat for the panel component (dictionary keys are checked
  * against the union by `LocaleDictOf`).
  *
- * T2 (spec panel-layout-graph §4): the iteration/gate detail moved into the
- * graph — the `iteration.*` keys were replaced by the `graph.*` family (phase
- * ring labels, plan-state bucket labels, legend, verdicts, degraded notes).
- *
- * T3 (spec agent-flow-catalog-graph §2.4): the expected/actual agent-flow
- * pipeline — `flow.*` keys (event strip title, status labels, degraded/empty
- * notes, unexpected) + `graph.legend.flow-*` legend labels.
+ * T2 (spec panel-zones §2, plan 20260810-panel-canvas-zones): the react-flow
+ * graph is replaced by the zone dashboard — the `graph.phase.*` /
+ * `graph.state.*` / react-flow `graph.legend.*` key families are gone with
+ * the graph library; the footer keeps the `graph.pass/fail/violations`
+ * gate-summary keys, and the new `zone.*` family covers the three zone
+ * titles/placeholders + the zone-semantic legend. The `flow.*` key family
+ * (agent-flow event dock) is unchanged.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -28,31 +28,26 @@ export type PanelKey =
   | 'watermark.harness'
   | 'watermark.none'
   | 'panel.unknown'
-  | 'graph.phase.iteration-start'
-  | 'graph.phase.autonomous-execute'
-  | 'graph.phase.iteration-close'
-  | 'graph.phase.pr-delivery'
-  | 'graph.phase.merge-ready'
-  | 'graph.state.Todo'
-  | 'graph.state.InProgress'
-  | 'graph.state.InReview'
-  | 'graph.state.Done'
-  | 'graph.state.Blocked'
-  | 'graph.state.unknown'
-  | 'graph.legend.title'
-  | 'graph.legend.phases'
-  | 'graph.legend.plan-states'
-  | 'graph.legend.edge-forward'
-  | 'graph.legend.edge-loop'
-  | 'graph.legend.edge-connector'
-  | 'graph.legend.state-current'
-  | 'graph.legend.state-next'
-  | 'graph.legend.state-idle'
-  | 'graph.legend.verdict-pass'
-  | 'graph.legend.verdict-fail'
-  | 'graph.legend.flow-expected'
-  | 'graph.legend.flow-actual'
-  | 'graph.legend.flow-unexpected'
+  | 'graph.pass'
+  | 'graph.fail'
+  | 'graph.violations'
+  | 'graph.no-violations'
+  | 'zone.legend.title'
+  | 'zone.legend.iteration'
+  | 'zone.legend.current'
+  | 'zone.legend.disabled'
+  | 'zone.legend.tasks'
+  | 'zone.legend.verdict-pass'
+  | 'zone.legend.verdict-fail'
+  | 'zone.legend.flow-expected'
+  | 'zone.legend.flow-actual'
+  | 'zone.legend.flow-unexpected'
+  | 'zone.iteration.title'
+  | 'zone.iteration.placeholder'
+  | 'zone.tasks.title'
+  | 'zone.tasks.placeholder'
+  | 'zone.agents.title'
+  | 'zone.agents.placeholder'
   | 'flow.title'
   | 'flow.empty'
   | 'flow.degraded'
@@ -63,16 +58,6 @@ export type PanelKey =
   | 'flow.advisory'
   | 'flow.denied'
   | 'flow.event-count'
-  | 'graph.iteration-id'
-  | 'graph.current'
-  | 'graph.next'
-  | 'graph.pass'
-  | 'graph.fail'
-  | 'graph.violations'
-  | 'graph.no-violations'
-  | 'graph.no-compass'
-  | 'graph.no-plans'
-  | 'graph.no-state'
   | 'state.title'
   | 'state.plans'
   | 'state.residuals'
@@ -108,31 +93,26 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'watermark.harness': 'harness: {dir}',
   'watermark.none': '无',
   'panel.unknown': '未知',
-  'graph.phase.iteration-start': '迭代启动',
-  'graph.phase.autonomous-execute': '自主执行',
-  'graph.phase.iteration-close': '迭代收口',
-  'graph.phase.pr-delivery': 'PR 交付',
-  'graph.phase.merge-ready': '合并就绪',
-  'graph.state.Todo': '待办',
-  'graph.state.InProgress': '进行中',
-  'graph.state.InReview': '审查中',
-  'graph.state.Done': '完成',
-  'graph.state.Blocked': '受阻',
-  'graph.state.unknown': '未知',
-  'graph.legend.title': '图例',
-  'graph.legend.phases': '阶段环',
-  'graph.legend.plan-states': 'plan 状态机',
-  'graph.legend.edge-forward': '正向流转',
-  'graph.legend.edge-loop': '循环 —— 下一轮迭代',
-  'graph.legend.edge-connector': '当前阶段焦点',
-  'graph.legend.state-current': '当前阶段',
-  'graph.legend.state-next': '下一步',
-  'graph.legend.state-idle': '未点亮（schema）',
-  'graph.legend.verdict-pass': 'gate PASS',
-  'graph.legend.verdict-fail': 'gate FAIL',
-  'graph.legend.flow-expected': '预期 stage（空心）',
-  'graph.legend.flow-actual': '实际派发（实心）',
-  'graph.legend.flow-unexpected': '未匹配角色（描边）',
+  'graph.pass': 'PASS',
+  'graph.fail': 'FAIL',
+  'graph.violations': '违规 ({count})',
+  'graph.no-violations': '无违规',
+  'zone.legend.title': '图例',
+  'zone.legend.iteration': '迭代区',
+  'zone.legend.current': '当前阶段',
+  'zone.legend.disabled': '迭代未激活',
+  'zone.legend.tasks': '任务 kanban',
+  'zone.legend.verdict-pass': 'gate PASS',
+  'zone.legend.verdict-fail': 'gate FAIL',
+  'zone.legend.flow-expected': '预期 stage（空心）',
+  'zone.legend.flow-actual': '实际派发（实心）',
+  'zone.legend.flow-unexpected': '未匹配角色（描边）',
+  'zone.iteration.title': '迭代',
+  'zone.iteration.placeholder': '迭代区（Step N / 分支）待实现',
+  'zone.tasks.title': '任务',
+  'zone.tasks.placeholder': '任务 kanban 待实现',
+  'zone.agents.title': '代理执行',
+  'zone.agents.placeholder': '代理执行区（实体 / 流转）待实现',
   'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -143,16 +123,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'flow.advisory': '提示',
   'flow.denied': '拒绝',
   'flow.event-count': '{count} 条',
-  'graph.iteration-id': '迭代',
-  'graph.current': '当前',
-  'graph.next': '下一步',
-  'graph.pass': 'PASS',
-  'graph.fail': 'FAIL',
-  'graph.violations': '违规 ({count})',
-  'graph.no-violations': '无违规',
-  'graph.no-compass': '无 steering compass / status.json',
-  'graph.no-plans': '无 plan 行（状态机骨架）',
-  'graph.no-state': '无工作区状态摘要',
   'state.title': '工作区状态',
   'state.plans': '计划',
   'state.residuals': '未决残留',
@@ -183,31 +153,26 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'watermark.harness': 'harness: {dir}',
   'watermark.none': 'none',
   'panel.unknown': 'unknown',
-  'graph.phase.iteration-start': 'Iteration Start',
-  'graph.phase.autonomous-execute': 'Autonomous Execute',
-  'graph.phase.iteration-close': 'Iteration Close',
-  'graph.phase.pr-delivery': 'PR Delivery',
-  'graph.phase.merge-ready': 'Merge Ready',
-  'graph.state.Todo': 'Todo',
-  'graph.state.InProgress': 'In Progress',
-  'graph.state.InReview': 'In Review',
-  'graph.state.Done': 'Done',
-  'graph.state.Blocked': 'Blocked',
-  'graph.state.unknown': 'Unknown',
-  'graph.legend.title': 'Legend',
-  'graph.legend.phases': 'Phase ring',
-  'graph.legend.plan-states': 'Plan state machine',
-  'graph.legend.edge-forward': 'forward transition',
-  'graph.legend.edge-loop': 'loop — next iteration',
-  'graph.legend.edge-connector': 'current-phase focus',
-  'graph.legend.state-current': 'current phase',
-  'graph.legend.state-next': 'next phase',
-  'graph.legend.state-idle': 'unlit (schema)',
-  'graph.legend.verdict-pass': 'gate PASS',
-  'graph.legend.verdict-fail': 'gate FAIL',
-  'graph.legend.flow-expected': 'expected stage (hollow)',
-  'graph.legend.flow-actual': 'actual dispatch (filled)',
-  'graph.legend.flow-unexpected': 'unexpected role (outlined)',
+  'graph.pass': 'PASS',
+  'graph.fail': 'FAIL',
+  'graph.violations': 'violations ({count})',
+  'graph.no-violations': 'no violations',
+  'zone.legend.title': 'Legend',
+  'zone.legend.iteration': 'iteration zone',
+  'zone.legend.current': 'current step',
+  'zone.legend.disabled': 'disabled iteration',
+  'zone.legend.tasks': 'task kanban',
+  'zone.legend.verdict-pass': 'gate PASS',
+  'zone.legend.verdict-fail': 'gate FAIL',
+  'zone.legend.flow-expected': 'expected stage (hollow)',
+  'zone.legend.flow-actual': 'actual dispatch (filled)',
+  'zone.legend.flow-unexpected': 'unexpected role (outlined)',
+  'zone.iteration.title': 'Iteration',
+  'zone.iteration.placeholder': 'Iteration zone (Step N / branches) pending',
+  'zone.tasks.title': 'Tasks',
+  'zone.tasks.placeholder': 'Task kanban pending',
+  'zone.agents.title': 'Agent Flow',
+  'zone.agents.placeholder': 'Agent flow zone (entities / flow) pending',
   'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',
@@ -218,16 +183,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'flow.advisory': 'advisory',
   'flow.denied': 'denied',
   'flow.event-count': '{count} events',
-  'graph.iteration-id': 'iteration',
-  'graph.current': 'current',
-  'graph.next': 'next',
-  'graph.pass': 'PASS',
-  'graph.fail': 'FAIL',
-  'graph.violations': 'violations ({count})',
-  'graph.no-violations': 'no violations',
-  'graph.no-compass': 'No steering compass / status.json',
-  'graph.no-plans': 'no plan rows (state machine skeleton)',
-  'graph.no-state': 'no workspace state digest',
   'state.title': 'Workspace state',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',

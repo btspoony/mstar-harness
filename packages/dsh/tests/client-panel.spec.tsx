@@ -5,13 +5,17 @@
  *
  * Coverage:
  * - full fixture (iteration + state + freshness): every section renders —
- *   the sidebar meta dock (version/harness, header removed), iteration
- *   phase/transition/gate verdict + violation codes, plan status board,
+ *   the sidebar meta dock (version/harness, header removed), the zone
+ *   dashboard canvas (iteration/tasks/agents zones + fixed footer with
+ *   legend/gate summary + corner event dock), plan status board,
  *   residual counts, branch/policy/lease anchors, knowledge digest,
  *   direction one-liner, last-updated marker;
- * - full-tab layout (spec panel-zones §2): root fills the Tab without page
- *   scroll (`overflow: hidden`), sidebar is its own scroll container with a
- *   fixed bottom meta dock; zero bare hex/rgb in the panel CSS;
+ * - full-tab layout (spec panel-zones §2, v3): root fills the Tab without page
+ *   scroll (`overflow: hidden`); the canvas zone container is the ONLY scroll
+ *   body (own `overflow: auto`); the canvas footer bar is flex:none (fixed,
+ *   never scrolls with the zones); the event dock is absolute bottom-left and
+ *   hidden entirely at 0 events; sidebar is its own scroll container with a
+ *   fixed bottom meta dock; zero bare hex/rgb in the panel + zones CSS;
  * - T4 theme audit (spec panel-zones §7): EVERY color-family declaration is a
  *   --dsw-* token (no bare color of any form), spacing/font ride the
  *   --mstar-space-* / --dsw-font-xxxs-11..xs-13 ramps, hover feedback sits in
@@ -29,12 +33,13 @@
  * - plugin entry: `apply(ctx)` registers the `mstar-panel` dictionaries and
  *   the `conversation.view` tab (`id: 'mstar-workflow'`, `order: 20`,
  *   locale-following label thunk);
- * - T3 flow column (spec agent-flow-catalog-graph §2.4): the expected/actual
- *   agent-flow pipeline — 6 flow-stage skeleton nodes + lit/count from
- *   dispatch evidence, the evidence-driven unexpected node, the event footer
- *   strip (role → planId#taskId rows, status coloring, settled markers,
- *   unexpected re-list), degraded/empty notes, legend flow-* items, zh labels,
- *   and garbage-proof totality.
+ * - T2 zone dashboard (spec panel-zones §2): the three zone frames
+ *   (`data-zone="iteration|tasks|agents"`), the fixed footer bar (legend +
+ *   gate summary + violations), and the canvas-corner AgentEventDock
+ *   (`data-agent-event-dock` — rendered only when events exist, hidden
+ *   entirely at 0); the react-flow-era orange notes are gone (`data-graph-
+ *   empty="no-compass"` etc. asserted absent); zh labels; garbage-proof
+ *   totality.
  *
  * Renderer: `react-dom/server.renderToStaticMarkup` over the real component
  * (dev-time seams linked from the dsh source tree; the `*.module.css` import
@@ -281,15 +286,17 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).toContain('harness: /proj/.mstar')
   })
 
-  it('renders the graph region with the iteration gate folded into the graph + footer (T2)', () => {
-    // Iteration/gate detail moved into the main-area graph (spec §1.1/§2.3/§2.6):
-    // transition → current-phase highlight; ok → PASS badge; violations → footer list.
-    expect(html).toContain('data-graph-canvas')
-    expect(html).toContain('data-graph-node="phase:autonomous-execute"')
-    expect(html).toContain('data-graph-node-state="current"')
-    expect(html).toContain('data-graph-verdict="pass"')
-    expect(html).toContain('data-graph-violations="2"')
+  it('renders the zone dashboard + fixed footer (legend + gate summary) in the main area (T2)', () => {
+    // The react-flow graph is replaced by the zone dashboard (spec §2): the
+    // three zone frames + the fixed footer bar (legend left, gate summary
+    // right — PASS verdict + collapsible violations list).
+    expect(html).toContain('data-mstar-canvas')
+    expect(html).toContain('data-zone="iteration"')
+    expect(html).toContain('data-zone="tasks"')
+    expect(html).toContain('data-zone="agents"')
+    expect(html).toContain('data-mstar-graph-footer')
     expect(html).toContain('data-mstar-gate-summary')
+    expect(html).toContain('data-graph-verdict="pass"')
     expect(html).toContain('data-graph-violations-count="2"')
     expect(html).toContain('data-violation-code="PLAN-3"')
     expect(html).toContain('data-violation-code="EXIT-1"')
@@ -361,12 +368,16 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).not.toContain('data-mstar-sidebar')
   })
 
-  it('no gate (harness present, iteration key absent) → graph renders schema skeleton + no-compass note, state still renders', () => {
+  it('no gate (harness present, iteration key absent) → muted iteration zone, state still renders, no orange note', () => {
     const html = panelHtml(noGateSource)
     expect(html).toContain('data-mstar-panel="panel"')
-    expect(html).toContain('data-graph-canvas')
-    expect(html).toContain('data-graph-empty="no-compass"')
-    expect(html).toContain('No steering compass / status.json')
+    expect(html).toContain('data-mstar-canvas')
+    expect(html).toContain('data-zone="iteration"')
+    expect(html).toContain('data-zone="tasks"')
+    // The react-flow-era no-compass orange note is GONE (replaced by the muted
+    // zone placeholder; the disabled-iteration treatment lands with Task 3).
+    expect(html).not.toContain('data-graph-empty="no-compass"')
+    expect(html).not.toContain('No steering compass / status.json')
     expect(html).toContain('data-mstar-section="state"')
     expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
     // Empty state lists degrade to "none" rather than crashing.
@@ -375,15 +386,15 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-mstar-empty="no-knowledge"')
   })
 
-  it('iteration: null (schema-drift variant of "absent") → same no-compass degradation, never a crash (AC-3)', () => {
+  it('iteration: null (schema-drift variant of "absent") → same muted degradation, never a crash (AC-3)', () => {
     const html = panelHtml({
       ...noGateSource,
       iteration: null,
     } as unknown as MstarEngineStatusSource)
     expect(html).toContain('data-mstar-panel="panel"')
-    expect(html).toContain('data-graph-canvas')
-    expect(html).toContain('data-graph-empty="no-compass"')
-    expect(html).toContain('No steering compass / status.json')
+    expect(html).toContain('data-mstar-canvas')
+    expect(html).toContain('data-zone="iteration"')
+    expect(html).not.toContain('data-graph-empty="no-compass"')
     expect(html).toContain('data-mstar-section="state"')
   })
 
@@ -410,7 +421,7 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
 })
 
 describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)', () => {
-  it('gate.ok false → FAIL badge on the current node + FAIL (n) in the gate summary', () => {
+  it('gate.ok false → FAIL badge in the footer gate summary + FAIL (n) count', () => {
     const html = panelHtml(failGateSource)
     expect(html).toContain('data-graph-verdict="fail"')
     expect(html).toContain('FAIL (2)')
@@ -421,8 +432,10 @@ describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)',
 
   it('renders the panel body in zh when the locale flips (not just the tab label)', () => {
     const html = panelHtml(fullSource, undefined, undefined, 'zh')
-    expect(html).toContain('data-graph-canvas')
-    expect(html).toContain('自主执行')
+    expect(html).toContain('data-mstar-canvas')
+    expect(html).toContain('迭代')
+    expect(html).toContain('任务')
+    expect(html).toContain('代理执行')
     expect(html).toContain('违规 (2)')
     expect(html).toContain('data-mstar-section="state"')
     expect(html).toContain('工作区状态')
@@ -557,16 +570,17 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html).toContain('harness: /proj/.mstar')
   })
 
-  it('root + sidebar CSS pin the full-tab layout (no page scroll, 300px sidebar, internal sidebar scroll, zero bare hex)', () => {
+  it('root + main CSS pin the full-tab v3 layout (no page scroll; the canvas zone container is the ONLY scroll body)', () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
-    // Root fills the Tab and never scrolls — main is the only overflow scroll source.
+    // Root fills the Tab and never scrolls (v3: the page NEVER scrolls).
     expect(cssText).toContain('grid-template-columns: minmax(0, 1fr) 300px')
     expect(cssText).toMatch(/grid-template-areas:\s*'main sidebar'/)
     expect(cssText).toContain('height: 100%')
     expect(cssText).toContain('min-height: 0')
     expect(cssText).toContain('overflow: hidden')
-    expect(cssText).toContain('overflow: auto')
     expect(cssText).toMatch(/@media \(max-width: 860px\)/)
+    // `.main` itself never scrolls (v3) — the canvas zone container scrolls.
+    expect(cssText).toMatch(/\.main\s*\{[\s\S]*?overflow:\s*hidden/)
     // Sidebar is its own scroll container (digest region), not the page.
     expect(cssText).toContain('overflow-y: auto')
     expect(cssText).toContain('flex: 1')
@@ -593,10 +607,15 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-watermark'))
   })
 
-  it('main area renders the react-flow graph canvas inside the graph region (T2 fills the graph)', () => {
+  it('main area renders the WorkflowCanvas zone dashboard inside the graph region (T2 fills the graph)', () => {
     expect(html).toContain('data-mstar-graph')
-    expect(html).toContain('data-graph-canvas')
-    expect(html).toContain('data-graph-nodes-draggable="false"')
+    expect(html).toContain('data-mstar-canvas')
+    expect(html).toContain('data-zone="iteration"')
+    expect(html).toContain('data-zone="tasks"')
+    expect(html).toContain('data-zone="agents"')
+    // The react-flow canvas anchors are gone.
+    expect(html).not.toContain('data-graph-canvas')
+    expect(html).not.toContain('data-graph-nodes-draggable')
   })
 })
 
@@ -785,7 +804,7 @@ describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflo
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')
   })
 
-  it('zh body renders the meta dock + graph phase labels (header captions removed)', () => {
+  it('zh body renders the meta dock + zone dashboard labels (header captions removed)', () => {
     const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
     // zh/en dual-locale coverage of the meta dock: anchors + watermark values
     // (zh `watermark.*` values are identical to en — both render from the dock).
@@ -800,105 +819,134 @@ describe('workflow panel — T1 panel rename: "MStar 工作流" / "MStar Workflo
     expect(zhHtml).not.toContain('harness 目录')
     expect(zhHtml).toContain('执行策略')
     expect(zhHtml).toContain('data-field="enforcement"')
-    expect(zhHtml).toContain('自主执行')
-    expect(zhHtml).toContain('迭代收口')
+    // Zone dashboard zone headers (the react-flow phase labels are gone).
+    expect(zhHtml).toContain('迭代')
+    expect(zhHtml).toContain('任务')
+    expect(zhHtml).toContain('代理执行')
+    expect(zhHtml).toContain('图例')
   })
 })
 
-describe('workflow panel — T2 graph: react-flow loop canvas (spec panel-layout-graph §2/§4)', () => {
+describe('workflow panel — T2 zone dashboard: three zones + fixed footer + corner event dock (spec panel-zones §2, v3)', () => {
   const html = panelHtml(fullSource)
 
-  it('mounts the GraphCanvas in the main graph region, read-only interaction (nodesDraggable=false)', () => {
+  it('mounts the WorkflowCanvas in the main graph region with the three zone frames', () => {
     expect(html).toContain('data-mstar-graph')
-    expect(html).toContain('data-graph-canvas')
-    expect(html).toContain('data-graph-nodes-draggable="false"')
-  })
-
-  it('renders all 5 phase-ring nodes with current highlighted, next marked, PASS badge on current', () => {
-    for (const id of ['iteration-start', 'autonomous-execute', 'iteration-close', 'pr-delivery', 'merge-ready']) {
-      expect(html).toContain(`data-graph-node="phase:${id}"`)
+    expect(html).toContain('data-mstar-canvas')
+    expect(html).toContain('data-mstar-canvas-scroll')
+    // Zone frames: iteration / tasks / agents, each with header + muted empty placeholder.
+    for (const zone of ['iteration', 'tasks', 'agents']) {
+      expect(html).toContain(`data-zone="${zone}"`)
     }
-    expect(html).toContain('data-graph-node-state="current"')
-    expect(html).toContain('data-graph-node-state="next"')
-    // Phase 1/5 schema-only nodes stay unlit (idle) — engine never emits those transitions (spec §2.3).
-    expect(html).toContain('data-graph-node-state="idle"')
-    expect(html).toContain('data-graph-verdict="pass"')
-    expect(html).toContain('data-graph-violations="2"')
-    expect(html).toContain('Autonomous Execute')
-    expect(html).toContain('Iteration Close')
+    expect(html).toContain('data-zone-header')
+    expect(html).toContain('data-zone-empty')
+    // Placeholder copy (muted empty states — no orange boxes, no crashes).
+    expect(html).toContain('Iteration zone (Step N / branches) pending')
+    expect(html).toContain('Task kanban pending')
+    // fullSource.agentFlow === null → agents zone shows the degraded muted note.
+    expect(html).toContain('No agent-flow evidence (ledger missing)')
   })
 
-  it('renders the plan state machine buckets with lit markers, counts and plan rows', () => {
-    expect(html).toContain('data-graph-node="state:InProgress"')
-    expect(html).toContain('data-graph-node="state:Done"')
-    expect(html).toContain('data-graph-lit="true"')
-    expect(html).toContain('data-graph-count="1"')
-    expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
-    expect(html).toContain('data-plan-status="InProgress"')
-  })
-
-  it('renders the legend + gate summary footer with the collapsible violations list', () => {
-    expect(html).toContain('data-mstar-legend')
+  it('renders the fixed footer bar: legend + gate summary with the collapsible violations list', () => {
     expect(html).toContain('data-mstar-graph-footer')
+    expect(html).toContain('data-mstar-legend')
     expect(html).toContain('data-mstar-gate-summary')
+    expect(html).toContain('data-graph-verdict="pass"')
     expect(html).toContain('data-graph-violations-count="2"')
     expect(html).toContain('data-violation-code="PLAN-3"')
     expect(html).toContain('data-violation-code="EXIT-1"')
   })
 
-  it('the connector edge links the current phase to the active plan bucket', () => {
-    // InProgress is the only lit non-Done/Blocked bucket in the panel fixture → connector target.
-    // (The marker uses '→' — React HTML-escapes '>' inside attribute values.)
-    expect(html).toContain('data-graph-connector="phase:autonomous-execute→state:InProgress"')
+  it('the event dock is hidden entirely when there are no events (v3 — no placeholder box)', () => {
+    // fullSource carries agentFlow: null → 0 events → dock must NOT exist.
+    expect(html).not.toContain('data-agent-event-dock')
+    expect(html).not.toContain('data-mstar-flow-events')
   })
 
   it('no-harness branch does NOT mount the canvas (mount gated on the empty-state branch, T1 minor-1)', () => {
     const g = panelHtml(noHarnessSource)
     expect(g).toContain('data-mstar-panel="no-harness"')
     expect(g).toContain('data-mstar-graph')
-    expect(g).not.toContain('data-graph-canvas')
+    expect(g).not.toContain('data-mstar-canvas')
   })
 
-  it('no iteration → schema ring + no-compass note, state machine still renders, no verdict badge', () => {
+  it('no iteration → muted iteration zone + unknown verdict, state still renders, no orange note', () => {
     const g = panelHtml(noGateSource)
-    expect(g).toContain('data-graph-canvas')
-    expect(g).toContain('data-graph-empty="no-compass"')
-    expect(g).toContain('data-graph-node="state:InProgress"')
+    expect(g).toContain('data-mstar-canvas')
+    expect(g).toContain('data-zone="iteration"')
+    // The react-flow-era no-compass orange note is gone (muted zone placeholder).
+    expect(g).not.toContain('data-graph-empty="no-compass"')
+    expect(g).not.toContain('No steering compass / status.json')
+    expect(g).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
     expect(g).not.toContain('data-graph-verdict="pass"')
   })
 
-  it('state null → machine skeleton + no-state note; graph still mounts (spec §2.5)', () => {
+  it('state null → tasks zone stays a muted frame; no no-state orange note (spec §8)', () => {
     const g = panelHtml({ ...fullSource, state: null })
-    expect(g).toContain('data-graph-canvas')
-    expect(g).toContain('data-graph-empty="no-state"')
+    expect(g).toContain('data-mstar-canvas')
+    expect(g).toContain('data-zone="tasks"')
+    expect(g).not.toContain('data-graph-empty="no-state"')
   })
 
-  it('plans missing → machine skeleton + no-plans note (spec §2.5)', () => {
+  it('plans missing → same muted tasks frame; no no-plans orange note (spec §8)', () => {
     const g = panelHtml({
       ...fullSource,
       state: { ...fullSource.state!, plans: undefined },
     } as unknown as MstarEngineStatusSource)
-    expect(g).toContain('data-graph-canvas')
-    expect(g).toContain('data-graph-empty="no-plans"')
+    expect(g).toContain('data-mstar-canvas')
+    expect(g).toContain('data-zone="tasks"')
+    expect(g).not.toContain('data-graph-empty="no-plans"')
   })
 
-  it('renders the iteration id as the phase-ring caption (T2 minor-1, spec §2.6)', () => {
-    expect(html).toContain('data-graph-iteration-id="iter-20260809-dsh-workflow-viz"')
-    // The locale label + the id render inside the same caption element (zh body too).
+  it('renders the zone-semantic legend items, en + zh (react-flow items gone)', () => {
+    for (const key of ['iteration', 'current', 'disabled', 'tasks', 'verdict-pass', 'verdict-fail', 'flow-expected', 'flow-actual', 'flow-unexpected']) {
+      expect(html).toContain(`data-mstar-legend-item="${key}"`)
+    }
+    // The react-flow legend items (edge kinds, idle swatch) are gone.
+    expect(html).not.toContain('data-mstar-legend-item="idle"')
+    expect(html).not.toContain('data-mstar-legend-item="edge-forward"')
+    expect(html).toContain('iteration zone')
+    expect(html).toContain('disabled iteration')
     const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
-    expect(zhHtml).toContain('data-graph-iteration-id="iter-20260809-dsh-workflow-viz"')
+    expect(zhHtml).toContain('data-mstar-legend-item="iteration"')
+    expect(zhHtml).toContain('迭代未激活')
   })
 
-  it('legend includes the idle (unlit) swatch, en + zh (T2 minor-2, spec §4)', () => {
-    expect(html).toContain('data-mstar-legend-item="idle"')
-    expect(html).toContain('unlit (schema)')
-    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
-    expect(zhHtml).toContain('data-mstar-legend-item="idle"')
-    expect(zhHtml).toContain('未点亮（schema）')
+  it('v3 zones CSS: canvas zone container is the ONLY scroll body, footer is flex:none, dock is absolute, <1200px stacks', () => {
+    const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
+    // Canvas zone container: the only scroll body (spec §2, v3).
+    expect(cssText).toMatch(/\.canvas\s*\{[\s\S]*?position:\s*relative/)
+    expect(cssText).toMatch(/\.scroll\s*\{[\s\S]*?overflow:\s*auto/)
+    expect(cssText).toContain('overscroll-behavior: contain')
+    // Three-zone grid: iteration fixed left / tasks flex center / agents fixed right.
+    expect(cssText).toContain('grid-template-columns: 300px minmax(0, 1fr) 380px')
+    // <1200px → vertical stack.
+    expect(cssText).toMatch(/@media \(max-width: 1200px\)/)
+    expect(cssText).toMatch(/@media \(max-width: 1200px\)\s*\{[\s\S]*?grid-template-columns:\s*1fr/)
+    // Footer bar: flex:none = fixed height, never scrolls with the zones.
+    expect(cssText).toMatch(/\.footer\s*\{[\s\S]*?flex:\s*none/)
+    // Event dock: absolute in the canvas container.
+    expect(cssText).toMatch(/\.dock\s*\{[\s\S]*?position:\s*absolute/)
+    // Token-only colors (zero bare colors of any form) — full-file scan.
+    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
+    // Spacing rides the --mstar-space-* ramp (values are var() or zero resets).
+    const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
+    const spacingRe = /\b(?:gap|padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?)\s*:/g
+    const spacingValues: string[] = []
+    for (const m of stripped.matchAll(spacingRe)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      spacingValues.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    expect(spacingValues.length).toBeGreaterThan(0)
+    for (const value of spacingValues) {
+      if (value === '' || /^0(\s+0)*$/.test(value)) continue // zero reset, not a metric
+      expect(value).toMatch(/var\(--mstar-space-/)
+    }
   })
 })
 
-describe('workflow panel — T3 data projection integration (spec panel-layout-graph §2.1/§2.5)', () => {
+describe('workflow panel — T3 data projection integration (spec panel-zones §2/§3)', () => {
   const html = panelHtml(fullSource)
 
   /** Render the panel against a live snapshot store (same helper shape as the data-wiring block). */
@@ -912,89 +960,45 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
     }))
   }
 
-  /** The `data-graph-node-state` value of one node div, from static HTML. */
-  function nodeState(h: string, nodeId: string): string | null {
-    const start = h.indexOf(`data-graph-node="${nodeId}"`)
-    if (start === -1) return null
-    const end = h.indexOf('data-graph-node="', start + 1)
-    const slice = end === -1 ? h.slice(start) : h.slice(start, end)
-    const m = slice.match(/data-graph-node-state="([^"]+)"/)
-    return m === null ? null : m[1]!
-  }
-
-  it('graph, meta dock and sidebar all render from the SAME catalog row (single source of truth)', () => {
+  it('canvas, meta dock and sidebar all render from the SAME catalog row (single source of truth)', () => {
     // Meta dock watermark = source.version / harnessDir (was the header).
     expect(html).toContain('mstar 2.0.4')
     expect(html).toContain('harness: /proj/.mstar')
     // Sidebar plan board rows = state.plans verbatim.
     expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
     expect(html).toContain('data-plan-status="InProgress"')
-    // Graph InProgress bucket lit with the same plan row + count.
-    expect(html).toContain('data-graph-node="state:InProgress"')
-    expect(html).toContain('data-graph-lit="true"')
-    expect(html).toContain('data-graph-count="1"')
+    // The canvas zones + footer render from the same row: zone frames, the
+    // PASS verdict from iteration.gate.ok, and the sidebar-visible plan row.
+    expect(html).toContain('data-mstar-canvas')
+    expect(html).toContain('data-zone="iteration"')
+    expect(html).toContain('data-zone="tasks"')
+    expect(html).toContain('data-zone="agents"')
+    expect(html).toContain('data-graph-verdict="pass"')
     expect(html).toContain('data-plan-status="InProgress"')
-    // Current-phase highlight follows iteration.gate.transition; the connector
-    // picks the same active bucket the sidebar board shows.
-    expect(html).toContain('data-graph-node="phase:autonomous-execute"')
-    expect(html).toContain('data-graph-node-state="current"')
-    expect(html).toContain('data-graph-connector="phase:autonomous-execute→state:InProgress"')
   })
 
-  it('a new catalog row with a new transition re-lights the ring (current + next move)', () => {
-    const phase2 = {
-      ...fullSource,
-      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition: 'phase-2-execute' } },
-    } as unknown as MstarEngineStatusSource
-    const store = createSnapshotStore(snapshotFor(phase2, 1_720_000_000_000))
-    const before = renderStore(store)
-    expect(nodeState(before, 'phase:autonomous-execute')).toBe('current')
-    expect(nodeState(before, 'phase:iteration-close')).toBe('next')
-    expect(nodeState(before, 'phase:iteration-start')).toBe('idle')
+  it('a new catalog row re-renders the canvas + footer with fresh data (no stale ring state)', () => {
+    // Snapshot bump: server re-emission with a FAIL verdict + new violations.
+    const beforeStore = createSnapshotStore(snapshotFor(fullSource, 1_720_000_000_000))
+    expect(renderStore(beforeStore)).toContain('data-graph-verdict="pass"')
 
-    // Snapshot bump: server re-emission with phase-3-close → highlight moves.
-    const phase3 = {
+    const failing = {
       ...fullSource,
-      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' } },
-    } as unknown as MstarEngineStatusSource
-    store.set(snapshotFor(phase3, 1_720_002_000_000))
-    const after = renderStore(store)
-    expect(nodeState(after, 'phase:iteration-close')).toBe('current')
-    expect(nodeState(after, 'phase:pr-delivery')).toBe('next')
-    expect(nodeState(after, 'phase:autonomous-execute')).toBe('idle')
-    // The connector edge follows the new current phase.
-    expect(after).toContain('data-graph-connector="phase:iteration-close→state:InProgress"')
-  })
-
-  it('a new catalog row with changed plans re-buckets the machine + moves the connector', () => {
-    const beforeSource = {
-      ...fullSource,
-      state: { ...fullSource.state!, plans: [{ id: 'plan-b', status: 'InProgress', doneAt: null }] },
-    }
-    const store = createSnapshotStore(snapshotFor(beforeSource, 1_720_000_000_000))
-    const before = renderStore(store)
-    expect(before).toContain('data-graph-count="1"')
-    expect(before).toContain('data-graph-connector="phase:autonomous-execute→state:InProgress"')
-
-    const afterSource = {
-      ...fullSource,
-      state: {
-        ...fullSource.state!,
-        plans: [
-          { id: 'plan-b', status: 'InProgress', doneAt: null },
-          { id: 'plan-c', status: 'InReview', doneAt: null },
-          { id: 'plan-d', status: 'InReview', doneAt: null },
-        ],
+      iteration: {
+        ...fullSource.iteration!,
+        gate: {
+          ...fullSource.iteration!.gate,
+          ok: false,
+          violations: [{ severity: 'high', code: 'EXIT-9', message: 'new violation row' }],
+        },
       },
-    }
-    store.set(snapshotFor(afterSource, 1_720_002_000_000))
+    } as unknown as MstarEngineStatusSource
+    const store = createSnapshotStore(snapshotFor(failing, 1_720_000_000_000))
     const after = renderStore(store)
-    // InReview bucket lit with 2 plans; connector moves to the most-populated bucket.
-    expect(after).toContain('data-graph-node="state:InReview"')
-    expect(after).toContain('data-graph-lit="true"')
-    expect(after).toContain('data-graph-count="2"')
-    expect(after).toContain('data-plan-id="plan-c"')
-    expect(after).toContain('data-graph-connector="phase:autonomous-execute→state:InReview"')
+    expect(after).toContain('data-graph-verdict="fail"')
+    expect(after).toContain('FAIL (1)')
+    expect(after).toContain('data-graph-violations-count="1"')
+    expect(after).toContain('data-violation-code="EXIT-9"')
   })
 
   it('new violations on a fresh row update the footer count + list', () => {
@@ -1023,31 +1027,33 @@ describe('workflow panel — T3 data projection integration (spec panel-layout-g
     expect(after).toContain('data-violation-code="EXIT-9"')
   })
 
-  it('missing / garbage fields degrade the WHOLE panel (meta dock + graph + sidebar) without crashing', () => {
+  it('missing / garbage fields degrade the WHOLE panel (meta dock + canvas + sidebar) without crashing', () => {
     const noIteration = panelHtml({ ...fullSource, iteration: undefined } as unknown as MstarEngineStatusSource)
     expect(noIteration).toContain('data-mstar-meta')
-    expect(noIteration).toContain('data-graph-canvas')
-    expect(noIteration).toContain('data-graph-empty="no-compass"')
+    expect(noIteration).toContain('data-mstar-canvas')
+    expect(noIteration).toContain('data-zone="iteration"')
+    expect(noIteration).not.toContain('data-graph-empty="no-compass"')
     expect(noIteration).toContain('data-mstar-sidebar')
     expect(noIteration).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
 
     const garbageIteration = panelHtml({ ...fullSource, iteration: 'not-an-object' } as unknown as MstarEngineStatusSource)
     expect(garbageIteration).toContain('data-mstar-meta')
-    expect(garbageIteration).toContain('data-graph-canvas')
-    expect(garbageIteration).toContain('data-graph-empty="no-compass"')
+    expect(garbageIteration).toContain('data-mstar-canvas')
+    expect(garbageIteration).toContain('data-zone="iteration"')
+    expect(garbageIteration).not.toContain('data-graph-empty="no-compass"')
     expect(garbageIteration).toContain('data-mstar-section="state"')
   })
 })
 
 /* ---------------------------------------------------------------------------
- * T3 flow column (spec agent-flow-catalog-graph §2.4): GraphCanvas renders the
- * expected/actual agent-flow pipeline — the 6 flow-stage skeleton nodes +
- * lit/count from dispatch evidence, the evidence-driven unexpected node, the
- * event footer strip (role → planId#taskId, status coloring, settled markers,
- * unexpected re-list), the degraded/empty notes, the legend flow-* items and
- * the zh labels. The projection itself is unit-tested in
- * client-graph-projection.spec.ts — these pin the RENDER layer through the
- * real data path (snapshot store → useSession → PanelView → GraphCanvas).
+ * T2 event dock (spec panel-zones §2, v3): the agent-flow events render in the
+ * canvas-corner AgentEventDock (absolute bottom-left, mounted ONLY when
+ * events exist — hidden entirely, no placeholder, at 0 events) — role →
+ * planId#taskId rows, status coloring, settled markers, unexpected re-list;
+ * the agents zone placeholder carries the muted degraded/empty notes (spec
+ * §8). The projection itself is unit-tested in client-graph-projection.spec.ts
+ * — these pin the RENDER layer through the real data path (snapshot store →
+ * useSession → PanelView → WorkflowCanvas → AgentEventDock).
  * ------------------------------------------------------------------------- */
 
 /** One dispatch row as the T1 ledger view emits it (spec §2.2). */
@@ -1106,68 +1112,22 @@ const flowEvents: AgentFlowEventView[] = [
   flowDispatch({ ts: 1_720_000_001_000, agent: 'a2', role: 'scout', planId: 'plan-9', taskId: 'T1' }),
 ]
 
-describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline (spec agent-flow-catalog-graph §2.4)', () => {
-  /** The opening-div slice of one flow node (avoids colliding with the state machine's lit/count attrs). */
-  function flowNodeSlice(h: string, nodeId: string): string {
-    const start = h.indexOf(`data-graph-node="flow:${nodeId}"`)
-    if (start === -1) return ''
-    const end = h.indexOf('data-graph-node="', start + 1)
-    return end === -1 ? h.slice(start) : h.slice(start, end)
-  }
-
-  it('renders the 6 expected-stage skeleton nodes + degraded note when the ledger is UNREADABLE (agentFlow null)', () => {
-    // The fixture simulates the server's degraded case (null agentFlow —
-    // only an unreadable ledger yields null post-fix-wave qc1 F-001; a
-    // MISSING ledger arrives as the empty view and renders the empty note
-    // instead, pinned in the next test block).
-    const html = panelHtml(fullSource) // fullSource.agentFlow === null → degraded
-    for (const id of [
-      'iteration-start:review-edit-chain',
-      'autonomous-execute:sdd-implement',
-      'autonomous-execute:sdd-task-review',
-      'autonomous-execute:qc-tri',
-      'autonomous-execute:qa-gate',
-      'autonomous-execute:ops-on-demand',
-    ]) {
-      expect(html).toContain(`data-graph-node="flow:${id}"`)
-    }
-    // Schema skeleton only — nothing lit without evidence, and the unlit
-    // marker lives on the flow node itself.
-    expect(flowNodeSlice(html, 'autonomous-execute:sdd-implement')).toContain('data-graph-lit="false"')
-    expect(flowNodeSlice(html, 'iteration-start:review-edit-chain')).toContain('data-graph-lit="false"')
-    // Degraded note + empty event strip.
-    expect(html).toContain('data-graph-empty="flow-degraded"')
+describe('workflow panel — T2 event dock: canvas-corner agent-flow events (spec panel-zones §2, v3)', () => {
+  it('agents zone shows the degraded muted note when the ledger is UNREADABLE (agentFlow null); dock hidden', () => {
+    // fullSource.agentFlow === null → degraded (an unreadable ledger); the
+    // agents zone carries the muted note and the dock is hidden entirely.
+    const html = panelHtml(fullSource)
+    expect(html).toContain('data-zone="agents"')
     expect(html).toContain('No agent-flow evidence (ledger missing)')
-    expect(html).toContain('data-graph-flow-count="0"')
-    expect(html).toContain('Agent flow events')
-    // No unexpected node without unexpected evidence.
-    expect(html).not.toContain('data-graph-node="flow:unexpected"')
+    expect(html).not.toContain('data-agent-event-dock')
+    expect(html).not.toContain('data-mstar-flow-events')
   })
 
-  it('lights stages + count badges from dispatch evidence (exact stage mapping)', () => {
-    const html = panelHtml(flowSource([
-      flowDispatch({ ts: 3, role: 'fullstack-dev' }),
-      flowDispatch({ ts: 2, role: 'fullstack-dev' }),
-      flowDispatch({ ts: 1, role: 'product-manager' }),
-    ]))
-    const implement = flowNodeSlice(html, 'autonomous-execute:sdd-implement')
-    expect(implement).toContain('data-graph-lit="true"')
-    expect(implement).toContain('data-graph-count="2"')
-    const review = flowNodeSlice(html, 'iteration-start:review-edit-chain')
-    expect(review).toContain('data-graph-lit="true"')
-    expect(review).toContain('data-graph-count="1"')
-    // Unrelated stages stay unlit schema boxes.
-    expect(flowNodeSlice(html, 'autonomous-execute:qc-tri')).toContain('data-graph-lit="false"')
-    // Roles chips render from the schema vocab.
-    expect(html).toContain('data-flow-role="frontend-dev"')
-    expect(html).toContain('data-flow-role="generalPurpose"')
-    expect(html).toContain('data-graph-flow-phase="autonomous-execute"')
-  })
-
-  it('renders the event footer strip: role → planId#taskId rows, status coloring, settled ✓, unexpected re-list', () => {
+  it('mounts the dock when events exist: role → planId#taskId rows, status coloring, settled ✓, unexpected re-list', () => {
     const html = panelHtml(flowSource(flowEvents))
-    expect(html).toContain('data-graph-flow-count="3"')
-    expect(html).toContain('data-graph-flow-unexpected-count="1"')
+    expect(html).toContain('data-agent-event-dock')
+    expect(html).toContain('data-agent-event-count="3"')
+    expect(html).toContain('data-agent-event-unexpected-count="1"')
     expect(html).toContain('data-mstar-flow-events')
     // Row attributes: kind / status / expected / settled.
     expect(html).toContain('data-graph-flow-event-kind="dispatch"')
@@ -1184,93 +1144,41 @@ describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline
     expect(html).toContain('dispatched')
     expect(html).toContain('settled ok')
     expect(html).toContain('340ms')
-    // Unexpected events are re-listed in their own warn section.
+    // Unexpected events are re-listed in their own section.
     expect(html).toContain('data-mstar-flow-unexpected')
     expect(html).toContain('Unexpected roles')
     expect(html).toContain('scout')
-    // The unexpected node + warn-edge source render on evidence.
-    expect(html).toContain('data-graph-node="flow:unexpected"')
-    expect(flowNodeSlice(html, 'unexpected')).toContain('data-graph-count="1"')
-    // With evidence present, no degraded/empty note.
-    expect(html).not.toContain('data-graph-empty="flow-degraded"')
-    expect(html).not.toContain('data-graph-empty="flow-empty"')
+    // With evidence present, the agents zone shows the generic pending placeholder.
+    expect(html).toContain('Agent flow zone (entities / flow) pending')
   })
 
-  it('mounts the unexpected node only on unexpected-role evidence (never a guessed warning)', () => {
-    expect(panelHtml(flowSource(flowEvents))).toContain('data-graph-node="flow:unexpected"')
+  it('the unexpected section mounts only on unexpected-role evidence (never a guessed warning)', () => {
+    expect(panelHtml(flowSource(flowEvents))).toContain('data-mstar-flow-unexpected')
+    expect(panelHtml(flowSource(flowEvents))).toContain('data-agent-event-unexpected-count="1"')
     const clean = panelHtml(flowSource([flowDispatch({ ts: 1, role: 'frontend-dev' })]))
-    expect(clean).not.toContain('data-graph-node="flow:unexpected"')
-    expect(clean).toContain('data-graph-node="flow:autonomous-execute:sdd-implement"')
+    expect(clean).not.toContain('data-mstar-flow-unexpected')
+    expect(clean).not.toContain('data-agent-event-unexpected-count')
+    // The dock still mounts for expected-only evidence.
+    expect(clean).toContain('data-agent-event-dock')
   })
 
-  it('renders hidden connection-point handles on every node type (ReactFlow v12 edge prerequisite — T3 fix loop)', () => {
-    const html = panelHtml(flowSource(flowEvents))
-    const slice = (prefix: string, nodeId: string) => {
-      const start = html.indexOf(`data-graph-node="${prefix}:${nodeId}"`)
-      if (start === -1) return ''
-      const end = html.indexOf('data-graph-node="', start + 1)
-      return end === -1 ? html.slice(start) : html.slice(start, end)
-    }
-    // Pipeline stages: target(top) + source(bottom) for the chain, and
-    // source(right) as the unexpected warn edge origin (buildEdges binds by
-    // these ids — an edge whose endpoint exposes no handle is dropped by
-    // @xyflow/react, so this is the render-side prerequisite for edges).
-    for (const id of [
-      'iteration-start:review-edit-chain',
-      'autonomous-execute:sdd-implement',
-      'autonomous-execute:sdd-task-review',
-      'autonomous-execute:qc-tri',
-      'autonomous-execute:qa-gate',
-      'autonomous-execute:ops-on-demand',
-    ]) {
-      const stage = slice('flow', id)
-      expect(stage).toContain('data-handleid="target:top"')
-      expect(stage).toContain('data-handleid="source:bottom"')
-      expect(stage).toContain('data-handleid="source:right"')
-    }
-    // The unexpected warn node receives the edge on its left side.
-    expect(slice('flow', 'unexpected')).toContain('data-handleid="target:left"')
-    // Phase ring: vertical loop, bottom→top.
-    expect(slice('phase', 'iteration-start')).toContain('data-handleid="target:top"')
-    expect(slice('phase', 'iteration-start')).toContain('data-handleid="source:bottom"')
-    expect(slice('phase', 'merge-ready')).toContain('data-handleid="source:bottom"')
-    // State machine topology: vertical chain bottom→top + the side-by-side
-    // Blocked branch right↔left; Done is terminal (target only); unknown is
-    // sink-only — it accepts the connector edge inbound (target:top, when
-    // unknown is the most-planned lit bucket) but exposes no source handles
-    // (no outbound edges; T3-review M1).
-    const inProgress = slice('state', 'InProgress')
-    expect(inProgress).toContain('data-handleid="target:top"')
-    expect(inProgress).toContain('data-handleid="source:bottom"')
-    expect(inProgress).toContain('data-handleid="source:right"')
-    expect(inProgress).toContain('data-handleid="target:right"')
-    const blocked = slice('state', 'Blocked')
-    expect(blocked).toContain('data-handleid="target:left"')
-    expect(blocked).toContain('data-handleid="source:left"')
-    const done = slice('state', 'Done')
-    expect(done).toContain('data-handleid="target:top"')
-    expect(done).not.toContain('data-handleid="source:bottom"')
-    const unknown = slice('state', 'unknown')
-    expect(unknown).toContain('data-handleid="target:top"')
-    expect(unknown).not.toContain('data-handleid="source:')
-  })
-
-  it('empty ledger (0 events) → empty-state note, skeleton unlit, strip count 0', () => {
+  it('empty ledger (0 events) → agents zone muted empty note; dock hidden (no placeholder box)', () => {
     const html = panelHtml(flowSource([]))
-    expect(html).toContain('data-graph-empty="flow-empty"')
+    expect(html).toContain('data-zone="agents"')
     expect(html).toContain('No actual dispatches yet (recording starts at agent-flow plan merge)')
-    expect(html).toContain('data-graph-flow-count="0"')
-    expect(flowNodeSlice(html, 'autonomous-execute:sdd-implement')).toContain('data-graph-lit="false"')
+    expect(html).not.toContain('data-agent-event-dock')
+    expect(html).not.toContain('data-mstar-flow-events')
   })
 
-  it('garbage agentFlow → degraded note, never a crash', () => {
+  it('garbage agentFlow → degraded muted note, never a crash', () => {
     const html = panelHtml({
       ...fullSource,
       state: { ...fullSource.state!, agentFlow: 42 },
     } as unknown as MstarEngineStatusSource)
-    expect(html).toContain('data-graph-canvas')
-    expect(html).toContain('data-graph-empty="flow-degraded"')
-    expect(html).toContain('data-graph-node="flow:autonomous-execute:sdd-implement"')
+    expect(html).toContain('data-mstar-canvas')
+    expect(html).toContain('data-zone="agents"')
+    expect(html).toContain('No agent-flow evidence (ledger missing)')
+    expect(html).not.toContain('data-agent-event-dock')
   })
 
   it('legend includes the flow-expected / flow-actual / flow-unexpected swatches, en + zh', () => {
@@ -1288,7 +1196,7 @@ describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline
     expect(zhHtml).toContain('未匹配角色（描边）')
   })
 
-  it('zh locale localizes the flow strip labels + status colors', () => {
+  it('zh locale localizes the dock title + status labels', () => {
     const zhHtml = panelHtml(flowSource(flowEvents), undefined, undefined, 'zh')
     expect(zhHtml).toContain('Agent 流转事件')
     expect(zhHtml).toContain('已派发')
@@ -1297,7 +1205,7 @@ describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline
     expect(zhHtml).toContain('3 条')
   })
 
-  it('a new catalog row with fresh agentFlow events updates the strip (data path)', () => {
+  it('a new catalog row with fresh agentFlow events mounts/updates the dock (data path)', () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
@@ -1306,13 +1214,14 @@ describe('workflow panel — T3 flow column: expected/actual agent-flow pipeline
       ...kitProps({ useSession: bindUseSession(store) }),
       t: locale.bind(NS),
     }))
-    expect(renderStore()).toContain('data-graph-flow-count="0"')
-    expect(renderStore()).toContain('data-graph-empty="flow-degraded"')
+    // fullSource: agentFlow null → degraded agents note + NO dock.
+    expect(renderStore()).not.toContain('data-agent-event-dock')
+    expect(renderStore()).toContain('No agent-flow evidence (ledger missing)')
     store.set(snapshotFor(flowSource(flowEvents), 1_720_000_004_000))
     const after = renderStore()
-    expect(after).toContain('data-graph-flow-count="3"')
-    expect(after).not.toContain('data-graph-empty="flow-degraded"')
-    expect(after).toContain('data-graph-node="flow:unexpected"')
+    expect(after).toContain('data-agent-event-dock')
+    expect(after).toContain('data-agent-event-count="3"')
     expect(after).toContain('plan-1#T2')
+    expect(after).not.toContain('No agent-flow evidence (ledger missing)')
   })
 })

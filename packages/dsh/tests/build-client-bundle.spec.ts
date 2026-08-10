@@ -91,7 +91,7 @@ describe('transformCssModule — the exact css-modules transform the build runs'
   it('transform-layer assertions pass on the shipped module.css files (plan Scope item 2)', () => {
     for (const file of [
       join(PKG_DIR, 'src/client/panel/panel.module.css'),
-      join(PKG_DIR, 'src/client/panel/graph/graph.module.css'),
+      join(PKG_DIR, 'src/client/panel/zones/zones.module.css'),
     ]) {
       const { classMap, css } = transformCssModule(readFileSync(file, 'utf8'))
       expect(Object.keys(classMap).length).toBeGreaterThan(0)

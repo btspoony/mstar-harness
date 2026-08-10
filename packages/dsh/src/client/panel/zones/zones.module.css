@@ -1,0 +1,402 @@
+/**
+ * Zone canvas styles (spec panel-zones §2/§7): WorkflowCanvas replaces the
+ * react-flow GraphCanvas with a pure HTML/CSS zone dashboard — three zone
+ * frames in a CSS grid (iteration fixed left / tasks flex center / agents
+ * fixed right; stacked below 1200px), a bottom fixed footer bar (legend +
+ * gate summary) that never scrolls with the zones, and the canvas-corner
+ * AgentEventDock (absolute bottom-left; mounted only when events exist).
+ *
+ * v3 layout invariants (spec §2): the zone scroll container is the ONLY
+ * scroll body (overflow: auto, overscroll contained) — the page / main never
+ * scroll; the footer bar is flex:none (fixed height, outside the scroll
+ * region); the dock is absolute in the canvas container.
+ *
+ * Hard metrics (spec §1.2/§7): spacing from the --mstar-space-* ramp (defined
+ * at the panel root) only; EVERY color is a verified --dsw-* alias token —
+ * zero bare hex/rgb, so dark mode is the host token flip; motion ≤200ms
+ * state switches (the panel root's prefers-reduced-motion rule disables all
+ * transitions/animations).
+ */
+
+.canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The ONLY scroll body (spec §2): zones scroll here, the page never does. */
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--mstar-space-1);
+}
+
+/* Three-zone grid (spec §2): iteration fixed left, tasks flex center, agents
+ * fixed right — stacked vertically below 1200px. */
+.zones {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 380px;
+  align-items: start;
+  gap: var(--mstar-space-3);
+}
+
+@media (max-width: 1200px) {
+  .zones {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- zone frame (shared by all three zones) --- */
+
+.zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+  padding: var(--mstar-space-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.zone:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.zoneHeader {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.zoneEmpty {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* --- footer bar (spec §2): flex:none = fixed height, never scrolls with the zones --- */
+
+.footer {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--mstar-space-4);
+  min-width: 0;
+  padding: var(--mstar-space-3) var(--mstar-space-1);
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.legendTitle {
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.legendList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-1) var(--mstar-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+}
+
+.legendSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* Zone-semantic legend swatches (spec §7): iteration frame, current step,
+ * disabled iteration, task kanban, verdicts, and the expected/actual/
+ * unexpected agent-pipeline states — mirrors the zone treatments. */
+.swatchIteration {
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  border-radius: 8px;
+}
+
+.swatchCurrent {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.swatchDisabled {
+  background: var(--dsw-alias-border-l2);
+  opacity: 0.55;
+}
+
+.swatchTasks {
+  border: 1px solid var(--dsw-alias-state-business-primary);
+}
+
+.swatchPass {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.swatchFail {
+  background: var(--dsw-alias-state-error-primary);
+}
+
+.swatchFlowExpected {
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
+}
+
+.swatchFlowActual {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.swatchFlowUnexpected {
+  border: 1px dashed var(--dsw-alias-state-warn-label);
+}
+
+/* --- gate summary (footer right) --- */
+
+.gateSummary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  font: var(--dsw-font-xxxs-11);
+}
+
+.summaryPass {
+  color: var(--dsw-alias-state-success-primary);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.summaryFail {
+  color: var(--dsw-alias-state-error-primary);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.summaryUnknown {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.violationsDetails {
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.violationsDetails summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.violationList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: var(--mstar-space-1) 0 0;
+  padding: 0;
+  max-height: 160px;              /* footer bar keeps its fixed height when expanded */
+  overflow-y: auto;
+  list-style: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.violationCode {
+  display: inline-block;
+  margin-right: var(--mstar-space-2);
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.violationList [data-severity='critical'],
+.violationList [data-severity='high'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* --- AgentEventDock (spec §2): canvas bottom-left absolute corner, mounted
+   only when events exist (v3 — hidden entirely, no placeholder, when empty) --- */
+
+.dock {
+  position: absolute;
+  left: var(--mstar-space-3);
+  bottom: var(--mstar-space-3);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  max-width: 380px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: var(--mstar-space-2) var(--mstar-space-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 0 0 1px var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.dockHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-2);
+}
+
+.dockTitle {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.dockCount {
+  color: var(--dsw-alias-label-caption);
+}
+
+.dockUnexpectedBadge {
+  display: inline-block;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-state-warn-label);
+  border-radius: 999px;
+  color: var(--dsw-alias-state-warn-label);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.flowEventList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: var(--mstar-space-1) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.flowEventRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-1) var(--mstar-space-2);
+}
+
+.flowEventRole {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.flowEventTarget {
+  overflow-wrap: anywhere;
+}
+
+.flowEventTime {
+  color: var(--dsw-alias-label-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.flowEventAgent {
+  color: var(--dsw-alias-label-caption);
+}
+
+.flowEventDuration {
+  color: var(--dsw-alias-label-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status chip: colored dot (currentColor) + colored label — the 5 statuses
+ * from the projection (dispatch → in-flight/advisory/denied; settle →
+ * settled-ok/error/denied). */
+.flowStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  font-weight: 600;
+}
+
+.flowStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.flowStatusDispatched {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.flowStatusAdvisory {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.flowStatusDenied {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.flowStatusOk {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.flowStatusError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Unreachable-in-practice fallback (the projection's status union is closed);
+ * kept for the total-function default branch. */
+.flowStatusUnknown {
+  color: var(--dsw-alias-label-caption);
+}
+
+/* The settled ✓ on a paired dispatch row — a completion marker, not a label. */
+.flowSettledMark {
+  color: var(--dsw-alias-state-success-primary);
+  font-weight: 600;
+}
+
+/* Settle rows carry no role (T1 sets '') — the row's role cell shows this
+ * glyph (the settle record itself is the completion marker). NEUTRAL color:
+ * the ✓ marks the record, not success — the status chip carries all outcome
+ * semantics. */
+.flowSettleGlyph {
+  color: var(--dsw-alias-label-secondary);
+  font-weight: 600;
+}
+
+.flowUnexpectedSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin-top: var(--mstar-space-2);
+  padding-top: var(--mstar-space-2);
+  border-top: 1px dashed var(--dsw-alias-state-warn-label);
+}
+
+.flowUnexpectedHeading {
+  color: var(--dsw-alias-state-warn-label);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
