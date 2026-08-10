@@ -8,6 +8,12 @@
  *  1. HarnessResolver unit semantics — explicit config wins outright; a
  *     missing workspace resolves to null (no process-cwd probe); the probe
  *     starts from the given workspace root; results are memoized per root.
+ *  1b. Workspace-root boundary (roadmap §7c) — the probe stops AT the session
+ *     workspace (`workspaceRoot = cwd`): a harness dir anywhere above it is
+ *     never returned (the `~/.mstar` global-collision fixture), even inside a
+ *     git repo where the engine's default boundary would have walked up; a
+ *     workspace-local harness still resolves; explicit `config.harnessDir`
+ *     stays authoritative outside the boundary.
  *  2. Pre-step catalog — no-config boot: an agent carrying a session cwd
  *     watermarks the WORKSPACE's harness dir; an agent-less event shows
  *     `harness dir: none` even though the process cwd walk-up would reach
@@ -22,7 +28,7 @@
  *     digest key).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdir, mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
@@ -43,6 +49,19 @@ afterEach(async () => {
 /** A fresh workspace root directory. */
 async function makeWorkspace(prefix: string): Promise<string> {
   return await mkdtemp(join(tmpdir(), prefix))
+}
+
+/**
+ * Minimal valid git work tree (no `git init` subprocess) — mirrors the
+ * engine/cli `gitInit` fixture: the engine's default boundary runs
+ * `git rev-parse --show-cdup`, which only needs a valid `.git` layout
+ * (HEAD + config + objects/ + refs/) — no commits.
+ */
+async function gitInit(root: string): Promise<void> {
+  await mkdir(join(root, '.git', 'objects'), { recursive: true })
+  await mkdir(join(root, '.git', 'refs'), { recursive: true })
+  await writeFile(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+  await writeFile(join(root, '.git', 'config'), '[core]\n\trepositoryformatversion = 0\n')
 }
 
 /** A pre-step payload whose agent carries a session cwd (the workspace). */
@@ -115,6 +134,61 @@ describe('HarnessResolver — explicit config wins; the probe starts from the wo
     // A different workspace probes independently.
     const other = await makeWorkspace('dsh-ws-memo-other-')
     expect(resolver.forWorkspace(other)).toBeNull()
+  })
+})
+
+/* ===========================================================================
+ * 1b. Workspace-root boundary (roadmap §7c) — the probe stops AT the session
+ * workspace; a harness dir anywhere above it is never returned, even when
+ * the engine's default git boundary would have found it. The dsh boundary
+ * is the probe start itself (`workspaceRoot = cwd`), NOT the git top-level.
+ * ========================================================================== */
+
+describe('HarnessResolver — workspace-root boundary: probe stops at the session workspace (roadmap §7c)', () => {
+  it('a `.mstar` above the session workspace but INSIDE the git top-level is never returned — the dsh boundary is the probe start, not git', async () => {
+    const home = await makeWorkspace('dsh-ws-boundary-')
+    const repo = join(home, 'proj')
+    await gitInit(repo) // the engine DEFAULT boundary would be this repo root
+    await mkdir(join(repo, '.mstar'), { recursive: true }) // harness ABOVE the session workspace
+    const ws = join(repo, 'packages', 'app') // the session workspace (deep)
+    await mkdir(ws, { recursive: true })
+    const resolver = new HarnessResolver(undefined)
+    // dsh boundary = the probe start (session cwd): no walk-up beyond it,
+    // so the repo-root `.mstar` must NOT resolve for a deeper workspace.
+    expect(resolver.forWorkspace(ws)).toBeNull()
+    expect(resolver.forAgent({ session: { header: { cwd: ws } } })).toBeNull()
+  })
+
+  it('a `~/.mstar`-style fixture in the parent chain above the workspace is never returned (the global-collision regression)', async () => {
+    const home = await makeWorkspace('dsh-ws-collision-')
+    await mkdir(join(home, '.mstar'), { recursive: true }) // the "global" ~/.mstar fixture
+    const repo = join(home, 'proj')
+    await gitInit(repo)
+    const ws = join(repo, 'nested', 'deep') // the session workspace, deep under the fixture home
+    await mkdir(ws, { recursive: true })
+    const resolver = new HarnessResolver(undefined)
+    expect(resolver.forWorkspace(ws)).toBeNull()
+    expect(resolver.forAgent({ session: { header: { cwd: ws } } })).toBeNull()
+  })
+
+  it('a workspace-LOCAL harness still resolves — the boundary keeps the probe at the start itself, and the start is probed', async () => {
+    const home = await makeWorkspace('dsh-ws-local-')
+    await mkdir(join(home, '.mstar'), { recursive: true }) // parent-chain fixture (must NOT win)
+    const ws = join(home, 'proj')
+    await gitInit(ws) // the engine default boundary = the workspace itself here
+    await mkdir(join(ws, '.agents'), { recursive: true }) // workspace-local harness
+    const resolver = new HarnessResolver(undefined)
+    expect(resolver.forWorkspace(ws)).toBe(join(ws, '.agents'))
+  })
+
+  it('explicit config.harnessDir stays authoritative even OUTSIDE the workspace boundary', async () => {
+    const home = await makeWorkspace('dsh-ws-explicit-outside-')
+    await mkdir(join(home, '.mstar'), { recursive: true }) // above the workspace (outside the boundary)
+    const ws = join(home, 'proj', 'src')
+    await mkdir(ws, { recursive: true })
+    const resolver = new HarnessResolver(join(home, '.mstar'))
+    expect(resolver.forWorkspace(ws)).toBe(join(home, '.mstar'))
+    expect(resolver.forAgent({ session: { header: { cwd: ws } } })).toBe(join(home, '.mstar'))
   })
 })
 

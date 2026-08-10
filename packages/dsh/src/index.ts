@@ -2971,7 +2971,11 @@ function registerMstarCommands(ctx: Context): void {
  *
  * The probe NEVER starts from the process cwd — it starts from the WORKSPACE
  * root of the session whose agent drives the event (the session cwd,
- * `agent.session.header.cwd` — the dsh workspace the user opened). An
+ * `agent.session.header.cwd` — the dsh workspace the user opened) AND stops
+ * there: `workspaceRoot = 探测起点` (roadmap §7c), so the walk-up never
+ * leaves the session workspace (the `~/.mstar` global-collision defect is
+ * the special case) and the dsh boundary deliberately diverges from the
+ * CLI's git-top-level boundary. An
  * explicit `harnessDir` config still wins outright (resolved once at boot;
  * a relative value is launch-cwd anchored — config path anchoring, not
  * probing — matching the `bundledSkillDir` precedent and the engine's
@@ -2998,13 +3002,21 @@ export class HarnessResolver {
    * @param cwd - the workspace root; `undefined` when the event carries no session.
    * @returns the resolved `{HARNESS_DIR}` (explicit override, else the probe
    * from the workspace root), or `null` when none resolves.
+   *
+   * Boundary (roadmap §7c): the probe stops AT the workspace root —
+   * `workspaceRoot = 探测起点` (the session cwd itself), so it never walks up
+   * beyond the session workspace (the `~/.mstar` global-collision special
+   * case), and it does NOT inherit the engine's default git-top-level
+   * boundary (the CLI surface). An empty/missing `cwd` keeps the current
+   * contract: `null`, never a process-cwd probe.
    */
   forWorkspace(cwd: string | undefined): string | null {
     if (this.explicit !== null) return this.explicit
     if (cwd === undefined || cwd.trim() === '') return null
     const hit = this.cache.get(cwd)
     if (hit !== undefined) return hit
-    const resolved = resolveHarnessDir(cwd)
+    // The probe start is the boundary: never walk up from the session cwd.
+    const resolved = resolveHarnessDir(cwd, { workspaceRoot: cwd })
     this.cache.set(cwd, resolved)
     return resolved
   }
