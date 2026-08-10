@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-08-10
+
+### Harness
+
+- `/iteration-start`: accepts an optional `direction` hint (constrains §2 candidates, seeds §3 grill-me — start stays interactive) and a `pause` flag; auto-continues into Phase 2→5 (execute → close → PR → merge-ready) after Phase 1 lock + integration branch, by default. `/iteration-drive` remains standalone for re-entry/resume on an already-locked iteration. Updated `iteration-loop` vs-commands table, README/README_CN command tables + workflow diagrams, OpenCode package quick start; added routing eval `iteration-start-auto-continue-phase2`.
+
+- Version alignment with harness **2.0.5** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.0.5**.
+
 ## [2.0.4] - 2026-08-09
 
 ### Bundled harness skills (`harness-skills/` at publish)
