@@ -94,6 +94,7 @@ const fullSource: MstarEngineStatusSource = {
       categories: ['architecture-patterns', 'conventions', 'tooling-decisions'],
     },
     direction: 'dsh is highly customizable (client plugins + slot registry)',
+    agentFlow: null,
   },
 }
 
@@ -126,6 +127,7 @@ const noGateSource: MstarEngineStatusSource = {
     leases: [],
     knowledge: null,
     direction: null,
+    agentFlow: null,
   },
 }
 

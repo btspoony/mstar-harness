@@ -29,6 +29,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { HarnessResolver, Config } from './_shared.ts'
 import { validateStatusDoc, validateStatusValue } from './status.ts'
 import { dispatchGateCore, leaseGateViolations, assignmentTextFromFields, resolveDispatchHard } from './dispatch.ts'
+import { recordDispatch, AGENT_FLOW_LOGGER } from './agent-flow.ts'
 /** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
 const HOST_LOGGER = 'mstar/host-adapter'
 /** Options for {@link DshHostAdapter}. */
@@ -139,6 +140,27 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const { violations, writable } = dispatchGateCore(this.config, harnessDir, prompt)
     if (exec !== undefined) {
       violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt))
+    }
+    // Agent-flow ledger — the ONE recording point for both dispatch paths
+    // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
+    // listener AND the host `beforeDispatch` hook). Recorded UNCONDITIONALLY
+    // (verdict derivation covers clean / advisory / hard deny) and
+    // advisory-only: `recordDispatch` is fully try/catch-contained and this
+    // belt-and-braces guard keeps a ledger bug from ever reaching the gate.
+    if (harnessDir !== null) {
+      try {
+        recordDispatch({
+          harnessDir,
+          exec,
+          prompt,
+          violations,
+          hard: resolveDispatchHard(harnessDir, this.config, prompt),
+        })
+      } catch (error) {
+        this.ctx.logger(AGENT_FLOW_LOGGER).error(
+          `agent-flow dispatch record failed (contained — dispatch proceeds): ${(error as Error).message}`,
+        )
+      }
     }
     return { ok: violations.length === 0, violations }
   }

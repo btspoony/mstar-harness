@@ -51,6 +51,11 @@ import {
   DISPATCH_LOGGER,
 } from './gates/dispatch.ts'
 import type { DispatchGateAdvisory } from './gates/dispatch.ts'
+import {
+  AGENT_FLOW_LOGGER,
+  registerSettleListener,
+  setAgentFlowLogger,
+} from './gates/agent-flow.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -58,7 +63,23 @@ import type { DispatchGateAdvisory } from './gates/dispatch.ts'
 // typed `ctx.dshMstar`.
 export { DshMstar } from './service.ts'
 export type { DshMstarOptions } from './service.ts'
-export type { MstarEngineStatusSource, MstarHarnessState, MstarIterationGateView } from './types.ts'
+export type {
+  MstarEngineStatusSource,
+  MstarHarnessState,
+  MstarIterationGateView,
+  AgentFlowEventView,
+  AgentFlowSummaryRow,
+  AgentFlowView,
+} from './types.ts'
+export {
+  AGENT_FLOW_FILE,
+  AGENT_FLOW_MAX_EVENTS,
+  SETTLE_SEAM,
+  readAgentFlow,
+  recordDispatch,
+  recordSettle,
+} from './gates/agent-flow.ts'
+export type { AgentFlowEvent, DispatchVerdict, SettleOutcome } from './gates/agent-flow.ts'
 export { Config, HarnessResolver, skillLocalConfig } from './gates/_shared.ts'
 export type { StatusGateAdvisory } from './gates/status.ts'
 export { SkillLintVetoError, lintSkillDoc, lintSkillWrite } from './gates/skill-lint.ts'
@@ -254,6 +275,22 @@ export function apply(ctx: Context, config: Config): void {
   // Constructed as a dsh service: `ctx.dshHostAdapter` is available to
   // inject consumers and host hooks after boot.
   const adapter = new DshHostAdapter(ctx, { resolver, config })
+
+  // Agent-flow ledger — bind the `mstar/agent-flow` logger sink (record
+  // failures and the settle-unavailable trace log through it) and register
+  // the defensive `tools/post-execute` settle listener (spec §2.1.2 Tier-2
+  // best-effort: the seam is NOT part of the verified dsh-tools surface, so
+  // settle events depend on host emission — a host that never emits leaves
+  // the ledger dispatch-only, with the settle-unavailable trace logged once
+  // and documented; the dispatch side records unconditionally via
+  // `DshHostAdapter.dispatchGate`).
+  setAgentFlowLogger((level, message) => {
+    const logger = ctx.logger(AGENT_FLOW_LOGGER)
+    if (level === 'warn') logger.warn(message)
+    else if (level === 'error') logger.error(message)
+    else logger.info(message)
+  })
+  registerSettleListener(ctx, resolver)
 
   // Bundled mstar commands — the omp/opencode slash-command parity surface
   // (iteration-start / iteration-drive / iteration-loop / codebase-audit),

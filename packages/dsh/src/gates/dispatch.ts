@@ -187,11 +187,13 @@ function isNaValue(value: string | undefined): value is undefined {
 /**
  * Resolve the target plan id from the Assignment HEADER region: `Plan Path`
  * basename (`.md` stripped), else `SDD dir` basename, else a `plan_id` field.
+ * Exported for the agent-flow ledger's dispatch derivation (the ledger
+ * records the same plan identity the gate resolved — one grammar).
  * @param headerRegion - `assignmentHeaderRegion(assignmentText)` (
  * only the header is read — a plan path quoted in the task body never
  * resolves a plan id).
  */
-function planIdOf(headerRegion: string): string | undefined {
+export function planIdOf(headerRegion: string): string | undefined {
   const planPath = assignmentHeaderValue(headerRegion, 'Plan Path')
   if (!isNaValue(planPath)) {
     const id = basename(firstToken(planPath) ?? '')
@@ -206,8 +208,13 @@ function planIdOf(headerRegion: string): string | undefined {
   return isNaValue(planId) ? undefined : planId
 }
 
-/** The dispatching session's stable id, when the seam exposes it (dsh Agent.id). */
-function sessionIdOf(exec: ToolExecution): string | undefined {
+/**
+ * The dispatching session's stable id, when the seam exposes it (dsh
+ * Agent.id). Exported for the agent-flow ledger's dispatch derivation (the
+ * ledger records the same agent identity the lease gate compares — one
+ * grammar).
+ */
+export function sessionIdOf(exec: ToolExecution): string | undefined {
   const agent = asRecord(exec.agent)
   const id = agent?.id
   return typeof id === 'string' && id.trim() !== '' ? id : undefined

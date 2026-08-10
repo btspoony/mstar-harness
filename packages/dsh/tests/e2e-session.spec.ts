@@ -35,11 +35,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { CallId, PreToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
-import { DshHostAdapter } from '../src/index.ts'
+import { DshHostAdapter, SETTLE_SEAM, readAgentFlow } from '../src/index.ts'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -556,5 +557,68 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
     const text = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')
     expect(text).toContain('mstar version: 2.0.6')
+  })
+})
+
+/* ===========================================================================
+ * 10. Agent-flow ledger — settle verification gate (spec §2.1.2)
+ * ========================================================================== */
+
+describe('agent-flow — settle verification gate (real call + Tier-2 wiring)', () => {
+  /** Emit an event NOT declared on the typed Events surface (runtime-valid). */
+  function emitUndeclared(ctx: BootResult['ctx'], name: string, ...args: unknown[]): void {
+    ;(ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(name, ...args)
+  }
+
+  it('a real subagent call through the composed registry records a dispatch; settle stays absent at dev time; a simulated host emission records the settle (Tier-2 live)', async () => {
+    booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
+    // Dev-time reality: the peer-stub tool registry ships no delegation tool,
+    // so the test registers the `subagent` tool it would have mounted — the
+    // composed pipeline (pre-execute waterfall → validation → body → render)
+    // is the shipping registry code (harness.ts / dsh-tools peer-stub).
+    booted.ctx.tools.register(defineTool({
+      name: 'subagent',
+      description: 'delegate a task to a subagent',
+      parameters: {
+        description: { type: 'string' },
+        prompt: { type: 'string', required: true },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: String(value) }],
+      },
+      execute: async () => 'subagent result',
+    }))
+
+    // REAL subagent call through the composed registry (agent-bound).
+    const result = await booted.ctx.tools.execute({
+      callId,
+      name: 'subagent',
+      arguments: { description: 'probe', prompt: fixture('assignments/valid.md') },
+      agent: { id: 'e2e-agent' },
+      signal,
+    })
+    expect(result.isError).toBe(false)
+
+    // Dispatch recorded with the session's agent id.
+    const view = readAgentFlow(booted.harnessDir)
+    expect(view).not.toBeNull()
+    expect(view!.events).toHaveLength(1)
+    expect(view!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', agent: 'e2e-agent' })
+
+    // Settle unavailable at dev time: the peer-stub registry emits NO
+    // `tools/post-execute` (its pre-execute pipeline settles without a
+    // post-execute event — the documented dispatch-only degrade). The ledger
+    // must NOT fabricate settlement.
+    expect(view!.events.some((e) => e.kind === 'settle')).toBe(false)
+
+    // Tier-2 wiring live: a HOST that emits the seam upgrades the ledger —
+    // the defensive listener shape-probes the payload and records the settle.
+    emitUndeclared(booted.ctx, SETTLE_SEAM, { agent: { id: 'e2e-agent' }, name: 'subagent' }, { isError: false })
+
+    const after = readAgentFlow(booted.harnessDir)
+    expect(after!.events).toHaveLength(2)
+    expect(after!.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'e2e-agent' })
+    expect(after!.events[1]).toMatchObject({ kind: 'dispatch' })
   })
 })

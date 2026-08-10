@@ -29,6 +29,7 @@ import type { StatusDoc } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
+  AgentFlowView,
   HarnessLeaseView,
   HarnessPlanView,
   HarnessResidualView,
@@ -38,6 +39,7 @@ import type {
   MstarIterationGateView,
 } from '../types.ts'
 import { STATUS_FILE, asRecord, sessionCwdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
+import { readAgentFlow } from './agent-flow.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
 const CATALOG_LOGGER = 'mstar/engine-status-catalog'
 
@@ -184,9 +186,44 @@ function renderEngineStatusCatalog(source: MstarEngineStatusSource): string {
       lines.push(`knowledge: ${state.knowledge.docCount} doc${state.knowledge.docCount === 1 ? '' : 's'} (${state.knowledge.categories.join(', ')})`)
     }
     if (state.direction !== null) lines.push(`direction: ${state.direction}`)
+    const flow = state.agentFlow
+    if (flow !== null && flow.events.length > 0) {
+      lines.push(renderAgentFlowLine(flow))
+    }
   }
   lines.push('</mstar_engine_status>')
   return lines.join('\n')
+}
+
+/**
+ * The model-facing agent-flow line (spec §2.2): ONE compact row, emitted only
+ * when the ledger has events. Role totals collapse the role × outcome summary
+ * (top 5 by count); `latest` is the newest dispatch's `role→planId#taskId`
+ * with the local HH:MM timestamp. The event detail lives in the structured
+ * `source.agentFlow` only — the model text must not balloon.
+ * @param flow - the ledger view (non-empty events).
+ */
+function renderAgentFlowLine(flow: AgentFlowView): string {
+  const byRole = new Map<string, number>()
+  for (const row of flow.summary) {
+    if (row.role === '') continue
+    byRole.set(row.role, (byRole.get(row.role) ?? 0) + row.count)
+  }
+  const top = [...byRole.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+  const roles = top.length === 0 ? 'none' : top.map(([role, count]) => `${role} ${count}`).join(', ')
+  const latest = flow.events.find((event) => event.kind === 'dispatch')
+  const latestText = latest === undefined
+    ? 'none'
+    : `${[latest.role, [latest.planId, latest.taskId !== null ? `#${latest.taskId}` : null]
+        .filter((part): part is string => part !== null)
+        .join('')].filter((part) => part !== '').join('→')} ${hhmm(latest.ts)}`
+  return `agent flow: ${flow.events.length} events; by role: ${roles}; latest: ${latestText}`
+}
+
+/** Local HH:MM for a timestamp (the agent-flow line's time-of-day). */
+function hhmm(ts: number): string {
+  const date = new Date(ts)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 /**
@@ -270,6 +307,13 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
       leases,
       knowledge: knowledgeDigest(harnessDir),
       direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
+      // Actual subagent flow evidence — read on the same per-workspace cache
+      // cycle as the sibling state rows (one bounded ledger read per TTL
+      // refresh; spec §2.2). Missing/unreadable ledger → null (advisory —
+      // the agent-flow line is simply absent). The state section as a whole
+      // is still gated on status.json (missing status → state null → agentFlow
+      // absent too — documented).
+      agentFlow: readAgentFlow(harnessDir, 50),
     }
   } catch {
     return null // advisory degrade — the state section is absent, never hardening

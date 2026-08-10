@@ -67,6 +67,7 @@ const fullSource: MstarEngineStatusSource = {
     leases: [],
     knowledge: null,
     direction: null,
+    agentFlow: null,
   },
 }
 

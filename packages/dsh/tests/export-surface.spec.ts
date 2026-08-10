@@ -22,6 +22,12 @@
  *
  * Frozen at BASE `76bbad4` (pre-split). Do not edit the lists below without
  * an explicit export-surface change review — the split is moves-only.
+ *
+ * Extended for plan `20260810-agent-flow-catalog-graph` (Task 1): the
+ * agent-flow ledger's public API (`recordDispatch` / `recordSettle` /
+ * `readAgentFlow` + `AGENT_FLOW_FILE` / `AGENT_FLOW_MAX_EVENTS` /
+ * `SETTLE_SEAM`) and its event/view types joined the entry surface — a
+ * deliberate, reviewed addition (new module), not a split drift.
  */
 import { describe, expect, it } from 'bun:test'
 import type { Context, Events } from 'cordis'
@@ -30,10 +36,13 @@ import type * as EntryTypes from '../src/index.ts'
 
 /** The frozen VALUE exports (runtime-visible; `Config` is also an interface). */
 const FROZEN_VALUE_EXPORTS = [
+  'AGENT_FLOW_FILE',
+  'AGENT_FLOW_MAX_EVENTS',
   'Config',
   'DshHostAdapter',
   'DshMstar',
   'HarnessResolver',
+  'SETTLE_SEAM',
   'SeamVetoError',
   'SkillLintVetoError',
   'apply',
@@ -46,12 +55,20 @@ const FROZEN_VALUE_EXPORTS = [
   'lintSkillDoc',
   'lintSkillWrite',
   'name',
+  'readAgentFlow',
+  'recordDispatch',
+  'recordSettle',
   'skillLocalConfig',
 ] as const
 
 /** The frozen TYPE-ONLY exports (erased at runtime — pinned for typecheck). */
 const FROZEN_TYPE_ONLY_EXPORTS = [
+  'AgentFlowEvent',
+  'AgentFlowEventView',
+  'AgentFlowSummaryRow',
+  'AgentFlowView',
   'DispatchGateAdvisory',
+  'DispatchVerdict',
   'DshHostAdapterOptions',
   'DshMstarOptions',
   'MstarEngineStatusSource',
@@ -59,6 +76,7 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'MstarIterationGateView',
   'SeamId',
   'SeamLintAdvisory',
+  'SettleOutcome',
   'SkillLintAdvisory',
   'StatusGateAdvisory',
 ] as const
@@ -99,7 +117,12 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
     // fails typecheck if the export disappears. The probe object pins the
     // frozen list as documentation and in the test output.
     const typeProbe = {
+      AgentFlowEvent: null as unknown as EntryTypes.AgentFlowEvent,
+      AgentFlowEventView: null as unknown as EntryTypes.AgentFlowEventView,
+      AgentFlowSummaryRow: null as unknown as EntryTypes.AgentFlowSummaryRow,
+      AgentFlowView: null as unknown as EntryTypes.AgentFlowView,
       DispatchGateAdvisory: null as unknown as EntryTypes.DispatchGateAdvisory,
+      DispatchVerdict: null as unknown as EntryTypes.DispatchVerdict,
       DshHostAdapterOptions: null as unknown as EntryTypes.DshHostAdapterOptions,
       DshMstarOptions: null as unknown as EntryTypes.DshMstarOptions,
       MstarEngineStatusSource: null as unknown as EntryTypes.MstarEngineStatusSource,
@@ -107,6 +130,7 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       MstarIterationGateView: null as unknown as EntryTypes.MstarIterationGateView,
       SeamId: null as unknown as EntryTypes.SeamId,
       SeamLintAdvisory: null as unknown as EntryTypes.SeamLintAdvisory,
+      SettleOutcome: null as unknown as EntryTypes.SettleOutcome,
       SkillLintAdvisory: null as unknown as EntryTypes.SkillLintAdvisory,
       StatusGateAdvisory: null as unknown as EntryTypes.StatusGateAdvisory,
     }
