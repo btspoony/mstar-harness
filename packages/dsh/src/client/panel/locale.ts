@@ -32,6 +32,15 @@
  * `zone.agents.pending-label` (the dashed "待执行" placeholder chip) and
  * `zone.agents.next` (the animated next-edge label). `zone.agents.placeholder`
  * is gone with the placeholder.
+ *
+ * T3 (same plan): the dock is collapsible (the frame is a native <details>,
+ * header = <summary>) and the legend gains the entity-status swatches —
+ * `zone.legend.agent-running` / `zone.legend.agent-settled` (the status-dot
+ * treatments of the entity cards; the `zone.agents.*` family itself is
+ * complete from T2 — every key is rendered, so no `zone.agents.status.*`
+ * family is added: a status TEXT on the cards would be dead strings, the
+ * spec §4 card shows a status point, and reusing `flow.*` would conflate
+ * event status words (dispatched/settled ok) with entity status words).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -62,6 +71,8 @@ export type PanelKey =
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
   | 'zone.legend.flow-unexpected'
+  | 'zone.legend.agent-running'
+  | 'zone.legend.agent-settled'
   | 'zone.legend.next'
   | 'zone.iteration.title'
   | 'zone.iteration.active'
@@ -153,6 +164,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-expected': '预期 stage（空心）',
   'zone.legend.flow-actual': '实际派发（实心）',
   'zone.legend.flow-unexpected': '未匹配角色（描边）',
+  'zone.legend.agent-running': '执行中实体（发光）',
+  'zone.legend.agent-settled': '已结算实体（✓）',
   'zone.legend.next': 'next 流转边（动画）',
   'zone.iteration.title': '迭代',
   'zone.iteration.active': '正在激活的迭代',
@@ -239,6 +252,8 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-expected': 'expected stage (hollow)',
   'zone.legend.flow-actual': 'actual dispatch (filled)',
   'zone.legend.flow-unexpected': 'unexpected role (outlined)',
+  'zone.legend.agent-running': 'agent running (glow)',
+  'zone.legend.agent-settled': 'agent settled (✓)',
   'zone.legend.next': 'next flow edge (animated)',
   'zone.iteration.title': 'Iteration',
   'zone.iteration.active': 'active iteration',

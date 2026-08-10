@@ -1555,6 +1555,103 @@ describe('workflow panel — T2 event dock: canvas-corner agent-flow events (spe
 })
 
 /* ---------------------------------------------------------------------------
+ * T3 dock alignment + agent-status legend (plan 20260810-panel-agent-flow-zone
+ * Task 3, AC-2/AC-5): the dock is COLLAPSIBLE (native <details>, open by
+ * default — the header row is its <summary>, no-JS toggle) on top of the v3
+ * three-state show/hide (events → mounted / 0 events → hidden / unreadable →
+ * hidden, no placeholder); the legend gains the entity-status swatches
+ * (`agent-running` / `agent-settled`, en + zh); the event-row anchor lineage
+ * (`data-agent-event-dock` / `data-graph-flow-event-*` / `data-flow-status`)
+ * is preserved. The projection-side status rules stay unit-tested in
+ * client-graph-projection.spec.ts — these pin the RENDER + locale layer.
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — T3 dock alignment: collapsible + three states + agent-status legend (plan 20260810-panel-agent-flow-zone Task 3)', () => {
+  it('the dock renders as a collapsible <details> open by default, header = <summary> (no-JS toggle)', () => {
+    const html = panelHtml(flowSource(flowEvents))
+    // Root tag: the dock IS a <details> carrying the mount anchors, default-open.
+    expect(html).toMatch(/<details[^>]*data-agent-event-dock[^>]*data-agent-event-count="3"[^>]*open=""/)
+    // The header row is the <summary> (the collapse toggle), followed by the
+    // event list inside the details body.
+    const dockStart = html.indexOf('data-agent-event-dock')
+    expect(html.slice(dockStart)).toMatch(/<summary>/)
+    expect(html.slice(dockStart)).toMatch(/<\/summary>\s*<ul[^>]*data-mstar-flow-events/)
+    // The unexpected re-list stays INSIDE the collapsible body.
+    const body = html.slice(dockStart)
+    expect(body.indexOf('data-mstar-flow-unexpected')).toBeGreaterThan(body.indexOf('</summary>'))
+    expect(body).toContain('</details>')
+    // The old non-collapsible wrapper is gone (no nested div.dock shell).
+    expect(html.match(/<div[^>]*data-agent-event-dock/g)).toBeNull()
+  })
+
+  it('dock show/hide three states: events → mounted; 0 events → hidden; unreadable → hidden (no placeholder)', () => {
+    // With events → mounted.
+    expect(panelHtml(flowSource(flowEvents))).toContain('data-agent-event-dock')
+    // 0 events (empty ledger) → hidden entirely, no placeholder box.
+    expect(panelHtml(flowSource([]))).not.toContain('data-agent-event-dock')
+    expect(panelHtml(flowSource([]))).not.toContain('data-mstar-flow-events')
+    // Unreadable ledger (null + garbage) → hidden, never a crash.
+    expect(panelHtml(fullSource)).not.toContain('data-agent-event-dock')
+    const garbage = panelHtml({ ...fullSource, state: { ...fullSource.state!, agentFlow: 42 } } as unknown as MstarEngineStatusSource)
+    expect(garbage).not.toContain('data-agent-event-dock')
+    expect(garbage).toContain('data-mstar-canvas')
+  })
+
+  it('event-row anchor lineage preserved: data-graph-flow-event-* + data-flow-status + role → planId#taskId cells', () => {
+    const html = panelHtml(flowSource(flowEvents))
+    // The row/status anchors that predate T3 still render unchanged.
+    expect(html).toContain('data-graph-flow-event-kind="dispatch"')
+    expect(html).toContain('data-graph-flow-event-status="dispatched"')
+    expect(html).toContain('data-graph-flow-event-settled="true"')
+    expect(html).toContain('data-flow-status="ok"')
+    expect(html).toContain('frontend-dev')
+    expect(html).toContain('plan-1#T2')
+    // Unexpected re-list anchor (spec §2.4 — unexpected events re-listed).
+    expect(html).toContain('data-mstar-flow-unexpected')
+    expect(html).toContain('data-agent-event-unexpected-count="1"')
+  })
+
+  it('legend includes the agent-running / agent-settled entity-status swatches, en + zh (next already present)', () => {
+    const html = panelHtml(fullSource)
+    for (const key of ['agent-running', 'agent-settled', 'next']) {
+      expect(html).toContain(`data-mstar-legend-item="${key}"`)
+    }
+    expect(html).toContain('agent running (glow)')
+    expect(html).toContain('agent settled (✓)')
+    expect(html).toContain('next flow edge (animated)')
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-mstar-legend-item="agent-running"')
+    expect(zhHtml).toContain('data-mstar-legend-item="agent-settled"')
+    expect(zhHtml).toContain('执行中实体（发光）')
+    expect(zhHtml).toContain('已结算实体（✓）')
+    expect(zhHtml).toContain('next 流转边（动画）')
+  })
+
+  it('legend swatch CSS: the two entity-status swatches are token-only and ride the radius ramp', () => {
+    const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
+    for (const cls of ['swatchAgentRunning', 'swatchAgentSettled']) {
+      const rule = cssText.match(new RegExp(`\\.${cls}\\s*\\{[\\s\\S]*?\\}`))
+      expect(rule, cls).not.toBeNull()
+      // State tokens only — running = business (the card glow), settled = success.
+      expect(rule![0]).toMatch(/--dsw-alias-state-(?:business|success)-primary/)
+      expect(rule![0]).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/)
+      // The swatch dot rides the chip radius ramp (999px circle).
+      expect(rule![0]).toContain('border-radius: 999px')
+    }
+  })
+
+  it('zh locale: the collapsible dock localizes its title + status labels', () => {
+    const zhHtml = panelHtml(flowSource(flowEvents), undefined, undefined, 'zh')
+    expect(zhHtml).toMatch(/<details[^>]*data-agent-event-dock[^>]*open=""/)
+    expect(zhHtml).toContain('Agent 流转事件')
+    expect(zhHtml).toContain('已派发')
+    expect(zhHtml).toContain('已结算')
+    expect(zhHtml).toContain('3 条')
+    expect(zhHtml).toContain('未匹配角色')
+  })
+})
+
+/* ---------------------------------------------------------------------------
  * T2 agent flow zone (spec panel-zones §4/§8, plan 20260810-panel-agent-flow-
  * zone): the 6 EXPECTED_ROLE_FLOW stage columns + entity cards (name/role
  * chip/task tag/status point/×N) + the summary row + pending placeholders +

@@ -185,6 +185,20 @@
   border: 1px dashed var(--dsw-alias-state-business-primary);
 }
 
+/* Entity status swatches (plan 3 T3): the agents-zone status-dot treatments —
+ * running = business dot with the 1px ring the running-card glow uses;
+ * settled = the success ✓ color. Mirrors the entity status points (spec §4). */
+.swatchAgentRunning {
+  background: var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--dsw-alias-bg-layer-1), 0 0 0 2px var(--dsw-alias-state-business-primary);
+}
+
+.swatchAgentSettled {
+  background: var(--dsw-alias-state-success-primary);
+  border-radius: 999px;
+}
+
 /* --- gate summary (footer right) --- */
 
 .gateSummary {
@@ -273,6 +287,15 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--mstar-space-2);
+  /* T3 collapsible dock: the header IS the <details> summary — the cursor
+     signals the toggle; the native disclosure marker is hidden so the row
+     reads as the plain title/count header (no-JS toggle, SSR-stable). */
+  cursor: pointer;
+  list-style: none;
+}
+
+.dockHeader::-webkit-details-marker {
+  display: none;
 }
 
 .dockTitle {

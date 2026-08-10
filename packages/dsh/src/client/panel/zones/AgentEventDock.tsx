@@ -10,6 +10,12 @@
  * with unexpected dispatch events re-listed in their own warn section.
  * Event ids are window-relative (`${ts}-${kind}-${index}`, T1 projection) —
  * NEVER a durable key; React keys only need intra-render stability.
+ *
+ * T3 (plan 20260810-panel-agent-flow-zone): the dock is collapsible — the
+ * frame is a native <details> (open by default, so events show on mount) with
+ * the header row as its <summary>: clicking the header toggles the list
+ * without JS, and the disclosure marker is hidden in CSS (the header already
+ * reads as the title/count row). No-JS, keyboard-accessible, SSR-stable.
  */
 
 import * as React from 'react'
@@ -102,10 +108,11 @@ function FlowEventRow({ event, t }: { event: FlowEventView; t: TranslateNS<'msta
 
 export function AgentEventDock({ events, unexpected, t }: AgentEventDockProps) {
   // v3: the dock is mounted only when events exist — never a placeholder box.
+  // T3: <details open> — the header row is the toggle; events show by default.
   if (events.length === 0) return null
   return (
-    <div className={css.dock} data-agent-event-dock data-agent-event-count={events.length}>
-      <div className={css.dockHeader}>
+    <details className={css.dock} data-agent-event-dock data-agent-event-count={events.length} open>
+      <summary className={css.dockHeader}>
         <span className={css.dockTitle}>{t('flow.title')}</span>
         <span className={css.dockCount}>{t('flow.event-count', { count: String(events.length) })}</span>
         {unexpected.length > 0 && (
@@ -113,7 +120,7 @@ export function AgentEventDock({ events, unexpected, t }: AgentEventDockProps) {
             {t('flow.unexpected')} · {unexpected.length}
           </span>
         )}
-      </div>
+      </summary>
       <ul className={css.flowEventList} data-mstar-flow-events>
         {events.map((event) => (
           <FlowEventRow key={event.id} event={event} t={t} />
@@ -129,6 +136,6 @@ export function AgentEventDock({ events, unexpected, t }: AgentEventDockProps) {
           </ul>
         </div>
       )}
-    </div>
+    </details>
   )
 }
