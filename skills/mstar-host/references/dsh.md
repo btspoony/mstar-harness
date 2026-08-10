@@ -50,8 +50,11 @@ or a custom profile).
   transitions); the loop edge is planning semantics; no historical back-scan
   of resumed long logs; no custom top-level slot (the `conversation.view` tab
   is the only session-level panel seat without dsh-private layout changes);
-  no-session → shell hero (strict-session view ring); browser UI observation
-  is the user-restart acceptance. See
+  no-session → shell hero (strict-session view ring). Panel acceptance is
+  dual-track: in-loop browser harness verification (agent-browser/CDP against
+  the rebuilt bundle — see
+  `.mstar/iterations/iter-20260810-panel-fix-agentflow/guides/`) plus
+  user-restart final GUI acceptance. See
   `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`
   for the verified install run.
 
