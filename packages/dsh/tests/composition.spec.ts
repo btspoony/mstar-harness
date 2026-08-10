@@ -41,13 +41,13 @@ describe('@mstar-harness/dsh through a real Loader composition (cordis.yml)', ()
     expect(rejected.violations.map((v) => v.code)).toContain('status.invalid-plans')
   })
 
-  it('exposes the engine version 2.0.5 through the service and the direct import surface', async () => {
+  it('exposes the engine version 2.0.6 through the service and the direct import surface', async () => {
     const app = booted = await bootApp()
     const { ctx, harnessDir } = app
     const badStatusPath = join(harnessDir, 'bad-status.json')
     await writeFile(badStatusPath, JSON.stringify(INVALID_STATUS))
-    expect(ctx.dshMstar.readHarnessVersion()).toBe('2.0.5')
-    expect(readHarnessVersion()).toBe('2.0.5')
+    expect(ctx.dshMstar.readHarnessVersion()).toBe('2.0.6')
+    expect(readHarnessVersion()).toBe('2.0.6')
 
     // Enforcement overlay: hard + violations → hardBlocked; warn-only otherwise.
     const verdict = ctx.dshMstar.validateStatus(badStatusPath)
