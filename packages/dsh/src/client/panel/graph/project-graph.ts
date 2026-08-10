@@ -1,86 +1,73 @@
 /**
- * `projectGraph(source): GraphView` — the pure projection of the
- * `mstar-engine-status` catalog source onto the workflow graph (spec
- * panel-layout-graph §2.1–§2.5). Total function: NEVER throws, produces no
+ * `projectGraph(source): ZoneView` — the pure projection of the
+ * `mstar-engine-status` catalog source onto the zone dashboard view model
+ * (spec panel-zones §3). Total function: NEVER throws, produces no
  * React/ReactFlow types, and degrades per field instead of guessing — the
  * same philosophy as `selectEngineStatus`'s try/catch fallback and the
  * `guards.ts` contract (missing → `unknown`, never a fabricated value).
  *
- * Two strictly separated inputs (spec §2.0):
- * - schema constants (`./schema.ts`) — the phase ring + plan state machine
- *   skeleton, client-side design knowledge;
- * - catalog evidence — `iteration.gate.transition` lights the current phase
+ * Two strictly separated inputs (spec §3):
+ * - schema constants (`./schema.ts`) — the 5 iteration steps (PHASE_IDS), the
+ *   6 kanban buckets (PLAN_STATE_IDS) and the expected role pipeline
+ *   (EXPECTED_ROLE_FLOW), all client-side design knowledge;
+ * - catalog evidence — `iteration.gate.transition` lights the current step
  *   (its forward target becomes `next`), `gate.ok/violations` become the
  *   PASS/FAIL verdict + count, and `state.plans[].status` rows fall into the
- *   exact-match buckets.
+ *   exact-match kanban buckets.
  *
- * Degradation (spec §2.5): `source === null` → legal empty view (the panel
+ * Migration from the react-flow GraphView (spec §3, per field):
+ * - kept & moved: `violations` / `flow.events` / `flow.unexpected` → top-level
+ *   `violations` / `events` / `unexpected` (FlowEventView projection unchanged,
+ *   incl. the `settled` pairing marker — shared with the plan-3 agent-entity
+ *   status derivation via `pairSettleIndexes`); `iterationId` →
+ *   `iteration.iterationId`;
+ * - deleted (react-flow graph structure): `phases`, `phaseEdges`,
+ *   `planStates`, `planEdges`, `connector`, `currentPhase`, `flow.stages`
+ *   (the stage skeleton + lit/count merge into the `agents` projection in
+ *   plan 3; plan 2 delivers the `agents` skeleton);
+ * - added: `iteration.steps / currentStep / branches`, `tasks.columns / total
+ *   / truncated`, `agents`.
+ *
+ * Degradation (spec §8): `source === null` → legal empty view (the panel
  * never mounts the graph for that case, but the projection stays total);
- * missing `iteration` → `degraded.iteration`; missing/invalid `transition` →
- * ring all idle + `degraded.transition`; `state` null → empty machine +
- * `degraded.state`; `state.plans` missing → skeleton + `degraded.plans`.
- *
- * The flow section (spec agent-flow-catalog-graph §2.3/§2.4 — `projectFlow`):
- * `state.agentFlow` evidence (the T1 ledger view) is projected onto the
- * `EXPECTED_ROLE_FLOW` skeleton — stage lit/count from matched dispatch
- * events, latest-first event rows (≤50), an `unexpected` list of
- * off-pipeline-role DISPATCH events, a best-effort settle→dispatch pairing
- * heuristic, and `degraded`/`empty` flags for the missing-ledger /
- * no-events-yet panel notes. Settle rows carry no role (T1 sets ''), so they
- * never light a stage and never appear in `unexpected` (they are completion
- * records, not role events — see `projectFlow`).
- *
- * Known limitation (spec §2.3): Phase 1/5 nodes never light as current and
- * the loop edge is planning-only — the engine gate emits only Phase 2→3→4.
+ * missing iteration / unresolvable transition → `active: false` + 5 idle
+ * steps + `degraded.iteration` (the old `degraded.transition` is merged into
+ * `iteration.active === false` — `degraded.iteration ⟺ !active`); `state`
+ * null → 6-column skeleton (count 0) + `degraded.state`; `state.plans`
+ * missing → same skeleton + `degraded.plans`; `state.agentFlow`
+ * missing/unreadable → agents skeleton + `degraded`; 0 events → `empty`.
  */
 
 import type { MstarEngineStatusSource } from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
+import { PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
-  EXPECTED_ROLE_FLOW, PHASE_EDGES, PHASE_IDS, PLAN_STATE_EDGES, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
+  EXPECTED_ROLE_FLOW, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
   type PhaseId, type PlanStateId,
 } from './schema.ts'
 
-/** Phase node state (spec §2.2): current=evidence highlight, next=forward target, idle=unlit schema, unknown=reserved. */
-export type PhaseState = 'current' | 'next' | 'idle' | 'unknown'
-/** Current-phase verdict from `gate.ok` (spec §2.2). */
+/** Current-step verdict from `gate.ok` (spec §3). */
 export type PhaseVerdict = 'pass' | 'fail' | 'unknown'
 
-export interface PhaseView {
-  id: PhaseId
-  state: PhaseState
-  verdict: PhaseVerdict
-  /** `gate.violations.length` — set on the current node only. */
-  violationCount: number | null
-}
-
-export interface PlanStateView {
-  id: PlanStateId
-  /** Raw catalog rows (str()-guarded id/status as-is, spec §2.4). */
-  plans: { id: string; status: string }[]
-  /** `plans.length > 0`. */
-  lit: boolean
-}
-
-/** One gate violation row, str()-guarded (drives the footer collapsible list, spec §4). */
+/** One gate violation row, str()-guarded (drives the footer collapsible list, spec §2). */
 export interface GraphViolation {
   severity: string
   code: string
   message: string
 }
 
-/* ------------------------------ flow (spec agent-flow-catalog-graph §2.4) ------------------------------ */
+/* ------------------------------ flow events (spec §3 — moved from `flow.*`) ------------------------------ */
 
 /** Event status coloring: dispatch → dispatched|advisory|denied; settle → ok|error|denied. */
 export type FlowEventStatus = 'dispatched' | 'advisory' | 'denied' | 'ok' | 'error'
 
 /**
- * One projected agent-flow event (spec agent-flow-catalog-graph §2.4). Every
- * field degrades individually via `guards.ts` — a missing/illegal value
- * becomes `null`/''/`0`/a base status, never a throw and never a guessed
- * value. Rows whose `kind` is not dispatch/settle cannot be classified and
- * are skipped entirely (belt-and-suspenders: the T1 ledger reader already
- * normalizes kind).
+ * One projected agent-flow event (spec agent-flow-catalog-graph §2.4 —
+ * unchanged by the zone refactor). Every field degrades individually via
+ * `guards.ts` — a missing/illegal value becomes `null`/''/`0`/a base status,
+ * never a throw and never a guessed value. Rows whose `kind` is not
+ * dispatch/settle cannot be classified and are skipped entirely
+ * (belt-and-suspenders: the T1 ledger reader already normalizes kind).
  */
 export interface FlowEventView {
   /** `${ts}-${kind}-${index}` — stable id (index = position in the projected window). */
@@ -104,64 +91,131 @@ export interface FlowEventView {
   durationMs: number | null
 }
 
-/** One expected-pipeline stage skeleton lit by matched dispatch events (spec §2.4). */
-export interface FlowStageView {
+/* ---------------------------------- iteration zone (spec §3) ---------------------------------- */
+
+/**
+ * One iteration step (spec §3): the PHASE_IDS skeleton with
+ * current/next/idle lit by `gate.transition` evidence. The `step` number is
+ * 1-based (1..5). `verdict` is carried by the CURRENT step only.
+ */
+export interface IterationStepView {
+  id: PhaseId
+  /** 1-based position in PHASE_IDS (1..5). */
+  step: number
+  state: 'current' | 'next' | 'idle'
+  /** Current-step gate verdict; 'unknown' on non-current steps. */
+  verdict: PhaseVerdict
+}
+
+/* ---------------------------------- tasks zone (spec §3) ---------------------------------- */
+
+/**
+ * One kanban column (spec §3): the PLAN_STATE_IDS skeleton with plan rows
+ * bucketed by EXACT status match (any other status → `unknown`). `count` is
+ * the FULL column count; the Done column is additionally sorted with the
+ * shared plan-sort key (`plan-sort.ts`) and capped at PLAN_CAP — `capped`
+ * carries the display count (PLAN_CAP) when the column overflows, else null.
+ */
+export interface KanbanColumnView {
+  id: PlanStateId
+  /** Displayed rows (Done: top PLAN_CAP of the plan-sort order). */
+  plans: { id: string; status: string }[]
+  /** Full column count (before the Done cap). */
+  count: number
+  /** PLAN_CAP when the column overflows (Done > 5); null otherwise. */
+  capped: number | null
+}
+
+/* ---------------------------------- agents zone (spec §4 — plan 2 skeleton) ---------------------------------- */
+
+/**
+ * One pending agent-pipeline stage (plan 2 skeleton; entity construction
+ * lands in plan 3 — spec §4): the EXPECTED_ROLE_FLOW skeleton with its
+ * expected role chips. No evidence → the stage renders as a dashed
+ * "待执行" placeholder.
+ */
+export interface AgentZoneStage {
   /** `${phase}:${stage}`. */
   id: string
   phase: PhaseId
   stage: string
   roles: readonly string[]
-  /** ≥1 matched dispatch event. */
-  lit: boolean
-  /** Matched dispatch event count (settles never count — they carry no role). */
-  count: number
 }
 
-/** The projected expected/actual flow section of the GraphView (spec agent-flow-catalog-graph §2.4). */
-export interface GraphFlowView {
-  /** The EXPECTED_ROLE_FLOW skeleton with lit/count from dispatch evidence. */
-  stages: readonly FlowStageView[]
-  /** Actual events, latest first, ≤50 (dispatch + settle rows). */
-  events: readonly FlowEventView[]
-  /** Off-pipeline-role DISPATCH events (unexpected role events; settles never appear). */
-  unexpected: readonly FlowEventView[]
+/**
+ * The projected agents zone — plan 2 delivers the SKELETON only (spec §3:
+ * "plan 3 完整；plan 2 先交付骨架"): the pending stage list plus the
+ * degraded/empty flags projected from `state.agentFlow` presence. Entities,
+ * stage lit/count and the flow arrows are the plan-3 projection.
+ */
+export interface AgentZoneView {
+  /** The EXPECTED_ROLE_FLOW skeleton (pending stages). */
+  stages: readonly AgentZoneStage[]
   /** `state.agentFlow` missing/unreadable (ledger absent → no evidence to show). */
   degraded: boolean
   /** `state.agentFlow` present but 0 events (recording started at plan merge). */
   empty: boolean
 }
 
-export interface GraphView {
-  /** Fixed 5 nodes in ring order (spec §2.2). */
-  phases: PhaseView[]
-  /** Schema phase edges (4 forward + 1 loop). */
-  phaseEdges: { source: PhaseId; target: PhaseId; kind: 'forward' | 'loop' }[]
-  /** Fixed 6 buckets (5 known + unknown). */
-  planStates: PlanStateView[]
-  /** Schema plan-state edges. */
-  planEdges: { source: PlanStateId; target: PlanStateId }[]
-  /** Current phase → most-populated lit non-Done/Blocked bucket, or null. */
-  connector: { source: PhaseId; target: PlanStateId } | null
-  currentPhase: PhaseId | null
-  iterationId: string | null
+/* ---------------------------------- ZoneView (spec §3) ---------------------------------- */
+
+export interface ZoneView {
+  iteration: {
+    /** Iteration exists AND `gate.transition` resolves (spec §3; `degraded.iteration ⟺ !active`). */
+    active: boolean
+    iterationId: string | null
+    /** 5 steps in PHASE_IDS order (spec §3). */
+    steps: IterationStepView[]
+    /** 1-based index of the current step in PHASE_IDS; null = inactive. */
+    currentStep: number | null
+    /** Branch anchors from `state`; null while inactive (rendered only when active, spec §3). */
+    branches: { iterationBase: string | null; target: string | null; specIntegration: string | null } | null
+    /** Current-step gate verdict; 'unknown' when inactive. */
+    verdict: PhaseVerdict
+    /** Current-step `gate.violations` count; null when inactive. */
+    violationCount: number | null
+  }
+  tasks: {
+    /** 6 columns: Todo/InProgress/InReview/Done/Blocked/unknown (spec §3). */
+    columns: KanbanColumnView[]
+    /** Plan total across all columns, unknown included. */
+    total: number
+    /** Done column overflow (rows > PLAN_CAP). */
+    truncated: boolean
+  }
+  agents: AgentZoneView
+  /** Current-step gate verdict — footer gate-summary seat (spec §3). */
+  verdict: PhaseVerdict
   /** Gate violations (str()-guarded), for the footer list. */
   violations: GraphViolation[]
-  /** Expected/actual subagent flow (spec agent-flow-catalog-graph §2.4). */
-  flow: GraphFlowView
-  degraded: { iteration: boolean; state: boolean; plans: boolean; transition: boolean }
+  /** Actual agent-flow events, latest first, ≤50 (spec §3; `flow.events` moved top-level). */
+  events: FlowEventView[]
+  /** Off-pipeline-role DISPATCH events (settles never appear). */
+  unexpected: FlowEventView[]
+  degraded: { iteration: boolean; state: boolean; plans: boolean }
 }
 
-/** The default (unlit) phase view — schema-only, evidence lights it later. */
-function idlePhase(id: PhaseId): PhaseView {
-  return { id, state: 'idle', verdict: 'unknown', violationCount: null }
+/* ------------------------------ projection helpers ------------------------------ */
+
+/** The default (unlit) iteration step — schema-only, evidence lights it later. */
+function idleStep(id: PhaseId, step: number): IterationStepView {
+  return { id, step, state: 'idle', verdict: 'unknown' }
+}
+
+/** One guarded plan row: id/status str()-guarded (missing → ''), doneAt str()-guarded (missing → null). */
+interface PlanRow {
+  id: string
+  status: string
+  doneAt: string | null
 }
 
 /** One guarded plan row: id/status str()-guarded, missing → '' (never fabricated). */
-function planRow(raw: unknown): { id: string; status: string } {
-  const row = raw as { id?: unknown; status?: unknown } | null | undefined
+function planRow(raw: unknown): PlanRow {
+  const row = raw as { id?: unknown; status?: unknown; doneAt?: unknown } | null | undefined
   return {
     id: str(row?.id) ?? '',
     status: str(row?.status) ?? '',
+    doneAt: str(row?.doneAt),
   }
 }
 
@@ -175,20 +229,28 @@ function violationRow(raw: unknown): GraphViolation {
   }
 }
 
-export function projectGraph(source: MstarEngineStatusSource | null): GraphView {
-  const degraded = { iteration: false, state: false, plans: false, transition: false }
+/** Guarded state section: the workspace-state digest (plans + branch anchors), null when missing. */
+function stateRow(source: MstarEngineStatusSource | null): { plans?: unknown; iterationBaseBranch?: unknown; targetBranch?: unknown; specIntegrationBranch?: unknown } | null {
+  const state = source == null ? null : (source as { state?: unknown }).state
+  if (state === null || typeof state !== 'object') return null
+  return state as { plans?: unknown; iterationBaseBranch?: unknown; targetBranch?: unknown; specIntegrationBranch?: unknown }
+}
 
-  // --- phase ring: schema skeleton, then transition evidence (spec §2.3) ---
-  const phases: PhaseView[] = PHASE_IDS.map(idlePhase)
-  let currentPhase: PhaseId | null = null
+export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
+  const degraded = { iteration: false, state: false, plans: false }
+
+  // --- iteration zone: 5-step skeleton, then transition evidence (spec §3) ---
+  const steps: IterationStepView[] = PHASE_IDS.map((id, i) => idleStep(id, i + 1))
+  let active = false
+  let currentStep: number | null = null
   let iterationId: string | null = null
+  let verdict: PhaseVerdict = 'unknown'
+  let violationCount: number | null = null
   let violations: GraphViolation[] = []
+  let branches: ZoneView['iteration']['branches'] = null
 
   const iteration = source == null ? null : (source as { iteration?: unknown }).iteration
-  if (iteration === null || iteration === undefined) {
-    degraded.iteration = true
-    degraded.transition = true
-  } else {
+  if (iteration !== null && iteration !== undefined) {
     const row = iteration as { iterationId?: unknown; gate?: unknown }
     iterationId = str(row.iterationId)
     const gate = row.gate as { transition?: unknown; ok?: unknown; violations?: unknown } | null | undefined
@@ -196,81 +258,147 @@ export function projectGraph(source: MstarEngineStatusSource | null): GraphView 
     const phaseId = transition === null || !Object.hasOwn(TRANSITION_TO_PHASE, transition)
       ? undefined
       : TRANSITION_TO_PHASE[transition]
-    if (phaseId === undefined) {
-      // Missing/illegal transition → ring stays idle + unknown marker (never guessed, spec §2.3).
-      degraded.transition = true
-    } else {
-      currentPhase = phaseId
-      const current = phases.find((p) => p.id === phaseId)!
+    if (phaseId !== undefined) {
+      active = true
+      const index = PHASE_IDS.indexOf(phaseId)
+      currentStep = index + 1 // 1-based
+      const current = steps[index]!
       current.state = 'current'
       const ok = gate === null || typeof gate !== 'object' ? null : bool(gate.ok)
       current.verdict = ok === null ? 'unknown' : ok ? 'pass' : 'fail'
       const rawViolations = gate !== null && typeof gate === 'object' && Array.isArray(gate.violations)
         ? gate.violations
         : null
-      current.violationCount = rawViolations === null ? null : rawViolations.length
+      violationCount = rawViolations === null ? null : rawViolations.length
       violations = rawViolations === null ? [] : rawViolations.map(violationRow)
-      // The forward edge target answers "where next" (spec §2.3).
+      verdict = current.verdict
+      // The forward edge target answers "where next" (spec §3; Phase 5 has no
+      // forward edge — a known limitation, the engine gate emits only 2→3→4).
       const forward = PHASE_EDGES.find((e) => e.source === phaseId && e.kind === 'forward')
-      if (forward !== undefined) phases.find((p) => p.id === forward.target)!.state = 'next'
+      if (forward !== undefined) steps[PHASE_IDS.indexOf(forward.target)]!.state = 'next'
+      // Branch anchors come from `state`; projected only while active (the
+      // iteration zone renders them exclusively in the active state, spec §3).
+      const state = stateRow(source)
+      branches = {
+        iterationBase: str(state?.iterationBaseBranch),
+        target: str(state?.targetBranch),
+        specIntegration: str(state?.specIntegrationBranch),
+      }
     }
   }
+  // `degraded.transition` is merged into `iteration.active === false` (spec §3).
+  degraded.iteration = !active
 
-  // --- plan state machine: schema buckets, evidence = exact status match (spec §2.4) ---
-  const planStates: PlanStateView[] = PLAN_STATE_IDS.map((id) => ({ id, plans: [], lit: false }))
-  const state = source == null ? null : (source as { state?: unknown }).state
-  if (state === null || state === undefined) {
+  // --- tasks zone: 6-column skeleton, evidence = exact status match (spec §3) ---
+  const columns: KanbanColumnView[] = PLAN_STATE_IDS.map((id) => ({ id, plans: [], count: 0, capped: null }))
+  const doneRows: PlanRow[] = []
+  let total = 0
+  let truncated = false
+
+  const state = stateRow(source)
+  if (state === null) {
     degraded.state = true
     degraded.plans = true
   } else {
-    const plans = (state as { plans?: unknown }).plans
+    const plans = state.plans
     if (!Array.isArray(plans)) {
       degraded.plans = true
     } else {
       for (const raw of plans) {
         const row = planRow(raw)
+        total += 1
         const bucket = (PLAN_STATE_IDS as readonly string[]).includes(row.status)
           ? (row.status as PlanStateId)
           : 'unknown'
-        const target = planStates.find((b) => b.id === bucket)!
-        target.plans.push(row)
-        target.lit = true
+        const column = columns.find((c) => c.id === bucket)!
+        column.count += 1
+        if (bucket === 'Done') {
+          // Done rows are sorted + capped below (needs doneAt — not a view field).
+          doneRows.push(row)
+        } else {
+          column.plans.push({ id: row.id, status: row.status })
+        }
       }
     }
   }
 
-  // --- connector: current phase → most-populated lit non-Done/Blocked bucket,
-  // machine-order tie-break (spec §2.4) ---
-  let connector: GraphView['connector'] = null
-  if (currentPhase !== null) {
-    let best: PlanStateId | null = null
-    let bestCount = 0
-    for (const bucket of planStates) {
-      if (bucket.id === 'Done' || bucket.id === 'Blocked') continue
-      if (!bucket.lit) continue
-      if (bucket.plans.length > bestCount) {
-        best = bucket.id
-        bestCount = bucket.plans.length
-      }
-    }
-    if (best !== null) connector = { source: currentPhase, target: best }
+  // Done column: shared plan-sort key (spec §3 — `plan-sort.ts`, reused not
+  // copied) + PLAN_CAP; `tasks.truncated` = Done column rows > PLAN_CAP.
+  const doneColumn = columns.find((c) => c.id === 'Done')!
+  doneColumn.plans = sortPlans(doneRows)
+    .slice(0, PLAN_CAP)
+    .map((r) => ({ id: r.id, status: r.status }))
+  if (doneRows.length > PLAN_CAP) {
+    truncated = true
+    doneColumn.capped = PLAN_CAP
   }
+
+  // --- agents zone skeleton + flow events (spec §3/§4 — plan 2) ---
+  const agents = projectAgents(source)
+  const flow = projectFlowEvents(source)
 
   return {
-    phases,
-    phaseEdges: PHASE_EDGES,
-    planStates,
-    planEdges: PLAN_STATE_EDGES,
-    connector,
-    currentPhase,
-    iterationId,
+    iteration: {
+      active,
+      iterationId,
+      steps,
+      currentStep,
+      branches,
+      verdict,
+      violationCount,
+    },
+    tasks: { columns, total, truncated },
+    agents,
+    verdict,
     violations,
-    flow: projectFlow(source),
+    events: flow.events,
+    unexpected: flow.unexpected,
     degraded,
   }
 }
 
-/* ---------------------------------- flow projection (spec agent-flow-catalog-graph §2.3/§2.4) ---------------------------------- */
+/* ---------------------------------- agents zone skeleton (spec §4 — plan 2) ---------------------------------- */
+
+/**
+ * `projectAgents(source): AgentZoneView` — the agents-zone SKELETON (plan 2;
+ * entities/edges land in plan 3). Total function: NEVER throws. Projects only
+ * `state.agentFlow` PRESENCE onto the EXPECTED_ROLE_FLOW pending-stage
+ * skeleton:
+ *
+ * - `state.agentFlow` null/unreadable (the server returns null ONLY for an
+ *   unreadable ledger) → `degraded` (skeleton + the evidence-missing note);
+ * - a MISSING ledger file reads as the server's empty view → present with 0
+ *   events → `empty` (recording starts at plan merge — the no-dispatches-yet
+ *   note);
+ * - otherwise → plain skeleton (lit/count and entities come with plan 3).
+ */
+export function projectAgents(source: MstarEngineStatusSource | null): AgentZoneView {
+  const stages: AgentZoneStage[] = EXPECTED_ROLE_FLOW.map((s) => ({
+    id: `${s.phase}:${s.stage}`,
+    phase: s.phase,
+    stage: s.stage,
+    roles: s.roles,
+  }))
+  const state = source == null ? null : (source as { state?: unknown }).state
+  const agentFlow = state == null ? undefined : (state as { agentFlow?: unknown }).agentFlow
+  const rawAgentFlow = agentFlow as { events?: unknown } | null | undefined
+  const rawEvents = rawAgentFlow === null || rawAgentFlow === undefined || typeof rawAgentFlow !== 'object'
+    ? null
+    : rawAgentFlow.events
+  if (rawEvents === null || !Array.isArray(rawEvents)) {
+    // Ledger unreadable / absent agentFlow (non-object / non-array) →
+    // skeleton + degraded marker (panel note; never a throw).
+    return { stages, degraded: true, empty: false }
+  }
+  if (rawEvents.length === 0) {
+    // Ledger exists (or the server's empty view for a missing ledger) but
+    // nothing recorded yet (recording starts at plan merge — spec §4).
+    return { stages, degraded: false, empty: true }
+  }
+  return { stages, degraded: false, empty: false }
+}
+
+/* ---------------------------------- flow events projection (spec §3 — moved from `flow.*`) ---------------------------------- */
 
 /** Projected event window bound: the view keeps the latest events only (spec §2.4: ≤50). */
 const FLOW_EVENT_WINDOW = 50
@@ -306,18 +434,6 @@ function dispatchStatus(verdict: unknown): FlowEventStatus {
  */
 function settleStatus(outcome: unknown): FlowEventStatus {
   return outcome === 'error' ? 'error' : outcome === 'denied' ? 'denied' : 'ok'
-}
-
-/** The expected stage skeleton (spec §2.4): every EXPECTED_ROLE_FLOW stage, unlit. */
-function flowStageSkeleton(): FlowStageView[] {
-  return EXPECTED_ROLE_FLOW.map((s) => ({
-    id: `${s.phase}:${s.stage}`,
-    phase: s.phase,
-    stage: s.stage,
-    roles: s.roles,
-    lit: false,
-    count: 0,
-  }))
 }
 
 /**
@@ -361,51 +477,63 @@ function flowEventOf(
 }
 
 /**
- * `projectFlow(source): GraphFlowView` — the flow section projection (spec
- * agent-flow-catalog-graph §2.3/§2.4). Total function: NEVER throws, NEVER
- * fabricates values. `state.agentFlow` evidence (the T1 ledger view,
- * latest-first) is projected onto the `EXPECTED_ROLE_FLOW` skeleton:
+ * Best-effort settle→dispatch pairing (spec §4): the shared pure function
+ * behind BOTH the events projection (`settled` marker) and the plan-3
+ * agent-entity status derivation — one implementation, no heuristic drift.
+ * Input rows are in FILE order (the catalog is latest-first, so the pairing
+ * walks reversed) keeping the most recent same-agent dispatch; each settle
+ * pairs with it and the paired dispatch's index is returned. A settle with no
+ * prior same-agent dispatch (agent null, truncated window, or a missed
+ * record) stays an independent settle. Output: the index set of paired
+ * dispatches.
+ */
+export function pairSettleIndexes(
+  rows: readonly { kind: 'dispatch' | 'settle'; agent: string | null }[],
+): ReadonlySet<number> {
+  const settled = new Set<number>()
+  const lastDispatch = new Map<string, number>()
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const entry = rows[i]!
+    if (entry.kind === 'dispatch') {
+      if (entry.agent !== null) lastDispatch.set(entry.agent, i)
+    } else if (entry.agent !== null) {
+      const paired = lastDispatch.get(entry.agent)
+      if (paired !== undefined) settled.add(paired)
+    }
+  }
+  return settled
+}
+
+/**
+ * `projectFlowEvents(source): { events, unexpected }` — the flow events
+ * projection (spec §3: `flow.events` / `flow.unexpected` moved top-level;
+ * `flow.stages` merged into the plan-3 agents projection). Total function:
+ * NEVER throws, NEVER fabricates values.
  *
- * - stages: skeleton + lit/count from matched DISPATCH events (exact-string
- *   role match, first-stage-in-constant-order); settle rows carry no role
- *   (T1 sets '') so they never light a stage;
  * - events: the actual events, latest first, ≤50 (dispatch + settle rows);
  * - unexpected: DISPATCH events whose role is not in the expected role union
  *   (e.g. `general` / `explore` / `scout`). Settle rows are completion
  *   records — they carry no role at all, so they never flag as unexpected
  *   even though their `expected` field is false ('' ∉ union);
- * - settled: best-effort (agent, file-order) pairing — each settle pairs
- *   with the most recent same-agent dispatch BEFORE it in file order (spec
- *   §2.3); an unpaired settle (no prior same-agent dispatch in the window)
- *   stays an independent settle marker. The panel never depends on the
+ * - settled: best-effort pairing via `pairSettleIndexes` (shared with the
+ *   plan-3 entity status derivation). The panel never depends on the
  *   pairing's correctness;
- * - degradation: `state.agentFlow` null/unreadable (the server returns null
- *   ONLY for an unreadable ledger — fix-wave qc1 F-001) → `degraded`
- *   (skeleton + no events — the panel shows the evidence-missing note); a
- *   MISSING ledger file reads as the server's empty view → present with 0
- *   events → `empty` (recording starts at plan merge — the empty-state note,
- *   per the plan promise).
+ * - degradation: agentFlow null/unreadable → no events (the `agents`
+ *   skeleton carries the `degraded` marker); the MISSING ledger file reads as
+ *   the server's empty view → present with 0 events → no events either (the
+ *   `agents` skeleton carries `empty`).
  */
-export function projectFlow(source: MstarEngineStatusSource | null): GraphFlowView {
-  const stages = flowStageSkeleton()
+export function projectFlowEvents(
+  source: MstarEngineStatusSource | null,
+): { events: FlowEventView[]; unexpected: FlowEventView[] } {
   const state = source == null ? null : (source as { state?: unknown }).state
   const agentFlow = state == null ? undefined : (state as { agentFlow?: unknown }).agentFlow
   const rawAgentFlow = agentFlow as { events?: unknown } | null | undefined
   const rawEvents = rawAgentFlow === null || rawAgentFlow === undefined || typeof rawAgentFlow !== 'object'
     ? null
     : rawAgentFlow.events
-  if (rawEvents === null || !Array.isArray(rawEvents)) {
-    // Ledger unreadable / absent agentFlow (non-object / non-array) →
-    // skeleton + degraded marker (panel note; never a throw). Fix-wave
-    // (qc1 F-001): a MISSING ledger file arrives as the server's EMPTY view
-    // (events: []) → the `empty` branch below, NOT this degrade — the panel
-    // keeps the plan's promised "no actual dispatches yet" empty state.
-    return { stages, events: [], unexpected: [], degraded: true, empty: false }
-  }
-  if (rawEvents.length === 0) {
-    // Ledger exists (or the server's empty view for a missing ledger) but
-    // nothing recorded yet (recording starts at plan merge — spec §3).
-    return { stages, events: [], unexpected: [], degraded: false, empty: true }
+  if (rawEvents === null || !Array.isArray(rawEvents) || rawEvents.length === 0) {
+    return { events: [], unexpected: [] }
   }
 
   const stageIndex = roleStageIndex()
@@ -419,39 +547,11 @@ export function projectFlow(source: MstarEngineStatusSource | null): GraphFlowVi
     entries.push({ view, kind: view.kind, agent: view.agent })
   })
 
-  // Best-effort settle→dispatch pairing (spec §2.3): scan file order (the
-  // catalog is latest-first, so walk reversed) keeping the most recent
-  // same-agent dispatch; each settle pairs with it and marks the dispatch
-  // `settled`. A settle with no prior same-agent dispatch (agent null,
-  // truncated window, or a missed record) stays an independent settle.
-  const settledByIndex = new Set<number>()
-  const lastDispatch = new Map<string, number>()
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i]!
-    if (entry.kind === 'dispatch') {
-      if (entry.agent !== null) lastDispatch.set(entry.agent, i)
-    } else if (entry.agent !== null) {
-      const paired = lastDispatch.get(entry.agent)
-      if (paired !== undefined) settledByIndex.add(paired)
-    }
-  }
-  for (const i of settledByIndex) entries[i]!.view.settled = true
-
-  // Stage lit/count from matched dispatch events only (spec §2.4).
-  for (const entry of entries) {
-    if (entry.kind !== 'dispatch') continue
-    const stage = entry.view.stage
-    if (stage === null) continue
-    const target = stages.find((s) => s.id === `${stage.phase}:${stage.stage}`)
-    if (target !== undefined) {
-      target.count += 1
-      target.lit = true
-    }
-  }
+  for (const i of pairSettleIndexes(entries)) entries[i]!.view.settled = true
 
   const events = entries.map((e) => e.view) // latest-first preserved
   const unexpected = entries
     .filter((e) => e.kind === 'dispatch' && !e.view.expected)
     .map((e) => e.view)
-  return { stages, events, unexpected, degraded: false, empty: false }
+  return { events, unexpected }
 }
