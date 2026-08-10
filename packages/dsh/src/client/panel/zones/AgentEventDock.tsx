@@ -84,7 +84,10 @@ function FlowEventRow({ event, t }: { event: FlowEventView; t: TranslateNS<'msta
       </span>
       {target !== '' && <span className={css.flowEventTarget}>{target}</span>}
       {time !== '' && <span className={css.flowEventTime}>{time}</span>}
-      <span className={`${css.flowStatus} ${flowStatusClass(event.status)}`}>
+      <span
+        className={`${css.flowStatus} ${flowStatusClass(event.status)}`}
+        data-flow-status={event.status}
+      >
         <span className={css.flowStatusDot} aria-hidden="true" />
         {statusLabel}
       </span>

@@ -56,6 +56,7 @@ export type PanelKey =
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
   | 'zone.legend.flow-unexpected'
+  | 'zone.legend.next'
   | 'zone.iteration.title'
   | 'zone.iteration.active'
   | 'zone.iteration.inactive'
@@ -144,6 +145,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-expected': '预期 stage（空心）',
   'zone.legend.flow-actual': '实际派发（实心）',
   'zone.legend.flow-unexpected': '未匹配角色（描边）',
+  'zone.legend.next': 'next 流转边（动画）',
   'zone.iteration.title': '迭代',
   'zone.iteration.active': '正在激活的迭代',
   'zone.iteration.inactive': '迭代未激活',
@@ -227,6 +229,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-expected': 'expected stage (hollow)',
   'zone.legend.flow-actual': 'actual dispatch (filled)',
   'zone.legend.flow-unexpected': 'unexpected role (outlined)',
+  'zone.legend.next': 'next flow edge (animated)',
   'zone.iteration.title': 'Iteration',
   'zone.iteration.active': 'active iteration',
   'zone.iteration.inactive': 'iteration inactive',

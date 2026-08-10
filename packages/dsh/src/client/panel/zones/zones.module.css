@@ -179,6 +179,12 @@
   border: 1px dashed var(--dsw-alias-state-warn-label);
 }
 
+/* Next flow edge (plan 3): the animated business dash arrow — declared with
+ * the legend (zone.legend.next); the agent-flow zone applies it in plan 3. */
+.swatchNext {
+  border: 1px dashed var(--dsw-alias-state-business-primary);
+}
+
 /* --- gate summary (footer right) --- */
 
 .gateSummary {
