@@ -2,7 +2,7 @@
  * `projectGraph(source): ZoneView` — the pure projection of the
  * `mstar-engine-status` catalog source onto the zone dashboard view model
  * (spec panel-zones §3). Total function: NEVER throws, produces no
- * React/ReactFlow types, and degrades per field instead of guessing — the
+ * React render types, and degrades per field instead of guessing — the
  * same philosophy as `selectEngineStatus`'s try/catch fallback and the
  * `guards.ts` contract (missing → `unknown`, never a fabricated value).
  *
@@ -15,13 +15,13 @@
  *   PASS/FAIL verdict + count, and `state.plans[].status` rows fall into the
  *   exact-match kanban buckets.
  *
- * Migration from the react-flow GraphView (spec §3, per field):
+ * Migration from the legacy graph GraphView (spec §3, per field):
  * - kept & moved: `violations` / `flow.events` / `flow.unexpected` → top-level
  *   `violations` / `events` / `unexpected` (FlowEventView projection unchanged,
  *   incl. the `settled` pairing marker — shared with the plan-3 agent-entity
  *   status derivation via `pairSettleIndexes`); `iterationId` →
  *   `iteration.iterationId`;
- * - deleted (react-flow graph structure): `phases`, `phaseEdges`,
+ * - deleted (legacy graph structure): `phases`, `phaseEdges`,
  *   `planStates`, `planEdges`, `connector`, `currentPhase`, `flow.stages`
  *   (the stage skeleton + lit/count merge into the `agents` projection in
  *   plan 3; plan 2 delivers the `agents` skeleton);

@@ -193,9 +193,9 @@ export function assertCssModuleTransform(
 /**
  * Inline `<style data-plugin>` injection source for a css text blob: the tag
  * is created once per factory materialization (the loader removes plugin-owned
- * tags on unload). Shared by the CSS-modules loader and the plain-`.css`
- * loader (react-flow's base stylesheet, spec §3.2 — the bundle must inline it:
- * a second emitted asset would never be served by the closure loader).
+ * tags on unload). Used by the CSS-modules loader — the only css source the
+ * client bundle carries (the react-flow plain-`.css` text loader was removed
+ * with the graph library, spec panel-zones §2).
  */
 function styleInjectionContents(cssText: string, tagId: string): string {
   return [
@@ -278,12 +278,9 @@ if (import.meta.main) {
     target: 'browser',
     format: 'cjs',
     external: [...CLIENT_EXTERNALS],
-    // Plain `.css` imports (e.g. `@xyflow/react/dist/style.css`) load as TEXT
-    // modules: GraphCanvas imports the stylesheet string and injects it as a
-    // `<style data-plugin>` tag at factory materialization (spec §3.2 — a second
-    // emitted asset would never be served by the closure loader). `*.module.css`
-    // is unaffected: the css-modules plugin below wins for those paths.
-    loader: { '.css': 'text' },
+    // No plain `.css` loader: the only consumer was `@xyflow/react/dist/style.css`
+    // (react-flow, removed — spec panel-zones §2). `*.module.css` is unaffected:
+    // the css-modules plugin below wins for those paths.
     // zustand/immer-style deps read process.env.NODE_ENV; honor the build env
     // like the snapshot recipe (artifacts default to production). zustand v4
     // ALSO reads `import.meta.env.MODE` (its store `destroy` deprecation
@@ -338,13 +335,15 @@ if (import.meta.main) {
   }
 
   // Inline bundle-contract assertions (spec §3.2 #2 verify-only + the
-  // classic-script guard): the emitted text must carry the inlined graph lib,
-  // must not value-import `@deepseek-ai/*` (purity gate), and must contain NO
-  // `import.meta` / ESM statements — the web loader executes this file as a
-  // classic <script>, where either is a parse-time SyntaxError.
+  // classic-script guard): the emitted text must NOT carry the removed
+  // react-flow library (negative assertion — proves the removal is complete
+  // end to end, spec panel-zones §2), must not value-import `@deepseek-ai/*`
+  // (purity gate), and must contain NO `import.meta` / ESM statements — the
+  // web loader executes this file as a classic <script>, where either is a
+  // parse-time SyntaxError.
   const bundleText = readFileSync(result.outputs[0]!.path, 'utf8')
-  if (!/xyflow|reactflow/i.test(bundleText)) {
-    throw new Error('client bundle contract: @xyflow/react is NOT inlined — check CLIENT_EXTERNALS / the loader module table')
+  if (/xyflow|reactflow/i.test(bundleText)) {
+    throw new Error('client bundle contract: the emitted bundle still contains xyflow/reactflow markers — the react-flow removal is incomplete (check imports / comments / devDeps)')
   }
   if (/require\(\s*["']@deepseek-ai\//.test(bundleText)) {
     throw new Error('client bundle contract: a @deepseek-ai/* VALUE import survived the purity gate')
