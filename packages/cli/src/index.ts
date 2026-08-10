@@ -315,8 +315,8 @@ pathCommand
       // plan-conventions § {HARNESS_DIR} 解析顺序: no .mstar/ → .agents/ →
       // .plans/|plans/ anywhere up the tree — harness not enabled from here.
       const guidance =
-        "no harness dir found (probed .mstar/, .agents/, .plans/, plans/ walking up from " +
-        `${startDir}) — run \`mstar init\` to bootstrap, or pass a start dir inside a harness-enabled project`;
+        "no harness dir found — the bounded probe (.mstar/, .agents/, .plans/, plans/) walked up from " +
+        `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) — run \`mstar init\` to bootstrap, or pass a start dir inside a harness-enabled project`;
       if (options.json) {
         console.log(JSON.stringify({ ok: false, startDir, harnessDir: null, specsDir: null, guidance }));
       } else {

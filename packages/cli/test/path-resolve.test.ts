@@ -57,6 +57,19 @@ function withRoot(fn: (root: string) => void): void {
   }
 }
 
+/**
+ * Minimal valid git work tree (no `git init` subprocess): the engine's
+ * default CLI boundary runs `git rev-parse --show-cdup`, which only needs a
+ * valid `.git` layout (HEAD + config + objects/ + refs/) — no commits.
+ * Mirrors the engine path.test.ts `gitInit` fixture.
+ */
+function gitInit(root: string): void {
+  mkdirSync(join(root, ".git", "objects"), { recursive: true });
+  mkdirSync(join(root, ".git", "refs"), { recursive: true });
+  writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(join(root, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
+}
+
 describe("mstar path resolve — harness/specs dir resolution", () => {
   test(".mstar/ present → exit 0, prints harness + specs dirs", () => {
     withRoot((root) => {
@@ -70,13 +83,44 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
     });
   });
 
-  test("resolves upward from a nested start dir (explicit [path] arg)", () => {
+  test("resolves upward from a nested start dir inside a git top-level (explicit [path] arg)", () => {
     withRoot((root) => {
+      // Real git repo fixture: default boundary = git top-level of the start
+      // dir, so a harness at the repo root resolves from a nested subdir.
+      gitInit(root);
       mkdirSync(join(root, ".mstar"), { recursive: true });
       mkdirSync(join(root, "nested", "deep"), { recursive: true });
       const result = runResolve([join(root, "nested", "deep")]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(`harness dir: ${join(root, ".mstar")}`);
+    });
+  });
+
+  test("harness only above the git top-level (global ~/.mstar collision) → exit 1", () => {
+    withRoot((root) => {
+      // `.mstar` sits one level ABOVE the git top-level (`root/proj`) — the
+      // engine boundary must stop the probe at the repo root and never return
+      // it (all-temp fixture; never touches the real ~/.mstar).
+      gitInit(join(root, "proj"));
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      mkdirSync(join(root, "proj", "nested", "deep"), { recursive: true });
+      const result = runResolve([join(root, "proj", "nested", "deep")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("no harness dir");
+      expect(result.stdout).toBe("");
+    });
+  });
+
+  test("non-git start probes only itself — no walk-up to a parent harness", () => {
+    withRoot((root) => {
+      // Non-git temp tree: default boundary = the start dir itself, so a
+      // harness one level up is never probed (deliberate tightening).
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      mkdirSync(join(root, "nested", "deep"), { recursive: true });
+      const result = runResolve([join(root, "nested", "deep")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("no harness dir");
+      expect(result.stdout).toBe("");
     });
   });
 
