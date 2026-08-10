@@ -4,6 +4,7 @@ secrets.env
 .harness/
 .mstar/
 .gitnexus/
+.wt-*/
 
 # ZCode client workspace state
 .zcode/
