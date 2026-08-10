@@ -712,6 +712,81 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
   })
 })
 
+/* ---------------------------------------------------------------------------
+ * T5 zones CSS audit (spec panel-zones §7): the T4 theme audit reads
+ * panel.module.css only — this block audits the zones css (the canvas zone
+ * frames / footer / AgentEventDock / stepper / kanban) for the same contract:
+ * token-only dock styles (bg/border/8px radius + token event status colors),
+ * transitions inside the 120–200ms window, font sizes on the ramp, and the
+ * reduced-motion root rule covering EVERY zones transition/animation.
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — T5 zones CSS audit: dock token styles + transition window + reduced-motion coverage (spec panel-zones §7)', () => {
+  const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
+
+  it('every transition in the zones css sits in the 120–200ms window (spec §7)', () => {
+    const transitions = [...cssText.matchAll(/transition:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
+    expect(transitions.length).toBeGreaterThan(0)
+    for (const t of transitions) {
+      if (/^none/.test(t)) continue // reduced-motion kill switch
+      const durations = [...t.matchAll(/(\d+)ms/g)].map((m) => Number(m[1]!))
+      expect(durations.length).toBeGreaterThan(0)
+      for (const d of durations) {
+        expect(d).toBeGreaterThanOrEqual(120)
+        expect(d).toBeLessThanOrEqual(200)
+      }
+    }
+  })
+
+  it('the panel root reduced-motion rule covers EVERY zones transition/animation (spec §1.2)', () => {
+    const root = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
+    // The global kill switch targets `*` (every element — the zones css
+    // included) inside @media (prefers-reduced-motion: reduce).
+    expect(root).toMatch(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\*\s*\{[\s\S]*?transition:\s*none\s*!important[\s\S]*?animation:\s*none\s*!important/,
+    )
+    // The zones css carries no own motion of its own: no animation yet (the
+    // plan-3 dash-flow lands under the same root rule) and no self-contained
+    // reduced-motion block (the root rule is the single coverage point).
+    expect(cssText).not.toMatch(/animation:/)
+    expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
+  })
+
+  it('font sizes in the zones css ride the --dsw-font-xxxs-11 / xxs-12 / xs-13 ramp (spec §7)', () => {
+    const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
+    const fonts: string[] = []
+    for (const m of stripped.matchAll(/\bfont\s*:/g)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      fonts.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    expect(fonts.length).toBeGreaterThan(0)
+    for (const value of fonts) {
+      expect(value).toMatch(/var\(--dsw-font-(?:xxxs-11|xxs-12|xs-13)\)/)
+    }
+  })
+
+  it('AgentEventDock styles align with the zone frames: token bg/border + 8px radius + token event status colors', () => {
+    // Dock frame = the same token treatment as the zone frames (bg-layer-1 /
+    // border-l1 / 8px radius — spec §2/§7 "样式与新区块统一").
+    const dockRule = cssText.match(/\.dock\s*\{[\s\S]*?\}/)
+    expect(dockRule).not.toBeNull()
+    expect(dockRule![0]).toContain('background: var(--dsw-alias-bg-layer-1)')
+    expect(dockRule![0]).toContain('border: 1px solid var(--dsw-alias-border-l1)')
+    expect(dockRule![0]).toContain('border-radius: 8px')
+    // Event-row status colors: every status class is a --dsw-* state token
+    // (dispatch → business/warn/error; settle → success/error — spec §2.4).
+    for (const cls of ['flowStatusDispatched', 'flowStatusAdvisory', 'flowStatusDenied', 'flowStatusOk', 'flowStatusError']) {
+      const rule = cssText.match(new RegExp(`\\.${cls}\\s*\\{[\\s\\S]*?\\}`))
+      expect(rule, cls).not.toBeNull()
+      expect(rule![0]).toMatch(/--dsw-alias-state-(?:business|warn|error|success)-/)
+    }
+    // Zero bare colors of any form in the dock region (whole-file scan covers
+    // it — re-pin for the dock-specific audit).
+    expect(dockRule![0]).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
+  })
+})
+
 describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings cap, policy enforcement (spec panel-zones §3/§5)', () => {
   /** Sidebar state-section slice: from `data-mstar-section="state"` to the meta dock — excludes the graph's own plan rows. */
   function stateSlice(html: string): string {
@@ -920,17 +995,25 @@ describe('workflow panel — T2 zone dashboard: three zones + fixed footer + cor
   })
 
   it('renders the zone-semantic legend items, en + zh (react-flow items gone)', () => {
-    for (const key of ['iteration', 'current', 'disabled', 'tasks', 'verdict-pass', 'verdict-fail', 'flow-expected', 'flow-actual', 'flow-unexpected']) {
+    // T5: the full zone-semantic set — iteration/current/disabled/tasks/
+    // verdicts/flow expected·actual·unexpected + the plan-3 `next` edge item
+    // (declared with the legend so the agent-flow zone can rely on it).
+    for (const key of ['iteration', 'current', 'disabled', 'tasks', 'verdict-pass', 'verdict-fail', 'flow-expected', 'flow-actual', 'flow-unexpected', 'next']) {
       expect(html).toContain(`data-mstar-legend-item="${key}"`)
     }
     // The react-flow legend items (edge kinds, idle swatch) are gone.
     expect(html).not.toContain('data-mstar-legend-item="idle"')
     expect(html).not.toContain('data-mstar-legend-item="edge-forward"')
+    expect(html).not.toContain('data-mstar-legend-item="edge-loop"')
+    expect(html).not.toContain('data-mstar-legend-item="connector"')
     expect(html).toContain('iteration zone')
     expect(html).toContain('disabled iteration')
+    expect(html).toContain('next flow edge (animated)')
     const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
     expect(zhHtml).toContain('data-mstar-legend-item="iteration"')
+    expect(zhHtml).toContain('data-mstar-legend-item="next"')
     expect(zhHtml).toContain('迭代未激活')
+    expect(zhHtml).toContain('next 流转边（动画）')
   })
 
   it('v3 zones CSS: canvas zone container is the ONLY scroll body, footer is flex:none, dock is absolute, <1200px stacks', () => {
@@ -964,6 +1047,98 @@ describe('workflow panel — T2 zone dashboard: three zones + fixed footer + cor
       if (value === '' || /^0(\s+0)*$/.test(value)) continue // zero reset, not a metric
       expect(value).toMatch(/var\(--mstar-space-/)
     }
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T5 AC-3 orange-box zeroing (spec panel-zones §3/§8): the react-flow-era
+ * orange warn notes (GraphCanvas, removed in T2) must be GONE from every
+ * render — the whole `data-graph-empty` anchor family (no-compass / no-state /
+ * no-plans), the old note texts (en + zh), and the `.stateUnknown` orange
+ * bucket class. The replacement muted empty states (data-zone-empty /
+ * data-iteration-inactive-note) must be PRESENT instead. T2 asserted parts of
+ * this per-state; this block unifies the negative assertions across the full
+ * degradation matrix in both locales (AC-3 "橙色框清零" render evidence).
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — T5 AC-3 orange-box zeroing: old anchors/texts gone, muted empty anchors present, dual locale (spec panel-zones §3/§8)', () => {
+  /** The react-flow-era orange anchor family — the WHOLE family must be gone (any value). */
+  const OLD_ANCHOR = 'data-graph-empty'
+  const OLD_TEXTS: Record<'en' | 'zh', readonly string[]> = {
+    // graph.no-compass / graph.no-plans / graph.no-state (old locale values).
+    en: ['No steering compass / status.json', 'no plan rows (state machine skeleton)', 'no workspace state digest'],
+    zh: ['无 steering compass / status.json', '无 plan 行（状态机骨架）', '无工作区状态摘要'],
+  }
+
+  it('full fixture, en + zh: zero data-graph-empty anchors, zero old note texts, zero stateUnknown', () => {
+    for (const lang of ['en', 'zh'] as const) {
+      const html = panelHtml(fullSource, undefined, undefined, lang)
+      expect(html).not.toContain(OLD_ANCHOR)
+      expect(html).not.toContain('stateUnknown')
+      for (const text of OLD_TEXTS[lang]) expect(html).not.toContain(text)
+    }
+  })
+
+  it('no iteration, en + zh: muted inactive note present, no-compass anchor + text gone', () => {
+    for (const lang of ['en', 'zh'] as const) {
+      const g = panelHtml(noGateSource, undefined, undefined, lang)
+      expect(g).toContain('data-zone="iteration"')
+      expect(g).toContain('data-iteration-active="false"')
+      expect(g).toContain('data-iteration-inactive-note')
+      expect(g).not.toContain(OLD_ANCHOR)
+      expect(g).not.toContain('data-graph-empty="no-compass"')
+      expect(g).not.toContain(OLD_TEXTS[lang][0]!)
+    }
+  })
+
+  it('state null, en + zh: muted no-plans note present, no-state anchor + text gone', () => {
+    for (const lang of ['en', 'zh'] as const) {
+      const g = panelHtml({ ...fullSource, state: null }, undefined, undefined, lang)
+      expect(g).toContain('data-zone-empty="no-plans"')
+      expect(g).toContain(lang === 'en' ? 'no plans' : '暂无计划')
+      expect(g).not.toContain(OLD_ANCHOR)
+      expect(g).not.toContain('data-graph-empty="no-state"')
+      expect(g).not.toContain(OLD_TEXTS[lang][2]!)
+    }
+  })
+
+  it('plans missing, en + zh: same muted skeleton, no-plans anchor + text gone', () => {
+    for (const lang of ['en', 'zh'] as const) {
+      const g = panelHtml({
+        ...fullSource,
+        state: { ...fullSource.state!, plans: undefined },
+      } as unknown as MstarEngineStatusSource, undefined, undefined, lang)
+      expect(g).toContain('data-zone-empty="no-plans"')
+      expect(g).not.toContain(OLD_ANCHOR)
+      expect(g).not.toContain('data-graph-empty="no-plans"')
+      expect(g).not.toContain(OLD_TEXTS[lang][1]!)
+    }
+  })
+
+  it('agentFlow null, en + zh: agents muted degraded note present, dock hidden, no orange flow note', () => {
+    for (const lang of ['en', 'zh'] as const) {
+      const g = panelHtml(fullSource, undefined, undefined, lang)
+      expect(g).toContain('data-zone="agents"')
+      expect(g).toContain('data-zone-empty')
+      expect(g).not.toContain('data-agent-event-dock')
+      expect(g).not.toContain(OLD_ANCHOR)
+    }
+  })
+
+  it('the .stateUnknown orange bucket class is deleted from the zones css; unknown column stays muted NEUTRAL', () => {
+    const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
+    // The react-flow-era `.stateUnknown` RULE (dashed warn border + warn
+    // label) is gone with graph.module.css — no selector rule survives (a
+    // comment may name the old class; the rule must not).
+    expect(cssText).not.toMatch(/\.stateUnknown\s*\{/)
+    // The unknown kanban column rule is the muted neutral treatment (spec §3):
+    // caption-colored, dimmed — no warn/error/business state token (AC-3
+    // umbrella re-assert; T4 pins the same rule).
+    const unknownRule = cssText.match(/\[data-kanban-column='unknown'\]\s*\{[\s\S]*?\}/)
+    expect(unknownRule).not.toBeNull()
+    expect(unknownRule![0]).toContain('--dsw-alias-label-caption')
+    expect(unknownRule![0]).toContain('opacity')
+    expect(unknownRule![0]).not.toMatch(/--dsw-alias-state-(?:warn|error|business)/)
   })
 })
 
@@ -1279,6 +1454,10 @@ describe('workflow panel — T2 event dock: canvas-corner agent-flow events (spe
     expect(html).toContain('data-graph-flow-event-status="ok"')
     expect(html).toContain('data-graph-flow-event-expected="true"')
     expect(html).toContain('data-graph-flow-event-expected="false"')
+    // The status chip anchor (T5): the colored label + dot cell carries its own
+    // `data-flow-status` (the sidebar `data-status` convention, event rows).
+    expect(html).toContain('data-flow-status="dispatched"')
+    expect(html).toContain('data-flow-status="ok"')
     // The paired dispatch carries the settled ✓ marker.
     expect(html).toContain('data-graph-flow-event-settled="true"')
     // Row cells: role → planId#taskId, status labels, settle duration.
