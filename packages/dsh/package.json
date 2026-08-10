@@ -31,17 +31,18 @@
   "dsh": {
     "bundle": {
       "patch": "./bundle/cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
     }
   },
-  "dshClient": {
-    "inject": [
-      "@deepseek-ai/dsh-client-runtime",
-      "@deepseek-ai/dsh-client-ui-conversation",
-      "@deepseek-ai/dsh-client-locale"
-    ],
-    "platform": "web"
-  },
   "scripts": {
+    "pretest": "bun run build-client",
     "test": "bun test",
     "typecheck:tests": "bunx tsc --noEmit -p tests/tsconfig.json",
     "dsh:link": "bun run scripts/setup-dsh-links.ts",

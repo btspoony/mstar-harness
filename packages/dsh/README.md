@@ -143,9 +143,11 @@ The row is **digest-gated**: per agent+workspace it is injected once per turn an
 
 The package ships a browser client half for the dsh **web** profile, discovered
 automatically on the already-installed `mstar` bundle row (package.json
-`dshClient` declaration + `exports["./client"]` → `dist/client.js`) — **no
-separate profile layer or install step** (spec §6.1). The web app serves the
-bundle at `/plugins/@mstar-harness/dsh/client.js` and loads it through the
+`dsh.client` declaration + `exports["./client"]` → `dist/client.js` — the
+upstream web `dsh.client` discovery scans loader entries and resolves each
+client's `exports["./client"]` into the boot graph) — **no separate profile
+layer or install step** (spec §6.1). The web app serves the bundle at
+`/plugins/@mstar-harness/dsh/client.js` and loads it through the
 closure-factory loader handoff (`window.__ModuleLoader__.load({ id, factory })`).
 
 The client entry registers a **`conversation.view`** view-ring tab
@@ -229,6 +231,11 @@ bun test --coverage
 bunx tsc --noEmit
 bun run build
 ```
+
+`bun run test` builds the client bundle first (the `pretest` hook runs
+`build-client` — the manifest-contract suite asserts `dist/client.js` exists);
+a direct `bun test` on a fresh checkout fails with a `bun run build` hint
+instead of a bare assertion.
 
 The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepseek-ai/dsh-*` packages from a local dsh source tree, linked into the repo-root `node_modules/@deepseek-ai/` by the link farm (`bun run dsh:link`, dsh-advisor pattern); re-run it after the dsh baseline (`$DSH_SOURCE_DIR` / `$DSH_HOME/source/current`) moves.
 
