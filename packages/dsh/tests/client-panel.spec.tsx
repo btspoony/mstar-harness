@@ -626,7 +626,7 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
       expect(value).toMatch(/var\(--dsw-(?:alias|static)-/)
     }
     // Zero bare colors of any form: hex, rgb/rgba, hsl/hsla, hwb, lab, lch, color().
-    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(/)
+    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
   })
 
   it('spacing rides the --mstar-space-1..6 ramp — no bare px gaps/paddings/margins (spec §7)', () => {
