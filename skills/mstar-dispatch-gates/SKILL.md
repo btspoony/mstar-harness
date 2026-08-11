@@ -47,7 +47,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - 额外代理仅以 **`Delegation: allowed (...)`** 为准；未显式写时视为 **`Delegation: forbidden`**。
 - Assignment 正文中的 role 引用：默认 **plain id**（`product-manager`）；OpenCode 见 **`mstar-host/references/opencode.md`** § Role-mention hygiene。
 - 承接方若判断必须增加 subagent，应先回报 **`Blocked`** 请 PM 重分派。
-- Per-task informal review, when PM explicitly allows it, must not use `qc-specialist*`; use `generalPurpose` or PM-marked informal `qa-engineer`. Formal QC remains `mstar-review-qc`.
+- Per-task informal review, when PM explicitly allows it, must not use `qc-specialist*`; use `code-reviewer` (generic fallback only when the role agent is absent on the host) or PM-marked informal `qa-engineer`. Formal QC remains `mstar-review-qc`.
 
 ## 并发分派完整性门禁（PM 强制）
 
