@@ -220,29 +220,32 @@ assignees = N `subagent` calls = N independent delegations** (dispatch-gate
 dispatched Assignment). Paste-only Assignment without an invoke is **not**
 dispatch.
 
-**Execution: concurrent via background dispatch.** The `subagent` tool does
-**not** declare `isConcurrencySafe` → fail-closed `exclusive` classification,
-so same-message invokes are issued one-at-a-time (the next invoke starts only
-after the previous one settles). Foreground invokes (no `run_in_background`)
-settle only when the child completes → end-to-end serial (wall ≈ N× single
-seat). **Background invokes (`run_in_background: true`) settle at task start
-(task id returned) and their child agents run CONCURRENTLY in background
-tasks** — for N≥2 dispatch (QC tri-review) use `run_in_background: true`:
-parallel execution, wall ≈ single seat (not N×). **Future path (upstream
-suggestion, not editable from this repo):** dsh-private declares
-`isConcurrencySafe: () => true` on the tool-subagent so same-message
-foreground invokes can also run concurrently — needs dsh maintainer
-evaluation (roadmap §7e).
+**Execution: concurrent dispatch REQUIRES background mode.** The `subagent`
+tool does **not** declare `isConcurrencySafe` → fail-closed `exclusive`
+classification, so same-message invokes are issued one-at-a-time (the next
+invoke starts only after the previous one settles). Foreground invokes (no
+`run_in_background`) settle only when the child completes → end-to-end serial
+(wall ≈ N× single seat). **Therefore any N≥2 dispatch that needs parallel
+execution MUST set `run_in_background: true` on EVERY invoke of the batch**:
+background invokes settle at task start (task id returned) and their child
+agents run CONCURRENTLY in background tasks (wall ≈ single seat, not N×).
+Foreground N≥2 invokes run SERIALLY and do NOT satisfy an N-parallel
+requirement — emitting them as "the dispatch" is dispatch-incomplete; if the N
+background invokes cannot be emitted in one message → **`Blocked`** (same as
+paste-only). **Future path (upstream suggestion, not editable from this
+repo):** dsh-private declares `isConcurrencySafe: () => true` on the
+tool-subagent so same-message foreground invokes can also run concurrently —
+needs dsh maintainer evaluation (roadmap §7e).
 
 ### QC default
 
 - **`Execution mode: sdd`**: **N=3** `subagent` dispatches — one per QC seat
   (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`), each body **Act as**
-  the respective QC role + QC skill load. **Dispatch all three with
-  `run_in_background: true` → the seats run CONCURRENTLY** (background
-  children; wall ≈ single seat); foreground (no `run_in_background`) would run
-  serially (wall ≈ 3× single seat). Cannot emit required **N** →
-  **`Blocked`**.
+  the respective QC role + QC skill load. **MUST dispatch all three with
+  `run_in_background: true` in one message** → the seats run CONCURRENTLY
+  (background children; wall ≈ single seat); foreground (no
+  `run_in_background`) runs serially (wall ≈ 3× single seat) and does NOT
+  count as parallel tri. Cannot emit required **N** → **`Blocked`**.
 - **`inline`**: **N=1**.
 
 ### SDD implement (serial)
