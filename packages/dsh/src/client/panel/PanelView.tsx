@@ -18,16 +18,18 @@
  *
  * Tab state (spec §6.2): local `useState<PanelTab>` (default 'tasks', D1, no
  * routing) — `renderToStaticMarkup` renders the default tasks page, keeping
- * SSR assertions stable. The tasks tab currently reuses the WorkflowCanvas
- * zone dashboard (the IterationTaskPage lands with Task 2); the agents/events
- * tabs render muted placeholder pages (refined by Task 3; the real pages land
- * with the agent-canvas / event-log plans).
+ * SSR assertions stable. The tasks tab renders the IterationTaskPage (Content
+ * Head + Steps 横排/收拢 + full-width kanban, spec §3 — landed with Task 2,
+ * replacing the WorkflowCanvas zone dashboard); the agents/events tabs render
+ * muted placeholder pages (refined by Task 3; the real pages land with the
+ * agent-canvas / event-log plans).
  *
  * Empty branches (spec §2): waiting / no-harness stay exactly as the zone
  * dashboard baseline — no tabs, no sidebar (hint + freshness only); the
  * no-harness main keeps `data-mstar-graph` on its hint container. Degradation
- * stays total: `projectGraph` never throws; no iteration → muted disabled
- * iteration zone; `state` null / plans missing → muted tasks zone.
+ * stays total: `projectGraph` never throws; no iteration → the IterationTaskPage's
+ * collapsed muted head (spec §8); `state` null / plans missing → muted kanban
+ * skeleton.
  */
 
 import * as React from 'react'
@@ -37,11 +39,11 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MstarEngineStatusSource } from '../../types.ts'
 import css from './panel.module.css'
 import { projectGraph } from './graph/project-graph.ts'
-import { WorkflowCanvas } from './zones/WorkflowCanvas.tsx'
 import { Sidebar } from './sidebar.tsx'
 import { TabNav, type PanelTab } from './TabNav.tsx'
 import { AgentCanvasPage } from './pages/AgentCanvasPage.tsx'
 import { EventLogPage } from './pages/EventLogPage.tsx'
+import { IterationTaskPage } from './pages/IterationTaskPage.tsx'
 import { useMstarEngineStatus } from './use-mstar-engine-status.ts'
 
 export interface MstarPanelViewProps extends ConvViewProps {
@@ -62,14 +64,16 @@ export interface PanelContentProps {
 
 /**
  * Tab → page mapping (spec §6.2): the only per-tab-switching part of the
- * layout. tasks = the zone dashboard for now (the IterationTaskPage lands
- * with Task 2); agents / events = muted placeholder pages (Task 3 refines
- * them; the real pages land with the agent-canvas / event-log plans).
+ * layout. tasks = the IterationTaskPage (spec §3 — Content Head + Steps
+ * 横排/收拢 + full-width kanban, landed with Task 2; it replaced the
+ * WorkflowCanvas zone dashboard, whose file is removed by the plan close);
+ * agents / events = muted placeholder pages (Task 3 refines them; the real
+ * pages land with the agent-canvas / event-log plans).
  */
 export function PanelContent({ tab, source, t }: PanelContentProps) {
   if (tab === 'agents') return <AgentCanvasPage t={t} />
   if (tab === 'events') return <EventLogPage t={t} />
-  return <WorkflowCanvas view={projectGraph(source)} t={t} />
+  return <IterationTaskPage view={projectGraph(source)} t={t} />
 }
 
 export function PanelView({ t, useSession }: MstarPanelViewProps) {

@@ -694,8 +694,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Horizontal 6-column row; the tasks zone is the flex center of the three-zone
-   grid, so the row scrolls internally when the zone is too narrow. */
+/* Horizontal 6-column row; on the IterationTaskPage the tasks area scrolls
+   vertically (the page's independent scroll body) and the columns SPREAD
+   full-width (flex: 1 1 0, no width cap — spec panel-tabs §3/D2); on very
+   narrow widths the row scrolls internally. */
 .kanban {
   display: flex;
   align-items: flex-start;
@@ -711,7 +713,6 @@
   flex-direction: column;
   gap: var(--mstar-space-2);
   min-width: 150px;
-  max-width: 200px;
   padding: var(--mstar-space-2);
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;

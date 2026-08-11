@@ -47,6 +47,13 @@
  * (任务迭代 / 代理执行 / 事件记录) and `page.*.placeholder` the muted
  * placeholder copy for the agents/events tabs (the real pages land with the
  * agent-canvas / event-log plans; Task 3 refines the placeholders).
+ *
+ * T2 (spec panel-tabs §3, plan 20260811-panel-tabs-shell Task 2): the
+ * IterationTaskPage head copy — `page.iteration.*` (the collapsed one-line
+ * "not started" note + the expand/collapse toggle hints). The head reuses the
+ * existing `zone.iteration.*` (step badge / Step n/5 label / step-state
+ * chips), `zone.phase.*` (the 5 PHASE_IDS names) and `zone.branches.*`
+ * (branch panel) keys; the kanban reuses `zone.tasks.*` / `zone.state.*`.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -62,6 +69,9 @@ export type PanelKey =
   | 'tab.events'
   | 'page.agents.placeholder'
   | 'page.events.placeholder'
+  | 'page.iteration.not-started'
+  | 'page.iteration.expand'
+  | 'page.iteration.collapse'
   | 'empty.waiting'
   | 'empty.no-harness'
   | 'watermark.version'
@@ -160,6 +170,9 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'tab.events': '事件记录',
   'page.agents.placeholder': '代理执行页由后续 plan 交付（agent canvas）',
   'page.events.placeholder': '事件记录页由后续 plan 交付（event log）',
+  'page.iteration.not-started': '迭代未启动',
+  'page.iteration.expand': '展开',
+  'page.iteration.collapse': '收拢',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
   'watermark.version': 'mstar {version}',
@@ -253,6 +266,9 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'tab.events': 'Event Log',
   'page.agents.placeholder': 'Agent run page lands in a later plan (agent canvas)',
   'page.events.placeholder': 'Event log page lands in a later plan',
+  'page.iteration.not-started': 'iteration not started',
+  'page.iteration.expand': 'expand',
+  'page.iteration.collapse': 'collapse',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
   'watermark.version': 'mstar {version}',
