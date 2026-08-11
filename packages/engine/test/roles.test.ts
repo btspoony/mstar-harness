@@ -98,6 +98,14 @@ function remap(mutate: (m: RoleMappingEntry) => RoleMappingEntry): RoleMappingEn
 }
 
 // ---------------------------------------------------------------------------
+// ROLE_MAPPING data
+// ---------------------------------------------------------------------------
+
+test("ROLE_MAPPING mirrors mstar-roles SSOT: code-reviewer → references/code-reviewer.md", () => {
+  expect(ROLE_MAPPING.find((m) => m.agentId === "code-reviewer")?.reference).toBe("references/code-reviewer.md");
+});
+
+// ---------------------------------------------------------------------------
 // validateRoleMapping
 // ---------------------------------------------------------------------------
 

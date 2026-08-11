@@ -31,7 +31,7 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
  * Mapping): `agentId` → skill-relative reference file. */
 export type RoleMappingEntry = { agentId: string; reference: string };
 
-/** The 13 role ids → `references/<role>.md` mapping, embedded as data
+/** The 14 role ids → `references/<role>.md` mapping, embedded as data
  * (mstar-roles § Role Reference Mapping; shared families point at the
  * shared reference files). */
 export const ROLE_MAPPING: readonly RoleMappingEntry[] = [
@@ -48,6 +48,7 @@ export const ROLE_MAPPING: readonly RoleMappingEntry[] = [
   { agentId: "ops-engineer", reference: "references/ops-engineer.md" },
   { agentId: "writing-specialist", reference: "references/writing-specialist.md" },
   { agentId: "prompt-engineer", reference: "references/prompt-engineer.md" },
+  { agentId: "code-reviewer", reference: "references/code-reviewer.md" },
 ];
 
 /** A role family that MUST resolve to one shared reference file
