@@ -48,7 +48,13 @@ or a custom profile).
   scrolls; the zone container is the only scroll body) with an **iteration
   zone** (Step 1–5 stepper + `Step N/5` badge + active-highlight / inactive
   dimmed state + the branch panel — iteration base / target / spec
-  integration, rendered only while active), a **tasks zone** (6-column
+  integration, rendered only while active; the expanded head is a LEFT-RIGHT
+  SPLIT — branches (small left half) + steps (large right half) via
+  `data-iteration-head-split`, stacking on narrow widths, and NO branch panel
+  when there is no active iteration; the current step follows the steering
+  compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
+  (iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge,
+  plan `20260811-panel-f4-iteration-zone`), a **tasks zone** (6-column
   kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
   badges, Done ≤5 + `+N more`), an **agent-execution zone** (the FOUR EXPECTED_ROLE_FLOW stage/phase
   columns — review-edit-chain → sdd-implement → qc-tri → qa-gate, the
@@ -116,9 +122,12 @@ or a custom profile).
   library inlined — react-flow removed; the build asserts the bundle contains
   no `xyflow`/`reactflow` markers, no `@deepseek-ai/*` value imports, and no
   `import.meta` / ESM statements — the loader runs plugin bundles as classic
-  scripts). **Known limitations**: the stepper's Step 1 (iteration-start) and
-  Step 5 (merge-ready) can never be the CURRENT step — the engine phase gate
-  only evaluates Phase 2→3→4, so they always render idle; the agent-entity
+  scripts). **Known limitations**: the stepper's Step 1 (iteration-start) IS
+  the current step while the steering compass is `status: active` (Phase 1 in
+  flight — catalog `compassStatus` field), carrying NO PASS/FAIL badge (Phase
+  1 has no gate verdict); Step 5 (merge-ready) can never be the CURRENT step —
+  the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
+  the agent-entity
   status derivation pairs a PAIRED settle exactly by its dispatch identity
   (`agent`, `role`, `planId`, `taskId` — under QC-tri N=3 concurrency each
   settle lands on ITS dispatch), and an unpaired dispatch stays `running`
