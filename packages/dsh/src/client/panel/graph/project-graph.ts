@@ -160,7 +160,13 @@ export interface AgentZoneStage {
  * (key = role id; count 0 / ts 0 — never a guessed status).
  */
 export interface AgentEntityView {
-  /** `agent` (session id); fallback `${role}+${ts}` when the agent id is missing; known role id for idle cards. */
+  /**
+   * `agent` (session id); fallback `${role}+${ts}` when the agent id is
+   * missing; known role id for idle cards. INVARIANT (spec §6.2, F-001): keys
+   * are UNIQUE across the whole `entities` array — a session id that collides
+   * with a known role id suppresses the idle twin in `idleEntities`, so the
+   * React `key` / `layoutAgents` `cards.set` never see duplicates.
+   */
   key: string
   /** The raw session id; null when the fallback key was used or the card is idle. */
   agent: string | null
@@ -214,6 +220,17 @@ export interface AgentEdge {
 }
 
 /**
+ * The canvas degradation-note classification (spec §8, F-002): the projection
+ * decides the note from the RAW ledger (never a UI-side heuristic on the
+ * entity list): `empty` = 0 events; `settle-only` = events present but NO
+ * dispatch row (all settle / garbage rows — genuinely no dispatch evidence);
+ * `null` = dispatch evidence present (incl. anonymous dispatch rows — they
+ * are evidence, not settle-only). The unreadable-ledger case is the SEPARATE
+ * `degraded` flag, not a note value.
+ */
+export type AgentZoneNote = 'empty' | 'settle-only' | null
+
+/**
  * The projected agents zone (spec §4 + §6.2): the EXPECTED_ROLE_FLOW stage
  * skeleton plus the dispatch-derived entity cards and the expected/actual/next
  * arrows. Total function — NEVER throws and NEVER fabricates: the KNOWN_AGENTS
@@ -230,6 +247,8 @@ export interface AgentZoneView {
   degraded: boolean
   /** `state.agentFlow` present but 0 events (recording started at plan merge). */
   empty: boolean
+  /** The projected canvas note (spec §8, F-002 — see `AgentZoneNote`). */
+  note: AgentZoneNote
   /** Evidence-derived dispatch entities ∪ idle KNOWN_AGENTS cards — the full roster is NEVER hidden (spec §6.2). */
   entities: readonly AgentEntityView[]
   /** expected (stage skeleton) + actual (same-plan handoffs) + at most one next (latest running). */
@@ -599,11 +618,21 @@ function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZ
  * evidence gets an `idle` entity (key = role id) — the full known roster is
  * NEVER hidden, degraded/empty branches included. `idle` cards carry no
  * fabricated claims: agent null, count 0, ts 0, task null, status `idle`.
+ *
+ * Key-uniqueness guard (F-001 — qc1/qc2 Warning): `evidencedRoles` suppresses
+ * the idle card of a role WITH dispatch evidence, but a dispatch row whose
+ * session id equals a KNOWN_AGENTS id while its `role` differs (e.g.
+ * `{ agent: 'project-manager', role: 'fullstack-dev' }`) produces a lit card
+ * keyed by that id WITHOUT that role being evidenced. `litKeys` (the
+ * evidence-derived entity key set) suppresses the idle twin in that case too
+ * — the entity key space stays unique, so `layoutAgents`' `cards.set` and the
+ * React `key` never collide/overwrite.
  */
-function idleEntities(evidencedRoles: ReadonlySet<string>): AgentEntityView[] {
+function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<string>): AgentEntityView[] {
   const out: AgentEntityView[] = []
   for (const known of KNOWN_AGENTS) {
     if (evidencedRoles.has(known.id)) continue
+    if (litKeys.has(known.id)) continue // F-001: the lit card occupies this roster slot
     out.push({
       key: known.id,
       agent: null,
@@ -635,6 +664,17 @@ function idleEntities(evidencedRoles: ReadonlySet<string>): AgentEntityView[] {
  *   members appended as idle cards, expected/actual/next edges, and the
  *   executing (running entities — idle never counts) / pending
  *   (un-evidenced stage roles) counts.
+ *
+ * Entity-key invariant (F-001 — qc1/qc2 Warning): the concatenated key space
+ * (evidence keys ∪ idle role ids) is UNIQUE by construction — `idleEntities`
+ * suppresses a known role's idle card when its id already exists as an
+ * evidence-derived entity key (a session id colliding with a role id), so the
+ * render layer's `key`/`cards.set` never collide.
+ *
+ * Canvas note (F-002 — qc1 Warning): `note` classifies the readable ledger in
+ * the projection ('empty' / 'settle-only' / null — see `AgentZoneNote`); the
+ * UI consumes it directly and never infers settle-only from the entity list
+ * (garbage rows would fake it).
  */
 export function projectAgents(source: MstarEngineStatusSource | null): AgentZoneView {
   const stages: AgentZoneStage[] = EXPECTED_ROLE_FLOW.map((s) => ({
@@ -651,15 +691,21 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     ? null
     : rawAgentFlow.events
   if (rawEvents === null || !Array.isArray(rawEvents)) {
-    // No ledger evidence at all → every known agent is idle (spec §6.2).
+    // No ledger evidence at all → every known agent is idle (spec §6.2);
+    // `note` is null — the `degraded` flag IS the note for this branch.
     return {
-      stages, degraded: true, empty: false,
-      entities: idleEntities(new Set()), edges: expectedEdges(stages), executing: 0, pending: 0,
+      stages, degraded: true, empty: false, note: null,
+      entities: idleEntities(new Set(), new Set()), edges: expectedEdges(stages), executing: 0, pending: 0,
     }
   }
 
   const entries = classifyFlowRows(rawEvents)
   const empty = rawEvents.length === 0
+  // F-002: the canvas note is a PROJECTION decision on the raw ledger (the UI
+  // never infers ledger semantics from the entity list): 0 events → 'empty';
+  // events but NO dispatch row (all settle / garbage) → 'settle-only';
+  // any dispatch row (anonymous included — it IS dispatch evidence) → null.
+  const note: AgentZoneNote = empty ? 'empty' : entries.some((e) => e.view.kind === 'dispatch') ? null : 'settle-only'
 
   // Evidence (spec §4): a stage is evidenced when any dispatch row's role maps
   // to it (roles are unique across stages, so this equals literal role
@@ -687,14 +733,18 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     entries.map((e) => ({ kind: e.view.kind, agent: e.view.agent, status: e.view.status })),
   )
 
-  const entities = [...aggregateEntities(entries, pairStatus), ...idleEntities(evidencedRoles)]
+  const lit = aggregateEntities(entries, pairStatus)
+  // F-001: the evidence-derived key set drives the idle-twin suppression —
+  // a session id equal to a known role id never yields a duplicate key.
+  const litKeys = new Set(lit.map((e) => e.key))
+  const entities = [...lit, ...idleEntities(evidencedRoles, litKeys)]
   const edges = [...expectedEdges(stages), ...actualEdges(entries), ...nextEdges(entities, stages)]
 
   const executing = entities.filter((e) => e.status === 'running').length
   // Pending = expected roles of stages with NO dispatch evidence (spec §4).
   const pending = stages.reduce((sum, s) => sum + (evidenced.has(s.id) ? 0 : s.roles.length), 0)
 
-  return { stages, degraded: false, empty, entities, edges, executing, pending }
+  return { stages, degraded: false, empty, note, entities, edges, executing, pending }
 }
 
 /* ---------------------------------- flow events projection (spec §3 — moved from `flow.*`) ---------------------------------- */

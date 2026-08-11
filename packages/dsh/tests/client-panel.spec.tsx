@@ -1842,7 +1842,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(html).toContain('data-agent-summary-executing="2"')
   })
 
-  it('empty ledger → data-canvas-note="empty"; settle-only ledger → the restored data-canvas-note="settle-only" (review T2-Imp-2)', () => {
+  it('empty ledger → data-canvas-note="empty"; settle-only ledger → the restored data-canvas-note="settle-only" (review T2-Imp-2; F-002 note is projected)', () => {
     // 0 events → the `empty` anchor (spec §8).
     const emptyHtml = agentsHtml(flowSource([]))
     expect(emptyHtml).toContain('data-canvas-note="empty"')
@@ -1858,6 +1858,16 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(settleOnly).toContain('Settle records only (no dispatch evidence)')
     expect(settleOnly).not.toContain('data-canvas-note="empty"')
     expect(settleOnly).not.toContain('data-canvas-note="degraded"')
+    // F-002: the note rides PROJECTED metadata — a garbage-only ledger
+    // (no dispatch evidence) renders settle-only; an anonymous dispatch row
+    // IS dispatch evidence, so no note (the old allIdle heuristic would
+    // have mislabeled both as settle-only).
+    const garbageOnly = agentsHtml(flowSource([42, null, 'garbage', { kind: 'banana' }]))
+    expect(garbageOnly).toContain('data-canvas-note="settle-only"')
+    expect(garbageOnly).toContain('Settle records only (no dispatch evidence)')
+    const anonymousDispatch = agentsHtml(flowSource([{ kind: 'dispatch' }]))
+    expect(anonymousDispatch).not.toContain('data-canvas-note')
+    expect(anonymousDispatch).toContain('data-agent-summary-executing="0"')
   })
 
   it('mounts the Legend on the agents page: idle swatch + collaboration-edge swatches (plan Task 3)', () => {
@@ -1946,5 +1956,27 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(layout.cards.get('project-manager')!.x).toBeGreaterThan(layout.columns[5]!.x)
     // Same view → identical geometry (SSR stability).
     expect(layoutAgents(view)).toEqual(layout)
+  })
+
+  it('F-001: a session id colliding with a role id renders ONE card per key — no duplicate-key twin, honest summary', () => {
+    // dispatch agent = 'project-manager' (a KNOWN_AGENTS id) with role
+    // 'fullstack-dev' — the projection suppresses the idle twin, so the page
+    // renders 1 lit + 13 idle = 14 unique entities (the collided roster slot
+    // is the lit card) and the summary matches the visible cards.
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 7, role: 'fullstack-dev', agent: 'project-manager' }),
+    ]))
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(14)
+    expect(html.match(/data-agent-entity="project-manager"/g)).toHaveLength(1)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
+    // The lit card is visible and honest (running, no idle marker).
+    const lit = cardRegion(html, 'project-manager')
+    expect(lit).toContain('data-agent-status="running"')
+    expect(lit).not.toContain('data-agent-idle')
+    expect(lit).toContain('data-agent-record')
+    // The suppressed role's idle card is gone too (fullstack-dev is evidenced).
+    expect(html).not.toContain('data-agent-entity="fullstack-dev"')
+    // Executing matches the visible running card.
+    expect(html).toContain('data-agent-summary-executing="1"')
   })
 })

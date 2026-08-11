@@ -938,6 +938,47 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     expect(agents.executing).toBe(0)
     expect(agents.pending).toBe(12)
     expect(agents.stages).toHaveLength(6)
+    // F-002: the projection classifies the ledger — settle rows but no
+    // dispatch rows → the settle-only note (never UI-inferred).
+    expect(agents.note).toBe('settle-only')
+  })
+
+  it('F-002: the canvas note is PROJECTED — empty (0 events) / settle-only (rows but no dispatch) / null (dispatch evidence)', () => {
+    // 0 events → 'empty'.
+    expect(projectGraph(flowSource([])).agents.note).toBe('empty')
+    // Events but NO dispatch row (settle rows only) → 'settle-only'.
+    expect(projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
+    ])).agents.note).toBe('settle-only')
+    // Any dispatch row → null (real evidence; anonymous rows count too —
+    // they are dispatch activity, not a settle-only ledger).
+    expect(projectGraph(flowSource([
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
+    ])).agents.note).toBeNull()
+    expect(projectGraph(flowSource([{ kind: 'dispatch' }])).agents.note).toBeNull()
+    // Unreadable / absent ledger → null note (the `degraded` flag is the signal).
+    expect(projectGraph(fullSource).agents.note).toBeNull()
+    expect(projectGraph(null).agents.note).toBeNull()
+    expect(projectGraph(noHarnessSource).agents.note).toBeNull()
+  })
+
+  it('F-002: a garbage-only ledger never fakes evidence — note settle-only (no dispatch rows to show)', () => {
+    // All rows unclassifiable (kind ∉ dispatch|settle) → no dispatch
+    // evidence at all → the honest settle-only note (the old UI-side
+    // allIdle heuristic produced the same anchor; the projection now owns it).
+    const agents = projectGraph(flowSource([42, null, 'garbage', { kind: 'banana' }])).agents
+    expect(agents.degraded).toBe(false)
+    expect(agents.empty).toBe(false)
+    expect(agents.note).toBe('settle-only')
+    expect(agents.entities.every((e) => e.idle)).toBe(true)
+    // Mixing garbage with a REAL dispatch row → evidence wins, no note.
+    const mixed = projectGraph(flowSource([
+      42,
+      'garbage',
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
+    ])).agents
+    expect(mixed.note).toBeNull()
+    expect(mixed.entities.some((e) => !e.idle)).toBe(true)
   })
 
   it('anonymous dispatch rows (no agent, no role) are skipped — never ghost cards', () => {
@@ -1090,6 +1131,75 @@ describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
     ])).agents
     expect(agents.entities).toHaveLength(15)
     expect(agents.executing).toBe(1)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Entity key uniqueness (F-001 — qc1/qc2 Warning): a dispatch row whose
+ * session id equals a KNOWN_AGENTS role id while its `role` differs (e.g.
+ * `{ agent: 'project-manager', role: 'fullstack-dev' }`) must NEVER yield two
+ * entities with the same key — the idle twin is suppressed by the lit key
+ * set, so React `key` / `layoutAgents` `cards.set` never collide and
+ * `executing` stays consistent with the visible cards.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents entity key uniqueness (F-001)', () => {
+  it('session id == another role id: the lit card occupies the slot, the idle twin is suppressed', () => {
+    // `agent` (session id) = 'project-manager' collides with the KNOWN_AGENTS
+    // id; the row's `role` is fullstack-dev — the old code emitted a lit
+    // card keyed 'project-manager' AND an idle card keyed 'project-manager'.
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'project-manager' }),
+    ])).agents
+    // No duplicate keys (the invariant the render layer depends on).
+    const keys = agents.entities.map((e) => e.key)
+    expect(new Set(keys).size).toBe(keys.length)
+    // The lit card exists, is running, and carries the honest role.
+    const lit = agents.entities.find((e) => e.key === 'project-manager')!
+    expect(lit).toBeDefined()
+    expect(lit.idle).toBe(false)
+    expect(lit.status).toBe('running')
+    expect(lit.role).toBe('fullstack-dev')
+    // Exactly ONE card per key — no React duplicate-key twin.
+    expect(agents.entities.filter((e) => e.key === 'project-manager')).toHaveLength(1)
+    // The suppressed idle twins: neither the collided role id nor the
+    // evidenced role id appears among the idle cards.
+    const idleKeys = agents.entities.filter((e) => e.idle).map((e) => e.key)
+    expect(idleKeys).not.toContain('project-manager')
+    expect(idleKeys).not.toContain('fullstack-dev')
+    // 1 lit + 13 idle = 14 unique cards (the collided roster slot is the lit card).
+    expect(agents.entities).toHaveLength(14)
+    // `executing` matches the visible cards (1 running lit card — no hidden
+    // duplicate to disagree with the summary).
+    expect(agents.executing).toBe(1)
+  })
+
+  it('collision via an unexpected role (agent = KNOWN_AGENTS id, role not in the roster) — same suppression', () => {
+    // role 'scout' is unexpected (no idle card for it anyway); the session id
+    // 'explore' collides with the KNOWN_AGENTS 'explore' → idle twin suppressed.
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 7, role: 'scout', agent: 'explore' }),
+    ])).agents
+    const keys = agents.entities.map((e) => e.key)
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(agents.entities.filter((e) => e.key === 'explore')).toHaveLength(1)
+    expect(agents.entities.find((e) => e.key === 'explore')!.idle).toBe(false)
+    // 1 lit + 14 idle (the other 14 roster members; 'explore' slot = lit card).
+    expect(agents.entities).toHaveLength(15)
+    expect(agents.executing).toBe(1)
+  })
+
+  it('key-uniqueness invariant holds across degraded / empty / evidence / collision states', () => {
+    for (const agents of [
+      projectGraph(fullSource).agents, // degraded: agentFlow null
+      projectGraph(flowSource([])).agents, // empty: 0 events
+      projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })])).agents,
+      projectGraph(flowSource([dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'project-manager' })])).agents,
+      projectGraph(flowSource([dispatchRow({ ts: 7, role: 'scout', agent: 'explore' })])).agents,
+    ]) {
+      const keys = agents.entities.map((e) => e.key)
+      expect(new Set(keys).size).toBe(keys.length)
+    }
   })
 })
 

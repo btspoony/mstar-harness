@@ -31,19 +31,21 @@
  * the placeholder.
  *
  * T2 (spec panel-zones §4, plan 20260810-panel-agent-flow-zone): the agents
- * zone is filled in — `zone.agents.summary` (`N executing · M pending`),
- * `zone.agents.pending-label` (the dashed "待执行" placeholder chip) and
- * `zone.agents.next` (the animated next-edge label). `zone.agents.placeholder`
- * is gone with the placeholder.
+ * zone is filled in — `zone.agents.summary` (`N executing · M pending`).
+ * `zone.agents.placeholder` is gone with the placeholder; the dashed
+ * "待执行" chip (`pending-label`) and the animated next-edge label (`next`)
+ * keys were removed with the AgentFlowZone in the agent-canvas QC wave
+ * (S-001 — the free canvas renders neither, so they had zero consumers).
  *
  * T3 (same plan): the dock is collapsible (the frame is a native <details>,
  * header = <summary>) and the legend gains the entity-status swatches —
  * `zone.legend.agent-running` / `zone.legend.agent-settled` (the status-dot
- * treatments of the entity cards; the `zone.agents.*` family itself is
- * complete from T2 — every key is rendered, so no `zone.agents.status.*`
- * family is added: a status TEXT on the cards would be dead strings, the
- * spec §4 card shows a status point, and reusing `flow.*` would conflate
- * event status words (dispatched/settled ok) with entity status words).
+ * treatments of the entity cards; the `zone.agents.*` family itself stays
+ * minimal — title/summary, both rendered by the canvas, so no
+ * `zone.agents.status.*` family is added: a status TEXT on the cards would be
+ * dead strings, the spec §4 card shows a status point, and reusing `flow.*`
+ * would conflate event status words (dispatched/settled ok) with entity
+ * status words).
  *
  * T1 (spec panel-tabs §2/§6.1, plan 20260811-panel-tabs-shell): the panel is
  * re-laid-out as Tabs + Content — `tab.*` covers the 3 fixed MenuTab labels
@@ -125,8 +127,6 @@ export type PanelKey =
   | 'zone.state.unknown'
   | 'zone.agents.title'
   | 'zone.agents.summary'
-  | 'zone.agents.pending-label'
-  | 'zone.agents.next'
   | 'flow.title'
   | 'flow.empty'
   | 'flow.settle-only'
@@ -216,8 +216,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': '未知',
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
-  'zone.agents.pending-label': '待执行',
-  'zone.agents.next': 'next',
   'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
@@ -302,8 +300,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': 'unknown',
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
-  'zone.agents.pending-label': 'pending',
-  'zone.agents.next': 'next',
   'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',

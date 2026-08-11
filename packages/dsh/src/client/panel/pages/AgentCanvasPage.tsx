@@ -10,6 +10,9 @@
  *   viewport; `touch-action: none` + `preventDefault` on pointerdown stop
  *   native scroll / text selection; during capture the entity cards never
  *   receive the pointer (no click-through); no pan bounds (free pan).
+ * - forced capture loss (window blur / alt-tab / element removal mid-gesture)
+ *   fires `lostpointercapture` without pointerup — it binds the same end
+ *   handler so `dragRef` never goes stale (review S-002).
  * - the content layer carries `data-canvas-pan` and exposes the pan state as
  *   `transform: translate(xpx, ypx)`; the grid background moves WITH the
  *   content. Pan is instant (no animation), so `prefers-reduced-motion`
@@ -37,9 +40,11 @@
  * yields the full idle roster, so the canvas renders it with the muted
  * `data-canvas-note` (degraded = ledger missing; empty = no events;
  * settle-only = events but no dispatch rows — review T2-Imp-2 restored the
- * old zone's distinct settle-only anchor). The Legend (idle / collaboration
- * swatches, plan Task 3) sits above the viewport. `initialPan` is a
- * deterministic SSR/test seed — the live page starts at the origin.
+ * old zone's distinct settle-only anchor; F-002: the empty/settle-only note
+ * is PROJECTED metadata, never inferred from the entity list). The Legend
+ * (idle / collaboration swatches, plan Task 3) sits above the viewport.
+ * `initialPan` is a deterministic SSR/test seed — the live page starts at the
+ * origin.
  */
 
 import * as React from 'react'
@@ -261,7 +266,7 @@ function EntityCard({ entity, t, box }: { entity: AgentEntityView; t: TranslateN
 /* ------------------------------ the page ------------------------------ */
 
 export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
-  const { entities, edges, degraded, empty, executing, pending } = view
+  const { entities, edges, degraded, note, executing, pending } = view
   const [pan, setPan] = useState<PanState>(() => initialPan ?? PAN_ORIGIN)
   const dragRef = useRef<PanDrag | null>(null)
   const layout = useMemo(() => layoutAgents(view), [view])
@@ -277,6 +282,12 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
     if (drag === null) return
     setPan(panDragMove(drag, e.clientX, e.clientY))
   }
+  // Shared end handler: pointerup / pointercancel (normal end) AND
+  // lostpointercapture (forced capture loss — window blur / alt-tab /
+  // element removal mid-gesture, review S-002). Resets `dragRef` so a stale
+  // drag never re-applies pan on a later button-less hover pointermove; the
+  // capture check keeps releasePointerCapture safe when capture is already
+  // gone (it would throw NotFoundError otherwise).
   const handlePointerEnd = (e: React.PointerEvent<HTMLDivElement>) => {
     dragRef.current = null
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
@@ -285,16 +296,18 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
   }
 
   // Muted degradation note (spec §8 — four honest states, never orange):
-  // degraded = unreadable ledger; empty = 0 events; settle-only = events but
-  // no dispatch rows (the old AgentFlowZone `data-zone-empty="settle-only"`
-  // semantic, review T2-Imp-2 — restored as `data-canvas-note="settle-only"`
-  // with its own muted copy instead of folding into `empty`).
-  const allIdle = entities.length > 0 && entities.every((e) => e.idle)
-  const note = degraded
+  // `degraded` (unreadable ledger) is its own flag; the projected `note`
+  // classifies the readable ledger — 'empty' = 0 events, 'settle-only' =
+  // events but no dispatch rows, null = dispatch evidence (the old
+  // AgentFlowZone `data-zone-empty="settle-only"` semantic, review
+  // T2-Imp-2, restored as `data-canvas-note="settle-only"`). F-002: the
+  // note comes from the PROJECTION, never from an `entities.every(idle)`
+  // heuristic — a garbage ledger would fake settle-only.
+  const noteInfo = degraded
     ? { anchor: 'degraded', text: t('flow.degraded') }
-    : empty
+    : note === 'empty'
       ? { anchor: 'empty', text: t('flow.empty') }
-      : allIdle
+      : note === 'settle-only'
         ? { anchor: 'settle-only', text: t('flow.settle-only') }
         : null
 
@@ -312,7 +325,7 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
         </span>
       </header>
 
-      {note !== null && <p className={css.canvasNote} data-canvas-note={note.anchor}>{note.text}</p>}
+      {noteInfo !== null && <p className={css.canvasNote} data-canvas-note={noteInfo.anchor}>{noteInfo.text}</p>}
 
       <div className={css.canvasLegend}>
         <Legend t={t} />
@@ -325,6 +338,7 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
+        onLostPointerCapture={handlePointerEnd}
       >
         <div
           className={css.canvasContent}
