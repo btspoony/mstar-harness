@@ -15,10 +15,13 @@
  *   PASS/FAIL verdict + count, and `state.plans[].status` rows fall into the
  *   exact-match kanban buckets. `iteration.compassStatus` (the steering
  *   compass frontmatter `status`, `'active' | 'locked'` — spec panel-f4 §2.3
- *   R9 / §5 D5) re-derives the current step during Phase 1: `'active'` →
- *   Step 1 (iteration-start) is current with verdict 'unknown' (Phase 1 has
- *   no gate evaluation → no PASS/FAIL badge) + next Step 2; `'locked'` or
- *   missing → the transition-driven logic below (Step 2→4 + gate verdict).
+ *   R9 / §5 D5) re-derives the current step during Phase 1: `'active'` WITH a
+ *   `phase-2-execute` transition (compass and gate mutually consistent — QC
+ *   wave F-001) → Step 1 (iteration-start) is current with verdict 'unknown'
+ *   (Phase 1 has no gate evaluation → no PASS/FAIL badge) + next Step 2;
+ *   `'active'` with a transition past Phase 2 (an inconsistent harness
+ *   state), `'locked'`, or missing → the transition-driven logic below
+ *   (Step 2→4 + gate verdict).
  *
  * Migration from the legacy graph GraphView (spec §3, per field):
  * - kept & moved: `violations` / `flow.events` / `flow.unexpected` → top-level
@@ -59,10 +62,11 @@
  * missing → same skeleton + `degraded.plans`; `state.agentFlow`
  * missing/unreadable → agents roster + `degraded` (full KNOWN_AGENTS idle
  * cards, no executing/pending claims); 0 events → `empty` (idle roster +
- * pending skeleton). `iteration.compassStatus` missing or non-union (old
- * catalog rows / fixtures — the field is OPTIONAL, spec D5) degrades to the
- * existing transition-driven current-step logic (Step 2→4) — backward
- * compatible, `active` semantics unchanged.
+ * pending skeleton). `iteration.compassStatus` missing, non-union (old
+ * catalog rows / fixtures — the field is OPTIONAL, spec D5), or `'active'`
+ * with a transition past Phase 2 (an inconsistent harness state — QC wave
+ * F-001) degrades to the existing transition-driven current-step logic
+ * (Step 2→4) — backward compatible, `active` semantics unchanged.
  */
 
 import type { MstarEngineStatusSource } from '../../../types.ts'
@@ -411,20 +415,30 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
       : TRANSITION_TO_PHASE[transition]
     if (phaseId !== undefined) {
       active = true
-      if (row.compassStatus === 'active') {
+      if (row.compassStatus === 'active' && transition === 'phase-2-execute') {
         // Phase 1 in flight (steering compass `status: active`, not yet
-        // locked — spec panel-f4 §2.3 R9 + §5 D5): Step 1 (iteration-start)
-        // is CURRENT with verdict 'unknown' — the engine gate evaluates only
-        // Phase 2→3→4, so Phase 1 has no PASS/FAIL verdict and no violation
-        // count (summary + step render no badge; violationCount stays null,
-        // violations empty). Next = Step 2 via the SAME PHASE_EDGES forward
-        // rule the locked path uses (iteration-start → autonomous-execute).
-        // `active` stays true — the transition already resolved (engine
-        // `evaluatePhaseGate` emits phase-2-execute + ok:true during Phase 1);
-        // only the CURRENT STEP is re-derived here.
+        // locked — spec panel-f4 §2.3 R9 + §5 D5) AND the gate still agrees
+        // (transition `phase-2-execute` — QC wave F-001: the override fires
+        // only while compass and gate are mutually consistent; compass
+        // `active` with a transition past Phase 2, e.g. `phase-3-close` in an
+        // inconsistent harness state, falls through to the transition-driven
+        // branch below, which shows the REAL gate verdict instead of hiding
+        // it): Step 1 (iteration-start) is CURRENT with verdict 'unknown' —
+        // the engine gate evaluates only Phase 2→3→4, so Phase 1 has no
+        // PASS/FAIL verdict and no violation count (summary + step render no
+        // badge; violationCount stays null, violations empty). Next = Step 2
+        // via the SAME PHASE_EDGES forward rule the locked path uses
+        // (iteration-start → autonomous-execute). `active` stays true — the
+        // transition already resolved (engine `evaluatePhaseGate` emits
+        // phase-2-execute + ok:true during Phase 1); only the CURRENT STEP is
+        // re-derived here.
         currentStep = 1
         const current = steps[0]!
         current.state = 'current'
+        // QC wave F-002 (qc3): the Phase-1 verdict is EXPLICIT — not the
+        // idleStep default — so a future change to that default can never
+        // silently give Phase 1 a PASS/FAIL badge.
+        current.verdict = 'unknown'
         const forward = PHASE_EDGES.find((e) => e.source === 'iteration-start' && e.kind === 'forward')
         if (forward !== undefined) steps[PHASE_IDS.indexOf(forward.target)]!.state = 'next'
       } else {

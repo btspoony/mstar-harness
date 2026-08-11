@@ -178,6 +178,9 @@ Known limitations (this iteration): the iteration stepper's Step 1
 NO PASS/FAIL badge (Phase 1 has no gate verdict); Step 5 (merge-ready) can
 never be the current step —
 the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
+the current step follows the TTL-refreshed `compassStatus` — up to one catalog
+interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
+documented staleness, never a wrong verdict);
 the agent-entity status derivation pairs a PAIRED settle exactly by its
 dispatch identity (agent, role, planId, taskId — QC-tri N=3 settles land on
 their own cards), and an unpaired dispatch stays running (no paired settle,

@@ -140,7 +140,7 @@ function newLocale(): LocaleService {
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelContent, PanelView } from '../src/client/panel/PanelView'
 import { TabNav } from '../src/client/panel/TabNav'
-import { nextExpandedOnActivation } from '../src/client/panel/pages/IterationTaskPage'
+import { IterationTaskPage, iterationSplitActive, nextExpandedOnActivation } from '../src/client/panel/pages/IterationTaskPage'
 import { EventLogPage } from '../src/client/panel/pages/EventLogPage'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
@@ -1404,6 +1404,42 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(g).not.toContain('data-iteration-head-split')
     expect(g).not.toContain('data-iteration-head-branches')
     expect(g).not.toContain('data-branch=')
+  })
+
+  it('expanded head without the split → the steps-row-alone fallback: 5 verdict seats, 0 badges, no split/branches (qc2 F-004 / qc3 F-003)', () => {
+    // The user-visible case (a manually EXPANDED inactive head) is
+    // SSR-unreachable in this suite — `expanded` is seeded from `active`
+    // (`useState(active)`), and effects/clicks cannot run under
+    // `renderToStaticMarkup`. The wrapper DECISION is therefore pinned pure
+    // (inactive → fallback), and the fallback DOM is pinned by rendering the
+    // only statically-reachable expanded + no-split state (`active` with
+    // `branches: null` — projection-unreachable, since branches are always
+    // projected non-null while active, but the fallback JSX is the SAME
+    // single `stepsRow` element the expanded-inactive head renders — one
+    // source, the two cases cannot diverge).
+    expect(iterationSplitActive(false, null)).toBe(false)
+    expect(iterationSplitActive(true, null)).toBe(false)
+    expect(iterationSplitActive(true, { iterationBase: 'a', target: 'b', specIntegration: 'c' })).toBe(true)
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const view = projectGraph(noGateSource)
+    const html = renderToStaticMarkup(createElement(IterationTaskPage, {
+      view: { ...view, iteration: { ...view.iteration, active: true, currentStep: null, branches: null } },
+      t: locale.bind(NS),
+    }))
+    // The expanded body renders the steps row ALONE — no split wrapper, no
+    // branch panel (spec R8 fallback).
+    expect(html).toContain('data-iteration-head-expanded="true"')
+    expect(html).toContain('data-iteration-head-steps')
+    expect(html).not.toContain('data-iteration-head-split')
+    expect(html).not.toContain('data-iteration-head-branches')
+    // All 5 steps reserve the fixed-height verdict seat; the idle skeleton
+    // carries no current step, so the badge condition (current + verdict
+    // != unknown) renders 0 badges.
+    expect(html.match(/data-step-verdict-seat/g)).toHaveLength(5)
+    expect(html).not.toContain('data-iteration-verdict')
+    expect(html).not.toMatch(/data-step-state="current"/)
   })
 
   it('every step reserves the verdict seat; the badge renders only once, on a real gate verdict', () => {

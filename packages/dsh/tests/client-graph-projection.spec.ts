@@ -255,6 +255,31 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     })
   })
 
+  it('compassStatus active + transition past phase-2-execute (inconsistent window) → the Phase-1 override does NOT fire: transition-driven Step 3 + REAL gate verdict (QC wave F-001)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: {
+        ...fullSource.iteration!,
+        compassStatus: 'active',
+        gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' },
+      },
+    })
+    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
+    // Compass and gate are mutually inconsistent — compass still `active`
+    // while the gate advanced past Phase 2 (e.g. all compass-registered plans
+    // Done but the compass not yet locked). The Phase-1 override is restricted
+    // to `phase-2-execute` (qc2 F-001), so the gate wins: Step 3 current +
+    // the REAL ok/violations verdict — no verdict suppression.
+    expect(byId.get('iteration-close')!.state).toBe('current')
+    expect(byId.get('pr-delivery')!.state).toBe('next')
+    expect(v.iteration.currentStep).toBe(3)
+    expect(byId.get('iteration-close')!.verdict).toBe('pass')
+    expect(v.iteration.verdict).toBe('pass')
+    expect(v.iteration.violationCount).toBe(2)
+    expect(v.violations).toHaveLength(2)
+    expect(v.iteration.active).toBe(true)
+  })
+
   it('compassStatus locked → the existing gate-transition-driven logic (Step 2 current + gate verdict)', () => {
     const v = projectGraph({
       ...fullSource,

@@ -127,7 +127,9 @@ or a custom profile).
   flight — catalog `compassStatus` field), carrying NO PASS/FAIL badge (Phase
   1 has no gate verdict); Step 5 (merge-ready) can never be the CURRENT step —
   the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
-  the agent-entity
+  the current step follows the TTL-refreshed `compassStatus` — up to one
+  catalog interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
+  documented staleness, never a wrong verdict); the agent-entity
   status derivation pairs a PAIRED settle exactly by its dispatch identity
   (`agent`, `role`, `planId`, `taskId` — under QC-tri N=3 concurrency each
   settle lands on ITS dispatch), and an unpaired dispatch stays `running`

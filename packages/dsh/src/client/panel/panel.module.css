@@ -384,7 +384,6 @@
   align-items: center;
   justify-content: center;
   height: 22px;
-  min-height: 22px;
 }
 
 /* Current-step verdict badge (spec §3 + panel-f4 §2.3 R9): PASS/FAIL pill,

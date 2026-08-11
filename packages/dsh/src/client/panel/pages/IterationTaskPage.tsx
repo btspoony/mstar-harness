@@ -85,6 +85,21 @@ const STATE_LABEL = {
   idle: 'zone.iteration.step.idle',
 } as const
 
+/**
+ * The split-layout wrapper decision (spec panel-f4 §2.3 R8, plan f4.3 Task 2
+ * — exported pure for the render tests, the `nextExpandedOnActivation`
+ * precedent): the `data-iteration-head-split` container renders ONLY while
+ * the branch panel renders (`active && branches !== null`); otherwise the
+ * expanded body renders the steps row ALONE — the expanded-inactive fallback
+ * (a user manually expands an inactive head → the 5-step idle skeleton
+ * without the split). The `active + branches null` arm is projection-
+ * unreachable (branches are always projected non-null while active), but the
+ * predicate keeps the decision a single, testable source of truth.
+ */
+export function iterationSplitActive(active: boolean, branches: ZoneView['iteration']['branches']): boolean {
+  return active && branches !== null
+}
+
 /** The three branch anchors (spec §3 — `state.iterationBaseBranch` etc.). */
 const BRANCH_ROWS: readonly {
   kind: 'iteration-base' | 'target' | 'spec-integration'
@@ -136,7 +151,7 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
   const stepsRow = (
     <ol className={css.iterationStepsRow} data-iteration-head-steps>
       {iteration.steps.map((step) => (
-        <li className={css.iterationStepItem} data-step={step.step} data-step-state={step.state}>
+        <li key={step.step} className={css.iterationStepItem} data-step={step.step} data-step-state={step.state}>
           <span className={css.iterationStepBadge} data-step-badge>
             {t('zone.iteration.step-badge', { n: String(step.step) })}
           </span>
@@ -199,13 +214,14 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
                 connector bars are removed, the gap replaces them), the
                 current step highlighted on the block itself (honest — the
                 schema knows only current/next/idle). */}
-            {active && iteration.branches !== null ? (
+            {iterationSplitActive(active, iteration.branches) ? (
               /* LEFT-RIGHT split (spec panel-f4 §2.3 R8, plan f4.3 Task 2):
                  branches LEFT (small half) + steps RIGHT (large half). DOM
                  order: branches BEFORE steps — a plain flex row puts branches
                  on the left. The split container exists ONLY while the
-                 branches panel renders (active + branches non-null); inactive
-                 / branches-null → the steps row alone (existing semantics). */
+                 branches panel renders (`iterationSplitActive` — active +
+                 branches non-null); inactive / branches-null → the steps row
+                 alone (existing semantics, the expanded-inactive fallback). */
               <div className={css.iterationHeadSplit} data-iteration-head-split>
                 {/* Branch panel (spec §3): rendered ONLY while the iteration
                     is active (branches are null while inactive, spec §3). */}

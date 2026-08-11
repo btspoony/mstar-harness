@@ -8,8 +8,12 @@
  *
  * Known limitation (spec §2.3 — a documented constraint, not a defect): the
  * engine phase gate only evaluates Phase 2→3→4, so the catalog never emits
- * `iteration-start` / `merge-ready` as current — those nodes stay idle. The
- * loop edge is planning semantics (one iteration closes, the next begins).
+ * `merge-ready` as current — Step 5 stays schema-only idle. Step 1
+ * (`iteration-start`) IS compass-driven current during Phase 1 — the
+ * `compassStatus: 'active'` field (plan 20260811-panel-f4-iteration-zone)
+ * lights it, so it is NOT a "never current" node; only Step 5 has no source
+ * that can light it. The loop edge is planning semantics (one iteration
+ * closes, the next begins).
  */
 
 /** Phase ring node ids in loop order (spec §2.3). */
