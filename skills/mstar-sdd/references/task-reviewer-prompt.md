@@ -4,8 +4,8 @@ One reviewer per task: spec compliance + code quality (`mstar-sdd`).
 
 ```
 Dispatch:
-  Role: generalPurpose                # L2 SDD task reviewer; NOT qc-specialist*
-                                      # omp: agent = "reviewer" or "task" + C5b; Cursor: subagent_type = "generalPurpose" → mstar-host C5
+  Role: code-reviewer                 # L2 SDD task reviewer; NOT qc-specialist*
+                                      # omp: agent = "code-reviewer" (when listed) or "reviewer"/"task" + C5b; Cursor: subagent_type = "generalPurpose" fallback → mstar-host C5
   Name: <CamelCaseId>                 # omp/Cursor name
   Model: [REQUIRED — standard tier default; capable if diff is large/subtle]
   Prompt body:

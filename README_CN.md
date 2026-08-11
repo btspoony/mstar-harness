@@ -162,6 +162,7 @@ flowchart TD
 | `fullstack-dev` / `fullstack-dev-2` | 后端主导实现 / 第二并行轨 |
 | `frontend-dev` | UI、交互、前端性能 |
 | `qa-engineer` | `QA gate: mandatory` 时验收 |
+| `code-reviewer` | SDD per-task 快速验证；codebase audit（`audit` 类） |
 | `qc-specialist` / `-2` / `-3` | QC 三审 |
 | `ops-engineer` | 部署、监控、基础设施 |
 | `writing-specialist` | 文档、小说、文案、脚本 |
