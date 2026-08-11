@@ -272,7 +272,7 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
   const layout = useMemo(() => layoutAgents(view), [view])
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return // primary button only
+    if (e.button !== 0 || !e.isPrimary) return // primary pointer/button only
     e.preventDefault() // no native scroll / text selection while dragging
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = panDragStart(pan, e.clientX, e.clientY)
