@@ -1,12 +1,14 @@
 /* Morning Star workflow panel — inherits dsh web's visual language
  * (dsw design tokens: surfaces, borders, labels, status states). Layout
- * contract (spec panel-zones §2, v3): root grid "main sidebar" fills the Tab
+ * contract (spec panel-tabs §2, v3): root grid "main sidebar" fills the Tab
  * (height 100%, overflow hidden — the page never scrolls); a fixed 300px
- * sidebar with its own internal scroll (<860px it stacks under main); the
- * sidebar bottom holds a fixed meta dock (version + harness dir) that does
- * NOT scroll with the digest. The main column hosts the WorkflowCanvas (the
- * canvas's own zone scroll container is the ONLY scroll body — spec §2) plus
- * the fixed freshness footer; `.main` itself never scrolls.
+ * resident sidebar with its own internal scroll (<860px it stacks under
+ * main); the sidebar bottom holds a fixed meta dock (version + harness dir)
+ * that does NOT scroll with the digest. The main column hosts the fixed
+ * header nav (TabNav — 3 MenuTabs) + the content region (switches per tab;
+ * for the tasks tab the WorkflowCanvas's own zone scroll container is the
+ * ONLY scroll body — spec §2) plus the fixed freshness footer; `.main` itself
+ * never scrolls.
  *
  * Hard metrics (spec §1.2): spacing comes ONLY from the --mstar-space-1..6
  * ramp defined at the root (a panel-scope ramp — not invented --dsw-* names);
@@ -86,6 +88,63 @@
   min-height: 0;
   padding: var(--mstar-space-4);
   overflow: hidden;                               /* main never scrolls — the canvas zone container is the ONLY scroll body */
+}
+
+/* --- header nav: 3 fixed MenuTabs + content region (spec panel-tabs §2) --- */
+
+.tabNav {
+  display: flex;
+  flex: none;
+  gap: var(--mstar-space-1);
+  padding: 0;
+  margin: 0 0 var(--mstar-space-2);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* MenuTab (F1.2): borderless button, secondary label, active underline via
+ * box-shadow (the T4 audit treats `border-*` shorthand colors as color
+ * declarations — `transparent` is not a token, so the underline slot rides
+ * box-shadow instead). */
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: var(--mstar-space-2) var(--mstar-space-3);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  cursor: pointer;
+  box-shadow: inset 0 -2px 0 0 transparent;
+  transition: color 150ms ease, box-shadow 150ms ease;   /* hover 120–150ms + state switch ≤200ms */
+}
+
+.tab:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.tabActive {
+  color: var(--dsw-alias-state-business-primary);
+  box-shadow: inset 0 -2px 0 0 var(--dsw-alias-state-business-primary);
+}
+
+/* Content region: the per-tab page mount (`data-mstar-graph`, spec §6.1).
+ * The tasks tab's WorkflowCanvas fills it and keeps its own scroll body —
+ * content itself never scrolls (v3 invariant preserved; the IterationTaskPage
+ * introduces content-area scrolling with Task 2). */
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Tab-page mount (placeholder pages, spec §6.2): fills the content region. */
+.page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  padding: var(--mstar-space-3);
 }
 
 /* --- sidebar: fixed 300px column, full height, own scroll (spec panel-zones §2) --- */

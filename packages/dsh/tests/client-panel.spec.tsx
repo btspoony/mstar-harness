@@ -40,6 +40,12 @@
  *   entirely at 0); the react-flow-era orange notes are gone (`data-graph-
  *   empty="no-compass"` etc. asserted absent); zh labels; garbage-proof
  *   totality.
+ * - T6 tabs-shell (spec panel-tabs §2/§6.1): the panel is re-laid-out as
+ *   Tabs + Content — resident right sidebar (all tabs share it), fixed
+ *   header nav (TabNav, 3 MenuTabs) + per-tab content; `data-mstar-graph`
+ *   now anchors the CONTENT container; default tab = 任务迭代 (D1); tab
+ *   switching content assertions ride the exported TabNav + PanelContent;
+ *   agents/events tabs render muted placeholder pages (`data-mstar-page-*`).
  *
  * Renderer: `react-dom/server.renderToStaticMarkup` over the real component
  * (dev-time seams linked from the dsh source tree; the `*.module.css` import
@@ -83,7 +89,8 @@ function newLocale(): LocaleService {
   return new LocaleServiceCtor(new Context())
 }
 import { en, NS, zh } from '../src/client/panel/locale'
-import { PanelView } from '../src/client/panel/PanelView'
+import { PanelContent, PanelView } from '../src/client/panel/PanelView'
+import { TabNav } from '../src/client/panel/TabNav'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
 const fullSource: MstarEngineStatusSource = {
@@ -2034,5 +2041,114 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     const zhEmpty = panelHtml({ ...fullSource, state: null }, undefined, undefined, 'zh')
     expect(tasksSlice(zhEmpty)).toContain('暂无计划')
     expect(zhEmpty).toContain('data-zone-empty="no-plans"')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T6 tabs-shell Task 1 (spec panel-tabs §2/§6.1, plan 20260811-panel-tabs-
+ * shell): the panel is re-laid-out as Tabs + Content — a resident right
+ * sidebar shared by every tab, a fixed header nav (TabNav) with the 3
+ * MenuTabs (任务迭代 / 代理执行 / 事件记录) and a content region that
+ * switches per tab. `data-mstar-graph` now anchors the CONTENT container
+ * (spec §6.1 — previously the canvas container). Default tab = 任务迭代 (D1);
+ * the tasks tab reuses the WorkflowCanvas zone dashboard for now
+ * (IterationTaskPage lands with Task 2); agents/events render muted
+ * placeholder pages (`data-mstar-page-*`). Switching assertions ride the
+ * exported TabNav (activation state per prop) + PanelContent (tab → page
+ * mapping) — `renderToStaticMarkup` renders the useState default (tasks), so
+ * per-tab content is pinned through the exported mapping component.
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + content switching (spec panel-tabs §2/§6.1)', () => {
+  it('renders the 3 MenuTab anchors in the header nav, tasks active by default (D1)', () => {
+    const html = panelHtml(fullSource)
+    expect(html).toContain('data-mstar-tab-nav')
+    for (const id of ['tasks', 'agents', 'events']) expect(html).toContain(`data-mstar-tab="${id}"`)
+    // Default tab = tasks (D1): exactly one active tab, two inactive; the
+    // active anchor sits on the tasks tab.
+    expect(html.match(/data-mstar-tab-active="true"/g)).toHaveLength(1)
+    expect(html.match(/data-mstar-tab-active="false"/g)).toHaveLength(2)
+    expect(html).toMatch(/data-mstar-tab="tasks"[^>]*data-mstar-tab-active="true"/)
+    // Tab labels render (en).
+    expect(html).toContain('Task Iteration')
+    expect(html).toContain('Agent Run')
+    expect(html).toContain('Event Log')
+  })
+
+  it('TabNav flips the active anchor per prop (activation state follows the tab)', () => {
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const t = locale.bind(NS)
+    for (const active of ['tasks', 'agents', 'events'] as const) {
+      const html = renderToStaticMarkup(createElement(TabNav, { active, onChange: () => {}, t }))
+      expect(html).toMatch(new RegExp(`data-mstar-tab="${active}"[^>]*data-mstar-tab-active="true"`))
+      expect(html.match(/data-mstar-tab-active="false"/g)).toHaveLength(2)
+    }
+  })
+
+  it('content switches with the tab: tasks → zone dashboard, agents/events → muted placeholder pages', () => {
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const t = locale.bind(NS)
+    // tasks → the WorkflowCanvas zone dashboard (IterationTaskPage lands with Task 2).
+    const tasks = renderToStaticMarkup(createElement(PanelContent, { tab: 'tasks', source: fullSource, t }))
+    expect(tasks).toContain('data-mstar-canvas')
+    expect(tasks).toContain('data-zone="iteration"')
+    expect(tasks).toContain('data-zone="tasks"')
+    expect(tasks).not.toContain('data-mstar-page=')
+    // agents → placeholder page (data-mstar-page anchor + muted copy).
+    const agents = renderToStaticMarkup(createElement(PanelContent, { tab: 'agents', source: fullSource, t }))
+    expect(agents).toContain('data-mstar-page="agents"')
+    expect(agents).toContain('Agent run page lands in a later plan (agent canvas)')
+    expect(agents).not.toContain('data-zone=')
+    // events → placeholder page.
+    const events = renderToStaticMarkup(createElement(PanelContent, { tab: 'events', source: fullSource, t }))
+    expect(events).toContain('data-mstar-page="events"')
+    expect(events).toContain('Event log page lands in a later plan')
+    expect(events).not.toContain('data-zone=')
+    // The sidebar lives at the PanelView root — no tab content carries it.
+    for (const html of [tasks, agents, events]) expect(html).not.toContain('data-mstar-sidebar')
+  })
+
+  it('the resident sidebar renders outside the tab-switching region, present under the default (tasks) tab', () => {
+    const html = panelHtml(fullSource)
+    // data-mstar-graph = the content container (spec §6.1): it precedes the
+    // sidebar, and the sidebar follows the whole main area.
+    expect(html).toContain('data-mstar-graph')
+    expect(html).toContain('data-mstar-sidebar')
+    expect(html).toContain('data-mstar-sidebar-scroll')
+    expect(html.indexOf('data-mstar-graph')).toBeLessThan(html.indexOf('data-mstar-sidebar'))
+    // The default render still shows the full zone dashboard inside content.
+    expect(html.indexOf('data-mstar-graph')).toBeLessThan(html.indexOf('data-mstar-canvas'))
+  })
+
+  it('waiting / no-harness branches keep data-mstar-panel + freshness, no tabs, no sidebar', () => {
+    const waiting = panelHtml(null)
+    expect(waiting).toContain('data-mstar-panel="waiting"')
+    expect(waiting).not.toContain('data-mstar-tab-nav')
+    expect(waiting).not.toContain('data-mstar-sidebar')
+    const noHarness = panelHtml(noHarnessSource)
+    expect(noHarness).toContain('data-mstar-panel="no-harness"')
+    expect(noHarness).toContain('data-mstar-freshness')
+    expect(noHarness).toContain('data-mstar-graph')
+    expect(noHarness).not.toContain('data-mstar-tab-nav')
+    expect(noHarness).not.toContain('data-mstar-sidebar')
+  })
+
+  it('zh locale localizes the tab labels + placeholder copy', () => {
+    const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('任务迭代')
+    expect(zhHtml).toContain('代理执行')
+    expect(zhHtml).toContain('事件记录')
+    // en tab labels must not leak into the zh body.
+    expect(zhHtml).not.toContain('Task Iteration')
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('zh')
+    const agents = renderToStaticMarkup(createElement(PanelContent, { tab: 'agents', source: fullSource, t: locale.bind(NS) }))
+    expect(agents).toContain('data-mstar-page="agents"')
+    expect(agents).toContain('代理执行页由后续 plan 交付')
   })
 })

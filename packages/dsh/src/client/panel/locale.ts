@@ -41,6 +41,12 @@
  * family is added: a status TEXT on the cards would be dead strings, the
  * spec §4 card shows a status point, and reusing `flow.*` would conflate
  * event status words (dispatched/settled ok) with entity status words).
+ *
+ * T1 (spec panel-tabs §2/§6.1, plan 20260811-panel-tabs-shell): the panel is
+ * re-laid-out as Tabs + Content — `tab.*` covers the 3 fixed MenuTab labels
+ * (任务迭代 / 代理执行 / 事件记录) and `page.*.placeholder` the muted
+ * placeholder copy for the agents/events tabs (the real pages land with the
+ * agent-canvas / event-log plans; Task 3 refines the placeholders).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -51,6 +57,11 @@ export const NS = 'mstar-panel'
 /** Panel dictionary keys (union of every translatable string the panel renders). */
 export type PanelKey =
   | 'view.mstar-workflow'
+  | 'tab.tasks'
+  | 'tab.agents'
+  | 'tab.events'
+  | 'page.agents.placeholder'
+  | 'page.events.placeholder'
   | 'empty.waiting'
   | 'empty.no-harness'
   | 'watermark.version'
@@ -144,6 +155,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** zh dictionary (repo bilingual convention; zh is the stub fallback locale). */
 export const zh: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar 工作流',
+  'tab.tasks': '任务迭代',
+  'tab.agents': '代理执行',
+  'tab.events': '事件记录',
+  'page.agents.placeholder': '代理执行页由后续 plan 交付（agent canvas）',
+  'page.events.placeholder': '事件记录页由后续 plan 交付（event log）',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
   'watermark.version': 'mstar {version}',
@@ -232,6 +248,11 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
 /** en dictionary (default locale). */
 export const en: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar Workflow',
+  'tab.tasks': 'Task Iteration',
+  'tab.agents': 'Agent Run',
+  'tab.events': 'Event Log',
+  'page.agents.placeholder': 'Agent run page lands in a later plan (agent canvas)',
+  'page.events.placeholder': 'Event log page lands in a later plan',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
   'watermark.version': 'mstar {version}',
