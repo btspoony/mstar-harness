@@ -6,9 +6,9 @@
  * main); the sidebar bottom holds a fixed meta dock (version + harness dir)
  * that does NOT scroll with the digest. The main column hosts the fixed
  * header nav (TabNav — 3 MenuTabs) + the content region (switches per tab;
- * for the tasks tab the WorkflowCanvas's own zone scroll container is the
- * ONLY scroll body — spec §2) plus the fixed freshness footer; `.main` itself
- * never scrolls.
+ * for the tasks tab the IterationTaskPage's own scroll area
+ * `data-mstar-tasks-scroll` is the ONLY scroll body — spec §3) plus the
+ * fixed freshness footer; `.main` itself never scrolls.
  *
  * Hard metrics (spec §1.2): spacing comes ONLY from the --mstar-space-1..6
  * ramp defined at the root (a panel-scope ramp — not invented --dsw-* names);
@@ -78,7 +78,8 @@
   overflow: hidden;
 }
 
-/* --- main: WorkflowCanvas column + fixed freshness footer (spec panel-zones §2, v3) --- */
+/* --- main: TabNav header + per-tab content + fixed freshness footer
+ * (spec panel-tabs §2, v3) --- */
 
 .main {
   grid-area: main;
@@ -87,7 +88,7 @@
   min-width: 0;
   min-height: 0;
   padding: var(--mstar-space-4);
-  overflow: hidden;                               /* main never scrolls — the canvas zone container is the ONLY scroll body */
+  overflow: hidden;                               /* main never scrolls — the per-tab page owns its scroll body */
 }
 
 /* --- header nav: 3 fixed MenuTabs + content region (spec panel-tabs §2) --- */
@@ -127,9 +128,9 @@
 }
 
 /* Content region: the per-tab page mount (`data-mstar-graph`, spec §6.1).
- * The tasks tab's WorkflowCanvas fills it and keeps its own scroll body —
- * content itself never scrolls (v3 invariant preserved; the IterationTaskPage
- * introduces content-area scrolling with Task 2). */
+ * The tasks tab's IterationTaskPage fills it and keeps its own scroll body
+ * (`data-mstar-tasks-scroll`, Task 2) — content itself never scrolls (v3
+ * invariant preserved); the placeholder pages (agents/events) are static. */
 .content {
   flex: 1;
   min-height: 0;
@@ -145,6 +146,15 @@
   display: flex;
   align-items: flex-start;
   padding: var(--mstar-space-3);
+}
+
+/* Muted placeholder note (spec §4/§5/§8 — 后续 plan 交付): caption color,
+ * never an orange warn frame; the harness probes this class for the muted
+ * placeholder rendering (`data-mstar-page-note`). */
+.pageNote {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxs-12);
 }
 
 /* --- IterationTaskPage (spec panel-tabs §3, plan 20260811-panel-tabs-shell

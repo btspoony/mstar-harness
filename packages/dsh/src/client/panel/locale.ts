@@ -83,12 +83,6 @@ export type PanelKey =
   | 'graph.violations'
   | 'graph.no-violations'
   | 'zone.legend.title'
-  | 'zone.legend.iteration'
-  | 'zone.legend.current'
-  | 'zone.legend.disabled'
-  | 'zone.legend.tasks'
-  | 'zone.legend.verdict-pass'
-  | 'zone.legend.verdict-fail'
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
   | 'zone.legend.flow-unexpected'
@@ -184,12 +178,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'graph.violations': '违规 ({count})',
   'graph.no-violations': '无违规',
   'zone.legend.title': '图例',
-  'zone.legend.iteration': '迭代区',
-  'zone.legend.current': '当前阶段',
-  'zone.legend.disabled': '迭代未激活',
-  'zone.legend.tasks': '任务 kanban',
-  'zone.legend.verdict-pass': 'gate PASS',
-  'zone.legend.verdict-fail': 'gate FAIL',
   'zone.legend.flow-expected': '预期 stage（空心）',
   'zone.legend.flow-actual': '实际派发（实心）',
   'zone.legend.flow-unexpected': '未匹配角色（描边）',
@@ -280,12 +268,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'graph.violations': 'violations ({count})',
   'graph.no-violations': 'no violations',
   'zone.legend.title': 'Legend',
-  'zone.legend.iteration': 'iteration zone',
-  'zone.legend.current': 'current step',
-  'zone.legend.disabled': 'disabled iteration',
-  'zone.legend.tasks': 'task kanban',
-  'zone.legend.verdict-pass': 'gate PASS',
-  'zone.legend.verdict-fail': 'gate FAIL',
   'zone.legend.flow-expected': 'expected stage (hollow)',
   'zone.legend.flow-actual': 'actual dispatch (filled)',
   'zone.legend.flow-unexpected': 'unexpected role (outlined)',

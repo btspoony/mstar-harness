@@ -99,6 +99,7 @@ function newLocale(): LocaleService {
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelContent, PanelView } from '../src/client/panel/PanelView'
 import { TabNav } from '../src/client/panel/TabNav'
+import { nextExpandedOnActivation } from '../src/client/panel/pages/IterationTaskPage'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
 const fullSource: MstarEngineStatusSource = {
@@ -988,6 +989,30 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).toContain('iteration/iter-20260809-dsh-workflow-viz')
   })
 
+  it('LIVE activation re-sync (Task 2 review Important-1): the head expands when the SAME mounted instance sees active flip false→true; user collapse while already active is never overridden', () => {
+    // The collapse/expand state is seeded from `iteration.active` at mount
+    // (SSR-stable, asserted above); a live catalog update can flip active
+    // false→true WITHOUT a remount, and spec §3 says an active iteration
+    // must show the expanded steps. The pure transition powers the
+    // component's useEffect — pin the full transition table here:
+    const t = nextExpandedOnActivation
+    // activation edge: inactive → active forces expand, regardless of the
+    // user's previous choice (the started iteration must show its steps).
+    expect(t(false, false, true)).toBe(true)
+    expect(t(true, false, true)).toBe(true)
+    // steady active: the user's own collapse (or expand) is preserved — a
+    // repeated catalog emission must not fight the user.
+    expect(t(true, true, true)).toBe(true)
+    expect(t(false, true, true)).toBe(false)
+    // deactivation edge (true→false): never force a collapse — the muted
+    // "not started" note + the collapsed affordance still render from
+    // `active` itself on the next pass.
+    expect(t(true, true, false)).toBe(true)
+    expect(t(false, true, false)).toBe(false)
+    // inactive → inactive: no change (initial mount no-op).
+    expect(t(false, false, false)).toBe(false)
+  })
+
   it('inactive iteration → head COLLAPSED to a one-line summary by default; the toggle can expand the idle skeleton', () => {
     const g = panelHtml(noGateSource)
     expect(g).toContain('data-iteration-head')
@@ -1521,14 +1546,17 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     expect(tasks).toContain('data-iteration-head')
     expect(tasks).toContain('data-zone="tasks"')
     expect(tasks).not.toContain('data-mstar-canvas')
-    // agents → placeholder page (data-mstar-page anchor + muted copy).
+    // agents → placeholder page (data-mstar-page + data-mstar-page-note
+    // anchors, muted 后续 plan 交付 copy — Task 3).
     const agents = renderToStaticMarkup(createElement(PanelContent, { tab: 'agents', source: fullSource, t }))
     expect(agents).toContain('data-mstar-page="agents"')
+    expect(agents).toContain('data-mstar-page-note')
     expect(agents).toContain('Agent run page lands in a later plan (agent canvas)')
     expect(agents).not.toContain('data-zone=')
     // events → placeholder page.
     const events = renderToStaticMarkup(createElement(PanelContent, { tab: 'events', source: fullSource, t }))
     expect(events).toContain('data-mstar-page="events"')
+    expect(events).toContain('data-mstar-page-note')
     expect(events).toContain('Event log page lands in a later plan')
     expect(events).not.toContain('data-zone=')
     // The sidebar lives at the PanelView root — no tab content carries it.
@@ -1572,6 +1600,7 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     locale.setLocale('zh')
     const agents = renderToStaticMarkup(createElement(PanelContent, { tab: 'agents', source: fullSource, t: locale.bind(NS) }))
     expect(agents).toContain('data-mstar-page="agents"')
+    expect(agents).toContain('data-mstar-page-note')
     expect(agents).toContain('代理执行页由后续 plan 交付')
   })
 })

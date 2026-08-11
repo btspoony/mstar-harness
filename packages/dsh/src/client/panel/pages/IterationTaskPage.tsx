@@ -19,7 +19,11 @@
  * (iterationId/verdict + the muted "not started" note, expandable to the idle
  * 5-step skeleton); `active === true` → expanded. SSR-stable: the default is
  * data-derived, so `renderToStaticMarkup` renders a deterministic state per
- * row that tests can pin statically.
+ * row that tests can pin statically. Live re-sync (Task 2 review
+ * Important-1): a useEffect re-expands the head when the SAME mounted
+ * instance sees `active` flip false→true on a catalog update (started
+ * iterations must show the expanded steps, spec §3); the transition is
+ * one-way — user collapse while already active is never overridden.
  *
  * Task area (spec §3/D2): the standard 6-column kanban (Todo / InProgress /
  * InReview / Done / Blocked / unknown) via the REUSED TaskBoard
@@ -36,7 +40,7 @@
  */
 
 import * as React from 'react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ZoneView } from '../graph/project-graph.ts'
 import { TaskBoard } from '../zones/TaskBoard.tsx'
@@ -45,6 +49,24 @@ import css from '../panel.module.css'
 export interface IterationTaskPageProps {
   view: ZoneView
   t: TranslateNS<'mstar-panel'>
+}
+
+/**
+ * Activation re-sync (Task 2 review Important-1): the collapse/expand state
+ * must follow a LIVE `active` flip on the SAME mounted instance — spec §3
+ * says 启动迭代才展开 (an active iteration shows the expanded steps), and a
+ * fresh catalog row can flip `iteration.active` false→true without a remount.
+ * The transition is one-way: only the INACTIVE → ACTIVE edge forces expand;
+ * a user collapse while already active is never overridden, and a live
+ * true→false deactivation keeps the user's current view (the muted
+ * "not started" note + collapsed affordance still render per `active`).
+ *
+ * Pure transition (exported for the render-test transition table): the head
+ * expands iff the iteration just became active; otherwise the user's state
+ * wins.
+ */
+export function nextExpandedOnActivation(prev: boolean, prevActive: boolean, nextActive: boolean): boolean {
+  return !prevActive && nextActive ? true : prev
 }
 
 /** Step-state chip label seat (spec §3 — current/next/idle, localized). */
@@ -72,6 +94,18 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
   // inactive → collapsed one-liner, active → expanded full steps. The initial
   // value is data-derived, so SSR renders a deterministic default per row.
   const [expanded, setExpanded] = useState(active)
+  // Activation re-sync (Task 2 review Important-1): a live catalog update can
+  // flip `active` false→true on the SAME mounted instance (e.g. the harness
+  // row re-emitted after 迭代启动) — the head must then expand per spec §3.
+  // The ref tracks the PREVIOUS prop (not the user state), so only the
+  // false→true edge forces expand; user collapse while already active is
+  // preserved. Effects don't run under renderToStaticMarkup, so SSR keeps the
+  // deterministic `useState(active)` default.
+  const activeRef = useRef(active)
+  useEffect(() => {
+    setExpanded((prev) => nextExpandedOnActivation(prev, activeRef.current, active))
+    activeRef.current = active
+  }, [active])
 
   // Current-step verdict label (PASS/FAIL, 'unknown' on a degraded ok).
   const verdictLabel = (verdict: ZoneView['iteration']['verdict']): string =>
