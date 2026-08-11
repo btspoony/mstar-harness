@@ -192,7 +192,7 @@ export interface AgentFlowEventView {
   readonly kind: 'dispatch' | 'settle'
   /** The session's stable id; null when the event carried none. */
   readonly agent: string | null
-  /** Assignment `Execute as` ('' for settle rows — settles carry no role). */
+  /** Assignment `Execute as` ('' for settle rows without a paired identity). */
   readonly role: string
   readonly planId: string | null
   readonly taskId: string | null
@@ -205,6 +205,14 @@ export interface AgentFlowEventView {
   readonly outcome?: 'ok' | 'error' | 'denied'
   /** Settle duration in ms (settle events only, when recorded). */
   readonly durationMs?: number | null
+  /**
+   * Settle rows only (plan `20260811-panel-f4-timeliness` Task 1): true when
+   * the settle carries the PAIRED dispatch's identity (`role`/`planId`/
+   * `taskId` — same fields + semantics as the dispatch event) — the client
+   * pairs exactly on that identity. ABSENT on unpaired (legacy) settles →
+   * they stay unpaired (honest, no owner+time guessing).
+   */
+  readonly paired?: boolean
 }
 
 /** One role × outcome count of the agent-flow summary (count desc). */

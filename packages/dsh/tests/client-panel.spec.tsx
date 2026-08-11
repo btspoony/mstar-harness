@@ -350,16 +350,17 @@ function dispatchEvent(over: {
   }
 }
 
-/** One settle row as the T1 ledger view emits it (spec §2.2 — carries no role). */
-function settleEvent(over: { ts: number; agent?: string; outcome?: 'ok' | 'error' | 'denied' }): AgentFlowEventView {
+/** One settle row as the T1 ledger view emits it (spec §2.2 — carries the PAIRED dispatch identity when `role` is given, plan `20260811-panel-f4-timeliness` Task 1). */
+function settleEvent(over: { ts: number; agent?: string; outcome?: 'ok' | 'error' | 'denied'; role?: string; planId?: string; taskId?: string }): AgentFlowEventView {
   return {
     ts: over.ts,
     kind: 'settle',
     agent: over.agent ?? null,
-    role: '',
-    planId: null,
-    taskId: null,
+    role: over.role ?? '',
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
     taskCategory: null,
+    ...(over.role !== undefined ? { paired: true } : {}),
     ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
   }
 }
@@ -2080,7 +2081,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
    * same plan) and a next edge (qc-specialist running). */
   const evidenceSource = flowSource([
     dispatchEvent({ ts: 30, role: 'qc-specialist', agent: 'a3', planId: 'plan-x', taskId: 'T3' }),
-    settleEvent({ ts: 25, agent: 'a2', outcome: 'ok' }),
+    settleEvent({ ts: 25, agent: 'a2', outcome: 'ok', role: 'generalPurpose', planId: 'plan-x', taskId: 'T2' }),
     dispatchEvent({ ts: 20, role: 'generalPurpose', agent: 'a2', planId: 'plan-x', taskId: 'T2' }),
     dispatchEvent({ ts: 10, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
   ])

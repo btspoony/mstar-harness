@@ -17,9 +17,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { Context } from 'cordis'
+import { Context, Service } from 'cordis'
 import Loader from '@cordisjs/plugin-loader'
 import Include from '@cordisjs/plugin-include'
+import type { TaskDoneListener, TaskSnapshot } from '@deepseek-ai/dsh-tasks'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 
 /**
@@ -44,6 +46,41 @@ import * as plugin from '../src/index.ts'
   }
 }
 
+/**
+ * Minimal in-memory `tasks` service for the settle-pairing tests (plan
+ * `20260811-panel-f4-timeliness` Task 1 — Step 1 seam probe): implements the
+ * ONE contract the plugin consumes — `onTaskDone(listener)` with the upstream
+ * `TaskDoneListener` signature `(snapshot, owner)` — and lets the test drive
+ * terminal snapshots through {@link fireDone}. Mounted as the
+ * `@deepseek-ai/dsh-tasks-fake` module row (`bootApp({ tasksService: 'fake' })`)
+ * so the plugin's REAL `ctx.inject(['tasks'])` wiring registers against it —
+ * the full Loader → apply → inject → onTaskDone composition under test,
+ * without the heavy real registry (dsh-tasks-local + dsh-agent + a live
+ * registered agent). The upstream snapshot contract (terminal statuses,
+ * startedAt/finishedAt) is verified in the spec fixtures against the
+ * `@deepseek-ai/dsh-tasks` types.
+ */
+export class FakeTaskService extends Service {
+  private listener: TaskDoneListener | undefined
+
+  constructor(ctx: Context) {
+    super(ctx, 'tasks')
+  }
+
+  onTaskDone(listener: TaskDoneListener): () => void {
+    this.listener = listener
+    return () => {
+      if (this.listener === listener) this.listener = undefined
+    }
+  }
+
+  /** Test driver: fire a terminal snapshot through the registered listener. */
+  fireDone(snapshot: TaskSnapshot, owner?: Agent): void {
+    const listener = this.listener
+    if (listener !== undefined) void listener(snapshot, owner)
+  }
+}
+
 /** Boot options for {@link bootApp}. */
 export interface BootOptions {
   /** `Enforcement` override for the plugin Config (`hard` | `soft`). */
@@ -58,6 +95,13 @@ export interface BootOptions {
   bundledSkillDir?: string
   /** Catalog cache refresh interval in ms (Config `catalogTtlMs`). */
   catalogTtlMs?: number
+  /**
+   * Mount the {@link FakeTaskService} as the `tasks` service (the
+   * `@deepseek-ai/dsh-tasks-fake` row + module map) so the plugin's
+   * `ctx.inject(['tasks'])` onTaskDone wiring registers against it (plan
+   * `20260811-panel-f4-timeliness` Task 1 seam probe).
+   */
+  tasksService?: 'fake'
   /** App root override (default: a fresh temp dir). */
   root?: string
   /**
@@ -151,6 +195,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
         // exists when the bundled mstar commands register (the real dsh app
         // always composes dsh-commands).
         "- name: '@deepseek-ai/dsh-commands'",
+        // The fake tasks service row (only when requested — plan
+        // `20260811-panel-f4-timeliness` Task 1): provides `ctx.tasks` so the
+        // plugin's deferred `ctx.inject(['tasks'])` onTaskDone wiring fires.
+        ...(options.tasksService !== undefined ? ["- name: '@deepseek-ai/dsh-tasks-fake'"] : []),
         "- name: '@mstar-harness/dsh'",
       ]
   const configLines: string[] = []
@@ -190,6 +238,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // named exports provide the CommandService (the host app provides it at
     // runtime via peerDependencies).
     ['@deepseek-ai/dsh-commands', await import('@deepseek-ai/dsh-commands')],
+    // The fake `tasks` service (plan `20260811-panel-f4-timeliness` Task 1):
+    // a `{ default }` module so the Loader's unwrapExports resolves the class.
+    ...(options.tasksService !== undefined
+      ? [['@deepseek-ai/dsh-tasks-fake', { default: FakeTaskService }] as const]
+      : []),
   ])
   ctx.loader.internal = {
     version: 'v2',

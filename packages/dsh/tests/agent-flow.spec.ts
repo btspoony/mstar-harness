@@ -1,8 +1,10 @@
 /**
  * Task 1 — server-side dispatch ledger + catalog `state.agentFlow` evidence
- * (plan `20260810-agent-flow-catalog-graph`, spec §2.1 / §2.2).
+ * (plan `20260810-agent-flow-catalog-graph`, spec §2.1 / §2.2) — extended by
+ * plan `20260811-panel-f4-timeliness` Task 1: REAL settle pairing (real
+ * completion signals instead of host-emission best-effort).
  *
- * Coverage (AC-3 / AC-5 anchors):
+ * Coverage (AC-3 / AC-5 anchors + the T1 pairing chain):
  * - ledger unit: recordDispatch / recordSettle / readAgentFlow — verdict
  *   derivation (ok / advisory / denied incl. hard deny), header/body identity
  *   derivation (role / planId / taskId / taskCategory), latest-first bound
@@ -13,11 +15,19 @@
  *   lands one event per Assignment-shaped dispatch (clean / advisory / hard
  *   deny), the host-hook path (`beforeDispatch`, exec-less) records too, and
  *   non-Assignment / non-subagent-tool / no-harness-dir calls stay silent;
- * - settle Tier-2: the defensive `tools/post-execute` listener — the
- *   settle-unavailable trace is logged once at registration (spec §2.1.2
- *   verification gate), a simulated host emission records a settle (pair and
- *   single-object payload forms), and an unmapped payload logs once without
- *   recording (never fabricate settlement);
+ * - settle pairing (plan `20260811-panel-f4-timeliness` T1): the
+ *   `tools/post-execute` listener — dispatch-tool matching, the VERIFIED
+ *   three-shape branch (background → taskId store / continuable → honest
+ *   no-settle / foreground+other → settle ok, isError → error), unpaired →
+ *   no settle + one warn, non-dispatch tool → no record, and the settle
+ *   carries the PAIRED dispatch identity (role/planId/taskId — schema +
+ *   view `paired` marker + JSONL round-trip); `recordTaskSettle` maps the
+ *   three onTaskDone terminal statuses (completed→ok / killed→denied /
+ *   failed→error) + durationMs and stays silent for unpaired task ids;
+ *   the catalog-invalidation hook fires after successful records (Task 2
+ *   seam); the upstream seam probes prove the REAL registry emits
+ *   `tools/post-execute` and the `ctx.inject(['tasks'])` onTaskDone wiring
+ *   registers + receives terminals (Step 1 — 先证后写);
  * - catalog integration: `state.agentFlow` surfaces the ledger (events ≤ 50 +
  *   summary), the model text gains ONE compact line only when events > 0, and
  *   the view carries no undefined-valued keys (Session.append lossless JSON).
@@ -28,8 +38,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from 'cordis'
-import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import { defineTool, type PreToolDecision, type ToolExecution, type ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import type { CallId } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { TaskId } from '@deepseek-ai/dsh-tasks'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import {
   AGENT_FLOW_FILE,
@@ -42,13 +54,15 @@ import {
 import {
   AGENT_FLOW_SIZE_GATE_BYTES,
   registerSettleListener,
+  recordTaskSettle,
+  setAgentFlowInvalidator,
   setAgentFlowLogger,
   SETTLE_SEAM_UNAVAILABLE_NOTE,
   taskIdOf,
 } from '../src/gates/agent-flow.ts'
+import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
-import { HarnessResolver } from '../src/index.ts'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, FakeTaskService, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -532,22 +546,46 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
 })
 
 /* ===========================================================================
- * 4. Settle Tier-2 — defensive listener + verification-gate trace
+ * 4. Settle pairing — post-execute three-shape branch + onTaskDone terminal
+ *    (plan `20260811-panel-f4-timeliness` Task 1) + verification-gate trace
  * ========================================================================== */
 
-describe('agent-flow settle — defensive tools/post-execute listener (Tier-2)', () => {
-  it('registration logs the settle-unavailable trace once (spec §2.1.2 verification gate)', async () => {
+/** A fresh apply-scoped pairing store (empty maps). */
+function pairingOf(): AgentFlowPairing {
+  return { dispatchByCallId: new Map(), dispatchByTaskId: new Map() }
+}
+
+/** A dispatch-tool exec carrying the FULL pairing surface (callId + agent). */
+function dispatchExec(callId: string, agent: string, prompt: string): ToolExecution {
+  return {
+    callId: callId as ToolExecution['callId'],
+    name: 'subagent',
+    arguments: { description: 'probe', prompt },
+    agent: { id: agent } as never,
+    signal: new AbortController().signal,
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
+}
+
+/** Record a dispatch with the pairing store (registers `callId → dispatchRef`). */
+function pairedDispatch(harnessDir: string, pairing: AgentFlowPairing, callId: string, prompt: string, agent = 'sess-1'): void {
+  recordDispatch({ harnessDir, exec: dispatchExec(callId, agent, prompt), prompt, violations: [], hard: false, pairing })
+}
+
+describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-timeliness T1)', () => {
+  it('registration logs the pairing trace once (verification gate)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-trace-')
     const ctx = new Context()
     const captured: string[] = []
     const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
     try {
-      registerSettleListener(ctx, new HarnessResolver(harnessDir))
+      registerSettleListener(ctx, {}, pairingOf())
 
       expect(captured).toHaveLength(1)
       expect(captured[0]).toBe(SETTLE_SEAM_UNAVAILABLE_NOTE)
       expect(SETTLE_SEAM).toBe('tools/post-execute')
       expect(SETTLE_SEAM_UNAVAILABLE_NOTE).toContain(SETTLE_SEAM)
+      expect(SETTLE_SEAM_UNAVAILABLE_NOTE).toContain('IS part of the verified dsh-tools registry surface')
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -555,41 +593,65 @@ describe('agent-flow settle — defensive tools/post-execute listener (Tier-2)',
     }
   })
 
-  it('a simulated host emission (pair form: exec, result) records a settle event', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-pair-')
-    const ctx = new Context()
-    const priorSink = setAgentFlowLogger(() => {})
+  it('recordDispatch with an exec registers callId → dispatchRef (dispatch identity)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-pairing-register-')
     try {
-      registerSettleListener(ctx, new HarnessResolver(harnessDir))
-
-      emitUndeclared(ctx, SETTLE_SEAM, { agent: { id: 'settled-1' }, name: 'subagent' }, { isError: false })
-
-      const view = readAgentFlow(harnessDir)
-      expect(view!.events).toHaveLength(1)
-      expect(view!.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'settled-1' })
-    } finally {
-      setAgentFlowLogger(priorSink)
-      await ctx.fiber.dispose().catch(() => {})
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it('a single-object payload form ({ exec, result }) records a settle with error outcome', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-single-')
-    const ctx = new Context()
-    const priorSink = setAgentFlowLogger(() => {})
-    try {
-      registerSettleListener(ctx, new HarnessResolver(harnessDir))
-
-      emitUndeclared(ctx, SETTLE_SEAM, {
-        exec: { agent: { id: 'settled-2' }, name: 'subagent' },
-        result: { isError: true, error: { message: 'boom' } },
-        durationMs: 42,
+      const pairing = pairingOf()
+      pairedDispatch(harnessDir, pairing, 'c-1', VALID_PLANNED, 'sess-1')
+      const ref = pairing.dispatchByCallId.get('c-1')
+      expect(ref).toMatchObject({
+        harnessDir,
+        agent: 'sess-1',
+        role: 'fullstack-dev',
+        planId: '20260810-agent-flow',
+        taskId: 'T2',
       })
+      // An exec-less record (host-hook path) never pairs.
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false, pairing })
+      expect(pairing.dispatchByCallId.size).toBe(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 
-      const view = readAgentFlow(harnessDir)
-      expect(view!.events).toHaveLength(1)
-      expect(view!.events[0]).toMatchObject({ kind: 'settle', outcome: 'error', agent: 'settled-2', durationMs: 42 })
+  it('a foreground dispatch result settles immediately with the PAIRED identity (schema + view + JSONL)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-foreground-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      pairedDispatch(harnessDir, pairing, 'c-fg', VALID_PLANNED)
+
+      emitUndeclared(
+        ctx, SETTLE_SEAM,
+        { callId: 'c-fg', name: 'subagent', agent: { id: 'sess-1' } },
+        { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } },
+      )
+
+      const view = readAgentFlow(harnessDir)!
+      expect(view.events).toHaveLength(2) // dispatch + settle
+      expect(view.events[0]).toMatchObject({
+        kind: 'settle',
+        outcome: 'ok',
+        agent: 'sess-1',
+        role: 'fullstack-dev',
+        planId: '20260810-agent-flow',
+        taskId: 'T2',
+      })
+      // The view carries the paired-identity presence marker.
+      expect(view.events[0].paired).toBe(true)
+      // The serialized JSONL line carries the identity fields (no undefined keys).
+      const line = readFileSync(join(harnessDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n').at(-1)!
+      const parsed = JSON.parse(line) as Record<string, unknown>
+      expect(parsed).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev', planId: '20260810-agent-flow', taskId: 'T2' })
+      expect(Object.values(parsed).every((v) => v !== undefined)).toBe(true)
+      // A plain-string foreground value settles too (foreground/other success).
+      pairing.dispatchByCallId.clear()
+      pairedDispatch(harnessDir, pairing, 'c-fg2', VALID_PLANNED, 'sess-2')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-fg2', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: 'plain result' })
+      const after = readAgentFlow(harnessDir)!
+      expect(after.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-2', role: 'fullstack-dev' })
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -597,19 +659,123 @@ describe('agent-flow settle — defensive tools/post-execute listener (Tier-2)',
     }
   })
 
-  it('an unmapped payload logs once and records nothing (never fabricate settlement)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-unmapped-')
+  it('a FAILED dispatch result settles error with the paired identity', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-error-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      pairedDispatch(harnessDir, pairing, 'c-err', VALID_PLANNED)
+      emitUndeclared(
+        ctx, SETTLE_SEAM,
+        { callId: 'c-err', name: 'subagent', agent: { id: 'sess-1' } },
+        { isError: true, error: { message: 'boom' } },
+      )
+      const view = readAgentFlow(harnessDir)!
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error', agent: 'sess-1', role: 'fullstack-dev' })
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a background result stores taskId → dispatchRef and records NO settle until the onTaskDone terminal', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-background-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      pairedDispatch(harnessDir, pairing, 'c-bg', VALID_PLANNED)
+      emitUndeclared(
+        ctx, SETTLE_SEAM,
+        { callId: 'c-bg', name: 'subagent', agent: { id: 'sess-1' } },
+        { isError: false, value: { kind: 'background', taskId: 'subagent-7' } },
+      )
+
+      // The pairing store now maps the registry task id → the dispatch.
+      expect(pairing.dispatchByTaskId.get('subagent-7')).toMatchObject({ role: 'fullstack-dev', planId: '20260810-agent-flow' })
+      // No settle yet — the ledger stays dispatch-only (honest).
+      let view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
+
+      // The terminal arrives → recordTaskSettle pairs and settles.
+      recordTaskSettle({ id: 'subagent-7', status: 'completed', startedAt: 1_000, finishedAt: 4_000 }, pairing)
+      view = readAgentFlow(harnessDir)!
+      expect(view.events).toHaveLength(2)
+      expect(view.events[0]).toMatchObject({
+        kind: 'settle',
+        outcome: 'ok',
+        agent: 'sess-1',
+        role: 'fullstack-dev',
+        planId: '20260810-agent-flow',
+        taskId: 'T2',
+        durationMs: 3_000,
+      })
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a continuable result records nothing (no terminal signal this round — documented limit)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-continuable-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      pairedDispatch(harnessDir, pairing, 'c-cont', VALID_PLANNED)
+      emitUndeclared(
+        ctx, SETTLE_SEAM,
+        { callId: 'c-cont', name: 'subagent', agent: { id: 'sess-1' } },
+        { isError: false, value: { kind: 'continuable', subagentId: 'child-1' } },
+      )
+      const view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['dispatch']) // dispatch only
+      expect(pairing.dispatchByTaskId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('non-dispatch tool calls record nothing (even with a paired callId)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-nondispatch-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      // A callId that IS paired, but the tool name is not a dispatch tool.
+      pairedDispatch(harnessDir, pairing, 'c-read', VALID_PLANNED)
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-read', name: 'read_file', agent: { id: 'sess-1' } }, { isError: false, value: 'file content' })
+      const view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an UNPAIRED dispatch-tool post-execute records nothing and warns once (honest degrade)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-unpaired-')
     const ctx = new Context()
     const captured: string[] = []
     const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
     try {
-      registerSettleListener(ctx, new HarnessResolver(harnessDir))
-
-      emitUndeclared(ctx, SETTLE_SEAM, { something: 'unrelated' })
+      registerSettleListener(ctx, {}, pairingOf())
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-nope', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: 'x' })
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-nope-2', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: 'y' })
 
       expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] }) // no record
-      expect(captured).toHaveLength(2) // registration note + unmapped warning
-      expect(captured[1]).toContain('did not map to a settle event')
+      expect(captured).toHaveLength(2) // registration note + ONE unpaired warning
+      expect(captured[1]).toContain('had no paired callId')
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -617,14 +783,14 @@ describe('agent-flow settle — defensive tools/post-execute listener (Tier-2)',
     }
   })
 
-  it('the settle-unavailable trace logs ONCE per logger binding, not per registration (qc1 F-006)', async () => {
+  it('the pairing trace logs ONCE per logger binding, not per registration (qc1 F-006)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-once-')
     const ctx = new Context()
     const captured: string[] = []
     const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
     try {
-      registerSettleListener(ctx, new HarnessResolver(harnessDir))
-      registerSettleListener(ctx, new HarnessResolver(harnessDir))
+      registerSettleListener(ctx, {}, pairingOf())
+      registerSettleListener(ctx, {}, pairingOf())
 
       // Two registrations under ONE binding → the ~300-char note is emitted
       // exactly once (a second apply would rebind the sink and log again).
@@ -635,6 +801,192 @@ describe('agent-flow settle — defensive tools/post-execute listener (Tier-2)',
       await ctx.fiber.dispose().catch(() => {})
       await rm(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('agent-flow settle — recordTaskSettle terminal mapping (onTaskDone)', () => {
+  /** Seed one taskId → dispatchRef pairing directly. */
+  function seededPairing(harnessDir: string, taskId: string, role = 'fullstack-dev'): AgentFlowPairing {
+    const pairing = pairingOf()
+    pairing.dispatchByTaskId.set(taskId, { harnessDir, agent: 'sess-1', role, planId: 'plan-x', taskId: 'T2' })
+    return pairing
+  }
+
+  it('completed → ok, killed → denied, failed → error; durationMs = finishedAt − startedAt when available', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-taskdone-map-')
+    try {
+      recordTaskSettle({ id: 'subagent-1', status: 'completed', startedAt: 100, finishedAt: 700 }, seededPairing(harnessDir, 'subagent-1'))
+      recordTaskSettle({ id: 'subagent-2', status: 'killed' }, seededPairing(harnessDir, 'subagent-2'))
+      recordTaskSettle({ id: 'subagent-3', status: 'failed', startedAt: 10, finishedAt: 20 }, seededPairing(harnessDir, 'subagent-3'))
+
+      const view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.outcome)).toEqual(['error', 'denied', 'ok']) // latest first
+      expect(view.events[2]).toMatchObject({ outcome: 'ok', durationMs: 600 })
+      expect(view.events[1]).toMatchObject({ outcome: 'denied' })
+      expect(view.events[1].durationMs).toBeUndefined() // no timestamps → no duration
+      expect(view.events[0]).toMatchObject({ outcome: 'error', durationMs: 10 })
+      // The settle carries the paired identity (same fields as the dispatch).
+      expect(view.events[2]).toMatchObject({ role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2', agent: 'sess-1' })
+      expect(view.events[2].paired).toBe(true)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('an UNPAIRED task id records nothing (honest — no fabricated settlement)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-taskdone-unpaired-')
+    try {
+      recordTaskSettle({ id: 'subagent-99', status: 'completed' }, pairingOf())
+      expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
+  it('a bound invalidator fires with the harness dir after successful records; a FAILING record does not', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-invalidator-')
+    const blocked = join(root, 'blocked')
+    await writeFile(blocked, 'i am a file, not a directory')
+    const seen: string[] = []
+    const prior = setAgentFlowInvalidator((dir) => { seen.push(dir) })
+    try {
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+      recordSettle({ harnessDir, outcome: 'ok' })
+      expect(seen).toEqual([harnessDir, harnessDir])
+      // A failing record (append throws) never fires the hook.
+      recordDispatch({ harnessDir: blocked, prompt: VALID_PLANNED, violations: [], hard: false })
+      expect(seen).toEqual([harnessDir, harnessDir])
+    } finally {
+      setAgentFlowInvalidator(prior)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+/* ===========================================================================
+ * 4b. Upstream seam probes (plan `20260811-panel-f4-timeliness` T1 Step 1 —
+ *     prove the seams BEFORE writing the pairing): the REAL dsh-tools
+ *     registry emits `tools/post-execute` for every tool call
+ *     (`runPostExecute` pipeline), and `ctx.tasks.onTaskDone` is registrable
+ *     via `ctx.inject(['tasks'])` and receives terminal snapshots.
+ * ========================================================================== */
+
+describe('upstream seam probe — real dsh-tools registry emits tools/post-execute (T1 Step 1)', () => {
+  it('a real tool call through the composed registry dispatches the post-execute waterfall with (exec, result)', async () => {
+    const app = booted = await bootApp()
+    const seen: Array<{ callId: string; name: string; value: unknown }> = []
+    app.ctx.on(SETTLE_SEAM as never, ((exec: unknown, result: unknown, next?: () => unknown): unknown => {
+      const execRec = exec as { callId?: string; name?: string }
+      const resultRec = result as { isError?: boolean; value?: unknown }
+      seen.push({ callId: execRec.callId ?? '', name: execRec.name ?? '', value: resultRec.value })
+      return next === undefined ? undefined : next()
+    }) as never)
+
+    app.ctx.tools.register(defineTool({
+      name: 'probe-tool',
+      description: 'seam probe',
+      parameters: { input: { type: 'string' } },
+      output: {
+        schema: { type: 'string' },
+        render: (_args: unknown, value: string) => [{ type: 'text', text: value }],
+      },
+      execute: async () => 'probe result',
+    }))
+    const result = await app.ctx.tools.execute({
+      callId: 'probe-1' as CallId,
+      name: 'probe-tool',
+      arguments: { input: 'x' },
+      signal: new AbortController().signal,
+    })
+
+    expect(result.isError).toBe(false)
+    // The real registry dispatched `tools/post-execute` once with the exec's
+    // callId/name and the canonical result value (the pre-execute waterfall
+    // also ran first — the mstar dispatch gate is registered prepend).
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ callId: 'probe-1', name: 'probe-tool' })
+    expect(seen[0].value).toBe('probe result')
+  })
+})
+
+describe('upstream seam probe — ctx.inject([\'tasks\']) onTaskDone wiring (T1 Step 1)', () => {
+  it('registers against a provided tasks service and receives a terminal snapshot — full chain dispatch → background → terminal → settle', async () => {
+    const app = booted = await bootApp({ tasksService: 'fake' })
+    // A dispatch tool returning the VERIFIED background shape (canonical
+    // `{ kind: 'background', taskId }` — the upstream dsh-tool-subagent
+    // output schema) so the post-execute branch stores taskId → dispatchRef.
+    app.ctx.tools.register(defineTool({
+      name: 'subagent',
+      description: 'delegate a task to a subagent',
+      parameters: {
+        description: { type: 'string' },
+        prompt: { type: 'string', required: true },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            kind: { type: 'string', required: true, const: 'background' },
+            taskId: { type: 'string', required: true },
+          },
+        },
+        render: (_args: unknown, value: { kind: 'background'; taskId: string }) =>
+          [{ type: 'text', text: `started background subagent task ${value.taskId}` }],
+      },
+      execute: async () => ({ kind: 'background' as const, taskId: 'subagent-1' }),
+    }))
+
+    const result = await app.ctx.tools.execute({
+      callId: 'bg-1' as CallId,
+      name: 'subagent',
+      arguments: { description: 'probe', prompt: VALID_PLANNED },
+      agent: { id: 'probe-agent' } as never,
+      signal: new AbortController().signal,
+    })
+    expect(result.isError).toBe(false)
+
+    // Dispatch recorded; background → NO settle yet (the terminal is pending).
+    let view = readAgentFlow(app.harnessDir)!
+    expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
+
+    // Fire the terminal through the onTaskDone listener the plugin's
+    // `ctx.inject(['tasks'])` wiring registered on the fake tasks service.
+    const tasks = app.ctx.tasks as unknown as FakeTaskService
+    tasks.fireDone({
+      id: TaskId('subagent-1'),
+      kind: 'subagent',
+      label: 'probe',
+      status: 'completed',
+      startedAt: 1_000,
+      finishedAt: 2_500,
+      reported: true,
+    })
+
+    view = readAgentFlow(app.harnessDir)!
+    expect(view.events).toHaveLength(2)
+    expect(view.events[0]).toMatchObject({
+      kind: 'settle',
+      outcome: 'ok',
+      agent: 'probe-agent',
+      role: 'fullstack-dev',
+      planId: '20260810-agent-flow',
+      taskId: 'T2',
+      durationMs: 1_500,
+    })
+  })
+
+  it('the inject wiring is INERT without a tasks service (the plugin boots fine)', async () => {
+    // bootApp WITHOUT tasksService: the deferred `ctx.inject(['tasks'])` child
+    // fiber simply never activates — the plugin apply and the dispatch gate
+    // work normally (no top-level `'tasks'` inject blocking boot).
+    const app = booted = await bootApp()
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
+    expect(decision).toEqual({ kind: 'allow' })
+    const view = readAgentFlow(app.harnessDir)!
+    expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
   })
 })
 

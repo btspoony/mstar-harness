@@ -89,7 +89,7 @@ export interface FlowEventView {
   id: string
   ts: number
   kind: 'dispatch' | 'settle'
-  /** `Execute as`; '' for settle rows (T1 settles carry no role). */
+  /** `Execute as`; '' for settle rows without a paired identity. */
   role: string
   planId: string | null
   taskId: string | null
@@ -103,6 +103,8 @@ export interface FlowEventView {
   stage: { phase: PhaseId; stage: string } | null
   /** dispatch: has a paired settle (best-effort heuristic); settle: always false. */
   settled: boolean
+  /** Settle rows only (plan `20260811-panel-f4-timeliness` Task 1): the settle carries the PAIRED dispatch's identity (exact pairing). */
+  paired?: boolean
   durationMs: number | null
 }
 
@@ -575,7 +577,8 @@ function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEven
  * `task` are record fields, the general entity's role displays `'general'`).
  * Anonymous rows (role '') are NOT skipped — they are dispatch evidence and
  * belong to the general bucket (user decision). Settle rows never produce
- * entities (they carry no role/plan identity — spec §4).
+ * entities — they are COMPLETION records, not dispatches (spec §4; a paired
+ * settle now carries the dispatch identity but never becomes a card).
  */
 function aggregateEntities(
   entries: readonly { view: FlowEventView }[],
@@ -810,12 +813,22 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
   }
   for (const s of stages) s.evidenced = evidenced.has(s.id)
 
-  // Shared settle→dispatch pairing (one walk, spec §4): the settle status per
-  // paired dispatch index; entity status looks up its latest dispatch's pair.
-  // `view.status` already carries settleStatus(outcome) for settle rows, so
-  // the record values are the settle statuses directly.
+  // Shared settle→dispatch pairing (one walk, spec §4 + plan
+  // `20260811-panel-f4-timeliness` Task 1): the settle status per paired
+  // dispatch index; entity status looks up its latest dispatch's pair. The
+  // pairing key is the EXACT identity (agent, role, planId, taskId) a paired
+  // settle carries — `view.status` already carries settleStatus(outcome) for
+  // settle rows, so the record values are the settle statuses directly.
   const pairStatus = pairSettleStatus(
-    entries.map((e) => ({ kind: e.view.kind, agent: e.view.agent, status: e.view.status })),
+    entries.map((e) => ({
+      kind: e.view.kind,
+      agent: e.view.agent,
+      role: e.view.role,
+      planId: e.view.planId,
+      taskId: e.view.taskId,
+      ...(e.view.paired === true ? { paired: true as const } : {}),
+      status: e.view.status,
+    })),
   )
 
   const lit = aggregateEntities(entries, pairStatus)
@@ -888,6 +901,7 @@ function flowEventOf(
   const row = raw as {
     ts?: unknown; kind?: unknown; role?: unknown; planId?: unknown; taskId?: unknown
     taskCategory?: unknown; agent?: unknown; verdict?: unknown; outcome?: unknown; durationMs?: unknown
+    paired?: unknown
   } | null | undefined
   const kind = row?.kind
   if (kind !== 'dispatch' && kind !== 'settle') return null
@@ -907,34 +921,61 @@ function flowEventOf(
     expected: matched !== undefined,
     stage: matched ?? null,
     settled: false,
+    // Paired-identity presence (settle rows only — the exact-pairing marker,
+    // plan `20260811-panel-f4-timeliness` Task 1).
+    ...(kind === 'settle' && row?.paired === true ? { paired: true } : {}),
     durationMs: count(row?.durationMs),
   }
 }
 
+/** One row of the pairing walk — the identity a PAIRED settle carries (plan
+ * `20260811-panel-f4-timeliness` Task 1, spec R1: exact identity pairing,
+ * never owner+time guessing). */
+interface PairingRow {
+  kind: 'dispatch' | 'settle'
+  agent: string | null
+  role?: string
+  planId?: string | null
+  taskId?: string | null
+  /** Settle rows only: true → the settle carries the paired dispatch's identity (exact pairing). */
+  paired?: boolean
+  status?: FlowEventStatus
+}
+
+/** The exact pairing key: `(agent, role, planId, taskId)` — the settle identity matches the dispatch identity field-for-field. */
+function pairingKeyOf(row: PairingRow): string {
+  return [row.agent ?? '', row.role ?? '', row.planId ?? '', row.taskId ?? ''].join('\u0000')
+}
+
 /**
- * Shared settle→dispatch pairing walk (spec §4) — the ONE implementation
+ * Shared settle→dispatch pairing walk (spec §4 — the ONE implementation
  * behind BOTH the events projection (`settled` marker, via
  * `pairSettleIndexes`) and the agent-entity status derivation (via the
- * returned settle status per paired dispatch index) — no heuristic drift.
+ * returned settle status per paired dispatch index) — no heuristic drift).
  * Input rows are in FILE order (the catalog is latest-first, so the pairing
- * walks reversed) keeping the most recent same-agent dispatch; each settle
- * pairs with it. A settle with no prior same-agent dispatch (agent null,
- * truncated window, or a missed record) stays an independent settle. Output:
+ * walks reversed) keeping the most recent same-identity dispatch; each
+ * PAIRED settle (`paired === true`) pairs with it. Pairing key = the EXACT
+ * `(agent, role, planId, taskId)` identity (plan
+ * `20260811-panel-f4-timeliness` Task 1 — upgraded from the old
+ * most-recent-same-AGENT guess: under QC tri N=3 concurrent dispatches from
+ * one session all three settles used to land on the latest dispatch; the
+ * identity key lets each settle land on ITS dispatch). A settle WITHOUT
+ * identity (legacy rows / unpaired) stays independent — NO fallback guessing
+ * (honest, spec R1); a settle with no prior same-identity dispatch (agent
+ * null, truncated window, missed record) stays independent too. Output:
  * paired dispatch index → the settle's status (`entry.status` for settle
  * rows — the events path omits it, defaulting to `ok`, and only the keys
  * matter there).
  */
-function pairSettleStatus(
-  rows: readonly { kind: 'dispatch' | 'settle'; agent: string | null; status?: FlowEventStatus }[],
-): Map<number, FlowEventStatus> {
+function pairSettleStatus(rows: readonly PairingRow[]): Map<number, FlowEventStatus> {
   const record = new Map<number, FlowEventStatus>()
   const lastDispatch = new Map<string, number>()
   for (let i = rows.length - 1; i >= 0; i--) {
     const entry = rows[i]!
     if (entry.kind === 'dispatch') {
-      if (entry.agent !== null) lastDispatch.set(entry.agent, i)
-    } else if (entry.agent !== null) {
-      const paired = lastDispatch.get(entry.agent)
+      if (entry.agent !== null) lastDispatch.set(pairingKeyOf(entry), i)
+    } else if (entry.paired === true && entry.agent !== null) {
+      const paired = lastDispatch.get(pairingKeyOf(entry))
       if (paired !== undefined) record.set(paired, entry.status ?? 'ok')
     }
   }
@@ -946,9 +987,7 @@ function pairSettleStatus(
  * marker. Same walk as the entity status derivation — `pairSettleStatus`
  * minus the settle statuses.
  */
-export function pairSettleIndexes(
-  rows: readonly { kind: 'dispatch' | 'settle'; agent: string | null }[],
-): ReadonlySet<number> {
+export function pairSettleIndexes(rows: readonly PairingRow[]): ReadonlySet<number> {
   return new Set(pairSettleStatus(rows).keys())
 }
 
@@ -1004,8 +1043,16 @@ export function projectFlowEvents(
 
   const entries = classifyFlowRows(rawEvents)
   // settled markers via the shared pairing walk (spec §4 — one implementation
-  // behind the events projection and the entity status derivation).
-  for (const i of pairSettleIndexes(entries.map((e) => ({ kind: e.view.kind, agent: e.view.agent })))) {
+  // behind the events projection and the entity status derivation; the
+  // identity-based key is plan `20260811-panel-f4-timeliness` Task 1).
+  for (const i of pairSettleIndexes(entries.map((e) => ({
+    kind: e.view.kind,
+    agent: e.view.agent,
+    role: e.view.role,
+    planId: e.view.planId,
+    taskId: e.view.taskId,
+    ...(e.view.paired === true ? { paired: true as const } : {}),
+  })))) {
     entries[i]!.view.settled = true
   }
 
