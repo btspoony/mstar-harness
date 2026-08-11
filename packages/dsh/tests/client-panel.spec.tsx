@@ -54,7 +54,16 @@
  *   header nav (TabNav, 3 MenuTabs) + per-tab content; `data-mstar-graph`
  *   now anchors the CONTENT container; default tab = 任务迭代 (D1); tab
  *   switching content assertions ride the exported TabNav + PanelContent;
- *   agents/events tabs render muted placeholder pages (`data-mstar-page-*`).
+ *   the agents tab renders the draggable AgentCanvasPage and the events tab
+ *   the muted placeholder page (`data-mstar-page-*`).
+ * - T8 agent canvas (spec panel-tabs §4/§6.2, plan 20260811-panel-agent-canvas
+ *   Task 2): the agents tab is the draggable canvas page — `data-canvas-pan`
+ *   exposes the pan transform (pointer-event drag helpers unit-tested +
+ *   the deterministic `initialPan` SSR seam), `data-agent-entity` covers the
+ *   full KNOWN_AGENTS roster (idle cards muted via `data-agent-idle`, lit
+ *   cards carry the agent-name title + `data-agent-record` fields), and the
+ *   expected/actual/next `data-agent-edge-*` lines exist per the AgentEdge
+ *   model.
  *
  * Renderer: `react-dom/server.renderToStaticMarkup` over the real component
  * (dev-time seams linked from the dsh source tree; the `*.module.css` import
@@ -75,8 +84,21 @@ import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/clie
 import { clientExports } from './client-bundles.ts'
 import { Context } from 'cordis'
 import type { MstarEngineStatusSource } from '../src/types'
+import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { apply } from '../src/client/index'
+import { KNOWN_AGENTS } from '../src/client/panel/graph/schema'
+import { projectGraph } from '../src/client/panel/graph/project-graph'
+import {
+  AgentCanvasPage,
+  layoutAgents,
+  panDragMove,
+  panDragStart,
+  panTransform,
+  PAN_ORIGIN,
+  UNEXPECTED_COLUMN,
+  type PanState,
+} from '../src/client/panel/pages/AgentCanvasPage'
 
 // The REAL client service values — loaded from the browser bundles through the
 // loader shim; SlotsService / LocaleService are cordis services (ctx).
@@ -287,6 +309,76 @@ function panelHtml(
     ...kitProps({ useSession: bindUseSession(store) }),
     t: locale.bind(NS),
   }))
+}
+
+/**
+ * One dispatch row as the T1 ledger view emits it (spec §2.2) — the canvas
+ * evidence fixture (same shape the projection spec's `dispatchRow` builds).
+ */
+function dispatchEvent(over: {
+  ts: number
+  role: string
+  agent?: string
+  planId?: string
+  taskId?: string
+  verdict?: 'ok' | 'advisory' | 'denied'
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'dispatch',
+    agent: over.agent ?? null,
+    role: over.role,
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
+    taskCategory: null,
+    ...(over.verdict !== undefined ? { verdict: over.verdict } : {}),
+  }
+}
+
+/** One settle row as the T1 ledger view emits it (spec §2.2 — carries no role). */
+function settleEvent(over: { ts: number; agent?: string; outcome?: 'ok' | 'error' | 'denied' }): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'settle',
+    agent: over.agent ?? null,
+    role: '',
+    planId: null,
+    taskId: null,
+    taskCategory: null,
+    ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
+  }
+}
+
+/** A full source whose `state.agentFlow` carries the given events (latest-first). */
+function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
+  return {
+    ...fullSource,
+    state: {
+      ...fullSource.state!,
+      agentFlow: { events, summary: [] } as unknown as AgentFlowView,
+    },
+  }
+}
+
+/** Render the AgentCanvasPage to static HTML (en locale; optional pan seed). */
+function agentsHtml(source: MstarEngineStatusSource, initialPan?: PanState): string {
+  const locale = newLocale()
+  locale.register(NS, { zh, en })
+  locale.setLocale('en')
+  return renderToStaticMarkup(createElement(AgentCanvasPage, {
+    view: projectGraph(source).agents,
+    t: locale.bind(NS),
+    ...(initialPan !== undefined ? { initialPan } : {}),
+  }))
+}
+
+/** The SSR markup of one entity card (the `<li data-agent-entity=...>` region). */
+function cardRegion(html: string, key: string): string {
+  const start = html.indexOf(`data-agent-entity="${key}"`)
+  expect(start).toBeGreaterThan(-1)
+  const end = html.indexOf('</li>', start)
+  expect(end).toBeGreaterThan(start)
+  return html.slice(start, end)
 }
 
 describe('workflow panel — full fixture renders every section (spec §2)', () => {
@@ -773,10 +865,11 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     expect(root).toMatch(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\*\s*\{[\s\S]*?transition:\s*none\s*!important[\s\S]*?animation:\s*none\s*!important/,
     )
-    // The zones css DECLARES its own animations (the plan-3 next-edge dash
-    // flow + the running-card pulse) but carries NO self-contained
-    // reduced-motion block — the root rule (`* { animation: none !important }`
-    // inside the media query, asserted above) is the single coverage point.
+    // The zones css (kanban / dock / legend) carries NO self-contained
+    // reduced-motion block — the root rule is the single coverage point.
+    // (The canvas animations live in the page css; the next block audits
+    // them — the AgentFlowZone stage styles were deleted with the component
+    // by the agent-canvas plan, so no keyframes remain here.)
     expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
   })
 
@@ -812,6 +905,89 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     // Zero bare colors of any form in the dock region (whole-file scan covers
     // it — re-pin for the dock-specific audit).
     expect(dockRule![0]).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T5b agent-canvas page CSS audit (spec panel-tabs §4/§6.2, plan
+ * 20260811-panel-agent-canvas Task 3): the canvas page css (grid / cards /
+ * edge animations) is new with this plan — the same contract as T4/T5:
+ * zero bare colors of any form, transitions inside the 120–200ms window,
+ * fonts on the ramp, keyframes + animation declarations present, and NO
+ * self-contained reduced-motion block (the panel root rule covers it).
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §4/§7)', () => {
+  const cssText = readFileSync(new URL('../src/client/panel/pages/agent-canvas.module.css', import.meta.url), 'utf8')
+
+  it('every color-family declaration is a --dsw-* token — zero bare colors of ANY form', () => {
+    const colorRe = /\b(?:color|background(?:-color)?|border(?:-(?:top|right|bottom|left))?(?:-color)?)\s*:/g
+    const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
+    const colors: string[] = []
+    for (const m of stripped.matchAll(colorRe)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      colors.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    expect(colors.length).toBeGreaterThan(0)
+    for (const value of colors) {
+      if (value === '0' || value === 'none' || value === 'currentColor') continue // structural resets / inherits
+      expect(value).toMatch(/var\(--dsw-(?:alias|static)-/)
+    }
+    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
+  })
+
+  it('spacing rides the --mstar-space-* ramp; font sizes ride the --dsw-font-xxxs-11/xxs-12/xs-13 ramp', () => {
+    const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
+    const spacingRe = /\b(?:gap|padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?)\s*:/g
+    const spacing: string[] = []
+    for (const m of stripped.matchAll(spacingRe)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      spacing.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    for (const value of spacing) {
+      if (value === '' || /^0(\s+0)*$/.test(value)) continue // zero reset
+      expect(value).toMatch(/var\(--mstar-space-/)
+    }
+    const fonts: string[] = []
+    for (const m of stripped.matchAll(/\bfont\s*:/g)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      fonts.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    for (const value of fonts) {
+      expect(value).toMatch(/var\(--dsw-font-(?:xxxs-11|xxs-12|xs-13)\)/)
+    }
+  })
+
+  it('every transition duration sits in the 120–200ms window (hover affordance)', () => {
+    const transitions = [...cssText.matchAll(/transition:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
+    expect(transitions.length).toBeGreaterThan(0)
+    for (const t of transitions) {
+      if (/^none/.test(t)) continue
+      const durations = [...t.matchAll(/(\d+)ms/g)].map((m) => Number(m[1]!))
+      expect(durations.length).toBeGreaterThan(0)
+      for (const d of durations) {
+        expect(d).toBeGreaterThanOrEqual(120)
+        expect(d).toBeLessThanOrEqual(200)
+      }
+    }
+  })
+
+  it('declares the next-edge dash-flow + running-card pulse animations; NO own reduced-motion block (root rule covers)', () => {
+    // The canvas ANIMATIONS (spec §6.2 — next edge dash flow + running glow
+    // pulse) are declared here — the single motion-kill coverage point stays
+    // the panel ROOT rule (`* { animation: none !important }` under
+    // prefers-reduced-motion: reduce, asserted in T5).
+    const keyframes = [...cssText.matchAll(/@keyframes\s+([a-z0-9-]+)/g)].map((m) => m[1]).sort()
+    expect(keyframes).toEqual(['canvas-card-pulse', 'canvas-dash-flow'])
+    const animDecls = [...cssText.matchAll(/animation\s*:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
+    expect(animDecls).toContain('canvas-dash-flow 700ms linear infinite')
+    expect(animDecls).toContain('canvas-card-pulse 1.6s ease-in-out infinite')
+    expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
+    // Zero dark-theme overrides — dark mode is the host token flip.
+    expect(cssText).not.toContain('data-ds-dark-theme')
   })
 })
 
@@ -1535,7 +1711,7 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     }
   })
 
-  it('content switches with the tab: tasks → IterationTaskPage, agents/events → muted placeholder pages', () => {
+  it('content switches with the tab: tasks → IterationTaskPage, agents → AgentCanvasPage, events → muted placeholder page', () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
@@ -1546,12 +1722,14 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     expect(tasks).toContain('data-iteration-head')
     expect(tasks).toContain('data-zone="tasks"')
     expect(tasks).not.toContain('data-mstar-canvas')
-    // agents → placeholder page (data-mstar-page + data-mstar-page-note
-    // anchors, muted 后续 plan 交付 copy — Task 3).
+    // agents → the draggable canvas page (plan 20260811-panel-agent-canvas
+    // Task 2): data-mstar-page + the pan anchor + full-roster entity cards.
     const agents = renderToStaticMarkup(createElement(PanelContent, { tab: 'agents', source: fullSource, t }))
     expect(agents).toContain('data-mstar-page="agents"')
-    expect(agents).toContain('data-mstar-page-note')
-    expect(agents).toContain('Agent run page lands in a later plan (agent canvas)')
+    expect(agents).toContain('data-canvas-viewport')
+    expect(agents).toContain('data-canvas-pan')
+    expect(agents).toContain('data-agent-entity=')
+    expect(agents).not.toContain('data-mstar-page-note')
     expect(agents).not.toContain('data-zone=')
     // events → placeholder page.
     const events = renderToStaticMarkup(createElement(PanelContent, { tab: 'events', source: fullSource, t }))
@@ -1588,7 +1766,7 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     expect(noHarness).not.toContain('data-mstar-sidebar')
   })
 
-  it('zh locale localizes the tab labels + placeholder copy', () => {
+  it('zh locale localizes the tab labels + the agents canvas page copy', () => {
     const zhHtml = panelHtml(fullSource, undefined, undefined, 'zh')
     expect(zhHtml).toContain('任务迭代')
     expect(zhHtml).toContain('代理执行')
@@ -1600,7 +1778,205 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     locale.setLocale('zh')
     const agents = renderToStaticMarkup(createElement(PanelContent, { tab: 'agents', source: fullSource, t: locale.bind(NS) }))
     expect(agents).toContain('data-mstar-page="agents"')
-    expect(agents).toContain('data-mstar-page-note')
-    expect(agents).toContain('代理执行页由后续 plan 交付')
+    expect(agents).toContain('data-canvas-pan')
+    // The degraded canvas note + summary are localized (spec §4/§8).
+    expect(agents).toContain('agentFlow 证据缺失')
+    expect(agents).toContain('执行中')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T8 agent canvas (spec panel-tabs §4/§6.2, plan 20260811-panel-agent-canvas
+ * Task 2): the draggable agents tab — pointer-event pan with the
+ * `data-canvas-pan` transform anchor, full-roster entity cards (idle muted),
+ * and the expected/actual/next AgentEdge lines. The drag math is the exported
+ * pure `panDragStart` / `panDragMove` / `panTransform` (no DOM in bun test);
+ * the deterministic `initialPan` prop seeds the rendered transform for the
+ * SSR-level change assertion.
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 20260811-panel-agent-canvas Task 2)', () => {
+  /** Evidence fixture: 3 dispatches across 3 stages + one settle — lit cards,
+   * actual handoffs (a1→a2→a3, same plan) and a next edge (a3 running). */
+  const evidenceSource = flowSource([
+    dispatchEvent({ ts: 30, role: 'qc-specialist', agent: 'a3', planId: 'plan-x', taskId: 'T3' }),
+    settleEvent({ ts: 25, agent: 'a2', outcome: 'ok' }),
+    dispatchEvent({ ts: 20, role: 'generalPurpose', agent: 'a2', planId: 'plan-x', taskId: 'T2' }),
+    dispatchEvent({ ts: 10, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
+  ])
+
+  it('data-agent-entity covers the full KNOWN_AGENTS roster — idle (degraded ledger) never hides a known agent', () => {
+    const html = agentsHtml(fullSource) // agentFlow null → degraded
+    for (const known of KNOWN_AGENTS) {
+      expect(html).toContain(`data-agent-entity="${known.id}"`)
+    }
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(15)
+    // Degraded → every roster member is an idle card (spec §6.2), zero claims.
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(15)
+    expect(html).toContain('data-canvas-note="degraded"')
+    expect(html).toContain('data-agent-summary-executing="0"')
+    expect(html).toContain('data-agent-summary-pending="0"')
+  })
+
+  it('lit cards carry the agent-name title + record fields; idle cards are muted with no fabricated record', () => {
+    const html = agentsHtml(evidenceSource)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(15)
+    // 3 lit (a1/a2/a3) + 12 idle roster members (spec §6.2 suppression rule).
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(12)
+    // Title = the agent name (role id); the session id rides the record line.
+    expect(html).toContain('title="fullstack-dev"')
+    expect(html).toContain('title="generalPurpose"')
+    expect(html).toContain('title="qc-specialist"')
+    expect(html).toContain('a1 · plan-x#T1')
+    // Lit cards: no idle marker, honest statuses + record fields present.
+    expect(cardRegion(html, 'a1')).not.toContain('data-agent-idle')
+    expect(cardRegion(html, 'a1')).toContain('data-agent-record')
+    expect(cardRegion(html, 'a1')).toContain('data-agent-status="running"')
+    expect(cardRegion(html, 'a2')).toContain('data-agent-status="settled"')
+    // Idle card (e.g. project-manager): muted marker, NO record line.
+    expect(cardRegion(html, 'project-manager')).toContain('data-agent-idle="true"')
+    expect(cardRegion(html, 'project-manager')).toContain('data-agent-status="idle"')
+    expect(cardRegion(html, 'project-manager')).not.toContain('data-agent-record')
+    // Evidence present → no degradation note (honest absence).
+    expect(html).not.toContain('data-canvas-note')
+    expect(html).toContain('data-agent-summary-executing="2"')
+  })
+
+  it('empty ledger → data-canvas-note="empty"; settle-only ledger → the restored data-canvas-note="settle-only" (review T2-Imp-2; F-002 note is projected)', () => {
+    // 0 events → the `empty` anchor (spec §8).
+    const emptyHtml = agentsHtml(flowSource([]))
+    expect(emptyHtml).toContain('data-canvas-note="empty"')
+    expect(emptyHtml).toContain('No actual dispatches yet')
+    // Events but NO dispatch rows → the settle-only anchor — the old
+    // AgentFlowZone's distinct `data-zone-empty="settle-only"` semantic,
+    // restored for the canvas (never folded into `empty`).
+    const settleOnly = agentsHtml(flowSource([
+      settleEvent({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      settleEvent({ ts: 7, agent: 'a2', outcome: 'error' }),
+    ]))
+    expect(settleOnly).toContain('data-canvas-note="settle-only"')
+    expect(settleOnly).toContain('Settle records only (no dispatch evidence)')
+    expect(settleOnly).not.toContain('data-canvas-note="empty"')
+    expect(settleOnly).not.toContain('data-canvas-note="degraded"')
+    // F-002: the note rides PROJECTED metadata — a garbage-only ledger
+    // (no dispatch evidence) renders settle-only; an anonymous dispatch row
+    // IS dispatch evidence, so no note (the old allIdle heuristic would
+    // have mislabeled both as settle-only).
+    const garbageOnly = agentsHtml(flowSource([42, null, 'garbage', { kind: 'banana' }]))
+    expect(garbageOnly).toContain('data-canvas-note="settle-only"')
+    expect(garbageOnly).toContain('Settle records only (no dispatch evidence)')
+    const anonymousDispatch = agentsHtml(flowSource([{ kind: 'dispatch' }]))
+    expect(anonymousDispatch).not.toContain('data-canvas-note')
+    expect(anonymousDispatch).toContain('data-agent-summary-executing="0"')
+  })
+
+  it('mounts the Legend on the agents page: idle swatch + collaboration-edge swatches (plan Task 3)', () => {
+    const html = agentsHtml(evidenceSource)
+    expect(html).toContain('data-mstar-legend')
+    // Idle swatch anchor (完成判据) + the collaboration-edge swatches.
+    for (const key of ['agent-idle', 'flow-expected', 'flow-actual', 'flow-unexpected', 'agent-running', 'agent-settled', 'next']) {
+      expect(html).toContain(`data-mstar-legend-item="${key}"`)
+    }
+    // The legend labels localize (zh).
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('zh')
+    const zhHtml = renderToStaticMarkup(createElement(AgentCanvasPage, {
+      view: projectGraph(evidenceSource).agents,
+      t: locale.bind(NS),
+    }))
+    expect(zhHtml).toContain('未工作实体（虚线）')
+    expect(zhHtml).toContain('预期流转边（虚线）')
+    expect(zhHtml).toContain('实际交接边')
+    expect(zhHtml).toContain('图例')
+  })
+
+  it('draws the AgentEdge collaboration lines: expected skeleton / actual handoffs / the animated next edge', () => {
+    const html = agentsHtml(evidenceSource)
+    // expected: 5 skeleton arrows across the consecutive stage columns.
+    expect(html.match(/data-agent-edge-expected="/g)).toHaveLength(5)
+    // actual: same-plan ts-adjacent dispatch pairs. NOTE: React SSR escapes
+    // `>` in attribute values, so `a1->a2` renders as `a1-&gt;a2`.
+    expect(html).toContain('data-agent-edge-actual="a1-&gt;a2"')
+    expect(html).toContain('data-agent-edge-actual="a2-&gt;a3"')
+    // next: the latest running entity (a3, qc-tri) → the next stage column.
+    expect(html).toContain('data-agent-edge-next="autonomous-execute:qc-tri-&gt;autonomous-execute:qa-gate"')
+    expect(html).toContain('data-agent-edge-next-from="a3"')
+    // Degraded ledger still draws the expected skeleton (5) — no fake claims.
+    const degraded = agentsHtml(fullSource)
+    expect(degraded.match(/data-agent-edge-expected="/g)).toHaveLength(5)
+    expect(degraded).not.toContain('data-agent-edge-actual=')
+    expect(degraded).not.toContain('data-agent-edge-next=')
+  })
+
+  it('data-canvas-pan exposes the pan state as a translate transform (origin default)', () => {
+    const html = agentsHtml(fullSource)
+    expect(html).toContain('data-canvas-pan')
+    expect(html).toMatch(/data-canvas-pan[^>]*transform:\s*translate\(0px, 0px\)/)
+    // The viewport is the pointer surface; the content layer carries the transform.
+    expect(html).toContain('data-canvas-viewport')
+  })
+
+  it('a pan seed renders the translated content layer — transform change on the anchor (SSR seam)', () => {
+    const html = agentsHtml(fullSource, { x: 40, y: -20 })
+    expect(html).toContain('translate(40px, -20px)')
+    expect(html).toMatch(/data-canvas-pan[^>]*transform:\s*translate\(40px, -20px\)/)
+    expect(html).not.toContain('translate(0px, 0px)')
+  })
+
+  it('pointer-event sequence → pan state → transform (pure drag helpers)', () => {
+    // pointerdown at (100, 50) on the origin; moves; pointerup — the pan
+    // tracks origin + (pointer − start), freely (no bounds, spec §6.2).
+    const drag = panDragStart(PAN_ORIGIN, 100, 50)
+    expect(panDragMove(drag, 160, 80)).toEqual({ x: 60, y: 30 })
+    expect(panDragMove(drag, 140, 60)).toEqual({ x: 40, y: 10 })
+    // A second gesture continues from the current pan (accumulates).
+    const second = panDragStart({ x: 40, y: 10 }, 20, 20)
+    expect(panDragMove(second, 50, 40)).toEqual({ x: 70, y: 30 })
+    expect(panTransform({ x: 40, y: -20 })).toBe('translate(40px, -20px)')
+    expect(panTransform(PAN_ORIGIN)).toBe('translate(0px, 0px)')
+  })
+
+  it('layoutAgents is deterministic: per-stage columns + the unexpected track, every entity boxed', () => {
+    const view = projectGraph(fullSource).agents
+    const layout = layoutAgents(view)
+    expect(layout.columns.map((c) => c.id)).toEqual([
+      'iteration-start:review-edit-chain',
+      'autonomous-execute:sdd-implement',
+      'autonomous-execute:sdd-task-review',
+      'autonomous-execute:qc-tri',
+      'autonomous-execute:qa-gate',
+      'autonomous-execute:ops-on-demand',
+      UNEXPECTED_COLUMN,
+    ])
+    for (const entity of view.entities) {
+      expect(layout.cards.get(entity.key)).toBeDefined()
+    }
+    // Off-pipeline idle roles (stage null) land in the trailing unexpected track.
+    expect(layout.cards.get('project-manager')!.x).toBeGreaterThan(layout.columns[5]!.x)
+    // Same view → identical geometry (SSR stability).
+    expect(layoutAgents(view)).toEqual(layout)
+  })
+
+  it('F-001: a session id colliding with a role id renders ONE card per key — no duplicate-key twin, honest summary', () => {
+    // dispatch agent = 'project-manager' (a KNOWN_AGENTS id) with role
+    // 'fullstack-dev' — the projection suppresses the idle twin, so the page
+    // renders 1 lit + 13 idle = 14 unique entities (the collided roster slot
+    // is the lit card) and the summary matches the visible cards.
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 7, role: 'fullstack-dev', agent: 'project-manager' }),
+    ]))
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(14)
+    expect(html.match(/data-agent-entity="project-manager"/g)).toHaveLength(1)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
+    // The lit card is visible and honest (running, no idle marker).
+    const lit = cardRegion(html, 'project-manager')
+    expect(lit).toContain('data-agent-status="running"')
+    expect(lit).not.toContain('data-agent-idle')
+    expect(lit).toContain('data-agent-record')
+    // The suppressed role's idle card is gone too (fullstack-dev is evidenced).
+    expect(html).not.toContain('data-agent-entity="fullstack-dev"')
+    // Executing matches the visible running card.
+    expect(html).toContain('data-agent-summary-executing="1"')
   })
 })

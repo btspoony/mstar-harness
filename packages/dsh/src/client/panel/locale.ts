@@ -31,19 +31,21 @@
  * the placeholder.
  *
  * T2 (spec panel-zones §4, plan 20260810-panel-agent-flow-zone): the agents
- * zone is filled in — `zone.agents.summary` (`N executing · M pending`),
- * `zone.agents.pending-label` (the dashed "待执行" placeholder chip) and
- * `zone.agents.next` (the animated next-edge label). `zone.agents.placeholder`
- * is gone with the placeholder.
+ * zone is filled in — `zone.agents.summary` (`N executing · M pending`).
+ * `zone.agents.placeholder` is gone with the placeholder; the dashed
+ * "待执行" chip (`pending-label`) and the animated next-edge label (`next`)
+ * keys were removed with the AgentFlowZone in the agent-canvas QC wave
+ * (S-001 — the free canvas renders neither, so they had zero consumers).
  *
  * T3 (same plan): the dock is collapsible (the frame is a native <details>,
  * header = <summary>) and the legend gains the entity-status swatches —
  * `zone.legend.agent-running` / `zone.legend.agent-settled` (the status-dot
- * treatments of the entity cards; the `zone.agents.*` family itself is
- * complete from T2 — every key is rendered, so no `zone.agents.status.*`
- * family is added: a status TEXT on the cards would be dead strings, the
- * spec §4 card shows a status point, and reusing `flow.*` would conflate
- * event status words (dispatched/settled ok) with entity status words).
+ * treatments of the entity cards; the `zone.agents.*` family itself stays
+ * minimal — title/summary, both rendered by the canvas, so no
+ * `zone.agents.status.*` family is added: a status TEXT on the cards would be
+ * dead strings, the spec §4 card shows a status point, and reusing `flow.*`
+ * would conflate event status words (dispatched/settled ok) with entity
+ * status words).
  *
  * T1 (spec panel-tabs §2/§6.1, plan 20260811-panel-tabs-shell): the panel is
  * re-laid-out as Tabs + Content — `tab.*` covers the 3 fixed MenuTab labels
@@ -57,6 +59,15 @@
  * existing `zone.iteration.*` (step badge / Step n/5 label / step-state
  * chips), `zone.phase.*` (the 5 PHASE_IDS names) and `zone.branches.*`
  * (branch panel) keys; the kanban reuses `zone.tasks.*` / `zone.state.*`.
+ *
+ * T3 (spec panel-tabs §4, plan 20260811-panel-agent-canvas Task 3): the
+ * legend re-mounts on the agent canvas — `zone.legend.agent-idle` (the idle
+ * card treatment) joins the swatch family and the collaboration-edge labels
+ * (flow-expected / flow-actual / flow-unexpected) now describe the canvas
+ * rendering (dashed/solid lines + the unexpected column) instead of the
+ * retired zone-dashboard stages; `flow.settle-only` is the distinct muted
+ * copy for the settle-only canvas note (review T2-Imp-2 restored the old
+ * zone's separate anchor).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -70,7 +81,6 @@ export type PanelKey =
   | 'tab.tasks'
   | 'tab.agents'
   | 'tab.events'
-  | 'page.agents.placeholder'
   | 'page.events.placeholder'
   | 'page.iteration.not-started'
   | 'page.iteration.expand'
@@ -89,6 +99,7 @@ export type PanelKey =
   | 'zone.legend.flow-unexpected'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
+  | 'zone.legend.agent-idle'
   | 'zone.legend.next'
   | 'zone.iteration.step-label'
   | 'zone.iteration.step-badge'
@@ -116,10 +127,9 @@ export type PanelKey =
   | 'zone.state.unknown'
   | 'zone.agents.title'
   | 'zone.agents.summary'
-  | 'zone.agents.pending-label'
-  | 'zone.agents.next'
   | 'flow.title'
   | 'flow.empty'
+  | 'flow.settle-only'
   | 'flow.degraded'
   | 'flow.unexpected'
   | 'flow.in-flight'
@@ -160,7 +170,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'tab.tasks': '任务迭代',
   'tab.agents': '代理执行',
   'tab.events': '事件记录',
-  'page.agents.placeholder': '代理执行页由后续 plan 交付（agent canvas）',
   'page.events.placeholder': '事件记录页由后续 plan 交付（event log）',
   'page.iteration.not-started': '迭代未启动',
   'page.iteration.expand': '展开',
@@ -174,11 +183,12 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': '图例',
-  'zone.legend.flow-expected': '预期 stage（空心）',
-  'zone.legend.flow-actual': '实际派发（实心）',
-  'zone.legend.flow-unexpected': '未匹配角色（描边）',
+  'zone.legend.flow-expected': '预期流转边（虚线）',
+  'zone.legend.flow-actual': '实际交接边',
+  'zone.legend.flow-unexpected': '未匹配角色（独立列）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
+  'zone.legend.agent-idle': '未工作实体（虚线）',
   'zone.legend.next': 'next 流转边（动画）',
   'zone.iteration.step-label': '步骤 {n}/{total}',
   'zone.iteration.step-badge': '步骤 {n}',
@@ -206,10 +216,9 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': '未知',
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
-  'zone.agents.pending-label': '待执行',
-  'zone.agents.next': 'next',
   'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
+  'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
   'flow.unexpected': '未匹配角色',
   'flow.in-flight': '已派发',
@@ -245,7 +254,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'tab.tasks': 'Task Iteration',
   'tab.agents': 'Agent Run',
   'tab.events': 'Event Log',
-  'page.agents.placeholder': 'Agent run page lands in a later plan (agent canvas)',
   'page.events.placeholder': 'Event log page lands in a later plan',
   'page.iteration.not-started': 'iteration not started',
   'page.iteration.expand': 'expand',
@@ -259,11 +267,12 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': 'Legend',
-  'zone.legend.flow-expected': 'expected stage (hollow)',
-  'zone.legend.flow-actual': 'actual dispatch (filled)',
-  'zone.legend.flow-unexpected': 'unexpected role (outlined)',
+  'zone.legend.flow-expected': 'expected flow edge (dashed)',
+  'zone.legend.flow-actual': 'actual handoff edge',
+  'zone.legend.flow-unexpected': 'unexpected role (own column)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
+  'zone.legend.agent-idle': 'idle agent (dashed)',
   'zone.legend.next': 'next flow edge (animated)',
   'zone.iteration.step-label': 'Step {n}/{total}',
   'zone.iteration.step-badge': 'Step {n}',
@@ -291,10 +300,9 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': 'unknown',
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
-  'zone.agents.pending-label': 'pending',
-  'zone.agents.next': 'next',
   'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
+  'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',
   'flow.unexpected': 'Unexpected roles',
   'flow.in-flight': 'dispatched',
