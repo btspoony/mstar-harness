@@ -7,7 +7,8 @@
  * and muted empty notes. The row layout + status colors MIGRATED from the
  * REMOVED AgentEventDock (spec §5 — 无双份日志: the dock file and its
  * zones.module.css styles are deleted with this plan; the events partition
- * title reuses the `flow.title` locale key).
+ * title uses the `event-log.section.events` locale key (qc1 F-003 — the
+ * event-log namespace stays symmetric with `event-log.section.violations`).
  *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host

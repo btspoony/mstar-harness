@@ -191,8 +191,10 @@ non-canvas log page (spec F1.5, plan `20260811-panel-event-log`): two
 partitions (**Agent 流转事件** / **违规记录**), every row an expandable
 native `<details>` carrying the full catalog fields (a missing field renders
 「—」, never a guessed value), muted empty states — the canvas-corner
-**`AgentEventDock`** and the fixed footer bar are REMOVED with the page
-(无双份日志, spec §5). Below 1200px the zones stack vertically. Projection is the pure
+**`AgentEventDock`** is REMOVED with the page (无双份日志, spec §5; the
+fixed footer bar — zone legend + gate summary + violations — died with the
+WorkflowCanvas zone dashboard in the tabs-shell plan; the footer that
+remains is the freshness marker). Below 1200px the zones stack vertically. Projection is the pure
 `projectGraph(source)` function (schema constants strictly separated from
 catalog evidence; never throws; missing fields degrade to explicit
 empty/last-known states — muted empty states, never orange warn boxes)

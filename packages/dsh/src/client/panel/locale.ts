@@ -84,6 +84,7 @@ export type PanelKey =
   | 'page.iteration.not-started'
   | 'page.iteration.expand'
   | 'page.iteration.collapse'
+  | 'event-log.section.events'
   | 'event-log.section.violations'
   | 'event-log.empty'
   | 'event-log.empty.events'
@@ -149,7 +150,6 @@ export type PanelKey =
   | 'zone.state.unknown'
   | 'zone.agents.title'
   | 'zone.agents.summary'
-  | 'flow.title'
   | 'flow.empty'
   | 'flow.settle-only'
   | 'flow.degraded'
@@ -194,6 +194,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'page.iteration.not-started': '迭代未启动',
   'page.iteration.expand': '展开',
   'page.iteration.collapse': '收拢',
+  'event-log.section.events': 'Agent 流转事件',
   'event-log.section.violations': '违规记录',
   'event-log.empty': '暂无记录',
   'event-log.empty.events': '暂无流转事件',
@@ -259,7 +260,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': '未知',
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
-  'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -299,6 +299,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'page.iteration.not-started': 'iteration not started',
   'page.iteration.expand': 'expand',
   'page.iteration.collapse': 'collapse',
+  'event-log.section.events': 'Agent flow events',
   'event-log.section.violations': 'Violations',
   'event-log.empty': 'No records yet',
   'event-log.empty.events': 'No flow events yet',
@@ -364,7 +365,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': 'unknown',
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
-  'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',

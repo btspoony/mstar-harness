@@ -2,7 +2,10 @@
  * EventLogPage (spec panel-tabs §5, plan 20260811-panel-event-log Task 2) —
  * the 事件记录 tab: a NON-canvas log page. Two partitions (spec §5):
  * Agent 流转事件 (`view.events` ≤50 latest-first — unexpected dispatches
- * fold in via the `expected` flag, NEVER double-appended) and 违规记录
+ * fold in via the `expected` flag, NEVER double-appended; the unexpected
+ * badge is DISPATCH-only — settle rows are completion records whose
+ * projected `expected` is always false, they never flag as unexpected,
+ * F-001) and 违规记录
  * (`view.violations`). Every row is an expandable native `<details>` (no-JS,
  * keyboard-accessible, SSR-stable) whose body shows the FULL catalog fields;
  * a missing field renders「—」— never a guessed value (spec §5/§8).
@@ -70,15 +73,22 @@ function flowStatusClass(status: FlowEventView['status']): string {
   }
 }
 
-/** Local HH:MM clock time; ts 0 (missing) renders empty — never a fabricated time. */
+/** True when ts is a usable Date time value: finite, positive, and inside the
+ * ECMAScript Date range (±8.64e15 ms) — outside it `new Date` throws
+ * RangeError (spec §8 total-function discipline: the render NEVER throws). */
+function isRenderableTime(ts: number): boolean {
+  return Number.isFinite(ts) && ts > 0 && Math.abs(ts) <= 8.64e15
+}
+
+/** Local HH:MM clock time; ts 0 (missing) or out-of-Date-range renders empty — never a fabricated time. */
 function formatEventTime(ts: number): string {
-  if (ts <= 0) return ''
+  if (!isRenderableTime(ts)) return ''
   return new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
 /** Local HH:MM:SS clock time for the detail body; ts 0 → '' (the caller shows「—」). */
 function formatEventTimeFull(ts: number): string {
-  if (ts <= 0) return ''
+  if (!isRenderableTime(ts)) return ''
   return new Date(ts).toLocaleTimeString('en-GB')
 }
 
@@ -125,7 +135,16 @@ function EventDetailsBody({
         value={entry.eventKind === 'dispatch' ? t('event-log.kind.dispatch') : t('event-log.kind.settle')}
       />
       <DetailField field="status" label={t('event-log.field.status')} value={flowStatusLabel(entry.status, t)} />
-      <DetailField field="expected" label={t('event-log.field.expected')} value={entry.expected ? t('event-log.yes') : t('event-log.no')} />
+      <DetailField
+        field="expected"
+        label={t('event-log.field.expected')}
+        // F-001 (QC wave): a SETTLE row is a completion record — the
+        // expected-role seat is not applicable there (the projection always
+        // sets `expected: false` on settles), so it renders「—」like the
+        // `settled` seat (T2-Min-2 precedent); only a DISPATCH row renders
+        // the honest yes/no.
+        value={entry.eventKind === 'settle' ? '' : entry.expected ? t('event-log.yes') : t('event-log.no')}
+      />
       <DetailField
         field="settled"
         label={t('event-log.field.settled')}
@@ -174,7 +193,10 @@ function EventLogEventRow({
           )}
           {entry.agent !== '' && <span className={css.eventAgent} data-event-log-agent={entry.agent}>{entry.agent}</span>}
           {entry.durationMs !== null && <span className={css.eventDuration} data-event-log-duration={entry.durationMs}>{entry.durationMs}ms</span>}
-          {!entry.expected && (
+          {/* F-001 (QC wave): the unexpected badge is a DISPATCH-only marker —
+              a settle row is a completion record whose projected `expected`
+              is always false (never flag as unexpected, spec §5). */}
+          {entry.eventKind === 'dispatch' && !entry.expected && (
             <span className={css.unexpectedBadge} data-event-log-unexpected="true">{t('flow.unexpected')}</span>
           )}
         </summary>
@@ -229,7 +251,7 @@ export function EventLogPage({ view, t }: EventLogPageProps) {
   return (
     <div className={css.eventLogPage} data-mstar-page="events">
       <section className={css.section} data-event-log-section="events" data-event-log-section-count={eventEntries.length}>
-        <h2 className={css.sectionTitle} data-event-log-section-title>{t('flow.title')}</h2>
+        <h2 className={css.sectionTitle} data-event-log-section-title>{t('event-log.section.events')}</h2>
         {eventEntries.length === 0 ? (
           <p className={css.empty} data-event-log-empty-section="events">{t('event-log.empty.events')}</p>
         ) : (

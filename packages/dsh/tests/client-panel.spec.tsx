@@ -1815,7 +1815,9 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
  * the muted empty states (`data-event-log-empty` both-empty /
  * `data-event-log-empty-section` mixed — never an orange warn frame), the
  * unexpected-dispatch fold-in (`data-event-log-expected="false"` + the
- * `flow.unexpected` badge — never double-appended), the dock migration
+ * `flow.unexpected` badge, DISPATCH-only — settle rows never flag as
+ * unexpected, qc2/qc3 F-001), the out-of-Date-range ts degrade (qc2 F-002),
+ * the dock migration
  * (zero `data-agent-event-dock` anchors — 无双份日志, spec §5) and the zh
  * copy. Row data rides the Task 1 `eventLogEntries` assembly.
  * ------------------------------------------------------------------------- */
@@ -1913,10 +1915,11 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     const settleField = html.match(/data-event-log-field="settled"[\s\S]*?<\/div>/)?.[0] ?? ''
     expect(settleField).toContain('data-event-log-missing="true"')
     expect(settleField).toContain('>—</span>')
-    // The settle row's detail body: 6 not-applicable fields (role/stage/
-    // plan/task/category/settled); agent/time/kind/status/expected/duration
+    // The settle row's detail body: 7 not-applicable fields (role/stage/
+    // plan/task/category/settled/expected — F-001: the expected-role seat is
+    // not applicable on a completion record); agent/time/kind/status/duration
     // render their honest values.
-    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(6)
+    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(7)
     // A dispatch row (not settled) still renders the honest 'no'.
     const dispatchHtml = eventsHtml(flowSource([
       { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
@@ -1967,6 +1970,41 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('data-event-log-expected="false"')
     expect(html).toContain('data-event-log-unexpected="true"')
     expect(html).toContain('Unexpected roles')
+  })
+
+  it('settle rows NEVER render the unexpected badge — dispatch-only marker (qc2/qc3 F-001)', () => {
+    // A normal dispatch→settle pair: the settle row's projected `expected`
+    // is always false, but it is a completion record — no badge and no
+    // "not-applicable" expected seat in its detail body (F-001).
+    const html = eventsHtml(flowSource([
+      { ts: 3_000, kind: 'settle', role: '', planId: null, taskId: null, taskCategory: null, agent: 'a-1', outcome: 'ok', durationMs: 1234 },
+      { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
+    ]))
+    // No unexpected badge / label anywhere in the pair.
+    expect(html).not.toContain('data-event-log-unexpected')
+    expect(html).not.toContain('Unexpected roles')
+    // The settle row's detail expected seat is not-applicable「—」.
+    const settleExpected = html.match(/data-event-log-field="expected"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(settleExpected).toContain('data-event-log-missing="true"')
+    // An off-pipeline DISPATCH still renders the badge (kind-guarded).
+    const unexpectedHtml = eventsHtml(flowSource([dispatchEvent({ ts: 4, role: 'scout', agent: 's-9' })]))
+    expect(unexpectedHtml).toContain('data-event-log-unexpected="true"')
+    expect(unexpectedHtml).toContain('Unexpected roles')
+  })
+
+  it('a finite but out-of-Date-range ts degrades to「—」— never throws (qc2 F-002)', () => {
+    // ts = 1e18 is finite (guards.count passes it through the projection)
+    // but outside the ECMAScript Date range (±8.64e15 ms): the old
+    // formatEventTime threw RangeError and crashed the whole events tab.
+    const html = eventsHtml(flowSource([
+      { ts: 1e18, kind: 'dispatch', role: 'fullstack-dev', agent: 'a-1' },
+    ]))
+    expect(html.match(/data-event-log-row-kind="event"/g)).toHaveLength(1)
+    // No fabricated clock time on the row…
+    expect(html).not.toContain('data-event-log-time=')
+    // …and the detail time seat renders「—」(missing).
+    const timeField = html.match(/data-event-log-field="time"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(timeField).toContain('data-event-log-missing="true"')
   })
 
   it('dock migration: zero data-agent-event-dock anchors on the events page (无双份日志, spec §5)', () => {

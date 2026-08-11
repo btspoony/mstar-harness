@@ -125,8 +125,10 @@ agent-flow event strip migrated into the **事件记录 (Event Log) tab** — a
 non-canvas log page (spec F1.5, plan `20260811-panel-event-log`): two
 partitions (Agent 流转事件 / 违规记录), every row an expandable native
 `<details>` carrying the full catalog fields (missing → 「—」), muted empty
-states — the canvas-corner **AgentEventDock** and the fixed footer bar are
-REMOVED with the page (无双份日志, spec §5), plus the freshness footer. Below 1200px the zones stack vertically.
+states — the canvas-corner **AgentEventDock** is REMOVED with the page
+(无双份日志, spec §5; the fixed footer bar — zone legend + gate summary +
+violations — died with the WorkflowCanvas in the tabs-shell plan; the
+footer that remains is the freshness marker). Below 1200px the zones stack vertically.
 Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
 CLIENT_EXTERNALS external, CSS modules hashed + `<style data-plugin>`
