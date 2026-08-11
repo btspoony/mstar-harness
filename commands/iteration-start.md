@@ -2,6 +2,7 @@
 name: iteration-start
 description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch; then auto-continue Phase 2→5 (execute → close → PR → merge-ready) unless `pause` arg given."
 agent: project-manager
+input: "[direction] [pause]"
 ---
 
 # Start Iteration

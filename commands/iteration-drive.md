@@ -2,6 +2,7 @@
 name: iteration-drive
 description: Drive the active iteration to completion — Phase 2 Autonomous Execute, Phase 3 iteration-close, Phase 4 Create PR, Phase 5 PR merge-ready loop (prefer babysit/*-babysit; optional greploop when repo has it; else CI fallback) until mergeable. Not Done until Phase 5 exit checklist passes.
 agent: project-manager
+input: "[no args]"
 ---
 
 # Drive Iteration
