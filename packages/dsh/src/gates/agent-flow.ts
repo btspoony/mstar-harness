@@ -223,9 +223,10 @@ let settleNoteLogged = false
  * Module-scoped catalog-invalidation hook (plan `20260811-panel-f4-timeliness`
  * Task 1 — the `invalidateCatalog` 挂钩 that Task 2 consumes): called with
  * the affected `{HARNESS_DIR}` after every SUCCESSFUL ledger record
- * (`recordDispatch` / `recordSettle`). The entry binds the real
- * invalidation closure at apply (Task 2 wires the harnessDir → cache-key
- * reverse map there); unbound → no-op. Never throws into the record path.
+ * (`recordDispatch` / `recordSettle`). The entry binds the real invalidation
+ * closure at apply (Task 2 shipped the apply-scoped harnessDir → cache-key
+ * reverse-map closure in `index.ts` — see `createCatalogInvalidation`);
+ * unbound → no-op. Never throws into the record path.
  */
 type AgentFlowInvalidator = (harnessDir: string) => void
 let invalidator: AgentFlowInvalidator | undefined
@@ -233,8 +234,9 @@ let invalidator: AgentFlowInvalidator | undefined
 /**
  * Bind the module's catalog-invalidation hook (plan
  * `20260811-panel-f4-timeliness` Task 1 — same pattern as
- * {@link setAgentFlowLogger}; the entry binds at apply, Task 2 replaces the
- * binding with the real TTL-cache invalidation).
+ * {@link setAgentFlowLogger}; the entry binds at apply; Task 2 shipped the
+ * real binding — the apply-scoped harnessDir → cache-key reverse-map
+ * closure in `index.ts`).
  * @param invalidate - the hook (`undefined` clears the binding).
  * @returns the PREVIOUS hook (tests restore it in a `finally`).
  */

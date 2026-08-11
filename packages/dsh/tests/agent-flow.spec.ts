@@ -863,6 +863,29 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('a dispatch through the real composition invalidates the catalog cache — the event is visible at the next pre-step within the REAL TTL (apply-bound wiring, Task 2)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-invalidator-wiring-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+    })
+    // REAL TTL (default 60000): the event can only be visible at the first
+    // pre-step if the record invalidated the boot-seeded cache entry.
+    const app = booted = await bootApp({ root })
+    // Dispatch BEFORE any pre-step: only the apply-time pre-registration of
+    // the explicit-config reverse map makes the boot-seeded entry
+    // invalidatable here — a no-op binding (Task 1 state) or a missing
+    // pre-registration would leave the stale boot build visible within the TTL.
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
+    expect(decision).toEqual({ kind: 'allow' })
+
+    const step = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { source } = catalogRowOf(step)
+    expect(source.state!.agentFlow!.events).toHaveLength(1)
+    expect(source.state!.agentFlow!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok' })
+  })
 })
 
 /* ===========================================================================

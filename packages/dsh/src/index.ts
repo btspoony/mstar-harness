@@ -33,6 +33,7 @@ import {
 import {
   preStepCatalogListener,
   buildCatalogSources,
+  createCatalogInvalidation,
   DEFAULT_CATALOG_TTL_MS,
   EXPLICIT_CACHE_KEY,
 } from './gates/catalog.ts'
@@ -375,18 +376,9 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
 
-  // Catalog-invalidation hook binding (plan `20260811-panel-f4-timeliness`
-  // Task 1 — the `invalidateCatalog` 挂钩 that Task 2 consumes): every
-  // successful ledger record (dispatch/settle) invokes the bound hook with
-  // the affected `{HARNESS_DIR}`. Task 2 wires the real harnessDir →
-  // catalog-cache-key reverse-map invalidation closure here; until then the
-  // no-op keeps the TTL-cache behavior unchanged (60s fallback — the plan's
-  // documented Task-1 state, no ledger-change invalidation yet).
-  setAgentFlowInvalidator((_harnessDir) => {
-    // Task 2 (catalog TTL invalidation) replaces this binding with the
-    // harnessDir → cache-key reverse-map closure (see plan
-    // `20260811-panel-f4-timeliness` Task 2 Step 1).
-  })
+  // Catalog-invalidation hook: the real harnessDir → cache-key reverse-map
+  // closure is created + bound alongside the catalog cache below (Task 2 —
+  // see the catalog section comment).
 
   // Bundled mstar commands — the omp/opencode slash-command parity surface
   // (iteration-start / iteration-drive / iteration-loop / codebase-audit),
@@ -489,11 +481,29 @@ export function apply(ctx: Context, config: Config): void {
   if (explicitKey !== undefined) {
     catalogCache.set(explicitKey, { sources: buildCatalogSources(ctx, bootHarnessDir), builtAt: Date.now() })
   }
+  // Catalog-invalidation hook (plan `20260811-panel-f4-timeliness` Task 2 —
+  // decision D3): the apply-scoped `harnessDir → cache key` reverse map +
+  // invalidation closure, created HERE with the same lifetime as the cache
+  // above (an HMR fiber restart recreates both — module-level state would
+  // survive and point at a destroyed cache). The explicit-config key is
+  // pre-registered so a ledger record between apply and the first pre-step
+  // still invalidates the boot-seeded entry; `catalogSourcesFor` registers
+  // every other workspace's key on hit/build. Bound to the agent-flow
+  // ledger hook (`setAgentFlowInvalidator`, Task 1 delivery): every
+  // successful recordDispatch/recordSettle fires it with the affected
+  // `{HARNESS_DIR}` → that workspace's entry is deleted → the next pre-step
+  // rebuilds and (digest text change) re-injects the row — the 60s TTL no
+  // longer bounds ledger-change latency (AC-2). No mapping → safe no-op; a
+  // throwing invalidation is contained by the record path (log-only, never
+  // blocks the ledger record).
+  const catalogInvalidation = createCatalogInvalidation(catalogCache)
+  if (explicitKey !== undefined) catalogInvalidation.register(bootHarnessDir, explicitKey)
+  setAgentFlowInvalidator(catalogInvalidation.invalidate)
   // Per agent+workspace turn digests for the digest-gated re-emission
   // (inject once per turn; re-inject only when the row changed).
   const catalogDigests = new Map<string, TurnDigest>()
   ctx.on('agent/pre-step', (payload, next) =>
-    preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, catalogDigests, payload, next))
+    preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, catalogInvalidation.register, catalogDigests, payload, next))
 
   // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
   registerSddIterationTools(ctx, resolver)
