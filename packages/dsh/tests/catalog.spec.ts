@@ -6,7 +6,10 @@
  * next pre-step rebuilds fresh sources and the digest re-emits the changed
  * row within the REAL TTL (AC-2); a non-record out-of-band ledger write
  * stays TTL-bounded (cache-hit behavior unchanged — only the record path
- * invalidates).
+ * invalidates). Extended by plan `20260811-panel-f4-iteration-zone` Task 1:
+ * the optional `iteration.compassStatus` surface (steering compass
+ * frontmatter `status` — active/locked present, non-steering status
+ * omits the whole iteration row; spec panel-f4 §5 D5).
  *
  * Dev-time reality (brief): the llm/agent seams are dev-time STUBS (no real
  * runtime), so the pre-step waterfall is simulated with the typed harness —
@@ -251,6 +254,67 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     expect(decision).toEqual({ kind: 'enter', messages: broken })
+  })
+})
+
+describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4 §5 D5, plan 20260811-panel-f4-iteration-zone Task 1)', () => {
+  /** Minimal status.json the iteration-gate row needs (empty plans → engine emits phase-2-execute + ok:true). */
+  const VALID_STATUS_JSON = JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} })
+
+  /** A minimal engine-shape-VALID delivery-compass frontmatter (spec D5 — the steering status value is the signal). */
+  function compassDoc(status: 'active' | 'locked' | 'completed'): string {
+    return [
+      '---',
+      'iteration_id: iter-20260811-catalog-compass',
+      'start_date: 2026-08-11',
+      `status: ${status}`,
+      'iteration_base_branch: dev-dsh',
+      'target_branch: dev-dsh',
+      '---',
+      '',
+      '## Direction lock',
+      'Catalog compassStatus surface.',
+    ].join('\n')
+  }
+
+  /** Boot with status.json + a delivery-compass seeded, then run one pre-step and return the catalog source. */
+  async function sourceWithCompass(status: 'active' | 'locked' | 'completed'): Promise<MstarEngineStatusSource> {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compassstatus-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': VALID_STATUS_JSON,
+      'iterations/iter-20260811-catalog-compass/delivery-compass.md': compassDoc(status),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    return catalogRowOf(decision).source
+  }
+
+  it('surfaces `compassStatus: active` when the steering compass is active (Phase 1 in flight)', async () => {
+    const source = await sourceWithCompass('active')
+    expect(source.iteration).toBeDefined()
+    expect(source.iteration!.compassStatus).toBe('active')
+    expect(source.iteration!.iterationId).toBe('iter-20260811-catalog-compass')
+    // The empty-plans fixture: engine emits phase-2-execute + ok:true during
+    // Phase 1 — `iteration.active` is true, only the current step re-derives
+    // from compassStatus (projection side).
+    expect(source.iteration!.gate.transition).toBe('phase-2-execute')
+    expect(source.iteration!.gate.ok).toBe(true)
+  })
+
+  it('surfaces `compassStatus: locked` when the steering compass is locked (Phase 1 complete)', async () => {
+    const source = await sourceWithCompass('locked')
+    expect(source.iteration!.compassStatus).toBe('locked')
+  })
+
+  it('omits compassStatus (and the whole iteration row) for a NON-steering status — the steering filter never admits it (belt-and-suspenders guard)', async () => {
+    // `status: completed` is not active|locked → `steeringCompassPath` skips
+    // the compass → no iteration section at all. The appended message stays
+    // losslessly JSON-serializable (no undefined-valued props, Session.append).
+    const source = await sourceWithCompass('completed')
+    expect(Object.keys(source).every((key) => (source as unknown as Record<string, unknown>)[key] !== undefined)).toBe(true)
+    expect('iteration' in source).toBe(false)
   })
 })
 

@@ -89,6 +89,17 @@ export interface MstarIterationGateView {
   readonly compassPath: string
   /** Cached `evaluatePhaseGate` result (tool result shape). */
   readonly gate: IterationGateView
+  /**
+   * The steering compass frontmatter `status` (`'active' | 'locked'`), the
+   * authoritative signal for whether Phase 1 is still in flight vs. complete
+   * (spec panel-f4 §2.3 R9 / §5 D5). Optional and OMITTED when absent or
+   * not one of the two steering values (lossless omit-when-absent — the
+   * `iteration` key's discipline: `Session.append` rejects undefined-valued
+   * properties) — old catalog rows / typed fixtures without the field keep
+   * compiling and the projection degrades to the existing transition-driven
+   * behavior.
+   */
+  readonly compassStatus?: 'active' | 'locked'
 }
 
 /** One registered plan row of the harness-state digest (id + status + completion date). */

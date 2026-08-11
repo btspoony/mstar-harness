@@ -11,9 +11,16 @@
  * Degradation contract (spec §8): missing/illegal fields set the matching
  * `degraded` flag and render as skeleton/unknown — the function NEVER throws
  * and NEVER fabricates values; `degraded.iteration ⟺ !active` (the old
- * `degraded.transition` is merged into `iteration.active === false`); Phase
- * 1/5 steps are schema-only (the engine gate never emits those transitions —
- * a known limitation, not a defect, spec §2.3).
+ * `degraded.transition` is merged into `iteration.active === false`);
+ * Step 5 stays schema-only (the engine gate never emits that transition —
+ * a known limitation, not a defect, spec §2.3). Plan
+ * `20260811-panel-f4-iteration-zone` Task 1 (spec panel-f4 §2.3 R9 / §5 D5):
+ * `iteration.compassStatus` re-derives the current step during Phase 1 —
+ * `'active'` → Step 1 (iteration-start) current + verdict unknown (Phase 1
+ * has no gate evaluation → no PASS/FAIL badge) + next Step 2; `'locked'` or
+ * missing/non-union → the existing transition-driven logic (Step 2→4 + gate
+ * verdict). `active` semantics unchanged — Step 1 is reached ONLY via the
+ * compass-status branch, never via a gate transition.
  *
  * The shared plan-sort rule lives in `plan-sort.ts` (its own unit tests stay
  * untouched); this file adds the projection-side integration: the Done column
@@ -216,6 +223,72 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     } as unknown as MstarEngineStatusSource)
     expect(v.iteration.active).toBe(true)
     expect(v.iteration.iterationId).toBeNull()
+  })
+
+  it('compassStatus active → Step 1 (iteration-start) current, verdict unknown, next Step 2 — Phase 1 has no gate verdict (spec panel-f4 §2.3 R9 / §5 D5)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
+    })
+    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
+    expect(byId.get('iteration-start')!.state).toBe('current')
+    expect(byId.get('autonomous-execute')!.state).toBe('next')
+    // The re-derived current step — the SAME PHASE_EDGES forward rule the
+    // locked path uses (iteration-start → autonomous-execute).
+    expect(v.iteration.currentStep).toBe(1)
+    expect(byId.get('iteration-start')!.verdict).toBe('unknown')
+    // No gate-derived badge data in Phase 1: summary + step verdict unknown,
+    // no violation count, no violation list.
+    expect(v.iteration.verdict).toBe('unknown')
+    expect(v.verdict).toBe('unknown')
+    expect(v.iteration.violationCount).toBeNull()
+    expect(v.violations).toEqual([])
+    // `active` semantics unchanged — the transition still resolved (engine
+    // emits phase-2-execute + ok:true during Phase 1); only the current step
+    // re-derives. Branches still project in the active state.
+    expect(v.iteration.active).toBe(true)
+    expect(v.degraded.iteration).toBe(false)
+    expect(v.iteration.branches).toEqual({
+      iterationBase: 'dev-dsh',
+      target: 'dev-dsh',
+      specIntegration: 'iteration/iter-20260810-panel-zones',
+    })
+  })
+
+  it('compassStatus locked → the existing gate-transition-driven logic (Step 2 current + gate verdict)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'locked' },
+    })
+    expect(v.iteration.currentStep).toBe(2)
+    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
+    expect(byId.get('autonomous-execute')!.state).toBe('current')
+    expect(byId.get('iteration-close')!.state).toBe('next')
+    expect(byId.get('autonomous-execute')!.verdict).toBe('pass')
+    expect(v.iteration.verdict).toBe('pass')
+    expect(v.iteration.violationCount).toBe(2)
+    expect(v.iteration.active).toBe(true)
+  })
+
+  it('compassStatus missing → existing transition-driven behavior (optional field, backward compatible — spec D5)', () => {
+    // `fullSource` carries NO compassStatus — old catalog rows / typed
+    // fixtures keep compiling and project exactly as before.
+    const v = projectGraph(fullSource)
+    expect(v.iteration.active).toBe(true)
+    expect(v.iteration.currentStep).toBe(2)
+    expect(v.iteration.verdict).toBe('pass')
+    expect(v.iteration.violationCount).toBe(2)
+  })
+
+  it('compassStatus non-union garbage → guard degrade to the transition-driven behavior (Total-function, never throws)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'completed' },
+    } as unknown as MstarEngineStatusSource)
+    expect(v.iteration.active).toBe(true)
+    expect(v.iteration.currentStep).toBe(2)
+    expect(v.iteration.verdict).toBe('pass')
+    expect(v.degraded.iteration).toBe(false)
   })
 })
 

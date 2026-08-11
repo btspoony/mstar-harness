@@ -13,7 +13,12 @@
  * - catalog evidence — `iteration.gate.transition` lights the current step
  *   (its forward target becomes `next`), `gate.ok/violations` become the
  *   PASS/FAIL verdict + count, and `state.plans[].status` rows fall into the
- *   exact-match kanban buckets.
+ *   exact-match kanban buckets. `iteration.compassStatus` (the steering
+ *   compass frontmatter `status`, `'active' | 'locked'` — spec panel-f4 §2.3
+ *   R9 / §5 D5) re-derives the current step during Phase 1: `'active'` →
+ *   Step 1 (iteration-start) is current with verdict 'unknown' (Phase 1 has
+ *   no gate evaluation → no PASS/FAIL badge) + next Step 2; `'locked'` or
+ *   missing → the transition-driven logic below (Step 2→4 + gate verdict).
  *
  * Migration from the legacy graph GraphView (spec §3, per field):
  * - kept & moved: `violations` / `flow.events` / `flow.unexpected` → top-level
@@ -54,7 +59,10 @@
  * missing → same skeleton + `degraded.plans`; `state.agentFlow`
  * missing/unreadable → agents roster + `degraded` (full KNOWN_AGENTS idle
  * cards, no executing/pending claims); 0 events → `empty` (idle roster +
- * pending skeleton).
+ * pending skeleton). `iteration.compassStatus` missing or non-union (old
+ * catalog rows / fixtures — the field is OPTIONAL, spec D5) degrades to the
+ * existing transition-driven current-step logic (Step 2→4) — backward
+ * compatible, `active` semantics unchanged.
  */
 
 import type { MstarEngineStatusSource } from '../../../types.ts'
@@ -394,7 +402,7 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
 
   const iteration = source == null ? null : (source as { iteration?: unknown }).iteration
   if (iteration !== null && iteration !== undefined) {
-    const row = iteration as { iterationId?: unknown; gate?: unknown }
+    const row = iteration as { iterationId?: unknown; gate?: unknown; compassStatus?: unknown }
     iterationId = str(row.iterationId)
     const gate = row.gate as { transition?: unknown; ok?: unknown; violations?: unknown } | null | undefined
     const transition = gate === null || typeof gate !== 'object' ? null : str(gate.transition)
@@ -403,22 +411,43 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
       : TRANSITION_TO_PHASE[transition]
     if (phaseId !== undefined) {
       active = true
-      const index = PHASE_IDS.indexOf(phaseId)
-      currentStep = index + 1 // 1-based
-      const current = steps[index]!
-      current.state = 'current'
-      const ok = gate === null || typeof gate !== 'object' ? null : bool(gate.ok)
-      current.verdict = ok === null ? 'unknown' : ok ? 'pass' : 'fail'
-      const rawViolations = gate !== null && typeof gate === 'object' && Array.isArray(gate.violations)
-        ? gate.violations
-        : null
-      violationCount = rawViolations === null ? null : rawViolations.length
-      violations = rawViolations === null ? [] : rawViolations.map(violationRow)
-      verdict = current.verdict
-      // The forward edge target answers "where next" (spec §3; Phase 5 has no
-      // forward edge — a known limitation, the engine gate emits only 2→3→4).
-      const forward = PHASE_EDGES.find((e) => e.source === phaseId && e.kind === 'forward')
-      if (forward !== undefined) steps[PHASE_IDS.indexOf(forward.target)]!.state = 'next'
+      if (row.compassStatus === 'active') {
+        // Phase 1 in flight (steering compass `status: active`, not yet
+        // locked — spec panel-f4 §2.3 R9 + §5 D5): Step 1 (iteration-start)
+        // is CURRENT with verdict 'unknown' — the engine gate evaluates only
+        // Phase 2→3→4, so Phase 1 has no PASS/FAIL verdict and no violation
+        // count (summary + step render no badge; violationCount stays null,
+        // violations empty). Next = Step 2 via the SAME PHASE_EDGES forward
+        // rule the locked path uses (iteration-start → autonomous-execute).
+        // `active` stays true — the transition already resolved (engine
+        // `evaluatePhaseGate` emits phase-2-execute + ok:true during Phase 1);
+        // only the CURRENT STEP is re-derived here.
+        currentStep = 1
+        const current = steps[0]!
+        current.state = 'current'
+        const forward = PHASE_EDGES.find((e) => e.source === 'iteration-start' && e.kind === 'forward')
+        if (forward !== undefined) steps[PHASE_IDS.indexOf(forward.target)]!.state = 'next'
+      } else {
+        // `compassStatus === 'locked'` (Phase 1 complete) or missing/non-union
+        // (guard degrade — Total-function) → the existing gate-transition-
+        // driven logic (Step 2→4 + gate verdict).
+        const index = PHASE_IDS.indexOf(phaseId)
+        currentStep = index + 1 // 1-based
+        const current = steps[index]!
+        current.state = 'current'
+        const ok = gate === null || typeof gate !== 'object' ? null : bool(gate.ok)
+        current.verdict = ok === null ? 'unknown' : ok ? 'pass' : 'fail'
+        const rawViolations = gate !== null && typeof gate === 'object' && Array.isArray(gate.violations)
+          ? gate.violations
+          : null
+        violationCount = rawViolations === null ? null : rawViolations.length
+        violations = rawViolations === null ? [] : rawViolations.map(violationRow)
+        verdict = current.verdict
+        // The forward edge target answers "where next" (spec §3; Phase 5 has no
+        // forward edge — a known limitation, the engine gate emits only 2→3→4).
+        const forward = PHASE_EDGES.find((e) => e.source === phaseId && e.kind === 'forward')
+        if (forward !== undefined) steps[PHASE_IDS.indexOf(forward.target)]!.state = 'next'
+      }
       // Branch anchors come from `state`; projected only while active (the
       // iteration zone renders them exclusively in the active state, spec §3).
       const state = stateRow(source)
