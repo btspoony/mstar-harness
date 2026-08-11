@@ -63,6 +63,11 @@
     border-left: 0;
     border-top: 1px solid var(--dsw-alias-border-l1);
   }
+  /* Narrow fallback (spec panel-f4 §2.3 R8): the iteration split stacks
+     vertically — branches (DOM-first) above, steps below. */
+  .iterationHeadSplit {
+    flex-direction: column;
+  }
 }
 
 /* Centered empty state (no catalog row yet). Full-tab like .root: the page
@@ -262,6 +267,27 @@
   border-top: 1px solid var(--dsw-alias-border-l1);
 }
 
+/* LEFT-RIGHT split (spec panel-f4 §2.3 R8, plan f4.3 Task 2): branches
+ * (small half, DOM-first) LEFT + steps (large half) RIGHT — a plain flex
+ * row; the DOM already puts branches before steps. Narrow widths stack
+ * vertically (the same 860px breakpoint as the root grid, below). */
+.iterationHeadSplit {
+  display: flex;
+  align-items: stretch;
+  gap: var(--mstar-space-4);
+  min-width: 0;
+}
+
+.iterationHeadSplit > .iterationBranches {
+  flex: 1 1 0;   /* small half (~1/3) */
+  min-width: 0;
+}
+
+.iterationHeadSplit > .iterationStepsRow {
+  flex: 2 1 0;   /* large half (~2/3) — keeps its own horizontal scroll */
+  min-width: 0;
+}
+
 /* Steps, HORIZONTAL (spec §3 + plan 20260811-panel-f2-quickfix Item 1 — user
  * F2 feedback): 5 EQUAL full-width unit blocks (flex `1 1 0` — the row
  * spreads evenly with no compression), item content centered (badge/phase/
@@ -345,12 +371,27 @@
   color: var(--dsw-alias-label-caption);
 }
 
-/* Current-step verdict badge (spec §3): PASS/FAIL/unknown pill, on the
- * current step only. */
+/* Verdict seat row (spec panel-f4 §2.3 R9, plan f4.3 Task 2): EVERY step
+ * reserves a fixed-height seat below the chip — the conditional PASS/FAIL
+ * badge fills the seat on the current step only. Every step item now has the
+ * same children (badge/phase/chip/seat), so the centered content groups align
+ * identically across steps — the old in-flow badge (an extra child on the
+ * current step only) shifted that block's centered group. The badge itself
+ * centers in the seat (inherit the item's center alignment — the old
+ * `align-self: flex-start` skew is gone). */
+.iterationVerdictSeat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-height: 22px;
+}
+
+/* Current-step verdict badge (spec §3 + panel-f4 §2.3 R9): PASS/FAIL pill,
+ * on the current step only — centered in its reserved seat. */
 .iterationVerdict {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
   padding: 0 var(--mstar-space-2);
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
