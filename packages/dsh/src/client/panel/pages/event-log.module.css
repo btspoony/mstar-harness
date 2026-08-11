@@ -110,7 +110,7 @@
   content: '▸';
   flex: none;
   color: var(--dsw-alias-label-caption);
-  font-size: 10px;
+  font: var(--dsw-font-xxxs-11);
   line-height: 1;
   transition: transform 150ms ease;   /* 120–150ms window */
 }
