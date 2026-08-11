@@ -79,10 +79,12 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 ## Client half (workflow panel)
 
 The same bundle row carries a browser client half for the dsh **web** profile:
-`dshClient` (`platform: 'web'`, declared inject faces) + `exports["./client"]`
+`dsh.client` (`platform: 'web'`, declared inject faces) + `exports["./client"]`
 (`dist/client.js`) in package.json. The `ClientModuleHostService` discovers it
 automatically on the **already-installed `mstar` bundle row** — no separate
-profile layer, no second install step (spec §6.1; mechanism-guide §1.1). At
+profile layer, no second install step (spec §6.1; mechanism-guide §1.1 — the
+upstream discovery reads the nested `dsh.client` declaration and resolves each
+client's `exports["./client"]` into the boot graph). At
 boot the web app serves the closure-factory CJS bundle at
 `/plugins/@mstar-harness/dsh/client.js` (rev = content sha1) and loads it via
 `window.__ModuleLoader__.load({ id, factory })`.
@@ -90,32 +92,59 @@ boot the web app serves the closure-factory CJS bundle at
 The client entry registers a `conversation.view` view-ring tab
 (`id: 'mstar-workflow'`, `order: 20`), labeled **"MStar 工作流" / "MStar
 Workflow"**, rendering the latest `mstar-engine-status` catalog row as the
-**MStar Workflow layout**: header (version / harness dir / enforcement evenly
-spread), right sidebar (plans / residuals / knowledge / leases /
-branches+policy / direction), and a **react-flow cyclic workflow graph** as
-the main body — phase ring (iteration-start → autonomous-execute →
-iteration-close → pr-delivery → merge-ready, loop edge) + plan state machine
-(Todo → InProgress → InReview → Done / InProgress ⇄ Blocked / unknown bucket)
-projected from the catalog by the pure `projectGraph` function (schema
-constants vs catalog evidence strictly separated; never throws; explicit
-degraded states), with current-phase highlight + legend + zoom/pan +
-freshness footer. Build step: `bun run
+**MStar Workflow layout**: a right sidebar (plans ≤5 time-desc + `+N more`,
+open residual findings ≤10 with severity chips + overflow hint, policy with
+enforcement first, leases, knowledge, direction) over a bottom **fixed meta
+dock** (version + harness dir; the former header row was removed), and an
+**HTML/CSS zone dashboard** as the main body — the react-flow cyclic graph
+was removed in plan `20260810-panel-canvas-zones`. The canvas fills the Tab
+(the page never scrolls; the zone container is the only scroll body) and
+lays out three zones projected from the catalog by the pure `projectGraph`
+function (schema constants vs catalog evidence strictly separated; never
+throws; explicit degraded states — muted empty states, never orange warn
+boxes): an **iteration zone** (Step 1–5 stepper + `Step N/5` badge,
+active-highlight / inactive dimmed states, and the branch panel — iteration
+base / target / spec integration, rendered only while active; the branches
+block left the sidebar for this in plan `20260810-panel-sidebar-info`), a
+**tasks zone** (6-column kanban: Todo / InProgress / InReview / Done /
+Blocked / unknown with count badges, Done ≤5 + `+N more`), an
+**agent-execution zone** (the six EXPECTED_ROLE_FLOW stage/phase columns
+rendering the subagent ENTITY cards aggregated from actual dispatch
+evidence — agent display name / role chip / task tag (`planId#taskId`) /
+status point / ×N count; running entities carry the business glow-pulse
+highlight, un-evidenced stages render the dashed "待执行" pending
+placeholder with their expected role chips, and the header shows the
+`N executing · M pending` summary; flow arrows: dim expected skeleton
+arrows between consecutive columns, small `→` in-column handoff arrows
+between same-column cards, and the ANIMATED **next** edge — a business
+dash-flow arrow (`@keyframes agent-dash-flow`, killed by the root
+`prefers-reduced-motion` rule) from the latest running entity's stage
+column to the next constant-order column, drawn ONLY while a running
+entity exists — plan `20260810-panel-agent-flow-zone`), a bottom **fixed footer bar**
+(zone legend + gate verdict/violation summary with a collapsible violations
+list) and a canvas-corner **AgentEventDock** (agent-flow event strip,
+absolute bottom-left, mounted only when events exist — hidden entirely at 0
+events), plus the freshness footer. Below 1200px the zones stack vertically.
+Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
 CLIENT_EXTERNALS external, CSS modules hashed + `<style data-plugin>`
-injection, purity gate, `@xyflow/react` inlined, and inline assertions that
-the bundle carries the xyflow markers, zero `@deepseek-ai/*` value imports
-and no `import.meta` / ESM statements — the web loader executes plugin
-bundles as classic `<script>`s); the full `bun run build` runs it after the
-node half. Verified locally: boot graph entry, the `/plugins/<id>/client.js`
-route serving the exact built bundle, and the browser-handoff
-materialization (`inject`/`apply`/CSS injection under classic-script
-semantics) — see
+injection, purity gate, and inline assertions that the bundle carries **no
+`xyflow`/`reactflow` markers** (negative assertion — the react-flow library
+and its plain-`.css` text loader were removed with the graph layer), zero
+`@deepseek-ai/*` value imports and no `import.meta` / ESM statements — the
+web loader executes plugin bundles as classic `<script>`s); the full `bun run
+build` runs it after the node half. Verified locally: boot graph entry, the
+`/plugins/<id>/client.js` route serving the exact built bundle, and the
+browser-handoff materialization (`inject`/`apply`/CSS injection under
+classic-script semantics) — see
 `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
 
-Known limitations (this iteration): the graph's Phase 1 / Phase 5 nodes are
-**schema-only** — the engine phase gate never emits their transitions (it
-evaluates Phase 2→3→4), and the loop edge is planning semantics; no
-historical back-scan of resumed long logs; no custom top-level slot (the
+Known limitations (this iteration): the iteration stepper's Step 1
+(iteration-start) and Step 5 (merge-ready) can never be the current step —
+the engine phase gate only evaluates Phase 2→3→4, so they always render idle;
+the agent-entity status derivation is a best-effort heuristic (running =
+dispatch with no paired settle; settle pairing is never faked); no historical
+back-scan of resumed long logs; no custom top-level slot (the
 `conversation.view` tab is the only session-level panel seat without
 dsh-private layout changes). Browser UI observation is the user-restart
 acceptance (R1 folded into this iteration's AC-1/2).

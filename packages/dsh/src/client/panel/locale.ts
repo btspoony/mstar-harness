@@ -5,13 +5,42 @@
  * a typed `t` seat for the panel component (dictionary keys are checked
  * against the union by `LocaleDictOf`).
  *
- * T2 (spec panel-layout-graph §4): the iteration/gate detail moved into the
- * graph — the `iteration.*` keys were replaced by the `graph.*` family (phase
- * ring labels, plan-state bucket labels, legend, verdicts, degraded notes).
+ * T2 (spec panel-zones §2, plan 20260810-panel-canvas-zones): the react-flow
+ * graph is replaced by the zone dashboard — the `graph.phase.*` /
+ * `graph.state.*` / react-flow `graph.legend.*` key families are gone with
+ * the graph library; the footer keeps the `graph.pass/fail/violations`
+ * gate-summary keys, and the new `zone.*` family covers the three zone
+ * titles/placeholders + the zone-semantic legend. The `flow.*` key family
+ * (agent-flow event dock) is unchanged.
  *
- * T3 (spec agent-flow-catalog-graph §2.4): the expected/actual agent-flow
- * pipeline — `flow.*` keys (event strip title, status labels, degraded/empty
- * notes, unexpected) + `graph.legend.flow-*` legend labels.
+ * T3 (spec panel-zones §3): the iteration zone is filled in — `zone.phase.*`
+ * (the 5 PHASE_IDS names, the `graph.phase.*` wording moved into the zone
+ * namespace), `zone.iteration.*` (active/inactive notes, Step N/5 label,
+ * Step N badge, step-state chips) and `zone.branches.*` (the branch panel
+ * moved from the sidebar). `zone.iteration.placeholder` is gone with the
+ * placeholder.
+ *
+ * T4 (spec panel-zones §3): the task board kanban is filled in —
+ * `zone.state.*` (the 6 PLAN_STATE_IDS column names — en is the raw status
+ * word, zh the localized name), `zone.tasks.total` (zone header plan total),
+ * `zone.tasks.no-plans` (the muted empty note) and `zone.tasks.more` (the
+ * Done-column `+N more` overflow hint). `zone.tasks.placeholder` is gone with
+ * the placeholder.
+ *
+ * T2 (spec panel-zones §4, plan 20260810-panel-agent-flow-zone): the agents
+ * zone is filled in — `zone.agents.summary` (`N executing · M pending`),
+ * `zone.agents.pending-label` (the dashed "待执行" placeholder chip) and
+ * `zone.agents.next` (the animated next-edge label). `zone.agents.placeholder`
+ * is gone with the placeholder.
+ *
+ * T3 (same plan): the dock is collapsible (the frame is a native <details>,
+ * header = <summary>) and the legend gains the entity-status swatches —
+ * `zone.legend.agent-running` / `zone.legend.agent-settled` (the status-dot
+ * treatments of the entity cards; the `zone.agents.*` family itself is
+ * complete from T2 — every key is rendered, so no `zone.agents.status.*`
+ * family is added: a status TEXT on the cards would be dead strings, the
+ * spec §4 card shows a status point, and reusing `flow.*` would conflate
+ * event status words (dispatched/settled ok) with entity status words).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -24,41 +53,58 @@ export type PanelKey =
   | 'view.mstar-workflow'
   | 'empty.waiting'
   | 'empty.no-harness'
-  | 'header.version'
-  | 'header.harness'
-  | 'header.enforcement'
   | 'watermark.version'
   | 'watermark.harness'
-  | 'watermark.enforcement'
-  | 'watermark.hard'
-  | 'watermark.soft'
   | 'watermark.none'
   | 'panel.unknown'
-  | 'graph.phase.iteration-start'
-  | 'graph.phase.autonomous-execute'
-  | 'graph.phase.iteration-close'
-  | 'graph.phase.pr-delivery'
-  | 'graph.phase.merge-ready'
-  | 'graph.state.Todo'
-  | 'graph.state.InProgress'
-  | 'graph.state.InReview'
-  | 'graph.state.Done'
-  | 'graph.state.Blocked'
-  | 'graph.state.unknown'
-  | 'graph.legend.title'
-  | 'graph.legend.phases'
-  | 'graph.legend.plan-states'
-  | 'graph.legend.edge-forward'
-  | 'graph.legend.edge-loop'
-  | 'graph.legend.edge-connector'
-  | 'graph.legend.state-current'
-  | 'graph.legend.state-next'
-  | 'graph.legend.state-idle'
-  | 'graph.legend.verdict-pass'
-  | 'graph.legend.verdict-fail'
-  | 'graph.legend.flow-expected'
-  | 'graph.legend.flow-actual'
-  | 'graph.legend.flow-unexpected'
+  | 'graph.pass'
+  | 'graph.fail'
+  | 'graph.violations'
+  | 'graph.no-violations'
+  | 'zone.legend.title'
+  | 'zone.legend.iteration'
+  | 'zone.legend.current'
+  | 'zone.legend.disabled'
+  | 'zone.legend.tasks'
+  | 'zone.legend.verdict-pass'
+  | 'zone.legend.verdict-fail'
+  | 'zone.legend.flow-expected'
+  | 'zone.legend.flow-actual'
+  | 'zone.legend.flow-unexpected'
+  | 'zone.legend.agent-running'
+  | 'zone.legend.agent-settled'
+  | 'zone.legend.next'
+  | 'zone.iteration.title'
+  | 'zone.iteration.active'
+  | 'zone.iteration.inactive'
+  | 'zone.iteration.step-label'
+  | 'zone.iteration.step-badge'
+  | 'zone.iteration.step.current'
+  | 'zone.iteration.step.next'
+  | 'zone.iteration.step.idle'
+  | 'zone.phase.iteration-start'
+  | 'zone.phase.autonomous-execute'
+  | 'zone.phase.iteration-close'
+  | 'zone.phase.pr-delivery'
+  | 'zone.phase.merge-ready'
+  | 'zone.branches.title'
+  | 'zone.branches.iteration-base'
+  | 'zone.branches.target'
+  | 'zone.branches.spec-integration'
+  | 'zone.tasks.title'
+  | 'zone.tasks.total'
+  | 'zone.tasks.no-plans'
+  | 'zone.tasks.more'
+  | 'zone.state.Todo'
+  | 'zone.state.InProgress'
+  | 'zone.state.InReview'
+  | 'zone.state.Done'
+  | 'zone.state.Blocked'
+  | 'zone.state.unknown'
+  | 'zone.agents.title'
+  | 'zone.agents.summary'
+  | 'zone.agents.pending-label'
+  | 'zone.agents.next'
   | 'flow.title'
   | 'flow.empty'
   | 'flow.degraded'
@@ -69,28 +115,19 @@ export type PanelKey =
   | 'flow.advisory'
   | 'flow.denied'
   | 'flow.event-count'
-  | 'graph.iteration-id'
-  | 'graph.current'
-  | 'graph.next'
-  | 'graph.pass'
-  | 'graph.fail'
-  | 'graph.violations'
-  | 'graph.no-violations'
-  | 'graph.no-compass'
-  | 'graph.no-plans'
-  | 'graph.no-state'
   | 'state.title'
   | 'state.plans'
   | 'state.residuals'
-  | 'state.branches'
   | 'state.policy'
   | 'state.leases'
   | 'state.knowledge'
   | 'state.direction'
   | 'state.none'
-  | 'state.branch.iteration-base'
-  | 'state.branch.target'
-  | 'state.branch.spec-integration'
+  | 'state.enforcement'
+  | 'state.enforcement.hard'
+  | 'state.enforcement.soft'
+  | 'state.plans.more'
+  | 'state.residual.more'
   | 'state.policy.push'
   | 'state.policy.worktree'
   | 'state.policy.control-worktree'
@@ -109,41 +146,58 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar 工作流',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
-  'header.version': '版本',
-  'header.harness': 'harness 目录',
-  'header.enforcement': '执行策略',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
-  'watermark.enforcement': 'enforcement: {value}',
-  'watermark.hard': 'hard',
-  'watermark.soft': 'soft',
   'watermark.none': '无',
   'panel.unknown': '未知',
-  'graph.phase.iteration-start': '迭代启动',
-  'graph.phase.autonomous-execute': '自主执行',
-  'graph.phase.iteration-close': '迭代收口',
-  'graph.phase.pr-delivery': 'PR 交付',
-  'graph.phase.merge-ready': '合并就绪',
-  'graph.state.Todo': '待办',
-  'graph.state.InProgress': '进行中',
-  'graph.state.InReview': '审查中',
-  'graph.state.Done': '完成',
-  'graph.state.Blocked': '受阻',
-  'graph.state.unknown': '未知',
-  'graph.legend.title': '图例',
-  'graph.legend.phases': '阶段环',
-  'graph.legend.plan-states': 'plan 状态机',
-  'graph.legend.edge-forward': '正向流转',
-  'graph.legend.edge-loop': '循环 —— 下一轮迭代',
-  'graph.legend.edge-connector': '当前阶段焦点',
-  'graph.legend.state-current': '当前阶段',
-  'graph.legend.state-next': '下一步',
-  'graph.legend.state-idle': '未点亮（schema）',
-  'graph.legend.verdict-pass': 'gate PASS',
-  'graph.legend.verdict-fail': 'gate FAIL',
-  'graph.legend.flow-expected': '预期 stage（空心）',
-  'graph.legend.flow-actual': '实际派发（实心）',
-  'graph.legend.flow-unexpected': '未匹配角色（描边）',
+  'graph.pass': 'PASS',
+  'graph.fail': 'FAIL',
+  'graph.violations': '违规 ({count})',
+  'graph.no-violations': '无违规',
+  'zone.legend.title': '图例',
+  'zone.legend.iteration': '迭代区',
+  'zone.legend.current': '当前阶段',
+  'zone.legend.disabled': '迭代未激活',
+  'zone.legend.tasks': '任务 kanban',
+  'zone.legend.verdict-pass': 'gate PASS',
+  'zone.legend.verdict-fail': 'gate FAIL',
+  'zone.legend.flow-expected': '预期 stage（空心）',
+  'zone.legend.flow-actual': '实际派发（实心）',
+  'zone.legend.flow-unexpected': '未匹配角色（描边）',
+  'zone.legend.agent-running': '执行中实体（发光）',
+  'zone.legend.agent-settled': '已结算实体（✓）',
+  'zone.legend.next': 'next 流转边（动画）',
+  'zone.iteration.title': '迭代',
+  'zone.iteration.active': '正在激活的迭代',
+  'zone.iteration.inactive': '迭代未激活',
+  'zone.iteration.step-label': '步骤 {n}/{total}',
+  'zone.iteration.step-badge': '步骤 {n}',
+  'zone.iteration.step.current': '当前',
+  'zone.iteration.step.next': '下一步',
+  'zone.iteration.step.idle': '待命',
+  'zone.phase.iteration-start': '迭代启动',
+  'zone.phase.autonomous-execute': '自主执行',
+  'zone.phase.iteration-close': '迭代收口',
+  'zone.phase.pr-delivery': 'PR 交付',
+  'zone.phase.merge-ready': '合并就绪',
+  'zone.branches.title': '分支',
+  'zone.branches.iteration-base': '迭代 base',
+  'zone.branches.target': '目标分支',
+  'zone.branches.spec-integration': 'spec 集成分支',
+  'zone.tasks.title': '任务',
+  'zone.tasks.total': '{count} 个计划',
+  'zone.tasks.no-plans': '暂无计划',
+  'zone.tasks.more': '+{count} 更多',
+  'zone.state.Todo': '待办',
+  'zone.state.InProgress': '进行中',
+  'zone.state.InReview': '审查中',
+  'zone.state.Done': '已完成',
+  'zone.state.Blocked': '受阻',
+  'zone.state.unknown': '未知',
+  'zone.agents.title': '代理执行',
+  'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
+  'zone.agents.pending-label': '待执行',
+  'zone.agents.next': 'next',
   'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -154,28 +208,19 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'flow.advisory': '提示',
   'flow.denied': '拒绝',
   'flow.event-count': '{count} 条',
-  'graph.iteration-id': '迭代',
-  'graph.current': '当前',
-  'graph.next': '下一步',
-  'graph.pass': 'PASS',
-  'graph.fail': 'FAIL',
-  'graph.violations': '违规 ({count})',
-  'graph.no-violations': '无违规',
-  'graph.no-compass': '无 steering compass / status.json',
-  'graph.no-plans': '无 plan 行（状态机骨架）',
-  'graph.no-state': '无工作区状态摘要',
   'state.title': '工作区状态',
   'state.plans': '计划',
   'state.residuals': '未决残留',
-  'state.branches': '分支',
   'state.policy': '策略',
   'state.leases': '租约',
   'state.knowledge': '知识',
   'state.direction': '方向',
   'state.none': '无',
-  'state.branch.iteration-base': 'iteration base',
-  'state.branch.target': 'target',
-  'state.branch.spec-integration': 'spec integration',
+  'state.enforcement': '执行策略',
+  'state.enforcement.hard': 'hard',
+  'state.enforcement.soft': 'soft',
+  'state.plans.more': '+{count} 更多',
+  'state.residual.more': '+{count} 更多',
   'state.policy.push': 'push',
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',
@@ -189,41 +234,58 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar Workflow',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
-  'header.version': 'version',
-  'header.harness': 'harness',
-  'header.enforcement': 'enforcement',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
-  'watermark.enforcement': 'enforcement: {value}',
-  'watermark.hard': 'hard',
-  'watermark.soft': 'soft',
   'watermark.none': 'none',
   'panel.unknown': 'unknown',
-  'graph.phase.iteration-start': 'Iteration Start',
-  'graph.phase.autonomous-execute': 'Autonomous Execute',
-  'graph.phase.iteration-close': 'Iteration Close',
-  'graph.phase.pr-delivery': 'PR Delivery',
-  'graph.phase.merge-ready': 'Merge Ready',
-  'graph.state.Todo': 'Todo',
-  'graph.state.InProgress': 'In Progress',
-  'graph.state.InReview': 'In Review',
-  'graph.state.Done': 'Done',
-  'graph.state.Blocked': 'Blocked',
-  'graph.state.unknown': 'Unknown',
-  'graph.legend.title': 'Legend',
-  'graph.legend.phases': 'Phase ring',
-  'graph.legend.plan-states': 'Plan state machine',
-  'graph.legend.edge-forward': 'forward transition',
-  'graph.legend.edge-loop': 'loop — next iteration',
-  'graph.legend.edge-connector': 'current-phase focus',
-  'graph.legend.state-current': 'current phase',
-  'graph.legend.state-next': 'next phase',
-  'graph.legend.state-idle': 'unlit (schema)',
-  'graph.legend.verdict-pass': 'gate PASS',
-  'graph.legend.verdict-fail': 'gate FAIL',
-  'graph.legend.flow-expected': 'expected stage (hollow)',
-  'graph.legend.flow-actual': 'actual dispatch (filled)',
-  'graph.legend.flow-unexpected': 'unexpected role (outlined)',
+  'graph.pass': 'PASS',
+  'graph.fail': 'FAIL',
+  'graph.violations': 'violations ({count})',
+  'graph.no-violations': 'no violations',
+  'zone.legend.title': 'Legend',
+  'zone.legend.iteration': 'iteration zone',
+  'zone.legend.current': 'current step',
+  'zone.legend.disabled': 'disabled iteration',
+  'zone.legend.tasks': 'task kanban',
+  'zone.legend.verdict-pass': 'gate PASS',
+  'zone.legend.verdict-fail': 'gate FAIL',
+  'zone.legend.flow-expected': 'expected stage (hollow)',
+  'zone.legend.flow-actual': 'actual dispatch (filled)',
+  'zone.legend.flow-unexpected': 'unexpected role (outlined)',
+  'zone.legend.agent-running': 'agent running (glow)',
+  'zone.legend.agent-settled': 'agent settled (✓)',
+  'zone.legend.next': 'next flow edge (animated)',
+  'zone.iteration.title': 'Iteration',
+  'zone.iteration.active': 'active iteration',
+  'zone.iteration.inactive': 'iteration inactive',
+  'zone.iteration.step-label': 'Step {n}/{total}',
+  'zone.iteration.step-badge': 'Step {n}',
+  'zone.iteration.step.current': 'current',
+  'zone.iteration.step.next': 'next',
+  'zone.iteration.step.idle': 'idle',
+  'zone.phase.iteration-start': 'Iteration Start',
+  'zone.phase.autonomous-execute': 'Autonomous Execute',
+  'zone.phase.iteration-close': 'Iteration Close',
+  'zone.phase.pr-delivery': 'PR Delivery',
+  'zone.phase.merge-ready': 'Merge Ready',
+  'zone.branches.title': 'Branches',
+  'zone.branches.iteration-base': 'iteration base',
+  'zone.branches.target': 'target',
+  'zone.branches.spec-integration': 'spec integration',
+  'zone.tasks.title': 'Tasks',
+  'zone.tasks.total': '{count} plans',
+  'zone.tasks.no-plans': 'no plans',
+  'zone.tasks.more': '+{count} more',
+  'zone.state.Todo': 'Todo',
+  'zone.state.InProgress': 'InProgress',
+  'zone.state.InReview': 'InReview',
+  'zone.state.Done': 'Done',
+  'zone.state.Blocked': 'Blocked',
+  'zone.state.unknown': 'unknown',
+  'zone.agents.title': 'Agent Flow',
+  'zone.agents.summary': '{executing} executing · {pending} pending',
+  'zone.agents.pending-label': 'pending',
+  'zone.agents.next': 'next',
   'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',
@@ -234,28 +296,19 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'flow.advisory': 'advisory',
   'flow.denied': 'denied',
   'flow.event-count': '{count} events',
-  'graph.iteration-id': 'iteration',
-  'graph.current': 'current',
-  'graph.next': 'next',
-  'graph.pass': 'PASS',
-  'graph.fail': 'FAIL',
-  'graph.violations': 'violations ({count})',
-  'graph.no-violations': 'no violations',
-  'graph.no-compass': 'No steering compass / status.json',
-  'graph.no-plans': 'no plan rows (state machine skeleton)',
-  'graph.no-state': 'no workspace state digest',
   'state.title': 'Workspace state',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
-  'state.branches': 'Branches',
   'state.policy': 'Policy',
   'state.leases': 'Leases',
   'state.knowledge': 'Knowledge',
   'state.direction': 'Direction',
   'state.none': 'none',
-  'state.branch.iteration-base': 'iteration base',
-  'state.branch.target': 'target',
-  'state.branch.spec-integration': 'spec integration',
+  'state.enforcement': 'enforcement',
+  'state.enforcement.hard': 'hard',
+  'state.enforcement.soft': 'soft',
+  'state.plans.more': '+{count} more',
+  'state.residual.more': '+{count} more',
   'state.policy.push': 'push',
   'state.policy.worktree': 'worktree',
   'state.policy.control-worktree': 'control worktree',

@@ -32,28 +32,63 @@ or a custom profile).
   validators **`mstar_design_md_validate`** / **`mstar_audit_validate`** /
   **`mstar_compound_validate`** / **`mstar_roles_validate`** on `ctx.tools`.
 - Web client plugin (workflow panel): the same `mstar` bundle row carries a
-  browser client half (`dshClient` + `exports["./client"]`) discovered
+  browser client half (`dsh.client` + `exports["./client"]`) discovered
   automatically by `ClientModuleHostService` — no separate profile layer or
   install step. It registers a **`conversation.view`** view-ring tab
   (`id: 'mstar-workflow'`, `order: 20`) labeled **"MStar 工作流" / "MStar
   Workflow"** rendering the latest `mstar-engine-status` catalog row as the
-  **MStar Workflow layout** — header (version / harness dir / enforcement
-  evenly spread), right sidebar (plans / residuals / knowledge / leases /
-  branches+policy / direction), and a **react-flow cyclic workflow graph**
-  (phase ring + plan state machine, current-phase highlight, legend, zoom/pan;
-  pure `projectGraph` projection, never throws, explicit degraded states);
-  refresh follows the session snapshot, no polling. Bundle served at
-  `/plugins/@mstar-harness/dsh/client.js` (closure-factory CJS; `@xyflow/react`
-  inlined; build asserts no `import.meta` / ESM statements — the loader runs
-  plugin bundles as classic scripts). **Known limitations**: the graph's
-  Phase 1/5 nodes are schema-only (the engine phase gate never emits their
-  transitions); the loop edge is planning semantics; no historical back-scan
-  of resumed long logs; no custom top-level slot (the `conversation.view` tab
-  is the only session-level panel seat without dsh-private layout changes);
-  no-session → shell hero (strict-session view ring). Panel acceptance is
-  dual-track: in-loop browser harness verification (agent-browser/CDP against
-  the rebuilt bundle, iteration guides record the verified runs) plus
-  user-restart final GUI acceptance.
+  **MStar Workflow layout** — a right sidebar (plans ≤5 in time-desc order +
+  `+N more`, open residual findings ≤10 with severity chips + overflow hint,
+  policy with **enforcement first** then push / worktree / control worktree,
+  leases, knowledge, direction) over a bottom **fixed meta dock** (version +
+  harness dir; small muted, hairline-separated, does NOT scroll with the
+  sidebar digest — the former header row was removed), and an **HTML/CSS zone
+  dashboard** (the react-flow cyclic graph was removed in plan
+  `20260810-panel-canvas-zones`): the canvas fills the Tab (the page never
+  scrolls; the zone container is the only scroll body) with an **iteration
+  zone** (Step 1–5 stepper + `Step N/5` badge + active-highlight / inactive
+  dimmed state + the branch panel — iteration base / target / spec
+  integration, rendered only while active), a **tasks zone** (6-column
+  kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
+  badges, Done ≤5 + `+N more`), an **agent-execution zone** (the six EXPECTED_ROLE_FLOW stage/phase columns
+  rendering the subagent ENTITY cards aggregated from actual dispatch
+  evidence — agent display name / role chip / task tag (`planId#taskId`) /
+  status point / ×N count; running entities carry the business glow-pulse
+  highlight, un-evidenced stages render the dashed "待执行" pending
+  placeholder with their expected role chips, and the header shows the
+  `N executing · M pending` summary; flow arrows: dim expected skeleton
+  arrows between consecutive columns, small `→` in-column handoff arrows
+  between same-column cards, and the ANIMATED **next** edge — a business
+  dash-flow arrow (`@keyframes agent-dash-flow` in the zones css, killed by
+  the root `prefers-reduced-motion` rule) from the latest running entity's
+  stage column to the next constant-order column, drawn ONLY while a running
+  entity exists — plan `20260810-panel-agent-flow-zone`), a bottom
+  **fixed footer bar** (zone
+  legend + gate summary with collapsible violations) and a canvas-corner
+  **`AgentEventDock`** (absolute bottom-left, mounted ONLY when agent-flow
+  events exist — hidden entirely at 0 events, no placeholder); below 1200px
+  the zones stack vertically. Pure `projectGraph` projection (never throws,
+  explicit degraded states — muted empty states, never orange warn boxes).
+  The branches block left the sidebar in plan `20260810-panel-sidebar-info`
+  (its anchor fields stay in the catalog source; the iteration zone renders
+  them via plan `20260810-panel-canvas-zones`); refresh follows the session
+  snapshot, no polling. Bundle served at
+  `/plugins/@mstar-harness/dsh/client.js` (closure-factory CJS with NO graph
+  library inlined — react-flow removed; the build asserts the bundle contains
+  no `xyflow`/`reactflow` markers, no `@deepseek-ai/*` value imports, and no
+  `import.meta` / ESM statements — the loader runs plugin bundles as classic
+  scripts). **Known limitations**: the stepper's Step 1 (iteration-start) and
+  Step 5 (merge-ready) can never be the CURRENT step — the engine phase gate
+  only evaluates Phase 2→3→4, so they always render idle; the agent-entity
+  status derivation is a best-effort heuristic (running = dispatch with no
+  paired settle; settle pairing is never faked); no historical back-scan of
+  resumed long logs; no custom
+  top-level slot (the `conversation.view` tab is the only session-level panel
+  seat without dsh-private layout changes); no-session → shell hero
+  (strict-session view ring). Panel acceptance is dual-track: in-loop browser
+  harness verification (agent-browser/CDP against the rebuilt bundle,
+  iteration guides record the verified runs) plus user-restart final GUI
+  acceptance.
 
 ## Skill loading
 
@@ -123,8 +158,9 @@ build (`catalogTtlMs`, default 60 s).
 
 The plugin records ACTUAL subagent dispatch (and best-effort settle) events —
 the evidence of what really happened, distinct from the client-side expected
-role flow. The workflow panel's third-column expected/actual pipeline and the
-footer event strip are pure consumers of this evidence.
+role flow. The workflow panel's agent-execution zone (the stage/entity
+projection — plan `20260810-panel-agent-flow-zone`) and the canvas-corner
+`AgentEventDock` event strip are pure consumers of this evidence.
 
 - **Recording point (one core)**: `DshHostAdapter.dispatchGate` is the SINGLE
   record path behind both dispatch surfaces — the `tools/pre-execute` listener
@@ -171,8 +207,8 @@ footer event strip are pure consumers of this evidence.
 - **Maintainer view**: change the ledger shape (event schema, bounds, settle
   seam) and update the projections together — `gates/agent-flow.ts` (record /
   read / settle listener), `gates/catalog.ts` (agent-flow line + `source`
-  view) and `client/panel/graph/project-graph.ts` (pipeline/edges) — the panel
-  renders ONLY what the evidence shows.
+  view) and `client/panel/graph/project-graph.ts` (the ZoneView flow/agents
+  projection) — the panel renders ONLY what the evidence shows.
 
 ## PM dispatch
 

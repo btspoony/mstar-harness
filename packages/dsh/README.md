@@ -143,47 +143,76 @@ The row is **digest-gated**: per agent+workspace it is injected once per turn an
 
 The package ships a browser client half for the dsh **web** profile, discovered
 automatically on the already-installed `mstar` bundle row (package.json
-`dshClient` declaration + `exports["./client"]` → `dist/client.js`) — **no
-separate profile layer or install step** (spec §6.1). The web app serves the
-bundle at `/plugins/@mstar-harness/dsh/client.js` and loads it through the
+`dsh.client` declaration + `exports["./client"]` → `dist/client.js` — the
+upstream web `dsh.client` discovery scans loader entries and resolves each
+client's `exports["./client"]` into the boot graph) — **no separate profile
+layer or install step** (spec §6.1). The web app serves the bundle at
+`/plugins/@mstar-harness/dsh/client.js` and loads it through the
 closure-factory loader handoff (`window.__ModuleLoader__.load({ id, factory })`).
 
 The client entry registers a **`conversation.view`** view-ring tab
 (`id: 'mstar-workflow'`, `order: 20` — the trajectory precedent shape), labeled
 **"MStar Workflow"** (en) / **"MStar 工作流"** (zh) through the `mstar-panel`
-locale namespace. The panel is the **MStar Workflow layout**: a header with
-three evenly-spread basics (version / harness dir / enforcement), a fixed
-300px right sidebar for routine state (plans / residuals / knowledge / leases
-/ branches+policy / direction), a **react-flow cyclic workflow graph** as the
-main body, and a freshness footer (`last-updated HH:MM:SS` + the
-catalog-re-emission refresh note). Below 860px the sidebar stacks under the
-main area.
+locale namespace. The panel is the **MStar Workflow layout**: a fixed 300px
+right sidebar — plans (≤5, time-desc, `+N more`), open residual findings (≤10,
+severity chips, overflow hint), policy (**enforcement first**, then push /
+worktree / control worktree), leases, knowledge, direction — over a bottom
+**fixed meta dock** (version + harness dir; small muted, does not scroll with
+the sidebar digest; the former header row was removed), an **HTML/CSS zone
+dashboard** as the main body, and a freshness footer (`last-updated
+HH:MM:SS` + the catalog-re-emission refresh note). The branches block moved
+out of the sidebar to the iteration zone (plan `20260810-panel-canvas-zones`).
+Below 860px the sidebar stacks under the main area.
 
-The graph is a pure render of the latest `mstar-engine-status` catalog row
-(from the `useSession` snapshot — refresh follows the snapshot, no polling): a
-**phase ring** (iteration-start → autonomous-execute → iteration-close →
-pr-delivery → merge-ready, with a loop edge back to start) and a **plan state
-machine** (Todo → InProgress → InReview → Done / InProgress ⇄ Blocked /
-unknown bucket), with the current phase highlighted (color + glow + verdict
-badge — colorblind-safe triple encoding) and a dotted connector to the
-focused plan bucket; a legend, the gate verdict/violation footer, zoom/pan and
-fitView are included. Projection is the pure `projectGraph(source)` function
-(schema constants strictly separated from catalog evidence; never throws;
-missing fields degrade to explicit empty/last-known states, never guessed
-values) producing a data-only `GraphView`; `GraphCanvas` maps it onto
-`@xyflow/react` nodes/edges (static layout table, `nodesDraggable={false}`).
+The canvas is a pure render of the latest `mstar-engine-status` catalog row
+(from the `useSession` snapshot — refresh follows the snapshot, no polling):
+the page fills the Tab (no page-level scrolling — the zone container is the
+only scroll body) and the **zone dashboard** (replacing the react-flow cyclic
+graph, plan `20260810-panel-canvas-zones`) lays out three zones — the
+**iteration zone** (Step 1–5 stepper with a `Step N/5` badge, active-highlight
+/ inactive dimmed states, and the branch panel: iteration base / target /
+spec integration, rendered only while active), the **tasks zone** (6-column
+kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
+badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the six EXPECTED_ROLE_FLOW stage/phase
+columns rendering the subagent **entity cards** aggregated from actual
+dispatch evidence — agent display name / role chip / task tag
+(`planId#taskId`) / status point / ×N count; running entities carry the
+business glow-pulse highlight, un-evidenced stages render the dashed
+"待执行" pending placeholder with their expected role chips, and the header
+shows the `N executing · M pending` summary; flow arrows: dim expected
+skeleton arrows between consecutive columns, small `→` in-column handoff
+arrows between same-column cards, and the ANIMATED **next** edge — a
+business dash-flow arrow (`@keyframes agent-dash-flow` in the zones css,
+killed by the root `prefers-reduced-motion` rule) from the latest running
+entity's stage column to the next constant-order column, drawn ONLY while a
+running entity exists — plan `20260810-panel-agent-flow-zone`) — under a
+bottom **fixed footer bar** (zone
+legend + gate verdict/violation summary with a collapsible violations list),
+with the agent-flow event strip as a canvas-corner **`AgentEventDock`**
+(absolute bottom-left, mounted only when events exist — hidden entirely at 0
+events). Below 1200px the zones stack vertically. Projection is the pure
+`projectGraph(source)` function (schema constants strictly separated from
+catalog evidence; never throws; missing fields degrade to explicit
+empty/last-known states — muted empty states, never orange warn boxes)
+producing a data-only `ZoneView`; `WorkflowCanvas` renders it as plain
+HTML/CSS.
 
-**Dependency**: `@xyflow/react@^12.11.2` is a **devDependency inlined into
-`dist/client.js` at build time** (MIT; transitive `@xyflow/system` / `zustand`
-/ `classcat` all MIT; peer `react >= 17` matches the repo's React 18) —
-`CLIENT_EXTERNALS` is unchanged (the loader module table has no xyflow entry,
-so externalizing would 404). The build script asserts the inline: the bundle
-carries the xyflow markers, zero `@deepseek-ai/*` value imports, and **no
-`import.meta` / ESM statements** — the web loader executes plugin bundles as
-classic `<script>`s, where a literal `import.meta` is a parse-time
-SyntaxError (a zustand v4 `import.meta.env` read is defined away at build;
-see the iteration install-verification guide §6). Bundle size recorded in the
-iteration guide: 438,954 B raw / 94,150 B gzip.
+**Dependency**: the zone dashboard carries **no graph library** — the
+`@xyflow/react` devDependency (previously inlined into `dist/client.js` at
+build time) was removed with the react-flow rendering layer (plan
+`20260810-panel-canvas-zones`), and the plain-`.css` text loader whose only
+consumer was `@xyflow/react/dist/style.css` is gone too (`CLIENT_EXTERNALS`
+is unchanged — react / react-dom and the `@deepseek-ai/dsh-client-*` platform
+modules stay external). The build script asserts the removal end to end: the
+emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
+`@deepseek-ai/*` value imports, and **no `import.meta` / ESM statements** —
+the web loader executes plugin bundles as classic `<script>`s, where a
+literal `import.meta` is a parse-time SyntaxError (a zustand v4
+`import.meta.env` read is defined away at build; see the iteration
+install-verification guide §6). Bundle size at this plan's wrap-up: **107,850 B
+raw / 20,966 B gzip** (re-measure per the iteration install-verification
+guide — the bundle shrank to ~85 KB when react-flow was removed and grew
+back with the agent-execution zone's entity rendering).
 
 Install / verify (the client half rides the same bundle-row install as the
 server half):
@@ -203,19 +232,19 @@ sha1), and the browser handoff materializes the plugin entry (`inject` +
 `apply` + CSS injection under classic-script semantics) — see
 `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
 
-**Known Limitations** (this iteration): the graph's Phase 1 (iteration-start)
-and Phase 5 (merge-ready) nodes are **schema-only — the engine phase gate
-never emits their transitions** (it evaluates Phase 2→3→4), so they always
-render unlit; the loop edge is planning semantics (one iteration closes, the
-next opens); no historical back-scan of a resumed long log (the server
-re-emits the row at every turn's first step, digest-gated); no custom
-top-level slot (the `conversation.view` tab is the only session-level panel
-seat available without dsh-private layout changes — spec §1). Panel
-acceptance is dual-track: in-loop browser harness verification against the
-rebuilt bundle (see iteration guides
-`iter-20260810-panel-fix-agentflow/guides/`) plus user-restart final GUI
-acceptance — rerun steps in the install-verification guide §8. R1 (browser
-observation) closed and archived 2026-08-10.
+**Known Limitations** (this iteration): the iteration stepper's Step 1
+(iteration-start) and Step 5 (merge-ready) can never be the **current** step —
+the engine phase gate only evaluates Phase 2→3→4, so they always render idle;
+the agent-entity status derivation is a best-effort heuristic (running =
+dispatch with no paired settle; settle pairing is never faked); no historical
+back-scan of a resumed long log (the server re-emits the row at every turn's
+first step, digest-gated); no custom top-level slot (the `conversation.view`
+tab is the only session-level panel seat available without dsh-private layout
+changes — spec §1). Panel acceptance is dual-track: in-loop browser harness
+verification against the rebuilt bundle (see iteration guides
+`iter-20260810-panel-zones/guides/`) plus user-restart final GUI acceptance —
+rerun steps in the install-verification guide §8. R1 (browser observation)
+closed and archived 2026-08-10.
 
 ## Development
 
@@ -226,6 +255,11 @@ bun test --coverage
 bunx tsc --noEmit
 bun run build
 ```
+
+`bun run test` builds the client bundle first (the `pretest` hook runs
+`build-client` — the manifest-contract suite asserts `dist/client.js` exists);
+a direct `bun test` on a fresh checkout fails with a `bun run build` hint
+instead of a bare assertion.
 
 The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepseek-ai/dsh-*` packages from a local dsh source tree, linked into the repo-root `node_modules/@deepseek-ai/` by the link farm (`bun run dsh:link`, dsh-advisor pattern); re-run it after the dsh baseline (`$DSH_SOURCE_DIR` / `$DSH_HOME/source/current`) moves.
 
@@ -268,4 +302,4 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming.
 - **Entry is a module index over `src/gates/*`** — the split shipped: `src/index.ts` (371 lines) re-exports the frozen 27-name export surface from the gate modules (`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`) and keeps the plugin manifest, the single cordis augmentation point, the command registration, and the `apply()` startup wiring. The surface (17 value + 10 type-only names; `Config` counts once) is frozen by `tests/export-surface.spec.ts` — the runtime value-export set plus, under `typecheck:tests` (`bunx tsc --noEmit -p tests/tsconfig.json`), the value-namespace identity and the per-name type-only probes.
 - **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root / `references/dsh.md`) updates with it.
-- **Workflow panel graph is schema-driven for phases 1/5** — the react-flow loop graph renders the phase ring + plan state machine from `mstar-engine-status` catalog evidence; the iteration-start / merge-ready nodes are schema constants the engine gate never lights (transition covers Phase 2→3→4 only), and the loop edge is planning semantics — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.
+- **Iteration stepper is schema-driven for steps 1/5** — the zone dashboard's Step 1 (iteration-start) and Step 5 (merge-ready) are schema constants the engine gate never lights as current (transition covers Phase 2→3→4 only), so they always render idle — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.
