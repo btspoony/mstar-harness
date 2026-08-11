@@ -81,10 +81,33 @@ export type PanelKey =
   | 'tab.tasks'
   | 'tab.agents'
   | 'tab.events'
-  | 'page.events.placeholder'
   | 'page.iteration.not-started'
   | 'page.iteration.expand'
   | 'page.iteration.collapse'
+  | 'event-log.section.events'
+  | 'event-log.section.violations'
+  | 'event-log.empty'
+  | 'event-log.empty.events'
+  | 'event-log.empty.violations'
+  | 'event-log.field.role'
+  | 'event-log.field.agent'
+  | 'event-log.field.stage'
+  | 'event-log.field.plan'
+  | 'event-log.field.task'
+  | 'event-log.field.category'
+  | 'event-log.field.time'
+  | 'event-log.field.kind'
+  | 'event-log.field.status'
+  | 'event-log.field.expected'
+  | 'event-log.field.settled'
+  | 'event-log.field.duration'
+  | 'event-log.field.severity'
+  | 'event-log.field.code'
+  | 'event-log.field.message'
+  | 'event-log.kind.dispatch'
+  | 'event-log.kind.settle'
+  | 'event-log.yes'
+  | 'event-log.no'
   | 'empty.waiting'
   | 'empty.no-harness'
   | 'watermark.version'
@@ -127,7 +150,6 @@ export type PanelKey =
   | 'zone.state.unknown'
   | 'zone.agents.title'
   | 'zone.agents.summary'
-  | 'flow.title'
   | 'flow.empty'
   | 'flow.settle-only'
   | 'flow.degraded'
@@ -137,7 +159,6 @@ export type PanelKey =
   | 'flow.error'
   | 'flow.advisory'
   | 'flow.denied'
-  | 'flow.event-count'
   | 'state.title'
   | 'state.plans'
   | 'state.residuals'
@@ -170,10 +191,33 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'tab.tasks': '任务迭代',
   'tab.agents': '代理执行',
   'tab.events': '事件记录',
-  'page.events.placeholder': '事件记录页由后续 plan 交付（event log）',
   'page.iteration.not-started': '迭代未启动',
   'page.iteration.expand': '展开',
   'page.iteration.collapse': '收拢',
+  'event-log.section.events': 'Agent 流转事件',
+  'event-log.section.violations': '违规记录',
+  'event-log.empty': '暂无记录',
+  'event-log.empty.events': '暂无流转事件',
+  'event-log.empty.violations': '暂无违规记录',
+  'event-log.field.role': '执行角色',
+  'event-log.field.agent': 'Agent（会话）',
+  'event-log.field.stage': '阶段',
+  'event-log.field.plan': '计划',
+  'event-log.field.task': '任务',
+  'event-log.field.category': '任务类别',
+  'event-log.field.time': '时间',
+  'event-log.field.kind': '类型',
+  'event-log.field.status': '状态',
+  'event-log.field.expected': '预期角色',
+  'event-log.field.settled': '已结算',
+  'event-log.field.duration': '耗时',
+  'event-log.field.severity': '严重度',
+  'event-log.field.code': '代码',
+  'event-log.field.message': '信息',
+  'event-log.kind.dispatch': '派发',
+  'event-log.kind.settle': '结算',
+  'event-log.yes': '是',
+  'event-log.no': '否',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
   'watermark.version': 'mstar {version}',
@@ -216,7 +260,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': '未知',
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
-  'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -226,7 +269,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'flow.error': '出错',
   'flow.advisory': '提示',
   'flow.denied': '拒绝',
-  'flow.event-count': '{count} 条',
   'state.title': '工作区状态',
   'state.plans': '计划',
   'state.residuals': '未决残留',
@@ -254,10 +296,33 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'tab.tasks': 'Task Iteration',
   'tab.agents': 'Agent Run',
   'tab.events': 'Event Log',
-  'page.events.placeholder': 'Event log page lands in a later plan',
   'page.iteration.not-started': 'iteration not started',
   'page.iteration.expand': 'expand',
   'page.iteration.collapse': 'collapse',
+  'event-log.section.events': 'Agent flow events',
+  'event-log.section.violations': 'Violations',
+  'event-log.empty': 'No records yet',
+  'event-log.empty.events': 'No flow events yet',
+  'event-log.empty.violations': 'No violations yet',
+  'event-log.field.role': 'Role',
+  'event-log.field.agent': 'Agent (session)',
+  'event-log.field.stage': 'Stage',
+  'event-log.field.plan': 'Plan',
+  'event-log.field.task': 'Task',
+  'event-log.field.category': 'Category',
+  'event-log.field.time': 'Time',
+  'event-log.field.kind': 'Kind',
+  'event-log.field.status': 'Status',
+  'event-log.field.expected': 'Expected role',
+  'event-log.field.settled': 'Settled',
+  'event-log.field.duration': 'Duration',
+  'event-log.field.severity': 'Severity',
+  'event-log.field.code': 'Code',
+  'event-log.field.message': 'Message',
+  'event-log.kind.dispatch': 'dispatch',
+  'event-log.kind.settle': 'settle',
+  'event-log.yes': 'yes',
+  'event-log.no': 'no',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
   'watermark.version': 'mstar {version}',
@@ -300,7 +365,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': 'unknown',
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
-  'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',
@@ -310,7 +374,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'flow.error': 'error',
   'flow.advisory': 'advisory',
   'flow.denied': 'denied',
-  'flow.event-count': '{count} events',
   'state.title': 'Workspace state',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',

@@ -28,6 +28,7 @@ import type { MstarEngineStatusSource } from '../src/types'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { pairSettleIndexes, projectGraph } from '../src/client/panel/graph/project-graph'
+import { eventLogEntries, type EventLogEntry } from '../src/client/panel/graph/event-log'
 import {
   EXPECTED_ROLE_FLOW, KNOWN_AGENTS, PHASE_IDS, PLAN_STATE_IDS,
   type PhaseId, type PlanStateId,
@@ -1407,5 +1408,168 @@ describe('projectGraph — ZoneView shape (spec §3)', () => {
     expect(stateIds).toContain('unknown')
     expect(view.tasks.columns[0]!.capped).toBeNull()
     expect(view.iteration.verdict).toBe('pass')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Event-log assembly (spec panel-tabs §5 — plan 20260811-panel-event-log
+ * Task 1): the pure eventLogEntries(view) → EventLogEntry[] mapping. Consumes
+ * ZoneView slices unchanged (zero projection changes); missing fields degrade
+ * to '' / 0 / null (the render side shows「—」); unexpected dispatches fold in
+ * via `expected: false` (view.unexpected is a re-list — never double-appended).
+ * ------------------------------------------------------------------------- */
+
+describe('eventLogEntries — event rows (spec §5, plan event-log Task 1)', () => {
+  it('maps every projected event field onto the entry (dispatch + paired settle)', () => {
+    const view = projectGraph({
+      ...flowSource([
+        // File order is latest-first: the settle (newest) pairs the dispatch below it.
+        settleRow({ ts: 9, agent: 'a1', outcome: 'ok', durationMs: 120 }),
+        dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
+      ]),
+      iteration: {
+        ...fullSource.iteration!,
+        gate: { ...fullSource.iteration!.gate, violations: [] },
+      },
+    })
+    const entries = eventLogEntries(view)
+    expect(entries).toHaveLength(2)
+    const [settle, dispatch] = entries as EventLogEntry[]
+    expect(settle).toEqual({
+      kind: 'event',
+      id: '9-settle-0',
+      eventKind: 'settle',
+      role: '', // settle rows carry no role (T1 sets '')
+      agent: 'a1',
+      stage: '',
+      task: '',
+      ts: 9,
+      status: 'ok',
+      settled: false, // settle rows are never "settled" themselves
+      durationMs: 120,
+      expected: false,
+    })
+    expect(dispatch).toEqual({
+      kind: 'event',
+      id: '8-dispatch-1',
+      eventKind: 'dispatch',
+      role: 'fullstack-dev',
+      agent: 'a1',
+      stage: 'autonomous-execute:sdd-implement',
+      task: 'plan-x#T2',
+      ts: 8,
+      status: 'dispatched',
+      settled: true, // paired with the settle (same agent)
+      durationMs: null, // dispatch rows carry no duration
+      expected: true,
+    })
+  })
+
+  it("task tag fallbacks: planId alone / #taskId alone / '' when neither present", () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+      dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a2', taskId: 'T1' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a3' }),
+    ]))
+    const events = eventLogEntries(view).filter((e) => e.kind === 'event')
+    expect(events.map((e) => e.task)).toEqual(['plan-x', '#T1', ''])
+  })
+
+  it("degrades missing/illegal fields individually: '' strings, 0 ts, null duration — never fabricated", () => {
+    const view = projectGraph(flowSource([
+      { kind: 'dispatch', ts: 'nope' } as unknown, // garbage row: no role/agent/plan/task
+      { kind: 'settle', outcome: 42 } as unknown, // illegal outcome → base status
+    ]))
+    const entries = eventLogEntries(view)
+    expect(entries[0]).toEqual({
+      kind: 'event',
+      id: '0-dispatch-0',
+      eventKind: 'dispatch',
+      role: '',
+      agent: '',
+      stage: '',
+      task: '',
+      ts: 0,
+      status: 'dispatched',
+      settled: false,
+      durationMs: null,
+      expected: false,
+    })
+    expect(entries[1]).toMatchObject({
+      kind: 'event',
+      eventKind: 'settle',
+      role: '',
+      agent: '',
+      ts: 0,
+      status: 'ok', // illegal outcome degrades to base ok — never a guessed error
+      durationMs: null,
+    })
+  })
+})
+
+describe('eventLogEntries — violation rows + mixed empty states (spec §5, plan event-log Task 1)', () => {
+  it('maps gate violations to violation entries after the event rows', () => {
+    const view = projectGraph(fullSource) // agentFlow null → no events; gate carries 2 violations
+    const entries = eventLogEntries(view)
+    expect(entries).toHaveLength(2)
+    expect(entries).toEqual([
+      { kind: 'violation', id: 'violation-0', severity: 'medium', code: 'PLAN-3', message: 'plan not complete' },
+      { kind: 'violation', id: 'violation-1', severity: 'low', code: 'EXIT-1', message: 'compass wording drift' },
+    ])
+  })
+
+  it('mixed empty state: 0 events + violations → violation entries only', () => {
+    const view = projectGraph(fullSource) // events [] (agentFlow null), violations present
+    const entries = eventLogEntries(view)
+    expect(entries.filter((e) => e.kind === 'event')).toHaveLength(0)
+    expect(entries.filter((e) => e.kind === 'violation')).toHaveLength(2)
+  })
+
+  it('mixed empty state: events + 0 violations → event entries only', () => {
+    const view = projectGraph({
+      ...flowSource([dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' })]),
+      iteration: {
+        ...fullSource.iteration!,
+        gate: { ...fullSource.iteration!.gate, violations: [] },
+      },
+    })
+    const entries = eventLogEntries(view)
+    expect(entries.filter((e) => e.kind === 'event')).toHaveLength(1)
+    expect(entries.filter((e) => e.kind === 'violation')).toHaveLength(0)
+  })
+
+  it('both empty → no entries (the page renders the muted 暂无记录 empty state)', () => {
+    const view = projectGraph({
+      ...flowSource([]),
+      iteration: {
+        ...fullSource.iteration!,
+        gate: { ...fullSource.iteration!.gate, violations: [] },
+      },
+    })
+    expect(eventLogEntries(view)).toEqual([])
+  })
+})
+
+describe('eventLogEntries — unexpected folding + window invariant (spec §5, plan event-log Task 1)', () => {
+  it('folds unexpected (off-pipeline) dispatches in via expected: false — never double-appended', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 4, role: 'scout' }),
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    // Sanity: the projection re-lists the off-pipeline dispatch as `unexpected`.
+    expect(view.unexpected.map((e) => e.role)).toEqual(['scout'])
+    const events = eventLogEntries(view).filter((e) => e.kind === 'event')
+    expect(events).toHaveLength(2) // the unexpected row appears ONCE (via view.events)
+    expect(events[0]).toMatchObject({ role: 'scout', expected: false, stage: '', task: '' })
+    expect(events[1]).toMatchObject({ role: 'fullstack-dev', expected: true, stage: 'autonomous-execute:sdd-implement' })
+  })
+
+  it('entry count = projected events + violations (the ≤50 window lives in the projection, not here)', () => {
+    const events = Array.from({ length: 60 }, (_, i) => dispatchRow({ ts: 60 - i, role: 'fullstack-dev' }))
+    const view = projectGraph(flowSource(events))
+    expect(view.events).toHaveLength(50) // projection window (classifyFlowRows) — NOT re-implemented here
+    const entries = eventLogEntries(view)
+    expect(entries).toHaveLength(50 + view.violations.length)
+    expect(entries.filter((e) => e.kind === 'event')).toHaveLength(50)
   })
 })

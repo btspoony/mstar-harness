@@ -22,8 +22,10 @@
  * Head + Steps 横排/收拢 + full-width kanban, spec §3 — landed with Task 2,
  * replacing the WorkflowCanvas zone dashboard); the agents tab renders the
  * draggable AgentCanvasPage (spec §4 — landed with the agent-canvas plan,
- * replacing the muted placeholder + the AgentFlowZone); the events tab stays
- * the muted placeholder page (the real page lands with the event-log plan).
+ * replacing the muted placeholder + the AgentFlowZone); the events tab
+ * renders the EventLogPage (spec §5 — the non-canvas log page with per-row
+ * `<details>` expansion, landed with the event-log plan Task 2, replacing
+ * the muted placeholder AND the AgentEventDock — 无双份日志).
  *
  * Empty branches (spec §2): waiting / no-harness stay exactly as the zone
  * dashboard baseline — no tabs, no sidebar (hint + freshness only); the
@@ -71,11 +73,14 @@ export interface PanelContentProps {
  * agents = the draggable AgentCanvasPage (spec §4 — full KNOWN_AGENTS roster
  * + idle states + AgentEdge collaboration edges, landed with the agent-canvas
  * plan; it replaced the muted placeholder and the AgentFlowZone); events =
- * the muted placeholder page (the real log page lands with the event-log plan).
+ * the real EventLogPage (spec §5 — non-canvas log page: Agent 流转事件 +
+ * 违规记录 partitions with per-row `<details>` expansion, landed with the
+ * event-log plan Task 2; it replaced the muted placeholder AND the
+ * AgentEventDock — 无双份日志, the dock is removed with this plan).
  */
 export function PanelContent({ tab, source, t }: PanelContentProps) {
   if (tab === 'agents') return <AgentCanvasPage view={projectGraph(source).agents} t={t} />
-  if (tab === 'events') return <EventLogPage t={t} />
+  if (tab === 'events') return <EventLogPage view={projectGraph(source)} t={t} />
   return <IterationTaskPage view={projectGraph(source)} t={t} />
 }
 

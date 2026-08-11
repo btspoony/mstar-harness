@@ -55,7 +55,18 @@
  *   now anchors the CONTENT container; default tab = 任务迭代 (D1); tab
  *   switching content assertions ride the exported TabNav + PanelContent;
  *   the agents tab renders the draggable AgentCanvasPage and the events tab
- *   the muted placeholder page (`data-mstar-page-*`).
+ *   the real EventLogPage (`data-mstar-page-*` + the `data-event-log-*`
+ *   anchor family — plan 20260811-panel-event-log Task 2).
+ * - T9 event-log page (spec panel-tabs §5, plan 20260811-panel-event-log
+ *   Task 2): the 事件记录 tab is a non-canvas log page — the Agent 流转事件 /
+ *   违规记录 partitions (`data-event-log-section`), per-row expandable
+ *   `<details>` rows (`data-event-log-details` / `data-event-log-field`
+ *   full-catalog detail bodies — missing fields render「—», never fabricated),
+ *   the muted empty states (`data-event-log-empty` both-empty +
+ *   `data-event-log-empty-section` mixed), the unexpected-dispatch fold-in
+ *   (`data-event-log-expected="false"` badge, never double-appended), and
+ *   the AgentEventDock removal (zero `data-agent-event-dock` anchors —
+ *   无双份日志 decision, spec §5).
  * - T8 agent canvas (spec panel-tabs §4/§6.2, plan 20260811-panel-agent-canvas
  *   Task 2): the agents tab is the draggable canvas page — `data-canvas-pan`
  *   exposes the pan transform (pointer-event drag helpers unit-tested +
@@ -122,6 +133,7 @@ import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelContent, PanelView } from '../src/client/panel/PanelView'
 import { TabNav } from '../src/client/panel/TabNav'
 import { nextExpandedOnActivation } from '../src/client/panel/pages/IterationTaskPage'
+import { EventLogPage } from '../src/client/panel/pages/EventLogPage'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
 const fullSource: MstarEngineStatusSource = {
@@ -834,11 +846,13 @@ describe('workflow panel — T4 theme audit: token-only colors, ramp metrics, re
 
 /* ---------------------------------------------------------------------------
  * T5 zones CSS audit (spec panel-zones §7): the T4 theme audit reads
- * panel.module.css only — this block audits the zones css (the canvas zone
- * frames / footer / AgentEventDock / stepper / kanban) for the same contract:
- * token-only dock styles (bg/border/8px radius + token event status colors),
- * transitions inside the 120–200ms window, font sizes on the ramp, and the
- * reduced-motion root rule covering EVERY zones transition/animation.
+ * panel.module.css only — this block audits the zones css (the kanban /
+ * legend — the AgentEventDock was removed by the event-log plan, spec §5;
+ * its row styles migrated to `pages/event-log.module.css`, audited here)
+ * for the same contract: token-only styles (bg/border/8px radius + token
+ * event status colors), transitions inside the 120–200ms window, font sizes
+ * on the ramp, and the reduced-motion root rule covering EVERY zones
+ * transition/animation.
  * ------------------------------------------------------------------------- */
 
 describe('workflow panel — T5 zones CSS audit: dock token styles + transition window + reduced-motion coverage (spec panel-zones §7)', () => {
@@ -887,24 +901,25 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     }
   })
 
-  it('AgentEventDock styles align with the zone frames: token bg/border + 8px radius + token event status colors', () => {
-    // Dock frame = the same token treatment as the zone frames (bg-layer-1 /
-    // border-l1 / 8px radius — spec §2/§7 "样式与新区块统一").
-    const dockRule = cssText.match(/\.dock\s*\{[\s\S]*?\}/)
-    expect(dockRule).not.toBeNull()
-    expect(dockRule![0]).toContain('background: var(--dsw-alias-bg-layer-1)')
-    expect(dockRule![0]).toContain('border: 1px solid var(--dsw-alias-border-l1)')
-    expect(dockRule![0]).toContain('border-radius: 8px')
-    // Event-row status colors: every status class is a --dsw-* state token
-    // (dispatch → business/warn/error; settle → success/error — spec §2.4).
-    for (const cls of ['flowStatusDispatched', 'flowStatusAdvisory', 'flowStatusDenied', 'flowStatusOk', 'flowStatusError']) {
-      const rule = cssText.match(new RegExp(`\\.${cls}\\s*\\{[\\s\\S]*?\\}`))
+  it('event-log page styles align with the zone frames: token bg/border + 8px radius + token status colors', () => {
+    const pageCss = readFileSync(new URL('../src/client/panel/pages/event-log.module.css', import.meta.url), 'utf8')
+    // Partition frame = the same token treatment as the zone frames
+    // (bg-layer-1 / border-l1 / 8px radius — spec §2/§7 "样式与新区块统一").
+    const sectionRule = pageCss.match(/\.section\s*\{[\s\S]*?\}/)
+    expect(sectionRule).not.toBeNull()
+    expect(sectionRule![0]).toContain('background: var(--dsw-alias-bg-layer-1)')
+    expect(sectionRule![0]).toContain('border: 1px solid var(--dsw-alias-border-l1)')
+    expect(sectionRule![0]).toContain('border-radius: 8px')
+    // Event-row status colors (migrated from the retired dock): every status
+    // class is a --dsw-* state token (dispatch → business/warn/error; settle
+    // → success/error — spec §2.4).
+    for (const cls of ['statusDispatched', 'statusAdvisory', 'statusDenied', 'statusOk', 'statusError']) {
+      const rule = pageCss.match(new RegExp(`\\.${cls}\\s*\\{[\\s\\S]*?\\}`))
       expect(rule, cls).not.toBeNull()
       expect(rule![0]).toMatch(/--dsw-alias-state-(?:business|warn|error|success)-/)
     }
-    // Zero bare colors of any form in the dock region (whole-file scan covers
-    // it — re-pin for the dock-specific audit).
-    expect(dockRule![0]).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
+    // Zero bare colors of any form in the event-log css (whole-file scan).
+    expect(pageCss).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
   })
 })
 
@@ -1711,7 +1726,7 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     }
   })
 
-  it('content switches with the tab: tasks → IterationTaskPage, agents → AgentCanvasPage, events → muted placeholder page', () => {
+  it('content switches with the tab: tasks → IterationTaskPage, agents → AgentCanvasPage, events → EventLogPage', () => {
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('en')
@@ -1731,11 +1746,16 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     expect(agents).toContain('data-agent-entity=')
     expect(agents).not.toContain('data-mstar-page-note')
     expect(agents).not.toContain('data-zone=')
-    // events → placeholder page.
+    // events → the real log page (plan 20260811-panel-event-log Task 2):
+    // the two partitions + expandable rows + muted empty states (the muted
+    // placeholder note is gone — its copy landed in this page).
     const events = renderToStaticMarkup(createElement(PanelContent, { tab: 'events', source: fullSource, t }))
     expect(events).toContain('data-mstar-page="events"')
-    expect(events).toContain('data-mstar-page-note')
-    expect(events).toContain('Event log page lands in a later plan')
+    expect(events).toContain('data-event-log-section="events"')
+    expect(events).toContain('data-event-log-section="violations"')
+    expect(events).toContain('data-event-log-details')
+    expect(events).not.toContain('data-mstar-page-note')
+    expect(events).not.toContain('data-agent-event-dock')
     expect(events).not.toContain('data-zone=')
     // The sidebar lives at the PanelView root — no tab content carries it.
     for (const html of [tasks, agents, events]) expect(html).not.toContain('data-mstar-sidebar')
@@ -1782,6 +1802,234 @@ describe('workflow panel — T6 tabs-shell: resident sidebar + header nav + cont
     // The degraded canvas note + summary are localized (spec §4/§8).
     expect(agents).toContain('agentFlow 证据缺失')
     expect(agents).toContain('执行中')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T9 event-log page (spec panel-tabs §5, plan 20260811-panel-event-log
+ * Task 2): the 事件记录 tab is a NON-canvas log page — the Agent 流转事件 /
+ * 违规记录 partitions (`data-event-log-section` + counts), per-row
+ * expandable native `<details>` rows (`data-event-log-details` — the summary
+ * IS the row; the body carries the FULL catalog fields via the T1-Min-3
+ * id→FlowEventView backfill, `data-event-log-field` + `-missing="true"`),
+ * the muted empty states (`data-event-log-empty` both-empty /
+ * `data-event-log-empty-section` mixed — never an orange warn frame), the
+ * unexpected-dispatch fold-in (`data-event-log-expected="false"` + the
+ * `flow.unexpected` badge, DISPATCH-only — settle rows never flag as
+ * unexpected, qc2/qc3 F-001), the out-of-Date-range ts degrade (qc2 F-002),
+ * the dock migration
+ * (zero `data-agent-event-dock` anchors — 无双份日志, spec §5) and the zh
+ * copy. Row data rides the Task 1 `eventLogEntries` assembly.
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — T9 event-log page: partitions + rows + details + empty states (spec panel-tabs §5, plan event-log Task 2)', () => {
+  /** Render the EventLogPage to static HTML (en default; the full projection). */
+  function eventsHtml(source: MstarEngineStatusSource, lang: 'en' | 'zh' = 'en'): string {
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale(lang)
+    return renderToStaticMarkup(createElement(EventLogPage, {
+      view: projectGraph(source),
+      t: locale.bind(NS),
+    }))
+  }
+
+  it('renders the two partitions with row anchors and counts (events + violations)', () => {
+    const html = eventsHtml(flowSource([
+      { ts: 3_000, kind: 'settle', role: '', planId: null, taskId: null, taskCategory: null, agent: 'a-1', outcome: 'ok', durationMs: 1234 },
+      { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
+    ]))
+    expect(html).toContain('data-mstar-page="events"')
+    // Partitions (spec §5): Agent 流转事件 + 违规记录, each with its count.
+    expect(html).toContain('data-event-log-section="events"')
+    expect(html).toContain('data-event-log-section="violations"')
+    expect(html).toContain('data-event-log-section-count="2"')
+    // Rows: 2 event rows (latest-first: settle then dispatch) + 2 violations.
+    expect(html.match(/data-event-log-row-kind="event"/g)).toHaveLength(2)
+    expect(html.match(/data-event-log-row-kind="violation"/g)).toHaveLength(2)
+    expect(html).toContain('data-event-log-row-id="3000-settle-0"')
+    expect(html).toContain('data-event-log-row-id="2000-dispatch-1"')
+    // Row summary cells: settle glyph row (no role) + dispatch role/stage/task.
+    expect(html).toContain('data-event-log-stage="autonomous-execute:sdd-implement"')
+    expect(html).toContain('data-event-log-target="plan-x#T1"')
+    expect(html).toContain('data-event-log-status="advisory"')
+    expect(html).toContain('data-event-log-agent="a-1"')
+    expect(html).toContain('data-event-log-duration="1234"')
+    // Violation rows carry the severity chip + code (spec §5).
+    expect(html).toContain('data-event-log-severity="medium"')
+    expect(html).toContain('data-event-log-code="PLAN-3"')
+  })
+
+  it('every row is an expandable <details> whose body carries the full catalog fields (T1-Min-3 backfill)', () => {
+    const html = eventsHtml(flowSource([
+      { ts: 3_000, kind: 'settle', role: '', planId: null, taskId: null, taskCategory: null, agent: 'a-1', outcome: 'ok', durationMs: 1234 },
+      { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
+    ]))
+    // 4 rows (2 events + 2 violations), each an expandable <details>.
+    expect(html.match(/<details/g)).toHaveLength(4)
+    expect(html.match(/data-event-log-details/g)).toHaveLength(4)
+    expect(html).toContain('<summary')
+    // The event detail body carries the FULL source fields — planId/taskId/
+    // taskCategory come from the id→FlowEventView backfill (T1-Min-3).
+    for (const field of ['role', 'agent', 'stage', 'plan', 'task', 'category', 'time', 'kind', 'status', 'expected', 'settled', 'duration']) {
+      expect(html).toContain(`data-event-log-field="${field}"`)
+    }
+    expect(html).toContain('data-event-log-field="plan"')
+    // Present values render verbatim (plan-x / T1 / logic / 1234ms / labels).
+    expect(html).toContain('plan-x')
+    expect(html).toContain('T1')
+    expect(html).toContain('logic')
+    expect(html).toContain('1234ms')
+    expect(html).toContain('advisory') // the advisory status label
+    expect(html).toContain('dispatch') // the kind label
+    // The violation detail body carries severity/code/message.
+    expect(html).toContain('data-event-log-field="severity"')
+    expect(html).toContain('data-event-log-field="code"')
+    expect(html).toContain('data-event-log-field="message"')
+    expect(html).toContain('plan 20260809-dsh-workflow-viz-panel not complete')
+  })
+
+  it('missing fields degrade to 「—」 in the detail body — never fabricated (T1-Min-2 ts)', () => {
+    // A sparse dispatch: no role/agent/plan/task/category/stage, ts 0, no
+    // duration — every one of those detail fields must render「—」.
+    const html = eventsHtml(flowSource([
+      { ts: 0, kind: 'dispatch', role: '', planId: null, taskId: null, taskCategory: null, agent: null },
+    ]))
+    // 8 missing fields: role / agent / stage / plan / task / category / time / duration.
+    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(8)
+    expect(html).toContain('data-event-log-field="time"')
+    // ts 0 → no fabricated clock time on the row either.
+    expect(html).not.toContain('data-event-log-time=')
+    // Each missing value renders「—」(spec §5).
+    expect(html.match(/—/g)).toHaveLength(8)
+    // The status/kind/expected/settled seats still render honest values.
+    expect(html).toContain('data-event-log-status="dispatched"')
+  })
+
+  it('settle rows render「—」for the settled field — the completion record itself, not a misleading no (T2-Min-2)', () => {
+    // A settle row IS the completion record: the detail body's settled seat
+    // renders「—」(not applicable) instead of a flat 'no' (review T2-Min-2).
+    const html = eventsHtml(flowSource([
+      { ts: 3_000, kind: 'settle', role: '', planId: null, taskId: null, taskCategory: null, agent: 'a-1', outcome: 'ok', durationMs: 1234 },
+    ]))
+    const settleField = html.match(/data-event-log-field="settled"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(settleField).toContain('data-event-log-missing="true"')
+    expect(settleField).toContain('>—</span>')
+    // The settle row's detail body: 7 not-applicable fields (role/stage/
+    // plan/task/category/settled/expected — F-001: the expected-role seat is
+    // not applicable on a completion record); agent/time/kind/status/duration
+    // render their honest values.
+    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(7)
+    // A dispatch row (not settled) still renders the honest 'no'.
+    const dispatchHtml = eventsHtml(flowSource([
+      { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
+    ]))
+    const dispatchField = dispatchHtml.match(/data-event-log-field="settled"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(dispatchField).toContain('data-event-log-missing="false"')
+    expect(dispatchField).toContain('>no</span>')
+  })
+
+  it('both empty → single muted 暂无记录 note, no partitions (spec §8)', () => {
+    const html = eventsHtml({
+      ...flowSource([]),
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, violations: [] } },
+    })
+    expect(html).toContain('data-event-log-empty="')
+    expect(html).toContain('No records yet')
+    expect(html).not.toContain('data-event-log-section=')
+    expect(html).not.toContain('<details')
+  })
+
+  it('mixed empty: violations only → the events partition degrades independently (its own muted note)', () => {
+    // fullSource: agentFlow null (0 events) + 2 gate violations.
+    const html = eventsHtml(fullSource)
+    expect(html).toContain('data-event-log-section="events"')
+    expect(html).toContain('data-event-log-empty-section="events"')
+    expect(html).toContain('No flow events yet')
+    expect(html).toContain('data-event-log-section="violations"')
+    expect(html).toContain('data-event-log-row-kind="violation"')
+    expect(html).not.toContain('data-event-log-empty="')
+  })
+
+  it('mixed empty: events only → the violations partition degrades independently (its own muted note)', () => {
+    const html = eventsHtml({
+      ...flowSource([dispatchEvent({ ts: 3, role: 'fullstack-dev', agent: 'a1' })]),
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, violations: [] } },
+    })
+    expect(html).toContain('data-event-log-row-kind="event"')
+    expect(html).toContain('data-event-log-empty-section="violations"')
+    expect(html).toContain('No violations yet')
+    expect(html).not.toContain('data-event-log-empty="')
+  })
+
+  it('unexpected dispatches fold into the events partition once (expected=false badge — never double-appended)', () => {
+    const html = eventsHtml(flowSource([dispatchEvent({ ts: 4, role: 'scout', agent: 's-9' })]))
+    // Exactly ONE event row for the off-pipeline dispatch (view.unexpected is
+    // a re-list — Task 1 folds via expected:false; the page never re-lists).
+    expect(html.match(/data-event-log-row-kind="event"/g)).toHaveLength(1)
+    expect(html).toContain('data-event-log-expected="false"')
+    expect(html).toContain('data-event-log-unexpected="true"')
+    expect(html).toContain('Unexpected roles')
+  })
+
+  it('settle rows NEVER render the unexpected badge — dispatch-only marker (qc2/qc3 F-001)', () => {
+    // A normal dispatch→settle pair: the settle row's projected `expected`
+    // is always false, but it is a completion record — no badge and no
+    // "not-applicable" expected seat in its detail body (F-001).
+    const html = eventsHtml(flowSource([
+      { ts: 3_000, kind: 'settle', role: '', planId: null, taskId: null, taskCategory: null, agent: 'a-1', outcome: 'ok', durationMs: 1234 },
+      { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
+    ]))
+    // No unexpected badge / label anywhere in the pair.
+    expect(html).not.toContain('data-event-log-unexpected')
+    expect(html).not.toContain('Unexpected roles')
+    // The settle row's detail expected seat is not-applicable「—」.
+    const settleExpected = html.match(/data-event-log-field="expected"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(settleExpected).toContain('data-event-log-missing="true"')
+    // An off-pipeline DISPATCH still renders the badge (kind-guarded).
+    const unexpectedHtml = eventsHtml(flowSource([dispatchEvent({ ts: 4, role: 'scout', agent: 's-9' })]))
+    expect(unexpectedHtml).toContain('data-event-log-unexpected="true"')
+    expect(unexpectedHtml).toContain('Unexpected roles')
+  })
+
+  it('a finite but out-of-Date-range ts degrades to「—」— never throws (qc2 F-002)', () => {
+    // ts = 1e18 is finite (guards.count passes it through the projection)
+    // but outside the ECMAScript Date range (±8.64e15 ms): the old
+    // formatEventTime threw RangeError and crashed the whole events tab.
+    const html = eventsHtml(flowSource([
+      { ts: 1e18, kind: 'dispatch', role: 'fullstack-dev', agent: 'a-1' },
+    ]))
+    expect(html.match(/data-event-log-row-kind="event"/g)).toHaveLength(1)
+    // No fabricated clock time on the row…
+    expect(html).not.toContain('data-event-log-time=')
+    // …and the detail time seat renders「—」(missing).
+    const timeField = html.match(/data-event-log-field="time"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(timeField).toContain('data-event-log-missing="true"')
+  })
+
+  it('dock migration: zero data-agent-event-dock anchors on the events page (无双份日志, spec §5)', () => {
+    const html = eventsHtml(flowSource([dispatchEvent({ ts: 3, role: 'fullstack-dev', agent: 'a1' })]))
+    expect(html).not.toContain('data-agent-event-dock')
+    expect(html).not.toContain('data-mstar-flow-events')
+    expect(html).not.toContain('data-mstar-page-note')
+  })
+
+  it('zh locale localizes the log page copy (partitions + empty notes + field labels)', () => {
+    // fullSource has 0 events (agentFlow null) → detail field labels render
+    // only for the violation rows; use a source WITH events too.
+    const zhEvents = eventsHtml(flowSource([dispatchEvent({ ts: 3, role: 'fullstack-dev', agent: 'a1' })]), 'zh')
+    expect(zhEvents).toContain('Agent 流转事件')
+    expect(zhEvents).toContain('违规记录')
+    expect(zhEvents).toContain('执行角色')
+    expect(zhEvents).toContain('已结算')
+    expect(zhEvents).toContain('严重度')
+    expect(zhEvents).toContain('代码')
+    expect(zhEvents).not.toContain('No records yet')
+    const zhEmpty = eventsHtml({
+      ...flowSource([]),
+      iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, violations: [] } },
+    }, 'zh')
+    expect(zhEmpty).toContain('暂无记录')
   })
 })
 
