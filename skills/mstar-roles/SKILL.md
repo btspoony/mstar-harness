@@ -42,7 +42,7 @@ If any conflict appears, `mstar-harness-core` remains the authoritative source f
 | `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-plan-conventions` (minimal); `mstar-design-md` when implementing styled UI |
 | `qc-specialist*` | `mstar-branch-worktree`, `mstar-plan-artifacts` (review bundle paths); `references/qc-specialist/` (workflow, checklist, template, lenses); `mstar-design-md` when reviewing UI |
 | `qa-engineer` | `mstar-branch-worktree`, `mstar-plan-artifacts` (closing R#); `references/qa-engineer/acceptance-gate.md`; `mstar-design-md` when verifying visual output |
-| `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-plan-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance); **`mstar-audit`** (`audit` Task category — architect leads codebase audit → improvement plans) |
+| `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-plan-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance) |
 | `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-plan-conventions` (paths); `mstar-plan-artifacts` (plan-quality-bar for audit plans) |
 | `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree` |
 | `prompt-engineer` | All topic skills when editing harness text |

@@ -66,7 +66,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `logic` | `@architect` + dev |
 | `ops` | `@ops-engineer` |
 | `docs` | `@product-manager` / `@architect` / `@writing-specialist` |
-| `audit` | `@architect` / read-only `scout` subagents → `mstar-audit`（read-only advisory；不进入状态机） |
+| `audit` | `@code-reviewer`（mstar-audit 承载；大型仓库经 Assignment `Delegation: allowed (scout/explore only, read-only)` 扇出只读 scout；read-only advisory；不进入状态机） |
 
 **硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + `status.json` 登记（见 **`mstar-plan-conventions`**）。
 

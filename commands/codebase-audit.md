@@ -21,9 +21,11 @@ Run a read-only codebase audit that discovers what is worth doing and writes sel
 
 | Context | Who runs the audit |
 |---------|-------------------|
-| **Small repo** (single scan pass feasible) | PM thread runs the audit directly — read, search, vet, write plans |
-| **Large repo** (parallel categories needed) | PM dispatches read-only `scout` / `explore` subagents per category, then vets and writes plans |
-| **Specialist depth needed** | PM dispatches `@architect` for architecture/tech-debt depth, or category-specific specialists |
+| **Small repo** (single scan pass feasible) | PM dispatches `@code-reviewer` — single scan pass, then vet and write plans |
+| **Large repo** (parallel categories needed) | `@code-reviewer` fans out read-only `scout` / `explore` subagents per category via Assignment `Delegation: allowed (scout/explore only, read-only)`, then vets and writes plans |
+| **Specialist depth needed** | `@code-reviewer` may consult `@architect` for architecture/tech-debt depth (PM orchestrates the consult or folds it into the delegation brief) |
+
+This command is the PM entry point; the audit execution body is `code-reviewer`（PM dispatch）.
 
 The audit is **advisory** — it does not enter the per-plan state machine (`Todo → InProgress → InReview → Done`). Its output is plan *candidates*.
 
