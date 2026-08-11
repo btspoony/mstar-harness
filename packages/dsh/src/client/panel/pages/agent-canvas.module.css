@@ -5,9 +5,10 @@
  * the scattered entity cards (agent-name title / status point / record fields;
  * idle cards muted via the dashed border + caption treatment), the stage
  * column labels (+ the on-demand column, plan 20260811-panel-f2-quickfix
- * Item 3), the Legend seat (plan Task 3), and the AgentEdge
- * collaboration lines (expected skeleton / the curved SDD loop back-edge /
- * actual handoffs / the ANIMATED next edge).
+ * Item 3; + the general bucket column, plan 20260811-panel-f3-agent-general),
+ * the Legend seat (plan Task 3), and the AgentEdge
+ * collaboration lines (expected skeleton / the curved SDD loop back-edge
+ * below the column band / actual handoffs / the ANIMATED next edge).
  *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
@@ -165,10 +166,11 @@
   fill: var(--dsw-alias-state-business-primary);
 }
 
-/* SDD loop back-edge (plan 20260811-panel-f2-quickfix Item 3): the
- * sdd-task-review → sdd-implement reverse edge — business CURVED path with
- * arrowheads at BOTH ends (the ⇄ implement ↔ review cycle), visually
- * distinct from the straight dim-dashed forward skeleton edge. */
+/* SDD loop back-edge (plan 20260811-panel-f3-agent-general): the
+ * sdd-implement → general bucket reverse edge — business CURVED path with
+ * arrowheads at BOTH ends (the ⇄ implement ↔ review cycle), drawn BELOW the
+ * column band by the page geometry (bow = max endpoint + 24), visually
+ * distinct from the straight dim-dashed forward skeleton edges. */
 .canvasEdgeLoop {
   fill: none;
   stroke: var(--dsw-alias-state-business-primary);

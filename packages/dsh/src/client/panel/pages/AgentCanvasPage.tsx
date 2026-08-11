@@ -30,16 +30,17 @@
  * are muted (`data-agent-idle`); lit cards follow the projection's status
  * priority (running/settled/error/denied/advisory).
  *
- * Edges (spec §4 + plan 20260811-panel-f2-quickfix Item 3 — AgentEdge model
- * reused): expected skeleton (dim dashed stage→stage, 4 forward edges),
- * the SDD LOOP back-edge sdd-task-review → sdd-implement (business CURVED
- * double-arrow — `data-agent-edge-loop`, visually distinct from the forward
- * edge it overlaps), actual handoffs (business entity→entity), next
- * (business ANIMATED dash-flow stage→stage) — all drawn as SVG over the
- * layout computed by the exported pure `layoutAgents` (deterministic columns
- * per EXPECTED_ROLE_FLOW stage + the on-demand column for
- * ops-engineer/prompt-engineer + a trailing unexpected column; column
- * buckets come from the PROJECTED `entity.zone`, never a render guess).
+ * Edges (spec §4 + plan 20260811-panel-f3-agent-general — AgentEdge model
+ * reused): expected skeleton (dim dashed stage→stage, 3 forward edges),
+ * the SDD LOOP back-edge sdd-implement → the general bucket (business CURVED
+ * double-arrow BELOW the column band — `data-agent-edge-loop`, visually
+ * distinct from the straight forward skeleton edges), actual handoffs
+ * (business entity→entity — role-keyed), next (business ANIMATED dash-flow
+ * stage→stage) — all drawn as SVG over the layout computed by the exported
+ * pure `layoutAgents` (deterministic columns per EXPECTED_ROLE_FLOW stage +
+ * the on-demand column for ops-engineer/prompt-engineer + a trailing general
+ * bucket column; column buckets come from the PROJECTED `entity.zone`, never
+ * a render guess).
  *
  * Degradation (spec §8 — never throws / never orange): the projection always
  * yields the full idle roster, so the canvas renders it with the muted
@@ -133,36 +134,38 @@ const COL_PAD = 12
 /** Column label band height (the cards start below it). */
 const LABEL_H = 18
 
-/** The trailing column id for stage-null entities (off-pipeline + unexpected). */
-export const UNEXPECTED_COLUMN = 'unexpected'
+/** The trailing column id for stage-null entities (the general bucket — the
+ * former 'unexpected' track, plan 20260811-panel-f3-agent-general). */
+export const GENERAL_COLUMN = 'general'
 
 /** The on-demand column id (plan 20260811-panel-f2-quickfix Item 3): the
  * separate zone for ops-engineer / prompt-engineer — NO expected/next arrows
- * touch it (independent region, distinct from the unexpected column). */
+ * touch it (independent region, distinct from the general column). */
 export const ON_DEMAND_COLUMN = 'on-demand'
 
 /**
- * Deterministic canvas layout (spec §4 + plan Item 3 — the collaboration
- * story): one column per EXPECTED_ROLE_FLOW stage (view order) + the
- * `on-demand` column (ops-engineer / prompt-engineer) + a trailing
- * `unexpected` column for the remaining stage-null entities. Cards stack
- * vertically inside their column; the canvas bounds grow with the tallest
- * column. The column bucket comes from the PROJECTED `entity.zone` (never a
- * render-side guess): 'flow' → the entity's stage column, 'on-demand' → the
- * on-demand column, 'unexpected' → the unexpected track. Total function —
- * every entity gets a box (unknown column ids fall back to the unexpected
- * track; never a throw).
+ * Deterministic canvas layout (spec §4 + plan 20260811-panel-f3-agent-general
+ * — the collaboration story): one column per EXPECTED_ROLE_FLOW stage (view
+ * order) + the `on-demand` column (ops-engineer / prompt-engineer) + a
+ * trailing `general` column for the remaining stage-null entities (the
+ * general bucket — SDD per-task reviewers, unmatched / anonymous dispatches;
+ * the former 'unexpected' track). Cards stack vertically inside their column;
+ * the canvas bounds grow with the tallest column. The column bucket comes
+ * from the PROJECTED `entity.zone` (never a render-side guess): 'flow' → the
+ * entity's stage column, 'on-demand' → the on-demand column, 'general' → the
+ * general track. Total function — every entity gets a box (unknown column
+ * ids fall back to the general track; never a throw).
  */
 export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
-  const columnIds = [...view.stages.map((s) => s.id), ON_DEMAND_COLUMN, UNEXPECTED_COLUMN]
+  const columnIds = [...view.stages.map((s) => s.id), ON_DEMAND_COLUMN, GENERAL_COLUMN]
   const buckets = new Map<string, AgentEntityView[]>()
   for (const entity of view.entities) {
     const colId = entity.zone === 'on-demand'
       ? ON_DEMAND_COLUMN
       : entity.zone === 'flow' && entity.stage !== null
         ? `${entity.stage.phase}:${entity.stage.stage}`
-        : UNEXPECTED_COLUMN
-    const bucketId = columnIds.includes(colId) ? colId : UNEXPECTED_COLUMN
+        : GENERAL_COLUMN
+    const bucketId = columnIds.includes(colId) ? colId : GENERAL_COLUMN
     const bucket = buckets.get(bucketId)
     if (bucket === undefined) buckets.set(bucketId, [entity])
     else bucket.push(entity)
@@ -370,8 +373,8 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
             >
               {col.id === ON_DEMAND_COLUMN
                 ? t('zone.agents.on-demand')
-                : col.id === UNEXPECTED_COLUMN
-                  ? t('flow.unexpected')
+                : col.id === GENERAL_COLUMN
+                  ? t('zone.agents.general')
                   : col.id.slice(col.id.indexOf(':') + 1)}
             </span>
           ))}
@@ -395,12 +398,14 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
               const line = edgeLine(edge, layout)
               if (line === null) return null
               const kind = edge.kind
-              // SDD loop back-edge (plan Item 3): a CURVED path bowing above
-              // the column band with arrowheads at BOTH ends — visually
-              // distinct from the straight forward skeleton edge it overlaps.
+              // SDD loop back-edge (plan 20260811-panel-f3-agent-general): a
+              // CURVED path bowing BELOW the column band (bow = the lower
+              // endpoint + 24 — under the columns) with arrowheads at BOTH
+              // ends — visually distinct from the straight forward skeleton
+              // edges above it.
               if (edge.loop) {
                 const midX = (line.x1 + line.x2) / 2
-                const bowY = Math.min(line.y1, line.y2) - 24
+                const bowY = Math.max(line.y1, line.y2) + 24
                 return (
                   <path
                     key={`loop-${i}-${edge.source}-${edge.target}`}

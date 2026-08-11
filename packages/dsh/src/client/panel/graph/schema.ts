@@ -64,7 +64,7 @@ export const TRANSITION_TO_PHASE: Readonly<Record<string, PhaseId>> = {
  * provenance and STRICTLY SEPARATED from catalog evidence: `projectGraph`'s
  * flow projection lights this skeleton with `state.agentFlow` dispatch events
  * (stage lit/count) and flags events whose role is NOT in this union
- * (unexpected — e.g. `general` / `explore` / `scout` or unregistered roles).
+ * (unexpected — e.g. `general` / `scout` or unregistered roles).
  *
  * Provenance (mstar role vocabulary — exact strings, dispatch order):
  * - review-edit-chain: product-manager → architect → writing-specialist —
@@ -72,21 +72,23 @@ export const TRANSITION_TO_PHASE: Readonly<Record<string, PhaseId>> = {
  *   review, Phase 1).
  * - sdd-implement: fullstack-dev / fullstack-dev-2 / frontend-dev — the
  *   mstar-sdd implementer roles (Phase 2 task execution).
- * - sdd-task-review: generalPurpose — the mstar-sdd L2 task reviewer
- *   (SKILL.md step 6); NOT qc-specialist*.
  * - qc-tri: qc-specialist ×3 — the mstar-sdd plan QC triage (Phase 2).
  * - qa-gate: qa-engineer — the QA gate (Phase 2 closing — the pipeline
  *   TERMINAL stage; ops-engineer is NOT in the pipeline).
  * - Phase 3–5 (iteration-close / pr-delivery / merge-ready) dispatch no
  *   routine subagents → no stages (spec §2.3).
  *
- * Off-pipeline roles (plan 20260811-panel-f2-quickfix Item 3) live in the
+ * Off-pipeline roles (plan 20260811-panel-f3-agent-general) live in the
  * KNOWN_AGENTS roster with `zone` markers, NOT here: `ops-engineer` and
  * `prompt-engineer` are on-demand dispatches (mstar-roles routing table,
- * as needed) rendered in their own on-demand column; `explore` stays an
- * unexpected-zone scout role. The SDD implement ↔ task-review loop
- * (mstar-sdd: implement → task review → rework → re-implement) is a
- * skeleton EDGE (sdd-task-review → sdd-implement back-edge), not a stage.
+ * as needed) rendered in their own on-demand column; the SDD per-task
+ * reviewer (the former `sdd-task-review` stage / `generalPurpose` role —
+ * mstar-sdd L2 reviewer) moved OFF the pipeline into the single `general`
+ * bucket (plan 20260811-panel-f3-agent-general — user decision), which also
+ * collects every unmatched / anonymous dispatch (role ''). The SDD
+ * implement ↔ review loop (mstar-sdd: implement → task review → rework →
+ * re-implement) is a skeleton EDGE (sdd-implement → general back-edge), not
+ * a stage.
  *
  * Matching rules (spec §2.3 — implemented by `projectGraph`'s flow
  * projection): `expected` ⟺ `event.role` ∈ the union of ALL `roles` below
@@ -104,26 +106,30 @@ export interface ExpectedRoleStage {
   roles: readonly string[]
 }
 
-/** Expected role pipeline skeleton: 5 stages (spec agent-flow-catalog-graph §2.3,
- * plan 20260811-panel-f2-quickfix Item 3 — ops-on-demand removed; qa-gate is the
+/** Expected role pipeline skeleton: 4 stages (spec agent-flow-catalog-graph §2.3,
+ * plan 20260811-panel-f3-agent-general — sdd-task-review removed, the SDD L2
+ * reviewer moved off-pipeline into the `general` bucket; qa-gate is the
  * terminal stage). */
 export const EXPECTED_ROLE_FLOW: readonly ExpectedRoleStage[] = [
   { phase: 'iteration-start',    stage: 'review-edit-chain', roles: ['product-manager', 'architect', 'writing-specialist'] },
   { phase: 'autonomous-execute', stage: 'sdd-implement',     roles: ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev'] },
-  { phase: 'autonomous-execute', stage: 'sdd-task-review',   roles: ['generalPurpose'] },
   { phase: 'autonomous-execute', stage: 'qc-tri',            roles: ['qc-specialist', 'qc-specialist-2', 'qc-specialist-3'] },
   { phase: 'autonomous-execute', stage: 'qa-gate',           roles: ['qa-engineer'] },
 ]
 
 /**
- * The known-agent roster (spec §4 / §6.2 / decision point D3): the static
- * FULL set of ASSIGNABLE roles the panel may ever show — every
- * EXPECTED_ROLE_FLOW role PLUS the off-pipeline roles `prompt-engineer`
- * (in the mstar-roles table but not in the pipeline) and `explore` (scout
- * role), PLUS `generalPurpose` (the mstar-sdd L2 reviewer — in the flow,
- * not in the mstar-roles table), PLUS `ops-engineer` (on-demand ops
- * dispatch — no longer a pipeline stage, plan 20260811-panel-f2-quickfix
- * Item 3). Exactly 14 roles.
+ * The known-agent roster (spec §4 / §6.2 / decision point D3 + plan
+ * 20260811-panel-f3-agent-general): the static FULL set of ASSIGNABLE roles
+ * the panel may ever show — every EXPECTED_ROLE_FLOW role PLUS the
+ * off-pipeline roles `prompt-engineer` (in the mstar-roles table but not in
+ * the pipeline) and `ops-engineer` (on-demand ops dispatch), PLUS `general`
+ * (the single general bucket — see below). Exactly 13 roles.
+ *
+ * `explore` is DELIBERATELY NOT in the roster (plan
+ * 20260811-panel-f3-agent-general — user F3 feedback): it is a scouting
+ * adjunct role with no standalone presentation value, so it is removed from
+ * the canvas (a stray `explore` dispatch still folds into the `general`
+ * bucket — it is not a KNOWN_AGENTS id).
  *
  * `project-manager` is deliberately NOT in the roster (plan
  * 20260811-panel-f2-quickfix Item 2 — user F2 feedback): it is the PRIMARY
@@ -136,9 +142,11 @@ export const EXPECTED_ROLE_FLOW: readonly ExpectedRoleStage[] = [
  * branches included). `stage` = the role's stage in EXPECTED_ROLE_FLOW
  * (first constant-order match); null for the off-pipeline roles, which
  * carry an explicit `zone` — `on-demand` (ops-engineer / prompt-engineer,
- * their own canvas column) or default `unexpected` (explore).
+ * their own canvas column) or `general` (the general bucket = the SDD
+ * per-task reviewer — the former `generalPurpose` role — plus ANY
+ * unmatched / anonymous dispatch (role '') in the projection).
  */
-export type AgentZone = 'flow' | 'on-demand' | 'unexpected'
+export type AgentZone = 'flow' | 'on-demand' | 'general'
 
 export interface KnownAgent {
   /** Role id — the entity key and the default card title (render may localize). */
@@ -147,12 +155,13 @@ export interface KnownAgent {
   displayName?: string
   /** The role's EXPECTED_ROLE_FLOW stage; null → off-pipeline role. */
   stage?: { phase: PhaseId; stage: string } | null
-  /** Off-pipeline zone (plan 20260811-panel-f2-quickfix Item 3): 'on-demand'
-   * for the on-demand column, 'unexpected' (the default when omitted). */
-  zone?: 'on-demand' | 'unexpected'
+  /** Off-pipeline zone (plan 20260811-panel-f3-agent-general): 'on-demand'
+   * for the on-demand column, 'general' (the default when omitted) for the
+   * general bucket. */
+  zone?: 'on-demand' | 'general'
 }
 
-/** Known-agent roster — 14 roles, spec §4 order (project-manager excluded). */
+/** Known-agent roster — 13 roles, spec §4 order (project-manager + explore excluded). */
 export const KNOWN_AGENTS: readonly KnownAgent[] = [
   { id: 'product-manager', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
   { id: 'architect', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
@@ -166,6 +175,5 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
   { id: 'ops-engineer', stage: null, zone: 'on-demand' },
   { id: 'writing-specialist', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
   { id: 'prompt-engineer', stage: null, zone: 'on-demand' },
-  { id: 'generalPurpose', stage: { phase: 'autonomous-execute', stage: 'sdd-task-review' } },
-  { id: 'explore', stage: null },
+  { id: 'general', stage: null, zone: 'general' },
 ]

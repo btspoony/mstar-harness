@@ -63,8 +63,10 @@
  * T3 (spec panel-tabs §4, plan 20260811-panel-agent-canvas Task 3): the
  * legend re-mounts on the agent canvas — `zone.legend.agent-idle` (the idle
  * card treatment) joins the swatch family and the collaboration-edge labels
- * (flow-expected / flow-actual / flow-unexpected) now describe the canvas
- * rendering (dashed/solid lines + the unexpected column) instead of the
+ * (flow-expected / flow-actual / general) now describe the canvas rendering
+ * (dashed/solid lines + the general bucket column — plan
+ * 20260811-panel-f3-agent-general replaced the former flow-unexpected entry;
+ * the event-log `unexpected` badge keeps `flow.unexpected`) instead of the
  * retired zone-dashboard stages; `flow.settle-only` is the distinct muted
  * copy for the settle-only canvas note (review T2-Imp-2 restored the old
  * zone's separate anchor).
@@ -119,7 +121,7 @@ export type PanelKey =
   | 'zone.legend.title'
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
-  | 'zone.legend.flow-unexpected'
+  | 'zone.legend.general'
   | 'zone.legend.on-demand'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
@@ -152,6 +154,7 @@ export type PanelKey =
   | 'zone.agents.title'
   | 'zone.agents.summary'
   | 'zone.agents.on-demand'
+  | 'zone.agents.general'
   | 'flow.empty'
   | 'flow.settle-only'
   | 'flow.degraded'
@@ -231,7 +234,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': '图例',
   'zone.legend.flow-expected': '预期流转边（虚线）',
   'zone.legend.flow-actual': '实际交接边',
-  'zone.legend.flow-unexpected': '未匹配角色（独立列）',
+  'zone.legend.general': 'general 桶（未匹配/匿名派发）',
   'zone.legend.on-demand': '按需执行角色（独立列）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
@@ -264,6 +267,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
   'zone.agents.on-demand': '按需执行',
+  'zone.agents.general': 'general',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -338,7 +342,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': 'Legend',
   'zone.legend.flow-expected': 'expected flow edge (dashed)',
   'zone.legend.flow-actual': 'actual handoff edge',
-  'zone.legend.flow-unexpected': 'unexpected role (own column)',
+  'zone.legend.general': 'general bucket (unmatched / anonymous)',
   'zone.legend.on-demand': 'on-demand role (own column)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
@@ -371,6 +375,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
   'zone.agents.on-demand': 'On-demand',
+  'zone.agents.general': 'general',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',

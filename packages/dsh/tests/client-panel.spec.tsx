@@ -106,9 +106,9 @@ import {
   panDragMove,
   panDragStart,
   panTransform,
+  GENERAL_COLUMN,
   ON_DEMAND_COLUMN,
   PAN_ORIGIN,
-  UNEXPECTED_COLUMN,
   type PanState,
 } from '../src/client/panel/pages/AgentCanvasPage'
 
@@ -2048,9 +2048,10 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
  * SSR-level change assertion.
  * ------------------------------------------------------------------------- */
 
-describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 20260811-panel-agent-canvas Task 2)', () => {
-  /** Evidence fixture: 3 dispatches across 3 stages + one settle — lit cards,
-   * actual handoffs (a1→a2→a3, same plan) and a next edge (a3 running). */
+describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 20260811-panel-f3-agent-general)', () => {
+  /** Evidence fixture: 3 dispatches across 3 stages + one settle — lit cards
+   * (role-keyed), actual handoffs (fullstack-dev → general → qc-specialist,
+   * same plan) and a next edge (qc-specialist running). */
   const evidenceSource = flowSource([
     dispatchEvent({ ts: 30, role: 'qc-specialist', agent: 'a3', planId: 'plan-x', taskId: 'T3' }),
     settleEvent({ ts: 25, agent: 'a2', outcome: 'ok' }),
@@ -2063,9 +2064,9 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     for (const known of KNOWN_AGENTS) {
       expect(html).toContain(`data-agent-entity="${known.id}"`)
     }
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(14)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
     // Degraded → every roster member is an idle card (spec §6.2), zero claims.
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(14)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
     expect(html).toContain('data-canvas-note="degraded"')
     expect(html).toContain('data-agent-summary-executing="0"')
     expect(html).toContain('data-agent-summary-pending="0"')
@@ -2073,19 +2074,20 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
 
   it('lit cards carry the agent-name title + record fields; idle cards are muted with no fabricated record', () => {
     const html = agentsHtml(evidenceSource)
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(14)
-    // 3 lit (a1/a2/a3) + 11 idle roster members (spec §6.2 suppression rule).
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(11)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
+    // 3 lit (fullstack-dev / general / qc-specialist — role-keyed) + 10 idle
+    // roster members (spec §6.2 suppression rule).
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(10)
     // Title = the agent name (role id); the session id rides the record line.
     expect(html).toContain('title="fullstack-dev"')
-    expect(html).toContain('title="generalPurpose"')
+    expect(html).toContain('title="general"') // the generalPurpose dispatch folds into the bucket
     expect(html).toContain('title="qc-specialist"')
     expect(html).toContain('a1 · plan-x#T1')
     // Lit cards: no idle marker, honest statuses + record fields present.
-    expect(cardRegion(html, 'a1')).not.toContain('data-agent-idle')
-    expect(cardRegion(html, 'a1')).toContain('data-agent-record')
-    expect(cardRegion(html, 'a1')).toContain('data-agent-status="running"')
-    expect(cardRegion(html, 'a2')).toContain('data-agent-status="settled"')
+    expect(cardRegion(html, 'fullstack-dev')).not.toContain('data-agent-idle')
+    expect(cardRegion(html, 'fullstack-dev')).toContain('data-agent-record')
+    expect(cardRegion(html, 'fullstack-dev')).toContain('data-agent-status="running"')
+    expect(cardRegion(html, 'general')).toContain('data-agent-status="settled"') // a2's settle pairs the bucket dispatch
     // Idle card (e.g. prompt-engineer — an on-demand roster member): muted
     // marker, NO record line.
     expect(cardRegion(html, 'prompt-engineer')).toContain('data-agent-idle="true"')
@@ -2095,8 +2097,30 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(html).not.toContain('data-canvas-note')
     expect(html).toContain('data-agent-summary-executing="2"')
     // Pending = un-evidenced stage roles: review-edit-chain (3) + qa-gate (1)
-    // = 4 — the 11-role in-flow semantics (plan Item 3; ops-engineer out).
+    // = 4 — the 10-role in-flow semantics (plan f3; ops-engineer out of the
+    // flow and generalPurpose off the pipeline).
     expect(html).toContain('data-agent-summary-pending="4"')
+  })
+
+  it('7 lit + 6 idle = 13 entities — the full roster is rendered, never hidden (plan f3 AC-1)', () => {
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 40, role: 'product-manager', agent: 'p1' }),
+      dispatchEvent({ ts: 39, role: 'architect', agent: 'p1' }),
+      dispatchEvent({ ts: 38, role: 'writing-specialist', agent: 'p1' }),
+      dispatchEvent({ ts: 37, role: 'fullstack-dev', agent: 'p1' }),
+      dispatchEvent({ ts: 36, role: 'qc-specialist', agent: 'p1' }),
+      dispatchEvent({ ts: 35, role: 'qa-engineer', agent: 'p1' }),
+      dispatchEvent({ ts: 34, role: 'generalPurpose', agent: 'p1' }), // → general bucket
+    ]))
+    // 7 lit (6 in-flow + the general bucket) + 6 idle (fullstack-dev-2,
+    // frontend-dev, qc-specialist-2, qc-specialist-3, ops-engineer,
+    // prompt-engineer) = 13.
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(6)
+    // All 7 lit dispatches are running (no settles).
+    expect(html).toContain('data-agent-summary-executing="7"')
+    // Every stage evidenced → no pending.
+    expect(html).toContain('data-agent-summary-pending="0"')
   })
 
   it('empty ledger → data-canvas-note="empty"; settle-only ledger → the restored data-canvas-note="settle-only" (review T2-Imp-2; F-002 note is projected)', () => {
@@ -2124,17 +2148,19 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(garbageOnly).toContain('Settle records only (no dispatch evidence)')
     const anonymousDispatch = agentsHtml(flowSource([{ kind: 'dispatch' }]))
     expect(anonymousDispatch).not.toContain('data-canvas-note')
-    expect(anonymousDispatch).toContain('data-agent-summary-executing="0"')
+    // An anonymous dispatch folds into the general bucket → one running card.
+    expect(anonymousDispatch).toContain('data-agent-summary-executing="1"')
   })
 
-  it('mounts the Legend on the agents page: idle swatch + collaboration-edge swatches (plan Task 3; + on-demand item, plan Item 3)', () => {
+  it('mounts the Legend on the agents page: idle swatch + collaboration-edge swatches (+ the general bucket entry, plan f3)', () => {
     const html = agentsHtml(evidenceSource)
     expect(html).toContain('data-mstar-legend')
     // Idle swatch anchor (完成判据) + the collaboration-edge swatches
-    // (8 items: + 'on-demand' — plan 20260811-panel-f2-quickfix Item 3).
-    for (const key of ['agent-idle', 'flow-expected', 'flow-actual', 'flow-unexpected', 'on-demand', 'agent-running', 'agent-settled', 'next']) {
+    // (8 items: 'general' replaced the former 'flow-unexpected' — plan f3).
+    for (const key of ['agent-idle', 'flow-expected', 'flow-actual', 'general', 'on-demand', 'agent-running', 'agent-settled', 'next']) {
       expect(html).toContain(`data-mstar-legend-item="${key}"`)
     }
+    expect(html).not.toContain('data-mstar-legend-item="flow-unexpected"')
     // The legend labels localize (zh).
     const locale = newLocale()
     locale.register(NS, { zh, en })
@@ -2146,31 +2172,60 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(zhHtml).toContain('未工作实体（虚线）')
     expect(zhHtml).toContain('预期流转边（虚线）')
     expect(zhHtml).toContain('实际交接边')
+    expect(zhHtml).toContain('general 桶（未匹配/匿名派发）')
     expect(zhHtml).toContain('按需执行角色（独立列）')
     expect(zhHtml).toContain('图例')
   })
 
-  it('draws the AgentEdge collaboration lines: expected skeleton / SDD loop back-edge / actual handoffs / the animated next edge', () => {
+  it('draws the AgentEdge collaboration lines: expected skeleton / SDD loop back-edge to general / actual handoffs / the animated next edge', () => {
     const html = agentsHtml(evidenceSource)
-    // expected: 4 forward skeleton arrows (5 stages) — plan Item 3.
-    expect(html.match(/data-agent-edge-expected="/g)).toHaveLength(4)
-    // SDD loop back-edge: sdd-task-review → sdd-implement, its OWN anchor
+    // expected: 3 forward skeleton arrows (4 stages) — plan f3.
+    expect(html.match(/data-agent-edge-expected="/g)).toHaveLength(3)
+    // SDD loop back-edge: sdd-implement → the general bucket, its OWN anchor
     // (curved double-arrow — visually distinct from the forward edge).
-    expect(html).toContain('data-agent-edge-loop="autonomous-execute:sdd-task-review-&gt;autonomous-execute:sdd-implement"')
-    // actual: same-plan ts-adjacent dispatch pairs. NOTE: React SSR escapes
-    // `>` in attribute values, so `a1->a2` renders as `a1-&gt;a2`.
-    expect(html).toContain('data-agent-edge-actual="a1-&gt;a2"')
-    expect(html).toContain('data-agent-edge-actual="a2-&gt;a3"')
-    // next: the latest running entity (a3, qc-tri) → the next stage column.
+    expect(html).toContain('data-agent-edge-loop="autonomous-execute:sdd-implement-&gt;general"')
+    // actual: same-plan ts-adjacent dispatch pairs, ROLE-keyed. NOTE: React
+    // SSR escapes `>` in attribute values, so `a->b` renders as `a-&gt;b`.
+    expect(html).toContain('data-agent-edge-actual="fullstack-dev-&gt;general"')
+    expect(html).toContain('data-agent-edge-actual="general-&gt;qc-specialist"')
+    // next: the latest running entity (qc-specialist, qc-tri) → the next stage column.
     expect(html).toContain('data-agent-edge-next="autonomous-execute:qc-tri-&gt;autonomous-execute:qa-gate"')
-    expect(html).toContain('data-agent-edge-next-from="a3"')
-    // Degraded ledger still draws the expected skeleton (4 forward + 1 loop
+    expect(html).toContain('data-agent-edge-next-from="qc-specialist"')
+    // Degraded ledger still draws the expected skeleton (3 forward + 1 loop
     // back-edge) — no fake claims.
     const degraded = agentsHtml(fullSource)
-    expect(degraded.match(/data-agent-edge-expected="/g)).toHaveLength(4)
+    expect(degraded.match(/data-agent-edge-expected="/g)).toHaveLength(3)
     expect(degraded.match(/data-agent-edge-loop="/g)).toHaveLength(1)
     expect(degraded).not.toContain('data-agent-edge-actual=')
     expect(degraded).not.toContain('data-agent-edge-next=')
+  })
+
+  it('the SDD loop edge is drawn BELOW the column band (bow = max endpoint + 24), double-arrow', () => {
+    const view = projectGraph(fullSource).agents // degraded → full idle roster
+    const layout = layoutAgents(view)
+    const impl = layout.columns.find((c) => c.id === 'autonomous-execute:sdd-implement')!
+    const general = layout.columns.find((c) => c.id === GENERAL_COLUMN)!
+    const y1 = impl.y + impl.h / 2
+    const y2 = general.y + general.h / 2
+    const bowY = Math.max(y1, y2) + 24
+    const html = agentsHtml(fullSource)
+    const anchor = html.indexOf('data-agent-edge-loop')
+    expect(anchor).toBeGreaterThan(-1)
+    // The loop path element: find the `<path` that carries the anchor, then
+    // read its `d="M x1 y1 Q midX bowY x2 y2"` geometry.
+    const pathStart = html.lastIndexOf('<path', anchor)
+    const pathEnd = html.indexOf('/>', pathStart)
+    const pathEl = html.slice(pathStart, pathEnd)
+    const m = pathEl.match(/d="M ([\d.]+) ([\d.]+) Q ([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)"/)
+    expect(m).not.toBeNull()
+    const gotBowY = Number(m![4])
+    // The bow sits below BOTH endpoints (below the column band mid-line).
+    expect(gotBowY).toBe(bowY)
+    expect(gotBowY).toBeGreaterThan(y1)
+    expect(gotBowY).toBeGreaterThan(y2)
+    // Both arrowheads (marker-start + marker-end → the ⇄ double arrow).
+    expect(pathEl).toContain('marker-start')
+    expect(pathEl).toContain('marker-end')
   })
 
   it('data-canvas-pan exposes the pan state as a translate transform (origin default)', () => {
@@ -2201,70 +2256,72 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(panTransform(PAN_ORIGIN)).toBe('translate(0px, 0px)')
   })
 
-  it('layoutAgents is deterministic: 5 flow columns + the on-demand column + the unexpected track, every entity boxed', () => {
+  it('layoutAgents is deterministic: 4 flow columns + the on-demand column + the general column, every entity boxed', () => {
     const view = projectGraph(fullSource).agents
     const layout = layoutAgents(view)
     expect(layout.columns.map((c) => c.id)).toEqual([
       'iteration-start:review-edit-chain',
       'autonomous-execute:sdd-implement',
-      'autonomous-execute:sdd-task-review',
       'autonomous-execute:qc-tri',
       'autonomous-execute:qa-gate',
       ON_DEMAND_COLUMN,
-      UNEXPECTED_COLUMN,
+      GENERAL_COLUMN,
     ])
     for (const entity of view.entities) {
       expect(layout.cards.get(entity.key)).toBeDefined()
     }
     // On-demand idle roles (ops-engineer / prompt-engineer) land in the
-    // on-demand column (index 5); unexpected-zone roles (explore) land in
-    // the trailing unexpected track (index 6) — plan Item 3 column split.
-    expect(layout.cards.get('ops-engineer')!.x).toBeGreaterThanOrEqual(layout.columns[5]!.x)
-    expect(layout.cards.get('ops-engineer')!.x).toBeLessThan(layout.columns[6]!.x)
-    expect(layout.cards.get('prompt-engineer')!.x).toBeGreaterThanOrEqual(layout.columns[5]!.x)
-    expect(layout.cards.get('prompt-engineer')!.x).toBeLessThan(layout.columns[6]!.x)
-    expect(layout.cards.get('explore')!.x).toBeGreaterThan(layout.columns[6]!.x)
+    // on-demand column (index 4); the general bucket member lands in the
+    // general column (index 5) — plan f3 column split.
+    expect(layout.cards.get('ops-engineer')!.x).toBeGreaterThanOrEqual(layout.columns[4]!.x)
+    expect(layout.cards.get('ops-engineer')!.x).toBeLessThan(layout.columns[5]!.x)
+    expect(layout.cards.get('prompt-engineer')!.x).toBeGreaterThanOrEqual(layout.columns[4]!.x)
+    expect(layout.cards.get('prompt-engineer')!.x).toBeLessThan(layout.columns[5]!.x)
+    expect(layout.cards.get('general')!.x).toBeGreaterThanOrEqual(layout.columns[5]!.x)
     // Same view → identical geometry (SSR stability).
     expect(layoutAgents(view)).toEqual(layout)
   })
 
-  it('F-001: a session id colliding with a role id renders ONE card per key — no duplicate-key twin, honest summary', () => {
-    // dispatch agent = 'explore' (a KNOWN_AGENTS id) with role
-    // 'fullstack-dev' — the projection suppresses the idle twin, so the page
-    // renders 1 lit + 12 idle = 13 unique entities (roster 14; the collided
-    // roster slot is the lit card and fullstack-dev is evidenced) and the
-    // summary matches the visible cards.
+  it('F-001: a non-roster session id is only a record field — the ROLE keys the card, ONE card per key, honest summary', () => {
+    // dispatch agent = 'explore' (session id, no longer a roster id) with role
+    // 'fullstack-dev' — the card is keyed by the ROLE; the session id rides
+    // the record line. 1 lit + 12 idle = 13 unique entities (roster 13) and
+    // the summary matches the visible cards.
     const html = agentsHtml(flowSource([
       dispatchEvent({ ts: 7, role: 'fullstack-dev', agent: 'explore' }),
     ]))
     expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
-    expect(html.match(/data-agent-entity="explore"/g)).toHaveLength(1)
+    expect(html.match(/data-agent-entity="fullstack-dev"/g)).toHaveLength(1)
+    expect(html).not.toContain('data-agent-entity="explore"')
     expect(html.match(/data-agent-idle="true"/g)).toHaveLength(12)
-    // The lit card is visible and honest (running, no idle marker).
-    const lit = cardRegion(html, 'explore')
+    // The lit card is visible and honest (running, no idle marker, record = session).
+    const lit = cardRegion(html, 'fullstack-dev')
     expect(lit).toContain('data-agent-status="running"')
     expect(lit).not.toContain('data-agent-idle')
     expect(lit).toContain('data-agent-record')
-    // The suppressed role's idle card is gone too (fullstack-dev is evidenced).
-    expect(html).not.toContain('data-agent-entity="fullstack-dev"')
+    expect(lit).toContain('explore')
+    // The idle fullstack-dev twin is gone (evidenced role).
+    expect(html).not.toContain('data-agent-entity="fullstack-dev" data-agent-idle')
     // Executing matches the visible running card.
     expect(html).toContain('data-agent-summary-executing="1"')
   })
 
-  it('renders the on-demand column separate from unexpected, with NO expected/next arrows touching it (plan Item 3)', () => {
+  it('renders the on-demand column separate from the general bucket, with NO expected/next arrows touching on-demand (plan f3)', () => {
     const html = agentsHtml(fullSource) // degraded → full idle roster
-    // The column exists with its own id; the label localizes.
+    // The columns exist with their own ids; the labels localize.
     expect(html).toContain('data-canvas-column="on-demand"')
-    expect(html).toContain('data-canvas-column="unexpected"')
+    expect(html).toContain('data-canvas-column="general"')
     expect(html).toContain('On-demand')
+    expect(html).toContain('>general<')
     // No expected/next edge anchor touches the on-demand column.
     expect(html).not.toMatch(/data-agent-edge-(?:expected|next)="[^"]*on-demand/)
     // On-demand zone cards report the zone on data-agent-stage (projected,
-    // never guessed); unexpected-zone cards report 'unexpected'.
+    // never guessed); general-bucket cards report 'general'.
     expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-stage="on-demand"')
     expect(cardRegion(html, 'prompt-engineer')).toContain('data-agent-stage="on-demand"')
-    expect(cardRegion(html, 'explore')).toContain('data-agent-stage="unexpected"')
-    // zh label localizes (按需执行).
+    expect(cardRegion(html, 'general')).toContain('data-agent-stage="general"')
+    // zh label localizes (按需执行); the general label is the user-fixed
+    // literal 'general' in both locales.
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
@@ -2273,5 +2330,6 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       t: locale.bind(NS),
     }))
     expect(zhHtml).toContain('按需执行')
+    expect(zhHtml).toContain('>general<')
   })
 })

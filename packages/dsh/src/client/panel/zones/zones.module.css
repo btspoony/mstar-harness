@@ -110,13 +110,17 @@
   background: var(--dsw-alias-state-business-primary);
 }
 
-.swatchFlowUnexpected {
+/* General bucket swatch (plan 20260811-panel-f3-agent-general): the trailing
+ * column for stage-null roles (SDD per-task reviewers / unmatched / anonymous
+ * dispatches) — the former 'unexpected' entry, kept as the dashed warn ring
+ * so the column stays visually distinct from the on-demand business ring. */
+.swatchGeneral {
   border: 1px dashed var(--dsw-alias-state-warn-label);
 }
 
 /* On-demand zone swatch (plan 20260811-panel-f2-quickfix Item 3): the
  * ops-engineer / prompt-engineer column — business ring, distinct from the
- * warn-dashed unexpected swatch. */
+ * warn-dashed general-bucket swatch. */
 .swatchOnDemand {
   border: 1px solid var(--dsw-alias-state-business-primary);
   border-radius: 999px;
