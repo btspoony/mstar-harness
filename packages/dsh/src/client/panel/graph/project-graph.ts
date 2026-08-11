@@ -18,15 +18,16 @@
  * Migration from the legacy graph GraphView (spec §3, per field):
  * - kept & moved: `violations` / `flow.events` / `flow.unexpected` → top-level
  *   `violations` / `events` / `unexpected` (FlowEventView projection unchanged,
- *   incl. the `settled` pairing marker — shared with the plan-3 agent-entity
- *   status derivation via `pairSettleIndexes`); `iterationId` →
- *   `iteration.iterationId`;
+ *   incl. the `settled` pairing marker — shared with the agent-entity status
+ *   derivation via the single `pairSettleStatus` pairing walk); `iterationId`
+ *   → `iteration.iterationId`;
  * - deleted (legacy graph structure): `phases`, `phaseEdges`,
  *   `planStates`, `planEdges`, `connector`, `currentPhase`, `flow.stages`
- *   (the stage skeleton + lit/count merge into the `agents` projection in
- *   plan 3; plan 2 delivers the `agents` skeleton);
+ *   (the stage skeleton + entities/edges now live in the `agents` projection —
+ *   spec §4);
  * - added: `iteration.steps / currentStep / branches`, `tasks.columns / total
- *   / truncated`, `agents`.
+ *   / truncated`, `agents` (entities + expected/actual/next edges + executing/
+ *   pending counts — spec §4).
  *
  * Degradation (spec §8): `source === null` → legal empty view (the panel
  * never mounts the graph for that case, but the projection stays total);
@@ -35,7 +36,8 @@
  * `iteration.active === false` — `degraded.iteration ⟺ !active`); `state`
  * null → 6-column skeleton (count 0) + `degraded.state`; `state.plans`
  * missing → same skeleton + `degraded.plans`; `state.agentFlow`
- * missing/unreadable → agents skeleton + `degraded`; 0 events → `empty`.
+ * missing/unreadable → agents skeleton + `degraded` (no entity/pending
+ * claims — the note explains); 0 events → `empty` (pending skeleton only).
  */
 
 import type { MstarEngineStatusSource } from '../../../types.ts'
@@ -126,13 +128,12 @@ export interface KanbanColumnView {
   capped: number | null
 }
 
-/* ---------------------------------- agents zone (spec §4 — plan 2 skeleton) ---------------------------------- */
+/* ---------------------------------- agents zone (spec §4) ---------------------------------- */
 
 /**
- * One pending agent-pipeline stage (plan 2 skeleton; entity construction
- * lands in plan 3 — spec §4): the EXPECTED_ROLE_FLOW skeleton with its
- * expected role chips. No evidence → the stage renders as a dashed
- * "待执行" placeholder.
+ * One agent-pipeline stage (spec §4): the EXPECTED_ROLE_FLOW skeleton with its
+ * expected role chips. No dispatch evidence → the stage renders as a dashed
+ * "待执行" placeholder and its expected roles count into `pending`.
  */
 export interface AgentZoneStage {
   /** `${phase}:${stage}`. */
@@ -140,13 +141,78 @@ export interface AgentZoneStage {
   phase: PhaseId
   stage: string
   roles: readonly string[]
+  /**
+   * Dispatch evidence (spec §4): any dispatch row's role maps to this stage —
+   * the render shows the dashed "待执行" placeholder ONLY for un-evidenced
+   * stages (the `pending` count is the same per-stage test). Evidence comes
+   * from ALL dispatch rows, not just each entity's latest — an agent
+   * re-dispatched under another role still lights its earlier stage.
+   */
+  evidenced: boolean
 }
 
 /**
- * The projected agents zone — plan 2 delivers the SKELETON only (spec §3:
- * "plan 3 完整；plan 2 先交付骨架"): the pending stage list plus the
- * degraded/empty flags projected from `state.agentFlow` presence. Entities,
- * stage lit/count and the flow arrows are the plan-3 projection.
+ * One agent entity card (spec §4): a session aggregated across its dispatch
+ * rows (count + latest ts). The card identity fields (name/role/task/stage)
+ * reflect the LATEST dispatch — the same dispatch that decides the status.
+ */
+export interface AgentEntityView {
+  /** `agent` (session id); fallback `${role}+${ts}` when the agent id is missing. */
+  key: string
+  /** The raw session id; null when the fallback key was used. */
+  agent: string | null
+  /** Display name = `agent ?? role` (spec §4). */
+  name: string
+  /** Role chip ('' when the dispatch carried no role). */
+  role: string
+  /** Task tag `${planId}#${taskId}` (missing planId → null; taskId missing → planId). */
+  task: string | null
+  /** Spec §4 hardcoded priority: latest-dispatch verdict → paired settle → running. */
+  status: AgentEntityStatus
+  /** Dispatch count of this entity in the window (settles never count). */
+  count: number
+  /** Latest dispatch ts (the status/identity source). */
+  ts: number
+  /** Latest dispatch's stage via `roleStageIndex` (first constant-order match); null → unexpected role. */
+  stage: { phase: PhaseId; stage: string } | null
+}
+
+/**
+ * Entity status (spec §4, hardcoded priority): `denied`/`advisory` come from
+ * the LATEST dispatch's verdict (verdict wins regardless of settling);
+ * `error`/`settled` come from the settle paired with that dispatch; `running`
+ * = no paired settle (best-effort heuristic, never pretended).
+ */
+export type AgentEntityStatus = 'running' | 'settled' | 'error' | 'denied' | 'advisory'
+
+/** Edge kinds (spec §4): skeleton / handoff / next-flow arrows. */
+export type AgentEdgeKind = 'expected' | 'actual' | 'next'
+
+/**
+ * One agents-zone arrow (spec §4):
+ * - `expected`: skeleton arrow between consecutive EXPECTED_ROLE_FLOW stage
+ *   columns (source/target = stage id);
+ * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
+ *   (source/target = entity key);
+ * - `next`: the latest running entity's stage column → the next constant-order
+ *   column (source/target = stage id; `entityKey` = the running card).
+ */
+export interface AgentEdge {
+  kind: AgentEdgeKind
+  /** expected/next: stage id (`${phase}:${stage}`); actual: entity key. */
+  source: string
+  target: string
+  /** The running entity key the next arrow highlights; null for expected/actual. */
+  entityKey: string | null
+}
+
+/**
+ * The projected agents zone (spec §4): the EXPECTED_ROLE_FLOW stage skeleton
+ * plus the dispatch-derived entity cards and the expected/actual/next arrows.
+ * Total function — NEVER throws and NEVER fabricates: agentFlow
+ * missing/unreadable → `degraded` (skeleton only, no entity/pending claims);
+ * 0 events → `empty` (pending skeleton only); settle-only ledger → no entity
+ * cards (settles never produce entities) + full pending skeleton.
  */
 export interface AgentZoneView {
   /** The EXPECTED_ROLE_FLOW skeleton (pending stages). */
@@ -155,6 +221,14 @@ export interface AgentZoneView {
   degraded: boolean
   /** `state.agentFlow` present but 0 events (recording started at plan merge). */
   empty: boolean
+  /** Aggregated dispatch entities — one card per agent key (spec §4). */
+  entities: readonly AgentEntityView[]
+  /** expected (stage skeleton) + actual (same-plan handoffs) + at most one next (latest running). */
+  edges: readonly AgentEdge[]
+  /** `running` entity count — the summary "N 执行中". */
+  executing: number
+  /** Sum of expected roles of stages with no dispatch evidence — the summary "M 待执行". */
+  pending: number
 }
 
 /* ---------------------------------- ZoneView (spec §3) ---------------------------------- */
@@ -333,7 +407,7 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
     doneColumn.capped = PLAN_CAP
   }
 
-  // --- agents zone skeleton + flow events (spec §3/§4 — plan 2) ---
+  // --- agents zone + flow events (spec §3/§4) ---
   const agents = projectAgents(source)
   const flow = projectFlowEvents(source)
 
@@ -357,20 +431,171 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
   }
 }
 
-/* ---------------------------------- agents zone skeleton (spec §4 — plan 2) ---------------------------------- */
+/* ---------------------------------- agents zone projection (spec §4) ---------------------------------- */
+
+/** Skeleton stage-column arrows: consecutive EXPECTED_ROLE_FLOW stages (spec §4). */
+function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
+  const edges: AgentEdge[] = []
+  for (let i = 0; i + 1 < stages.length; i++) {
+    edges.push({ kind: 'expected', source: stages[i]!.id, target: stages[i + 1]!.id, entityKey: null })
+  }
+  return edges
+}
+
+/** One in-progress entity accumulator (the aggregation walk, spec §4). */
+interface EntityAccum {
+  key: string
+  agent: string | null
+  name: string
+  role: string
+  task: string | null
+  count: number
+  ts: number
+  stage: { phase: PhaseId; stage: string } | null
+  /** Index of the latest dispatch in the classified entries array (pair lookup). */
+  latestIndex: number
+  /** dispatchStatus of the latest dispatch ('denied' | 'advisory' | 'dispatched'). */
+  verdict: FlowEventStatus
+}
 
 /**
- * `projectAgents(source): AgentZoneView` — the agents-zone SKELETON (plan 2;
- * entities/edges land in plan 3). Total function: NEVER throws. Projects only
- * `state.agentFlow` PRESENCE onto the EXPECTED_ROLE_FLOW pending-stage
- * skeleton:
+ * Entity status (spec §4 hardcoded priority): the latest-dispatch verdict
+ * wins (denied/advisory, settle-independent); otherwise the settle paired
+ * with that dispatch — `error` → error, `ok`/`denied` → settled; no pair →
+ * running (best-effort heuristic, never pretended).
+ */
+function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEventStatus>): AgentEntityStatus {
+  if (acc.verdict === 'denied') return 'denied'
+  if (acc.verdict === 'advisory') return 'advisory'
+  const paired = pairStatus.get(acc.latestIndex)
+  return paired === 'error' ? 'error' : paired === undefined ? 'running' : 'settled'
+}
+
+/**
+ * Aggregate dispatch rows into entity cards (spec §4): key = `agent` (session
+ * id) with `${role}+${ts}` fallback; the same key aggregates (count + latest
+ * ts, identity fields from the latest dispatch). Dispatch rows with NO
+ * identity at all (agent null AND role '') are skipped — a card with nothing
+ * on it is never fabricated (spec §8 garbage rows). Settle rows never produce
+ * entities (they carry no role/plan identity — spec §4).
+ */
+function aggregateEntities(
+  entries: readonly { view: FlowEventView }[],
+  pairStatus: ReadonlyMap<number, FlowEventStatus>,
+): AgentEntityView[] {
+  const acc = new Map<string, EntityAccum>()
+  for (let i = 0; i < entries.length; i++) {
+    const v = entries[i]!.view
+    if (v.kind !== 'dispatch') continue
+    if (v.agent === null && v.role === '') continue // anonymous → no card
+    const key = v.agent ?? `${v.role}+${v.ts}`
+    const task = v.planId === null ? null : v.taskId === null ? v.planId : `${v.planId}#${v.taskId}`
+    const cur = acc.get(key)
+    if (cur === undefined) {
+      acc.set(key, {
+        key,
+        agent: v.agent,
+        name: v.agent ?? v.role,
+        role: v.role,
+        task,
+        count: 1,
+        ts: v.ts,
+        stage: v.stage,
+        latestIndex: i,
+        verdict: v.status,
+      })
+    } else {
+      cur.count += 1
+      // The latest dispatch = max ts; equal ts → first in file order (the
+      // catalog is latest-first, so the smaller index is the more recent).
+      if (v.ts > cur.ts || (v.ts === cur.ts && i < cur.latestIndex)) {
+        cur.ts = v.ts
+        cur.latestIndex = i
+        cur.verdict = v.status
+        cur.agent = v.agent
+        cur.name = v.agent ?? v.role
+        cur.role = v.role
+        cur.task = task
+        cur.stage = v.stage
+      }
+    }
+  }
+  return Array.from(acc.values()).map((e) => ({
+    key: e.key,
+    agent: e.agent,
+    name: e.name,
+    role: e.role,
+    task: e.task,
+    count: e.count,
+    ts: e.ts,
+    stage: e.stage,
+    status: entityStatus(e, pairStatus),
+  }))
+}
+
+/**
+ * Same-plan handoff arrows (spec §4): within each planId, the ts-ascending
+ * adjacent dispatch ENTITY pairs. Anonymous rows (no card) and plan-less
+ * dispatches cannot form a pair → excluded; a self-pair (the same entity
+ * twice in a row) is skipped — a card never hands off to itself.
+ */
+function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
+  const byPlan = new Map<string, { key: string; ts: number; idx: number }[]>()
+  entries.forEach((e, idx) => {
+    const v = e.view
+    if (v.kind !== 'dispatch') return
+    if (v.agent === null && v.role === '') return // anonymous → no card
+    if (v.planId === null) return // no plan → no same-plan chain
+    const key = v.agent ?? `${v.role}+${v.ts}`
+    const list = byPlan.get(v.planId)
+    if (list === undefined) byPlan.set(v.planId, [{ key, ts: v.ts, idx }])
+    else list.push({ key, ts: v.ts, idx })
+  })
+  const edges: AgentEdge[] = []
+  for (const planId of Array.from(byPlan.keys()).sort()) {
+    const rows = byPlan.get(planId)!
+      .slice()
+      .sort((a, b) => a.ts - b.ts || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) || a.idx - b.idx)
+    for (let i = 0; i + 1 < rows.length; i++) {
+      if (rows[i]!.key === rows[i + 1]!.key) continue // self-pair skip
+      edges.push({ kind: 'actual', source: rows[i]!.key, target: rows[i + 1]!.key, entityKey: null })
+    }
+  }
+  return edges
+}
+
+/**
+ * The `next` arrow (spec §4): the LATEST running entity (max ts; tie →
+ * smallest entity key) sits in a stage column → the next EXPECTED_ROLE_FLOW
+ * column. No running entity / running entity without a stage (unexpected
+ * role) / already at the last column (ops-on-demand) → NO next edge (honest
+ * — never a guess).
+ */
+function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZoneStage[]): AgentEdge[] {
+  let best: AgentEntityView | null = null
+  for (const e of entities) {
+    if (e.status !== 'running') continue
+    if (best === null || e.ts > best.ts || (e.ts === best.ts && e.key < best.key)) best = e
+  }
+  if (best === null || best.stage === null) return []
+  const fromId = `${best.stage.phase}:${best.stage.stage}`
+  const index = stages.findIndex((s) => s.id === fromId)
+  if (index === -1 || index + 1 >= stages.length) return []
+  return [{ kind: 'next', source: fromId, target: stages[index + 1]!.id, entityKey: best.key }]
+}
+
+/**
+ * `projectAgents(source): AgentZoneView` — the agents zone (spec §4). Total
+ * function: NEVER throws and NEVER fabricates values:
  *
- * - `state.agentFlow` null/unreadable (the server returns null ONLY for an
- *   unreadable ledger) → `degraded` (skeleton + the evidence-missing note);
+ * - `state.agentFlow` null/unreadable → `degraded` (skeleton + the
+ *   evidence-missing note; no entity/pending claims — executing 0, pending 0,
+ *   never a guessed count);
  * - a MISSING ledger file reads as the server's empty view → present with 0
- *   events → `empty` (recording starts at plan merge — the no-dispatches-yet
- *   note);
- * - otherwise → plain skeleton (lit/count and entities come with plan 3).
+ *   events → `empty` (pending skeleton: every expected role is pending);
+ * - otherwise: entities aggregated from dispatch rows, statuses via the
+ *   shared pairing walk, expected/actual/next edges, and the executing
+ *   (running entities) / pending (un-evidenced stage roles) counts.
  */
 export function projectAgents(source: MstarEngineStatusSource | null): AgentZoneView {
   const stages: AgentZoneStage[] = EXPECTED_ROLE_FLOW.map((s) => ({
@@ -378,6 +603,7 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     phase: s.phase,
     stage: s.stage,
     roles: s.roles,
+    evidenced: false,
   }))
   const state = source == null ? null : (source as { state?: unknown }).state
   const agentFlow = state == null ? undefined : (state as { agentFlow?: unknown }).agentFlow
@@ -386,16 +612,42 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     ? null
     : rawAgentFlow.events
   if (rawEvents === null || !Array.isArray(rawEvents)) {
-    // Ledger unreadable / absent agentFlow (non-object / non-array) →
-    // skeleton + degraded marker (panel note; never a throw).
-    return { stages, degraded: true, empty: false }
+    return { stages, degraded: true, empty: false, entities: [], edges: expectedEdges(stages), executing: 0, pending: 0 }
   }
-  if (rawEvents.length === 0) {
-    // Ledger exists (or the server's empty view for a missing ledger) but
-    // nothing recorded yet (recording starts at plan merge — spec §4).
-    return { stages, degraded: false, empty: true }
+
+  const entries = classifyFlowRows(rawEvents)
+  const empty = rawEvents.length === 0
+
+  // Evidence (spec §4): a stage is evidenced when any dispatch row's role maps
+  // to it (roles are unique across stages, so this equals literal role
+  // membership). Counted from ALL dispatch rows — an agent re-dispatched under
+  // another role still lights its earlier stage. The same set drives the
+  // per-stage `evidenced` flag (the render's pending-placeholder decision) and
+  // the `pending` count — no drift.
+  const evidenced = new Set<string>()
+  for (const e of entries) {
+    if (e.view.kind === 'dispatch' && e.view.stage !== null) {
+      evidenced.add(`${e.view.stage.phase}:${e.view.stage.stage}`)
+    }
   }
-  return { stages, degraded: false, empty: false }
+  for (const s of stages) s.evidenced = evidenced.has(s.id)
+
+  // Shared settle→dispatch pairing (one walk, spec §4): the settle status per
+  // paired dispatch index; entity status looks up its latest dispatch's pair.
+  // `view.status` already carries settleStatus(outcome) for settle rows, so
+  // the record values are the settle statuses directly.
+  const pairStatus = pairSettleStatus(
+    entries.map((e) => ({ kind: e.view.kind, agent: e.view.agent, status: e.view.status })),
+  )
+
+  const entities = aggregateEntities(entries, pairStatus)
+  const edges = [...expectedEdges(stages), ...actualEdges(entries), ...nextEdges(entities, stages)]
+
+  const executing = entities.filter((e) => e.status === 'running').length
+  // Pending = expected roles of stages with NO dispatch evidence (spec §4).
+  const pending = stages.reduce((sum, s) => sum + (evidenced.has(s.id) ? 0 : s.roles.length), 0)
+
+  return { stages, degraded: false, empty, entities, edges, executing, pending }
 }
 
 /* ---------------------------------- flow events projection (spec §3 — moved from `flow.*`) ---------------------------------- */
@@ -477,20 +729,22 @@ function flowEventOf(
 }
 
 /**
- * Best-effort settle→dispatch pairing (spec §4): the shared pure function
- * behind BOTH the events projection (`settled` marker) and the plan-3
- * agent-entity status derivation — one implementation, no heuristic drift.
+ * Shared settle→dispatch pairing walk (spec §4) — the ONE implementation
+ * behind BOTH the events projection (`settled` marker, via
+ * `pairSettleIndexes`) and the agent-entity status derivation (via the
+ * returned settle status per paired dispatch index) — no heuristic drift.
  * Input rows are in FILE order (the catalog is latest-first, so the pairing
  * walks reversed) keeping the most recent same-agent dispatch; each settle
- * pairs with it and the paired dispatch's index is returned. A settle with no
- * prior same-agent dispatch (agent null, truncated window, or a missed
- * record) stays an independent settle. Output: the index set of paired
- * dispatches.
+ * pairs with it. A settle with no prior same-agent dispatch (agent null,
+ * truncated window, or a missed record) stays an independent settle. Output:
+ * paired dispatch index → the settle's status (`entry.status` for settle
+ * rows — the events path omits it, defaulting to `ok`, and only the keys
+ * matter there).
  */
-export function pairSettleIndexes(
-  rows: readonly { kind: 'dispatch' | 'settle'; agent: string | null }[],
-): ReadonlySet<number> {
-  const settled = new Set<number>()
+function pairSettleStatus(
+  rows: readonly { kind: 'dispatch' | 'settle'; agent: string | null; status?: FlowEventStatus }[],
+): Map<number, FlowEventStatus> {
+  const record = new Map<number, FlowEventStatus>()
   const lastDispatch = new Map<string, number>()
   for (let i = rows.length - 1; i >= 0; i--) {
     const entry = rows[i]!
@@ -498,10 +752,39 @@ export function pairSettleIndexes(
       if (entry.agent !== null) lastDispatch.set(entry.agent, i)
     } else if (entry.agent !== null) {
       const paired = lastDispatch.get(entry.agent)
-      if (paired !== undefined) settled.add(paired)
+      if (paired !== undefined) record.set(paired, entry.status ?? 'ok')
     }
   }
-  return settled
+  return record
+}
+
+/**
+ * The paired dispatch index set (spec §4): the events projection's `settled`
+ * marker. Same walk as the entity status derivation — `pairSettleStatus`
+ * minus the settle statuses.
+ */
+export function pairSettleIndexes(
+  rows: readonly { kind: 'dispatch' | 'settle'; agent: string | null }[],
+): ReadonlySet<number> {
+  return new Set(pairSettleStatus(rows).keys())
+}
+
+/**
+ * Classify the windowed ledger rows into guarded event entries (spec §2.4):
+ * unclassifiable rows (kind ∉ dispatch|settle) are skipped — never guessed;
+ * valid rows degrade per field via `flowEventOf`. Latest-first order is
+ * preserved (the pairing walk and the entity aggregation both depend on it).
+ */
+function classifyFlowRows(rawEvents: readonly unknown[]): { view: FlowEventView }[] {
+  const stageIndex = roleStageIndex()
+  const windowed = rawEvents.slice(0, FLOW_EVENT_WINDOW)
+  const entries: { view: FlowEventView }[] = []
+  windowed.forEach((raw, i) => {
+    const view = flowEventOf(raw, i, stageIndex)
+    if (view === null) return
+    entries.push({ view })
+  })
+  return entries
 }
 
 /**
@@ -515,8 +798,8 @@ export function pairSettleIndexes(
  *   (e.g. `general` / `explore` / `scout`). Settle rows are completion
  *   records — they carry no role at all, so they never flag as unexpected
  *   even though their `expected` field is false ('' ∉ union);
- * - settled: best-effort pairing via `pairSettleIndexes` (shared with the
- *   plan-3 entity status derivation). The panel never depends on the
+ * - settled: best-effort pairing via `pairSettleIndexes` (the same walk the
+ *   agent-entity status derivation uses). The panel never depends on the
  *   pairing's correctness;
  * - degradation: agentFlow null/unreadable → no events (the `agents`
  *   skeleton carries the `degraded` marker); the MISSING ledger file reads as
@@ -532,26 +815,20 @@ export function projectFlowEvents(
   const rawEvents = rawAgentFlow === null || rawAgentFlow === undefined || typeof rawAgentFlow !== 'object'
     ? null
     : rawAgentFlow.events
-  if (rawEvents === null || !Array.isArray(rawEvents) || rawEvents.length === 0) {
+  if (rawEvents === null || !Array.isArray(rawEvents)) {
     return { events: [], unexpected: [] }
   }
 
-  const stageIndex = roleStageIndex()
-  const windowed = rawEvents.slice(0, FLOW_EVENT_WINDOW)
-  // Classify first: unclassifiable rows are skipped (never guessed), and the
-  // pairing below walks only valid rows in file order.
-  const entries: { view: FlowEventView; kind: 'dispatch' | 'settle'; agent: string | null }[] = []
-  windowed.forEach((raw, i) => {
-    const view = flowEventOf(raw, i, stageIndex)
-    if (view === null) return
-    entries.push({ view, kind: view.kind, agent: view.agent })
-  })
-
-  for (const i of pairSettleIndexes(entries)) entries[i]!.view.settled = true
+  const entries = classifyFlowRows(rawEvents)
+  // settled markers via the shared pairing walk (spec §4 — one implementation
+  // behind the events projection and the entity status derivation).
+  for (const i of pairSettleIndexes(entries.map((e) => ({ kind: e.view.kind, agent: e.view.agent })))) {
+    entries[i]!.view.settled = true
+  }
 
   const events = entries.map((e) => e.view) // latest-first preserved
   const unexpected = entries
-    .filter((e) => e.kind === 'dispatch' && !e.view.expected)
+    .filter((e) => e.view.kind === 'dispatch' && !e.view.expected)
     .map((e) => e.view)
   return { events, unexpected }
 }

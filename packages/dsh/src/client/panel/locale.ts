@@ -26,6 +26,21 @@
  * `zone.tasks.no-plans` (the muted empty note) and `zone.tasks.more` (the
  * Done-column `+N more` overflow hint). `zone.tasks.placeholder` is gone with
  * the placeholder.
+ *
+ * T2 (spec panel-zones §4, plan 20260810-panel-agent-flow-zone): the agents
+ * zone is filled in — `zone.agents.summary` (`N executing · M pending`),
+ * `zone.agents.pending-label` (the dashed "待执行" placeholder chip) and
+ * `zone.agents.next` (the animated next-edge label). `zone.agents.placeholder`
+ * is gone with the placeholder.
+ *
+ * T3 (same plan): the dock is collapsible (the frame is a native <details>,
+ * header = <summary>) and the legend gains the entity-status swatches —
+ * `zone.legend.agent-running` / `zone.legend.agent-settled` (the status-dot
+ * treatments of the entity cards; the `zone.agents.*` family itself is
+ * complete from T2 — every key is rendered, so no `zone.agents.status.*`
+ * family is added: a status TEXT on the cards would be dead strings, the
+ * spec §4 card shows a status point, and reusing `flow.*` would conflate
+ * event status words (dispatched/settled ok) with entity status words).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -56,6 +71,8 @@ export type PanelKey =
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
   | 'zone.legend.flow-unexpected'
+  | 'zone.legend.agent-running'
+  | 'zone.legend.agent-settled'
   | 'zone.legend.next'
   | 'zone.iteration.title'
   | 'zone.iteration.active'
@@ -85,7 +102,9 @@ export type PanelKey =
   | 'zone.state.Blocked'
   | 'zone.state.unknown'
   | 'zone.agents.title'
-  | 'zone.agents.placeholder'
+  | 'zone.agents.summary'
+  | 'zone.agents.pending-label'
+  | 'zone.agents.next'
   | 'flow.title'
   | 'flow.empty'
   | 'flow.degraded'
@@ -145,6 +164,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-expected': '预期 stage（空心）',
   'zone.legend.flow-actual': '实际派发（实心）',
   'zone.legend.flow-unexpected': '未匹配角色（描边）',
+  'zone.legend.agent-running': '执行中实体（发光）',
+  'zone.legend.agent-settled': '已结算实体（✓）',
   'zone.legend.next': 'next 流转边（动画）',
   'zone.iteration.title': '迭代',
   'zone.iteration.active': '正在激活的迭代',
@@ -174,7 +195,9 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.state.Blocked': '受阻',
   'zone.state.unknown': '未知',
   'zone.agents.title': '代理执行',
-  'zone.agents.placeholder': '代理执行区（实体 / 流转）待实现',
+  'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
+  'zone.agents.pending-label': '待执行',
+  'zone.agents.next': 'next',
   'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -229,6 +252,8 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-expected': 'expected stage (hollow)',
   'zone.legend.flow-actual': 'actual dispatch (filled)',
   'zone.legend.flow-unexpected': 'unexpected role (outlined)',
+  'zone.legend.agent-running': 'agent running (glow)',
+  'zone.legend.agent-settled': 'agent settled (✓)',
   'zone.legend.next': 'next flow edge (animated)',
   'zone.iteration.title': 'Iteration',
   'zone.iteration.active': 'active iteration',
@@ -258,7 +283,9 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.state.Blocked': 'Blocked',
   'zone.state.unknown': 'unknown',
   'zone.agents.title': 'Agent Flow',
-  'zone.agents.placeholder': 'Agent flow zone (entities / flow) pending',
+  'zone.agents.summary': '{executing} executing · {pending} pending',
+  'zone.agents.pending-label': 'pending',
+  'zone.agents.next': 'next',
   'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',

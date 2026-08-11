@@ -28,6 +28,10 @@ export function Legend({ t }: LegendProps) {
     { key: 'flow-expected', swatch: css.swatchFlowExpected, label: t('zone.legend.flow-expected') },
     { key: 'flow-actual', swatch: css.swatchFlowActual, label: t('zone.legend.flow-actual') },
     { key: 'flow-unexpected', swatch: css.swatchFlowUnexpected, label: t('zone.legend.flow-unexpected') },
+    // Entity statuses (plan 3 T3): the status-dot treatments of the entity
+    // cards — running (business glow dot) and settled (success ✓).
+    { key: 'agent-running', swatch: css.swatchAgentRunning, label: t('zone.legend.agent-running') },
+    { key: 'agent-settled', swatch: css.swatchAgentSettled, label: t('zone.legend.agent-settled') },
     // Next-flow edge (plan 3): the animated business dash arrow from the
     // latest running entity to the next expected stage — declared now so the
     // legend stays complete when the agent-flow zone lands.
