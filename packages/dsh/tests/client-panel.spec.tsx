@@ -923,6 +923,30 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     // Zero bare colors of any form in the event-log css (whole-file scan).
     expect(pageCss).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
   })
+
+  it('event-log page: two-column locked-height body + per-partition internal scroll + narrow stack fallback (plan F3 Task 2)', () => {
+    const pageCss = readFileSync(new URL('../src/client/panel/pages/event-log.module.css', import.meta.url), 'utf8')
+    // Page frame (AC-3): grid two columns, locked to the tab height, NO
+    // whole-page scroll — the old `overflow-y: auto` scroll body is gone.
+    const pageRule = pageCss.match(/\.eventLogPage\s*\{[\s\S]*?\}/)
+    expect(pageRule).not.toBeNull()
+    expect(pageRule![0]).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
+    expect(pageRule![0]).toContain('grid-template-rows: minmax(0, 1fr)')
+    expect(pageRule![0]).toContain('overflow: hidden')
+    expect(pageRule![0]).not.toContain('overflow-y')
+    // Partitions shrink inside the locked row; the row list owns the internal
+    // scroll (the pinned section title never scrolls away).
+    const sectionRule = pageCss.match(/\.section\s*\{[\s\S]*?\}/)
+    expect(sectionRule![0]).toContain('min-height: 0')
+    const listRule = pageCss.match(/\.rowList\s*\{[\s\S]*?\}/)
+    expect(listRule).not.toBeNull()
+    expect(listRule![0]).toContain('flex: 1')
+    expect(listRule![0]).toContain('min-height: 0')
+    expect(listRule![0]).toContain('overflow-y: auto')
+    // Narrow fallback: below the zones 1200px precedent the partitions stack
+    // as locked 50/50 rows (both stay visible, each scrolling internally).
+    expect(pageCss).toMatch(/@media\s*\(max-width:\s*1200px\)\s*\{[\s\S]*?\.eventLogPage\s*\{[\s\S]*?grid-template-columns:\s*1fr/)
+  })
 })
 
 /* ---------------------------------------------------------------------------
