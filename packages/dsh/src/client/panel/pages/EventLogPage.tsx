@@ -126,7 +126,15 @@ function EventDetailsBody({
       />
       <DetailField field="status" label={t('event-log.field.status')} value={flowStatusLabel(entry.status, t)} />
       <DetailField field="expected" label={t('event-log.field.expected')} value={entry.expected ? t('event-log.yes') : t('event-log.no')} />
-      <DetailField field="settled" label={t('event-log.field.settled')} value={entry.settled ? t('event-log.yes') : t('event-log.no')} />
+      <DetailField
+        field="settled"
+        label={t('event-log.field.settled')}
+        // T2-Min-2: a SETTLE row IS the completion record — the field is not
+        // applicable there, so it renders「—」like any missing value (a flat
+        // 'no' would misread as "not settled"); a dispatch row renders the
+        // honest yes/no.
+        value={entry.eventKind === 'settle' ? '' : entry.settled ? t('event-log.yes') : t('event-log.no')}
+      />
       <DetailField field="duration" label={t('event-log.field.duration')} value={entry.durationMs === null ? '' : `${entry.durationMs}ms`} />
     </div>
   )

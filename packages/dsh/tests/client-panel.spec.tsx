@@ -1904,6 +1904,28 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('data-event-log-status="dispatched"')
   })
 
+  it('settle rows render「—」for the settled field — the completion record itself, not a misleading no (T2-Min-2)', () => {
+    // A settle row IS the completion record: the detail body's settled seat
+    // renders「—」(not applicable) instead of a flat 'no' (review T2-Min-2).
+    const html = eventsHtml(flowSource([
+      { ts: 3_000, kind: 'settle', role: '', planId: null, taskId: null, taskCategory: null, agent: 'a-1', outcome: 'ok', durationMs: 1234 },
+    ]))
+    const settleField = html.match(/data-event-log-field="settled"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(settleField).toContain('data-event-log-missing="true"')
+    expect(settleField).toContain('>—</span>')
+    // The settle row's detail body: 6 not-applicable fields (role/stage/
+    // plan/task/category/settled); agent/time/kind/status/expected/duration
+    // render their honest values.
+    expect(html.match(/data-event-log-missing="true"/g)).toHaveLength(6)
+    // A dispatch row (not settled) still renders the honest 'no'.
+    const dispatchHtml = eventsHtml(flowSource([
+      { ts: 2_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1', taskCategory: 'logic', agent: 'a-1', verdict: 'advisory' },
+    ]))
+    const dispatchField = dispatchHtml.match(/data-event-log-field="settled"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(dispatchField).toContain('data-event-log-missing="false"')
+    expect(dispatchField).toContain('>no</span>')
+  })
+
   it('both empty → single muted 暂无记录 note, no partitions (spec §8)', () => {
     const html = eventsHtml({
       ...flowSource([]),

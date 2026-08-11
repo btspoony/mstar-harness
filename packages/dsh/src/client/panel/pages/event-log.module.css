@@ -86,6 +86,38 @@
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   transition: color 150ms ease;   /* hover 120–150ms window */
+  list-style: none;               /* Firefox: remove the native disclosure marker */
+}
+
+/* Disclosure marker (T2-Min-1): the browser default triangle is replaced by
+ * a token-driven chevron (label-caption — visible in BOTH themes via the
+ * host token flip, dark has no panel-side override) that rotates 90° when
+ * the row expands. The 150ms rotation sits in the 120–150ms hover window;
+ * the panel root prefers-reduced-motion rule kills it like every other
+ * transition/animation. */
+.eventSummary::-webkit-details-marker,
+.violationSummary::-webkit-details-marker {
+  display: none;                  /* Chrome/Safari */
+}
+
+.eventSummary::marker,
+.violationSummary::marker {
+  content: '';
+}
+
+.eventSummary::before,
+.violationSummary::before {
+  content: '▸';
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 150ms ease;   /* 120–150ms window */
+}
+
+.eventDetails[open] > .eventSummary::before,
+.eventDetails[open] > .violationSummary::before {
+  transform: rotate(90deg);
 }
 
 .eventSummary:hover,
