@@ -167,19 +167,34 @@ function packagedCommandsDir(): string | undefined {
   }
 }
 
-/** Frontmatter field value of one command markdown (`name`/`description`/`agent`). */
+/** Frontmatter field value of one command markdown (`name`/`description`/`agent`/`input`). */
 function commandFrontmatterField(frontmatter: string, label: string): string | undefined {
   const match = new RegExp(`^${label}[ \\t]*:[ \\t]*(.+)$`, 'm').exec(frontmatter)
   return match?.[1]?.trim()
 }
 
 /**
+ * Strip one pair of surrounding double quotes (frontmatter authors quote
+ * values containing `[`/`]` so YAML treats them as scalars, not flow
+ * sequences — e.g. `input: "[direction] [pause]"`).
+ */
+function unquote(value: string): string {
+  return value.length >= 2 && value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value
+}
+
+/**
  * Parse one bundled mstar command markdown (`harness-commands/<name>.md`):
  * the `---` frontmatter block yields `name` + `description` (registration
- * metadata); the body is the command content the handler steers into the
- * receiving agent. Returns undefined for files without a parseable block.
+ * metadata) and the optional `input` hint (the dsh-commands `input.hint`
+ * advertised to capable clients — declaring it makes the dsh web client
+ * CLAIM the command: the picked `/name ` token is inserted into the
+ * composer with the command highlight and the hint as ghost text, waits
+ * for the user's follow-up args, and only submits on Enter; without it
+ * the client executes the bare command immediately on pick). The body is
+ * the command content the handler steers into the receiving agent.
+ * Returns undefined for files without a parseable block.
  */
-function parseCommandMarkdown(content: string): { name: string; description: string; body: string } | undefined {
+function parseCommandMarkdown(content: string): { name: string; description: string; input?: string; body: string } | undefined {
   const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/)
   if (lines.length === 0 || lines[0]!.trim() !== '---') return undefined
   let end = -1
@@ -191,7 +206,15 @@ function parseCommandMarkdown(content: string): { name: string; description: str
   const name = commandFrontmatterField(frontmatter, 'name')
   const description = commandFrontmatterField(frontmatter, 'description')
   if (name === undefined || description === undefined) return undefined
-  return { name, description, body: lines.slice(end + 1).join('\n').trim() }
+  const input = commandFrontmatterField(frontmatter, 'input')
+  // The dsh-commands registry rejects an empty input hint — treat a blank
+  // `input:` as absent so the command registers without the claim.
+  return {
+    name,
+    description: unquote(description),
+    ...(input !== undefined && input !== '' ? { input: unquote(input) } : {}),
+    body: lines.slice(end + 1).join('\n').trim(),
+  }
 }
 
 /**
@@ -201,10 +224,15 @@ function parseCommandMarkdown(content: string): { name: string; description: str
  * `/iteration-drive`, `/iteration-loop`, `/codebase-audit`). Each command
  * handler steers the command body into the receiving agent as a user message
  * (the dsh-commands "explicitly schedule model-visible work through the
- * receiving Agent" path), returning a success result. The registration is
- * deferred with `ctx.inject(['commands'], …)` — the same optional-unit
- * pattern as the tools — so the plugin boots without the commands service.
- * Absent mirror (no `bundle-assets` run) → no registrations.
+ * receiving Agent" path), returning a success result. When the frontmatter
+ * declares an `input` hint, the registration advertises `input.hint`, which
+ * flips the dsh web client's decision table from detached bare execution to
+ * a leadingInput claim (composer insert + args wait — the /plan, /goal,
+ * /advisor interaction); user-typed args are appended to the steered text.
+ * The registration is deferred with `ctx.inject(['commands'], …)` — the same
+ * optional-unit pattern as the tools — so the plugin boots without the
+ * commands service. Absent mirror (no `bundle-assets` run) → no
+ * registrations.
  * @param ctx - registrant context carrying the commands service.
  */
 function registerMstarCommands(ctx: Context): void {
@@ -218,6 +246,13 @@ function registerMstarCommands(ctx: Context): void {
       commandsCtx.commands.register({
         name: parsed.name,
         description: parsed.description,
+        // Declaring `input.hint` makes the dsh web client CLAIM the command
+        // on menu pick instead of executing it detached: `/name ` is
+        // inserted into the composer (command-colored token, the hint as
+        // ghost text) and the line submits only on Enter — the interaction
+        // the user asked for. Commands without a frontmatter `input:` keep
+        // the previous bare-immediate behavior.
+        ...(parsed.input !== undefined ? { input: { hint: parsed.input } } : {}),
         handler: (invocation: CommandInvocation) => {
           // The command body is delivered to the model as a USER message —
           // the dsh-plan-mode /permission command precedent (`source:
@@ -226,9 +261,18 @@ function registerMstarCommands(ctx: Context): void {
           // treats it as system-provided context rather than a task to
           // execute; a user-source message is what makes the model act on
           // the mstar command body.
+          const rawInput = invocation.rawInput.trim()
+          // A claimed execution can carry user-typed follow-up args
+          // (`/iteration-start <direction>`); append them to the steered
+          // text so the model receives the prompt alongside the command
+          // body. A bare execute (`/iteration-start`) has an empty rawInput
+          // and steers the body alone.
+          const text = rawInput === ''
+            ? parsed.body
+            : `${parsed.body}\n\n## User input\n\n${rawInput}`
           const message = createUserMessage({
             source: { kind: 'user' },
-            content: [{ type: 'text', text: parsed.body }],
+            content: [{ type: 'text', text }],
           })
           invocation.agent.steer(message)
           return { kind: 'success', text: `mstar ${parsed.name} started` }

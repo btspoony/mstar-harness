@@ -8,6 +8,11 @@
  * the receiving agent as a user message (the dsh-commands "explicitly
  * schedule model-visible work through the receiving Agent" path).
  *
+ * Every command declares a frontmatter `input` hint, which the registration
+ * advertises as `input.hint`: the dsh web client then CLAIMS the command on
+ * menu pick (composer insert + args wait) instead of executing it detached —
+ * the interaction contract this spec pins down.
+ *
  * The commands service resolves from a real dsh source tree via the link farm
  * (`scripts/setup-dsh-links.ts`); the registrations are deferred with
  * `ctx.inject(['commands'], …)` so the plugin boots without the service.
@@ -36,6 +41,21 @@ function packagedCommandsDir(): string | undefined {
 /** The four mstar slash commands (repo-root `commands/` mirror). */
 const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit'] as const
 
+/** The frontmatter `input` hint each command must advertise (the client-claim contract). */
+const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> = {
+  'iteration-start': '[direction] [pause]',
+  'iteration-loop': '[direction] [scale]',
+  'iteration-drive': '[no args]',
+  'codebase-audit': '[no args]',
+}
+
+/** One command's registered descriptor (the view the dsh web client resolves). */
+interface RegisteredCommand {
+  readonly name: string
+  readonly description: string
+  readonly input?: { readonly hint: string }
+}
+
 /** A minimal fake receiving agent capturing steered messages. */
 function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
   const steered: UserMessage[] = []
@@ -56,6 +76,23 @@ function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
     } as unknown as Agent,
     steered,
   }
+}
+
+/** Registered command descriptors by name (skips the deferred-boot guard once). */
+async function registeredCommands(): Promise<Map<string, RegisteredCommand>> {
+  booted = await bootApp()
+  const byName = new Map<string, RegisteredCommand>()
+  for (const command of booted.ctx.commands.list(fakeAgent().agent) as unknown as RegisteredCommand[]) {
+    byName.set(command.name, command)
+  }
+  return byName
+}
+
+/** The mirror's `<name>.md` body (identical to the repo-root command). */
+function commandBody(dir: string, name: string): string {
+  return readFileSync(join(dir, `${name}.md`), 'utf8')
+    .replace(/^---[\s\S]*?---\r?\n?/, '')
+    .trim()
 }
 
 describe('bundled mstar commands (omp parity)', () => {
@@ -83,15 +120,47 @@ describe('bundled mstar commands (omp parity)', () => {
       // /permission precedent — `source: { kind: 'user' }`), so the model
       // treats the command body as a task to execute, not injected context;
       // its text is the mirror's `<name>.md` body (identical to the
-      // repo-root command).
-      const expectedBody = readFileSync(join(dir, `${name}.md`), 'utf8')
-        .replace(/^---[\s\S]*?---\r?\n?/, '')
-        .trim()
+      // repo-root command). A bare execute carries no user input, so the
+      // body is steered alone.
+      const expectedBody = commandBody(dir, name)
       expect(steered).toHaveLength(MSTAR_COMMANDS.indexOf(name) + 1)
       const message = steered.at(-1)!
       expect(message.source.kind).toBe('user')
       expect(message.content[0]?.type === 'text' ? message.content[0].text : '').toBe(expectedBody)
     }
+  })
+
+  it('advertises the frontmatter input hint on every registered command (client-claim contract)', async () => {
+    const dir = packagedCommandsDir()
+    if (dir === undefined) return
+    const byName = await registeredCommands()
+    for (const name of MSTAR_COMMANDS) {
+      const command = byName.get(name)
+      expect(command, `missing registration for /${name}`).toBeDefined()
+      // `input.hint` drives the dsh web client decision table: declared ⇒
+      // the menu pick claims `/name ` (composer insert + ghost hint + Enter
+      // to submit) instead of executing the bare command immediately.
+      expect(command?.input?.hint, `/${name} must declare input.hint`).toBe(EXPECTED_HINTS[name])
+      // Quoted frontmatter values must register unquoted — quotes in the
+      // menu description or the composer ghost text would render literally.
+      expect(command?.description.startsWith('"')).toBe(false)
+    }
+  })
+
+  it('steers user-typed args after the command name alongside the body', async () => {
+    const dir = packagedCommandsDir()
+    if (dir === undefined) return
+    booted = await bootApp()
+    const { agent, steered } = fakeAgent()
+    // The claimed path submits `/iteration-start ` + args; the rawInput
+    // must reach the model with the command body, not vanish.
+    const result = await booted.ctx.commands.execute(agent, '/iteration-start pause', new AbortController().signal)
+    expect(result?.result.kind).toBe('success')
+    expect(steered).toHaveLength(1)
+    const message = steered[0]!
+    expect(message.source.kind).toBe('user')
+    const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
+    expect(text).toBe(`${commandBody(dir, 'iteration-start')}\n\n## User input\n\npause`)
   })
 
   it('registers no commands when the commands service is absent (optional unit)', async () => {

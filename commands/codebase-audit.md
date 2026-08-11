@@ -2,6 +2,7 @@
 name: codebase-audit
 description: Survey a codebase as a senior advisor and produce prioritized, self-contained improvement plans. Read-only on source code. Use standalone before iteration-start to discover what's worth doing, or independently to build a prioritized backlog.
 agent: project-manager
+input: "[no args]"
 ---
 
 # Audit Codebase
