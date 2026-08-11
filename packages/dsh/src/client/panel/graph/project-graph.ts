@@ -29,6 +29,18 @@
  *   / truncated`, `agents` (entities + expected/actual/next edges + executing/
  *   pending counts — spec §4).
  *
+ * Agent-entity semantics (plan 20260811-panel-f3-agent-general — the
+ * per-role aggregation refactor): entities aggregate by ROLE, not by session
+ * — a KNOWN_AGENTS roster role keys its own card (same role across sessions
+ * folds into one card ×N), and EVERY non-roster dispatch (the former
+ * `generalPurpose` SDD reviewer, `scout`, unregistered roles, anonymous
+ * `role === ''`) folds into the single `general` bucket entity (key
+ * `'general'`, role shown `'general'`). The legacy `unexpected` zone is
+ * GONE — stage-null non-on-demand entities now project `zone: 'general'`
+ * (the render's general column); the event-log `unexpected` badge is a
+ * SEPARATE, unchanged semantic (`expected` ⟺ role ∈ EXPECTED_ROLE_FLOW
+ * union).
+ *
  * Degradation (spec §8): `source === null` → legal empty view (the panel
  * never mounts the graph for that case, but the projection stays total);
  * missing iteration / unresolvable transition → `active: false` + 5 idle
@@ -45,7 +57,7 @@ import type { MstarEngineStatusSource } from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
 import { PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
-  EXPECTED_ROLE_FLOW, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
+  EXPECTED_ROLE_FLOW, GENERAL_BUCKET, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
   type AgentZone, type KnownAgent, type PhaseId, type PlanStateId,
 } from './schema.ts'
 
@@ -153,26 +165,31 @@ export interface AgentZoneStage {
 }
 
 /**
- * One agent entity card (spec §4 + §6.2): either a session aggregated across
- * its dispatch rows (count + latest ts; identity fields reflect the LATEST
- * dispatch — the same dispatch that decides the status) or a synthesized
- * `idle` card for a KNOWN_AGENTS roster member with NO dispatch evidence
- * (key = role id; count 0 / ts 0 — never a guessed status).
+ * One agent entity card (spec §4 + §6.2 + plan 20260811-panel-f3-agent-general):
+ * either a ROLE aggregated across its dispatch rows (count + latest ts;
+ * identity fields reflect the LATEST dispatch — the same dispatch that
+ * decides the status; `agent` / `task` are record fields, never the title)
+ * or a synthesized `idle` card for a KNOWN_AGENTS roster member with NO
+ * dispatch evidence (key = role id; count 0 / ts 0 — never a guessed status).
+ * Non-roster dispatches (former `generalPurpose` / `scout` / anonymous '')
+ * aggregate into the single `general` bucket entity.
  */
 export interface AgentEntityView {
   /**
-   * `agent` (session id); fallback `${role}+${ts}` when the agent id is
-   * missing; known role id for idle cards. INVARIANT (spec §6.2, F-001): keys
-   * are UNIQUE across the whole `entities` array — a session id that collides
-   * with a known role id suppresses the idle twin in `idleEntities`, so the
-   * React `key` / `layoutAgents` `cards.set` never see duplicates.
+   * THE ROLE id for lit cards (KNOWN_AGENTS membership — `general` for every
+   * non-roster dispatch); the KNOWN_AGENTS role id for idle cards. INVARIANT
+   * (spec §6.2, F-001): keys are UNIQUE across the whole `entities` array —
+   * an evidence-derived `general` key suppresses the idle general twin in
+   * `idleEntities`, so the React `key` / `layoutAgents` `cards.set` never see
+   * duplicates.
    */
   key: string
-  /** The raw session id; null when the fallback key was used or the card is idle. */
+  /** The raw session id of the LATEST dispatch; null for idle cards. */
   agent: string | null
-  /** Display name = `agent ?? role` (spec §4); role id for idle cards. */
+  /** Display name = `agent ?? key` (spec §4); the role id for idle cards. */
   name: string
-  /** Role chip ('' when the dispatch carried no role; the known role id for idle cards). */
+  /** Role chip — the raw role of the latest dispatch; `'general'` for the
+   * bucket entity; the known role id for idle cards. */
   role: string
   /** Task tag `${planId}#${taskId}` (missing planId → null; taskId missing → planId); null for idle cards. */
   task: string | null
@@ -186,11 +203,11 @@ export interface AgentEntityView {
   ts: number
   /** Latest dispatch's stage via `roleStageIndex` (first constant-order match); null → off-pipeline role; KNOWN_AGENTS stage for idle cards. */
   stage: { phase: PhaseId; stage: string } | null
-  /** Column zone (plan 20260811-panel-f2-quickfix Item 3 — projection-owned,
+  /** Column zone (plan 20260811-panel-f3-agent-general — projection-owned,
    * the render NEVER heuristically guesses): 'flow' (stage columns), 'on-demand'
-   * (ops-engineer / prompt-engineer column) or 'unexpected' (stage-null
-   * non-on-demand — explore, scout, unregistered). Derived from the role for
-   * lit cards, from the KnownAgent `zone` for idle cards. */
+   * (ops-engineer / prompt-engineer column) or 'general' (the general bucket —
+   * the former 'unexpected' zone). Derived from the role for lit cards, from
+   * the KnownAgent `zone` for idle cards. */
   zone: AgentZone
 }
 
@@ -211,11 +228,13 @@ export type AgentEdgeKind = 'expected' | 'actual' | 'next'
  * One agents-zone arrow (spec §4):
  * - `expected`: skeleton arrow between consecutive EXPECTED_ROLE_FLOW stage
  *   columns (source/target = stage id) — PLUS the SDD loop back-edge
- *   `sdd-task-review → sdd-implement` (plan 20260811-panel-f2-quickfix
- *   Item 3, `loop: true`): the implement ↔ task-review cycle, rendered as a
- *   visually distinct curved double-arrow;
+ *   `autonomous-execute:sdd-implement → general` (plan
+ *   20260811-panel-f3-agent-general, `loop: true`): the implement ↔
+ *   general-bucket review cycle, rendered as a visually distinct curved
+ *   double-arrow BELOW the column band (the render bows it down);
  * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
- *   (source/target = entity key);
+ *   (source/target = entity key — role-based since plan
+ *   20260811-panel-f3-agent-general);
  * - `next`: the latest running entity's stage column → the next constant-order
  *   column (source/target = stage id; `entityKey` = the running card).
  */
@@ -226,7 +245,8 @@ export interface AgentEdge {
   target: string
   /** The running entity key the next arrow highlights; null for expected/actual. */
   entityKey: string | null
-  /** SDD loop back-edge flag (plan Item 3): sdd-task-review → sdd-implement. */
+  /** SDD loop back-edge flag (plan 20260811-panel-f3-agent-general):
+   * sdd-implement → general bucket. */
   loop?: boolean
 }
 
@@ -473,22 +493,21 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
 /* ---------------------------------- agents zone projection (spec §4) ---------------------------------- */
 
 /**
- * Skeleton stage-column arrows (spec §4 + plan 20260811-panel-f2-quickfix
- * Item 3): forward edges between consecutive EXPECTED_ROLE_FLOW stages PLUS
- * the SDD loop back-edge `sdd-task-review → sdd-implement` (`loop: true`,
- * kind stays 'expected' — both are in-flow skeleton edges; the flag lets the
- * render layer draw the reverse edge as a visually distinct curved
- * double-arrow instead of a straight line overlapping the forward edge).
+ * Skeleton stage-column arrows (spec §4 + plan 20260811-panel-f3-agent-general):
+ * forward edges between consecutive EXPECTED_ROLE_FLOW stages PLUS the SDD
+ * loop back-edge `autonomous-execute:sdd-implement → general` (`loop: true`,
+ * kind stays 'expected' — the implement ↔ general-bucket review cycle: the
+ * render draws it as a visually distinct curved double-arrow BELOW the column
+ * band instead of a straight line overlapping a forward edge).
  */
 function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
   const edges: AgentEdge[] = []
   for (let i = 0; i + 1 < stages.length; i++) {
     edges.push({ kind: 'expected', source: stages[i]!.id, target: stages[i + 1]!.id, entityKey: null })
   }
-  const review = stages.find((s) => s.stage === 'sdd-task-review')
   const implement = stages.find((s) => s.stage === 'sdd-implement')
-  if (review !== undefined && implement !== undefined) {
-    edges.push({ kind: 'expected', source: review.id, target: implement.id, entityKey: null, loop: true })
+  if (implement !== undefined) {
+    edges.push({ kind: 'expected', source: implement.id, target: GENERAL_BUCKET, entityKey: null, loop: true })
   }
   return edges
 }
@@ -503,7 +522,8 @@ interface EntityAccum {
   count: number
   ts: number
   stage: { phase: PhaseId; stage: string } | null
-  /** Column zone (plan Item 3): 'flow' when staged; role-derived for stage-null roles. */
+  /** Column zone (plan 20260811-panel-f3-agent-general): 'flow' when staged;
+   * KNOWN_AGENTS `zone` for off-pipeline roster roles; 'general' otherwise. */
   zone: AgentZone
   /** Index of the latest dispatch in the classified entries array (pair lookup). */
   latestIndex: number
@@ -511,13 +531,26 @@ interface EntityAccum {
   verdict: FlowEventStatus
 }
 
-/** The zone helper shared by lit + idle cards (plan Item 3): a staged role is
- * 'flow'; an off-pipeline role takes its KNOWN_AGENTS `zone` (on-demand) or
- * defaults to 'unexpected'. Never a render-side heuristic. */
+/**
+ * The entity key of a dispatch row (plan 20260811-panel-f3-agent-general —
+ * per-role aggregation): a KNOWN_AGENTS roster role keys its OWN card
+ * (in-union → key = role); EVERY non-roster dispatch — the former
+ * `generalPurpose` SDD reviewer, `scout`, unregistered roles and anonymous
+ * `role === ''` — folds into the single `general` bucket entity. Total
+ * function: every dispatch row yields a key, never a throw.
+ */
+function entityKeyOf(role: string): string {
+  if (role !== '' && KNOWN_AGENTS.some((a) => a.id === role)) return role
+  return GENERAL_BUCKET
+}
+
+/** The zone helper shared by lit + idle cards (plan 20260811-panel-f3-agent-general):
+ * a staged role is 'flow'; an off-pipeline role takes its KNOWN_AGENTS `zone`
+ * (on-demand / general), defaulting to 'general'. Never a render-side heuristic. */
 function roleZone(role: string, stage: { phase: PhaseId; stage: string } | null): AgentZone {
   if (stage !== null) return 'flow'
   const known = KNOWN_AGENTS.find((a) => a.id === role)
-  return known === undefined ? 'unexpected' : (known.zone ?? 'unexpected')
+  return known === undefined ? GENERAL_BUCKET : (known.zone ?? GENERAL_BUCKET)
 }
 
 /**
@@ -534,11 +567,14 @@ function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEven
 }
 
 /**
- * Aggregate dispatch rows into entity cards (spec §4): key = `agent` (session
- * id) with `${role}+${ts}` fallback; the same key aggregates (count + latest
- * ts, identity fields from the latest dispatch). Dispatch rows with NO
- * identity at all (agent null AND role '') are skipped — a card with nothing
- * on it is never fabricated (spec §8 garbage rows). Settle rows never produce
+ * Aggregate dispatch rows into entity cards (spec §4 + plan
+ * 20260811-panel-f3-agent-general): key = the ROLE classification
+ * (`entityKeyOf` — a KNOWN_AGENTS role id, or `'general'` for every
+ * non-roster / anonymous dispatch); the same key aggregates across sessions
+ * (count + latest ts, identity fields from the latest dispatch — `agent` /
+ * `task` are record fields, the general entity's role displays `'general'`).
+ * Anonymous rows (role '') are NOT skipped — they are dispatch evidence and
+ * belong to the general bucket (user decision). Settle rows never produce
  * entities (they carry no role/plan identity — spec §4).
  */
 function aggregateEntities(
@@ -549,21 +585,21 @@ function aggregateEntities(
   for (let i = 0; i < entries.length; i++) {
     const v = entries[i]!.view
     if (v.kind !== 'dispatch') continue
-    if (v.agent === null && v.role === '') continue // anonymous → no card
-    const key = v.agent ?? `${v.role}+${v.ts}`
+    const key = entityKeyOf(v.role)
+    const role = key === GENERAL_BUCKET ? GENERAL_BUCKET : v.role
     const task = v.planId === null ? null : v.taskId === null ? v.planId : `${v.planId}#${v.taskId}`
     const cur = acc.get(key)
     if (cur === undefined) {
       acc.set(key, {
         key,
         agent: v.agent,
-        name: v.agent ?? v.role,
-        role: v.role,
+        name: v.agent ?? role,
+        role,
         task,
         count: 1,
         ts: v.ts,
         stage: v.stage,
-        zone: roleZone(v.role, v.stage),
+        zone: roleZone(role, v.stage),
         latestIndex: i,
         verdict: v.status,
       })
@@ -576,11 +612,11 @@ function aggregateEntities(
         cur.latestIndex = i
         cur.verdict = v.status
         cur.agent = v.agent
-        cur.name = v.agent ?? v.role
-        cur.role = v.role
+        cur.name = v.agent ?? role
+        cur.role = role
         cur.task = task
         cur.stage = v.stage
-        cur.zone = roleZone(v.role, v.stage)
+        cur.zone = roleZone(role, v.stage)
       }
     }
   }
@@ -601,18 +637,20 @@ function aggregateEntities(
 
 /**
  * Same-plan handoff arrows (spec §4): within each planId, the ts-ascending
- * adjacent dispatch ENTITY pairs. Anonymous rows (no card) and plan-less
- * dispatches cannot form a pair → excluded; a self-pair (the same entity
- * twice in a row) is skipped — a card never hands off to itself.
+ * adjacent dispatch ENTITY pairs — keys are ROLE-based since plan
+ * 20260811-panel-f3-agent-general (`entityKeyOf`, the same classification the
+ * entity cards use, so a handoff always connects two real cards; anonymous
+ * rows fold into the `general` key). Plan-less dispatches cannot form a pair
+ * → excluded; a self-pair (the same entity twice in a row) is skipped — a
+ * card never hands off to itself.
  */
 function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
   const byPlan = new Map<string, { key: string; ts: number; idx: number }[]>()
   entries.forEach((e, idx) => {
     const v = e.view
     if (v.kind !== 'dispatch') return
-    if (v.agent === null && v.role === '') return // anonymous → no card
     if (v.planId === null) return // no plan → no same-plan chain
-    const key = v.agent ?? `${v.role}+${v.ts}`
+    const key = entityKeyOf(v.role)
     const list = byPlan.get(v.planId)
     if (list === undefined) byPlan.set(v.planId, [{ key, ts: v.ts, idx }])
     else list.push({ key, ts: v.ts, idx })
@@ -634,9 +672,8 @@ function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
  * The `next` arrow (spec §4): the LATEST running entity (max ts; tie →
  * smallest entity key) sits in a stage column → the next EXPECTED_ROLE_FLOW
  * column. No running entity / running entity without a stage (off-pipeline
- * role — on-demand or unexpected) / already at the LAST column (qa-gate,
- * the pipeline terminal since plan 20260811-panel-f2-quickfix Item 3) →
- * NO next edge (honest — never a guess).
+ * role — on-demand or the general bucket) / already at the LAST column
+ * (qa-gate, the pipeline terminal) → NO next edge (honest — never a guess).
  */
 function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZoneStage[]): AgentEdge[] {
   let best: AgentEntityView | null = null
@@ -658,13 +695,12 @@ function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZ
  * fabricated claims: agent null, count 0, ts 0, task null, status `idle`.
  *
  * Key-uniqueness guard (F-001 — qc1/qc2 Warning): `evidencedRoles` suppresses
- * the idle card of a role WITH dispatch evidence, but a dispatch row whose
- * session id equals a KNOWN_AGENTS id while its `role` differs (e.g.
- * `{ agent: 'explore', role: 'fullstack-dev' }`) produces a lit card
- * keyed by that id WITHOUT that role being evidenced. `litKeys` (the
- * evidence-derived entity key set) suppresses the idle twin in that case too
- * — the entity key space stays unique, so `layoutAgents`' `cards.set` and the
- * React `key` never collide/overwrite.
+ * the idle card of a role WITH dispatch evidence, but a NON-roster dispatch
+ * (e.g. `scout` — no KNOWN_AGENTS entry for it) produces a lit card keyed
+ * `general` WITHOUT the `general` role being literally evidenced.
+ * `litKeys` (the evidence-derived entity key set) suppresses the idle general
+ * twin in that case too — the entity key space stays unique, so
+ * `layoutAgents`' `cards.set` and the React `key` never collide/overwrite.
  */
 function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<string>): AgentEntityView[] {
   const out: AgentEntityView[] = []
@@ -688,11 +724,12 @@ function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<
   return out
 }
 
-/** Idle-card zone (plan Item 3): the KnownAgent's explicit off-pipeline zone
- * (on-demand) or 'unexpected' — staged roster members are 'flow'. */
+/** Idle-card zone (plan 20260811-panel-f3-agent-general): the KnownAgent's
+ * explicit off-pipeline zone (on-demand / general) — staged roster members
+ * are 'flow'. */
 function idleZone(known: KnownAgent): AgentZone {
   if (known.stage !== null) return 'flow'
-  return known.zone ?? 'unexpected'
+  return known.zone ?? GENERAL_BUCKET
 }
 
 /**
@@ -714,8 +751,10 @@ function idleZone(known: KnownAgent): AgentZone {
  * Entity-key invariant (F-001 — qc1/qc2 Warning): the concatenated key space
  * (evidence keys ∪ idle role ids) is UNIQUE by construction — `idleEntities`
  * suppresses a known role's idle card when its id already exists as an
- * evidence-derived entity key (a session id colliding with a role id), so the
- * render layer's `key`/`cards.set` never collide.
+ * evidence-derived entity key (a NON-roster dispatch produces a lit `general`
+ * key while the roster `general` id stays un-evidenced — the twin is
+ * suppressed via `litKeys`), so the render layer's `key`/`cards.set` never
+ * collide.
  *
  * Canvas note (F-002 — qc1 Warning): `note` classifies the readable ledger in
  * the projection ('empty' / 'settle-only' / null — see `AgentZoneNote`); the
@@ -755,10 +794,10 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
 
   // Evidence (spec §4): a stage is evidenced when any dispatch row's role maps
   // to it (roles are unique across stages, so this equals literal role
-  // membership). Counted from ALL dispatch rows — an agent re-dispatched under
-  // another role still lights its earlier stage. The same set drives the
-  // per-stage `evidenced` flag (the render's pending-placeholder decision) and
-  // the `pending` count — no drift.
+  // membership). Counted from ALL dispatch rows — a session re-dispatched under
+  // several roles lights EACH role's stage (per-role aggregation). The same
+  // set drives the per-stage `evidenced` flag (the render's
+  // pending-placeholder decision) and the `pending` count — no drift.
   const evidenced = new Set<string>()
   // Role evidence (spec §6.2): the roles with ANY dispatch row — drives the
   // idle-roster suppression (a known agent with dispatch evidence is never
@@ -781,7 +820,8 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
 
   const lit = aggregateEntities(entries, pairStatus)
   // F-001: the evidence-derived key set drives the idle-twin suppression —
-  // a session id equal to a known role id never yields a duplicate key.
+  // a lit `general` key (from any non-roster dispatch) never coexists with the
+  // idle roster `general` card.
   const litKeys = new Set(lit.map((e) => e.key))
   const entities = [...lit, ...idleEntities(evidencedRoles, litKeys)]
   const edges = [...expectedEdges(stages), ...actualEdges(entries), ...nextEdges(entities, stages)]

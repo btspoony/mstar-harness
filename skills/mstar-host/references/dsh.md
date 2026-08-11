@@ -50,19 +50,35 @@ or a custom profile).
   dimmed state + the branch panel — iteration base / target / spec
   integration, rendered only while active), a **tasks zone** (6-column
   kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
-  badges, Done ≤5 + `+N more`), an **agent-execution zone** (the six EXPECTED_ROLE_FLOW stage/phase columns
-  rendering the subagent ENTITY cards aggregated from actual dispatch
-  evidence — agent display name / role chip / task tag (`planId#taskId`) /
-  status point / ×N count; running entities carry the business glow-pulse
+  badges, Done ≤5 + `+N more`), an **agent-execution zone** (the FOUR EXPECTED_ROLE_FLOW stage/phase
+  columns — review-edit-chain → sdd-implement → qc-tri → qa-gate, the
+  terminal stage; the former `sdd-task-review` stage is removed and its SDD
+  L2 reviewer moved off-pipeline — plus the on-demand column for
+  ops-engineer / prompt-engineer and a trailing **general bucket** column,
+  plan `20260811-panel-f3-agent-general`; `explore` is removed — no card, no
+  column). The subagent ENTITY cards aggregate **by role** from actual
+  dispatch evidence: the same role across sessions folds into one card ×N,
+  and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
+  `scout`, anonymous `role === ''`) folds into the single `general` bucket
+  entity — the card is ROLE-TITLED (the role id, e.g. `fullstack-dev`); the
+  agent session id / task tag (`planId#taskId`) ride the RECORD line, never
+  the title. Cards show the role chip / status point / ×N count; running
+  entities carry the business glow-pulse
   highlight, un-evidenced stages render the dashed "待执行" pending
-  placeholder with their expected role chips, and the header shows the
-  `N executing · M pending` summary; flow arrows: dim expected skeleton
-  arrows between consecutive columns, small `→` in-column handoff arrows
-  between same-column cards, and the ANIMATED **next** edge — a business
-  dash-flow arrow (`@keyframes agent-dash-flow` in the zones css, killed by
-  the root `prefers-reduced-motion` rule) from the latest running entity's
-  stage column to the next constant-order column, drawn ONLY while a running
-  entity exists — plan `20260810-panel-agent-flow-zone`); the 事件记录 tab
+  placeholder with their expected role chips, un-evidenced KNOWN_AGENTS
+  members render dashed idle cards (the full 13-role roster is never
+  hidden), and the header shows the `N executing · M pending` summary; flow
+  arrows: dim expected skeleton arrows between consecutive stage columns
+  (3 forward), plus the SDD loop back-edge `sdd-implement` ↔ `general`
+  bucket as a visually distinct curved DOUBLE-ARROW drawn BELOW the column
+  band — anchored at the column bottoms with its true bezier extremum 16px
+  below the lowest column bottom, `data-agent-edge-loop` =
+  `autonomous-execute:sdd-implement->general` — small `→` in-column handoff
+  arrows between same-column cards, and the ANIMATED **next** edge — a
+  business dash-flow arrow (`@keyframes agent-dash-flow` in the zones css,
+  killed by the root `prefers-reduced-motion` rule) from the latest running
+  entity's stage column to the next constant-order column, drawn ONLY while
+  a running entity exists — plan `20260810-panel-agent-flow-zone`); the 事件记录 tab
   (`EventLogPage`, spec panel-tabs §5, plan `20260811-panel-event-log`) is a
   NON-canvas log page with two partitions — **Agent 流转事件** (`view.events`
   ≤50 latest-first; off-pipeline unexpected dispatches fold in once via
@@ -71,7 +87,12 @@ or a custom profile).
   (`view.violations`, gate violations with severity/code/message); every row
   is an expandable native `<details>` (no-JS, keyboard-accessible) whose body
   shows the full catalog fields — missing fields render「—」, never a guessed
-  value. The canvas-corner **`AgentEventDock`** is REMOVED with the page
+  value. Layout (plan `20260811-panel-f3-agent-general`): the two partitions
+  render SIDE BY SIDE in a locked-height two-column grid
+  (`repeat(2, minmax(0, 1fr))` — the page never scrolls as a whole; each
+  partition pins its title and owns an internal `overflow-y` scroll on its
+  row list), falling back to two stacked 50/50 locked rows below 1200px —
+  the `data-event-log-*` anchor family is unchanged. The canvas-corner **`AgentEventDock`** is REMOVED with the page
   (无双份日志 — its row layout + status chips migrated into `EventLogPage`);
   the fixed footer bar (zone legend + gate summary + violations) died with
   the WorkflowCanvas in plan `20260811-panel-tabs-shell` — the footer that

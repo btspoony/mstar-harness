@@ -129,9 +129,10 @@
 
 /* Content region: the per-tab page mount (`data-mstar-graph`, spec §6.1).
  * The tasks tab's IterationTaskPage fills it and keeps its own scroll body
- * (`data-mstar-tasks-scroll`, Task 2); the events tab's EventLogPage is its
- * own scroll body (`pages/event-log.module.css`) — content itself never
- * scrolls (v3 invariant preserved). */
+ * (`data-mstar-tasks-scroll`, Task 2); the events tab's EventLogPage locks
+ * its height and its two partitions scroll internally (plan
+ * 20260811-panel-f3-agent-general Task 2 — no whole-page scroll) —
+ * content itself never scrolls (v3 invariant preserved). */
 .content {
   flex: 1;
   min-height: 0;

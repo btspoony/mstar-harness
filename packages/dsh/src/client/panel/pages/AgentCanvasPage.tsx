@@ -30,16 +30,22 @@
  * are muted (`data-agent-idle`); lit cards follow the projection's status
  * priority (running/settled/error/denied/advisory).
  *
- * Edges (spec §4 + plan 20260811-panel-f2-quickfix Item 3 — AgentEdge model
- * reused): expected skeleton (dim dashed stage→stage, 4 forward edges),
- * the SDD LOOP back-edge sdd-task-review → sdd-implement (business CURVED
- * double-arrow — `data-agent-edge-loop`, visually distinct from the forward
- * edge it overlaps), actual handoffs (business entity→entity), next
- * (business ANIMATED dash-flow stage→stage) — all drawn as SVG over the
- * layout computed by the exported pure `layoutAgents` (deterministic columns
- * per EXPECTED_ROLE_FLOW stage + the on-demand column for
- * ops-engineer/prompt-engineer + a trailing unexpected column; column
- * buckets come from the PROJECTED `entity.zone`, never a render guess).
+ * Edges (spec §4 + plan 20260811-panel-f3-agent-general — AgentEdge model
+ * reused): expected skeleton (dim dashed stage→stage, 3 forward edges),
+ * the SDD LOOP back-edge sdd-implement → the general bucket (business CURVED
+ * double-arrow BELOW the column band — fix round I-1: anchored at the COLUMN
+ * BOTTOMS, with the arc's TRUE lowest point exactly `LOOP_BOW_MARGIN` below
+ * the lowest column bottom (the control point is solved inverse from the
+ * quadratic-bezier extremum formula, so the real geometry clears every
+ * column band — never occluded behind the intermediate columns' cards, never
+ * near the forward-edge corridor) — `data-agent-edge-loop`, visually
+ * distinct from the straight forward skeleton edges), actual handoffs
+ * (business entity→entity — role-keyed), next (business ANIMATED dash-flow
+ * stage→stage) — all drawn as SVG over the layout computed by the exported
+ * pure `layoutAgents` (deterministic columns per EXPECTED_ROLE_FLOW stage +
+ * the on-demand column for ops-engineer/prompt-engineer + a trailing general
+ * bucket column; column buckets come from the PROJECTED `entity.zone`, never
+ * a render guess).
  *
  * Degradation (spec §8 — never throws / never orange): the projection always
  * yields the full idle roster, so the canvas renders it with the muted
@@ -56,6 +62,7 @@ import * as React from 'react'
 import { useMemo, useRef, useState } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AgentEdge, AgentEntityStatus, AgentEntityView, ZoneView } from '../graph/project-graph.ts'
+import { GENERAL_BUCKET } from '../graph/schema.ts'
 import { Legend } from '../zones/Legend.tsx'
 import css from './agent-canvas.module.css'
 
@@ -133,36 +140,67 @@ const COL_PAD = 12
 /** Column label band height (the cards start below it). */
 const LABEL_H = 18
 
-/** The trailing column id for stage-null entities (off-pipeline + unexpected). */
-export const UNEXPECTED_COLUMN = 'unexpected'
+/** How far below the lowest column bottom the SDD loop arc's TRUE lowest
+ * point must land (fix round I-1): ≥ 16px so the bow is clearly visible,
+ * and < PAD_Y (24) so the extremum always stays inside the canvas (the
+ * canvas bottom is exactly `bandBottom + PAD_Y` — see `layoutAgents`). */
+export const LOOP_BOW_MARGIN = 16
+
+/** The SDD-loop arc's control-point y (fix round I-1 + QC fix S-2): the pure
+ * inverse-extremum solve for the quadratic bezier Q(y1, yc, y2) — given the
+ * anchor ys (the two loop columns' bottoms) and the arc's TARGET lowest
+ * point, return the control-point y `yc` whose curve's REAL lowest point
+ * (the dy/dt=0 extremum) lands exactly at `target`.
+ *
+ * Derivation: for Q(y1, yc, y2) the dy/dt=0 root is
+ *   t* = (y1 − yc) / (y1 − 2·yc + y2),   whose value is
+ *   y(t*) = (y1·y2 − yc²) / (y1 − 2·yc + y2).
+ * Solving y(t*) = target for the below-both-anchors root (yc > max(y1, y2)):
+ *   yc = target ± sqrt((target − y1)·(target − y2))  →  the plus root.
+ * Deterministic per view; the radicand is ≥ 0 while target ≥ max(y1, y2) —
+ * the render always passes `bandBottom + LOOP_BOW_MARGIN`, which is > both
+ * anchors by construction. The control point sits DEEPER than the extremum —
+ * never assert it as the bow (the SSR tests assert the true extremum via
+ * `bezierLowY`). */
+export function solveLoopBow(y1: number, y2: number, target: number): number {
+  return target + Math.sqrt((target - y1) * (target - y2))
+}
+
+/** The trailing column id for stage-null entities (the general bucket — the
+ * former 'unexpected' track, plan 20260811-panel-f3-agent-general). Derived
+ * from `GENERAL_BUCKET` (schema.ts — the single source for the value): the
+ * column id must equal the bucket id or the loop edge's `target` would miss
+ * the column and the bow would silently vanish. */
+export const GENERAL_COLUMN = GENERAL_BUCKET
 
 /** The on-demand column id (plan 20260811-panel-f2-quickfix Item 3): the
  * separate zone for ops-engineer / prompt-engineer — NO expected/next arrows
- * touch it (independent region, distinct from the unexpected column). */
+ * touch it (independent region, distinct from the general column). */
 export const ON_DEMAND_COLUMN = 'on-demand'
 
 /**
- * Deterministic canvas layout (spec §4 + plan Item 3 — the collaboration
- * story): one column per EXPECTED_ROLE_FLOW stage (view order) + the
- * `on-demand` column (ops-engineer / prompt-engineer) + a trailing
- * `unexpected` column for the remaining stage-null entities. Cards stack
- * vertically inside their column; the canvas bounds grow with the tallest
- * column. The column bucket comes from the PROJECTED `entity.zone` (never a
- * render-side guess): 'flow' → the entity's stage column, 'on-demand' → the
- * on-demand column, 'unexpected' → the unexpected track. Total function —
- * every entity gets a box (unknown column ids fall back to the unexpected
- * track; never a throw).
+ * Deterministic canvas layout (spec §4 + plan 20260811-panel-f3-agent-general
+ * — the collaboration story): one column per EXPECTED_ROLE_FLOW stage (view
+ * order) + the `on-demand` column (ops-engineer / prompt-engineer) + a
+ * trailing `general` column for the remaining stage-null entities (the
+ * general bucket — SDD per-task reviewers, unmatched / anonymous dispatches;
+ * the former 'unexpected' track). Cards stack vertically inside their column;
+ * the canvas bounds grow with the tallest column. The column bucket comes
+ * from the PROJECTED `entity.zone` (never a render-side guess): 'flow' → the
+ * entity's stage column, 'on-demand' → the on-demand column, 'general' → the
+ * general track. Total function — every entity gets a box (unknown column
+ * ids fall back to the general track; never a throw).
  */
 export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
-  const columnIds = [...view.stages.map((s) => s.id), ON_DEMAND_COLUMN, UNEXPECTED_COLUMN]
+  const columnIds = [...view.stages.map((s) => s.id), ON_DEMAND_COLUMN, GENERAL_COLUMN]
   const buckets = new Map<string, AgentEntityView[]>()
   for (const entity of view.entities) {
     const colId = entity.zone === 'on-demand'
       ? ON_DEMAND_COLUMN
       : entity.zone === 'flow' && entity.stage !== null
         ? `${entity.stage.phase}:${entity.stage.stage}`
-        : UNEXPECTED_COLUMN
-    const bucketId = columnIds.includes(colId) ? colId : UNEXPECTED_COLUMN
+        : GENERAL_COLUMN
+    const bucketId = columnIds.includes(colId) ? colId : GENERAL_COLUMN
     const bucket = buckets.get(bucketId)
     if (bucket === undefined) buckets.set(bucketId, [entity])
     else bucket.push(entity)
@@ -370,8 +408,8 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
             >
               {col.id === ON_DEMAND_COLUMN
                 ? t('zone.agents.on-demand')
-                : col.id === UNEXPECTED_COLUMN
-                  ? t('flow.unexpected')
+                : col.id === GENERAL_COLUMN
+                  ? t('zone.agents.general')
                   : col.id.slice(col.id.indexOf(':') + 1)}
             </span>
           ))}
@@ -392,26 +430,46 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
               </marker>
             </defs>
             {edges.map((edge, i) => {
-              const line = edgeLine(edge, layout)
-              if (line === null) return null
-              const kind = edge.kind
-              // SDD loop back-edge (plan Item 3): a CURVED path bowing above
-              // the column band with arrowheads at BOTH ends — visually
-              // distinct from the straight forward skeleton edge it overlaps.
+              // SDD loop back-edge (plan 20260811-panel-f3-agent-general +
+              // fix round I-1): a CURVED double-arrow drawn BELOW the column
+              // band. The anchors sit at the COLUMN BOTTOMS (below the cards —
+              // NOT the mid-height skeleton anchors, which would drag the arc
+              // through the intermediate columns' card stacks), and the
+              // control point is solved INVERSE from the quadratic-bezier
+              // extremum so the arc's TRUE lowest point lands exactly
+              // `LOOP_BOW_MARGIN` below the lowest column bottom of the whole
+              // layout. Total function: a missing anchor column → no path.
               if (edge.loop) {
-                const midX = (line.x1 + line.x2) / 2
-                const bowY = Math.min(line.y1, line.y2) - 24
+                const from = layout.columns.find((c) => c.id === edge.source)
+                const to = layout.columns.find((c) => c.id === edge.target)
+                if (from === undefined || to === undefined) return null
+                const x1 = from.x + from.w
+                const y1 = from.y + from.h
+                const x2 = to.x
+                const y2 = to.y + to.h
+                const midX = (x1 + x2) / 2
+                // The lowest bottom edge across ALL columns — the band the
+                // arc must clear (not just the two anchor columns).
+                const bandBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
+                // The control point is solved INVERSE from the quadratic-bezier
+                // extremum so the arc's TRUE lowest point lands exactly
+                // `LOOP_BOW_MARGIN` below the band (pure + unit-tested —
+                // `solveLoopBow`; the derivation lives there).
+                const bowY = solveLoopBow(y1, y2, bandBottom + LOOP_BOW_MARGIN)
                 return (
                   <path
                     key={`loop-${i}-${edge.source}-${edge.target}`}
                     className={css.canvasEdgeLoop}
-                    d={`M ${line.x1} ${line.y1} Q ${midX} ${bowY} ${line.x2} ${line.y2}`}
+                    d={`M ${x1} ${y1} Q ${midX} ${bowY} ${x2} ${y2}`}
                     markerStart="url(#canvas-arrow-loop)"
                     markerEnd="url(#canvas-arrow-loop)"
                     data-agent-edge-loop={`${edge.source}->${edge.target}`}
                   />
                 )
               }
+              const line = edgeLine(edge, layout)
+              if (line === null) return null
+              const kind = edge.kind
               const className = kind === 'next'
                 ? css.canvasEdgeNext
                 : kind === 'actual'

@@ -10,6 +10,11 @@
  * keyboard-accessible, SSR-stable) whose body shows the FULL catalog fields;
  * a missing field renders「—」— never a guessed value (spec §5/§8).
  *
+ * Layout (plan 20260811-panel-f3-agent-general Task 2 — user feedback「左右
+ * 排两列 + 锁定一个高内部滚动」): the two partitions render side by side in a
+ * locked-height two-column grid; the page never scrolls as a whole — each
+ * partition pins its title and scrolls internally (`event-log.module.css`).
+ *
  * Dock migration decision (spec §5 — 无双份日志): the AgentEventDock is
  * REMOVED, not degraded. The dock's content (row layout + status chips)
  * moved into this page, and its host (the WorkflowCanvas canvas-corner)

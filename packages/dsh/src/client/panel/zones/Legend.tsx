@@ -3,9 +3,10 @@
  * mounted on the AgentCanvasPage (the zone-dashboard footer legend is gone
  * with the WorkflowCanvas — spec §6.1). Describes the agent canvas: the
  * collaboration edges (expected dim-dashed skeleton / actual business handoff
- * / unexpected column / animated next edge) and the entity card treatments
- * (running glow, settled ✓, idle dashed-muted). Pure render of the `t` seat;
- * every label is a `zone.legend.*` locale key.
+ * / the general bucket column — plan 20260811-panel-f3-agent-general, the
+ * former 'unexpected' entry / animated next edge) and the entity card
+ * treatments (running glow, settled ✓, idle dashed-muted). Pure render of the
+ * `t` seat; every label is a `zone.legend.*` locale key.
  */
 
 import * as React from 'react'
@@ -20,13 +21,15 @@ export function Legend({ t }: LegendProps) {
   const items: { key: string; swatch: string; label: string }[] = [
     // Collaboration edges on the agent canvas (spec §4 — AgentEdge model):
     // expected = dim dashed stage→stage skeleton line, actual = business
-    // solid entity→entity handoff line, unexpected = the trailing column for
-    // stage-null roles, next = the ANIMATED business dash-flow edge.
+    // solid entity→entity handoff line, general = the trailing column for
+    // stage-null roles (the general bucket — SDD per-task reviewers /
+    // unmatched / anonymous dispatches), next = the ANIMATED business
+    // dash-flow edge.
     { key: 'flow-expected', swatch: css.swatchFlowExpected, label: t('zone.legend.flow-expected') },
     { key: 'flow-actual', swatch: css.swatchFlowActual, label: t('zone.legend.flow-actual') },
-    { key: 'flow-unexpected', swatch: css.swatchFlowUnexpected, label: t('zone.legend.flow-unexpected') },
+    { key: 'general', swatch: css.swatchGeneral, label: t('zone.legend.general') },
     // On-demand zone (plan 20260811-panel-f2-quickfix Item 3): ops-engineer /
-    // prompt-engineer — their own column, distinct from flow-unexpected.
+    // prompt-engineer — their own column, distinct from the general bucket.
     { key: 'on-demand', swatch: css.swatchOnDemand, label: t('zone.legend.on-demand') },
     // Entity statuses (plan Task 3): the card treatments — running (business
     // glow ring), settled (success ✓) and idle (dashed muted card).

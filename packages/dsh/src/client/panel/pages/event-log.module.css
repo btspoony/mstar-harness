@@ -10,6 +10,14 @@
  * title uses the `event-log.section.events` locale key (qc1 F-003 — the
  * event-log namespace stays symmetric with `event-log.section.violations`).
  *
+ * Layout (plan 20260811-panel-f3-agent-general Task 2 — user feedback「左右排
+ * 两列 + 锁定一个高内部滚动」): the page frame is a locked-height TWO-COLUMN
+ * grid (Agent 流转事件 | 违规记录 side by side) and NO LONGER scrolls as a
+ * whole (`overflow: hidden`) — each partition pins its title and owns an
+ * internal `overflow-y: auto` scroll on its row list, so both partitions are
+ * visible at once at any window height. Below 1200px the two partitions stack
+ * as 50/50 locked rows (each still scrolls internally).
+ *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
  * token flip); spacing rides the --mstar-space-1..6 ramp; fonts ride the
@@ -20,25 +28,30 @@
  * reduced-motion block.
  */
 
-/* --- page frame: the log page is its own scroll body (spec §5 — a log, not a canvas) --- */
+/* --- page frame: locked-height two-column body (plan F3 Task 2 — the page
+ * never scrolls as a whole; each partition scrolls internally) --- */
 
 .eventLogPage {
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);   /* single locked row — the page height IS the tab height */
   gap: var(--mstar-space-3);
   padding: var(--mstar-space-3);
-  overflow-y: auto;
+  overflow: hidden;                     /* no whole-page scroll — the partitions own their scroll */
 }
 
-/* --- partition frame (same token treatment as the zone frames, spec §7) --- */
+/* --- partition frame (same token treatment as the zone frames, spec §7) ---
+ * min-height: 0 lets the grid item shrink inside the locked row so the row
+ * list below can own the internal scroll (plan F3 Task 2). */
 
 .section {
   display: flex;
   flex-direction: column;
   gap: var(--mstar-space-2);
   min-width: 0;
+  min-height: 0;
   padding: var(--mstar-space-3);
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
@@ -63,7 +76,10 @@
   font: var(--dsw-font-xxs-12);
 }
 
-/* --- log rows --- */
+/* --- log rows ---
+ * The row list owns the partition's internal scroll (plan F3 Task 2): the
+ * section is a locked-height flex column, so the pinned title never scrolls
+ * away — only the rows do. */
 
 .rowList {
   display: flex;
@@ -72,6 +88,9 @@
   margin: 0;
   padding: 0;
   list-style: none;
+  flex: 1;            /* fill the partition below the pinned title */
+  min-height: 0;      /* allow shrinking so overflow-y can engage */
+  overflow-y: auto;   /* internal scroll — the partition locks its height */
 }
 
 /* The row summary IS the toggle (native <details> — no-JS, keyboard-accessible). */
@@ -272,4 +291,26 @@
 /* Missing field → muted「—」(spec §5 — never a guessed value). */
 .detailValueMissing {
   color: var(--dsw-alias-label-caption);
+}
+
+/* --- narrow fallback (plan F3 Task 2): below 1200px the two partitions
+ * stack as two locked 50/50 rows — both stay visible at any window height,
+ * each scrolling internally (same shape as the panel's own sidebar stack at
+ * 860px, `panel.module.css`). Breakpoint rationale — MAIN-REGION width
+ * arithmetic (this plan's decision, plan 20260811-panel-f3-agent-general):
+ * the events page columns live in the main region, which already loses 300px
+ * to the resident sidebar above the panel's 860px breakpoint — below 1200px
+ * the main area is too narrow for two legible log columns (≈420px each at
+ * 1200px, ≈300px at 960px, ≈250px at 860px — rows wrap to several lines).
+ * The stacked-rows fallback shape is a decision OF THIS PLAN (two locked
+ * 50/50 rows), not a reuse of a precedent: the canvas-zones dual-panel
+ * side-by-side layout that once motivated a similar 1200px breakpoint was
+ * removed by the tabs-shell refactor, so it no longer exists in the
+ * codebase (archival). --- */
+
+@media (max-width: 1200px) {
+  .eventLogPage {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
 }
