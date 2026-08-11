@@ -29,7 +29,7 @@ import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { pairSettleIndexes, projectGraph } from '../src/client/panel/graph/project-graph'
 import {
-  EXPECTED_ROLE_FLOW, PHASE_IDS, PLAN_STATE_IDS,
+  EXPECTED_ROLE_FLOW, KNOWN_AGENTS, PHASE_IDS, PLAN_STATE_IDS,
   type PhaseId, type PlanStateId,
 } from '../src/client/panel/graph/schema'
 import { PLAN_CAP, sortPlans } from '../src/client/panel/plan-sort'
@@ -513,6 +513,15 @@ function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
   }
 }
 
+/**
+ * The expected idle tail (spec §6.2): KNOWN_AGENTS members WITHOUT role
+ * evidence project as idle cards — this mirrors the projection's suppression
+ * rule so assertions can compute the expected roster tail.
+ */
+function idleRosterIds(evidencedRoles: readonly string[]): string[] {
+  return KNOWN_AGENTS.filter((a) => !evidencedRoles.includes(a.id)).map((a) => a.id)
+}
+
 describe('projectGraph — agents zone skeleton (spec §4, plan 2)', () => {
   it('is the fixed 6-stage EXPECTED_ROLE_FLOW skeleton with the spec\'d exact role vocabularies', () => {
     expect(EXPECTED_ROLE_FLOW).toHaveLength(6)
@@ -538,7 +547,7 @@ describe('projectGraph — agents zone skeleton (spec §4, plan 2)', () => {
     }
   })
 
-  it('agentFlow null (ledger absent) → degraded skeleton (no entities yet — plan 3)', () => {
+  it('agentFlow null (ledger absent) → degraded skeleton + full idle roster (spec §6.2)', () => {
     const agents = projectGraph(fullSource).agents
     expect(agents.degraded).toBe(true)
     expect(agents.empty).toBe(false)
@@ -623,9 +632,10 @@ describe('projectGraph — agents zone entities (spec §4)', () => {
       dispatchRow({ ts: 5, role: 'fullstack-dev' }),
       dispatchRow({ ts: 3, role: 'fullstack-dev' }),
     ]))
-    expect(view.agents.entities.map((e) => e.key)).toEqual(['fullstack-dev+5', 'fullstack-dev+3'])
-    expect(view.agents.entities.map((e) => e.name)).toEqual(['fullstack-dev', 'fullstack-dev'])
-    expect(view.agents.entities.map((e) => e.agent)).toEqual([null, null])
+    const idleTail = idleRosterIds(['fullstack-dev'])
+    expect(view.agents.entities.map((e) => e.key)).toEqual(['fullstack-dev+5', 'fullstack-dev+3', ...idleTail])
+    expect(view.agents.entities.map((e) => e.name)).toEqual(['fullstack-dev', 'fullstack-dev', ...idleTail])
+    expect(view.agents.entities.map((e) => e.agent)).toEqual([null, null, ...idleTail.map(() => null)])
   })
 
   it('identical fallback keys (same role+ts) aggregate into one card', () => {
@@ -633,9 +643,11 @@ describe('projectGraph — agents zone entities (spec §4)', () => {
       dispatchRow({ ts: 5, role: 'fullstack-dev' }),
       dispatchRow({ ts: 5, role: 'fullstack-dev' }),
     ]))
-    expect(view.agents.entities).toHaveLength(1)
+    // 1 evidence card + the 14 un-evidenced KNOWN_AGENTS idle cards (spec §6.2).
+    expect(view.agents.entities).toHaveLength(1 + idleRosterIds(['fullstack-dev']).length)
     expect(view.agents.entities[0]!.key).toBe('fullstack-dev+5')
     expect(view.agents.entities[0]!.count).toBe(2)
+    expect(view.agents.entities[0]!.idle).toBe(false)
   })
 
   it('task tag: planId#taskId; planId alone when taskId missing; null when planId missing', () => {
@@ -713,14 +725,18 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
     expect(view.agents.entities[0]!.status).toBe('running')
   })
 
-  it('settle-only flow → NO entities (settle rows never produce cards)', () => {
+  it('settle-only flow → no settle-derived cards; the full KNOWN_AGENTS roster shows idle', () => {
     const agents = projectGraph(flowSource([
       settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
       settleRow({ ts: 7, agent: 'a2', outcome: 'error' }),
     ])).agents
-    expect(agents.entities).toEqual([])
+    // Settle rows never produce cards (spec §4), but the known roster is never
+    // hidden: every known agent projects as an idle card (spec §6.2).
     expect(agents.degraded).toBe(false)
     expect(agents.empty).toBe(false)
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
+    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
+    expect(agents.executing).toBe(0)
   })
 })
 
@@ -885,35 +901,40 @@ describe('projectGraph — agents zone counts (spec §4)', () => {
 })
 
 describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
-  it('degraded (agentFlow null / unreadable) → skeleton, NO entity/pending claims (0/0)', () => {
+  it('degraded (agentFlow null / unreadable) → full idle roster, NO executing/pending claims (0/0)', () => {
     const degraded = projectGraph(fullSource).agents // agentFlow: null
     expect(degraded.degraded).toBe(true)
-    expect(degraded.entities).toEqual([])
+    // The known roster is never hidden (spec §6.2): all 15 agents show idle.
+    expect(degraded.entities).toHaveLength(KNOWN_AGENTS.length)
+    expect(degraded.entities.every((e) => e.idle && e.status === 'idle' && e.count === 0 && e.ts === 0)).toBe(true)
     expect(degraded.executing).toBe(0)
     expect(degraded.pending).toBe(0)
     expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(5)
     // No evidence claims on a degraded skeleton either (render shows no
-    // pending placeholders, no cards — spec §8).
+    // pending placeholders — spec §8).
     expect(degraded.stages.every((s) => !s.evidenced)).toBe(true)
   })
 
-  it('empty ledger → empty + full pending skeleton (0 executing, 12 pending)', () => {
+  it('empty ledger → empty + full idle roster + full pending skeleton (0 executing, 12 pending)', () => {
     const agents = projectGraph(flowSource([])).agents
     expect(agents.empty).toBe(true)
     expect(agents.degraded).toBe(false)
-    expect(agents.entities).toEqual([])
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
+    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
     expect(agents.pending).toBe(12)
   })
 
-  it('only-settle ledger → no entity cards + full pending skeleton (摘要 0 执行中 · M 待执行)', () => {
+  it('only-settle ledger → idle roster + full pending skeleton (摘要 0 执行中 · M 待执行)', () => {
     const agents = projectGraph(flowSource([
       settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
       settleRow({ ts: 7, agent: 'a2', outcome: 'error' }),
     ])).agents
     expect(agents.degraded).toBe(false)
     expect(agents.empty).toBe(false)
-    expect(agents.entities).toEqual([])
+    // Settles never produce cards; the known roster still shows idle.
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
+    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
     expect(agents.pending).toBe(12)
     expect(agents.stages).toHaveLength(6)
@@ -925,15 +946,150 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
       { kind: 'dispatch', ts: 8 },           // fully anonymous
       dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1' }),
     ]))
-    expect(view.agents.entities.map((e) => e.key)).toEqual(['a1'])
+    // a1 (lit) + the 14 un-evidenced known roles (idle) — anonymous rows add nothing.
+    expect(view.agents.entities.map((e) => e.key)).toEqual(['a1', ...idleRosterIds(['fullstack-dev'])])
     expect(view.agents.executing).toBe(1)
+    expect(view.agents.entities.filter((e) => e.idle).every((e) => e.status === 'idle')).toBe(true)
   })
 
-  it('all-garbage agent-flow rows → total function: no entities, never throws', () => {
+  it('all-garbage agent-flow rows → total function: idle roster only, never throws', () => {
     const agents = projectGraph(flowSource([42, null, 'garbage', { kind: 'banana' }, { kind: 'dispatch' }])).agents
     expect(agents.degraded).toBe(false)
-    expect(agents.entities).toEqual([])
+    // No role evidence → the whole known roster is idle.
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
+    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * KNOWN_AGENTS full roster (spec §4 / §6.2 / decision point D3): exactly 15
+ * roles — every EXPECTED_ROLE_FLOW role + project-manager / prompt-engineer /
+ * explore + generalPurpose; stages pinned to the flow (first constant-order
+ * match), null for the off-pipeline roles.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — KNOWN_AGENTS full roster (spec §4 / §6.2 / D3)', () => {
+  it('is exactly the 15 spec roles in spec §4 order, no duplicates', () => {
+    expect(KNOWN_AGENTS).toHaveLength(15)
+    expect(KNOWN_AGENTS.map((a) => a.id)).toEqual([
+      'project-manager', 'product-manager', 'architect', 'fullstack-dev', 'fullstack-dev-2',
+      'frontend-dev', 'qa-engineer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3',
+      'ops-engineer', 'writing-specialist', 'prompt-engineer', 'generalPurpose', 'explore',
+    ])
+    expect(new Set(KNOWN_AGENTS.map((a) => a.id)).size).toBe(15)
+  })
+
+  it('covers every EXPECTED_ROLE_FLOW role (12) plus the 3 off-pipeline roles', () => {
+    const flowRoles = EXPECTED_ROLE_FLOW.flatMap((s) => [...s.roles])
+    expect(flowRoles).toHaveLength(12)
+    for (const role of flowRoles) {
+      expect(KNOWN_AGENTS.some((a) => a.id === role)).toBe(true)
+    }
+    // The architect-verified gaps (spec §6.5 D3): orchestrator / table-only / scout.
+    for (const role of ['project-manager', 'prompt-engineer', 'explore']) {
+      expect(KNOWN_AGENTS.some((a) => a.id === role)).toBe(true)
+    }
+  })
+
+  it('stage = the first constant-order EXPECTED_ROLE_FLOW match; null for off-pipeline roles', () => {
+    const firstStage = (role: string) => {
+      for (const s of EXPECTED_ROLE_FLOW) {
+        if (s.roles.includes(role)) return { phase: s.phase, stage: s.stage }
+      }
+      return null
+    }
+    for (const known of KNOWN_AGENTS) {
+      expect(known.stage ?? null).toEqual(firstStage(known.id))
+    }
+    expect(KNOWN_AGENTS.find((a) => a.id === 'project-manager')!.stage ?? null).toBeNull()
+    expect(KNOWN_AGENTS.find((a) => a.id === 'prompt-engineer')!.stage ?? null).toBeNull()
+    expect(KNOWN_AGENTS.find((a) => a.id === 'explore')!.stage ?? null).toBeNull()
+  })
+
+  it('generalPurpose (the user-named SDD general reviewer) sits in sdd-task-review', () => {
+    const gp = KNOWN_AGENTS.find((a) => a.id === 'generalPurpose')!
+    expect(gp.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-task-review' })
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Agents roster full coverage (spec §6.2): every KNOWN_AGENTS member has an
+ * entity — lit when dispatch-evidenced, idle otherwise — across degraded /
+ * empty / evidence states; idle never counts into `executing`.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
+  it('every KNOWN_AGENTS member has an entity (idle or lit) across degraded / empty / evidence states', () => {
+    for (const agents of [
+      projectGraph(fullSource).agents, // degraded: agentFlow null
+      projectGraph(flowSource([])).agents, // empty: 0 events
+      projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })])).agents,
+    ]) {
+      // A lit member's card is keyed by session id — match on the ROLE field
+      // (idle cards carry role = id, lit cards carry role = the known id).
+      for (const known of KNOWN_AGENTS) {
+        expect(agents.entities.some((e) => e.role === known.id)).toBe(true)
+      }
+    }
+  })
+
+  it('no evidence → the whole roster is idle cards (idle true, status idle, count 0, ts 0, agent null)', () => {
+    const agents = projectGraph(flowSource([])).agents
+    expect(agents.entities).toHaveLength(15)
+    for (const e of agents.entities) {
+      expect(e.status).toBe('idle')
+      expect(e.idle).toBe(true)
+      expect(e.count).toBe(0)
+      expect(e.ts).toBe(0)
+      expect(e.agent).toBeNull()
+      expect(e.task).toBeNull()
+      expect(e.name).toBe(e.role)
+    }
+    expect(agents.executing).toBe(0)
+  })
+
+  it('idle cards carry the KNOWN_AGENTS stage (null for off-pipeline roles)', () => {
+    const agents = projectGraph(flowSource([])).agents
+    const byId = new Map(agents.entities.map((e) => [e.key, e]))
+    for (const known of KNOWN_AGENTS) {
+      expect(byId.get(known.id)!.stage ?? null).toEqual(known.stage ?? null)
+    }
+  })
+
+  it('dispatch evidence lights the known agent (idle false) and suppresses its idle card', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 2, role: 'generalPurpose', agent: 'a1' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a2' }),
+    ])).agents
+    const byKey = new Map(agents.entities.map((e) => [e.key, e]))
+    expect(byKey.get('a2')!.idle).toBe(false)
+    expect(byKey.get('a2')!.status).toBe('running')
+    expect(byKey.get('a1')!.idle).toBe(false)
+    // Lit roles never ALSO appear as idle cards (evidence suppresses the idle twin).
+    expect(byKey.get('fullstack-dev')).toBeUndefined()
+    expect(byKey.get('generalPurpose')).toBeUndefined()
+    // The other 13 known roles are idle.
+    const idle = agents.entities.filter((e) => e.idle)
+    expect(idle).toHaveLength(13)
+    expect(idle.every((e) => e.status === 'idle')).toBe(true)
+  })
+
+  it('evidence via an agent-less dispatch row (role present) still lights the role', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 1, role: 'ops-engineer' }), // no agent id → fallback key
+    ])).agents
+    const keys = agents.entities.map((e) => e.key)
+    expect(keys).toContain('ops-engineer+1')
+    expect(agents.entities.filter((e) => e.idle).map((e) => e.key)).not.toContain('ops-engineer')
+  })
+
+  it('executing counts running evidence entities only — idle never counts', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a1' }),
+    ])).agents
+    expect(agents.entities).toHaveLength(15)
+    expect(agents.executing).toBe(1)
   })
 })
 
