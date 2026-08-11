@@ -60,9 +60,10 @@ or a custom profile).
   dispatch evidence: the same role across sessions folds into one card ×N,
   and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
   `scout`, anonymous `role === ''`) folds into the single `general` bucket
-  entity — `agent` / `task` are record fields, never the card title. Cards
-  show agent display name / role chip / task tag (`planId#taskId`) / status
-  point / ×N count; running entities carry the business glow-pulse
+  entity — the card is ROLE-TITLED (the role id, e.g. `fullstack-dev`); the
+  agent session id / task tag (`planId#taskId`) ride the RECORD line, never
+  the title. Cards show the role chip / status point / ×N count; running
+  entities carry the business glow-pulse
   highlight, un-evidenced stages render the dashed "待执行" pending
   placeholder with their expected role chips, un-evidenced KNOWN_AGENTS
   members render dashed idle cards (the full 13-role roster is never

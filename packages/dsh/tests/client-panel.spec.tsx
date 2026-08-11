@@ -110,6 +110,7 @@ import {
   LOOP_BOW_MARGIN,
   ON_DEMAND_COLUMN,
   PAN_ORIGIN,
+  solveLoopBow,
   type PanState,
 } from '../src/client/panel/pages/AgentCanvasPage'
 
@@ -2292,6 +2293,48 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     const bandBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
     const p = parseLoopPath(agentsHtml(evidenceSource))
     expect(bezierLowY(p.y1, p.yc, p.y2)).toBeGreaterThanOrEqual(bandBottom + LOOP_BOW_MARGIN - 1e-6)
+  })
+
+  it('solveLoopBow (pure — QC fix S-2): known value matches the QC-verified degraded geometry (y1=306, y2=138, target=322)', () => {
+    // The exact geometry the I-1 fix round verified by hand: the degraded
+    // all-idle roster bows sdd-implement (306) → general (138) with the
+    // extremum at bandBottom + 16 = 322; the control point sits deeper at
+    // 322 + sqrt(16·184) ≈ 376.26.
+    expect(solveLoopBow(306, 138, 322)).toBe(322 + Math.sqrt(16 * 184))
+    expect(bezierLowY(306, 322 + Math.sqrt(16 * 184), 138)).toBeCloseTo(322, 9)
+  })
+
+  it('solveLoopBow: equal anchors (y1 == y2) — the symmetric arc extremum lands exactly at target', () => {
+    // y1 == y2 → the dy/dt=0 root is t* = 1/2 and y(0.5) = target exactly.
+    const yc = solveLoopBow(306, 306, 322)
+    expect(bezierLowY(306, yc, 306)).toBeCloseTo(322, 9)
+    expect(yc).toBe(322 + 16) // target + |target − anchor| — the symmetric control point
+  })
+
+  it('solveLoopBow: extreme anchor skew (y1 << y2) — the control point dips deeper but the extremum stays at target', () => {
+    // Very different anchors grow the radicand (target−y1)·(target−y2), so the
+    // control point sits much deeper than the extremum — but the dy/dt=0 root
+    // stays strictly inside the arc and its value is exactly target.
+    const y1 = 50
+    const y2 = 400
+    const target = 420
+    const yc = solveLoopBow(y1, y2, target)
+    expect(bezierLowY(y1, yc, y2)).toBeCloseTo(target, 9)
+    expect(yc).toBeGreaterThan(target)
+    const tStar = (y1 - yc) / (y1 - 2 * yc + y2)
+    expect(tStar).toBeGreaterThan(0)
+    expect(tStar).toBeLessThan(1)
+  })
+
+  it('solveLoopBow: target boundary — a target ON an anchor collapses the radicand (total, no NaN); below-anchor targets are out of domain', () => {
+    // target == the higher anchor → radicand 0 → yc == target (the control
+    // point lands on the anchor line; the render never passes this — target
+    // is always bandBottom + margin). The function stays total at the
+    // boundary: no NaN, no throw.
+    expect(solveLoopBow(100, 300, 300)).toBe(300)
+    // Below-anchor targets are OUT of the valid domain (negative radicand) —
+    // NaN by construction; the render guarantees target > max(y1, y2).
+    expect(solveLoopBow(100, 300, 299)).toBeNaN()
   })
 
   it('data-canvas-pan exposes the pan state as a translate transform (origin default)', () => {

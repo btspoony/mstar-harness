@@ -57,7 +57,7 @@ import type { MstarEngineStatusSource } from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
 import { PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
-  EXPECTED_ROLE_FLOW, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
+  EXPECTED_ROLE_FLOW, GENERAL_BUCKET, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
   type AgentZone, type KnownAgent, type PhaseId, type PlanStateId,
 } from './schema.ts'
 
@@ -507,7 +507,7 @@ function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
   }
   const implement = stages.find((s) => s.stage === 'sdd-implement')
   if (implement !== undefined) {
-    edges.push({ kind: 'expected', source: implement.id, target: 'general', entityKey: null, loop: true })
+    edges.push({ kind: 'expected', source: implement.id, target: GENERAL_BUCKET, entityKey: null, loop: true })
   }
   return edges
 }
@@ -541,7 +541,7 @@ interface EntityAccum {
  */
 function entityKeyOf(role: string): string {
   if (role !== '' && KNOWN_AGENTS.some((a) => a.id === role)) return role
-  return 'general'
+  return GENERAL_BUCKET
 }
 
 /** The zone helper shared by lit + idle cards (plan 20260811-panel-f3-agent-general):
@@ -550,7 +550,7 @@ function entityKeyOf(role: string): string {
 function roleZone(role: string, stage: { phase: PhaseId; stage: string } | null): AgentZone {
   if (stage !== null) return 'flow'
   const known = KNOWN_AGENTS.find((a) => a.id === role)
-  return known === undefined ? 'general' : (known.zone ?? 'general')
+  return known === undefined ? GENERAL_BUCKET : (known.zone ?? GENERAL_BUCKET)
 }
 
 /**
@@ -586,7 +586,7 @@ function aggregateEntities(
     const v = entries[i]!.view
     if (v.kind !== 'dispatch') continue
     const key = entityKeyOf(v.role)
-    const role = key === 'general' ? 'general' : v.role
+    const role = key === GENERAL_BUCKET ? GENERAL_BUCKET : v.role
     const task = v.planId === null ? null : v.taskId === null ? v.planId : `${v.planId}#${v.taskId}`
     const cur = acc.get(key)
     if (cur === undefined) {
@@ -729,7 +729,7 @@ function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<
  * are 'flow'. */
 function idleZone(known: KnownAgent): AgentZone {
   if (known.stage !== null) return 'flow'
-  return known.zone ?? 'general'
+  return known.zone ?? GENERAL_BUCKET
 }
 
 /**

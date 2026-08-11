@@ -146,6 +146,18 @@ export const EXPECTED_ROLE_FLOW: readonly ExpectedRoleStage[] = [
  * per-task reviewer — the former `generalPurpose` role — plus ANY
  * unmatched / anonymous dispatch (role '') in the projection).
  */
+/** The general-bucket id (plan 20260811-panel-f3-agent-general): the single
+ * bucket every off-roster / anonymous dispatch folds into — the SDD per-task
+ * reviewer (the former `generalPurpose` role) plus ANY unmatched / anonymous
+ * dispatch (role '') in the projection. Single source for the value:
+ * `entityKeyOf`'s fallback key, the `expectedEdges` SDD-loop target,
+ * `roleZone` / `idleZone` defaults, the render's `GENERAL_COLUMN` and the
+ * KNOWN_AGENTS roster id ALL derive from it — renaming the bucket changes
+ * exactly one constant. The `'general'` literal in the `AgentZone` /
+ * `KnownAgent.zone` unions below is the type-level binding (a union member
+ * cannot reference a value) — keep them in sync with this constant. */
+export const GENERAL_BUCKET = 'general' as const
+
 export type AgentZone = 'flow' | 'on-demand' | 'general'
 
 export interface KnownAgent {
@@ -157,7 +169,8 @@ export interface KnownAgent {
   stage?: { phase: PhaseId; stage: string } | null
   /** Off-pipeline zone (plan 20260811-panel-f3-agent-general): 'on-demand'
    * for the on-demand column, 'general' (the default when omitted) for the
-   * general bucket. */
+   * general bucket. The `'general'` literal is the type-level binding of
+   * `GENERAL_BUCKET` (see above) — a union member cannot reference a value. */
   zone?: 'on-demand' | 'general'
 }
 
@@ -175,5 +188,5 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
   { id: 'ops-engineer', stage: null, zone: 'on-demand' },
   { id: 'writing-specialist', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
   { id: 'prompt-engineer', stage: null, zone: 'on-demand' },
-  { id: 'general', stage: null, zone: 'general' },
+  { id: GENERAL_BUCKET, stage: null, zone: GENERAL_BUCKET },
 ]

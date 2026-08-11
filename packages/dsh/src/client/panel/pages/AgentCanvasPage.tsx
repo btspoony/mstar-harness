@@ -62,6 +62,7 @@ import * as React from 'react'
 import { useMemo, useRef, useState } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AgentEdge, AgentEntityStatus, AgentEntityView, ZoneView } from '../graph/project-graph.ts'
+import { GENERAL_BUCKET } from '../graph/schema.ts'
 import { Legend } from '../zones/Legend.tsx'
 import css from './agent-canvas.module.css'
 
@@ -145,9 +146,32 @@ const LABEL_H = 18
  * canvas bottom is exactly `bandBottom + PAD_Y` — see `layoutAgents`). */
 export const LOOP_BOW_MARGIN = 16
 
+/** The SDD-loop arc's control-point y (fix round I-1 + QC fix S-2): the pure
+ * inverse-extremum solve for the quadratic bezier Q(y1, yc, y2) — given the
+ * anchor ys (the two loop columns' bottoms) and the arc's TARGET lowest
+ * point, return the control-point y `yc` whose curve's REAL lowest point
+ * (the dy/dt=0 extremum) lands exactly at `target`.
+ *
+ * Derivation: for Q(y1, yc, y2) the dy/dt=0 root is
+ *   t* = (y1 − yc) / (y1 − 2·yc + y2),   whose value is
+ *   y(t*) = (y1·y2 − yc²) / (y1 − 2·yc + y2).
+ * Solving y(t*) = target for the below-both-anchors root (yc > max(y1, y2)):
+ *   yc = target ± sqrt((target − y1)·(target − y2))  →  the plus root.
+ * Deterministic per view; the radicand is ≥ 0 while target ≥ max(y1, y2) —
+ * the render always passes `bandBottom + LOOP_BOW_MARGIN`, which is > both
+ * anchors by construction. The control point sits DEEPER than the extremum —
+ * never assert it as the bow (the SSR tests assert the true extremum via
+ * `bezierLowY`). */
+export function solveLoopBow(y1: number, y2: number, target: number): number {
+  return target + Math.sqrt((target - y1) * (target - y2))
+}
+
 /** The trailing column id for stage-null entities (the general bucket — the
- * former 'unexpected' track, plan 20260811-panel-f3-agent-general). */
-export const GENERAL_COLUMN = 'general'
+ * former 'unexpected' track, plan 20260811-panel-f3-agent-general). Derived
+ * from `GENERAL_BUCKET` (schema.ts — the single source for the value): the
+ * column id must equal the bucket id or the loop edge's `target` would miss
+ * the column and the bow would silently vanish. */
+export const GENERAL_COLUMN = GENERAL_BUCKET
 
 /** The on-demand column id (plan 20260811-panel-f2-quickfix Item 3): the
  * separate zone for ops-engineer / prompt-engineer — NO expected/next arrows
@@ -427,18 +451,11 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
                 // The lowest bottom edge across ALL columns — the band the
                 // arc must clear (not just the two anchor columns).
                 const bandBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
-                const target = bandBottom + LOOP_BOW_MARGIN
-                // Inverse extremum: for Q(y1, yc, y2) the dy/dt=0 root is
-                // t* = (y1−yc)/(y1−2yc+y2), whose value is
-                // y(t*) = (y1·y2 − yc²)/(y1−2yc+y2). Solving y(t*) = target
-                // for the below-both-anchors root (yc > max(y1,y2)) gives
-                // yc = target + sqrt((target−y1)·(target−y2)) — the arc's
-                // REAL lowest point lands exactly at `target` (deterministic
-                // per view; always inside the canvas since target <
-                // bandBottom + PAD_Y = canvas bottom). The control point
-                // itself sits DEEPER than the extremum — never assert it as
-                // the bow.
-                const bowY = target + Math.sqrt((target - y1) * (target - y2))
+                // The control point is solved INVERSE from the quadratic-bezier
+                // extremum so the arc's TRUE lowest point lands exactly
+                // `LOOP_BOW_MARGIN` below the band (pure + unit-tested —
+                // `solveLoopBow`; the derivation lives there).
+                const bowY = solveLoopBow(y1, y2, bandBottom + LOOP_BOW_MARGIN)
                 return (
                   <path
                     key={`loop-${i}-${edge.source}-${edge.target}`}

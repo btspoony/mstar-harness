@@ -184,9 +184,9 @@ column. The subagent **entity cards** aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
 and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
 `scout`, anonymous `role === ''`) folds into the single `general` bucket
-entity (`agent` / `task` are record fields, never the card title) — agent
-display name / role chip / task tag
-(`planId#taskId`) / status point / ×N count; running entities carry the
+entity (the card is role-titled — the role id; the agent session id / task
+tag ride the record line, never the title) — role chip / status point / ×N
+count; running entities carry the
 business glow-pulse highlight, un-evidenced stages render the dashed
 "待执行" pending placeholder with their expected role chips, un-evidenced
 KNOWN_AGENTS members render dashed idle cards (the full 13-role roster is

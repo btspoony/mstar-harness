@@ -296,14 +296,17 @@
 /* --- narrow fallback (plan F3 Task 2): below 1200px the two partitions
  * stack as two locked 50/50 rows — both stay visible at any window height,
  * each scrolling internally (same shape as the panel's own sidebar stack at
- * 860px, `panel.module.css`). Breakpoint rationale: the events page columns
- * live in the MAIN region, which already loses 300px to the resident sidebar
- * above the panel's 860px breakpoint — below 1200px the main area is too
- * narrow for two legible log columns (≈420px each at 1200px, ≈300px at
- * 960px, ≈250px at 860px — rows wrap to several lines). The fallback
- * therefore follows the zones dual-panel precedent (the canvas-zones plan
- * stacked its side-by-side zones below 1200px) rather than the 860px sidebar
- * precedent. --- */
+ * 860px, `panel.module.css`). Breakpoint rationale — MAIN-REGION width
+ * arithmetic (this plan's decision, plan 20260811-panel-f3-agent-general):
+ * the events page columns live in the main region, which already loses 300px
+ * to the resident sidebar above the panel's 860px breakpoint — below 1200px
+ * the main area is too narrow for two legible log columns (≈420px each at
+ * 1200px, ≈300px at 960px, ≈250px at 860px — rows wrap to several lines).
+ * The stacked-rows fallback shape is a decision OF THIS PLAN (two locked
+ * 50/50 rows), not a reuse of a precedent: the canvas-zones dual-panel
+ * side-by-side layout that once motivated a similar 1200px breakpoint was
+ * removed by the tabs-shell refactor, so it no longer exists in the
+ * codebase (archival). --- */
 
 @media (max-width: 1200px) {
   .eventLogPage {
