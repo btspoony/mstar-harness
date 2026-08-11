@@ -172,7 +172,13 @@ graph, plan `20260810-panel-canvas-zones`) lays out three zones — the
 **iteration zone** (Step 1–5 as 5 equal full-width unit blocks with pure-number
 badges + an `N/5` summary — no 步骤/Step wording, plan `20260811-panel-f2-quickfix`;
 active-highlight / inactive dimmed states, and the branch panel: iteration
-base / target / spec integration, rendered only while active), the **tasks zone** (6-column
+base / target / spec integration, rendered only while active; the expanded
+head is a LEFT-RIGHT SPLIT — branches (small left half) + steps (large right
+half) via `data-iteration-head-split`, stacking on narrow widths, and NO
+branch panel when there is no active iteration; the current step follows the
+steering compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
+(iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge —
+plan `20260811-panel-f4-iteration-zone`), the **tasks zone** (6-column
 kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
 badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the four EXPECTED_ROLE_FLOW stage/phase
 columns — review-edit-chain → sdd-implement → qc-tri → qa-gate (the
@@ -262,8 +268,14 @@ sha1), and the browser handoff materializes the plugin entry (`inject` +
 `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
 
 **Known Limitations** (this iteration): the iteration stepper's Step 1
-(iteration-start) and Step 5 (merge-ready) can never be the **current** step —
-the engine phase gate only evaluates Phase 2→3→4, so they always render idle;
+(iteration-start) IS the current step while the steering compass is
+`status: active` (Phase 1 in flight — catalog `compassStatus` field), carrying
+NO PASS/FAIL badge (Phase 1 has no gate verdict); Step 5 (merge-ready) can
+never be the **current** step —
+the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
+the current step follows the TTL-refreshed `compassStatus` — up to one catalog
+interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
+documented staleness, never a wrong verdict);
 the agent-entity status derivation pairs a PAIRED settle exactly by its
 dispatch identity (agent, role, planId, taskId — QC-tri N=3 settles land on
 their own cards), and an unpaired dispatch stays running (no paired settle,
@@ -333,4 +345,4 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming.
 - **Entry is a module index over `src/gates/*`** — the split shipped: `src/index.ts` (371 lines) re-exports the frozen 27-name export surface from the gate modules (`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`) and keeps the plugin manifest, the single cordis augmentation point, the command registration, and the `apply()` startup wiring. The surface (17 value + 10 type-only names; `Config` counts once) is frozen by `tests/export-surface.spec.ts` — the runtime value-export set plus, under `typecheck:tests` (`bunx tsc --noEmit -p tests/tsconfig.json`), the value-namespace identity and the per-name type-only probes.
 - **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root / `references/dsh.md`) updates with it.
-- **Iteration stepper is schema-driven for steps 1/5** — the zone dashboard's Step 1 (iteration-start) and Step 5 (merge-ready) are schema constants the engine gate never lights as current (transition covers Phase 2→3→4 only), so they always render idle — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.
+- **Iteration stepper: Step 1 is compass-driven, Step 5 is schema-driven** — the zone dashboard's Step 1 (iteration-start) is the current step while the steering compass is `status: active` (Phase 1 in flight — no gate verdict, so no PASS/FAIL badge); Step 5 (merge-ready) is a schema constant the engine gate never lights as current (transition covers Phase 2→3→4 only), so it always renders idle — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.

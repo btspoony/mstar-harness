@@ -14,7 +14,14 @@
  * centered, --mstar-space-* gap; no connector bars) with the current step
  * highlighted on the block itself (the same honesty as the zone stepper:
  * no "completed" checkmarks) plus the branch panel (rendered ONLY while the
- * iteration is active, spec §3).
+ * iteration is active, spec §3). Plan 20260811-panel-f4-iteration-zone
+ * Task 2 (spec panel-f4 §2.3 R8/R9): the expanded body is a LEFT-RIGHT
+ * SPLIT — branches (small half, DOM-first) + steps (large half), with the
+ * `data-iteration-head-split` container present only while branches render;
+ * each step reserves the fixed-height verdict seat (`data-step-verdict-seat`)
+ * and the PASS/FAIL badge renders only for a current step with a real gate
+ * verdict (`state === 'current' && verdict !== 'unknown'` — Phase 1 renders
+ * no badge), so the centered content groups align across steps.
  *
  * Collapse/expand (spec §3 / Task 2 brief): a local `useState` defaulted to
  * the iteration state — `active === false` → collapsed to a one-line summary
@@ -78,6 +85,21 @@ const STATE_LABEL = {
   idle: 'zone.iteration.step.idle',
 } as const
 
+/**
+ * The split-layout wrapper decision (spec panel-f4 §2.3 R8, plan f4.3 Task 2
+ * — exported pure for the render tests, the `nextExpandedOnActivation`
+ * precedent): the `data-iteration-head-split` container renders ONLY while
+ * the branch panel renders (`active && branches !== null`); otherwise the
+ * expanded body renders the steps row ALONE — the expanded-inactive fallback
+ * (a user manually expands an inactive head → the 5-step idle skeleton
+ * without the split). The `active + branches null` arm is projection-
+ * unreachable (branches are always projected non-null while active), but the
+ * predicate keeps the decision a single, testable source of truth.
+ */
+export function iterationSplitActive(active: boolean, branches: ZoneView['iteration']['branches']): boolean {
+  return active && branches !== null
+}
+
 /** The three branch anchors (spec §3 — `state.iterationBaseBranch` etc.). */
 const BRANCH_ROWS: readonly {
   kind: 'iteration-base' | 'target' | 'spec-integration'
@@ -116,6 +138,36 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
   const statusLabel = active && iteration.currentStep !== null
     ? t('zone.iteration.step-label', { n: String(iteration.currentStep), total: String(iteration.steps.length) })
     : t('page.iteration.not-started')
+
+  // The horizontal steps row (spec §3) — shared by the split layout (steps
+  // right) and the no-branches fallback (steps alone). Each step reserves the
+  // fixed-height verdict seat (spec panel-f4 §2.3 R9, plan f4.3 Task 2): the
+  // conditional PASS/FAIL badge fills the seat on the current step only, so
+  // every step item has the SAME children (badge/phase/chip/seat) and the
+  // centered content groups align identically — the old in-flow badge (an
+  // extra child on the current step) shifted that block. The badge renders
+  // ONLY for a current step carrying a REAL gate verdict — Phase 1 (Step 1
+  // current, verdict 'unknown') renders NO badge (spec R9).
+  const stepsRow = (
+    <ol className={css.iterationStepsRow} data-iteration-head-steps>
+      {iteration.steps.map((step) => (
+        <li key={step.step} className={css.iterationStepItem} data-step={step.step} data-step-state={step.state}>
+          <span className={css.iterationStepBadge} data-step-badge>
+            {t('zone.iteration.step-badge', { n: String(step.step) })}
+          </span>
+          <span className={css.iterationStepPhase} data-step-phase>{t(`zone.phase.${step.id}`)}</span>
+          <span className={css.iterationStepChip} data-step-chip>{t(STATE_LABEL[step.state])}</span>
+          <span className={css.iterationVerdictSeat} data-step-verdict-seat>
+            {step.state === 'current' && step.verdict !== 'unknown' && (
+              <span className={css.iterationVerdict} data-iteration-verdict={step.verdict}>
+                {verdictLabel(step.verdict)}
+              </span>
+            )}
+          </span>
+        </li>
+      ))}
+    </ol>
+  )
 
   return (
     <div className={css.iterationPage} data-mstar-page="tasks">
@@ -162,39 +214,34 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
                 connector bars are removed, the gap replaces them), the
                 current step highlighted on the block itself (honest — the
                 schema knows only current/next/idle). */}
-            <ol className={css.iterationStepsRow} data-iteration-head-steps>
-              {iteration.steps.map((step) => (
-                <li className={css.iterationStepItem} data-step={step.step} data-step-state={step.state}>
-                  <span className={css.iterationStepBadge} data-step-badge>
-                    {t('zone.iteration.step-badge', { n: String(step.step) })}
-                  </span>
-                  <span className={css.iterationStepPhase} data-step-phase>{t(`zone.phase.${step.id}`)}</span>
-                  <span className={css.iterationStepChip} data-step-chip>{t(STATE_LABEL[step.state])}</span>
-                  {step.state === 'current' && (
-                    <span className={css.iterationVerdict} data-iteration-verdict={step.verdict}>
-                      {verdictLabel(step.verdict)}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ol>
-
-            {/* Branch panel (spec §3): rendered ONLY while the iteration is
-                active (branches are null while inactive, spec §3). */}
-            {active && iteration.branches !== null && (
-              <div className={css.iterationBranches} data-iteration-head-branches>
-                <h3 className={css.iterationBranchesTitle} data-branches-title>{t('zone.branches.title')}</h3>
-                <ul className={css.iterationBranchList}>
-                  {BRANCH_ROWS.map((row) => (
-                    <li key={row.kind} className={css.iterationBranchRow} data-branch={row.kind}>
-                      <span className={css.iterationBranchLabel}>{t(row.label)}</span>
-                      <code className={css.iterationBranchValue} data-branch-value>
-                        {iteration.branches?.[row.value] ?? '—'}
-                      </code>
-                    </li>
-                  ))}
-                </ul>
+            {iterationSplitActive(active, iteration.branches) ? (
+              /* LEFT-RIGHT split (spec panel-f4 §2.3 R8, plan f4.3 Task 2):
+                 branches LEFT (small half) + steps RIGHT (large half). DOM
+                 order: branches BEFORE steps — a plain flex row puts branches
+                 on the left. The split container exists ONLY while the
+                 branches panel renders (`iterationSplitActive` — active +
+                 branches non-null); inactive / branches-null → the steps row
+                 alone (existing semantics, the expanded-inactive fallback). */
+              <div className={css.iterationHeadSplit} data-iteration-head-split>
+                {/* Branch panel (spec §3): rendered ONLY while the iteration
+                    is active (branches are null while inactive, spec §3). */}
+                <div className={css.iterationBranches} data-iteration-head-branches>
+                  <h3 className={css.iterationBranchesTitle} data-branches-title>{t('zone.branches.title')}</h3>
+                  <ul className={css.iterationBranchList}>
+                    {BRANCH_ROWS.map((row) => (
+                      <li key={row.kind} className={css.iterationBranchRow} data-branch={row.kind}>
+                        <span className={css.iterationBranchLabel}>{t(row.label)}</span>
+                        <code className={css.iterationBranchValue} data-branch-value>
+                          {iteration.branches?.[row.value] ?? '—'}
+                        </code>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                {stepsRow}
               </div>
+            ) : (
+              stepsRow
             )}
           </div>
         )}

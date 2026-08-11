@@ -49,6 +49,14 @@
  *   projection layer stays unit-tested in client-graph-projection.spec.ts);
  *   the react-flow-era orange notes are asserted absent; zh labels;
  *   garbage-proof totality.
+ * - F4.3 iteration zone (spec panel-f4 §2.3 R8/R9, plan 20260811-panel-f4-
+ *   iteration-zone Task 2): the expanded head body is a LEFT-RIGHT split —
+ *   branches (small half, DOM-first) + steps (large half), the
+ *   `data-iteration-head-split` container present only while branches render;
+ *   the verdict badge renders only for a current step with a real gate
+ *   verdict (Phase 1 → Step 1 current, verdict unknown → NO badge) and every
+ *   step reserves the fixed-height `data-step-verdict-seat` so the centered
+ *   groups align (no `align-self` skew, no block shift).
  * - T6 tabs-shell (spec panel-tabs §2/§6.1): the panel is re-laid-out as
  *   Tabs + Content — resident right sidebar (all tabs share it), fixed
  *   header nav (TabNav, 3 MenuTabs) + per-tab content; `data-mstar-graph`
@@ -132,7 +140,7 @@ function newLocale(): LocaleService {
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelContent, PanelView } from '../src/client/panel/PanelView'
 import { TabNav } from '../src/client/panel/TabNav'
-import { nextExpandedOnActivation } from '../src/client/panel/pages/IterationTaskPage'
+import { IterationTaskPage, iterationSplitActive, nextExpandedOnActivation } from '../src/client/panel/pages/IterationTaskPage'
 import { EventLogPage } from '../src/client/panel/pages/EventLogPage'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
@@ -1355,6 +1363,140 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(columnRule).not.toBeNull()
     expect(columnRule![0]).toContain('flex: 1 1 0')
     expect(columnRule![0]).not.toContain('max-width')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * F4.3 iteration zone (spec panel-f4 §2.3 R8/R9, plan 20260811-panel-f4-
+ * iteration-zone Task 2): the expanded head body becomes a LEFT-RIGHT split —
+ * branches (`data-iteration-head-branches`) LEFT small half + steps
+ * (`data-iteration-head-steps`) RIGHT large half, DOM order branches BEFORE
+ * steps (a plain flex row puts branches left); the `data-iteration-head-split`
+ * container exists ONLY while branches render (active + non-null). The
+ * verdict badge renders ONLY for a current step carrying a REAL gate verdict
+ * (`step.state === 'current' && step.verdict !== 'unknown'`) — Phase 1
+ * (compassStatus active → Step 1 current, verdict unknown) renders NO badge.
+ * Every step reserves a fixed-height verdict seat (`data-step-verdict-seat`)
+ * so the centered content groups align across steps — the old conditional
+ * in-flow badge shifted the current step and `align-self: flex-start`
+ * skewed it left (both root causes asserted gone).
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — F4.3 iteration zone: split layout + verdict badge seat/condition (spec panel-f4 §2.3 R8/R9)', () => {
+  /** Phase 1 in flight: compassStatus active → Step 1 current, verdict unknown (Task 1 projection). */
+  const phase1Source: MstarEngineStatusSource = {
+    ...fullSource,
+    iteration: { ...fullSource.iteration!, compassStatus: 'active' },
+  }
+
+  it('active + branches → the split container wraps branches (DOM-first) and steps', () => {
+    const html = panelHtml(fullSource)
+    expect(html).toContain('data-iteration-head-split')
+    // DOM order: the split wraps BOTH panels, branches BEFORE steps — a plain
+    // flex row puts branches on the left (spec R8; the pre-split DOM had
+    // steps first, which would put steps left).
+    expect(html.indexOf('data-iteration-head-split')).toBeLessThan(html.indexOf('data-iteration-head-branches'))
+    expect(html.indexOf('data-iteration-head-branches')).toBeLessThan(html.indexOf('data-iteration-head-steps'))
+  })
+
+  it('inactive → no branches, no split container (the steps row alone)', () => {
+    const g = panelHtml(noGateSource)
+    expect(g).not.toContain('data-iteration-head-split')
+    expect(g).not.toContain('data-iteration-head-branches')
+    expect(g).not.toContain('data-branch=')
+  })
+
+  it('expanded head without the split → the steps-row-alone fallback: 5 verdict seats, 0 badges, no split/branches (qc2 F-004 / qc3 F-003)', () => {
+    // The user-visible case (a manually EXPANDED inactive head) is
+    // SSR-unreachable in this suite — `expanded` is seeded from `active`
+    // (`useState(active)`), and effects/clicks cannot run under
+    // `renderToStaticMarkup`. The wrapper DECISION is therefore pinned pure
+    // (inactive → fallback), and the fallback DOM is pinned by rendering the
+    // only statically-reachable expanded + no-split state (`active` with
+    // `branches: null` — projection-unreachable, since branches are always
+    // projected non-null while active, but the fallback JSX is the SAME
+    // single `stepsRow` element the expanded-inactive head renders — one
+    // source, the two cases cannot diverge).
+    expect(iterationSplitActive(false, null)).toBe(false)
+    expect(iterationSplitActive(true, null)).toBe(false)
+    expect(iterationSplitActive(true, { iterationBase: 'a', target: 'b', specIntegration: 'c' })).toBe(true)
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    const view = projectGraph(noGateSource)
+    const html = renderToStaticMarkup(createElement(IterationTaskPage, {
+      view: { ...view, iteration: { ...view.iteration, active: true, currentStep: null, branches: null } },
+      t: locale.bind(NS),
+    }))
+    // The expanded body renders the steps row ALONE — no split wrapper, no
+    // branch panel (spec R8 fallback).
+    expect(html).toContain('data-iteration-head-expanded="true"')
+    expect(html).toContain('data-iteration-head-steps')
+    expect(html).not.toContain('data-iteration-head-split')
+    expect(html).not.toContain('data-iteration-head-branches')
+    // All 5 steps reserve the fixed-height verdict seat; the idle skeleton
+    // carries no current step, so the badge condition (current + verdict
+    // != unknown) renders 0 badges.
+    expect(html.match(/data-step-verdict-seat/g)).toHaveLength(5)
+    expect(html).not.toContain('data-iteration-verdict')
+    expect(html).not.toMatch(/data-step-state="current"/)
+  })
+
+  it('every step reserves the verdict seat; the badge renders only once, on a real gate verdict', () => {
+    const html = panelHtml(fullSource)
+    // Structural parity: all 5 steps carry the fixed-height seat — the
+    // conditional badge never shifts the current step's centered group.
+    expect(html.match(/data-step-verdict-seat/g)).toHaveLength(5)
+    // Locked/transition path (fixture has NO compassStatus): Step 2 current
+    // with the gate verdict pass → the badge fills the seat (existing
+    // assertion kept — no regression).
+    expect(html).toContain('data-iteration-verdict="pass"')
+    expect(html.match(/data-iteration-verdict=/g)).toHaveLength(1)
+  })
+
+  it('Phase 1 (compassStatus active): Step 1 current, Step 2 next, verdict unknown, NO badge', () => {
+    const html = panelHtml(phase1Source)
+    expect(html).toContain('data-iteration-head-active="true"')
+    expect(html).toContain('data-iteration-head-expanded="true"')
+    // Step 1 (iteration-start) is current; Step 2 is next (spec R9).
+    expect(html.match(/data-step-state="current"/g)).toHaveLength(1)
+    expect(html).toMatch(/data-step="1"[^>]*data-step-state="current"/)
+    expect(html).toMatch(/data-step="2"[^>]*data-step-state="next"/)
+    expect(html).toContain('1/5')
+    // Summary verdict unknown — Phase 1 has no gate-derived badge data.
+    expect(html).toContain('data-iteration-head-verdict="unknown"')
+    // The badge render condition is pinned: current + verdict unknown → NO
+    // badge (the old code rendered for ANY current step, unknown included).
+    expect(html).not.toContain('data-iteration-verdict')
+    // The split still wraps the panels while active + branches present.
+    expect(html).toContain('data-iteration-head-split')
+    // The seat stays reserved even without a badge — blocks align.
+    expect(html.match(/data-step-verdict-seat/g)).toHaveLength(5)
+  })
+
+  it('Phase 1 in zh: no badge either, seat row still reserved (zh/en parity)', () => {
+    const zhHtml = panelHtml(phase1Source, undefined, undefined, 'zh')
+    expect(zhHtml).toContain('data-iteration-head-verdict="unknown"')
+    expect(zhHtml).not.toContain('data-iteration-verdict')
+    expect(zhHtml.match(/data-step-verdict-seat/g)).toHaveLength(5)
+  })
+
+  it('css: split flex row (branches 1/3, steps 2/3) + narrow stack; badge aligned via the fixed-height seat, no align-self skew', () => {
+    const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
+    // Split container: a flex row with a ramp gap (spec R8).
+    expect(cssText).toMatch(/\.iterationHeadSplit\s*\{[\s\S]*?display:\s*flex[\s\S]*?gap:\s*var\(--mstar-space-/)
+    // Halves: branches small (flex 1) + steps large (flex 2) ⇒ ~1/3 vs ~2/3.
+    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*1\s+1\s+0/)
+    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationStepsRow\s*\{[\s\S]*?flex:\s*2\s+1\s+0/)
+    // Narrow fallback: the same 860px breakpoint stacks the split vertically.
+    expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*\{[\s\S]*?flex-direction:\s*column/)
+    // Verdict alignment fix: every step reserves a fixed-height flex seat; the
+    // badge rule carries NO align-self (the `align-self: flex-start` skew
+    // root cause is gone — spec §2.3 R9 "不再歪斜、不导致 Step 对齐偏移").
+    expect(cssText).toMatch(/\.iterationVerdictSeat\s*\{[\s\S]*?display:\s*flex[\s\S]*?height:\s*22px/)
+    const verdictRule = cssText.match(/\.iterationVerdict\s*\{[\s\S]*?\}/)
+    expect(verdictRule).not.toBeNull()
+    expect(verdictRule![0]).not.toMatch(/align-self/)
   })
 })
 

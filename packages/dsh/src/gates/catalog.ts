@@ -586,11 +586,20 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateView 
       exit: iterationGateView(result.exit),
       violations: result.violations.map(iterationViolationView),
     }
+    // Steering compass `status` — the authoritative Phase-1-in-flight signal
+    // (spec panel-f4 §5 D5; consumed by the iteration current-step projection).
+    // `steeringCompassPath` already filters to `active | locked`, so this guard
+    // is belt-and-suspenders only: a non-union value omits the field (lossless
+    // omit-when-absent — `Session.append` rejects undefined-valued props).
+    const compassStatus = compassDoc.status === 'active' || compassDoc.status === 'locked'
+      ? compassDoc.status
+      : undefined
     return {
       iterationId: compass.iterationId,
       statusPath,
       compassPath: compass.compassPath,
       gate,
+      ...(compassStatus !== undefined ? { compassStatus } : {}),
     }
   } catch {
     return undefined // degrade — the iteration section is absent, no hardening

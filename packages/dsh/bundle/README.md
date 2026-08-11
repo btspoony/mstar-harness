@@ -104,7 +104,13 @@ function (schema constants vs catalog evidence strictly separated; never
 throws; explicit degraded states — muted empty states, never orange warn
 boxes): an **iteration zone** (Step 1–5 stepper + `Step N/5` badge,
 active-highlight / inactive dimmed states, and the branch panel — iteration
-base / target / spec integration, rendered only while active; the branches
+base / target / spec integration, rendered only while active; the expanded
+head is a LEFT-RIGHT SPLIT — branches (small left half) + steps (large right
+half) via `data-iteration-head-split`, stacking on narrow widths, and NO
+branch panel when there is no active iteration; the current step follows the
+steering compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
+(iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge —
+plan `20260811-panel-f4-iteration-zone`; the branches
 block left the sidebar for this in plan `20260810-panel-sidebar-info`), a
 **tasks zone** (6-column kanban: Todo / InProgress / InReview / Done /
 Blocked / unknown with count badges, Done ≤5 + `+N more`), an
@@ -167,8 +173,14 @@ classic-script semantics) — see
 `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
 
 Known limitations (this iteration): the iteration stepper's Step 1
-(iteration-start) and Step 5 (merge-ready) can never be the current step —
-the engine phase gate only evaluates Phase 2→3→4, so they always render idle;
+(iteration-start) IS the current step while the steering compass is
+`status: active` (Phase 1 in flight — catalog `compassStatus` field), carrying
+NO PASS/FAIL badge (Phase 1 has no gate verdict); Step 5 (merge-ready) can
+never be the current step —
+the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
+the current step follows the TTL-refreshed `compassStatus` — up to one catalog
+interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
+documented staleness, never a wrong verdict);
 the agent-entity status derivation pairs a PAIRED settle exactly by its
 dispatch identity (agent, role, planId, taskId — QC-tri N=3 settles land on
 their own cards), and an unpaired dispatch stays running (no paired settle,
