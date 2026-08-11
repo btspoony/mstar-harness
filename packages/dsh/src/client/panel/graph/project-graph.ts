@@ -239,11 +239,12 @@ export type AgentEdgeKind = 'expected' | 'actual' | 'next'
  * One agents-zone arrow (spec §4):
  * - `expected`: skeleton arrow between consecutive EXPECTED_ROLE_FLOW stage
  *   columns (source/target = stage id). The former SDD loop back-edge
- *   `autonomous-execute:sdd-implement → general` (plan
- *   20260811-panel-f3-agent-general, `loop: true`) is REMOVED from the
+ *   `autonomous-execute:sdd-implement → general` is REMOVED from the
  *   projection (plan 20260811-panel-f4-agent-view Task 1, user F4.2 — the
  *   implement ↔ general-bucket review cycle is no longer drawn as an edge;
- *   a future "dynamic-lines" iteration may reconnect by real evidence);
+ *   the `AgentEdge.loop` field itself was removed with the render branch in
+ *   Task 2; a future "dynamic-lines" iteration may reconnect by real
+ *   evidence);
  * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
  *   (source/target = entity key — role-based since plan
  *   20260811-panel-f3-agent-general);
@@ -257,12 +258,6 @@ export interface AgentEdge {
   target: string
   /** The running entity key the next arrow highlights; null for expected/actual. */
   entityKey: string | null
-  /** SDD loop back-edge flag (plan 20260811-panel-f3-agent-general):
-   * sdd-implement → general bucket. NO LONGER projected (plan
-   * 20260811-panel-f4-agent-view Task 1 drops the loop edge); the field is
-   * kept ONLY because the render branch (`AgentCanvasPage`) still consumes
-   * `edge.loop` — Task 2 removes the render branch and this field. */
-  loop?: boolean
 }
 
 /**
@@ -511,10 +506,10 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
  * Skeleton stage-column arrows (spec §4 + plan 20260811-panel-f4-agent-view
  * Task 1): forward edges between consecutive EXPECTED_ROLE_FLOW stages ONLY.
  * The former SDD loop back-edge `autonomous-execute:sdd-implement → general`
- * (`loop: true`, kind 'expected' — the implement ↔ general-bucket review
- * cycle drawn as a curved double-arrow below the column band) is REMOVED
- * (user F4.2: the loop edge is dropped; the `general` card renders at the
- * bottom INSIDE the `sdd-implement` column — render placement, Task 2).
+ * (the implement ↔ general-bucket review cycle drawn as a curved
+ * double-arrow below the column band) is REMOVED (user F4.2: the loop edge
+ * is dropped; the `general` card renders at the bottom INSIDE the
+ * `sdd-implement` column — render placement, Task 2).
  */
 function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
   const edges: AgentEdge[] = []

@@ -5,10 +5,12 @@
  * the scattered entity cards (agent-name title / status point / record fields;
  * idle cards muted via the dashed border + caption treatment), the stage
  * column labels (+ the on-demand column, plan 20260811-panel-f2-quickfix
- * Item 3; + the general bucket column, plan 20260811-panel-f3-agent-general),
+ * Item 3; the general bucket has NO column of its own — plan
+ * 20260811-panel-f4-agent-view Task 2, its card sinks to the bottom of the
+ * sdd-implement column with the in-bucket `general` tag),
  * the Legend seat (plan Task 3), and the AgentEdge
- * collaboration lines (expected skeleton / the curved SDD loop back-edge
- * below the column band / actual handoffs / the ANIMATED next edge).
+ * collaboration lines (expected skeleton / actual handoffs / the ANIMATED
+ * next edge).
  *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
@@ -166,25 +168,6 @@
   fill: var(--dsw-alias-state-business-primary);
 }
 
-/* SDD loop back-edge (plan 20260811-panel-f3-agent-general + fix round
- * I-1): the sdd-implement → general bucket reverse edge — business CURVED
- * path with arrowheads at BOTH ends (the ⇄ implement ↔ review cycle), drawn
- * BELOW the column band by the page geometry: the anchors sit at the COLUMN
- * BOTTOMS and the arc's TRUE lowest point lands exactly LOOP_BOW_MARGIN
- * below the lowest column bottom (AgentCanvasPage solves the
- * quadratic-bezier extremum inverse for the control point — never the old
- * "max endpoint + 24" control-point guess), visually distinct from the
- * straight dim-dashed forward skeleton edges. */
-.canvasEdgeLoop {
-  fill: none;
-  stroke: var(--dsw-alias-state-business-primary);
-  stroke-width: 1.5;
-}
-
-.canvasArrowLoop path {
-  fill: var(--dsw-alias-state-business-primary);
-}
-
 /* --- entity cards (spec §4/§6.2): agent-name title / status point /
  * record fields; idle = dashed muted card, running = business ring + glow --- */
 
@@ -245,6 +228,33 @@
 
 .agentCardIdle:hover {
   border-color: var(--dsw-alias-label-caption);
+}
+
+/* In-bucket general label (plan 20260811-panel-f4-agent-view Task 2): the
+ * general bucket card sits at the BOTTOM of the `sdd-implement` column — a
+ * tiny `general` caption + a dashed rule float in the row gap ABOVE the card
+ * (the tag is positioned at the card's top edge), setting the bucket apart
+ * from the dev cards above. Token discipline: colors --dsw-alias-*, spacing
+ * --mstar-space-*, font --dsw-font-xxxs-11 — zero bare hex. */
+.generalBucketTag {
+  position: absolute;
+  top: -13px;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* The dashed separator rule filling the rest of the tag row. */
+.generalBucketTag::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--dsw-alias-border-l2);
 }
 
 .agentCardLine {

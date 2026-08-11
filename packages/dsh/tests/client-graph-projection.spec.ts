@@ -775,9 +775,9 @@ describe('projectGraph — agents zone edges (spec §4)', () => {
       ['autonomous-execute:qc-tri', 'autonomous-execute:qa-gate'],
     ])
     // The SDD loop back-edge (sdd-implement → general) is GONE (plan
-    // 20260811-panel-f4-agent-view Task 1, user F4.2): no edge targets the
-    // general bucket, no `loop` flag is projected.
-    expect(expected.some((e) => e.loop)).toBe(false)
+    // 20260811-panel-f4-agent-view Task 1 + Task 2, user F4.2): no edge
+    // targets the general bucket — the `AgentEdge.loop` field itself was
+    // removed with the render branch (Task 2).
     expect(agents.edges.every((e) => e.target !== 'general' && e.source !== 'general')).toBe(true)
   })
 
