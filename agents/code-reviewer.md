@@ -29,6 +29,14 @@ permission:
     ".worktrees/**/.mstar/plans/**/*.md": allow
     ".worktrees/**/.agents/plans/*.md": allow
     ".worktrees/**/.agents/plans/**/*.md": allow
+    ".harness/sdd/*.md": allow
+    ".harness/sdd/**/*.md": allow
+    ".harness/plans/*.md": allow
+    ".harness/plans/**/*.md": allow
+    ".worktrees/**/.harness/sdd/*.md": allow
+    ".worktrees/**/.harness/sdd/**/*.md": allow
+    ".worktrees/**/.harness/plans/*.md": allow
+    ".worktrees/**/.harness/plans/**/*.md": allow
   bash:
     "*": deny
     # Git inspection (read-only) — L2 diff review + audit recon; no test/build/lint CLIs
@@ -38,7 +46,10 @@ permission:
     "git blame*": allow
     "git shortlog*": allow
     "git stash list*": allow
-    "git branch*": allow
+    "git branch --show-current*": allow
+    "git branch -a*": allow
+    "git branch --list*": allow
+    "git branch -r*": allow
     "git status*": allow
     "git rev-parse*": allow
     # Lightweight read-only analysis
@@ -48,9 +59,19 @@ permission:
     "scc*": allow
     "tokei*": allow
     # Audit read-only checks (matches mstar-audit Hard Rule 2)
-    "tsc --noEmit*": allow
-    "npm audit*": allow
-    "pnpm audit*": allow
+    # Deny mutating variants before the exact read-only allows
+    "npm audit fix*": deny
+    "pnpm audit fix*": deny
+    "tsc --noEmit false*": deny
+    "tsc --noEmit=*": deny
+    "tsc --noEmit": allow
+    "tsc --noEmit --*": allow
+    "npm audit": allow
+    "npm audit --json*": allow
+    "pnpm audit": allow
+    "pnpm audit --json*": allow
+    # Audit-mode commands are intentionally always-on (host shells cannot mode-gate);
+    # Mode A NEVER rules (no test/build execution) still apply.
   task:
     "*": deny
     # Audit mode only, with Assignment `Delegation: allowed (scout/explore only, read-only)`

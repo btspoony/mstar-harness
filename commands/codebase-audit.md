@@ -24,7 +24,7 @@ Run a read-only codebase audit that discovers what is worth doing and writes sel
 |---------|-------------------|
 | **Small repo** (single scan pass feasible) | PM dispatches `@code-reviewer` — single scan pass, then vet and write plans |
 | **Large repo** (parallel categories needed) | `@code-reviewer` fans out read-only `scout` / `explore` subagents per category via Assignment `Delegation: allowed (scout/explore only, read-only)`, then vets and writes plans |
-| **Specialist depth needed** | `@code-reviewer` may consult `@architect` for architecture/tech-debt depth (PM orchestrates the consult or folds it into the delegation brief) |
+| **Specialist depth needed** | PM orchestrates an `@architect` consult for architecture/tech-debt depth (separate dispatch, or folded into the audit delegation brief) |
 
 This command is the PM entry point; the audit execution body is `code-reviewer`（PM dispatch）.
 

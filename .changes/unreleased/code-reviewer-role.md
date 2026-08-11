@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, opencode
+packages: root, opencode, engine
 ---
 
 - Added a **`code-reviewer` role** (L2): a read-only seat for SDD per-task review and `Task category: audit` / `mstar-audit` execution. PM entry stays `/codebase-audit`; large-repo fan-out uses read-only `scout` / `explore` via Assignment `Delegation: allowed (scout/explore only, read-only)`.

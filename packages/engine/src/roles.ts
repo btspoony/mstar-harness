@@ -38,6 +38,7 @@ export const ROLE_MAPPING: readonly RoleMappingEntry[] = [
   { agentId: "project-manager", reference: "references/project-manager.md" },
   { agentId: "product-manager", reference: "references/product-manager.md" },
   { agentId: "architect", reference: "references/architect.md" },
+  { agentId: "code-reviewer", reference: "references/code-reviewer.md" },
   { agentId: "fullstack-dev", reference: "references/fullstack-dev-shared.md" },
   { agentId: "fullstack-dev-2", reference: "references/fullstack-dev-shared.md" },
   { agentId: "frontend-dev", reference: "references/frontend-dev.md" },
@@ -48,7 +49,6 @@ export const ROLE_MAPPING: readonly RoleMappingEntry[] = [
   { agentId: "ops-engineer", reference: "references/ops-engineer.md" },
   { agentId: "writing-specialist", reference: "references/writing-specialist.md" },
   { agentId: "prompt-engineer", reference: "references/prompt-engineer.md" },
-  { agentId: "code-reviewer", reference: "references/code-reviewer.md" },
 ];
 
 /** A role family that MUST resolve to one shared reference file

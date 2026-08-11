@@ -56,6 +56,18 @@ import type { GateResult } from "../src/core.js";
  * lint.test.ts FRONTMATTER_REAL_*) keep the invariants covered
  * unconditionally; a checked-in full-corpus fixture is the future upgrade
  * path if machine-independent enforcement is required.
+ *
+ * Expected-red note (FIX-10, deterministic, NOT a regression): pointing
+ * `MSTAR_CONTROL_SKILLS` at the CONTROL checkout while it is still on
+ * `main` (pre-merge) reds the real-corpus test with
+ * `roles.mapping.reference.missing` for `code-reviewer` — the branch ships
+ * the `code-reviewer` ROLE_MAPPING row + `references/code-reviewer.md`,
+ * but the control `main` corpus does not have that file yet. This is the
+ * expected pre-merge state, not a regression: CI does not set
+ * `MSTAR_CONTROL_SKILLS`, so it resolves the upward walk to this
+ * checkout's own `skills/` (which contains the file) and stays green.
+ * Gate runs set the override to THIS checkout's skills, e.g.
+ * `MSTAR_CONTROL_SKILLS=<checkout>/skills`.
  */
 function resolveCorpusRoot(): string | null {
   const fromEnv = process.env.MSTAR_CONTROL_SKILLS;
