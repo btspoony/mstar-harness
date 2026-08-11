@@ -106,3 +106,46 @@ export const EXPECTED_ROLE_FLOW: readonly ExpectedRoleStage[] = [
   { phase: 'autonomous-execute', stage: 'qa-gate',           roles: ['qa-engineer'] },
   { phase: 'autonomous-execute', stage: 'ops-on-demand',     roles: ['ops-engineer'] },
 ]
+
+/**
+ * The known-agent roster (spec §4 / §6.2 / decision point D3): the static
+ * FULL set of roles the panel may ever show — every EXPECTED_ROLE_FLOW role
+ * PLUS the off-pipeline roles `project-manager` (orchestrator, never
+ * dispatched), `prompt-engineer` (in the mstar-roles table but not in the
+ * pipeline) and `explore` (scout role), PLUS `generalPurpose` (the mstar-sdd
+ * L2 reviewer — in the flow, not in the mstar-roles table). Exactly 15 roles
+ * (spec §4 authoritative listing; cross-checked against the mstar-roles
+ * mapping table, 13 rows, minus pipeline overlap + the two extras).
+ *
+ * The panel NEVER hides a known agent: every member without dispatch
+ * evidence projects as an `idle` entity (spec §6.2 — degraded/empty
+ * branches included). `stage` = the role's stage in EXPECTED_ROLE_FLOW
+ * (first constant-order match); null for the off-pipeline roles.
+ */
+export interface KnownAgent {
+  /** Role id — the entity key and the default card title (render may localize). */
+  id: string
+  /** Optional display label; render falls back to `id` when absent. */
+  displayName?: string
+  /** The role's EXPECTED_ROLE_FLOW stage; null → off-pipeline role. */
+  stage?: { phase: PhaseId; stage: string } | null
+}
+
+/** Known-agent roster — 15 roles, spec §4 order. */
+export const KNOWN_AGENTS: readonly KnownAgent[] = [
+  { id: 'project-manager', stage: null },
+  { id: 'product-manager', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
+  { id: 'architect', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
+  { id: 'fullstack-dev', stage: { phase: 'autonomous-execute', stage: 'sdd-implement' } },
+  { id: 'fullstack-dev-2', stage: { phase: 'autonomous-execute', stage: 'sdd-implement' } },
+  { id: 'frontend-dev', stage: { phase: 'autonomous-execute', stage: 'sdd-implement' } },
+  { id: 'qa-engineer', stage: { phase: 'autonomous-execute', stage: 'qa-gate' } },
+  { id: 'qc-specialist', stage: { phase: 'autonomous-execute', stage: 'qc-tri' } },
+  { id: 'qc-specialist-2', stage: { phase: 'autonomous-execute', stage: 'qc-tri' } },
+  { id: 'qc-specialist-3', stage: { phase: 'autonomous-execute', stage: 'qc-tri' } },
+  { id: 'ops-engineer', stage: { phase: 'autonomous-execute', stage: 'ops-on-demand' } },
+  { id: 'writing-specialist', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
+  { id: 'prompt-engineer', stage: null },
+  { id: 'generalPurpose', stage: { phase: 'autonomous-execute', stage: 'sdd-task-review' } },
+  { id: 'explore', stage: null },
+]

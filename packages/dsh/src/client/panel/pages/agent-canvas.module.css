@@ -1,0 +1,323 @@
+/**
+ * AgentCanvasPage styles (spec panel-tabs §4/§6.2, plan 20260811-panel-agent-canvas
+ * Task 2): the draggable agent canvas — pointer-event pan (translate-only, no
+ * zoom), the coordinate-space content layer with the moving grid background,
+ * the scattered entity cards (agent-name title / status point / record fields;
+ * idle cards muted via the dashed border + caption treatment), the stage
+ * column labels, the Legend seat (plan Task 3), and the AgentEdge
+ * collaboration lines (expected skeleton / actual handoffs / the ANIMATED
+ * next edge).
+ *
+ * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
+ * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
+ * token flip); spacing rides the --mstar-space-1..6 ramp; fonts ride the
+ * --dsw-font-xxxs-11/xxs-12/xs-13 ramp; hover feedback 150ms (120–150ms
+ * window); radius is the unified 8px/999px pair; motion (card pulse + the
+ * next-edge dash flow) is killed by the panel root's global
+ * `prefers-reduced-motion` rule (`* { animation: none !important }`) — this
+ * module declares no self-contained reduced-motion block.
+ */
+
+/* --- page frame: fills the content region as a flex column --- */
+
+.canvasPage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  padding: var(--mstar-space-3);
+}
+
+.canvasHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  flex: none;
+  min-width: 0;
+}
+
+.canvasTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+  font-weight: 600;
+}
+
+/* Summary row (spec §4): `N executing · M pending` — projection counts. */
+.canvasSummary {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Muted degradation note (spec §8 — never an orange warn frame). */
+.canvasNote {
+  flex: none;
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxs-12);
+}
+
+/* Legend seat (plan Task 3 — the Legend component renders its own frame;
+ * this wrapper just keeps it from shrinking inside the flex column). */
+.canvasLegend {
+  flex: none;
+}
+
+/* --- canvas viewport: the pan surface (pointer capture target) --- */
+
+.canvasViewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;          /* free pan — the page itself never scrolls */
+  touch-action: none;        /* pointer-event pan: no native scroll/zoom gestures */
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  cursor: grab;
+  user-select: none;         /* no text selection while dragging */
+}
+
+.canvasViewport:active {
+  cursor: grabbing;
+}
+
+/* --- content layer: the coordinate space; translate() by the pan state,
+ * grid background moves WITH the content (spec §6.2 — 网格背景随动) --- */
+
+.canvasContent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background-color: var(--dsw-alias-bg-layer-1);
+  background-image:
+    linear-gradient(var(--dsw-alias-border-l1) 1px, transparent 1px),
+    linear-gradient(90deg, var(--dsw-alias-border-l1) 1px, transparent 1px);
+  background-size: 24px 24px;
+  will-change: transform;
+}
+
+/* Stage column label (caption, uppercase — the pipeline-order context). */
+.canvasColumnLabel {
+  position: absolute;
+  padding: 0 var(--mstar-space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* --- collaboration edges (spec §4): expected skeleton / actual handoff /
+ * next animated — SVG lines, non-interactive overlay --- */
+
+.canvasEdges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.canvasEdgeExpected {
+  stroke: var(--dsw-alias-label-caption);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.canvasEdgeActual {
+  stroke: var(--dsw-alias-state-business-primary);
+  stroke-width: 1.5;
+}
+
+/* Next edge (spec §4): business dash-flow ANIMATED — the stroke-dashoffset
+ * loop (period 12px = 2 × dasharray); the panel root reduced-motion rule
+ * kills the animation. */
+.canvasEdgeNext {
+  stroke: var(--dsw-alias-state-business-primary);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 6;
+  animation: canvas-dash-flow 700ms linear infinite;
+}
+
+@keyframes canvas-dash-flow {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+
+.canvasArrowExpected path {
+  fill: var(--dsw-alias-label-caption);
+}
+
+.canvasArrowActual path {
+  fill: var(--dsw-alias-state-business-primary);
+}
+
+.canvasArrowNext path {
+  fill: var(--dsw-alias-state-business-primary);
+}
+
+/* --- entity cards (spec §4/§6.2): agent-name title / status point /
+ * record fields; idle = dashed muted card, running = business ring + glow --- */
+
+.canvasCards {
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agentCard {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  padding: var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.agentCard:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* Running card (spec §4): business ring + soft glow pulse — the "执行中高亮"
+   treatment. The pulse is motion, killed by the root reduced-motion rule. */
+.agentCardRunning {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  animation: canvas-card-pulse 1.6s ease-in-out infinite;
+}
+
+.agentCardRunning:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+@keyframes canvas-card-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  }
+  50% {
+    box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary), 0 0 6px 0 var(--dsw-alias-state-business-primary);
+  }
+}
+
+/* Idle card (spec §6.2 — the muted "未工作" card): dashed frame, caption
+ * text — never a guessed status. */
+.agentCardIdle {
+  border-style: dashed;
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.agentCardIdle:hover {
+  border-color: var(--dsw-alias-label-caption);
+}
+
+.agentCardLine {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.agentCardName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.agentCardIdle .agentCardName {
+  color: var(--dsw-alias-label-caption);
+}
+
+/* ×N count badge (spec §4 — count > 1 only); the name's flex:1 pushes it
+   right without a non-ramp margin. */
+.agentCount {
+  flex: none;
+  min-width: 18px;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.agentRoleChip {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* Record fields (spec §4 — session id / task tag are auxiliary, never the
+ * title): monospace caption line. */
+.agentRecord {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status point (spec §4): dot colored by status; running glows (business),
+   settled shows the ✓ (success), error/denied carry error, advisory warn,
+   idle stays muted caption. */
+.agentStatusDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.agentStatusRunning {
+  color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+.agentStatusSettled {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  background: none;
+  color: var(--dsw-alias-state-success-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.agentStatusError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.agentStatusAdvisory {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.agentStatusIdle {
+  color: var(--dsw-alias-label-caption);
+}

@@ -62,11 +62,20 @@ or a custom profile).
   dash-flow arrow (`@keyframes agent-dash-flow` in the zones css, killed by
   the root `prefers-reduced-motion` rule) from the latest running entity's
   stage column to the next constant-order column, drawn ONLY while a running
-  entity exists — plan `20260810-panel-agent-flow-zone`), a bottom
-  **fixed footer bar** (zone
-  legend + gate summary with collapsible violations) and a canvas-corner
-  **`AgentEventDock`** (absolute bottom-left, mounted ONLY when agent-flow
-  events exist — hidden entirely at 0 events, no placeholder); below 1200px
+  entity exists — plan `20260810-panel-agent-flow-zone`); the 事件记录 tab
+  (`EventLogPage`, spec panel-tabs §5, plan `20260811-panel-event-log`) is a
+  NON-canvas log page with two partitions — **Agent 流转事件** (`view.events`
+  ≤50 latest-first; off-pipeline unexpected dispatches fold in once via
+  `expected: false` and carry a dispatch-only 「未匹配角色」 badge — settle
+  rows are completion records and never flag as unexpected) and **违规记录**
+  (`view.violations`, gate violations with severity/code/message); every row
+  is an expandable native `<details>` (no-JS, keyboard-accessible) whose body
+  shows the full catalog fields — missing fields render「—」, never a guessed
+  value. The canvas-corner **`AgentEventDock`** is REMOVED with the page
+  (无双份日志 — its row layout + status chips migrated into `EventLogPage`);
+  the fixed footer bar (zone legend + gate summary + violations) died with
+  the WorkflowCanvas in plan `20260811-panel-tabs-shell` — the footer that
+  remains is the freshness marker. Below 1200px
   the zones stack vertically. Pure `projectGraph` projection (never throws,
   explicit degraded states — muted empty states, never orange warn boxes).
   The branches block left the sidebar in plan `20260810-panel-sidebar-info`
@@ -159,8 +168,9 @@ build (`catalogTtlMs`, default 60 s).
 The plugin records ACTUAL subagent dispatch (and best-effort settle) events —
 the evidence of what really happened, distinct from the client-side expected
 role flow. The workflow panel's agent-execution zone (the stage/entity
-projection — plan `20260810-panel-agent-flow-zone`) and the canvas-corner
-`AgentEventDock` event strip are pure consumers of this evidence.
+projection — plan `20260810-panel-agent-flow-zone`) and the 事件记录 tab's
+`EventLogPage` log page (plan `20260811-panel-event-log`) are pure consumers
+of this evidence.
 
 - **Recording point (one core)**: `DshHostAdapter.dispatchGate` is the SINGLE
   record path behind both dispatch surfaces — the `tools/pre-execute` listener
