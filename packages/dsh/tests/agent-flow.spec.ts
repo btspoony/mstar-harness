@@ -57,7 +57,7 @@ import {
   recordTaskSettle,
   setAgentFlowInvalidator,
   setAgentFlowLogger,
-  SETTLE_SEAM_UNAVAILABLE_NOTE,
+  SETTLE_SEAM_PAIRING_NOTE,
   taskIdOf,
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
@@ -582,10 +582,10 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       registerSettleListener(ctx, {}, pairingOf())
 
       expect(captured).toHaveLength(1)
-      expect(captured[0]).toBe(SETTLE_SEAM_UNAVAILABLE_NOTE)
+      expect(captured[0]).toBe(SETTLE_SEAM_PAIRING_NOTE)
       expect(SETTLE_SEAM).toBe('tools/post-execute')
-      expect(SETTLE_SEAM_UNAVAILABLE_NOTE).toContain(SETTLE_SEAM)
-      expect(SETTLE_SEAM_UNAVAILABLE_NOTE).toContain('IS part of the verified dsh-tools registry surface')
+      expect(SETTLE_SEAM_PAIRING_NOTE).toContain(SETTLE_SEAM)
+      expect(SETTLE_SEAM_PAIRING_NOTE).toContain('IS part of the verified dsh-tools registry surface')
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -593,12 +593,14 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
     }
   })
 
-  it('recordDispatch with an exec registers callId → dispatchRef (dispatch identity)', async () => {
+  it('recordDispatch with an exec registers the agent-namespaced call key → dispatchRef (qc1 F-101 fix-wave)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-agentflow-pairing-register-')
     try {
       const pairing = pairingOf()
       pairedDispatch(harnessDir, pairing, 'c-1', VALID_PLANNED, 'sess-1')
-      const ref = pairing.dispatchByCallId.get('c-1')
+      // The key is `${sessionId}\u0000${callId}` — a raw callId alone would
+      // collide across sessions in one process.
+      const ref = pairing.dispatchByCallId.get('sess-1\u0000c-1')
       expect(ref).toMatchObject({
         harnessDir,
         agent: 'sess-1',
@@ -606,6 +608,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
         planId: '20260810-agent-flow',
         taskId: 'T2',
       })
+      expect(pairing.dispatchByCallId.get('c-1')).toBeUndefined() // un-namespaced key never exists
       // An exec-less record (host-hook path) never pairs.
       recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false, pairing })
       expect(pairing.dispatchByCallId.size).toBe(1)
@@ -681,6 +684,117 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
     }
   })
 
+  it('two agents sharing the same callId never cross-pair — each settle lands on its own dispatch (qc1 F-101 fix-wave)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-pairing-namespace-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      // The SAME callId 'c-shared' from two different sessions — a realistic
+      // cross-session interleave (upstream callIds are per-message).
+      pairedDispatch(harnessDir, pairing, 'c-shared', VALID_PLANNED, 'sess-A')
+      pairedDispatch(harnessDir, pairing, 'c-shared', VALID_PLANNED, 'sess-B')
+      expect(pairing.dispatchByCallId.size).toBe(2) // distinct namespaced keys
+
+      // Session A's completion pairs to A's dispatch only.
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-shared', name: 'subagent', agent: { id: 'sess-A' } }, { isError: false, value: { kind: 'foreground', runId: 'rA', output: [] } })
+      let view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch', 'dispatch'])
+      expect(view.events[0]).toMatchObject({ kind: 'settle', agent: 'sess-A', role: 'fullstack-dev', planId: '20260810-agent-flow', taskId: 'T2' })
+
+      // Session B's completion pairs to B's dispatch — the settle identities
+      // never crossed (no mis-pair into the other session's dispatchRef).
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-shared', name: 'subagent', agent: { id: 'sess-B' } }, { isError: false, value: { kind: 'foreground', runId: 'rB', output: [] } })
+      view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['settle', 'settle', 'dispatch', 'dispatch'])
+      expect(view.events[0]).toMatchObject({ kind: 'settle', agent: 'sess-B', role: 'fullstack-dev' })
+      expect(view.events[1]).toMatchObject({ kind: 'settle', agent: 'sess-A', role: 'fullstack-dev' })
+      // Both calls were consumed (map pruning) — nothing stays paired.
+      expect(pairing.dispatchByCallId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a result carrying `error` WITHOUT `isError: true` settles error — never a fabricated ok (qc2 F-001 / qc3 F-003a fix-wave)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-error-key-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      pairedDispatch(harnessDir, pairing, 'c-err2', VALID_PLANNED, 'sess-1')
+      // Failed envelope WITHOUT the canonical `isError` flag: `error` present.
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-err2', name: 'subagent', agent: { id: 'sess-1' } }, { error: { message: 'boom without the flag' } })
+      let view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error', agent: 'sess-1', role: 'fullstack-dev' })
+      // `error` + `value` (both present, no isError) is still a failure.
+      pairedDispatch(harnessDir, pairing, 'c-err3', VALID_PLANNED, 'sess-1')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-err3', name: 'subagent', agent: { id: 'sess-1' } }, { error: { message: 'x' }, value: 'partial' })
+      view = readAgentFlow(harnessDir)!
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error' })
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a background result WITHOUT a valid taskId records nothing — never a fabricated ok (qc3 F-003b fix-wave)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-background-notask-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      pairedDispatch(harnessDir, pairing, 'c-bg0', VALID_PLANNED)
+      // `kind: 'background'` with a MISSING taskId → nothing mappable.
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-bg0', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'background' } })
+      let view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['dispatch']) // no settle
+      expect(pairing.dispatchByTaskId.size).toBe(0)
+      // `kind: 'background'` with an EMPTY taskId → nothing mappable too.
+      pairedDispatch(harnessDir, pairing, 'c-bg0b', VALID_PLANNED, 'sess-2')
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-bg0b', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: { kind: 'background', taskId: '' } })
+      view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['dispatch', 'dispatch']) // still no settle
+      expect(pairing.dispatchByTaskId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('the dispatchByCallId entry is pruned once the post-execute branch resolves the call (qc1 F-102 / qc2 F-002 / qc3 F-002 fix-wave)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-prune-callid-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      // A foreground settle consumes the call entry — the map holds only
+      // in-flight calls.
+      pairedDispatch(harnessDir, pairing, 'c-prune', VALID_PLANNED)
+      expect(pairing.dispatchByCallId.size).toBe(1)
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-prune', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } })
+      expect(pairing.dispatchByCallId.size).toBe(0)
+      // A SECOND post-execute for the same call is not a real event — it
+      // finds no pairing (honest no-settle; the warn fires at most once).
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-prune', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } })
+      const view = readAgentFlow(harnessDir)!
+      expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('a background result stores taskId → dispatchRef and records NO settle until the onTaskDone terminal', async () => {
     const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-background-')
     const ctx = new Context()
@@ -714,6 +828,9 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
         taskId: 'T2',
         durationMs: 3_000,
       })
+      // The consumed task entry is pruned — the map holds only in-flight tasks
+      // (qc1 F-102 / qc2 F-002 / qc3 F-002 fix-wave).
+      expect(pairing.dispatchByTaskId.size).toBe(0)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -775,7 +892,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
 
       expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] }) // no record
       expect(captured).toHaveLength(2) // registration note + ONE unpaired warning
-      expect(captured[1]).toContain('had no paired callId')
+      expect(captured[1]).toContain('had no paired call key')
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
@@ -795,7 +912,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       // Two registrations under ONE binding → the ~300-char note is emitted
       // exactly once (a second apply would rebind the sink and log again).
       expect(captured).toHaveLength(1)
-      expect(captured[0]).toBe(SETTLE_SEAM_UNAVAILABLE_NOTE)
+      expect(captured[0]).toBe(SETTLE_SEAM_PAIRING_NOTE)
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})

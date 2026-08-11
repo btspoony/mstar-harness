@@ -371,9 +371,22 @@ export function apply(ctx: Context, config: Config): void {
     // the ONE consumed surface: `onTaskDone(listener)` with the upstream
     // `TaskDoneListener = (snapshot, owner) => void | PromiseLike<void>`.
     const tasks = (tasksCtx as unknown as { tasks: { onTaskDone(listener: (snapshot: TaskDoneSnapshot, _owner: unknown) => void): unknown } }).tasks
-    tasks.onTaskDone((snapshot, _owner) => {
-      recordTaskSettle(snapshot, pairing)
-    })
+    try {
+      // Registration contained (qc2 F-004 fix-wave) for symmetry with the
+      // rest of the seam wiring: the listener body itself is already
+      // try/catch-contained (`recordTaskSettle`), but a THROWING registration
+      // would surface as an unhandled child-fiber error at an arbitrary later
+      // time (whenever the tasks service appears) — contained here instead
+      // (a failed registration only degrades background settle pairing,
+      // honestly: the child fiber still unwinds with this apply).
+      tasks.onTaskDone((snapshot, _owner) => {
+        recordTaskSettle(snapshot, pairing)
+      })
+    } catch (error) {
+      ctx.logger(AGENT_FLOW_LOGGER).error(
+        `tasks.onTaskDone registration failed (contained — background settle pairing degraded): ${(error as Error).message}`,
+      )
+    }
   })
 
   // Catalog-invalidation hook: the real harnessDir → cache-key reverse-map

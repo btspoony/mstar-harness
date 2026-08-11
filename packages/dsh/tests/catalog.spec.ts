@@ -303,6 +303,66 @@ Implement the invalidation.
     expect(textOf(row)).toContain('by role: fullstack-dev 1')
   })
 
+  it('cross-workspace isolation: a ledger record in workspace A invalidates ONLY A — B\'s cached entry survives within the TTL (qc1 F-103 / qc2 F-003 / qc3 F-004 fix-wave)', async () => {
+    // Two workspaces, each with its OWN probed harness root — no explicit
+    // config, so each session cwd resolves its own `{HARNESS_DIR}` and its own
+    // cache key (the session cwd) + reverse-map entry (D3: per-workspace
+    // invalidation — a record deletes EXACTLY the affected workspace's entry,
+    // never a global clear).
+    const wsA = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-a-'))
+    const wsB = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-b-'))
+    for (const ws of [wsA, wsB]) {
+      await seedHarness(join(ws, '.mstar'), {
+        'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+      })
+    }
+    const stepFor = (cwd: string, turn: number) => ({
+      agent: { session: { header: { cwd } } },
+      messages: [],
+      turn,
+      step: 1,
+      signal: new AbortController().signal,
+    } as never)
+    const app = booted = await bootApp({ harnessDir: null })
+
+    // Register BOTH workspace keys with one pre-step each (the cache is built
+    // on first use + the reverse map registers on build).
+    const sourceA1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 1), defaultEnter([]))).source
+    const sourceB1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 1), defaultEnter([]))).source
+    expect(sourceA1.state!.agentFlow).toEqual({ events: [], summary: [] })
+    expect(sourceB1.state!.agentFlow).toEqual({ events: [], summary: [] })
+
+    // An OUT-OF-BAND ledger line in B (direct write, bypassing recordDispatch
+    // → NO invalidation fires for B): if B's cache entry survives, the line
+    // stays INVISIBLE within the REAL TTL (cache hit — no rebuild). This is
+    // the observable for "B's cached entry survives": the dsh-llm message
+    // envelope deep-clones its source (`createMessage` → `freezeMessage` →
+    // `structuredClone`), so cache-hit identity cannot be asserted by
+    // reference equality through the message — the direct-write invisibility
+    // is the equivalent (and stronger) cache-hit proof.
+    await writeFile(
+      join(wsB, '.mstar', plugin.AGENT_FLOW_FILE),
+      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
+    )
+
+    // A ledger record for workspace A ONLY — the apply-bound invalidator
+    // fires with A's harness dir → deletes exactly A's cache entry.
+    plugin.recordDispatch({ harnessDir: join(wsA, '.mstar'), prompt: ASSIGNMENT, violations: [], hard: false })
+
+    // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
+    // fresh source carrying the new dispatch event).
+    const sourceA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 2), defaultEnter([]))).source
+    expect(sourceA2.state!.agentFlow!.events).toHaveLength(1)
+    expect(sourceA2.state!.agentFlow!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', role: 'fullstack-dev' })
+
+    // Next pre-step for B (new turn): B's entry was NOT invalidated → the
+    // cache HIT serves the cached build — the out-of-band B line stays
+    // invisible within the TTL (no global clear; a multi-workspace deployment
+    // does not rebuild every workspace per record).
+    const sourceB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 2), defaultEnter([]))).source
+    expect(sourceB2.state!.agentFlow).toEqual({ events: [], summary: [] }) // cached build — the direct line is NOT visible
+  })
+
   it('without a ledger change the cache-hit behavior is unchanged — a directly-written ledger line stays invisible within the TTL (only the record path invalidates)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cachehit-'))
     const harnessDir = join(root, 'harness')

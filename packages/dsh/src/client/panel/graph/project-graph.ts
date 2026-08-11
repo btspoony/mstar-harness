@@ -101,7 +101,7 @@ export interface FlowEventView {
   expected: boolean
   /** The matched expected stage; null → unexpected role. */
   stage: { phase: PhaseId; stage: string } | null
-  /** dispatch: has a paired settle (best-effort heuristic); settle: always false. */
+  /** dispatch: has an EXACT-identity-paired settle (exact pairing; an unpaired settle stays unpaired — honest); settle: always false. */
   settled: boolean
   /** Settle rows only (plan `20260811-panel-f4-timeliness` Task 1): the settle carries the PAIRED dispatch's identity (exact pairing). */
   paired?: boolean
@@ -217,7 +217,8 @@ export interface AgentEntityView {
  * Entity status (spec §4, hardcoded priority): `denied`/`advisory` come from
  * the LATEST dispatch's verdict (verdict wins regardless of settling);
  * `error`/`settled` come from the settle paired with that dispatch; `running`
- * = no paired settle (best-effort heuristic, never pretended); `idle` = a
+ * = no paired settle yet (exact identity pairing — an unpaired settle stays
+ * unpaired, honest); `idle` = a
  * KNOWN_AGENTS roster member with no dispatch evidence (spec §6.2 — never
  * guessed as running/settled).
  */
@@ -559,7 +560,7 @@ function roleZone(role: string, stage: { phase: PhaseId; stage: string } | null)
  * Entity status (spec §4 hardcoded priority): the latest-dispatch verdict
  * wins (denied/advisory, settle-independent); otherwise the settle paired
  * with that dispatch — `error` → error, `ok`/`denied` → settled; no pair →
- * running (best-effort heuristic, never pretended).
+ * running (exact identity pairing — an unpaired settle stays unpaired, honest).
  */
 function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEventStatus>): AgentEntityStatus {
   if (acc.verdict === 'denied') return 'denied'
@@ -1020,9 +1021,9 @@ function classifyFlowRows(rawEvents: readonly unknown[]): { view: FlowEventView 
  *   (e.g. `general` / `explore` / `scout`). Settle rows are completion
  *   records — they carry no role at all, so they never flag as unexpected
  *   even though their `expected` field is false ('' ∉ union);
- * - settled: best-effort pairing via `pairSettleIndexes` (the same walk the
- *   agent-entity status derivation uses). The panel never depends on the
- *   pairing's correctness;
+ * - settled: EXACT identity pairing via `pairSettleIndexes` (the same walk the
+ *   agent-entity status derivation uses; an unpaired settle stays unpaired —
+ *   honest). The panel never depends on the pairing's correctness;
  * - degradation: agentFlow null/unreadable → no events (the `agents`
  *   skeleton carries the `degraded` marker); the MISSING ledger file reads as
  *   the server's empty view → present with 0 events → no events either (the
