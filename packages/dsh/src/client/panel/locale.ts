@@ -18,8 +18,8 @@
  *
  * T3 (spec panel-zones §3): the iteration zone is filled in — `zone.phase.*`
  * (the 5 PHASE_IDS names, the `graph.phase.*` wording moved into the zone
- * namespace), `zone.iteration.*` (active/inactive notes, Step N/5 label,
- * Step N badge, step-state chips) and `zone.branches.*` (the branch panel
+ * namespace), `zone.iteration.*` (Step N/5 label, Step N badge, step-state
+ * chips) and `zone.branches.*` (the branch panel
  * moved from the sidebar). `zone.iteration.placeholder` is gone with the
  * placeholder.
  *
