@@ -57,6 +57,15 @@
  * existing `zone.iteration.*` (step badge / Step n/5 label / step-state
  * chips), `zone.phase.*` (the 5 PHASE_IDS names) and `zone.branches.*`
  * (branch panel) keys; the kanban reuses `zone.tasks.*` / `zone.state.*`.
+ *
+ * T3 (spec panel-tabs §4, plan 20260811-panel-agent-canvas Task 3): the
+ * legend re-mounts on the agent canvas — `zone.legend.agent-idle` (the idle
+ * card treatment) joins the swatch family and the collaboration-edge labels
+ * (flow-expected / flow-actual / flow-unexpected) now describe the canvas
+ * rendering (dashed/solid lines + the unexpected column) instead of the
+ * retired zone-dashboard stages; `flow.settle-only` is the distinct muted
+ * copy for the settle-only canvas note (review T2-Imp-2 restored the old
+ * zone's separate anchor).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -88,6 +97,7 @@ export type PanelKey =
   | 'zone.legend.flow-unexpected'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
+  | 'zone.legend.agent-idle'
   | 'zone.legend.next'
   | 'zone.iteration.step-label'
   | 'zone.iteration.step-badge'
@@ -119,6 +129,7 @@ export type PanelKey =
   | 'zone.agents.next'
   | 'flow.title'
   | 'flow.empty'
+  | 'flow.settle-only'
   | 'flow.degraded'
   | 'flow.unexpected'
   | 'flow.in-flight'
@@ -172,11 +183,12 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': '图例',
-  'zone.legend.flow-expected': '预期 stage（空心）',
-  'zone.legend.flow-actual': '实际派发（实心）',
-  'zone.legend.flow-unexpected': '未匹配角色（描边）',
+  'zone.legend.flow-expected': '预期流转边（虚线）',
+  'zone.legend.flow-actual': '实际交接边',
+  'zone.legend.flow-unexpected': '未匹配角色（独立列）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
+  'zone.legend.agent-idle': '未工作实体（虚线）',
   'zone.legend.next': 'next 流转边（动画）',
   'zone.iteration.step-label': '步骤 {n}/{total}',
   'zone.iteration.step-badge': '步骤 {n}',
@@ -208,6 +220,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.next': 'next',
   'flow.title': 'Agent 流转事件',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
+  'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
   'flow.unexpected': '未匹配角色',
   'flow.in-flight': '已派发',
@@ -256,11 +269,12 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': 'Legend',
-  'zone.legend.flow-expected': 'expected stage (hollow)',
-  'zone.legend.flow-actual': 'actual dispatch (filled)',
-  'zone.legend.flow-unexpected': 'unexpected role (outlined)',
+  'zone.legend.flow-expected': 'expected flow edge (dashed)',
+  'zone.legend.flow-actual': 'actual handoff edge',
+  'zone.legend.flow-unexpected': 'unexpected role (own column)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
+  'zone.legend.agent-idle': 'idle agent (dashed)',
   'zone.legend.next': 'next flow edge (animated)',
   'zone.iteration.step-label': 'Step {n}/{total}',
   'zone.iteration.step-badge': 'Step {n}',
@@ -292,6 +306,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.next': 'next',
   'flow.title': 'Agent flow events',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
+  'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',
   'flow.unexpected': 'Unexpected roles',
   'flow.in-flight': 'dispatched',

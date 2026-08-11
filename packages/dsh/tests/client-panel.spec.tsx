@@ -865,10 +865,11 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     expect(root).toMatch(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\*\s*\{[\s\S]*?transition:\s*none\s*!important[\s\S]*?animation:\s*none\s*!important/,
     )
-    // The zones css DECLARES its own animations (the plan-3 next-edge dash
-    // flow + the running-card pulse) but carries NO self-contained
-    // reduced-motion block — the root rule (`* { animation: none !important }`
-    // inside the media query, asserted above) is the single coverage point.
+    // The zones css (kanban / dock / legend) carries NO self-contained
+    // reduced-motion block — the root rule is the single coverage point.
+    // (The canvas animations live in the page css; the next block audits
+    // them — the AgentFlowZone stage styles were deleted with the component
+    // by the agent-canvas plan, so no keyframes remain here.)
     expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
   })
 
@@ -904,6 +905,89 @@ describe('workflow panel — T5 zones CSS audit: dock token styles + transition 
     // Zero bare colors of any form in the dock region (whole-file scan covers
     // it — re-pin for the dock-specific audit).
     expect(dockRule![0]).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T5b agent-canvas page CSS audit (spec panel-tabs §4/§6.2, plan
+ * 20260811-panel-agent-canvas Task 3): the canvas page css (grid / cards /
+ * edge animations) is new with this plan — the same contract as T4/T5:
+ * zero bare colors of any form, transitions inside the 120–200ms window,
+ * fonts on the ramp, keyframes + animation declarations present, and NO
+ * self-contained reduced-motion block (the panel root rule covers it).
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §4/§7)', () => {
+  const cssText = readFileSync(new URL('../src/client/panel/pages/agent-canvas.module.css', import.meta.url), 'utf8')
+
+  it('every color-family declaration is a --dsw-* token — zero bare colors of ANY form', () => {
+    const colorRe = /\b(?:color|background(?:-color)?|border(?:-(?:top|right|bottom|left))?(?:-color)?)\s*:/g
+    const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
+    const colors: string[] = []
+    for (const m of stripped.matchAll(colorRe)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      colors.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    expect(colors.length).toBeGreaterThan(0)
+    for (const value of colors) {
+      if (value === '0' || value === 'none' || value === 'currentColor') continue // structural resets / inherits
+      expect(value).toMatch(/var\(--dsw-(?:alias|static)-/)
+    }
+    expect(cssText).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|lab\(|lch\(|color\(/)
+  })
+
+  it('spacing rides the --mstar-space-* ramp; font sizes ride the --dsw-font-xxxs-11/xxs-12/xs-13 ramp', () => {
+    const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, '')
+    const spacingRe = /\b(?:gap|padding(?:-(?:top|right|bottom|left))?|margin(?:-(?:top|right|bottom|left))?)\s*:/g
+    const spacing: string[] = []
+    for (const m of stripped.matchAll(spacingRe)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      spacing.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    for (const value of spacing) {
+      if (value === '' || /^0(\s+0)*$/.test(value)) continue // zero reset
+      expect(value).toMatch(/var\(--mstar-space-/)
+    }
+    const fonts: string[] = []
+    for (const m of stripped.matchAll(/\bfont\s*:/g)) {
+      const rest = stripped.slice((m.index ?? 0) + m[0].length)
+      const end = rest.search(/[;}]/)
+      fonts.push(rest.slice(0, end === -1 ? rest.length : end).trim())
+    }
+    for (const value of fonts) {
+      expect(value).toMatch(/var\(--dsw-font-(?:xxxs-11|xxs-12|xs-13)\)/)
+    }
+  })
+
+  it('every transition duration sits in the 120–200ms window (hover affordance)', () => {
+    const transitions = [...cssText.matchAll(/transition:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
+    expect(transitions.length).toBeGreaterThan(0)
+    for (const t of transitions) {
+      if (/^none/.test(t)) continue
+      const durations = [...t.matchAll(/(\d+)ms/g)].map((m) => Number(m[1]!))
+      expect(durations.length).toBeGreaterThan(0)
+      for (const d of durations) {
+        expect(d).toBeGreaterThanOrEqual(120)
+        expect(d).toBeLessThanOrEqual(200)
+      }
+    }
+  })
+
+  it('declares the next-edge dash-flow + running-card pulse animations; NO own reduced-motion block (root rule covers)', () => {
+    // The canvas ANIMATIONS (spec §6.2 — next edge dash flow + running glow
+    // pulse) are declared here — the single motion-kill coverage point stays
+    // the panel ROOT rule (`* { animation: none !important }` under
+    // prefers-reduced-motion: reduce, asserted in T5).
+    const keyframes = [...cssText.matchAll(/@keyframes\s+([a-z0-9-]+)/g)].map((m) => m[1]).sort()
+    expect(keyframes).toEqual(['canvas-card-pulse', 'canvas-dash-flow'])
+    const animDecls = [...cssText.matchAll(/animation\s*:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
+    expect(animDecls).toContain('canvas-dash-flow 700ms linear infinite')
+    expect(animDecls).toContain('canvas-card-pulse 1.6s ease-in-out infinite')
+    expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
+    // Zero dark-theme overrides — dark mode is the host token flip.
+    expect(cssText).not.toContain('data-ds-dark-theme')
   })
 })
 
@@ -1756,6 +1840,45 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     // Evidence present → no degradation note (honest absence).
     expect(html).not.toContain('data-canvas-note')
     expect(html).toContain('data-agent-summary-executing="2"')
+  })
+
+  it('empty ledger → data-canvas-note="empty"; settle-only ledger → the restored data-canvas-note="settle-only" (review T2-Imp-2)', () => {
+    // 0 events → the `empty` anchor (spec §8).
+    const emptyHtml = agentsHtml(flowSource([]))
+    expect(emptyHtml).toContain('data-canvas-note="empty"')
+    expect(emptyHtml).toContain('No actual dispatches yet')
+    // Events but NO dispatch rows → the settle-only anchor — the old
+    // AgentFlowZone's distinct `data-zone-empty="settle-only"` semantic,
+    // restored for the canvas (never folded into `empty`).
+    const settleOnly = agentsHtml(flowSource([
+      settleEvent({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      settleEvent({ ts: 7, agent: 'a2', outcome: 'error' }),
+    ]))
+    expect(settleOnly).toContain('data-canvas-note="settle-only"')
+    expect(settleOnly).toContain('Settle records only (no dispatch evidence)')
+    expect(settleOnly).not.toContain('data-canvas-note="empty"')
+    expect(settleOnly).not.toContain('data-canvas-note="degraded"')
+  })
+
+  it('mounts the Legend on the agents page: idle swatch + collaboration-edge swatches (plan Task 3)', () => {
+    const html = agentsHtml(evidenceSource)
+    expect(html).toContain('data-mstar-legend')
+    // Idle swatch anchor (完成判据) + the collaboration-edge swatches.
+    for (const key of ['agent-idle', 'flow-expected', 'flow-actual', 'flow-unexpected', 'agent-running', 'agent-settled', 'next']) {
+      expect(html).toContain(`data-mstar-legend-item="${key}"`)
+    }
+    // The legend labels localize (zh).
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('zh')
+    const zhHtml = renderToStaticMarkup(createElement(AgentCanvasPage, {
+      view: projectGraph(evidenceSource).agents,
+      t: locale.bind(NS),
+    }))
+    expect(zhHtml).toContain('未工作实体（虚线）')
+    expect(zhHtml).toContain('预期流转边（虚线）')
+    expect(zhHtml).toContain('实际交接边')
+    expect(zhHtml).toContain('图例')
   })
 
   it('draws the AgentEdge collaboration lines: expected skeleton / actual handoffs / the animated next edge', () => {

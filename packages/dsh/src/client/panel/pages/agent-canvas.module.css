@@ -4,8 +4,9 @@
  * zoom), the coordinate-space content layer with the moving grid background,
  * the scattered entity cards (agent-name title / status point / record fields;
  * idle cards muted via the dashed border + caption treatment), the stage
- * column labels, and the AgentEdge collaboration lines (expected skeleton /
- * actual handoffs / the ANIMATED next edge).
+ * column labels, the Legend seat (plan Task 3), and the AgentEdge
+ * collaboration lines (expected skeleton / actual handoffs / the ANIMATED
+ * next edge).
  *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
@@ -58,6 +59,12 @@
   margin: 0;
   color: var(--dsw-alias-label-caption);
   font: var(--dsw-font-xxs-12);
+}
+
+/* Legend seat (plan Task 3 — the Legend component renders its own frame;
+ * this wrapper just keeps it from shrinking inside the flex column). */
+.canvasLegend {
+  flex: none;
 }
 
 /* --- canvas viewport: the pan surface (pointer capture target) --- */

@@ -35,15 +35,18 @@
  *
  * Degradation (spec §8 — never throws / never orange): the projection always
  * yields the full idle roster, so the canvas renders it with the muted
- * `data-canvas-note` (degraded = ledger missing; empty/all-idle = no
- * dispatches yet). `initialPan` is a deterministic SSR/test seed — the live
- * page starts at the origin.
+ * `data-canvas-note` (degraded = ledger missing; empty = no events;
+ * settle-only = events but no dispatch rows — review T2-Imp-2 restored the
+ * old zone's distinct settle-only anchor). The Legend (idle / collaboration
+ * swatches, plan Task 3) sits above the viewport. `initialPan` is a
+ * deterministic SSR/test seed — the live page starts at the origin.
  */
 
 import * as React from 'react'
 import { useMemo, useRef, useState } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AgentEdge, AgentEntityStatus, AgentEntityView, ZoneView } from '../graph/project-graph.ts'
+import { Legend } from '../zones/Legend.tsx'
 import css from './agent-canvas.module.css'
 
 export interface AgentCanvasPageProps {
@@ -281,14 +284,19 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
     }
   }
 
-  // Muted degradation note (spec §8 — three honest states, never orange):
-  // degraded = unreadable ledger; empty = 0 events; all-idle = settles only.
+  // Muted degradation note (spec §8 — four honest states, never orange):
+  // degraded = unreadable ledger; empty = 0 events; settle-only = events but
+  // no dispatch rows (the old AgentFlowZone `data-zone-empty="settle-only"`
+  // semantic, review T2-Imp-2 — restored as `data-canvas-note="settle-only"`
+  // with its own muted copy instead of folding into `empty`).
   const allIdle = entities.length > 0 && entities.every((e) => e.idle)
   const note = degraded
     ? { anchor: 'degraded', text: t('flow.degraded') }
-    : empty || allIdle
+    : empty
       ? { anchor: 'empty', text: t('flow.empty') }
-      : null
+      : allIdle
+        ? { anchor: 'settle-only', text: t('flow.settle-only') }
+        : null
 
   return (
     <div className={css.canvasPage} data-mstar-page="agents">
@@ -305,6 +313,10 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
       </header>
 
       {note !== null && <p className={css.canvasNote} data-canvas-note={note.anchor}>{note.text}</p>}
+
+      <div className={css.canvasLegend}>
+        <Legend t={t} />
+      </div>
 
       <div
         className={css.canvasViewport}
@@ -375,9 +387,14 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
           </svg>
 
           <ul className={css.canvasCards}>
-            {entities.map((entity) => (
-              <EntityCard key={entity.key} entity={entity} t={t} box={layout.cards.get(entity.key)!} />
-            ))}
+            {entities.map((entity) => {
+              // Defensive skip (review T2-Imp-1 — never throw/guess): the
+              // deterministic layout is total (every entity gets a box), but a
+              // card without one renders nothing instead of a runtime crash.
+              const box = layout.cards.get(entity.key)
+              if (box === undefined) return null
+              return <EntityCard key={entity.key} entity={entity} t={t} box={box} />
+            })}
           </ul>
         </div>
       </div>
