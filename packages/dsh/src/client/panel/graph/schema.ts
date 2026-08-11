@@ -75,11 +75,18 @@ export const TRANSITION_TO_PHASE: Readonly<Record<string, PhaseId>> = {
  * - sdd-task-review: generalPurpose — the mstar-sdd L2 task reviewer
  *   (SKILL.md step 6); NOT qc-specialist*.
  * - qc-tri: qc-specialist ×3 — the mstar-sdd plan QC triage (Phase 2).
- * - qa-gate: qa-engineer — the QA gate (Phase 2 closing).
- * - ops-on-demand: ops-engineer — on-demand ops dispatch (mstar-roles
- *   routing table), Phase 2 only, as needed.
+ * - qa-gate: qa-engineer — the QA gate (Phase 2 closing — the pipeline
+ *   TERMINAL stage; ops-engineer is NOT in the pipeline).
  * - Phase 3–5 (iteration-close / pr-delivery / merge-ready) dispatch no
  *   routine subagents → no stages (spec §2.3).
+ *
+ * Off-pipeline roles (plan 20260811-panel-f2-quickfix Item 3) live in the
+ * KNOWN_AGENTS roster with `zone` markers, NOT here: `ops-engineer` and
+ * `prompt-engineer` are on-demand dispatches (mstar-roles routing table,
+ * as needed) rendered in their own on-demand column; `explore` stays an
+ * unexpected-zone scout role. The SDD implement ↔ task-review loop
+ * (mstar-sdd: implement → task review → rework → re-implement) is a
+ * skeleton EDGE (sdd-task-review → sdd-implement back-edge), not a stage.
  *
  * Matching rules (spec §2.3 — implemented by `projectGraph`'s flow
  * projection): `expected` ⟺ `event.role` ∈ the union of ALL `roles` below
@@ -97,31 +104,42 @@ export interface ExpectedRoleStage {
   roles: readonly string[]
 }
 
-/** Expected role pipeline skeleton: 6 stages (spec agent-flow-catalog-graph §2.3). */
+/** Expected role pipeline skeleton: 5 stages (spec agent-flow-catalog-graph §2.3,
+ * plan 20260811-panel-f2-quickfix Item 3 — ops-on-demand removed; qa-gate is the
+ * terminal stage). */
 export const EXPECTED_ROLE_FLOW: readonly ExpectedRoleStage[] = [
   { phase: 'iteration-start',    stage: 'review-edit-chain', roles: ['product-manager', 'architect', 'writing-specialist'] },
   { phase: 'autonomous-execute', stage: 'sdd-implement',     roles: ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev'] },
   { phase: 'autonomous-execute', stage: 'sdd-task-review',   roles: ['generalPurpose'] },
   { phase: 'autonomous-execute', stage: 'qc-tri',            roles: ['qc-specialist', 'qc-specialist-2', 'qc-specialist-3'] },
   { phase: 'autonomous-execute', stage: 'qa-gate',           roles: ['qa-engineer'] },
-  { phase: 'autonomous-execute', stage: 'ops-on-demand',     roles: ['ops-engineer'] },
 ]
 
 /**
  * The known-agent roster (spec §4 / §6.2 / decision point D3): the static
- * FULL set of roles the panel may ever show — every EXPECTED_ROLE_FLOW role
- * PLUS the off-pipeline roles `project-manager` (orchestrator, never
- * dispatched), `prompt-engineer` (in the mstar-roles table but not in the
- * pipeline) and `explore` (scout role), PLUS `generalPurpose` (the mstar-sdd
- * L2 reviewer — in the flow, not in the mstar-roles table). Exactly 15 roles
- * (spec §4 authoritative listing; cross-checked against the mstar-roles
- * mapping table, 13 rows, minus pipeline overlap + the two extras).
+ * FULL set of ASSIGNABLE roles the panel may ever show — every
+ * EXPECTED_ROLE_FLOW role PLUS the off-pipeline roles `prompt-engineer`
+ * (in the mstar-roles table but not in the pipeline) and `explore` (scout
+ * role), PLUS `generalPurpose` (the mstar-sdd L2 reviewer — in the flow,
+ * not in the mstar-roles table), PLUS `ops-engineer` (on-demand ops
+ * dispatch — no longer a pipeline stage, plan 20260811-panel-f2-quickfix
+ * Item 3). Exactly 14 roles.
+ *
+ * `project-manager` is deliberately NOT in the roster (plan
+ * 20260811-panel-f2-quickfix Item 2 — user F2 feedback): it is the PRIMARY
+ * orchestration agent (mstar-roles mapping `mode: primary`), the seat that
+ * DISPATCHES subagents — never an assignable subagent itself, so it must
+ * not appear as a dispatchable entity in the 代理执行 tab.
  *
  * The panel NEVER hides a known agent: every member without dispatch
  * evidence projects as an `idle` entity (spec §6.2 — degraded/empty
  * branches included). `stage` = the role's stage in EXPECTED_ROLE_FLOW
- * (first constant-order match); null for the off-pipeline roles.
+ * (first constant-order match); null for the off-pipeline roles, which
+ * carry an explicit `zone` — `on-demand` (ops-engineer / prompt-engineer,
+ * their own canvas column) or default `unexpected` (explore).
  */
+export type AgentZone = 'flow' | 'on-demand' | 'unexpected'
+
 export interface KnownAgent {
   /** Role id — the entity key and the default card title (render may localize). */
   id: string
@@ -129,11 +147,13 @@ export interface KnownAgent {
   displayName?: string
   /** The role's EXPECTED_ROLE_FLOW stage; null → off-pipeline role. */
   stage?: { phase: PhaseId; stage: string } | null
+  /** Off-pipeline zone (plan 20260811-panel-f2-quickfix Item 3): 'on-demand'
+   * for the on-demand column, 'unexpected' (the default when omitted). */
+  zone?: 'on-demand' | 'unexpected'
 }
 
-/** Known-agent roster — 15 roles, spec §4 order. */
+/** Known-agent roster — 14 roles, spec §4 order (project-manager excluded). */
 export const KNOWN_AGENTS: readonly KnownAgent[] = [
-  { id: 'project-manager', stage: null },
   { id: 'product-manager', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
   { id: 'architect', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
   { id: 'fullstack-dev', stage: { phase: 'autonomous-execute', stage: 'sdd-implement' } },
@@ -143,9 +163,9 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = [
   { id: 'qc-specialist', stage: { phase: 'autonomous-execute', stage: 'qc-tri' } },
   { id: 'qc-specialist-2', stage: { phase: 'autonomous-execute', stage: 'qc-tri' } },
   { id: 'qc-specialist-3', stage: { phase: 'autonomous-execute', stage: 'qc-tri' } },
-  { id: 'ops-engineer', stage: { phase: 'autonomous-execute', stage: 'ops-on-demand' } },
+  { id: 'ops-engineer', stage: null, zone: 'on-demand' },
   { id: 'writing-specialist', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
-  { id: 'prompt-engineer', stage: null },
+  { id: 'prompt-engineer', stage: null, zone: 'on-demand' },
   { id: 'generalPurpose', stage: { phase: 'autonomous-execute', stage: 'sdd-task-review' } },
   { id: 'explore', stage: null },
 ]

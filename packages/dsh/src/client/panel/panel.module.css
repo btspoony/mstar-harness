@@ -261,12 +261,15 @@
   border-top: 1px solid var(--dsw-alias-border-l1);
 }
 
-/* Steps, HORIZONTAL (spec §3): 5 items in PHASE_IDS order with dim bars
- * between; the bar leading INTO the current step is lit. */
+/* Steps, HORIZONTAL (spec §3 + plan 20260811-panel-f2-quickfix Item 1 — user
+ * F2 feedback): 5 EQUAL full-width unit blocks (flex `1 1 0` — the row
+ * spreads evenly with no compression), item content centered (badge/phase/
+ * chip vertically + horizontally), a consistent --mstar-space-* gap; the
+ * old connector bars are REMOVED — the gap replaces them. */
 .iterationStepsRow {
   display: flex;
-  align-items: flex-start;
-  gap: var(--mstar-space-1);
+  align-items: stretch;
+  gap: var(--mstar-space-3);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -275,30 +278,20 @@
 }
 
 .iterationStepItem {
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: var(--mstar-space-1);
-  min-width: 0;
-}
-
-.iterationStepConnector,
-.iterationStepConnectorLit {
-  flex: none;
-  align-self: center;
-  width: var(--mstar-space-3);
-  height: 2px;
-  background: var(--dsw-alias-border-l1);
-}
-
-.iterationStepConnectorLit {
-  background: var(--dsw-alias-state-business-primary);
+  text-align: center;
 }
 
 .iterationStepBadge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  align-self: flex-start;
   width: 22px;
   height: 22px;
   border: 1px solid var(--dsw-alias-border-l2);
@@ -317,11 +310,11 @@
 
 /* State chip: current = business glow + ring, next = dashed, idle = dim —
  * driven by the step item's `data-step-state` (spec §3 treatment carried
- * over from the zone stepper, now horizontal). */
+ * over from the zone stepper, now horizontal; the current-step highlight
+ * stays on the BLOCK itself — plan Item 1). */
 .iterationStepChip {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
   padding: 0 var(--mstar-space-2);
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 999px;

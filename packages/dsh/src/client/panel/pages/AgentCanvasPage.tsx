@@ -30,11 +30,16 @@
  * are muted (`data-agent-idle`); lit cards follow the projection's status
  * priority (running/settled/error/denied/advisory).
  *
- * Edges (spec §4 — AgentEdge model reused): expected skeleton (dim dashed
- * stage→stage), actual handoffs (business entity→entity), next (business
- * ANIMATED dash-flow stage→stage) — all drawn as SVG lines over the layout
- * computed by the exported pure `layoutAgents` (deterministic columns per
- * EXPECTED_ROLE_FLOW stage + a trailing unexpected/off-pipeline column).
+ * Edges (spec §4 + plan 20260811-panel-f2-quickfix Item 3 — AgentEdge model
+ * reused): expected skeleton (dim dashed stage→stage, 4 forward edges),
+ * the SDD LOOP back-edge sdd-task-review → sdd-implement (business CURVED
+ * double-arrow — `data-agent-edge-loop`, visually distinct from the forward
+ * edge it overlaps), actual handoffs (business entity→entity), next
+ * (business ANIMATED dash-flow stage→stage) — all drawn as SVG over the
+ * layout computed by the exported pure `layoutAgents` (deterministic columns
+ * per EXPECTED_ROLE_FLOW stage + the on-demand column for
+ * ops-engineer/prompt-engineer + a trailing unexpected column; column
+ * buckets come from the PROJECTED `entity.zone`, never a render guess).
  *
  * Degradation (spec §8 — never throws / never orange): the projection always
  * yields the full idle roster, so the canvas renders it with the muted
@@ -131,21 +136,32 @@ const LABEL_H = 18
 /** The trailing column id for stage-null entities (off-pipeline + unexpected). */
 export const UNEXPECTED_COLUMN = 'unexpected'
 
+/** The on-demand column id (plan 20260811-panel-f2-quickfix Item 3): the
+ * separate zone for ops-engineer / prompt-engineer — NO expected/next arrows
+ * touch it (independent region, distinct from the unexpected column). */
+export const ON_DEMAND_COLUMN = 'on-demand'
+
 /**
- * Deterministic canvas layout (spec §4 — the collaboration story): one column
- * per EXPECTED_ROLE_FLOW stage (view order) + a trailing `unexpected` column
- * for stage-null entities; cards stack vertically inside their column; the
- * canvas bounds grow with the tallest column. Total function — every entity
- * gets a box (stage ids that do not match any column fall back to the
- * unexpected track; never a throw).
+ * Deterministic canvas layout (spec §4 + plan Item 3 — the collaboration
+ * story): one column per EXPECTED_ROLE_FLOW stage (view order) + the
+ * `on-demand` column (ops-engineer / prompt-engineer) + a trailing
+ * `unexpected` column for the remaining stage-null entities. Cards stack
+ * vertically inside their column; the canvas bounds grow with the tallest
+ * column. The column bucket comes from the PROJECTED `entity.zone` (never a
+ * render-side guess): 'flow' → the entity's stage column, 'on-demand' → the
+ * on-demand column, 'unexpected' → the unexpected track. Total function —
+ * every entity gets a box (unknown column ids fall back to the unexpected
+ * track; never a throw).
  */
 export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
-  const columnIds = [...view.stages.map((s) => s.id), UNEXPECTED_COLUMN]
+  const columnIds = [...view.stages.map((s) => s.id), ON_DEMAND_COLUMN, UNEXPECTED_COLUMN]
   const buckets = new Map<string, AgentEntityView[]>()
   for (const entity of view.entities) {
-    const colId = entity.stage === null
-      ? UNEXPECTED_COLUMN
-      : `${entity.stage.phase}:${entity.stage.stage}`
+    const colId = entity.zone === 'on-demand'
+      ? ON_DEMAND_COLUMN
+      : entity.zone === 'flow' && entity.stage !== null
+        ? `${entity.stage.phase}:${entity.stage.stage}`
+        : UNEXPECTED_COLUMN
     const bucketId = columnIds.includes(colId) ? colId : UNEXPECTED_COLUMN
     const bucket = buckets.get(bucketId)
     if (bucket === undefined) buckets.set(bucketId, [entity])
@@ -244,7 +260,7 @@ function EntityCard({ entity, t, box }: { entity: AgentEntityView; t: TranslateN
       data-agent-status={entity.status}
       data-agent-idle={entity.idle ? 'true' : undefined}
       data-agent-running={running ? 'true' : undefined}
-      data-agent-stage={entity.stage === null ? 'unexpected' : `${entity.stage.phase}:${entity.stage.stage}`}
+      data-agent-stage={entity.stage === null ? entity.zone : `${entity.stage.phase}:${entity.stage.stage}`}
     >
       <div className={css.agentCardLine}>
         <span className={css.agentCardName} title={title}>{title}</span>
@@ -352,7 +368,11 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
               style={{ left: col.x, top: col.y }}
               data-canvas-column={col.id}
             >
-              {col.id === UNEXPECTED_COLUMN ? t('flow.unexpected') : col.id.slice(col.id.indexOf(':') + 1)}
+              {col.id === ON_DEMAND_COLUMN
+                ? t('zone.agents.on-demand')
+                : col.id === UNEXPECTED_COLUMN
+                  ? t('flow.unexpected')
+                  : col.id.slice(col.id.indexOf(':') + 1)}
             </span>
           ))}
 
@@ -367,11 +387,31 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
               <marker id="canvas-arrow-next" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
                 <path className={css.canvasArrowNext} d="M 0 1 L 9 5 L 0 9 z" />
               </marker>
+              <marker id="canvas-arrow-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path className={css.canvasArrowLoop} d="M 0 1 L 9 5 L 0 9 z" />
+              </marker>
             </defs>
             {edges.map((edge, i) => {
               const line = edgeLine(edge, layout)
               if (line === null) return null
               const kind = edge.kind
+              // SDD loop back-edge (plan Item 3): a CURVED path bowing above
+              // the column band with arrowheads at BOTH ends — visually
+              // distinct from the straight forward skeleton edge it overlaps.
+              if (edge.loop) {
+                const midX = (line.x1 + line.x2) / 2
+                const bowY = Math.min(line.y1, line.y2) - 24
+                return (
+                  <path
+                    key={`loop-${i}-${edge.source}-${edge.target}`}
+                    className={css.canvasEdgeLoop}
+                    d={`M ${line.x1} ${line.y1} Q ${midX} ${bowY} ${line.x2} ${line.y2}`}
+                    markerStart="url(#canvas-arrow-loop)"
+                    markerEnd="url(#canvas-arrow-loop)"
+                    data-agent-edge-loop={`${edge.source}->${edge.target}`}
+                  />
+                )
+              }
               const className = kind === 'next'
                 ? css.canvasEdgeNext
                 : kind === 'actual'

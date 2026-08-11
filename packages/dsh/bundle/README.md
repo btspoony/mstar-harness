@@ -108,8 +108,10 @@ base / target / spec integration, rendered only while active; the branches
 block left the sidebar for this in plan `20260810-panel-sidebar-info`), a
 **tasks zone** (6-column kanban: Todo / InProgress / InReview / Done /
 Blocked / unknown with count badges, Done ≤5 + `+N more`), an
-**agent-execution zone** (the six EXPECTED_ROLE_FLOW stage/phase columns
-rendering the subagent ENTITY cards aggregated from actual dispatch
+**agent-execution zone** (the five EXPECTED_ROLE_FLOW stage/phase columns
+— plus the on-demand column for ops-engineer/prompt-engineer and the
+unexpected track, plan `20260811-panel-f2-quickfix` — rendering the
+subagent ENTITY cards aggregated from actual dispatch
 evidence — agent display name / role chip / task tag (`planId#taskId`) /
 status point / ×N count; running entities carry the business glow-pulse
 highlight, un-evidenced stages render the dashed "待执行" pending

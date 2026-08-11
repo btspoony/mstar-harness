@@ -25,6 +25,9 @@ export function Legend({ t }: LegendProps) {
     { key: 'flow-expected', swatch: css.swatchFlowExpected, label: t('zone.legend.flow-expected') },
     { key: 'flow-actual', swatch: css.swatchFlowActual, label: t('zone.legend.flow-actual') },
     { key: 'flow-unexpected', swatch: css.swatchFlowUnexpected, label: t('zone.legend.flow-unexpected') },
+    // On-demand zone (plan 20260811-panel-f2-quickfix Item 3): ops-engineer /
+    // prompt-engineer — their own column, distinct from flow-unexpected.
+    { key: 'on-demand', swatch: css.swatchOnDemand, label: t('zone.legend.on-demand') },
     // Entity statuses (plan Task 3): the card treatments — running (business
     // glow ring), settled (success ✓) and idle (dashed muted card).
     { key: 'agent-running', swatch: css.swatchAgentRunning, label: t('zone.legend.agent-running') },

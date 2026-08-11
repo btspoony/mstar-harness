@@ -4,9 +4,10 @@
  * zoom), the coordinate-space content layer with the moving grid background,
  * the scattered entity cards (agent-name title / status point / record fields;
  * idle cards muted via the dashed border + caption treatment), the stage
- * column labels, the Legend seat (plan Task 3), and the AgentEdge
- * collaboration lines (expected skeleton / actual handoffs / the ANIMATED
- * next edge).
+ * column labels (+ the on-demand column, plan 20260811-panel-f2-quickfix
+ * Item 3), the Legend seat (plan Task 3), and the AgentEdge
+ * collaboration lines (expected skeleton / the curved SDD loop back-edge /
+ * actual handoffs / the ANIMATED next edge).
  *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
@@ -161,6 +162,20 @@
 }
 
 .canvasArrowNext path {
+  fill: var(--dsw-alias-state-business-primary);
+}
+
+/* SDD loop back-edge (plan 20260811-panel-f2-quickfix Item 3): the
+ * sdd-task-review → sdd-implement reverse edge — business CURVED path with
+ * arrowheads at BOTH ends (the ⇄ implement ↔ review cycle), visually
+ * distinct from the straight dim-dashed forward skeleton edge. */
+.canvasEdgeLoop {
+  fill: none;
+  stroke: var(--dsw-alias-state-business-primary);
+  stroke-width: 1.5;
+}
+
+.canvasArrowLoop path {
   fill: var(--dsw-alias-state-business-primary);
 }
 

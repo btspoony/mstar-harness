@@ -169,12 +169,14 @@ The canvas is a pure render of the latest `mstar-engine-status` catalog row
 the page fills the Tab (no page-level scrolling — the zone container is the
 only scroll body) and the **zone dashboard** (replacing the react-flow cyclic
 graph, plan `20260810-panel-canvas-zones`) lays out three zones — the
-**iteration zone** (Step 1–5 stepper with a `Step N/5` badge, active-highlight
-/ inactive dimmed states, and the branch panel: iteration base / target /
-spec integration, rendered only while active), the **tasks zone** (6-column
+**iteration zone** (Step 1–5 as 5 equal full-width unit blocks with pure-number
+badges + an `N/5` summary — no 步骤/Step wording, plan `20260811-panel-f2-quickfix`;
+active-highlight / inactive dimmed states, and the branch panel: iteration
+base / target / spec integration, rendered only while active), the **tasks zone** (6-column
 kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
-badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the six EXPECTED_ROLE_FLOW stage/phase
-columns rendering the subagent **entity cards** aggregated from actual
+badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the five EXPECTED_ROLE_FLOW stage/phase
+columns — plus the on-demand column for ops-engineer/prompt-engineer and the unexpected track, plan
+20260811-panel-f2-quickfix — rendering the subagent **entity cards** aggregated from actual
 dispatch evidence — agent display name / role chip / task tag
 (`planId#taskId`) / status point / ×N count; running entities carry the
 business glow-pulse highlight, un-evidenced stages render the dashed

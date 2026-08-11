@@ -46,7 +46,7 @@ import { bool, count, str } from '../guards.ts'
 import { PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
   EXPECTED_ROLE_FLOW, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
-  type PhaseId, type PlanStateId,
+  type AgentZone, type KnownAgent, type PhaseId, type PlanStateId,
 } from './schema.ts'
 
 /** Current-step verdict from `gate.ok` (spec §3). */
@@ -184,8 +184,14 @@ export interface AgentEntityView {
   count: number
   /** Latest dispatch ts (the status/identity source); 0 for idle cards. */
   ts: number
-  /** Latest dispatch's stage via `roleStageIndex` (first constant-order match); null → unexpected role; KNOWN_AGENTS stage for idle cards. */
+  /** Latest dispatch's stage via `roleStageIndex` (first constant-order match); null → off-pipeline role; KNOWN_AGENTS stage for idle cards. */
   stage: { phase: PhaseId; stage: string } | null
+  /** Column zone (plan 20260811-panel-f2-quickfix Item 3 — projection-owned,
+   * the render NEVER heuristically guesses): 'flow' (stage columns), 'on-demand'
+   * (ops-engineer / prompt-engineer column) or 'unexpected' (stage-null
+   * non-on-demand — explore, scout, unregistered). Derived from the role for
+   * lit cards, from the KnownAgent `zone` for idle cards. */
+  zone: AgentZone
 }
 
 /**
@@ -204,7 +210,10 @@ export type AgentEdgeKind = 'expected' | 'actual' | 'next'
 /**
  * One agents-zone arrow (spec §4):
  * - `expected`: skeleton arrow between consecutive EXPECTED_ROLE_FLOW stage
- *   columns (source/target = stage id);
+ *   columns (source/target = stage id) — PLUS the SDD loop back-edge
+ *   `sdd-task-review → sdd-implement` (plan 20260811-panel-f2-quickfix
+ *   Item 3, `loop: true`): the implement ↔ task-review cycle, rendered as a
+ *   visually distinct curved double-arrow;
  * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
  *   (source/target = entity key);
  * - `next`: the latest running entity's stage column → the next constant-order
@@ -217,6 +226,8 @@ export interface AgentEdge {
   target: string
   /** The running entity key the next arrow highlights; null for expected/actual. */
   entityKey: string | null
+  /** SDD loop back-edge flag (plan Item 3): sdd-task-review → sdd-implement. */
+  loop?: boolean
 }
 
 /**
@@ -461,11 +472,23 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
 
 /* ---------------------------------- agents zone projection (spec §4) ---------------------------------- */
 
-/** Skeleton stage-column arrows: consecutive EXPECTED_ROLE_FLOW stages (spec §4). */
+/**
+ * Skeleton stage-column arrows (spec §4 + plan 20260811-panel-f2-quickfix
+ * Item 3): forward edges between consecutive EXPECTED_ROLE_FLOW stages PLUS
+ * the SDD loop back-edge `sdd-task-review → sdd-implement` (`loop: true`,
+ * kind stays 'expected' — both are in-flow skeleton edges; the flag lets the
+ * render layer draw the reverse edge as a visually distinct curved
+ * double-arrow instead of a straight line overlapping the forward edge).
+ */
 function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
   const edges: AgentEdge[] = []
   for (let i = 0; i + 1 < stages.length; i++) {
     edges.push({ kind: 'expected', source: stages[i]!.id, target: stages[i + 1]!.id, entityKey: null })
+  }
+  const review = stages.find((s) => s.stage === 'sdd-task-review')
+  const implement = stages.find((s) => s.stage === 'sdd-implement')
+  if (review !== undefined && implement !== undefined) {
+    edges.push({ kind: 'expected', source: review.id, target: implement.id, entityKey: null, loop: true })
   }
   return edges
 }
@@ -480,10 +503,21 @@ interface EntityAccum {
   count: number
   ts: number
   stage: { phase: PhaseId; stage: string } | null
+  /** Column zone (plan Item 3): 'flow' when staged; role-derived for stage-null roles. */
+  zone: AgentZone
   /** Index of the latest dispatch in the classified entries array (pair lookup). */
   latestIndex: number
   /** dispatchStatus of the latest dispatch ('denied' | 'advisory' | 'dispatched'). */
   verdict: FlowEventStatus
+}
+
+/** The zone helper shared by lit + idle cards (plan Item 3): a staged role is
+ * 'flow'; an off-pipeline role takes its KNOWN_AGENTS `zone` (on-demand) or
+ * defaults to 'unexpected'. Never a render-side heuristic. */
+function roleZone(role: string, stage: { phase: PhaseId; stage: string } | null): AgentZone {
+  if (stage !== null) return 'flow'
+  const known = KNOWN_AGENTS.find((a) => a.id === role)
+  return known === undefined ? 'unexpected' : (known.zone ?? 'unexpected')
 }
 
 /**
@@ -529,6 +563,7 @@ function aggregateEntities(
         count: 1,
         ts: v.ts,
         stage: v.stage,
+        zone: roleZone(v.role, v.stage),
         latestIndex: i,
         verdict: v.status,
       })
@@ -545,6 +580,7 @@ function aggregateEntities(
         cur.role = v.role
         cur.task = task
         cur.stage = v.stage
+        cur.zone = roleZone(v.role, v.stage)
       }
     }
   }
@@ -557,6 +593,7 @@ function aggregateEntities(
     count: e.count,
     ts: e.ts,
     stage: e.stage,
+    zone: e.zone,
     status: entityStatus(e, pairStatus),
     idle: false,
   }))
@@ -596,9 +633,10 @@ function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
 /**
  * The `next` arrow (spec §4): the LATEST running entity (max ts; tie →
  * smallest entity key) sits in a stage column → the next EXPECTED_ROLE_FLOW
- * column. No running entity / running entity without a stage (unexpected
- * role) / already at the last column (ops-on-demand) → NO next edge (honest
- * — never a guess).
+ * column. No running entity / running entity without a stage (off-pipeline
+ * role — on-demand or unexpected) / already at the LAST column (qa-gate,
+ * the pipeline terminal since plan 20260811-panel-f2-quickfix Item 3) →
+ * NO next edge (honest — never a guess).
  */
 function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZoneStage[]): AgentEdge[] {
   let best: AgentEntityView | null = null
@@ -622,7 +660,7 @@ function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZ
  * Key-uniqueness guard (F-001 — qc1/qc2 Warning): `evidencedRoles` suppresses
  * the idle card of a role WITH dispatch evidence, but a dispatch row whose
  * session id equals a KNOWN_AGENTS id while its `role` differs (e.g.
- * `{ agent: 'project-manager', role: 'fullstack-dev' }`) produces a lit card
+ * `{ agent: 'explore', role: 'fullstack-dev' }`) produces a lit card
  * keyed by that id WITHOUT that role being evidenced. `litKeys` (the
  * evidence-derived entity key set) suppresses the idle twin in that case too
  * — the entity key space stays unique, so `layoutAgents`' `cards.set` and the
@@ -644,9 +682,17 @@ function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<
       count: 0,
       ts: 0,
       stage: known.stage ?? null,
+      zone: idleZone(known),
     })
   }
   return out
+}
+
+/** Idle-card zone (plan Item 3): the KnownAgent's explicit off-pipeline zone
+ * (on-demand) or 'unexpected' — staged roster members are 'flow'. */
+function idleZone(known: KnownAgent): AgentZone {
+  if (known.stage !== null) return 'flow'
+  return known.zone ?? 'unexpected'
 }
 
 /**

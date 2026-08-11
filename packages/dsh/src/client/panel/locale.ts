@@ -120,6 +120,7 @@ export type PanelKey =
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
   | 'zone.legend.flow-unexpected'
+  | 'zone.legend.on-demand'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
   | 'zone.legend.agent-idle'
@@ -150,6 +151,7 @@ export type PanelKey =
   | 'zone.state.unknown'
   | 'zone.agents.title'
   | 'zone.agents.summary'
+  | 'zone.agents.on-demand'
   | 'flow.empty'
   | 'flow.settle-only'
   | 'flow.degraded'
@@ -230,12 +232,13 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-expected': '预期流转边（虚线）',
   'zone.legend.flow-actual': '实际交接边',
   'zone.legend.flow-unexpected': '未匹配角色（独立列）',
+  'zone.legend.on-demand': '按需执行角色（独立列）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
   'zone.legend.agent-idle': '未工作实体（虚线）',
   'zone.legend.next': 'next 流转边（动画）',
-  'zone.iteration.step-label': '步骤 {n}/{total}',
-  'zone.iteration.step-badge': '步骤 {n}',
+  'zone.iteration.step-label': '{n}/{total}',
+  'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': '当前',
   'zone.iteration.step.next': '下一步',
   'zone.iteration.step.idle': '待命',
@@ -260,6 +263,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': '未知',
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
+  'zone.agents.on-demand': '按需执行',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -335,12 +339,13 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.flow-expected': 'expected flow edge (dashed)',
   'zone.legend.flow-actual': 'actual handoff edge',
   'zone.legend.flow-unexpected': 'unexpected role (own column)',
+  'zone.legend.on-demand': 'on-demand role (own column)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
   'zone.legend.agent-idle': 'idle agent (dashed)',
   'zone.legend.next': 'next flow edge (animated)',
-  'zone.iteration.step-label': 'Step {n}/{total}',
-  'zone.iteration.step-badge': 'Step {n}',
+  'zone.iteration.step-label': '{n}/{total}',
+  'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': 'current',
   'zone.iteration.step.next': 'next',
   'zone.iteration.step.idle': 'idle',
@@ -365,6 +370,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.state.unknown': 'unknown',
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
+  'zone.agents.on-demand': 'On-demand',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',

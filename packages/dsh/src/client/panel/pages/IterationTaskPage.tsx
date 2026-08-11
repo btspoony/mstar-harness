@@ -9,9 +9,10 @@
  * Content Head (spec §3): the iteration info (iterationId / gate verdict /
  * status note) rides the summary row, which IS the toggle (a native button
  * with aria-expanded + aria-controls pointing at the body — QC wave). The
- * expanded body renders the Steps HORIZONTALLY
- * (PHASE_IDS order — the current step highlighted, the connector segment
- * leading INTO the current step lit; the same honesty as the zone stepper:
+ * expanded body renders the Steps HORIZONTALLY as 5 EQUAL full-width unit
+ * blocks (plan 20260811-panel-f2-quickfix Item 1 — badge/phase/chip
+ * centered, --mstar-space-* gap; no connector bars) with the current step
+ * highlighted on the block itself (the same honesty as the zone stepper:
  * no "completed" checkmarks) plus the branch panel (rendered ONLY while the
  * iteration is active, spec §3).
  *
@@ -155,35 +156,26 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
 
         {expanded && (
           <div className={css.iterationHeadBody} id="iteration-head-body" data-iteration-head-body>
-            {/* Steps, HORIZONTAL (spec §3): PHASE_IDS order, the current step
-                highlighted; the connector leading INTO the current step is
-                lit (honest — the schema knows only current/next/idle). */}
+            {/* Steps, HORIZONTAL (spec §3 + plan 20260811-panel-f2-quickfix
+                Item 1): PHASE_IDS order — 5 EQUAL full-width unit blocks
+                (flex 1 1 0, centered content, --mstar-space-* gap; the old
+                connector bars are removed, the gap replaces them), the
+                current step highlighted on the block itself (honest — the
+                schema knows only current/next/idle). */}
             <ol className={css.iterationStepsRow} data-iteration-head-steps>
-              {iteration.steps.map((step, i) => (
-                <React.Fragment key={step.id}>
-                  <li className={css.iterationStepItem} data-step={step.step} data-step-state={step.state}>
-                    <span className={css.iterationStepBadge} data-step-badge>
-                      {t('zone.iteration.step-badge', { n: String(step.step) })}
+              {iteration.steps.map((step) => (
+                <li className={css.iterationStepItem} data-step={step.step} data-step-state={step.state}>
+                  <span className={css.iterationStepBadge} data-step-badge>
+                    {t('zone.iteration.step-badge', { n: String(step.step) })}
+                  </span>
+                  <span className={css.iterationStepPhase} data-step-phase>{t(`zone.phase.${step.id}`)}</span>
+                  <span className={css.iterationStepChip} data-step-chip>{t(STATE_LABEL[step.state])}</span>
+                  {step.state === 'current' && (
+                    <span className={css.iterationVerdict} data-iteration-verdict={step.verdict}>
+                      {verdictLabel(step.verdict)}
                     </span>
-                    <span className={css.iterationStepPhase} data-step-phase>{t(`zone.phase.${step.id}`)}</span>
-                    <span className={css.iterationStepChip} data-step-chip>{t(STATE_LABEL[step.state])}</span>
-                    {step.state === 'current' && (
-                      <span className={css.iterationVerdict} data-iteration-verdict={step.verdict}>
-                        {verdictLabel(step.verdict)}
-                      </span>
-                    )}
-                  </li>
-                  {i < iteration.steps.length - 1 && (
-                    <span
-                      className={active && iteration.currentStep !== null && i === iteration.currentStep - 2
-                        ? css.iterationStepConnectorLit
-                        : css.iterationStepConnector}
-                      data-step-connector
-                      data-step-connector-state={active && iteration.currentStep !== null && i === iteration.currentStep - 2 ? 'lit' : 'dim'}
-                      aria-hidden="true"
-                    />
                   )}
-                </React.Fragment>
+                </li>
               ))}
             </ol>
 
