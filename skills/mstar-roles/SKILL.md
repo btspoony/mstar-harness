@@ -1,6 +1,6 @@
 ---
 name: mstar-roles
-description: Morning Star role prompt hub — `agents/*.md` shells plus full behavior in `references/*.md`, each with a **Required Skill Dependencies** list (which `mstar-*` topic skills to load after `mstar-harness-core`). Always load for any Morning Star role (`project-manager`, `product-manager`, `architect`, `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, `qa-engineer`, `qc-specialist*`, `ops-engineer`, `writing-specialist`, `prompt-engineer`). Cross-role **Role → typical topic skills** summary in this SKILL.md; per-role lists in `references/*.md` are authoritative for that role's session. Full topic skill index → **`mstar-harness-core`**.
+description: Morning Star role prompt hub — `agents/*.md` shells plus full behavior in `references/*.md`, each with a **Required Skill Dependencies** list (which `mstar-*` topic skills to load after `mstar-harness-core`). Always load for any Morning Star role (`project-manager`, `product-manager`, `architect`, `code-reviewer`, `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, `qa-engineer`, `qc-specialist*`, `ops-engineer`, `writing-specialist`, `prompt-engineer`). Cross-role **Role → typical topic skills** summary in this SKILL.md; per-role lists in `references/*.md` are authoritative for that role's session. Full topic skill index → **`mstar-harness-core`**.
 ---
 
 ## Load Order (Required)
@@ -22,6 +22,7 @@ If any conflict appears, `mstar-harness-core` remains the authoritative source f
 | `project-manager` | `references/project-manager.md` | — |
 | `product-manager` | `references/product-manager.md` | — |
 | `architect` | `references/architect.md` | — |
+| `code-reviewer` | `references/code-reviewer.md` | — |
 | `fullstack-dev` | `references/fullstack-dev-shared.md` | `role_id`, `track` |
 | `fullstack-dev-2` | `references/fullstack-dev-shared.md` | `role_id`, `track` |
 | `frontend-dev` | `references/frontend-dev.md` | — |
@@ -42,6 +43,7 @@ If any conflict appears, `mstar-harness-core` remains the authoritative source f
 | `qc-specialist*` | `mstar-branch-worktree`, `mstar-plan-artifacts` (review bundle paths); `references/qc-specialist/` (workflow, checklist, template, lenses); `mstar-design-md` when reviewing UI |
 | `qa-engineer` | `mstar-branch-worktree`, `mstar-plan-artifacts` (closing R#); `references/qa-engineer/acceptance-gate.md`; `mstar-design-md` when verifying visual output |
 | `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-plan-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance); **`mstar-audit`** (`audit` Task category — architect leads codebase audit → improvement plans) |
+| `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-plan-conventions` (paths); `mstar-plan-artifacts` (plan-quality-bar for audit plans) |
 | `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree` |
 | `prompt-engineer` | All topic skills when editing harness text |
 
