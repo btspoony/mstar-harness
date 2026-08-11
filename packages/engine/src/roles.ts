@@ -4,7 +4,7 @@
  *
  * Source skills (semantic SSOT — this module implements their deterministic
  * rules, it never redefines them; roadmap §8.5 C2):
- * - `mstar-roles` SKILL.md § Role Reference Mapping — the 13 agent ids →
+ * - `mstar-roles` SKILL.md § Role Reference Mapping — the 14 agent ids →
  *   `references/<role>.md` table (shared families `fullstack-dev*` /
  *   `qc-specialist*` on ONE shared file per § Maintenance Rules).
  * - `mstar-roles` SKILL.md § Parameter Table (SSOT) — dev track
