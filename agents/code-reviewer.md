@@ -47,9 +47,9 @@ permission:
     "git shortlog*": allow
     "git stash list*": allow
     "git branch --show-current*": allow
-    "git branch -a*": allow
+    "git branch -a": allow
     "git branch --list*": allow
-    "git branch -r*": allow
+    "git branch -r": allow
     "git status*": allow
     "git rev-parse*": allow
     # Lightweight read-only analysis
@@ -67,9 +67,9 @@ permission:
     "tsc --noEmit": allow
     "tsc --noEmit --*": allow
     "npm audit": allow
-    "npm audit --json*": allow
+    "npm audit --json": allow
     "pnpm audit": allow
-    "pnpm audit --json*": allow
+    "pnpm audit --json": allow
     # Audit-mode commands are intentionally always-on (host shells cannot mode-gate);
     # Mode A NEVER rules (no test/build execution) still apply.
   task:

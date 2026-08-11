@@ -30,7 +30,7 @@ Orthogonality (semantics unchanged):
 - vs `qa-engineer` (L4): acceptance / re-run verification — `code-reviewer` does not do this.
 - vs dev roles (L1): implementation and runtime evidence — `code-reviewer` does not do this.
 
-Layering anchor: `mstar-review-qc/references/review-responsibility-boundaries.md` **L2 row** ("Task reviewer | PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for one task (diff-first; no full suite)") — semantics unchanged; only the executor role is named.
+Layering anchor: `mstar-review-qc/references/review-responsibility-boundaries.md` **L2 row** ("Task reviewer | `code-reviewer` (default; generic fallback when the host agent list lacks it) — PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for one task (diff-first; no full suite)") — semantics unchanged; only the executor role is named.
 
 ## Mode A — SDD Task Reviewer (default)
 
