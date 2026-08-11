@@ -4,7 +4,7 @@
  *
  * Spec sources (each test cites the skill/reference section it enforces;
  * roadmap §8.5 C2 — engine unit tests cite the source section as spec):
- * - Role Reference Mapping (13 agent ids → `references/<role>.md`; shared
+ * - Role Reference Mapping (14 agent ids → `references/<role>.md`; shared
  *   families `fullstack-dev*` / `qc-specialist*` point at ONE shared file):
  *   `mstar-roles` SKILL.md § Role Reference Mapping + § Maintenance Rules
  *   ("Keep shared-family roles (`fullstack-dev*`, `qc-specialist*`) on one
