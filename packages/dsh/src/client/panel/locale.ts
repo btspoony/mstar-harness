@@ -70,7 +70,6 @@ export type PanelKey =
   | 'tab.tasks'
   | 'tab.agents'
   | 'tab.events'
-  | 'page.agents.placeholder'
   | 'page.events.placeholder'
   | 'page.iteration.not-started'
   | 'page.iteration.expand'
@@ -160,7 +159,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'tab.tasks': '任务迭代',
   'tab.agents': '代理执行',
   'tab.events': '事件记录',
-  'page.agents.placeholder': '代理执行页由后续 plan 交付（agent canvas）',
   'page.events.placeholder': '事件记录页由后续 plan 交付（event log）',
   'page.iteration.not-started': '迭代未启动',
   'page.iteration.expand': '展开',
@@ -245,7 +243,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'tab.tasks': 'Task Iteration',
   'tab.agents': 'Agent Run',
   'tab.events': 'Event Log',
-  'page.agents.placeholder': 'Agent run page lands in a later plan (agent canvas)',
   'page.events.placeholder': 'Event log page lands in a later plan',
   'page.iteration.not-started': 'iteration not started',
   'page.iteration.expand': 'expand',

@@ -20,9 +20,10 @@
  * routing) — `renderToStaticMarkup` renders the default tasks page, keeping
  * SSR assertions stable. The tasks tab renders the IterationTaskPage (Content
  * Head + Steps 横排/收拢 + full-width kanban, spec §3 — landed with Task 2,
- * replacing the WorkflowCanvas zone dashboard); the agents/events tabs render
- * muted placeholder pages (refined by Task 3; the real pages land with the
- * agent-canvas / event-log plans).
+ * replacing the WorkflowCanvas zone dashboard); the agents tab renders the
+ * draggable AgentCanvasPage (spec §4 — landed with the agent-canvas plan,
+ * replacing the muted placeholder + the AgentFlowZone); the events tab stays
+ * the muted placeholder page (the real page lands with the event-log plan).
  *
  * Empty branches (spec §2): waiting / no-harness stay exactly as the zone
  * dashboard baseline — no tabs, no sidebar (hint + freshness only); the
@@ -67,11 +68,13 @@ export interface PanelContentProps {
  * layout. tasks = the IterationTaskPage (spec §3 — Content Head + Steps
  * 横排/收拢 + full-width kanban, landed with Task 2; it replaced the
  * WorkflowCanvas zone dashboard, whose file is removed by the plan close);
- * agents / events = muted placeholder pages (Task 3 refines them; the real
- * pages land with the agent-canvas / event-log plans).
+ * agents = the draggable AgentCanvasPage (spec §4 — full KNOWN_AGENTS roster
+ * + idle states + AgentEdge collaboration edges, landed with the agent-canvas
+ * plan; it replaced the muted placeholder and the AgentFlowZone); events =
+ * the muted placeholder page (the real log page lands with the event-log plan).
  */
 export function PanelContent({ tab, source, t }: PanelContentProps) {
-  if (tab === 'agents') return <AgentCanvasPage t={t} />
+  if (tab === 'agents') return <AgentCanvasPage view={projectGraph(source).agents} t={t} />
   if (tab === 'events') return <EventLogPage t={t} />
   return <IterationTaskPage view={projectGraph(source)} t={t} />
 }
