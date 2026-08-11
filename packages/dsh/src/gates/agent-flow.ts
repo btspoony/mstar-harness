@@ -1,9 +1,9 @@
 /**
  * Agent-flow ledger — the server-side record of ACTUAL subagent dispatch and
- * (best-effort) settle events (plan `20260810-agent-flow-catalog-graph`, spec
- * §2.1 定稿). The context catalog's `state.agentFlow` evidence reads this
- * ledger, so the panel can render what actually happened (vs the client-side
- * expected role flow).
+ * settle events — real completion, exact pairing (plan
+ * `20260810-agent-flow-catalog-graph`, spec §2.1 定稿). The context catalog's
+ * `state.agentFlow` evidence reads this ledger, so the panel can render what
+ * actually happened (vs the client-side expected role flow).
  *
  * Recording point (spec §2.1.1): the shared `DshHostAdapter.dispatchGate`
  * core — the ONE validation path behind the `tools/pre-execute` listener
@@ -42,16 +42,41 @@
  * promise); only an UNREADABLE file → null (evidence-missing degrade).
  * Malformed lines are skipped, never fatal.
  *
- * Settle (spec §2.1.2 — Tier 2, best-effort): `tools/post-execute` is NOT
- * part of the verified dsh-tools consumer surface (the peer-stub declares
- * only `tools/pre-execute`), so settle events depend on HOST emission.
- * `registerSettleListener` wires a defensive listener (error-containment
- * envelope + payload shape probing — an unmapped payload is dropped with a
- * one-line log). A host that never emits the seam leaves the ledger
- * dispatch-only — the documented settle-unavailable degrade; the panel must
- * not fabricate settlement. The Task 1 verification gate proves both halves:
- * the listener records a settle when a host emits (simulated in-test), and
- * the dev-time registry emits no post-execute (real-call assertion).
+ * Settle (plan `20260811-panel-f4-timeliness` Task 1 — real completion
+ * signals, paired to the dispatch record): `tools/post-execute` IS part of
+ * the verified dsh-tools registry surface (`runPostExecute` dispatches the
+ * waterfall for every tool call — verified against the upstream source and
+ * pinned by the real-call probe in `tests/agent-flow.spec.ts`), and
+ * `ctx.tasks.onTaskDone` reports background-task terminal snapshots. Settles
+ * are recorded ONLY for dispatches that can be paired to a real completion:
+ * - `registerSettleListener` (the `tools/post-execute` listener) matches the
+ *   dispatch TOOLS (Config `dispatchTools`, default `['subagent']` — the
+ *   shared `DEFAULT_DISPATCH_TOOLS` from `dispatch.ts`), looks up the exec's
+ *   agent-namespaced call key (`${sessionId}\u0000${callId}` — a raw `callId`
+ *   alone is not globally unique across sessions in one process, qc1 F-101
+ *   fix-wave) in the apply-scoped pairing store, and branches on the
+ *   verified result shapes: `{ kind: 'background', taskId }` (valid taskId)
+ *   → stores `taskId → dispatchRef` (the settle arrives later via
+ *   `onTaskDone`); `{ kind: 'background' }` without a valid taskId → nothing
+ *   mappable (no settle); `{ kind: 'continuable', subagentId }` → no terminal
+ *   signal this round → no settle (documented limit); any other successful
+ *   value (foreground `{ kind: 'foreground', … }` included) → immediate
+ *   settle with the paired identity. A failed result (`isError` or an
+ *   `error` payload — fabrication guard, qc2 F-001 / qc3 F-003a fix-wave)
+ *   settles `error`.
+ * - `recordTaskSettle` (wired through `ctx.inject(['tasks'])` in the entry)
+ *   maps a terminal snapshot (`completed → ok / killed → denied / failed →
+ *   error`, `durationMs = finishedAt − startedAt` when available) onto the
+ *   stored `taskId → dispatchRef` and prunes the consumed task entry.
+ * Both pairing maps hold only IN-FLIGHT calls: the `dispatchByCallId` entry
+ * is deleted once the post-execute branch resolves the call (each callId
+ * pairs exactly once), and `recordTaskSettle` deletes the consumed
+ * `dispatchByTaskId` entry (qc1 F-102 / qc2 F-002 / qc3 F-002 fix-wave).
+ * Pairing is apply-scoped (D1): the in-memory maps live in the entry's
+ * `apply`, so an HMR restart resets them — a post-execute/task-done outside
+ * the window stays unpaired and records NOTHING (honest degrade, never
+ * fabricated settlement). Non-dispatch tool calls and unpaired payloads
+ * record nothing either.
  *
  * Module boundary: no barrel — the entry and the adapter import by explicit
  * relative path; the public exports (`recordDispatch` / `recordSettle` /
@@ -63,8 +88,9 @@ import { type Context } from 'cordis'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'
-import { asRecord, type HarnessResolver } from './_shared.ts'
-import { isNaValue, planIdOf, sessionIdOf } from './dispatch.ts'
+import { asRecord } from './_shared.ts'
+import type { Config } from './_shared.ts'
+import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS } from './dispatch.ts'
 
 /** The agent-flow ledger file name under `{HARNESS_DIR}`. */
 export const AGENT_FLOW_FILE = 'agent-flow.jsonl'
@@ -85,21 +111,29 @@ export const AGENT_FLOW_SIZE_GATE_BYTES = 64 * 1024
 /** Logger label for the agent-flow ledger (dsh logger naming: `<scope>/<subject>`). */
 export const AGENT_FLOW_LOGGER = 'mstar/agent-flow'
 /**
- * The settle seam name. Not part of the verified dsh-tools consumer surface
- * (peer-stub declares only `tools/pre-execute`) — see the module doc for the
- * Tier-2 best-effort semantics.
+ * The settle seam name — the dsh-tools registry's `tools/post-execute`
+ * waterfall. VERIFIED to be dispatched by the real registry for every tool
+ * call (`runPostExecute` → `postExecute`, upstream source; pinned by the
+ * real-call probe in `tests/agent-flow.spec.ts`), so settles are no longer
+ * host-emission-dependent (plan `20260811-panel-f4-timeliness` Task 1 — the
+ * old "not part of the verified surface" assumption is obsolete).
  */
 export const SETTLE_SEAM = 'tools/post-execute'
 /**
- * The human-readable settle-unavailable trace (spec §2.1.2 verification
- * gate): logged ONCE per logger binding (≈ once per apply — a module-level
- * flag, qc1 F-006) when the defensive settle listener is registered and
- * documented as the ledger's dispatch-only degrade. A host that emits
- * `tools/post-execute` upgrades the ledger to dispatch + settle; one that
- * never does leaves this trace as the visible confirmation.
+ * The once-per-apply settle-pairing trace (plan `20260811-panel-f4-timeliness`
+ * Task 1). Historical name `SETTLE_SEAM_UNAVAILABLE_NOTE` (qc1 F-105 / qc2
+ * N-002 fix-wave): the old name claimed the seam was UNAVAILABLE, which the
+ * message itself refutes — the seam IS a verified part of the registry
+ * surface, so the constant was renamed to the accurate `PAIRING` name. The
+ * message states the VERIFIED pairing facts: the seam is emitted by the
+ * registry; foreground dispatch calls settle via it, background subagents
+ * settle via `ctx.tasks.onTaskDone` pairing; only unpaired payloads stay
+ * dispatch-only (never fabricated settlement). Logged ONCE per logger binding
+ * (≈ once per apply — the same module-level flag, qc1 F-006) when the pairing
+ * listener is registered.
  */
-export const SETTLE_SEAM_UNAVAILABLE_NOTE =
-  `settle seam "${SETTLE_SEAM}" is not part of the verified dsh-tools surface (the consumed peer-stub declares only tools/pre-execute) — settle events depend on host emission (best-effort); the agent-flow ledger stays dispatch-only until a host emits the seam`
+export const SETTLE_SEAM_PAIRING_NOTE =
+  `settle seam "${SETTLE_SEAM}" IS part of the verified dsh-tools registry surface (runPostExecute dispatches it for every tool call) — foreground dispatch calls settle here, background subagents settle via ctx.tasks.onTaskDone pairing; only UNPAIRED payloads (non-dispatch tools, calls outside the apply-scoped pairing window) stay dispatch-only — never a fabricated settle`
 
 /** Dispatch verdict vocabulary (spec §2.1.3). */
 export type DispatchVerdict = 'ok' | 'advisory' | 'denied'
@@ -135,11 +169,67 @@ export type AgentFlowEvent =
       v: 1
       ts: number
       kind: 'settle'
-      /** The settled session's stable id (payload-probed). */
+      /** The settled session's stable id (the paired dispatch's agent). */
       agent?: string
       outcome: SettleOutcome
       durationMs?: number
+      /**
+       * The PAIRED dispatch's identity (plan `20260811-panel-f4-timeliness`
+       * Task 1) — same field names + semantics as the dispatch event:
+       * `role` is the Assignment `Execute as` ('' when missing), `planId` /
+       * `taskId` the plan + `Task N` tags. Written for every paired settle;
+       * ABSENT on unpaired (legacy) settles — the client pairs on identity
+       * presence. The registry background-task id is deliberately NOT
+       * written here (`taskRef` is reserved as the distinct field name if a
+       * future audit needs it — it never collides with `taskId`).
+       */
+      role?: string
+      planId?: string
+      taskId?: string
     }
+
+/**
+ * The identity of one recorded dispatch, carried by the pairing store so a
+ * later completion (post-execute settle / onTaskDone terminal) can record a
+ * settle carrying the SAME identity fields as its dispatch event.
+ */
+export interface AgentFlowDispatchRef {
+  /** The resolved `{HARNESS_DIR}` the dispatch recorded into (settles record into the same ledger). */
+  harnessDir: string
+  /** The dispatching session's stable id ('' when the exec carried none). */
+  agent?: string
+  /** Assignment `Execute as` ('' when missing — the dispatch event's grammar). */
+  role: string
+  /** `planIdOf(header)` — the dispatch event's grammar. */
+  planId?: string
+  /** `taskIdOf(prompt)` — the Assignment `Task N` tag, NOT a registry task id. */
+  taskId?: string
+}
+
+/**
+ * The apply-scoped pairing store (plan `20260811-panel-f4-timeliness` Task 1,
+ * decision D1 — created in the entry `apply`, same lifetime as the catalog
+ * cache; an HMR restart resets it, and completions outside the window stay
+ * unpaired → no settle, the documented honest degrade). Maps are keyed by
+ * the TWO verified pairing keys: the tool-call `callId` (pre → post-execute)
+ * and the registry background-task id (post-execute background shape →
+ * `onTaskDone` terminal).
+ */
+export interface AgentFlowPairing {
+  /**
+   * The agent-namespaced call key → the dispatch it recorded (populated by
+   * `recordDispatch` when an exec is present). Key = `${sessionId}\u0000${callId}`
+   * (qc1 F-101 fix-wave): a raw `ToolExecution.callId` is NOT globally unique
+   * in one process — dsh runs many sessions concurrently and upstream mints
+   * per-message ids (`call-${index}`), so the dispatching session id must
+   * namespace the key or session B's same-id call could overwrite session A's
+   * pairing and mis-pair A's settle into B's dispatchRef. Consumed (deleted)
+   * by the post-execute branch — the map holds only in-flight calls.
+   */
+  dispatchByCallId: Map<string, AgentFlowDispatchRef>
+  /** Registry background-task id (`TaskSnapshot.id`) → the dispatch that started it (populated by the post-execute background branch; consumed by `recordTaskSettle`). */
+  dispatchByTaskId: Map<string, AgentFlowDispatchRef>
+}
 
 /** Module-scoped log sink (bound to `mstar/agent-flow` by the entry at apply). */
 type AgentFlowLogSink = (level: 'info' | 'warn' | 'error', message: string) => void
@@ -150,6 +240,32 @@ let logSink: AgentFlowLogSink | undefined
  * not on every registration).
  */
 let settleNoteLogged = false
+/**
+ * Module-scoped catalog-invalidation hook (plan `20260811-panel-f4-timeliness`
+ * Task 1 — the `invalidateCatalog` 挂钩 that Task 2 consumes): called with
+ * the affected `{HARNESS_DIR}` after every SUCCESSFUL ledger record
+ * (`recordDispatch` / `recordSettle`). The entry binds the real invalidation
+ * closure at apply (Task 2 shipped the apply-scoped harnessDir → cache-key
+ * reverse-map closure in `index.ts` — see `createCatalogInvalidation`);
+ * unbound → no-op. Never throws into the record path.
+ */
+type AgentFlowInvalidator = (harnessDir: string) => void
+let invalidator: AgentFlowInvalidator | undefined
+
+/**
+ * Bind the module's catalog-invalidation hook (plan
+ * `20260811-panel-f4-timeliness` Task 1 — same pattern as
+ * {@link setAgentFlowLogger}; the entry binds at apply; Task 2 shipped the
+ * real binding — the apply-scoped harnessDir → cache-key reverse-map
+ * closure in `index.ts`).
+ * @param invalidate - the hook (`undefined` clears the binding).
+ * @returns the PREVIOUS hook (tests restore it in a `finally`).
+ */
+export function setAgentFlowInvalidator(invalidate: AgentFlowInvalidator | undefined): AgentFlowInvalidator | undefined {
+  const prior = invalidator
+  invalidator = invalidate
+  return prior
+}
 
 /**
  * Bind the module's log sink (called once at apply; tests may rebind to
@@ -208,6 +324,34 @@ function verdictOf(violations: readonly unknown[], hard: boolean): DispatchVerdi
   return hard ? 'denied' : 'advisory'
 }
 
+/** The tool-call pairing key of an exec, when the seam exposes one (structural read). */
+function callIdOf(exec: unknown): string | undefined {
+  const rec = asRecord(exec)
+  const callId = rec?.callId
+  return typeof callId === 'string' && callId !== '' ? callId : undefined
+}
+
+/**
+ * The AGENT-NAMESPACED pairing key of one exec (qc1 F-101 fix-wave):
+ * `${sessionIdOf(exec) ?? ''}\u0000${callId}`. A raw `callId` alone is NOT
+ * globally unique in one process — dsh runs many sessions concurrently and
+ * upstream mints per-message ids (`call-${index}`; model-supplied
+ * `toolCallId`s are commonly `call_0`-style per message too) — so the key
+ * must carry the dispatching session id, or session B's same-id call could
+ * overwrite session A's pairing and A's settle would pair into B's dispatchRef
+ * (wrong harnessDir + wrong identity — exactly the defect class this plan
+ * prevents). Both `recordDispatch` (registration) and `registerSettleListener`
+ * (lookup + consumption) derive the key identically from the SAME exec, so an
+ * agent-less exec (`sessionIdOf` → '') still pairs to its own registration.
+ * @param exec - the tool-execution record (structural read).
+ * @returns the namespaced key, or undefined when the exec carries no callId.
+ */
+function callPairingKey(exec: unknown): string | undefined {
+  const callId = callIdOf(exec)
+  if (callId === undefined) return undefined
+  return `${sessionIdOf(exec as ToolExecution) ?? ''}\u0000${callId}`
+}
+
 /**
  * Append one event to `{HARNESS_DIR}/agent-flow.jsonl` and keep the file
  * bounded (spec §2.1.3 — fix-wave qc2 F-1 / qc3 F-001/003). Common path is
@@ -245,8 +389,22 @@ function appendEvent(harnessDir: string, event: AgentFlowEvent): void {
  * Verdict derivation (ok/advisory/denied, incl. hard denies) and the header
  * identity derivation (role / planId / taskId / taskCategory) reuse the gate's
  * own parsers — one grammar.
+ *
+ * Pairing (plan `20260811-panel-f4-timeliness` Task 1): when the input
+ * carries an `exec` AND the apply-scoped `pairing` store, the successful
+ * record registers the agent-namespaced key `${sessionId}\u0000${callId}` →
+ * dispatchRef (the full dispatch identity), so a later
+ * `tools/post-execute` for the same call can settle with the SAME identity
+ * (qc1 F-101 fix-wave: the session id namespaces the key — a raw callId is
+ * not globally unique across sessions in one process). The pairing registers
+ * only after the ledger append SUCCEEDED — a failed record never pairs to a
+ * phantom dispatch. An exec-less record (host-hook path) has no callId → no
+ * pairing. The pairing sub-path has its OWN catch scope (qc1 F-106 / qc2
+ * N-001 / qc3 F-006 fix-wave): a `Map.set` throw must not log "record
+ * failed" after the dispatch was already appended.
  * @param input - harness dir + exec (agent id) + Assignment text + the gate's
- * violations + the hard-enforcement resolution.
+ * violations + the hard-enforcement resolution + the apply-scoped pairing
+ * store (the adapter passes its own; direct callers may omit it).
  */
 export function recordDispatch(input: {
   harnessDir: string
@@ -254,6 +412,7 @@ export function recordDispatch(input: {
   prompt: string
   violations: readonly unknown[]
   hard: boolean
+  pairing?: AgentFlowPairing
 }): void {
   try {
     const header = assignmentHeaderRegion(input.prompt)
@@ -275,6 +434,35 @@ export function recordDispatch(input: {
       hard: input.hard,
     }
     appendEvent(input.harnessDir, event)
+    try {
+      invalidator?.(input.harnessDir)
+    } catch (error) {
+      log('error', `catalog invalidation failed (contained): ${errorMessage(error)}`)
+    }
+    // callId pairing — only for exec-bound records after a SUCCESSFUL append.
+    // Registered whenever the call id is present (the dispatchRef may carry no
+    // agent for agent-less calls — the settle then records what it knows and
+    // the client pairing honestly stays unpaired without an agent). Keyed by
+    // the agent-namespaced call key (qc1 F-101 fix-wave).
+    try {
+      if (input.pairing !== undefined && input.exec !== undefined) {
+        const key = callPairingKey(input.exec)
+        if (key !== undefined) {
+          input.pairing.dispatchByCallId.set(key, {
+            harnessDir: input.harnessDir,
+            ...(agent !== undefined ? { agent } : {}),
+            role: fields.executeAs ?? '',
+            ...(planId !== undefined && !isNaValue(planId) ? { planId } : {}),
+            ...(taskId !== undefined ? { taskId } : {}),
+          })
+        }
+      }
+    } catch (error) {
+      // Own catch scope (qc1 F-106 / qc2 N-001 / qc3 F-006 fix-wave): a
+      // pairing-registration throw must not claim the DISPATCH record failed
+      // — the event was already appended successfully above.
+      log('error', `pairing registration failed (contained — the dispatch record succeeded): ${errorMessage(error)}`)
+    }
   } catch (error) {
     log('error', `dispatch record failed (contained — dispatch proceeds): ${errorMessage(error)}`)
   }
@@ -282,15 +470,21 @@ export function recordDispatch(input: {
 
 /**
  * Record one settle event (spec §2.1.3). Fully try/catch-contained; a failing
- * record logs only. Callers (the defensive settle listener) resolve the
- * harness dir from the payload's agent workspace.
- * @param input - harness dir + agent id + outcome + optional duration.
+ * record logs only. Callers resolve the harness dir from the PAIRED dispatch
+ * (the pairing store's dispatchRef — never a payload probe).
+ * @param input - harness dir + agent id + outcome + optional duration + the
+ * PAIRED dispatch's identity (`role`/`planId`/`taskId` — same field names +
+ * semantics as the dispatch event; written for every paired settle, so the
+ * client can exactly pair the settle back to its dispatch).
  */
 export function recordSettle(input: {
   harnessDir: string
   agent?: string
   outcome: SettleOutcome
   durationMs?: number
+  role?: string
+  planId?: string
+  taskId?: string
 }): void {
   try {
     const event: AgentFlowEvent = {
@@ -300,8 +494,16 @@ export function recordSettle(input: {
       ...(input.agent !== undefined && input.agent.trim() !== '' ? { agent: input.agent } : {}),
       outcome: input.outcome,
       ...(input.durationMs !== undefined && Number.isFinite(input.durationMs) ? { durationMs: input.durationMs } : {}),
+      ...(input.role !== undefined ? { role: input.role } : {}),
+      ...(input.planId !== undefined && input.planId !== '' ? { planId: input.planId } : {}),
+      ...(input.taskId !== undefined && input.taskId !== '' ? { taskId: input.taskId } : {}),
     }
     appendEvent(input.harnessDir, event)
+    try {
+      invalidator?.(input.harnessDir)
+    } catch (error) {
+      log('error', `catalog invalidation failed (contained): ${errorMessage(error)}`)
+    }
   } catch (error) {
     log('error', `settle record failed (contained): ${errorMessage(error)}`)
   }
@@ -340,10 +542,16 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
     ...(agent !== undefined ? { agent } : {}),
     outcome,
     ...(typeof rec.durationMs === 'number' && Number.isFinite(rec.durationMs) ? { durationMs: rec.durationMs } : {}),
+    // Paired-dispatch identity (plan `20260811-panel-f4-timeliness` Task 1):
+    // `role` presence marks a PAIRED settle (kept even when '' — an
+    // empty-role identity is still an identity); planId/taskId omit when empty.
+    ...(typeof rec.role === 'string' ? { role: rec.role } : {}),
+    ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
+    ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
   }
 }
 
-/** Map one ledger event to its catalog view (settle rows carry no role/plan identity → empty/null). */
+/** Map one ledger event to its catalog view (settle rows carry the paired identity when present). */
 function eventView(event: AgentFlowEvent): AgentFlowEventView {
   if (event.kind === 'dispatch') {
     return {
@@ -362,10 +570,13 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
     ts: event.ts,
     kind: 'settle',
     agent: event.agent ?? null,
-    role: '',
-    planId: null,
-    taskId: null,
+    role: event.role ?? '',
+    planId: event.planId ?? null,
+    taskId: event.taskId ?? null,
     taskCategory: null,
+    // Presence marker: a PAIRED settle (carries the dispatch identity) — the
+    // client pairs on it (legacy unpaired settles stay unpaired, honest).
+    ...(event.role !== undefined ? { paired: true } : {}),
     ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
     ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
   }
@@ -437,138 +648,201 @@ export function readAgentFlow(harnessDir: string, limit?: number): AgentFlowView
   }
 }
 
-/* ---------------------------------- settle (Tier-2) ---------------------------------- */
-
-/** Probe a value for an agent identity: a string id or an `{ id }` handle. */
-function agentIdOf(value: unknown): string | undefined {
-  const rec = asRecord(value)
-  if (rec === undefined) return undefined
-  if (typeof rec.agent === 'string' && rec.agent.trim() !== '') return rec.agent
-  const agent = asRecord(rec.agent)
-  const id = agent?.id
-  return typeof id === 'string' && id.trim() !== '' ? id : undefined
-}
+/* ---------------------------------- settle (real completion pairing) ---------------------------------- */
 
 /**
- * Probe a value for a settle outcome: explicit `outcome` / `isError` / `error`
- * keys. A REAL tool result (the registry's automatic `tools/post-execute`
- * payload) carries `content`/`value` and must never map — deriving a settle
- * from an ordinary tool result would fabricate settlement on every call; only
- * minimal outcome markers (host-emitted settle payloads) map.
+ * Record a settle carrying a PAIRED dispatch's identity (plan
+ * `20260811-panel-f4-timeliness` Task 1): the harness dir + agent + identity
+ * come from the dispatchRef (the apply-scoped pairing store) — never probed
+ * from a payload. `role` is always written (the dispatchRef always carries
+ * it, possibly ''); planId/taskId omit when absent — the same field
+ * names + semantics as the dispatch event.
  */
-function outcomeOf(value: unknown): SettleOutcome | undefined {
-  const rec = asRecord(value)
-  if (rec === undefined) return undefined
-  const outcome = rec.outcome
-  if (outcome === 'ok' || outcome === 'error' || outcome === 'denied') return outcome
-  if (rec.content !== undefined || rec.value !== undefined) return undefined
-  if (rec.isError === true) return 'error'
-  if (rec.isError === false) return 'ok'
-  if (rec.error !== undefined) return 'error'
-  return undefined
-}
-
-/** Probe a value for a settle duration (finite number). */
-function durationOf(value: unknown): number | undefined {
-  const rec = asRecord(value)
-  if (rec === undefined) return undefined
-  const duration = rec.durationMs
-  return typeof duration === 'number' && Number.isFinite(duration) ? duration : undefined
-}
-
-/** The agent HANDLE of a settle payload arg (for workspace resolution), when present. */
-function agentHandleOf(value: unknown): unknown {
-  return asRecord(value)?.agent
-}
-
-/** One mapped settle from a probed payload (undefined when nothing maps). */
-interface MappedSettle {
-  agent?: string
-  outcome: SettleOutcome
-  durationMs?: number
+function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, durationMs: number | undefined): void {
+  recordSettle({
+    harnessDir: ref.harnessDir,
+    ...(ref.agent !== undefined && ref.agent.trim() !== '' ? { agent: ref.agent } : {}),
+    outcome,
+    ...(durationMs !== undefined && Number.isFinite(durationMs) ? { durationMs } : {}),
+    role: ref.role,
+    ...(ref.planId !== undefined ? { planId: ref.planId } : {}),
+    ...(ref.taskId !== undefined ? { taskId: ref.taskId } : {}),
+  })
 }
 
 /**
- * Shape-probe an unknown settle payload into a recordable event. Two forms
- * are tolerated because the seam's payload is unverified: a single-object
- * payload `{ exec?, result?, agent?, outcome?, durationMs? }` and the
- * `(exec, result)` pair (ToolExecution + ToolExecutionResult-ish). Returns
- * undefined when no outcome can be derived — the caller logs once and records
- * nothing (spec §2.1.2: never fabricate settlement).
- */
-function settleFromArgs(exec: unknown, result: unknown): MappedSettle | undefined {
-  const first = asRecord(exec)
-  const second = asRecord(result)
-  // Single-object payload form: `{ exec?, result?, agent?, outcome?, durationMs? }`
-  // — detected by the NESTED exec/result keys only (a ToolExecution carries an
-  // `agent` field too, so `agent`/`outcome` alone never selects this branch).
-  if (first !== undefined && (first.exec !== undefined || first.result !== undefined)) {
-    const nestedExec = asRecord(first.exec)
-    const nestedResult = asRecord(first.result)
-    const agent = agentIdOf(first) ?? (nestedExec !== undefined ? agentIdOf(nestedExec) : undefined)
-    const outcome = outcomeOf(first) ?? (nestedResult !== undefined ? outcomeOf(nestedResult) : undefined)
-    if (outcome !== undefined) {
-      const durationMs = durationOf(first) ?? (nestedResult !== undefined ? durationOf(nestedResult) : undefined)
-      return { ...(agent !== undefined ? { agent } : {}), outcome, ...(durationMs !== undefined ? { durationMs } : {}) }
-    }
-    // Nested probe found no outcome — fall through to the pair form (the first
-    // arg may actually be the ToolExecution of a `(exec, result)` emission).
-  }
-  // Pair form: `(exec, result)` — ToolExecution + ToolExecutionResult-ish.
-  const agent = agentIdOf(first) ?? agentIdOf(second)
-  const outcome = outcomeOf(second) ?? outcomeOf(first)
-  if (outcome === undefined) return undefined
-  const durationMs = durationOf(second) ?? durationOf(first)
-  return { ...(agent !== undefined ? { agent } : {}), outcome, ...(durationMs !== undefined ? { durationMs } : {}) }
-}
-
-/**
- * Register the defensive `tools/post-execute` settle listener (spec §2.1.2 —
- * Tier 2, best-effort). The real dsh-tools registry ALWAYS dispatches the
- * seam (a composed app's default listeners delegate to accept), so the
- * listener MUST delegate via `next()` on every path — returning without
- * calling `next` bails the waterfall and breaks every tool call. Observational
- * only: an unmapped payload records nothing (warned at most once per process
- * — the seam fires on every tool call, so per-call warn spam is avoided) and
- * a throwing record never propagates. A host emission that carries a real
- * outcome upgrades the ledger to dispatch + settle; the mstar tools' own
- * results carry no outcome and leave the ledger dispatch-only.
+ * The `tools/post-execute` settle pairing (plan `20260811-panel-f4-timeliness`
+ * Task 1 — replaces the old defensive payload probing): the VERIFIED
+ * dsh-tools registry dispatches this seam for every tool call
+ * (`runPostExecute` → `postExecute`, upstream source), so the listener only
+ * decides whether a completion signal exists for the PAIRED dispatch:
+ *
+ * - non-dispatch tool (`exec.name` ∉ Config `dispatchTools`) → nothing;
+ * - dispatch tool whose agent-namespaced call key
+ *   (`${sessionId}\u0000${callId}`, qc1 F-101 fix-wave) is not in the pairing
+ *   store (HMR reset, host-hook dispatch, non-gate path) → nothing (warned
+ *   once per registration — honest degrade, never fabricated settlement);
+ * - `result.isError === true` OR an `error` payload present → settle `error`
+ *   immediately (fabrication guard, qc2 F-001 / qc3 F-003a — the dispatch
+ *   call failed; a result carrying `error` without `isError` never settles ok);
+ * - successful `result.value` shape `{ kind: 'background', taskId }` with a
+ *   valid taskId → store `taskId → dispatchRef` (the real settle arrives via
+ *   `ctx.tasks.onTaskDone`); `{ kind: 'background' }` WITHOUT a valid taskId
+ *   → nothing mappable (no settle, qc3 F-003b);
+ * - `{ kind: 'continuable', subagentId }` → no terminal signal this round →
+ *   no settle (documented limit — the child owns its turns);
+ * - any other successful value (foreground `{ kind: 'foreground', … }`
+ *   included) → settle `ok` (the call completed synchronously).
+ * The consumed `dispatchByCallId` entry is DELETED after the branch resolves
+ * the call (map pruning, qc1 F-102 / qc2 F-002 / qc3 F-002 — each callId
+ * pairs exactly once; the map holds only in-flight calls).
+ *
+ * The waterfall MUST be delegated via `next()` on every path — returning
+ * without calling `next` bails the chain and breaks every tool call. A
+ * throwing record never propagates.
  *
  * Cordis typing note: `ctx.on` only accepts declared event keys and
  * `tools/post-execute` is undeclared — the registration casts through the
  * runtime-accepted event-name string (the event bus dispatches any name).
  * @param ctx - registrant context (fiber disposal unwinds the listener).
- * @param resolver - per-workspace `{HARNESS_DIR}` resolver (the payload's
- * agent workspace — never the process cwd).
+ * @param config - the plugin Config (dispatch-tool matching).
+ * @param pairing - the apply-scoped pairing store (dispatchByCallId read,
+ * dispatchByTaskId written by the background branch).
  */
-export function registerSettleListener(ctx: Context, resolver: HarnessResolver): void {
-  let unmappedWarned = false
+export function registerSettleListener(ctx: Context, config: Config, pairing: AgentFlowPairing): void {
+  const dispatchTools = config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]
+  let unpairedWarned = false
   const listener = (exec: unknown, result: unknown, next?: () => unknown): unknown => {
     try {
-      const mapped = settleFromArgs(exec, result)
-      if (mapped !== undefined) {
-        const harnessDir = resolver.forAgent(agentHandleOf(exec) ?? agentHandleOf(result))
-        if (harnessDir !== null) {
-          recordSettle({ harnessDir, agent: mapped.agent, outcome: mapped.outcome, durationMs: mapped.durationMs })
+      const execRec = asRecord(exec)
+      const name = execRec === undefined ? undefined : execRec.name
+      if (typeof name !== 'string' || !dispatchTools.includes(name)) {
+        // Non-dispatch tool call → no record (the waterfall still delegates below).
+      } else {
+        // Agent-namespaced call key (qc1 F-101 fix-wave): a raw callId is not
+        // globally unique across sessions in one process — the session id in
+        // the key keeps this settle from pairing into ANOTHER session's
+        // dispatchRef. Same derivation as `recordDispatch` registration.
+        const key = callPairingKey(exec)
+        const dispatchRef = key !== undefined ? pairing.dispatchByCallId.get(key) : undefined
+        if (dispatchRef === undefined) {
+          // Dispatch tool with no paired call key (HMR reset / host-hook /
+          // non-gate path) → honest no-settle; warned once per registration.
+          if (!unpairedWarned) {
+            unpairedWarned = true
+            log('warn', `${SETTLE_SEAM} for dispatch tool "${name}" had no paired call key (${key ?? 'none'}) — no settle recorded (pairing window missed / HMR reset; honest degrade)`)
+          }
+        } else {
+          const resultRec = asRecord(result)
+          if (resultRec !== undefined) {
+            // Fabrication guard (qc2 F-001 / qc3 F-003a fix-wave): a failed
+            // result detected by EITHER the canonical `isError` flag OR an
+            // `error` payload settles `error` — a result carrying `error`
+            // without `isError: true` must NEVER settle a fabricated `ok`.
+            if (resultRec.isError === true || resultRec.error !== undefined) {
+              // The dispatch call itself failed → settle error.
+              recordSettleWithRef(dispatchRef, 'error', undefined)
+            } else {
+              const value = asRecord(resultRec.value)
+              if (value !== undefined && value.kind === 'background') {
+                if (typeof value.taskId === 'string' && value.taskId !== '') {
+                  // Background task started — the settle arrives via onTaskDone.
+                  pairing.dispatchByTaskId.set(value.taskId, dispatchRef)
+                }
+                // Background WITHOUT a valid taskId → nothing mappable (qc3
+                // F-003b fix-wave) — never a fabricated ok settle.
+              } else if (value !== undefined && value.kind === 'continuable') {
+                // Continuable child — no terminal signal this round → honest no-settle.
+              } else {
+                // Foreground / any other successful value → the call completed.
+                recordSettleWithRef(dispatchRef, 'ok', undefined)
+              }
+            }
+          }
+          // resultRec === undefined → no result payload at all — nothing mappable.
         }
-      } else if (!unmappedWarned) {
-        unmappedWarned = true
-        log('warn', `${SETTLE_SEAM} payload did not map to a settle event (unverified shape) — nothing recorded`)
+        // The call is CONSUMED — each callId pairs exactly once (map pruning,
+        // qc1 F-102 / qc2 F-002 / qc3 F-002 fix-wave): the dispatchByCallId
+        // entry is deleted after the post-execute branch resolves the call, so
+        // the map holds only in-flight calls (a no-op when the key was never
+        // registered or already consumed).
+        if (key !== undefined) pairing.dispatchByCallId.delete(key)
       }
     } catch (error) {
       log('error', `settle record failed (contained): ${errorMessage(error)}`)
     }
-    // Waterfall dispatch (real registry) hands a `next` — delegate so the
-    // chain continues (returning without calling next bails the waterfall);
-    // a direct host emission (plain `emit`) has no `next` and stays silent.
+    // Waterfall dispatch (real registry) hands a `next` — delegate on EVERY
+    // path (returning without calling next bails the waterfall and breaks
+    // every tool call); a direct host emission (plain `emit`) has no `next`
+    // and stays silent.
     return next === undefined ? undefined : next()
   }
   ctx.on(SETTLE_SEAM as never, listener as never)
-  // The ~300-char settle-unavailable trace is emitted at most ONCE per
-  // logger binding (≈ once per apply — qc1 F-006): repeated registrations
-  // (tests, HMR) must not re-spam the info log with the same note.
+  // The pairing trace is emitted at most ONCE per logger binding (≈ once per
+  // apply — qc1 F-006): repeated registrations (tests, HMR) must not re-spam.
   if (!settleNoteLogged) {
     settleNoteLogged = true
-    log('info', SETTLE_SEAM_UNAVAILABLE_NOTE)
+    log('info', SETTLE_SEAM_PAIRING_NOTE)
+  }
+}
+
+/**
+ * The structural read of the dsh-tasks terminal snapshot the pairing consumes
+ * (plan `20260811-panel-f4-timeliness` Task 1). The `ctx.tasks.onTaskDone`
+ * contract was verified against the upstream `@deepseek-ai/dsh-tasks`
+ * `types.ts`: `TaskDoneListener = (snapshot, owner) => …`, terminal
+ * `snapshot.status` ∈ `completed | killed | failed`, `startedAt`/`finishedAt`
+ * are epoch ms (`finishedAt` absent while running). Structural (no runtime or
+ * type import of the optional dsh-tasks seam — the plugin treats it as an
+ * optional service, wired via `ctx.inject(['tasks'])`).
+ */
+export interface TaskDoneSnapshot {
+  /** The registry-issued task id (`<kind>-N`, e.g. `subagent-1`). */
+  id: string
+  /** Terminal lifecycle status: `completed | killed | failed`. */
+  status: string
+  /** Epoch ms when the task was registered. */
+  startedAt?: number
+  /** Epoch ms when the task settled. */
+  finishedAt?: number
+}
+
+/**
+ * Record the settle for one background-task terminal (plan
+ * `20260811-panel-f4-timeliness` Task 1 — the `ctx.tasks.onTaskDone` path):
+ * the snapshot's task id must hit the pairing store's `dispatchByTaskId`
+ * (populated by the post-execute background branch) — a miss records NOTHING
+ * (honest degrade, never fabricated). Outcome mapping: `completed → ok` /
+ * `killed → denied` / `failed → error`; `durationMs = finishedAt − startedAt`
+ * when both are present. After a SUCCESSFUL settle the consumed
+ * `dispatchByTaskId` entry is deleted (map pruning, qc1 F-102 / qc2 F-002 /
+ * qc3 F-002 — the map holds only in-flight tasks; a contract-violating
+ * non-terminal snapshot records nothing and KEEPS the entry so a later real
+ * terminal can still settle). Fully contained — never throws into the task
+ * registry's listener notification.
+ * @param snapshot - the terminal task snapshot (structural read).
+ * @param pairing - the apply-scoped pairing store.
+ */
+export function recordTaskSettle(snapshot: TaskDoneSnapshot, pairing: AgentFlowPairing): void {
+  try {
+    const dispatchRef = pairing.dispatchByTaskId.get(snapshot.id)
+    if (dispatchRef === undefined) return // unpaired task → no settle
+    // Terminal mapping (spec R1): completed → ok / killed → denied / failed →
+    // error. Anything ELSE (a contract-violating non-terminal snapshot) maps
+    // to NOTHING — never a guessed outcome.
+    let outcome: SettleOutcome
+    if (snapshot.status === 'completed') outcome = 'ok'
+    else if (snapshot.status === 'killed') outcome = 'denied'
+    else if (snapshot.status === 'failed') outcome = 'error'
+    else return
+    const durationMs = typeof snapshot.startedAt === 'number' && typeof snapshot.finishedAt === 'number'
+      ? snapshot.finishedAt - snapshot.startedAt
+      : undefined
+    recordSettleWithRef(dispatchRef, outcome, durationMs)
+    // Consumed — the map holds only in-flight tasks (qc1 F-102 / qc2 F-002 /
+    // qc3 F-002 fix-wave).
+    pairing.dispatchByTaskId.delete(snapshot.id)
+  } catch (error) {
+    log('error', `settle record failed (contained): ${errorMessage(error)}`)
   }
 }

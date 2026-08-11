@@ -39,13 +39,13 @@ export interface EventLogEventEntry {
   agent: string
   /** `${phase}:${stage}` when the role matched an expected stage; '' otherwise. */
   stage: string
-  /** planId#taskId best-effort tag (planId / #taskId fallbacks); '' when neither present. */
+  /** planId#taskId tag (deterministic planId / #taskId fallbacks); '' when neither present. */
   task: string
   /** Event timestamp; 0 when missing (the render shows「—」— never a guessed time). */
   ts: number
   /** Dispatch → dispatched|advisory|denied; settle → ok|error|denied (token-colored). */
   status: FlowEventStatus
-  /** Dispatch with a paired settle (best-effort); settle rows are never "settled". */
+  /** Dispatch with an exact-identity-paired settle (an unpaired settle stays unpaired — honest); settle rows are never "settled". */
   settled: boolean
   /** Settle duration in ms; null when missing/illegal (render shows「—」). */
   durationMs: number | null

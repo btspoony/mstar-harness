@@ -262,8 +262,10 @@ sha1), and the browser handoff materializes the plugin entry (`inject` +
 **Known Limitations** (this iteration): the iteration stepper's Step 1
 (iteration-start) and Step 5 (merge-ready) can never be the **current** step —
 the engine phase gate only evaluates Phase 2→3→4, so they always render idle;
-the agent-entity status derivation is a best-effort heuristic (running =
-dispatch with no paired settle; settle pairing is never faked); no historical
+the agent-entity status derivation pairs a PAIRED settle exactly by its
+dispatch identity (agent, role, planId, taskId — QC-tri N=3 settles land on
+their own cards), and an unpaired dispatch stays running (no paired settle,
+never faked); no historical
 back-scan of a resumed long log (the server re-emits the row at every turn's
 first step, digest-gated); no custom top-level slot (the `conversation.view`
 tab is the only session-level panel seat available without dsh-private layout

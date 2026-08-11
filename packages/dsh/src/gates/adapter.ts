@@ -36,6 +36,7 @@ import {
   resolveDispatchHard,
 } from './dispatch.ts'
 import { recordDispatch, AGENT_FLOW_LOGGER } from './agent-flow.ts'
+import type { AgentFlowPairing } from './agent-flow.ts'
 /** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
 const HOST_LOGGER = 'mstar/host-adapter'
 /** Options for {@link DshHostAdapter}. */
@@ -48,6 +49,15 @@ export interface DshHostAdapterOptions {
   readonly resolver: HarnessResolver
   /** The plugin Config the gates resolve enforcement + anti-recursion binding from. */
   readonly config: Config
+  /**
+   * The apply-scoped agent-flow pairing store (plan
+   * `20260811-panel-f4-timeliness` Task 1 — created by the entry `apply`,
+   * shared with the settle listener): passed to `recordDispatch` so an
+   * exec-bound dispatch registers `callId → dispatchRef` for the later
+   * post-execute settle pairing. Absent (host-adapter tests / direct
+   * construction) → no pairing registration (record-only).
+   */
+  readonly pairing?: AgentFlowPairing
   /**
    * Log sink for `HostAdapter.log`. Defaults to the dsh ctx logger scoped
    * `mstar/host-adapter` (dsh logger naming: `<scope>/<subject>`).
@@ -91,6 +101,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
 
   private readonly resolver: HarnessResolver
   private readonly config: Config
+  private readonly pairing: AgentFlowPairing | undefined
   private readonly logSink: (level: 'info' | 'warn' | 'error', msg: string) => void
 
   constructor(ctx: Context, options: DshHostAdapterOptions) {
@@ -99,6 +110,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     super(ctx, 'dshHostAdapter')
     this.resolver = options.resolver
     this.config = options.config
+    this.pairing = options.pairing
     this.logSink = options.log ?? ((level, msg) => {
       const logger = ctx.logger(HOST_LOGGER)
       if (level === 'warn') logger.warn(msg)
@@ -161,6 +173,11 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // fix-wave): the listener path guards before calling, and the exec-less
     // host-hook path must stay equally silent for non-Assignment text — no
     // phantom records on either surface (spec §2.1.1 "非 Assignment 不记录").
+    // The apply-scoped `pairing` rides along (plan
+    // `20260811-panel-f4-timeliness` Task 1): an exec-bound record registers
+    // `callId → dispatchRef` inside `recordDispatch`, so the later
+    // `tools/post-execute` for the same call can settle with the same
+    // identity; the exec-less host-hook path has no callId → no pairing.
     if (harnessDir !== null && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
       try {
         recordDispatch({
@@ -169,6 +186,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
           prompt,
           violations,
           hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
+          pairing: this.pairing,
         })
       } catch (error) {
         this.ctx.logger(AGENT_FLOW_LOGGER).error(

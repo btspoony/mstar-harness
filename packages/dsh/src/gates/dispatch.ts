@@ -50,8 +50,14 @@ import type { DshHostAdapter } from './adapter.ts'
 /** Logger label for the dispatch gate (dsh logger naming: `<scope>/<subject>`). */
 export const DISPATCH_LOGGER = 'mstar/dispatch-gate'
 
-/** Default delegation tool names the dispatch gate matches (tool-subagent default id). */
-const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
+/**
+ * Default delegation tool names the dispatch gate matches (tool-subagent
+ * default id). Exported SHARED with the agent-flow settle pairing
+ * (`registerSettleListener` matches the same tool set — plan
+ * `20260811-panel-f4-timeliness` Task 1) so the default cannot drift between
+ * the gate and the settle seam.
+ */
+export const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
 
 /** `## Assignment` heading marker (opencode parity — shape guard only). */
 const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
