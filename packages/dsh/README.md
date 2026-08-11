@@ -174,15 +174,30 @@ badges + an `N/5` summary — no 步骤/Step wording, plan `20260811-panel-f2-qu
 active-highlight / inactive dimmed states, and the branch panel: iteration
 base / target / spec integration, rendered only while active), the **tasks zone** (6-column
 kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
-badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the five EXPECTED_ROLE_FLOW stage/phase
-columns — plus the on-demand column for ops-engineer/prompt-engineer and the unexpected track, plan
-20260811-panel-f2-quickfix — rendering the subagent **entity cards** aggregated from actual
-dispatch evidence — agent display name / role chip / task tag
+badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the four EXPECTED_ROLE_FLOW stage/phase
+columns — review-edit-chain → sdd-implement → qc-tri → qa-gate (the
+terminal stage; the former `sdd-task-review` stage is removed, its SDD L2
+reviewer moved off-pipeline) — plus the on-demand column for
+ops-engineer/prompt-engineer and a trailing **general bucket** column,
+plan `20260811-panel-f3-agent-general`; `explore` is removed — no card, no
+column. The subagent **entity cards** aggregate **by role** from actual
+dispatch evidence — the same role across sessions folds into one card ×N,
+and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
+`scout`, anonymous `role === ''`) folds into the single `general` bucket
+entity (`agent` / `task` are record fields, never the card title) — agent
+display name / role chip / task tag
 (`planId#taskId`) / status point / ×N count; running entities carry the
 business glow-pulse highlight, un-evidenced stages render the dashed
-"待执行" pending placeholder with their expected role chips, and the header
+"待执行" pending placeholder with their expected role chips, un-evidenced
+KNOWN_AGENTS members render dashed idle cards (the full 13-role roster is
+never hidden), and the header
 shows the `N executing · M pending` summary; flow arrows: dim expected
-skeleton arrows between consecutive columns, small `→` in-column handoff
+skeleton arrows between consecutive stage columns (3 forward), plus the
+SDD loop back-edge `sdd-implement` ↔ `general` bucket as a visually
+distinct curved DOUBLE-ARROW drawn BELOW the column band — anchored at the
+column bottoms with its true bezier extremum 16px below the lowest column
+bottom, `data-agent-edge-loop="autonomous-execute:sdd-implement->general"`
+— small `→` in-column handoff
 arrows between same-column cards, and the ANIMATED **next** edge — a
 business dash-flow arrow (`@keyframes agent-dash-flow` in the zones css,
 killed by the root `prefers-reduced-motion` rule) from the latest running
@@ -192,7 +207,13 @@ agent-flow event strip migrated into the **事件记录 (Event Log) tab** — a
 non-canvas log page (spec F1.5, plan `20260811-panel-event-log`): two
 partitions (**Agent 流转事件** / **违规记录**), every row an expandable
 native `<details>` carrying the full catalog fields (a missing field renders
-「—」, never a guessed value), muted empty states — the canvas-corner
+「—」, never a guessed value), muted empty states — the two partitions
+render SIDE BY SIDE in a locked-height two-column grid
+(`repeat(2, minmax(0, 1fr))` — the page never scrolls as a whole; each
+partition pins its title and owns an internal `overflow-y` scroll on its
+row list), falling back to two stacked 50/50 locked rows below 1200px (the
+`data-event-log-*` anchors unchanged, plan `20260811-panel-f3-agent-general`)
+— the canvas-corner
 **`AgentEventDock`** is REMOVED with the page (无双份日志, spec §5; the
 fixed footer bar — zone legend + gate summary + violations — died with the
 WorkflowCanvas zone dashboard in the tabs-shell plan; the footer that
@@ -215,8 +236,8 @@ emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
 the web loader executes plugin bundles as classic `<script>`s, where a
 literal `import.meta` is a parse-time SyntaxError (a zustand v4
 `import.meta.env` read is defined away at build; see the iteration
-install-verification guide §6). Bundle size at this plan's wrap-up: **107,850 B
-raw / 20,966 B gzip** (re-measure per the iteration install-verification
+install-verification guide §6). Bundle size at this plan's wrap-up: **127,068 B
+raw / 25,562 B gzip** (re-measure per the iteration install-verification
 guide — the bundle shrank to ~85 KB when react-flow was removed and grew
 back with the agent-execution zone's entity rendering).
 
