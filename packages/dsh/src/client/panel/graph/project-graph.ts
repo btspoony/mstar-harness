@@ -36,10 +36,14 @@
  * `generalPurpose` SDD reviewer, `scout`, unregistered roles, anonymous
  * `role === ''`) folds into the single `general` bucket entity (key
  * `'general'`, role shown `'general'`). The legacy `unexpected` zone is
- * GONE — stage-null non-on-demand entities now project `zone: 'general'`
- * (the render's general column); the event-log `unexpected` badge is a
- * SEPARATE, unchanged semantic (`expected` ⟺ role ∈ EXPECTED_ROLE_FLOW
- * union).
+ * GONE — stage-null non-on-demand entities now project `zone: 'general'`.
+ * Placement (plan 20260811-panel-f4-agent-view Task 1, user F4.2): the
+ * projection only declares the zone — the RENDER places `zone: 'general'`
+ * entities at the BOTTOM INSIDE the `sdd-implement` column bucket (no
+ * general column anymore; Task 2 consumes this). The SDD loop back-edge
+ * (sdd-implement → general) is REMOVED from the projection (Task 1); the
+ * event-log `unexpected` badge is a SEPARATE, unchanged semantic
+ * (`expected` ⟺ role ∈ EXPECTED_ROLE_FLOW union).
  *
  * Degradation (spec §8): `source === null` → legal empty view (the panel
  * never mounts the graph for that case, but the projection stays total);
@@ -208,8 +212,12 @@ export interface AgentEntityView {
   /** Column zone (plan 20260811-panel-f3-agent-general — projection-owned,
    * the render NEVER heuristically guesses): 'flow' (stage columns), 'on-demand'
    * (ops-engineer / prompt-engineer column) or 'general' (the general bucket —
-   * the former 'unexpected' zone). Derived from the role for lit cards, from
-   * the KnownAgent `zone` for idle cards. */
+   * the former 'unexpected' zone). Placement (plan
+   * 20260811-panel-f4-agent-view Task 1, user F4.2): 'general' has NO column
+   * of its own — the render places those entities at the BOTTOM INSIDE the
+   * `sdd-implement` column bucket (the zone VALUE is unchanged, only the
+   * render layout changes — Task 2). Derived from the role for lit cards,
+   * from the KnownAgent `zone` for idle cards. */
   zone: AgentZone
 }
 
@@ -230,11 +238,13 @@ export type AgentEdgeKind = 'expected' | 'actual' | 'next'
 /**
  * One agents-zone arrow (spec §4):
  * - `expected`: skeleton arrow between consecutive EXPECTED_ROLE_FLOW stage
- *   columns (source/target = stage id) — PLUS the SDD loop back-edge
- *   `autonomous-execute:sdd-implement → general` (plan
- *   20260811-panel-f3-agent-general, `loop: true`): the implement ↔
- *   general-bucket review cycle, rendered as a visually distinct curved
- *   double-arrow BELOW the column band (the render bows it down);
+ *   columns (source/target = stage id). The former SDD loop back-edge
+ *   `autonomous-execute:sdd-implement → general` is REMOVED from the
+ *   projection (plan 20260811-panel-f4-agent-view Task 1, user F4.2 — the
+ *   implement ↔ general-bucket review cycle is no longer drawn as an edge;
+ *   the `AgentEdge.loop` field itself was removed with the render branch in
+ *   Task 2; a future "dynamic-lines" iteration may reconnect by real
+ *   evidence);
  * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
  *   (source/target = entity key — role-based since plan
  *   20260811-panel-f3-agent-general);
@@ -248,9 +258,6 @@ export interface AgentEdge {
   target: string
   /** The running entity key the next arrow highlights; null for expected/actual. */
   entityKey: string | null
-  /** SDD loop back-edge flag (plan 20260811-panel-f3-agent-general):
-   * sdd-implement → general bucket. */
-  loop?: boolean
 }
 
 /**
@@ -496,21 +503,18 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
 /* ---------------------------------- agents zone projection (spec §4) ---------------------------------- */
 
 /**
- * Skeleton stage-column arrows (spec §4 + plan 20260811-panel-f3-agent-general):
- * forward edges between consecutive EXPECTED_ROLE_FLOW stages PLUS the SDD
- * loop back-edge `autonomous-execute:sdd-implement → general` (`loop: true`,
- * kind stays 'expected' — the implement ↔ general-bucket review cycle: the
- * render draws it as a visually distinct curved double-arrow BELOW the column
- * band instead of a straight line overlapping a forward edge).
+ * Skeleton stage-column arrows (spec §4 + plan 20260811-panel-f4-agent-view
+ * Task 1): forward edges between consecutive EXPECTED_ROLE_FLOW stages ONLY.
+ * The former SDD loop back-edge `autonomous-execute:sdd-implement → general`
+ * (the implement ↔ general-bucket review cycle drawn as a curved
+ * double-arrow below the column band) is REMOVED (user F4.2: the loop edge
+ * is dropped; the `general` card renders at the bottom INSIDE the
+ * `sdd-implement` column — render placement, Task 2).
  */
 function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
   const edges: AgentEdge[] = []
   for (let i = 0; i + 1 < stages.length; i++) {
     edges.push({ kind: 'expected', source: stages[i]!.id, target: stages[i + 1]!.id, entityKey: null })
-  }
-  const implement = stages.find((s) => s.stage === 'sdd-implement')
-  if (implement !== undefined) {
-    edges.push({ kind: 'expected', source: implement.id, target: GENERAL_BUCKET, entityKey: null, loop: true })
   }
   return edges
 }

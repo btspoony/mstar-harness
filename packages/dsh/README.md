@@ -178,8 +178,11 @@ badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the fo
 columns — review-edit-chain → sdd-implement → qc-tri → qa-gate (the
 terminal stage; the former `sdd-task-review` stage is removed, its SDD L2
 reviewer moved off-pipeline) — plus the on-demand column for
-ops-engineer/prompt-engineer and a trailing **general bucket** column,
-plan `20260811-panel-f3-agent-general`; `explore` is removed — no card, no
+ops-engineer/prompt-engineer; there is NO general column — the single
+`general` bucket card renders at the bottom INSIDE the `sdd-implement`
+column (dashed separator + small in-bucket `general` label, idle
+placeholder preserved; plan `20260811-panel-f4-agent-view` F4.2), plan
+`20260811-panel-f3-agent-general`; `explore` is removed — no card, no
 column. The subagent **entity cards** aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
 and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
@@ -192,12 +195,11 @@ business glow-pulse highlight, un-evidenced stages render the dashed
 KNOWN_AGENTS members render dashed idle cards (the full 13-role roster is
 never hidden), and the header
 shows the `N executing · M pending` summary; flow arrows: dim expected
-skeleton arrows between consecutive stage columns (3 forward), plus the
-SDD loop back-edge `sdd-implement` ↔ `general` bucket as a visually
-distinct curved DOUBLE-ARROW drawn BELOW the column band — anchored at the
-column bottoms with its true bezier extremum 16px below the lowest column
-bottom, `data-agent-edge-loop="autonomous-execute:sdd-implement->general"`
-— small `→` in-column handoff
+skeleton arrows between consecutive stage columns (3 forward only — the
+former SDD loop back-edge `sdd-implement` ↔ `general` curved DOUBLE-ARROW
+below the column band is REMOVED, plan `20260811-panel-f4-agent-view`
+F4.2; evidence-driven "dynamic lines" are a later roadmap iteration) —
+small `→` in-column handoff
 arrows between same-column cards, and the ANIMATED **next** edge — a
 business dash-flow arrow (`@keyframes agent-dash-flow` in the zones css,
 killed by the root `prefers-reduced-motion` rule) from the latest running
