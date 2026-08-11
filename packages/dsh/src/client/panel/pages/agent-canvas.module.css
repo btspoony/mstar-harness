@@ -166,11 +166,15 @@
   fill: var(--dsw-alias-state-business-primary);
 }
 
-/* SDD loop back-edge (plan 20260811-panel-f3-agent-general): the
- * sdd-implement → general bucket reverse edge — business CURVED path with
- * arrowheads at BOTH ends (the ⇄ implement ↔ review cycle), drawn BELOW the
- * column band by the page geometry (bow = max endpoint + 24), visually
- * distinct from the straight dim-dashed forward skeleton edges. */
+/* SDD loop back-edge (plan 20260811-panel-f3-agent-general + fix round
+ * I-1): the sdd-implement → general bucket reverse edge — business CURVED
+ * path with arrowheads at BOTH ends (the ⇄ implement ↔ review cycle), drawn
+ * BELOW the column band by the page geometry: the anchors sit at the COLUMN
+ * BOTTOMS and the arc's TRUE lowest point lands exactly LOOP_BOW_MARGIN
+ * below the lowest column bottom (AgentCanvasPage solves the
+ * quadratic-bezier extremum inverse for the control point — never the old
+ * "max endpoint + 24" control-point guess), visually distinct from the
+ * straight dim-dashed forward skeleton edges. */
 .canvasEdgeLoop {
   fill: none;
   stroke: var(--dsw-alias-state-business-primary);

@@ -33,7 +33,12 @@
  * Edges (spec §4 + plan 20260811-panel-f3-agent-general — AgentEdge model
  * reused): expected skeleton (dim dashed stage→stage, 3 forward edges),
  * the SDD LOOP back-edge sdd-implement → the general bucket (business CURVED
- * double-arrow BELOW the column band — `data-agent-edge-loop`, visually
+ * double-arrow BELOW the column band — fix round I-1: anchored at the COLUMN
+ * BOTTOMS, with the arc's TRUE lowest point exactly `LOOP_BOW_MARGIN` below
+ * the lowest column bottom (the control point is solved inverse from the
+ * quadratic-bezier extremum formula, so the real geometry clears every
+ * column band — never occluded behind the intermediate columns' cards, never
+ * near the forward-edge corridor) — `data-agent-edge-loop`, visually
  * distinct from the straight forward skeleton edges), actual handoffs
  * (business entity→entity — role-keyed), next (business ANIMATED dash-flow
  * stage→stage) — all drawn as SVG over the layout computed by the exported
@@ -133,6 +138,12 @@ const PAD_Y = 24
 const COL_PAD = 12
 /** Column label band height (the cards start below it). */
 const LABEL_H = 18
+
+/** How far below the lowest column bottom the SDD loop arc's TRUE lowest
+ * point must land (fix round I-1): ≥ 16px so the bow is clearly visible,
+ * and < PAD_Y (24) so the extremum always stays inside the canvas (the
+ * canvas bottom is exactly `bandBottom + PAD_Y` — see `layoutAgents`). */
+export const LOOP_BOW_MARGIN = 16
 
 /** The trailing column id for stage-null entities (the general bucket — the
  * former 'unexpected' track, plan 20260811-panel-f3-agent-general). */
@@ -395,28 +406,53 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
               </marker>
             </defs>
             {edges.map((edge, i) => {
-              const line = edgeLine(edge, layout)
-              if (line === null) return null
-              const kind = edge.kind
-              // SDD loop back-edge (plan 20260811-panel-f3-agent-general): a
-              // CURVED path bowing BELOW the column band (bow = the lower
-              // endpoint + 24 — under the columns) with arrowheads at BOTH
-              // ends — visually distinct from the straight forward skeleton
-              // edges above it.
+              // SDD loop back-edge (plan 20260811-panel-f3-agent-general +
+              // fix round I-1): a CURVED double-arrow drawn BELOW the column
+              // band. The anchors sit at the COLUMN BOTTOMS (below the cards —
+              // NOT the mid-height skeleton anchors, which would drag the arc
+              // through the intermediate columns' card stacks), and the
+              // control point is solved INVERSE from the quadratic-bezier
+              // extremum so the arc's TRUE lowest point lands exactly
+              // `LOOP_BOW_MARGIN` below the lowest column bottom of the whole
+              // layout. Total function: a missing anchor column → no path.
               if (edge.loop) {
-                const midX = (line.x1 + line.x2) / 2
-                const bowY = Math.max(line.y1, line.y2) + 24
+                const from = layout.columns.find((c) => c.id === edge.source)
+                const to = layout.columns.find((c) => c.id === edge.target)
+                if (from === undefined || to === undefined) return null
+                const x1 = from.x + from.w
+                const y1 = from.y + from.h
+                const x2 = to.x
+                const y2 = to.y + to.h
+                const midX = (x1 + x2) / 2
+                // The lowest bottom edge across ALL columns — the band the
+                // arc must clear (not just the two anchor columns).
+                const bandBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
+                const target = bandBottom + LOOP_BOW_MARGIN
+                // Inverse extremum: for Q(y1, yc, y2) the dy/dt=0 root is
+                // t* = (y1−yc)/(y1−2yc+y2), whose value is
+                // y(t*) = (y1·y2 − yc²)/(y1−2yc+y2). Solving y(t*) = target
+                // for the below-both-anchors root (yc > max(y1,y2)) gives
+                // yc = target + sqrt((target−y1)·(target−y2)) — the arc's
+                // REAL lowest point lands exactly at `target` (deterministic
+                // per view; always inside the canvas since target <
+                // bandBottom + PAD_Y = canvas bottom). The control point
+                // itself sits DEEPER than the extremum — never assert it as
+                // the bow.
+                const bowY = target + Math.sqrt((target - y1) * (target - y2))
                 return (
                   <path
                     key={`loop-${i}-${edge.source}-${edge.target}`}
                     className={css.canvasEdgeLoop}
-                    d={`M ${line.x1} ${line.y1} Q ${midX} ${bowY} ${line.x2} ${line.y2}`}
+                    d={`M ${x1} ${y1} Q ${midX} ${bowY} ${x2} ${y2}`}
                     markerStart="url(#canvas-arrow-loop)"
                     markerEnd="url(#canvas-arrow-loop)"
                     data-agent-edge-loop={`${edge.source}->${edge.target}`}
                   />
                 )
               }
+              const line = edgeLine(edge, layout)
+              if (line === null) return null
+              const kind = edge.kind
               const className = kind === 'next'
                 ? css.canvasEdgeNext
                 : kind === 'actual'

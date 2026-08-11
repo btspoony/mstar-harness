@@ -107,6 +107,7 @@ import {
   panDragStart,
   panTransform,
   GENERAL_COLUMN,
+  LOOP_BOW_MARGIN,
   ON_DEMAND_COLUMN,
   PAN_ORIGIN,
   type PanState,
@@ -2059,6 +2060,29 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     dispatchEvent({ ts: 10, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
   ])
 
+  /** Parse the rendered loop path `d="M x1 y1 Q midX bowY x2 y2"` (the
+   * element that carries `data-agent-edge-loop`). SSR escapes `>` in the
+   * anchor, so locate the element by `lastIndexOf('<path', anchor)`. */
+  function parseLoopPath(html: string): { el: string; y1: number; yc: number; y2: number } {
+    const anchor = html.indexOf('data-agent-edge-loop')
+    expect(anchor).toBeGreaterThan(-1)
+    const pathStart = html.lastIndexOf('<path', anchor)
+    const pathEnd = html.indexOf('/>', pathStart)
+    const el = html.slice(pathStart, pathEnd)
+    const m = el.match(/d="M ([\d.]+) ([\d.]+) Q ([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)"/)
+    expect(m).not.toBeNull()
+    return { el, y1: Number(m![2]), yc: Number(m![4]), y2: Number(m![6]) }
+  }
+
+  /** The arc's TRUE lowest point over t ∈ [0,1] for the quadratic bezier
+   * Q(y1, yc, y2) (fix round I-1 — assert the REAL geometry, never just the
+   * control point): the dy/dt=0 root t = (y1−yc)/(y1−2yc+y2) clamped to
+   * [0,1], substituted back into y(t) = (1−t)²·y1 + 2t(1−t)·yc + t²·y2. */
+  function bezierLowY(y1: number, yc: number, y2: number): number {
+    const t = Math.min(1, Math.max(0, (y1 - yc) / (y1 - 2 * yc + y2)))
+    return (1 - t) * (1 - t) * y1 + 2 * t * (1 - t) * yc + t * t * y2
+  }
+
   it('data-agent-entity covers the full KNOWN_AGENTS roster — idle (degraded ledger) never hides a known agent', () => {
     const html = agentsHtml(fullSource) // agentFlow null → degraded
     for (const known of KNOWN_AGENTS) {
@@ -2200,32 +2224,50 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(degraded).not.toContain('data-agent-edge-next=')
   })
 
-  it('the SDD loop edge is drawn BELOW the column band (bow = max endpoint + 24), double-arrow', () => {
-    const view = projectGraph(fullSource).agents // degraded → full idle roster
+  it('the SDD loop edge bows below the column band — TRUE bezier extremum ≥ band bottom + margin (fix round I-1)', () => {
+    // High-column state: the degraded all-idle roster (sdd-implement = 3 idle
+    // cards → column bottom 306; general = 1 → 138; the band = 306). The OLD
+    // formula bowY = max(y1,y2)+24 set the CONTROL POINT, not the arc: the
+    // true extremum of Q(165, 189, 81) is ≈169.4 — the arc stayed inside the
+    // card region, occluded behind the qc-tri cards. The fixed geometry
+    // anchors the loop at the COLUMN BOTTOMS and targets the true extremum.
+    const view = projectGraph(fullSource).agents
     const layout = layoutAgents(view)
+    const bandBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
+    const html = agentsHtml(fullSource)
+    const p = parseLoopPath(html)
+    // Anchors sit at the COLUMN BOTTOMS (below the cards) — not the
+    // mid-height skeleton anchors.
     const impl = layout.columns.find((c) => c.id === 'autonomous-execute:sdd-implement')!
     const general = layout.columns.find((c) => c.id === GENERAL_COLUMN)!
-    const y1 = impl.y + impl.h / 2
-    const y2 = general.y + general.h / 2
-    const bowY = Math.max(y1, y2) + 24
-    const html = agentsHtml(fullSource)
-    const anchor = html.indexOf('data-agent-edge-loop')
-    expect(anchor).toBeGreaterThan(-1)
-    // The loop path element: find the `<path` that carries the anchor, then
-    // read its `d="M x1 y1 Q midX bowY x2 y2"` geometry.
-    const pathStart = html.lastIndexOf('<path', anchor)
-    const pathEnd = html.indexOf('/>', pathStart)
-    const pathEl = html.slice(pathStart, pathEnd)
-    const m = pathEl.match(/d="M ([\d.]+) ([\d.]+) Q ([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)"/)
-    expect(m).not.toBeNull()
-    const gotBowY = Number(m![4])
-    // The bow sits below BOTH endpoints (below the column band mid-line).
-    expect(gotBowY).toBe(bowY)
-    expect(gotBowY).toBeGreaterThan(y1)
-    expect(gotBowY).toBeGreaterThan(y2)
+    expect(p.y1).toBe(impl.y + impl.h)
+    expect(p.y2).toBe(general.y + general.h)
+    // The arc's REAL lowest point (quadratic-bezier extremum — the dy/dt=0
+    // root clamped to [0,1] substituted back) clears the WHOLE band by the
+    // margin — NOT merely the control point (which sits deeper).
+    const lowY = bezierLowY(p.y1, p.yc, p.y2)
+    expect(lowY).toBeGreaterThanOrEqual(bandBottom + LOOP_BOW_MARGIN - 1e-6)
+    // The bow genuinely dips below both anchors, and the extremum root lies
+    // inside the arc (the dip is on the drawn path).
+    expect(lowY).toBeGreaterThan(p.y1)
+    expect(lowY).toBeGreaterThan(p.y2)
+    const tStar = (p.y1 - p.yc) / (p.y1 - 2 * p.yc + p.y2)
+    expect(tStar).toBeGreaterThan(0)
+    expect(tStar).toBeLessThan(1)
     // Both arrowheads (marker-start + marker-end → the ⇄ double arrow).
-    expect(pathEl).toContain('marker-start')
-    expect(pathEl).toContain('marker-end')
+    expect(p.el).toContain('marker-start')
+    expect(p.el).toContain('marker-end')
+  })
+
+  it('the loop bow clears the band in an EVIDENCE view too — same true-extremum guarantee (fix round I-1)', () => {
+    // Not only the degraded roster: with lit cards the loop must still bow
+    // below every column bottom — the geometry is view-independent by
+    // construction (the control point is solved from the band + anchors).
+    const view = projectGraph(evidenceSource).agents
+    const layout = layoutAgents(view)
+    const bandBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
+    const p = parseLoopPath(agentsHtml(evidenceSource))
+    expect(bezierLowY(p.y1, p.yc, p.y2)).toBeGreaterThanOrEqual(bandBottom + LOOP_BOW_MARGIN - 1e-6)
   })
 
   it('data-canvas-pan exposes the pan state as a translate transform (origin default)', () => {
