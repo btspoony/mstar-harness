@@ -39,7 +39,7 @@ description: Morning Star (启明星) harness **强制全局入口** —— 信�
 | 角色 | 始终 | 按任务追加（典型） |
 |------|------|-------------------|
 | **全部** | 本 skill | — |
-| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-plan-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-plan-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`。**不**读 `mstar-coding-behavior` |
+| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-plan-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-plan-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）。**不**读 `mstar-coding-behavior` |
 | **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-plan-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-plan-artifacts`；UI：`mstar-design-md`；知识库：`mstar-compound`（PM） |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
 

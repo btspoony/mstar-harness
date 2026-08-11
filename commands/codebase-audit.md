@@ -14,8 +14,9 @@ Run a read-only codebase audit that discovers what is worth doing and writes sel
 
 1. `mstar-harness-core`
 2. `mstar-audit` → SKILL.md（workflow、hard rules、scope variants、handoff 全量在此）
-3. `mstar-plan-conventions` (path symbols — `{PLAN_DIR}`, `{HARNESS_DIR}`)
-4. `mstar-host` → active host reference (invoke capability for parallel subagents)
+3. `mstar-roles` → `references/code-reviewer.md`（执行角色：audit 执行体）
+4. `mstar-plan-conventions` (path symbols — `{PLAN_DIR}`, `{HARNESS_DIR}`)
+5. `mstar-host` → active host reference (invoke capability for parallel subagents)
 
 ## Routing（谁执行 audit）
 
@@ -32,5 +33,7 @@ The audit is **advisory** — it does not enter the per-plan state machine (`Tod
 ## Execute
 
 Execute **`mstar-audit`** end to end（SKILL.md：Recon → Audit → Vet & prioritize → Write plans；effort `quick` / `standard` / `deep`；scope variants `security` / `perf` / `tests` / `branch` / `next` / `roadmap`）。Plans → `{PLAN_DIR}/audit-<YYYY-MM-DD>/NNN-<slug>.md` + `README.md` index，per **`mstar-plan-artifacts/references/plan-quality-bar.md`**。
+
+Executor: PM dispatches `@code-reviewer`；大型仓库 scout 扇出经 Assignment `Delegation: allowed (scout/explore only, read-only)`（Routing 表）。
 
 Pursued plans feed the normal Prepare → Execute flow（fast-track Prepare — intent gate + clarify still apply）or `/iteration-start` as direction candidates。
