@@ -919,7 +919,7 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
   it('degraded (agentFlow null / unreadable) → full idle roster, NO executing/pending claims (0/0)', () => {
     const degraded = projectGraph(fullSource).agents // agentFlow: null
     expect(degraded.degraded).toBe(true)
-    // The known roster is never hidden (spec §6.2): all 15 agents show idle.
+    // The known roster is never hidden (spec §6.2): all 14 KNOWN_AGENTS show idle.
     expect(degraded.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(degraded.entities.every((e) => e.idle && e.status === 'idle' && e.count === 0 && e.ts === 0)).toBe(true)
     expect(degraded.executing).toBe(0)
