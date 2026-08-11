@@ -234,11 +234,13 @@
  * general bucket card sits at the BOTTOM of the `sdd-implement` column — a
  * tiny `general` caption + a dashed rule float in the row gap ABOVE the card
  * (the tag is positioned at the card's top edge), setting the bucket apart
- * from the dev cards above. Token discipline: colors --dsw-alias-*, spacing
- * --mstar-space-*, font --dsw-font-xxxs-11 — zero bare hex. */
+ * from the dev cards above. `top: -12px` aligns exactly with ROW_GAP = 12 —
+ * the tag stays inside the gap, never touching the card above (qc F-003).
+ * Token discipline: colors --dsw-alias-*, spacing --mstar-space-*, font
+ * --dsw-font-xxxs-11 — zero bare hex. */
 .generalBucketTag {
   position: absolute;
-  top: -13px;
+  top: -12px;
   left: 0;
   right: 0;
   display: flex;

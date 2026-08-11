@@ -2384,6 +2384,14 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     // user-fixed literal 'general' (plan f4.2 Task 2 — R5 small label).
     expect(cardRegion(html, 'general')).toContain('data-agent-bucket="general"')
     expect(cardRegion(html, 'general')).toContain('>general<')
+    // Negative anchor pin (qc F-002): NO non-general card carries the
+    // in-bucket tag — it is emitted ONLY for `entity.zone === GENERAL_BUCKET`
+    // (the flow/on-demand roster cards never do), and the 13-card roster
+    // yields exactly ONE bucket tag.
+    expect(cardRegion(html, 'fullstack-dev')).not.toContain('data-agent-bucket')
+    expect(cardRegion(html, 'frontend-dev')).not.toContain('data-agent-bucket')
+    expect(cardRegion(html, 'ops-engineer')).not.toContain('data-agent-bucket')
+    expect(html.match(/data-agent-bucket=/g)).toHaveLength(1)
     // On-demand zone cards report the zone on data-agent-stage (projected,
     // never guessed); general-bucket cards report 'general'.
     expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-stage="on-demand"')

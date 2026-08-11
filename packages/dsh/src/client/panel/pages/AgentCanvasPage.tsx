@@ -143,14 +143,18 @@ const LABEL_H = 18
  * touch it (independent region). */
 export const ON_DEMAND_COLUMN = 'on-demand'
 
-/** The stage column the general bucket sinks into (plan
- * 20260811-panel-f4-agent-view Task 2, user F4.2): `zone: 'general'`
- * entities render at the BOTTOM INSIDE the `sdd-implement` stage column —
- * the dev-implement bucket (fullstack-dev / fullstack-dev-2 / frontend-dev,
- * EXPECTED_ROLE_FLOW, schema.ts). The id is the `${phase}:${stage}` key of
- * that stage; `layoutAgents` falls back to the LAST column when the stage
- * column is absent (total function — never a throw). */
-const GENERAL_SINK_COLUMN = 'autonomous-execute:sdd-implement'
+/** The stage the general bucket sinks into (plan 20260811-panel-f4-agent-view
+ * Task 2, user F4.2): `zone: 'general'` entities render at the BOTTOM INSIDE
+ * the `sdd-implement` stage column — the dev-implement bucket (fullstack-dev
+ * / fullstack-dev-2 / frontend-dev, EXPECTED_ROLE_FLOW, schema.ts). The sink
+ * column id is DERIVED from the projected stages inside `layoutAgents`
+ * (`view.stages.find(...)` → the stage's `${phase}:${stage}` id — single
+ * source of truth, the same key construction the projection's
+ * EXPECTED_ROLE_FLOW map emits), so a phase/stage rename can never silently
+ * orphan the sink; the stage selector below is the ONLY literal. When the
+ * stage column is absent, `layoutAgents` falls back to the LAST column (the
+ * on-demand column is always appended last — total function, never a throw). */
+const GENERAL_SINK_STAGE = 'sdd-implement'
 
 /**
  * Deterministic canvas layout (spec §4 + plan 20260811-panel-f3-agent-general
@@ -173,11 +177,14 @@ const GENERAL_SINK_COLUMN = 'autonomous-execute:sdd-implement'
  */
 export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
   const columnIds = [...view.stages.map((s) => s.id), ON_DEMAND_COLUMN]
-  // The general bucket's sink column: sdd-implement, or the LAST column when
-  // it is somehow absent (total function — never a throw).
-  const generalSink = columnIds.includes(GENERAL_SINK_COLUMN)
-    ? GENERAL_SINK_COLUMN
-    : columnIds[columnIds.length - 1] ?? ON_DEMAND_COLUMN
+  // The general bucket's sink column: DERIVED from the projected stages (the
+  // `${phase}:${stage}` id of the sdd-implement stage — the projection's own
+  // key construction, so the sink can never silently miss a phase/stage
+  // rename). Absent that stage → the LAST column: the on-demand column is
+  // always appended last, so `ON_DEMAND_COLUMN` is exactly that fallback
+  // (total function — never a throw).
+  const generalSink = view.stages.find((s) => s.stage === GENERAL_SINK_STAGE)?.id
+    ?? ON_DEMAND_COLUMN
   const buckets = new Map<string, AgentEntityView[]>()
   const generalTail: AgentEntityView[] = []
   for (const entity of view.entities) {
@@ -296,6 +303,11 @@ function EntityCard({ entity, t, box }: { entity: AgentEntityView; t: TranslateN
       data-agent-running={running ? 'true' : undefined}
       data-agent-stage={entity.stage === null ? entity.zone : `${entity.stage.phase}:${entity.stage.stage}`}
     >
+      {/* The in-bucket label (plan f4.2 Task 2 — R5 small tag): emitted ONLY
+       * for `entity.zone === GENERAL_BUCKET` (negative tests pin it). On the
+       * idle general card the title above already reads 'general' — the tag
+       * intentionally repeats it: the title NAMES the card, the tag LABELS
+       * the bucket (accepted with documentation, qc2 F-005 — no change). */}
       {entity.zone === GENERAL_BUCKET && (
         <span className={css.generalBucketTag} data-agent-bucket="general">
           {t('zone.agents.general')}
