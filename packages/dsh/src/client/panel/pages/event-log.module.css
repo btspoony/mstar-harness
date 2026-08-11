@@ -1,0 +1,242 @@
+/**
+ * EventLogPage styles (spec panel-tabs §5/§6.2, plan 20260811-panel-event-log
+ * Task 2): the NON-canvas log page — two partition frames (Agent 流转事件 /
+ * 违规记录), per-row expandable native `<details>` rows (role/stage/task/ts/
+ * status chip/agent/settled/duration + the unexpected badge), the expanded
+ * detail body (label/value field rows — a missing field renders muted「—」),
+ * and muted empty notes. The row layout + status colors MIGRATED from the
+ * REMOVED AgentEventDock (spec §5 — 无双份日志: the dock file and its
+ * zones.module.css styles are deleted with this plan; the events partition
+ * title reuses the `flow.title` locale key).
+ *
+ * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
+ * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
+ * token flip); spacing rides the --mstar-space-1..6 ramp; fonts ride the
+ * --dsw-font-xxxs-11/xxs-12/xs-13 ramp; hover feedback 150ms (120–150ms
+ * window); radius is the unified 8px/999px pair; motion is killed by the
+ * panel root's global `prefers-reduced-motion` rule (`* { transition/
+ * animation: none !important }`) — this module declares no self-contained
+ * reduced-motion block.
+ */
+
+/* --- page frame: the log page is its own scroll body (spec §5 — a log, not a canvas) --- */
+
+.eventLogPage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-3);
+  padding: var(--mstar-space-3);
+  overflow-y: auto;
+}
+
+/* --- partition frame (same token treatment as the zone frames, spec §7) --- */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+  padding: var(--mstar-space-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Muted empty note (spec §8 — never an orange warn frame). */
+.empty {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxs-12);
+}
+
+/* --- log rows --- */
+
+.rowList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The row summary IS the toggle (native <details> — no-JS, keyboard-accessible). */
+.eventSummary,
+.violationSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+  padding: var(--mstar-space-1) var(--mstar-space-2);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  transition: color 150ms ease;   /* hover 120–150ms window */
+}
+
+.eventSummary:hover,
+.violationSummary:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.eventRole {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.eventStage,
+.eventTarget {
+  overflow-wrap: anywhere;
+}
+
+.eventTime,
+.eventAgent,
+.eventDuration {
+  color: var(--dsw-alias-label-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status chip (migrated from the retired dock — same spec §2.4 key set:
+ * dispatch → business/warn/error; settle → success/error). */
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.statusDispatched {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.statusAdvisory {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.statusDenied {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.statusOk {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.statusError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Total-function default branch (unknown statuses degrade to the base). */
+.statusUnknown {
+  color: var(--dsw-alias-label-caption);
+}
+
+/* The settled ✓ on a paired dispatch row — a completion marker, not a label. */
+.settledMark {
+  color: var(--dsw-alias-state-success-primary);
+  font-weight: 600;
+}
+
+/* Settle rows carry no role — the glyph marks the completion record itself. */
+.settleGlyph {
+  color: var(--dsw-alias-label-secondary);
+  font-weight: 600;
+}
+
+/* Off-pipeline (unexpected) dispatch badge — warn label, never an orange frame. */
+.unexpectedBadge {
+  display: inline-block;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-state-warn-label);
+  border-radius: 999px;
+  color: var(--dsw-alias-state-warn-label);
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* Violation severity chip (the sidebar finding-chip treatment: error /
+ * warn by severity, caption default — spec §5). */
+.severityChip {
+  display: inline-block;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.severityChip[data-event-log-severity='critical'],
+.severityChip[data-event-log-severity='high'] {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.severityChip[data-event-log-severity='medium'] {
+  border-color: var(--dsw-alias-state-warn-label);
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.violationCode {
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
+}
+
+.violationMessage {
+  overflow-wrap: anywhere;
+}
+
+/* --- expanded detail body (full catalog fields — missing → muted「—」) --- */
+
+.detailBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin-top: var(--mstar-space-1);
+  padding: var(--mstar-space-2) var(--mstar-space-3);
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.detailField {
+  display: flex;
+  align-items: baseline;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+.detailLabel {
+  flex: none;
+  width: 9em;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.detailValue {
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
+  overflow-wrap: anywhere;
+}
+
+/* Missing field → muted「—」(spec §5 — never a guessed value). */
+.detailValueMissing {
+  color: var(--dsw-alias-label-caption);
+}

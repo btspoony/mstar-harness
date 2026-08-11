@@ -129,32 +129,15 @@
 
 /* Content region: the per-tab page mount (`data-mstar-graph`, spec §6.1).
  * The tasks tab's IterationTaskPage fills it and keeps its own scroll body
- * (`data-mstar-tasks-scroll`, Task 2) — content itself never scrolls (v3
- * invariant preserved); the placeholder pages (agents/events) are static. */
+ * (`data-mstar-tasks-scroll`, Task 2); the events tab's EventLogPage is its
+ * own scroll body (`pages/event-log.module.css`) — content itself never
+ * scrolls (v3 invariant preserved). */
 .content {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-/* Tab-page mount (placeholder pages, spec §6.2): fills the content region. */
-.page {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  align-items: flex-start;
-  padding: var(--mstar-space-3);
-}
-
-/* Muted placeholder note (spec §4/§5/§8 — 后续 plan 交付): caption color,
- * never an orange warn frame; the harness probes this class for the muted
- * placeholder rendering (`data-mstar-page-note`). */
-.pageNote {
-  margin: 0;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxs-12);
 }
 
 /* --- IterationTaskPage (spec panel-tabs §3, plan 20260811-panel-tabs-shell

@@ -41,7 +41,7 @@ export interface EventLogEventEntry {
   stage: string
   /** planId#taskId best-effort tag (planId / #taskId fallbacks); '' when neither present. */
   task: string
-  /** Event timestamp; 0 when missing (render shows '' — never a guessed time). */
+  /** Event timestamp; 0 when missing (the render shows「—」— never a guessed time). */
   ts: number
   /** Dispatch → dispatched|advisory|denied; settle → ok|error|denied (token-colored). */
   status: FlowEventStatus
