@@ -765,20 +765,20 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
  * ------------------------------------------------------------------------- */
 
 describe('projectGraph — agents zone edges (spec §4)', () => {
-  it('expected: 3 forward skeleton arrows across the 4 stages + the SDD loop back-edge to the general bucket (plan f3)', () => {
+  it('expected: 3 forward skeleton arrows across the 4 stages — NO loop back-edge (plan f4.2 Task 1)', () => {
     const agents = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev' })])).agents
     const expected = agents.edges.filter((e) => e.kind === 'expected')
     // 3 forward edges across the consecutive stage columns.
-    expect(expected.filter((e) => !e.loop).map((e) => [e.source, e.target])).toEqual([
+    expect(expected.map((e) => [e.source, e.target])).toEqual([
       ['iteration-start:review-edit-chain', 'autonomous-execute:sdd-implement'],
       ['autonomous-execute:sdd-implement', 'autonomous-execute:qc-tri'],
       ['autonomous-execute:qc-tri', 'autonomous-execute:qa-gate'],
     ])
-    // The SDD loop back-edge: sdd-implement → the general bucket, kind
-    // 'expected' with the loop flag (the implement ↔ review cycle).
-    expect(expected.filter((e) => e.loop).map((e) => [e.source, e.target, e.kind])).toEqual([
-      ['autonomous-execute:sdd-implement', 'general', 'expected'],
-    ])
+    // The SDD loop back-edge (sdd-implement → general) is GONE (plan
+    // 20260811-panel-f4-agent-view Task 1, user F4.2): no edge targets the
+    // general bucket, no `loop` flag is projected.
+    expect(expected.some((e) => e.loop)).toBe(false)
+    expect(agents.edges.every((e) => e.target !== 'general' && e.source !== 'general')).toBe(true)
   })
 
   it('actual: same-plan ts-ascending adjacent dispatch entity pairs — role-keyed (plan f3)', () => {
@@ -945,7 +945,7 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     expect(degraded.entities.every((e) => e.idle && e.status === 'idle' && e.count === 0 && e.ts === 0)).toBe(true)
     expect(degraded.executing).toBe(0)
     expect(degraded.pending).toBe(0)
-    expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(4)
+    expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(3) // 3 forward skeleton only — the SDD loop back-edge is gone (plan f4.2 Task 1)
     // No evidence claims on a degraded skeleton either (render shows no
     // pending placeholders — spec §8).
     expect(degraded.stages.every((s) => !s.evidenced)).toBe(true)

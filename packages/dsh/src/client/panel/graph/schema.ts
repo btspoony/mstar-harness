@@ -85,10 +85,18 @@ export const TRANSITION_TO_PHASE: Readonly<Record<string, PhaseId>> = {
  * reviewer (the former `sdd-task-review` stage / `generalPurpose` role —
  * mstar-sdd L2 reviewer) moved OFF the pipeline into the single `general`
  * bucket (plan 20260811-panel-f3-agent-general — user decision), which also
- * collects every unmatched / anonymous dispatch (role ''). The SDD
- * implement ↔ review loop (mstar-sdd: implement → task review → rework →
- * re-implement) is a skeleton EDGE (sdd-implement → general back-edge), not
- * a stage.
+ * collects every unmatched / anonymous dispatch (role '').
+ *
+ * General-bucket PLACEMENT (plan 20260811-panel-f4-agent-view Task 1, user
+ * F4.2): the `general` bucket no longer has its OWN canvas column — the
+ * projection still emits `zone: 'general'` entities (semantics unchanged,
+ * placement is a RENDER-layer decision), and the render places them at the
+ * BOTTOM INSIDE the `sdd-implement` column bucket. The former SDD
+ * implement ↔ review skeleton EDGE (sdd-implement → general back-edge, the
+ * `loop: true` arrow) is REMOVED from the projection (plan
+ * 20260811-panel-f4-agent-view Task 1); a future "dynamic-lines" iteration
+ * (per real dispatch/settle evidence — compass Roadmap Position) may
+ * reintroduce evidence-driven connections.
  *
  * Matching rules (spec §2.3 — implemented by `projectGraph`'s flow
  * projection): `expected` ⟺ `event.role` ∈ the union of ALL `roles` below
@@ -145,19 +153,44 @@ export const EXPECTED_ROLE_FLOW: readonly ExpectedRoleStage[] = [
  * their own canvas column) or `general` (the general bucket = the SDD
  * per-task reviewer — the former `generalPurpose` role — plus ANY
  * unmatched / anonymous dispatch (role '') in the projection).
+ *
+ * General-bucket placement (plan 20260811-panel-f4-agent-view Task 1, user
+ * F4.2): the `general` bucket has NO column of its own — the render places
+ * `zone: 'general'` entities at the BOTTOM INSIDE the `sdd-implement`
+ * column bucket (dev cards above, general card below; see the schema note
+ * above and the render layout in AgentCanvasPage). The zone VALUE
+ * ('general') is unchanged — placement is a render-layer decision, the
+ * projection keeps declaring the zone.
  */
 /** The general-bucket id (plan 20260811-panel-f3-agent-general): the single
  * bucket every off-roster / anonymous dispatch folds into — the SDD per-task
  * reviewer (the former `generalPurpose` role) plus ANY unmatched / anonymous
  * dispatch (role '') in the projection. Single source for the value:
- * `entityKeyOf`'s fallback key, the `expectedEdges` SDD-loop target,
- * `roleZone` / `idleZone` defaults, the render's `GENERAL_COLUMN` and the
+ * `entityKeyOf`'s fallback key, `roleZone` / `idleZone` defaults and the
  * KNOWN_AGENTS roster id ALL derive from it — renaming the bucket changes
- * exactly one constant. The `'general'` literal in the `AgentZone` /
- * `KnownAgent.zone` unions below is the type-level binding (a union member
- * cannot reference a value) — keep them in sync with this constant. */
+ * exactly one constant.
+ *
+ * Placement (plan 20260811-panel-f4-agent-view Task 1, user F4.2): the
+ * bucket no longer has its own canvas column — the render places
+ * `zone: 'general'` entities at the BOTTOM INSIDE the `sdd-implement`
+ * column bucket (Task 2 removes the render's `GENERAL_COLUMN`; the former
+ * SDD-loop edge target is gone — `expectedEdges` no longer emits the
+ * sdd-implement → general back-edge, Task 1). The `'general'` literal in
+ * the `AgentZone` / `KnownAgent.zone` unions below is the type-level
+ * binding (a union member cannot reference a value) — keep them in sync
+ * with this constant. */
 export const GENERAL_BUCKET = 'general' as const
 
+/**
+ * Agent-entity column zone (plan 20260811-panel-f3-agent-general + plan
+ * 20260811-panel-f4-agent-view Task 1): `'flow'` (stage columns), `'on-demand'`
+ * (ops-engineer / prompt-engineer — their own on-demand column, unchanged) or
+ * `'general'` (the general bucket). Placement semantics (F4.2, user
+ * decision): the `general` zone has NO column of its own — the render places
+ * `zone: 'general'` entities at the BOTTOM INSIDE the `sdd-implement` column
+ * bucket. The zone VALUE is projection-owned and unchanged; only the render
+ * layout (Task 2) changes.
+ */
 export type AgentZone = 'flow' | 'on-demand' | 'general'
 
 export interface KnownAgent {

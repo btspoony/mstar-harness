@@ -107,7 +107,6 @@ import {
   panDragStart,
   panTransform,
   GENERAL_COLUMN,
-  LOOP_BOW_MARGIN,
   ON_DEMAND_COLUMN,
   PAN_ORIGIN,
   solveLoopBow,
@@ -2086,20 +2085,6 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     dispatchEvent({ ts: 10, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
   ])
 
-  /** Parse the rendered loop path `d="M x1 y1 Q midX bowY x2 y2"` (the
-   * element that carries `data-agent-edge-loop`). SSR escapes `>` in the
-   * anchor, so locate the element by `lastIndexOf('<path', anchor)`. */
-  function parseLoopPath(html: string): { el: string; y1: number; yc: number; y2: number } {
-    const anchor = html.indexOf('data-agent-edge-loop')
-    expect(anchor).toBeGreaterThan(-1)
-    const pathStart = html.lastIndexOf('<path', anchor)
-    const pathEnd = html.indexOf('/>', pathStart)
-    const el = html.slice(pathStart, pathEnd)
-    const m = el.match(/d="M ([\d.]+) ([\d.]+) Q ([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)"/)
-    expect(m).not.toBeNull()
-    return { el, y1: Number(m![2]), yc: Number(m![4]), y2: Number(m![6]) }
-  }
-
   /** The arc's TRUE lowest point over t ∈ [0,1] for the quadratic bezier
    * Q(y1, yc, y2) (fix round I-1 — assert the REAL geometry, never just the
    * control point): the dy/dt=0 root t = (y1−yc)/(y1−2yc+y2) clamped to
@@ -2227,13 +2212,14 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(zhHtml).toContain('图例')
   })
 
-  it('draws the AgentEdge collaboration lines: expected skeleton / SDD loop back-edge to general / actual handoffs / the animated next edge', () => {
+  it('draws the AgentEdge collaboration lines: expected skeleton / actual handoffs / the animated next edge — NO SDD loop edge (plan f4.2 Task 1)', () => {
     const html = agentsHtml(evidenceSource)
-    // expected: 3 forward skeleton arrows (4 stages) — plan f3.
+    // expected: 3 forward skeleton arrows (4 stages) — plan f3, unchanged.
     expect(html.match(/data-agent-edge-expected="/g)).toHaveLength(3)
-    // SDD loop back-edge: sdd-implement → the general bucket, its OWN anchor
-    // (curved double-arrow — visually distinct from the forward edge).
-    expect(html).toContain('data-agent-edge-loop="autonomous-execute:sdd-implement-&gt;general"')
+    // The SDD loop back-edge (sdd-implement → general) is GONE — the
+    // projection no longer emits it (plan 20260811-panel-f4-agent-view
+    // Task 1, user F4.2), so no `data-agent-edge-loop` anchor renders.
+    expect(html).not.toContain('data-agent-edge-loop')
     // actual: same-plan ts-adjacent dispatch pairs, ROLE-keyed. NOTE: React
     // SSR escapes `>` in attribute values, so `a->b` renders as `a-&gt;b`.
     expect(html).toContain('data-agent-edge-actual="fullstack-dev-&gt;general"')
@@ -2241,59 +2227,23 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     // next: the latest running entity (qc-specialist, qc-tri) → the next stage column.
     expect(html).toContain('data-agent-edge-next="autonomous-execute:qc-tri-&gt;autonomous-execute:qa-gate"')
     expect(html).toContain('data-agent-edge-next-from="qc-specialist"')
-    // Degraded ledger still draws the expected skeleton (3 forward + 1 loop
-    // back-edge) — no fake claims.
+    // Degraded ledger still draws the expected skeleton (3 forward only, no
+    // loop back-edge) — no fake claims.
     const degraded = agentsHtml(fullSource)
     expect(degraded.match(/data-agent-edge-expected="/g)).toHaveLength(3)
-    expect(degraded.match(/data-agent-edge-loop="/g)).toHaveLength(1)
+    expect(degraded).not.toContain('data-agent-edge-loop')
     expect(degraded).not.toContain('data-agent-edge-actual=')
     expect(degraded).not.toContain('data-agent-edge-next=')
   })
 
-  it('the SDD loop edge bows below the column band — TRUE bezier extremum ≥ band bottom + margin (fix round I-1)', () => {
-    // High-column state: the degraded all-idle roster (sdd-implement = 3 idle
-    // cards → column bottom 306; general = 1 → 138; the band = 306). The OLD
-    // formula bowY = max(y1,y2)+24 set the CONTROL POINT, not the arc: the
-    // true extremum of Q(165, 189, 81) is ≈169.4 — the arc stayed inside the
-    // card region, occluded behind the qc-tri cards. The fixed geometry
-    // anchors the loop at the COLUMN BOTTOMS and targets the true extremum.
-    const view = projectGraph(fullSource).agents
-    const layout = layoutAgents(view)
-    const bandBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
-    const html = agentsHtml(fullSource)
-    const p = parseLoopPath(html)
-    // Anchors sit at the COLUMN BOTTOMS (below the cards) — not the
-    // mid-height skeleton anchors.
-    const impl = layout.columns.find((c) => c.id === 'autonomous-execute:sdd-implement')!
-    const general = layout.columns.find((c) => c.id === GENERAL_COLUMN)!
-    expect(p.y1).toBe(impl.y + impl.h)
-    expect(p.y2).toBe(general.y + general.h)
-    // The arc's REAL lowest point (quadratic-bezier extremum — the dy/dt=0
-    // root clamped to [0,1] substituted back) clears the WHOLE band by the
-    // margin — NOT merely the control point (which sits deeper).
-    const lowY = bezierLowY(p.y1, p.yc, p.y2)
-    expect(lowY).toBeGreaterThanOrEqual(bandBottom + LOOP_BOW_MARGIN - 1e-6)
-    // The bow genuinely dips below both anchors, and the extremum root lies
-    // inside the arc (the dip is on the drawn path).
-    expect(lowY).toBeGreaterThan(p.y1)
-    expect(lowY).toBeGreaterThan(p.y2)
-    const tStar = (p.y1 - p.yc) / (p.y1 - 2 * p.yc + p.y2)
-    expect(tStar).toBeGreaterThan(0)
-    expect(tStar).toBeLessThan(1)
-    // Both arrowheads (marker-start + marker-end → the ⇄ double arrow).
-    expect(p.el).toContain('marker-start')
-    expect(p.el).toContain('marker-end')
-  })
-
-  it('the loop bow clears the band in an EVIDENCE view too — same true-extremum guarantee (fix round I-1)', () => {
-    // Not only the degraded roster: with lit cards the loop must still bow
-    // below every column bottom — the geometry is view-independent by
-    // construction (the control point is solved from the band + anchors).
-    const view = projectGraph(evidenceSource).agents
-    const layout = layoutAgents(view)
-    const bandBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
-    const p = parseLoopPath(agentsHtml(evidenceSource))
-    expect(bezierLowY(p.y1, p.yc, p.y2)).toBeGreaterThanOrEqual(bandBottom + LOOP_BOW_MARGIN - 1e-6)
+  it('the SDD loop edge is NOT rendered in any view — the projection no longer emits it (plan f4.2 Task 1, AC-3 "no data-agent-edge-loop anchor")', () => {
+    // Both the degraded (all-idle) roster and an evidence view render NO loop
+    // path: the render's `edge.loop` branch is now unreachable because the
+    // projection's `expectedEdges` emits only the 3 forward skeleton edges
+    // (the render branch itself is removed in Task 2).
+    expect(agentsHtml(fullSource)).not.toContain('data-agent-edge-loop')
+    expect(agentsHtml(evidenceSource)).not.toContain('data-agent-edge-loop')
+    expect(agentsHtml(flowSource([dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]))).not.toContain('data-agent-edge-loop')
   })
 
   it('solveLoopBow (pure — QC fix S-2): known value matches the QC-verified degraded geometry (y1=306, y2=138, target=322)', () => {
