@@ -8,15 +8,18 @@
  * T2 (spec panel-zones §2, plan 20260810-panel-canvas-zones): the react-flow
  * graph is replaced by the zone dashboard — the `graph.phase.*` /
  * `graph.state.*` / react-flow `graph.legend.*` key families are gone with
- * the graph library; the footer keeps the `graph.pass/fail/violations`
- * gate-summary keys, and the new `zone.*` family covers the three zone
- * titles/placeholders + the zone-semantic legend. The `flow.*` key family
- * (agent-flow event dock) is unchanged.
+ * the graph library; only `graph.pass` / `graph.fail` remain (the
+ * gate-verdict labels reused by the tabs-shell IterationTaskPage head), and
+ * the new `zone.*` family covers the three zone titles/placeholders + the
+ * zone-semantic legend. The `flow.*` key family (agent-flow event dock) is
+ * unchanged. The old footer's violations copy (`graph.violations` /
+ * `graph.no-violations`) is carried by the event-log plan — it adds its own
+ * dedicated keys when that page lands, NOT reserved in this union.
  *
  * T3 (spec panel-zones §3): the iteration zone is filled in — `zone.phase.*`
  * (the 5 PHASE_IDS names, the `graph.phase.*` wording moved into the zone
- * namespace), `zone.iteration.*` (active/inactive notes, Step N/5 label,
- * Step N badge, step-state chips) and `zone.branches.*` (the branch panel
+ * namespace), `zone.iteration.*` (Step N/5 label, Step N badge, step-state
+ * chips) and `zone.branches.*` (the branch panel
  * moved from the sidebar). `zone.iteration.placeholder` is gone with the
  * placeholder.
  *
@@ -41,6 +44,19 @@
  * family is added: a status TEXT on the cards would be dead strings, the
  * spec §4 card shows a status point, and reusing `flow.*` would conflate
  * event status words (dispatched/settled ok) with entity status words).
+ *
+ * T1 (spec panel-tabs §2/§6.1, plan 20260811-panel-tabs-shell): the panel is
+ * re-laid-out as Tabs + Content — `tab.*` covers the 3 fixed MenuTab labels
+ * (任务迭代 / 代理执行 / 事件记录) and `page.*.placeholder` the muted
+ * placeholder copy for the agents/events tabs (the real pages land with the
+ * agent-canvas / event-log plans; Task 3 refines the placeholders).
+ *
+ * T2 (spec panel-tabs §3, plan 20260811-panel-tabs-shell Task 2): the
+ * IterationTaskPage head copy — `page.iteration.*` (the collapsed one-line
+ * "not started" note + the expand/collapse toggle hints). The head reuses the
+ * existing `zone.iteration.*` (step badge / Step n/5 label / step-state
+ * chips), `zone.phase.*` (the 5 PHASE_IDS names) and `zone.branches.*`
+ * (branch panel) keys; the kanban reuses `zone.tasks.*` / `zone.state.*`.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -51,6 +67,14 @@ export const NS = 'mstar-panel'
 /** Panel dictionary keys (union of every translatable string the panel renders). */
 export type PanelKey =
   | 'view.mstar-workflow'
+  | 'tab.tasks'
+  | 'tab.agents'
+  | 'tab.events'
+  | 'page.agents.placeholder'
+  | 'page.events.placeholder'
+  | 'page.iteration.not-started'
+  | 'page.iteration.expand'
+  | 'page.iteration.collapse'
   | 'empty.waiting'
   | 'empty.no-harness'
   | 'watermark.version'
@@ -59,24 +83,13 @@ export type PanelKey =
   | 'panel.unknown'
   | 'graph.pass'
   | 'graph.fail'
-  | 'graph.violations'
-  | 'graph.no-violations'
   | 'zone.legend.title'
-  | 'zone.legend.iteration'
-  | 'zone.legend.current'
-  | 'zone.legend.disabled'
-  | 'zone.legend.tasks'
-  | 'zone.legend.verdict-pass'
-  | 'zone.legend.verdict-fail'
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
   | 'zone.legend.flow-unexpected'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
   | 'zone.legend.next'
-  | 'zone.iteration.title'
-  | 'zone.iteration.active'
-  | 'zone.iteration.inactive'
   | 'zone.iteration.step-label'
   | 'zone.iteration.step-badge'
   | 'zone.iteration.step.current'
@@ -144,6 +157,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** zh dictionary (repo bilingual convention; zh is the stub fallback locale). */
 export const zh: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar 工作流',
+  'tab.tasks': '任务迭代',
+  'tab.agents': '代理执行',
+  'tab.events': '事件记录',
+  'page.agents.placeholder': '代理执行页由后续 plan 交付（agent canvas）',
+  'page.events.placeholder': '事件记录页由后续 plan 交付（event log）',
+  'page.iteration.not-started': '迭代未启动',
+  'page.iteration.expand': '展开',
+  'page.iteration.collapse': '收拢',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
   'watermark.version': 'mstar {version}',
@@ -152,24 +173,13 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'panel.unknown': '未知',
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
-  'graph.violations': '违规 ({count})',
-  'graph.no-violations': '无违规',
   'zone.legend.title': '图例',
-  'zone.legend.iteration': '迭代区',
-  'zone.legend.current': '当前阶段',
-  'zone.legend.disabled': '迭代未激活',
-  'zone.legend.tasks': '任务 kanban',
-  'zone.legend.verdict-pass': 'gate PASS',
-  'zone.legend.verdict-fail': 'gate FAIL',
   'zone.legend.flow-expected': '预期 stage（空心）',
   'zone.legend.flow-actual': '实际派发（实心）',
   'zone.legend.flow-unexpected': '未匹配角色（描边）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
   'zone.legend.next': 'next 流转边（动画）',
-  'zone.iteration.title': '迭代',
-  'zone.iteration.active': '正在激活的迭代',
-  'zone.iteration.inactive': '迭代未激活',
   'zone.iteration.step-label': '步骤 {n}/{total}',
   'zone.iteration.step-badge': '步骤 {n}',
   'zone.iteration.step.current': '当前',
@@ -232,6 +242,14 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
 /** en dictionary (default locale). */
 export const en: LocaleDictOf<'mstar-panel'> = {
   'view.mstar-workflow': 'MStar Workflow',
+  'tab.tasks': 'Task Iteration',
+  'tab.agents': 'Agent Run',
+  'tab.events': 'Event Log',
+  'page.agents.placeholder': 'Agent run page lands in a later plan (agent canvas)',
+  'page.events.placeholder': 'Event log page lands in a later plan',
+  'page.iteration.not-started': 'iteration not started',
+  'page.iteration.expand': 'expand',
+  'page.iteration.collapse': 'collapse',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
   'watermark.version': 'mstar {version}',
@@ -240,24 +258,13 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'panel.unknown': 'unknown',
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
-  'graph.violations': 'violations ({count})',
-  'graph.no-violations': 'no violations',
   'zone.legend.title': 'Legend',
-  'zone.legend.iteration': 'iteration zone',
-  'zone.legend.current': 'current step',
-  'zone.legend.disabled': 'disabled iteration',
-  'zone.legend.tasks': 'task kanban',
-  'zone.legend.verdict-pass': 'gate PASS',
-  'zone.legend.verdict-fail': 'gate FAIL',
   'zone.legend.flow-expected': 'expected stage (hollow)',
   'zone.legend.flow-actual': 'actual dispatch (filled)',
   'zone.legend.flow-unexpected': 'unexpected role (outlined)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
   'zone.legend.next': 'next flow edge (animated)',
-  'zone.iteration.title': 'Iteration',
-  'zone.iteration.active': 'active iteration',
-  'zone.iteration.inactive': 'iteration inactive',
   'zone.iteration.step-label': 'Step {n}/{total}',
   'zone.iteration.step-badge': 'Step {n}',
   'zone.iteration.step.current': 'current',

@@ -1,12 +1,14 @@
 /* Morning Star workflow panel — inherits dsh web's visual language
  * (dsw design tokens: surfaces, borders, labels, status states). Layout
- * contract (spec panel-zones §2, v3): root grid "main sidebar" fills the Tab
+ * contract (spec panel-tabs §2, v3): root grid "main sidebar" fills the Tab
  * (height 100%, overflow hidden — the page never scrolls); a fixed 300px
- * sidebar with its own internal scroll (<860px it stacks under main); the
- * sidebar bottom holds a fixed meta dock (version + harness dir) that does
- * NOT scroll with the digest. The main column hosts the WorkflowCanvas (the
- * canvas's own zone scroll container is the ONLY scroll body — spec §2) plus
- * the fixed freshness footer; `.main` itself never scrolls.
+ * resident sidebar with its own internal scroll (<860px it stacks under
+ * main); the sidebar bottom holds a fixed meta dock (version + harness dir)
+ * that does NOT scroll with the digest. The main column hosts the fixed
+ * header nav (TabNav — 3 MenuTabs) + the content region (switches per tab;
+ * for the tasks tab the IterationTaskPage's own scroll area
+ * `data-mstar-tasks-scroll` is the ONLY scroll body — spec §3) plus the
+ * fixed freshness footer; `.main` itself never scrolls.
  *
  * Hard metrics (spec §1.2): spacing comes ONLY from the --mstar-space-1..6
  * ramp defined at the root (a panel-scope ramp — not invented --dsw-* names);
@@ -76,7 +78,8 @@
   overflow: hidden;
 }
 
-/* --- main: WorkflowCanvas column + fixed freshness footer (spec panel-zones §2, v3) --- */
+/* --- main: TabNav header + per-tab content + fixed freshness footer
+ * (spec panel-tabs §2, v3) --- */
 
 .main {
   grid-area: main;
@@ -85,7 +88,363 @@
   min-width: 0;
   min-height: 0;
   padding: var(--mstar-space-4);
-  overflow: hidden;                               /* main never scrolls — the canvas zone container is the ONLY scroll body */
+  overflow: hidden;                               /* main never scrolls — the per-tab page owns its scroll body */
+}
+
+/* --- header nav: 3 fixed MenuTabs + content region (spec panel-tabs §2) --- */
+
+.tabNav {
+  display: flex;
+  flex: none;
+  gap: var(--mstar-space-1);
+  padding: 0;
+  margin: 0 0 var(--mstar-space-2);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* MenuTab (F1.2): borderless button, secondary label, active underline via
+ * box-shadow (the T4 audit treats `border-*` shorthand colors as color
+ * declarations — `transparent` is not a token, so the underline slot rides
+ * box-shadow instead). */
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: var(--mstar-space-2) var(--mstar-space-3);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  cursor: pointer;
+  box-shadow: inset 0 -2px 0 0 transparent;
+  transition: color 150ms ease, box-shadow 150ms ease;   /* hover 120–150ms + state switch ≤200ms */
+}
+
+.tab:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.tabActive {
+  color: var(--dsw-alias-state-business-primary);
+  box-shadow: inset 0 -2px 0 0 var(--dsw-alias-state-business-primary);
+}
+
+/* Content region: the per-tab page mount (`data-mstar-graph`, spec §6.1).
+ * The tasks tab's IterationTaskPage fills it and keeps its own scroll body
+ * (`data-mstar-tasks-scroll`, Task 2) — content itself never scrolls (v3
+ * invariant preserved); the placeholder pages (agents/events) are static. */
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Tab-page mount (placeholder pages, spec §6.2): fills the content region. */
+.page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  padding: var(--mstar-space-3);
+}
+
+/* Muted placeholder note (spec §4/§5/§8 — 后续 plan 交付): caption color,
+ * never an orange warn frame; the harness probes this class for the muted
+ * placeholder rendering (`data-mstar-page-note`). */
+.pageNote {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxs-12);
+}
+
+/* --- IterationTaskPage (spec panel-tabs §3, plan 20260811-panel-tabs-shell
+ * Task 2): Content Head (collapsible iteration summary + horizontal steps) +
+ * full-width kanban. The page fills the content region as a flex column; the
+ * head is flex:none (stays fixed) and the tasks area is the page's
+ * INDEPENDENT scroll body — the kanban spreads full-width and is never
+ * compressed into a small box by a canvas height. Colors are --dsw-* tokens
+ * only; spacing rides the --mstar-space-* ramp; motion ≤200ms (killed by the
+ * root reduced-motion rule). --- */
+
+.iterationPage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-3);
+}
+
+/* Head frame: inactive keeps the neutral frame (the muted summary note
+ * carries the "not started" semantics — never an orange warn box); the
+ * active frame gets the business ring. */
+.iterationHead {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  padding: var(--mstar-space-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.iterationHead:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.iterationHead[data-iteration-head-active='true'] {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+.iterationHead[data-iteration-head-active='true']:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+/* The summary row IS the toggle (spec §3): borderless button, wraps to one
+ * line when collapsed. */
+.iterationSummary {
+  appearance: none;
+  border: 0;
+  background: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-2);
+  padding: 0;
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  cursor: pointer;
+  text-align: left;
+  transition: color 150ms ease;   /* hover 120–150ms window */
+}
+
+.iterationSummary:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.iterationSummaryId {
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.iterationSummaryVerdict {
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+[data-iteration-head-verdict='pass'] {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+[data-iteration-head-verdict='fail'] {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.iterationSummaryStatus {
+  color: var(--dsw-alias-state-business-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.iterationSummaryStatusMuted {
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.iterationSummaryHint {
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.iterationHeadBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  padding-top: var(--mstar-space-2);
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* Steps, HORIZONTAL (spec §3): 5 items in PHASE_IDS order with dim bars
+ * between; the bar leading INTO the current step is lit. */
+.iterationStepsRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+}
+
+.iterationStepItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.iterationStepConnector,
+.iterationStepConnectorLit {
+  flex: none;
+  align-self: center;
+  width: var(--mstar-space-3);
+  height: 2px;
+  background: var(--dsw-alias-border-l1);
+}
+
+.iterationStepConnectorLit {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.iterationStepBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.iterationStepPhase {
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* State chip: current = business glow + ring, next = dashed, idle = dim —
+ * driven by the step item's `data-step-state` (spec §3 treatment carried
+ * over from the zone stepper, now horizontal). */
+.iterationStepChip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+[data-step-state='current'] .iterationStepBadge,
+[data-step-state='current'] .iterationStepChip {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+[data-step-state='current'] .iterationStepChip {
+  font-weight: 600;
+}
+
+[data-step-state='next'] .iterationStepBadge,
+[data-step-state='next'] .iterationStepChip {
+  border: 1px dashed var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+[data-step-state='idle'] .iterationStepBadge {
+  border-color: var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-caption);
+}
+
+/* Current-step verdict badge (spec §3): PASS/FAIL/unknown pill, on the
+ * current step only. */
+.iterationVerdict {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+[data-iteration-verdict='pass'] {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+[data-iteration-verdict='fail'] {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* Branch panel (spec §3/§5): rendered only while the iteration is active. */
+.iterationBranches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+}
+
+.iterationBranchesTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.iterationBranchList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.iterationBranchRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+.iterationBranchLabel {
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.iterationBranchValue {
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+/* Task area: the page's INDEPENDENT vertical scroll body (spec §3 — the
+ * kanban spreads full-width, never compressed by a canvas height). */
+.iterationTasks {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* --- sidebar: fixed 300px column, full height, own scroll (spec panel-zones §2) --- */

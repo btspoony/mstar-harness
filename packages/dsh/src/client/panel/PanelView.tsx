@@ -7,30 +7,43 @@
  * `useMstarEngineStatus()` hook riding the kit's `useSession` selector (spec
  * §5) — the render body is a pure function of (source, lastUpdated, t).
  *
- * Layout (spec panel-zones §2): root grid `"main sidebar"` fills the Tab
- * (height 100%, overflow hidden — the page never scrolls); main = the graph
- * region (zone skeleton filled by plan 20260810-panel-canvas-zones) +
- * freshness footer, sidebar = workspace-state digest with the bottom fixed
- * meta dock (version + harness dir). Below 860px the sidebar stacks under
- * the main area.
+ * Layout (spec panel-tabs §2, plan 20260811-panel-tabs-shell): root grid
+ * `"main sidebar"` fills the Tab (height 100%, overflow hidden — the page
+ * never scrolls); the right sidebar is RESIDENT (all tabs share it, its props
+ * `{ t, state, source }` unchanged); main = the fixed header nav (TabNav, 3
+ * MenuTabs) + the content region (switches per tab) + the freshness footer.
+ * The `data-mstar-graph` anchor now marks the CONTENT container (spec §6.1 —
+ * previously the canvas container), so tests pin the layout contract, not the
+ * per-tab page internals.
  *
- * Graph mount gating (spec §2.5, T1 review minor-1): the canvas mounts ONLY
- * in the harness-present branch — the `data-mstar-graph` anchor also exists
- * on the no-harness hint container, but no WorkflowCanvas is rendered there.
- * Degradation stays total: `projectGraph` never throws; no iteration →
- * muted disabled iteration zone; `state` null / plans missing → muted tasks
- * zone; the zone dashboard replaces the react-flow graph (plan
- * 20260810-panel-canvas-zones Task 2). The no-session case is shell-handled
- * by the strict-session view ring.
+ * Tab state (spec §6.2): local `useState<PanelTab>` (default 'tasks', D1, no
+ * routing) — `renderToStaticMarkup` renders the default tasks page, keeping
+ * SSR assertions stable. The tasks tab renders the IterationTaskPage (Content
+ * Head + Steps 横排/收拢 + full-width kanban, spec §3 — landed with Task 2,
+ * replacing the WorkflowCanvas zone dashboard); the agents/events tabs render
+ * muted placeholder pages (refined by Task 3; the real pages land with the
+ * agent-canvas / event-log plans).
+ *
+ * Empty branches (spec §2): waiting / no-harness stay exactly as the zone
+ * dashboard baseline — no tabs, no sidebar (hint + freshness only); the
+ * no-harness main keeps `data-mstar-graph` on its hint container. Degradation
+ * stays total: `projectGraph` never throws; no iteration → the IterationTaskPage's
+ * collapsed muted head (spec §8); `state` null / plans missing → muted kanban
+ * skeleton.
  */
 
 import * as React from 'react'
+import { useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { MstarEngineStatusSource } from '../../types.ts'
 import css from './panel.module.css'
 import { projectGraph } from './graph/project-graph.ts'
-import { WorkflowCanvas } from './zones/WorkflowCanvas.tsx'
 import { Sidebar } from './sidebar.tsx'
+import { TabNav, type PanelTab } from './TabNav.tsx'
+import { AgentCanvasPage } from './pages/AgentCanvasPage.tsx'
+import { EventLogPage } from './pages/EventLogPage.tsx'
+import { IterationTaskPage } from './pages/IterationTaskPage.tsx'
 import { useMstarEngineStatus } from './use-mstar-engine-status.ts'
 
 export interface MstarPanelViewProps extends ConvViewProps {
@@ -43,8 +56,32 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString('en-GB')
 }
 
+export interface PanelContentProps {
+  tab: PanelTab
+  source: MstarEngineStatusSource
+  t: TranslateNS<'mstar-panel'>
+}
+
+/**
+ * Tab → page mapping (spec §6.2): the only per-tab-switching part of the
+ * layout. tasks = the IterationTaskPage (spec §3 — Content Head + Steps
+ * 横排/收拢 + full-width kanban, landed with Task 2; it replaced the
+ * WorkflowCanvas zone dashboard, whose file is removed by the plan close);
+ * agents / events = muted placeholder pages (Task 3 refines them; the real
+ * pages land with the agent-canvas / event-log plans).
+ */
+export function PanelContent({ tab, source, t }: PanelContentProps) {
+  if (tab === 'agents') return <AgentCanvasPage t={t} />
+  if (tab === 'events') return <EventLogPage t={t} />
+  return <IterationTaskPage view={projectGraph(source)} t={t} />
+}
+
 export function PanelView({ t, useSession }: MstarPanelViewProps) {
   const { source, lastUpdated } = useMstarEngineStatus(useSession)
+  // Tab state (spec §6.2): local, default 'tasks' (D1), no routing. Called
+  // before every early return (hooks rule) — the empty branches never render
+  // the tab nav.
+  const [tab, setTab] = useState<PanelTab>('tasks')
   if (source === null || source === undefined) {
     return (
       <div className={css.emptyRoot} data-mstar-panel="waiting">
@@ -62,10 +99,9 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
     </footer>
   )
   if (noHarness) {
-    // No harness → no canvas region (spec §2.5): hint + freshness in a
-    // single-column root. The `data-mstar-graph` anchor is present for the
-    // layout contract, but the WorkflowCanvas mount is gated to the
-    // harness-present branch below.
+    // No harness → no tabs / no sidebar (spec §2 — empty branch unchanged):
+    // hint + freshness in a single-column root. The `data-mstar-graph` anchor
+    // stays on the hint container (its layout contract slot).
     return (
       <div className={css.root} data-mstar-panel="no-harness">
         <main className={css.main} data-mstar-graph>
@@ -77,8 +113,11 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
   }
   return (
     <div className={css.root} data-mstar-panel="panel">
-      <main className={css.main} data-mstar-graph>
-        <WorkflowCanvas view={projectGraph(source)} t={t} />
+      <main className={css.main}>
+        <TabNav active={tab} onChange={setTab} t={t} />
+        <div className={css.content} data-mstar-graph>
+          <PanelContent tab={tab} source={source} t={t} />
+        </div>
         {freshness}
       </main>
       <Sidebar t={t} state={source.state} source={source} />

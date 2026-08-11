@@ -1,15 +1,17 @@
 /**
- * Zone canvas styles (spec panel-zones §2/§7): WorkflowCanvas replaces the
- * react-flow GraphCanvas with a pure HTML/CSS zone dashboard — three zone
- * frames in a CSS grid (iteration fixed left / tasks flex center / agents
- * fixed right; stacked below 1200px), a bottom fixed footer bar (legend +
- * gate summary) that never scrolls with the zones, and the canvas-corner
- * AgentEventDock (absolute bottom-left; mounted only when events exist).
- *
- * v3 layout invariants (spec §2): the zone scroll container is the ONLY
- * scroll body (overflow: auto, overscroll contained) — the page / main never
- * scroll; the footer bar is flex:none (fixed height, outside the scroll
- * region); the dock is absolute in the canvas container.
+ * Zone component styles (spec panel-zones §2/§7, plan 20260811-panel-tabs-shell
+ * Task 3): the WorkflowCanvas zone dashboard layout is GONE with the
+ * Tabs+Content rework — the canvas/scroll/zones grid, the footer bar
+ * (legend + gate summary + violations) and the vertical IterationZone
+ * stepper styles were removed here (their render surfaces migrated into
+ * IterationTaskPage in panel.module.css / the agent-canvas + event-log
+ * plans). What remains serves the components still mounted today or planned
+ * for the downstream plans:
+ *   - the shared `.zone` frame (TaskBoard + AgentFlowZone),
+ *   - the AgentEventDock event rows (→ event-log plan reuses the styles),
+ *   - the TaskBoard kanban (reused full-width by IterationTaskPage),
+ *   - the AgentFlowZone stage pipeline (→ agent-canvas plan),
+ *   - the Legend agent-pipeline swatches (→ agent-canvas plan re-mounts).
  *
  * Hard metrics (spec §1.2/§7): spacing from the --mstar-space-* ramp (defined
  * at the panel root) only; EVERY color is a verified --dsw-* alias token —
@@ -18,39 +20,7 @@
  * transitions/animations).
  */
 
-.canvas {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-}
-
-/* The ONLY scroll body (spec §2): zones scroll here, the page never does. */
-.scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: var(--mstar-space-1);
-}
-
-/* Three-zone grid (spec §2): iteration fixed left, tasks flex center, agents
- * fixed right — stacked vertically below 1200px. */
-.zones {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 380px;
-  align-items: start;
-  gap: var(--mstar-space-3);
-}
-
-@media (max-width: 1200px) {
-  .zones {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* --- zone frame (shared by all three zones) --- */
+/* --- zone frame (shared by the TaskBoard / agent-flow zone) --- */
 
 .zone {
   display: flex;
@@ -83,19 +53,6 @@
   margin: 0;
   color: var(--dsw-alias-label-caption);
   font: var(--dsw-font-xxxs-11);
-}
-
-/* --- footer bar (spec §2): flex:none = fixed height, never scrolls with the zones --- */
-
-.footer {
-  flex: none;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--mstar-space-4);
-  min-width: 0;
-  padding: var(--mstar-space-3) var(--mstar-space-1);
-  border-top: 1px solid var(--dsw-alias-border-l1);
 }
 
 .legend {
@@ -137,35 +94,11 @@
   border-radius: 2px;
 }
 
-/* Zone-semantic legend swatches (spec §7): iteration frame, current step,
- * disabled iteration, task kanban, verdicts, and the expected/actual/
- * unexpected agent-pipeline states — mirrors the zone treatments. */
-.swatchIteration {
-  border: 1px solid var(--dsw-alias-state-business-primary);
-  border-radius: 8px;
-}
-
-.swatchCurrent {
-  background: var(--dsw-alias-state-business-primary);
-}
-
-.swatchDisabled {
-  background: var(--dsw-alias-border-l2);
-  opacity: 0.55;
-}
-
-.swatchTasks {
-  border: 1px solid var(--dsw-alias-state-business-primary);
-}
-
-.swatchPass {
-  background: var(--dsw-alias-state-success-primary);
-}
-
-.swatchFail {
-  background: var(--dsw-alias-state-error-primary);
-}
-
+/* Agent-pipeline legend swatches (spec §7, plan 20260811-panel-tabs-shell
+ * Task 3): the zone-dashboard legend items (iteration/current/disabled/
+ * tasks/verdicts) were removed with the WorkflowCanvas (spec §6.1 — the
+ * legend re-mounts on the agent-canvas page); the agent-pipeline swatches
+ * stay: expected/actual/unexpected flow edges, entity statuses, next edge. */
 .swatchFlowExpected {
   border: 1px solid var(--dsw-alias-state-business-primary);
   border-radius: 999px;
@@ -197,66 +130,6 @@
 .swatchAgentSettled {
   background: var(--dsw-alias-state-success-primary);
   border-radius: 999px;
-}
-
-/* --- gate summary (footer right) --- */
-
-.gateSummary {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--mstar-space-1);
-  min-width: 0;
-  font: var(--dsw-font-xxxs-11);
-}
-
-.summaryPass {
-  color: var(--dsw-alias-state-success-primary);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-.summaryFail {
-  color: var(--dsw-alias-state-error-primary);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-.summaryUnknown {
-  color: var(--dsw-alias-state-warn-label);
-}
-
-.violationsDetails {
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.violationsDetails summary {
-  cursor: pointer;
-  user-select: none;
-}
-
-.violationList {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  margin: var(--mstar-space-1) 0 0;
-  padding: 0;
-  max-height: 160px;              /* footer bar keeps its fixed height when expanded */
-  overflow-y: auto;
-  list-style: none;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.violationCode {
-  display: inline-block;
-  margin-right: var(--mstar-space-2);
-  color: var(--dsw-alias-state-warn-label);
-}
-
-.violationList [data-severity='critical'],
-.violationList [data-severity='high'] {
-  color: var(--dsw-alias-state-error-primary);
 }
 
 /* --- AgentEventDock (spec §2): canvas bottom-left absolute corner, mounted
@@ -430,248 +303,6 @@
   letter-spacing: 0.03em;
 }
 
-/* --- iteration zone (spec §3/§8): active business ring / disabled dim + Step
-   stepper + branch panel. Colors are --dsw-* tokens only; spacing rides the
-   --mstar-space-* ramp; the root reduced-motion rule kills all motion. --- */
-
-/* Active iteration frame (spec §3): business border + 1px glow ring — the
- * "business glow" the zone header/stepper describe. */
-.iterationActive {
-  border-color: var(--dsw-alias-state-business-primary);
-  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
-}
-
-/* Hover keeps the business ring (the active frame is the affordance, spec §7). */
-.iterationActive:hover {
-  border-color: var(--dsw-alias-state-business-primary);
-}
-
-/* Disabled iteration (spec §8): the WHOLE zone dims — a dimmed zone, never an
- * orange warn frame. Flat on hover too (no affordance while disabled). */
-.zoneDisabled {
-  opacity: 0.55;
-}
-
-.zoneDisabled:hover {
-  border-color: var(--dsw-alias-border-l1);
-}
-
-.iterationHeader {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-}
-
-.iterationMeta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-}
-
-.iterationId {
-  overflow-wrap: anywhere;
-  color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-}
-
-.iterationActiveNote {
-  color: var(--dsw-alias-state-business-primary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-.iterationStepLabel {
-  color: var(--dsw-alias-state-business-primary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.iterationInactiveNote {
-  margin: 0;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-/* Step 1–5 stepper (spec §3): vertical list; each item = badge rail (badge +
- * connector to the next step) + body (phase name + state chip + verdict). */
-.stepper {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.stepItem {
-  display: flex;
-  gap: var(--mstar-space-2);
-  min-width: 0;
-}
-
-.stepRail {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 22px;
-}
-
-.stepBadge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Connector to the NEXT step: dim by default; the segment leading INTO the
- * current step is lit (spec §3 — honest: no "completed" checkmarks, the
- * schema only knows current/next/idle). */
-.stepConnector {
-  flex: 1;
-  width: 2px;
-  min-height: var(--mstar-space-2);
-  background: var(--dsw-alias-border-l1);
-}
-
-.stepConnectorLit {
-  flex: 1;
-  width: 2px;
-  min-height: var(--mstar-space-2);
-  background: var(--dsw-alias-state-business-primary);
-}
-
-.stepBody {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  min-width: 0;
-  padding-bottom: var(--mstar-space-2);
-}
-
-.stepPhase {
-  overflow-wrap: anywhere;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-}
-
-/* State chip (spec §3): current = business glow + border highlight, next =
- * dashed, idle = dim — driven by the step row's `data-step-state`. */
-.stepChip {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  padding: 0 var(--mstar-space-2);
-  border: 1px solid transparent;
-  border-radius: 999px;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-[data-step-state='current'] .stepBadge,
-[data-step-state='current'] .stepChip {
-  border-color: var(--dsw-alias-state-business-primary);
-  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
-  color: var(--dsw-alias-state-business-primary);
-}
-
-[data-step-state='current'] .stepChip {
-  font-weight: 600;
-}
-
-[data-step-state='next'] .stepBadge,
-[data-step-state='next'] .stepChip {
-  border: 1px dashed var(--dsw-alias-state-business-primary);
-  color: var(--dsw-alias-state-business-primary);
-}
-
-[data-step-state='idle'] .stepBadge {
-  border-color: var(--dsw-alias-border-l1);
-  color: var(--dsw-alias-label-caption);
-}
-
-/* Current-step verdict badge (spec §3): PASS/FAIL/unknown pill, rendered on
- * the current step only. */
-.verdictBadge {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  padding: 0 var(--mstar-space-2);
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-[data-iteration-verdict='pass'] {
-  border-color: var(--dsw-alias-state-success-primary);
-  color: var(--dsw-alias-state-success-primary);
-}
-
-[data-iteration-verdict='fail'] {
-  border-color: var(--dsw-alias-state-error-primary);
-  color: var(--dsw-alias-state-error-primary);
-}
-
-/* Branch panel (spec §3/§5): the branches moved from the sidebar, rendered
- * only while the iteration is active. */
-.branches {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  padding-top: var(--mstar-space-2);
-  border-top: 1px solid var(--dsw-alias-border-l1);
-}
-
-.branchesTitle {
-  margin: 0;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxs-12);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.branchList {
-  display: flex;
-  flex-direction: column;
-  gap: var(--mstar-space-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.branchRow {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--mstar-space-2);
-  min-width: 0;
-}
-
-.branchLabel {
-  color: var(--dsw-alias-label-caption);
-  font: var(--dsw-font-xxxs-11);
-}
-
-.branchValue {
-  overflow-wrap: anywhere;
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-11);
-  font-weight: 600;
-}
-
 /* --- task board kanban (spec §3/§5/§7): 6 columns + count badges + plan
    cards + dim inter-column flow arrows + Done-cap overflow hint + muted
    no-plans empty state. Colors are --dsw-* tokens only (the unknown catch-all
@@ -694,8 +325,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Horizontal 6-column row; the tasks zone is the flex center of the three-zone
-   grid, so the row scrolls internally when the zone is too narrow. */
+/* Horizontal 6-column row; on the IterationTaskPage the tasks area scrolls
+   vertically (the page's independent scroll body) and the columns SPREAD
+   full-width (flex: 1 1 0, no width cap — spec panel-tabs §3/D2); on very
+   narrow widths the row scrolls internally. */
 .kanban {
   display: flex;
   align-items: flex-start;
@@ -705,13 +338,21 @@
   overscroll-behavior: contain;
 }
 
+/* box-sizing: border-box keeps `min-width` an OUTER width — under the
+   default content-box the 150px floor silently became 166px per column and
+   the six columns (+ flow arrows) overflowed the content area at normal
+   desktop widths, hiding the trailing columns behind the internal scrollbar
+   (plan 20260811-panel-tabs-shell Task 3 browser verification finding). 120px
+   outer floor: the six columns spread the content width down to ~1130px
+   viewport; below that the row scrolls internally (the narrow-width
+   fallback, spec §3/D2). */
 .kanbanColumn {
+  box-sizing: border-box;
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
   gap: var(--mstar-space-2);
-  min-width: 150px;
-  max-width: 200px;
+  min-width: 120px;
   padding: var(--mstar-space-2);
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
