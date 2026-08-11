@@ -8,10 +8,13 @@
  * T2 (spec panel-zones §2, plan 20260810-panel-canvas-zones): the react-flow
  * graph is replaced by the zone dashboard — the `graph.phase.*` /
  * `graph.state.*` / react-flow `graph.legend.*` key families are gone with
- * the graph library; the footer keeps the `graph.pass/fail/violations`
- * gate-summary keys, and the new `zone.*` family covers the three zone
- * titles/placeholders + the zone-semantic legend. The `flow.*` key family
- * (agent-flow event dock) is unchanged.
+ * the graph library; only `graph.pass` / `graph.fail` remain (the
+ * gate-verdict labels reused by the tabs-shell IterationTaskPage head), and
+ * the new `zone.*` family covers the three zone titles/placeholders + the
+ * zone-semantic legend. The `flow.*` key family (agent-flow event dock) is
+ * unchanged. The old footer's violations copy (`graph.violations` /
+ * `graph.no-violations`) is carried by the event-log plan — it adds its own
+ * dedicated keys when that page lands, NOT reserved in this union.
  *
  * T3 (spec panel-zones §3): the iteration zone is filled in — `zone.phase.*`
  * (the 5 PHASE_IDS names, the `graph.phase.*` wording moved into the zone
@@ -80,8 +83,6 @@ export type PanelKey =
   | 'panel.unknown'
   | 'graph.pass'
   | 'graph.fail'
-  | 'graph.violations'
-  | 'graph.no-violations'
   | 'zone.legend.title'
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
@@ -89,9 +90,6 @@ export type PanelKey =
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
   | 'zone.legend.next'
-  | 'zone.iteration.title'
-  | 'zone.iteration.active'
-  | 'zone.iteration.inactive'
   | 'zone.iteration.step-label'
   | 'zone.iteration.step-badge'
   | 'zone.iteration.step.current'
@@ -175,8 +173,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'panel.unknown': '未知',
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
-  'graph.violations': '违规 ({count})',
-  'graph.no-violations': '无违规',
   'zone.legend.title': '图例',
   'zone.legend.flow-expected': '预期 stage（空心）',
   'zone.legend.flow-actual': '实际派发（实心）',
@@ -184,9 +180,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
   'zone.legend.next': 'next 流转边（动画）',
-  'zone.iteration.title': '迭代',
-  'zone.iteration.active': '正在激活的迭代',
-  'zone.iteration.inactive': '迭代未激活',
   'zone.iteration.step-label': '步骤 {n}/{total}',
   'zone.iteration.step-badge': '步骤 {n}',
   'zone.iteration.step.current': '当前',
@@ -265,8 +258,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'panel.unknown': 'unknown',
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
-  'graph.violations': 'violations ({count})',
-  'graph.no-violations': 'no violations',
   'zone.legend.title': 'Legend',
   'zone.legend.flow-expected': 'expected stage (hollow)',
   'zone.legend.flow-actual': 'actual dispatch (filled)',
@@ -274,9 +265,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
   'zone.legend.next': 'next flow edge (animated)',
-  'zone.iteration.title': 'Iteration',
-  'zone.iteration.active': 'active iteration',
-  'zone.iteration.inactive': 'iteration inactive',
   'zone.iteration.step-label': 'Step {n}/{total}',
   'zone.iteration.step-badge': 'Step {n}',
   'zone.iteration.step.current': 'current',

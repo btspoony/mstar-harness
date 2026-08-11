@@ -9,6 +9,12 @@
  * Anchors: `data-mstar-tab-nav` (the nav frame), `data-mstar-tab="{id}"` on
  * every tab and `data-mstar-tab-active="true|false"` (activation state). The
  * active tab gets the business-token underline; inactive tabs stay secondary.
+ *
+ * A11y (QC wave): the nav is a WAI-ARIA tablist and each tab is a
+ * `role="tab"` button with `aria-selected` (APG Tabs pattern, replacing the
+ * former `aria-pressed` toggle). Deliberately minimal: every tab stays Tab-
+ * reachable (no roving tabindex / arrow-key handling — that behavior would
+ * be scope creep without an explicit keyboard contract).
  */
 
 import * as React from 'react'
@@ -34,15 +40,16 @@ const TABS: readonly { id: PanelTab; label: PanelKey }[] = [
 
 export function TabNav({ active, onChange, t }: TabNavProps) {
   return (
-    <nav className={css.tabNav} data-mstar-tab-nav>
+    <nav className={css.tabNav} data-mstar-tab-nav role="tablist">
       {TABS.map((tab) => (
         <button
           key={tab.id}
           type="button"
+          role="tab"
           className={active === tab.id ? `${css.tab} ${css.tabActive}` : css.tab}
           data-mstar-tab={tab.id}
           data-mstar-tab-active={active === tab.id ? 'true' : 'false'}
-          aria-pressed={active === tab.id}
+          aria-selected={active === tab.id}
           onClick={() => onChange(tab.id)}
         >
           {t(tab.label)}

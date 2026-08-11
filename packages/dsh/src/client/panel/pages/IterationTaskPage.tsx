@@ -8,7 +8,8 @@
  *
  * Content Head (spec §3): the iteration info (iterationId / gate verdict /
  * status note) rides the summary row, which IS the toggle (a native button
- * with aria-expanded). The expanded body renders the Steps HORIZONTALLY
+ * with aria-expanded + aria-controls pointing at the body — QC wave). The
+ * expanded body renders the Steps HORIZONTALLY
  * (PHASE_IDS order — the current step highlighted, the connector segment
  * leading INTO the current step lit; the same honesty as the zone stepper:
  * no "completed" checkmarks) plus the branch panel (rendered ONLY while the
@@ -132,6 +133,7 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
           data-iteration-head-toggle
           data-iteration-head-summary
           aria-expanded={expanded}
+          aria-controls="iteration-head-body"
           onClick={() => setExpanded((v) => !v)}
         >
           <span className={css.iterationSummaryId} data-iteration-head-id={idLabel}>
@@ -152,7 +154,7 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
         </button>
 
         {expanded && (
-          <div className={css.iterationHeadBody} data-iteration-head-body>
+          <div className={css.iterationHeadBody} id="iteration-head-body" data-iteration-head-body>
             {/* Steps, HORIZONTAL (spec §3): PHASE_IDS order, the current step
                 highlighted; the connector leading INTO the current step is
                 lit (honest — the schema knows only current/next/idle). */}
@@ -172,7 +174,7 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
                     )}
                   </li>
                   {i < iteration.steps.length - 1 && (
-                    <li
+                    <span
                       className={active && iteration.currentStep !== null && i === iteration.currentStep - 2
                         ? css.iterationStepConnectorLit
                         : css.iterationStepConnector}
