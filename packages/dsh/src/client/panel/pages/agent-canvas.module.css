@@ -430,7 +430,8 @@
  * the auto-start-reverse markers (both ends point outward). Task 5 (design
  * doc §2.7): the line hangs on the SIDE-GAP vertical anchor (card right edge
  * + 18px) — clear of the "sdd-reviewer" caption text (H2); evidenced → solid
- * business (the dash is dropped for the lit state). */
+ * business — the lit rule BELOW explicitly cancels the dash (QC W-001: the
+ * dash survived the lit state before because no rule reset it). */
 .canvasEdgeSupervise {
   stroke: var(--dsw-alias-label-caption);
   stroke-width: 1.5;
@@ -438,7 +439,13 @@
 }
 
 .canvasEdgeSuperviseLit {
+  /* QC W-001 (plan QC tri): the evidenced supervise line must render 1.5px
+   * business SOLID (design doc §2.7 — 降低虚线噪音). The base rule's
+   * `stroke-dasharray` is single-class specificity (0,1,0), so only an
+   * EXPLICIT reset in this same-specificity rule wins the cascade — a
+   * stroke-only override leaves the dash in place. */
   stroke: var(--dsw-alias-state-business-primary);
+  stroke-dasharray: none;
 }
 
 .canvasArrowSupervise {

@@ -1062,6 +1062,19 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     expect(arrowRule('canvasArrowSupervise')).toContain('fill: var(--dsw-alias-label-caption)')
     expect(arrowRule('canvasArrowSuperviseLit')).toContain('fill: var(--dsw-alias-state-business-primary)')
   })
+
+  it('evidenced supervise line renders SOLID — the lit rule RESETS the base dasharray (qc1 W-001 cascade outcome)', () => {
+    // qc1 W-001 (plan QC tri): `.canvasEdgeSupervise` declares
+    // `stroke-dasharray: 5 4` and `.canvasEdgeSuperviseLit` overrides only
+    // `stroke` — both single-class specificity (0,1,0), so the dash
+    // survived into the evidenced lit state (the design doc §2.7 requires a
+    // 1.5px business SOLID line). The P4 W-001 lesson: assert the cascade
+    // OUTCOME — the lit rule must carry an explicit dasharray reset — not
+    // merely that the lit rule exists.
+    const rule = (cls: string) => cssText.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+    expect(rule('canvasEdgeSupervise')).toContain('stroke-dasharray: 5 4')
+    expect(rule('canvasEdgeSuperviseLit')).toContain('stroke-dasharray: none')
+  })
 })
 
 describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings cap, policy enforcement (spec panel-zones §3/§5)', () => {

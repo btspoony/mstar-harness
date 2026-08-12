@@ -244,7 +244,7 @@ const GROUP_GAP = 24
  * design doc §2.5, H1): every actual-edge path END retreats this far from
  * the target port along the endpoint tangent, so the arrow tip sits 10px
  * OUTSIDE the card border (不贴卡). Same-column flows with a tighter gap
- * reduce it so the 7px arrowhead never overlaps the source card (see
+ * reduce it so the 6px arrowhead never overlaps the source card (see
  * `sameColumnStandoff`). */
 const STANDOFF = 10
 
@@ -690,12 +690,18 @@ function crossesLabelSeat(g: { x: number; y: number; w: number; h: number }, lay
   return labelSeats(layout).some((seat) => boxOverlaps(g, seat))
 }
 
-/** The standoff for a same-column south↔north flow: the doc's 10px would
- * leave the 7px arrowhead overlapping the source card in the tight ROW_GAP
- * (12px) — shrink to fit: standoff = min(STANDOFF, gap − 8) keeps the arrow
- * base ≥ 2px clear of the source card (simplify: the vertical arrowhead
- * needs ~8px of the gap; a future larger ROW_GAP token restores the full
- * 10px standoff). */
+/** The standoff for a same-column vertical flow (design doc §2.5): the 10px
+ * doc standoff would leave the arrowhead overlapping the source card in the
+ * tight ROW_GAP (12px) — shrink to fit: standoff = min(STANDOFF, gap − 8)
+ * keeps the arrow BASE ≥ 2px clear of the source card. The arrow markers are
+ * pinned to a fixed 6px user-space body (`markerUnits="userSpaceOnUse"` —
+ * QC F-001: the old strokeWidth-scaled marker rendered ~9.45px, so its base
+ * reached INTO the source card), so 6px arrow + 2px base clearance = the 8
+ * the formula reserves. `gap` is the inter-card distance in the flow
+ * direction (target north − source south for forward, source north − target
+ * south for reverse — always ≥ 0, QC W-001). (simplify: the vertical
+ * arrowhead needs ~8px of the gap; a future larger ROW_GAP token restores
+ * the full 10px standoff.) */
 function sameColumnStandoff(gap: number): number {
   return Math.min(STANDOFF, Math.max(2, gap - 8))
 }
@@ -743,9 +749,21 @@ function verticalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeom
  * Port selection (design doc §2.5 — lines connect ports only, never through
  * a card): forward (source column < target column) → source EAST → target
  * WEST; reverse (source column > target column) → source WEST → target
- * EAST; same column → source SOUTH → target NORTH. The path END stands off
- * STANDOFF px from the target port along the endpoint tangent (arrow tip off
- * the card, H1); the source starts AT its port (no arrow there).
+ * EAST; same column → the vertical flow (direction-aware, QC W-001). The
+ * path END stands off STANDOFF px from the target port along the endpoint
+ * tangent (arrow tip off the card, H1); the source starts AT its port (no
+ * arrow there).
+ *
+ * Direction-aware vertical endpoints (plan QC tri qc3 W-001): a same-column
+ * (or side-gap) flow whose SOURCE sits BELOW the target — the implement →
+ * review → rework cycle collapses to `code-reviewer → fullstack-dev` (the
+ * projection pair-dedupe keeps the LATEST direction) — must approach the
+ * target's SOUTH port, not its north: the arrow tip lands `standoff` below
+ * the target's bottom edge pointing UP into it. The old code put the tip
+ * above the target (pointing AWAY) and the center-x line ran through both
+ * card bodies (H1/H2 violations). Forward (source above) keeps source SOUTH
+ * → target NORTH. The same rule applies to the reverse inter-band reroute
+ * (Phase 2 → Phase 1).
  *
  * Same-column flows whose center-x vertical line would cross a sub-bucket
  * CAPTION row (the implementor↔reviewer flow crosses the "sdd-reviewer"
@@ -759,8 +777,9 @@ function verticalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeom
  * fullstack-dev — a real same-plan Review&Edit→implement transfer) would
  * cross the Phase-2 group label row + the column label rows on its diagonal
  * — the DIRECT horizontal bezier is replaced by the SAME side-gap vertical
- * route (source SOUTH → target NORTH at `card left edge − SIDE_GAP`) when
- * its bbox intersects any label seat (H2, 绕行策略 ②).
+ * route at `card left edge − SIDE_GAP` when its bbox intersects any label
+ * seat (H2, 绕行策略 ②); the reroute keeps the direction-aware endpoint
+ * (reverse Phase 2 → Phase 1 handoffs land below the target's south edge).
  */
 export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | null {
   if (edge.kind === 'supervise') {
@@ -781,17 +800,22 @@ export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | 
   const srcCol = columnIndexOfBox(layout, sourceBox)
   const tgtCol = columnIndexOfBox(layout, targetBox)
   // The inter-band / caption-crossing side-gap vertical reroute (design doc
-  // §2.0 绕行策略 ② / §2.5): source SOUTH → target NORTH hanging at
-  // `source card left edge − SIDE_GAP` — clear of every card and label row
-  // (H2); the arrow lands `standoff` px off the target's north port along
-  // the vertical tangent (H1). Shared by the same-column caption-crossing
-  // branch and the inter-band reroute below.
+  // §2.0 绕行策略 ② / §2.5): hangs at `source card left edge − SIDE_GAP` —
+  // clear of every card and label row (H2). DIRECTION-AWARE endpoints (QC
+  // W-001): forward (source above target) hangs source SOUTH → target
+  // NORTH; reverse (source below — the rework cycle) hangs source NORTH →
+  // target SOUTH — the arrow tip ALWAYS lands on the target's NEAR side at
+  // `standoff` along the vertical tangent (H1) and the line never crosses a
+  // card body. Shared by the same-column caption-crossing branch and the
+  // inter-band reroutes below.
   const sideGapVertical = (): EdgeGeometry => {
-    const srcBottom = sourceBox.y + sourceBox.h
-    const gap = targetBox.y - srcBottom
-    const standoff = sameColumnStandoff(Math.abs(gap))
     const sideX = sourceBox.x - SIDE_GAP
-    return verticalCurve(sideX, srcBottom, sideX, targetBox.y - standoff)
+    const forward = sourceBox.y + sourceBox.h <= targetBox.y
+    const gap = forward ? targetBox.y - (sourceBox.y + sourceBox.h) : sourceBox.y - (targetBox.y + targetBox.h)
+    const standoff = sameColumnStandoff(gap)
+    const startY = forward ? sourceBox.y + sourceBox.h : sourceBox.y
+    const endY = forward ? targetBox.y - standoff : targetBox.y + targetBox.h + standoff
+    return verticalCurve(sideX, startY, sideX, endY)
   }
   if (srcCol < tgtCol) {
     // Forward: source east → target west; the path ends 10px LEFT of the
@@ -812,24 +836,30 @@ export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | 
     if (crossesLabelSeat(horizontalBBox(s.x, s.y, endX, t.y), layout)) return sideGapVertical()
     return horizontalCurve(s.x, s.y, endX, t.y)
   }
-  // Same column: south → north (design doc §2.5). The center-x vertical line
-  // must not cross a caption row of the column (H2 — e.g. implementor →
-  // code-reviewer crosses the "sdd-reviewer" caption); when it would, route
-  // in the column's LEFT side gap (card left edge − SIDE_GAP).
-  const srcBottom = sourceBox.y + sourceBox.h
-  const gap = targetBox.y - srcBottom
+  // Same column: the vertical flow (design doc §2.5). DIRECTION-AWARE
+  // endpoints (QC W-001): forward = source above → source SOUTH → target
+  // NORTH + standoff; reverse = source below (the rework cycle —
+  // `code-reviewer → fullstack-dev`) → source NORTH → target SOUTH +
+  // standoff — the tip lands on the target's NEAR side, the line stays in
+  // the inter-card gap, never through a card body (H1/H2). The center-x
+  // vertical line must not cross a caption row of the column (H2 — e.g.
+  // implementor → code-reviewer crosses the "sdd-reviewer" caption); when it
+  // would, route in the column's LEFT side gap (card left edge − SIDE_GAP).
+  const forward = sourceBox.y + sourceBox.h <= targetBox.y
+  const gap = forward ? targetBox.y - (sourceBox.y + sourceBox.h) : sourceBox.y - (targetBox.y + targetBox.h)
   const standoff = sameColumnStandoff(gap)
   const cx = sourceBox.x + sourceBox.w / 2
-  const endY = targetBox.y - standoff
+  const startY = forward ? sourceBox.y + sourceBox.h : sourceBox.y
+  const endY = forward ? targetBox.y - standoff : targetBox.y + targetBox.h + standoff
   const colId = layout.columns[srcCol]?.id
   const crossesCaption = colId !== undefined && captionRows(layout, colId).some(
-    (row) => cx >= row.x && cx <= row.x + row.w && Math.min(srcBottom, endY) < row.y + row.h && Math.max(srcBottom, endY) > row.y,
+    (row) => cx >= row.x && cx <= row.x + row.w && Math.min(startY, endY) < row.y + row.h && Math.max(startY, endY) > row.y,
   )
   if (crossesCaption) {
     const sideX = sourceBox.x - SIDE_GAP
-    return verticalCurve(sideX, srcBottom, sideX, endY)
+    return verticalCurve(sideX, startY, sideX, endY)
   }
-  return verticalCurve(cx, srcBottom, cx, endY)
+  return verticalCurve(cx, startY, cx, endY)
 }
 
 /* ------------------------------ card / edge pieces ------------------------------ */
@@ -1135,15 +1165,21 @@ export function AgentCanvasPage({ view, iteration, t, initialPan }: AgentCanvasP
                * endpoint tangent — the bezier shapes guarantee the tangent
                * equals the line's dominant direction, §2.6); supervise uses
                * orient="auto-start-reverse" so BOTH ends point outward — the
-               * bidirectional implementor ↔ sdd-reviewer double arrow. */}
-              <marker id="canvas-arrow-actual" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                <path className={css.canvasArrowActual} d="M 0 1 L 9 5 L 0 9 z" />
+               * bidirectional implementor ↔ sdd-reviewer double arrow. QC
+               * F-001: every marker is pinned to a fixed 6px user-space body
+               * (markerUnits="userSpaceOnUse" — the 6-wide viewBox maps 1:1,
+               * tip at refX 6, so the rendered arrow is EXACTLY 6px long,
+               * independent of the stroke-width): the same-column standoff
+               * math (gap − 8 = 6px arrow + 2px base clearance) then holds
+               * for the REAL marker extents. */}
+              <marker id="canvas-arrow-actual" markerUnits="userSpaceOnUse" viewBox="0 0 6 8" refX="6" refY="4" markerWidth="6" markerHeight="8" orient="auto">
+                <path className={css.canvasArrowActual} d="M 0 1 L 6 4 L 0 7 z" />
               </marker>
-              <marker id="canvas-arrow-supervise" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                <path className={css.canvasArrowSupervise} d="M 0 1 L 9 5 L 0 9 z" />
+              <marker id="canvas-arrow-supervise" markerUnits="userSpaceOnUse" viewBox="0 0 6 8" refX="6" refY="4" markerWidth="6" markerHeight="8" orient="auto-start-reverse">
+                <path className={css.canvasArrowSupervise} d="M 0 1 L 6 4 L 0 7 z" />
               </marker>
-              <marker id="canvas-arrow-supervise-lit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                <path className={css.canvasArrowSuperviseLit} d="M 0 1 L 9 5 L 0 9 z" />
+              <marker id="canvas-arrow-supervise-lit" markerUnits="userSpaceOnUse" viewBox="0 0 6 8" refX="6" refY="4" markerWidth="6" markerHeight="8" orient="auto-start-reverse">
+                <path className={css.canvasArrowSuperviseLit} d="M 0 1 L 6 4 L 0 7 z" />
               </marker>
             </defs>
             {edges.map((edge, i) => {

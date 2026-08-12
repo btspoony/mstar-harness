@@ -523,6 +523,112 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
     expect(d.y2).toBe(876 - 10) // target north − STANDOFF
   })
 
+  it('actual edge: a REVERSE same-column flow (source below target) ends on the target SOUTH side, arrow pointing up — never through the cards (qc3 W-001)', () => {
+    // The caption-free reverse pair fullstack-dev-2 → fullstack-dev: the
+    // pair-dedupe keeps the latest direction, so the implementor-2 →
+    // implementor rework collapses to this direction (source BELOW target).
+    // The old code put the tip ABOVE the target (`targetBox.y − standoff`)
+    // and ran the center-x line through BOTH card bodies (H1/H2 violation).
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 2, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'fullstack-dev-2', agent: 'a2', planId: 'plan-x' }),
+    ]))
+    const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
+    const cx = 24 + 12 + 176 / 2
+    expect(d.x1).toBe(cx)
+    expect(d.x2).toBe(cx) // center-x vertical
+    // Direction-aware endpoints: source NORTH (its top edge) → target SOUTH
+    // + standoff (below the target's bottom edge) — the tip lands on the
+    // NEAR side of the target, pointing UP into it (old code: tip at
+    // 438−2=436, above the target, pointing away).
+    expect(d.y1).toBe(522) // source top (fullstack-dev-2 north port)
+    expect(d.y2).toBe(510 + 4) // target bottom + reduced standoff (gap 12 → 4)
+    // The endpoint tangent points UP toward the target card (the bezier's
+    // end control sits BELOW the endpoint, qc3 W-001 "tangent toward card").
+    expect(d.cy2).toBeGreaterThan(d.y2)
+    // The curve stays in the inter-card gap (510..522) — no segment crosses
+    // either card body (H2): the bbox never overlaps the source or target box.
+    const bbox = curveBBox(d)
+    expect(overlaps(bbox, { x: 24 + 12, y: 438, w: 176, h: 72 })).toBe(false) // target fullstack-dev
+    expect(overlaps(bbox, { x: 24 + 12, y: 522, w: 176, h: 72 })).toBe(false) // source fullstack-dev-2
+  })
+
+  it('actual edge: the REVERSE rework collapse (code-reviewer → fullstack-dev) reroutes in the side gap with the tip on the target SOUTH side (qc3 W-001)', () => {
+    // The implement → review → rework cycle (fullstack-dev → code-reviewer →
+    // fullstack-dev) collapses to the LATEST direction: code-reviewer →
+    // fullstack-dev — a same-column edge whose source sits BELOW the target.
+    // The center-x line would cross the "sdd-reviewer" caption → the side-gap
+    // route (H2); the old code ended the line ABOVE the target's north edge
+    // (tip pointing away at empty space) and started at the source's BOTTOM.
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+      dispatchEvent({ ts: 2, role: 'code-reviewer', agent: 'r1', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    const path = pathOf(html, 'data-agent-edge-actual')
+    expect(lineAttr(path, 'data-agent-edge-actual')).toBe('code-reviewer-&gt;fullstack-dev')
+    const d = parsePath(lineAttr(path, 'd'))
+    expect(d.x1).toBe(24 + 12 - 18) // card LEFT edge − SIDE_GAP (side-gap route)
+    expect(d.x2).toBe(24 + 12 - 18)
+    // Direction-aware: source NORTH (code-reviewer top, 876) → target SOUTH +
+    // standoff (fullstack bottom 510 + 10) — the tip lands BELOW the target,
+    // pointing UP into it (old code: start at the source BOTTOM 948, tip at
+    // 438−10=428 above the target).
+    expect(d.y1).toBe(876)
+    expect(d.y2).toBe(510 + 10)
+    expect(d.cy2).toBeGreaterThan(d.y2) // end tangent points UP toward the card
+    // The line hangs LEFT of both cards (x=18 < card left 36) — no card-body
+    // crossing (H2).
+    const bbox = curveBBox(d)
+    expect(overlaps(bbox, { x: 24 + 12, y: 438, w: 176, h: 72 })).toBe(false) // target fullstack-dev
+    expect(overlaps(bbox, { x: 24 + 12, y: 876, w: 176, h: 72 })).toBe(false) // source code-reviewer
+  })
+
+  it('arrow markers are pinned to a fixed 6px user-space body — the same-column standoff clears the source card for the REAL marker extents (qc2 F-001)', () => {
+    // qc2 F-001: the old markers used the strokeWidth-scaled default
+    // (markerUnits unset → "strokeWidth") — a 10×10 viewBox / refX=9 marker
+    // at stroke-width 1.5 rendered ~9.45px long, so the `gap − 8` standoff
+    // left the arrow base INSIDE the source card (the comment claimed a 7px
+    // arrow). The markers are now pinned to userSpaceOnUse with an exact
+    // 6px body, so the geometry math holds for the real extents.
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 2, role: 'fullstack-dev-2', agent: 'a2', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    // Marker defs: extract each marker's opening tag (the static SVG defs
+    // always render, independent of the view state).
+    const markerTag = (id: string): string => {
+      const start = html.indexOf(`id="${id}"`)
+      expect(start, `${id} marker def`).toBeGreaterThan(-1)
+      const tagStart = html.lastIndexOf('<marker', start)
+      const end = html.indexOf('>', start)
+      expect(end, `${id} marker close`).toBeGreaterThan(tagStart)
+      return html.slice(tagStart, end)
+    }
+    for (const id of ['canvas-arrow-actual', 'canvas-arrow-supervise', 'canvas-arrow-supervise-lit']) {
+      const tag = markerTag(id)
+      // Pinned user-space size: markerUnits=userSpaceOnUse + 1:1 viewBox
+      // (markerWidth == viewBox width, tip at refX 6) → the rendered arrow
+      // body is EXACTLY 6px long, independent of the stroke-width.
+      expect(tag, `${id} markerUnits`).toContain('markerUnits="userSpaceOnUse"')
+      expect(tag).toContain('viewBox="0 0 6 8"')
+      expect(tag).toContain('refX="6"')
+      expect(tag).toContain('markerWidth="6"')
+    }
+    // The forward same-column edge (fullstack-dev → fullstack-dev-2):
+    // standoff = gap − 8 = 4 (tip 4px off the target north edge); the pinned
+    // 6px arrow body extends BACKWARD from the tip (up toward the source) →
+    // base at tip − 6 = 512, EXACTLY 2px clear of the source card bottom
+    // (510). The comment's "base ≥ 2px clear" claim now matches the REAL
+    // marker extents (old code: ~9.45px marker → base at 508.55, 1.45px INTO
+    // the source card).
+    const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
+    expect(d.y1).toBe(438 + 72) // source south port
+    expect(d.y2).toBe(522 - 4) // target north − reduced standoff (gap 12 → 4)
+    const arrowLen = 6 // the pinned marker body (refX in the 1:1 userSpaceOnUse viewBox)
+    expect(d.y2 - arrowLen).toBe(438 + 72 + 2) // base exactly 2px clear of the source bottom
+  })
+
   it('expected / next edge anchors NEVER render (design doc §2.2 — 简洁化)', () => {
     for (const source of [baseSource, flowSource([dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1' })])]) {
       const html = agentsHtml(source)
