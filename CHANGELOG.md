@@ -2,24 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **2.1.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **2.1.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **2.1.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.1.0** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.1.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.1.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **2.1.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **2.1.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **2.1.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **2.1.0** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.1.0** |
-| Agent Plugins manifest | `plugin.json` | **2.1.0** |
+| Monorepo root | `morning-star` (`package.json`) | **2.1.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.1.1** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.1.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.1.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **2.1.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **2.1.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **2.1.1** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **2.1.1** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.1.1** |
+| Agent Plugins manifest | `plugin.json` | **2.1.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [2.1.1] - 2026-08-12
+
+### Harness
+
+- Canonical `.gitignore` snippet now default-ignores the whole harness dir (`<dir>/**`) and re-includes only the tracked results (AGENTS.md, knowledge/, specs/) — new process subdirectories are ignored automatically.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 2.1.1**.
 
 ## [2.1.0] - 2026-08-12
 

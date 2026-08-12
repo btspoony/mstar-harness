@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-08-12
+
+### Harness
+
+- Canonical `.gitignore` snippet now default-ignores the whole harness dir (`<dir>/**`) and re-includes only the tracked results (AGENTS.md, knowledge/, specs/) — new process subdirectories are ignored automatically.
+
+- Version alignment with harness **2.1.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.1.1**.
+
 ## [2.1.0] - 2026-08-12
 
 ### Changed
