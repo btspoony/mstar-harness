@@ -35,7 +35,7 @@
  *   (the stage skeleton + entities/edges now live in the `agents` projection —
  *   spec §4);
  * - added: `iteration.steps / currentStep / branches`, `tasks.columns / total
- *   / truncated`, `agents` (entities + expected/actual/next edges + executing/
+ *   / truncated`, `agents` (entities + actual/supervise edges + executing/
  *   pending counts — spec §4).
  *
  * Agent-entity semantics (plan 20260811-panel-f3-agent-general — the
@@ -47,9 +47,10 @@
  * legacy `unexpected` zone is GONE — stage-null non-on-demand entities now
  * project `zone: 'general'`. Placement (plan 20260812-panel-f5-agent-layout
  * Task 1, user 2026-08-12): the projection only declares the zone — the
- * RENDER places `zone: 'general'` entities in their OWN rightmost UNKNOWN
- * column (Task 2; the earlier F4.2 "bottom inside the sdd-implement column"
- * placement is superseded). The SDD loop back-edge (sdd-implement →
+ * RENDER places `zone: 'general'` entities in an unknown sub-partition at
+ * the bottom of the LAST column (plan 20260812-panel-f5-design-system Task
+ * 5, user 2026-08-12 feedback #3 — the standalone rightmost unknown column
+ * is superseded: 4 columns total). The SDD loop back-edge (sdd-implement →
  * general) stays REMOVED from the projection (plan 20260811-panel-f4-agent-view
  * Task 1); the F5 supervise line is a SEPARATE sub-bucket edge
  * (`kind: 'supervise'`, see `superviseEdges`). The event-log `unexpected`
@@ -319,25 +320,21 @@ function emphasisOf(
  */
 export type AgentEntityStatus = 'running' | 'settled' | 'error' | 'denied' | 'advisory' | 'idle'
 
-/** Edge kinds (spec §4 + plan 20260812-panel-f5-agent-layout Task 1):
- * skeleton / handoff / next-flow / sub-bucket supervision arrows. */
-export type AgentEdgeKind = 'expected' | 'actual' | 'next' | 'supervise'
+/** Edge kinds (spec §4 + plan 20260812-panel-f5-design-system Task 5 — the
+ * 2026-08-12 finalized line semantics, design doc §2.2): handoff / sub-bucket
+ * supervision arrows. `expected` (stage skeleton) and `next` (running
+ * animation) are REMOVED — the column order implies the flow, the running
+ * card glow/status point carries the position (user feedback #1/#5). */
+export type AgentEdgeKind = 'actual' | 'supervise'
 
 /**
  * One agents-zone arrow (spec §4 + plan 20260812-panel-f5-agent-layout Task
- * 1):
- * - `expected`: skeleton arrow between consecutive EXPECTED_ROLE_FLOW stage
- *   columns (source/target = stage id). The former SDD loop back-edge
- *   `autonomous-execute:sdd-implement → general` is REMOVED from the
- *   projection (plan 20260811-panel-f4-agent-view Task 1, user F4.2 — the
- *   implement ↔ general-bucket review cycle is no longer drawn as an edge;
- *   the `AgentEdge.loop` field itself was removed with the render branch in
- *   Task 2);
+ * 1 + plan 20260812-panel-f5-design-system Task 5):
  * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
  *   (source/target = entity key — role-based since plan
- *   20260811-panel-f3-agent-general);
- * - `next`: the latest running entity's stage column → the next constant-order
- *   column (source/target = stage id; `entityKey` = the running card);
+ *   20260811-panel-f3-agent-general). Task 5 filters general-bucket endpoints
+ *   (a general handoff is noise, not a meaningful transfer) and keeps at most
+ *   ONE edge per entity-key pair (the latest direction) — design doc §2.2;
  * - `supervise`: ONE static sub-bucket line inside the `sdd-implement`
  *   column — implementor ↔ reviewer mutual supervision (mstar-sdd contract;
  *   the render draws it as a bidirectional double arrow, Task 2).
@@ -351,15 +348,16 @@ export type AgentEdgeKind = 'expected' | 'actual' | 'next' | 'supervise'
  */
 export interface AgentEdge {
   kind: AgentEdgeKind
-  /** expected/next: stage id (`${phase}:${stage}`); actual: entity key; supervise: `<stage-id>:implementor|reviewer`. */
+  /** actual: entity key; supervise: `<stage-id>:implementor|reviewer`. */
   source: string
   target: string
-  /** The running entity key the next arrow highlights; null for expected/actual/supervise. */
+  /** Unused by the Task 5 line set (the removed `next` arrow carried the
+   * running entity key); kept for shape stability — always null. */
   entityKey: string | null
   /** Supervise edges only (plan 20260812-panel-f5-agent-layout Task 1):
    * evidence-driven lighting — true when any dispatch row's role belongs to
    * an SDD sub-bucket (implementor ∪ reviewer), false otherwise (dim).
-   * Absent (undefined) for expected/actual/next. */
+   * Absent (undefined) for actual. */
   evidenced?: boolean
 }
 
@@ -376,7 +374,7 @@ export type AgentZoneNote = 'empty' | 'settle-only' | null
 
 /**
  * The projected agents zone (spec §4 + §6.2): the EXPECTED_ROLE_FLOW stage
- * skeleton plus the dispatch-derived entity cards and the expected/actual/next
+ * skeleton plus the dispatch-derived entity cards and the actual/supervise
  * arrows. Total function — NEVER throws and NEVER fabricates: the KNOWN_AGENTS
  * roster always projects as entities (idle cards when there is no evidence) —
  * agentFlow missing/unreadable → `degraded` (full idle roster + no
@@ -648,23 +646,6 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
 /* ---------------------------------- agents zone projection (spec §4) ---------------------------------- */
 
 /**
- * Skeleton stage-column arrows (spec §4 + plan 20260811-panel-f4-agent-view
- * Task 1): forward edges between consecutive EXPECTED_ROLE_FLOW stages ONLY.
- * The former SDD loop back-edge `autonomous-execute:sdd-implement → general`
- * (the implement ↔ general-bucket review cycle drawn as a curved
- * double-arrow below the column band) is REMOVED (user F4.2: the loop edge
- * is dropped; the `general` card renders at the bottom INSIDE the
- * `sdd-implement` column — render placement, Task 2).
- */
-function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
-  const edges: AgentEdge[] = []
-  for (let i = 0; i + 1 < stages.length; i++) {
-    edges.push({ kind: 'expected', source: stages[i]!.id, target: stages[i + 1]!.id, entityKey: null })
-  }
-  return edges
-}
-
-/**
  * The SDD sub-bucket of a role (plan 20260812-panel-f5-agent-layout Task 1):
  * role ∈ SDD_BUCKET_ROLES.implementor → 'implementor' (incl. the on-demand
  * ops-engineer / prompt-engineer — bucket membership is a LAYOUT dimension,
@@ -850,13 +831,21 @@ function aggregateEntities(
 }
 
 /**
- * Same-plan handoff arrows (spec §4): within each planId, the ts-ascending
- * adjacent dispatch ENTITY pairs — keys are ROLE-based since plan
+ * Same-plan handoff arrows (spec §4 + plan 20260812-panel-f5-design-system
+ * Task 5 — design doc §2.2): within each planId, the ts-ascending adjacent
+ * dispatch ENTITY pairs — keys are ROLE-based since plan
  * 20260811-panel-f3-agent-general (`entityKeyOf`, the same classification the
  * entity cards use, so a handoff always connects two real cards; anonymous
  * rows fold into the `general` key). Plan-less dispatches cannot form a pair
  * → excluded; a self-pair (the same entity twice in a row) is skipped — a
  * card never hands off to itself.
+ *
+ * Task 5 简洁化 (user 2026-08-12 feedback #5, design doc §2.2): general-bucket
+ * endpoints are FILTERED (a handoff into/out of the anonymous catch-all is
+ * noise, not a meaningful transfer — the general card is a sink, not a flow
+ * participant), and each unordered entity-key PAIR emits AT MOST ONE edge —
+ * the latest direction (an A→B→A→B oscillation collapses to the final B
+ * handoff). Total function, never a throw.
  */
 function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
   const byPlan = new Map<string, { key: string; ts: number; idx: number }[]>()
@@ -869,37 +858,23 @@ function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
     if (list === undefined) byPlan.set(v.planId, [{ key, ts: v.ts, idx }])
     else list.push({ key, ts: v.ts, idx })
   })
-  const edges: AgentEdge[] = []
+  // Unordered-pair dedupe map: the walk is ts-ascending, so the LAST write per
+  // pair carries the LATEST direction (design doc §2.2 — 同对实体键至多 1 条).
+  const pairEdges = new Map<string, AgentEdge>()
   for (const planId of Array.from(byPlan.keys()).sort()) {
     const rows = byPlan.get(planId)!
       .slice()
       .sort((a, b) => a.ts - b.ts || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) || a.idx - b.idx)
     for (let i = 0; i + 1 < rows.length; i++) {
       if (rows[i]!.key === rows[i + 1]!.key) continue // self-pair skip
-      edges.push({ kind: 'actual', source: rows[i]!.key, target: rows[i + 1]!.key, entityKey: null })
+      const a = rows[i]!.key
+      const b = rows[i + 1]!.key
+      if (a === GENERAL_BUCKET || b === GENERAL_BUCKET) continue // general endpoints filtered
+      const pairKey = a < b ? `${a}|${b}` : `${b}|${a}`
+      pairEdges.set(pairKey, { kind: 'actual', source: a, target: b, entityKey: null })
     }
   }
-  return edges
-}
-
-/**
- * The `next` arrow (spec §4): the LATEST running entity (max ts; tie →
- * smallest entity key) sits in a stage column → the next EXPECTED_ROLE_FLOW
- * column. No running entity / running entity without a stage (off-pipeline
- * role — on-demand or the general bucket) / already at the LAST column
- * (qa-gate, the pipeline terminal) → NO next edge (honest — never a guess).
- */
-function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZoneStage[]): AgentEdge[] {
-  let best: AgentEntityView | null = null
-  for (const e of entities) {
-    if (e.status !== 'running') continue
-    if (best === null || e.ts > best.ts || (e.ts === best.ts && e.key < best.key)) best = e
-  }
-  if (best === null || best.stage === null) return []
-  const fromId = `${best.stage.phase}:${best.stage.stage}`
-  const index = stages.findIndex((s) => s.id === fromId)
-  if (index === -1 || index + 1 >= stages.length) return []
-  return [{ kind: 'next', source: fromId, target: stages[index + 1]!.id, entityKey: best.key }]
+  return Array.from(pairEdges.values())
 }
 
 /**
@@ -970,7 +945,9 @@ function idleZone(known: KnownAgent): AgentZone {
  *   role is pending);
  * - otherwise: entities aggregated from dispatch rows (with `idle: false`),
  *   statuses via the shared pairing walk, the un-evidenced KNOWN_AGENTS
- *   members appended as idle cards, expected/actual/next edges, and the
+ *   members appended as idle cards, actual/supervise edges (design doc §2.2 —
+ *   the `expected` skeleton and `next` animation edges are REMOVED by plan
+ *   20260812-panel-f5-design-system Task 5), and the
  *   executing (running entities — idle never counts) / pending
  *   (un-evidenced stage roles) counts.
  *
@@ -1009,7 +986,7 @@ export function projectAgents(source: MstarEngineStatusSource | null, currentSte
     return {
       stages, degraded: true, empty: false, note: null,
       entities: idleEntities(new Set(), new Set(), currentStep),
-      edges: [...expectedEdges(stages), ...superviseEdges(stages, [])], executing: 0, pending: 0,
+      edges: superviseEdges(stages, []), executing: 0, pending: 0,
     }
   }
 
@@ -1063,10 +1040,11 @@ export function projectAgents(source: MstarEngineStatusSource | null, currentSte
   // idle roster `general` card.
   const litKeys = new Set(lit.map((e) => e.key))
   const entities = [...lit, ...idleEntities(evidencedRoles, litKeys, currentStep)]
+  // Task 5 line set (design doc §2.2): actual (filtered handoffs) + supervise
+  // (static design knowledge). `expected` skeleton / `next` animation edges
+  // are REMOVED — 简洁化 (user 2026-08-12 feedback #1/#5).
   const edges = [
-    ...expectedEdges(stages),
     ...actualEdges(entries),
-    ...nextEdges(entities, stages),
     ...superviseEdges(stages, entries),
   ]
 

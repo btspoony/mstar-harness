@@ -4,13 +4,15 @@
  * zoom), the coordinate-space content layer with the moving grid background,
  * the scattered entity cards (agent-name title / status point / record fields;
  * idle cards muted via the dashed border + caption treatment), the stage
- * column labels (+ the rightmost unknown column and the sdd-implement
- * sub-bucket captions / on-demand badge / supervise line — plan
- * 20260812-panel-f5-agent-layout Task 2: the standalone on-demand column is
- * removed, the general bucket no longer sinks into the sdd-implement column),
- * the Legend seat (plan Task 3), and the AgentEdge
- * collaboration lines (expected skeleton / actual handoffs / the ANIMATED
- * next edge / the bidirectional supervise line). Plus the emphasis tiers
+ * column labels (+ the sdd-implement sub-bucket captions / on-demand badge /
+ * supervise line — plan 20260812-panel-f5-agent-layout Task 2, and the
+ * LAST-column "unknown / 未匹配角色" sub-partition caption — plan
+ * 20260812-panel-f5-design-system Task 5: the standalone unknown column is
+ * removed, general entities sink into the last column's bottom sub-partition),
+ * the card PORT anchors (4 edge-midpoint dots, hover-visible, Task 5), the
+ * Legend seat (plan Task 3), and the AgentEdge collaboration paths (actual
+ * handoffs + the bidirectional supervise line — Task 5: bezier `C` curves,
+ * port-anchored, expected/next edges REMOVED). Plus the emphasis tiers
  * (plan 20260812-panel-f5-design-system Task 4 — design doc §3): chrome
  * colors mix toward the layer background by the projected
  * `data-agent-emphasis` tier (current 100% / next 75% / off 45% — NEVER a
@@ -20,10 +22,11 @@
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
  * token flip); spacing rides the --mstar-space-1..6 ramp; fonts ride the
  * --dsw-font-xxxs-11/xxs-12/xs-13 ramp; hover feedback 150ms (120–150ms
- * window); radius is the unified 8px/999px pair; motion (card pulse + the
- * next-edge dash flow) is killed by the panel root's global
- * `prefers-reduced-motion` rule (`* { animation: none !important }`) — this
- * module declares no self-contained reduced-motion block.
+ * window); radius is the unified 8px/999px pair; motion (the running-card
+ * pulse — the next-edge dash flow is REMOVED with the next edge, Task 5) is
+ * killed by the panel root's global `prefers-reduced-motion` rule
+ * (`* { animation: none !important }`) — this module declares no
+ * self-contained reduced-motion block.
  */
 
 /* --- page frame: fills the content region as a flex column --- */
@@ -131,9 +134,9 @@
   text-transform: uppercase;
 }
 
-/* --- collaboration edges (spec §4): expected skeleton / actual handoff /
- * next animated / supervise bidirectional — SVG lines, non-interactive
- * overlay --- */
+/* --- collaboration edges (plan 20260812-panel-f5-design-system Task 5 —
+ * design doc §2.2/§2.6): actual handoff + supervise — SVG bezier PATHS,
+ * non-interactive overlay (expected/next edges are REMOVED) --- */
 
 .canvasEdges {
   position: absolute;
@@ -142,10 +145,11 @@
   pointer-events: none;
 }
 
-.canvasEdgeExpected {
-  stroke: var(--dsw-alias-label-caption);
-  stroke-width: 1;
-  stroke-dasharray: 4 4;
+/* The shared path base (design doc §2.6): every edge is a cubic-bezier
+ * `C` path — `fill: none` is mandatory for SVG paths (the default black
+ * fill would swallow the stroke + arrowheads). */
+.canvasEdgeCurve {
+  fill: none;
 }
 
 .canvasEdgeActual {
@@ -153,35 +157,11 @@
   stroke-width: 1.5;
 }
 
-/* Next edge (spec §4): business dash-flow ANIMATED — the stroke-dashoffset
- * loop (period 12px = 2 × dasharray); the panel root reduced-motion rule
- * kills the animation. */
-.canvasEdgeNext {
-  stroke: var(--dsw-alias-state-business-primary);
-  stroke-width: 1.5;
-  stroke-dasharray: 6 6;
-  animation: canvas-dash-flow 700ms linear infinite;
-}
-
-@keyframes canvas-dash-flow {
-  to {
-    stroke-dashoffset: -12;
-  }
-}
-
 /* Arrowhead fills (QC S-002): the marker <path> elements carry these classes
  * directly (AgentCanvasPage.tsx marker defs), so the fill must target the
  * class itself — a `.canvasArrowX path` descendant selector would never match
  * and the SVG default (black) fill would win. One direct rule per marker. */
-.canvasArrowExpected {
-  fill: var(--dsw-alias-label-caption);
-}
-
 .canvasArrowActual {
-  fill: var(--dsw-alias-state-business-primary);
-}
-
-.canvasArrowNext {
   fill: var(--dsw-alias-state-business-primary);
 }
 
@@ -273,6 +253,55 @@
   border-color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
 }
 
+/* Card ports (plan 20260812-panel-f5-design-system Task 5 — design doc §2.5):
+ * the 4 fixed edge-midpoint anchors (north / south / west / east), 3px dots.
+ * STATIC-INVISIBLE (opacity 0 at rest — pure geometry, no visual noise);
+ * revealed on card hover / selected (design doc §2.5 可见性) — running cards
+ * hover in business color. Non-interactive (pointer-events: none — ports are
+ * anchors, not controls; the edges are non-interactive too, spec §4.1). */
+.agentPort {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--dsw-alias-label-caption);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+.agentCard:hover .agentPort {
+  opacity: 1;
+}
+
+.agentCardRunning:hover .agentPort {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.agentPort[data-agent-port='north'] {
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.agentPort[data-agent-port='south'] {
+  bottom: 0;
+  left: 50%;
+  transform: translate(-50%, 50%);
+}
+
+.agentPort[data-agent-port='west'] {
+  left: 0;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.agentPort[data-agent-port='east'] {
+  right: 0;
+  top: 50%;
+  transform: translate(50%, -50%);
+}
+
 /* On-demand badge (plan 20260812-panel-f5-agent-layout Task 2): the
  * implementor-sub-bucket on-demand roles (ops-engineer / prompt-engineer)
  * carry a dashed business chip — the tag marks the on-demand nature inside
@@ -311,11 +340,14 @@
   border-top: 1px dashed var(--dsw-alias-border-l2);
 }
 
-/* Supervise line (plan f5 Task 2): the implementor ↔ sdd-reviewer mutual
- * supervision edge — dim dashed by default, lit business when the projected
- * `evidenced` flag is true (dispatch evidence in an SDD sub-bucket; never a
- * fabricated activation). The bidirectional double arrow comes from the
- * auto-start-reverse markers (both ends point outward). */
+/* Supervise line (plan f5 Task 2 + Task 5): the implementor ↔ sdd-reviewer
+ * mutual supervision edge — dim dashed by default, lit business when the
+ * projected `evidenced` flag is true (dispatch evidence in an SDD sub-bucket;
+ * never a fabricated activation). The bidirectional double arrow comes from
+ * the auto-start-reverse markers (both ends point outward). Task 5 (design
+ * doc §2.7): the line hangs on the SIDE-GAP vertical anchor (card right edge
+ * + 18px) — clear of the "sdd-reviewer" caption text (H2); evidenced → solid
+ * business (the dash is dropped for the lit state). */
 .canvasEdgeSupervise {
   stroke: var(--dsw-alias-label-caption);
   stroke-width: 1.5;

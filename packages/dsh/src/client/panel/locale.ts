@@ -90,6 +90,18 @@
  * (the former 'general' entry is replaced by 'unknown'); `zone.legend.general`
  * is REMOVED and `zone.legend.on-demand` rewords to the badge semantics.
  *
+ * T5 (plan 20260812-panel-f5-design-system Task 5 — the 2026-08-12 edge
+ * rework supersedes the Task-2 unknown COLUMN): the standalone rightmost
+ * unknown column is REMOVED (user feedback #3 — FOUR columns total) — the
+ * general bucket sinks into an unknown SUB-PARTITION at the bottom of the
+ * LAST column, so `zone.agents.unknown` (the old column label) is REMOVED
+ * and `zone.agents.unknown-sub` (「unknown / 未匹配角色」) is the sub-partition
+ * caption. The legend drops the expected / next entries (both edges are
+ * REMOVED, design doc §2.2) and gains `zone.legend.port` (the hover-visible
+ * card ports, design doc §2.5); `zone.legend.flow-actual` / `supervise` /
+ * `unknown` reword to the bezier / port-anchored / side-gap / sub-partition
+ * semantics.
+ *
  * T3 (plan 20260812-panel-f5-agent-layout Task 3): the no-harness branch
  * renders a CENTERED inactive-state card (icon + title + hint, no tabs /
  * no sidebar) instead of the left-aligned hint — `empty.no-harness-hint`
@@ -145,8 +157,8 @@ export type PanelKey =
   | 'graph.pass'
   | 'graph.fail'
   | 'zone.legend.title'
-  | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
+  | 'zone.legend.port'
   | 'zone.legend.sub-bucket'
   | 'zone.legend.supervise'
   | 'zone.legend.on-demand'
@@ -154,7 +166,6 @@ export type PanelKey =
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
   | 'zone.legend.agent-idle'
-  | 'zone.legend.next'
   | 'zone.iteration.step-label'
   | 'zone.iteration.step-badge'
   | 'zone.iteration.step.current'
@@ -183,7 +194,7 @@ export type PanelKey =
   | 'zone.agents.title'
   | 'zone.agents.summary'
   | 'zone.agents.on-demand'
-  | 'zone.agents.unknown'
+  | 'zone.agents.unknown-sub'
   | 'zone.agents.bucket.implementor'
   | 'zone.agents.bucket.reviewer'
   | 'flow.empty'
@@ -264,16 +275,15 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': '图例',
-  'zone.legend.flow-expected': '预期流转边（虚线）',
-  'zone.legend.flow-actual': '实际交接边',
+  'zone.legend.flow-actual': '实际交接边（曲线 · 端口锚定 · 箭头沿线）',
+  'zone.legend.port': '卡片端口（hover 显示 · 4 固定锚点 · 线止于 standoff 不贴卡）',
   'zone.legend.sub-bucket': 'sdd-implement 子桶（implementor / sdd-reviewer）',
-  'zone.legend.supervise': 'implementor ↔ sdd-reviewer 双向监督线',
+  'zone.legend.supervise': 'implementor ↔ sdd-reviewer 双向监督线（侧隙垂直锚点）',
   'zone.legend.on-demand': '按需执行角色（implementor 子桶徽标）',
-  'zone.legend.unknown': 'unknown 列（未匹配 / general 角色）',
+  'zone.legend.unknown': 'unknown 分区（qa-gate 列底部 · 未匹配 / general 角色）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
   'zone.legend.agent-idle': '未工作实体（虚线）',
-  'zone.legend.next': 'next 流转边（动画）',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': '当前',
@@ -302,7 +312,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
   'zone.agents.on-demand': '按需执行',
-  'zone.agents.unknown': '未知',
+  'zone.agents.unknown-sub': 'unknown / 未匹配角色',
   'zone.agents.bucket.implementor': 'implementor',
   'zone.agents.bucket.reviewer': 'sdd-reviewer',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
@@ -378,16 +388,15 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': 'Legend',
-  'zone.legend.flow-expected': 'expected flow edge (dashed)',
-  'zone.legend.flow-actual': 'actual handoff edge',
+  'zone.legend.flow-actual': 'actual handoff edge (curve · port-anchored · arrow along the line)',
+  'zone.legend.port': 'card ports (hover-visible · 4 fixed anchors · line ends at the standoff, off the card)',
   'zone.legend.sub-bucket': 'sdd-implement sub-buckets (implementor / sdd-reviewer)',
-  'zone.legend.supervise': 'implementor ↔ sdd-reviewer bidirectional supervise line',
+  'zone.legend.supervise': 'implementor ↔ sdd-reviewer bidirectional supervise line (side-gap vertical anchor)',
   'zone.legend.on-demand': 'on-demand role (implementor sub-bucket badge)',
-  'zone.legend.unknown': 'unknown column (unmatched / general roles)',
+  'zone.legend.unknown': 'unknown partition (bottom of the qa-gate column · unmatched / general roles)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
   'zone.legend.agent-idle': 'idle agent (dashed)',
-  'zone.legend.next': 'next flow edge (animated)',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': 'current',
@@ -416,7 +425,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
   'zone.agents.on-demand': 'On-demand',
-  'zone.agents.unknown': 'unknown',
+  'zone.agents.unknown-sub': 'unknown / unmatched roles',
   'zone.agents.bucket.implementor': 'implementor',
   'zone.agents.bucket.reviewer': 'sdd-reviewer',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',

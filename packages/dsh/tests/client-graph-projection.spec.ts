@@ -918,47 +918,69 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
  * handoffs / next determination (multiple-running rule).
  * ------------------------------------------------------------------------- */
 
-describe('projectGraph — agents zone edges (spec §4)', () => {
-  it('expected: 3 forward skeleton arrows across the 4 stages — NO loop back-edge (plan f4.2 Task 1)', () => {
+describe('projectGraph — agents zone edges (spec §4 + plan 20260812-panel-f5-design-system T5)', () => {
+  it('expected skeleton edges are REMOVED — no stage→stage arrows (design doc §2.2, user 2026-08-12 #1)', () => {
     const agents = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev' })])).agents
-    const expected = agents.edges.filter((e) => e.kind === 'expected')
-    // 3 forward edges across the consecutive stage columns.
-    expect(expected.map((e) => [e.source, e.target])).toEqual([
-      ['iteration-start:review-edit-chain', 'autonomous-execute:sdd-implement'],
-      ['autonomous-execute:sdd-implement', 'autonomous-execute:qc-tri'],
-      ['autonomous-execute:qc-tri', 'autonomous-execute:qa-gate'],
-    ])
-    // The SDD loop back-edge (sdd-implement → general) is GONE (plan
-    // 20260811-panel-f4-agent-view Task 1 + Task 2, user F4.2): no edge
-    // targets the general bucket — the `AgentEdge.loop` field itself was
-    // removed with the render branch (Task 2).
-    expect(agents.edges.every((e) => e.target !== 'general' && e.source !== 'general')).toBe(true)
+    // The AgentEdgeKind union dropped `expected` — the projection can only
+    // emit actual/supervise (compile-time) and never emits an expected arrow
+    // (runtime pin).
+    expect(agents.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
   })
 
-  it('actual: same-plan ts-ascending adjacent dispatch entity pairs — role-keyed (plan f3)', () => {
+  it('actual: same-plan ts-ascending adjacent dispatch entity pairs — role-keyed (plan f3), general endpoints filtered (T5)', () => {
     const view = projectGraph(flowSource([
       dispatchRow({ ts: 5, role: 'qc-specialist', agent: 'a3', planId: 'plan-x' }),
-      dispatchRow({ ts: 3, role: 'generalPurpose', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    const actual = view.agents.edges.filter((e) => e.kind === 'actual')
+    // Entity keys are role-based; the adjacent ts pairs stay (no general row
+    // in this fixture): frontend-dev → fullstack-dev → qc-specialist.
+    expect(actual.map((e) => [e.source, e.target])).toEqual([
+      ['frontend-dev', 'fullstack-dev'],
+      ['fullstack-dev', 'qc-specialist'],
+    ])
+    expect(actual.every((e) => e.entityKey === null)).toBe(true)
+  })
+
+  it('actual: general-bucket endpoints are FILTERED — a handoff into/out of the anonymous catch-all is noise (design doc §2.2)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 5, role: 'qc-specialist', agent: 'a3', planId: 'plan-x' }),
+      dispatchRow({ ts: 3, role: 'generalPurpose', agent: 'a2', planId: 'plan-x' }), // → general bucket
       dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
     ]))
     const actual = view.agents.edges.filter((e) => e.kind === 'actual')
-    // Entity keys are role-based: fullstack-dev → general (generalPurpose) → qc-specialist.
-    expect(actual.map((e) => [e.source, e.target])).toEqual([
-      ['fullstack-dev', 'general'],
-      ['general', 'qc-specialist'],
-    ])
-    expect(actual.every((e) => e.entityKey === null)).toBe(true)
+    // The old projection emitted fullstack-dev → general → qc-specialist; T5
+    // filters every edge with a general endpoint → none survive.
+    expect(actual).toEqual([])
+    // Anonymous rows still fold into the general CARD (unchanged) — only the
+    // EDGE endpoints are filtered.
+    expect(view.agents.entities.find((e) => e.key === 'general')).toBeDefined()
+  })
+
+  it('actual: at most ONE edge per entity-key pair — the latest direction wins (design doc §2.2)', () => {
+    // An oscillation fullstack-dev → qc-specialist → fullstack-dev →
+    // qc-specialist within one plan collapses to the FINAL handoff.
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 40, role: 'qc-specialist', agent: 'a1', planId: 'plan-x' }),
+      dispatchRow({ ts: 30, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+      dispatchRow({ ts: 20, role: 'qc-specialist', agent: 'a1', planId: 'plan-x' }),
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    const actual = view.agents.edges.filter((e) => e.kind === 'actual')
+    expect(actual).toHaveLength(1)
+    expect(actual[0]).toMatchObject({ kind: 'actual', source: 'fullstack-dev', target: 'qc-specialist' })
   })
 
   it('actual: different plans never cross; plan-less dispatches excluded', () => {
     const view = projectGraph(flowSource([
       dispatchRow({ ts: 5, role: 'qc-specialist', agent: 'b1', planId: 'plan-y' }),
-      dispatchRow({ ts: 4, role: 'generalPurpose', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 4, role: 'frontend-dev', agent: 'a2', planId: 'plan-x' }),
       dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'noplan' }),
       dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
     ]))
     const actual = view.agents.edges.filter((e) => e.kind === 'actual')
-    expect(actual.map((e) => [e.source, e.target])).toEqual([['fullstack-dev', 'general']])
+    expect(actual.map((e) => [e.source, e.target])).toEqual([['fullstack-dev', 'frontend-dev']])
   })
 
   it('actual: a self-pair (the same entity twice in a plan) is skipped', () => {
@@ -970,60 +992,34 @@ describe('projectGraph — agents zone edges (spec §4)', () => {
   })
 })
 
-describe('projectGraph — agents zone next edge (spec §4)', () => {
-  it('next: the latest running entity → the next constant-order stage column', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'qc-specialist', agent: 'a2' }),
-      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([
-      { kind: 'next', source: 'autonomous-execute:qc-tri', target: 'autonomous-execute:qa-gate', entityKey: 'qc-specialist' },
-    ])
-  })
-
-  it('next: multiple running with equal ts → the smallest entity key wins', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'qc-specialist', agent: 'b-agent' }),
-      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a-agent' }),
-    ]))
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([
-      { kind: 'next', source: 'autonomous-execute:sdd-implement', target: 'autonomous-execute:qc-tri', entityKey: 'fullstack-dev' },
-    ])
-  })
-
-  it('next: no running entity → no next edge (honest)', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 20, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
-  })
-
-  it('next: running at the LAST stage (qa-gate — the pipeline terminal) → no next edge', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'qa-engineer', agent: 'a1' }),
-    ]))
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
-  })
-
-  it('next: an off-pipeline running entity (ops-engineer, on-demand zone) has no stage → no next edge', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'a1' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'ops-engineer')!.stage).toBeNull()
-    expect(view.agents.entities.find((e) => e.key === 'ops-engineer')!.zone).toBe('on-demand')
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
-  })
-
-  it('next: a running general-bucket entity (no stage) → no next edge', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'scout', agent: 'a1' }),
-    ]))
-    const general = view.agents.entities.find((e) => e.key === 'general')!
-    expect(general.status).toBe('running')
-    expect(general.stage).toBeNull()
-    expect(general.zone).toBe('general')
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
+describe('projectGraph — agents zone next edge REMOVED (plan 20260812-panel-f5-design-system T5, design doc §2.2)', () => {
+  it('no `next` edge in ANY view — the projection no longer emits the running animation edge (user 2026-08-12 #1/#5)', () => {
+    // The running-position semantic moved to the running-card glow + status
+    // point (design doc §2.4); the projection never fabricates a next arrow.
+    const views = [
+      projectGraph(flowSource([
+        dispatchRow({ ts: 10, role: 'qc-specialist', agent: 'a2' }),
+        dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1' }),
+      ])).agents,
+      projectGraph(flowSource([
+        dispatchRow({ ts: 10, role: 'qc-specialist', agent: 'b-agent' }),
+        dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a-agent' }),
+      ])).agents,
+      projectGraph(flowSource([
+        settleRow({ ts: 20, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
+        dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
+      ])).agents,
+      projectGraph(flowSource([dispatchRow({ ts: 10, role: 'qa-engineer', agent: 'a1' })])).agents,
+      projectGraph(flowSource([dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'a1' })])).agents,
+      projectGraph(flowSource([dispatchRow({ ts: 10, role: 'scout', agent: 'a1' })])).agents,
+      projectGraph(fullSource).agents, // degraded
+      projectGraph(flowSource([])).agents, // empty
+    ]
+    for (const agents of views) {
+      // The AgentEdgeKind union dropped `next` — the projection can only
+      // emit actual/supervise (compile-time + runtime double pin).
+      expect(agents.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
+    }
   })
 })
 
@@ -1099,7 +1095,11 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     expect(degraded.entities.every((e) => e.idle && e.status === 'idle' && e.count === 0 && e.ts === 0)).toBe(true)
     expect(degraded.executing).toBe(0)
     expect(degraded.pending).toBe(0)
-    expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(3) // 3 forward skeleton only — the SDD loop back-edge is gone (plan f4.2 Task 1)
+    // Task 5 (design doc §2.2): the expected skeleton is REMOVED — the
+    // degraded branch carries ONLY the static supervise edge (dimmed).
+    expect(degraded.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
+    expect(degraded.edges).toHaveLength(1)
+    expect(degraded.edges[0]!.kind).toBe('supervise')
     // No evidence claims on a degraded skeleton either (render shows no
     // pending placeholders — spec §8).
     expect(degraded.stages.every((s) => !s.evidenced)).toBe(true)
@@ -1382,8 +1382,10 @@ describe('projectGraph — off-pipeline zones (plan 20260811-panel-f3-agent-gene
     // EXPECTED_ROLE_FLOW union): ops-engineer left the union → off-pipeline.
     expect(view.events[0]!.expected).toBe(false)
     expect(view.events[0]!.stage).toBeNull()
-    // No next edge for an off-pipeline running entity (no stage column).
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
+    // The `next` animation edge is REMOVED (plan 20260812-panel-f5-design-system
+    // Task 5) — the running position rides the card glow/status point; the
+    // projection never emits a next arrow for an off-pipeline running entity.
+    expect(view.agents.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
   })
 
   it('general-bucket role (scout) → stage null + zone general; unregistered roles never get on-demand', () => {
@@ -1671,12 +1673,12 @@ describe('projectGraph — supervise edge (plan 20260812-panel-f5-agent-layout T
     expect(supervise(agents)[0]!.evidenced).toBe(false)
   })
 
-  it('is independent of the expected skeleton: 3 expected + 1 supervise, no loop back-edge', () => {
+  it('is independent of the removed expected skeleton: NO expected edges + 1 supervise, no loop back-edge', () => {
     const agents = projectGraph(flowSource([
       dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
     ])).agents
-    const expected = agents.edges.filter((e) => e.kind === 'expected')
-    expect(expected).toHaveLength(3)
+    // Task 5 — the skeleton is removed: only actual/supervise kinds can exist.
+    expect(agents.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
     expect(supervise(agents)).toHaveLength(1)
     expect(agents.edges.every((e) => e.target !== 'general' && e.source !== 'general')).toBe(true)
   })
