@@ -691,9 +691,11 @@ describe('projectGraph — agents zone skeleton (spec §4, plan 2)', () => {
       'autonomous-execute:qa-gate',
     ])
     expect(EXPECTED_ROLE_FLOW[0]!.roles).toEqual(['product-manager', 'architect', 'writing-specialist'])
-    expect(EXPECTED_ROLE_FLOW[1]!.roles).toEqual(['fullstack-dev', 'fullstack-dev-2', 'frontend-dev'])
-    // sdd-task-review is GONE (plan f3): the SDD per-task reviewer
-    // (generalPurpose) moved off-pipeline into the general bucket.
+    expect(EXPECTED_ROLE_FLOW[1]!.roles).toEqual(['fullstack-dev', 'fullstack-dev-2', 'frontend-dev', 'code-reviewer'])
+    // code-reviewer joins the sdd-implement stage (plan f5 Task 1): v2.1.1
+    // makes the SDD L2 task reviewer (the former generalPurpose seat) a
+    // routine pipeline role. ops-engineer / prompt-engineer stay OUT of the
+    // union (on-demand — see SDD_BUCKET_ROLES; expectedness unchanged).
     expect(EXPECTED_ROLE_FLOW[2]!.roles).toEqual(['qc-specialist', 'qc-specialist-2', 'qc-specialist-3'])
     expect(EXPECTED_ROLE_FLOW[3]!.roles).toEqual(['qa-engineer'])
     // Phase 3–5 have no stages (no routine subagent dispatch) — every stage
@@ -1092,7 +1094,7 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
   it('degraded (agentFlow null / unreadable) → full idle roster, NO executing/pending claims (0/0)', () => {
     const degraded = projectGraph(fullSource).agents // agentFlow: null
     expect(degraded.degraded).toBe(true)
-    // The known roster is never hidden (spec §6.2): all 13 KNOWN_AGENTS show idle.
+    // The known roster is never hidden (spec §6.2): all 14 KNOWN_AGENTS show idle.
     expect(degraded.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(degraded.entities.every((e) => e.idle && e.status === 'idle' && e.count === 0 && e.ts === 0)).toBe(true)
     expect(degraded.executing).toBe(0)
@@ -1103,14 +1105,15 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     expect(degraded.stages.every((s) => !s.evidenced)).toBe(true)
   })
 
-  it('empty ledger → empty + full idle roster + full pending skeleton (0 executing, 10 pending)', () => {
+  it('empty ledger → empty + full idle roster + full pending skeleton (0 executing, 11 pending)', () => {
     const agents = projectGraph(flowSource([])).agents
     expect(agents.empty).toBe(true)
     expect(agents.degraded).toBe(false)
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
-    expect(agents.pending).toBe(10)
+    // 3 + 4 (sdd-implement incl. code-reviewer — plan f5 Task 1) + 3 + 1 = 11.
+    expect(agents.pending).toBe(11)
   })
 
   it('only-settle ledger → idle roster + full pending skeleton (摘要 0 执行中 · M 待执行)', () => {
@@ -1124,7 +1127,8 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
-    expect(agents.pending).toBe(10)
+    // 11 expected roles across the 4 stages (sdd-implement now incl. code-reviewer).
+    expect(agents.pending).toBe(11)
     expect(agents.stages).toHaveLength(4)
     // F-002: the projection classifies the ledger — settle rows but no
     // dispatch rows → the settle-only note (never UI-inferred).
@@ -1176,7 +1180,7 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
       dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1' }),
     ]))
     // a1's role card (lit) + the general bucket card (lit, ×2 anonymous rows)
-    // + the 11 un-evidenced known roles (idle) — anonymous rows are dispatch
+    // + the 12 un-evidenced known roles (idle) — anonymous rows are dispatch
     // evidence and belong to the general bucket (user decision, plan f3).
     expect(view.agents.entities.map((e) => e.key)).toEqual(['general', 'fullstack-dev', ...idleRosterIds(['fullstack-dev', 'general'])])
     expect(view.agents.entities.find((e) => e.key === 'general')!.count).toBe(2)
@@ -1188,7 +1192,7 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     const agents = projectGraph(flowSource([42, null, 'garbage', { kind: 'banana' }, { kind: 'dispatch' }])).agents
     expect(agents.degraded).toBe(false)
     // { kind: 'dispatch' } is a valid dispatch row (role '' → general bucket);
-    // every OTHER row is unclassifiable → 1 lit general + 12 idle = 13.
+    // every OTHER row is unclassifiable → 1 lit general + 13 idle = 14.
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.find((e) => e.key === 'general')!.idle).toBe(false)
     expect(agents.entities.filter((e) => e.idle).every((e) => e.status === 'idle')).toBe(true)
@@ -1198,26 +1202,28 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
 
 /* ---------------------------------------------------------------------------
  * KNOWN_AGENTS full roster (spec §4 / §6.2 / decision point D3 + plan
- * 20260811-panel-f3-agent-general): exactly 13 roles — every
- * EXPECTED_ROLE_FLOW role (10) + ops-engineer / prompt-engineer (off-pipeline,
- * on-demand zone) + `general` (the general bucket — the SDD per-task reviewer,
- * the former `generalPurpose`; zone 'general'); project-manager is EXCLUDED
- * (the primary orchestration agent, never an assignable subagent — F2 plan
- * Item 2) and `explore` is EXCLUDED too (scout adjunct, no presentation value
- * — user F3 feedback); stages pinned to the flow (first constant-order match),
- * null for the off-pipeline roles with an explicit `zone`
- * ('on-demand' / 'general').
+ * 20260811-panel-f3-agent-general + plan 20260812-panel-f5-agent-layout Task
+ * 1): exactly 14 roles — every EXPECTED_ROLE_FLOW role (11, incl. the SDD L2
+ * task reviewer `code-reviewer` — v2.1.1, the former `generalPurpose` seat)
+ * + ops-engineer / prompt-engineer (off-pipeline, on-demand zone —
+ * implementor-sub-bucket members, plan f5 Task 1) + `general` (the general
+ * bucket — the unmatched/anonymous catch-all; zone 'general'); project-manager
+ * is EXCLUDED (the primary orchestration agent, never an assignable subagent
+ * — F2 plan Item 2) and `explore` is EXCLUDED too (scout adjunct, no
+ * presentation value — user F3 feedback); stages pinned to the flow (first
+ * constant-order match), null for the off-pipeline roles with an explicit
+ * `zone` ('on-demand' / 'general').
  * ------------------------------------------------------------------------- */
 
 describe('projectGraph — KNOWN_AGENTS full roster (spec §4 / §6.2 / D3)', () => {
-  it('is exactly the 13 spec roles in spec §4 order, no duplicates, no project-manager, no explore', () => {
-    expect(KNOWN_AGENTS).toHaveLength(13)
+  it('is exactly the 14 spec roles in spec §4 order, no duplicates, no project-manager, no explore', () => {
+    expect(KNOWN_AGENTS).toHaveLength(14)
     expect(KNOWN_AGENTS.map((a) => a.id)).toEqual([
       'product-manager', 'architect', 'fullstack-dev', 'fullstack-dev-2',
-      'frontend-dev', 'qa-engineer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3',
+      'frontend-dev', 'code-reviewer', 'qa-engineer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3',
       'ops-engineer', 'writing-specialist', 'prompt-engineer', 'general',
     ])
-    expect(new Set(KNOWN_AGENTS.map((a) => a.id)).size).toBe(13)
+    expect(new Set(KNOWN_AGENTS.map((a) => a.id)).size).toBe(14)
     // F2 Item 2 (user F2 feedback): project-manager is the PRIMARY orchestration
     // agent — NOT an assignable subagent, so it is not in the roster.
     expect(KNOWN_AGENTS.some((a) => a.id === 'project-manager')).toBe(false)
@@ -1227,9 +1233,9 @@ describe('projectGraph — KNOWN_AGENTS full roster (spec §4 / §6.2 / D3)', ()
     expect(KNOWN_AGENTS.some((a) => a.id === 'generalPurpose')).toBe(false)
   })
 
-  it('covers every EXPECTED_ROLE_FLOW role (10) plus the 3 off-pipeline roles', () => {
+  it('covers every EXPECTED_ROLE_FLOW role (11) plus the 3 off-pipeline roles', () => {
     const flowRoles = EXPECTED_ROLE_FLOW.flatMap((s) => [...s.roles])
-    expect(flowRoles).toHaveLength(10)
+    expect(flowRoles).toHaveLength(11)
     for (const role of flowRoles) {
       expect(KNOWN_AGENTS.some((a) => a.id === role)).toBe(true)
     }
@@ -1260,7 +1266,13 @@ describe('projectGraph — KNOWN_AGENTS full roster (spec §4 / §6.2 / D3)', ()
     expect(KNOWN_AGENTS.find((a) => a.id === 'general')!.zone).toBe('general')
   })
 
-  it('general = the SDD per-task reviewer bucket (the former generalPurpose): stage null, zone general', () => {
+  it('code-reviewer joins the sdd-implement stage (plan f5 Task 1 — v2.1.1 SDD L2 task reviewer)', () => {
+    const c = KNOWN_AGENTS.find((a) => a.id === 'code-reviewer')!
+    expect(c.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    expect(c.zone ?? null).toBeNull() // staged → no off-pipeline zone
+  })
+
+  it('general = the unmatched/anonymous catch-all bucket (the SDD per-task reviewer seat is now the pipeline role code-reviewer): stage null, zone general', () => {
     const g = KNOWN_AGENTS.find((a) => a.id === 'general')!
     expect(g.stage ?? null).toBeNull()
     expect(g.zone).toBe('general')
@@ -1290,7 +1302,7 @@ describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
 
   it('no evidence → the whole roster is idle cards (idle true, status idle, count 0, ts 0, agent null)', () => {
     const agents = projectGraph(flowSource([])).agents
-    expect(agents.entities).toHaveLength(13)
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     for (const e of agents.entities) {
       expect(e.status).toBe('idle')
       expect(e.idle).toBe(true)
@@ -1323,9 +1335,9 @@ describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
     expect(byKey.get('general')!.role).toBe('general')
     // Lit roles never ALSO appear as idle cards (evidence suppresses the idle twin).
     expect(agents.entities.filter((e) => e.idle && e.key === 'general')).toHaveLength(0)
-    // The other 11 known roles are idle (roster 13 − 2 evidenced slots).
+    // The other 12 known roles are idle (roster 14 − 2 evidenced slots).
     const idle = agents.entities.filter((e) => e.idle)
-    expect(idle).toHaveLength(11)
+    expect(idle).toHaveLength(12)
     expect(idle.every((e) => e.status === 'idle')).toBe(true)
   })
 
@@ -1342,7 +1354,7 @@ describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
     const agents = projectGraph(flowSource([
       dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a1' }),
     ])).agents
-    expect(agents.entities).toHaveLength(13)
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.executing).toBe(1)
   })
 })
@@ -1409,6 +1421,180 @@ describe('projectGraph — off-pipeline zones (plan 20260811-panel-f3-agent-gene
 })
 
 /* ---------------------------------------------------------------------------
+ * SDD sub-buckets (plan 20260812-panel-f5-agent-layout Task 1): every entity
+ * carries a projected `bucket` — 'implementor' (SDD_BUCKET_ROLES.implementor:
+ * the implementer roles PLUS the on-demand ops-engineer / prompt-engineer),
+ * 'reviewer' (SDD_BUCKET_ROLES.reviewer: code-reviewer) or null (every other
+ * role — qc/qa/review-edit-chain/general). Bucket membership is a LAYOUT
+ * dimension ORTHOGONAL to expectedness: on-demand roles carry bucket
+ * 'implementor' while their `zone` stays 'on-demand' (the on-demand badge
+ * data) and their events stay `unexpected`.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — SDD sub-buckets (plan 20260812-panel-f5-agent-layout T1)', () => {
+  it('idle cards derive the bucket from SDD_BUCKET_ROLES: implementor/reviewer roles bucketed, everything else null', () => {
+    const agents = projectGraph(flowSource([])).agents
+    const byId = new Map(agents.entities.map((e) => [e.key, e]))
+    // Reviewer: code-reviewer (idle — no evidence yet) sits in the sdd-implement
+    // stage column's reviewer sub-bucket (zone flow — staged).
+    const reviewer = byId.get('code-reviewer')!
+    expect(reviewer.idle).toBe(true)
+    expect(reviewer.bucket).toBe('reviewer')
+    expect(reviewer.zone).toBe('flow')
+    expect(reviewer.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    // Implementor: the three implementer roles + the on-demand roles.
+    for (const id of ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev']) {
+      expect(byId.get(id)!.bucket).toBe('implementor')
+    }
+    expect(byId.get('ops-engineer')!.bucket).toBe('implementor')
+    expect(byId.get('prompt-engineer')!.bucket).toBe('implementor')
+    // On-demand zone is UNCHANGED (the render's on-demand badge data — the
+    // standalone on-demand column is removed by Task 2, not by the zone).
+    expect(byId.get('ops-engineer')!.zone).toBe('on-demand')
+    expect(byId.get('prompt-engineer')!.zone).toBe('on-demand')
+    // Every other role (review-edit-chain / qc / qa / general bucket) → null.
+    for (const id of ['product-manager', 'architect', 'writing-specialist', 'qa-engineer',
+      'qc-specialist', 'qc-specialist-2', 'qc-specialist-3', 'general']) {
+      expect(byId.get(id)!.bucket).toBeNull()
+    }
+    expect(byId.get('general')!.zone).toBe('general')
+  })
+
+  it('code-reviewer dispatch → bucket reviewer + zone flow (expected pipeline role); its event turns expected', () => {
+    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'code-reviewer', agent: 'r1' })]))
+    const lit = view.agents.entities.find((e) => e.key === 'code-reviewer')!
+    expect(lit.idle).toBe(false)
+    expect(lit.bucket).toBe('reviewer')
+    expect(lit.zone).toBe('flow')
+    expect(lit.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    // v2.1.1: the SDD L2 task reviewer is a routine pipeline role — its
+    // dispatch event is EXPECTED (union member since plan f5 T1).
+    expect(view.events[0]!.expected).toBe(true)
+    expect(view.events[0]!.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    expect(view.unexpected).toEqual([])
+  })
+
+  it('on-demand dispatches (ops-engineer / prompt-engineer) → bucket implementor + zone on-demand + event still unexpected (orthogonality)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'o1' }),
+      dispatchRow({ ts: 9, role: 'prompt-engineer', agent: 'p1' }),
+    ]))
+    for (const id of ['ops-engineer', 'prompt-engineer']) {
+      const lit = view.agents.entities.find((e) => e.key === id)!
+      expect(lit.idle).toBe(false)
+      expect(lit.bucket).toBe('implementor') // implementor-sub-bucket member
+      expect(lit.zone).toBe('on-demand')    // but the on-demand badge data stays
+      expect(lit.stage).toBeNull()
+    }
+    // REGRESSION (compass Non-Goal — no event-log classification change): the
+    // on-demand roles stay OUT of the EXPECTED_ROLE_FLOW union, so their
+    // dispatch events keep the `unexpected` badge even inside the implementor
+    // bucket.
+    expect(view.unexpected.map((e) => e.role).sort()).toEqual(['ops-engineer', 'prompt-engineer'])
+    expect(view.events.every((e) => e.expected === false)).toBe(true)
+  })
+
+  it('general-bucket dispatch → bucket null + zone general (unmatched/anonymous catch-all)', () => {
+    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'scout', agent: 's1' })]))
+    const general = view.agents.entities.find((e) => e.key === 'general')!
+    expect(general.idle).toBe(false)
+    expect(general.bucket).toBeNull()
+    expect(general.zone).toBe('general')
+    expect(general.stage).toBeNull()
+    // The general bucket is NOT in the union → its events stay unexpected.
+    expect(view.unexpected.map((e) => e.role)).toEqual(['scout'])
+  })
+
+  it('bucket follows the ROLE, never the session id (a code-reviewer session id under another role stays null/other)', () => {
+    // The session id 'code-reviewer' is only a record field — the ROLE decides
+    // the bucket: a fullstack-dev dispatch carries bucket implementor.
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'code-reviewer' }),
+    ])).agents
+    const lit = agents.entities.find((e) => e.key === 'fullstack-dev')!
+    expect(lit.bucket).toBe('implementor')
+    expect(lit.agent).toBe('code-reviewer')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * The sub-bucket supervision edge (plan 20260812-panel-f5-agent-layout Task
+ * 1): ONE static design-knowledge line between the sdd-implement column's
+ * implementor and reviewer sub-buckets (mstar-sdd mutual supervision — the
+ * render draws it as a bidirectional double arrow, Task 2). Presence is
+ * STATIC (emitted even with no evidence, degraded/empty included); lighting
+ * is evidence-driven via `AgentEdge.evidenced` — dim (false) without any
+ * implement/review dispatch evidence, lit (true) with it. Anchors embed the
+ * column id: `<stage-id>:implementor` / `<stage-id>:reviewer`.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — supervise edge (plan 20260812-panel-f5-agent-layout T1)', () => {
+  const supervise = (agents: ZoneView['agents']) => agents.edges.filter((e) => e.kind === 'supervise')
+
+  it('exists STATICALLY with the sub-bucket anchor shape, dimmed (evidenced false) without any evidence', () => {
+    const agents = projectGraph(flowSource([])).agents // empty ledger
+    const edges = supervise(agents)
+    expect(edges).toHaveLength(1)
+    expect(edges[0]).toEqual({
+      kind: 'supervise',
+      source: 'autonomous-execute:sdd-implement:implementor',
+      target: 'autonomous-execute:sdd-implement:reviewer',
+      entityKey: null,
+      evidenced: false,
+    })
+  })
+
+  it('exists dimmed in the degraded branch too (static presence — design knowledge, no evidence to light it)', () => {
+    const agents = projectGraph(fullSource).agents // agentFlow null → degraded
+    expect(supervise(agents)).toEqual([{
+      kind: 'supervise',
+      source: 'autonomous-execute:sdd-implement:implementor',
+      target: 'autonomous-execute:sdd-implement:reviewer',
+      entityKey: null,
+      evidenced: false,
+    }])
+  })
+
+  it('lights (evidenced true) on implement evidence — a fullstack-dev dispatch', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
+    ])).agents
+    expect(supervise(agents)[0]!.evidenced).toBe(true)
+  })
+
+  it('lights on review evidence — a code-reviewer dispatch (the reviewer sub-bucket)', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'code-reviewer', agent: 'r1' }),
+    ])).agents
+    expect(supervise(agents)[0]!.evidenced).toBe(true)
+  })
+
+  it('lights on an on-demand implementor dispatch (ops-engineer) — bucket membership, not expectedness', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'o1' }),
+    ])).agents
+    expect(supervise(agents)[0]!.evidenced).toBe(true)
+  })
+
+  it('stays dim on dispatch evidence OUTSIDE the sub-buckets (qa-engineer — different column)', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'qa-engineer', agent: 'q1' }),
+    ])).agents
+    expect(supervise(agents)[0]!.evidenced).toBe(false)
+  })
+
+  it('is independent of the expected skeleton: 3 expected + 1 supervise, no loop back-edge', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
+    ])).agents
+    const expected = agents.edges.filter((e) => e.kind === 'expected')
+    expect(expected).toHaveLength(3)
+    expect(supervise(agents)).toHaveLength(1)
+    expect(agents.edges.every((e) => e.target !== 'general' && e.source !== 'general')).toBe(true)
+  })
+})
+
+/* ---------------------------------------------------------------------------
  * Entity key uniqueness (F-001 — qc1/qc2 Warning): since plan
  * 20260811-panel-f3-agent-general keys are ROLE-based (not session ids), the
  * collision class moved from "session id vs roster id" to "lit `general` key
@@ -1440,16 +1626,17 @@ describe('projectGraph — agents entity key uniqueness (F-001)', () => {
     // The suppressed idle twin: the roster `general` id never appears idle.
     const idleKeys = agents.entities.filter((e) => e.idle).map((e) => e.key)
     expect(idleKeys).not.toContain('general')
-    // 1 lit + 12 idle = 13 unique cards (roster 13; the general slot is lit).
-    expect(agents.entities).toHaveLength(13)
+    // 1 lit + 13 idle = 14 unique cards (roster 14; the general slot is lit).
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     // `executing` matches the visible cards (1 running lit card — no hidden
     // duplicate to disagree with the summary).
     expect(agents.executing).toBe(1)
   })
 
   it('the general bucket aggregates heterogeneous non-roster dispatches into ONE card', () => {
-    // generalPurpose (former SDD reviewer) + anonymous + scout → one `general`
-    // entity — the F3 migration: SDD per-task reviews land in the bucket.
+    // generalPurpose (legacy non-roster id) + anonymous + scout → one `general`
+    // entity — the bucket is the unmatched/anonymous catch-all (the SDD
+    // per-task reviewer seat is the pipeline role `code-reviewer`, plan f5 T1).
     const agents = projectGraph(flowSource([
       dispatchRow({ ts: 9, role: 'scout', agent: 's1' }),
       { kind: 'dispatch', ts: 8 }, // anonymous → general
@@ -1552,6 +1739,27 @@ describe('projectGraph — events / unexpected (spec §3 migration)', () => {
       settleRow({ ts: 1 }),
     ]))
     expect(view.unexpected.map((e) => e.ts)).toEqual([4, 3])
+  })
+
+  it('unexpected semantics regression (plan f5 T1 — union extended by code-reviewer ONLY): ops-engineer / prompt-engineer / general stay unexpected, code-reviewer turns expected', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 5, role: 'code-reviewer' }),
+      dispatchRow({ ts: 4, role: 'ops-engineer' }),
+      dispatchRow({ ts: 3, role: 'prompt-engineer' }),
+      dispatchRow({ ts: 2, role: 'general' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev' }),
+    ]))
+    // code-reviewer joined the EXPECTED_ROLE_FLOW union (sdd-implement) →
+    // its dispatch is now EXPECTED (was the former generalPurpose seat,
+    // v2.1.1). Compass Non-Goal honored: ops-engineer / prompt-engineer /
+    // general are NOT in the union → their badges stay `unexpected`.
+    expect(view.unexpected.map((e) => e.role)).toEqual(['ops-engineer', 'prompt-engineer', 'general'])
+    const byRole = new Map(view.events.map((e) => [e.role, e]))
+    expect(byRole.get('code-reviewer')!.expected).toBe(true)
+    expect(byRole.get('ops-engineer')!.expected).toBe(false)
+    expect(byRole.get('prompt-engineer')!.expected).toBe(false)
+    expect(byRole.get('general')!.expected).toBe(false)
+    expect(byRole.get('fullstack-dev')!.expected).toBe(true)
   })
 })
 

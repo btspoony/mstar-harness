@@ -4,13 +4,13 @@
  * zoom), the coordinate-space content layer with the moving grid background,
  * the scattered entity cards (agent-name title / status point / record fields;
  * idle cards muted via the dashed border + caption treatment), the stage
- * column labels (+ the on-demand column, plan 20260811-panel-f2-quickfix
- * Item 3; the general bucket has NO column of its own — plan
- * 20260811-panel-f4-agent-view Task 2, its card sinks to the bottom of the
- * sdd-implement column with the in-bucket `general` tag),
+ * column labels (+ the rightmost unknown column and the sdd-implement
+ * sub-bucket captions / on-demand badge / supervise line — plan
+ * 20260812-panel-f5-agent-layout Task 2: the standalone on-demand column is
+ * removed, the general bucket no longer sinks into the sdd-implement column),
  * the Legend seat (plan Task 3), and the AgentEdge
  * collaboration lines (expected skeleton / actual handoffs / the ANIMATED
- * next edge).
+ * next edge / the bidirectional supervise line).
  *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
@@ -120,7 +120,8 @@
 }
 
 /* --- collaboration edges (spec §4): expected skeleton / actual handoff /
- * next animated — SVG lines, non-interactive overlay --- */
+ * next animated / supervise bidirectional — SVG lines, non-interactive
+ * overlay --- */
 
 .canvasEdges {
   position: absolute;
@@ -156,15 +157,19 @@
   }
 }
 
-.canvasArrowExpected path {
+/* Arrowhead fills (QC S-002): the marker <path> elements carry these classes
+ * directly (AgentCanvasPage.tsx marker defs), so the fill must target the
+ * class itself — a `.canvasArrowX path` descendant selector would never match
+ * and the SVG default (black) fill would win. One direct rule per marker. */
+.canvasArrowExpected {
   fill: var(--dsw-alias-label-caption);
 }
 
-.canvasArrowActual path {
+.canvasArrowActual {
   fill: var(--dsw-alias-state-business-primary);
 }
 
-.canvasArrowNext path {
+.canvasArrowNext {
   fill: var(--dsw-alias-state-business-primary);
 }
 
@@ -230,19 +235,28 @@
   border-color: var(--dsw-alias-label-caption);
 }
 
-/* In-bucket general label (plan 20260811-panel-f4-agent-view Task 2): the
- * general bucket card sits at the BOTTOM of the `sdd-implement` column — a
- * tiny `general` caption + a dashed rule float in the row gap ABOVE the card
- * (the tag is positioned at the card's top edge), setting the bucket apart
- * from the dev cards above. `top: -12px` aligns exactly with ROW_GAP = 12 —
- * the tag stays inside the gap, never touching the card above (qc F-003).
+/* On-demand badge (plan 20260812-panel-f5-agent-layout Task 2): the
+ * implementor-sub-bucket on-demand roles (ops-engineer / prompt-engineer)
+ * carry a dashed business chip — the tag marks the on-demand nature inside
+ * the implementor partition (the standalone on-demand column is gone).
  * Token discipline: colors --dsw-alias-*, spacing --mstar-space-*, font
  * --dsw-font-xxxs-11 — zero bare hex. */
-.generalBucketTag {
+.onDemandBadge {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px dashed var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* Sub-bucket caption (plan f5 Task 2): the implementor / sdd-reviewer
+ * partition labels inside the `sdd-implement` column — a tiny uppercase
+ * caption + the dashed rule filling the rest of the row (the former
+ * generalBucketTag pattern, now carrying the partition labels). `width` is
+ * set inline from the layout (the deterministic caption seat). */
+.subBucketLabel {
   position: absolute;
-  top: -12px;
-  left: 0;
-  right: 0;
   display: flex;
   align-items: center;
   gap: var(--mstar-space-1);
@@ -252,11 +266,34 @@
   text-transform: uppercase;
 }
 
-/* The dashed separator rule filling the rest of the tag row. */
-.generalBucketTag::after {
+/* The dashed separator rule filling the rest of the caption row. */
+.subBucketLabel::after {
   content: '';
   flex: 1;
   border-top: 1px dashed var(--dsw-alias-border-l2);
+}
+
+/* Supervise line (plan f5 Task 2): the implementor ↔ sdd-reviewer mutual
+ * supervision edge — dim dashed by default, lit business when the projected
+ * `evidenced` flag is true (dispatch evidence in an SDD sub-bucket; never a
+ * fabricated activation). The bidirectional double arrow comes from the
+ * auto-start-reverse markers (both ends point outward). */
+.canvasEdgeSupervise {
+  stroke: var(--dsw-alias-label-caption);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.canvasEdgeSuperviseLit {
+  stroke: var(--dsw-alias-state-business-primary);
+}
+
+.canvasArrowSupervise {
+  fill: var(--dsw-alias-label-caption);
+}
+
+.canvasArrowSuperviseLit {
+  fill: var(--dsw-alias-state-business-primary);
 }
 
 .agentCardLine {

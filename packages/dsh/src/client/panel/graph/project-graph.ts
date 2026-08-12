@@ -41,18 +41,25 @@
  * Agent-entity semantics (plan 20260811-panel-f3-agent-general — the
  * per-role aggregation refactor): entities aggregate by ROLE, not by session
  * — a KNOWN_AGENTS roster role keys its own card (same role across sessions
- * folds into one card ×N), and EVERY non-roster dispatch (the former
- * `generalPurpose` SDD reviewer, `scout`, unregistered roles, anonymous
- * `role === ''`) folds into the single `general` bucket entity (key
- * `'general'`, role shown `'general'`). The legacy `unexpected` zone is
- * GONE — stage-null non-on-demand entities now project `zone: 'general'`.
- * Placement (plan 20260811-panel-f4-agent-view Task 1, user F4.2): the
- * projection only declares the zone — the RENDER places `zone: 'general'`
- * entities at the BOTTOM INSIDE the `sdd-implement` column bucket (no
- * general column anymore; Task 2 consumes this). The SDD loop back-edge
- * (sdd-implement → general) is REMOVED from the projection (Task 1); the
- * event-log `unexpected` badge is a SEPARATE, unchanged semantic
- * (`expected` ⟺ role ∈ EXPECTED_ROLE_FLOW union).
+ * folds into one card ×N), and EVERY non-roster dispatch (`scout`,
+ * unregistered roles, anonymous `role === ''`) folds into the single
+ * `general` bucket entity (key `'general'`, role shown `'general'`). The
+ * legacy `unexpected` zone is GONE — stage-null non-on-demand entities now
+ * project `zone: 'general'`. Placement (plan 20260812-panel-f5-agent-layout
+ * Task 1, user 2026-08-12): the projection only declares the zone — the
+ * RENDER places `zone: 'general'` entities in their OWN rightmost UNKNOWN
+ * column (Task 2; the earlier F4.2 "bottom inside the sdd-implement column"
+ * placement is superseded). The SDD loop back-edge (sdd-implement →
+ * general) stays REMOVED from the projection (plan 20260811-panel-f4-agent-view
+ * Task 1); the F5 supervise line is a SEPARATE sub-bucket edge
+ * (`kind: 'supervise'`, see `superviseEdges`). The event-log `unexpected`
+ * badge is a SEPARATE, unchanged semantic (`expected` ⟺ role ∈
+ * EXPECTED_ROLE_FLOW union). The `sdd-implement` column is further split
+ * into implementor / reviewer SUB-BUCKETS (plan 20260812-panel-f5-agent-layout
+ * Task 1): every entity carries a projected `bucket` field ('implementor' /
+ * 'reviewer' / null via SDD_BUCKET_ROLES — a layout dimension ORTHOGONAL to
+ * expectedness: on-demand roles keep their `unexpected` badge inside the
+ * implementor bucket).
  *
  * Degradation (spec §8): `source === null` → legal empty view (the panel
  * never mounts the graph for that case, but the projection stays total);
@@ -74,7 +81,7 @@ import type { MstarEngineStatusSource } from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
 import { PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
-  EXPECTED_ROLE_FLOW, GENERAL_BUCKET, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
+  EXPECTED_ROLE_FLOW, GENERAL_BUCKET, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, SDD_BUCKET_ROLES, TRANSITION_TO_PHASE,
   type AgentZone, type KnownAgent, type PhaseId, type PlanStateId,
 } from './schema.ts'
 
@@ -229,15 +236,27 @@ export interface AgentEntityView {
   stage: { phase: PhaseId; stage: string } | null
   /** Column zone (plan 20260811-panel-f3-agent-general — projection-owned,
    * the render NEVER heuristically guesses): 'flow' (stage columns), 'on-demand'
-   * (ops-engineer / prompt-engineer column) or 'general' (the general bucket —
-   * the former 'unexpected' zone). Placement (plan
-   * 20260811-panel-f4-agent-view Task 1, user F4.2): 'general' has NO column
-   * of its own — the render places those entities at the BOTTOM INSIDE the
-   * `sdd-implement` column bucket (the zone VALUE is unchanged, only the
-   * render layout changes — Task 2). Derived from the role for lit cards,
-   * from the KnownAgent `zone` for idle cards. */
+   * (ops-engineer / prompt-engineer — implementor-sub-bucket dispatches with
+   * an on-demand badge; the standalone on-demand column is REMOVED, plan
+   * 20260812-panel-f5-agent-layout Task 2) or 'general' (the general bucket —
+   * the rightmost UNKNOWN column, Task 2). Derived from the role for lit
+   * cards, from the KnownAgent `zone` for idle cards. */
   zone: AgentZone
+  /** SDD sub-bucket (plan 20260812-panel-f5-agent-layout Task 1 —
+   * projection-derived, the render ONLY consumes it): role ∈
+   * SDD_BUCKET_ROLES.implementor → 'implementor' (incl. on-demand roles),
+   * role ∈ SDD_BUCKET_ROLES.reviewer → 'reviewer' (code-reviewer); every
+   * other role (qc/qa/review-edit-chain/general) → null. Same rule for idle
+   * cards (KNOWN_AGENTS id → SDD_BUCKET_ROLES lookup). */
+  bucket: AgentBucket | null
 }
+
+/** The SDD sub-bucket a role belongs to within the `sdd-implement` column
+ * (plan 20260812-panel-f5-agent-layout Task 1): 'implementor' | 'reviewer';
+ * roles in neither bucket project `null`. The bucket is a LAYOUT dimension,
+ * ORTHOGONAL to expectedness (SDD_BUCKET_ROLES vs EXPECTED_ROLE_FLOW — an
+ * on-demand role in the implementor bucket stays OUTSIDE the expected union). */
+export type AgentBucket = 'implementor' | 'reviewer'
 
 /**
  * Entity status (spec §4, hardcoded priority): `denied`/`advisory` come from
@@ -250,32 +269,48 @@ export interface AgentEntityView {
  */
 export type AgentEntityStatus = 'running' | 'settled' | 'error' | 'denied' | 'advisory' | 'idle'
 
-/** Edge kinds (spec §4): skeleton / handoff / next-flow arrows. */
-export type AgentEdgeKind = 'expected' | 'actual' | 'next'
+/** Edge kinds (spec §4 + plan 20260812-panel-f5-agent-layout Task 1):
+ * skeleton / handoff / next-flow / sub-bucket supervision arrows. */
+export type AgentEdgeKind = 'expected' | 'actual' | 'next' | 'supervise'
 
 /**
- * One agents-zone arrow (spec §4):
+ * One agents-zone arrow (spec §4 + plan 20260812-panel-f5-agent-layout Task
+ * 1):
  * - `expected`: skeleton arrow between consecutive EXPECTED_ROLE_FLOW stage
  *   columns (source/target = stage id). The former SDD loop back-edge
  *   `autonomous-execute:sdd-implement → general` is REMOVED from the
  *   projection (plan 20260811-panel-f4-agent-view Task 1, user F4.2 — the
  *   implement ↔ general-bucket review cycle is no longer drawn as an edge;
  *   the `AgentEdge.loop` field itself was removed with the render branch in
- *   Task 2; a future "dynamic-lines" iteration may reconnect by real
- *   evidence);
+ *   Task 2);
  * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
  *   (source/target = entity key — role-based since plan
  *   20260811-panel-f3-agent-general);
  * - `next`: the latest running entity's stage column → the next constant-order
- *   column (source/target = stage id; `entityKey` = the running card).
+ *   column (source/target = stage id; `entityKey` = the running card);
+ * - `supervise`: ONE static sub-bucket line inside the `sdd-implement`
+ *   column — implementor ↔ reviewer mutual supervision (mstar-sdd contract;
+ *   the render draws it as a bidirectional double arrow, Task 2).
+ *   source/target embed the column id as an anchor prefix:
+ *   `<stage-id>:implementor` / `<stage-id>:reviewer`. NOT per-entity pairs —
+ *   drawing per-role pairs would fabricate concrete supervision relations
+ *   where no evidence exists (evidence-level handoffs are covered by
+ *   `actualEdges`). STATIC presence (design knowledge) + evidence-driven
+ *   lighting via `evidenced` (dim without implement/review dispatch
+ *   evidence, lit with it — never a fabricated activation).
  */
 export interface AgentEdge {
   kind: AgentEdgeKind
-  /** expected/next: stage id (`${phase}:${stage}`); actual: entity key. */
+  /** expected/next: stage id (`${phase}:${stage}`); actual: entity key; supervise: `<stage-id>:implementor|reviewer`. */
   source: string
   target: string
-  /** The running entity key the next arrow highlights; null for expected/actual. */
+  /** The running entity key the next arrow highlights; null for expected/actual/supervise. */
   entityKey: string | null
+  /** Supervise edges only (plan 20260812-panel-f5-agent-layout Task 1):
+   * evidence-driven lighting — true when any dispatch row's role belongs to
+   * an SDD sub-bucket (implementor ∪ reviewer), false otherwise (dim).
+   * Absent (undefined) for expected/actual/next. */
+  evidenced?: boolean
 }
 
 /**
@@ -576,6 +611,59 @@ function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
   return edges
 }
 
+/**
+ * The SDD sub-bucket of a role (plan 20260812-panel-f5-agent-layout Task 1):
+ * role ∈ SDD_BUCKET_ROLES.implementor → 'implementor' (incl. the on-demand
+ * ops-engineer / prompt-engineer — bucket membership is a LAYOUT dimension,
+ * orthogonal to expectedness), role ∈ SDD_BUCKET_ROLES.reviewer →
+ * 'reviewer' (code-reviewer); every other role (qc / qa / review-edit-chain /
+ * general) → null. Total function, never a throw.
+ */
+function bucketOf(role: string): AgentBucket | null {
+  if (SDD_BUCKET_ROLES.implementor.includes(role)) return 'implementor'
+  if (SDD_BUCKET_ROLES.reviewer.includes(role)) return 'reviewer'
+  return null
+}
+
+/** The `sdd-implement` stage column id (the sub-buckets' host column) —
+ * DERIVED from the projected stages (the same `${phase}:${stage}` key
+ * construction the projection emits — a phase/stage rename can never
+ * silently orphan the supervise line); null when the stage is absent. */
+function sddImplementColumnId(stages: readonly AgentZoneStage[]): string | null {
+  const s = stages.find((x) => x.stage === 'sdd-implement')
+  return s === undefined ? null : s.id
+}
+
+/**
+ * The sub-bucket supervision edge (plan 20260812-panel-f5-agent-layout Task
+ * 1): ONE static design-knowledge line between the `sdd-implement` column's
+ * implementor and reviewer sub-buckets (the mstar-sdd mutual-supervision
+ * contract — the render draws it as a bidirectional double arrow, Task 2).
+ * NOT per-entity pairs: drawing implementor→reviewer per role pair would
+ * fabricate concrete supervision relations where no evidence exists (the
+ * evidence-level handoffs are already covered by `actualEdges`). STATIC
+ * presence (existence = design knowledge — the edge is emitted even without
+ * any dispatch evidence, degraded/empty branches included) + evidence-driven
+ * lighting via `AgentEdge.evidenced` (dim with no implement/review dispatch
+ * evidence, lit with it — the same pattern as the expected skeleton: never a
+ * fabricated activation). Anchors embed the column id as a prefix:
+ * `<stage-id>:implementor` / `<stage-id>:reviewer`.
+ */
+function superviseEdges(stages: readonly AgentZoneStage[], entries: readonly { view: FlowEventView }[]): AgentEdge[] {
+  const columnId = sddImplementColumnId(stages)
+  if (columnId === null) return []
+  const evidenced = entries.some(
+    (e) => e.view.kind === 'dispatch' && bucketOf(e.view.role) !== null,
+  )
+  return [{
+    kind: 'supervise',
+    source: `${columnId}:implementor`,
+    target: `${columnId}:reviewer`,
+    entityKey: null,
+    evidenced,
+  }]
+}
+
 /** One in-progress entity accumulator (the aggregation walk, spec §4). */
 interface EntityAccum {
   key: string
@@ -589,6 +677,9 @@ interface EntityAccum {
   /** Column zone (plan 20260811-panel-f3-agent-general): 'flow' when staged;
    * KNOWN_AGENTS `zone` for off-pipeline roster roles; 'general' otherwise. */
   zone: AgentZone
+  /** SDD sub-bucket (plan 20260812-panel-f5-agent-layout Task 1): derived
+   * from the entity role via `bucketOf` — see AgentEntityView.bucket. */
+  bucket: AgentBucket | null
   /** Index of the latest dispatch in the classified entries array (pair lookup). */
   latestIndex: number
   /** dispatchStatus of the latest dispatch ('denied' | 'advisory' | 'dispatched'). */
@@ -665,6 +756,7 @@ function aggregateEntities(
         ts: v.ts,
         stage: v.stage,
         zone: roleZone(role, v.stage),
+        bucket: bucketOf(role),
         latestIndex: i,
         verdict: v.status,
       })
@@ -682,6 +774,7 @@ function aggregateEntities(
         cur.task = task
         cur.stage = v.stage
         cur.zone = roleZone(role, v.stage)
+        cur.bucket = bucketOf(role)
       }
     }
   }
@@ -695,6 +788,7 @@ function aggregateEntities(
     ts: e.ts,
     stage: e.stage,
     zone: e.zone,
+    bucket: e.bucket,
     status: entityStatus(e, pairStatus),
     idle: false,
   }))
@@ -784,6 +878,7 @@ function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<
       ts: 0,
       stage: known.stage ?? null,
       zone: idleZone(known),
+      bucket: bucketOf(known.id),
     })
   }
   return out
@@ -842,10 +937,13 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     : rawAgentFlow.events
   if (rawEvents === null || !Array.isArray(rawEvents)) {
     // No ledger evidence at all → every known agent is idle (spec §6.2);
-    // `note` is null — the `degraded` flag IS the note for this branch.
+    // `note` is null — the `degraded` flag IS the note for this branch. The
+    // supervise edge still exists (STATIC design knowledge), dimmed
+    // (evidenced false — no evidence to light it).
     return {
       stages, degraded: true, empty: false, note: null,
-      entities: idleEntities(new Set(), new Set()), edges: expectedEdges(stages), executing: 0, pending: 0,
+      entities: idleEntities(new Set(), new Set()),
+      edges: [...expectedEdges(stages), ...superviseEdges(stages, [])], executing: 0, pending: 0,
     }
   }
 
@@ -899,7 +997,12 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
   // idle roster `general` card.
   const litKeys = new Set(lit.map((e) => e.key))
   const entities = [...lit, ...idleEntities(evidencedRoles, litKeys)]
-  const edges = [...expectedEdges(stages), ...actualEdges(entries), ...nextEdges(entities, stages)]
+  const edges = [
+    ...expectedEdges(stages),
+    ...actualEdges(entries),
+    ...nextEdges(entities, stages),
+    ...superviseEdges(stages, entries),
+  ]
 
   const executing = entities.filter((e) => e.status === 'running').length
   // Pending = expected roles of stages with NO dispatch evidence (spec §4).

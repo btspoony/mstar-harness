@@ -111,16 +111,33 @@
 }
 
 /* General bucket swatch (plan 20260811-panel-f3-agent-general): the trailing
- * column for stage-null roles (SDD per-task reviewers / unmatched / anonymous
- * dispatches) — the former 'unexpected' entry, kept as the dashed warn ring
- * so the column stays visually distinct from the on-demand business ring. */
-.swatchGeneral {
-  border: 1px dashed var(--dsw-alias-state-warn-label);
+ * column for stage-null roles — replaced by the rightmost UNKNOWN column
+ * swatch (plan 20260812-panel-f5-agent-layout Task 2). Muted NEUTRAL dashed
+ * caption ring — deliberately NOT the warn/orange treatment, mirroring the
+ * kanban unknown column. */
+.swatchUnknown {
+  border: 1px dashed var(--dsw-alias-label-caption);
 }
 
-/* On-demand zone swatch (plan 20260811-panel-f2-quickfix Item 3): the
- * ops-engineer / prompt-engineer column — business ring, distinct from the
- * warn-dashed general-bucket swatch. */
+/* Sub-bucket swatch (plan f5 Task 2): the sdd-implement column's two stacked
+ * partitions — implementor (business bar) above, sdd-reviewer (caption bar)
+ * below. */
+.swatchSubBucket {
+  border-top: 3px solid var(--dsw-alias-state-business-primary);
+  border-bottom: 3px solid var(--dsw-alias-label-caption);
+}
+
+/* Supervise-line swatch (plan f5 Task 2): the implementor ↔ sdd-reviewer
+ * bidirectional supervision line — dim dashed caption (the lit business
+ * state is evidence-driven; the arrowheads are implied). */
+.swatchSupervise {
+  border: 1px dashed var(--dsw-alias-label-secondary);
+}
+
+/* On-demand swatch (plan 20260811-panel-f2-quickfix Item 3 + plan f5 Task 2):
+ * ops-engineer / prompt-engineer — business ring for the implementor-sub-
+ * bucket on-demand badge (the standalone on-demand column is gone; the badge
+ * marks the on-demand nature inside the implementor partition). */
 .swatchOnDemand {
   border: 1px solid var(--dsw-alias-state-business-primary);
   border-radius: 999px;

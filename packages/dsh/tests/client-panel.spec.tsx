@@ -114,7 +114,7 @@ import {
   panDragMove,
   panDragStart,
   panTransform,
-  ON_DEMAND_COLUMN,
+  UNKNOWN_COLUMN,
   PAN_ORIGIN,
   type PanState,
 } from '../src/client/panel/pages/AgentCanvasPage'
@@ -1036,6 +1036,21 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
     // Zero dark-theme overrides — dark mode is the host token flip.
     expect(cssText).not.toContain('data-ds-dark-theme')
+  })
+
+  it('arrowhead fills target the marker <path> itself — no descendant selector (QC S-002)', () => {
+    // The marker defs put the class ON the <path> element (AgentCanvasPage.tsx
+    // `canvas-arrow-*` markers), so a `.canvasArrowX path` descendant selector
+    // can never match — the SVG default (black) fill would win and the lit
+    // supervise arrowheads would never render business-primary. Pin the
+    // direct-class form + the token pairing with each edge's stroke color.
+    expect(cssText).not.toMatch(/\.canvasArrow[A-Za-z]+\s+path\s*\{/)
+    const arrowRule = (cls: string) => cssText.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+    expect(arrowRule('canvasArrowExpected')).toContain('fill: var(--dsw-alias-label-caption)')
+    expect(arrowRule('canvasArrowActual')).toContain('fill: var(--dsw-alias-state-business-primary)')
+    expect(arrowRule('canvasArrowNext')).toContain('fill: var(--dsw-alias-state-business-primary)')
+    expect(arrowRule('canvasArrowSupervise')).toContain('fill: var(--dsw-alias-label-caption)')
+    expect(arrowRule('canvasArrowSuperviseLit')).toContain('fill: var(--dsw-alias-state-business-primary)')
   })
 })
 
@@ -2261,9 +2276,9 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     for (const known of KNOWN_AGENTS) {
       expect(html).toContain(`data-agent-entity="${known.id}"`)
     }
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
     // Degraded → every roster member is an idle card (spec §6.2), zero claims.
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(KNOWN_AGENTS.length)
     expect(html).toContain('data-canvas-note="degraded"')
     expect(html).toContain('data-agent-summary-executing="0"')
     expect(html).toContain('data-agent-summary-pending="0"')
@@ -2271,10 +2286,10 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
 
   it('lit cards carry the agent-name title + record fields; idle cards are muted with no fabricated record', () => {
     const html = agentsHtml(evidenceSource)
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
-    // 3 lit (fullstack-dev / general / qc-specialist — role-keyed) + 10 idle
-    // roster members (spec §6.2 suppression rule).
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(10)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
+    // 3 lit (fullstack-dev / general / qc-specialist — role-keyed) + 11 idle
+    // roster members (spec §6.2 suppression rule; roster 14 — plan f5 T1).
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(11)
     // Title = the agent name (role id); the session id rides the record line.
     expect(html).toContain('title="fullstack-dev"')
     expect(html).toContain('title="general"') // the generalPurpose dispatch folds into the bucket
@@ -2294,8 +2309,9 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(html).not.toContain('data-canvas-note')
     expect(html).toContain('data-agent-summary-executing="2"')
     // Pending = un-evidenced stage roles: review-edit-chain (3) + qa-gate (1)
-    // = 4 — the 10-role in-flow semantics (plan f3; ops-engineer out of the
-    // flow and generalPurpose off the pipeline).
+    // = 4 — sdd-implement is evidenced (fullstack-dev) incl. code-reviewer
+    // (plan f5 T1), ops-engineer stays out of the flow (on-demand) and the
+    // generalPurpose dispatch is off the pipeline.
     expect(html).toContain('data-agent-summary-pending="4"')
   })
 
@@ -2309,11 +2325,11 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       dispatchEvent({ ts: 35, role: 'qa-engineer', agent: 'p1' }),
       dispatchEvent({ ts: 34, role: 'generalPurpose', agent: 'p1' }), // → general bucket
     ]))
-    // 7 lit (6 in-flow + the general bucket) + 6 idle (fullstack-dev-2,
+    // 7 lit (6 in-flow + the general bucket) + 7 idle (fullstack-dev-2,
     // frontend-dev, qc-specialist-2, qc-specialist-3, ops-engineer,
-    // prompt-engineer) = 13.
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(6)
+    // prompt-engineer, code-reviewer — the f5 T1 roster addition) = 14.
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(7)
     // All 7 lit dispatches are running (no settles).
     expect(html).toContain('data-agent-summary-executing="7"')
     // Every stage evidenced → no pending.
@@ -2349,19 +2365,24 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(anonymousDispatch).toContain('data-agent-summary-executing="1"')
   })
 
-  it('mounts the Legend on the agents page: idle swatch + collaboration-edge swatches (+ the general bucket entry, plan f3/f4.2)', () => {
+  it('mounts the Legend on the agents page: sub-bucket / supervise / unknown swatches (plan f5 T2 rework)', () => {
     const html = agentsHtml(evidenceSource)
     expect(html).toContain('data-mstar-legend')
     // Idle swatch anchor (完成判据) + the collaboration-edge swatches
-    // (8 items: 'general' replaced the former 'flow-unexpected' — plan f3).
-    for (const key of ['agent-idle', 'flow-expected', 'flow-actual', 'general', 'on-demand', 'agent-running', 'agent-settled', 'next']) {
+    // (10 items: 'general' is replaced by 'unknown' and the f5 T2 layout
+    // entries sub-bucket + supervise join — plan f5 T2).
+    for (const key of ['agent-idle', 'flow-expected', 'flow-actual', 'sub-bucket', 'supervise', 'on-demand', 'unknown', 'agent-running', 'agent-settled', 'next']) {
       expect(html).toContain(`data-mstar-legend-item="${key}"`)
     }
     expect(html).not.toContain('data-mstar-legend-item="flow-unexpected"')
-    // The general bucket entry rewords to the sink semantics (plan f4.2
-    // Task 2 — no general column; the card sits at the bottom of the
-    // sdd-implement bucket) in BOTH locales.
-    expect(html).toContain('general at the bottom of the sdd-implement bucket')
+    expect(html).not.toContain('data-mstar-legend-item="general"')
+    // The general bucket entry rewords to the unknown-column semantics (plan
+    // f5 Task 2 — the general card lives in the rightmost unknown column,
+    // the F4.2 sink wording is gone) in BOTH locales.
+    expect(html).not.toContain('general at the bottom of the sdd-implement bucket')
+    expect(html).toContain('unknown column (unmatched / general roles)')
+    expect(html).toContain('implementor ↔ sdd-reviewer bidirectional supervise line')
+    expect(html).toContain('on-demand role (implementor sub-bucket badge)')
     // The legend labels localize (zh).
     const locale = newLocale()
     locale.register(NS, { zh, en })
@@ -2373,8 +2394,10 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(zhHtml).toContain('未工作实体（虚线）')
     expect(zhHtml).toContain('预期流转边（虚线）')
     expect(zhHtml).toContain('实际交接边')
-    expect(zhHtml).toContain('general 位于 sdd-implement 桶内底部')
-    expect(zhHtml).toContain('按需执行角色（独立列）')
+    expect(zhHtml).toContain('sdd-implement 子桶（implementor / sdd-reviewer）')
+    expect(zhHtml).toContain('implementor ↔ sdd-reviewer 双向监督线')
+    expect(zhHtml).toContain('unknown 列（未匹配 / general 角色）')
+    expect(zhHtml).toContain('按需执行角色（implementor 子桶徽标）')
     expect(zhHtml).toContain('图例')
   })
 
@@ -2441,7 +2464,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(panTransform(PAN_ORIGIN)).toBe('translate(0px, 0px)')
   })
 
-  it('layoutAgents is deterministic: 4 flow columns + the on-demand column (5 total — NO general column), every entity boxed', () => {
+  it('layoutAgents is deterministic: 4 flow columns + the rightmost unknown column (5 total — NO on-demand/general column), every entity boxed', () => {
     const view = projectGraph(fullSource).agents
     const layout = layoutAgents(view)
     expect(layout.columns.map((c) => c.id)).toEqual([
@@ -2449,49 +2472,37 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       'autonomous-execute:sdd-implement',
       'autonomous-execute:qc-tri',
       'autonomous-execute:qa-gate',
-      ON_DEMAND_COLUMN,
+      UNKNOWN_COLUMN,
     ])
     for (const entity of view.entities) {
       expect(layout.cards.get(entity.key)).toBeDefined()
     }
-    // On-demand idle roles (ops-engineer / prompt-engineer) land in the
-    // on-demand column (index 4 — the LAST column).
-    expect(layout.cards.get('ops-engineer')!.x).toBeGreaterThanOrEqual(layout.columns[4]!.x)
-    expect(layout.cards.get('prompt-engineer')!.x).toBeGreaterThanOrEqual(layout.columns[4]!.x)
-    // The general bucket member sits INSIDE the sdd-implement column (index 1),
-    // BELOW the dev cards (plan f4.2 Task 2 — the general card sinks to the
-    // bucket bottom; the fullSource idle roster stacks 3 dev cards + general).
+    // On-demand idle roles (ops-engineer / prompt-engineer) land INSIDE the
+    // sdd-implement column's implementor partition (index 1) — no standalone
+    // on-demand column (plan f5 Task 2).
     const sdd = layout.columns[1]!
-    const general = layout.cards.get('general')!
-    expect(general.x).toBeGreaterThanOrEqual(sdd.x)
-    expect(general.x).toBeLessThan(sdd.x + sdd.w)
-    for (const dev of ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev']) {
-      expect(general.y).toBeGreaterThan(layout.cards.get(dev)!.y)
+    for (const key of ['ops-engineer', 'prompt-engineer']) {
+      expect(layout.cards.get(key)!.x).toBeGreaterThanOrEqual(sdd.x)
+      expect(layout.cards.get(key)!.x).toBeLessThan(sdd.x + sdd.w)
     }
+    // The general bucket member sits in the rightmost unknown column (index
+    // 4) — its OWN column (plan f5 Task 2; the F4.2 sink inside sdd-implement
+    // is superseded).
+    const unknown = layout.columns[4]!
+    expect(unknown.id).toBe(UNKNOWN_COLUMN)
+    const general = layout.cards.get('general')!
+    expect(general.x).toBeGreaterThanOrEqual(unknown.x)
+    expect(general.x).toBeLessThan(unknown.x + unknown.w)
     // Same view → identical geometry (SSR stability).
     expect(layoutAgents(view)).toEqual(layout)
   })
 
-  it('stable partition: the general card stays BELOW the sdd-implement dev cards even when it precedes them in the entity array (lit view)', () => {
-    // evidenceSource entity order: [qc-specialist, general, fullstack-dev, …]
-    // — the general entity comes BEFORE the dev entities, yet the stable
-    // partition (flow cards first, general last — plan f4.2 Task 2 R5) still
-    // puts its card at the bucket bottom, below the three dev cards.
-    const view = projectGraph(evidenceSource).agents
-    const layout = layoutAgents(view)
-    const sdd = layout.columns[1]!
-    const general = layout.cards.get('general')!
-    expect(general.x).toBeGreaterThanOrEqual(sdd.x)
-    expect(general.x).toBeLessThan(sdd.x + sdd.w)
-    for (const dev of ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev']) {
-      expect(general.y).toBeGreaterThan(layout.cards.get(dev)!.y)
-    }
-  })
-
-  it('total function: no sdd-implement stage column → general entities fall back to the LAST column, never a throw', () => {
+  it('total function: no sdd-implement stage column → general AND on-demand entities fall back to the LAST column (unknown), never a throw', () => {
     // A view whose stage skeleton lacks the sdd-implement column (degraded
     // shape — the projection always emits it, but `layoutAgents` stays total):
-    // the general bucket entity lands in the LAST column instead of throwing.
+    // the general-bucket entity AND an on-demand entity (ops-engineer) land
+    // in the LAST column (the always-appended UNKNOWN_COLUMN) instead of
+    // throwing.
     const view: ZoneView['agents'] = {
       stages: [{
         id: 'iteration-start:review-edit-chain',
@@ -2503,33 +2514,42 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       degraded: false,
       empty: false,
       note: null,
-      entities: [{
-        key: 'general', agent: null, name: 'general', role: 'general', task: null,
-        status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'general',
-      }],
+      entities: [
+        {
+          key: 'general', agent: null, name: 'general', role: 'general', task: null,
+          status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'general', bucket: null,
+        },
+        {
+          key: 'ops-engineer', agent: null, name: 'ops-engineer', role: 'ops-engineer', task: null,
+          status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'on-demand', bucket: 'implementor',
+        },
+      ],
       edges: [],
       executing: 0,
       pending: 0,
     }
     const layout = layoutAgents(view)
     const last = layout.columns[layout.columns.length - 1]!
-    expect(layout.cards.get('general')).toBeDefined()
-    expect(layout.cards.get('general')!.x).toBeGreaterThanOrEqual(last.x)
-    expect(layout.cards.get('general')!.x).toBeLessThan(last.x + last.w)
+    expect(last.id).toBe(UNKNOWN_COLUMN)
+    for (const key of ['general', 'ops-engineer']) {
+      expect(layout.cards.get(key)).toBeDefined()
+      expect(layout.cards.get(key)!.x).toBeGreaterThanOrEqual(last.x)
+      expect(layout.cards.get(key)!.x).toBeLessThan(last.x + last.w)
+    }
   })
 
   it('F-001: a non-roster session id is only a record field — the ROLE keys the card, ONE card per key, honest summary', () => {
     // dispatch agent = 'explore' (session id, no longer a roster id) with role
     // 'fullstack-dev' — the card is keyed by the ROLE; the session id rides
-    // the record line. 1 lit + 12 idle = 13 unique entities (roster 13) and
-    // the summary matches the visible cards.
+    // the record line. 1 lit + 13 idle = 14 unique entities (roster 14 — plan
+    // f5 T1 adds code-reviewer) and the summary matches the visible cards.
     const html = agentsHtml(flowSource([
       dispatchEvent({ ts: 7, role: 'fullstack-dev', agent: 'explore' }),
     ]))
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
     expect(html.match(/data-agent-entity="fullstack-dev"/g)).toHaveLength(1)
     expect(html).not.toContain('data-agent-entity="explore"')
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(12)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
     // The lit card is visible and honest (running, no idle marker, record = session).
     const lit = cardRegion(html, 'fullstack-dev')
     expect(lit).toContain('data-agent-status="running"')
@@ -2542,36 +2562,42 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(html).toContain('data-agent-summary-executing="1"')
   })
 
-  it('renders the on-demand column with NO general column; the general card sits INSIDE the sdd-implement bucket with its in-bucket label (plan f3 + f4.2)', () => {
+  it('renders the rightmost UNKNOWN column with NO on-demand column; sub-bucket + on-demand-badge anchors ride the cards (plan f5 Task 2)', () => {
     const html = agentsHtml(fullSource) // degraded → full idle roster
-    // The columns exist with their own ids; the labels localize. NO
-    // general column anymore (plan f4.2 Task 2, AC-1 — `data-canvas-column`
-    // never carries the 'general' value).
-    expect(html).toContain('data-canvas-column="on-demand"')
+    // The columns exist with their own ids; the labels localize. NO on-demand
+    // column anymore (plan f5 Task 2 — `data-canvas-column` never carries the
+    // 'on-demand' value); the rightmost column is the unknown catch-all.
+    expect(html).toContain('data-canvas-column="unknown"')
     expect(html).toContain('data-canvas-column="autonomous-execute:sdd-implement"')
+    expect(html).not.toContain('data-canvas-column="on-demand"')
     expect(html).not.toContain('data-canvas-column="general"')
-    expect(html).toContain('On-demand')
-    // No expected/next edge anchor touches the on-demand column.
-    expect(html).not.toMatch(/data-agent-edge-(?:expected|next)="[^"]*on-demand/)
-    // The general bucket card carries its in-bucket label anchor + the
-    // user-fixed literal 'general' (plan f4.2 Task 2 — R5 small label).
-    expect(cardRegion(html, 'general')).toContain('data-agent-bucket="general"')
-    expect(cardRegion(html, 'general')).toContain('>general<')
-    // Negative anchor pin (qc F-002): NO non-general card carries the
-    // in-bucket tag — it is emitted ONLY for `entity.zone === GENERAL_BUCKET`
-    // (the flow/on-demand roster cards never do), and the 13-card roster
-    // yields exactly ONE bucket tag.
-    expect(cardRegion(html, 'fullstack-dev')).not.toContain('data-agent-bucket')
-    expect(cardRegion(html, 'frontend-dev')).not.toContain('data-agent-bucket')
-    expect(cardRegion(html, 'ops-engineer')).not.toContain('data-agent-bucket')
-    expect(html.match(/data-agent-bucket=/g)).toHaveLength(1)
+    expect(html).toContain('>unknown<') // the unknown column label text
+    // No expected/next edge anchor touches the unknown column.
+    expect(html).not.toMatch(/data-agent-edge-(?:expected|next)="[^"]*unknown/)
+    // Sub-bucket anchors (plan f5 Task 2): the PROJECTED `entity.bucket`
+    // rides data-agent-bucket on the sdd-implement cards — implementor
+    // (flow + on-demand roles) / reviewer (code-reviewer).
+    expect(cardRegion(html, 'code-reviewer')).toContain('data-agent-bucket="reviewer"')
+    expect(cardRegion(html, 'fullstack-dev')).toContain('data-agent-bucket="implementor"')
+    expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-bucket="implementor"')
+    // The general card (bucket null) carries NO data-agent-bucket — it lives
+    // in the unknown column, identified by data-agent-stage (projected, never
+    // guessed).
+    expect(cardRegion(html, 'general')).not.toContain('data-agent-bucket')
+    expect(cardRegion(html, 'general')).toContain('data-agent-stage="general"')
+    // On-demand badge (plan f5 Task 2): zone 'on-demand' cards only —
+    // ops-engineer / prompt-engineer carry the badge, flow cards never do.
+    expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-on-demand="true"')
+    expect(cardRegion(html, 'prompt-engineer')).toContain('data-agent-on-demand="true"')
+    expect(cardRegion(html, 'fullstack-dev')).not.toContain('data-agent-on-demand')
+    expect(cardRegion(html, 'code-reviewer')).not.toContain('data-agent-on-demand')
     // On-demand zone cards report the zone on data-agent-stage (projected,
     // never guessed); general-bucket cards report 'general'.
     expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-stage="on-demand"')
     expect(cardRegion(html, 'prompt-engineer')).toContain('data-agent-stage="on-demand"')
     expect(cardRegion(html, 'general')).toContain('data-agent-stage="general"')
-    // zh label localizes (按需执行); the general bucket label is the
-    // user-fixed literal 'general' in both locales.
+    // zh labels localize (未知 column + the 按需执行 badge + the reviewer
+    // sub-bucket anchor).
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
@@ -2579,7 +2605,8 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       view: projectGraph(fullSource).agents,
       t: locale.bind(NS),
     }))
+    expect(zhHtml).toContain('>未知<')
     expect(zhHtml).toContain('按需执行')
-    expect(zhHtml).toContain('data-agent-bucket="general"')
+    expect(zhHtml).toContain('data-agent-bucket="reviewer"')
   })
 })

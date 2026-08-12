@@ -124,13 +124,20 @@ Blocked / unknown with count badges, Done ≤5 + `+N more`), an
 **agent-execution zone** (the four EXPECTED_ROLE_FLOW stage/phase columns
 — review-edit-chain → sdd-implement → qc-tri → qa-gate (the terminal
 stage; the former `sdd-task-review` stage is removed, its SDD L2 reviewer
-moved off-pipeline) — plus the on-demand column for ops-engineer/
-prompt-engineer; there is NO general column — the single `general` bucket
-card renders at the bottom INSIDE the `sdd-implement` column (dashed
-separator + small in-bucket `general` label, idle placeholder preserved;
-plan `20260811-panel-f4-agent-view` F4.2), plan
-`20260811-panel-f3-agent-general`; `explore` is removed — no card, no
-column. The subagent ENTITY cards aggregate **by role** from actual
+is now the pipeline role `code-reviewer`, v2.1.1) — plus the rightmost
+**unknown column** for the `general` bucket, plan
+`20260812-panel-f5-agent-layout` Task 1/2 (user 2026-08-12 decision — the
+former F4.2 bottom-inside placement and the standalone on-demand column are
+superseded); `explore` is removed — no card, no column. The `sdd-implement`
+column splits into **sub-buckets** by the projected `entity.bucket` (never
+a render guess): the **implementor** partition above — flow roles in the
+stage's original order (fullstack-dev / fullstack-dev-2 / frontend-dev),
+then the on-demand roles (ops-engineer / prompt-engineer, carrying the
+**on-demand badge** — no standalone on-demand column) — and the
+**sdd-reviewer** partition below (code-reviewer, the SDD L2 task reviewer),
+with implementor / sdd-reviewer caption labels; `zone: 'on-demand'` entities
+live in the implementor partition, `zone: 'general'` entities render in the
+rightmost unknown column. The subagent ENTITY cards aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
 and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
 `scout`, anonymous `role === ''`) folds into the single `general` bucket
@@ -139,13 +146,18 @@ tag ride the record line, never the title) — role chip / status point / ×N
 count; running entities carry the business glow-pulse
 highlight, un-evidenced stages render the dashed "待执行" pending
 placeholder with their expected role chips, un-evidenced KNOWN_AGENTS
-members render dashed idle cards (the full 13-role roster is never
+members render dashed idle cards (the full 14-role roster is never
 hidden), and the header shows the
 `N executing · M pending` summary; flow arrows: dim expected skeleton
 arrows between consecutive stage columns (3 forward only — the former SDD
 loop back-edge `sdd-implement` ↔ `general` curved DOUBLE-ARROW below the
-column band is REMOVED, plan `20260811-panel-f4-agent-view` F4.2;
-evidence-driven "dynamic lines" are a later roadmap iteration) — small
+column band is REMOVED, plan `20260811-panel-f4-agent-view` F4.2) plus the
+**bidirectional supervise line** (plan `20260812-panel-f5-agent-layout`
+Task 1/2) — one static design-knowledge sub-bucket edge inside the
+`sdd-implement` column (implementor ↔ sdd-reviewer — the mstar-sdd
+mutual-supervision contract; dim dashed by default, lit business when the
+projected `evidenced` flag is true — evidence-driven lighting, never a
+fabricated activation) — small
 `→` in-column handoff arrows
 between same-column cards, and the ANIMATED **next** edge — a business
 dash-flow arrow (`@keyframes agent-dash-flow`, killed by the root
@@ -164,7 +176,13 @@ below 1200px (`data-event-log-*` anchors unchanged, plan
 `20260811-panel-f3-agent-general`) — the canvas-corner **AgentEventDock** is REMOVED with the page
 (无双份日志, spec §5; the fixed footer bar — zone legend + gate summary +
 violations — died with the WorkflowCanvas in the tabs-shell plan; the
-footer that remains is the freshness marker). Below 1200px the zones stack vertically.
+footer that remains is the freshness marker). Empty branches (spec §2, plan
+`20260812-panel-f5-agent-layout` Task 3): waiting keeps the muted hint, and
+NO harness renders a **centered inactive-state card** — folder icon + 「No
+Morning Star harness detected」 title + hint copy (the detail panel stays
+inactive — no tabs, no sidebar — and activates automatically once a harness
+is detected; `data-mstar-empty="no-harness"` stays on the title,
+`data-mstar-graph` on the main container). Below 1200px the zones stack vertically.
 Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
 CLIENT_EXTERNALS external, CSS modules hashed + `<style data-plugin>`
