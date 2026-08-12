@@ -21,7 +21,7 @@ Every leaf executor returns this template (only `**Agent**` and content fields c
 **Git**: ...
 ```
 
-`{role_id}` = the role's own id (e.g. `fullstack-dev`, `frontend-dev`, `ops-engineer`, `qa-engineer`, `architect`, `product-manager`, `prompt-engineer`, `writing-specialist`, `qc-specialist*`).
+`{role_id}` = the role's own id (e.g. `fullstack-dev`, `frontend-dev`, `ops-engineer`, `qa-engineer`, `architect`, `code-reviewer`, `product-manager`, `prompt-engineer`, `writing-specialist`, `qc-specialist*`).
 
 ## Git NEVER (repo writes)
 

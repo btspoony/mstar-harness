@@ -6,6 +6,27 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-08-12
+
+### Harness
+
+- Canonical `.gitignore` snippet now default-ignores the whole harness dir (`<dir>/**`) and re-includes only the tracked results (AGENTS.md, knowledge/, specs/) — new process subdirectories are ignored automatically.
+
+- Version alignment with harness **2.1.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.1.1**.
+
+## [2.1.0] - 2026-08-12
+
+### Harness
+
+- Added a **`code-reviewer` role** (L2): a read-only seat for SDD per-task review and `Task category: audit` / `mstar-audit` execution. PM entry stays `/codebase-audit`; large-repo fan-out uses read-only `scout` / `explore` via Assignment `Delegation: allowed (scout/explore only, read-only)`.
+- Wired `code-reviewer` into SDD per-task dispatch (named L2 reviewer id, `generic` fallback), audit routing (`mstar-harness-core`, `commands/codebase-audit.md`), engine `ROLE_MAPPING` (13→14), and the bilingual README role tables; `qc-specialist*` (L3) / QA (L4) semantics unchanged.
+
+- Version alignment with harness **2.1.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.1.0**.
+
 ## [2.0.6] - 2026-08-10
 
 ### Changed
