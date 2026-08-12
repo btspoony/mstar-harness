@@ -30,7 +30,7 @@
       "devDependencies": {
         "@cordisjs/plugin-include": "1.0.4",
         "@cordisjs/plugin-loader": "1.0.0-rc.5",
-        "@mstar-harness/engine": "2.0.6",
+        "@mstar-harness/engine": "2.1.1",
         "@types/node": "^25.6.0",
         "@types/react": "~18.3.1",
         "bun-types": "^1.2.17",
@@ -674,8 +674,6 @@
     "yargs-parser": ["yargs-parser@22.0.0", "", {}, "sha512-rwu/ClNdSMpkSrUb+d6BRsSkLUq1fmfsY6TOpYzTwvwkg1/NRG85KBy3kq++A8LKQwX6lsu+aWad+2khvuXrqw=="],
 
     "zod": ["zod@4.1.8", "", {}, "sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ=="],
-
-    "@mstar-harness/dsh/@mstar-harness/engine": ["@mstar-harness/engine@2.0.6", "", {}, "sha512-ZEILLKWJOy6DWXvJjh99t3SvBapOgXhs43Um0A4NpbOZI3amvng6UPceob+FLED2huiALUFTFJYnfuOyi9cf/A=="],
 
     "@oh-my-pi/omp-stats/react": ["react@19.2.7", "", {}, "sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ=="],
 
