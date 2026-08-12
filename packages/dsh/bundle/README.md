@@ -141,7 +141,15 @@ then the on-demand roles (ops-engineer / prompt-engineer, carrying the
 **sdd-reviewer** partition below (code-reviewer, the SDD L2 task reviewer),
 with implementor / sdd-reviewer caption labels; `zone: 'on-demand'` entities
 live in the implementor partition, `zone: 'general'` entities render in the
-qa-gate column's bottom unknown sub-partition. The subagent ENTITY cards aggregate **by role** from actual
+qa-gate column's bottom unknown sub-partition. The canvas is laid out in
+**TWO stacked Phase groups** (plan `20260812-panel-f5-design-system` Task 8,
+user 2026-08-12 round-4 decision #2): the **Phase 1 group ABOVE**
+(review-edit-chain — the sequential Review & Edit chain) and the **Phase 2
+group BELOW** (sdd-implement → qc-tri → qa-gate — the iterative plan loop),
+each with its group label row; the **Phase-2 label annotates the CURRENT
+PLAN** (projected `agents.activePlanId` — the first InProgress
+`state.plans[]` row, `data-canvas-group-plan`; `+N more` when several plans
+run in parallel, muted「无进行中 plan」when none). The subagent ENTITY cards aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
 and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
 `scout`, anonymous `role === ''`) folds into the single `general` bucket
@@ -162,7 +170,15 @@ expected roles at **75%**, already-passed / stage-less (on-demand, general)
 roles at **45%**, and `null` (no iteration / unresolved transition) applies
 NO override — always a chrome **alpha mix** (`--mstar-canvas-emphasis-*`
 tokens; never a whole-card `opacity`, so the status point + running glow
-stay opaque). Edges — plan `20260812-panel-f5-design-system` Task 5 (design
+stay opaque). Settled entities get a **standalone GREEN done frame + green
+✓** (plan `20260812-panel-f5-design-system` Task 8, user round-4 decisions
+#1/#3: `data-agent-done="true"` — a full-strength success border + 1px ring
+on the rounded card body + the ✓ in the status point) **ONLY when
+`emphasis ≠ 'off'`** — an off-tier role (already-passed / stage-less
+on-demand + general) renders the muted dot instead and NEVER shows the
+completion marker. The **iteration info section is SHARED by the tasks AND
+agents tabs** (Task 8, decision #4 — one `IterationInfoSection` component,
+both tabs render the same `view.iteration` block). Edges — plan `20260812-panel-f5-design-system` Task 5 (design
 doc §2): the `expected` stage skeleton arrows AND the ANIMATED **next** edge
 (the former `@keyframes agent-dash-flow` dash-flow arrow of plan
 `20260810-panel-agent-flow-zone`) are **REMOVED** — flow order is implied

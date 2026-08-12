@@ -104,6 +104,7 @@ canvas:
   port-size: 3px
   standoff: 10px
   side-gap: 18px
+  group-gap: 24px
   emphasis-current: 100%
   emphasis-next: 75%
   emphasis-off: 45%
@@ -142,7 +143,7 @@ hex** at runtime.
 | Caption (record rows, dim) | `gray-400` | `#81858c` | `--dsw-alias-label-caption` (dark) |
 | Business (running, actual line) | `blue-700` | `#679efe` | `--dsw-alias-state-business-primary` (dark) |
 | Error / denied | `red-700` | `#f25a5a` | `--dsw-alias-state-error-primary` (dark) |
-| Success (settled ✓) | `green-700` | `#22c55e` | `--dsw-alias-state-success-primary` (dark) |
+| Success (done frame + ✓) | `green-700` | `#22c55e` | `--dsw-alias-state-success-primary` (dark) |
 | Warn (advisory) | `amber-700` | `#dd8629` | `--dsw-alias-state-warn-label` (dark) |
 | **Line — business** | `line-business` | `#679efe` | `--dsw-alias-state-business-primary` (dark) |
 | **Line — caption** | `line-caption` | `#81858c` | `--dsw-alias-label-caption` (dark) |

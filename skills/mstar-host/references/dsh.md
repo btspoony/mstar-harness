@@ -61,7 +61,11 @@ or a custom profile).
   when there is no active iteration; the current step follows the steering
   compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
   (iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge,
-  plan `20260811-panel-f4-iteration-zone`), a **tasks zone** (6-column
+  plan `20260811-panel-f4-iteration-zone`; **the iteration info section is
+  SHARED by the tasks AND agents tabs** (plan
+  `20260812-panel-f5-design-system` Task 8, user round-4 decision #4 — one
+  `IterationInfoSection` component, both tabs render the same `view.iteration`
+  block: summary + steps + branches), a **tasks zone** (6-column
   kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
   badges, Done ≤5 + `+N more`), an **agent-execution zone** (the FOUR EXPECTED_ROLE_FLOW stage/phase
   columns — review-edit-chain → sdd-implement → qc-tri → qa-gate, the
@@ -75,7 +79,16 @@ or a custom profile).
   column** (a `data-sub-bucket="unknown"` caption row 「unknown / 未匹配角色」
   after the last qa-gate card, then the general cards; the standalone
   on-demand column was already removed in the agent-layout plan); `explore`
-  is removed — no card, no column. The `sdd-implement` column is split into SUB-BUCKETS by
+  is removed — no card, no column. The columns are laid out in **TWO stacked
+  Phase groups** (plan `20260812-panel-f5-design-system` Task 8, user
+  round-4 decision #2): the **Phase 1 group ABOVE** (review-edit-chain — the
+  sequential Review & Edit chain: product-manager → architect →
+  writing-specialist) and the **Phase 2 group BELOW** (sdd-implement →
+  qc-tri → qa-gate — the iterative plan loop), each with its group label
+  row; the **Phase-2 label annotates the CURRENT PLAN** (projected
+  `agents.activePlanId` = the first InProgress `state.plans[]` row,
+  `data-canvas-group-plan`; `+N more` when several plans run in parallel,
+  muted「无进行中 plan」when none). The `sdd-implement` column is split into SUB-BUCKETS by
   the PROJECTED `entity.bucket` (never a render guess): the **implementor**
   partition ABOVE — the flow roles in the stage's original order
   (fullstack-dev / fullstack-dev-2 / frontend-dev), then the on-demand
@@ -104,6 +117,14 @@ or a custom profile).
   `null` (no iteration / unresolved transition) applies NO override — always
   a chrome **alpha mix** (`--mstar-canvas-emphasis-*` tokens; never a
   whole-card `opacity`, so the status point + running glow stay opaque).
+  Settled entities get a **standalone GREEN done frame + green ✓** (plan
+  `20260812-panel-f5-design-system` Task 8, user round-4 decisions #1/#3:
+  `data-agent-done="true"` — a full-strength success border + 1px ring on
+  the rounded card body + the ✓ in the status point) **ONLY when
+  `emphasis ≠ 'off'`** — an off-tier role (already-passed / stage-less
+  on-demand + general) renders the muted dot instead and NEVER shows the
+  completion marker (the completed state never appears on a stage-less
+  role).
   Edges (plan `20260812-panel-f5-design-system` Task 5, design doc §2):
   the `expected` stage skeleton arrows AND the ANIMATED **next** edge (the
   former `@keyframes agent-dash-flow` dash-flow arrow of plan

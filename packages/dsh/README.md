@@ -185,7 +185,11 @@ stacking on narrow widths, and NO
 branch panel when there is no active iteration; the current step follows the
 steering compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
 (iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge —
-plan `20260811-panel-f4-iteration-zone`), the **tasks zone** (6-column
+plan `20260811-panel-f4-iteration-zone`); the **iteration info section is
+SHARED by the tasks AND agents tabs** (plan `20260812-panel-f5-design-system`
+Task 8, user round-4 decision #4 — one `IterationInfoSection` component,
+both tabs render the same `view.iteration` block: summary + steps +
+branches); the **tasks zone** (6-column
 kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
 badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the four EXPECTED_ROLE_FLOW stage/phase
 columns — review-edit-chain → sdd-implement → qc-tri → qa-gate (the
@@ -207,7 +211,16 @@ then the on-demand roles (ops-engineer / prompt-engineer, carrying the
 **sdd-reviewer** partition below (code-reviewer, the SDD L2 task reviewer),
 with implementor / sdd-reviewer caption labels; `zone: 'on-demand'` entities
 live in the implementor partition, `zone: 'general'` entities render in the
-qa-gate column's bottom unknown sub-partition. The subagent **entity cards** aggregate **by role** from actual
+qa-gate column's bottom unknown sub-partition. The agent canvas is laid out
+in **TWO stacked Phase groups** (plan `20260812-panel-f5-design-system`
+Task 8, user 2026-08-12 round-4 decision): the **Phase 1 group ABOVE**
+(review-edit-chain — the sequential Review & Edit chain: product-manager →
+architect → writing-specialist) and the **Phase 2 group BELOW**
+(sdd-implement → qc-tri → qa-gate — the iterative plan loop), each with its
+group label row; the **Phase-2 label annotates the CURRENT PLAN** — the
+first InProgress `state.plans[]` row (`data-canvas-group-plan`, projected
+`activePlanId`; `+N more` when several plans run in parallel, muted
+「无进行中 plan」 when none). The subagent **entity cards** aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
 and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
 `scout`, anonymous `role === ''`) folds into the single `general` bucket
@@ -228,7 +241,12 @@ expected roles at **75%**, already-passed / stage-less (on-demand, general)
 roles at **45%**, and `null` (no iteration / unresolved transition) applies
 NO override — always a chrome **alpha mix** (`--mstar-canvas-emphasis-*`
 tokens; never a whole-card `opacity`, so the status point + running glow
-stay opaque). Edges — plan `20260812-panel-f5-design-system` Task 5 (design
+stay opaque). Settled entities get a **standalone GREEN DONE FRAME + green ✓**
+(plan `20260812-panel-f5-design-system` Task 8 — user round-4 feedback #1/#3:
+`data-agent-done="true"`, a full-strength success border + 1px ring on the
+rounded card body + the ✓ in the status point) **ONLY when `emphasis ≠ 'off'`**
+— an off-tier role (already-passed / stage-less on-demand + general) renders
+the muted dot instead and NEVER shows the completion marker. Edges — plan `20260812-panel-f5-design-system` Task 5 (design
 doc §2): the `expected` stage skeleton arrows AND the ANIMATED **next** edge
 (the former `@keyframes agent-dash-flow` dash-flow arrow of plan
 `20260810-panel-agent-flow-zone`) are **REMOVED** — flow order is implied

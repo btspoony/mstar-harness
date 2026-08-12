@@ -110,6 +110,7 @@ canvas:
   port-size: 3px
   standoff: 10px
   side-gap: 18px
+  group-gap: 24px
   emphasis-current: 100%
   emphasis-next: 75%
   emphasis-off: 45%
@@ -122,8 +123,11 @@ canvas:
 > **Canonical package-level design contract** — promoted from the iteration
 > spec `agent-canvas-design-system.md` (iter-20260812-sync-v211-panel-f5,
 > plan `20260812-panel-f5-design-system` Task 1; user-reviewed v3, finalized
-> 2026-08-12) to `packages/dsh/DESIGN.md` by plan Task 7 (2026-08-12). The
-> iteration snapshot remains in the iteration specs/ — this file is the single
+> 2026-08-12) to `packages/dsh/DESIGN.md` by plan Task 7 (2026-08-12), then
+> updated to **v4** by plan Task 8 (user 2026-08-12 feedback round 4:
+> Phase 1/2 groups + current-plan annotation / settled done frame + ✓ with
+> the off-tier exclusion / shared iteration info section). The iteration
+> snapshot remains in the iteration specs/ — this file is the single
 > canonical source (single-source principle, AGENTS.md). Consumers:
 > `@frontend-dev` / `@fullstack-dev` implement styled panel UI; `@qc-specialist`
 > verifies alignment; `@qa-engineer` verifies visual output.
@@ -141,10 +145,26 @@ emphasis is time-driven, and every color is a verified host alias token.
 - **Aesthetic principles**: zero bare hex; geometry over decoration; line
   minimalism (2 semantic classes, ≤ 4 rendered lines); status always
   full-opacity; dark mode is the host alias flip — no theme branch.
+- **v4 (2026-08-12 round 4)**: the canvas splits into **two Phase groups**
+  (Phase 1 sequential review-edit-chain above / Phase 2 iterative plan loop
+  below, §1.2) with the **current-plan annotation**; settled entities get a
+  **standalone green done frame + ✓** that is **excluded on off-tier roles**
+  (§1.4 / §3.4); the iteration info section is **shared** between the tasks
+  and agents tabs (one `IterationInfoSection`, §0.4).
 - **Theme**: this file is the **Light** theme. The **Dark** theme uses the
   same token names with different values and lives at
   [`DESIGN.dark.md`](DESIGN.dark.md) (host alias flip; canvas geometry and
   emphasis tiers are theme-independent, so only the `colors:` values change).
+
+### 0.4 Shared surfaces（v4 — 迭代信息 Section 共用）
+
+- The **iteration info section** (iterationId / verdict / status note +
+  the horizontal 5-step row + the branches panel) is a SINGLE component —
+  `IterationInfoSection` — rendered by BOTH the tasks tab (`IterationTaskPage`)
+  and the agents tab (`AgentCanvasPage`) from the SAME `view.iteration` data
+  (user 2026-08-12 feedback #4: 两个 tab 显示同一迭代信息块). One
+  implementation, two mounts — no per-tab drift; the `data-iteration-*`
+  anchor family is unchanged.
 
 All concrete token values live in the **YAML frontmatter above** (colors,
 typography, spacing, rounded, plus the `dswAlias` name-level host interface
@@ -169,13 +189,20 @@ with concrete values per the design contract).
 | Caption (record rows, dim) | `gray-400` | `#adb2b8` | `--dsw-alias-label-caption` |
 | Business (running, actual line) | `blue-700` | `#4176e6` | `--dsw-alias-state-business-primary` |
 | Error / denied | `red-700` | `#ec1313` | `--dsw-alias-state-error-primary` |
-| Success (settled ✓) | `green-700` | `#22c55e` | `--dsw-alias-state-success-primary` |
+| Success (done frame + ✓) | `green-700` | `#22c55e` | `--dsw-alias-state-success-primary` |
 | Warn (advisory) | `amber-700` | `#dd8629` | `--dsw-alias-state-warn-label` |
 | **Line — business** (actual + supervise lit) | `line-business` | `#4176e6` | `--dsw-alias-state-business-primary` |
 | **Line — caption** (supervise dim) | `line-caption` | `#adb2b8` | `--dsw-alias-label-caption` |
 
 - Border colors ride `--dsw-alias-border-l1` (rest) / `--dsw-alias-border-l2`
   (hover) — host alias, name-level.
+- **Done frame** (v4, user feedback #1/#3): a settled entity with
+  `emphasis ≠ 'off'` gets a **standalone green frame** — success border +
+  1px ring on the ROUNDED card body (§1.4) + the green ✓ in the status point
+  — full-strength `--dsw-alias-state-success-primary` (an EVIDENCE state,
+  never chrome-mixed / never faded by the emphasis tier, §3.4). `emphasis ===
+  'off'` (already-passed / stage-less on-demand + general roles) renders
+  **neither** — the completed state never appears on an off-tier role.
 - **Emphasis chrome** (design doc §3.4): card chrome colors are mixed toward
   the layer background by the emphasis tier alpha
   (`color-mix(in srgb, <chrome> var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1))`)
@@ -250,6 +277,7 @@ itself (`.card-body` box-shadow); never stack `box-shadow`/`outline` on a
 | `canvas.port-size` | 3px | port dot diameter |
 | `canvas.standoff` | 10px | arrow-tip retreat (`STANDOFF`) |
 | `canvas.side-gap` | 18px | supervise side-gap anchor offset |
+| `canvas.group-gap` | 24px | vertical gap between the Phase groups (v4, §1.2) |
 
 > `simplify:` — geometry currently lives as `layoutAgents` constants
 > (`AgentCanvasPage.tsx`); if a future plan needs theming/scaling, map them to
@@ -287,20 +315,30 @@ this section codifies the deterministic layout contract.
 
 #### 1.2 列序（阶段主线）
 
-Column order is fixed to the `EXPECTED_ROLE_FLOW` constant order
-(**4 columns**, user feedback round 2 #3 — no standalone 5th column):
+列顺序固定为 `EXPECTED_ROLE_FLOW` 常量序（**共 4 列**，用户第二轮反馈 #3 已定：不再单独突出第五列）：
 
 ```
 review-edit-chain → sdd-implement → qc-tri → qa-gate（+ unknown 下沉分区）
 ```
 
-- Column label = stage id (`${phase}:${stage}` → text after `:`).
-- **unknown sink partition (v3, user feedback #3)**: `zone: 'general'`
-  entities (unmatched / anonymous dispatches) no longer own a 5th column;
-  they render in a sub-partition at the **bottom of the qa-gate column**
-  (title「unknown / 未匹配角色」, `data-sub-bucket="unknown"`), after the
-  qa-gate cards. No standalone on-demand column either (P2 merged on-demand
-  into the implementor sub-bucket).
+- 列标签 = 阶段 id（`${phase}:${stage}` 取 `:` 后段）。
+- **Phase 分组（v4，用户第 4 轮反馈 #2 定稿）**：4 列按迭代阶段拆为**上下两个
+  竖直 band**，各带组标签行（`data-canvas-group`）——
+  - **上面 Phase 1 组**：`review-edit-chain`（顺序完成的 Review & Edit 链：
+    product-manager → architect → writing-specialist）；
+  - **下面 Phase 2 组**：`sdd-implement → qc-tri → qa-gate`（循环迭代 plans）
+    ——组标签行右侧**注明当前正在做哪个 plan**（投影 `agents.activePlanId` =
+    `state.plans[]` 中第一个 `status === 'InProgress'` 的 plan_id，catalog 序；
+    多个进行中 → 首个 + 诚实 `+N more`；无 → 灰字「无进行中 plan」）。
+  - 组序 = 投影阶段的首现序（PHASE_IDS 对齐）；组间垂直间距
+    `canvas.group-gap`（24px）；组标签行高复用 `LABEL_H`（18px）。
+  - 宽度 = 最宽组（Phase 2 三列 → 760px）；高度 = 两组堆叠总高。
+- **unknown 下沉分区（v3, user feedback #3）**: `zone: 'general'` 实体
+  （unmatched / anonymous dispatches）不再拥有独立 5th column；渲染于
+  **qa-gate column 底部** sub-partition（title「unknown / 未匹配角色」,
+  `data-sub-bucket="unknown"`), after the qa-gate cards. No standalone
+  on-demand column either (P2 merged on-demand into the implementor
+  sub-bucket).
 - Geometry: unknown partition title row = `SUB_LABEL_H` (14px), placed
   `ROW_GAP` below the qa-gate last card; general cards follow (`SUB_GAP` 4px);
   column height = stacked card total (incl. sink partition).
@@ -339,6 +377,7 @@ the projected `entity.bucket` (render layer never guesses):
 | 状态点 | 8px 圆点（settled 为 12px ✓） | §4.3 |
 | 记录行 | `copy-11` 等宽，色 `--dsw-alias-label-caption` | session id · task tag（辅助字段，非标题） |
 | 角色 chip / 徽标 | `copy-11`，边框 `--dsw-alias-border-l2` | on-demand 徽标 = 虚线 business 边框 `rounded.full` 胶囊 |
+| **完成态（v4 新增）** | 绿框 = success 边框 + 1px ring（圆角 `.card-body`）+ 状态点绿 ✓ | **仅 `settled && emphasis ≠ 'off'`**（`data-agent-done="true"`）；`emphasis === 'off'` 的角色（已过阶段 / 无阶段 on-demand + general）**不显示**绿框与 ✓（反馈 #3：off 低透明时绿✓泄漏的缺陷修复） |
 
 > **卡片唯一元素规则（v3 硬规则，用户反馈 #2 已定）**：一张卡片的可视轮廓
 > **只有一个**——带 8px 圆角的 `.card-body`。**running / 高亮态的外发光 ring /
@@ -373,6 +412,13 @@ rework.
 带；③ 垂直切线——垂直走向的线两端切线取垂直（箭头自然沿线）；④ 列间空带——
 跨列线只经过无卡片 / 无标签的列间隙。**任何情况下不做「压文字绕行」的妥协**：
 发现冲突即调整锚点 / 端口 / 路由，而不是让线穿过文字。
+
+> **跨 band 交接（v4，反馈 #2 的两分组布局引入）**：Phase 1 ↔ Phase 2 的同
+> plan 交接线（如 writing-specialist → fullstack-dev）直接水平 bezier 的
+> bbox 会穿过 Phase 2 组标签行与列标签行 → 走**同一侧隙垂直路由**（源卡
+> SOUTH → 目标卡 NORTH，`x = 源卡左缘 − SIDE_GAP`；H1 垂直切线 + H2 全清）——
+> 判定 = 直接路径 bbox 与任一标签 seat（组标签 / 列标签 / 子桶标题 / unknown
+> 标题）相交即改道（确定性，与 H2 几何测试同源）。
 
 #### 2.1 用户反馈 → 落地决策（2026-08-12，不可曲解）
 
@@ -501,15 +547,17 @@ rework.
 
 #### 2.8 简洁化清单
 
-| 维度 | 现状（初稿） | 修订后（v3） |
-|------|-------------|--------|
-| 线数量 | 8（expected 3 + actual 2 + next 1 + supervise 1 + noise 1） | **≤ 4**（actual ≤ 3 过滤后 + supervise 1） |
-| 颜色层次 | 3（caption + business + 动画叠加） | **2**（business = actual + supervise lit；caption = supervise dim） |
-| 动画 | 2（running 脉冲 + next dash-flow） | **1**（仅 running 脉冲） |
-| 图例项 | 10 | **8**（移除 expected / next，新增端口 1 项） |
-| 列数 | 5（4 阶段列 + 独立 unknown 列） | **4**（unknown 下沉 qa-gate 列底部） |
-| 卡片内线 | actual 穿卡（卡片中心锚点） | **零穿卡**（端口锚定 + standoff 退让） |
-| 线叠文字 | 监督线横穿「sdd-reviewer」标题 | **零叠字**（H2：监督线移侧隙，箭头尖端 standoff 不贴卡） |
+| 维度 | 现状（初稿） | 修订后（v3） | v4（反馈 #2–#4） |
+|------|-------------|--------|--------|
+| 线数量 | 8（expected 3 + actual 2 + next 1 + supervise 1 + noise 1） | **≤ 4**（actual ≤ 3 过滤后 + supervise 1） | 不变 |
+| 颜色层次 | 3（caption + business + 动画叠加） | **2**（business = actual + supervise lit；caption = supervise dim） | 不变 |
+| 动画 | 2（running 脉冲 + next dash-flow） | **1**（仅 running 脉冲） | 不变 |
+| 图例项 | 10 | 9（移除 expected / next，新增端口 1 项） | **10**（新增 Phase 分组 1 项；settled 文案更新为绿框 ✓ 语义） |
+| 列数 | 5（4 阶段列 + 独立 unknown 列） | **4**（unknown 下沉 qa-gate 列底部） | 不变（4 列拆两组：Phase 1 上 / Phase 2 下） |
+| 卡片内线 | actual 穿卡（卡片中心锚点） | **零穿卡**（端口锚定 + standoff 退让） | 不变 |
+| 线叠文字 | 监督线横穿「sdd-reviewer」标题 | **零叠字**（H2：监督线移侧隙，箭头尖端 standoff 不贴卡） | 跨 band 交接线同走侧隙（§2.0） |
+| 完成态 | settled 仅状态点 ✓ | ✓ 随 off 低透明泄漏（缺陷） | **独立绿框 + 绿 ✓，off 角色不显示**（§1.4 / §3.4） |
+| 迭代信息 | 仅任务迭代 tab | 仅任务迭代 tab | **两 tab 共用同一 Section**（§0.4） |
 
 #### 2.9 边界：动态证据线（non-goal，扩展点）
 
@@ -605,6 +653,12 @@ emphasis(entity) =
 - 叠加规则：`emphasis`（时间维）与 `entity.status`（证据维）独立叠加——running
   辉光与状态点永远全不透明；idle 卡片虚线 muted（border-style）与 emphasis
   （opacity）作用于不同属性面，互不冲突。
+- **settled 完成态排除规则（v4，用户第 4 轮反馈 #3 定稿 — 硬约束）**：
+  `settled` 的绿 ✓ + 绿框**只在 `emphasis !== 'off'` 时显示**
+  （`data-agent-done="true"`）；`emphasis === 'off'`（已过阶段 / 无阶段
+  on-demand + general 角色）的 settled 实体显示**灰字圆点**——**已完成状态不
+  能在无阶段角色上出现**（v3 缺陷：off 低透明时绿✓仍显示）。`emphasis === null`
+  （无迭代）时 settled 维持原 ✓ 语义（回归 T4 前行为）。
 - 无迭代（`emphasis === null`）时：不套用任何档位，卡片维持现状。
 
 #### 3.5 透明度 token（canvas 语义 token，深浅同值）
@@ -648,12 +702,15 @@ emphasis(entity) =
 | 状态 | 呈现 | token |
 |------|------|-------|
 | running | business 圆点 + 1px ring + 辉光脉冲（1.6s） | `--dsw-alias-state-business-primary` |
-| settled | 12px ✓（success 色） | `--dsw-alias-state-success-primary` |
+| settled（`emphasis ≠ 'off'`） | **独立绿框 + 12px 绿 ✓**（v4 反馈 #1/#3；绿框见 §1.4 / Colors） | `--dsw-alias-state-success-primary` |
+| settled（`emphasis === 'off'`） | **灰字圆点，无 ✓、无绿框**（已完成状态不在无阶段角色上出现——v4 缺陷修复） | `--dsw-alias-label-caption` |
 | error / denied | error 色圆点 | `--dsw-alias-state-error-primary` |
 | advisory | warn 色圆点 | `--dsw-alias-state-warn-label` |
 | idle | caption 色圆点（muted） | `--dsw-alias-label-caption` |
 
-状态点 + running 辉光 = **最高优先级**（§3.4：不随透明度档位变淡）。
+状态点 + running 辉光 = **最高优先级**（§3.4：不随透明度档位变淡）；绿 ✓ 与
+绿框同属 evidence 态（全强度，不随 chrome alpha 变淡），仅 off 档角色整体不显
+示完成标记。
 
 #### 4.4 深浅主题
 
@@ -713,17 +770,20 @@ emphasis(entity) =
 
 ### 5. 完整性自检（已定稿）
 
-**覆盖清单：** 布局与结构 token → §Spacing & Layout / §1（已定稿）；线型语义 →
-§2（修订稿，两轮 2026-08-12 反馈已落实：expected/next 移除、曲线、端口、简洁
-化、**线总则 H1/H2、箭头切线、standoff、侧隙锚点**）；透明度分级 → §3（用户复
-核定稿）；交互态 + 主题 → §4（已定稿）。
+**覆盖清单：** 布局与结构 token → §Spacing & Layout / §1（已定稿；**v4 追加
+Phase 分组 band + 当前 plan 标注**，§1.2）；线型语义 → §2（修订稿，三轮
+2026-08-12 反馈已落实：expected/next 移除、曲线、端口、简洁化、**线总则
+H1/H2、箭头切线、standoff、侧隙锚点、跨 band 侧隙路由**）；透明度分级 → §3
+（用户复核定稿；**v4 追加 settled 完成态 off 排除规则**，§3.4）；交互态 + 主
+题 → §4（已定稿；**v4 追加完成态状态点呈现**，§4.3）；共享 Section → §0.4
+（v4，迭代信息两 tab 共用）。
 
 **边界与非目标：** 不做动态证据线（§2.9 扩展点）；不改事件日志分类语义；不动
 sidebar / kanban / `PHASE_IDS` / `PLAN_STATE_IDS`；不引入新第三方渲染依赖（画
 布零依赖，原生 pointer + SVG）；不改 P2 投影数据模型；无 placeholder——所有开放
 项以「推荐 + 待用户定」显式标注（§6），无 TBD / TODO / 空段。
 
-### 6. 决策点清单（用户审阅 gate 记录，2026-08-12 两轮反馈共 10 项）
+### 6. 决策点清单（用户审阅 gate 记录，2026-08-12 三轮反馈共 19 项）
 
 | # | 决策点 | 状态 | 定稿 / 推荐 |
 |---|--------|------|------------|
@@ -742,6 +802,10 @@ sidebar / kanban / `PHASE_IDS` / `PLAN_STATE_IDS`；不引入新第三方渲染�
 | D13 | 卡片无方形层叠（第二轮 #2） | **用户反馈已定** | **卡片唯一圆角元素**：高亮 ring / glow 施加于圆角 `.card-body` |
 | D14 | 四列布局（第二轮 #3） | **用户反馈已定** | **4 列**；unknown / general **下沉 qa-gate 列底部**子分区，不设独立第五列 |
 | D15 | 组线避开文字（第二轮 #4） | **用户反馈已定** | 监督线移**侧隙垂直锚点**（`x = 卡片右缘 + 18px`），不横穿子桶标题 / 卡片文字 |
+| D16 | 已完成 Agent 变绿 + ✓（第 4 轮 #1） | **用户反馈已定（Task 8）** | settled 实体**独立绿框 + 绿 ✓**（全强度 success token，圆角卡片体 ring） |
+| D17 | Phase 1/2 分组（第 4 轮 #2） | **用户反馈已定（Task 8）** | **两 band**：上 Phase 1（review-edit-chain 顺序链）/ 下 Phase 2（sdd-implement → qc-tri → qa-gate 循环迭代）；Phase 2 组标注**当前 plan**（`activePlanId` = `state.plans[]` 首个 InProgress；多个 → `+N more`） |
+| D18 | 透明度与完成态交互（第 4 轮 #3） | **用户反馈已定（Task 8）** | **off 低透明不显示绿✓**；完成态用**独立绿色框体 + 绿✓**（不是让 off 角色显示绿✓）；off 档 settled → 灰字圆点 |
+| D19 | 迭代信息 Section 共用（第 4 轮 #4） | **用户反馈已定（Task 8）** | 任务迭代页与代理执行页**共用同一迭代信息块**（一个 `IterationInfoSection` 组件，两 tab 同一 `view.iteration` 数据） |
 
 ### 7. 审阅记录
 
@@ -750,6 +814,7 @@ sidebar / kanban / `PHASE_IDS` / `PLAN_STATE_IDS`；不引入新第三方渲染�
 | 2026-08-12（初稿） | 用户反馈 5 项 → **修订稿 v2** | ① 移除 `expected` 骨架虚线 ② 连线改 bezier 曲线 ③ 卡片 4 端口锚点系统 ④ 确认 sdd-implement 子桶分组 ⑤ 简洁化（线 8→≤4、颜色 2 类、图例 10→8、去动画）。D1–D3 / D8–D11 已定 |
 | 2026-08-12（第二轮反馈） | 用户反馈 5 项 → **修订稿 v3** | ① 箭头顺线（切线对齐 + standoff 退让）② 卡片无方形层叠（圆角 `.card-body`）③ 四列布局 + unknown 下沉 ④ 组线避文字（侧隙垂直锚点）⑤ 线不叠字总则 H1/H2。D12–D15 已定 |
 | 2026-08-12（复核定稿） | 用户确认定稿；D4–D7 确认 | 透明度档位 0.75/0.45、阶段粒度、on-demand `'off'`、Phase 3–5 全 `'off'` 确认；本 doc 提升为 `packages/dsh/DESIGN.md`（canonical，plan Task 7） |
+| 2026-08-12（第 4 轮反馈） | 用户反馈 4 项 → **修订稿 v4（Task 8）** | ① 已完成 Agent 变绿 + ✓（独立绿框）② Phase 1/2 分组（上顺序链 / 下循环迭代）+ 当前 plan 标注 ③ off 低透明不显示绿✓（已完成状态不出现在无阶段角色上）④ 迭代信息 Section 两 tab 共用。D16–D19 已定 |
 
 ## Upgrade path (placeholders)
 
