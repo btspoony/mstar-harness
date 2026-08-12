@@ -157,15 +157,19 @@
   }
 }
 
-.canvasArrowExpected path {
+/* Arrowhead fills (QC S-002): the marker <path> elements carry these classes
+ * directly (AgentCanvasPage.tsx marker defs), so the fill must target the
+ * class itself — a `.canvasArrowX path` descendant selector would never match
+ * and the SVG default (black) fill would win. One direct rule per marker. */
+.canvasArrowExpected {
   fill: var(--dsw-alias-label-caption);
 }
 
-.canvasArrowActual path {
+.canvasArrowActual {
   fill: var(--dsw-alias-state-business-primary);
 }
 
-.canvasArrowNext path {
+.canvasArrowNext {
   fill: var(--dsw-alias-state-business-primary);
 }
 
@@ -284,11 +288,11 @@
   stroke: var(--dsw-alias-state-business-primary);
 }
 
-.canvasArrowSupervise path {
+.canvasArrowSupervise {
   fill: var(--dsw-alias-label-caption);
 }
 
-.canvasArrowSuperviseLit path {
+.canvasArrowSuperviseLit {
   fill: var(--dsw-alias-state-business-primary);
 }
 

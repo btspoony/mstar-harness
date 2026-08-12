@@ -1037,6 +1037,21 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     // Zero dark-theme overrides — dark mode is the host token flip.
     expect(cssText).not.toContain('data-ds-dark-theme')
   })
+
+  it('arrowhead fills target the marker <path> itself — no descendant selector (QC S-002)', () => {
+    // The marker defs put the class ON the <path> element (AgentCanvasPage.tsx
+    // `canvas-arrow-*` markers), so a `.canvasArrowX path` descendant selector
+    // can never match — the SVG default (black) fill would win and the lit
+    // supervise arrowheads would never render business-primary. Pin the
+    // direct-class form + the token pairing with each edge's stroke color.
+    expect(cssText).not.toMatch(/\.canvasArrow[A-Za-z]+\s+path\s*\{/)
+    const arrowRule = (cls: string) => cssText.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+    expect(arrowRule('canvasArrowExpected')).toContain('fill: var(--dsw-alias-label-caption)')
+    expect(arrowRule('canvasArrowActual')).toContain('fill: var(--dsw-alias-state-business-primary)')
+    expect(arrowRule('canvasArrowNext')).toContain('fill: var(--dsw-alias-state-business-primary)')
+    expect(arrowRule('canvasArrowSupervise')).toContain('fill: var(--dsw-alias-label-caption)')
+    expect(arrowRule('canvasArrowSuperviseLit')).toContain('fill: var(--dsw-alias-state-business-primary)')
+  })
 })
 
 describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings cap, policy enforcement (spec panel-zones §3/§5)', () => {
