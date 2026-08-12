@@ -216,7 +216,7 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
                 (flex 1 1 0, centered content, --mstar-space-* gap; the old
                 connector bars are removed, the gap replaces them), the
                 current step highlighted on the block itself (honest — the
-                schema knows only current/next/idle). */}
+                schema knows only current/next/done/idle). */}
             {iterationSplitActive(active, iteration.branches) ? (
               /* LEFT-RIGHT split (spec panel-f4 §2.3 R8, plan f4.3 Task 2):
                  branches LEFT (small half) + steps RIGHT (large half). DOM

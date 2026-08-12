@@ -108,7 +108,7 @@ const noHarnessSource: MstarEngineStatusSource = {
 }
 
 /* ---------------------------------------------------------------------------
- * Iteration zone (spec §3): steps / Step N / current/next/idle / verdict /
+ * Iteration zone (spec §3): steps / Step N / current/next/done/idle / verdict /
  * branches / disabled determination.
  * ------------------------------------------------------------------------- */
 

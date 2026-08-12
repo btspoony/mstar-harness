@@ -38,7 +38,7 @@
  *   Task 2): the Content Head — `data-iteration-head-*` anchors pin the
  *   collapse/expand defaults (active → expanded, inactive → collapsed one-line
  *   summary with the muted "not started" note + toggle affordance), the
- *   horizontal 5-step row (PHASE_IDS order, current/next/idle, connectors,
+ *   horizontal 5-step row (PHASE_IDS order, current/next/done/idle, connectors,
  *   current-step verdict) and the branches panel; the kanban anchors
  *   (`data-kanban-column` 6 columns / `data-tasks-total` / `data-mstar-kanban`)
  *   ride the reused TaskBoard; css asserts the tasks area is the independent
