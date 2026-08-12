@@ -103,27 +103,26 @@ Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
 ```gitignore
 # Morning Star harness (.mstar/)
 # Principle: process stays local; results are shared with the team.
-# Ignored (process / coordination):
-.mstar/archived/
-.mstar/iterations/
-.mstar/plans/
-.mstar/sdd/
-.mstar/notes.json
-.mstar/status.json
-# Tracked (results): .mstar/AGENTS.md, .mstar/knowledge/, .mstar/specs/
+# Default-ignore everything under .mstar/, then re-include the tracked results.
+.mstar/**
+!.mstar/AGENTS.md
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
 ```
 
 Legacy `.agents/` 等价：
 
 ```gitignore
 # Morning Star harness (.agents/) — legacy
-.agents/archived/
-.agents/iterations/
-.agents/plans/
-.agents/sdd/
-.agents/notes.json
-.agents/status.json
-# Tracked (results): .agents/AGENTS.md, .agents/knowledge/, .agents/specs/
+# Default-ignore everything under .agents/, then re-include the tracked results.
+.agents/**
+!.agents/AGENTS.md
+!.agents/knowledge/
+!.agents/knowledge/**
+!.agents/specs/
+!.agents/specs/**
 ```
 
 > **Engine check (when available):** import `emitGitignoreSnippet` / `validateGitignore` from `@mstar-harness/engine` in a host hook to emit or validate the canonical snippet above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.

@@ -186,21 +186,19 @@ export function scaffoldHarness(root: string): string {
  * Canonical `.mstar/` `.gitignore` snippet — verbatim embedded copy of the
  * skill's canonical snippet (plan-conventions § Git 跟踪策略; the skill is
  * the SSOT, this constant exists so the engine never reads skill files at
- * runtime). NOTE: it is NOT byte-identical to the CLI `init` fence — the
- * CLI currently appends a flat dual-prefix entry list (packages/cli
- * src/adapters/shared-install.ts HARNESS_PROCESS_GITIGNORE). Ends with a
+ * runtime). The CLI `init` fence (packages/cli/src/adapters/shared-install.ts
+ * HARNESS_PROCESS_GITIGNORE) mirrors these entries verbatim. Ends with a
  * trailing newline so it can be appended directly.
  */
 const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
 # Principle: process stays local; results are shared with the team.
-# Ignored (process / coordination):
-.mstar/archived/
-.mstar/iterations/
-.mstar/plans/
-.mstar/sdd/
-.mstar/notes.json
-.mstar/status.json
-# Tracked (results): .mstar/AGENTS.md, .mstar/knowledge/, .mstar/specs/
+# Default-ignore everything under .mstar/, then re-include the tracked results.
+.mstar/**
+!.mstar/AGENTS.md
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
 `;
 
 /**
@@ -210,23 +208,23 @@ const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
  * is `.agents`.
  */
 const GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
-.agents/archived/
-.agents/iterations/
-.agents/plans/
-.agents/sdd/
-.agents/notes.json
-.agents/status.json
-# Tracked (results): .agents/AGENTS.md, .agents/knowledge/, .agents/specs/
+# Default-ignore everything under .agents/, then re-include the tracked results.
+.agents/**
+!.agents/AGENTS.md
+!.agents/knowledge/
+!.agents/knowledge/**
+!.agents/specs/
+!.agents/specs/**
 `;
 
-/** Process-artifact ignore entries, derived from the `.mstar/` snippet. */
+/** Harness `.gitignore` fence entries (ignore + re-include), derived from the `.mstar/` snippet. */
 const GITIGNORE_PROCESS_ENTRIES: readonly string[] = GITIGNORE_SNIPPET.split("\n")
-  .filter((line) => line.startsWith(".mstar/"))
+  .filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/"))
   .map((line) => line.trim());
 
-/** Process-artifact ignore entries, derived from the legacy `.agents/` snippet. */
+/** Harness `.gitignore` fence entries (ignore + re-include), derived from the legacy `.agents/` snippet. */
 const GITIGNORE_PROCESS_ENTRIES_AGENTS: readonly string[] = GITIGNORE_SNIPPET_AGENTS.split("\n")
-  .filter((line) => line.startsWith(".agents/"))
+  .filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/"))
   .map((line) => line.trim());
 
 /**
@@ -238,10 +236,10 @@ export type HarnessKind = "mstar" | "agents";
 
 /**
  * Emit the canonical `.gitignore` snippet for `kind` (plan-conventions
- * § Git 跟踪策略): the process-artifact ignore set (`archived/`,
- * `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json` under the
- * harness dir) with the tracked/results note. When the kind is unknown
- * (omitted), both snippets are emitted so either fence can be applied.
+ * § Git 跟踪策略): default-ignore the whole harness dir (`<dir>/**`) and
+ * re-include only the tracked results (AGENTS.md, knowledge/, specs/).
+ * When the kind is unknown (omitted), both snippets are emitted so either
+ * fence can be applied.
  */
 export function emitGitignoreSnippet(kind?: HarnessKind): string {
   if (kind === "agents") return GITIGNORE_SNIPPET_AGENTS;
@@ -251,7 +249,9 @@ export function emitGitignoreSnippet(kind?: HarnessKind): string {
 
 /**
  * Validate that `<root>/.gitignore` contains a complete canonical
- * process-artifact ignore set (plan-conventions § Git 跟踪策略). Rule
+ * harness ignore set — default-ignore `<dir>/**` plus the tracked
+ * re-includes (AGENTS.md, knowledge/, specs/) per plan-conventions
+ * § Git 跟踪策略. Rule
  * (chosen alignment): the gate passes when the repo's .gitignore holds ONE
  * complete set for the DETECTED harness kind — `.mstar/` for a `.mstar`
  * harness, `.agents/` for a legacy `.agents` harness; layouts without a
@@ -318,7 +318,7 @@ export function validateGitignore(root: string): ValidationResult {
     ok: true,
     severity: "low",
     code: "gitignore.ok",
-    message: `.gitignore at ${gitignorePath} contains a complete canonical harness process-artifact ignore set (${label})`,
+    message: `.gitignore at ${gitignorePath} contains a complete canonical harness ignore set — default-ignore + tracked re-includes (${label})`,
   };
 }
 
