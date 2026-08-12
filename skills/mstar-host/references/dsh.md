@@ -48,14 +48,23 @@ or a custom profile).
   scrolls; the zone container is the only scroll body) with an **iteration
   zone** (Step 1–5 stepper + `Step N/5` badge + active-highlight / inactive
   dimmed state + the branch panel — iteration base / target / spec
-  integration, rendered only while active), a **tasks zone** (6-column
+  integration, rendered only while active; the expanded head is a LEFT-RIGHT
+  SPLIT — branches (small left half) + steps (large right half) via
+  `data-iteration-head-split`, stacking on narrow widths, and NO branch panel
+  when there is no active iteration; the current step follows the steering
+  compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
+  (iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge,
+  plan `20260811-panel-f4-iteration-zone`), a **tasks zone** (6-column
   kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
   badges, Done ≤5 + `+N more`), an **agent-execution zone** (the FOUR EXPECTED_ROLE_FLOW stage/phase
   columns — review-edit-chain → sdd-implement → qc-tri → qa-gate, the
   terminal stage; the former `sdd-task-review` stage is removed and its SDD
   L2 reviewer moved off-pipeline — plus the on-demand column for
-  ops-engineer / prompt-engineer and a trailing **general bucket** column,
-  plan `20260811-panel-f3-agent-general`; `explore` is removed — no card, no
+  ops-engineer / prompt-engineer; NO general column — the single `general`
+  bucket card renders at the BOTTOM INSIDE the `sdd-implement` column
+  (dashed separator + small in-bucket `general` label, idle placeholder
+  preserved; plan `20260811-panel-f4-agent-view` F4.2, plan
+  `20260811-panel-f3-agent-general`; `explore` is removed — no card, no
   column). The subagent ENTITY cards aggregate **by role** from actual
   dispatch evidence: the same role across sessions folds into one card ×N,
   and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
@@ -69,11 +78,11 @@ or a custom profile).
   members render dashed idle cards (the full 13-role roster is never
   hidden), and the header shows the `N executing · M pending` summary; flow
   arrows: dim expected skeleton arrows between consecutive stage columns
-  (3 forward), plus the SDD loop back-edge `sdd-implement` ↔ `general`
-  bucket as a visually distinct curved DOUBLE-ARROW drawn BELOW the column
-  band — anchored at the column bottoms with its true bezier extremum 16px
-  below the lowest column bottom, `data-agent-edge-loop` =
-  `autonomous-execute:sdd-implement->general` — small `→` in-column handoff
+  (3 forward only — the former SDD loop back-edge `sdd-implement` ↔
+  `general` curved DOUBLE-ARROW below the column band is REMOVED, plan
+  `20260811-panel-f4-agent-view` F4.2; evidence-driven "dynamic lines" for
+  the review cycle are a later roadmap iteration — compass Roadmap
+  Position) — small `→` in-column handoff
   arrows between same-column cards, and the ANIMATED **next** edge — a
   business dash-flow arrow (`@keyframes agent-dash-flow` in the zones css,
   killed by the root `prefers-reduced-motion` rule) from the latest running
@@ -102,16 +111,29 @@ or a custom profile).
   The branches block left the sidebar in plan `20260810-panel-sidebar-info`
   (its anchor fields stay in the catalog source; the iteration zone renders
   them via plan `20260810-panel-canvas-zones`); refresh follows the session
-  snapshot, no polling. Bundle served at
+  snapshot, no polling — while the main agent is ACTIVELY orchestrating, a
+  ledger record (dispatch/settle) invalidates the workspace's TTL-cached
+  catalog row so the next pre-step rebuilds and (digest text change)
+  re-injects it, and the panel refreshes per step (seconds, not the 60 s TTL);
+  while the main agent IDLES (waiting, no tool calls) the panel keeps the
+  LAST snapshot — no live push channel (documented limit, plan
+  `20260811-panel-f4-timeliness`). Bundle served at
   `/plugins/@mstar-harness/dsh/client.js` (closure-factory CJS with NO graph
   library inlined — react-flow removed; the build asserts the bundle contains
   no `xyflow`/`reactflow` markers, no `@deepseek-ai/*` value imports, and no
   `import.meta` / ESM statements — the loader runs plugin bundles as classic
-  scripts). **Known limitations**: the stepper's Step 1 (iteration-start) and
-  Step 5 (merge-ready) can never be the CURRENT step — the engine phase gate
-  only evaluates Phase 2→3→4, so they always render idle; the agent-entity
-  status derivation is a best-effort heuristic (running = dispatch with no
-  paired settle; settle pairing is never faked); no historical back-scan of
+  scripts). **Known limitations**: the stepper's Step 1 (iteration-start) IS
+  the current step while the steering compass is `status: active` (Phase 1 in
+  flight — catalog `compassStatus` field), carrying NO PASS/FAIL badge (Phase
+  1 has no gate verdict); Step 5 (merge-ready) can never be the CURRENT step —
+  the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
+  the current step follows the TTL-refreshed `compassStatus` — up to one
+  catalog interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
+  documented staleness, never a wrong verdict); the agent-entity
+  status derivation pairs a PAIRED settle exactly by its dispatch identity
+  (`agent`, `role`, `planId`, `taskId` — under QC-tri N=3 concurrency each
+  settle lands on ITS dispatch), and an unpaired dispatch stays `running`
+  (no paired settle — never guessed, never faked); no historical back-scan of
   resumed long logs; no custom
   top-level slot (the `conversation.view` tab is the only session-level panel
   seat without dsh-private layout changes); no-session → shell hero
@@ -186,7 +208,7 @@ build (`catalogTtlMs`, default 60 s).
 
 ## Agent-flow ledger
 
-The plugin records ACTUAL subagent dispatch (and best-effort settle) events —
+The plugin records ACTUAL subagent dispatch and real-completion settle events —
 the evidence of what really happened, distinct from the client-side expected
 role flow. The workflow panel's agent-execution zone (the stage/entity
 projection — plan `20260810-panel-agent-flow-zone`) and the 事件记录 tab's
@@ -219,22 +241,41 @@ of this evidence.
   summary. A MISSING file reads as the empty view ("no actual dispatches yet"
   — recording starts at plan merge); an unreadable file is absent evidence;
   malformed lines are skipped, never fatal.
-- **Settle is two-tier, never faked**:
-  - **Tier-1 baseline**: dispatch-only records (settle events optional).
-  - **Tier-2 best-effort**: `tools/post-execute` is NOT part of the verified
-    dsh-tools consumer surface (the peer-stub declares only
-    `tools/pre-execute`). A defensive listener records a settle ONLY when a
-    host actually emits the seam (payload shape-probed; unmapped payloads are
-    dropped with a one-line log — the verification gate proves both halves:
-    listener records on host emission, and the dev-time registry emits no
-    post-execute). A host that never emits leaves the ledger dispatch-only
-    (documented degrade); the panel must not fabricate settlement.
+- **Settle = real completion pairing, never faked** (plan
+  `20260811-panel-f4-timeliness`): `tools/post-execute` IS part of the
+  verified dsh-tools registry surface (`runPostExecute` dispatches the
+  waterfall for every tool call — verified against the upstream source and
+  pinned by a real-call probe). The pairing listener matches dispatch TOOLS
+  (Config `dispatchTools`, default `['subagent']`), looks up the exec's
+  `callId` in the apply-scoped pairing store, and branches on the verified
+  result shapes:
+  - `{ kind: 'background', taskId }` → store `taskId → dispatchRef`; the REAL
+    settle arrives via `ctx.tasks.onTaskDone` (terminal mapping
+    completed → ok / killed → denied / failed → error, `durationMs` when
+    available), wired through `ctx.inject(['tasks'])`.
+  - `{ kind: 'continuable', subagentId }` → no terminal signal this round →
+    no settle (documented limit — the child owns its turns).
+  - any other successful value (foreground included) → settle `ok`; a failed
+    result (`isError`) → settle `error`.
+  Pairing is apply-scoped (in-memory `callId → dispatchRef` /
+  `taskId → dispatchRef` maps created in the entry `apply`; an HMR restart
+  resets them, and completions outside the window stay unpaired). Every
+  PAIRED settle carries the paired dispatch's identity (`role`/`planId`/
+  `taskId` — same field names + semantics as the dispatch event; the registry
+  background-task id is never written as `taskId`, `taskRef` is reserved for
+  it). Unpaired payloads (non-dispatch tools, calls outside the pairing
+  window) record NOTHING — the ledger stays dispatch-only, never a
+  fabricated settle.
 - **Catalog**: `state.agentFlow` carries the ledger view (`events` ≤ 50,
   latest-first, + `summary`); the model-facing `<mstar_engine_status>` text
   renders ONE compact `agent flow: …` line only when events > 0 (role totals
   top-5 + latest dispatch with HH:MM — the event detail lives in the
-  structured source, never the model text); staleness follows the row's normal
-  60 s TTL.
+  structured source, never the model text). A ledger record (dispatch/settle)
+  invalidates the affected workspace's TTL cache entry IMMEDIATELY
+  (apply-scoped `harnessDir → cache key` reverse map + invalidation closure,
+  plan `20260811-panel-f4-timeliness`) → the next pre-step rebuilds and (digest
+  text change) re-injects the row — the 60 s TTL no longer bounds
+  ledger-change latency; it still bounds non-ledger staleness.
 - **Maintainer view**: change the ledger shape (event schema, bounds, settle
   seam) and update the projections together — `gates/agent-flow.ts` (record /
   read / settle listener), `gates/catalog.ts` (agent-flow line + `source`

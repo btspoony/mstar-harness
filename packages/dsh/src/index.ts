@@ -33,6 +33,7 @@ import {
 import {
   preStepCatalogListener,
   buildCatalogSources,
+  createCatalogInvalidation,
   DEFAULT_CATALOG_TTL_MS,
   EXPLICIT_CACHE_KEY,
 } from './gates/catalog.ts'
@@ -54,8 +55,11 @@ import type { DispatchGateAdvisory } from './gates/dispatch.ts'
 import {
   AGENT_FLOW_LOGGER,
   registerSettleListener,
+  recordTaskSettle,
+  setAgentFlowInvalidator,
   setAgentFlowLogger,
 } from './gates/agent-flow.ts'
+import type { AgentFlowPairing, TaskDoneSnapshot } from './gates/agent-flow.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -314,27 +318,80 @@ export function apply(ctx: Context, config: Config): void {
   // The Service constructor registers itself on the fiber via reflect.provide,
   // so construction alone exposes `ctx.dshMstar` (dsh service convention).
   new DshMstar(ctx, { harnessDir: bootHarnessDir })
+  // Agent-flow settle pairing store (plan `20260811-panel-f4-timeliness`
+  // Task 1, decision D1): apply-scoped in-memory Maps, SAME lifetime as the
+  // catalog cache below — an HMR restart resets them and completions outside
+  // the window stay unpaired (documented honest degrade; no cross-apply
+  // pairing). Shared by the dispatch recording (callId → dispatchRef via the
+  // adapter), the post-execute settle listener (reads callId, writes the
+  // background taskId) and the onTaskDone wiring (reads taskId).
+  const pairing: AgentFlowPairing = {
+    dispatchByCallId: new Map(),
+    dispatchByTaskId: new Map(),
+  }
   // The host-facing HostAdapter facade — the fs-intent / pre-execute gates
   // route through it (host hooks and in-plugin gates share ONE code path).
   // Constructed as a dsh service: `ctx.dshHostAdapter` is available to
   // inject consumers and host hooks after boot.
-  const adapter = new DshHostAdapter(ctx, { resolver, config })
+  const adapter = new DshHostAdapter(ctx, { resolver, config, pairing })
 
   // Agent-flow ledger — bind the `mstar/agent-flow` logger sink (record
-  // failures and the settle-unavailable trace log through it) and register
-  // the defensive `tools/post-execute` settle listener (spec §2.1.2 Tier-2
-  // best-effort: the seam is NOT part of the verified dsh-tools surface, so
-  // settle events depend on host emission — a host that never emits leaves
-  // the ledger dispatch-only, with the settle-unavailable trace logged once
-  // and documented; the dispatch side records unconditionally via
-  // `DshHostAdapter.dispatchGate`).
+  // failures and the settle-pairing trace log through it) and register the
+  // `tools/post-execute` settle listener (plan `20260811-panel-f4-timeliness`
+  // Task 1 — the seam IS emitted by the real registry, verified; foreground
+  // dispatch calls settle here, background subagents settle via the
+  // `ctx.tasks.onTaskDone` pairing wired below). The dispatch side records
+  // unconditionally via `DshHostAdapter.dispatchGate` (+ the callId pairing).
   setAgentFlowLogger((level, message) => {
     const logger = ctx.logger(AGENT_FLOW_LOGGER)
     if (level === 'warn') logger.warn(message)
     else if (level === 'error') logger.error(message)
     else logger.info(message)
   })
-  registerSettleListener(ctx, resolver)
+  registerSettleListener(ctx, config, pairing)
+
+  // Background-task settle pairing — the SECOND real completion seam: a
+  // terminal task snapshot (completed/killed/failed) pairs via the registry
+  // task id (stored by the post-execute background branch) to the dispatch
+  // that started it → recordSettle (completed→ok / killed→denied /
+  // failed→error; durationMs = finishedAt − startedAt when available).
+  // Deferred with `ctx.inject(['tasks'], …)` — the SAME optional-unit
+  // pattern as `registerMstarCommands`: cordis 4 service visibility requires
+  // inject (a direct `ctx.tasks` access throws "cannot get property without
+  // inject"), and the plugin must boot without the tasks service (a
+  // composition without dsh-tasks keeps the ledger dispatch+settle for
+  // foreground calls and leaves background tasks unpaired — honest degrade).
+  // 'tasks' is deliberately NOT in the top-level `inject` (that would block
+  // the whole plugin apply on the service). The child fiber's registrations
+  // are effect-scoped and unwind with this apply.
+  ctx.inject(['tasks'], (tasksCtx) => {
+    // The dsh-tasks service is an OPTIONAL seam — the plugin deliberately
+    // carries no runtime/type import of it (structural `TaskDoneSnapshot`
+    // contract in agent-flow.ts), so the runtime `tasksCtx.tasks` is cast to
+    // the ONE consumed surface: `onTaskDone(listener)` with the upstream
+    // `TaskDoneListener = (snapshot, owner) => void | PromiseLike<void>`.
+    const tasks = (tasksCtx as unknown as { tasks: { onTaskDone(listener: (snapshot: TaskDoneSnapshot, _owner: unknown) => void): unknown } }).tasks
+    try {
+      // Registration contained (qc2 F-004 fix-wave) for symmetry with the
+      // rest of the seam wiring: the listener body itself is already
+      // try/catch-contained (`recordTaskSettle`), but a THROWING registration
+      // would surface as an unhandled child-fiber error at an arbitrary later
+      // time (whenever the tasks service appears) — contained here instead
+      // (a failed registration only degrades background settle pairing,
+      // honestly: the child fiber still unwinds with this apply).
+      tasks.onTaskDone((snapshot, _owner) => {
+        recordTaskSettle(snapshot, pairing)
+      })
+    } catch (error) {
+      ctx.logger(AGENT_FLOW_LOGGER).error(
+        `tasks.onTaskDone registration failed (contained — background settle pairing degraded): ${(error as Error).message}`,
+      )
+    }
+  })
+
+  // Catalog-invalidation hook: the real harnessDir → cache-key reverse-map
+  // closure is created + bound alongside the catalog cache below (Task 2 —
+  // see the catalog section comment).
 
   // Bundled mstar commands — the omp/opencode slash-command parity surface
   // (iteration-start / iteration-drive / iteration-loop / codebase-audit),
@@ -437,11 +494,29 @@ export function apply(ctx: Context, config: Config): void {
   if (explicitKey !== undefined) {
     catalogCache.set(explicitKey, { sources: buildCatalogSources(ctx, bootHarnessDir), builtAt: Date.now() })
   }
+  // Catalog-invalidation hook (plan `20260811-panel-f4-timeliness` Task 2 —
+  // decision D3): the apply-scoped `harnessDir → cache key` reverse map +
+  // invalidation closure, created HERE with the same lifetime as the cache
+  // above (an HMR fiber restart recreates both — module-level state would
+  // survive and point at a destroyed cache). The explicit-config key is
+  // pre-registered so a ledger record between apply and the first pre-step
+  // still invalidates the boot-seeded entry; `catalogSourcesFor` registers
+  // every other workspace's key on hit/build. Bound to the agent-flow
+  // ledger hook (`setAgentFlowInvalidator`, Task 1 delivery): every
+  // successful recordDispatch/recordSettle fires it with the affected
+  // `{HARNESS_DIR}` → that workspace's entry is deleted → the next pre-step
+  // rebuilds and (digest text change) re-injects the row — the 60s TTL no
+  // longer bounds ledger-change latency (AC-2). No mapping → safe no-op; a
+  // throwing invalidation is contained by the record path (log-only, never
+  // blocks the ledger record).
+  const catalogInvalidation = createCatalogInvalidation(catalogCache)
+  if (explicitKey !== undefined) catalogInvalidation.register(bootHarnessDir, explicitKey)
+  setAgentFlowInvalidator(catalogInvalidation.invalidate)
   // Per agent+workspace turn digests for the digest-gated re-emission
   // (inject once per turn; re-inject only when the row changed).
   const catalogDigests = new Map<string, TurnDigest>()
   ctx.on('agent/pre-step', (payload, next) =>
-    preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, catalogDigests, payload, next))
+    preStepCatalogListener(ctx, resolver, explicitKey, catalogCache, ttlMs, catalogInvalidation.register, catalogDigests, payload, next))
 
   // v2 seams — sdd + iteration model-facing tools: `mstar sdd …` / `mstar iteration gate` equivalents on `ctx.tools`.
   registerSddIterationTools(ctx, resolver)

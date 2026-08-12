@@ -42,7 +42,7 @@ import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
-import { DshHostAdapter, SETTLE_SEAM, readAgentFlow } from '../src/index.ts'
+import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -563,21 +563,20 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
 })
 
 /* ===========================================================================
- * 10. Agent-flow ledger — settle verification gate (spec §2.1.2)
+ * 10. Agent-flow ledger — real settle verification (plan
+ *     `20260811-panel-f4-timeliness` Task 1: the REAL registry emits
+ *     tools/post-execute — the old "settle unavailable at dev time" gate is
+ *     obsolete, replaced by the paired-settle assertion)
  * ========================================================================== */
 
-describe('agent-flow — settle verification gate (real call + Tier-2 wiring)', () => {
-  /** Emit an event NOT declared on the typed Events surface (runtime-valid). */
-  function emitUndeclared(ctx: BootResult['ctx'], name: string, ...args: unknown[]): void {
-    ;(ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(name, ...args)
-  }
-
-  it('a real subagent call through the composed registry records a dispatch; settle stays absent at dev time; a simulated host emission records the settle (Tier-2 live)', async () => {
+describe('agent-flow — real settle pairing (real call through the composed registry)', () => {
+  it('a real subagent call through the composed registry records a dispatch AND a paired settle (post-execute foreground completion)', async () => {
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
     // Dev-time reality: the linked dsh-tools registry ships no delegation
     // tool, so the test registers the `subagent` tool it would have mounted —
     // the composed pipeline (pre-execute waterfall → validation → body →
-    // render) is the shipping registry code (link-farm dsh-tools).
+    // render → post-execute waterfall) is the shipping registry code
+    // (link-farm dsh-tools).
     booted.ctx.tools.register(defineTool({
       name: 'subagent',
       description: 'delegate a task to a subagent',
@@ -602,24 +601,21 @@ describe('agent-flow — settle verification gate (real call + Tier-2 wiring)', 
     })
     expect(result.isError).toBe(false)
 
-    // Dispatch recorded with the session's agent id.
+    // Dispatch recorded with the session's agent id AND a paired settle: the
+    // registry's post-execute waterfall fired for the same callId — the
+    // pairing store hit → the foreground result ('subagent result') settles
+    // `ok` carrying the dispatch identity (role from the Assignment).
     const view = readAgentFlow(booted.harnessDir)
     expect(view).not.toBeNull()
-    expect(view!.events).toHaveLength(1)
-    expect(view!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', agent: 'e2e-agent' })
-
-    // Settle unavailable at dev time: the mstar tools' own results carry no
-    // outcome, so the defensive `tools/post-execute` settle listener records
-    // nothing (the ledger must NOT fabricate settlement).
-    expect(view!.events.some((e) => e.kind === 'settle')).toBe(false)
-
-    // Tier-2 wiring live: a HOST that emits the seam upgrades the ledger —
-    // the defensive listener shape-probes the payload and records the settle.
-    emitUndeclared(booted.ctx, SETTLE_SEAM, { agent: { id: 'e2e-agent' }, name: 'subagent' }, { isError: false })
-
-    const after = readAgentFlow(booted.harnessDir)
-    expect(after!.events).toHaveLength(2)
-    expect(after!.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'e2e-agent' })
-    expect(after!.events[1]).toMatchObject({ kind: 'dispatch' })
+    expect(view!.events).toHaveLength(2)
+    expect(view!.events[0]).toMatchObject({
+      kind: 'settle',
+      outcome: 'ok',
+      agent: 'e2e-agent',
+      role: 'fullstack-dev', // the paired dispatch's Execute as (fixture valid.md)
+      planId: null,
+      taskId: null,
+    })
+    expect(view!.events[1]).toMatchObject({ kind: 'dispatch', verdict: 'ok', agent: 'e2e-agent', role: 'fullstack-dev' })
   })
 })

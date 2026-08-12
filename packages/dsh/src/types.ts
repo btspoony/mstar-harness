@@ -89,6 +89,17 @@ export interface MstarIterationGateView {
   readonly compassPath: string
   /** Cached `evaluatePhaseGate` result (tool result shape). */
   readonly gate: IterationGateView
+  /**
+   * The steering compass frontmatter `status` (`'active' | 'locked'`), the
+   * authoritative signal for whether Phase 1 is still in flight vs. complete
+   * (spec panel-f4 §2.3 R9 / §5 D5). Optional and OMITTED when absent or
+   * not one of the two steering values (lossless omit-when-absent — the
+   * `iteration` key's discipline: `Session.append` rejects undefined-valued
+   * properties) — old catalog rows / typed fixtures without the field keep
+   * compiling and the projection degrades to the existing transition-driven
+   * behavior.
+   */
+  readonly compassStatus?: 'active' | 'locked'
 }
 
 /** One registered plan row of the harness-state digest (id + status + completion date). */
@@ -192,7 +203,7 @@ export interface AgentFlowEventView {
   readonly kind: 'dispatch' | 'settle'
   /** The session's stable id; null when the event carried none. */
   readonly agent: string | null
-  /** Assignment `Execute as` ('' for settle rows — settles carry no role). */
+  /** Assignment `Execute as` ('' for settle rows without a paired identity). */
   readonly role: string
   readonly planId: string | null
   readonly taskId: string | null
@@ -205,6 +216,14 @@ export interface AgentFlowEventView {
   readonly outcome?: 'ok' | 'error' | 'denied'
   /** Settle duration in ms (settle events only, when recorded). */
   readonly durationMs?: number | null
+  /**
+   * Settle rows only (plan `20260811-panel-f4-timeliness` Task 1): true when
+   * the settle carries the PAIRED dispatch's identity (`role`/`planId`/
+   * `taskId` — same fields + semantics as the dispatch event) — the client
+   * pairs exactly on that identity. ABSENT on unpaired (legacy) settles →
+   * they stay unpaired (honest, no owner+time guessing).
+   */
+  readonly paired?: boolean
 }
 
 /** One role × outcome count of the agent-flow summary (count desc). */

@@ -13,7 +13,8 @@
  * Module boundary: no barrel — the entry imports by explicit relative path;
  * the wiring exports (`preStepCatalogListener`, `buildCatalogSources`,
  * `DEFAULT_CATALOG_TTL_MS`, `EXPLICIT_CACHE_KEY`, `CatalogCacheEntry` /
- * `TurnDigest`) are entry-internal.
+ * `TurnDigest`, `createCatalogInvalidation` / `CatalogInvalidation`) are
+ * entry-internal.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -132,6 +133,55 @@ export interface CatalogCacheEntry {
 }
 
 /**
+ * The apply-scoped `harnessDir → cache key` reverse map + invalidation
+ * closure (plan `20260811-panel-f4-timeliness` Task 2, decision D3): the
+ * catalog cache is keyed by {@link EXPLICIT_CACHE_KEY} or the session cwd,
+ * while ledger records (dispatch/settle) identify the affected workspace by
+ * `{HARNESS_DIR}` — the reverse map bridges the two so a ledger change
+ * deletes EXACTLY the affected workspace's entry (no global clear; a
+ * multi-workspace deployment does not rebuild every workspace). BOTH the map
+ * and the closure are created per-apply by the entry (same lifetime as the
+ * cache): module-level state would survive an HMR fiber restart and point at
+ * a destroyed cache.
+ */
+export interface CatalogInvalidation {
+  /**
+   * Register `key` as the cache key of `harnessDir` — called by
+   * `catalogSourcesFor` on cache hit AND build, and pre-registered by the
+   * entry at apply for the explicit-config boot entry (a ledger record
+   * between apply and the first pre-step must still invalidate the
+   * pre-seeded entry). A null harness dir (no `{HARNESS_DIR}` resolved) has
+   * no cache entry to invalidate → no-op.
+   */
+  register(harnessDir: string | null, key: string): void
+  /**
+   * Delete the cache entry of `harnessDir` (D3 — the ledger record path
+   * invokes this through the apply-bound hook). A missing mapping is a safe
+   * no-op, and a missing entry after a previous invalidation is a no-op too
+   * (the next pre-step rebuilds regardless). A throwing invalidation is
+   * contained by the record path (log-only — it never blocks the ledger
+   * record).
+   */
+  invalidate(harnessDir: string): void
+}
+
+/** Create the apply-scoped invalidation bound to ONE catalog cache (entry-internal wiring — see {@link CatalogInvalidation}). */
+export function createCatalogInvalidation(cache: Map<string, CatalogCacheEntry>): CatalogInvalidation {
+  const keyByHarnessDir = new Map<string, string>()
+  return {
+    register(harnessDir, key) {
+      if (harnessDir === null) return
+      keyByHarnessDir.set(harnessDir, key)
+    },
+    invalidate(harnessDir) {
+      const key = keyByHarnessDir.get(harnessDir)
+      if (key === undefined) return
+      cache.delete(key)
+    },
+  }
+}
+
+/**
  * Build the unified catalog source for one harness dir (boot for the
  * explicit config, first-use per workspace otherwise, then TTL-refreshed —
  * see `catalogSourcesFor`). Logs the manifest fallback once per build — a
@@ -155,17 +205,36 @@ export function buildCatalogSources(ctx: Context, harnessDir: string | null): Ms
  * disk (one bounded sync re-read per workspace per interval — the
  * mid-session plan/compass/residual staleness window the user opted into;
  * Config `catalogTtlMs`).
+ *
+ * The `harnessDir → key` reverse map (plan `20260811-panel-f4-timeliness`
+ * Task 2, decision D3) is registered on BOTH hit and build: a later ledger
+ * record (dispatch/settle) for this harness dir can then invalidate exactly
+ * this cache entry through the apply-bound closure (see
+ * `createCatalogInvalidation`) — the 60s TTL no longer bounds ledger-change
+ * latency (AC-2).
  * @param ctx - registrant context (logger for the manifest fallback).
  * @param cache - the per-workspace TTL cache.
+ * @param register - the apply-scoped reverse-map registration (harnessDir → key).
  * @param key - cache key (the explicit-config key, else the session cwd).
  * @param harnessDir - the resolved `{HARNESS_DIR}` for this key.
  * @param ttlMs - refresh interval in milliseconds.
  */
-function catalogSourcesFor(ctx: Context, cache: Map<string, CatalogCacheEntry>, key: string, harnessDir: string | null, ttlMs: number): MstarEngineStatusSource {
+function catalogSourcesFor(
+  ctx: Context,
+  cache: Map<string, CatalogCacheEntry>,
+  register: (harnessDir: string | null, key: string) => void,
+  key: string,
+  harnessDir: string | null,
+  ttlMs: number,
+): MstarEngineStatusSource {
   const entry = cache.get(key)
-  if (entry !== undefined && Date.now() - entry.builtAt < ttlMs) return entry.sources
+  if (entry !== undefined && Date.now() - entry.builtAt < ttlMs) {
+    register(harnessDir, key)
+    return entry.sources
+  }
   const sources = buildCatalogSources(ctx, harnessDir)
   cache.set(key, { sources, builtAt: Date.now() })
+  register(harnessDir, key)
   return sources
 }
 
@@ -517,11 +586,20 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateView 
       exit: iterationGateView(result.exit),
       violations: result.violations.map(iterationViolationView),
     }
+    // Steering compass `status` — the authoritative Phase-1-in-flight signal
+    // (spec panel-f4 §5 D5; consumed by the iteration current-step projection).
+    // `steeringCompassPath` already filters to `active | locked`, so this guard
+    // is belt-and-suspenders only: a non-union value omits the field (lossless
+    // omit-when-absent — `Session.append` rejects undefined-valued props).
+    const compassStatus = compassDoc.status === 'active' || compassDoc.status === 'locked'
+      ? compassDoc.status
+      : undefined
     return {
       iterationId: compass.iterationId,
       statusPath,
       compassPath: compass.compassPath,
       gate,
+      ...(compassStatus !== undefined ? { compassStatus } : {}),
     }
   } catch {
     return undefined // degrade — the iteration section is absent, no hardening
@@ -567,6 +645,10 @@ function iterationGateSource(harnessDir: string | null): MstarIterationGateView 
  * for the explicit-config case; otherwise built on first use of each
  * workspace root and TTL-refreshed — Config `catalogTtlMs`).
  * @param ttlMs - catalog refresh interval in milliseconds.
+ * @param register - the apply-scoped `harnessDir → cache key` reverse-map
+ * registration (plan `20260811-panel-f4-timeliness` Task 2 — keeps every
+ * workspace's entry invalidatable by a ledger change; see
+ * `createCatalogInvalidation`).
  * @param digests - per agent+workspace turn digests (last rendered text)
  * for the digest-gated re-emission.
  * @param payload - the proposed step the loop is about to enter.
@@ -578,6 +660,7 @@ export async function preStepCatalogListener(
   explicitKey: string | undefined,
   cache: Map<string, CatalogCacheEntry>,
   ttlMs: number,
+  register: (harnessDir: string | null, key: string) => void,
   digests: Map<string, TurnDigest>,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
@@ -595,7 +678,7 @@ export async function preStepCatalogListener(
     const cwd = sessionCwdOf(payload.agent)
     const harnessDir = resolver.forWorkspace(cwd)
     const key = explicitKey ?? cwd ?? ''
-    const sources = catalogSourcesFor(ctx, cache, key, harnessDir, ttlMs)
+    const sources = catalogSourcesFor(ctx, cache, register, key, harnessDir, ttlMs)
     const messages = [...decision.messages]
     const text = renderEngineStatusCatalog(sources)
     // Digest gate: inject the ONE unified row on the first step of a turn,

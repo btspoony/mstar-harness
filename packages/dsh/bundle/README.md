@@ -104,7 +104,13 @@ function (schema constants vs catalog evidence strictly separated; never
 throws; explicit degraded states — muted empty states, never orange warn
 boxes): an **iteration zone** (Step 1–5 stepper + `Step N/5` badge,
 active-highlight / inactive dimmed states, and the branch panel — iteration
-base / target / spec integration, rendered only while active; the branches
+base / target / spec integration, rendered only while active; the expanded
+head is a LEFT-RIGHT SPLIT — branches (small left half) + steps (large right
+half) via `data-iteration-head-split`, stacking on narrow widths, and NO
+branch panel when there is no active iteration; the current step follows the
+steering compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
+(iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge —
+plan `20260811-panel-f4-iteration-zone`; the branches
 block left the sidebar for this in plan `20260810-panel-sidebar-info`), a
 **tasks zone** (6-column kanban: Todo / InProgress / InReview / Done /
 Blocked / unknown with count badges, Done ≤5 + `+N more`), an
@@ -112,7 +118,10 @@ Blocked / unknown with count badges, Done ≤5 + `+N more`), an
 — review-edit-chain → sdd-implement → qc-tri → qa-gate (the terminal
 stage; the former `sdd-task-review` stage is removed, its SDD L2 reviewer
 moved off-pipeline) — plus the on-demand column for ops-engineer/
-prompt-engineer and a trailing **general bucket** column, plan
+prompt-engineer; there is NO general column — the single `general` bucket
+card renders at the bottom INSIDE the `sdd-implement` column (dashed
+separator + small in-bucket `general` label, idle placeholder preserved;
+plan `20260811-panel-f4-agent-view` F4.2), plan
 `20260811-panel-f3-agent-general`; `explore` is removed — no card, no
 column. The subagent ENTITY cards aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
@@ -126,11 +135,10 @@ placeholder with their expected role chips, un-evidenced KNOWN_AGENTS
 members render dashed idle cards (the full 13-role roster is never
 hidden), and the header shows the
 `N executing · M pending` summary; flow arrows: dim expected skeleton
-arrows between consecutive stage columns (3 forward), plus the SDD loop
-back-edge `sdd-implement` ↔ `general` bucket as a visually distinct curved
-DOUBLE-ARROW drawn BELOW the column band — anchored at the column bottoms
-with its true bezier extremum 16px below the lowest column bottom,
-`data-agent-edge-loop="autonomous-execute:sdd-implement->general"` — small
+arrows between consecutive stage columns (3 forward only — the former SDD
+loop back-edge `sdd-implement` ↔ `general` curved DOUBLE-ARROW below the
+column band is REMOVED, plan `20260811-panel-f4-agent-view` F4.2;
+evidence-driven "dynamic lines" are a later roadmap iteration) — small
 `→` in-column handoff arrows
 between same-column cards, and the ANIMATED **next** edge — a business
 dash-flow arrow (`@keyframes agent-dash-flow`, killed by the root
@@ -165,10 +173,18 @@ classic-script semantics) — see
 `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
 
 Known limitations (this iteration): the iteration stepper's Step 1
-(iteration-start) and Step 5 (merge-ready) can never be the current step —
-the engine phase gate only evaluates Phase 2→3→4, so they always render idle;
-the agent-entity status derivation is a best-effort heuristic (running =
-dispatch with no paired settle; settle pairing is never faked); no historical
+(iteration-start) IS the current step while the steering compass is
+`status: active` (Phase 1 in flight — catalog `compassStatus` field), carrying
+NO PASS/FAIL badge (Phase 1 has no gate verdict); Step 5 (merge-ready) can
+never be the current step —
+the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
+the current step follows the TTL-refreshed `compassStatus` — up to one catalog
+interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
+documented staleness, never a wrong verdict);
+the agent-entity status derivation pairs a PAIRED settle exactly by its
+dispatch identity (agent, role, planId, taskId — QC-tri N=3 settles land on
+their own cards), and an unpaired dispatch stays running (no paired settle,
+never faked); no historical
 back-scan of resumed long logs; no custom top-level slot (the
 `conversation.view` tab is the only session-level panel seat without
 dsh-private layout changes). Browser UI observation is the user-restart

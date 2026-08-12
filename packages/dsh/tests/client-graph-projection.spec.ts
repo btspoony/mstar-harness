@@ -11,9 +11,16 @@
  * Degradation contract (spec §8): missing/illegal fields set the matching
  * `degraded` flag and render as skeleton/unknown — the function NEVER throws
  * and NEVER fabricates values; `degraded.iteration ⟺ !active` (the old
- * `degraded.transition` is merged into `iteration.active === false`); Phase
- * 1/5 steps are schema-only (the engine gate never emits those transitions —
- * a known limitation, not a defect, spec §2.3).
+ * `degraded.transition` is merged into `iteration.active === false`);
+ * Step 5 stays schema-only (the engine gate never emits that transition —
+ * a known limitation, not a defect, spec §2.3). Plan
+ * `20260811-panel-f4-iteration-zone` Task 1 (spec panel-f4 §2.3 R9 / §5 D5):
+ * `iteration.compassStatus` re-derives the current step during Phase 1 —
+ * `'active'` → Step 1 (iteration-start) current + verdict unknown (Phase 1
+ * has no gate evaluation → no PASS/FAIL badge) + next Step 2; `'locked'` or
+ * missing/non-union → the existing transition-driven logic (Step 2→4 + gate
+ * verdict). `active` semantics unchanged — Step 1 is reached ONLY via the
+ * compass-status branch, never via a gate transition.
  *
  * The shared plan-sort rule lives in `plan-sort.ts` (its own unit tests stay
  * untouched); this file adds the projection-side integration: the Done column
@@ -216,6 +223,97 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     } as unknown as MstarEngineStatusSource)
     expect(v.iteration.active).toBe(true)
     expect(v.iteration.iterationId).toBeNull()
+  })
+
+  it('compassStatus active → Step 1 (iteration-start) current, verdict unknown, next Step 2 — Phase 1 has no gate verdict (spec panel-f4 §2.3 R9 / §5 D5)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
+    })
+    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
+    expect(byId.get('iteration-start')!.state).toBe('current')
+    expect(byId.get('autonomous-execute')!.state).toBe('next')
+    // The re-derived current step — the SAME PHASE_EDGES forward rule the
+    // locked path uses (iteration-start → autonomous-execute).
+    expect(v.iteration.currentStep).toBe(1)
+    expect(byId.get('iteration-start')!.verdict).toBe('unknown')
+    // No gate-derived badge data in Phase 1: summary + step verdict unknown,
+    // no violation count, no violation list.
+    expect(v.iteration.verdict).toBe('unknown')
+    expect(v.verdict).toBe('unknown')
+    expect(v.iteration.violationCount).toBeNull()
+    expect(v.violations).toEqual([])
+    // `active` semantics unchanged — the transition still resolved (engine
+    // emits phase-2-execute + ok:true during Phase 1); only the current step
+    // re-derives. Branches still project in the active state.
+    expect(v.iteration.active).toBe(true)
+    expect(v.degraded.iteration).toBe(false)
+    expect(v.iteration.branches).toEqual({
+      iterationBase: 'dev-dsh',
+      target: 'dev-dsh',
+      specIntegration: 'iteration/iter-20260810-panel-zones',
+    })
+  })
+
+  it('compassStatus active + transition past phase-2-execute (inconsistent window) → the Phase-1 override does NOT fire: transition-driven Step 3 + REAL gate verdict (QC wave F-001)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: {
+        ...fullSource.iteration!,
+        compassStatus: 'active',
+        gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' },
+      },
+    })
+    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
+    // Compass and gate are mutually inconsistent — compass still `active`
+    // while the gate advanced past Phase 2 (e.g. all compass-registered plans
+    // Done but the compass not yet locked). The Phase-1 override is restricted
+    // to `phase-2-execute` (qc2 F-001), so the gate wins: Step 3 current +
+    // the REAL ok/violations verdict — no verdict suppression.
+    expect(byId.get('iteration-close')!.state).toBe('current')
+    expect(byId.get('pr-delivery')!.state).toBe('next')
+    expect(v.iteration.currentStep).toBe(3)
+    expect(byId.get('iteration-close')!.verdict).toBe('pass')
+    expect(v.iteration.verdict).toBe('pass')
+    expect(v.iteration.violationCount).toBe(2)
+    expect(v.violations).toHaveLength(2)
+    expect(v.iteration.active).toBe(true)
+  })
+
+  it('compassStatus locked → the existing gate-transition-driven logic (Step 2 current + gate verdict)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'locked' },
+    })
+    expect(v.iteration.currentStep).toBe(2)
+    const byId = new Map(v.iteration.steps.map((s) => [s.id, s]))
+    expect(byId.get('autonomous-execute')!.state).toBe('current')
+    expect(byId.get('iteration-close')!.state).toBe('next')
+    expect(byId.get('autonomous-execute')!.verdict).toBe('pass')
+    expect(v.iteration.verdict).toBe('pass')
+    expect(v.iteration.violationCount).toBe(2)
+    expect(v.iteration.active).toBe(true)
+  })
+
+  it('compassStatus missing → existing transition-driven behavior (optional field, backward compatible — spec D5)', () => {
+    // `fullSource` carries NO compassStatus — old catalog rows / typed
+    // fixtures keep compiling and project exactly as before.
+    const v = projectGraph(fullSource)
+    expect(v.iteration.active).toBe(true)
+    expect(v.iteration.currentStep).toBe(2)
+    expect(v.iteration.verdict).toBe('pass')
+    expect(v.iteration.violationCount).toBe(2)
+  })
+
+  it('compassStatus non-union garbage → guard degrade to the transition-driven behavior (Total-function, never throws)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'completed' },
+    } as unknown as MstarEngineStatusSource)
+    expect(v.iteration.active).toBe(true)
+    expect(v.iteration.currentStep).toBe(2)
+    expect(v.iteration.verdict).toBe('pass')
+    expect(v.degraded.iteration).toBe(false)
   })
 })
 
@@ -481,21 +579,27 @@ function dispatchRow(over: {
   }
 }
 
-/** One settle row as the T1 ledger view emits it (spec §2.2 — carries no role). */
+/** One settle row as the T1 ledger view emits it (spec §2.2 — carries the PAIRED dispatch identity when `role` is given, plan `20260811-panel-f4-timeliness` Task 1). */
 function settleRow(over: {
   ts: number
   agent?: string
   outcome?: 'ok' | 'error' | 'denied'
   durationMs?: number
+  role?: string
+  planId?: string
+  taskId?: string
 }): AgentFlowEventView {
   return {
     ts: over.ts,
     kind: 'settle',
     agent: over.agent ?? null,
-    role: '',
-    planId: null,
-    taskId: null,
+    // Identity presence: the server writes `role` on every PAIRED settle
+    // ('' for an empty-role identity) — the client pairs on it exactly.
+    role: over.role ?? '',
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
     taskCategory: null,
+    ...(over.role !== undefined ? { paired: true } : {}),
     ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
     ...(over.durationMs !== undefined ? { durationMs: over.durationMs } : {}),
   }
@@ -679,7 +783,7 @@ describe('projectGraph — agents zone entities (spec §4, plan f3 — per-role 
 describe('projectGraph — agents zone status derivation (spec §4)', () => {
   it('latest-dispatch verdict denied wins even with a paired settle', () => {
     const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'denied' }),
     ]))
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('denied')
@@ -687,28 +791,28 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
 
   it('latest-dispatch verdict advisory → advisory (verdict priority, settle ignored)', () => {
     const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'error' }),
+      settleRow({ ts: 8, agent: 'a1', outcome: 'error', role: 'fullstack-dev' }),
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
     ]))
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('advisory')
   })
 
-  it('paired settle ok → settled', () => {
+  it('paired settle ok → settled (identity-paired: agent + role + plan/task)', () => {
     const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
-      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
     ]))
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
   })
 
   it('paired settle error → error; settle outcome denied → settled at the ENTITY level', () => {
     const errorView = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a1', outcome: 'error' }),
+      settleRow({ ts: 8, agent: 'a1', outcome: 'error', role: 'fullstack-dev' }),
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
     ]))
     expect(errorView.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('error')
     const deniedView = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a2', outcome: 'denied' }),
+      settleRow({ ts: 8, agent: 'a2', outcome: 'denied', role: 'frontend-dev' }),
       dispatchRow({ ts: 7, role: 'frontend-dev', agent: 'a2' }),
     ]))
     expect(deniedView.agents.entities.find((e) => e.key === 'frontend-dev')!.status).toBe('settled')
@@ -719,12 +823,12 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
     ]))
     expect(running.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
-    // File order: D(t9) → S(t8) → D(t7). The settle pairs the OLDER dispatch
-    // (most recent same-agent dispatch before it in file order); the latest
+    // File order: D(t9) → S(t8) → D(t7). The settle pairs the OLDER same-identity
+    // dispatch (most recent matching dispatch before it in file order); the latest
     // dispatch (t9) has no pair → running (honest).
     const again = projectGraph(flowSource([
       dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1' }),
-      settleRow({ ts: 8, agent: 'a1', outcome: 'ok' }),
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
     ]))
     expect(again.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
@@ -732,7 +836,7 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
 
   it('different agents never pair; the settle-only agent stays running', () => {
     const view = projectGraph(flowSource([
-      settleRow({ ts: 8, agent: 'a2', outcome: 'ok' }),
+      settleRow({ ts: 8, agent: 'a2', outcome: 'ok', role: 'fullstack-dev' }),
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
     ]))
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
@@ -759,20 +863,20 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
  * ------------------------------------------------------------------------- */
 
 describe('projectGraph — agents zone edges (spec §4)', () => {
-  it('expected: 3 forward skeleton arrows across the 4 stages + the SDD loop back-edge to the general bucket (plan f3)', () => {
+  it('expected: 3 forward skeleton arrows across the 4 stages — NO loop back-edge (plan f4.2 Task 1)', () => {
     const agents = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev' })])).agents
     const expected = agents.edges.filter((e) => e.kind === 'expected')
     // 3 forward edges across the consecutive stage columns.
-    expect(expected.filter((e) => !e.loop).map((e) => [e.source, e.target])).toEqual([
+    expect(expected.map((e) => [e.source, e.target])).toEqual([
       ['iteration-start:review-edit-chain', 'autonomous-execute:sdd-implement'],
       ['autonomous-execute:sdd-implement', 'autonomous-execute:qc-tri'],
       ['autonomous-execute:qc-tri', 'autonomous-execute:qa-gate'],
     ])
-    // The SDD loop back-edge: sdd-implement → the general bucket, kind
-    // 'expected' with the loop flag (the implement ↔ review cycle).
-    expect(expected.filter((e) => e.loop).map((e) => [e.source, e.target, e.kind])).toEqual([
-      ['autonomous-execute:sdd-implement', 'general', 'expected'],
-    ])
+    // The SDD loop back-edge (sdd-implement → general) is GONE (plan
+    // 20260811-panel-f4-agent-view Task 1 + Task 2, user F4.2): no edge
+    // targets the general bucket — the `AgentEdge.loop` field itself was
+    // removed with the render branch (Task 2).
+    expect(agents.edges.every((e) => e.target !== 'general' && e.source !== 'general')).toBe(true)
   })
 
   it('actual: same-plan ts-ascending adjacent dispatch entity pairs — role-keyed (plan f3)', () => {
@@ -833,7 +937,7 @@ describe('projectGraph — agents zone next edge (spec §4)', () => {
 
   it('next: no running entity → no next edge (honest)', () => {
     const view = projectGraph(flowSource([
-      settleRow({ ts: 20, agent: 'a1', outcome: 'ok' }),
+      settleRow({ ts: 20, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
       dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
     ]))
     expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
@@ -875,10 +979,10 @@ describe('projectGraph — agents zone next edge (spec §4)', () => {
 describe('projectGraph — agents zone counts (spec §4)', () => {
   it('executing = running entity count; settled/error/denied are not executing', () => {
     const view = projectGraph(flowSource([
-      settleRow({ ts: 20, agent: 's1', outcome: 'ok' }),
+      settleRow({ ts: 20, agent: 's1', outcome: 'ok', role: 'frontend-dev' }),
       dispatchRow({ ts: 19, role: 'frontend-dev', agent: 's1' }),
       dispatchRow({ ts: 18, role: 'fullstack-dev', agent: 'r1' }),
-      settleRow({ ts: 17, agent: 'e1', outcome: 'error' }),
+      settleRow({ ts: 17, agent: 'e1', outcome: 'error', role: 'generalPurpose' }),
       dispatchRow({ ts: 16, role: 'generalPurpose', agent: 'e1' }),
       dispatchRow({ ts: 15, role: 'qc-specialist', agent: 'd1', verdict: 'denied' }),
     ]))
@@ -939,7 +1043,7 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     expect(degraded.entities.every((e) => e.idle && e.status === 'idle' && e.count === 0 && e.ts === 0)).toBe(true)
     expect(degraded.executing).toBe(0)
     expect(degraded.pending).toBe(0)
-    expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(4)
+    expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(3) // 3 forward skeleton only — the SDD loop back-edge is gone (plan f4.2 Task 1)
     // No evidence claims on a degraded skeleton either (render shows no
     // pending placeholders — spec §8).
     expect(degraded.stages.every((s) => !s.evidenced)).toBe(true)
@@ -1397,11 +1501,13 @@ describe('projectGraph — events / unexpected (spec §3 migration)', () => {
   })
 })
 
-describe('projectGraph — settle pairing (shared pairSettleIndexes)', () => {
-  it('a settle pairs with the most recent same-agent dispatch BEFORE it in file order', () => {
-    // File order: D1(a1, t1) → D2(a1, t3) → S1(a1, t4); the catalog is latest-first.
+describe('projectGraph — settle pairing (identity-based, plan 20260811-panel-f4-timeliness T1)', () => {
+  it('a paired settle lands on the most recent same-IDENTITY dispatch BEFORE it in file order', () => {
+    // File order: D1(a1, fullstack-dev, t1) → D2(a1, fullstack-dev, t3) →
+    // S1(a1, fullstack-dev, t4); the catalog is latest-first. The settle
+    // carries the paired identity → exact match, NOT the agent guess.
     const view = projectGraph(flowSource([
-      settleRow({ ts: 4, agent: 'a1', outcome: 'ok' }),
+      settleRow({ ts: 4, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
       dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' }),
       dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' }),
     ]))
@@ -1413,21 +1519,68 @@ describe('projectGraph — settle pairing (shared pairSettleIndexes)', () => {
 
   it('the shared pure function returns the paired dispatch index set', () => {
     const rows = [
-      { kind: 'settle' as const, agent: 'a1' },
-      { kind: 'dispatch' as const, agent: 'a1' },
-      { kind: 'dispatch' as const, agent: 'a1' },
-      { kind: 'dispatch' as const, agent: null },
+      { kind: 'settle' as const, agent: 'a1', role: 'fullstack-dev', paired: true },
+      { kind: 'dispatch' as const, agent: 'a1', role: 'fullstack-dev' },
+      { kind: 'dispatch' as const, agent: 'a1', role: 'fullstack-dev' },
+      { kind: 'dispatch' as const, agent: null, role: 'fullstack-dev' },
     ]
     expect(Array.from(pairSettleIndexes(rows)).sort((a, b) => a - b)).toEqual([1])
   })
 
   it('different agents never pair; agent-less rows never pair', () => {
     const view = projectGraph(flowSource([
-      settleRow({ ts: 3, agent: 'a2', outcome: 'ok' }),
-      settleRow({ ts: 2, outcome: 'ok' }), // agent null
+      settleRow({ ts: 3, agent: 'a2', outcome: 'ok', role: 'fullstack-dev' }),
+      settleRow({ ts: 2, outcome: 'ok', role: 'fullstack-dev' }), // agent null
       dispatchRow({ ts: 1, role: 'fullstack-dev' }), // agent null
     ]))
     expect(view.events.every((e) => !e.settled)).toBe(true)
+  })
+
+  it('a settle WITHOUT identity (legacy row) never pairs — honest, no fallback guessing (spec R1)', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 4, agent: 'a1', outcome: 'ok' }), // no role/plan/task → legacy
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    const d = view.events.find((e) => e.kind === 'dispatch')!
+    expect(d.settled).toBe(false)
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
+  })
+
+  it('QC tri N=3 concurrent: three settles from ONE session each land on THEIR OWN dispatch (identity key, not agent)', () => {
+    // The spec R1 regression: three concurrent QC reviews dispatched from the
+    // SAME parent session all carry agent 'parent' — the OLD agent-based
+    // pairing would land all three settles on the latest dispatch, leaving
+    // two cards running. The identity key (agent + role + planId + taskId)
+    // lands each settle on ITS dispatch. Latest-first file order.
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 12, agent: 'parent', outcome: 'ok', role: 'qc-specialist', planId: 'plan-x', taskId: 'T1' }),
+      settleRow({ ts: 11, agent: 'parent', outcome: 'ok', role: 'qc-specialist-2', planId: 'plan-x', taskId: 'T2' }),
+      settleRow({ ts: 10, agent: 'parent', outcome: 'ok', role: 'qc-specialist-3', planId: 'plan-x', taskId: 'T3' }),
+      dispatchRow({ ts: 9, role: 'qc-specialist', agent: 'parent', planId: 'plan-x', taskId: 'T1' }),
+      dispatchRow({ ts: 8, role: 'qc-specialist-2', agent: 'parent', planId: 'plan-x', taskId: 'T2' }),
+      dispatchRow({ ts: 7, role: 'qc-specialist-3', agent: 'parent', planId: 'plan-x', taskId: 'T3' }),
+    ]))
+    // Every dispatch pairs with ITS OWN settle — none stuck on running.
+    const byKey = new Map(view.agents.entities.map((e) => [e.key, e.status]))
+    expect(byKey.get('qc-specialist')).toBe('settled')
+    expect(byKey.get('qc-specialist-2')).toBe('settled')
+    expect(byKey.get('qc-specialist-3')).toBe('settled')
+    expect(view.agents.executing).toBe(0)
+    // The events projection marks exactly the three matching dispatches settled.
+    const dispatchEvents = view.events.filter((e) => e.kind === 'dispatch')
+    expect(dispatchEvents.map((e) => e.settled)).toEqual([true, true, true])
+  })
+
+  it('same-identity retries: a settle pairs the MOST RECENT matching dispatch before it, earlier retries stay running', () => {
+    // Two dispatches with the SAME identity (a retried task); the settle pairs
+    // the latest (t3) — the older retry (t1) stays running (honest: the settle
+    // identity alone cannot split two identical dispatch records).
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 4, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2' }),
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
   })
 })
 
@@ -1538,8 +1691,9 @@ describe('eventLogEntries — event rows (spec §5, plan event-log Task 1)', () 
   it('maps every projected event field onto the entry (dispatch + paired settle)', () => {
     const view = projectGraph({
       ...flowSource([
-        // File order is latest-first: the settle (newest) pairs the dispatch below it.
-        settleRow({ ts: 9, agent: 'a1', outcome: 'ok', durationMs: 120 }),
+        // File order is latest-first: the settle (newest, carrying the paired
+        // identity) pairs the dispatch below it exactly.
+        settleRow({ ts: 9, agent: 'a1', outcome: 'ok', durationMs: 120, role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2' }),
         dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
       ]),
       iteration: {
@@ -1554,15 +1708,15 @@ describe('eventLogEntries — event rows (spec §5, plan event-log Task 1)', () 
       kind: 'event',
       id: '9-settle-0',
       eventKind: 'settle',
-      role: '', // settle rows carry no role (T1 sets '')
+      role: 'fullstack-dev', // the PAIRED dispatch identity (plan 20260811-panel-f4-timeliness T1)
       agent: 'a1',
-      stage: '',
-      task: '',
+      stage: 'autonomous-execute:sdd-implement',
+      task: 'plan-x#T2',
       ts: 9,
       status: 'ok',
       settled: false, // settle rows are never "settled" themselves
       durationMs: 120,
-      expected: false,
+      expected: true, // the paired role ∈ the EXPECTED_ROLE_FLOW union
     })
     expect(dispatch).toEqual({
       kind: 'event',
@@ -1574,7 +1728,7 @@ describe('eventLogEntries — event rows (spec §5, plan event-log Task 1)', () 
       task: 'plan-x#T2',
       ts: 8,
       status: 'dispatched',
-      settled: true, // paired with the settle (same agent)
+      settled: true, // paired with the settle (exact identity)
       durationMs: null, // dispatch rows carry no duration
       expected: true,
     })

@@ -1,6 +1,15 @@
 /**
  * Task 5 — mstar-engine-status catalog at agent/pre-step (plan
- * 20260808-dsh-host-adapter).
+ * 20260808-dsh-host-adapter), extended by plan
+ * `20260811-panel-f4-timeliness` Task 2: the catalog TTL invalidation — a
+ * ledger change (recordDispatch) deletes the workspace cache entry so the
+ * next pre-step rebuilds fresh sources and the digest re-emits the changed
+ * row within the REAL TTL (AC-2); a non-record out-of-band ledger write
+ * stays TTL-bounded (cache-hit behavior unchanged — only the record path
+ * invalidates). Extended by plan `20260811-panel-f4-iteration-zone` Task 1:
+ * the optional `iteration.compassStatus` surface (steering compass
+ * frontmatter `status` — active/locked present, non-steering status
+ * omits the whole iteration row; spec panel-f4 §5 D5).
  *
  * Dev-time reality (brief): the llm/agent seams are dev-time STUBS (no real
  * runtime), so the pre-step waterfall is simulated with the typed harness —
@@ -24,13 +33,14 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from 'cordis'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
+import type { MstarEngineStatusSource } from '../src/index.ts'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -65,6 +75,21 @@ const stepPayload = (messages: UserMessage[], signal = new AbortController().sig
 /** The last message of an enter decision (the appended catalog when present). */
 const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>
   decision.kind === 'enter' ? decision.messages.at(-1) : undefined
+
+/** Narrow an enter decision to its appended engine-status catalog row. */
+function catalogRowOf(decision: PreStepDecision): { row: UserMessage; source: MstarEngineStatusSource } {
+  if (decision.kind !== 'enter') throw new Error('expected enter')
+  const row = decision.messages.at(-1)
+  if (row === undefined) throw new Error('missing catalog row')
+  const source = row.source
+  if (source.kind !== 'mstar-engine-status') throw new Error('missing catalog row')
+  return { row, source }
+}
+
+/** The model-facing text of a catalog row. */
+function textOf(row: UserMessage): string {
+  return row.content[0]?.type === 'text' ? row.content[0].text : ''
+}
 
 describe('mstar-engine-status catalog — pre-step composition (real Loader boot)', () => {
   it('appends the catalog MessageSource; the text appears in the composed session log', async () => {
@@ -229,6 +254,212 @@ describe('mstar-engine-status catalog — pre-step composition (real Loader boot
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     expect(decision).toEqual({ kind: 'enter', messages: broken })
+  })
+})
+
+describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4 §5 D5, plan 20260811-panel-f4-iteration-zone Task 1)', () => {
+  /** Minimal status.json the iteration-gate row needs (empty plans → engine emits phase-2-execute + ok:true). */
+  const VALID_STATUS_JSON = JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} })
+
+  /** A minimal engine-shape-VALID delivery-compass frontmatter (spec D5 — the steering status value is the signal). */
+  function compassDoc(status: 'active' | 'locked' | 'completed'): string {
+    return [
+      '---',
+      'iteration_id: iter-20260811-catalog-compass',
+      'start_date: 2026-08-11',
+      `status: ${status}`,
+      'iteration_base_branch: dev-dsh',
+      'target_branch: dev-dsh',
+      '---',
+      '',
+      '## Direction lock',
+      'Catalog compassStatus surface.',
+    ].join('\n')
+  }
+
+  /** Boot with status.json + a delivery-compass seeded, then run one pre-step and return the catalog source. */
+  async function sourceWithCompass(status: 'active' | 'locked' | 'completed'): Promise<MstarEngineStatusSource> {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compassstatus-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': VALID_STATUS_JSON,
+      'iterations/iter-20260811-catalog-compass/delivery-compass.md': compassDoc(status),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    return catalogRowOf(decision).source
+  }
+
+  it('surfaces `compassStatus: active` when the steering compass is active (Phase 1 in flight)', async () => {
+    const source = await sourceWithCompass('active')
+    expect(source.iteration).toBeDefined()
+    expect(source.iteration!.compassStatus).toBe('active')
+    expect(source.iteration!.iterationId).toBe('iter-20260811-catalog-compass')
+    // The empty-plans fixture: engine emits phase-2-execute + ok:true during
+    // Phase 1 — `iteration.active` is true, only the current step re-derives
+    // from compassStatus (projection side).
+    expect(source.iteration!.gate.transition).toBe('phase-2-execute')
+    expect(source.iteration!.gate.ok).toBe(true)
+  })
+
+  it('surfaces `compassStatus: locked` when the steering compass is locked (Phase 1 complete)', async () => {
+    const source = await sourceWithCompass('locked')
+    expect(source.iteration!.compassStatus).toBe('locked')
+  })
+
+  it('omits compassStatus (and the whole iteration row) for a NON-steering status — the steering filter never admits it (belt-and-suspenders guard)', async () => {
+    // `status: completed` is not active|locked → `steeringCompassPath` skips
+    // the compass → no iteration section at all. The appended message stays
+    // losslessly JSON-serializable (no undefined-valued props, Session.append).
+    const source = await sourceWithCompass('completed')
+    expect(Object.keys(source).every((key) => (source as unknown as Record<string, unknown>)[key] !== undefined)).toBe(true)
+    expect('iteration' in source).toBe(false)
+  })
+})
+
+describe('catalog TTL invalidation — ledger change refreshes within the TTL (plan 20260811-panel-f4-timeliness Task 2)', () => {
+  /** A minimal Assignment for the ledger record (role derives to `fullstack-dev`). */
+  const ASSIGNMENT = `## Assignment
+
+**Execute as**: fullstack-dev
+
+## Task 2
+
+Implement the invalidation.
+`
+
+  it('a ledger change within the TTL invalidates the cache — the next pre-step rebuilds fresh sources and the digest re-emits the changed row (AC-2)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-invalidate-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+    })
+    // REAL TTL (default 60000): a refresh at the second pre-step can only
+    // come from the ledger-change invalidation — never from a TTL expiry.
+    const app = booted = await bootApp({ root })
+
+    // Pre-step 1 (turn 1): no ledger events yet — the row is injected once.
+    const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { source: firstSource } = catalogRowOf(first)
+    expect(firstSource.state!.agentFlow).toEqual({ events: [], summary: [] })
+
+    // One successful ledger record — the apply-bound invalidator deletes the
+    // workspace's catalog cache entry (the TTL itself is untouched).
+    plugin.recordDispatch({ harnessDir: app.harnessDir, prompt: ASSIGNMENT, violations: [], hard: false })
+
+    // Pre-step 2 — SAME turn (step 2): the digest gate suppresses an
+    // UNCHANGED row, so this re-injection can only be the digest text change
+    // from the invalidation-triggered rebuild (the sources now carry the new
+    // dispatch event).
+    const second = await app.ctx.waterfall('agent/pre-step', {
+      agent: {},
+      messages: [],
+      turn: 1,
+      step: 2,
+      signal: new AbortController().signal,
+    } as never, defaultEnter([]))
+    const { row, source } = catalogRowOf(second)
+    expect(source.state!.agentFlow!.events).toHaveLength(1)
+    expect(source.state!.agentFlow!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', role: 'fullstack-dev' })
+    expect(textOf(row)).toContain('agent flow: 1 events')
+    expect(textOf(row)).toContain('by role: fullstack-dev 1')
+  })
+
+  it('cross-workspace isolation: a ledger record in workspace A invalidates ONLY A — B\'s cached entry survives within the TTL (qc1 F-103 / qc2 F-003 / qc3 F-004 fix-wave)', async () => {
+    // Two workspaces, each with its OWN probed harness root — no explicit
+    // config, so each session cwd resolves its own `{HARNESS_DIR}` and its own
+    // cache key (the session cwd) + reverse-map entry (D3: per-workspace
+    // invalidation — a record deletes EXACTLY the affected workspace's entry,
+    // never a global clear).
+    const wsA = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-a-'))
+    const wsB = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-b-'))
+    for (const ws of [wsA, wsB]) {
+      await seedHarness(join(ws, '.mstar'), {
+        'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+      })
+    }
+    const stepFor = (cwd: string, turn: number) => ({
+      agent: { session: { header: { cwd } } },
+      messages: [],
+      turn,
+      step: 1,
+      signal: new AbortController().signal,
+    } as never)
+    const app = booted = await bootApp({ harnessDir: null })
+
+    // Register BOTH workspace keys with one pre-step each (the cache is built
+    // on first use + the reverse map registers on build).
+    const sourceA1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 1), defaultEnter([]))).source
+    const sourceB1 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 1), defaultEnter([]))).source
+    expect(sourceA1.state!.agentFlow).toEqual({ events: [], summary: [] })
+    expect(sourceB1.state!.agentFlow).toEqual({ events: [], summary: [] })
+
+    // An OUT-OF-BAND ledger line in B (direct write, bypassing recordDispatch
+    // → NO invalidation fires for B): if B's cache entry survives, the line
+    // stays INVISIBLE within the REAL TTL (cache hit — no rebuild). This is
+    // the observable for "B's cached entry survives": the dsh-llm message
+    // envelope deep-clones its source (`createMessage` → `freezeMessage` →
+    // `structuredClone`), so cache-hit identity cannot be asserted by
+    // reference equality through the message — the direct-write invisibility
+    // is the equivalent (and stronger) cache-hit proof.
+    await writeFile(
+      join(wsB, '.mstar', plugin.AGENT_FLOW_FILE),
+      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
+    )
+
+    // A ledger record for workspace A ONLY — the apply-bound invalidator
+    // fires with A's harness dir → deletes exactly A's cache entry.
+    plugin.recordDispatch({ harnessDir: join(wsA, '.mstar'), prompt: ASSIGNMENT, violations: [], hard: false })
+
+    // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
+    // fresh source carrying the new dispatch event).
+    const sourceA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 2), defaultEnter([]))).source
+    expect(sourceA2.state!.agentFlow!.events).toHaveLength(1)
+    expect(sourceA2.state!.agentFlow!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', role: 'fullstack-dev' })
+
+    // Next pre-step for B (new turn): B's entry was NOT invalidated → the
+    // cache HIT serves the cached build — the out-of-band B line stays
+    // invisible within the TTL (no global clear; a multi-workspace deployment
+    // does not rebuild every workspace per record).
+    const sourceB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 2), defaultEnter([]))).source
+    expect(sourceB2.state!.agentFlow).toEqual({ events: [], summary: [] }) // cached build — the direct line is NOT visible
+  })
+
+  it('without a ledger change the cache-hit behavior is unchanged — a directly-written ledger line stays invisible within the TTL (only the record path invalidates)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cachehit-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+    })
+    const app = booted = await bootApp({ root })
+
+    // Pre-step 1 (turn 1): no events → no agent-flow line.
+    const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    expect(textOf(lastMessage(first)!)).not.toContain('agent flow:')
+
+    // Write a ledger line DIRECTLY (bypassing recordDispatch → NO
+    // invalidation fires): the disk now differs from the cached build.
+    await writeFile(
+      join(app.harnessDir, plugin.AGENT_FLOW_FILE),
+      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
+    )
+
+    // Pre-step 2 (turn 2, within the REAL TTL): the cache entry was NOT
+    // invalidated → the cached build is reused (stale) — the 60s TTL
+    // fallback still bounds an out-of-band ledger change.
+    const second = await app.ctx.waterfall('agent/pre-step', {
+      agent: {},
+      messages: [],
+      turn: 2,
+      step: 1,
+      signal: new AbortController().signal,
+    } as never, defaultEnter([]))
+    const { row, source } = catalogRowOf(second)
+    expect(source.state!.agentFlow).toEqual({ events: [], summary: [] })
+    expect(textOf(row)).not.toContain('agent flow:')
   })
 })
 

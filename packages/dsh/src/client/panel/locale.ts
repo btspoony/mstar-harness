@@ -64,12 +64,18 @@
  * legend re-mounts on the agent canvas — `zone.legend.agent-idle` (the idle
  * card treatment) joins the swatch family and the collaboration-edge labels
  * (flow-expected / flow-actual / general) now describe the canvas rendering
- * (dashed/solid lines + the general bucket column — plan
- * 20260811-panel-f3-agent-general replaced the former flow-unexpected entry;
- * the event-log `unexpected` badge keeps `flow.unexpected`) instead of the
- * retired zone-dashboard stages; `flow.settle-only` is the distinct muted
- * copy for the settle-only canvas note (review T2-Imp-2 restored the old
- * zone's separate anchor).
+ * (dashed/solid lines + the general bucket — plan
+ * 20260811-panel-f3-agent-general replaced the former flow-unexpected entry)
+ * instead of the retired zone-dashboard stages; `flow.settle-only` is the
+ * distinct muted copy for the settle-only canvas note (review T2-Imp-2
+ * restored the old zone's separate anchor).
+ *
+ * T2 (plan 20260811-panel-f4-agent-view): the general bucket has NO column
+ * of its own anymore — `zone.agents.general` is REPURPOSED as the small
+ * in-bucket label on the general card (which sinks to the bottom of the
+ * `sdd-implement` column — the value stays the user-fixed literal 'general'
+ * in both locales); `zone.legend.general` rewords to the sink semantics
+ * (「general 位于 sdd-implement 桶内底部」).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -234,7 +240,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': '图例',
   'zone.legend.flow-expected': '预期流转边（虚线）',
   'zone.legend.flow-actual': '实际交接边',
-  'zone.legend.general': 'general 桶（未匹配/匿名派发）',
+  'zone.legend.general': 'general 位于 sdd-implement 桶内底部',
   'zone.legend.on-demand': '按需执行角色（独立列）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
@@ -342,7 +348,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': 'Legend',
   'zone.legend.flow-expected': 'expected flow edge (dashed)',
   'zone.legend.flow-actual': 'actual handoff edge',
-  'zone.legend.general': 'general bucket (unmatched / anonymous)',
+  'zone.legend.general': 'general at the bottom of the sdd-implement bucket',
   'zone.legend.on-demand': 'on-demand role (own column)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
