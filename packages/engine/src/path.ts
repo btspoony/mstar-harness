@@ -249,7 +249,9 @@ export function emitGitignoreSnippet(kind?: HarnessKind): string {
 
 /**
  * Validate that `<root>/.gitignore` contains a complete canonical
- * process-artifact ignore set (plan-conventions § Git 跟踪策略). Rule
+ * harness ignore set — default-ignore `<dir>/**` plus the tracked
+ * re-includes (AGENTS.md, knowledge/, specs/) per plan-conventions
+ * § Git 跟踪策略. Rule
  * (chosen alignment): the gate passes when the repo's .gitignore holds ONE
  * complete set for the DETECTED harness kind — `.mstar/` for a `.mstar`
  * harness, `.agents/` for a legacy `.agents` harness; layouts without a
@@ -316,7 +318,7 @@ export function validateGitignore(root: string): ValidationResult {
     ok: true,
     severity: "low",
     code: "gitignore.ok",
-    message: `.gitignore at ${gitignorePath} contains a complete canonical harness process-artifact ignore set (${label})`,
+    message: `.gitignore at ${gitignorePath} contains a complete canonical harness ignore set — default-ignore + tracked re-includes (${label})`,
   };
 }
 
