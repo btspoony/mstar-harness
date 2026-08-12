@@ -11,9 +11,10 @@
  *   6 kanban buckets (PLAN_STATE_IDS) and the expected role pipeline
  *   (EXPECTED_ROLE_FLOW), all client-side design knowledge;
  * - catalog evidence — `iteration.gate.transition` lights the current step
- *   (its forward target becomes `next`), `gate.ok/violations` become the
- *   PASS/FAIL verdict + count, and `state.plans[].status` rows fall into the
- *   exact-match kanban buckets. `iteration.compassStatus` (the steering
+ *   (steps before it become `done` — plan 20260812-panel-f5-iteration-zone-fix
+ *   Task 1, its forward target becomes `next`), `gate.ok/violations` become
+ *   the PASS/FAIL verdict + count, and `state.plans[].status` rows fall into
+ *   the exact-match kanban buckets. `iteration.compassStatus` (the steering
  *   compass frontmatter `status`, `'active' | 'locked'` — spec panel-f4 §2.3
  *   R9 / §5 D5) re-derives the current step during Phase 1: `'active'` WITH a
  *   `phase-2-execute` transition (compass and gate mutually consistent — QC
@@ -127,15 +128,20 @@ export interface FlowEventView {
 /* ---------------------------------- iteration zone (spec §3) ---------------------------------- */
 
 /**
- * One iteration step (spec §3): the PHASE_IDS skeleton with
- * current/next/idle lit by `gate.transition` evidence. The `step` number is
- * 1-based (1..5). `verdict` is carried by the CURRENT step only.
+ * One iteration step (spec §3 + plan 20260812-panel-f5-iteration-zone-fix
+ * Task 1): the PHASE_IDS skeleton with current/next/done/idle lit by
+ * `gate.transition` evidence — the CURRENT step, its forward target (`next`)
+ * and every step BEFORE it (`done` — completed: the Task 1 fix, a finished
+ * Step 1 must not read as idle「待命」 while Step 2 is current). The `step`
+ * number is 1-based (1..5). `verdict` is carried by the CURRENT step only.
  */
 export interface IterationStepView {
   id: PhaseId
   /** 1-based position in PHASE_IDS (1..5). */
   step: number
-  state: 'current' | 'next' | 'idle'
+  /** 'current' (the gate transition) / 'next' (its forward target) / 'done'
+   * (a step BEFORE the current one — completed) / 'idle' (schema-only). */
+  state: 'current' | 'next' | 'done' | 'idle'
   /** Current-step gate verdict; 'unknown' on non-current steps. */
   verdict: PhaseVerdict
 }
@@ -431,7 +437,9 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
         // (iteration-start → autonomous-execute). `active` stays true — the
         // transition already resolved (engine `evaluatePhaseGate` emits
         // phase-2-execute + ok:true during Phase 1); only the CURRENT STEP is
-        // re-derived here.
+        // re-derived here. No `done` step on this branch (plan
+        // 20260812-panel-f5-iteration-zone-fix Task 1): Step 1 is current and
+        // nothing precedes it (index 0 → no completed steps).
         currentStep = 1
         const current = steps[0]!
         current.state = 'current'
@@ -449,6 +457,12 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
         currentStep = index + 1 // 1-based
         const current = steps[index]!
         current.state = 'current'
+        // Completed steps (plan 20260812-panel-f5-iteration-zone-fix Task 1 —
+        // the user bug: a finished Step 1 must not read as idle「待命」 while
+        // Step 2 is current): every step BEFORE the current one projects
+        // `done` (steps 0..index-1; index 0 → no done, e.g. an iteration at
+        // the first lit phase). current/next logic above stays unchanged.
+        for (let i = 0; i < index; i++) steps[i]!.state = 'done'
         const ok = gate === null || typeof gate !== 'object' ? null : bool(gate.ok)
         current.verdict = ok === null ? 'unknown' : ok ? 'pass' : 'fail'
         const rawViolations = gate !== null && typeof gate === 'object' && Array.isArray(gate.violations)

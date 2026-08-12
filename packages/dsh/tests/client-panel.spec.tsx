@@ -1179,12 +1179,16 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).toContain('data-iteration-head-verdict="pass"')
     expect(html).toContain('2/5')
     expect(html).not.toContain('Step ')
-    // The horizontal 5-step row: PHASE_IDS order, one current + one next + three idle.
+    // The horizontal 5-step row: PHASE_IDS order, one done + one current +
+    // one next + two idle (plan 20260812-panel-f5-iteration-zone-fix T1: the
+    // completed Step 1 before current projects `done`, not idle).
     expect(html).toContain('data-iteration-head-steps')
     for (const n of [1, 2, 3, 4, 5]) expect(html).toContain(`data-step="${n}"`)
+    expect(html.match(/data-step-state="done"/g)).toHaveLength(1)
     expect(html.match(/data-step-state="current"/g)).toHaveLength(1)
     expect(html.match(/data-step-state="next"/g)).toHaveLength(1)
-    expect(html.match(/data-step-state="idle"/g)).toHaveLength(3)
+    expect(html.match(/data-step-state="idle"/g)).toHaveLength(2)
+    expect(html).toMatch(/data-step="1"[^>]*data-step-state="done"/)
     expect(html).toMatch(/data-step="2"[^>]*data-step-state="current"/)
     expect(html).toMatch(/data-step="3"[^>]*data-step-state="next"/)
     // Badges are PURE NUMBERS (plan Item 1 — no 步骤/Step prefix).
