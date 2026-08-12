@@ -4,7 +4,7 @@
  * registered on `ctx.tools` via the dsh-tools `defineTool` contract, running
  * the engine in-app against control-path artifacts.
  *
- * Composition: the app boots through the real Loader with the
+ * Composition: the app boots the REAL-composition harness with the
  * `@deepseek-ai/dsh-tools` registry linked from the dsh source tree (its
  * default export provides the `ctx.tools` service), so registration and
  * execution exercise

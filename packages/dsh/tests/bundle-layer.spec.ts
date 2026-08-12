@@ -10,7 +10,7 @@
  * `join(packageDir, dsh.bundle.patch)`), assert the row's neutral defaults
  * (Enforcement OFF by construction: absent → the iteration compass decides,
  * warn-only when nothing hardens — never a global always-on hard gate), and
- * round-trip whole-config replacement with a minimal mirror of the include's
+ * round-trip whole-config replacement with a minimal mirror of the include
  * patch algorithm (`insert` append + id-targeted `config` replacement).
  */
 import { describe, expect, it } from 'bun:test'
@@ -38,9 +38,10 @@ interface PatchOp {
 }
 
 /**
- * Minimal mirror of `@cordisjs/plugin-include` `applyEntryPatches` for the
- * two ops the dsh-bundle contract uses: `insert` appends rows; an id-targeted
- * `config` patch replaces the target row's WHOLE config (no deep merge).
+ * Minimal mirror of the include patch semantics the dsh profile loader
+ * applies, for the two ops the dsh-bundle contract uses: `insert` appends
+ * rows; an id-targeted `config` patch replaces the target row's WHOLE config
+ * (no deep merge).
  * @param entries - the composed entry list (e.g. the dsh-base layer).
  * @param patches - patch ops in application order (later wins).
  * @returns the composed entry list.

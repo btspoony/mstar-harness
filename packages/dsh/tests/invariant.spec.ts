@@ -11,7 +11,7 @@
  * 'invariants')`).
  */
 import { describe, expect, it } from 'bun:test'
-import { Context, Service } from 'cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 import * as invariant from '../src/invariant.ts'
 

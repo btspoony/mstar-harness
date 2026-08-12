@@ -16,7 +16,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
-import { type Context } from 'cordis'
+import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assertLightDarkParity,

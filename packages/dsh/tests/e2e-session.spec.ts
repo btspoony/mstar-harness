@@ -2,7 +2,7 @@
  * Task 5 — end-to-end integration test: a FULL mstar-gated session in one
  * composed dsh app (plan 20260808-dsh-seams-bundle).
  *
- * Boots the full-app fixture cordis.yml through the real Loader (dsh-skill +
+ * Boots the full-app fixture cordis.yml through the REAL-composition boot (dsh-skill +
  * dsh-system-prompt + dsh-tools + dsh-commands from the linked dsh source
  * tree + the mstar plugin — the committed `tests/fixtures/cordis.yml`
  * replaces the inline row list), mounts the

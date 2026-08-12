@@ -30,7 +30,7 @@
  * deliberate, reviewed addition (new module), not a split drift.
  */
 import { describe, expect, it } from 'bun:test'
-import type { Context, Events } from 'cordis'
+import type { Context, Events } from '@deepseek-ai/cordis'
 import * as entry from '../src/index.ts'
 import type * as EntryTypes from '../src/index.ts'
 

@@ -15,7 +15,7 @@
  * verbatim by the entry.
  */
 import { basename, dirname, join, resolve } from 'node:path'
-import { type Context } from 'cordis'
+import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   findingsCleanupGate,

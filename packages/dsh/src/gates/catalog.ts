@@ -18,7 +18,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Context } from 'cordis'
+import { type Context } from '@deepseek-ai/cordis'
 import {
   evaluatePhaseGate,
   parseCompassFrontmatter,

@@ -6,7 +6,7 @@
  * on the known-document branch) + the on-demand `mstar_*_validate` tools
  * (CLI `mstar design-md validate` / `mstar compound validate` mirrors).
  *
- * Composition: the app boots through the real Loader with the dsh-tools
+ * Composition: the app boots the REAL-composition harness with the dsh-tools
  * registry linked from the dsh source tree (same harness as
  * sdd-iteration-tools.spec), so gate listeners and tool registrations
  * exercise the shipping plugin path.
@@ -15,7 +15,7 @@ import { describe, expect, it, afterEach } from 'bun:test'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { CallId } from '@deepseek-ai/dsh-llm'
 import type { ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'

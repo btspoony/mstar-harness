@@ -11,7 +11,7 @@
  *   (limit 50), truncation (AGENT_FLOW_MAX_EVENTS 500), malformed-line
  *   tolerance, missing-file degrade → null, summary (role × outcome, count
  *   desc), and the never-throw advisory contract;
- * - dispatch smoke: REAL Loader boot + `ctx.waterfall('tools/pre-execute', …)`
+ * - dispatch smoke: REAL-composition boot + `ctx.waterfall('tools/pre-execute', …)`
  *   lands one event per Assignment-shaped dispatch (clean / advisory / hard
  *   deny), the host-hook path (`beforeDispatch`, exec-less) records too, and
  *   non-Assignment / non-subagent-tool / no-harness-dir calls stay silent;
@@ -37,7 +37,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { defineTool, type PreToolDecision, type ToolExecution, type ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { CallId } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
@@ -453,7 +453,7 @@ Do the thing.
 })
 
 /* ===========================================================================
- * 3. Dispatch smoke — REAL Loader boot + tools/pre-execute waterfall
+ * 3. Dispatch smoke — REAL-composition boot + tools/pre-execute waterfall
  * ========================================================================== */
 
 describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import * as plugin from '../src/index.ts'
 
 describe('@mstar-harness/dsh function-plugin contract', () => {

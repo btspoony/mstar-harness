@@ -1,10 +1,12 @@
 /**
  * Shared REAL-composition boot for `@mstar-harness/dsh` tests (plan Task 2
- * pattern, extended for the Task 3 status gate): boots a test-only
- * `cordis.yml` through the actual `@cordisjs/plugin-loader`, mounting
- * `@mstar-harness/dsh` with only the module-import seam replaced by a modules
- * map — entry parsing, config validation, fiber mounting, and settlement are
- * the shipping code.
+ * pattern, extended for the Task 3 status gate): boots the REAL-composition
+ * app by mounting the seam rows directly with `ctx.plugin` in the exact
+ * order the dsh app composes them (skill → system-prompt → tools → commands
+ * → mstar), applying the plugin Config through the shipping schemastery
+ * validation — entry/config semantics and fiber mounting are cordis's own
+ * `ctx.plugin` path, with no `@cordisjs/plugin-loader` involved (the plugin
+ * bundle carries no bare `cordis` dependency; only `@deepseek-ai/cordis`).
  *
  * Seam boundary: dev-time the dsh seam packages resolve from a real dsh
  * source tree via the link farm (`scripts/setup-dsh-links.ts` → repo-root
@@ -17,9 +19,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { Context, Service } from 'cordis'
-import Loader from '@cordisjs/plugin-loader'
-import Include from '@cordisjs/plugin-include'
+import { Context, Service } from '@deepseek-ai/cordis'
+import { load as parseYaml } from 'js-yaml'
 import type { TaskDoneListener, TaskSnapshot } from '@deepseek-ai/dsh-tasks'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
@@ -164,63 +165,72 @@ export async function seedHarness(harnessDir: string, files: Record<string, stri
 }
 
 /**
- * Boot a test-only cordis.yml through the Loader with the plugin mounted.
+ * Boot a REAL-composition app: mount the seam rows directly with
+ * `ctx.plugin` in the dsh app's row order, applying the mstar plugin Config
+ * through the shipping schemastery validation. No `@cordisjs/plugin-loader`:
+ * the bundle depends only on `@deepseek-ai/cordis`.
  * @param options - config override and root placement.
  * @returns the booted app handle.
  */
 export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
-  const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-loader-'))
+  const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
   const harnessDir = join(root, 'harness')
   await mkdir(harnessDir, { recursive: true })
-  const configPath = join(root, 'cordis.yml')
+
   // The dsh skill registry row mounts first (real dsh app layout): the
   // `@mstar-harness/dsh` plugin mounts skill-local as a child, which injects
-  // the `skills` service.
-  const lines = options.cordisYml !== undefined
+  // the `skills` service. The tool/command registry rows mount before the
+  // plugin so `ctx.tools` / `ctx.commands` exist when the v2 seams register
+  // (the real dsh app always composes them).
+  const inlineRows: ReadonlyArray<{ name: string; config?: Record<string, unknown> }> = [
+    { name: '@deepseek-ai/dsh-skill' },
+    // The real dsh-tools ToolRegistry service injects `systemPrompt`
+    // (unlike the removed peer-stub), so the system-prompt row mounts
+    // before the tool registry row.
+    { name: '@deepseek-ai/dsh-system-prompt' },
+    // The tool registry row mounts before the plugin so `ctx.tools` exists
+    // when the v2 seams register their model-facing tools (Task 1 of plan
+    // 20260808-dsh-seams-bundle; the real dsh app always composes dsh-tools).
+    { name: '@deepseek-ai/dsh-tools' },
+    // The command registry row mounts before the plugin so `ctx.commands`
+    // exists when the bundled mstar commands register (the real dsh app
+    // always composes dsh-commands).
+    { name: '@deepseek-ai/dsh-commands' },
+    // The fake tasks service row (only when requested — plan
+    // `20260811-panel-f4-timeliness` Task 1): provides `ctx.tasks` so the
+    // plugin's deferred `ctx.inject(['tasks'])` onTaskDone wiring fires.
+    ...(options.tasksService !== undefined ? [{ name: '@deepseek-ai/dsh-tasks-fake' }] : []),
+    // Last row: the mstar plugin (carries the boot-time Config below).
+    { name: '@mstar-harness/dsh' },
+  ]
+  let rows: ReadonlyArray<{ name: string; config?: Record<string, unknown> }> = inlineRows
+  if (options.cordisYml !== undefined) {
     // Full-app fixture composition (e2e-session.spec): the committed rows
-    // replace the inline list; the boot-time config block below is appended
-    // to the fixture's trailing mstar row exactly as for the inline list.
-    ? (await readFile(options.cordisYml, 'utf8')).replace(/\s+$/, '').split('\n')
-    : [
-        "- name: '@deepseek-ai/dsh-skill'",
-        // The real dsh-tools ToolRegistry service injects `systemPrompt`
-        // (unlike the removed peer-stub), so the system-prompt row mounts
-        // before the tool registry row.
-        "- name: '@deepseek-ai/dsh-system-prompt'",
-        // The tool registry row mounts before the plugin so `ctx.tools` exists
-        // when the v2 seams register their model-facing tools (Task 1 of plan
-        // 20260808-dsh-seams-bundle; the real dsh app always composes dsh-tools).
-        "- name: '@deepseek-ai/dsh-tools'",
-        // The command registry row mounts before the plugin so `ctx.commands`
-        // exists when the bundled mstar commands register (the real dsh app
-        // always composes dsh-commands).
-        "- name: '@deepseek-ai/dsh-commands'",
-        // The fake tasks service row (only when requested — plan
-        // `20260811-panel-f4-timeliness` Task 1): provides `ctx.tasks` so the
-        // plugin's deferred `ctx.inject(['tasks'])` onTaskDone wiring fires.
-        ...(options.tasksService !== undefined ? ["- name: '@deepseek-ai/dsh-tasks-fake'"] : []),
-        "- name: '@mstar-harness/dsh'",
-      ]
-  const configLines: string[] = []
-  if (options.harnessDir !== null) {
-    configLines.push(`    harnessDir: ${JSON.stringify(options.harnessDir ?? harnessDir)}`)
+    // replace the inline list; the boot-time config block is applied to the
+    // trailing mstar row exactly as for the inline list.
+    const parsed = parseYaml(await readFile(options.cordisYml, 'utf8'))
+    if (!Array.isArray(parsed)) throw new Error(`fixture cordis.yml must be a row list: ${options.cordisYml}`)
+    rows = parsed.map((row, index) => {
+      if (typeof row !== 'object' || row === null || typeof (row as { name?: unknown }).name !== 'string') {
+        throw new Error(`fixture row ${index} must declare a string name: ${options.cordisYml}`)
+      }
+      return { name: (row as { name: string }).name, config: (row as { config?: Record<string, unknown> }).config }
+    })
   }
-  if (options.enforcement !== undefined) configLines.push(`    enforcement: ${options.enforcement}`)
-  if (options.dispatchTools !== undefined) configLines.push(`    dispatchTools: ${JSON.stringify(options.dispatchTools)}`)
-  if (options.dispatchBinding !== undefined) configLines.push(`    dispatchBinding: ${JSON.stringify(options.dispatchBinding)}`)
-  if (options.skillRoots !== undefined) configLines.push(`    skillRoots: ${JSON.stringify(options.skillRoots)}`)
-  if (options.bundledSkillDir !== undefined) configLines.push(`    bundledSkillDir: ${JSON.stringify(options.bundledSkillDir)}`)
-  if (options.catalogTtlMs !== undefined) configLines.push(`    catalogTtlMs: ${options.catalogTtlMs}`)
-  if (configLines.length > 0) {
-    lines.push('  config:')
-    lines.push(...configLines)
-  }
-  await writeFile(configPath, lines.join('\n') + '\n')
+
+  const config: Record<string, unknown> = {}
+  if (options.harnessDir !== null) config.harnessDir = options.harnessDir ?? harnessDir
+  if (options.enforcement !== undefined) config.enforcement = options.enforcement
+  if (options.dispatchTools !== undefined) config.dispatchTools = options.dispatchTools
+  if (options.dispatchBinding !== undefined) config.dispatchBinding = options.dispatchBinding
+  if (options.skillRoots !== undefined) config.skillRoots = options.skillRoots
+  if (options.bundledSkillDir !== undefined) config.bundledSkillDir = options.bundledSkillDir
+  if (options.catalogTtlMs !== undefined) config.catalogTtlMs = options.catalogTtlMs
 
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root).href + '/'
-  await ctx.plugin(Loader)
-  ctx.loader.builtins.include = Include
+  // Module seams, keyed by row name. The seam packages export their plugin
+  // function as `default` (CJS-style); the mstar plugin is named-only.
   const modules = new Map<string, unknown>([
     ['@mstar-harness/dsh', plugin],
     // The `ctx.skills` registry seam — the REAL package, linked from a local
@@ -239,20 +249,19 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // runtime via peerDependencies).
     ['@deepseek-ai/dsh-commands', await import('@deepseek-ai/dsh-commands')],
     // The fake `tasks` service (plan `20260811-panel-f4-timeliness` Task 1):
-    // a `{ default }` module so the Loader's unwrapExports resolves the class.
+    // a `{ default }` module so the seam unwrap resolves the class.
     ...(options.tasksService !== undefined
       ? [['@deepseek-ai/dsh-tasks-fake', { default: FakeTaskService }] as const]
       : []),
   ])
-  ctx.loader.internal = {
-    version: 'v2',
-    async import(specifier: string) {
-      if (!modules.has(specifier)) throw new Error(`unexpected Loader import: ${specifier}`)
-      return modules.get(specifier)
-    },
-  } as unknown as NonNullable<typeof ctx.loader.internal>
-  await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
-  await ctx.loader.await()
+  for (const row of rows) {
+    const mod = modules.get(row.name)
+    if (mod === undefined) throw new Error(`unexpected boot row: ${row.name}`)
+    const mountable = (mod as { default?: unknown }).default ?? mod
+    // `ctx.plugin` validates a plain config object against the plugin's
+    // schemastery `Config` (the same validation the loader applied to rows).
+    await ctx.plugin(mountable as Parameters<Context['plugin']>[0], row.name === '@mstar-harness/dsh' && Object.keys(config).length > 0 ? config : undefined)
+  }
   return {
     ctx,
     root,

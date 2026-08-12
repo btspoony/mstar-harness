@@ -36,7 +36,7 @@ import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
@@ -91,7 +91,7 @@ function textOf(row: UserMessage): string {
   return row.content[0]?.type === 'text' ? row.content[0].text : ''
 }
 
-describe('mstar-engine-status catalog — pre-step composition (real Loader boot)', () => {
+describe('mstar-engine-status catalog — pre-step composition (REAL-composition boot)', () => {
   it('appends the catalog MessageSource; the text appears in the composed session log', async () => {
     const app = booted = await bootApp()
     const inbox = [inboxMessage()]
