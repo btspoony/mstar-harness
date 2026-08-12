@@ -89,6 +89,12 @@
  * `zone.legend.sub-bucket` / `zone.legend.supervise` / `zone.legend.unknown`
  * (the former 'general' entry is replaced by 'unknown'); `zone.legend.general`
  * is REMOVED and `zone.legend.on-demand` rewords to the badge semantics.
+ *
+ * T3 (plan 20260812-panel-f5-agent-layout Task 3): the no-harness branch
+ * renders a CENTERED inactive-state card (icon + title + hint, no tabs /
+ * no sidebar) instead of the left-aligned hint — `empty.no-harness-hint`
+ * is the explanatory secondary copy under the reused `empty.no-harness`
+ * title.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -131,6 +137,7 @@ export type PanelKey =
   | 'event-log.no'
   | 'empty.waiting'
   | 'empty.no-harness'
+  | 'empty.no-harness-hint'
   | 'watermark.version'
   | 'watermark.harness'
   | 'watermark.none'
@@ -249,6 +256,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'event-log.no': '否',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
+  'empty.no-harness-hint': '当前工作区未发现 .mstar/ harness 目录，详细面板保持未激活；检测到 harness 后自动呈现',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
   'watermark.none': '无',
@@ -362,6 +370,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'event-log.no': 'no',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
+  'empty.no-harness-hint': 'No .mstar/ harness directory found in this workspace — the detail panel stays inactive and activates automatically once a harness is detected',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
   'watermark.none': 'none',
