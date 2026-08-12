@@ -45,10 +45,53 @@
   overflow: hidden;                               /* full-tab: page never scrolls */
 }
 
-/* No harness → no graph region (spec §2.5): single-column hint + freshness. */
+/* No harness → no graph region (spec §2.5): single-column root; the main
+ * centers the inactive-state card (plan 20260812-panel-f5-agent-layout T3 —
+ * replaces the left-aligned hint). */
 .root[data-mstar-panel='no-harness'] {
   grid-template-columns: 1fr;
   grid-template-areas: 'main';
+}
+
+/* The centered inactive-state card: a muted frame (no orange — spec §8
+ * degraded tone) centered in the free space above the freshness footer
+ * (flex: 1 + inner centering; compact width, text wraps within it). */
+.noHarnessCard {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 400px;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--mstar-space-2);
+  padding: var(--mstar-space-5);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  text-align: center;
+}
+
+.noHarnessIcon {
+  color: var(--dsw-alias-label-caption);
+  margin-bottom: var(--mstar-space-1);
+}
+
+.noHarnessTitle {
+  margin: 0;
+  max-width: 100%;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+}
+
+.noHarnessHint {
+  margin: 0;
+  max-width: 100%;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
 }
 
 @media (max-width: 860px) {
@@ -64,9 +107,17 @@
     border-top: 1px solid var(--dsw-alias-border-l1);
   }
   /* Narrow fallback (spec panel-f4 §2.3 R8): the iteration split stacks
-     vertically — branches (DOM-first) above, steps below. */
+     vertically — branches (DOM-first) above, steps below. The Task 2 width
+     cap applies to the ROW main axis only (flex-basis would otherwise set
+     a 260px HEIGHT in the column stack) — reset to content height. The cap
+     is scoped to `@media (min-width: 861px)` below, so nothing competes
+     with this reset at ≤860px (plan QC W-001/F-001 cascade fix). */
   .iterationHeadSplit {
     flex-direction: column;
+  }
+  .iterationHeadSplit > .iterationBranches {
+    flex: 0 1 auto;
+    max-width: none;
   }
 }
 
@@ -270,7 +321,16 @@
 /* LEFT-RIGHT split (spec panel-f4 §2.3 R8, plan f4.3 Task 2): branches
  * (small half, DOM-first) LEFT + steps (large half) RIGHT — a plain flex
  * row; the DOM already puts branches before steps. Narrow widths stack
- * vertically (the same 860px breakpoint as the root grid, below). */
+ * vertically (the same 860px breakpoint as the root grid, below).
+ * Width cap (plan 20260812-panel-f5-iteration-zone-fix Task 2): in the ROW
+ * layout the branch panel is width-constrained (flex-basis 260px, capped
+ * 280px — it never stretches with the container; the branch values stay
+ * compact) and the steps row absorbs ALL remaining width (flex 1 1 0).
+ * The cap is scoped to `@media (min-width: 861px)` so the ≤860px column
+ * stack never sees flex-basis 260px / max-width 280px — the narrow reset
+ * above is the ONLY branch rule at ≤860px, with no cascade competition
+ * (plan QC W-001/F-001: an earlier source order let the later
+ * same-specificity base rule win). */
 .iterationHeadSplit {
   display: flex;
   align-items: stretch;
@@ -278,13 +338,17 @@
   min-width: 0;
 }
 
-.iterationHeadSplit > .iterationBranches {
-  flex: 1 1 0;   /* small half (~1/3) */
-  min-width: 0;
+@media (min-width: 861px) {
+  /* Row-mode width cap — scoped to ≥861px (see the split comment above). */
+  .iterationHeadSplit > .iterationBranches {
+    flex: 0 1 260px;   /* width-capped (plan f5 T2) — branch info never stretches */
+    max-width: 280px;
+    min-width: 0;
+  }
 }
 
 .iterationHeadSplit > .iterationStepsRow {
-  flex: 2 1 0;   /* large half (~2/3) — keeps its own horizontal scroll */
+  flex: 1 1 0;   /* absorbs the remaining width (plan f5 T2) — keeps its own horizontal scroll */
   min-width: 0;
 }
 
@@ -369,6 +433,29 @@
 [data-step-state='idle'] .iterationStepBadge {
   border-color: var(--dsw-alias-border-l1);
   color: var(--dsw-alias-label-caption);
+}
+
+/* Done step (plan 20260812-panel-f5-iteration-zone-fix Task 2): a step
+ * BEFORE the current one — the projection derives it explicitly (Task 1
+ * state machine), the render layer only styles it (honest — no UI
+ * guesswork). A quiet "passed/visited" treatment: the badge keeps its
+ * pure number (plan Item 1) with a success border + tint, the chip text
+ * dims to muted and gains a leading ✓ (the panel's settled glyph — cf.
+ * zone.legend.agent-settled). Clearly apart from idle (no ✓, no success
+ * tint) and from current (no business glow / ring / bold). */
+[data-step-state='done'] .iterationStepBadge {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+[data-step-state='done'] .iterationStepChip {
+  color: var(--dsw-alias-label-secondary);
+}
+
+[data-step-state='done'] .iterationStepChip::before {
+  content: '✓';
+  margin-right: var(--mstar-space-1);
+  color: var(--dsw-alias-state-success-primary);
 }
 
 /* Verdict seat row (spec panel-f4 §2.3 R9, plan f4.3 Task 2): EVERY step

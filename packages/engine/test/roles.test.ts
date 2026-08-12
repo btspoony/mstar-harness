@@ -4,7 +4,7 @@
  *
  * Spec sources (each test cites the skill/reference section it enforces;
  * roadmap §8.5 C2 — engine unit tests cite the source section as spec):
- * - Role Reference Mapping (13 agent ids → `references/<role>.md`; shared
+ * - Role Reference Mapping (14 agent ids → `references/<role>.md`; shared
  *   families `fullstack-dev*` / `qc-specialist*` point at ONE shared file):
  *   `mstar-roles` SKILL.md § Role Reference Mapping + § Maintenance Rules
  *   ("Keep shared-family roles (`fullstack-dev*`, `qc-specialist*`) on one
@@ -56,6 +56,18 @@ import type { GateResult } from "../src/core.js";
  * lint.test.ts FRONTMATTER_REAL_*) keep the invariants covered
  * unconditionally; a checked-in full-corpus fixture is the future upgrade
  * path if machine-independent enforcement is required.
+ *
+ * Expected-red note (FIX-10, deterministic, NOT a regression): pointing
+ * `MSTAR_CONTROL_SKILLS` at the CONTROL checkout while it is still on
+ * `main` (pre-merge) reds the real-corpus test with
+ * `roles.mapping.reference.missing` for `code-reviewer` — the branch ships
+ * the `code-reviewer` ROLE_MAPPING row + `references/code-reviewer.md`,
+ * but the control `main` corpus does not have that file yet. This is the
+ * expected pre-merge state, not a regression: CI does not set
+ * `MSTAR_CONTROL_SKILLS`, so it resolves the upward walk to this
+ * checkout's own `skills/` (which contains the file) and stays green.
+ * Gate runs set the override to THIS checkout's skills, e.g.
+ * `MSTAR_CONTROL_SKILLS=<checkout>/skills`.
  */
 function resolveCorpusRoot(): string | null {
   const fromEnv = process.env.MSTAR_CONTROL_SKILLS;
@@ -96,6 +108,14 @@ function violationsOf(result: GateResult): string[] {
 function remap(mutate: (m: RoleMappingEntry) => RoleMappingEntry): RoleMappingEntry[] {
   return ROLE_MAPPING.map(mutate);
 }
+
+// ---------------------------------------------------------------------------
+// ROLE_MAPPING data
+// ---------------------------------------------------------------------------
+
+test("ROLE_MAPPING mirrors mstar-roles SSOT: code-reviewer → references/code-reviewer.md", () => {
+  expect(ROLE_MAPPING.find((m) => m.agentId === "code-reviewer")?.reference).toBe("references/code-reviewer.md");
+});
 
 // ---------------------------------------------------------------------------
 // validateRoleMapping

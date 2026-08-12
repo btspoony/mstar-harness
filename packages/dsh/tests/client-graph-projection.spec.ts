@@ -1,10 +1,10 @@
 /**
  * Pure projection tests for `projectGraph` (spec panel-zones §3 + §8): the
  * total function maps an `mstar-engine-status` catalog source to a `ZoneView`
- * — iteration zone (5 PHASE_IDS steps + Step N + current/next/idle + verdict
- * + branches + disabled determination), tasks zone (6 kanban columns +
- * exact-match bucketing + unknown column + shared plan-sort key + Done cap 5
- * + truncated), agents skeleton (EXPECTED_ROLE_FLOW pending stages +
+ * — iteration zone (5 PHASE_IDS steps + Step N + current/next/done/idle +
+ * verdict + branches + disabled determination), tasks zone (6 kanban columns
+ * + exact-match bucketing + unknown column + shared plan-sort key + Done cap
+ * 5 + truncated), agents skeleton (EXPECTED_ROLE_FLOW pending stages +
  * degraded/empty from `state.agentFlow` presence), and the migrated top-level
  * verdict / violations / events / unexpected / degraded.
  *
@@ -34,7 +34,7 @@ import { describe, expect, it } from 'bun:test'
 import type { MstarEngineStatusSource } from '../src/types'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
-import { pairSettleIndexes, projectGraph } from '../src/client/panel/graph/project-graph'
+import { pairSettleIndexes, projectGraph, type ZoneView } from '../src/client/panel/graph/project-graph'
 import { eventLogEntries, type EventLogEntry } from '../src/client/panel/graph/event-log'
 import {
   EXPECTED_ROLE_FLOW, KNOWN_AGENTS, PHASE_IDS, PLAN_STATE_IDS,
@@ -46,7 +46,7 @@ import { PLAN_CAP, sortPlans } from '../src/client/panel/plan-sort'
 const fullSource: MstarEngineStatusSource = {
   kind: 'mstar-engine-status',
   form: 'catalog',
-  version: '2.0.6',
+  version: '2.1.1',
   harnessDir: '/proj/.mstar',
   enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
   iteration: {
@@ -101,14 +101,14 @@ const prDeliverySource: MstarEngineStatusSource = {
 const noHarnessSource: MstarEngineStatusSource = {
   kind: 'mstar-engine-status',
   form: 'catalog',
-  version: '2.0.6',
+  version: '2.1.1',
   harnessDir: null,
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: null,
 }
 
 /* ---------------------------------------------------------------------------
- * Iteration zone (spec §3): steps / Step N / current/next/idle / verdict /
+ * Iteration zone (spec §3): steps / Step N / current/next/done/idle / verdict /
  * branches / disabled determination.
  * ------------------------------------------------------------------------- */
 
@@ -120,12 +120,15 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     expect(view.iteration.steps.map((s) => s.step)).toEqual([1, 2, 3, 4, 5])
   })
 
-  it('lights the transition step as current and its forward target as next', () => {
+  it('lights the transition step as current, its forward target as next, and completed steps before it as done', () => {
     const byId = new Map(view.iteration.steps.map((s) => [s.id, s]))
     expect(byId.get('autonomous-execute')!.state).toBe('current')
     expect(byId.get('iteration-close')!.state).toBe('next')
-    // Schema-only steps stay idle — never lit by the gate (Phase 1/5 known limitation).
-    expect(byId.get('iteration-start')!.state).toBe('idle')
+    // Steps BEFORE the current step are `done` (plan
+    // 20260812-panel-f5-iteration-zone-fix Task 1 — a completed Step 1 must
+    // not read as idle「待命」); only post-current schema-only steps stay idle
+    // (Phase 5 never lights — the engine gate emits 2→3→4 only).
+    expect(byId.get('iteration-start')!.state).toBe('done')
     expect(byId.get('pr-delivery')!.state).toBe('idle')
     expect(byId.get('merge-ready')!.state).toBe('idle')
   })
@@ -314,6 +317,57 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     expect(v.iteration.currentStep).toBe(2)
     expect(v.iteration.verdict).toBe('pass')
     expect(v.degraded.iteration).toBe(false)
+  })
+})
+
+describe('projectGraph — iteration steps done state (plan 20260812-panel-f5-iteration-zone-fix T1)', () => {
+  /** The 5 step states of a PROJECTED view, in PHASE_IDS order. */
+  const statesOf = (view: ZoneView): string[] => view.iteration.steps.map((s) => s.state)
+
+  it('phase-2-execute + locked → [done, current, next, idle, idle] (a completed Step 1 shows done, not idle)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'locked' },
+    })
+    expect(statesOf(v)).toEqual(['done', 'current', 'next', 'idle', 'idle'])
+    expect(v.iteration.currentStep).toBe(2)
+    // Done steps are not the current step → they carry no verdict.
+    expect(v.iteration.steps.find((s) => s.id === 'iteration-start')!.verdict).toBe('unknown')
+  })
+
+  it('phase-3-close → [done, done, current, next, idle]', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: {
+        ...fullSource.iteration!,
+        gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' },
+      },
+    })
+    expect(statesOf(v)).toEqual(['done', 'done', 'current', 'next', 'idle'])
+    expect(v.iteration.currentStep).toBe(3)
+  })
+
+  it('phase-4-pr-delivery → [done, done, done, current, next]', () => {
+    const v = projectGraph(prDeliverySource)
+    expect(statesOf(v)).toEqual(['done', 'done', 'done', 'current', 'next'])
+    expect(v.iteration.currentStep).toBe(4)
+  })
+
+  it('Phase 1 in flight (compassStatus active + phase-2-execute) → [current, next, idle, idle, idle] — no done (nothing precedes Step 1)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
+    })
+    expect(statesOf(v)).toEqual(['current', 'next', 'idle', 'idle', 'idle'])
+    expect(v.iteration.currentStep).toBe(1)
+  })
+
+  it('no iteration → all 5 steps stay idle (no done without a resolved transition)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: undefined,
+    } as unknown as MstarEngineStatusSource)
+    expect(statesOf(v)).toEqual(['idle', 'idle', 'idle', 'idle', 'idle'])
   })
 })
 
@@ -637,9 +691,11 @@ describe('projectGraph — agents zone skeleton (spec §4, plan 2)', () => {
       'autonomous-execute:qa-gate',
     ])
     expect(EXPECTED_ROLE_FLOW[0]!.roles).toEqual(['product-manager', 'architect', 'writing-specialist'])
-    expect(EXPECTED_ROLE_FLOW[1]!.roles).toEqual(['fullstack-dev', 'fullstack-dev-2', 'frontend-dev'])
-    // sdd-task-review is GONE (plan f3): the SDD per-task reviewer
-    // (generalPurpose) moved off-pipeline into the general bucket.
+    expect(EXPECTED_ROLE_FLOW[1]!.roles).toEqual(['fullstack-dev', 'fullstack-dev-2', 'frontend-dev', 'code-reviewer'])
+    // code-reviewer joins the sdd-implement stage (plan f5 Task 1): v2.1.1
+    // makes the SDD L2 task reviewer (the former generalPurpose seat) a
+    // routine pipeline role. ops-engineer / prompt-engineer stay OUT of the
+    // union (on-demand — see SDD_BUCKET_ROLES; expectedness unchanged).
     expect(EXPECTED_ROLE_FLOW[2]!.roles).toEqual(['qc-specialist', 'qc-specialist-2', 'qc-specialist-3'])
     expect(EXPECTED_ROLE_FLOW[3]!.roles).toEqual(['qa-engineer'])
     // Phase 3–5 have no stages (no routine subagent dispatch) — every stage
@@ -862,47 +918,69 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
  * handoffs / next determination (multiple-running rule).
  * ------------------------------------------------------------------------- */
 
-describe('projectGraph — agents zone edges (spec §4)', () => {
-  it('expected: 3 forward skeleton arrows across the 4 stages — NO loop back-edge (plan f4.2 Task 1)', () => {
+describe('projectGraph — agents zone edges (spec §4 + plan 20260812-panel-f5-design-system T5)', () => {
+  it('expected skeleton edges are REMOVED — no stage→stage arrows (design doc §2.2, user 2026-08-12 #1)', () => {
     const agents = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev' })])).agents
-    const expected = agents.edges.filter((e) => e.kind === 'expected')
-    // 3 forward edges across the consecutive stage columns.
-    expect(expected.map((e) => [e.source, e.target])).toEqual([
-      ['iteration-start:review-edit-chain', 'autonomous-execute:sdd-implement'],
-      ['autonomous-execute:sdd-implement', 'autonomous-execute:qc-tri'],
-      ['autonomous-execute:qc-tri', 'autonomous-execute:qa-gate'],
-    ])
-    // The SDD loop back-edge (sdd-implement → general) is GONE (plan
-    // 20260811-panel-f4-agent-view Task 1 + Task 2, user F4.2): no edge
-    // targets the general bucket — the `AgentEdge.loop` field itself was
-    // removed with the render branch (Task 2).
-    expect(agents.edges.every((e) => e.target !== 'general' && e.source !== 'general')).toBe(true)
+    // The AgentEdgeKind union dropped `expected` — the projection can only
+    // emit actual/supervise (compile-time) and never emits an expected arrow
+    // (runtime pin).
+    expect(agents.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
   })
 
-  it('actual: same-plan ts-ascending adjacent dispatch entity pairs — role-keyed (plan f3)', () => {
+  it('actual: same-plan ts-ascending adjacent dispatch entity pairs — role-keyed (plan f3), general endpoints filtered (T5)', () => {
     const view = projectGraph(flowSource([
       dispatchRow({ ts: 5, role: 'qc-specialist', agent: 'a3', planId: 'plan-x' }),
-      dispatchRow({ ts: 3, role: 'generalPurpose', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    const actual = view.agents.edges.filter((e) => e.kind === 'actual')
+    // Entity keys are role-based; the adjacent ts pairs stay (no general row
+    // in this fixture): frontend-dev → fullstack-dev → qc-specialist.
+    expect(actual.map((e) => [e.source, e.target])).toEqual([
+      ['frontend-dev', 'fullstack-dev'],
+      ['fullstack-dev', 'qc-specialist'],
+    ])
+    expect(actual.every((e) => e.entityKey === null)).toBe(true)
+  })
+
+  it('actual: general-bucket endpoints are FILTERED — a handoff into/out of the anonymous catch-all is noise (design doc §2.2)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 5, role: 'qc-specialist', agent: 'a3', planId: 'plan-x' }),
+      dispatchRow({ ts: 3, role: 'generalPurpose', agent: 'a2', planId: 'plan-x' }), // → general bucket
       dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
     ]))
     const actual = view.agents.edges.filter((e) => e.kind === 'actual')
-    // Entity keys are role-based: fullstack-dev → general (generalPurpose) → qc-specialist.
-    expect(actual.map((e) => [e.source, e.target])).toEqual([
-      ['fullstack-dev', 'general'],
-      ['general', 'qc-specialist'],
-    ])
-    expect(actual.every((e) => e.entityKey === null)).toBe(true)
+    // The old projection emitted fullstack-dev → general → qc-specialist; T5
+    // filters every edge with a general endpoint → none survive.
+    expect(actual).toEqual([])
+    // Anonymous rows still fold into the general CARD (unchanged) — only the
+    // EDGE endpoints are filtered.
+    expect(view.agents.entities.find((e) => e.key === 'general')).toBeDefined()
+  })
+
+  it('actual: at most ONE edge per entity-key pair — the latest direction wins (design doc §2.2)', () => {
+    // An oscillation fullstack-dev → qc-specialist → fullstack-dev →
+    // qc-specialist within one plan collapses to the FINAL handoff.
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 40, role: 'qc-specialist', agent: 'a1', planId: 'plan-x' }),
+      dispatchRow({ ts: 30, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+      dispatchRow({ ts: 20, role: 'qc-specialist', agent: 'a1', planId: 'plan-x' }),
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    const actual = view.agents.edges.filter((e) => e.kind === 'actual')
+    expect(actual).toHaveLength(1)
+    expect(actual[0]).toMatchObject({ kind: 'actual', source: 'fullstack-dev', target: 'qc-specialist' })
   })
 
   it('actual: different plans never cross; plan-less dispatches excluded', () => {
     const view = projectGraph(flowSource([
       dispatchRow({ ts: 5, role: 'qc-specialist', agent: 'b1', planId: 'plan-y' }),
-      dispatchRow({ ts: 4, role: 'generalPurpose', agent: 'a2', planId: 'plan-x' }),
+      dispatchRow({ ts: 4, role: 'frontend-dev', agent: 'a2', planId: 'plan-x' }),
       dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'noplan' }),
       dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
     ]))
     const actual = view.agents.edges.filter((e) => e.kind === 'actual')
-    expect(actual.map((e) => [e.source, e.target])).toEqual([['fullstack-dev', 'general']])
+    expect(actual.map((e) => [e.source, e.target])).toEqual([['fullstack-dev', 'frontend-dev']])
   })
 
   it('actual: a self-pair (the same entity twice in a plan) is skipped', () => {
@@ -914,60 +992,34 @@ describe('projectGraph — agents zone edges (spec §4)', () => {
   })
 })
 
-describe('projectGraph — agents zone next edge (spec §4)', () => {
-  it('next: the latest running entity → the next constant-order stage column', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'qc-specialist', agent: 'a2' }),
-      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([
-      { kind: 'next', source: 'autonomous-execute:qc-tri', target: 'autonomous-execute:qa-gate', entityKey: 'qc-specialist' },
-    ])
-  })
-
-  it('next: multiple running with equal ts → the smallest entity key wins', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'qc-specialist', agent: 'b-agent' }),
-      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a-agent' }),
-    ]))
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([
-      { kind: 'next', source: 'autonomous-execute:sdd-implement', target: 'autonomous-execute:qc-tri', entityKey: 'fullstack-dev' },
-    ])
-  })
-
-  it('next: no running entity → no next edge (honest)', () => {
-    const view = projectGraph(flowSource([
-      settleRow({ ts: 20, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
-      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
-    ]))
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
-  })
-
-  it('next: running at the LAST stage (qa-gate — the pipeline terminal) → no next edge', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'qa-engineer', agent: 'a1' }),
-    ]))
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
-  })
-
-  it('next: an off-pipeline running entity (ops-engineer, on-demand zone) has no stage → no next edge', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'a1' }),
-    ]))
-    expect(view.agents.entities.find((e) => e.key === 'ops-engineer')!.stage).toBeNull()
-    expect(view.agents.entities.find((e) => e.key === 'ops-engineer')!.zone).toBe('on-demand')
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
-  })
-
-  it('next: a running general-bucket entity (no stage) → no next edge', () => {
-    const view = projectGraph(flowSource([
-      dispatchRow({ ts: 10, role: 'scout', agent: 'a1' }),
-    ]))
-    const general = view.agents.entities.find((e) => e.key === 'general')!
-    expect(general.status).toBe('running')
-    expect(general.stage).toBeNull()
-    expect(general.zone).toBe('general')
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
+describe('projectGraph — agents zone next edge REMOVED (plan 20260812-panel-f5-design-system T5, design doc §2.2)', () => {
+  it('no `next` edge in ANY view — the projection no longer emits the running animation edge (user 2026-08-12 #1/#5)', () => {
+    // The running-position semantic moved to the running-card glow + status
+    // point (design doc §2.4); the projection never fabricates a next arrow.
+    const views = [
+      projectGraph(flowSource([
+        dispatchRow({ ts: 10, role: 'qc-specialist', agent: 'a2' }),
+        dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1' }),
+      ])).agents,
+      projectGraph(flowSource([
+        dispatchRow({ ts: 10, role: 'qc-specialist', agent: 'b-agent' }),
+        dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a-agent' }),
+      ])).agents,
+      projectGraph(flowSource([
+        settleRow({ ts: 20, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
+        dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
+      ])).agents,
+      projectGraph(flowSource([dispatchRow({ ts: 10, role: 'qa-engineer', agent: 'a1' })])).agents,
+      projectGraph(flowSource([dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'a1' })])).agents,
+      projectGraph(flowSource([dispatchRow({ ts: 10, role: 'scout', agent: 'a1' })])).agents,
+      projectGraph(fullSource).agents, // degraded
+      projectGraph(flowSource([])).agents, // empty
+    ]
+    for (const agents of views) {
+      // The AgentEdgeKind union dropped `next` — the projection can only
+      // emit actual/supervise (compile-time + runtime double pin).
+      expect(agents.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
+    }
   })
 })
 
@@ -1038,25 +1090,30 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
   it('degraded (agentFlow null / unreadable) → full idle roster, NO executing/pending claims (0/0)', () => {
     const degraded = projectGraph(fullSource).agents // agentFlow: null
     expect(degraded.degraded).toBe(true)
-    // The known roster is never hidden (spec §6.2): all 13 KNOWN_AGENTS show idle.
+    // The known roster is never hidden (spec §6.2): all 14 KNOWN_AGENTS show idle.
     expect(degraded.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(degraded.entities.every((e) => e.idle && e.status === 'idle' && e.count === 0 && e.ts === 0)).toBe(true)
     expect(degraded.executing).toBe(0)
     expect(degraded.pending).toBe(0)
-    expect(degraded.edges.filter((e) => e.kind === 'expected')).toHaveLength(3) // 3 forward skeleton only — the SDD loop back-edge is gone (plan f4.2 Task 1)
+    // Task 5 (design doc §2.2): the expected skeleton is REMOVED — the
+    // degraded branch carries ONLY the static supervise edge (dimmed).
+    expect(degraded.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
+    expect(degraded.edges).toHaveLength(1)
+    expect(degraded.edges[0]!.kind).toBe('supervise')
     // No evidence claims on a degraded skeleton either (render shows no
     // pending placeholders — spec §8).
     expect(degraded.stages.every((s) => !s.evidenced)).toBe(true)
   })
 
-  it('empty ledger → empty + full idle roster + full pending skeleton (0 executing, 10 pending)', () => {
+  it('empty ledger → empty + full idle roster + full pending skeleton (0 executing, 11 pending)', () => {
     const agents = projectGraph(flowSource([])).agents
     expect(agents.empty).toBe(true)
     expect(agents.degraded).toBe(false)
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
-    expect(agents.pending).toBe(10)
+    // 3 + 4 (sdd-implement incl. code-reviewer — plan f5 Task 1) + 3 + 1 = 11.
+    expect(agents.pending).toBe(11)
   })
 
   it('only-settle ledger → idle roster + full pending skeleton (摘要 0 执行中 · M 待执行)', () => {
@@ -1070,7 +1127,8 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
-    expect(agents.pending).toBe(10)
+    // 11 expected roles across the 4 stages (sdd-implement now incl. code-reviewer).
+    expect(agents.pending).toBe(11)
     expect(agents.stages).toHaveLength(4)
     // F-002: the projection classifies the ledger — settle rows but no
     // dispatch rows → the settle-only note (never UI-inferred).
@@ -1122,7 +1180,7 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
       dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1' }),
     ]))
     // a1's role card (lit) + the general bucket card (lit, ×2 anonymous rows)
-    // + the 11 un-evidenced known roles (idle) — anonymous rows are dispatch
+    // + the 12 un-evidenced known roles (idle) — anonymous rows are dispatch
     // evidence and belong to the general bucket (user decision, plan f3).
     expect(view.agents.entities.map((e) => e.key)).toEqual(['general', 'fullstack-dev', ...idleRosterIds(['fullstack-dev', 'general'])])
     expect(view.agents.entities.find((e) => e.key === 'general')!.count).toBe(2)
@@ -1134,7 +1192,7 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
     const agents = projectGraph(flowSource([42, null, 'garbage', { kind: 'banana' }, { kind: 'dispatch' }])).agents
     expect(agents.degraded).toBe(false)
     // { kind: 'dispatch' } is a valid dispatch row (role '' → general bucket);
-    // every OTHER row is unclassifiable → 1 lit general + 12 idle = 13.
+    // every OTHER row is unclassifiable → 1 lit general + 13 idle = 14.
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.find((e) => e.key === 'general')!.idle).toBe(false)
     expect(agents.entities.filter((e) => e.idle).every((e) => e.status === 'idle')).toBe(true)
@@ -1144,26 +1202,28 @@ describe('projectGraph — agents zone degradation matrix (spec §8)', () => {
 
 /* ---------------------------------------------------------------------------
  * KNOWN_AGENTS full roster (spec §4 / §6.2 / decision point D3 + plan
- * 20260811-panel-f3-agent-general): exactly 13 roles — every
- * EXPECTED_ROLE_FLOW role (10) + ops-engineer / prompt-engineer (off-pipeline,
- * on-demand zone) + `general` (the general bucket — the SDD per-task reviewer,
- * the former `generalPurpose`; zone 'general'); project-manager is EXCLUDED
- * (the primary orchestration agent, never an assignable subagent — F2 plan
- * Item 2) and `explore` is EXCLUDED too (scout adjunct, no presentation value
- * — user F3 feedback); stages pinned to the flow (first constant-order match),
- * null for the off-pipeline roles with an explicit `zone`
- * ('on-demand' / 'general').
+ * 20260811-panel-f3-agent-general + plan 20260812-panel-f5-agent-layout Task
+ * 1): exactly 14 roles — every EXPECTED_ROLE_FLOW role (11, incl. the SDD L2
+ * task reviewer `code-reviewer` — v2.1.1, the former `generalPurpose` seat)
+ * + ops-engineer / prompt-engineer (off-pipeline, on-demand zone —
+ * implementor-sub-bucket members, plan f5 Task 1) + `general` (the general
+ * bucket — the unmatched/anonymous catch-all; zone 'general'); project-manager
+ * is EXCLUDED (the primary orchestration agent, never an assignable subagent
+ * — F2 plan Item 2) and `explore` is EXCLUDED too (scout adjunct, no
+ * presentation value — user F3 feedback); stages pinned to the flow (first
+ * constant-order match), null for the off-pipeline roles with an explicit
+ * `zone` ('on-demand' / 'general').
  * ------------------------------------------------------------------------- */
 
 describe('projectGraph — KNOWN_AGENTS full roster (spec §4 / §6.2 / D3)', () => {
-  it('is exactly the 13 spec roles in spec §4 order, no duplicates, no project-manager, no explore', () => {
-    expect(KNOWN_AGENTS).toHaveLength(13)
+  it('is exactly the 14 spec roles in spec §4 order, no duplicates, no project-manager, no explore', () => {
+    expect(KNOWN_AGENTS).toHaveLength(14)
     expect(KNOWN_AGENTS.map((a) => a.id)).toEqual([
       'product-manager', 'architect', 'fullstack-dev', 'fullstack-dev-2',
-      'frontend-dev', 'qa-engineer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3',
+      'frontend-dev', 'code-reviewer', 'qa-engineer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3',
       'ops-engineer', 'writing-specialist', 'prompt-engineer', 'general',
     ])
-    expect(new Set(KNOWN_AGENTS.map((a) => a.id)).size).toBe(13)
+    expect(new Set(KNOWN_AGENTS.map((a) => a.id)).size).toBe(14)
     // F2 Item 2 (user F2 feedback): project-manager is the PRIMARY orchestration
     // agent — NOT an assignable subagent, so it is not in the roster.
     expect(KNOWN_AGENTS.some((a) => a.id === 'project-manager')).toBe(false)
@@ -1173,9 +1233,9 @@ describe('projectGraph — KNOWN_AGENTS full roster (spec §4 / §6.2 / D3)', ()
     expect(KNOWN_AGENTS.some((a) => a.id === 'generalPurpose')).toBe(false)
   })
 
-  it('covers every EXPECTED_ROLE_FLOW role (10) plus the 3 off-pipeline roles', () => {
+  it('covers every EXPECTED_ROLE_FLOW role (11) plus the 3 off-pipeline roles', () => {
     const flowRoles = EXPECTED_ROLE_FLOW.flatMap((s) => [...s.roles])
-    expect(flowRoles).toHaveLength(10)
+    expect(flowRoles).toHaveLength(11)
     for (const role of flowRoles) {
       expect(KNOWN_AGENTS.some((a) => a.id === role)).toBe(true)
     }
@@ -1206,7 +1266,13 @@ describe('projectGraph — KNOWN_AGENTS full roster (spec §4 / §6.2 / D3)', ()
     expect(KNOWN_AGENTS.find((a) => a.id === 'general')!.zone).toBe('general')
   })
 
-  it('general = the SDD per-task reviewer bucket (the former generalPurpose): stage null, zone general', () => {
+  it('code-reviewer joins the sdd-implement stage (plan f5 Task 1 — v2.1.1 SDD L2 task reviewer)', () => {
+    const c = KNOWN_AGENTS.find((a) => a.id === 'code-reviewer')!
+    expect(c.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    expect(c.zone ?? null).toBeNull() // staged → no off-pipeline zone
+  })
+
+  it('general = the unmatched/anonymous catch-all bucket (the SDD per-task reviewer seat is now the pipeline role code-reviewer): stage null, zone general', () => {
     const g = KNOWN_AGENTS.find((a) => a.id === 'general')!
     expect(g.stage ?? null).toBeNull()
     expect(g.zone).toBe('general')
@@ -1236,7 +1302,7 @@ describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
 
   it('no evidence → the whole roster is idle cards (idle true, status idle, count 0, ts 0, agent null)', () => {
     const agents = projectGraph(flowSource([])).agents
-    expect(agents.entities).toHaveLength(13)
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     for (const e of agents.entities) {
       expect(e.status).toBe('idle')
       expect(e.idle).toBe(true)
@@ -1269,9 +1335,9 @@ describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
     expect(byKey.get('general')!.role).toBe('general')
     // Lit roles never ALSO appear as idle cards (evidence suppresses the idle twin).
     expect(agents.entities.filter((e) => e.idle && e.key === 'general')).toHaveLength(0)
-    // The other 11 known roles are idle (roster 13 − 2 evidenced slots).
+    // The other 12 known roles are idle (roster 14 − 2 evidenced slots).
     const idle = agents.entities.filter((e) => e.idle)
-    expect(idle).toHaveLength(11)
+    expect(idle).toHaveLength(12)
     expect(idle.every((e) => e.status === 'idle')).toBe(true)
   })
 
@@ -1288,7 +1354,7 @@ describe('projectGraph — agents roster full coverage (spec §6.2)', () => {
     const agents = projectGraph(flowSource([
       dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a1' }),
     ])).agents
-    expect(agents.entities).toHaveLength(13)
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.executing).toBe(1)
   })
 })
@@ -1316,8 +1382,10 @@ describe('projectGraph — off-pipeline zones (plan 20260811-panel-f3-agent-gene
     // EXPECTED_ROLE_FLOW union): ops-engineer left the union → off-pipeline.
     expect(view.events[0]!.expected).toBe(false)
     expect(view.events[0]!.stage).toBeNull()
-    // No next edge for an off-pipeline running entity (no stage column).
-    expect(view.agents.edges.filter((e) => e.kind === 'next')).toEqual([])
+    // The `next` animation edge is REMOVED (plan 20260812-panel-f5-design-system
+    // Task 5) — the running position rides the card glow/status point; the
+    // projection never emits a next arrow for an off-pipeline running entity.
+    expect(view.agents.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
   })
 
   it('general-bucket role (scout) → stage null + zone general; unregistered roles never get on-demand', () => {
@@ -1355,6 +1423,337 @@ describe('projectGraph — off-pipeline zones (plan 20260811-panel-f3-agent-gene
 })
 
 /* ---------------------------------------------------------------------------
+ * SDD sub-buckets (plan 20260812-panel-f5-agent-layout Task 1): every entity
+ * carries a projected `bucket` — 'implementor' (SDD_BUCKET_ROLES.implementor:
+ * the implementer roles PLUS the on-demand ops-engineer / prompt-engineer),
+ * 'reviewer' (SDD_BUCKET_ROLES.reviewer: code-reviewer) or null (every other
+ * role — qc/qa/review-edit-chain/general). Bucket membership is a LAYOUT
+ * dimension ORTHOGONAL to expectedness: on-demand roles carry bucket
+ * 'implementor' while their `zone` stays 'on-demand' (the on-demand badge
+ * data) and their events stay `unexpected`.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — SDD sub-buckets (plan 20260812-panel-f5-agent-layout T1)', () => {
+  it('idle cards derive the bucket from SDD_BUCKET_ROLES: implementor/reviewer roles bucketed, everything else null', () => {
+    const agents = projectGraph(flowSource([])).agents
+    const byId = new Map(agents.entities.map((e) => [e.key, e]))
+    // Reviewer: code-reviewer (idle — no evidence yet) sits in the sdd-implement
+    // stage column's reviewer sub-bucket (zone flow — staged).
+    const reviewer = byId.get('code-reviewer')!
+    expect(reviewer.idle).toBe(true)
+    expect(reviewer.bucket).toBe('reviewer')
+    expect(reviewer.zone).toBe('flow')
+    expect(reviewer.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    // Implementor: the three implementer roles + the on-demand roles.
+    for (const id of ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev']) {
+      expect(byId.get(id)!.bucket).toBe('implementor')
+    }
+    expect(byId.get('ops-engineer')!.bucket).toBe('implementor')
+    expect(byId.get('prompt-engineer')!.bucket).toBe('implementor')
+    // On-demand zone is UNCHANGED (the render's on-demand badge data — the
+    // standalone on-demand column is removed by Task 2, not by the zone).
+    expect(byId.get('ops-engineer')!.zone).toBe('on-demand')
+    expect(byId.get('prompt-engineer')!.zone).toBe('on-demand')
+    // Every other role (review-edit-chain / qc / qa / general bucket) → null.
+    for (const id of ['product-manager', 'architect', 'writing-specialist', 'qa-engineer',
+      'qc-specialist', 'qc-specialist-2', 'qc-specialist-3', 'general']) {
+      expect(byId.get(id)!.bucket).toBeNull()
+    }
+    expect(byId.get('general')!.zone).toBe('general')
+  })
+
+  it('code-reviewer dispatch → bucket reviewer + zone flow (expected pipeline role); its event turns expected', () => {
+    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'code-reviewer', agent: 'r1' })]))
+    const lit = view.agents.entities.find((e) => e.key === 'code-reviewer')!
+    expect(lit.idle).toBe(false)
+    expect(lit.bucket).toBe('reviewer')
+    expect(lit.zone).toBe('flow')
+    expect(lit.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    // v2.1.1: the SDD L2 task reviewer is a routine pipeline role — its
+    // dispatch event is EXPECTED (union member since plan f5 T1).
+    expect(view.events[0]!.expected).toBe(true)
+    expect(view.events[0]!.stage).toEqual({ phase: 'autonomous-execute', stage: 'sdd-implement' })
+    expect(view.unexpected).toEqual([])
+  })
+
+  it('on-demand dispatches (ops-engineer / prompt-engineer) → bucket implementor + zone on-demand + event still unexpected (orthogonality)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'o1' }),
+      dispatchRow({ ts: 9, role: 'prompt-engineer', agent: 'p1' }),
+    ]))
+    for (const id of ['ops-engineer', 'prompt-engineer']) {
+      const lit = view.agents.entities.find((e) => e.key === id)!
+      expect(lit.idle).toBe(false)
+      expect(lit.bucket).toBe('implementor') // implementor-sub-bucket member
+      expect(lit.zone).toBe('on-demand')    // but the on-demand badge data stays
+      expect(lit.stage).toBeNull()
+    }
+    // REGRESSION (compass Non-Goal — no event-log classification change): the
+    // on-demand roles stay OUT of the EXPECTED_ROLE_FLOW union, so their
+    // dispatch events keep the `unexpected` badge even inside the implementor
+    // bucket.
+    expect(view.unexpected.map((e) => e.role).sort()).toEqual(['ops-engineer', 'prompt-engineer'])
+    expect(view.events.every((e) => e.expected === false)).toBe(true)
+  })
+
+  it('general-bucket dispatch → bucket null + zone general (unmatched/anonymous catch-all)', () => {
+    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'scout', agent: 's1' })]))
+    const general = view.agents.entities.find((e) => e.key === 'general')!
+    expect(general.idle).toBe(false)
+    expect(general.bucket).toBeNull()
+    expect(general.zone).toBe('general')
+    expect(general.stage).toBeNull()
+    // The general bucket is NOT in the union → its events stay unexpected.
+    expect(view.unexpected.map((e) => e.role)).toEqual(['scout'])
+  })
+
+  it('bucket follows the ROLE, never the session id (a code-reviewer session id under another role stays null/other)', () => {
+    // The session id 'code-reviewer' is only a record field — the ROLE decides
+    // the bucket: a fullstack-dev dispatch carries bucket implementor.
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'code-reviewer' }),
+    ])).agents
+    const lit = agents.entities.find((e) => e.key === 'fullstack-dev')!
+    expect(lit.bucket).toBe('implementor')
+    expect(lit.agent).toBe('code-reviewer')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Agent emphasis tiers (plan 20260812-panel-f5-design-system Task 4 — design
+ * doc §3): the TIME dimension — the iteration's current phase
+ * (`currentStep` → PHASE_IDS rank) vs the entity's pipeline-stage phase.
+ * Derived from projected fields only (zero new catalog reads): current /
+ * next / off / null (no iteration → no override). The design doc's example
+ * table (design doc §3.3) is the expectation oracle.
+ * ------------------------------------------------------------------------- */
+
+/** A source at the given gate transition (phase 2/3/4) with the ledger events. */
+function phaseSource(
+  transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery',
+  events: readonly unknown[] = [],
+): MstarEngineStatusSource {
+  return {
+    ...flowSource(events),
+    iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition } },
+  }
+}
+
+describe('projectGraph — agents emphasis tiers (plan 20260812-panel-f5-design-system T4)', () => {
+  /** entity key → emphasis (the projection is the only source of truth). */
+  const emphasisByKey = (view: ZoneView) =>
+    new Map(view.agents.entities.map((e) => [e.key, e.emphasis]))
+  /** The 8 autonomous-execute pipeline roles (design doc §3.3 example). */
+  const EXECUTE_ROLES = ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev', 'code-reviewer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3', 'qa-engineer']
+  /** The 3 review-edit-chain roles (design doc §3.3 example). */
+  const REVIEW_ROLES = ['product-manager', 'architect', 'writing-specialist']
+
+  it('Phase 1 (currentStep 1): review-edit-chain current, autonomous-execute next, on-demand/general off', () => {
+    const view = projectGraph({
+      ...flowSource([dispatchRow({ ts: 1, role: 'product-manager', agent: 'pm1' })]),
+      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
+    })
+    expect(view.iteration.currentStep).toBe(1)
+    const byKey = emphasisByKey(view)
+    for (const role of REVIEW_ROLES) expect(byKey.get(role)).toBe('current') // lit + idle parity
+    for (const role of EXECUTE_ROLES) expect(byKey.get(role)).toBe('next')
+    for (const role of ['ops-engineer', 'prompt-engineer', 'general']) expect(byKey.get(role)).toBe('off')
+  })
+
+  it('Phase 2 (currentStep 2): autonomous-execute current, review-edit-chain + on-demand/general off', () => {
+    const view = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]))
+    expect(view.iteration.currentStep).toBe(2)
+    const byKey = emphasisByKey(view)
+    for (const role of EXECUTE_ROLES) expect(byKey.get(role)).toBe('current')
+    for (const role of [...REVIEW_ROLES, 'ops-engineer', 'prompt-engineer', 'general']) {
+      expect(byKey.get(role)).toBe('off')
+    }
+  })
+
+  it('Phase 3 (currentStep 3): Phase 3+ dispatch no EXPECTED_ROLE_FLOW stages → the whole 14-roster goes off (design doc §3.2 note)', () => {
+    const view = projectGraph(phaseSource('phase-3-close', [dispatchRow({ ts: 1, role: 'fullstack-dev' })]))
+    expect(view.iteration.currentStep).toBe(3)
+    expect(view.agents.entities).toHaveLength(KNOWN_AGENTS.length)
+    for (const e of view.agents.entities) expect(e.emphasis).toBe('off')
+  })
+
+  it('Phase 4 (currentStep 4): the same all-off (pr-delivery)', () => {
+    const view = projectGraph(prDeliverySource)
+    expect(view.iteration.currentStep).toBe(4)
+    for (const e of view.agents.entities) expect(e.emphasis).toBe('off')
+  })
+
+  it('no iteration / no plan (currentStep null): every entity emphasis null — NO override (design doc §3.1)', () => {
+    for (const source of [null, noHarnessSource] as const) {
+      const view = projectGraph(source)
+      expect(view.iteration.currentStep).toBeNull()
+      expect(view.agents.entities.length).toBeGreaterThan(0)
+      for (const e of view.agents.entities) expect(e.emphasis).toBeNull()
+    }
+  })
+
+  it('running on-demand card (stage null) during Phase 2 → off, status stays running — emphasis × status ORTHOGONAL', () => {
+    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'o1' })]))
+    const ops = view.agents.entities.find((e) => e.key === 'ops-engineer')!
+    expect(ops.stage).toBeNull()
+    expect(ops.status).toBe('running')
+    expect(ops.emphasis).toBe('off')
+  })
+
+  it('totality: emphasis is projected per entity on garbage branches too (never throws)', () => {
+    const view = projectGraph({ garbage: true } as unknown as MstarEngineStatusSource)
+    expect(view.agents.entities.length).toBeGreaterThan(0)
+    for (const e of view.agents.entities) expect(e.emphasis).toBeNull()
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * The Phase-2 current-plan annotation (plan 20260812-panel-f5-design-system
+ * Task 8 — user 2026-08-12 feedback #2): the projection exposes the FIRST
+ * `state.plans[]` InProgress row (`activePlanId`, catalog order) + the full
+ * InProgress count (`activePlanCount`) — the render annotates the Phase 2
+ * group with the current plan (and an honest `+N more` when several plans
+ * run in parallel). Total function: state / plans missing or no InProgress
+ * row → null / 0, never fabricated.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents activePlanId / activePlanCount (plan 20260812-panel-f5-design-system T8)', () => {
+  /** A ledger-evidence source whose state.plans carries the given rows. */
+  function planRowsSource(rows: readonly { id?: string; status?: string }[]): MstarEngineStatusSource {
+    return {
+      ...flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]),
+      state: { ...fullSource.state!, plans: rows as never },
+    }
+  }
+
+  it('the first InProgress plan id + the full InProgress count (catalog order)', () => {
+    const view = projectGraph(planRowsSource([
+      { id: 'plan-a', status: 'Done' },
+      { id: 'plan-b', status: 'InProgress' },
+      { id: 'plan-c', status: 'InProgress' },
+      { id: 'plan-d', status: 'Todo' },
+    ]))
+    expect(view.agents.activePlanId).toBe('plan-b')
+    expect(view.agents.activePlanCount).toBe(2)
+  })
+
+  it('no InProgress row → null / 0 (never fabricated)', () => {
+    const view = projectGraph(planRowsSource([
+      { id: 'plan-a', status: 'Done' },
+      { id: 'plan-d', status: 'Todo' },
+      { id: 'plan-e', status: 'Blocked' },
+    ]))
+    expect(view.agents.activePlanId).toBeNull()
+    expect(view.agents.activePlanCount).toBe(0)
+  })
+
+  it('state null / plans missing / non-array → null / 0 (total function)', () => {
+    expect(projectGraph({ ...fullSource, state: null }).agents.activePlanId).toBeNull()
+    expect(projectGraph({ ...fullSource, state: null }).agents.activePlanCount).toBe(0)
+    const missing = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: undefined } } as unknown as MstarEngineStatusSource)
+    expect(missing.agents.activePlanId).toBeNull()
+    expect(missing.agents.activePlanCount).toBe(0)
+    const garbage = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: 'nope' } } as unknown as MstarEngineStatusSource)
+    expect(garbage.agents.activePlanId).toBeNull()
+  })
+
+  it('degraded / empty ledger branches include the note too — it rides state.plans, not the ledger', () => {
+    // agentFlow null → the degraded branch; the InProgress plan still projects.
+    const degraded = projectGraph({
+      ...planRowsSource([{ id: 'plan-x', status: 'InProgress' }]),
+      state: { ...planRowsSource([{ id: 'plan-x', status: 'InProgress' }]).state!, agentFlow: null },
+    })
+    expect(degraded.agents.degraded).toBe(true)
+    expect(degraded.agents.activePlanId).toBe('plan-x')
+    expect(degraded.agents.activePlanCount).toBe(1)
+    // Empty ledger (0 events) + no InProgress → null.
+    const empty = projectGraph({
+      ...flowSource([]),
+      state: { ...flowSource([]).state!, plans: [{ id: 'plan-d', status: 'Todo', doneAt: null }] },
+    })
+    expect(empty.agents.empty).toBe(true)
+    expect(empty.agents.activePlanId).toBeNull()
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * The sub-bucket supervision edge (plan 20260812-panel-f5-agent-layout Task
+ * 1): ONE static design-knowledge line between the sdd-implement column's
+ * implementor and reviewer sub-buckets (mstar-sdd mutual supervision — the
+ * render draws it as a bidirectional double arrow, Task 2). Presence is
+ * STATIC (emitted even with no evidence, degraded/empty included); lighting
+ * is evidence-driven via `AgentEdge.evidenced` — dim (false) without any
+ * implement/review dispatch evidence, lit (true) with it. Anchors embed the
+ * column id: `<stage-id>:implementor` / `<stage-id>:reviewer`.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — supervise edge (plan 20260812-panel-f5-agent-layout T1)', () => {
+  const supervise = (agents: ZoneView['agents']) => agents.edges.filter((e) => e.kind === 'supervise')
+
+  it('exists STATICALLY with the sub-bucket anchor shape, dimmed (evidenced false) without any evidence', () => {
+    const agents = projectGraph(flowSource([])).agents // empty ledger
+    const edges = supervise(agents)
+    expect(edges).toHaveLength(1)
+    expect(edges[0]).toEqual({
+      kind: 'supervise',
+      source: 'autonomous-execute:sdd-implement:implementor',
+      target: 'autonomous-execute:sdd-implement:reviewer',
+      entityKey: null,
+      evidenced: false,
+    })
+  })
+
+  it('exists dimmed in the degraded branch too (static presence — design knowledge, no evidence to light it)', () => {
+    const agents = projectGraph(fullSource).agents // agentFlow null → degraded
+    expect(supervise(agents)).toEqual([{
+      kind: 'supervise',
+      source: 'autonomous-execute:sdd-implement:implementor',
+      target: 'autonomous-execute:sdd-implement:reviewer',
+      entityKey: null,
+      evidenced: false,
+    }])
+  })
+
+  it('lights (evidenced true) on implement evidence — a fullstack-dev dispatch', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
+    ])).agents
+    expect(supervise(agents)[0]!.evidenced).toBe(true)
+  })
+
+  it('lights on review evidence — a code-reviewer dispatch (the reviewer sub-bucket)', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'code-reviewer', agent: 'r1' }),
+    ])).agents
+    expect(supervise(agents)[0]!.evidenced).toBe(true)
+  })
+
+  it('lights on an on-demand implementor dispatch (ops-engineer) — bucket membership, not expectedness', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'o1' }),
+    ])).agents
+    expect(supervise(agents)[0]!.evidenced).toBe(true)
+  })
+
+  it('stays dim on dispatch evidence OUTSIDE the sub-buckets (qa-engineer — different column)', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'qa-engineer', agent: 'q1' }),
+    ])).agents
+    expect(supervise(agents)[0]!.evidenced).toBe(false)
+  })
+
+  it('is independent of the removed expected skeleton: NO expected edges + 1 supervise, no loop back-edge', () => {
+    const agents = projectGraph(flowSource([
+      dispatchRow({ ts: 10, role: 'fullstack-dev', agent: 'a1' }),
+    ])).agents
+    // Task 5 — the skeleton is removed: only actual/supervise kinds can exist.
+    expect(agents.edges.every((e) => e.kind === 'actual' || e.kind === 'supervise')).toBe(true)
+    expect(supervise(agents)).toHaveLength(1)
+    expect(agents.edges.every((e) => e.target !== 'general' && e.source !== 'general')).toBe(true)
+  })
+})
+
+/* ---------------------------------------------------------------------------
  * Entity key uniqueness (F-001 — qc1/qc2 Warning): since plan
  * 20260811-panel-f3-agent-general keys are ROLE-based (not session ids), the
  * collision class moved from "session id vs roster id" to "lit `general` key
@@ -1386,16 +1785,17 @@ describe('projectGraph — agents entity key uniqueness (F-001)', () => {
     // The suppressed idle twin: the roster `general` id never appears idle.
     const idleKeys = agents.entities.filter((e) => e.idle).map((e) => e.key)
     expect(idleKeys).not.toContain('general')
-    // 1 lit + 12 idle = 13 unique cards (roster 13; the general slot is lit).
-    expect(agents.entities).toHaveLength(13)
+    // 1 lit + 13 idle = 14 unique cards (roster 14; the general slot is lit).
+    expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     // `executing` matches the visible cards (1 running lit card — no hidden
     // duplicate to disagree with the summary).
     expect(agents.executing).toBe(1)
   })
 
   it('the general bucket aggregates heterogeneous non-roster dispatches into ONE card', () => {
-    // generalPurpose (former SDD reviewer) + anonymous + scout → one `general`
-    // entity — the F3 migration: SDD per-task reviews land in the bucket.
+    // generalPurpose (legacy non-roster id) + anonymous + scout → one `general`
+    // entity — the bucket is the unmatched/anonymous catch-all (the SDD
+    // per-task reviewer seat is the pipeline role `code-reviewer`, plan f5 T1).
     const agents = projectGraph(flowSource([
       dispatchRow({ ts: 9, role: 'scout', agent: 's1' }),
       { kind: 'dispatch', ts: 8 }, // anonymous → general
@@ -1498,6 +1898,27 @@ describe('projectGraph — events / unexpected (spec §3 migration)', () => {
       settleRow({ ts: 1 }),
     ]))
     expect(view.unexpected.map((e) => e.ts)).toEqual([4, 3])
+  })
+
+  it('unexpected semantics regression (plan f5 T1 — union extended by code-reviewer ONLY): ops-engineer / prompt-engineer / general stay unexpected, code-reviewer turns expected', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 5, role: 'code-reviewer' }),
+      dispatchRow({ ts: 4, role: 'ops-engineer' }),
+      dispatchRow({ ts: 3, role: 'prompt-engineer' }),
+      dispatchRow({ ts: 2, role: 'general' }),
+      dispatchRow({ ts: 1, role: 'fullstack-dev' }),
+    ]))
+    // code-reviewer joined the EXPECTED_ROLE_FLOW union (sdd-implement) →
+    // its dispatch is now EXPECTED (was the former generalPurpose seat,
+    // v2.1.1). Compass Non-Goal honored: ops-engineer / prompt-engineer /
+    // general are NOT in the union → their badges stay `unexpected`.
+    expect(view.unexpected.map((e) => e.role)).toEqual(['ops-engineer', 'prompt-engineer', 'general'])
+    const byRole = new Map(view.events.map((e) => [e.role, e]))
+    expect(byRole.get('code-reviewer')!.expected).toBe(true)
+    expect(byRole.get('ops-engineer')!.expected).toBe(false)
+    expect(byRole.get('prompt-engineer')!.expected).toBe(false)
+    expect(byRole.get('general')!.expected).toBe(false)
+    expect(byRole.get('fullstack-dev')!.expected).toBe(true)
   })
 })
 

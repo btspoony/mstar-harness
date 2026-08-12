@@ -76,6 +76,37 @@
  * `sdd-implement` column — the value stays the user-fixed literal 'general'
  * in both locales); `zone.legend.general` rewords to the sink semantics
  * (「general 位于 sdd-implement 桶内底部」).
+ *
+ * T2 (plan 20260812-panel-f5-agent-layout Task 2 — the layout rework
+ * supersedes the F4.2 sink): the general bucket moves to its OWN rightmost
+ * UNKNOWN column — `zone.agents.unknown` (the column label, 未知 / unknown);
+ * the in-bucket general tag is gone (the general card's title + the unknown
+ * column label carry it), so `zone.agents.general` is REMOVED. The
+ * `sdd-implement` column splits into sub-buckets — `zone.agents.bucket.*`
+ * (implementor / sdd-reviewer caption labels); `zone.agents.on-demand`
+ * re-keys as the on-demand BADGE (the implementor-sub-bucket roles, the
+ * standalone on-demand column is removed). The legend entries gain
+ * `zone.legend.sub-bucket` / `zone.legend.supervise` / `zone.legend.unknown`
+ * (the former 'general' entry is replaced by 'unknown'); `zone.legend.general`
+ * is REMOVED and `zone.legend.on-demand` rewords to the badge semantics.
+ *
+ * T5 (plan 20260812-panel-f5-design-system Task 5 — the 2026-08-12 edge
+ * rework supersedes the Task-2 unknown COLUMN): the standalone rightmost
+ * unknown column is REMOVED (user feedback #3 — FOUR columns total) — the
+ * general bucket sinks into an unknown SUB-PARTITION at the bottom of the
+ * LAST column, so `zone.agents.unknown` (the old column label) is REMOVED
+ * and `zone.agents.unknown-sub` (「unknown / 未匹配角色」) is the sub-partition
+ * caption. The legend drops the expected / next entries (both edges are
+ * REMOVED, design doc §2.2) and gains `zone.legend.port` (the hover-visible
+ * card ports, design doc §2.5); `zone.legend.flow-actual` / `supervise` /
+ * `unknown` reword to the bezier / port-anchored / side-gap / sub-partition
+ * semantics.
+ *
+ * T3 (plan 20260812-panel-f5-agent-layout Task 3): the no-harness branch
+ * renders a CENTERED inactive-state card (icon + title + hint, no tabs /
+ * no sidebar) instead of the left-aligned hint — `empty.no-harness-hint`
+ * is the explanatory secondary copy under the reused `empty.no-harness`
+ * title.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -118,6 +149,7 @@ export type PanelKey =
   | 'event-log.no'
   | 'empty.waiting'
   | 'empty.no-harness'
+  | 'empty.no-harness-hint'
   | 'watermark.version'
   | 'watermark.harness'
   | 'watermark.none'
@@ -125,18 +157,21 @@ export type PanelKey =
   | 'graph.pass'
   | 'graph.fail'
   | 'zone.legend.title'
-  | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
-  | 'zone.legend.general'
+  | 'zone.legend.port'
+  | 'zone.legend.group'
+  | 'zone.legend.sub-bucket'
+  | 'zone.legend.supervise'
   | 'zone.legend.on-demand'
+  | 'zone.legend.unknown'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
   | 'zone.legend.agent-idle'
-  | 'zone.legend.next'
   | 'zone.iteration.step-label'
   | 'zone.iteration.step-badge'
   | 'zone.iteration.step.current'
   | 'zone.iteration.step.next'
+  | 'zone.iteration.step.done'
   | 'zone.iteration.step.idle'
   | 'zone.phase.iteration-start'
   | 'zone.phase.autonomous-execute'
@@ -160,7 +195,15 @@ export type PanelKey =
   | 'zone.agents.title'
   | 'zone.agents.summary'
   | 'zone.agents.on-demand'
-  | 'zone.agents.general'
+  | 'zone.agents.unknown-sub'
+  | 'zone.agents.bucket.implementor'
+  | 'zone.agents.bucket.reviewer'
+  | 'zone.agents.group.phase-1'
+  | 'zone.agents.group.phase-2'
+  | 'zone.agents.group.phase-n'
+  | 'zone.agents.group.plan'
+  | 'zone.agents.group.no-plan'
+  | 'zone.agents.group.plan-more'
   | 'flow.empty'
   | 'flow.settle-only'
   | 'flow.degraded'
@@ -231,6 +274,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'event-log.no': '否',
   'empty.waiting': '等待首条 engine-status catalog…',
   'empty.no-harness': '未检测到 Morning Star harness',
+  'empty.no-harness-hint': '当前工作区未发现 .mstar/ harness 目录，详细面板保持未激活；检测到 harness 后自动呈现',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
   'watermark.none': '无',
@@ -238,18 +282,21 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': '图例',
-  'zone.legend.flow-expected': '预期流转边（虚线）',
-  'zone.legend.flow-actual': '实际交接边',
-  'zone.legend.general': 'general 位于 sdd-implement 桶内底部',
-  'zone.legend.on-demand': '按需执行角色（独立列）',
+  'zone.legend.flow-actual': '实际交接边（曲线 · 端口锚定 · 箭头沿线）',
+  'zone.legend.port': '卡片端口（hover 显示 · 4 固定锚点 · 线止于 standoff 不贴卡）',
+  'zone.legend.group': 'Phase 分组（上：Phase 1 顺序链 / 下：Phase 2 循环迭代 + 当前 plan 标注）',
+  'zone.legend.sub-bucket': 'sdd-implement 子桶（implementor / sdd-reviewer）',
+  'zone.legend.supervise': 'implementor ↔ sdd-reviewer 双向监督线（侧隙垂直锚点）',
+  'zone.legend.on-demand': '按需执行角色（implementor 子桶徽标）',
+  'zone.legend.unknown': 'unknown 分区（qa-gate 列底部 · 未匹配 / general 角色）',
   'zone.legend.agent-running': '执行中实体（发光）',
-  'zone.legend.agent-settled': '已结算实体（✓）',
+  'zone.legend.agent-settled': '已完成实体（独立绿框 + ✓；off 阶段不显示）',
   'zone.legend.agent-idle': '未工作实体（虚线）',
-  'zone.legend.next': 'next 流转边（动画）',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': '当前',
   'zone.iteration.step.next': '下一步',
+  'zone.iteration.step.done': '已完成',
   'zone.iteration.step.idle': '待命',
   'zone.phase.iteration-start': '迭代启动',
   'zone.phase.autonomous-execute': '自主执行',
@@ -273,7 +320,15 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
   'zone.agents.on-demand': '按需执行',
-  'zone.agents.general': 'general',
+  'zone.agents.unknown-sub': 'unknown / 未匹配角色',
+  'zone.agents.bucket.implementor': 'implementor',
+  'zone.agents.bucket.reviewer': 'sdd-reviewer',
+  'zone.agents.group.phase-1': 'Phase 1 · 顺序完成（review-edit-chain）',
+  'zone.agents.group.phase-2': 'Phase 2 · 循环迭代 plans',
+  'zone.agents.group.phase-n': 'Phase {n}',
+  'zone.agents.group.plan': 'plan: {plan}',
+  'zone.agents.group.no-plan': '无进行中 plan',
+  'zone.agents.group.plan-more': '+{n} 更多',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -339,6 +394,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'event-log.no': 'no',
   'empty.waiting': 'Waiting for the first engine-status catalog…',
   'empty.no-harness': 'No Morning Star harness detected',
+  'empty.no-harness-hint': 'No .mstar/ harness directory found in this workspace — the detail panel stays inactive and activates automatically once a harness is detected',
   'watermark.version': 'mstar {version}',
   'watermark.harness': 'harness: {dir}',
   'watermark.none': 'none',
@@ -346,18 +402,21 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': 'Legend',
-  'zone.legend.flow-expected': 'expected flow edge (dashed)',
-  'zone.legend.flow-actual': 'actual handoff edge',
-  'zone.legend.general': 'general at the bottom of the sdd-implement bucket',
-  'zone.legend.on-demand': 'on-demand role (own column)',
+  'zone.legend.flow-actual': 'actual handoff edge (curve · port-anchored · arrow along the line)',
+  'zone.legend.port': 'card ports (hover-visible · 4 fixed anchors · line ends at the standoff, off the card)',
+  'zone.legend.group': 'Phase groups (Phase 1 sequential chain above / Phase 2 iterative plan loop below + current-plan note)',
+  'zone.legend.sub-bucket': 'sdd-implement sub-buckets (implementor / sdd-reviewer)',
+  'zone.legend.supervise': 'implementor ↔ sdd-reviewer bidirectional supervise line (side-gap vertical anchor)',
+  'zone.legend.on-demand': 'on-demand role (implementor sub-bucket badge)',
+  'zone.legend.unknown': 'unknown partition (bottom of the qa-gate column · unmatched / general roles)',
   'zone.legend.agent-running': 'agent running (glow)',
-  'zone.legend.agent-settled': 'agent settled (✓)',
+  'zone.legend.agent-settled': 'settled agent (green done frame + ✓; off-tier roles show neither)',
   'zone.legend.agent-idle': 'idle agent (dashed)',
-  'zone.legend.next': 'next flow edge (animated)',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': 'current',
   'zone.iteration.step.next': 'next',
+  'zone.iteration.step.done': 'done',
   'zone.iteration.step.idle': 'idle',
   'zone.phase.iteration-start': 'Iteration Start',
   'zone.phase.autonomous-execute': 'Autonomous Execute',
@@ -381,7 +440,15 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
   'zone.agents.on-demand': 'On-demand',
-  'zone.agents.general': 'general',
+  'zone.agents.unknown-sub': 'unknown / unmatched roles',
+  'zone.agents.bucket.implementor': 'implementor',
+  'zone.agents.bucket.reviewer': 'sdd-reviewer',
+  'zone.agents.group.phase-1': 'Phase 1 · sequential (review-edit-chain)',
+  'zone.agents.group.phase-2': 'Phase 2 · iterative plan loop',
+  'zone.agents.group.phase-n': 'Phase {n}',
+  'zone.agents.group.plan': 'plan: {plan}',
+  'zone.agents.group.no-plan': 'no in-progress plan',
+  'zone.agents.group.plan-more': '+{n} more',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',

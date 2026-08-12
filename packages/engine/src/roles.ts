@@ -4,7 +4,7 @@
  *
  * Source skills (semantic SSOT — this module implements their deterministic
  * rules, it never redefines them; roadmap §8.5 C2):
- * - `mstar-roles` SKILL.md § Role Reference Mapping — the 13 agent ids →
+ * - `mstar-roles` SKILL.md § Role Reference Mapping — the 14 agent ids →
  *   `references/<role>.md` table (shared families `fullstack-dev*` /
  *   `qc-specialist*` on ONE shared file per § Maintenance Rules).
  * - `mstar-roles` SKILL.md § Parameter Table (SSOT) — dev track
@@ -31,13 +31,14 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
  * Mapping): `agentId` → skill-relative reference file. */
 export type RoleMappingEntry = { agentId: string; reference: string };
 
-/** The 13 role ids → `references/<role>.md` mapping, embedded as data
+/** The 14 role ids → `references/<role>.md` mapping, embedded as data
  * (mstar-roles § Role Reference Mapping; shared families point at the
  * shared reference files). */
 export const ROLE_MAPPING: readonly RoleMappingEntry[] = [
   { agentId: "project-manager", reference: "references/project-manager.md" },
   { agentId: "product-manager", reference: "references/product-manager.md" },
   { agentId: "architect", reference: "references/architect.md" },
+  { agentId: "code-reviewer", reference: "references/code-reviewer.md" },
   { agentId: "fullstack-dev", reference: "references/fullstack-dev-shared.md" },
   { agentId: "fullstack-dev-2", reference: "references/fullstack-dev-shared.md" },
   { agentId: "frontend-dev", reference: "references/frontend-dev.md" },

@@ -190,7 +190,7 @@ Cannot emit required **N** → **`Blocked`**.
 
 ### SDD implement (serial)
 
-- **`Execution mode: sdd`**: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry with `agent: "reviewer"` (omp L2 review; not qc-specialist*) or `agent: "task"` as last resort + C5b — no sticky resume unless host resume/id is available and recorded. Serial rule → **`parallel-dispatch.md`** § SDD implement.
+- **`Execution mode: sdd`**: one implementer `task` entry per task id with `agent` matching the implementer role when listed; task reviewer = new entry with `agent: "code-reviewer"` (omp L2 review; not qc-specialist*) or `agent: "reviewer"`/`"task"` as fallback + C5b — no sticky resume unless host resume/id is available and recorded. Serial rule → **`parallel-dispatch.md`** § SDD implement.
 - **Never** multiple implementer entries in one message for the same plan.
 
 ## Clarify

@@ -100,36 +100,68 @@
  * Task 3): the zone-dashboard legend items (iteration/current/disabled/
  * tasks/verdicts) were removed with the WorkflowCanvas (spec §6.1 — the
  * legend re-mounts on the agent-canvas page); the agent-pipeline swatches
- * stay: expected/actual/unexpected flow edges, entity statuses, next edge. */
-.swatchFlowExpected {
-  border: 1px solid var(--dsw-alias-state-business-primary);
-  border-radius: 999px;
-}
-
+ * stay: actual handoff edge / card ports / sub-buckets / supervise line /
+ * on-demand badge / unknown partition + the entity statuses. The expected /
+ * next edge swatches are REMOVED with the edges (plan
+ * 20260812-panel-f5-design-system Task 5 — design doc §2.8). */
 .swatchFlowActual {
   background: var(--dsw-alias-state-business-primary);
 }
 
-/* General bucket swatch (plan 20260811-panel-f3-agent-general): the trailing
- * column for stage-null roles (SDD per-task reviewers / unmatched / anonymous
- * dispatches) — the former 'unexpected' entry, kept as the dashed warn ring
- * so the column stays visually distinct from the on-demand business ring. */
-.swatchGeneral {
-  border: 1px dashed var(--dsw-alias-state-warn-label);
-}
-
-/* On-demand zone swatch (plan 20260811-panel-f2-quickfix Item 3): the
- * ops-engineer / prompt-engineer column — business ring, distinct from the
- * warn-dashed general-bucket swatch. */
-.swatchOnDemand {
-  border: 1px solid var(--dsw-alias-state-business-primary);
+/* Card-port swatch (plan 20260812-panel-f5-design-system Task 5 — design
+ * doc §2.5/§2.8): the 4 fixed edge-midpoint anchors, hover-visible caption
+ * dots (running cards hover business) — the lines end at the standoff point
+ * 10px off the port, never touching the card border. */
+.swatchPort {
+  background: var(--dsw-alias-label-caption);
   border-radius: 999px;
 }
 
-/* Next flow edge (plan 3): the animated business dash arrow — declared with
- * the legend (zone.legend.next); the agent-flow zone applies it in plan 3. */
-.swatchNext {
-  border: 1px dashed var(--dsw-alias-state-business-primary);
+/* General bucket swatch (plan 20260811-panel-f3-agent-general): the trailing
+ * catch-all for stage-null roles — repurposed by plan
+ * 20260812-panel-f5-design-system Task 5 (design doc §1.2) to the UNKNOWN
+ * SUB-PARTITION at the bottom of the LAST column (qa-gate) — the standalone
+ * unknown column is removed. Muted NEUTRAL dashed caption ring — deliberately
+ * NOT the warn/orange treatment, mirroring the kanban unknown column. */
+.swatchUnknown {
+  border: 1px dashed var(--dsw-alias-label-caption);
+}
+
+/* Sub-bucket swatch (plan f5 Task 2): the sdd-implement column's two stacked
+ * partitions — implementor (business bar) above, sdd-reviewer (caption bar)
+ * below. */
+.swatchSubBucket {
+  border-top: 3px solid var(--dsw-alias-state-business-primary);
+  border-bottom: 3px solid var(--dsw-alias-label-caption);
+}
+
+/* Phase-group swatch (plan 20260812-panel-f5-design-system Task 8 — design
+ * doc §1.2, user 2026-08-12 feedback #2): the canvas splits into TWO
+ * vertical phase bands — Phase 1 (the sequential review-edit-chain) ABOVE,
+ * Phase 2 (the iterative plan loop sdd-implement → qc-tri → qa-gate, with
+ * the current-plan annotation) BELOW — a primary label bar over a caption
+ * note bar (group label row over the plan note row). */
+.swatchGroup {
+  border-top: 3px solid var(--dsw-alias-label-primary);
+  border-bottom: 3px solid var(--dsw-alias-label-caption);
+}
+
+/* Supervise-line swatch (plan f5 Task 2 + Task 5): the implementor ↔
+ * sdd-reviewer bidirectional supervision line — dim dashed caption (the lit
+ * business state is evidence-driven; the arrowheads are implied). Task 5
+ * (design doc §2.7): the line hangs on the side-gap vertical anchor (card
+ * right edge + 18px). */
+.swatchSupervise {
+  border: 1px dashed var(--dsw-alias-label-secondary);
+}
+
+/* On-demand swatch (plan 20260811-panel-f2-quickfix Item 3 + plan f5 Task 2):
+ * ops-engineer / prompt-engineer — business ring for the implementor-sub-
+ * bucket on-demand badge (the standalone on-demand column is gone; the badge
+ * marks the on-demand nature inside the implementor partition). */
+.swatchOnDemand {
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
 }
 
 /* Entity status swatches (plan 20260811-panel-agent-canvas Task 3): the

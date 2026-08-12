@@ -38,7 +38,7 @@
  *   Task 2): the Content Head — `data-iteration-head-*` anchors pin the
  *   collapse/expand defaults (active → expanded, inactive → collapsed one-line
  *   summary with the muted "not started" note + toggle affordance), the
- *   horizontal 5-step row (PHASE_IDS order, current/next/idle, connectors,
+ *   horizontal 5-step row (PHASE_IDS order, current/next/done/idle, connectors,
  *   current-step verdict) and the branches panel; the kanban anchors
  *   (`data-kanban-column` 6 columns / `data-tasks-total` / `data-mstar-kanban`)
  *   ride the reused TaskBoard; css asserts the tasks area is the independent
@@ -114,7 +114,7 @@ import {
   panDragMove,
   panDragStart,
   panTransform,
-  ON_DEMAND_COLUMN,
+  UNKNOWN_COLUMN,
   PAN_ORIGIN,
   type PanState,
 } from '../src/client/panel/pages/AgentCanvasPage'
@@ -140,7 +140,12 @@ function newLocale(): LocaleService {
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelContent, PanelView } from '../src/client/panel/PanelView'
 import { TabNav } from '../src/client/panel/TabNav'
-import { IterationTaskPage, iterationSplitActive, nextExpandedOnActivation } from '../src/client/panel/pages/IterationTaskPage'
+import { IterationTaskPage } from '../src/client/panel/pages/IterationTaskPage'
+import {
+  IterationInfoSection,
+  iterationSplitActive,
+  nextExpandedOnActivation,
+} from '../src/client/panel/pages/IterationInfoSection'
 import { EventLogPage } from '../src/client/panel/pages/EventLogPage'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
@@ -386,8 +391,10 @@ function agentsHtml(source: MstarEngineStatusSource, initialPan?: PanState): str
   const locale = newLocale()
   locale.register(NS, { zh, en })
   locale.setLocale('en')
+  const view = projectGraph(source)
   return renderToStaticMarkup(createElement(AgentCanvasPage, {
-    view: projectGraph(source).agents,
+    view: view.agents,
+    iteration: view.iteration,
     t: locale.bind(NS),
     ...(initialPan !== undefined ? { initialPan } : {}),
   }))
@@ -1023,19 +1030,50 @@ describe('workflow panel — T5b agent-canvas page CSS audit (spec panel-tabs §
     }
   })
 
-  it('declares the next-edge dash-flow + running-card pulse animations; NO own reduced-motion block (root rule covers)', () => {
-    // The canvas ANIMATIONS (spec §6.2 — next edge dash flow + running glow
-    // pulse) are declared here — the single motion-kill coverage point stays
-    // the panel ROOT rule (`* { animation: none !important }` under
-    // prefers-reduced-motion: reduce, asserted in T5).
+  it('declares ONLY the running-card pulse animation (the next-edge dash flow is REMOVED with the next edge — T5); NO own reduced-motion block (root rule covers)', () => {
+    // The canvas ANIMATION (spec §6.2 + plan 20260812-panel-f5-design-system
+    // Task 5 — running glow pulse) is declared here — the single motion-kill
+    // coverage point stays the panel ROOT rule (`* { animation: none
+    // !important }` under prefers-reduced-motion: reduce, asserted in T5).
+    // The next-edge dash flow is GONE with the next edge (design doc §2.2).
     const keyframes = [...cssText.matchAll(/@keyframes\s+([a-z0-9-]+)/g)].map((m) => m[1]).sort()
-    expect(keyframes).toEqual(['canvas-card-pulse', 'canvas-dash-flow'])
+    expect(keyframes).toEqual(['canvas-card-pulse'])
     const animDecls = [...cssText.matchAll(/animation\s*:\s*([^;}]+)/g)].map((m) => m[1]!.trim())
-    expect(animDecls).toContain('canvas-dash-flow 700ms linear infinite')
     expect(animDecls).toContain('canvas-card-pulse 1.6s ease-in-out infinite')
+    expect(animDecls).not.toContain('canvas-dash-flow')
     expect(cssText).not.toMatch(/@media\s*\(prefers-reduced-motion/)
     // Zero dark-theme overrides — dark mode is the host token flip.
     expect(cssText).not.toContain('data-ds-dark-theme')
+  })
+
+  it('arrowhead fills target the marker <path> itself — no descendant selector (QC S-002)', () => {
+    // The marker defs put the class ON the <path> element (AgentCanvasPage.tsx
+    // `canvas-arrow-*` markers), so a `.canvasArrowX path` descendant selector
+    // can never match — the SVG default (black) fill would win and the lit
+    // supervise arrowheads would never render business-primary. Pin the
+    // direct-class form + the token pairing with each edge's stroke color.
+    expect(cssText).not.toMatch(/\.canvasArrow[A-Za-z]+\s+path\s*\{/)
+    const arrowRule = (cls: string) => cssText.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+    // Task 5 (design doc §2.2): the expected / next arrowheads are REMOVED
+    // with their edges — only actual + supervise markers remain.
+    expect(arrowRule('canvasArrowExpected')).toBe('')
+    expect(arrowRule('canvasArrowNext')).toBe('')
+    expect(arrowRule('canvasArrowActual')).toContain('fill: var(--dsw-alias-state-business-primary)')
+    expect(arrowRule('canvasArrowSupervise')).toContain('fill: var(--dsw-alias-label-caption)')
+    expect(arrowRule('canvasArrowSuperviseLit')).toContain('fill: var(--dsw-alias-state-business-primary)')
+  })
+
+  it('evidenced supervise line renders SOLID — the lit rule RESETS the base dasharray (qc1 W-001 cascade outcome)', () => {
+    // qc1 W-001 (plan QC tri): `.canvasEdgeSupervise` declares
+    // `stroke-dasharray: 5 4` and `.canvasEdgeSuperviseLit` overrides only
+    // `stroke` — both single-class specificity (0,1,0), so the dash
+    // survived into the evidenced lit state (the design doc §2.7 requires a
+    // 1.5px business SOLID line). The P4 W-001 lesson: assert the cascade
+    // OUTCOME — the lit rule must carry an explicit dasharray reset — not
+    // merely that the lit rule exists.
+    const rule = (cls: string) => cssText.match(new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+    expect(rule('canvasEdgeSupervise')).toContain('stroke-dasharray: 5 4')
+    expect(rule('canvasEdgeSuperviseLit')).toContain('stroke-dasharray: none')
   })
 })
 
@@ -1179,12 +1217,16 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).toContain('data-iteration-head-verdict="pass"')
     expect(html).toContain('2/5')
     expect(html).not.toContain('Step ')
-    // The horizontal 5-step row: PHASE_IDS order, one current + one next + three idle.
+    // The horizontal 5-step row: PHASE_IDS order, one done + one current +
+    // one next + two idle (plan 20260812-panel-f5-iteration-zone-fix T1: the
+    // completed Step 1 before current projects `done`, not idle).
     expect(html).toContain('data-iteration-head-steps')
     for (const n of [1, 2, 3, 4, 5]) expect(html).toContain(`data-step="${n}"`)
+    expect(html.match(/data-step-state="done"/g)).toHaveLength(1)
     expect(html.match(/data-step-state="current"/g)).toHaveLength(1)
     expect(html.match(/data-step-state="next"/g)).toHaveLength(1)
-    expect(html.match(/data-step-state="idle"/g)).toHaveLength(3)
+    expect(html.match(/data-step-state="idle"/g)).toHaveLength(2)
+    expect(html).toMatch(/data-step="1"[^>]*data-step-state="done"/)
     expect(html).toMatch(/data-step="2"[^>]*data-step-state="current"/)
     expect(html).toMatch(/data-step="3"[^>]*data-step-state="next"/)
     // Badges are PURE NUMBERS (plan Item 1 — no 步骤/Step prefix).
@@ -1195,10 +1237,16 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).toContain('Iteration Close')
     expect(html).toContain('PR Delivery')
     expect(html).toContain('Merge Ready')
-    // State chips (localized labels).
+    // State chips (localized labels) — all four states render (plan
+    // 20260812-panel-f5-iteration-zone-fix T2: the done chip label added —
+    // en value follows the status-id-lowercase convention, like current/
+    // next/idle).
     expect(html).toContain('current')
     expect(html).toContain('next')
     expect(html).toContain('idle')
+    // The done step's chip sits on the SAME item as its done anchor (Step 1,
+    // asserted above) and carries the localized 'done' label.
+    expect(html).toMatch(/data-step="1"[^>]*data-step-state="done"[^>]*>[\s\S]*?data-step-chip[^>]*>done</)
     // Current-step verdict badge (fixture gate.ok → pass).
     expect(html).toContain('data-iteration-verdict="pass"')
     // Connectors are REMOVED (plan Item 1 — the gap replaces them; the
@@ -1291,7 +1339,10 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(zhHtml).toContain('合并就绪')
     expect(zhHtml).toContain('当前')
     expect(zhHtml).toContain('下一步')
+    expect(zhHtml).toContain('已完成')
     expect(zhHtml).toContain('待命')
+    // The done chip localizes too — anchored to the done step item (Step 1).
+    expect(zhHtml).toMatch(/data-step="1"[^>]*data-step-state="done"[^>]*>[\s\S]*?data-step-chip[^>]*>已完成</)
     expect(zhHtml).toContain('分支')
     expect(zhHtml).toContain('迭代 base')
     expect(zhHtml).toContain('目标分支')
@@ -1481,15 +1532,33 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(zhHtml.match(/data-step-verdict-seat/g)).toHaveLength(5)
   })
 
-  it('css: split flex row (branches 1/3, steps 2/3) + narrow stack; badge aligned via the fixed-height seat, no align-self skew', () => {
+  it('css: split flex row (branches width-capped, steps absorb) + narrow stack; badge aligned via the fixed-height seat, no align-self skew', () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
     // Split container: a flex row with a ramp gap (spec R8).
     expect(cssText).toMatch(/\.iterationHeadSplit\s*\{[\s\S]*?display:\s*flex[\s\S]*?gap:\s*var\(--mstar-space-/)
-    // Halves: branches small (flex 1) + steps large (flex 2) ⇒ ~1/3 vs ~2/3.
-    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*1\s+1\s+0/)
-    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationStepsRow\s*\{[\s\S]*?flex:\s*2\s+1\s+0/)
-    // Narrow fallback: the same 860px breakpoint stacks the split vertically.
+    // Width contract (plan 20260812-panel-f5-iteration-zone-fix Task 2):
+    // branches are width-CAPPED (flex-basis 260px, max-width 280px — branch
+    // info never stretches with the container), the steps row absorbs ALL
+    // remaining width (flex 1 1 0).
+    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*0\s+1\s+260px[\s\S]*?max-width:\s*280px/)
+    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationStepsRow\s*\{[\s\S]*?flex:\s*1\s+1\s+0/)
+    // Narrow fallback: the same 860px breakpoint stacks the split vertically —
+    // and the Task 2 width cap RESETS (a column flex-basis would become a
+    // 260px HEIGHT in the stack, so the cap is lifted for the column axis).
     expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*\{[\s\S]*?flex-direction:\s*column/)
+    expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?max-width:\s*none/)
+    // Regression guard (plan QC W-001/F-001): the ≤860px column stack must
+    // NEVER see the row-mode cap. The cap is scoped inside a SINGLE
+    // `@media (min-width: 861px)` block — at ≤860px only the content-height
+    // reset above exists, so no cascade competition remains (an earlier
+    // source-order bug let the later same-specificity base rule win and
+    // defeat the reset). A text-presence assertion alone cannot catch this.
+    expect(cssText.match(/@media\s*\(min-width:\s*861px\)\s*\{/g)).toHaveLength(1)
+    const capBlock = cssText.match(/@media\s*\(min-width:\s*861px\)\s*\{([\s\S]*?)\n\}/)
+    expect(capBlock).not.toBeNull()
+    expect(capBlock![1]).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*0\s+1\s+260px[\s\S]*?max-width:\s*280px/)
+    // The reset must stay in the ≤860px fallback, never inside the ≥861px block.
+    expect(capBlock![1]).not.toContain('max-width: none')
     // Verdict alignment fix: every step reserves a fixed-height flex seat; the
     // badge rule carries NO align-self (the `align-self: flex-start` skew
     // root cause is gone — spec §2.3 R9 "不再歪斜、不导致 Step 对齐偏移").
@@ -2216,8 +2285,11 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
 
 describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 20260811-panel-f3-agent-general)', () => {
   /** Evidence fixture: 3 dispatches across 3 stages + one settle — lit cards
-   * (role-keyed), actual handoffs (fullstack-dev → general → qc-specialist,
-   * same plan) and a next edge (qc-specialist running). */
+   * (role-keyed). NOTE (plan 20260812-panel-f5-design-system Task 5 — design
+   * doc §2.2): the same-plan adjacent pairs involve the general bucket
+   * (generalPurpose), so the general-endpoint filter drops EVERY actual edge
+   * in this fixture — the handoff-render tests live in
+   * agent-canvas-layout.spec.tsx with general-free fixtures. */
   const evidenceSource = flowSource([
     dispatchEvent({ ts: 30, role: 'qc-specialist', agent: 'a3', planId: 'plan-x', taskId: 'T3' }),
     settleEvent({ ts: 25, agent: 'a2', outcome: 'ok', role: 'generalPurpose', planId: 'plan-x', taskId: 'T2' }),
@@ -2230,9 +2302,9 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     for (const known of KNOWN_AGENTS) {
       expect(html).toContain(`data-agent-entity="${known.id}"`)
     }
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
     // Degraded → every roster member is an idle card (spec §6.2), zero claims.
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(KNOWN_AGENTS.length)
     expect(html).toContain('data-canvas-note="degraded"')
     expect(html).toContain('data-agent-summary-executing="0"')
     expect(html).toContain('data-agent-summary-pending="0"')
@@ -2240,10 +2312,10 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
 
   it('lit cards carry the agent-name title + record fields; idle cards are muted with no fabricated record', () => {
     const html = agentsHtml(evidenceSource)
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
-    // 3 lit (fullstack-dev / general / qc-specialist — role-keyed) + 10 idle
-    // roster members (spec §6.2 suppression rule).
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(10)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
+    // 3 lit (fullstack-dev / general / qc-specialist — role-keyed) + 11 idle
+    // roster members (spec §6.2 suppression rule; roster 14 — plan f5 T1).
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(11)
     // Title = the agent name (role id); the session id rides the record line.
     expect(html).toContain('title="fullstack-dev"')
     expect(html).toContain('title="general"') // the generalPurpose dispatch folds into the bucket
@@ -2263,8 +2335,9 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(html).not.toContain('data-canvas-note')
     expect(html).toContain('data-agent-summary-executing="2"')
     // Pending = un-evidenced stage roles: review-edit-chain (3) + qa-gate (1)
-    // = 4 — the 10-role in-flow semantics (plan f3; ops-engineer out of the
-    // flow and generalPurpose off the pipeline).
+    // = 4 — sdd-implement is evidenced (fullstack-dev) incl. code-reviewer
+    // (plan f5 T1), ops-engineer stays out of the flow (on-demand) and the
+    // generalPurpose dispatch is off the pipeline.
     expect(html).toContain('data-agent-summary-pending="4"')
   })
 
@@ -2278,11 +2351,11 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       dispatchEvent({ ts: 35, role: 'qa-engineer', agent: 'p1' }),
       dispatchEvent({ ts: 34, role: 'generalPurpose', agent: 'p1' }), // → general bucket
     ]))
-    // 7 lit (6 in-flow + the general bucket) + 6 idle (fullstack-dev-2,
+    // 7 lit (6 in-flow + the general bucket) + 7 idle (fullstack-dev-2,
     // frontend-dev, qc-specialist-2, qc-specialist-3, ops-engineer,
-    // prompt-engineer) = 13.
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(6)
+    // prompt-engineer, code-reviewer — the f5 T1 roster addition) = 14.
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(7)
     // All 7 lit dispatches are running (no settles).
     expect(html).toContain('data-agent-summary-executing="7"')
     // Every stage evidenced → no pending.
@@ -2318,57 +2391,85 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(anonymousDispatch).toContain('data-agent-summary-executing="1"')
   })
 
-  it('mounts the Legend on the agents page: idle swatch + collaboration-edge swatches (+ the general bucket entry, plan f3/f4.2)', () => {
+  it('mounts the Legend on the agents page: group / port / sub-bucket / supervise / unknown swatches; expected+next entries gone (plan f5 T2 + T5 + design-system T8)', () => {
     const html = agentsHtml(evidenceSource)
     expect(html).toContain('data-mstar-legend')
-    // Idle swatch anchor (完成判据) + the collaboration-edge swatches
-    // (8 items: 'general' replaced the former 'flow-unexpected' — plan f3).
-    for (const key of ['agent-idle', 'flow-expected', 'flow-actual', 'general', 'on-demand', 'agent-running', 'agent-settled', 'next']) {
+    // Idle swatch anchor (完成判据) + the collaboration-edge swatches — 10
+    // items (plan f5 T2 layout entries sub-bucket + supervise + the T5 port
+    // entry + the T8 Phase-group entry; 'general' is replaced by 'unknown';
+    // the expected / next entries are REMOVED with their edges — design doc
+    // §2.8).
+    for (const key of ['flow-actual', 'port', 'group', 'sub-bucket', 'supervise', 'on-demand', 'unknown', 'agent-running', 'agent-settled', 'agent-idle']) {
       expect(html).toContain(`data-mstar-legend-item="${key}"`)
     }
+    expect(html).not.toContain('data-mstar-legend-item="flow-expected"')
+    expect(html).not.toContain('data-mstar-legend-item="next"')
     expect(html).not.toContain('data-mstar-legend-item="flow-unexpected"')
-    // The general bucket entry rewords to the sink semantics (plan f4.2
-    // Task 2 — no general column; the card sits at the bottom of the
-    // sdd-implement bucket) in BOTH locales.
-    expect(html).toContain('general at the bottom of the sdd-implement bucket')
+    expect(html).not.toContain('data-mstar-legend-item="general"')
+    // The general bucket entry rewords to the unknown sub-partition semantics
+    // (plan f5 Task 5 — the general card lives in the LAST column's bottom
+    // sub-partition; the standalone unknown column is gone) in BOTH locales.
+    expect(html).not.toContain('general at the bottom of the sdd-implement bucket')
+    expect(html).toContain('unknown partition (bottom of the qa-gate column · unmatched / general roles)')
+    expect(html).toContain('implementor ↔ sdd-reviewer bidirectional supervise line (side-gap vertical anchor)')
+    expect(html).toContain('on-demand role (implementor sub-bucket badge)')
     // The legend labels localize (zh).
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
+    const evidenceView = projectGraph(evidenceSource)
     const zhHtml = renderToStaticMarkup(createElement(AgentCanvasPage, {
-      view: projectGraph(evidenceSource).agents,
+      view: evidenceView.agents,
+      iteration: evidenceView.iteration,
       t: locale.bind(NS),
     }))
     expect(zhHtml).toContain('未工作实体（虚线）')
-    expect(zhHtml).toContain('预期流转边（虚线）')
-    expect(zhHtml).toContain('实际交接边')
-    expect(zhHtml).toContain('general 位于 sdd-implement 桶内底部')
-    expect(zhHtml).toContain('按需执行角色（独立列）')
+    expect(zhHtml).toContain('实际交接边（曲线 · 端口锚定 · 箭头沿线）')
+    expect(zhHtml).toContain('sdd-implement 子桶（implementor / sdd-reviewer）')
+    expect(zhHtml).toContain('implementor ↔ sdd-reviewer 双向监督线（侧隙垂直锚点）')
+    expect(zhHtml).toContain('unknown 分区（qa-gate 列底部 · 未匹配 / general 角色）')
+    expect(zhHtml).toContain('按需执行角色（implementor 子桶徽标）')
     expect(zhHtml).toContain('图例')
+    expect(zhHtml).not.toContain('预期流转边（虚线）')
+    expect(zhHtml).not.toContain('next 流转边（动画）')
   })
 
-  it('draws the AgentEdge collaboration lines: expected skeleton / actual handoffs / the animated next edge — NO SDD loop edge (plan f4.2 Task 1)', () => {
+  it('draws the AgentEdge bezier paths: actual handoffs (general endpoints filtered) + the supervise line — NO expected/next edges (plan f5 T2 + design-system T5)', () => {
     const html = agentsHtml(evidenceSource)
-    // expected: 3 forward skeleton arrows (4 stages) — plan f3, unchanged.
-    expect(html.match(/data-agent-edge-expected="/g)).toHaveLength(3)
-    // The SDD loop back-edge (sdd-implement → general) is GONE — the
-    // projection no longer emits it (plan 20260811-panel-f4-agent-view
-    // Task 1, user F4.2), so no `data-agent-edge-loop` anchor renders.
+    // Task 5 (design doc §2.2 — user 2026-08-12 feedback #1/#5): the
+    // expected skeleton + the next animation edge are REMOVED — no anchors
+    // and no marker defs survive.
+    expect(html).not.toContain('data-agent-edge-expected')
+    expect(html).not.toContain('data-agent-edge-next')
+    expect(html).not.toContain('canvas-arrow-expected')
+    expect(html).not.toContain('canvas-arrow-next')
+    // The SDD loop back-edge (sdd-implement → general) is GONE (plan
+    // 20260811-panel-f4-agent-view Task 1, user F4.2), so no
+    // `data-agent-edge-loop` anchor renders.
     expect(html).not.toContain('data-agent-edge-loop')
-    // actual: same-plan ts-adjacent dispatch pairs, ROLE-keyed. NOTE: React
-    // SSR escapes `>` in attribute values, so `a->b` renders as `a-&gt;b`.
-    expect(html).toContain('data-agent-edge-actual="fullstack-dev-&gt;general"')
-    expect(html).toContain('data-agent-edge-actual="general-&gt;qc-specialist"')
-    // next: the latest running entity (qc-specialist, qc-tri) → the next stage column.
-    expect(html).toContain('data-agent-edge-next="autonomous-execute:qc-tri-&gt;autonomous-execute:qa-gate"')
-    expect(html).toContain('data-agent-edge-next-from="qc-specialist"')
-    // Degraded ledger still draws the expected skeleton (3 forward only, no
-    // loop back-edge) — no fake claims.
+    // actual: same-plan ts-adjacent dispatch pairs, ROLE-keyed, general
+    // endpoints FILTERED (Task 5). The evidenceSource pairs all involve the
+    // general bucket (generalPurpose) → NO actual edge renders here (the
+    // general-free handoff rendering is pinned in agent-canvas-layout.spec.tsx).
+    expect(html).not.toContain('data-agent-edge-actual=')
+    // The static supervise line still renders (design knowledge) — LIT here:
+    // fullstack-dev is an implementor-bucket dispatch (evidence, design doc
+    // §2.7) — as a bezier `C` path (not a <line>).
+    expect(html).toContain('data-agent-edge-supervise=')
+    expect(html).toContain('data-agent-edge-supervise-lit="true"')
+    // Degraded ledger draws NO actual edges (no handoff evidence) — no fake claims.
     const degraded = agentsHtml(fullSource)
-    expect(degraded.match(/data-agent-edge-expected="/g)).toHaveLength(3)
-    expect(degraded).not.toContain('data-agent-edge-loop')
     expect(degraded).not.toContain('data-agent-edge-actual=')
     expect(degraded).not.toContain('data-agent-edge-next=')
+    expect(degraded).not.toContain('data-agent-edge-expected=')
+    // Every edge is an SVG path with a bezier `C` command (design doc §2.6).
+    const paths = [...html.matchAll(/<path([^>]*)>/g)].map((m) => m[1]!)
+    const edgePaths = paths.filter((p) => /data-agent-edge-(?:actual|supervise)=/.test(p))
+    expect(edgePaths.length).toBeGreaterThan(0)
+    for (const p of edgePaths) {
+      expect(p).toContain('d="M ')
+      expect(p).toContain(' C ')
+    }
   })
 
   it('the SDD loop edge is NOT rendered in any view — the projection no longer emits it and the render branch is gone (plan f4.2 Task 1 + Task 2, AC-3 "no data-agent-edge-loop anchor")', () => {
@@ -2410,7 +2511,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(panTransform(PAN_ORIGIN)).toBe('translate(0px, 0px)')
   })
 
-  it('layoutAgents is deterministic: 4 flow columns + the on-demand column (5 total — NO general column), every entity boxed', () => {
+  it('layoutAgents is deterministic: the 4 flow columns ONLY (no unknown/on-demand/general column — Task 5), every entity boxed', () => {
     const view = projectGraph(fullSource).agents
     const layout = layoutAgents(view)
     expect(layout.columns.map((c) => c.id)).toEqual([
@@ -2418,49 +2519,38 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       'autonomous-execute:sdd-implement',
       'autonomous-execute:qc-tri',
       'autonomous-execute:qa-gate',
-      ON_DEMAND_COLUMN,
     ])
     for (const entity of view.entities) {
       expect(layout.cards.get(entity.key)).toBeDefined()
     }
-    // On-demand idle roles (ops-engineer / prompt-engineer) land in the
-    // on-demand column (index 4 — the LAST column).
-    expect(layout.cards.get('ops-engineer')!.x).toBeGreaterThanOrEqual(layout.columns[4]!.x)
-    expect(layout.cards.get('prompt-engineer')!.x).toBeGreaterThanOrEqual(layout.columns[4]!.x)
-    // The general bucket member sits INSIDE the sdd-implement column (index 1),
-    // BELOW the dev cards (plan f4.2 Task 2 — the general card sinks to the
-    // bucket bottom; the fullSource idle roster stacks 3 dev cards + general).
+    // On-demand idle roles (ops-engineer / prompt-engineer) land INSIDE the
+    // sdd-implement column's implementor partition (index 1) — no standalone
+    // on-demand column (plan f5 Task 2).
     const sdd = layout.columns[1]!
-    const general = layout.cards.get('general')!
-    expect(general.x).toBeGreaterThanOrEqual(sdd.x)
-    expect(general.x).toBeLessThan(sdd.x + sdd.w)
-    for (const dev of ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev']) {
-      expect(general.y).toBeGreaterThan(layout.cards.get(dev)!.y)
+    for (const key of ['ops-engineer', 'prompt-engineer']) {
+      expect(layout.cards.get(key)!.x).toBeGreaterThanOrEqual(sdd.x)
+      expect(layout.cards.get(key)!.x).toBeLessThan(sdd.x + sdd.w)
     }
+    // The general bucket member sits INSIDE the LAST column (qa-gate), in
+    // the unknown sub-partition BELOW the qa-gate card (plan f5 Task 5 —
+    // design doc §1.2; the standalone unknown column is gone).
+    const last = layout.columns[layout.columns.length - 1]!
+    expect(last.id).toBe('autonomous-execute:qa-gate')
+    const general = layout.cards.get('general')!
+    const qa = layout.cards.get('qa-engineer')!
+    expect(general.x).toBeGreaterThanOrEqual(last.x)
+    expect(general.x).toBeLessThan(last.x + last.w)
+    expect(general.y).toBeGreaterThan(qa.y + qa.h)
     // Same view → identical geometry (SSR stability).
     expect(layoutAgents(view)).toEqual(layout)
   })
 
-  it('stable partition: the general card stays BELOW the sdd-implement dev cards even when it precedes them in the entity array (lit view)', () => {
-    // evidenceSource entity order: [qc-specialist, general, fullstack-dev, …]
-    // — the general entity comes BEFORE the dev entities, yet the stable
-    // partition (flow cards first, general last — plan f4.2 Task 2 R5) still
-    // puts its card at the bucket bottom, below the three dev cards.
-    const view = projectGraph(evidenceSource).agents
-    const layout = layoutAgents(view)
-    const sdd = layout.columns[1]!
-    const general = layout.cards.get('general')!
-    expect(general.x).toBeGreaterThanOrEqual(sdd.x)
-    expect(general.x).toBeLessThan(sdd.x + sdd.w)
-    for (const dev of ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev']) {
-      expect(general.y).toBeGreaterThan(layout.cards.get(dev)!.y)
-    }
-  })
-
-  it('total function: no sdd-implement stage column → general entities fall back to the LAST column, never a throw', () => {
+  it('total function: no sdd-implement stage column → general AND on-demand entities fall back to the LAST column, never a throw', () => {
     // A view whose stage skeleton lacks the sdd-implement column (degraded
     // shape — the projection always emits it, but `layoutAgents` stays total):
-    // the general bucket entity lands in the LAST column instead of throwing.
+    // the general-bucket entity AND an on-demand entity (ops-engineer) land
+    // in the LAST stage column (the general in its unknown sub-partition, the
+    // on-demand in the flow stack) instead of throwing.
     const view: ZoneView['agents'] = {
       stages: [{
         id: 'iteration-start:review-edit-chain',
@@ -2472,33 +2562,44 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       degraded: false,
       empty: false,
       note: null,
-      entities: [{
-        key: 'general', agent: null, name: 'general', role: 'general', task: null,
-        status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'general',
-      }],
+      entities: [
+        {
+          key: 'general', agent: null, name: 'general', role: 'general', task: null,
+          status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'general', bucket: null, emphasis: null,
+        },
+        {
+          key: 'ops-engineer', agent: null, name: 'ops-engineer', role: 'ops-engineer', task: null,
+          status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'on-demand', bucket: 'implementor', emphasis: null,
+        },
+      ],
       edges: [],
       executing: 0,
       pending: 0,
+      activePlanId: null,
+      activePlanCount: 0,
     }
     const layout = layoutAgents(view)
     const last = layout.columns[layout.columns.length - 1]!
-    expect(layout.cards.get('general')).toBeDefined()
-    expect(layout.cards.get('general')!.x).toBeGreaterThanOrEqual(last.x)
-    expect(layout.cards.get('general')!.x).toBeLessThan(last.x + last.w)
+    expect(last.id).toBe('iteration-start:review-edit-chain')
+    for (const key of ['general', 'ops-engineer']) {
+      expect(layout.cards.get(key)).toBeDefined()
+      expect(layout.cards.get(key)!.x).toBeGreaterThanOrEqual(last.x)
+      expect(layout.cards.get(key)!.x).toBeLessThan(last.x + last.w)
+    }
   })
 
   it('F-001: a non-roster session id is only a record field — the ROLE keys the card, ONE card per key, honest summary', () => {
     // dispatch agent = 'explore' (session id, no longer a roster id) with role
     // 'fullstack-dev' — the card is keyed by the ROLE; the session id rides
-    // the record line. 1 lit + 12 idle = 13 unique entities (roster 13) and
-    // the summary matches the visible cards.
+    // the record line. 1 lit + 13 idle = 14 unique entities (roster 14 — plan
+    // f5 T1 adds code-reviewer) and the summary matches the visible cards.
     const html = agentsHtml(flowSource([
       dispatchEvent({ ts: 7, role: 'fullstack-dev', agent: 'explore' }),
     ]))
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
     expect(html.match(/data-agent-entity="fullstack-dev"/g)).toHaveLength(1)
     expect(html).not.toContain('data-agent-entity="explore"')
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(12)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
     // The lit card is visible and honest (running, no idle marker, record = session).
     const lit = cardRegion(html, 'fullstack-dev')
     expect(lit).toContain('data-agent-status="running"')
@@ -2511,44 +2612,137 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(html).toContain('data-agent-summary-executing="1"')
   })
 
-  it('renders the on-demand column with NO general column; the general card sits INSIDE the sdd-implement bucket with its in-bucket label (plan f3 + f4.2)', () => {
+  it('renders the unknown SUB-PARTITION at the bottom of the last column — NO standalone unknown column; sub-bucket + on-demand-badge anchors ride the cards (plan f5 Task 2 + T5)', () => {
     const html = agentsHtml(fullSource) // degraded → full idle roster
-    // The columns exist with their own ids; the labels localize. NO
-    // general column anymore (plan f4.2 Task 2, AC-1 — `data-canvas-column`
-    // never carries the 'general' value).
-    expect(html).toContain('data-canvas-column="on-demand"')
+    // FOUR columns (plan f5 Task 5 — user 2026-08-12 feedback #3); the
+    // rightmost catch-all COLUMN is gone — `data-canvas-column` never carries
+    // the 'unknown' / 'on-demand' / 'general' values; the general bucket
+    // renders in the last column's bottom sub-partition instead.
+    expect(html).not.toContain('data-canvas-column="unknown"')
     expect(html).toContain('data-canvas-column="autonomous-execute:sdd-implement"')
+    expect(html).toContain('data-canvas-column="autonomous-execute:qa-gate"')
+    expect(html).not.toContain('data-canvas-column="on-demand"')
     expect(html).not.toContain('data-canvas-column="general"')
-    expect(html).toContain('On-demand')
-    // No expected/next edge anchor touches the on-demand column.
-    expect(html).not.toMatch(/data-agent-edge-(?:expected|next)="[^"]*on-demand/)
-    // The general bucket card carries its in-bucket label anchor + the
-    // user-fixed literal 'general' (plan f4.2 Task 2 — R5 small label).
-    expect(cardRegion(html, 'general')).toContain('data-agent-bucket="general"')
-    expect(cardRegion(html, 'general')).toContain('>general<')
-    // Negative anchor pin (qc F-002): NO non-general card carries the
-    // in-bucket tag — it is emitted ONLY for `entity.zone === GENERAL_BUCKET`
-    // (the flow/on-demand roster cards never do), and the 13-card roster
-    // yields exactly ONE bucket tag.
-    expect(cardRegion(html, 'fullstack-dev')).not.toContain('data-agent-bucket')
-    expect(cardRegion(html, 'frontend-dev')).not.toContain('data-agent-bucket')
-    expect(cardRegion(html, 'ops-engineer')).not.toContain('data-agent-bucket')
-    expect(html.match(/data-agent-bucket=/g)).toHaveLength(1)
+    // The unknown sub-partition caption (design doc §1.2).
+    expect(html).toContain(`data-sub-bucket="${UNKNOWN_COLUMN}"`)
+    expect(html).toContain('>unknown / unmatched roles<')
+    // Sub-bucket anchors (plan f5 Task 2): the PROJECTED `entity.bucket`
+    // rides data-agent-bucket on the sdd-implement cards — implementor
+    // (flow + on-demand roles) / reviewer (code-reviewer).
+    expect(cardRegion(html, 'code-reviewer')).toContain('data-agent-bucket="reviewer"')
+    expect(cardRegion(html, 'fullstack-dev')).toContain('data-agent-bucket="implementor"')
+    expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-bucket="implementor"')
+    // The general card (bucket null) carries NO data-agent-bucket — it lives
+    // in the unknown sub-partition, identified by data-agent-stage (projected,
+    // never guessed).
+    expect(cardRegion(html, 'general')).not.toContain('data-agent-bucket')
+    expect(cardRegion(html, 'general')).toContain('data-agent-stage="general"')
+    // On-demand badge (plan f5 Task 2): zone 'on-demand' cards only —
+    // ops-engineer / prompt-engineer carry the badge, flow cards never do.
+    expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-on-demand="true"')
+    expect(cardRegion(html, 'prompt-engineer')).toContain('data-agent-on-demand="true"')
+    expect(cardRegion(html, 'fullstack-dev')).not.toContain('data-agent-on-demand')
+    expect(cardRegion(html, 'code-reviewer')).not.toContain('data-agent-on-demand')
     // On-demand zone cards report the zone on data-agent-stage (projected,
     // never guessed); general-bucket cards report 'general'.
     expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-stage="on-demand"')
     expect(cardRegion(html, 'prompt-engineer')).toContain('data-agent-stage="on-demand"')
     expect(cardRegion(html, 'general')).toContain('data-agent-stage="general"')
-    // zh label localizes (按需执行); the general bucket label is the
-    // user-fixed literal 'general' in both locales.
+    // zh labels localize (the unknown sub-partition caption + the 按需执行
+    // badge + the reviewer sub-bucket anchor).
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
+    const fullView = projectGraph(fullSource)
     const zhHtml = renderToStaticMarkup(createElement(AgentCanvasPage, {
-      view: projectGraph(fullSource).agents,
+      view: fullView.agents,
+      iteration: fullView.iteration,
       t: locale.bind(NS),
     }))
+    expect(zhHtml).toContain('>unknown / 未匹配角色<')
     expect(zhHtml).toContain('按需执行')
-    expect(zhHtml).toContain('data-agent-bucket="general"')
+    expect(zhHtml).toContain('data-agent-bucket="reviewer"')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T8 shared iteration info section (plan 20260812-panel-f5-design-system
+ * Task 8, user 2026-08-12 feedback #4): the agents tab renders the SAME
+ * IterationInfoSection the tasks tab renders, from the SAME `view.iteration`
+ * data — 两个 tab 显示同一迭代信息块 (one implementation, two mounts; the
+ * `data-iteration-*` anchor family is unchanged on both).
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — shared iteration info section (plan 20260812-panel-f5-design-system T8, user feedback #4)', () => {
+  /** Render one tab's content through the real PanelContent mapping. */
+  function tabHtml(tab: 'tasks' | 'agents', source: MstarEngineStatusSource): string {
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    return renderToStaticMarkup(createElement(PanelContent, { tab, source, t: locale.bind(NS) }))
+  }
+
+  it('the agents tab renders the SAME IterationInfoSection as the tasks tab — same anchors, same data', () => {
+    const agents = tabHtml('agents', fullSource)
+    const tasks = tabHtml('tasks', fullSource)
+    // The agents page now carries the shared iteration head (Task 8).
+    expect(agents).toContain('data-mstar-page="agents"')
+    expect(agents).toContain('data-iteration-head')
+    expect(agents).toContain('data-iteration-head-active="true"')
+    expect(agents).toContain('data-iteration-head-expanded="true"')
+    expect(agents).toContain('data-iteration-head-steps')
+    expect(agents).toContain('data-iteration-head-branches')
+    // SAME data as the tasks tab: identical id / verdict / step row / branches.
+    for (const anchor of [
+      'data-iteration-head-id="iter-20260809-dsh-workflow-viz"',
+      'data-iteration-head-verdict="pass"',
+      'data-step-state="current"',
+      'data-branch="spec-integration"',
+      'iteration/iter-20260809-dsh-workflow-viz',
+    ]) {
+      expect(tasks).toContain(anchor)
+      expect(agents).toContain(anchor)
+    }
+    // Exactly ONE head root per page (no duplication within a tab) — React
+    // SSR renders the valueless `data-iteration-head` attribute as
+    // `data-iteration-head=""`, so the lookahead accepts `=`.
+    expect(agents.match(/data-iteration-head(?=["= ])/g)).toHaveLength(1)
+    expect(tasks.match(/data-iteration-head(?=["= ])/g)).toHaveLength(1)
+  })
+
+  it('inactive iteration → the agents page renders the same collapsed muted head as the tasks page', () => {
+    const agents = tabHtml('agents', noGateSource)
+    expect(agents).toContain('data-mstar-page="agents"')
+    expect(agents).toContain('data-iteration-head-active="false"')
+    expect(agents).toContain('data-iteration-head-expanded="false"')
+    expect(agents).toContain('iteration not started')
+  })
+
+  it('zh locale: the agents-page iteration section localizes like the tasks page', () => {
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('zh')
+    const agents = renderToStaticMarkup(createElement(PanelContent, {
+      tab: 'agents',
+      source: fullSource,
+      t: locale.bind(NS),
+    }))
+    expect(agents).toContain('data-iteration-head-active="true"')
+    expect(agents).toContain('迭代启动')
+    expect(agents).toContain('分支')
+    expect(agents).not.toContain('Autonomous Execute')
+  })
+
+  it('the pure helpers keep their contract from the SHARED module (IterationInfoSection — the single implementation)', () => {
+    // The transition table pins the collapse/expand contract (moved verbatim
+    // from the old IterationTaskPage head; the anchors are unchanged).
+    const t = nextExpandedOnActivation
+    expect(t(false, false, true)).toBe(true)
+    expect(t(true, false, true)).toBe(true)
+    expect(t(true, true, true)).toBe(true)
+    expect(t(false, true, true)).toBe(false)
+    expect(iterationSplitActive(false, null)).toBe(false)
+    expect(iterationSplitActive(true, null)).toBe(false)
+    expect(iterationSplitActive(true, { iterationBase: 'a', target: 'b', specIntegration: 'c' })).toBe(true)
   })
 })

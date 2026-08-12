@@ -27,12 +27,14 @@
  * `<details>` expansion, landed with the event-log plan Task 2, replacing
  * the muted placeholder AND the AgentEventDock — 无双份日志).
  *
- * Empty branches (spec §2): waiting / no-harness stay exactly as the zone
- * dashboard baseline — no tabs, no sidebar (hint + freshness only); the
- * no-harness main keeps `data-mstar-graph` on its hint container. Degradation
- * stays total: `projectGraph` never throws; no iteration → the IterationTaskPage's
- * collapsed muted head (spec §8); `state` null / plans missing → muted kanban
- * skeleton.
+ * Empty branches (spec §2): waiting / no-harness render no tabs / no
+ * sidebar. Waiting keeps the muted hint; the no-harness branch renders a
+ * CENTERED inactive-state card (icon + title + hint, plan
+ * 20260812-panel-f5-agent-layout T3 — replaces the left-aligned hint) with
+ * the freshness footer; the no-harness main keeps `data-mstar-graph` on its
+ * content container. Degradation stays total: `projectGraph` never throws;
+ * no iteration → the IterationTaskPage's collapsed muted head (spec §8);
+ * `state` null / plans missing → muted kanban skeleton.
  */
 
 import * as React from 'react'
@@ -79,7 +81,13 @@ export interface PanelContentProps {
  * AgentEventDock — 无双份日志, the dock is removed with this plan).
  */
 export function PanelContent({ tab, source, t }: PanelContentProps) {
-  if (tab === 'agents') return <AgentCanvasPage view={projectGraph(source).agents} t={t} />
+  if (tab === 'agents') {
+    // The SHARED iteration info section (plan 20260812-panel-f5-design-system
+    // Task 8 — user 2026-08-12 feedback #4): the agents page receives the
+    // SAME `view.iteration` the tasks page renders (IterationInfoSection).
+    const view = projectGraph(source)
+    return <AgentCanvasPage view={view.agents} iteration={view.iteration} t={t} />
+  }
   if (tab === 'events') return <EventLogPage view={projectGraph(source)} t={t} />
   return <IterationTaskPage view={projectGraph(source)} t={t} />
 }
@@ -108,12 +116,36 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
   )
   if (noHarness) {
     // No harness → no tabs / no sidebar (spec §2 — empty branch unchanged):
-    // hint + freshness in a single-column root. The `data-mstar-graph` anchor
-    // stays on the hint container (its layout contract slot).
+    // a CENTERED inactive-state card (icon + main copy + hint) with the
+    // freshness footer, in a single-column root (plan
+    // 20260812-panel-f5-agent-layout T3 — replaces the left-aligned hint).
+    // The `data-mstar-graph` anchor stays on the main container (its layout
+    // contract slot).
     return (
       <div className={css.root} data-mstar-panel="no-harness">
         <main className={css.main} data-mstar-graph>
-          <p className={css.empty} data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
+          <div className={css.noHarnessCard} data-mstar-empty-card>
+            <svg
+              className={css.noHarnessIcon}
+              data-mstar-empty-icon
+              width="32"
+              height="32"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              {/* Muted folder glyph — the harness directory is not detected. */}
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <path d="M9.7 9.4a2.4 2.4 0 1 1 3.4 2.2c-.7.3-1 .8-1 1.5" />
+              <circle cx="12" cy="16.4" r="0.6" />
+            </svg>
+            <p className={css.noHarnessTitle} data-mstar-empty="no-harness">{t('empty.no-harness')}</p>
+            <p className={css.noHarnessHint}>{t('empty.no-harness-hint')}</p>
+          </div>
           {freshness}
         </main>
       </div>

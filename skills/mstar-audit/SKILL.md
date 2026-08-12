@@ -46,7 +46,7 @@ If the repo has no working verification command (no tests, broken build), record
 
 Audit across the categories in **`references/audit-playbook.md`** — read it now. Nine categories: **correctness/bugs, security, performance, test coverage, tech debt & architecture, dependencies & migrations, DX & tooling, docs, direction (features & what to build next)**.
 
-For repos of any real size, PM fans out parallel read-only subagents (`scout` / `explore` type) — one per category or cluster. **Subagents do not inherit this skill's context**, so each subagent prompt must include:
+For repos of any real size, `code-reviewer` (the audit executor, PM-dispatched) fans out parallel read-only subagents (`scout` / `explore` type) under Assignment `Delegation: allowed (scout/explore only, read-only)` — one per category or cluster; PM remains orchestrator/entry. **Subagents do not inherit this skill's context**, so each subagent prompt must include:
 
 - The **absolute path** to `references/audit-playbook.md` plus the exact section headings to read — **always including "## Finding format"** (subagents can read files; this is cheaper than pasting).
 - Recon facts that scope the search (languages, frameworks, key directories, what to skip).

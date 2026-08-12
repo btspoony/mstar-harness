@@ -11,9 +11,10 @@
  *   6 kanban buckets (PLAN_STATE_IDS) and the expected role pipeline
  *   (EXPECTED_ROLE_FLOW), all client-side design knowledge;
  * - catalog evidence — `iteration.gate.transition` lights the current step
- *   (its forward target becomes `next`), `gate.ok/violations` become the
- *   PASS/FAIL verdict + count, and `state.plans[].status` rows fall into the
- *   exact-match kanban buckets. `iteration.compassStatus` (the steering
+ *   (steps before it become `done` — plan 20260812-panel-f5-iteration-zone-fix
+ *   Task 1, its forward target becomes `next`), `gate.ok/violations` become
+ *   the PASS/FAIL verdict + count, and `state.plans[].status` rows fall into
+ *   the exact-match kanban buckets. `iteration.compassStatus` (the steering
  *   compass frontmatter `status`, `'active' | 'locked'` — spec panel-f4 §2.3
  *   R9 / §5 D5) re-derives the current step during Phase 1: `'active'` WITH a
  *   `phase-2-execute` transition (compass and gate mutually consistent — QC
@@ -34,24 +35,32 @@
  *   (the stage skeleton + entities/edges now live in the `agents` projection —
  *   spec §4);
  * - added: `iteration.steps / currentStep / branches`, `tasks.columns / total
- *   / truncated`, `agents` (entities + expected/actual/next edges + executing/
+ *   / truncated`, `agents` (entities + actual/supervise edges + executing/
  *   pending counts — spec §4).
  *
  * Agent-entity semantics (plan 20260811-panel-f3-agent-general — the
  * per-role aggregation refactor): entities aggregate by ROLE, not by session
  * — a KNOWN_AGENTS roster role keys its own card (same role across sessions
- * folds into one card ×N), and EVERY non-roster dispatch (the former
- * `generalPurpose` SDD reviewer, `scout`, unregistered roles, anonymous
- * `role === ''`) folds into the single `general` bucket entity (key
- * `'general'`, role shown `'general'`). The legacy `unexpected` zone is
- * GONE — stage-null non-on-demand entities now project `zone: 'general'`.
- * Placement (plan 20260811-panel-f4-agent-view Task 1, user F4.2): the
- * projection only declares the zone — the RENDER places `zone: 'general'`
- * entities at the BOTTOM INSIDE the `sdd-implement` column bucket (no
- * general column anymore; Task 2 consumes this). The SDD loop back-edge
- * (sdd-implement → general) is REMOVED from the projection (Task 1); the
- * event-log `unexpected` badge is a SEPARATE, unchanged semantic
- * (`expected` ⟺ role ∈ EXPECTED_ROLE_FLOW union).
+ * folds into one card ×N), and EVERY non-roster dispatch (`scout`,
+ * unregistered roles, anonymous `role === ''`) folds into the single
+ * `general` bucket entity (key `'general'`, role shown `'general'`). The
+ * legacy `unexpected` zone is GONE — stage-null non-on-demand entities now
+ * project `zone: 'general'`. Placement (plan 20260812-panel-f5-agent-layout
+ * Task 1, user 2026-08-12): the projection only declares the zone — the
+ * RENDER places `zone: 'general'` entities in an unknown sub-partition at
+ * the bottom of the LAST column (plan 20260812-panel-f5-design-system Task
+ * 5, user 2026-08-12 feedback #3 — the standalone rightmost unknown column
+ * is superseded: 4 columns total). The SDD loop back-edge (sdd-implement →
+ * general) stays REMOVED from the projection (plan 20260811-panel-f4-agent-view
+ * Task 1); the F5 supervise line is a SEPARATE sub-bucket edge
+ * (`kind: 'supervise'`, see `superviseEdges`). The event-log `unexpected`
+ * badge is a SEPARATE, unchanged semantic (`expected` ⟺ role ∈
+ * EXPECTED_ROLE_FLOW union). The `sdd-implement` column is further split
+ * into implementor / reviewer SUB-BUCKETS (plan 20260812-panel-f5-agent-layout
+ * Task 1): every entity carries a projected `bucket` field ('implementor' /
+ * 'reviewer' / null via SDD_BUCKET_ROLES — a layout dimension ORTHOGONAL to
+ * expectedness: on-demand roles keep their `unexpected` badge inside the
+ * implementor bucket).
  *
  * Degradation (spec §8): `source === null` → legal empty view (the panel
  * never mounts the graph for that case, but the projection stays total);
@@ -73,7 +82,7 @@ import type { MstarEngineStatusSource } from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
 import { PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
-  EXPECTED_ROLE_FLOW, GENERAL_BUCKET, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, TRANSITION_TO_PHASE,
+  EXPECTED_ROLE_FLOW, GENERAL_BUCKET, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, SDD_BUCKET_ROLES, TRANSITION_TO_PHASE,
   type AgentZone, type KnownAgent, type PhaseId, type PlanStateId,
 } from './schema.ts'
 
@@ -127,15 +136,20 @@ export interface FlowEventView {
 /* ---------------------------------- iteration zone (spec §3) ---------------------------------- */
 
 /**
- * One iteration step (spec §3): the PHASE_IDS skeleton with
- * current/next/idle lit by `gate.transition` evidence. The `step` number is
- * 1-based (1..5). `verdict` is carried by the CURRENT step only.
+ * One iteration step (spec §3 + plan 20260812-panel-f5-iteration-zone-fix
+ * Task 1): the PHASE_IDS skeleton with current/next/done/idle lit by
+ * `gate.transition` evidence — the CURRENT step, its forward target (`next`)
+ * and every step BEFORE it (`done` — completed: the Task 1 fix, a finished
+ * Step 1 must not read as idle「待命」 while Step 2 is current). The `step`
+ * number is 1-based (1..5). `verdict` is carried by the CURRENT step only.
  */
 export interface IterationStepView {
   id: PhaseId
   /** 1-based position in PHASE_IDS (1..5). */
   step: number
-  state: 'current' | 'next' | 'idle'
+  /** 'current' (the gate transition) / 'next' (its forward target) / 'done'
+   * (a step BEFORE the current one — completed) / 'idle' (schema-only). */
+  state: 'current' | 'next' | 'done' | 'idle'
   /** Current-step gate verdict; 'unknown' on non-current steps. */
   verdict: PhaseVerdict
 }
@@ -223,14 +237,76 @@ export interface AgentEntityView {
   stage: { phase: PhaseId; stage: string } | null
   /** Column zone (plan 20260811-panel-f3-agent-general — projection-owned,
    * the render NEVER heuristically guesses): 'flow' (stage columns), 'on-demand'
-   * (ops-engineer / prompt-engineer column) or 'general' (the general bucket —
-   * the former 'unexpected' zone). Placement (plan
-   * 20260811-panel-f4-agent-view Task 1, user F4.2): 'general' has NO column
-   * of its own — the render places those entities at the BOTTOM INSIDE the
-   * `sdd-implement` column bucket (the zone VALUE is unchanged, only the
-   * render layout changes — Task 2). Derived from the role for lit cards,
-   * from the KnownAgent `zone` for idle cards. */
+   * (ops-engineer / prompt-engineer — implementor-sub-bucket dispatches with
+   * an on-demand badge; the standalone on-demand column is REMOVED, plan
+   * 20260812-panel-f5-agent-layout Task 2) or 'general' (the general bucket —
+   * the rightmost UNKNOWN column, Task 2). Derived from the role for lit
+   * cards, from the KnownAgent `zone` for idle cards. */
   zone: AgentZone
+  /** SDD sub-bucket (plan 20260812-panel-f5-agent-layout Task 1 —
+   * projection-derived, the render ONLY consumes it): role ∈
+   * SDD_BUCKET_ROLES.implementor → 'implementor' (incl. on-demand roles),
+   * role ∈ SDD_BUCKET_ROLES.reviewer → 'reviewer' (code-reviewer); every
+   * other role (qc/qa/review-edit-chain/general) → null. Same rule for idle
+   * cards (KNOWN_AGENTS id → SDD_BUCKET_ROLES lookup). */
+  bucket: AgentBucket | null
+  /** Transparency tier (plan 20260812-panel-f5-design-system Task 4 — the
+   * TIME dimension, design doc §3): the iteration's current phase vs the
+   * entity's pipeline-stage phase — 'current' (chrome full-strength), 'next'
+   * (mid transparency), 'off' (low transparency — passed phases, on-demand /
+   * general bucket), null (no iteration/plan — NO override, idle status quo).
+   * ORTHOGONAL to `bucket` (space: same-column partition) / `zone` (column) /
+   * `status` (evidence): the render fades the card CHROME only — the status
+   * point and the running ring/glow NEVER fade (design doc §3.4 HARD). */
+  emphasis: AgentEmphasis
+}
+
+/** The SDD sub-bucket a role belongs to within the `sdd-implement` column
+ * (plan 20260812-panel-f5-agent-layout Task 1): 'implementor' | 'reviewer';
+ * roles in neither bucket project `null`. The bucket is a LAYOUT dimension,
+ * ORTHOGONAL to expectedness (SDD_BUCKET_ROLES vs EXPECTED_ROLE_FLOW — an
+ * on-demand role in the implementor bucket stays OUTSIDE the expected union). */
+export type AgentBucket = 'implementor' | 'reviewer'
+
+/** Transparency tier (plan 20260812-panel-f5-design-system Task 4 — design
+ * doc §3.1): the TIME dimension of an entity — the iteration's current phase
+ * vs the entity's pipeline-stage phase. 'current' → chrome full-strength,
+ * 'next' → mid transparency (expected but not yet), 'off' → low transparency
+ * (already-passed phase, or NO stage — on-demand / general bucket), null →
+ * no iteration/plan (NO override — the render keeps the idle status quo). */
+export type AgentEmphasis = 'current' | 'next' | 'off' | null
+
+/**
+ * Emphasis derivation (plan 20260812-panel-f5-design-system Task 4 — design
+ * doc §3.3, the FINALIZED rule: Task 3 gate D4–D7 confirmed the tiers
+ * 1/0.75/0.45, phase granularity, on-demand → 'off' and Phase 3–5 → all
+ * 'off'). Reuses ONLY projected fields (`iteration.currentStep` +
+ * `entity.stage`) — zero new catalog reads:
+ *
+ *   currentStep === null                      → null   (no iteration: no override)
+ *   stage === null                            → 'off'  (on-demand / general bucket)
+ *   phaseRank(stage.phase) <  rank(current)   → 'off'  (already-passed phase)
+ *   phaseRank(stage.phase) === rank(current)  → 'current'
+ *   otherwise                                 → 'next' (a later phase)
+ *
+ * Phase 3–5 have NO EXPECTED_ROLE_FLOW stages (design doc §3.2 note) — every
+ * pipeline role's rank stays below the current phase → all 'off'. Total
+ * function, never a throw: an out-of-range `currentStep` (impossible via the
+ * projection — it derives 1..5) degrades to `null` (no override).
+ */
+function emphasisOf(
+  stage: { phase: PhaseId; stage: string } | null,
+  currentStep: number | null,
+): AgentEmphasis {
+  if (currentStep === null) return null
+  if (stage === null) return 'off'
+  const currentPhase = PHASE_IDS[currentStep - 1]
+  if (currentPhase === undefined) return null // defensive: out-of-range step → no override
+  const rank = PHASE_IDS.indexOf(stage.phase)
+  const currentRank = PHASE_IDS.indexOf(currentPhase)
+  if (rank < currentRank) return 'off'
+  if (rank === currentRank) return 'current'
+  return 'next'
 }
 
 /**
@@ -244,32 +320,45 @@ export interface AgentEntityView {
  */
 export type AgentEntityStatus = 'running' | 'settled' | 'error' | 'denied' | 'advisory' | 'idle'
 
-/** Edge kinds (spec §4): skeleton / handoff / next-flow arrows. */
-export type AgentEdgeKind = 'expected' | 'actual' | 'next'
+/** Edge kinds (spec §4 + plan 20260812-panel-f5-design-system Task 5 — the
+ * 2026-08-12 finalized line semantics, design doc §2.2): handoff / sub-bucket
+ * supervision arrows. `expected` (stage skeleton) and `next` (running
+ * animation) are REMOVED — the column order implies the flow, the running
+ * card glow/status point carries the position (user feedback #1/#5). */
+export type AgentEdgeKind = 'actual' | 'supervise'
 
 /**
- * One agents-zone arrow (spec §4):
- * - `expected`: skeleton arrow between consecutive EXPECTED_ROLE_FLOW stage
- *   columns (source/target = stage id). The former SDD loop back-edge
- *   `autonomous-execute:sdd-implement → general` is REMOVED from the
- *   projection (plan 20260811-panel-f4-agent-view Task 1, user F4.2 — the
- *   implement ↔ general-bucket review cycle is no longer drawn as an edge;
- *   the `AgentEdge.loop` field itself was removed with the render branch in
- *   Task 2; a future "dynamic-lines" iteration may reconnect by real
- *   evidence);
+ * One agents-zone arrow (spec §4 + plan 20260812-panel-f5-agent-layout Task
+ * 1 + plan 20260812-panel-f5-design-system Task 5):
  * - `actual`: same-plan handoff between ts-adjacent dispatch ENTITY keys
  *   (source/target = entity key — role-based since plan
- *   20260811-panel-f3-agent-general);
- * - `next`: the latest running entity's stage column → the next constant-order
- *   column (source/target = stage id; `entityKey` = the running card).
+ *   20260811-panel-f3-agent-general). Task 5 filters general-bucket endpoints
+ *   (a general handoff is noise, not a meaningful transfer) and keeps at most
+ *   ONE edge per entity-key pair (the latest direction) — design doc §2.2;
+ * - `supervise`: ONE static sub-bucket line inside the `sdd-implement`
+ *   column — implementor ↔ reviewer mutual supervision (mstar-sdd contract;
+ *   the render draws it as a bidirectional double arrow, Task 2).
+ *   source/target embed the column id as an anchor prefix:
+ *   `<stage-id>:implementor` / `<stage-id>:reviewer`. NOT per-entity pairs —
+ *   drawing per-role pairs would fabricate concrete supervision relations
+ *   where no evidence exists (evidence-level handoffs are covered by
+ *   `actualEdges`). STATIC presence (design knowledge) + evidence-driven
+ *   lighting via `evidenced` (dim without implement/review dispatch
+ *   evidence, lit with it — never a fabricated activation).
  */
 export interface AgentEdge {
   kind: AgentEdgeKind
-  /** expected/next: stage id (`${phase}:${stage}`); actual: entity key. */
+  /** actual: entity key; supervise: `<stage-id>:implementor|reviewer`. */
   source: string
   target: string
-  /** The running entity key the next arrow highlights; null for expected/actual. */
+  /** Unused by the Task 5 line set (the removed `next` arrow carried the
+   * running entity key); kept for shape stability — always null. */
   entityKey: string | null
+  /** Supervise edges only (plan 20260812-panel-f5-agent-layout Task 1):
+   * evidence-driven lighting — true when any dispatch row's role belongs to
+   * an SDD sub-bucket (implementor ∪ reviewer), false otherwise (dim).
+   * Absent (undefined) for actual. */
+  evidenced?: boolean
 }
 
 /**
@@ -285,7 +374,7 @@ export type AgentZoneNote = 'empty' | 'settle-only' | null
 
 /**
  * The projected agents zone (spec §4 + §6.2): the EXPECTED_ROLE_FLOW stage
- * skeleton plus the dispatch-derived entity cards and the expected/actual/next
+ * skeleton plus the dispatch-derived entity cards and the actual/supervise
  * arrows. Total function — NEVER throws and NEVER fabricates: the KNOWN_AGENTS
  * roster always projects as entities (idle cards when there is no evidence) —
  * agentFlow missing/unreadable → `degraded` (full idle roster + no
@@ -310,6 +399,16 @@ export interface AgentZoneView {
   executing: number
   /** Sum of expected roles of stages with no dispatch evidence — the summary "M 待执行". */
   pending: number
+  /** The FIRST `state.plans[]` row with status 'InProgress' (catalog order);
+   * null when no plan is in progress (plan 20260812-panel-f5-design-system
+   * Task 8 — the Phase 2 group's current-plan annotation, user 2026-08-12
+   * feedback #2). Total function: state/plans missing or no InProgress row →
+   * null (never fabricated). */
+  activePlanId: string | null
+  /** How many `state.plans[]` rows are InProgress (the render shows
+   * `+N more` when several plans run in parallel — honest, same shape as the
+   * kanban overflow hint; never hides the count behind the first id). */
+  activePlanCount: number
 }
 
 /* ---------------------------------- ZoneView (spec §3) ---------------------------------- */
@@ -431,7 +530,9 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
         // (iteration-start → autonomous-execute). `active` stays true — the
         // transition already resolved (engine `evaluatePhaseGate` emits
         // phase-2-execute + ok:true during Phase 1); only the CURRENT STEP is
-        // re-derived here.
+        // re-derived here. No `done` step on this branch (plan
+        // 20260812-panel-f5-iteration-zone-fix Task 1): Step 1 is current and
+        // nothing precedes it (index 0 → no completed steps).
         currentStep = 1
         const current = steps[0]!
         current.state = 'current'
@@ -449,6 +550,12 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
         currentStep = index + 1 // 1-based
         const current = steps[index]!
         current.state = 'current'
+        // Completed steps (plan 20260812-panel-f5-iteration-zone-fix Task 1 —
+        // the user bug: a finished Step 1 must not read as idle「待命」 while
+        // Step 2 is current): every step BEFORE the current one projects
+        // `done` (steps 0..index-1; index 0 → no done, e.g. an iteration at
+        // the first lit phase). current/next logic above stays unchanged.
+        for (let i = 0; i < index; i++) steps[i]!.state = 'done'
         const ok = gate === null || typeof gate !== 'object' ? null : bool(gate.ok)
         current.verdict = ok === null ? 'unknown' : ok ? 'pass' : 'fail'
         const rawViolations = gate !== null && typeof gate === 'object' && Array.isArray(gate.violations)
@@ -520,7 +627,10 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
   }
 
   // --- agents zone + flow events (spec §3/§4) ---
-  const agents = projectAgents(source)
+  // `currentStep` (already computed above, spec §3) drives the entity
+  // transparency tiers (plan 20260812-panel-f5-design-system Task 4 — design
+  // doc §3.3: null → no override, every entity `emphasis: null`).
+  const agents = projectAgents(source, currentStep)
   const flow = projectFlowEvents(source)
 
   return {
@@ -546,20 +656,56 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
 /* ---------------------------------- agents zone projection (spec §4) ---------------------------------- */
 
 /**
- * Skeleton stage-column arrows (spec §4 + plan 20260811-panel-f4-agent-view
- * Task 1): forward edges between consecutive EXPECTED_ROLE_FLOW stages ONLY.
- * The former SDD loop back-edge `autonomous-execute:sdd-implement → general`
- * (the implement ↔ general-bucket review cycle drawn as a curved
- * double-arrow below the column band) is REMOVED (user F4.2: the loop edge
- * is dropped; the `general` card renders at the bottom INSIDE the
- * `sdd-implement` column — render placement, Task 2).
+ * The SDD sub-bucket of a role (plan 20260812-panel-f5-agent-layout Task 1):
+ * role ∈ SDD_BUCKET_ROLES.implementor → 'implementor' (incl. the on-demand
+ * ops-engineer / prompt-engineer — bucket membership is a LAYOUT dimension,
+ * orthogonal to expectedness), role ∈ SDD_BUCKET_ROLES.reviewer →
+ * 'reviewer' (code-reviewer); every other role (qc / qa / review-edit-chain /
+ * general) → null. Total function, never a throw.
  */
-function expectedEdges(stages: readonly AgentZoneStage[]): AgentEdge[] {
-  const edges: AgentEdge[] = []
-  for (let i = 0; i + 1 < stages.length; i++) {
-    edges.push({ kind: 'expected', source: stages[i]!.id, target: stages[i + 1]!.id, entityKey: null })
-  }
-  return edges
+function bucketOf(role: string): AgentBucket | null {
+  if (SDD_BUCKET_ROLES.implementor.includes(role)) return 'implementor'
+  if (SDD_BUCKET_ROLES.reviewer.includes(role)) return 'reviewer'
+  return null
+}
+
+/** The `sdd-implement` stage column id (the sub-buckets' host column) —
+ * DERIVED from the projected stages (the same `${phase}:${stage}` key
+ * construction the projection emits — a phase/stage rename can never
+ * silently orphan the supervise line); null when the stage is absent. */
+function sddImplementColumnId(stages: readonly AgentZoneStage[]): string | null {
+  const s = stages.find((x) => x.stage === 'sdd-implement')
+  return s === undefined ? null : s.id
+}
+
+/**
+ * The sub-bucket supervision edge (plan 20260812-panel-f5-agent-layout Task
+ * 1): ONE static design-knowledge line between the `sdd-implement` column's
+ * implementor and reviewer sub-buckets (the mstar-sdd mutual-supervision
+ * contract — the render draws it as a bidirectional double arrow, Task 2).
+ * NOT per-entity pairs: drawing implementor→reviewer per role pair would
+ * fabricate concrete supervision relations where no evidence exists (the
+ * evidence-level handoffs are already covered by `actualEdges`). STATIC
+ * presence (existence = design knowledge — the edge is emitted even without
+ * any dispatch evidence, degraded/empty branches included) + evidence-driven
+ * lighting via `AgentEdge.evidenced` (dim with no implement/review dispatch
+ * evidence, lit with it — the same pattern as the expected skeleton: never a
+ * fabricated activation). Anchors embed the column id as a prefix:
+ * `<stage-id>:implementor` / `<stage-id>:reviewer`.
+ */
+function superviseEdges(stages: readonly AgentZoneStage[], entries: readonly { view: FlowEventView }[]): AgentEdge[] {
+  const columnId = sddImplementColumnId(stages)
+  if (columnId === null) return []
+  const evidenced = entries.some(
+    (e) => e.view.kind === 'dispatch' && bucketOf(e.view.role) !== null,
+  )
+  return [{
+    kind: 'supervise',
+    source: `${columnId}:implementor`,
+    target: `${columnId}:reviewer`,
+    entityKey: null,
+    evidenced,
+  }]
 }
 
 /** One in-progress entity accumulator (the aggregation walk, spec §4). */
@@ -575,6 +721,9 @@ interface EntityAccum {
   /** Column zone (plan 20260811-panel-f3-agent-general): 'flow' when staged;
    * KNOWN_AGENTS `zone` for off-pipeline roster roles; 'general' otherwise. */
   zone: AgentZone
+  /** SDD sub-bucket (plan 20260812-panel-f5-agent-layout Task 1): derived
+   * from the entity role via `bucketOf` — see AgentEntityView.bucket. */
+  bucket: AgentBucket | null
   /** Index of the latest dispatch in the classified entries array (pair lookup). */
   latestIndex: number
   /** dispatchStatus of the latest dispatch ('denied' | 'advisory' | 'dispatched'). */
@@ -631,6 +780,7 @@ function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEven
 function aggregateEntities(
   entries: readonly { view: FlowEventView }[],
   pairStatus: ReadonlyMap<number, FlowEventStatus>,
+  currentStep: number | null,
 ): AgentEntityView[] {
   const acc = new Map<string, EntityAccum>()
   for (let i = 0; i < entries.length; i++) {
@@ -651,6 +801,7 @@ function aggregateEntities(
         ts: v.ts,
         stage: v.stage,
         zone: roleZone(role, v.stage),
+        bucket: bucketOf(role),
         latestIndex: i,
         verdict: v.status,
       })
@@ -668,6 +819,7 @@ function aggregateEntities(
         cur.task = task
         cur.stage = v.stage
         cur.zone = roleZone(role, v.stage)
+        cur.bucket = bucketOf(role)
       }
     }
   }
@@ -681,19 +833,29 @@ function aggregateEntities(
     ts: e.ts,
     stage: e.stage,
     zone: e.zone,
+    bucket: e.bucket,
+    emphasis: emphasisOf(e.stage, currentStep),
     status: entityStatus(e, pairStatus),
     idle: false,
   }))
 }
 
 /**
- * Same-plan handoff arrows (spec §4): within each planId, the ts-ascending
- * adjacent dispatch ENTITY pairs — keys are ROLE-based since plan
+ * Same-plan handoff arrows (spec §4 + plan 20260812-panel-f5-design-system
+ * Task 5 — design doc §2.2): within each planId, the ts-ascending adjacent
+ * dispatch ENTITY pairs — keys are ROLE-based since plan
  * 20260811-panel-f3-agent-general (`entityKeyOf`, the same classification the
  * entity cards use, so a handoff always connects two real cards; anonymous
  * rows fold into the `general` key). Plan-less dispatches cannot form a pair
  * → excluded; a self-pair (the same entity twice in a row) is skipped — a
  * card never hands off to itself.
+ *
+ * Task 5 简洁化 (user 2026-08-12 feedback #5, design doc §2.2): general-bucket
+ * endpoints are FILTERED (a handoff into/out of the anonymous catch-all is
+ * noise, not a meaningful transfer — the general card is a sink, not a flow
+ * participant), and each unordered entity-key PAIR emits AT MOST ONE edge —
+ * the latest direction (an A→B→A→B oscillation collapses to the final B
+ * handoff). Total function, never a throw.
  */
 function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
   const byPlan = new Map<string, { key: string; ts: number; idx: number }[]>()
@@ -706,37 +868,23 @@ function actualEdges(entries: readonly { view: FlowEventView }[]): AgentEdge[] {
     if (list === undefined) byPlan.set(v.planId, [{ key, ts: v.ts, idx }])
     else list.push({ key, ts: v.ts, idx })
   })
-  const edges: AgentEdge[] = []
+  // Unordered-pair dedupe map: the walk is ts-ascending, so the LAST write per
+  // pair carries the LATEST direction (design doc §2.2 — 同对实体键至多 1 条).
+  const pairEdges = new Map<string, AgentEdge>()
   for (const planId of Array.from(byPlan.keys()).sort()) {
     const rows = byPlan.get(planId)!
       .slice()
       .sort((a, b) => a.ts - b.ts || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) || a.idx - b.idx)
     for (let i = 0; i + 1 < rows.length; i++) {
       if (rows[i]!.key === rows[i + 1]!.key) continue // self-pair skip
-      edges.push({ kind: 'actual', source: rows[i]!.key, target: rows[i + 1]!.key, entityKey: null })
+      const a = rows[i]!.key
+      const b = rows[i + 1]!.key
+      if (a === GENERAL_BUCKET || b === GENERAL_BUCKET) continue // general endpoints filtered
+      const pairKey = a < b ? `${a}|${b}` : `${b}|${a}`
+      pairEdges.set(pairKey, { kind: 'actual', source: a, target: b, entityKey: null })
     }
   }
-  return edges
-}
-
-/**
- * The `next` arrow (spec §4): the LATEST running entity (max ts; tie →
- * smallest entity key) sits in a stage column → the next EXPECTED_ROLE_FLOW
- * column. No running entity / running entity without a stage (off-pipeline
- * role — on-demand or the general bucket) / already at the LAST column
- * (qa-gate, the pipeline terminal) → NO next edge (honest — never a guess).
- */
-function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZoneStage[]): AgentEdge[] {
-  let best: AgentEntityView | null = null
-  for (const e of entities) {
-    if (e.status !== 'running') continue
-    if (best === null || e.ts > best.ts || (e.ts === best.ts && e.key < best.key)) best = e
-  }
-  if (best === null || best.stage === null) return []
-  const fromId = `${best.stage.phase}:${best.stage.stage}`
-  const index = stages.findIndex((s) => s.id === fromId)
-  if (index === -1 || index + 1 >= stages.length) return []
-  return [{ kind: 'next', source: fromId, target: stages[index + 1]!.id, entityKey: best.key }]
+  return Array.from(pairEdges.values())
 }
 
 /**
@@ -753,11 +901,16 @@ function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZ
  * twin in that case too — the entity key space stays unique, so
  * `layoutAgents`' `cards.set` and the React `key` never collide/overwrite.
  */
-function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<string>): AgentEntityView[] {
+function idleEntities(
+  evidencedRoles: ReadonlySet<string>,
+  litKeys: ReadonlySet<string>,
+  currentStep: number | null,
+): AgentEntityView[] {
   const out: AgentEntityView[] = []
   for (const known of KNOWN_AGENTS) {
     if (evidencedRoles.has(known.id)) continue
     if (litKeys.has(known.id)) continue // F-001: the lit card occupies this roster slot
+    const stage = known.stage ?? null
     out.push({
       key: known.id,
       agent: null,
@@ -768,8 +921,10 @@ function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<
       idle: true,
       count: 0,
       ts: 0,
-      stage: known.stage ?? null,
+      stage,
       zone: idleZone(known),
+      bucket: bucketOf(known.id),
+      emphasis: emphasisOf(stage, currentStep),
     })
   }
   return out
@@ -784,7 +939,12 @@ function idleZone(known: KnownAgent): AgentZone {
 }
 
 /**
- * `projectAgents(source): AgentZoneView` — the agents zone (spec §4 + §6.2).
+ * `projectAgents(source, currentStep): AgentZoneView` — the agents zone (spec
+ * §4 + §6.2). `currentStep` is the ITERATION's current step (1-based into
+ * PHASE_IDS, null when inactive — already computed by `projectGraph`, spec
+ * §3): it drives each entity's `emphasis` tier (plan
+ * 20260812-panel-f5-design-system Task 4 — design doc §3.3; `null` → every
+ * entity `emphasis: null`, no override).
  * Total function: NEVER throws and NEVER fabricates values:
  *
  * - `state.agentFlow` null/unreadable → `degraded`: the FULL KNOWN_AGENTS
@@ -795,7 +955,9 @@ function idleZone(known: KnownAgent): AgentZone {
  *   role is pending);
  * - otherwise: entities aggregated from dispatch rows (with `idle: false`),
  *   statuses via the shared pairing walk, the un-evidenced KNOWN_AGENTS
- *   members appended as idle cards, expected/actual/next edges, and the
+ *   members appended as idle cards, actual/supervise edges (design doc §2.2 —
+ *   the `expected` skeleton and `next` animation edges are REMOVED by plan
+ *   20260812-panel-f5-design-system Task 5), and the
  *   executing (running entities — idle never counts) / pending
  *   (un-evidenced stage roles) counts.
  *
@@ -811,8 +973,14 @@ function idleZone(known: KnownAgent): AgentZone {
  * the projection ('empty' / 'settle-only' / null — see `AgentZoneNote`); the
  * UI consumes it directly and never infers settle-only from the entity list
  * (garbage rows would fake it).
+ *
+ * Phase-2 plan note (plan 20260812-panel-f5-design-system Task 8 — user
+ * 2026-08-12 feedback #2): `activePlanId` / `activePlanCount` ride the
+ * `state.plans[]` InProgress rows (catalog order) — the Phase 2 group label
+ * annotates the current plan; degraded/empty branches include the note too
+ * (it is a state.plans annotation, independent of the ledger evidence).
  */
-export function projectAgents(source: MstarEngineStatusSource | null): AgentZoneView {
+export function projectAgents(source: MstarEngineStatusSource | null, currentStep: number | null): AgentZoneView {
   const stages: AgentZoneStage[] = EXPECTED_ROLE_FLOW.map((s) => ({
     id: `${s.phase}:${s.stage}`,
     phase: s.phase,
@@ -826,12 +994,36 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
   const rawEvents = rawAgentFlow === null || rawAgentFlow === undefined || typeof rawAgentFlow !== 'object'
     ? null
     : rawAgentFlow.events
+
+  // The Phase-2 current-plan annotation (plan 20260812-panel-f5-design-system
+  // Task 8 — design doc §1.2, user 2026-08-12 feedback #2): the
+  // `state.plans[]` rows with status 'InProgress' (catalog order).
+  // `activePlanId` = the FIRST one; `activePlanCount` = all of them (the
+  // render shows `+N more` when several plans run in parallel — honest,
+  // never hides the rest behind the first id). Total function: state /
+  // plans missing or no InProgress row → null / 0 (never fabricated).
+  const rawPlans = state == null ? undefined : (state as { plans?: unknown }).plans
+  const activePlans = Array.isArray(rawPlans)
+    ? rawPlans
+        .map((p) => ({ id: str((p as { id?: unknown })?.id), status: str((p as { status?: unknown })?.status) }))
+        .filter((p) => p.status === 'InProgress' && p.id !== '')
+        .map((p) => p.id)
+    : []
+  const activePlanId = activePlans[0] ?? null
+  const activePlanCount = activePlans.length
+
   if (rawEvents === null || !Array.isArray(rawEvents)) {
     // No ledger evidence at all → every known agent is idle (spec §6.2);
-    // `note` is null — the `degraded` flag IS the note for this branch.
+    // `note` is null — the `degraded` flag IS the note for this branch. The
+    // supervise edge still exists (STATIC design knowledge), dimmed
+    // (evidenced false — no evidence to light it). The Phase-2 plan note
+    // still renders (it is a state.plans annotation, independent of the
+    // ledger evidence).
     return {
       stages, degraded: true, empty: false, note: null,
-      entities: idleEntities(new Set(), new Set()), edges: expectedEdges(stages), executing: 0, pending: 0,
+      entities: idleEntities(new Set(), new Set(), currentStep),
+      edges: superviseEdges(stages, []), executing: 0, pending: 0,
+      activePlanId, activePlanCount,
     }
   }
 
@@ -879,19 +1071,25 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     })),
   )
 
-  const lit = aggregateEntities(entries, pairStatus)
+  const lit = aggregateEntities(entries, pairStatus, currentStep)
   // F-001: the evidence-derived key set drives the idle-twin suppression —
   // a lit `general` key (from any non-roster dispatch) never coexists with the
   // idle roster `general` card.
   const litKeys = new Set(lit.map((e) => e.key))
-  const entities = [...lit, ...idleEntities(evidencedRoles, litKeys)]
-  const edges = [...expectedEdges(stages), ...actualEdges(entries), ...nextEdges(entities, stages)]
+  const entities = [...lit, ...idleEntities(evidencedRoles, litKeys, currentStep)]
+  // Task 5 line set (design doc §2.2): actual (filtered handoffs) + supervise
+  // (static design knowledge). `expected` skeleton / `next` animation edges
+  // are REMOVED — 简洁化 (user 2026-08-12 feedback #1/#5).
+  const edges = [
+    ...actualEdges(entries),
+    ...superviseEdges(stages, entries),
+  ]
 
   const executing = entities.filter((e) => e.status === 'running').length
   // Pending = expected roles of stages with NO dispatch evidence (spec §4).
   const pending = stages.reduce((sum, s) => sum + (evidenced.has(s.id) ? 0 : s.roles.length), 0)
 
-  return { stages, degraded: false, empty, note, entities, edges, executing, pending }
+  return { stages, degraded: false, empty, note, entities, edges, executing, pending, activePlanId, activePlanCount }
 }
 
 /* ---------------------------------- flow events projection (spec §3 — moved from `flow.*`) ---------------------------------- */

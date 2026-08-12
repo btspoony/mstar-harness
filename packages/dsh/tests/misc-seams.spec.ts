@@ -154,7 +154,7 @@ Body only.
 
 /**
  * Seed a fixture mstar-roles skill dir: SKILL.md (with a valid Load Order
- * section) + the 10 distinct references/<role>.md files the 13-row engine
+ * section) + the 11 distinct references/<role>.md files the 14-row engine
  * mapping resolves to, plus one sibling `mstar-*` skill for load-order
  * linting.
  * @param root - parent dir; the skill dir lands at `<root>/mstar-roles`.
@@ -183,6 +183,7 @@ description: Fixture role hub.
     'project-manager.md',
     'product-manager.md',
     'architect.md',
+    'code-reviewer.md',
     'fullstack-dev-shared.md',
     'frontend-dev.md',
     'qa-engineer.md',

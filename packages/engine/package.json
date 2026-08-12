@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/engine",
-  "version": "2.0.6",
+  "version": "2.1.1",
   "description": "Morning Star Harness Workflow Engine — deterministic workflow enforcement library (path, status, lease, dispatch, sdd, iteration, lint gates).",
   "license": "MIT",
   "repository": {

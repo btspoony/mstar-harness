@@ -171,46 +171,103 @@ only scroll body) and the **zone dashboard** (replacing the react-flow cyclic
 graph, plan `20260810-panel-canvas-zones`) lays out three zones — the
 **iteration zone** (Step 1–5 as 5 equal full-width unit blocks with pure-number
 badges + an `N/5` summary — no 步骤/Step wording, plan `20260811-panel-f2-quickfix`;
-active-highlight / inactive dimmed states, and the branch panel: iteration
+active-highlight / inactive dimmed states; the steps carry a FOUR-STATE machine —
+`current` / `next` / `done` / `idle` (plan `20260812-panel-f5-iteration-zone-fix`
+Task 1): every step BEFORE the current one projects `done`「已完成」(completed —
+a finished Step 1 must not read as idle while Step 2 is current), `next` is the
+single forward target, `idle` is schema-only — and the branch panel: iteration
 base / target / spec integration, rendered only while active; the expanded
-head is a LEFT-RIGHT SPLIT — branches (small left half) + steps (large right
-half) via `data-iteration-head-split`, stacking on narrow widths, and NO
+head is a LEFT-RIGHT SPLIT — branches (small left half, WIDTH-CAPPED —
+`flex: 0 1 260px` + `max-width: 280px`, never stretches with the container; the
+<860px column stack resets to content height) + steps (large right half,
+`flex: 1 1 0` absorbing the remaining width) via `data-iteration-head-split`,
+stacking on narrow widths, and NO
 branch panel when there is no active iteration; the current step follows the
 steering compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
 (iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge —
-plan `20260811-panel-f4-iteration-zone`), the **tasks zone** (6-column
+plan `20260811-panel-f4-iteration-zone`); the **iteration info section is
+SHARED by the tasks AND agents tabs** (plan `20260812-panel-f5-design-system`
+Task 8, user round-4 decision #4 — one `IterationInfoSection` component,
+both tabs render the same `view.iteration` block: summary + steps +
+branches); the **tasks zone** (6-column
 kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
 badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the four EXPECTED_ROLE_FLOW stage/phase
 columns — review-edit-chain → sdd-implement → qc-tri → qa-gate (the
 terminal stage; the former `sdd-task-review` stage is removed, its SDD L2
-reviewer moved off-pipeline) — plus the on-demand column for
-ops-engineer/prompt-engineer; there is NO general column — the single
-`general` bucket card renders at the bottom INSIDE the `sdd-implement`
-column (dashed separator + small in-bucket `general` label, idle
-placeholder preserved; plan `20260811-panel-f4-agent-view` F4.2), plan
-`20260811-panel-f3-agent-general`; `explore` is removed — no card, no
-column. The subagent **entity cards** aggregate **by role** from actual
+reviewer is now the pipeline role `code-reviewer`, v2.1.1) — a strict
+FOUR-column layout with NO standalone unknown column (plan
+`20260812-panel-f5-design-system` Task 5, user 2026-08-12 round-2 decision —
+the former rightmost unknown column of plan `20260812-panel-f5-agent-layout`
+is superseded): the `general` bucket sinks into an **unknown sub-partition
+at the bottom of the `qa-gate` column** (a `data-sub-bucket="unknown"`
+caption row 「unknown / 未匹配角色」 after the last qa-gate card, then the
+general cards; the standalone on-demand column was already removed in the
+agent-layout plan); `explore` is removed — no card, no column. The `sdd-implement`
+column splits into **sub-buckets** by the projected `entity.bucket` (never
+a render guess): the **implementor** partition above — flow roles in the
+stage's original order (fullstack-dev / fullstack-dev-2 / frontend-dev),
+then the on-demand roles (ops-engineer / prompt-engineer, carrying the
+**on-demand badge** — no standalone on-demand column) — and the
+**sdd-reviewer** partition below (code-reviewer, the SDD L2 task reviewer),
+with implementor / sdd-reviewer caption labels; `zone: 'on-demand'` entities
+live in the implementor partition, `zone: 'general'` entities render in the
+qa-gate column's bottom unknown sub-partition. The agent canvas is laid out
+in **TWO stacked Phase groups** (plan `20260812-panel-f5-design-system`
+Task 8, user 2026-08-12 round-4 decision): the **Phase 1 group ABOVE**
+(review-edit-chain — the sequential Review & Edit chain: product-manager →
+architect → writing-specialist) and the **Phase 2 group BELOW**
+(sdd-implement → qc-tri → qa-gate — the iterative plan loop), each with its
+group label row; the **Phase-2 label annotates the CURRENT PLAN** — the
+first InProgress `state.plans[]` row (`data-canvas-group-plan`, projected
+`activePlanId`; `+N more` when several plans run in parallel, muted
+「无进行中 plan」 when none). The subagent **entity cards** aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
 and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
 `scout`, anonymous `role === ''`) folds into the single `general` bucket
 entity (the card is role-titled — the role id; the agent session id / task
 tag ride the record line, never the title) — role chip / status point / ×N
 count; running entities carry the
-business glow-pulse highlight, un-evidenced stages render the dashed
+business glow-pulse highlight (on the ROUNDED `.card-body` — the card is a
+single rounded element, no square outline overlay, plan
+`20260812-panel-f5-design-system` Task 5), un-evidenced stages render the dashed
 "待执行" pending placeholder with their expected role chips, un-evidenced
-KNOWN_AGENTS members render dashed idle cards (the full 13-role roster is
+KNOWN_AGENTS members render dashed idle cards (the full 14-role roster is
 never hidden), and the header
-shows the `N executing · M pending` summary; flow arrows: dim expected
-skeleton arrows between consecutive stage columns (3 forward only — the
-former SDD loop back-edge `sdd-implement` ↔ `general` curved DOUBLE-ARROW
-below the column band is REMOVED, plan `20260811-panel-f4-agent-view`
-F4.2; evidence-driven "dynamic lines" are a later roadmap iteration) —
-small `→` in-column handoff
-arrows between same-column cards, and the ANIMATED **next** edge — a
-business dash-flow arrow (`@keyframes agent-dash-flow` in the zones css,
-killed by the root `prefers-reduced-motion` rule) from the latest running
-entity's stage column to the next constant-order column, drawn ONLY while a
-running entity exists — plan `20260810-panel-agent-flow-zone`) — with the
+shows the `N executing · M pending` summary; cards carry the projected
+**emphasis tier** (plan `20260812-panel-f5-design-system` Task 4, design
+doc §3): `emphasis: 'current' | 'next' | 'off' | null` — the iteration's
+current-phase roles render at **100%** chrome intensity, later-phase
+expected roles at **75%**, already-passed / stage-less (on-demand, general)
+roles at **45%**, and `null` (no iteration / unresolved transition) applies
+NO override — always a chrome **alpha mix** (`--mstar-canvas-emphasis-*`
+tokens; never a whole-card `opacity`, so the status point + running glow
+stay opaque). Settled entities get a **standalone GREEN DONE FRAME + green ✓**
+(plan `20260812-panel-f5-design-system` Task 8 — user round-4 feedback #1/#3:
+`data-agent-done="true"`, a full-strength success border + 1px ring on the
+rounded card body + the ✓ in the status point) **ONLY when `emphasis ≠ 'off'`**
+— an off-tier role (already-passed / stage-less on-demand + general) renders
+the muted dot instead and NEVER shows the completion marker. Edges — plan `20260812-panel-f5-design-system` Task 5 (design
+doc §2): the `expected` stage skeleton arrows AND the ANIMATED **next** edge
+(the former `@keyframes agent-dash-flow` dash-flow arrow of plan
+`20260810-panel-agent-flow-zone`) are **REMOVED** — flow order is implied
+by the fixed column order + column labels, the current position by the
+running card glow + status point — leaving TWO semantic kinds: the
+evidence-driven **`actual` handoff** edges (same-plan ts-adjacent dispatch
+entity-key pairs, `general` endpoints filtered, ≤1 per entity pair) drawn as
+**bezier `C` curves** anchored to card **ports** — 4 fixed edge-midpoint
+ports (north / south / east / west; static-invisible, hover-revealed as
+small dots) with the arrow tip pulled back to a **10px standoff** off the
+port — the arrow follows the line's local tangent at the anchor (**H1**),
+and no line's stroke or arrow crosses any text (**H2**: standoff + side-gap
+routing, design doc §2.0/§2.5/§2.6) — plus the **bidirectional supervise
+line** (plan `20260812-panel-f5-agent-layout` Task 1/2) — one static
+design-knowledge sub-bucket edge inside the `sdd-implement` column
+(implementor ↔ sdd-reviewer — the mstar-sdd mutual-supervision contract),
+now anchored at the **side-gap vertical anchor** (`x = card right edge +
+18px`, vertical bezier flow, arrows along the vertical tangent — design doc
+§2.5/§2.7); dim dashed by default, lit business SOLID when the projected
+`evidenced` flag is true — evidence-driven lighting, never a fabricated
+activation) — with the
 agent-flow event strip migrated into the **事件记录 (Event Log) tab** — a
 non-canvas log page (spec F1.5, plan `20260811-panel-event-log`): two
 partitions (**Agent 流转事件** / **违规记录**), every row an expandable
@@ -225,7 +282,13 @@ row list), falling back to two stacked 50/50 locked rows below 1200px (the
 **`AgentEventDock`** is REMOVED with the page (无双份日志, spec §5; the
 fixed footer bar — zone legend + gate summary + violations — died with the
 WorkflowCanvas zone dashboard in the tabs-shell plan; the footer that
-remains is the freshness marker). Below 1200px the zones stack vertically. Projection is the pure
+remains is the freshness marker). Empty branches (spec §2, plan
+`20260812-panel-f5-agent-layout` Task 3): waiting keeps the muted hint, and
+NO harness renders a **centered inactive-state card** — folder icon + 「No
+Morning Star harness detected」 title + hint copy (the detail panel stays
+inactive — no tabs, no sidebar — and activates automatically once a harness
+is detected; the `data-mstar-empty="no-harness"` anchor stays on the title,
+`data-mstar-graph` on the main container). Below 1200px the zones stack vertically. Projection is the pure
 `projectGraph(source)` function (schema constants strictly separated from
 catalog evidence; never throws; missing fields degrade to explicit
 empty/last-known states — muted empty states, never orange warn boxes)
@@ -244,10 +307,11 @@ emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
 the web loader executes plugin bundles as classic `<script>`s, where a
 literal `import.meta` is a parse-time SyntaxError (a zustand v4
 `import.meta.env` read is defined away at build; see the iteration
-install-verification guide §6). Bundle size at this plan's wrap-up: **127,068 B
-raw / 25,562 B gzip** (re-measure per the iteration install-verification
+install-verification guide §6). Bundle size at this plan's wrap-up: **145,159 B
+raw / 29,460 B gzip** (re-measure per the iteration install-verification
 guide — the bundle shrank to ~85 KB when react-flow was removed and grew
-back with the agent-execution zone's entity rendering).
+back with the agent-execution zone's entity rendering, then again with the
+F5 emphasis tiers + edge rework).
 
 Install / verify (the client half rides the same bundle-row install as the
 server half):
@@ -272,7 +336,9 @@ sha1), and the browser handoff materializes the plugin entry (`inject` +
 `status: active` (Phase 1 in flight — catalog `compassStatus` field), carrying
 NO PASS/FAIL badge (Phase 1 has no gate verdict); Step 5 (merge-ready) can
 never be the **current** step —
-the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
+the engine phase gate only evaluates Phase 2→3→4 (merge-ready is never a gate
+transition); it renders `next` only while Step 4 (pr-delivery) is current, idle
+otherwise;
 the current step follows the TTL-refreshed `compassStatus` — up to one catalog
 interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
 documented staleness, never a wrong verdict);
@@ -314,6 +380,8 @@ The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepse
 
 Every composed step carries one `mstar-engine-status` catalog user message (the `<mstar_engine_status>` watermark block — see the Engine-status catalog section). Gate decisions add: the dispatch veto as the registry-materialized `PreToolDecision { kind: 'deny', reason }` error; the status gate as the `mstar/status-gate` advisory (warn pass, hard-mode repair escape, or degraded allow); the dispatch gate as the `mstar/dispatch-gate` advisory (warn pass or degraded); the skill lint gate as the `mstar/skill-lint` advisory (warn pass, hard-mode repair escape, or degraded allow). Every model-visible row is reconstructable from the session log (catalog-form sources + advisory events).
 
+**Leaf delivery discipline (PM 2026-08-12):** leaf subagents hand back their Completion Report in the **final (closing) message**, not via the `report` tool — the dsh tool-subagent-report default `reportDelivery: quiet` routes a report into the parent's next-step queue, where it strands when the parent's turn has ended (no step boundary follows). The closing message is the guaranteed delivery channel; reserve `report` for mid-turn findings that change what the parent should do next (SSOT: `skills/mstar-host/references/dsh.md` → PM dispatch).
+
 #### Token effect
 
 The catalog appends one fixed, stable user message per composed step (small constant block — no growth with session length beyond one row per step; per-session digest dedup is a P3 item). Veto and advisory text exists only when a gate fires.
@@ -328,7 +396,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **Anti-recursion binding is Config-declared** — dsh exposes no per-agent role on the tool-execution context, so `dispatchBinding` declares one deployment-wide role; an Assignment with a different `Execute as` cannot be caught as self-recursion, and multi-role dispatchers need per-instance plugins.
 - **Lease gate diverges from opencode by design** — opencode's `beforeDispatch` runs no lease checks; the dsh lease gate is additive (`lease.dispatch.*` codes) and fires only for writable SDD/InProgress dispatches, so parity covers the field set, not the lease surface.
 - **Shared engine composition adopted** — the dispatch gate core is the engine's single `composeDispatchGate` (opencode/omp/CLI parity, so field/branch/anti-recursion violation codes are identical by construction), and the compass frontmatter parser is the engine's shared `parseCompassFrontmatter` (no local fork — nothing left to drift). Both run over the dsh header-region slice; the lease + worktree L1/L2 checks stay dsh-side additions on top.
-- **Engine single-version pin** — `@mstar-harness/engine` is an exact `2.0.6` devDependency bundled into `dist/` (never a runtime dependency); `readHarnessVersion()` reads the dsh package manifest next to the bundle, which stays `2.0.6` by the single-version invariant.
+- **Engine single-version pin** — `@mstar-harness/engine` is an exact `2.1.1` devDependency bundled into `dist/` (never a runtime dependency); `readHarnessVersion()` reads the dsh package manifest next to the bundle — `2.1.1`, equal to the pinned engine by the single-version invariant.
 - **Schemastery empty-array materialization** — an omitted optional ARRAY Config key materializes as `[]`; the dispatch keys preserve omission via `.default(undefined)`, and any future optional array key must do the same.
 - **Payload boundary** — the dispatch gate validates the delegation payload (Assignment text), not the child's runtime behavior; post-publish observation via `subagent/start` remains an option if model-visible child activity needs surfacing.
 - **Status gate is content-blind by seam design** — the `fs/write-intent`/`fs/edit-intent` waterfall carries only `(target, actor)`, never the incoming content, so the write that FIRST corrupts a valid `status.json` passes in BOTH modes (the gate validates the pre-write document only). Hard mode therefore never vetoes status writes: an already-invalid document is allowed as a **repair escape** (error-level advisory with `hard: true, repair: true`) so the repairing write can land. Recovery path: repair the document in place (the gate allows it) or delete `status.json` and let the harness re-create it; monitor hard-mode deployments for `repair: true` advisories.

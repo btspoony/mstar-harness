@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/cli",
-  "version": "2.0.6",
+  "version": "2.1.1",
   "description": "Morning Star harness CLI — installer bootstrap + mstar workflow verbs (path/status/lease/sdd/iteration/dispatch/worktree/lint/design-md/audit/compound/host/skill).",
   "license": "MIT",
   "repository": {
@@ -34,6 +34,6 @@
     "access": "public"
   },
   "devDependencies": {
-    "@mstar-harness/engine": "2.0.6"
+    "@mstar-harness/engine": "2.1.1"
   }
 }

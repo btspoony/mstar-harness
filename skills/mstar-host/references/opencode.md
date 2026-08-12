@@ -32,6 +32,8 @@ PM workflow: finalize Assignment → **call task tool** with **subagent** + gene
 
 **SDD sticky implementer:** if the task tool exposes **resume** / agent id, follow **`mstar-sdd/references/sticky-implementer-session.md`** and the active host reference. If resume is **not** available, use **micro-batch** (2–3 tasks, one invoke) or **`SDD implementer session: fresh`** per task — do not assume sticky without host support.
 
+**SDD task reviewer:** each task review is a **new** task tool call with `subagent: "code-reviewer"` (OpenCode L2 review; not qc-specialist*) when that agent is configured, else generic built-in fallback + C5b — no sticky resume for reviewers (fresh per task).
+
 ## Role-mention hygiene (OpenCode)
 
 OpenCode may **auto-append** system lines when prompt text stacks multiple agent-id **prefix mentions**. Typical boilerplate (host-generated — **not** harness Assignment):
