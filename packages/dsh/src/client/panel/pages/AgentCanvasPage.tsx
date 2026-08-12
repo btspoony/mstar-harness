@@ -137,7 +137,8 @@ export interface CanvasLayout {
   cards: ReadonlyMap<string, CanvasBox>
   /** Sub-bucket geometry per column id (plan 20260812-panel-f5-agent-layout
    * Task 2): the `sdd-implement` column's implementor/reviewer caption seats
-   * + card bands — the supervise line anchors to the band midpoints.
+   * + card bands — the supervise line anchors to the band edges (the
+   * inter-partition gap; QC W-001).
    * Columns without sub-buckets are absent from the map. */
   subBuckets: ReadonlyMap<string, SubBucketGeometry>
 }
@@ -186,7 +187,8 @@ const GENERAL_SINK_STAGE = 'sdd-implement'
 
 /** One sub-bucket partition inside the `sdd-implement` column (plan
  * 20260812-panel-f5-agent-layout Task 2): the caption seat + the cards'
- * band — the supervise line anchors to the band's vertical midpoint. */
+ * band — the supervise line anchors to the band's edge (implementor:
+ * bottom edge; reviewer: top edge — the inter-partition gap; QC W-001). */
 export interface SubBucketPartition {
   /** The caption row's top-left seat (canvas coordinates; width = the card
    * row width so the dashed rule fills the row). */
@@ -274,7 +276,8 @@ export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
       // the implementor partition above — flow roles in the stage's original
       // EXPECTED_ROLE_FLOW order, then the on-demand roles in roster order —
       // the reviewer partition (code-reviewer) below. The bands (each
-      // bucket's card y-extent) become the supervise-line anchors.
+      // bucket's card y-extent) become the supervise-line anchor edges —
+      // the line spans the inter-partition gap (QC W-001).
       const implementor = list.filter((e) => e.bucket === 'implementor')
       const reviewer = list.filter((e) => e.bucket === 'reviewer')
       const rest = list.filter((e) => e.bucket !== 'implementor' && e.bucket !== 'reviewer')
@@ -361,9 +364,14 @@ export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
 
 /**
  * Resolve one supervise anchor `<col-id>:<bucket>` to the sub-bucket band
- * midpoint point (plan 20260812-panel-f5-agent-layout Task 2): the column id
- * is the anchor prefix BEFORE the last `:` (column ids themselves contain
- * `:`, so the bucket suffix is the LAST segment); the band is the
+ * EDGE point (plan 20260812-panel-f5-agent-layout Task 2 + QC W-001): the
+ * column id is the anchor prefix BEFORE the last `:` (column ids themselves
+ * contain `:`, so the bucket suffix is the LAST segment); the implementor
+ * anchor lands on its band's BOTTOM edge and the reviewer anchor on its
+ * band's TOP edge — the inter-partition gap (the supervise line spans the
+ * gap, so both outward auto-start-reverse arrowheads render clear of the
+ * opaque cards; a single gap-midpoint anchor would collapse the line to
+ * zero length, which cannot draw visible markers). The band is the
  * deterministic sub-bucket geometry from `layoutAgents` (idle cards are in
  * the layout, so the band is computable whenever the partition has any
  * card). Null when the column / sub-bucket geometry / band is missing —
@@ -382,15 +390,22 @@ function superviseAnchor(anchor: string, layout: CanvasLayout): { x: number; y: 
   const partition = bucket === 'implementor' ? geometry.implementor : geometry.reviewer
   const band = partition.band
   if (band === null) return null
-  return { x: column.x + column.w / 2, y: band.y + band.h / 2 }
+  // Inter-partition gap anchor (QC W-001): the endpoint sits on the band
+  // EDGE — implementor at its bottom edge, reviewer at its top edge — so
+  // the supervise line spans the ~30 px gap (ROW_GAP + the reviewer caption
+  // row + SUB_GAP) and both arrowheads stay visible. x = the column center.
+  const y = bucket === 'implementor' ? band.y + band.h : band.y
+  return { x: column.x + column.w / 2, y }
 }
 
 /** One edge's SVG line geometry; null when an anchor is missing (total function). */
 function edgeLine(edge: AgentEdge, layout: CanvasLayout): { x1: number; y1: number; x2: number; y2: number } | null {
   if (edge.kind === 'supervise') {
-    // The bidirectional sub-bucket supervision line (plan f5 Task 2):
-    // implementor ↔ sdd-reviewer — a vertical line between the two bands'
-    // vertical midpoints (both bands live in the same column).
+    // The bidirectional sub-bucket supervision line (plan f5 Task 2, QC
+    // W-001): implementor ↔ sdd-reviewer — a vertical line spanning the
+    // inter-partition gap (implementor band bottom → reviewer band top, both
+    // bands in the same column), so the outward double-arrow markers stay
+    // visible in the gap instead of landing behind the opaque cards.
     const source = superviseAnchor(edge.source, layout)
     const target = superviseAnchor(edge.target, layout)
     if (source === null || target === null) return null

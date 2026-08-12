@@ -14,9 +14,11 @@
  * - the general bucket in the rightmost unknown column (the F4.2 sink inside
  *   the sdd-implement column is superseded);
  * - the bidirectional supervise line (`data-agent-edge-supervise`): static
- *   presence, band-midpoint anchors (edgeLine), dim dashed without evidence,
- *   lit business with it (`data-agent-edge-supervise-lit` — the projected
- *   `evidenced` flag, never a render-side fabrication);
+ *   presence, band-EDGE anchors in the inter-partition gap (edgeLine — QC
+ *   W-001: implementor band bottom → reviewer band top, so the outward
+ *   arrowheads render clear of the opaque cards), dim dashed without
+ *   evidence, lit business with it (`data-agent-edge-supervise-lit` — the
+ *   projected `evidenced` flag, never a render-side fabrication);
  * - the Legend / locale sync (sub-bucket / supervise / unknown entries).
  *
  * The projection layer (bucket fields, supervise edge data, zones) is
@@ -239,7 +241,7 @@ describe('agent canvas layout — supervise line (plan 20260812-panel-f5-agent-l
     expect(html).not.toContain('data-agent-edge-supervise-lit')
   })
 
-  it('anchors to the sub-bucket band midpoints (edgeLine contract: <col-id>:<bucket> → band midpoint)', () => {
+  it('anchors to the inter-partition gap, not the card centers (edgeLine contract: <col-id>:<bucket> → band edge)', () => {
     const view = projectGraph(baseSource).agents
     const layout = layoutAgents(view)
     const sdd = layout.columns.find((c) => c.id === 'autonomous-execute:sdd-implement')!
@@ -247,10 +249,18 @@ describe('agent canvas layout — supervise line (plan 20260812-panel-f5-agent-l
     const html = agentsHtml(baseSource)
     const line = html.match(/<line[^>]*data-agent-edge-supervise="[^"]*"[^>]*>/)![0]
     const cx = sdd.x + sdd.w / 2
+    // QC W-001: the supervise line anchors to the sub-bucket band EDGES —
+    // implementor bottom edge → reviewer top edge — the inter-partition gap
+    // (NOT the card centers / band midpoints the opaque cards occlude).
+    // Both endpoints stay on the column center.
     expect(Number(lineAttr(line, 'x1'))).toBe(cx)
     expect(Number(lineAttr(line, 'x2'))).toBe(cx)
-    expect(Number(lineAttr(line, 'y1'))).toBe(geometry.implementor.band!.y + geometry.implementor.band!.h / 2)
-    expect(Number(lineAttr(line, 'y2'))).toBe(geometry.reviewer.band!.y + geometry.reviewer.band!.h / 2)
+    expect(Number(lineAttr(line, 'y1'))).toBe(geometry.implementor.band!.y + geometry.implementor.band!.h)
+    expect(Number(lineAttr(line, 'y2'))).toBe(geometry.reviewer.band!.y)
+    // The line's vertical center is the inter-partition gap midpoint (the
+    // ~30 px row between the two bands) — it never crosses the card bodies.
+    const gapMid = (geometry.implementor.band!.y + geometry.implementor.band!.h + geometry.reviewer.band!.y) / 2
+    expect((Number(lineAttr(line, 'y1')) + Number(lineAttr(line, 'y2'))) / 2).toBe(gapMid)
     // Bidirectional double arrow: marker-start + marker-end (auto-start-reverse).
     expect(lineAttr(line, 'marker-start')).toBe('url(#canvas-arrow-supervise)')
     expect(lineAttr(line, 'marker-end')).toBe('url(#canvas-arrow-supervise)')
