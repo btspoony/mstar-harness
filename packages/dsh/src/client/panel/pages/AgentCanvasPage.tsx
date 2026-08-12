@@ -57,7 +57,12 @@
  * supervise side-gap anchors (card right edge + 18px); the arrow tip sits
  * at the STANDOFF point 10px off the target port (arrow along the endpoint
  * tangent — H1) and no line crosses text (H2: standoff + side-gap routing
- * for caption-crossing same-column flows + column-gap crossings).
+ * for caption-crossing same-column flows + column-gap crossings). Col-skip
+ * cross-column edges (plan QC tri R1 — a source/target pair whose columns
+ * are separated by an intermediate column, e.g. writing-specialist →
+ * qc-specialist) reroute via a multi-`L` side-gap DETOUR below the
+ * intermediate card band instead of a direct bezier through the card bodies
+ * (H1).
  *
  * Layout (plan 20260812-panel-f5-agent-layout Task 2 + plan
  * 20260812-panel-f5-design-system Task 5 + Task 8 — the F5 rework; plan
@@ -661,26 +666,34 @@ function captionRows(layout: CanvasLayout, columnId: string): { x: number; y: nu
   return rows
 }
 
-/** The deterministic label seats of the whole canvas (design doc §2.0 H2 —
- * 线不叠任何文字): the Phase group label rows (plan
- * 20260812-panel-f5-design-system Task 8 + plan
- * 20260813-panel-agent-canvas-legend-layout Task 2 — the left-right group
- * labels) + every column label row + the sub-bucket captions + the unknown
- * caption. Full-row approximations (the same seats the H2 geometry test
- * asserts) — deterministic, independent of rendered text width. */
-function labelSeats(layout: CanvasLayout): { x: number; y: number; w: number; h: number }[] {
-  const seats: { x: number; y: number; w: number; h: number }[] = []
-  for (const group of layout.groups) seats.push(group.label)
-  for (const col of layout.columns) seats.push({ x: col.x, y: col.y, w: col.w, h: LABEL_H })
-  for (const geometry of layout.subBuckets.values()) {
-    for (const p of [geometry.implementor, geometry.reviewer]) {
-      if (p.band !== null) seats.push({ x: p.label.x, y: p.label.y, w: p.label.w, h: SUB_LABEL_H })
-    }
+/** The card boxes in the columns STRICTLY BETWEEN the source and target
+ * columns of a cross-column edge (design doc §2.0 绕行策略 ③ — plan QC tri
+ * R1): the intermediate columns whose CARD BODIES a direct horizontal bezier
+ * would pierce. Empty when the columns are ADJACENT — the direct line then
+ * spans only the inter-column gap + standoffs and is legitimately clear. */
+function intermediateCardBoxes(layout: CanvasLayout, srcCol: number, tgtCol: number): CanvasBox[] {
+  const lo = Math.min(srcCol, tgtCol)
+  const hi = Math.max(srcCol, tgtCol)
+  const boxes: CanvasBox[] = []
+  for (const box of layout.cards.values()) {
+    const col = columnIndexOfBox(layout, box)
+    if (col > lo && col < hi) boxes.push(box)
   }
-  if (layout.unknown !== null && layout.unknown.band !== null) {
-    seats.push({ x: layout.unknown.label.x, y: layout.unknown.label.y, w: layout.unknown.label.w, h: SUB_LABEL_H })
-  }
-  return seats
+  return boxes
+}
+
+/** Whether a DIRECT horizontal bezier's bbox intersects ANY CARD BODY other
+ * than the source/target cards (design doc §2.0 H1 — 绕行策略 ③, plan QC tri
+ * R1): with the LEFT-RIGHT group layout a COL-SKIP cross-column edge (e.g.
+ * writing-specialist → qc-specialist — a real docs-only / inline / QA-gate
+ * ledger chain) would run its straight line THROUGH the intermediate
+ * columns' card bodies. The pre-R1 guard only checked TEXT seats (group /
+ * column labels + captions) and never fired for these — the top-anchored
+ * label rows sit above the card-center flow band, so a card body was the
+ * only thing in the line's way. This card-body guard is the reachable H1
+ * check: when it fires, the edge reroutes via the side-gap detour below. */
+function crossesCardBody(g: { x: number; y: number; w: number; h: number }, layout: CanvasLayout, srcCol: number, tgtCol: number): boolean {
+  return intermediateCardBoxes(layout, srcCol, tgtCol).some((card) => boxOverlaps(g, card))
 }
 
 /** The convex-hull bbox of a HORIZONTAL bezier (design doc §2.6): controls
@@ -702,17 +715,51 @@ function boxOverlaps(a: { x: number; y: number; w: number; h: number }, b: { x: 
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 }
 
-/** Whether a DIRECT horizontal bezier's bbox intersects ANY label seat
- * (design doc §2.0 H2 — 绕行策略 ②): with the LEFT-RIGHT group layout (plan
- * 20260813-panel-agent-canvas-legend-layout Task 2) a Phase 1 ↔ Phase 2
- * handoff is a normal forward horizontal flow at the card-center y band,
- * clear of the top-anchored label rows — this guard now only reroutes a
- * horizontal bezier whose bbox still hits a label row (e.g. a same-row
- * handoff crossing a sub-bucket caption) via the source's LEFT side gap
- * vertical route (the same side-gap route as the caption-crossing same-column
- * flows — design doc §2.0/§2.5). Defensive H2, retained. */
-function crossesLabelSeat(g: { x: number; y: number; w: number; h: number }, layout: CanvasLayout): boolean {
-  return labelSeats(layout).some((seat) => boxOverlaps(g, seat))
+/** The SIDE-GAP DETOUR for a col-skip cross-column edge (design doc §2.0
+ * 绕行策略 ③ — plan QC tri R1): a multi-segment polyline that clears the
+ * intermediate columns' WHOLE card band —
+ *
+ *   source port (east/west)
+ *     → the source column's side gap (card edge ∓ SIDE_GAP — direction-aware)
+ *     → VERTICALLY down to BELOW the intermediate band bottom (+ SIDE_GAP)
+ *     → HORIZONTALLY across to the target column's side gap
+ *     → VERTICALLY back up to the target port height
+ *     → HORIZONTALLY into the target STANDOFF point (the FINAL segment's
+ *       tangent — the marker-end arrow rides it into the target, H1).
+ *
+ * The route always goes DOWN: the space ABOVE the top-aligned cards is
+ * crowded with the group/column label rows + sub-bucket captions (H2), while
+ * the area below the tallest intermediate column is empty — and
+ * `detourY = bandBottom + SIDE_GAP ≤ canvasBottom + SIDE_GAP < layout.height`
+ * (SIDE_GAP 18 < PAD_Y 24), so the line never leaves the SVG. The vertical
+ * runs hang in the inter-column gaps (card edge ± SIDE_GAP) and the
+ * horizontal run sits below every intermediate card, so no segment crosses
+ * any card body (H1) or text seat (H2). `EdgeGeometry.d` is a multi-command
+ * path — the render passes `d` through verbatim and `marker-end
+ * orient="auto"` follows the final segment, so the arrow still points into
+ * the target. */
+function sideGapDetour(
+  sx: number,
+  sy: number,
+  endX: number,
+  endY: number,
+  sourceBox: CanvasBox,
+  targetBox: CanvasBox,
+  layout: CanvasLayout,
+  srcCol: number,
+  tgtCol: number,
+): EdgeGeometry {
+  const forward = srcCol < tgtCol
+  const band = intermediateCardBoxes(layout, srcCol, tgtCol)
+  const bandBottom = band.reduce((m, c) => Math.max(m, c.y + c.h), 0)
+  const detourY = bandBottom + SIDE_GAP
+  // Direction-aware side gaps: forward (source EAST) exits into the source
+  // column's RIGHT gap and enters the target WEST from its LEFT gap; reverse
+  // (source WEST) mirrors — LEFT gap out, RIGHT gap in.
+  const sourceGapX = forward ? sourceBox.x + sourceBox.w + SIDE_GAP : sourceBox.x - SIDE_GAP
+  const targetGapX = forward ? targetBox.x - SIDE_GAP : targetBox.x + targetBox.w + SIDE_GAP
+  const d = `M ${sx} ${sy} L ${sourceGapX} ${sy} L ${sourceGapX} ${detourY} L ${targetGapX} ${detourY} L ${targetGapX} ${endY} L ${endX} ${endY}`
+  return { d, x1: sx, y1: sy, x2: endX, y2: endY }
 }
 
 /** The standoff for a same-column vertical flow (design doc §2.5): the 10px
@@ -736,7 +783,11 @@ function sameColumnStandoff(gap: number): number {
  * point — the arrow tip lands there, 10px off the card border H1). Null
  * when an anchor is missing (total function). */
 export interface EdgeGeometry {
-  /** The SVG path `d` (single `C` cubic-bezier command). */
+  /** The SVG path `d` — a single `C` cubic-bezier command for the standard
+   * curves, or the multi-command `M … L … L … L … L … L …` side-gap detour
+   * polyline for col-skip cross-column edges (plan QC tri R1). The render
+   * passes `d` through verbatim; `marker-end orient="auto"` follows the
+   * FINAL segment, so the arrow always rides the endpoint tangent (H1). */
   d: string
   x1: number
   y1: number
@@ -787,9 +838,9 @@ function verticalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeom
  * the target's bottom edge pointing UP into it. The old code put the tip
  * above the target (pointing AWAY) and the center-x line ran through both
  * card bodies (H1/H2 violations). Forward (source above) keeps source SOUTH
- * → target NORTH. The same direction-aware rule applies to the defensive
- * side-gap reroute of a reverse Phase 2 → Phase 1 handoff (should
- * `crossesLabelSeat` ever fire for one).
+ * → target NORTH. The reverse side-gap detour below is direction-aware by
+ * construction (it enters the target from its RIGHT side gap and lands 10px
+ * off the EAST edge, tip pointing LEFT into the card).
  *
  * Same-column flows whose center-x vertical line would cross a sub-bucket
  * CAPTION row (the implementor↔reviewer flow crosses the "sdd-reviewer"
@@ -804,11 +855,14 @@ function verticalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeom
  * fullstack-dev — a real same-plan Review&Edit→implement transfer) is a
  * normal FORWARD horizontal bezier (source east → target west) — the groups
  * sit side-by-side at one top-aligned y band, so no label row lies between
- * the cards. `crossesLabelSeat` stays as a DEFENSIVE H2 guard: if a
- * horizontal bbox still intersects any label seat (e.g. a caption row), the
- * flow reroutes via the source's LEFT side gap vertical route at `card left
- * edge − SIDE_GAP`, keeping the direction-aware endpoint (reverse Phase 2 →
- * Phase 1 handoffs land below the target's south edge).
+ * the cards. The CARD-AWARE guard (plan QC tri R1 — 绕行策略 ③): a
+ * cross-column edge whose columns SKIP an intermediate column (e.g.
+ * writing-specialist → qc-specialist — a real docs-only / inline / QA-gate
+ * ledger chain) would run its direct horizontal bezier THROUGH the
+ * intermediate column's card bodies; when the direct bbox intersects ANY
+ * card box other than the source/target cards, the edge reroutes via the
+ * side-gap DETOUR (see `sideGapDetour`) — a polyline below the intermediate
+ * band, clear of every card (H1) and text seat (H2).
  */
 export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | null {
   if (edge.kind === 'supervise') {
@@ -828,42 +882,34 @@ export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | 
   if (sourceBox === undefined || targetBox === undefined) return null
   const srcCol = columnIndexOfBox(layout, sourceBox)
   const tgtCol = columnIndexOfBox(layout, targetBox)
-  // The caption-crossing side-gap vertical reroute (design doc §2.0 绕行策略
-  // ② / §2.5): hangs at `source card left edge − SIDE_GAP` — clear of every
-  // card and label row (H2). DIRECTION-AWARE endpoints (QC W-001): forward
-  // (source above target) hangs source SOUTH → target NORTH; reverse (source
-  // below — the rework cycle) hangs source NORTH → target SOUTH — the arrow
-  // tip ALWAYS lands on the target's NEAR side at `standoff` along the
-  // vertical tangent (H1) and the line never crosses a card body. Shared by
-  // the same-column caption-crossing branch and the defensive
-  // `crossesLabelSeat` reroute below (H2).
-  const sideGapVertical = (): EdgeGeometry => {
-    const sideX = sourceBox.x - SIDE_GAP
-    const forward = sourceBox.y + sourceBox.h <= targetBox.y
-    const gap = forward ? targetBox.y - (sourceBox.y + sourceBox.h) : sourceBox.y - (targetBox.y + targetBox.h)
-    const standoff = sameColumnStandoff(gap)
-    const startY = forward ? sourceBox.y + sourceBox.h : sourceBox.y
-    const endY = forward ? targetBox.y - standoff : targetBox.y + targetBox.h + standoff
-    return verticalCurve(sideX, startY, sideX, endY)
-  }
   if (srcCol < tgtCol) {
     // Forward: source east → target west; the path ends 10px LEFT of the
-    // west edge (outside the card) with a horizontal tangent (H1). A direct
-    // bezier whose bbox still crosses any label seat (defensive H2 — the
-    // left-right layout keeps the top label rows clear of the card-center
-    // flow band) reroutes via the side gap.
+    // west edge (outside the card) with a horizontal tangent (H1). The
+    // CARD-AWARE guard (plan QC tri R1): a direct bezier whose bbox hits ANY
+    // card body in the INTERMEDIATE columns (a col-skip edge — e.g.
+    // writing-specialist → qc-specialist — would otherwise run its straight
+    // line through the sdd-implement cards) reroutes via the side-gap
+    // detour. Adjacent columns have no intermediate cards → direct.
     const s = portPoint(sourceBox, 'east')
     const t = portPoint(targetBox, 'west')
     const endX = t.x - STANDOFF
-    if (crossesLabelSeat(horizontalBBox(s.x, s.y, endX, t.y), layout)) return sideGapVertical()
+    if (crossesCardBody(horizontalBBox(s.x, s.y, endX, t.y), layout, srcCol, tgtCol)) {
+      return sideGapDetour(s.x, s.y, endX, t.y, sourceBox, targetBox, layout, srcCol, tgtCol)
+    }
     return horizontalCurve(s.x, s.y, endX, t.y)
   }
   if (srcCol > tgtCol) {
     // Reverse: source west → target east; ends 10px RIGHT of the east edge.
+    // The same card-aware guard + side-gap detour (mirrored: the source
+    // exits into its LEFT gap, the final segment approaches the target EAST
+    // from its RIGHT gap — the arrow rides the horizontal final segment
+    // pointing LEFT into the target, H1).
     const s = portPoint(sourceBox, 'west')
     const t = portPoint(targetBox, 'east')
     const endX = t.x + STANDOFF
-    if (crossesLabelSeat(horizontalBBox(s.x, s.y, endX, t.y), layout)) return sideGapVertical()
+    if (crossesCardBody(horizontalBBox(s.x, s.y, endX, t.y), layout, srcCol, tgtCol)) {
+      return sideGapDetour(s.x, s.y, endX, t.y, sourceBox, targetBox, layout, srcCol, tgtCol)
+    }
     return horizontalCurve(s.x, s.y, endX, t.y)
   }
   // Same column: the vertical flow (design doc §2.5). DIRECTION-AWARE

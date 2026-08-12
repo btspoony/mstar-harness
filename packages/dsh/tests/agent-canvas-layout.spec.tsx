@@ -29,7 +29,11 @@
  *   layout entries are gone);
  * - the Phase 1/2 LEFT-RIGHT layout (plan 20260813-panel-agent-canvas-legend-layout
  *   Task 2: Phase 1 leftmost, Phase 2 right, top-aligned — all columns share
- *   one colY; a Phase 1 → Phase 2 handoff is a direct horizontal bezier).
+ *   one colY; a Phase 1 → Phase 2 handoff is a direct horizontal bezier);
+ * - the col-skip side-gap DETOUR (plan QC tri R1: a cross-column edge whose
+ *   columns SKIP an intermediate column — e.g. writing-specialist →
+ *   qc-specialist — reroutes as a multi-`L` polyline below the intermediate
+ *   card band instead of a direct bezier through the card bodies, H1).
  *
  * The projection layer (bucket fields, supervise edge data, zones, the
  * general-endpoint edge filter) is covered by client-graph-projection.spec.ts;
@@ -226,6 +230,49 @@ function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: num
 function curveBBox(g: { x1: number; y1: number; x2: number; y2: number; cx1: number; cy1: number; cx2: number; cy2: number }) {
   const xs = [g.x1, g.cx1, g.cx2, g.x2]
   const ys = [g.y1, g.cy1, g.cy2, g.y2]
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+/** Split a path `d` into its geometric segments (design doc §2.6 — the d
+ * strings this module generates are either a single `C` bezier or the
+ * side-gap detour polyline of `L` segments, plan QC tri R1). Each segment
+ * carries its endpoints + (for a `C`) its control points. */
+function pathSegments(d: string): { x1: number; y1: number; x2: number; y2: number; cx1: number | null; cy1: number | null; cx2: number | null; cy2: number | null }[] {
+  const segs: { x1: number; y1: number; x2: number; y2: number; cx1: number | null; cy1: number | null; cx2: number | null; cy2: number | null }[] = []
+  const tokens = [...d.matchAll(/([MLC])([^MLC]*)/g)]
+  let cur: { x: number; y: number } | null = null
+  for (const t of tokens) {
+    const cmd = t[1]!
+    const nums = [...t[2]!.matchAll(/-?\d+(?:\.\d+)?/g)].map((n) => Number(n[0]!))
+    if (cmd === 'M') cur = { x: nums[0]!, y: nums[1]! }
+    else if (cmd === 'L' && cur !== null) {
+      const p = { x: nums[0]!, y: nums[1]! }
+      segs.push({ x1: cur.x, y1: cur.y, x2: p.x, y2: p.y, cx1: null, cy1: null, cx2: null, cy2: null })
+      cur = p
+    } else if (cmd === 'C' && cur !== null) {
+      const c1 = { x: nums[0]!, y: nums[1]! }
+      const c2 = { x: nums[2]!, y: nums[3]! }
+      const p = { x: nums[4]!, y: nums[5]! }
+      segs.push({ x1: cur.x, y1: cur.y, x2: p.x, y2: p.y, cx1: c1.x, cy1: c1.y, cx2: c2.x, cy2: c2.y })
+      cur = p
+    }
+  }
+  return segs
+}
+
+/** The conservative bounding box of ONE path segment (H1/H2 stroke checks —
+ * plan QC tri R1): a `C` bezier's control-point hull (the curve lies inside
+ * it); an `L` line's endpoint box (EXACT for the axis-aligned detour
+ * segments — the whole-path bbox of a detour necessarily ENCLOSES the
+ * intermediate band it bypasses, so the invariant is asserted per segment,
+ * never on the whole-path hull). */
+function segmentBox(s: { x1: number; y1: number; x2: number; y2: number; cx1: number | null; cy1: number | null; cx2: number | null; cy2: number | null }): { x: number; y: number; w: number; h: number } {
+  const xs = [s.x1, s.x2, ...(s.cx1 === null ? [] : [s.cx1, s.cx2!])]
+  const ys = [s.y1, s.y2, ...(s.cy1 === null ? [] : [s.cy1, s.cy2!])]
   const minX = Math.min(...xs)
   const maxX = Math.max(...xs)
   const minY = Math.min(...ys)
@@ -654,7 +701,7 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
     }
   })
 
-  it('H2 geometry: no edge curve bbox intersects any text seat (column labels / sub-bucket captions / unknown caption)', () => {
+  it('H2 geometry: no edge stroke segment intersects any text seat (column labels / sub-bucket captions / unknown caption)', () => {
     // A mixed view: forward + reverse cross-column flows, a caption-crossing
     // same-column flow (side-gap route) and the supervise line.
     const view = projectGraph(flowSource([
@@ -672,9 +719,21 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
     for (const edge of view.edges) {
       const g = edgePath(edge, layout)
       if (g === null) continue
-      const bbox = curveBBox(parsePath(g.d))
-      for (const seat of seats) {
-        expect(overlaps(bbox, seat), `${edge.kind} ${edge.source}->${edge.target} vs text seat`).toBe(false)
+      // Per-segment stroke checks (plan QC tri R1 — the side-gap detour's
+      // whole-path hull would enclose the band it bypasses, so the invariant
+      // is asserted per segment, never on the whole-path bbox).
+      for (const seg of pathSegments(g.d)) {
+        const box = segmentBox(seg)
+        for (const seat of seats) {
+          expect(overlaps(box, seat), `${edge.kind} ${edge.source}->${edge.target} vs text seat`).toBe(false)
+        }
+        // H1 weak-form (S-001): no segment crosses ANY CARD BODY other than
+        // the edge's own source/target cards (supervise anchors are column
+        // ids, never card keys — the exclusion simply never matches).
+        for (const [key, card] of layout.cards) {
+          if (key === edge.source || key === edge.target) continue
+          expect(overlaps(box, card), `${edge.kind} ${edge.source}->${edge.target} vs card ${key}`).toBe(false)
+        }
       }
     }
   })
@@ -769,6 +828,11 @@ describe('agent canvas — Phase 1/2 groups + current-plan annotation (plan 2026
     // GROUP_GAP 24 + Phase 2 (3 cols = 3·200 + 2·56 = 712) + right pad 24 =
     // 984 (the old stacked layout took only the widest group width, 760).
     expect(layout.width).toBe(24 + 200 + 24 + (3 * 200 + 2 * 56) + 24)
+    // Height = the TALLEST column bottom + PAD_Y (the single shared top row —
+    // no per-group y accumulation; QC1-S-003: the new `canvasBottom + PAD_Y`
+    // semantics are pinned directly).
+    const tallestBottom = Math.max(...layout.columns.map((c) => c.y + c.h))
+    expect(layout.height).toBe(tallestBottom + 24) // PAD_Y
     // Column x positions: Phase 1 leftmost at PAD_X (24); the sdd-implement
     // column no longer starts at 24 — it sits right of Phase 1 (+ GROUP_GAP).
     expect(review.x).toBe(24)
@@ -875,6 +939,146 @@ describe('agent canvas — inter-phase edge routing (plan 20260813-panel-agent-c
     expect(d.cy1).toBe(d.y1) // horizontal endpoint tangent — NOT the side-gap vertical
     expect(d.cx1).not.toBe(d.x1)
     expect(d.x1).toBe(248 + 12 + 176) // source east port
+  })
+
+  it('a col-skip cross-column edge (writing-specialist → qc-specialist) reroutes via the SIDE-GAP DETOUR — the direct line would pierce the intermediate column cards (plan QC tri R1 / F-002)', () => {
+    // writing-specialist (Phase 1, review-edit-chain — the FIRST card of its
+    // plain stack, y=84, center 120) → qc-specialist (Phase 2, qc-tri — first
+    // card, y=84, center 120): the source column (0) and target column (2)
+    // SKIP the sdd-implement column — the direct horizontal bezier at y=120
+    // runs straight through fullstack-dev (102..174) / fullstack-dev-2
+    // (186..258). Real docs-only / inline / QA-gate ledger chains. The
+    // card-body guard (R1) reroutes it via the side-gap detour.
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 2, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'writing-specialist', agent: 'w1', planId: 'plan-x' }),
+    ]))
+    const path = pathOf(html, 'data-agent-edge-actual')
+    expect(lineAttr(path, 'data-agent-edge-actual')).toBe('writing-specialist-&gt;qc-specialist')
+    const d = lineAttr(path, 'd')
+    // (a) REROUTE (not the direct horizontal bezier): the path is the
+    // multi-L side-gap detour — a single-`C` curve would contain no `L`.
+    expect(d).toContain(' L ')
+    expect(d).not.toContain('C ')
+    const segs = pathSegments(d)
+    expect(segs).toHaveLength(5) // M + 5 L segments
+    const view = projectGraph(flowSource([
+      dispatchEvent({ ts: 2, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'writing-specialist', agent: 'w1', planId: 'plan-x' }),
+    ])).agents
+    const layout = layoutAgents(view)
+    // Source EAST port (writing-specialist card (36,84) → east (212,120)),
+    // then INTO the source column's RIGHT side gap (card right edge +
+    // SIDE_GAP — the vertical run hangs in the column gap, clear of cards).
+    const first = segs[0]!
+    expect(first.x1).toBe(24 + 12 + 176)
+    expect(first.y1).toBe(84 + 36)
+    expect(first.x2).toBe(24 + 12 + 176 + 18)
+    expect(first.y2).toBe(84 + 36)
+    // The vertical run drops BELOW the intermediate column's card band
+    // (sdd-implement: band bottom = code-reviewer bottom → detour y +18).
+    const sdd = layout.columns.find((c) => c.id === 'autonomous-execute:sdd-implement')!
+    const intermediate = Array.from(layout.cards.values())
+      .filter((b) => b.x >= sdd.x && b.x < sdd.x + sdd.w)
+    const bandBottom = Math.max(...intermediate.map((b) => b.y + b.h))
+    const vertical = segs[1]!
+    expect(vertical.x1).toBe(first.x2)
+    expect(vertical.y2).toBe(bandBottom + 18) // SIDE_GAP
+    // The horizontal run crosses at the detour y, then the target-side
+    // vertical climbs to the target port y, then the FINAL segment
+    // approaches the target WEST port HORIZONTALLY at 10px standoff — the
+    // marker-end arrow rides the final segment (H1).
+    const across = segs[2]!
+    expect(across.y1).toBe(bandBottom + 18)
+    expect(across.x2).toBe(504 + 12 - 18) // target LEFT side gap
+    const climb = segs[3]!
+    expect(climb.x1).toBe(across.x2)
+    expect(climb.y2).toBe(84 + 36) // target center y
+    const final = segs[4]!
+    expect(final.y1).toBe(climb.y2)
+    expect(final.y2).toBe(climb.y2) // horizontal approach (H1)
+    expect(final.x2).toBe(504 + 12 - 10) // target west − STANDOFF
+    // (b) H1: NO segment's bbox overlaps ANY card body other than the
+    // source/target cards — the intermediate sdd-implement cards above all.
+    for (const seg of segs) {
+      const box = segmentBox(seg)
+      for (const card of intermediate) {
+        expect(overlaps(box, card), `forward detour segment ${JSON.stringify(seg)} vs card ${JSON.stringify(card)}`).toBe(false)
+      }
+    }
+    // H2: the detour stroke clears every text seat too (per segment).
+    for (const seg of segs) {
+      const box = segmentBox(seg)
+      for (const seat of textSeats(layout)) {
+        expect(overlaps(box, seat), `forward detour segment vs text seat ${JSON.stringify(seat)}`).toBe(false)
+      }
+    }
+  })
+
+  it('a REVERSE col-skip cross-column edge (qc-specialist → writing-specialist, Phase 2 → Phase 1) reroutes via the side-gap detour too (plan QC tri R1 / F-003)', () => {
+    // qc-specialist (Phase 2, qc-tri — first card, center 120) →
+    // writing-specialist (Phase 1, review-edit-chain — first card, center
+    // 120): source column (2) > target column (0) — source WEST → target
+    // EAST; the direct line skips sdd-implement and pierces its cards. The
+    // projection emits this shape (a real ledger where the QC seat runs
+    // before the Phase-1 chain completes in the same plan).
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 2, role: 'writing-specialist', agent: 'w1', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
+    ]))
+    const path = pathOf(html, 'data-agent-edge-actual')
+    expect(lineAttr(path, 'data-agent-edge-actual')).toBe('qc-specialist-&gt;writing-specialist')
+    const d = lineAttr(path, 'd')
+    expect(d).toContain(' L ')
+    expect(d).not.toContain('C ')
+    const segs = pathSegments(d)
+    expect(segs).toHaveLength(5)
+    const view = projectGraph(flowSource([
+      dispatchEvent({ ts: 2, role: 'writing-specialist', agent: 'w1', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
+    ])).agents
+    const layout = layoutAgents(view)
+    // Source WEST port (qc-specialist (516,84) → west (516,120)), then into
+    // the source column's LEFT side gap (card left edge − SIDE_GAP).
+    const first = segs[0]!
+    expect(first.x1).toBe(504 + 12)
+    expect(first.y1).toBe(84 + 36)
+    expect(first.x2).toBe(504 + 12 - 18)
+    expect(first.y2).toBe(84 + 36)
+    // Same detour band: below the intermediate sdd-implement cards.
+    const sdd = layout.columns.find((c) => c.id === 'autonomous-execute:sdd-implement')!
+    const intermediate = Array.from(layout.cards.values())
+      .filter((b) => b.x >= sdd.x && b.x < sdd.x + sdd.w)
+    const bandBottom = Math.max(...intermediate.map((b) => b.y + b.h))
+    const vertical = segs[1]!
+    expect(vertical.x1).toBe(first.x2)
+    expect(vertical.y2).toBe(bandBottom + 18) // SIDE_GAP
+    const across = segs[2]!
+    expect(across.y1).toBe(bandBottom + 18)
+    expect(across.x2).toBe(24 + 12 + 176 + 18) // target RIGHT side gap
+    const climb = segs[3]!
+    expect(climb.x1).toBe(across.x2)
+    expect(climb.y2).toBe(84 + 36) // target center y
+    // Final HORIZONTAL approach into the target EAST port from its right
+    // side gap — traveling LEFT, the arrow rides it into the target (H1).
+    const final = segs[4]!
+    expect(final.y1).toBe(climb.y2)
+    expect(final.y2).toBe(climb.y2)
+    expect(final.x2).toBe(24 + 12 + 176 + 10) // target east + STANDOFF
+    // (b) H1 per-segment: no intermediate card body overlaps any segment.
+    for (const seg of segs) {
+      const box = segmentBox(seg)
+      for (const card of intermediate) {
+        expect(overlaps(box, card), `reverse detour segment ${JSON.stringify(seg)} vs card ${JSON.stringify(card)}`).toBe(false)
+      }
+    }
+    // H2: the detour stroke clears every text seat too (per segment).
+    for (const seg of segs) {
+      const box = segmentBox(seg)
+      for (const seat of textSeats(layout)) {
+        expect(overlaps(box, seat), `reverse detour segment vs text seat ${JSON.stringify(seat)}`).toBe(false)
+      }
+    }
   })
 })
 
