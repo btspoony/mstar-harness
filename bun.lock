@@ -26,7 +26,7 @@
     },
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
-      "version": "2.0.6",
+      "version": "2.1.1",
       "devDependencies": {
         "@cordisjs/plugin-include": "1.0.4",
         "@cordisjs/plugin-loader": "1.0.0-rc.5",
