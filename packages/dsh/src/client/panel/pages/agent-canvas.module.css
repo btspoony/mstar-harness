@@ -135,12 +135,14 @@
 }
 
 /* Phase group label row (plan 20260812-panel-f5-design-system Task 8 — user
- * 2026-08-12 feedback #2, design doc §1.2): the canvas splits into TWO
- * vertical bands — Phase 1 (the sequential review-edit-chain) ABOVE, Phase 2
- * (the iterative plan loop: sdd-implement → qc-tri → qa-gate) BELOW — each
- * with its own label row; the Phase-2 row additionally carries the
- * CURRENT-PLAN annotation (the projected `activePlanId` — the first
- * InProgress `state.plans[]` row, or the muted「无进行中 plan」note). */
+ * 2026-08-12 feedback #2, design doc §1.2; side-by-side layout per plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2): the canvas splits into
+ * TWO side-by-side groups — Phase 1 (the sequential review-edit-chain) on
+ * the LEFT, Phase 2 (the iterative plan loop: sdd-implement → qc-tri →
+ * qa-gate) on the RIGHT, top-aligned (all group label rows share the same
+ * `y = PAD_Y`) — each with its own label row; the Phase-2 row additionally
+ * carries the CURRENT-PLAN annotation (the projected `activePlanId` — the
+ * first InProgress `state.plans[]` row, or the muted「无进行中 plan」note). */
 .canvasGroupLabel {
   position: absolute;
   display: flex;

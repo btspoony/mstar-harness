@@ -79,16 +79,18 @@ or a custom profile).
   column** (a `data-sub-bucket="unknown"` caption row 「unknown / 未匹配角色」
   after the last qa-gate card, then the general cards; the standalone
   on-demand column was already removed in the agent-layout plan); `explore`
-  is removed — no card, no column. The columns are laid out in **TWO stacked
-  Phase groups** (plan `20260812-panel-f5-design-system` Task 8, user
-  round-4 decision #2): the **Phase 1 group ABOVE** (review-edit-chain — the
-  sequential Review & Edit chain: product-manager → architect →
-  writing-specialist) and the **Phase 2 group BELOW** (sdd-implement →
-  qc-tri → qa-gate — the iterative plan loop), each with its group label
-  row; the **Phase-2 label annotates the CURRENT PLAN** (projected
-  `agents.activePlanId` = the first InProgress `state.plans[]` row,
-  `data-canvas-group-plan`; `+N more` when several plans run in parallel,
-  muted「无进行中 plan」when none). The `sdd-implement` column is split into SUB-BUCKETS by
+  is removed — no card, no column. The columns are laid out in **TWO
+  side-by-side Phase groups** (plan `20260812-panel-f5-design-system` Task 8,
+  user round-4 decision #2; side-by-side layout per plan
+  `20260813-panel-agent-canvas-legend-layout` Task 2): the **Phase 1 group
+  on the LEFT** (review-edit-chain — the sequential Review & Edit chain:
+  product-manager → architect → writing-specialist) and the **Phase 2 group
+  on the RIGHT** (sdd-implement → qc-tri → qa-gate — the iterative plan
+  loop), top-aligned (all group label rows share the same `y = PAD_Y`), each
+  with its group label row; the **Phase-2 label annotates the CURRENT PLAN**
+  (projected `agents.activePlanId` = the first InProgress `state.plans[]`
+  row, `data-canvas-group-plan`; `+N more` when several plans run in
+  parallel, muted「无进行中 plan」when none). The `sdd-implement` column is split into SUB-BUCKETS by
   the PROJECTED `entity.bucket` (never a render guess): the **implementor**
   partition ABOVE — the flow roles in the stage's original order
   (fullstack-dev / fullstack-dev-2 / frontend-dev), then the on-demand

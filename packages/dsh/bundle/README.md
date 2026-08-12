@@ -142,12 +142,14 @@ then the on-demand roles (ops-engineer / prompt-engineer, carrying the
 with implementor / sdd-reviewer caption labels; `zone: 'on-demand'` entities
 live in the implementor partition, `zone: 'general'` entities render in the
 qa-gate column's bottom unknown sub-partition. The canvas is laid out in
-**TWO stacked Phase groups** (plan `20260812-panel-f5-design-system` Task 8,
-user 2026-08-12 round-4 decision #2): the **Phase 1 group ABOVE**
-(review-edit-chain — the sequential Review & Edit chain) and the **Phase 2
-group BELOW** (sdd-implement → qc-tri → qa-gate — the iterative plan loop),
-each with its group label row; the **Phase-2 label annotates the CURRENT
-PLAN** (projected `agents.activePlanId` — the first InProgress
+**TWO side-by-side Phase groups** (plan `20260812-panel-f5-design-system`
+Task 8, user 2026-08-12 round-4 decision #2; side-by-side layout per plan
+`20260813-panel-agent-canvas-legend-layout` Task 2): the **Phase 1 group on
+the LEFT** (review-edit-chain — the sequential Review & Edit chain) and the
+**Phase 2 group on the RIGHT** (sdd-implement → qc-tri → qa-gate — the
+iterative plan loop), top-aligned (all group label rows share the same
+`y = PAD_Y`), each with its group label row; the **Phase-2 label annotates
+the CURRENT PLAN** (projected `agents.activePlanId` — the first InProgress
 `state.plans[]` row, `data-canvas-group-plan`; `+N more` when several plans
 run in parallel, muted「无进行中 plan」when none). The subagent ENTITY cards aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
