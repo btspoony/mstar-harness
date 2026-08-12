@@ -76,6 +76,19 @@
  * `sdd-implement` column — the value stays the user-fixed literal 'general'
  * in both locales); `zone.legend.general` rewords to the sink semantics
  * (「general 位于 sdd-implement 桶内底部」).
+ *
+ * T2 (plan 20260812-panel-f5-agent-layout Task 2 — the layout rework
+ * supersedes the F4.2 sink): the general bucket moves to its OWN rightmost
+ * UNKNOWN column — `zone.agents.unknown` (the column label, 未知 / unknown);
+ * the in-bucket general tag is gone (the general card's title + the unknown
+ * column label carry it), so `zone.agents.general` is REMOVED. The
+ * `sdd-implement` column splits into sub-buckets — `zone.agents.bucket.*`
+ * (implementor / sdd-reviewer caption labels); `zone.agents.on-demand`
+ * re-keys as the on-demand BADGE (the implementor-sub-bucket roles, the
+ * standalone on-demand column is removed). The legend entries gain
+ * `zone.legend.sub-bucket` / `zone.legend.supervise` / `zone.legend.unknown`
+ * (the former 'general' entry is replaced by 'unknown'); `zone.legend.general`
+ * is REMOVED and `zone.legend.on-demand` rewords to the badge semantics.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -127,8 +140,10 @@ export type PanelKey =
   | 'zone.legend.title'
   | 'zone.legend.flow-expected'
   | 'zone.legend.flow-actual'
-  | 'zone.legend.general'
+  | 'zone.legend.sub-bucket'
+  | 'zone.legend.supervise'
   | 'zone.legend.on-demand'
+  | 'zone.legend.unknown'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
   | 'zone.legend.agent-idle'
@@ -161,7 +176,9 @@ export type PanelKey =
   | 'zone.agents.title'
   | 'zone.agents.summary'
   | 'zone.agents.on-demand'
-  | 'zone.agents.general'
+  | 'zone.agents.unknown'
+  | 'zone.agents.bucket.implementor'
+  | 'zone.agents.bucket.reviewer'
   | 'flow.empty'
   | 'flow.settle-only'
   | 'flow.degraded'
@@ -241,8 +258,10 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': '图例',
   'zone.legend.flow-expected': '预期流转边（虚线）',
   'zone.legend.flow-actual': '实际交接边',
-  'zone.legend.general': 'general 位于 sdd-implement 桶内底部',
-  'zone.legend.on-demand': '按需执行角色（独立列）',
+  'zone.legend.sub-bucket': 'sdd-implement 子桶（implementor / sdd-reviewer）',
+  'zone.legend.supervise': 'implementor ↔ sdd-reviewer 双向监督线',
+  'zone.legend.on-demand': '按需执行角色（implementor 子桶徽标）',
+  'zone.legend.unknown': 'unknown 列（未匹配 / general 角色）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已结算实体（✓）',
   'zone.legend.agent-idle': '未工作实体（虚线）',
@@ -275,7 +294,9 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
   'zone.agents.on-demand': '按需执行',
-  'zone.agents.general': 'general',
+  'zone.agents.unknown': '未知',
+  'zone.agents.bucket.implementor': 'implementor',
+  'zone.agents.bucket.reviewer': 'sdd-reviewer',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -350,8 +371,10 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': 'Legend',
   'zone.legend.flow-expected': 'expected flow edge (dashed)',
   'zone.legend.flow-actual': 'actual handoff edge',
-  'zone.legend.general': 'general at the bottom of the sdd-implement bucket',
-  'zone.legend.on-demand': 'on-demand role (own column)',
+  'zone.legend.sub-bucket': 'sdd-implement sub-buckets (implementor / sdd-reviewer)',
+  'zone.legend.supervise': 'implementor ↔ sdd-reviewer bidirectional supervise line',
+  'zone.legend.on-demand': 'on-demand role (implementor sub-bucket badge)',
+  'zone.legend.unknown': 'unknown column (unmatched / general roles)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'agent settled (✓)',
   'zone.legend.agent-idle': 'idle agent (dashed)',
@@ -384,7 +407,9 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
   'zone.agents.on-demand': 'On-demand',
-  'zone.agents.general': 'general',
+  'zone.agents.unknown': 'unknown',
+  'zone.agents.bucket.implementor': 'implementor',
+  'zone.agents.bucket.reviewer': 'sdd-reviewer',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',
