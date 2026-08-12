@@ -78,10 +78,13 @@ export function nextExpandedOnActivation(prev: boolean, prevActive: boolean, nex
   return !prevActive && nextActive ? true : prev
 }
 
-/** Step-state chip label seat (spec §3 — current/next/idle, localized). */
+/** Step-state chip label seat (spec §3 + plan 20260812-panel-f5-iteration-zone-fix
+ * Task 2 — current/next/done/idle, localized; `done` rides the projection's
+ * explicit four-state machine, Task 1). */
 const STATE_LABEL = {
   current: 'zone.iteration.step.current',
   next: 'zone.iteration.step.next',
+  done: 'zone.iteration.step.done',
   idle: 'zone.iteration.step.idle',
 } as const
 

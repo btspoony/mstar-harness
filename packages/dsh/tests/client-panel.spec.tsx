@@ -1199,10 +1199,16 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).toContain('Iteration Close')
     expect(html).toContain('PR Delivery')
     expect(html).toContain('Merge Ready')
-    // State chips (localized labels).
+    // State chips (localized labels) — all four states render (plan
+    // 20260812-panel-f5-iteration-zone-fix T2: the done chip label added —
+    // en value follows the status-id-lowercase convention, like current/
+    // next/idle).
     expect(html).toContain('current')
     expect(html).toContain('next')
     expect(html).toContain('idle')
+    // The done step's chip sits on the SAME item as its done anchor (Step 1,
+    // asserted above) and carries the localized 'done' label.
+    expect(html).toMatch(/data-step="1"[^>]*data-step-state="done"[^>]*>[\s\S]*?data-step-chip[^>]*>done</)
     // Current-step verdict badge (fixture gate.ok → pass).
     expect(html).toContain('data-iteration-verdict="pass"')
     // Connectors are REMOVED (plan Item 1 — the gap replaces them; the
@@ -1295,7 +1301,10 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(zhHtml).toContain('合并就绪')
     expect(zhHtml).toContain('当前')
     expect(zhHtml).toContain('下一步')
+    expect(zhHtml).toContain('已完成')
     expect(zhHtml).toContain('待命')
+    // The done chip localizes too — anchored to the done step item (Step 1).
+    expect(zhHtml).toMatch(/data-step="1"[^>]*data-step-state="done"[^>]*>[\s\S]*?data-step-chip[^>]*>已完成</)
     expect(zhHtml).toContain('分支')
     expect(zhHtml).toContain('迭代 base')
     expect(zhHtml).toContain('目标分支')
@@ -1485,15 +1494,21 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     expect(zhHtml.match(/data-step-verdict-seat/g)).toHaveLength(5)
   })
 
-  it('css: split flex row (branches 1/3, steps 2/3) + narrow stack; badge aligned via the fixed-height seat, no align-self skew', () => {
+  it('css: split flex row (branches width-capped, steps absorb) + narrow stack; badge aligned via the fixed-height seat, no align-self skew', () => {
     const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
     // Split container: a flex row with a ramp gap (spec R8).
     expect(cssText).toMatch(/\.iterationHeadSplit\s*\{[\s\S]*?display:\s*flex[\s\S]*?gap:\s*var\(--mstar-space-/)
-    // Halves: branches small (flex 1) + steps large (flex 2) ⇒ ~1/3 vs ~2/3.
-    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*1\s+1\s+0/)
-    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationStepsRow\s*\{[\s\S]*?flex:\s*2\s+1\s+0/)
-    // Narrow fallback: the same 860px breakpoint stacks the split vertically.
+    // Width contract (plan 20260812-panel-f5-iteration-zone-fix Task 2):
+    // branches are width-CAPPED (flex-basis 260px, max-width 280px — branch
+    // info never stretches with the container), the steps row absorbs ALL
+    // remaining width (flex 1 1 0).
+    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*0\s+1\s+260px[\s\S]*?max-width:\s*280px/)
+    expect(cssText).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationStepsRow\s*\{[\s\S]*?flex:\s*1\s+1\s+0/)
+    // Narrow fallback: the same 860px breakpoint stacks the split vertically —
+    // and the Task 2 width cap RESETS (a column flex-basis would become a
+    // 260px HEIGHT in the stack, so the cap is lifted for the column axis).
     expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*\{[\s\S]*?flex-direction:\s*column/)
+    expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?max-width:\s*none/)
     // Verdict alignment fix: every step reserves a fixed-height flex seat; the
     // badge rule carries NO align-self (the `align-self: flex-start` skew
     // root cause is gone — spec §2.3 R9 "不再歪斜、不导致 Step 对齐偏移").

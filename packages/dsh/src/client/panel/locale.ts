@@ -137,6 +137,7 @@ export type PanelKey =
   | 'zone.iteration.step-badge'
   | 'zone.iteration.step.current'
   | 'zone.iteration.step.next'
+  | 'zone.iteration.step.done'
   | 'zone.iteration.step.idle'
   | 'zone.phase.iteration-start'
   | 'zone.phase.autonomous-execute'
@@ -250,6 +251,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': '当前',
   'zone.iteration.step.next': '下一步',
+  'zone.iteration.step.done': '已完成',
   'zone.iteration.step.idle': '待命',
   'zone.phase.iteration-start': '迭代启动',
   'zone.phase.autonomous-execute': '自主执行',
@@ -358,6 +360,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.iteration.step-badge': '{n}',
   'zone.iteration.step.current': 'current',
   'zone.iteration.step.next': 'next',
+  'zone.iteration.step.done': 'done',
   'zone.iteration.step.idle': 'idle',
   'zone.phase.iteration-start': 'Iteration Start',
   'zone.phase.autonomous-execute': 'Autonomous Execute',
