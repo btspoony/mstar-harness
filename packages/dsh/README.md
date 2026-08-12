@@ -190,11 +190,15 @@ kanban: Todo / InProgress / InReview / Done / Blocked / unknown with count
 badges, Done ≤5 + `+N more` overflow) and the **agent-execution zone** (the four EXPECTED_ROLE_FLOW stage/phase
 columns — review-edit-chain → sdd-implement → qc-tri → qa-gate (the
 terminal stage; the former `sdd-task-review` stage is removed, its SDD L2
-reviewer is now the pipeline role `code-reviewer`, v2.1.1) — plus the
-rightmost **unknown column** for the `general` bucket, plan
-`20260812-panel-f5-agent-layout` Task 1/2 (user 2026-08-12 decision — the
-former F4.2 bottom-inside placement and the standalone on-demand column are
-superseded); `explore` is removed — no card, no column. The `sdd-implement`
+reviewer is now the pipeline role `code-reviewer`, v2.1.1) — a strict
+FOUR-column layout with NO standalone unknown column (plan
+`20260812-panel-f5-design-system` Task 5, user 2026-08-12 round-2 decision —
+the former rightmost unknown column of plan `20260812-panel-f5-agent-layout`
+is superseded): the `general` bucket sinks into an **unknown sub-partition
+at the bottom of the `qa-gate` column** (a `data-sub-bucket="unknown"`
+caption row 「unknown / 未匹配角色」 after the last qa-gate card, then the
+general cards; the standalone on-demand column was already removed in the
+agent-layout plan); `explore` is removed — no card, no column. The `sdd-implement`
 column splits into **sub-buckets** by the projected `entity.bucket` (never
 a render guess): the **implementor** partition above — flow roles in the
 stage's original order (fullstack-dev / fullstack-dev-2 / frontend-dev),
@@ -203,33 +207,49 @@ then the on-demand roles (ops-engineer / prompt-engineer, carrying the
 **sdd-reviewer** partition below (code-reviewer, the SDD L2 task reviewer),
 with implementor / sdd-reviewer caption labels; `zone: 'on-demand'` entities
 live in the implementor partition, `zone: 'general'` entities render in the
-rightmost unknown column. The subagent **entity cards** aggregate **by role** from actual
+qa-gate column's bottom unknown sub-partition. The subagent **entity cards** aggregate **by role** from actual
 dispatch evidence — the same role across sessions folds into one card ×N,
 and every off-roster dispatch (the former `generalPurpose` SDD reviewer,
 `scout`, anonymous `role === ''`) folds into the single `general` bucket
 entity (the card is role-titled — the role id; the agent session id / task
 tag ride the record line, never the title) — role chip / status point / ×N
 count; running entities carry the
-business glow-pulse highlight, un-evidenced stages render the dashed
+business glow-pulse highlight (on the ROUNDED `.card-body` — the card is a
+single rounded element, no square outline overlay, plan
+`20260812-panel-f5-design-system` Task 5), un-evidenced stages render the dashed
 "待执行" pending placeholder with their expected role chips, un-evidenced
 KNOWN_AGENTS members render dashed idle cards (the full 14-role roster is
 never hidden), and the header
-shows the `N executing · M pending` summary; flow arrows: dim expected
-skeleton arrows between consecutive stage columns (3 forward only — the
-former SDD loop back-edge `sdd-implement` ↔ `general` curved DOUBLE-ARROW
-below the column band is REMOVED, plan `20260811-panel-f4-agent-view`
-F4.2) plus the **bidirectional supervise line** (plan
-`20260812-panel-f5-agent-layout` Task 1/2) — one static design-knowledge
-sub-bucket edge inside the `sdd-implement` column (implementor ↔
-sdd-reviewer — the mstar-sdd mutual-supervision contract; dim dashed by
-default, lit business when the projected `evidenced` flag is true —
-evidence-driven lighting, never a fabricated activation) —
-small `→` in-column handoff
-arrows between same-column cards, and the ANIMATED **next** edge — a
-business dash-flow arrow (`@keyframes agent-dash-flow` in the zones css,
-killed by the root `prefers-reduced-motion` rule) from the latest running
-entity's stage column to the next constant-order column, drawn ONLY while a
-running entity exists — plan `20260810-panel-agent-flow-zone`) — with the
+shows the `N executing · M pending` summary; cards carry the projected
+**emphasis tier** (plan `20260812-panel-f5-design-system` Task 4, design
+doc §3): `emphasis: 'current' | 'next' | 'off' | null` — the iteration's
+current-phase roles render at **100%** chrome intensity, later-phase
+expected roles at **75%**, already-passed / stage-less (on-demand, general)
+roles at **45%**, and `null` (no iteration / unresolved transition) applies
+NO override — always a chrome **alpha mix** (`--mstar-canvas-emphasis-*`
+tokens; never a whole-card `opacity`, so the status point + running glow
+stay opaque). Edges — plan `20260812-panel-f5-design-system` Task 5 (design
+doc §2): the `expected` stage skeleton arrows AND the ANIMATED **next** edge
+(the former `@keyframes agent-dash-flow` dash-flow arrow of plan
+`20260810-panel-agent-flow-zone`) are **REMOVED** — flow order is implied
+by the fixed column order + column labels, the current position by the
+running card glow + status point — leaving TWO semantic kinds: the
+evidence-driven **`actual` handoff** edges (same-plan ts-adjacent dispatch
+entity-key pairs, `general` endpoints filtered, ≤1 per entity pair) drawn as
+**bezier `C` curves** anchored to card **ports** — 4 fixed edge-midpoint
+ports (north / south / east / west; static-invisible, hover-revealed as
+small dots) with the arrow tip pulled back to a **10px standoff** off the
+port — the arrow follows the line's local tangent at the anchor (**H1**),
+and no line's stroke or arrow crosses any text (**H2**: standoff + side-gap
+routing, design doc §2.0/§2.5/§2.6) — plus the **bidirectional supervise
+line** (plan `20260812-panel-f5-agent-layout` Task 1/2) — one static
+design-knowledge sub-bucket edge inside the `sdd-implement` column
+(implementor ↔ sdd-reviewer — the mstar-sdd mutual-supervision contract),
+now anchored at the **side-gap vertical anchor** (`x = card right edge +
+18px`, vertical bezier flow, arrows along the vertical tangent — design doc
+§2.5/§2.7); dim dashed by default, lit business SOLID when the projected
+`evidenced` flag is true — evidence-driven lighting, never a fabricated
+activation) — with the
 agent-flow event strip migrated into the **事件记录 (Event Log) tab** — a
 non-canvas log page (spec F1.5, plan `20260811-panel-event-log`): two
 partitions (**Agent 流转事件** / **违规记录**), every row an expandable
@@ -269,10 +289,11 @@ emitted bundle must contain **no `xyflow`/`reactflow` markers**, zero
 the web loader executes plugin bundles as classic `<script>`s, where a
 literal `import.meta` is a parse-time SyntaxError (a zustand v4
 `import.meta.env` read is defined away at build; see the iteration
-install-verification guide §6). Bundle size at this plan's wrap-up: **127,068 B
-raw / 25,562 B gzip** (re-measure per the iteration install-verification
+install-verification guide §6). Bundle size at this plan's wrap-up: **145,159 B
+raw / 29,460 B gzip** (re-measure per the iteration install-verification
 guide — the bundle shrank to ~85 KB when react-flow was removed and grew
-back with the agent-execution zone's entity rendering).
+back with the agent-execution zone's entity rendering, then again with the
+F5 emphasis tiers + edge rework).
 
 Install / verify (the client half rides the same bundle-row install as the
 server half):
@@ -340,6 +361,8 @@ The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepse
 #### What the model sees
 
 Every composed step carries one `mstar-engine-status` catalog user message (the `<mstar_engine_status>` watermark block — see the Engine-status catalog section). Gate decisions add: the dispatch veto as the registry-materialized `PreToolDecision { kind: 'deny', reason }` error; the status gate as the `mstar/status-gate` advisory (warn pass, hard-mode repair escape, or degraded allow); the dispatch gate as the `mstar/dispatch-gate` advisory (warn pass or degraded); the skill lint gate as the `mstar/skill-lint` advisory (warn pass, hard-mode repair escape, or degraded allow). Every model-visible row is reconstructable from the session log (catalog-form sources + advisory events).
+
+**Leaf delivery discipline (PM 2026-08-12):** leaf subagents hand back their Completion Report in the **final (closing) message**, not via the `report` tool — the dsh tool-subagent-report default `reportDelivery: quiet` routes a report into the parent's next-step queue, where it strands when the parent's turn has ended (no step boundary follows). The closing message is the guaranteed delivery channel; reserve `report` for mid-turn findings that change what the parent should do next (SSOT: `skills/mstar-host/references/dsh.md` → PM dispatch).
 
 #### Token effect
 
