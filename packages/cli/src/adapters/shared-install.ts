@@ -174,20 +174,20 @@ export function validateSymlink(target: string, linkPath: string) {
   return errors;
 }
 
-/** Harness process artifacts (not results: knowledge/, specs/, AGENTS.md). */
+/** Harness .gitignore fence entries: default-ignore the harness dir, re-include tracked results. */
 export const HARNESS_PROCESS_GITIGNORE = [
-  ".mstar/archived/",
-  ".mstar/iterations/",
-  ".mstar/plans/",
-  ".mstar/sdd/",
-  ".mstar/notes.json",
-  ".mstar/status.json",
-  ".agents/archived/",
-  ".agents/iterations/",
-  ".agents/plans/",
-  ".agents/sdd/",
-  ".agents/notes.json",
-  ".agents/status.json",
+  ".mstar/**",
+  "!.mstar/AGENTS.md",
+  "!.mstar/knowledge/",
+  "!.mstar/knowledge/**",
+  "!.mstar/specs/",
+  "!.mstar/specs/**",
+  ".agents/**",
+  "!.agents/AGENTS.md",
+  "!.agents/knowledge/",
+  "!.agents/knowledge/**",
+  "!.agents/specs/",
+  "!.agents/specs/**",
 ];
 
 export function missingHarnessProcessGitignoreEntries(gitignoreContent: string): string[] {

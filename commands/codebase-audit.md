@@ -15,21 +15,26 @@ Run a read-only codebase audit that discovers what is worth doing and writes sel
 
 1. `mstar-harness-core`
 2. `mstar-audit` → SKILL.md（workflow、hard rules、scope variants、handoff 全量在此）
-3. `mstar-plan-conventions` (path symbols — `{PLAN_DIR}`, `{HARNESS_DIR}`)
-4. `mstar-host` → active host reference (invoke capability for parallel subagents)
+3. `mstar-roles` → `references/code-reviewer.md`（执行角色：audit 执行体）
+4. `mstar-plan-conventions` (path symbols — `{PLAN_DIR}`, `{HARNESS_DIR}`)
+5. `mstar-host` → active host reference (invoke capability for parallel subagents)
 
 ## Routing（谁执行 audit）
 
 | Context | Who runs the audit |
 |---------|-------------------|
-| **Small repo** (single scan pass feasible) | PM thread runs the audit directly — read, search, vet, write plans |
-| **Large repo** (parallel categories needed) | PM dispatches read-only `scout` / `explore` subagents per category, then vets and writes plans |
-| **Specialist depth needed** | PM dispatches `@architect` for architecture/tech-debt depth, or category-specific specialists |
+| **Small repo** (single scan pass feasible) | PM dispatches `@code-reviewer` — single scan pass, then vet and write plans |
+| **Large repo** (parallel categories needed) | `@code-reviewer` fans out read-only `scout` / `explore` subagents per category via Assignment `Delegation: allowed (scout/explore only, read-only)`, then vets and writes plans |
+| **Specialist depth needed** | PM orchestrates an `@architect` consult for architecture/tech-debt depth (separate dispatch, or folded into the audit delegation brief) |
+
+This command is the PM entry point; the audit execution body is `code-reviewer`（PM dispatch）.
 
 The audit is **advisory** — it does not enter the per-plan state machine (`Todo → InProgress → InReview → Done`). Its output is plan *candidates*.
 
 ## Execute
 
 Execute **`mstar-audit`** end to end（SKILL.md：Recon → Audit → Vet & prioritize → Write plans；effort `quick` / `standard` / `deep`；scope variants `security` / `perf` / `tests` / `branch` / `next` / `roadmap`）。Plans → `{PLAN_DIR}/audit-<YYYY-MM-DD>/NNN-<slug>.md` + `README.md` index，per **`mstar-plan-artifacts/references/plan-quality-bar.md`**。
+
+Executor: PM dispatches `@code-reviewer`；大型仓库 scout 扇出经 Assignment `Delegation: allowed (scout/explore only, read-only)`（Routing 表）。
 
 Pursued plans feed the normal Prepare → Execute flow（fast-track Prepare — intent gate + clarify still apply）or `/iteration-start` as direction candidates。

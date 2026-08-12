@@ -45,7 +45,7 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 
 - **`Execution mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path (N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
-- SDD implement/reviewer: **serial** — see **`mstar-sdd`**.
+- SDD implement/reviewer: **serial** — implementer Task per task id with `subagent_type` matching the implementer role when listed; task reviewer = new Task with `subagent_type: "code-reviewer"` (Cursor L2 review; not qc-specialist*) when listed, else generic fallback per C5 — no `resume` for reviewers. See **`mstar-sdd`**.
 
 ## SDD sticky implementer (Cursor Task resume)
 

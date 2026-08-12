@@ -46,7 +46,7 @@ import { PLAN_CAP, sortPlans } from '../src/client/panel/plan-sort'
 const fullSource: MstarEngineStatusSource = {
   kind: 'mstar-engine-status',
   form: 'catalog',
-  version: '2.0.6',
+  version: '2.1.1',
   harnessDir: '/proj/.mstar',
   enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
   iteration: {
@@ -101,7 +101,7 @@ const prDeliverySource: MstarEngineStatusSource = {
 const noHarnessSource: MstarEngineStatusSource = {
   kind: 'mstar-engine-status',
   form: 'catalog',
-  version: '2.0.6',
+  version: '2.1.1',
   harnessDir: null,
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: null,

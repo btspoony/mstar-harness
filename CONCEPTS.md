@@ -14,3 +14,6 @@ The directory that owns a project's harness process artifacts (status registry, 
 
 ### Enforcement flag
 An opt-in declaration that escalates engine validators from warn-only to blocking gates for one dispatch or one iteration. Scope is strict: an Assignment flag is read from the header region only (body examples never count), and a compass flag counts only while the iteration is `active` or `locked` — a completed iteration can never keep the repo hardened. Rollback is always unsetting the flag, and the flag is inert when the engine is absent.
+
+### Review seat layers (L1–L4)
+The four verification layers of a plan's review chain: **L1** implementer (writes code + runs evidence), **L2** task reviewer (named role `code-reviewer` by default — spec + quality for one task, diff-first, fresh per task), **L3** plan QC (named `qc-specialist` / `-2` / `-3` tri seats — whole-branch diff/logic/risk lenses, never runs suites), **L4** QA (`qa-engineer` — acceptance + residual verification). Layers are roles, not people: a seat never executes another layer's work, and L2/L3 reviewer seats are structurally read-only via their agent-shell permission profiles.

@@ -181,6 +181,7 @@ Without iteration: same per-plan gates, no `iteration-start` / `iteration-close`
 | `fullstack-dev` / `fullstack-dev-2` | Backend-led implement / second parallel track |
 | `frontend-dev` | UI, interaction, frontend performance |
 | `qa-engineer` | Acceptance when `QA gate: mandatory` |
+| `code-reviewer` | SDD per-task review; codebase audit (`audit` category) |
 | `qc-specialist` / `-2` / `-3` | QC trio |
 | `ops-engineer` | Deploy, monitoring, infrastructure |
 | `writing-specialist` | Docs, fiction, copy, scripts |

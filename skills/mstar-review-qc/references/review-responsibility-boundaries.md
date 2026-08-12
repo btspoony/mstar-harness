@@ -5,7 +5,7 @@
 | Layer | Who | When | Scope | Input |
 |-------|-----|------|-------|--------|
 | **L1** Implementer | dev subagent | Per task | Write code + **run** TDD / verification evidence | `task-N-brief.md` |
-| **L2** Task reviewer | PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** (diff-first; no full suite) | brief, report, **task-level** diff |
+| **L2** Task reviewer | `code-reviewer` (default; generic fallback when the host agent list lacks it) — PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** (diff-first; no full suite) | brief, report, **task-level** diff |
 | **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | **Code-review seat** — diff, language/logic, security & contract lenses on **whole branch**; **not** the test-execution path | Branch `review-package` MERGE_BASE..HEAD |
 | **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, targeted/full **command** verification, Done recommendation | Review bundle + plan + **L1 evidence** + `status.json` |
 
