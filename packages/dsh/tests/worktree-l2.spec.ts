@@ -203,7 +203,7 @@ function worktreeFixture(root: string, branches: readonly string[]): Map<string,
  * (a) pre-step iteration gate — catalog composition
  * ========================================================================== */
 
-describe('pre-step iteration gate — catalog composition (real Loader boot)', () => {
+describe('pre-step iteration gate — catalog composition (REAL-composition boot)', () => {
   it('boot with status.json + steering compass → pre-step appends the iteration-gate row after the engine-status row (Task 1 tool result shape)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-gate-'))
     fixtureRoots.push(root)

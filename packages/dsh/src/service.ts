@@ -7,7 +7,7 @@
  * @module @mstar-harness/dsh
  */
 
-import { Context, Service } from 'cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import {
   applyEnforcement as engineApplyEnforcement,
   findingsCleanupGate as engineFindingsCleanupGate,
@@ -26,7 +26,7 @@ import type {
   StatusDoc,
 } from '@mstar-harness/engine'
 
-declare module 'cordis' {
+declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Morning Star engine service provided by `@mstar-harness/dsh`. */
     dshMstar: DshMstar

@@ -30,7 +30,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { join } from 'node:path'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import type { HostAdapter } from '@mstar-harness/engine'
 import type { AssignmentFields } from '@mstar-harness/engine'
 import type { IntegrationMergeLease } from '@mstar-harness/engine'

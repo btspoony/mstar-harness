@@ -23,17 +23,29 @@
  * the shared dsh tree; this plugin never imports them). Entries already
  * pointing at the correct target are left untouched.
  *
- * `cordis` ships publicly on npm and stays a devDependency of this package,
- * but the cordis SHIM is still generated whenever a source tree resolves
- * (dsh-advisor pattern, not just when npm cordis is missing): module identity
- * drives the `Context`/`Events` augmentations the real packages declare, and
- * their d.ts files resolve `cordis` from the TREE — the shim points at the
- * tree's vendored cordis files so the plugin's `import 'cordis'` (and the
- * merges) resolve to the SAME module the real packages type against. With the
- * npm copy instead, the real packages' augmentations silently fail to merge
- * (build breaks with `ctx.tools`/`ctx.commands`/`fs/write-intent` … missing).
- * When NO source tree resolves (CI), the npm cordis devDependency is used and
- * no shim is written.
+ * `@deepseek-ai/cordis` is the in-box framework (20260811 snapshot rename;
+ * the legacy bare `cordis` name is no longer supported by the vendored
+ * snapshot) and is declared as a peerDependency of this package. It is
+ * unpublished, so dev-time resolution comes from the cordis SHIM generated
+ * whenever a source tree resolves (dsh-advisor pattern): a bin-less shim at
+ * `node_modules/@deepseek-ai/cordis` answers the scoped name and points at
+ * the tree's vendored files, so the plugin's `import '@deepseek-ai/cordis'`
+ * (and its Context/Events augmentations) resolve to the SAME module the real
+ * packages type against — with any other copy the augmentations silently
+ * fail to merge (build breaks with `ctx.tools`/`ctx.commands`/… missing).
+ * The bare `cordis` name is deliberately absent from the whole bundle
+ * (package.json, imports, externals): a legacy `node_modules/cordis` from an
+ * earlier install is removed in `write` and flagged by `--check`, so no
+ * stale bare-cordis resolution can survive. When NO source tree resolves
+ * (CI), the farm is skipped and the dsh steps are gated on availability
+ * upstream (CI does not run dsh — user-confirmed).
+ *
+ * Safety (this repo's git-install path): the host profile installs the
+ * plugin via git deps, whose prepare/postinstall run INSIDE the profile's
+ * pnpm store (`<profile>/node_modules/.pnpm/…`). There the farm must NOT be
+ * created — the host resolves `@deepseek-ai/*` from its in-box bundles,
+ * never from a staging tree. The script therefore skips (exit 0) when it
+ * detects a pnpm store copy or a repo root without `node_modules/` yet.
  *
  * Failure semantics: when the source tree is missing locally (non-CI) the
  * script FAILS with guidance (`set DSH_SOURCE_DIR=...`); when the `CI`
@@ -59,6 +71,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -71,15 +84,29 @@ const pkgDir = resolve(here, '..')
 /** The package root two levels up: the repo root whose `node_modules` hosts the farm. */
 const repo = resolve(pkgDir, '..', '..')
 const CHECK = process.argv.includes('--check')
-const linkDir = join(repo, 'node_modules', '@deepseek-ai')
-const cordisShimDir = join(repo, 'node_modules', 'cordis')
 
-/** Resolve the dsh source tree root ($DSH_SOURCE_DIR first, then $DSH_HOME/source/current, then the default home location). */
+// ---------------------------------------------------------------------------
+// Safety guard: never run inside a host-profile install (pnpm store copy) or
+// an uninstalled checkout — the host resolves @deepseek-ai/* from its in-box
+// bundles, never from a staging tree.
+// ---------------------------------------------------------------------------
+const inStore = repo.includes(`${sep}node_modules${sep}.pnpm${sep}`)
+const hasNodeModules = existsSync(join(repo, 'node_modules'))
+if (inStore || !hasNodeModules) {
+  console.log(`[dsh-links] skip: not a top-level dev install (${inStore ? 'inside the pnpm store (host-profile install path)' : 'repo root has no node_modules/ yet (not installed)'}).`)
+  console.log('  @deepseek-ai/* resolve from the dsh in-box bundles at runtime; no link farm is created here.')
+  process.exit(0)
+}
+
+const linkDir = join(repo, 'node_modules', '@deepseek-ai')
+const cordisShimDir = join(repo, 'node_modules', '@deepseek-ai', 'cordis')
+
+/** Resolve the dsh source tree root ($DSH_SOURCE_DIR first, then $DSH_HOME/source/current, then the default home location; Windows has no HOME, so USERPROFILE stands in). */
 function resolveSourceRoot(): string | undefined {
   const candidates = [
     process.env.DSH_SOURCE_DIR,
     process.env.DSH_HOME ? join(process.env.DSH_HOME, 'source', 'current') : undefined,
-    join(process.env.HOME ?? '', '.dsh', 'source', 'current'),
+    join(process.env.HOME ?? process.env.USERPROFILE ?? '', '.dsh', 'source', 'current'),
   ].filter((candidate): candidate is string => candidate !== undefined)
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate
@@ -124,11 +151,18 @@ function collectDeepseekPackages(sourceRoot: string): Map<string, string> {
   return found
 }
 
-/** The `@deepseek-ai/*` peerDependencies of this package that must be linkable from the tree. */
+/**
+ * The `@deepseek-ai/*` peerDependencies of this package that must be
+ * linkable from the tree. `@deepseek-ai/cordis` is exempt: the in-box cordis
+ * framework is provided by the private shim (node_modules/@deepseek-ai/cordis),
+ * not the farm — the vendored package declares a `bin`, so
+ * collectDeepseekPackages() excludes it and it would otherwise land in
+ * missingPeers.
+ */
 function requiredPeers(): string[] {
   const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
   return Object.keys(manifest.peerDependencies ?? {})
-    .filter((name) => name.startsWith('@deepseek-ai/'))
+    .filter((name) => name.startsWith('@deepseek-ai/') && name !== '@deepseek-ai/cordis')
     .sort()
 }
 
@@ -140,8 +174,17 @@ function readdirSafe(dir: string): string[] {
   }
 }
 
-function linkKind() {
-  return process.platform === 'win32' ? 'junction' : 'dir'
+function linkKind(target: string) {
+  if (process.platform !== 'win32') return 'dir'
+  // Windows link kinds are per-target: junctions are directory-only (and need
+  // no privileges); file symlinks need Developer Mode or an admin shell. The
+  // cordis shim's file entries (index.js / index.d.ts) must NOT become
+  // junctions — a broken junction on a file makes the import fail.
+  try {
+    return statSync(target).isDirectory() ? 'junction' : 'file'
+  } catch {
+    return 'file'
+  }
 }
 
 /**
@@ -164,14 +207,16 @@ function ensure(linkPath: string, target: string) {
 }
 
 /**
- * The in-box cordis framework fallback (dsh-advisor pattern, used only when
- * `node_modules/cordis` does not exist): the real packages type and run
- * against the tree's vendored cordis, so dev-time `import 'cordis'` must
- * resolve to the SAME files. The vendored package declares a `bin`, and
- * symlinking it into node_modules makes bun link its bin into `.bin` (a
- * chmod write into the shared dsh tree), so instead of a package symlink
- * this writes a small private shim: a directory with a bin-less package.json
- * whose entry files are symlinks to the vendored files.
+ * The in-box cordis framework (dsh-advisor pattern): the real packages type
+ * and run against the tree's vendored cordis, so dev-time
+ * `import '@deepseek-ai/cordis'` must resolve to the SAME files. The vendored
+ * package declares a `bin`, and symlinking it into node_modules makes bun
+ * link its bin into `.bin` (a chmod write into the shared dsh tree), so
+ * instead of a package symlink this writes a small private shim: a directory
+ * with a bin-less package.json whose entry files are symlinks to the
+ * vendored files. The bundle carries no bare `cordis` anywhere — the legacy
+ * `node_modules/cordis` (old shim or npm copy) is removed so no stale
+ * bare-cordis resolution survives.
  */
 function writeCordisShim(sourceRoot: string) {
   const vendorCordis = join(sourceRoot, 'vendor', 'cordis')
@@ -180,9 +225,15 @@ function writeCordisShim(sourceRoot: string) {
     throw new Error(`vendored cordis not found at ${vendorCordis} — the source tree must provide the in-box cordis framework`)
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-  if (manifest.name !== 'cordis') {
-    throw new Error(`vendored cordis at ${vendorCordis} declares name "${manifest.name}" — expected "cordis"`)
+  // The vendored snapshot answers only the scoped name (20260811 rename);
+  // the legacy bare `cordis` snapshot is no longer supported.
+  if (manifest.name !== '@deepseek-ai/cordis') {
+    throw new Error(`vendored cordis at ${vendorCordis} declares name "${manifest.name}" — expected "@deepseek-ai/cordis" (only the 20260811 snapshot rename is accepted; the legacy "cordis" name is no longer supported)`)
   }
+  // Migration cleanup: remove the legacy bare-name entry (safe for both a
+  // plain-dir shim and an npm-published copy) so no stale `import 'cordis'`
+  // resolution survives.
+  rmSync(join(repo, 'node_modules', 'cordis'), { recursive: true, force: true })
   rmSync(cordisShimDir, { recursive: true, force: true })
   mkdirSync(cordisShimDir, { recursive: true })
   ensure(join(cordisShimDir, 'index.js'), join(vendorCordis, 'lib', 'index.js'))
@@ -198,10 +249,10 @@ function writeCordisShim(sourceRoot: string) {
     join(cordisShimDir, 'package.json'),
     JSON.stringify(
       {
-        name: 'cordis',
+        name: '@deepseek-ai/cordis',
         version: manifest.version,
         private: true,
-        // Marker distinguishing this generated shim from the npm cordis dir.
+        // Marker distinguishing this generated shim from an npm-published copy.
         dshLinkFarmShim: true,
         type: 'module',
         main: './index.js',
@@ -215,7 +266,7 @@ function writeCordisShim(sourceRoot: string) {
   return vendorCordis
 }
 
-/** True when `node_modules/cordis` is a link-farm generated shim (vs the npm package). */
+/** True when `node_modules/@deepseek-ai/cordis` is a link-farm generated shim (vs anything else). */
 function isCordisShim(): boolean {
   try {
     const manifest = JSON.parse(readFileSync(join(cordisShimDir, 'package.json'), 'utf8'))
@@ -279,9 +330,9 @@ function checkLink(name: string, linkPath: string, target: string): string | und
 /** Verify the cordis shim resolves to the vendored entry files (the shim is required whenever a source tree resolves). */
 function checkCordisShim(sourceRoot: string): string | undefined {
   if (!isCordisShim()) {
-    return existsSync(join(repo, 'node_modules', 'cordis', 'package.json'))
-      ? `cordis shim missing: the real packages' Context/Events augmentations merge only against the tree's vendored cordis (run \`bun run dsh:link\`)`
-      : `cordis missing: neither node_modules/cordis nor the tree shim exists (run \`bun run dsh:link\`)`
+    return existsSync(join(cordisShimDir, 'package.json'))
+      ? `cordis shim missing: the plugin's Context/Events augmentations merge only against the tree's vendored cordis (run \`bun run dsh:link\`)`
+      : `cordis missing: neither node_modules/@deepseek-ai/cordis nor the tree shim exists (run \`bun run dsh:link\`)`
   }
   const vendorCordis = join(sourceRoot, 'vendor', 'cordis')
   const problems: string[] = []
@@ -304,6 +355,11 @@ function checkCordisShim(sourceRoot: string): string | undefined {
   }
   probe('index.d.ts', join(vendorCordis, 'lib', 'types', 'index.d.ts'))
   probe('index.js', join(vendorCordis, 'lib', 'index.js'))
+  // Migration leftover: the bare-name entry must be gone — the bundle
+  // answers only the scoped name.
+  if (existsSync(join(repo, 'node_modules', 'cordis'))) {
+    problems.push('legacy node_modules/cordis present (re-run `bun run dsh:link`)')
+  }
   return problems.length > 0 ? problems.join('; ') : undefined
 }
 
@@ -357,9 +413,10 @@ function main() {
     ensure(join(linkDir, name.replace('@deepseek-ai/', '')), target)
   }
   // ALWAYS write the cordis shim when a source tree resolves — the real
-  // packages' `declare module 'cordis'` Context/Events augmentations merge
-  // only against the tree's vendored cordis (module identity; npm cordis is
-  // a different physical copy and the merges silently fail).
+  // packages' `declare module '@deepseek-ai/cordis'` Context/Events
+  // augmentations merge only against the tree's vendored cordis (module
+  // identity; any other copy is a different physical module and the merges
+  // silently fail).
   writeCordisShim(sourceRoot)
   const removed = pruneStale(new Set(managed.keys()), false)
   console.log(

@@ -15,15 +15,15 @@
  * the reloaded app — no half-removed contribution survives.
  *
  * Mount form: `ctx.plugin(plugin, config)` (Plugin.Object shape — the same
- * mount the Loader performs for a function plugin, dsh-private compact
- * HMR-safety pattern); the real Loader composition is covered by the
+ * mount `ctx.plugin` performs for a function plugin, dsh-private compact
+ * HMR-safety pattern); the REAL-composition boot is covered by the
  * status/dispatch/lease suites.
  */
 import { describe, expect, it } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'

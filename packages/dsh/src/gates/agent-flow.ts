@@ -84,7 +84,7 @@
  */
 import { appendFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Context } from 'cordis'
+import { type Context } from '@deepseek-ai/cordis'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'

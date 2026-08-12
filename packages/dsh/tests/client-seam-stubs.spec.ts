@@ -19,7 +19,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { clientExports } from './client-bundles.ts'
 import { resolveSlotLabel, SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ContextMessageNode, ConversationNode, ConversationSnapshot, SessionId, SlotsService } from '@deepseek-ai/dsh-client-runtime/client'

@@ -26,7 +26,7 @@ import type { ConversationNode, ConversationSnapshot, SessionId } from '@deepsee
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { clientExports } from './client-bundles.ts'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import type { MstarEngineStatusSource } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { en, NS, zh } from '../src/client/panel/locale'

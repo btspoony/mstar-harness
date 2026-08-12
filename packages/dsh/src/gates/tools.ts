@@ -17,7 +17,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { type Context } from 'cordis'
+import { type Context } from '@deepseek-ai/cordis'
 import {
   assertIndexRows,
   completenessLevel,

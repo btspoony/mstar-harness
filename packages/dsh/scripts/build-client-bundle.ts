@@ -39,7 +39,7 @@ export const CLIENT_EXTERNALS: readonly string[] = [
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
-  'cordis',
+  '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',

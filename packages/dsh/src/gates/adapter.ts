@@ -16,7 +16,7 @@
  * verbatim by the entry.
  */
 import { existsSync } from 'node:fs'
-import { Service, type Context } from 'cordis'
+import { Service, type Context } from '@deepseek-ai/cordis'
 import { applyEnforcement, assignmentHeaderRegion, validateIntegrationMergeLease } from '@mstar-harness/engine'
 import type {
   AssignmentFields,

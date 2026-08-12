@@ -16,7 +16,7 @@
  */
 import { existsSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
-import { type Context } from 'cordis'
+import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assignmentHeaderRegion,

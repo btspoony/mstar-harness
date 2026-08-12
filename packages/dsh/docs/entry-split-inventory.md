@@ -16,7 +16,7 @@
 | 3 | 插件 manifest | 103–111 | `export const name = 'dsh'`、`export const inject: string[] = []` |
 | 4 | 模块常量 | 113–148 | `LOGGER_NAME`、`STATUS_FILE`、`DISPATCH_LOGGER`、`HOST_LOGGER`、`SKILL_LINT_LOGGER`、`CATALOG_LOGGER`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`RESIDUAL_SEVERITIES`、`DEFAULT_DISPATCH_TOOLS`、`ASSIGNMENT_HEADING_RE`、`ASSIGNMENT_FIELD_RE` |
 | 5 | 插件配置 | 150–225 | `export interface Config`（6 可选字段）+ `export const Config: z<Config>`（schemastery schema） |
-| 6 | Advisory 类型 + SeamId + cordis augmentation | 227–391 | `StatusGateAdvisory`、`DispatchGateAdvisory`、`SkillLintAdvisory`、`SeamId`、`SeamLintAdvisory`；`declare module 'cordis'`：`Context.dshHostAdapter` + `Events` 四事件（`mstar/dispatch-gate` / `mstar/status-gate` / `mstar/skill-lint` / `mstar/seam-lint`） |
+| 6 | Advisory 类型 + SeamId + cordis augmentation | 227–391 | `StatusGateAdvisory`、`DispatchGateAdvisory`、`SkillLintAdvisory`、`SeamId`、`SeamLintAdvisory`；`declare module '@deepseek-ai/cordis'`：`Context.dshHostAdapter` + `Events` 四事件（`mstar/dispatch-gate` / `mstar/status-gate` / `mstar/skill-lint` / `mstar/seam-lint`） |
 | 7 | 共享助手 | 393–403 | `formatViolation`（violation → 日志行）、`asRecord`（unknown → record） |
 | 8 | **status gate** | 405–587 | `isStatusTarget`、`resolveHard`、`validateStatusValue`（status 校验 + findings_cleanup gate）、`validateStatusDoc`（单读 TOCTOU 收敛）、`gateStatusIntent`（repair-escape + degrade 包络）、`writeIntentListener`、`editIntentListener`（prepend 注册契约） |
 | 9 | **skill-lint gate** | 589–826 | `SkillLintVetoError`（typed veto）、`stripFrontmatter`、`lintSkillDoc`、`lintSkillWrite`、`skillRootsOf`、`isSkillTarget`、`skillNameOf`、`skillCanonicalForm`、`resolveSeamHard`、`gateSkillIntent`（repair-escape）、`skillWriteIntentListener` |
@@ -66,7 +66,7 @@
 
 `Config`（interface，与值同名）、`StatusGateAdvisory`、`DispatchGateAdvisory`、`SkillLintAdvisory`、`SeamId`、`SeamLintAdvisory`、`DshHostAdapterOptions`、`DshMstarOptions`（re-export）、`MstarEngineStatusSource` / `MstarHarnessState` / `MstarIterationGateView`（re-export from `./types.ts`）
 
-### 2.3 cordis augmentation（`declare module 'cordis'`）
+### 2.3 cordis augmentation（`declare module '@deepseek-ai/cordis'`）
 
 - `Context.dshHostAdapter: DshHostAdapter`
 - `Events`：`'mstar/dispatch-gate'`、`'mstar/status-gate'`、`'mstar/skill-lint'`、`'mstar/seam-lint'`（各携带对应 Advisory payload）
@@ -95,7 +95,7 @@
 ### 3.2 入口（拆分后）— 模块索引 + 启动接线
 
 `src/index.ts` 保留：
-- 头部注释（禁 default export 契约）、`name`/`inject` manifest、`declare module 'cordis'` augmentation（单一 augmentation 点）。
+- 头部注释（禁 default export 契约）、`name`/`inject` manifest、`declare module '@deepseek-ai/cordis'` augmentation（单一 augmentation 点）。
 - **`apply()` 启动接线**（不搬移）：resolver 构造、`DshMstar`/`DshHostAdapter` service 构造、skill-local mount、boot 观测 warn、5 个事件槽注册（fs×3 组 + pre-execute + pre-step）、catalog cache/digest 装配、两个工具注册调用。
 - **命令注册**（§16，非 gate 实现，属启动接线）：`registerMstarCommands` + `parseCommandMarkdown` + `commandFrontmatterField` + `packagedCommandsDir` 留在 entry。
 - 全部 27 个不同具名导出（28 个导出形态，`Config` 值+类型同名）改为从 gates/_shared/service/types **原样 re-export**（`export { X } from './gates/…'`），零签名变化。
@@ -148,4 +148,4 @@ status / skill-lint / seams / dispatch / catalog ──> _shared
 ## 5. 边界（Non-goals）
 
 - 不改 compass / spec / 主 plan 正文（除本 plan Task 1 方案节）；零 dsh-private / knowledge / `status.json` 写；不 publish。
-- 命令注册留在入口（属启动接线，非 gate 实现）；`declare module 'cordis'` augmentation 保留在入口（单一 augmentation 点）。
+- 命令注册留在入口（属启动接线，非 gate 实现）；`declare module '@deepseek-ai/cordis'` augmentation 保留在入口（单一 augmentation 点）。

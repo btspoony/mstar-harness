@@ -1,9 +1,10 @@
 /**
  * REAL-composition tier (plan Task 2, mirrors dsh-private packages/AGENTS.md):
- * boots a test-only `cordis.yml` through the actual `@cordisjs/plugin-loader`
- * (the exact versions dsh-private vendors), mounting `@mstar-harness/dsh`
- * with only the module-import seam replaced by a modules map — entry parsing,
- * config validation, fiber mounting, and settlement are the shipping code.
+ * boots the REAL-composition app by mounting the seam rows directly with
+ * `ctx.plugin` in the dsh app's row order (harness.ts `bootApp`), applying
+ * the plugin Config through the shipping schemastery validation — entry
+ * semantics, config validation, fiber mounting, and settlement are cordis's
+ * own `ctx.plugin` path (no `@cordisjs/plugin-loader`, no bare `cordis`).
  *
  * Seam boundary: at dev time the dsh seam packages resolve from a real dsh
  * source tree via the link farm (scripts/setup-dsh-links.ts), so this boot
@@ -23,7 +24,7 @@ afterEach(async () => {
   booted = undefined
 })
 
-describe('@mstar-harness/dsh through a real Loader composition (cordis.yml)', () => {
+describe('@mstar-harness/dsh REAL-composition boot (direct ctx.plugin rows)', () => {
   it('resolves the configured harness dir and validates a fixture status.json inside the app', async () => {
     const app = booted = await bootApp()
     const { ctx, harnessDir } = app

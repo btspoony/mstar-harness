@@ -46,7 +46,7 @@ import type { MstarEngineStatusSource } from '../src/types'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { clientExports } from './client-bundles.ts'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { projectGraph } from '../src/client/panel/graph/project-graph'
 import { KNOWN_AGENTS } from '../src/client/panel/graph/schema'
 import {

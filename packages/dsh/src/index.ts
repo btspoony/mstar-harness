@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type Context } from 'cordis'
+import { type Context } from '@deepseek-ai/cordis'
 import {
   apply as applySkillLocal,
   Config as SkillLocalSchema,
@@ -104,7 +104,7 @@ export const name = 'dsh'
  */
 export const inject: string[] = []
 
-declare module 'cordis' {
+declare module '@deepseek-ai/cordis' {
   interface Context {
     /**
      * The plugin's engine `HostAdapter` implementation (`host: 'dsh'`) —
