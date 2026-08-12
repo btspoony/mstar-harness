@@ -24,8 +24,9 @@
  *   edge midpoints) with the target STANDOFF 10px (arrow tip off the card,
  *   H1); caption-crossing same-column flows route in the LEFT side gap (H2);
  *   the 4 hover-visible port dots (`data-agent-port`) render per card;
- * - the Legend / locale sync (port entry, unknown sub-partition wording;
- *   the expected/next entries are gone).
+ * - the Legend / locale sync (plan 20260813-panel-agent-canvas-legend-layout
+ *   Task 1: ONLY the 3 role-card status entries; the 7 collaboration-edge /
+ *   layout entries are gone).
  *
  * The projection layer (bucket fields, supervise edge data, zones, the
  * general-endpoint edge filter) is covered by client-graph-projection.spec.ts;
@@ -411,34 +412,29 @@ describe('agent canvas layout — supervise line (plan 20260812-panel-f5-agent-l
   })
 })
 
-describe('agent canvas layout — legend & locale (plan f5 T2 + design-system T5)', () => {
-  it('legend: the group entry joins; expected/next entries are REMOVED; unknown rewords to the sub-partition', () => {
+describe('agent canvas layout — legend & locale (plan 20260813-panel-agent-canvas-legend-layout T1)', () => {
+  it('legend: ONLY the 3 role-card status entries render; the 7 collaboration-edge / layout entries are REMOVED', () => {
     const html = agentsHtml(baseSource)
-    // Task 5 (design doc §2.8): expected + next legend entries are gone.
+    // Task 1 (图例精简): exactly the 3 entity-status entries, no others.
+    const items = [...html.matchAll(/data-mstar-legend-item="([^"]+)"/g)].map((m) => m[1]!)
+    expect(items).toEqual(['agent-running', 'agent-settled', 'agent-idle'])
+    // The 7 collaboration-edge / layout entries are gone.
+    for (const key of ['flow-actual', 'port', 'group', 'sub-bucket', 'supervise', 'on-demand', 'unknown']) {
+      expect(html).not.toContain(`data-mstar-legend-item="${key}"`)
+    }
+    // Historical negative pins stay (expected / next / general never rendered).
     expect(html).not.toContain('data-mstar-legend-item="flow-expected"')
     expect(html).not.toContain('data-mstar-legend-item="next"')
-    // Task 8 (user 2026-08-12 feedback #2): the Phase-group entry joins.
-    for (const key of ['flow-actual', 'port', 'group', 'sub-bucket', 'supervise', 'on-demand', 'unknown', 'agent-running', 'agent-settled', 'agent-idle']) {
-      expect(html).toContain(`data-mstar-legend-item="${key}"`)
-    }
     expect(html).not.toContain('data-mstar-legend-item="general"')
-    expect(html).toContain('unknown partition (bottom of the qa-gate column · unmatched / general roles)')
-    expect(html).toContain('implementor ↔ sdd-reviewer bidirectional supervise line (side-gap vertical anchor)')
-    expect(html).toContain('card ports (hover-visible · 4 fixed anchors · line ends at the standoff, off the card)')
-    expect(html).toContain('on-demand role (implementor sub-bucket badge)')
-    // The settled entry rewords to the green DONE FRAME semantics (feedback #1/#3).
+    // The surviving entries' labels (en).
+    expect(html).toContain('agent running (glow)')
     expect(html).toContain('settled agent (green done frame + ✓; off-tier roles show neither)')
-    // The group entry describes the two-band split + the plan note.
-    expect(html).toContain('Phase groups (Phase 1 sequential chain above / Phase 2 iterative plan loop below + current-plan note)')
+    expect(html).toContain('idle agent (dashed)')
     // zh labels localize.
     const zhHtml = agentsHtml(baseSource, 'zh')
-    expect(zhHtml).toContain('sdd-implement 子桶（implementor / sdd-reviewer）')
-    expect(zhHtml).toContain('implementor ↔ sdd-reviewer 双向监督线（侧隙垂直锚点）')
-    expect(zhHtml).toContain('unknown 分区（qa-gate 列底部 · 未匹配 / general 角色）')
-    expect(zhHtml).toContain('按需执行角色（implementor 子桶徽标）')
-    expect(zhHtml).toContain('卡片端口（hover 显示 · 4 固定锚点 · 线止于 standoff 不贴卡）')
-    expect(zhHtml).toContain('Phase 分组（上：Phase 1 顺序链 / 下：Phase 2 循环迭代 + 当前 plan 标注）')
+    expect(zhHtml).toContain('执行中实体（发光）')
     expect(zhHtml).toContain('已完成实体（独立绿框 + ✓；off 阶段不显示）')
+    expect(zhHtml).toContain('未工作实体（虚线）')
   })
 })
 

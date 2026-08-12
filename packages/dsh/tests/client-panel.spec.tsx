@@ -2391,28 +2391,25 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(anonymousDispatch).toContain('data-agent-summary-executing="1"')
   })
 
-  it('mounts the Legend on the agents page: group / port / sub-bucket / supervise / unknown swatches; expected+next entries gone (plan f5 T2 + T5 + design-system T8)', () => {
+  it('mounts the Legend on the agents page: ONLY the 3 role-card status entries; the collaboration-edge / layout swatches are gone (plan 20260813-panel-agent-canvas-legend-layout T1)', () => {
     const html = agentsHtml(evidenceSource)
     expect(html).toContain('data-mstar-legend')
-    // Idle swatch anchor (完成判据) + the collaboration-edge swatches — 10
-    // items (plan f5 T2 layout entries sub-bucket + supervise + the T5 port
-    // entry + the T8 Phase-group entry; 'general' is replaced by 'unknown';
-    // the expected / next entries are REMOVED with their edges — design doc
-    // §2.8).
-    for (const key of ['flow-actual', 'port', 'group', 'sub-bucket', 'supervise', 'on-demand', 'unknown', 'agent-running', 'agent-settled', 'agent-idle']) {
-      expect(html).toContain(`data-mstar-legend-item="${key}"`)
+    // Task 1 (图例精简): exactly the 3 entity-status entries — the 7
+    // collaboration-edge / layout entries (flow-actual / port / group /
+    // sub-bucket / supervise / on-demand / unknown) are REMOVED.
+    const items = [...html.matchAll(/data-mstar-legend-item="([^"]+)"/g)].map((m) => m[1]!)
+    expect(items).toEqual(['agent-running', 'agent-settled', 'agent-idle'])
+    for (const key of ['flow-actual', 'port', 'group', 'sub-bucket', 'supervise', 'on-demand', 'unknown']) {
+      expect(html).not.toContain(`data-mstar-legend-item="${key}"`)
     }
     expect(html).not.toContain('data-mstar-legend-item="flow-expected"')
     expect(html).not.toContain('data-mstar-legend-item="next"')
     expect(html).not.toContain('data-mstar-legend-item="flow-unexpected"')
     expect(html).not.toContain('data-mstar-legend-item="general"')
-    // The general bucket entry rewords to the unknown sub-partition semantics
-    // (plan f5 Task 5 — the general card lives in the LAST column's bottom
-    // sub-partition; the standalone unknown column is gone) in BOTH locales.
-    expect(html).not.toContain('general at the bottom of the sdd-implement bucket')
-    expect(html).toContain('unknown partition (bottom of the qa-gate column · unmatched / general roles)')
-    expect(html).toContain('implementor ↔ sdd-reviewer bidirectional supervise line (side-gap vertical anchor)')
-    expect(html).toContain('on-demand role (implementor sub-bucket badge)')
+    // The surviving entries' labels (en).
+    expect(html).toContain('agent running (glow)')
+    expect(html).toContain('settled agent (green done frame + ✓; off-tier roles show neither)')
+    expect(html).toContain('idle agent (dashed)')
     // The legend labels localize (zh).
     const locale = newLocale()
     locale.register(NS, { zh, en })
@@ -2423,12 +2420,9 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       iteration: evidenceView.iteration,
       t: locale.bind(NS),
     }))
+    expect(zhHtml).toContain('执行中实体（发光）')
+    expect(zhHtml).toContain('已完成实体（独立绿框 + ✓；off 阶段不显示）')
     expect(zhHtml).toContain('未工作实体（虚线）')
-    expect(zhHtml).toContain('实际交接边（曲线 · 端口锚定 · 箭头沿线）')
-    expect(zhHtml).toContain('sdd-implement 子桶（implementor / sdd-reviewer）')
-    expect(zhHtml).toContain('implementor ↔ sdd-reviewer 双向监督线（侧隙垂直锚点）')
-    expect(zhHtml).toContain('unknown 分区（qa-gate 列底部 · 未匹配 / general 角色）')
-    expect(zhHtml).toContain('按需执行角色（implementor 子桶徽标）')
     expect(zhHtml).toContain('图例')
     expect(zhHtml).not.toContain('预期流转边（虚线）')
     expect(zhHtml).not.toContain('next 流转边（动画）')

@@ -107,6 +107,14 @@
  * no sidebar) instead of the left-aligned hint — `empty.no-harness-hint`
  * is the explanatory secondary copy under the reused `empty.no-harness`
  * title.
+ *
+ * T1 (plan 20260813-panel-agent-canvas-legend-layout Task 1 — 图例精简): the
+ * legend narrows to the 3 role-card status entries —
+ * `zone.legend.flow-actual` / `port` / `group` / `sub-bucket` / `supervise` /
+ * `on-demand` / `unknown` are REMOVED (the collaboration-edge / layout tech
+ * entries; the canvas itself keeps the edges / ports / partitions — only the
+ * legend copy drops them). `zone.legend.agent-running` / `agent-settled` /
+ * `agent-idle` remain.
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -157,13 +165,6 @@ export type PanelKey =
   | 'graph.pass'
   | 'graph.fail'
   | 'zone.legend.title'
-  | 'zone.legend.flow-actual'
-  | 'zone.legend.port'
-  | 'zone.legend.group'
-  | 'zone.legend.sub-bucket'
-  | 'zone.legend.supervise'
-  | 'zone.legend.on-demand'
-  | 'zone.legend.unknown'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
   | 'zone.legend.agent-idle'
@@ -282,13 +283,6 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': '图例',
-  'zone.legend.flow-actual': '实际交接边（曲线 · 端口锚定 · 箭头沿线）',
-  'zone.legend.port': '卡片端口（hover 显示 · 4 固定锚点 · 线止于 standoff 不贴卡）',
-  'zone.legend.group': 'Phase 分组（上：Phase 1 顺序链 / 下：Phase 2 循环迭代 + 当前 plan 标注）',
-  'zone.legend.sub-bucket': 'sdd-implement 子桶（implementor / sdd-reviewer）',
-  'zone.legend.supervise': 'implementor ↔ sdd-reviewer 双向监督线（侧隙垂直锚点）',
-  'zone.legend.on-demand': '按需执行角色（implementor 子桶徽标）',
-  'zone.legend.unknown': 'unknown 分区（qa-gate 列底部 · 未匹配 / general 角色）',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已完成实体（独立绿框 + ✓；off 阶段不显示）',
   'zone.legend.agent-idle': '未工作实体（虚线）',
@@ -402,13 +396,6 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'graph.pass': 'PASS',
   'graph.fail': 'FAIL',
   'zone.legend.title': 'Legend',
-  'zone.legend.flow-actual': 'actual handoff edge (curve · port-anchored · arrow along the line)',
-  'zone.legend.port': 'card ports (hover-visible · 4 fixed anchors · line ends at the standoff, off the card)',
-  'zone.legend.group': 'Phase groups (Phase 1 sequential chain above / Phase 2 iterative plan loop below + current-plan note)',
-  'zone.legend.sub-bucket': 'sdd-implement sub-buckets (implementor / sdd-reviewer)',
-  'zone.legend.supervise': 'implementor ↔ sdd-reviewer bidirectional supervise line (side-gap vertical anchor)',
-  'zone.legend.on-demand': 'on-demand role (implementor sub-bucket badge)',
-  'zone.legend.unknown': 'unknown partition (bottom of the qa-gate column · unmatched / general roles)',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'settled agent (green done frame + ✓; off-tier roles show neither)',
   'zone.legend.agent-idle': 'idle agent (dashed)',
