@@ -60,19 +60,21 @@
  * for caption-crossing same-column flows + column-gap crossings).
  *
  * Layout (plan 20260812-panel-f5-agent-layout Task 2 + plan
- * 20260812-panel-f5-design-system Task 5 + Task 8 — the F5 rework):
- * deterministic columns per EXPECTED_ROLE_FLOW stage (review-edit-chain →
- * sdd-implement → qc-tri → qa-gate) — FOUR columns total (user 2026-08-12
- * feedback #3: the standalone rightmost UNKNOWN column is REMOVED; `zone:
- * 'general'` entities render in an "unknown / 未匹配角色" SUB-PARTITION at
- * the bottom of the LAST column, `data-sub-bucket="unknown"`), laid out in
- * TWO stacked PHASE GROUPS (Task 8 — user feedback #2): the Phase 1 group
- * ABOVE (review-edit-chain — the sequential Review & Edit chain:
- * product-manager → architect → writing-specialist) and the Phase 2 group
- * BELOW (sdd-implement → qc-tri → qa-gate — the iterative plan loop,
- * annotated with the current `activePlanId` from the projected
- * `state.plans[]` InProgress rows), each with its group label row
- * (`data-canvas-group`). The
+ * 20260812-panel-f5-design-system Task 5 + Task 8 — the F5 rework; plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2 — the left-right
+ * rework): deterministic columns per EXPECTED_ROLE_FLOW stage
+ * (review-edit-chain → sdd-implement → qc-tri → qa-gate) — FOUR columns
+ * total (user 2026-08-12 feedback #3: the standalone rightmost UNKNOWN
+ * column is REMOVED; `zone: 'general'` entities render in an "unknown /
+ * 未匹配角色" SUB-PARTITION at the bottom of the LAST column,
+ * `data-sub-bucket="unknown"`), laid out in TWO SIDE-BY-SIDE PHASE GROUPS
+ * (Task 8 — user feedback #2; Task 2 — user 2026-08-13 feedback #2): the
+ * Phase 1 group LEFTMOST (review-edit-chain — the sequential Review & Edit
+ * chain: product-manager → architect → writing-specialist) and the Phase 2
+ * group to its RIGHT (sdd-implement → qc-tri → qa-gate — the iterative plan
+ * loop, annotated with the current `activePlanId` from the projected
+ * `state.plans[]` InProgress rows), top-aligned on ONE label row, each with
+ * its group label (`data-canvas-group`). The
  * `sdd-implement` column is split into sub-buckets by the PROJECTED
  * `entity.bucket` (never a render guess): the implementor partition above —
  * flow roles in the stage's original order, then the on-demand roles
@@ -167,15 +169,18 @@ export interface CanvasColumn extends CanvasBox {
 
 /**
  * One PHASE group of the canvas (plan 20260812-panel-f5-design-system Task 8
- * — user 2026-08-12 feedback #2): the stage columns split into two vertical
- * bands by iteration phase — **Phase 1** (review-edit-chain, the sequential
- * Review & Edit chain: product-manager → architect → writing-specialist)
- * ABOVE, **Phase 2** (sdd-implement → qc-tri → qa-gate, the iterative plan
- * loop) BELOW — each with its group label row; the Phase-2 row additionally
- * annotates the CURRENT PLAN (the projected `activePlanId` — the first
- * InProgress `state.plans[]` row, design doc §1.2). Group order = first
- * occurrence in the projected stage order (PHASE_IDS-aligned) — derived,
- * never literal, so a phase/stage rename can never orphan the groups.
+ * — user 2026-08-12 feedback #2; plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2 — the left-right
+ * rework): the stage columns split into two SIDE-BY-SIDE groups by iteration
+ * phase — **Phase 1** (review-edit-chain, the sequential Review & Edit
+ * chain: product-manager → architect → writing-specialist) LEFTMOST,
+ * **Phase 2** (sdd-implement → qc-tri → qa-gate, the iterative plan loop) to
+ * its RIGHT — every group label row TOP-ALIGNED at PAD_Y; the Phase-2 row
+ * additionally annotates the CURRENT PLAN (the projected `activePlanId` —
+ * the first InProgress `state.plans[]` row, design doc §1.2). Group order =
+ * first occurrence in the projected stage order (PHASE_IDS-aligned) —
+ * derived, never literal, so a phase/stage rename can never orphan the
+ * groups.
  */
 export interface CanvasGroup {
   /** The group's iteration phase id. */
@@ -212,8 +217,10 @@ export interface CanvasLayout {
    * null when the layout has no columns (total function — never a throw). */
   unknown: UnknownSubPartition | null
   /** The Phase groups (plan 20260812-panel-f5-design-system Task 8 — user
-   * 2026-08-12 feedback #2): Phase 1 band above / Phase 2 band below, each
-   * with its label seat; empty when the layout has no columns. */
+   * 2026-08-12 feedback #2; plan
+   * 20260813-panel-agent-canvas-legend-layout Task 2): Phase 1 leftmost /
+   * Phase 2 right, top-aligned, each with its label seat; empty when the
+   * layout has no columns. */
   groups: readonly CanvasGroup[]
 }
 
@@ -235,9 +242,10 @@ const LABEL_H = 18
 const SUB_LABEL_H = 14
 /** Gap between a sub-bucket caption row and its first card (canvas metric). */
 const SUB_GAP = 4
-/** Vertical gap between the Phase groups (plan 20260812-panel-f5-design-system
- * Task 8 — design doc §1.2, canvas metric): the Phase 1 band and the Phase 2
- * band (with the group label rows) stack with this separation. */
+/** Horizontal gap between the Phase groups (plan 20260812-panel-f5-design-system
+ * Task 8 — design doc §1.2; plan 20260813-panel-agent-canvas-legend-layout
+ * Task 2 — canvas metric): the Phase 1 group and the Phase 2 group sit
+ * side-by-side with this separation. */
 const GROUP_GAP = 24
 
 /** The arrow-tip standoff (plan 20260812-panel-f5-design-system Task 5 —
@@ -312,17 +320,19 @@ export interface UnknownSubPartition {
 
 /**
  * Deterministic canvas layout (spec §4 + plan 20260812-panel-f5-agent-layout
- * Task 2 + plan 20260812-panel-f5-design-system Task 5 + Task 8 — the F5
- * rework): one column per EXPECTED_ROLE_FLOW stage (view order:
+ * Task 2 + plan 20260812-panel-f5-design-system Task 5 + Task 8 + plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2 — the F5 rework + the
+ * left-right rework): one column per EXPECTED_ROLE_FLOW stage (view order:
  * review-edit-chain → sdd-implement → qc-tri → qa-gate) — FOUR columns
- * total, laid out in TWO stacked PHASE GROUPS (Task 8, user 2026-08-12
- * feedback #2): the **Phase 1 group ABOVE** (review-edit-chain — the
- * sequential Review & Edit chain: product-manager → architect →
- * writing-specialist) and the **Phase 2 group BELOW** (sdd-implement →
- * qc-tri → qa-gate — the iterative plan loop, annotated with the current
- * `activePlanId`), each with its group label row (design doc §1.2; the
- * standalone rightmost unknown column is REMOVED — Task 5, user feedback
- * #3). The `sdd-implement` column is split into sub-buckets by the
+ * total, laid out in TWO SIDE-BY-SIDE PHASE GROUPS (Task 8, user 2026-08-12
+ * feedback #2; Task 2, user 2026-08-13 feedback #2): the **Phase 1 group
+ * LEFTMOST** (review-edit-chain — the sequential Review & Edit chain:
+ * product-manager → architect → writing-specialist) and the **Phase 2 group
+ * to its RIGHT** (sdd-implement → qc-tri → qa-gate — the iterative plan
+ * loop, annotated with the current `activePlanId`), every group label row
+ * TOP-ALIGNED at PAD_Y (design doc §1.2; the standalone rightmost unknown
+ * column is REMOVED — Task 5, user feedback #3). The `sdd-implement` column
+ * is split into sub-buckets by the
  * PROJECTED `entity.bucket` (never a render-side guess): the implementor
  * partition above — flow roles in the stage's original EXPECTED_ROLE_FLOW
  * order, then the on-demand roles (ops-engineer / prompt-engineer — the
@@ -377,14 +387,16 @@ export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
   }
 
   // Phase groups (plan 20260812-panel-f5-design-system Task 8 — user
-  // 2026-08-12 feedback #2, design doc §1.2): the stage columns split into
-  // vertical BANDS by iteration phase — Phase 1 (review-edit-chain — the
-  // sequential Review & Edit chain: product-manager → architect →
-  // writing-specialist) ABOVE, Phase 2 (sdd-implement → qc-tri → qa-gate —
-  // the iterative plan loop) BELOW. Group order = first occurrence in the
-  // projected stage order (PHASE_IDS-aligned); `planNote` marks the
-  // `autonomous-execute` group (the current-plan annotation host). Derived,
-  // never literal — a phase/stage rename can never orphan the groups.
+  // 2026-08-12 feedback #2, design doc §1.2; plan
+  // 20260813-panel-agent-canvas-legend-layout Task 2): the stage columns
+  // split into SIDE-BY-SIDE groups by iteration phase — Phase 1
+  // (review-edit-chain — the sequential Review & Edit chain:
+  // product-manager → architect → writing-specialist) LEFTMOST, Phase 2
+  // (sdd-implement → qc-tri → qa-gate — the iterative plan loop) to its
+  // RIGHT. Group order = first occurrence in the projected stage order
+  // (PHASE_IDS-aligned); `planNote` marks the `autonomous-execute` group
+  // (the current-plan annotation host). Derived, never literal — a
+  // phase/stage rename can never orphan the groups.
   const rawGroups: { phase: PhaseId; index: number; columnIds: string[]; planNote: boolean }[] = []
   for (const stage of view.stages) {
     const last = rawGroups[rawGroups.length - 1]
@@ -405,19 +417,23 @@ export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
   const columns: CanvasColumn[] = []
   const subBuckets = new Map<string, SubBucketGeometry>()
   let unknown: UnknownSubPartition | null = null
-  let maxWidth = 0
-  let y = PAD_Y
+  // LEFT-RIGHT groups (plan 20260813-panel-agent-canvas-legend-layout Task 2
+  // — user 2026-08-13 feedback #2): the Phase groups advance along x (Phase
+  // 1 leftmost, then Phase 2), sharing ONE top-anchored column row.
+  const colY = PAD_Y + LABEL_H + COL_PAD
+  let groupX = PAD_X
+  let canvasBottom = colY
   for (const group of groups) {
     // Group label row (design doc §1.2): the phase name (+ the Phase-2
     // current-plan chip — rendered by the page from `group.planNote` +
-    // `view.activePlanId`). The label seat spans the group's content width.
-    const groupW = PAD_X + group.columnIds.length * (COL_W + COL_GAP) - COL_GAP + PAD_X
-    maxWidth = Math.max(maxWidth, groupW)
-    group.label = { x: PAD_X, y, w: groupW - PAD_X * 2, h: LABEL_H }
-    const colY = y + LABEL_H + COL_PAD
+    // `view.activePlanId`). TOP-ALIGNED — every group's label sits at the
+    // same y = PAD_Y; the seat starts at the group's left edge and spans the
+    // group's columns.
+    const groupW = group.columnIds.length * (COL_W + COL_GAP) - COL_GAP
+    group.label = { x: groupX, y: PAD_Y, w: groupW, h: LABEL_H }
     let groupBottom = colY
     group.columnIds.forEach((id, ci) => {
-      const colX = PAD_X + ci * (COL_W + COL_GAP)
+      const colX = groupX + ci * (COL_W + COL_GAP)
       const column: CanvasColumn = { id, x: colX, y: colY, w: COL_W, h: 0 }
       columns.push(column)
       const list = buckets.get(id) ?? []
@@ -535,14 +551,19 @@ export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
       }
       groupBottom = Math.max(groupBottom, colY + column.h)
     })
-    y = groupBottom + GROUP_GAP
+    canvasBottom = Math.max(canvasBottom, groupBottom)
+    groupX += groupW + GROUP_GAP
   }
   return {
-    // Width = the WIDEST group (Phase 2: 3 columns → 760px; Phase 1: 1
-    // column → 248px) — the canvas is narrower than the old single-row 4
-    // columns, the height grows with the two stacked bands.
-    width: maxWidth,
-    height: y - GROUP_GAP + PAD_Y,
+    // Width = the combined single row: every group's column width +
+    // GROUP_GAP between the groups + PAD_X on both sides (Phase 1: 1 column
+    // → 200px; Phase 2: 3 columns → 712px; the full row ≈ 984px — the
+    // canvas is WIDER than the old stacked layout, the height collapses to
+    // the single shared top row).
+    width: groups.length === 0 ? 0 : groupX - GROUP_GAP + PAD_X,
+    // Height = the TALLEST group's column bottom + PAD_Y (one shared top row
+    // — no per-group y accumulation).
+    height: canvasBottom + PAD_Y,
     columns,
     cards,
     subBuckets,
@@ -610,12 +631,13 @@ function portPoint(box: CanvasBox, port: PortId): { x: number; y: number } {
 }
 
 /** The canvas column index of a card box (deterministic — columns never
- * overlap in BOTH axes: the two-band group layout (plan
- * 20260812-panel-f5-design-system Task 8) stacks the Phase-1 and Phase-2
- * columns at the SAME x positions but disjoint y bands, so the containment
- * test needs the y-range too — an x-only findIndex would resolve every
- * Phase-2 card to the Phase-1 column at the same x. -1 only when the layout
- * has no columns (total function). */
+ * overlap in BOTH axes: the LEFT-RIGHT group layout (plan
+ * 20260812-panel-f5-design-system Task 8 + plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2) places every group's
+ * columns at DISJOINT x positions sharing ONE top-aligned y band, so the
+ * x-range alone disambiguates (the y-range condition is now redundant —
+ * retained as a defensive guard). -1 only when the layout has no columns
+ * (total function). */
 function columnIndexOfBox(layout: CanvasLayout, box: CanvasBox): number {
   return layout.columns.findIndex((c) => box.x >= c.x && box.x < c.x + c.w && box.y >= c.y && box.y < c.y + c.h)
 }
@@ -641,10 +663,11 @@ function captionRows(layout: CanvasLayout, columnId: string): { x: number; y: nu
 
 /** The deterministic label seats of the whole canvas (design doc §2.0 H2 —
  * 线不叠任何文字): the Phase group label rows (plan
- * 20260812-panel-f5-design-system Task 8 — the two-band layout adds them) +
- * every column label row + the sub-bucket captions + the unknown caption.
- * Full-row approximations (the same seats the H2 geometry test asserts) —
- * deterministic, independent of rendered text width. */
+ * 20260812-panel-f5-design-system Task 8 + plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2 — the left-right group
+ * labels) + every column label row + the sub-bucket captions + the unknown
+ * caption. Full-row approximations (the same seats the H2 geometry test
+ * asserts) — deterministic, independent of rendered text width. */
 function labelSeats(layout: CanvasLayout): { x: number; y: number; w: number; h: number }[] {
   const seats: { x: number; y: number; w: number; h: number }[] = []
   for (const group of layout.groups) seats.push(group.label)
@@ -680,12 +703,14 @@ function boxOverlaps(a: { x: number; y: number; w: number; h: number }, b: { x: 
 }
 
 /** Whether a DIRECT horizontal bezier's bbox intersects ANY label seat
- * (design doc §2.0 H2 — 绕行策略 ②): an INTER-BAND flow (Phase 1 ↔ Phase 2 —
- * e.g. writing-specialist → fullstack-dev, a real same-plan handoff) crosses
- * the Phase-2 group label row + the column label rows at its diagonal, so it
- * reroutes via the source's LEFT side gap as a vertical bezier (the same
- * side-gap route as the caption-crossing same-column flows — design doc
- * §2.0/§2.5). */
+ * (design doc §2.0 H2 — 绕行策略 ②): with the LEFT-RIGHT group layout (plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2) a Phase 1 ↔ Phase 2
+ * handoff is a normal forward horizontal flow at the card-center y band,
+ * clear of the top-anchored label rows — this guard now only reroutes a
+ * horizontal bezier whose bbox still hits a label row (e.g. a same-row
+ * handoff crossing a sub-bucket caption) via the source's LEFT side gap
+ * vertical route (the same side-gap route as the caption-crossing same-column
+ * flows — design doc §2.0/§2.5). Defensive H2, retained. */
 function crossesLabelSeat(g: { x: number; y: number; w: number; h: number }, layout: CanvasLayout): boolean {
   return labelSeats(layout).some((seat) => boxOverlaps(g, seat))
 }
@@ -762,8 +787,9 @@ function verticalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeom
  * the target's bottom edge pointing UP into it. The old code put the tip
  * above the target (pointing AWAY) and the center-x line ran through both
  * card bodies (H1/H2 violations). Forward (source above) keeps source SOUTH
- * → target NORTH. The same rule applies to the reverse inter-band reroute
- * (Phase 2 → Phase 1).
+ * → target NORTH. The same direction-aware rule applies to the defensive
+ * side-gap reroute of a reverse Phase 2 → Phase 1 handoff (should
+ * `crossesLabelSeat` ever fire for one).
  *
  * Same-column flows whose center-x vertical line would cross a sub-bucket
  * CAPTION row (the implementor↔reviewer flow crosses the "sdd-reviewer"
@@ -772,14 +798,17 @@ function verticalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeom
  * 绕行策略 ② — 同列关系线移到卡片列外侧的间隙带): the vertical bezier hangs
  * at `card left edge − SIDE_GAP`, clear of every text (H2).
  *
- * Inter-band flows (plan 20260812-panel-f5-design-system Task 8 — the
- * two-band layout): a Phase 1 ↔ Phase 2 handoff (e.g. writing-specialist →
- * fullstack-dev — a real same-plan Review&Edit→implement transfer) would
- * cross the Phase-2 group label row + the column label rows on its diagonal
- * — the DIRECT horizontal bezier is replaced by the SAME side-gap vertical
- * route at `card left edge − SIDE_GAP` when its bbox intersects any label
- * seat (H2, 绕行策略 ②); the reroute keeps the direction-aware endpoint
- * (reverse Phase 2 → Phase 1 handoffs land below the target's south edge).
+ * Inter-phase flows (plan 20260812-panel-f5-design-system Task 8 + plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2 — the left-right
+ * layout): a Phase 1 → Phase 2 handoff (e.g. writing-specialist →
+ * fullstack-dev — a real same-plan Review&Edit→implement transfer) is a
+ * normal FORWARD horizontal bezier (source east → target west) — the groups
+ * sit side-by-side at one top-aligned y band, so no label row lies between
+ * the cards. `crossesLabelSeat` stays as a DEFENSIVE H2 guard: if a
+ * horizontal bbox still intersects any label seat (e.g. a caption row), the
+ * flow reroutes via the source's LEFT side gap vertical route at `card left
+ * edge − SIDE_GAP`, keeping the direction-aware endpoint (reverse Phase 2 →
+ * Phase 1 handoffs land below the target's south edge).
  */
 export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | null {
   if (edge.kind === 'supervise') {
@@ -799,15 +828,15 @@ export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | 
   if (sourceBox === undefined || targetBox === undefined) return null
   const srcCol = columnIndexOfBox(layout, sourceBox)
   const tgtCol = columnIndexOfBox(layout, targetBox)
-  // The inter-band / caption-crossing side-gap vertical reroute (design doc
-  // §2.0 绕行策略 ② / §2.5): hangs at `source card left edge − SIDE_GAP` —
-  // clear of every card and label row (H2). DIRECTION-AWARE endpoints (QC
-  // W-001): forward (source above target) hangs source SOUTH → target
-  // NORTH; reverse (source below — the rework cycle) hangs source NORTH →
-  // target SOUTH — the arrow tip ALWAYS lands on the target's NEAR side at
-  // `standoff` along the vertical tangent (H1) and the line never crosses a
-  // card body. Shared by the same-column caption-crossing branch and the
-  // inter-band reroutes below.
+  // The caption-crossing side-gap vertical reroute (design doc §2.0 绕行策略
+  // ② / §2.5): hangs at `source card left edge − SIDE_GAP` — clear of every
+  // card and label row (H2). DIRECTION-AWARE endpoints (QC W-001): forward
+  // (source above target) hangs source SOUTH → target NORTH; reverse (source
+  // below — the rework cycle) hangs source NORTH → target SOUTH — the arrow
+  // tip ALWAYS lands on the target's NEAR side at `standoff` along the
+  // vertical tangent (H1) and the line never crosses a card body. Shared by
+  // the same-column caption-crossing branch and the defensive
+  // `crossesLabelSeat` reroute below (H2).
   const sideGapVertical = (): EdgeGeometry => {
     const sideX = sourceBox.x - SIDE_GAP
     const forward = sourceBox.y + sourceBox.h <= targetBox.y
@@ -820,8 +849,9 @@ export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | 
   if (srcCol < tgtCol) {
     // Forward: source east → target west; the path ends 10px LEFT of the
     // west edge (outside the card) with a horizontal tangent (H1). A direct
-    // diagonal whose bbox crosses any label seat (the inter-band case —
-    // Task 8) reroutes via the side gap (H2).
+    // bezier whose bbox still crosses any label seat (defensive H2 — the
+    // left-right layout keeps the top label rows clear of the card-center
+    // flow band) reroutes via the side gap.
     const s = portPoint(sourceBox, 'east')
     const t = portPoint(targetBox, 'west')
     const endX = t.x - STANDOFF
@@ -1058,13 +1088,16 @@ export function AgentCanvasPage({ view, iteration, t, initialPan }: AgentCanvasP
           style={{ transform: panTransform(pan), width: layout.width, height: layout.height }}
         >
           {/* Phase group labels (plan 20260812-panel-f5-design-system Task 8 —
-           * user 2026-08-12 feedback #2): the canvas splits into TWO vertical
-           * bands — Phase 1 (the sequential review-edit-chain) ABOVE, Phase 2
-           * (the iterative plan loop: sdd-implement → qc-tri → qa-gate) BELOW.
-           * The Phase-2 row carries the CURRENT-PLAN annotation (the projected
-           * `activePlanId` — the first InProgress `state.plans[]` row; muted
-           * 「无进行中 plan」 when none; `+N more` when several run in
-           * parallel — honest, never hides the rest). */}
+           * user 2026-08-12 feedback #2; plan
+           * 20260813-panel-agent-canvas-legend-layout Task 2 — the left-right
+           * rework): the canvas splits into TWO SIDE-BY-SIDE groups — Phase 1
+           * (the sequential review-edit-chain) LEFTMOST, Phase 2 (the iterative
+           * plan loop: sdd-implement → qc-tri → qa-gate) to its RIGHT — all
+           * top-aligned on one label row. The Phase-2 row carries the
+           * CURRENT-PLAN annotation (the projected `activePlanId` — the first
+           * InProgress `state.plans[]` row; muted 「无进行中 plan」 when none;
+           * `+N more` when several run in parallel — honest, never hides the
+           * rest). */}
           {layout.groups.map((group) => (
             <span
               key={group.phase}

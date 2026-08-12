@@ -26,7 +26,10 @@
  *   the 4 hover-visible port dots (`data-agent-port`) render per card;
  * - the Legend / locale sync (plan 20260813-panel-agent-canvas-legend-layout
  *   Task 1: ONLY the 3 role-card status entries; the 7 collaboration-edge /
- *   layout entries are gone).
+ *   layout entries are gone);
+ * - the Phase 1/2 LEFT-RIGHT layout (plan 20260813-panel-agent-canvas-legend-layout
+ *   Task 2: Phase 1 leftmost, Phase 2 right, top-aligned — all columns share
+ *   one colY; a Phase 1 → Phase 2 handoff is a direct horizontal bezier).
  *
  * The projection layer (bucket fields, supervise edge data, zones, the
  * general-endpoint edge filter) is covered by client-graph-projection.spec.ts;
@@ -231,9 +234,10 @@ function curveBBox(g: { x1: number; y1: number; x2: number; y2: number; cx1: num
 }
 
 /** The text seats of the deterministic layout (design doc §1.1 constants):
- * Phase group labels (plan 20260812-panel-f5-design-system Task 8 — the
- * two-band layout adds a group label row per phase) + column labels
- * (LABEL_H) + sub-bucket captions (SUB_LABEL_H). */
+ * Phase group labels (plan 20260812-panel-f5-design-system Task 8 + plan
+ * 20260813-panel-agent-canvas-legend-layout T2 — one top-aligned label row
+ * per left-right group) + column labels (LABEL_H) + sub-bucket captions
+ * (SUB_LABEL_H). */
 function textSeats(layout: CanvasLayout): { x: number; y: number; w: number; h: number }[] {
   const seats: { x: number; y: number; w: number; h: number }[] = []
   for (const group of layout.groups) seats.push({ ...group.label })
@@ -448,19 +452,20 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
     const path = pathOf(html, 'data-agent-edge-actual')
     expect(lineAttr(path, 'data-agent-edge-actual')).toBe('fullstack-dev-&gt;qc-specialist')
     const d = parsePath(lineAttr(path, 'd'))
-    // Source EAST port: the card right-edge midpoint. Phase 2 group (Task 8
-    // — the two-band layout): the sdd-implement column sits at x=24 (group
-    // label y=360 → column y=390), the implementor caption pushes the first
-    // card (fullstack-dev) to y=438 — 176×72 card → east port (212, 474).
-    expect(d.x1).toBe(24 + 12 + 176) // card left (colX + centering) + CARD_W
-    expect(d.y1).toBe(438 + 72 / 2)
+    // Source EAST port: the card right-edge midpoint. LEFT-RIGHT layout (plan
+    // 20260813-panel-agent-canvas-legend-layout T2): Phase 2 starts at x=248,
+    // the sdd-implement column shares colY=54 with every other column, the
+    // implementor caption pushes the first card (fullstack-dev) to y=102 —
+    // 176×72 card → east port (436, 138).
+    expect(d.x1).toBe(248 + 12 + 176) // card left (colX + centering) + CARD_W
+    expect(d.y1).toBe(102 + 72 / 2)
     // Target WEST port standoff: 10px LEFT of the west edge (arrow tip off
     // the card — 不贴卡) at the target card's vertical midpoint. The qc-tri
-    // column (x=280) is a PLAIN stack — its first card (qc-specialist) sits
-    // at y = 390 + LABEL_H + COL_PAD = 420, center y = 456.
-    const targetWest = 280 + 12 // qc-tri column x + card centering
+    // column (x=504) is a PLAIN stack — its first card (qc-specialist) sits
+    // at y = 54 + LABEL_H + COL_PAD = 84, center y = 120.
+    const targetWest = 504 + 12 // qc-tri column x + card centering
     expect(d.x2).toBe(targetWest - 10)
-    expect(d.y2).toBe(420 + 36)
+    expect(d.y2).toBe(84 + 36)
     // Bezier `C` with the horizontal-flow control formula: off =
     // max(|dx|/2, 24) = 35 → c1 = (sx+35, sy) — horizontal endpoint tangents.
     expect(lineAttr(path, 'd')).toContain('C ')
@@ -480,10 +485,10 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
       dispatchEvent({ ts: 1, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
     ]))
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    expect(d.x1).toBe(280 + 12) // qc card WEST edge (left edge midpoint)
-    expect(d.x2).toBe(24 + 12 + 176 + 10) // fullstack EAST edge + 10px standoff
-    expect(d.y1).toBe(420 + 36) // qc-specialist (plain qc-tri column, first card)
-    expect(d.y2).toBe(438 + 36) // fullstack-dev (sdd-implement, center y = 474)
+    expect(d.x1).toBe(504 + 12) // qc card WEST edge (left edge midpoint)
+    expect(d.x2).toBe(248 + 12 + 176 + 10) // fullstack EAST edge + 10px standoff
+    expect(d.y1).toBe(84 + 36) // qc-specialist (plain qc-tri column, first card)
+    expect(d.y2).toBe(102 + 36) // fullstack-dev (sdd-implement, center y = 138)
   })
 
   it('actual edge: a same-column flow uses south → north ports with a center-x vertical bezier', () => {
@@ -494,11 +499,11 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
       dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
     ]))
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    const cx = 24 + 12 + 176 / 2
+    const cx = 248 + 12 + 176 / 2 // sdd-implement column (Phase 2, x=248)
     expect(d.x1).toBe(cx)
     expect(d.x2).toBe(cx) // center-x vertical
-    expect(d.y1).toBe(438 + 72) // source south port (card bottom)
-    expect(d.y2).toBe(522 - 4) // target north − reduced standoff (gap 12 → 4)
+    expect(d.y1).toBe(102 + 72) // source south port (card bottom)
+    expect(d.y2).toBe(186 - 4) // target north − reduced standoff (gap 12 → 4)
     // Vertical degenerate bezier: control points collinear with the endpoints.
     expect(d.cx1).toBe(cx)
     expect(d.cx2).toBe(cx)
@@ -513,10 +518,10 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
       dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
     ]))
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    expect(d.x1).toBe(24 + 12 - 18) // card LEFT edge − SIDE_GAP (inside the gap)
-    expect(d.x2).toBe(24 + 12 - 18)
-    expect(d.y1).toBe(438 + 72) // source south edge level
-    expect(d.y2).toBe(876 - 10) // target north − STANDOFF
+    expect(d.x1).toBe(248 + 12 - 18) // card LEFT edge − SIDE_GAP (inside the gap)
+    expect(d.x2).toBe(248 + 12 - 18)
+    expect(d.y1).toBe(102 + 72) // source south edge level
+    expect(d.y2).toBe(540 - 10) // target north − STANDOFF
   })
 
   it('actual edge: a REVERSE same-column flow (source below target) ends on the target SOUTH side, arrow pointing up — never through the cards (qc3 W-001)', () => {
@@ -530,23 +535,23 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
       dispatchEvent({ ts: 1, role: 'fullstack-dev-2', agent: 'a2', planId: 'plan-x' }),
     ]))
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    const cx = 24 + 12 + 176 / 2
+    const cx = 248 + 12 + 176 / 2
     expect(d.x1).toBe(cx)
     expect(d.x2).toBe(cx) // center-x vertical
     // Direction-aware endpoints: source NORTH (its top edge) → target SOUTH
     // + standoff (below the target's bottom edge) — the tip lands on the
-    // NEAR side of the target, pointing UP into it (old code: tip at
-    // 438−2=436, above the target, pointing away).
-    expect(d.y1).toBe(522) // source top (fullstack-dev-2 north port)
-    expect(d.y2).toBe(510 + 4) // target bottom + reduced standoff (gap 12 → 4)
+    // NEAR side of the target, pointing UP into it (the old code put the tip
+    // above the target, pointing away).
+    expect(d.y1).toBe(186) // source top (fullstack-dev-2 north port)
+    expect(d.y2).toBe(102 + 72 + 4) // target bottom + reduced standoff (gap 12 → 4)
     // The endpoint tangent points UP toward the target card (the bezier's
     // end control sits BELOW the endpoint, qc3 W-001 "tangent toward card").
     expect(d.cy2).toBeGreaterThan(d.y2)
-    // The curve stays in the inter-card gap (510..522) — no segment crosses
+    // The curve stays in the inter-card gap (174..186) — no segment crosses
     // either card body (H2): the bbox never overlaps the source or target box.
     const bbox = curveBBox(d)
-    expect(overlaps(bbox, { x: 24 + 12, y: 438, w: 176, h: 72 })).toBe(false) // target fullstack-dev
-    expect(overlaps(bbox, { x: 24 + 12, y: 522, w: 176, h: 72 })).toBe(false) // source fullstack-dev-2
+    expect(overlaps(bbox, { x: 248 + 12, y: 102, w: 176, h: 72 })).toBe(false) // target fullstack-dev
+    expect(overlaps(bbox, { x: 248 + 12, y: 186, w: 176, h: 72 })).toBe(false) // source fullstack-dev-2
   })
 
   it('actual edge: the REVERSE rework collapse (code-reviewer → fullstack-dev) reroutes in the side gap with the tip on the target SOUTH side (qc3 W-001)', () => {
@@ -564,20 +569,20 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
     const path = pathOf(html, 'data-agent-edge-actual')
     expect(lineAttr(path, 'data-agent-edge-actual')).toBe('code-reviewer-&gt;fullstack-dev')
     const d = parsePath(lineAttr(path, 'd'))
-    expect(d.x1).toBe(24 + 12 - 18) // card LEFT edge − SIDE_GAP (side-gap route)
-    expect(d.x2).toBe(24 + 12 - 18)
-    // Direction-aware: source NORTH (code-reviewer top, 876) → target SOUTH +
-    // standoff (fullstack bottom 510 + 10) — the tip lands BELOW the target,
-    // pointing UP into it (old code: start at the source BOTTOM 948, tip at
-    // 438−10=428 above the target).
-    expect(d.y1).toBe(876)
-    expect(d.y2).toBe(510 + 10)
+    expect(d.x1).toBe(248 + 12 - 18) // card LEFT edge − SIDE_GAP (side-gap route)
+    expect(d.x2).toBe(248 + 12 - 18)
+    // Direction-aware: source NORTH (code-reviewer top, 540) → target SOUTH +
+    // standoff (fullstack bottom 174 + 10) — the tip lands BELOW the target,
+    // pointing UP into it (the old code started at the source BOTTOM and put
+    // the tip above the target, pointing away).
+    expect(d.y1).toBe(540)
+    expect(d.y2).toBe(102 + 72 + 10)
     expect(d.cy2).toBeGreaterThan(d.y2) // end tangent points UP toward the card
-    // The line hangs LEFT of both cards (x=18 < card left 36) — no card-body
+    // The line hangs LEFT of both cards (x=242 < card left 260) — no card-body
     // crossing (H2).
     const bbox = curveBBox(d)
-    expect(overlaps(bbox, { x: 24 + 12, y: 438, w: 176, h: 72 })).toBe(false) // target fullstack-dev
-    expect(overlaps(bbox, { x: 24 + 12, y: 876, w: 176, h: 72 })).toBe(false) // source code-reviewer
+    expect(overlaps(bbox, { x: 248 + 12, y: 102, w: 176, h: 72 })).toBe(false) // target fullstack-dev
+    expect(overlaps(bbox, { x: 248 + 12, y: 540, w: 176, h: 72 })).toBe(false) // source code-reviewer
   })
 
   it('arrow markers are pinned to a fixed 6px user-space body — the same-column standoff clears the source card for the REAL marker extents (qc2 F-001)', () => {
@@ -614,15 +619,15 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
     // The forward same-column edge (fullstack-dev → fullstack-dev-2):
     // standoff = gap − 8 = 4 (tip 4px off the target north edge); the pinned
     // 6px arrow body extends BACKWARD from the tip (up toward the source) →
-    // base at tip − 6 = 512, EXACTLY 2px clear of the source card bottom
-    // (510). The comment's "base ≥ 2px clear" claim now matches the REAL
-    // marker extents (old code: ~9.45px marker → base at 508.55, 1.45px INTO
-    // the source card).
+    // base at tip − 6 = 176, EXACTLY 2px clear of the source card bottom
+    // (174). The comment's "base ≥ 2px clear" claim now matches the REAL
+    // marker extents (the old strokeWidth-scaled marker was ~9.45px, so its
+    // base reached ~1.45px INTO the source card).
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    expect(d.y1).toBe(438 + 72) // source south port
-    expect(d.y2).toBe(522 - 4) // target north − reduced standoff (gap 12 → 4)
+    expect(d.y1).toBe(102 + 72) // source south port
+    expect(d.y2).toBe(186 - 4) // target north − reduced standoff (gap 12 → 4)
     const arrowLen = 6 // the pinned marker body (refX in the 1:1 userSpaceOnUse viewBox)
-    expect(d.y2 - arrowLen).toBe(438 + 72 + 2) // base exactly 2px clear of the source bottom
+    expect(d.y2 - arrowLen).toBe(102 + 72 + 2) // base exactly 2px clear of the source bottom
   })
 
   it('expected / next edge anchors NEVER render (design doc §2.2 — 简洁化)', () => {
@@ -733,7 +738,7 @@ describe('agent canvas — Phase 1/2 groups + current-plan annotation (plan 2026
     }
   }
 
-  it('two group anchors in stage order: Phase 1 (iteration-start) ABOVE, Phase 2 (autonomous-execute) BELOW', () => {
+  it('two group anchors in stage order: Phase 1 (iteration-start) LEFTMOST, Phase 2 (autonomous-execute) RIGHT (plan 20260813-panel-agent-canvas-legend-layout T2)', () => {
     const view = projectGraph(baseSource).agents
     const layout = layoutAgents(view)
     // The groups split the 4 columns by phase: Phase 1 = review-edit-chain,
@@ -746,23 +751,28 @@ describe('agent canvas — Phase 1/2 groups + current-plan annotation (plan 2026
     ])
     // Phase 2 group carries the plan-note host; Phase 1 does not.
     expect(layout.groups.map((g) => g.planNote)).toEqual([false, true])
-    // The Phase 1 band sits ABOVE the Phase 2 band (label rows + column bands).
+    // LEFT-RIGHT (Task 2): Phase 1 leftmost, Phase 2 right — every group
+    // label TOP-ALIGNED at the same y = PAD_Y (24).
     const [g1, g2] = layout.groups
-    expect(g1!.label.y).toBeLessThan(g2!.label.y)
+    expect(g1!.label.x).toBeLessThan(g2!.label.x)
+    expect(g1!.label.y).toBe(g2!.label.y)
+    expect(g1!.label.y).toBe(24)
     const review = layout.columns.find((c) => c.id === 'iteration-start:review-edit-chain')!
     const sdd = layout.columns.find((c) => c.id === 'autonomous-execute:sdd-implement')!
-    expect(review.y).toBeLessThan(sdd.y)
-    // The Phase-2 group label row sits between the two column bands.
-    expect(review.y + review.h).toBeLessThan(g2!.label.y)
-    expect(g2!.label.y).toBeLessThan(sdd.y)
-    // Width = the widest group (Phase 2: 3 columns); the canvas is narrower
-    // than the old single-row 4-column layout.
-    expect(layout.width).toBe(24 + 3 * (200 + 56) - 56 + 24)
-    // Column x positions: the sdd-implement column is back at PAD_X (24) —
-    // the same x as the review-edit-chain column ABOVE it (the y bands
-    // disambiguate; `columnIndexOfBox` is y-aware, T8).
-    expect(sdd.x).toBe(24)
+    // The columns share ONE colY row (PAD_Y + LABEL_H + COL_PAD = 54); the
+    // groups sit side-by-side — no x overlap, `columnIndexOfBox` needs only
+    // the x-range to disambiguate.
+    expect(review.y).toBe(sdd.y)
+    expect(review.x).toBeLessThan(sdd.x)
+    expect(review.x + review.w).toBeLessThan(sdd.x)
+    // Width = the FULL combined row: left pad 24 + Phase 1 (1 col = 200) +
+    // GROUP_GAP 24 + Phase 2 (3 cols = 3·200 + 2·56 = 712) + right pad 24 =
+    // 984 (the old stacked layout took only the widest group width, 760).
+    expect(layout.width).toBe(24 + 200 + 24 + (3 * 200 + 2 * 56) + 24)
+    // Column x positions: Phase 1 leftmost at PAD_X (24); the sdd-implement
+    // column no longer starts at 24 — it sits right of Phase 1 (+ GROUP_GAP).
     expect(review.x).toBe(24)
+    expect(sdd.x).toBe(24 + 200 + 24)
   })
 
   it('renders the group labels: Phase 1 label + Phase 2 label with the CURRENT-PLAN chip (data-canvas-group-plan)', () => {
@@ -816,39 +826,47 @@ describe('agent canvas — Phase 1/2 groups + current-plan annotation (plan 2026
   })
 })
 
-describe('agent canvas — inter-band edge routing (plan 20260812-panel-f5-design-system T8, H2)', () => {
-  it('a Phase 1 → Phase 2 handoff (writing-specialist → fullstack-dev) reroutes via the LEFT side gap — never crosses the Phase-2 group label row (H2)', () => {
-    // writing-specialist (Phase 1, review-edit-chain) → fullstack-dev (Phase
-    // 2, sdd-implement), same plan — the DIRECT horizontal bezier's bbox
-    // would cross the Phase-2 group label + the sdd-implement column label
-    // rows, so the side-gap vertical reroute (source SOUTH → target NORTH at
-    // card left − SIDE_GAP) takes over.
+describe('agent canvas — inter-phase edge routing (plan 20260813-panel-agent-canvas-legend-layout T2, H2)', () => {
+  it('a Phase 1 → Phase 2 handoff (writing-specialist → fullstack-dev) is a DIRECT horizontal bezier — source east → target west', () => {
+    // writing-specialist (Phase 1, review-edit-chain — the FIRST card of its
+    // plain stack, y=84) → fullstack-dev (Phase 2, sdd-implement — the first
+    // implementor card, y=102), same plan. With the LEFT-RIGHT layout the two
+    // groups sit side-by-side at one top-aligned y band — no group/column
+    // label row lies between the cards, so the DIRECT horizontal bezier holds
+    // (the old stacked layout rerouted this handoff via the side gap).
     const html = agentsHtml(flowSource([
       dispatchEvent({ ts: 2, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
       dispatchEvent({ ts: 1, role: 'writing-specialist', agent: 'w1', planId: 'plan-x' }),
     ]))
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    // Source south → target north in the LEFT side gap (x = card left − 18).
-    // The review-edit-chain column is a PLAIN stack (entity order — the lit
-    // writing-specialist card is FIRST, y=84), so its south port is 156.
-    expect(d.x1).toBe(24 + 12 - 18)
-    expect(d.x2).toBe(24 + 12 - 18)
-    expect(d.y1).toBe(84 + 72) // writing-specialist south (the first Phase-1 card)
-    expect(d.y2).toBe(438 - 10) // fullstack-dev north − STANDOFF
-    // The bbox of the rerouted line never intersects ANY label seat (H2 —
-    // the line hangs LEFT of every label row: x=18 < all label x≥24).
+    // Source EAST (writing-specialist card right-edge midpoint): the card at
+    // (36, 84) → east = (212, 120). Target WEST standoff: fullstack-dev card
+    // at (260, 102) → west = (260, 138), 10px LEFT → 250.
+    expect(d.x1).toBe(24 + 12 + 176)
+    expect(d.y1).toBe(84 + 36)
+    expect(d.x2).toBe(248 + 12 - 10)
+    expect(d.y2).toBe(102 + 36)
+    // A horizontal bezier (NOT the side-gap vertical route): the endpoint
+    // tangents are horizontal (cy == y) and the controls offset along x.
+    expect(d.cy1).toBe(d.y1)
+    expect(d.cy2).toBe(d.y2)
+    expect(d.cx1).toBe(d.x1 + Math.max(Math.abs(d.x2 - d.x1) / 2, 24))
+    // The direct bbox never intersects ANY label seat (H2 — the top-anchored
+    // label rows stay clear of the card-center flow band).
     const layout = layoutAgents(projectGraph(flowSource([
       dispatchEvent({ ts: 2, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
       dispatchEvent({ ts: 1, role: 'writing-specialist', agent: 'w1', planId: 'plan-x' }),
     ])).agents)
+    const bbox = curveBBox(d)
     for (const seat of textSeats(layout)) {
-      expect(overlaps({ x: d.x1, y: d.y1, w: 0, h: d.y2 - d.y1 }, seat)).toBe(false)
+      expect(overlaps(bbox, seat)).toBe(false)
     }
   })
 
   it('a direct Phase-2 cross-column flow stays a horizontal bezier (no label between the cards)', () => {
-    // fullstack-dev → qc-specialist — both Phase 2 bands, horizontal line at
-    // the card centers — no label row in between → the direct curve holds.
+    // fullstack-dev → qc-specialist — both Phase 2 columns (same group),
+    // horizontal line at the card centers — no label row in between → the
+    // direct curve holds.
     const html = agentsHtml(flowSource([
       dispatchEvent({ ts: 2, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
       dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
@@ -856,7 +874,7 @@ describe('agent canvas — inter-band edge routing (plan 20260812-panel-f5-desig
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
     expect(d.cy1).toBe(d.y1) // horizontal endpoint tangent — NOT the side-gap vertical
     expect(d.cx1).not.toBe(d.x1)
-    expect(d.x1).toBe(24 + 12 + 176) // source east port
+    expect(d.x1).toBe(248 + 12 + 176) // source east port
   })
 })
 
