@@ -1,23 +1,34 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.0.6**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.1.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **2.0.6** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.0.6** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.0.6** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.0.6** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.0.6** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **2.0.6** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.0.6** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.0.6** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.0.6** |
-| Agent Plugins 清单 | `plugin.json` | **2.0.6** |
+| monorepo 根 | `morning-star`（`package.json`） | **2.1.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.1.0** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.1.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.1.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.1.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **2.1.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.1.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.1.0** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.1.0** |
+| Agent Plugins 清单 | `plugin.json` | **2.1.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [2.1.0] - 2026-08-12
+
+### Harness
+
+- 新增 **`code-reviewer` 角色（L2）**：只读席位，承担 SDD per-task 审查与 `Task category: audit` / `mstar-audit` 执行。PM 入口仍为 `/codebase-audit`；大型仓库经 Assignment `Delegation: allowed (scout/explore only, read-only)` 扇出只读 `scout` / `explore`。
+- 将 `code-reviewer` 接入 SDD per-task 派发（具名 L2 reviewer id，`generic` 回退）、audit 路由（`mstar-harness-core`、`commands/codebase-audit.md`）、engine `ROLE_MAPPING`（13→14）与双语 README 角色表；`qc-specialist*`（L3）/ QA（L4）语义不变。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 2.1.0**。
 
 ## [2.0.6] - 2026-08-10
 
