@@ -19,6 +19,10 @@
  *   arrowheads render clear of the opaque cards), dim dashed without
  *   evidence, lit business with it (`data-agent-edge-supervise-lit` — the
  *   projected `evidenced` flag, never a render-side fabrication);
+ * - the emphasis tiers (plan 20260812-panel-f5-design-system Task 4):
+ *   `data-agent-emphasis` rides the PROJECTED tier, absent with no
+ *   iteration, and the status point stays OPAQUE on emphasized cards (zero
+ *   whole-card opacity — the fade is a chrome color mix, design doc §3.4);
  * - the Legend / locale sync (sub-bucket / supervise / unknown entries).
  *
  * The projection layer (bucket fields, supervise edge data, zones) is
@@ -107,6 +111,29 @@ function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
     state: {
       ...baseSource.state!,
       agentFlow: { events, summary: [] } as unknown as AgentFlowView,
+    },
+  }
+}
+
+/** A PHASE-2 source (gate transition `phase-2-execute` → `currentStep` 2)
+ * with the given ledger events — the emphasis-tier render tests need an
+ * ACTIVE iteration (the base `flowSource` carries none → `currentStep`
+ * null → no emphasis override). */
+function phase2Source(events: readonly unknown[]): MstarEngineStatusSource {
+  return {
+    ...flowSource(events),
+    iteration: {
+      iterationId: 'iter-x',
+      statusPath: '/proj/.mstar/status.json',
+      compassPath: '/proj/.mstar/iterations/iter-x/delivery-compass.md',
+      gate: {
+        transition: 'phase-2-execute',
+        all_plans_done: false,
+        ok: true,
+        entry: { ok: true, violations: [] },
+        exit: { ok: true, violations: [] },
+        violations: [],
+      },
     },
   }
 }
@@ -296,5 +323,48 @@ describe('agent canvas layout — legend & locale (plan 20260812-panel-f5-agent-
     expect(zhHtml).toContain('implementor ↔ sdd-reviewer 双向监督线')
     expect(zhHtml).toContain('unknown 列（未匹配 / general 角色）')
     expect(zhHtml).toContain('按需执行角色（implementor 子桶徽标）')
+  })
+})
+
+describe('agent canvas — emphasis tiers (plan 20260812-panel-f5-design-system T4, design doc §3)', () => {
+  it('Phase 2: autonomous-execute cards current, review-edit-chain + on-demand/general off (data-agent-emphasis)', () => {
+    const html = agentsHtml(phase2Source([dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]))
+    // Lit AND idle cards both carry the PROJECTED tier (idle fullstack-dev
+    // would also be current — its KNOWN_AGENTS stage is autonomous-execute).
+    expect(cardRegion(html, 'fullstack-dev')).toContain('data-agent-emphasis="current"')
+    expect(cardRegion(html, 'product-manager')).toContain('data-agent-emphasis="off"')
+    expect(cardRegion(html, 'ops-engineer')).toContain('data-agent-emphasis="off"')
+    expect(cardRegion(html, 'general')).toContain('data-agent-emphasis="off"')
+  })
+
+  it('Phase 1: review-edit-chain current, autonomous-execute next (the only phase with a next tier)', () => {
+    const phase1 = agentsHtml({
+      ...phase2Source([dispatchEvent({ ts: 1, role: 'product-manager', agent: 'pm1' })]),
+      iteration: { ...phase2Source([]).iteration!, compassStatus: 'active' },
+    })
+    expect(cardRegion(phase1, 'product-manager')).toContain('data-agent-emphasis="current"')
+    expect(cardRegion(phase1, 'fullstack-dev')).toContain('data-agent-emphasis="next"')
+    expect(cardRegion(phase1, 'ops-engineer')).toContain('data-agent-emphasis="off"')
+  })
+
+  it('no iteration (currentStep null): NO card carries data-agent-emphasis — the no-override case', () => {
+    const html = agentsHtml(baseSource) // no iteration section at all
+    expect(html.match(/data-agent-emphasis=/g)).toBeNull()
+  })
+
+  it('status point stays OPAQUE on an emphasized card — zero whole-card opacity (design doc §3.4 HARD)', () => {
+    // A RUNNING on-demand card during Phase 2: emphasis 'off' (stage null)
+    // × status 'running' — the time (emphasis) and evidence (status)
+    // dimensions stack independently (design doc §3.1/§3.4).
+    const html = agentsHtml(phase2Source([dispatchEvent({ ts: 1, role: 'ops-engineer', agent: 'o1' })]))
+    const region = cardRegion(html, 'ops-engineer')
+    expect(region).toContain('data-agent-emphasis="off"')
+    expect(region).toContain('data-agent-status="running"')
+    // The fade lives in the chrome COLOR mix (color-mix toward the layer
+    // background) — never in an `opacity` property, because a whole-card
+    // opacity would fade the status point and the running glow with it (the
+    // HARD rule). Pin: no `opacity` anywhere in the card markup (the inline
+    // `style` carries left/top/width/height only).
+    expect(region).not.toContain('opacity')
   })
 })

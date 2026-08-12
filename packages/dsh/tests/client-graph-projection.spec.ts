@@ -1518,6 +1518,94 @@ describe('projectGraph — SDD sub-buckets (plan 20260812-panel-f5-agent-layout 
 })
 
 /* ---------------------------------------------------------------------------
+ * Agent emphasis tiers (plan 20260812-panel-f5-design-system Task 4 — design
+ * doc §3): the TIME dimension — the iteration's current phase
+ * (`currentStep` → PHASE_IDS rank) vs the entity's pipeline-stage phase.
+ * Derived from projected fields only (zero new catalog reads): current /
+ * next / off / null (no iteration → no override). The design doc's example
+ * table (design doc §3.3) is the expectation oracle.
+ * ------------------------------------------------------------------------- */
+
+/** A source at the given gate transition (phase 2/3/4) with the ledger events. */
+function phaseSource(
+  transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery',
+  events: readonly unknown[] = [],
+): MstarEngineStatusSource {
+  return {
+    ...flowSource(events),
+    iteration: { ...fullSource.iteration!, gate: { ...fullSource.iteration!.gate, transition } },
+  }
+}
+
+describe('projectGraph — agents emphasis tiers (plan 20260812-panel-f5-design-system T4)', () => {
+  /** entity key → emphasis (the projection is the only source of truth). */
+  const emphasisByKey = (view: ZoneView) =>
+    new Map(view.agents.entities.map((e) => [e.key, e.emphasis]))
+  /** The 8 autonomous-execute pipeline roles (design doc §3.3 example). */
+  const EXECUTE_ROLES = ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev', 'code-reviewer', 'qc-specialist', 'qc-specialist-2', 'qc-specialist-3', 'qa-engineer']
+  /** The 3 review-edit-chain roles (design doc §3.3 example). */
+  const REVIEW_ROLES = ['product-manager', 'architect', 'writing-specialist']
+
+  it('Phase 1 (currentStep 1): review-edit-chain current, autonomous-execute next, on-demand/general off', () => {
+    const view = projectGraph({
+      ...flowSource([dispatchRow({ ts: 1, role: 'product-manager', agent: 'pm1' })]),
+      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
+    })
+    expect(view.iteration.currentStep).toBe(1)
+    const byKey = emphasisByKey(view)
+    for (const role of REVIEW_ROLES) expect(byKey.get(role)).toBe('current') // lit + idle parity
+    for (const role of EXECUTE_ROLES) expect(byKey.get(role)).toBe('next')
+    for (const role of ['ops-engineer', 'prompt-engineer', 'general']) expect(byKey.get(role)).toBe('off')
+  })
+
+  it('Phase 2 (currentStep 2): autonomous-execute current, review-edit-chain + on-demand/general off', () => {
+    const view = projectGraph(flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]))
+    expect(view.iteration.currentStep).toBe(2)
+    const byKey = emphasisByKey(view)
+    for (const role of EXECUTE_ROLES) expect(byKey.get(role)).toBe('current')
+    for (const role of [...REVIEW_ROLES, 'ops-engineer', 'prompt-engineer', 'general']) {
+      expect(byKey.get(role)).toBe('off')
+    }
+  })
+
+  it('Phase 3 (currentStep 3): Phase 3+ dispatch no EXPECTED_ROLE_FLOW stages → the whole 14-roster goes off (design doc §3.2 note)', () => {
+    const view = projectGraph(phaseSource('phase-3-close', [dispatchRow({ ts: 1, role: 'fullstack-dev' })]))
+    expect(view.iteration.currentStep).toBe(3)
+    expect(view.agents.entities).toHaveLength(KNOWN_AGENTS.length)
+    for (const e of view.agents.entities) expect(e.emphasis).toBe('off')
+  })
+
+  it('Phase 4 (currentStep 4): the same all-off (pr-delivery)', () => {
+    const view = projectGraph(prDeliverySource)
+    expect(view.iteration.currentStep).toBe(4)
+    for (const e of view.agents.entities) expect(e.emphasis).toBe('off')
+  })
+
+  it('no iteration / no plan (currentStep null): every entity emphasis null — NO override (design doc §3.1)', () => {
+    for (const source of [null, noHarnessSource] as const) {
+      const view = projectGraph(source)
+      expect(view.iteration.currentStep).toBeNull()
+      expect(view.agents.entities.length).toBeGreaterThan(0)
+      for (const e of view.agents.entities) expect(e.emphasis).toBeNull()
+    }
+  })
+
+  it('running on-demand card (stage null) during Phase 2 → off, status stays running — emphasis × status ORTHOGONAL', () => {
+    const view = projectGraph(flowSource([dispatchRow({ ts: 10, role: 'ops-engineer', agent: 'o1' })]))
+    const ops = view.agents.entities.find((e) => e.key === 'ops-engineer')!
+    expect(ops.stage).toBeNull()
+    expect(ops.status).toBe('running')
+    expect(ops.emphasis).toBe('off')
+  })
+
+  it('totality: emphasis is projected per entity on garbage branches too (never throws)', () => {
+    const view = projectGraph({ garbage: true } as unknown as MstarEngineStatusSource)
+    expect(view.agents.entities.length).toBeGreaterThan(0)
+    for (const e of view.agents.entities) expect(e.emphasis).toBeNull()
+  })
+})
+
+/* ---------------------------------------------------------------------------
  * The sub-bucket supervision edge (plan 20260812-panel-f5-agent-layout Task
  * 1): ONE static design-knowledge line between the sdd-implement column's
  * implementor and reviewer sub-buckets (mstar-sdd mutual supervision — the

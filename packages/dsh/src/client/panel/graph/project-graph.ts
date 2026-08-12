@@ -249,6 +249,15 @@ export interface AgentEntityView {
    * other role (qc/qa/review-edit-chain/general) → null. Same rule for idle
    * cards (KNOWN_AGENTS id → SDD_BUCKET_ROLES lookup). */
   bucket: AgentBucket | null
+  /** Transparency tier (plan 20260812-panel-f5-design-system Task 4 — the
+   * TIME dimension, design doc §3): the iteration's current phase vs the
+   * entity's pipeline-stage phase — 'current' (chrome full-strength), 'next'
+   * (mid transparency), 'off' (low transparency — passed phases, on-demand /
+   * general bucket), null (no iteration/plan — NO override, idle status quo).
+   * ORTHOGONAL to `bucket` (space: same-column partition) / `zone` (column) /
+   * `status` (evidence): the render fades the card CHROME only — the status
+   * point and the running ring/glow NEVER fade (design doc §3.4 HARD). */
+  emphasis: AgentEmphasis
 }
 
 /** The SDD sub-bucket a role belongs to within the `sdd-implement` column
@@ -257,6 +266,47 @@ export interface AgentEntityView {
  * ORTHOGONAL to expectedness (SDD_BUCKET_ROLES vs EXPECTED_ROLE_FLOW — an
  * on-demand role in the implementor bucket stays OUTSIDE the expected union). */
 export type AgentBucket = 'implementor' | 'reviewer'
+
+/** Transparency tier (plan 20260812-panel-f5-design-system Task 4 — design
+ * doc §3.1): the TIME dimension of an entity — the iteration's current phase
+ * vs the entity's pipeline-stage phase. 'current' → chrome full-strength,
+ * 'next' → mid transparency (expected but not yet), 'off' → low transparency
+ * (already-passed phase, or NO stage — on-demand / general bucket), null →
+ * no iteration/plan (NO override — the render keeps the idle status quo). */
+export type AgentEmphasis = 'current' | 'next' | 'off' | null
+
+/**
+ * Emphasis derivation (plan 20260812-panel-f5-design-system Task 4 — design
+ * doc §3.3, the FINALIZED rule: Task 3 gate D4–D7 confirmed the tiers
+ * 1/0.75/0.45, phase granularity, on-demand → 'off' and Phase 3–5 → all
+ * 'off'). Reuses ONLY projected fields (`iteration.currentStep` +
+ * `entity.stage`) — zero new catalog reads:
+ *
+ *   currentStep === null                      → null   (no iteration: no override)
+ *   stage === null                            → 'off'  (on-demand / general bucket)
+ *   phaseRank(stage.phase) <  rank(current)   → 'off'  (already-passed phase)
+ *   phaseRank(stage.phase) === rank(current)  → 'current'
+ *   otherwise                                 → 'next' (a later phase)
+ *
+ * Phase 3–5 have NO EXPECTED_ROLE_FLOW stages (design doc §3.2 note) — every
+ * pipeline role's rank stays below the current phase → all 'off'. Total
+ * function, never a throw: an out-of-range `currentStep` (impossible via the
+ * projection — it derives 1..5) degrades to `null` (no override).
+ */
+function emphasisOf(
+  stage: { phase: PhaseId; stage: string } | null,
+  currentStep: number | null,
+): AgentEmphasis {
+  if (currentStep === null) return null
+  if (stage === null) return 'off'
+  const currentPhase = PHASE_IDS[currentStep - 1]
+  if (currentPhase === undefined) return null // defensive: out-of-range step → no override
+  const rank = PHASE_IDS.indexOf(stage.phase)
+  const currentRank = PHASE_IDS.indexOf(currentPhase)
+  if (rank < currentRank) return 'off'
+  if (rank === currentRank) return 'current'
+  return 'next'
+}
 
 /**
  * Entity status (spec §4, hardcoded priority): `denied`/`advisory` come from
@@ -569,7 +619,10 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
   }
 
   // --- agents zone + flow events (spec §3/§4) ---
-  const agents = projectAgents(source)
+  // `currentStep` (already computed above, spec §3) drives the entity
+  // transparency tiers (plan 20260812-panel-f5-design-system Task 4 — design
+  // doc §3.3: null → no override, every entity `emphasis: null`).
+  const agents = projectAgents(source, currentStep)
   const flow = projectFlowEvents(source)
 
   return {
@@ -736,6 +789,7 @@ function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEven
 function aggregateEntities(
   entries: readonly { view: FlowEventView }[],
   pairStatus: ReadonlyMap<number, FlowEventStatus>,
+  currentStep: number | null,
 ): AgentEntityView[] {
   const acc = new Map<string, EntityAccum>()
   for (let i = 0; i < entries.length; i++) {
@@ -789,6 +843,7 @@ function aggregateEntities(
     stage: e.stage,
     zone: e.zone,
     bucket: e.bucket,
+    emphasis: emphasisOf(e.stage, currentStep),
     status: entityStatus(e, pairStatus),
     idle: false,
   }))
@@ -861,11 +916,16 @@ function nextEdges(entities: readonly AgentEntityView[], stages: readonly AgentZ
  * twin in that case too — the entity key space stays unique, so
  * `layoutAgents`' `cards.set` and the React `key` never collide/overwrite.
  */
-function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<string>): AgentEntityView[] {
+function idleEntities(
+  evidencedRoles: ReadonlySet<string>,
+  litKeys: ReadonlySet<string>,
+  currentStep: number | null,
+): AgentEntityView[] {
   const out: AgentEntityView[] = []
   for (const known of KNOWN_AGENTS) {
     if (evidencedRoles.has(known.id)) continue
     if (litKeys.has(known.id)) continue // F-001: the lit card occupies this roster slot
+    const stage = known.stage ?? null
     out.push({
       key: known.id,
       agent: null,
@@ -876,9 +936,10 @@ function idleEntities(evidencedRoles: ReadonlySet<string>, litKeys: ReadonlySet<
       idle: true,
       count: 0,
       ts: 0,
-      stage: known.stage ?? null,
+      stage,
       zone: idleZone(known),
       bucket: bucketOf(known.id),
+      emphasis: emphasisOf(stage, currentStep),
     })
   }
   return out
@@ -893,7 +954,12 @@ function idleZone(known: KnownAgent): AgentZone {
 }
 
 /**
- * `projectAgents(source): AgentZoneView` — the agents zone (spec §4 + §6.2).
+ * `projectAgents(source, currentStep): AgentZoneView` — the agents zone (spec
+ * §4 + §6.2). `currentStep` is the ITERATION's current step (1-based into
+ * PHASE_IDS, null when inactive — already computed by `projectGraph`, spec
+ * §3): it drives each entity's `emphasis` tier (plan
+ * 20260812-panel-f5-design-system Task 4 — design doc §3.3; `null` → every
+ * entity `emphasis: null`, no override).
  * Total function: NEVER throws and NEVER fabricates values:
  *
  * - `state.agentFlow` null/unreadable → `degraded`: the FULL KNOWN_AGENTS
@@ -921,7 +987,7 @@ function idleZone(known: KnownAgent): AgentZone {
  * UI consumes it directly and never infers settle-only from the entity list
  * (garbage rows would fake it).
  */
-export function projectAgents(source: MstarEngineStatusSource | null): AgentZoneView {
+export function projectAgents(source: MstarEngineStatusSource | null, currentStep: number | null): AgentZoneView {
   const stages: AgentZoneStage[] = EXPECTED_ROLE_FLOW.map((s) => ({
     id: `${s.phase}:${s.stage}`,
     phase: s.phase,
@@ -942,7 +1008,7 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     // (evidenced false — no evidence to light it).
     return {
       stages, degraded: true, empty: false, note: null,
-      entities: idleEntities(new Set(), new Set()),
+      entities: idleEntities(new Set(), new Set(), currentStep),
       edges: [...expectedEdges(stages), ...superviseEdges(stages, [])], executing: 0, pending: 0,
     }
   }
@@ -991,12 +1057,12 @@ export function projectAgents(source: MstarEngineStatusSource | null): AgentZone
     })),
   )
 
-  const lit = aggregateEntities(entries, pairStatus)
+  const lit = aggregateEntities(entries, pairStatus, currentStep)
   // F-001: the evidence-derived key set drives the idle-twin suppression —
   // a lit `general` key (from any non-roster dispatch) never coexists with the
   // idle roster `general` card.
   const litKeys = new Set(lit.map((e) => e.key))
-  const entities = [...lit, ...idleEntities(evidencedRoles, litKeys)]
+  const entities = [...lit, ...idleEntities(evidencedRoles, litKeys, currentStep)]
   const edges = [
     ...expectedEdges(stages),
     ...actualEdges(entries),

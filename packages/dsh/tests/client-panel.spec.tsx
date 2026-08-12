@@ -2517,11 +2517,11 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       entities: [
         {
           key: 'general', agent: null, name: 'general', role: 'general', task: null,
-          status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'general', bucket: null,
+          status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'general', bucket: null, emphasis: null,
         },
         {
           key: 'ops-engineer', agent: null, name: 'ops-engineer', role: 'ops-engineer', task: null,
-          status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'on-demand', bucket: 'implementor',
+          status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'on-demand', bucket: 'implementor', emphasis: null,
         },
       ],
       edges: [],

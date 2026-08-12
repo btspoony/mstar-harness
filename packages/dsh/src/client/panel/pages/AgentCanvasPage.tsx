@@ -476,6 +476,7 @@ function EntityCard({ entity, t, box }: { entity: AgentEntityView; t: TranslateN
       data-agent-running={running ? 'true' : undefined}
       data-agent-stage={entity.stage === null ? entity.zone : `${entity.stage.phase}:${entity.stage.stage}`}
       data-agent-bucket={entity.bucket ?? undefined}
+      data-agent-emphasis={entity.emphasis ?? undefined}
     >
       {/* On-demand badge (plan 20260812-panel-f5-agent-layout Task 2): the
        * implementor-sub-bucket on-demand roles (ops-engineer /

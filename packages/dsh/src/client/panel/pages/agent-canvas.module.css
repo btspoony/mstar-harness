@@ -10,7 +10,11 @@
  * removed, the general bucket no longer sinks into the sdd-implement column),
  * the Legend seat (plan Task 3), and the AgentEdge
  * collaboration lines (expected skeleton / actual handoffs / the ANIMATED
- * next edge / the bidirectional supervise line).
+ * next edge / the bidirectional supervise line). Plus the emphasis tiers
+ * (plan 20260812-panel-f5-design-system Task 4 — design doc §3): chrome
+ * colors mix toward the layer background by the projected
+ * `data-agent-emphasis` tier (current 100% / next 75% / off 45% — NEVER a
+ * whole-card opacity, so the status point + running glow stay opaque).
  *
  * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
  * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
@@ -31,6 +35,14 @@
   flex-direction: column;
   gap: var(--mstar-space-2);
   padding: var(--mstar-space-3);
+  /* Canvas emphasis tiers (design doc §3.5 — canvas semantic tokens, this
+   * plan declares them; theme-independent, light/dark same values): the
+   * chrome-alpha PERCENTAGES the tier rules mix chrome colors toward the
+   * viewport layer background (design doc §3.4 — numeric equivalents:
+   * current 1 / next 0.75 / off 0.45). */
+  --mstar-canvas-emphasis-current: 100%;
+  --mstar-canvas-emphasis-next: 75%;
+  --mstar-canvas-emphasis-off: 45%;
 }
 
 .canvasHeader {
@@ -193,14 +205,38 @@
   gap: var(--mstar-space-1);
   min-width: 0;
   padding: var(--mstar-space-2);
-  border: 1px solid var(--dsw-alias-border-l1);
+  /* Emphasis chrome alpha (plan 20260812-panel-f5-design-system Task 4 —
+   * design doc §3.4 HARD): the tier percentage applied to the card CHROME
+   * colors via color-mix toward the layer background — NEVER a whole-card
+   * `opacity` (a parent opacity would fade the status point + running glow,
+   * violating the status-point highest-priority rule). Default = the
+   * current tier (100% → identity mix); the `data-agent-emphasis` rules
+   * below swap it. The status point / running ring + glow use their OWN
+   * full-strength token colors and are never mixed. */
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-current);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);
   transition: border-color 150ms ease;   /* hover 120–150ms window */
 }
 
+/* Emphasis tier overrides (design doc §3.3/§3.5): swap the chrome alpha
+ * only — `current` renders the attribute but changes nothing (100% = the
+ * default). No tier → no attribute → no override (the no-iteration /
+ * no-plan case, design doc §3.1 null). */
+.agentCard[data-agent-emphasis='next'] {
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-next);
+}
+
+.agentCard[data-agent-emphasis='off'] {
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-off);
+}
+
 .agentCard:hover {
-  border-color: var(--dsw-alias-border-l2);
+  /* Hover brightening (spec §4.1 — border-l1 → border-l2) mixed with the
+   * card's own chrome alpha: the tier fade persists on hover instead of the
+   * neutral hover color overriding it. */
+  border-color: color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
 }
 
 /* Running card (spec §4): business ring + soft glow pulse — the "执行中高亮"
@@ -225,14 +261,16 @@
 }
 
 /* Idle card (spec §6.2 — the muted "未工作" card): dashed frame, caption
- * text — never a guessed status. */
+ * text — never a guessed status. The border-color rides the card's chrome
+ * alpha (design doc §3.4: idle dashed + emphasis coexist — border-style is
+ * a DIFFERENT property plane than the chrome fade). */
 .agentCardIdle {
   border-style: dashed;
-  border-color: var(--dsw-alias-border-l2);
+  border-color: color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
 }
 
 .agentCardIdle:hover {
-  border-color: var(--dsw-alias-label-caption);
+  border-color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
 }
 
 /* On-demand badge (plan 20260812-panel-f5-agent-layout Task 2): the
@@ -244,9 +282,9 @@
 .onDemandBadge {
   align-self: flex-start;
   padding: 0 var(--mstar-space-1);
-  border: 1px dashed var(--dsw-alias-state-business-primary);
+  border: 1px dashed color-mix(in srgb, var(--dsw-alias-state-business-primary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   border-radius: 999px;
-  color: var(--dsw-alias-label-secondary);
+  color: color-mix(in srgb, var(--dsw-alias-label-secondary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   font: var(--dsw-font-xxxs-11);
 }
 
@@ -308,13 +346,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--dsw-alias-label-primary);
+  color: color-mix(in srgb, var(--dsw-alias-label-primary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   font: var(--dsw-font-xxxs-11);
   font-weight: 600;
 }
 
 .agentCardIdle .agentCardName {
-  color: var(--dsw-alias-label-caption);
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
 }
 
 /* ×N count badge (spec §4 — count > 1 only); the name's flex:1 pushes it
@@ -323,9 +361,9 @@
   flex: none;
   min-width: 18px;
   padding: 0 var(--mstar-space-1);
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   border-radius: 999px;
-  color: var(--dsw-alias-label-caption);
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   font: var(--dsw-font-xxxs-11);
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -334,9 +372,9 @@
 .agentRoleChip {
   align-self: flex-start;
   padding: 0 var(--mstar-space-1);
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   border-radius: 999px;
-  color: var(--dsw-alias-label-secondary);
+  color: color-mix(in srgb, var(--dsw-alias-label-secondary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   font: var(--dsw-font-xxxs-11);
 }
 
@@ -346,7 +384,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--dsw-alias-label-caption);
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
   font: var(--dsw-font-xxxs-11);
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
