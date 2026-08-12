@@ -1608,6 +1608,75 @@ describe('projectGraph — agents emphasis tiers (plan 20260812-panel-f5-design-
 })
 
 /* ---------------------------------------------------------------------------
+ * The Phase-2 current-plan annotation (plan 20260812-panel-f5-design-system
+ * Task 8 — user 2026-08-12 feedback #2): the projection exposes the FIRST
+ * `state.plans[]` InProgress row (`activePlanId`, catalog order) + the full
+ * InProgress count (`activePlanCount`) — the render annotates the Phase 2
+ * group with the current plan (and an honest `+N more` when several plans
+ * run in parallel). Total function: state / plans missing or no InProgress
+ * row → null / 0, never fabricated.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents activePlanId / activePlanCount (plan 20260812-panel-f5-design-system T8)', () => {
+  /** A ledger-evidence source whose state.plans carries the given rows. */
+  function planRowsSource(rows: readonly { id?: string; status?: string }[]): MstarEngineStatusSource {
+    return {
+      ...flowSource([dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]),
+      state: { ...fullSource.state!, plans: rows as never },
+    }
+  }
+
+  it('the first InProgress plan id + the full InProgress count (catalog order)', () => {
+    const view = projectGraph(planRowsSource([
+      { id: 'plan-a', status: 'Done' },
+      { id: 'plan-b', status: 'InProgress' },
+      { id: 'plan-c', status: 'InProgress' },
+      { id: 'plan-d', status: 'Todo' },
+    ]))
+    expect(view.agents.activePlanId).toBe('plan-b')
+    expect(view.agents.activePlanCount).toBe(2)
+  })
+
+  it('no InProgress row → null / 0 (never fabricated)', () => {
+    const view = projectGraph(planRowsSource([
+      { id: 'plan-a', status: 'Done' },
+      { id: 'plan-d', status: 'Todo' },
+      { id: 'plan-e', status: 'Blocked' },
+    ]))
+    expect(view.agents.activePlanId).toBeNull()
+    expect(view.agents.activePlanCount).toBe(0)
+  })
+
+  it('state null / plans missing / non-array → null / 0 (total function)', () => {
+    expect(projectGraph({ ...fullSource, state: null }).agents.activePlanId).toBeNull()
+    expect(projectGraph({ ...fullSource, state: null }).agents.activePlanCount).toBe(0)
+    const missing = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: undefined } } as unknown as MstarEngineStatusSource)
+    expect(missing.agents.activePlanId).toBeNull()
+    expect(missing.agents.activePlanCount).toBe(0)
+    const garbage = projectGraph({ ...fullSource, state: { ...fullSource.state!, plans: 'nope' } } as unknown as MstarEngineStatusSource)
+    expect(garbage.agents.activePlanId).toBeNull()
+  })
+
+  it('degraded / empty ledger branches include the note too — it rides state.plans, not the ledger', () => {
+    // agentFlow null → the degraded branch; the InProgress plan still projects.
+    const degraded = projectGraph({
+      ...planRowsSource([{ id: 'plan-x', status: 'InProgress' }]),
+      state: { ...planRowsSource([{ id: 'plan-x', status: 'InProgress' }]).state!, agentFlow: null },
+    })
+    expect(degraded.agents.degraded).toBe(true)
+    expect(degraded.agents.activePlanId).toBe('plan-x')
+    expect(degraded.agents.activePlanCount).toBe(1)
+    // Empty ledger (0 events) + no InProgress → null.
+    const empty = projectGraph({
+      ...flowSource([]),
+      state: { ...flowSource([]).state!, plans: [{ id: 'plan-d', status: 'Todo', doneAt: null }] },
+    })
+    expect(empty.agents.empty).toBe(true)
+    expect(empty.agents.activePlanId).toBeNull()
+  })
+})
+
+/* ---------------------------------------------------------------------------
  * The sub-bucket supervision edge (plan 20260812-panel-f5-agent-layout Task
  * 1): ONE static design-knowledge line between the sdd-implement column's
  * implementor and reviewer sub-buckets (mstar-sdd mutual supervision — the

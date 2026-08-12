@@ -81,7 +81,13 @@ export interface PanelContentProps {
  * AgentEventDock — 无双份日志, the dock is removed with this plan).
  */
 export function PanelContent({ tab, source, t }: PanelContentProps) {
-  if (tab === 'agents') return <AgentCanvasPage view={projectGraph(source).agents} t={t} />
+  if (tab === 'agents') {
+    // The SHARED iteration info section (plan 20260812-panel-f5-design-system
+    // Task 8 — user 2026-08-12 feedback #4): the agents page receives the
+    // SAME `view.iteration` the tasks page renders (IterationInfoSection).
+    const view = projectGraph(source)
+    return <AgentCanvasPage view={view.agents} iteration={view.iteration} t={t} />
+  }
   if (tab === 'events') return <EventLogPage view={projectGraph(source)} t={t} />
   return <IterationTaskPage view={projectGraph(source)} t={t} />
 }

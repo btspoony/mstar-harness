@@ -109,6 +109,24 @@ function dispatchEvent(over: { ts: number; role: string; agent?: string; planId?
   }
 }
 
+/** One settle row as the T1 ledger view emits it (spec §2.2 — carries the
+ * PAIRED dispatch identity when `role` is given, plan
+ * `20260811-panel-f4-timeliness` Task 1 — the settled-status fixtures need
+ * the exact-identity pairing). */
+function settleEvent(over: { ts: number; agent?: string; outcome?: 'ok' | 'error' | 'denied'; role?: string; planId?: string; taskId?: string }): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'settle',
+    agent: over.agent ?? null,
+    role: over.role ?? '',
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
+    taskCategory: null,
+    ...(over.role !== undefined ? { paired: true } : {}),
+    ...(over.outcome !== undefined ? { outcome: over.outcome } : {}),
+  }
+}
+
 /** A source whose `state.agentFlow` carries the given events (latest-first). */
 function flowSource(events: readonly unknown[]): MstarEngineStatusSource {
   return {
@@ -148,8 +166,10 @@ function agentsHtml(source: MstarEngineStatusSource, lang: 'en' | 'zh' = 'en', i
   const locale = newLocale()
   locale.register(NS, { zh, en })
   locale.setLocale(lang)
+  const view = projectGraph(source)
   return renderToStaticMarkup(createElement(AgentCanvasPage, {
-    view: projectGraph(source).agents,
+    view: view.agents,
+    iteration: view.iteration,
     t: locale.bind(NS),
     ...(initialPan !== undefined ? { initialPan } : {}),
   }))
@@ -210,9 +230,12 @@ function curveBBox(g: { x1: number; y1: number; x2: number; y2: number; cx1: num
 }
 
 /** The text seats of the deterministic layout (design doc §1.1 constants):
- * column labels (LABEL_H) + sub-bucket captions (SUB_LABEL_H). */
+ * Phase group labels (plan 20260812-panel-f5-design-system Task 8 — the
+ * two-band layout adds a group label row per phase) + column labels
+ * (LABEL_H) + sub-bucket captions (SUB_LABEL_H). */
 function textSeats(layout: CanvasLayout): { x: number; y: number; w: number; h: number }[] {
   const seats: { x: number; y: number; w: number; h: number }[] = []
+  for (const group of layout.groups) seats.push({ ...group.label })
   for (const col of layout.columns) seats.push({ x: col.x, y: col.y, w: col.w, h: 18 }) // LABEL_H
   for (const geometry of layout.subBuckets.values()) {
     for (const p of [geometry.implementor, geometry.reviewer]) {
@@ -389,12 +412,13 @@ describe('agent canvas layout — supervise line (plan 20260812-panel-f5-agent-l
 })
 
 describe('agent canvas layout — legend & locale (plan f5 T2 + design-system T5)', () => {
-  it('legend: the port entry joins; expected/next entries are REMOVED; unknown rewords to the sub-partition', () => {
+  it('legend: the group entry joins; expected/next entries are REMOVED; unknown rewords to the sub-partition', () => {
     const html = agentsHtml(baseSource)
     // Task 5 (design doc §2.8): expected + next legend entries are gone.
     expect(html).not.toContain('data-mstar-legend-item="flow-expected"')
     expect(html).not.toContain('data-mstar-legend-item="next"')
-    for (const key of ['flow-actual', 'port', 'sub-bucket', 'supervise', 'on-demand', 'unknown', 'agent-running', 'agent-settled', 'agent-idle']) {
+    // Task 8 (user 2026-08-12 feedback #2): the Phase-group entry joins.
+    for (const key of ['flow-actual', 'port', 'group', 'sub-bucket', 'supervise', 'on-demand', 'unknown', 'agent-running', 'agent-settled', 'agent-idle']) {
       expect(html).toContain(`data-mstar-legend-item="${key}"`)
     }
     expect(html).not.toContain('data-mstar-legend-item="general"')
@@ -402,6 +426,10 @@ describe('agent canvas layout — legend & locale (plan f5 T2 + design-system T5
     expect(html).toContain('implementor ↔ sdd-reviewer bidirectional supervise line (side-gap vertical anchor)')
     expect(html).toContain('card ports (hover-visible · 4 fixed anchors · line ends at the standoff, off the card)')
     expect(html).toContain('on-demand role (implementor sub-bucket badge)')
+    // The settled entry rewords to the green DONE FRAME semantics (feedback #1/#3).
+    expect(html).toContain('settled agent (green done frame + ✓; off-tier roles show neither)')
+    // The group entry describes the two-band split + the plan note.
+    expect(html).toContain('Phase groups (Phase 1 sequential chain above / Phase 2 iterative plan loop below + current-plan note)')
     // zh labels localize.
     const zhHtml = agentsHtml(baseSource, 'zh')
     expect(zhHtml).toContain('sdd-implement 子桶（implementor / sdd-reviewer）')
@@ -409,6 +437,8 @@ describe('agent canvas layout — legend & locale (plan f5 T2 + design-system T5
     expect(zhHtml).toContain('unknown 分区（qa-gate 列底部 · 未匹配 / general 角色）')
     expect(zhHtml).toContain('按需执行角色（implementor 子桶徽标）')
     expect(zhHtml).toContain('卡片端口（hover 显示 · 4 固定锚点 · 线止于 standoff 不贴卡）')
+    expect(zhHtml).toContain('Phase 分组（上：Phase 1 顺序链 / 下：Phase 2 循环迭代 + 当前 plan 标注）')
+    expect(zhHtml).toContain('已完成实体（独立绿框 + ✓；off 阶段不显示）')
   })
 })
 
@@ -422,18 +452,19 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
     const path = pathOf(html, 'data-agent-edge-actual')
     expect(lineAttr(path, 'data-agent-edge-actual')).toBe('fullstack-dev-&gt;qc-specialist')
     const d = parsePath(lineAttr(path, 'd'))
-    // Source EAST port: the card right-edge midpoint (fullstack-dev card at
-    // sdd-implement x=292, y=72 — the implementor caption pushes the first
-    // card below the plain-column start — 176×72).
-    expect(d.x1).toBe(292 + 176)
-    expect(d.y1).toBe(72 + 72 / 2)
+    // Source EAST port: the card right-edge midpoint. Phase 2 group (Task 8
+    // — the two-band layout): the sdd-implement column sits at x=24 (group
+    // label y=360 → column y=390), the implementor caption pushes the first
+    // card (fullstack-dev) to y=438 — 176×72 card → east port (212, 474).
+    expect(d.x1).toBe(24 + 12 + 176) // card left (colX + centering) + CARD_W
+    expect(d.y1).toBe(438 + 72 / 2)
     // Target WEST port standoff: 10px LEFT of the west edge (arrow tip off
     // the card — 不贴卡) at the target card's vertical midpoint. The qc-tri
-    // column is a PLAIN stack — its first card (qc-specialist) sits at
-    // PAD_Y + LABEL_H + COL_PAD = 54, center y = 90.
-    const targetWest = 536 + 12 // qc-tri column x + card centering
+    // column (x=280) is a PLAIN stack — its first card (qc-specialist) sits
+    // at y = 390 + LABEL_H + COL_PAD = 420, center y = 456.
+    const targetWest = 280 + 12 // qc-tri column x + card centering
     expect(d.x2).toBe(targetWest - 10)
-    expect(d.y2).toBe(54 + 36)
+    expect(d.y2).toBe(420 + 36)
     // Bezier `C` with the horizontal-flow control formula: off =
     // max(|dx|/2, 24) = 35 → c1 = (sx+35, sy) — horizontal endpoint tangents.
     expect(lineAttr(path, 'd')).toContain('C ')
@@ -453,10 +484,10 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
       dispatchEvent({ ts: 1, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
     ]))
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    expect(d.x1).toBe(536 + 12) // qc card WEST edge (left edge midpoint)
-    expect(d.x2).toBe(292 + 176 + 10) // fullstack EAST edge + 10px standoff
-    expect(d.y1).toBe(54 + 36) // qc-specialist (plain qc-tri column, first card)
-    expect(d.y2).toBe(72 + 36) // fullstack-dev (sdd-implement, center y = 108)
+    expect(d.x1).toBe(280 + 12) // qc card WEST edge (left edge midpoint)
+    expect(d.x2).toBe(24 + 12 + 176 + 10) // fullstack EAST edge + 10px standoff
+    expect(d.y1).toBe(420 + 36) // qc-specialist (plain qc-tri column, first card)
+    expect(d.y2).toBe(438 + 36) // fullstack-dev (sdd-implement, center y = 474)
   })
 
   it('actual edge: a same-column flow uses south → north ports with a center-x vertical bezier', () => {
@@ -467,11 +498,11 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
       dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
     ]))
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    const cx = 292 + 176 / 2
+    const cx = 24 + 12 + 176 / 2
     expect(d.x1).toBe(cx)
     expect(d.x2).toBe(cx) // center-x vertical
-    expect(d.y1).toBe(72 + 72) // source south port (card bottom)
-    expect(d.y2).toBe(156 - 4) // target north − reduced standoff (gap 12 → 4)
+    expect(d.y1).toBe(438 + 72) // source south port (card bottom)
+    expect(d.y2).toBe(522 - 4) // target north − reduced standoff (gap 12 → 4)
     // Vertical degenerate bezier: control points collinear with the endpoints.
     expect(d.cx1).toBe(cx)
     expect(d.cx2).toBe(cx)
@@ -486,10 +517,10 @@ describe('agent canvas — Task 5 edge rework: bezier curves + card ports + H1/H
       dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
     ]))
     const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
-    expect(d.x1).toBe(292 - 18) // card LEFT edge − SIDE_GAP (inside the gap)
-    expect(d.x2).toBe(292 - 18)
-    expect(d.y1).toBe(72 + 72) // source south edge level
-    expect(d.y2).toBe(510 - 10) // target north − STANDOFF
+    expect(d.x1).toBe(24 + 12 - 18) // card LEFT edge − SIDE_GAP (inside the gap)
+    expect(d.x2).toBe(24 + 12 - 18)
+    expect(d.y1).toBe(438 + 72) // source south edge level
+    expect(d.y2).toBe(876 - 10) // target north − STANDOFF
   })
 
   it('expected / next edge anchors NEVER render (design doc §2.2 — 简洁化)', () => {
@@ -582,5 +613,215 @@ describe('agent canvas — emphasis tiers (plan 20260812-panel-f5-design-system 
     // HARD rule). Pin: no `opacity` anywhere in the card markup (the inline
     // `style` carries left/top/width/height only).
     expect(region).not.toContain('opacity')
+  })
+})
+
+describe('agent canvas — Phase 1/2 groups + current-plan annotation (plan 20260812-panel-f5-design-system T8, user feedback #2)', () => {
+  /** A phase-2 source whose state.plans carries the given InProgress rows. */
+  function planSource(inProgress: string[]): MstarEngineStatusSource {
+    return {
+      ...phase2Source([dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]),
+      state: {
+        ...baseSource.state!,
+        plans: [
+          ...inProgress.map((id) => ({ id, status: 'InProgress', doneAt: null })),
+          { id: 'plan-done', status: 'Done', doneAt: '2026-08-08' },
+        ],
+      },
+    }
+  }
+
+  it('two group anchors in stage order: Phase 1 (iteration-start) ABOVE, Phase 2 (autonomous-execute) BELOW', () => {
+    const view = projectGraph(baseSource).agents
+    const layout = layoutAgents(view)
+    // The groups split the 4 columns by phase: Phase 1 = review-edit-chain,
+    // Phase 2 = sdd-implement / qc-tri / qa-gate.
+    expect(layout.groups.map((g) => g.phase)).toEqual(['iteration-start', 'autonomous-execute'])
+    expect(layout.groups.map((g) => g.index)).toEqual([1, 2])
+    expect(layout.groups.map((g) => g.columnIds)).toEqual([
+      ['iteration-start:review-edit-chain'],
+      ['autonomous-execute:sdd-implement', 'autonomous-execute:qc-tri', 'autonomous-execute:qa-gate'],
+    ])
+    // Phase 2 group carries the plan-note host; Phase 1 does not.
+    expect(layout.groups.map((g) => g.planNote)).toEqual([false, true])
+    // The Phase 1 band sits ABOVE the Phase 2 band (label rows + column bands).
+    const [g1, g2] = layout.groups
+    expect(g1!.label.y).toBeLessThan(g2!.label.y)
+    const review = layout.columns.find((c) => c.id === 'iteration-start:review-edit-chain')!
+    const sdd = layout.columns.find((c) => c.id === 'autonomous-execute:sdd-implement')!
+    expect(review.y).toBeLessThan(sdd.y)
+    // The Phase-2 group label row sits between the two column bands.
+    expect(review.y + review.h).toBeLessThan(g2!.label.y)
+    expect(g2!.label.y).toBeLessThan(sdd.y)
+    // Width = the widest group (Phase 2: 3 columns); the canvas is narrower
+    // than the old single-row 4-column layout.
+    expect(layout.width).toBe(24 + 3 * (200 + 56) - 56 + 24)
+    // Column x positions: the sdd-implement column is back at PAD_X (24) —
+    // the same x as the review-edit-chain column ABOVE it (the y bands
+    // disambiguate; `columnIndexOfBox` is y-aware, T8).
+    expect(sdd.x).toBe(24)
+    expect(review.x).toBe(24)
+  })
+
+  it('renders the group labels: Phase 1 label + Phase 2 label with the CURRENT-PLAN chip (data-canvas-group-plan)', () => {
+    const html = agentsHtml(planSource(['20260812-panel-f5-design-system']))
+    expect(html).toContain('data-canvas-group="iteration-start"')
+    expect(html).toContain('data-canvas-group-index="1"')
+    expect(html).toContain('data-canvas-group="autonomous-execute"')
+    expect(html).toContain('data-canvas-group-index="2"')
+    expect(html).toContain('Phase 1 · sequential (review-edit-chain)')
+    expect(html).toContain('Phase 2 · iterative plan loop')
+    // The Phase-2 annotation chip carries the FIRST InProgress plan id.
+    expect(html).toContain('data-canvas-group-plan="20260812-panel-f5-design-system"')
+    expect(html).toContain('plan: 20260812-panel-f5-design-system')
+    // Phase 1 carries no plan chip.
+    expect(html).not.toContain('data-canvas-group-no-plan')
+    // zh labels localize.
+    const zhHtml = agentsHtml(planSource(['20260812-panel-f5-design-system']), 'zh')
+    expect(zhHtml).toContain('Phase 1 · 顺序完成（review-edit-chain）')
+    expect(zhHtml).toContain('Phase 2 · 循环迭代 plans')
+    expect(zhHtml).toContain('plan: 20260812-panel-f5-design-system')
+  })
+
+  it('no InProgress plan → the muted「no in-progress plan」note, no plan chip', () => {
+    const html = agentsHtml(planSource([]))
+    expect(html).not.toContain('data-canvas-group-plan=')
+    expect(html).toContain('data-canvas-group-no-plan')
+    expect(html).toContain('no in-progress plan')
+    // A state with NO plans array at all degrades the same way (total function).
+    expect(agentsHtml(phase2Source([dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1' })]))).toContain('data-canvas-group-no-plan')
+  })
+
+  it('several InProgress plans → the FIRST id + the honest `+N more` count', () => {
+    const html = agentsHtml(planSource(['plan-a', 'plan-b', 'plan-c']))
+    expect(html).toContain('data-canvas-group-plan="plan-a"')
+    expect(html).toContain('plan: plan-a')
+    expect(html).toContain('data-canvas-group-plan-more')
+    expect(html).toContain('+2 more')
+    // Single InProgress → no more-count.
+    expect(agentsHtml(planSource(['plan-a']))).not.toContain('data-canvas-group-plan-more')
+  })
+
+  it('the degraded branch (no agentFlow) still annotates the current plan — the note rides state.plans, not the ledger', () => {
+    // baseSource has no agentFlow → the degraded canvas; with an InProgress
+    // plan the Phase-2 note still renders.
+    const html = agentsHtml({
+      ...planSource(['plan-x']),
+      state: { ...planSource(['plan-x']).state!, agentFlow: null },
+    })
+    expect(html).toContain('data-canvas-note="degraded"')
+    expect(html).toContain('data-canvas-group-plan="plan-x"')
+  })
+})
+
+describe('agent canvas — inter-band edge routing (plan 20260812-panel-f5-design-system T8, H2)', () => {
+  it('a Phase 1 → Phase 2 handoff (writing-specialist → fullstack-dev) reroutes via the LEFT side gap — never crosses the Phase-2 group label row (H2)', () => {
+    // writing-specialist (Phase 1, review-edit-chain) → fullstack-dev (Phase
+    // 2, sdd-implement), same plan — the DIRECT horizontal bezier's bbox
+    // would cross the Phase-2 group label + the sdd-implement column label
+    // rows, so the side-gap vertical reroute (source SOUTH → target NORTH at
+    // card left − SIDE_GAP) takes over.
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 2, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'writing-specialist', agent: 'w1', planId: 'plan-x' }),
+    ]))
+    const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
+    // Source south → target north in the LEFT side gap (x = card left − 18).
+    // The review-edit-chain column is a PLAIN stack (entity order — the lit
+    // writing-specialist card is FIRST, y=84), so its south port is 156.
+    expect(d.x1).toBe(24 + 12 - 18)
+    expect(d.x2).toBe(24 + 12 - 18)
+    expect(d.y1).toBe(84 + 72) // writing-specialist south (the first Phase-1 card)
+    expect(d.y2).toBe(438 - 10) // fullstack-dev north − STANDOFF
+    // The bbox of the rerouted line never intersects ANY label seat (H2 —
+    // the line hangs LEFT of every label row: x=18 < all label x≥24).
+    const layout = layoutAgents(projectGraph(flowSource([
+      dispatchEvent({ ts: 2, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'writing-specialist', agent: 'w1', planId: 'plan-x' }),
+    ])).agents)
+    for (const seat of textSeats(layout)) {
+      expect(overlaps({ x: d.x1, y: d.y1, w: 0, h: d.y2 - d.y1 }, seat)).toBe(false)
+    }
+  })
+
+  it('a direct Phase-2 cross-column flow stays a horizontal bezier (no label between the cards)', () => {
+    // fullstack-dev → qc-specialist — both Phase 2 bands, horizontal line at
+    // the card centers — no label row in between → the direct curve holds.
+    const html = agentsHtml(flowSource([
+      dispatchEvent({ ts: 2, role: 'qc-specialist', agent: 'a2', planId: 'plan-x' }),
+      dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x' }),
+    ]))
+    const d = parsePath(lineAttr(pathOf(html, 'data-agent-edge-actual'), 'd'))
+    expect(d.cy1).toBe(d.y1) // horizontal endpoint tangent — NOT the side-gap vertical
+    expect(d.cx1).not.toBe(d.x1)
+    expect(d.x1).toBe(24 + 12 + 176) // source east port
+  })
+})
+
+describe('agent canvas — settled done frame + off interaction (plan 20260812-panel-f5-design-system T8, user feedback #1/#3)', () => {
+  it('settled + emphasis current → the green done frame marker + the green ✓ (data-agent-done="true")', () => {
+    // Phase 2: fullstack-dev settled (paired settle) + emphasis 'current' →
+    // the completion marker shows.
+    const html = agentsHtml(phase2Source([
+      settleEvent({ ts: 2, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1' }),
+      dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
+    ]))
+    const region = cardRegion(html, 'fullstack-dev')
+    expect(region).toContain('data-agent-status="settled"')
+    expect(region).toContain('data-agent-emphasis="current"')
+    expect(region).toContain('data-agent-done="true"')
+    expect(region).toContain('>✓<') // the green checkmark renders
+  })
+
+  it('settled + emphasis null (no iteration) → still done: the pre-T4 settled ✓ survives', () => {
+    // No iteration → emphasis null → `settled && null !== 'off'` → done.
+    const html = agentsHtml(flowSource([
+      settleEvent({ ts: 2, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1' }),
+      dispatchEvent({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
+    ]))
+    const region = cardRegion(html, 'fullstack-dev')
+    expect(region).toContain('data-agent-status="settled"')
+    expect(region).not.toContain('data-agent-emphasis=')
+    expect(region).toContain('data-agent-done="true"')
+    expect(region).toContain('>✓<')
+  })
+
+  it('settled + emphasis off → NO completion marker: the card is data-agent-done="false" with no ✓ (feedback #3)', () => {
+    // Phase 2: a review-edit-chain role (product-manager) settled — its
+    // stage phase (iteration-start) is ALREADY PASSED → emphasis 'off' → the
+    // ✓ must NOT render (the v3 leak: the ✓ survived the off-tier low
+    // transparency).
+    const html = agentsHtml(phase2Source([
+      settleEvent({ ts: 2, agent: 'pm1', outcome: 'ok', role: 'product-manager', planId: 'plan-x', taskId: 'T1' }),
+      dispatchEvent({ ts: 1, role: 'product-manager', agent: 'pm1', planId: 'plan-x', taskId: 'T1' }),
+    ]))
+    const region = cardRegion(html, 'product-manager')
+    expect(region).toContain('data-agent-status="settled"')
+    expect(region).toContain('data-agent-emphasis="off"')
+    expect(region).toContain('data-agent-done="false"')
+    expect(region).not.toContain('>✓<')
+    expect(region).not.toContain('data-agent-done="true"')
+    // The status point still reports the honest status (no ✓ glyph, muted dot).
+    expect(region).toContain('data-agent-status="settled"')
+  })
+
+  it('off-tier settled + running siblings: only the off card loses the ✓ (whole-canvas count)', () => {
+    // Phase 2: product-manager settled (off) + fullstack-dev settled
+    // (current) + qc-specialist running — exactly ONE green ✓ on the canvas.
+    const html = agentsHtml(phase2Source([
+      settleEvent({ ts: 30, agent: 'a2', outcome: 'ok', role: 'qc-specialist', planId: 'plan-x', taskId: 'T3' }),
+      dispatchEvent({ ts: 29, role: 'qc-specialist', agent: 'a2', planId: 'plan-x', taskId: 'T3' }),
+      settleEvent({ ts: 20, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T1' }),
+      dispatchEvent({ ts: 19, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T1' }),
+      settleEvent({ ts: 10, agent: 'pm1', outcome: 'ok', role: 'product-manager', planId: 'plan-x', taskId: 'T2' }),
+      dispatchEvent({ ts: 9, role: 'product-manager', agent: 'pm1', planId: 'plan-x', taskId: 'T2' }),
+    ]))
+    // Exactly the two CURRENT-tier settled cards carry the green ✓ (the off
+    // product-manager shows neither). `data-agent-done="true"` appears TWICE
+    // per done card (the card frame + the ✓ span) — the ✓ glyph is the
+    // completion marker count.
+    expect(html.match(/>✓</g)).toHaveLength(2)
+    expect(html.match(/data-agent-done="true" data-agent-stage/g)).toHaveLength(2) // the card-level frame
+    expect(cardRegion(html, 'product-manager')).toContain('data-agent-done="false"')
   })
 })

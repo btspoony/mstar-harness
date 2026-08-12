@@ -140,7 +140,12 @@ function newLocale(): LocaleService {
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelContent, PanelView } from '../src/client/panel/PanelView'
 import { TabNav } from '../src/client/panel/TabNav'
-import { IterationTaskPage, iterationSplitActive, nextExpandedOnActivation } from '../src/client/panel/pages/IterationTaskPage'
+import { IterationTaskPage } from '../src/client/panel/pages/IterationTaskPage'
+import {
+  IterationInfoSection,
+  iterationSplitActive,
+  nextExpandedOnActivation,
+} from '../src/client/panel/pages/IterationInfoSection'
 import { EventLogPage } from '../src/client/panel/pages/EventLogPage'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
@@ -386,8 +391,10 @@ function agentsHtml(source: MstarEngineStatusSource, initialPan?: PanState): str
   const locale = newLocale()
   locale.register(NS, { zh, en })
   locale.setLocale('en')
+  const view = projectGraph(source)
   return renderToStaticMarkup(createElement(AgentCanvasPage, {
-    view: projectGraph(source).agents,
+    view: view.agents,
+    iteration: view.iteration,
     t: locale.bind(NS),
     ...(initialPan !== undefined ? { initialPan } : {}),
   }))
@@ -2371,14 +2378,15 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(anonymousDispatch).toContain('data-agent-summary-executing="1"')
   })
 
-  it('mounts the Legend on the agents page: port / sub-bucket / supervise / unknown swatches; expected+next entries gone (plan f5 T2 + T5)', () => {
+  it('mounts the Legend on the agents page: group / port / sub-bucket / supervise / unknown swatches; expected+next entries gone (plan f5 T2 + T5 + design-system T8)', () => {
     const html = agentsHtml(evidenceSource)
     expect(html).toContain('data-mstar-legend')
-    // Idle swatch anchor (完成判据) + the collaboration-edge swatches — 9
+    // Idle swatch anchor (完成判据) + the collaboration-edge swatches — 10
     // items (plan f5 T2 layout entries sub-bucket + supervise + the T5 port
-    // entry join; 'general' is replaced by 'unknown'; the expected / next
-    // entries are REMOVED with their edges — design doc §2.8).
-    for (const key of ['flow-actual', 'port', 'sub-bucket', 'supervise', 'on-demand', 'unknown', 'agent-running', 'agent-settled', 'agent-idle']) {
+    // entry + the T8 Phase-group entry; 'general' is replaced by 'unknown';
+    // the expected / next entries are REMOVED with their edges — design doc
+    // §2.8).
+    for (const key of ['flow-actual', 'port', 'group', 'sub-bucket', 'supervise', 'on-demand', 'unknown', 'agent-running', 'agent-settled', 'agent-idle']) {
       expect(html).toContain(`data-mstar-legend-item="${key}"`)
     }
     expect(html).not.toContain('data-mstar-legend-item="flow-expected"')
@@ -2396,8 +2404,10 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
+    const evidenceView = projectGraph(evidenceSource)
     const zhHtml = renderToStaticMarkup(createElement(AgentCanvasPage, {
-      view: projectGraph(evidenceSource).agents,
+      view: evidenceView.agents,
+      iteration: evidenceView.iteration,
       t: locale.bind(NS),
     }))
     expect(zhHtml).toContain('未工作实体（虚线）')
@@ -2552,6 +2562,8 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       edges: [],
       executing: 0,
       pending: 0,
+      activePlanId: null,
+      activePlanCount: 0,
     }
     const layout = layoutAgents(view)
     const last = layout.columns[layout.columns.length - 1]!
@@ -2628,12 +2640,96 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     const locale = newLocale()
     locale.register(NS, { zh, en })
     locale.setLocale('zh')
+    const fullView = projectGraph(fullSource)
     const zhHtml = renderToStaticMarkup(createElement(AgentCanvasPage, {
-      view: projectGraph(fullSource).agents,
+      view: fullView.agents,
+      iteration: fullView.iteration,
       t: locale.bind(NS),
     }))
     expect(zhHtml).toContain('>unknown / 未匹配角色<')
     expect(zhHtml).toContain('按需执行')
     expect(zhHtml).toContain('data-agent-bucket="reviewer"')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * T8 shared iteration info section (plan 20260812-panel-f5-design-system
+ * Task 8, user 2026-08-12 feedback #4): the agents tab renders the SAME
+ * IterationInfoSection the tasks tab renders, from the SAME `view.iteration`
+ * data — 两个 tab 显示同一迭代信息块 (one implementation, two mounts; the
+ * `data-iteration-*` anchor family is unchanged on both).
+ * ------------------------------------------------------------------------- */
+
+describe('workflow panel — shared iteration info section (plan 20260812-panel-f5-design-system T8, user feedback #4)', () => {
+  /** Render one tab's content through the real PanelContent mapping. */
+  function tabHtml(tab: 'tasks' | 'agents', source: MstarEngineStatusSource): string {
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('en')
+    return renderToStaticMarkup(createElement(PanelContent, { tab, source, t: locale.bind(NS) }))
+  }
+
+  it('the agents tab renders the SAME IterationInfoSection as the tasks tab — same anchors, same data', () => {
+    const agents = tabHtml('agents', fullSource)
+    const tasks = tabHtml('tasks', fullSource)
+    // The agents page now carries the shared iteration head (Task 8).
+    expect(agents).toContain('data-mstar-page="agents"')
+    expect(agents).toContain('data-iteration-head')
+    expect(agents).toContain('data-iteration-head-active="true"')
+    expect(agents).toContain('data-iteration-head-expanded="true"')
+    expect(agents).toContain('data-iteration-head-steps')
+    expect(agents).toContain('data-iteration-head-branches')
+    // SAME data as the tasks tab: identical id / verdict / step row / branches.
+    for (const anchor of [
+      'data-iteration-head-id="iter-20260809-dsh-workflow-viz"',
+      'data-iteration-head-verdict="pass"',
+      'data-step-state="current"',
+      'data-branch="spec-integration"',
+      'iteration/iter-20260809-dsh-workflow-viz',
+    ]) {
+      expect(tasks).toContain(anchor)
+      expect(agents).toContain(anchor)
+    }
+    // Exactly ONE head root per page (no duplication within a tab) — React
+    // SSR renders the valueless `data-iteration-head` attribute as
+    // `data-iteration-head=""`, so the lookahead accepts `=`.
+    expect(agents.match(/data-iteration-head(?=["= ])/g)).toHaveLength(1)
+    expect(tasks.match(/data-iteration-head(?=["= ])/g)).toHaveLength(1)
+  })
+
+  it('inactive iteration → the agents page renders the same collapsed muted head as the tasks page', () => {
+    const agents = tabHtml('agents', noGateSource)
+    expect(agents).toContain('data-mstar-page="agents"')
+    expect(agents).toContain('data-iteration-head-active="false"')
+    expect(agents).toContain('data-iteration-head-expanded="false"')
+    expect(agents).toContain('iteration not started')
+  })
+
+  it('zh locale: the agents-page iteration section localizes like the tasks page', () => {
+    const locale = newLocale()
+    locale.register(NS, { zh, en })
+    locale.setLocale('zh')
+    const agents = renderToStaticMarkup(createElement(PanelContent, {
+      tab: 'agents',
+      source: fullSource,
+      t: locale.bind(NS),
+    }))
+    expect(agents).toContain('data-iteration-head-active="true"')
+    expect(agents).toContain('迭代启动')
+    expect(agents).toContain('分支')
+    expect(agents).not.toContain('Autonomous Execute')
+  })
+
+  it('the pure helpers keep their contract from the SHARED module (IterationInfoSection — the single implementation)', () => {
+    // The transition table pins the collapse/expand contract (moved verbatim
+    // from the old IterationTaskPage head; the anchors are unchanged).
+    const t = nextExpandedOnActivation
+    expect(t(false, false, true)).toBe(true)
+    expect(t(true, false, true)).toBe(true)
+    expect(t(true, true, true)).toBe(true)
+    expect(t(false, true, true)).toBe(false)
+    expect(iterationSplitActive(false, null)).toBe(false)
+    expect(iterationSplitActive(true, null)).toBe(false)
+    expect(iterationSplitActive(true, { iterationBase: 'a', target: 'b', specIntegration: 'c' })).toBe(true)
   })
 })

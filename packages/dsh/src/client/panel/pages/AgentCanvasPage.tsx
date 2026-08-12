@@ -28,7 +28,17 @@
  * `entity.name`); the session id / task tag are AUXILIARY record fields on
  * `data-agent-record` (never the title). Idle (no dispatch evidence) cards
  * are muted (`data-agent-idle`); lit cards follow the projection's status
- * priority (running/settled/error/denied/advisory).
+ * priority (running/settled/error/denied/advisory). Settled cards get a
+ * standalone GREEN DONE FRAME + green ✓ (Task 8 — user feedback #1/#3:
+ * `data-agent-done="true"`, the frame is a full-strength success ring on the
+ * rounded card body) ONLY when `emphasis !== 'off'` — an off-tier role
+ * (already-passed / stage-less on-demand + general) never shows the
+ * completion marker (the v3 leak: the ✓ survived the off-tier low
+ * transparency).
+ *
+ * Shared iteration section (Task 8 — user feedback #4): the page renders the
+ * SAME `IterationInfoSection` the tasks tab uses, from the SAME
+ * `view.iteration` data — 两个 tab 显示同一迭代信息块.
  *
  * Edges (spec §4 + plan 20260812-panel-f5-design-system Task 5 — the
  * finalized 2026-08-12 line semantics, design doc §2): ONLY the actual
@@ -50,12 +60,19 @@
  * for caption-crossing same-column flows + column-gap crossings).
  *
  * Layout (plan 20260812-panel-f5-agent-layout Task 2 + plan
- * 20260812-panel-f5-design-system Task 5 — the F5 rework): deterministic
- * columns per EXPECTED_ROLE_FLOW stage (review-edit-chain → sdd-implement →
- * qc-tri → qa-gate) — FOUR columns total (user 2026-08-12 feedback #3: the
- * standalone rightmost UNKNOWN column is REMOVED; `zone: 'general'`
- * entities render in an "unknown / 未匹配角色" SUB-PARTITION at the bottom
- * of the LAST column, `data-sub-bucket="unknown"`). The
+ * 20260812-panel-f5-design-system Task 5 + Task 8 — the F5 rework):
+ * deterministic columns per EXPECTED_ROLE_FLOW stage (review-edit-chain →
+ * sdd-implement → qc-tri → qa-gate) — FOUR columns total (user 2026-08-12
+ * feedback #3: the standalone rightmost UNKNOWN column is REMOVED; `zone:
+ * 'general'` entities render in an "unknown / 未匹配角色" SUB-PARTITION at
+ * the bottom of the LAST column, `data-sub-bucket="unknown"`), laid out in
+ * TWO stacked PHASE GROUPS (Task 8 — user feedback #2): the Phase 1 group
+ * ABOVE (review-edit-chain — the sequential Review & Edit chain:
+ * product-manager → architect → writing-specialist) and the Phase 2 group
+ * BELOW (sdd-implement → qc-tri → qa-gate — the iterative plan loop,
+ * annotated with the current `activePlanId` from the projected
+ * `state.plans[]` InProgress rows), each with its group label row
+ * (`data-canvas-group`). The
  * `sdd-implement` column is split into sub-buckets by the PROJECTED
  * `entity.bucket` (never a render guess): the implementor partition above —
  * flow roles in the stage's original order, then the on-demand roles
@@ -84,13 +101,19 @@ import * as React from 'react'
 import { useMemo, useRef, useState } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AgentEdge, AgentEntityStatus, AgentEntityView, ZoneView } from '../graph/project-graph.ts'
-import { GENERAL_BUCKET, KNOWN_AGENTS } from '../graph/schema.ts'
+import { GENERAL_BUCKET, KNOWN_AGENTS, type PhaseId } from '../graph/schema.ts'
 import { Legend } from '../zones/Legend.tsx'
+import { IterationInfoSection } from './IterationInfoSection.tsx'
 import css from './agent-canvas.module.css'
 
 export interface AgentCanvasPageProps {
   /** The projected agents zone (spec §6.2 — `ZoneView['agents']`). */
   view: ZoneView['agents']
+  /** The projected iteration zone (spec §3) — the SHARED iteration info
+   * block (plan 20260812-panel-f5-design-system Task 8, user 2026-08-12
+   * feedback #4): BOTH the tasks tab and this page render the SAME
+   * `IterationInfoSection` from the SAME `view.iteration` data. */
+  iteration: ZoneView['iteration']
   t: TranslateNS<'mstar-panel'>
   /** Deterministic initial pan seed (SSR/tests); the live page starts at the origin. */
   initialPan?: PanState
@@ -142,6 +165,34 @@ export interface CanvasColumn extends CanvasBox {
   id: string
 }
 
+/**
+ * One PHASE group of the canvas (plan 20260812-panel-f5-design-system Task 8
+ * — user 2026-08-12 feedback #2): the stage columns split into two vertical
+ * bands by iteration phase — **Phase 1** (review-edit-chain, the sequential
+ * Review & Edit chain: product-manager → architect → writing-specialist)
+ * ABOVE, **Phase 2** (sdd-implement → qc-tri → qa-gate, the iterative plan
+ * loop) BELOW — each with its group label row; the Phase-2 row additionally
+ * annotates the CURRENT PLAN (the projected `activePlanId` — the first
+ * InProgress `state.plans[]` row, design doc §1.2). Group order = first
+ * occurrence in the projected stage order (PHASE_IDS-aligned) — derived,
+ * never literal, so a phase/stage rename can never orphan the groups.
+ */
+export interface CanvasGroup {
+  /** The group's iteration phase id. */
+  phase: PhaseId
+  /** 1-based group ordinal in stage order (Phase 1 = 1, Phase 2 = 2). */
+  index: number
+  /** The group label row seat (canvas coordinates; width = the group's
+   * content width — the Phase-2 current-plan chip rides the same row). */
+  label: { x: number; y: number; w: number; h: number }
+  /** The stage column ids of this group, stage order. */
+  columnIds: readonly string[]
+  /** Current-plan annotation host (design doc §1.2 — user feedback #2):
+   * true for the `autonomous-execute` phase group (the iterative plan loop)
+   * only. */
+  planNote: boolean
+}
+
 /** The deterministic canvas geometry: stage columns + per-entity card boxes. */
 export interface CanvasLayout {
   width: number
@@ -160,6 +211,10 @@ export interface CanvasLayout {
    * instead of a standalone fifth column). The caption seat + card band;
    * null when the layout has no columns (total function — never a throw). */
   unknown: UnknownSubPartition | null
+  /** The Phase groups (plan 20260812-panel-f5-design-system Task 8 — user
+   * 2026-08-12 feedback #2): Phase 1 band above / Phase 2 band below, each
+   * with its label seat; empty when the layout has no columns. */
+  groups: readonly CanvasGroup[]
 }
 
 /** Layout metrics (canvas coordinate space — px, deterministic per view). */
@@ -180,6 +235,10 @@ const LABEL_H = 18
 const SUB_LABEL_H = 14
 /** Gap between a sub-bucket caption row and its first card (canvas metric). */
 const SUB_GAP = 4
+/** Vertical gap between the Phase groups (plan 20260812-panel-f5-design-system
+ * Task 8 — design doc §1.2, canvas metric): the Phase 1 band and the Phase 2
+ * band (with the group label rows) stack with this separation. */
+const GROUP_GAP = 24
 
 /** The arrow-tip standoff (plan 20260812-panel-f5-design-system Task 5 —
  * design doc §2.5, H1): every actual-edge path END retreats this far from
@@ -253,26 +312,33 @@ export interface UnknownSubPartition {
 
 /**
  * Deterministic canvas layout (spec §4 + plan 20260812-panel-f5-agent-layout
- * Task 2 + plan 20260812-panel-f5-design-system Task 5 — the F5 rework): one
- * column per EXPECTED_ROLE_FLOW stage (view order: review-edit-chain →
- * sdd-implement → qc-tri → qa-gate) — FOUR columns total (user 2026-08-12
- * feedback #3; the standalone rightmost unknown column is REMOVED). The
- * `sdd-implement` column is split into sub-buckets by the PROJECTED
- * `entity.bucket` (never a render-side guess): the implementor partition
- * above — flow roles in the stage's original EXPECTED_ROLE_FLOW order, then
- * the on-demand roles (ops-engineer / prompt-engineer — the standalone
- * on-demand column is REMOVED) — and the reviewer partition (code-reviewer)
- * below, with the implementor / sdd-reviewer caption seats + card bands
- * recorded in `subBuckets` (the supervise-line anchors). `zone: 'general'`
- * entities (the general bucket — unmatched / anonymous dispatches) render in
- * the "unknown / 未匹配角色" SUB-PARTITION at the bottom of the LAST column
- * (`layout.unknown` — design doc §1.2: caption row ROW_GAP below the last
- * flow card, general cards SUB_GAP below it). The column bucket comes from
- * the PROJECTED `entity.zone`: 'flow' → the entity's stage column,
- * 'on-demand' → the sdd-implement column's implementor partition, 'general'
- * → the last column's unknown partition. Total function — every entity gets
- * a box; absent sdd-implement stage → on-demand falls back to the LAST
- * column; unknown column ids fall back to the same sink; never a throw.
+ * Task 2 + plan 20260812-panel-f5-design-system Task 5 + Task 8 — the F5
+ * rework): one column per EXPECTED_ROLE_FLOW stage (view order:
+ * review-edit-chain → sdd-implement → qc-tri → qa-gate) — FOUR columns
+ * total, laid out in TWO stacked PHASE GROUPS (Task 8, user 2026-08-12
+ * feedback #2): the **Phase 1 group ABOVE** (review-edit-chain — the
+ * sequential Review & Edit chain: product-manager → architect →
+ * writing-specialist) and the **Phase 2 group BELOW** (sdd-implement →
+ * qc-tri → qa-gate — the iterative plan loop, annotated with the current
+ * `activePlanId`), each with its group label row (design doc §1.2; the
+ * standalone rightmost unknown column is REMOVED — Task 5, user feedback
+ * #3). The `sdd-implement` column is split into sub-buckets by the
+ * PROJECTED `entity.bucket` (never a render-side guess): the implementor
+ * partition above — flow roles in the stage's original EXPECTED_ROLE_FLOW
+ * order, then the on-demand roles (ops-engineer / prompt-engineer — the
+ * standalone on-demand column is REMOVED) — and the reviewer partition
+ * (code-reviewer) below, with the implementor / sdd-reviewer caption seats +
+ * card bands recorded in `subBuckets` (the supervise-line anchors).
+ * `zone: 'general'` entities (the general bucket — unmatched / anonymous
+ * dispatches) render in the "unknown / 未匹配角色" SUB-PARTITION at the
+ * bottom of the LAST column (`layout.unknown` — design doc §1.2: caption row
+ * ROW_GAP below the last flow card, general cards SUB_GAP below it). The
+ * column bucket comes from the PROJECTED `entity.zone`: 'flow' → the
+ * entity's stage column, 'on-demand' → the sdd-implement column's implementor
+ * partition, 'general' → the last column's unknown partition. Total function —
+ * every entity gets a box; absent sdd-implement stage → on-demand falls back
+ * to the LAST column; unknown column ids fall back to the same sink; no
+ * stages → empty groups/columns; never a throw.
  */
 export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
   const columnIds = view.stages.map((s) => s.id)
@@ -310,138 +376,178 @@ export function layoutAgents(view: ZoneView['agents']): CanvasLayout {
     else bucket.push(entity)
   }
 
+  // Phase groups (plan 20260812-panel-f5-design-system Task 8 — user
+  // 2026-08-12 feedback #2, design doc §1.2): the stage columns split into
+  // vertical BANDS by iteration phase — Phase 1 (review-edit-chain — the
+  // sequential Review & Edit chain: product-manager → architect →
+  // writing-specialist) ABOVE, Phase 2 (sdd-implement → qc-tri → qa-gate —
+  // the iterative plan loop) BELOW. Group order = first occurrence in the
+  // projected stage order (PHASE_IDS-aligned); `planNote` marks the
+  // `autonomous-execute` group (the current-plan annotation host). Derived,
+  // never literal — a phase/stage rename can never orphan the groups.
+  const rawGroups: { phase: PhaseId; index: number; columnIds: string[]; planNote: boolean }[] = []
+  for (const stage of view.stages) {
+    const last = rawGroups[rawGroups.length - 1]
+    if (last === undefined || last.phase !== stage.phase) {
+      rawGroups.push({
+        phase: stage.phase,
+        index: rawGroups.length + 1,
+        columnIds: [stage.id],
+        planNote: stage.phase === 'autonomous-execute',
+      })
+    } else {
+      last.columnIds.push(stage.id)
+    }
+  }
+  const groups: CanvasGroup[] = rawGroups.map((g) => ({ ...g, label: { x: 0, y: 0, w: 0, h: 0 } }))
+
   const cards = new Map<string, CanvasBox>()
   const columns: CanvasColumn[] = []
   const subBuckets = new Map<string, SubBucketGeometry>()
   let unknown: UnknownSubPartition | null = null
-  let maxColH = 0
-  let x = PAD_X
-  for (const id of columnIds) {
-    const list = buckets.get(id) ?? []
-    const column: CanvasColumn = { id, x, y: PAD_Y, w: COL_W, h: 0 }
-    columns.push(column)
-    if (id === sddSinkId && sddStage !== undefined) {
-      // Deterministic sub-bucket partition (plan f5 Task 2 — the partition
-      // boundary comes from the PROJECTED `entity.bucket`, never a render
-      // guess; same determinism discipline as the former F4.2 general sink):
-      // the implementor partition above — flow roles in the stage's original
-      // EXPECTED_ROLE_FLOW order, then the on-demand roles in roster order —
-      // the reviewer partition (code-reviewer) below. The bands (each
-      // bucket's card y-extent) become the supervise-line anchor edges —
-      // the line spans the inter-partition gap (QC W-001).
-      const implementor = list.filter((e) => e.bucket === 'implementor')
-      const reviewer = list.filter((e) => e.bucket === 'reviewer')
-      const rest = list.filter((e) => e.bucket !== 'implementor' && e.bucket !== 'reviewer')
-      // The implementor partition order key: flow roles by their index in
-      // the stage's original roles array (fullstack-dev / fullstack-dev-2 /
-      // frontend-dev), on-demand roles AFTER all flow roles (roster order —
-      // ops-engineer / prompt-engineer). Defensive unknowns stay last.
-      const rosterIndex = new Map(KNOWN_AGENTS.map((a, i) => [a.id, i]))
-      const implementorKey = (e: AgentEntityView): number => {
-        if (e.zone === 'flow') {
-          const i = sddStage.roles.indexOf(e.role)
-          return i === -1 ? Number.MAX_SAFE_INTEGER : i
+  let maxWidth = 0
+  let y = PAD_Y
+  for (const group of groups) {
+    // Group label row (design doc §1.2): the phase name (+ the Phase-2
+    // current-plan chip — rendered by the page from `group.planNote` +
+    // `view.activePlanId`). The label seat spans the group's content width.
+    const groupW = PAD_X + group.columnIds.length * (COL_W + COL_GAP) - COL_GAP + PAD_X
+    maxWidth = Math.max(maxWidth, groupW)
+    group.label = { x: PAD_X, y, w: groupW - PAD_X * 2, h: LABEL_H }
+    const colY = y + LABEL_H + COL_PAD
+    let groupBottom = colY
+    group.columnIds.forEach((id, ci) => {
+      const colX = PAD_X + ci * (COL_W + COL_GAP)
+      const column: CanvasColumn = { id, x: colX, y: colY, w: COL_W, h: 0 }
+      columns.push(column)
+      const list = buckets.get(id) ?? []
+      if (id === sddSinkId && sddStage !== undefined) {
+        // Deterministic sub-bucket partition (plan f5 Task 2 — the partition
+        // boundary comes from the PROJECTED `entity.bucket`, never a render
+        // guess; same determinism discipline as the former F4.2 general sink):
+        // the implementor partition above — flow roles in the stage's original
+        // EXPECTED_ROLE_FLOW order, then the on-demand roles in roster order —
+        // the reviewer partition (code-reviewer) below. The bands (each
+        // bucket's card y-extent) become the supervise-line anchor edges —
+        // the line spans the inter-partition gap (QC W-001).
+        const implementor = list.filter((e) => e.bucket === 'implementor')
+        const reviewer = list.filter((e) => e.bucket === 'reviewer')
+        const rest = list.filter((e) => e.bucket !== 'implementor' && e.bucket !== 'reviewer')
+        // The implementor partition order key: flow roles by their index in
+        // the stage's original roles array (fullstack-dev / fullstack-dev-2 /
+        // frontend-dev), on-demand roles AFTER all flow roles (roster order —
+        // ops-engineer / prompt-engineer). Defensive unknowns stay last.
+        const rosterIndex = new Map(KNOWN_AGENTS.map((a, i) => [a.id, i]))
+        const implementorKey = (e: AgentEntityView): number => {
+          if (e.zone === 'flow') {
+            const i = sddStage.roles.indexOf(e.role)
+            return i === -1 ? Number.MAX_SAFE_INTEGER : i
+          }
+          if (e.zone === 'on-demand') {
+            return sddStage.roles.length + (rosterIndex.get(e.role) ?? Number.MAX_SAFE_INTEGER)
+          }
+          return Number.MAX_SAFE_INTEGER
         }
-        if (e.zone === 'on-demand') {
-          return sddStage.roles.length + (rosterIndex.get(e.role) ?? Number.MAX_SAFE_INTEGER)
+        implementor.sort((a, b) => implementorKey(a) - implementorKey(b))
+        // The reviewer partition keeps its (deterministic) insertion order —
+        // the only reviewer role today is code-reviewer.
+        const implLabelY = colY + LABEL_H + COL_PAD
+        const implCards: CanvasBox[] = []
+        let cy = implLabelY + SUB_LABEL_H + SUB_GAP
+        for (const entity of implementor) {
+          const box = { x: colX + (COL_W - CARD_W) / 2, y: cy, w: CARD_W, h: CARD_H }
+          cards.set(entity.key, box)
+          implCards.push(box)
+          cy += CARD_H + ROW_GAP
         }
-        return Number.MAX_SAFE_INTEGER
-      }
-      implementor.sort((a, b) => implementorKey(a) - implementorKey(b))
-      // The reviewer partition keeps its (deterministic) insertion order —
-      // the only reviewer role today is code-reviewer.
-      const implLabelY = PAD_Y + LABEL_H + COL_PAD
-      const implCards: CanvasBox[] = []
-      let y = implLabelY + SUB_LABEL_H + SUB_GAP
-      for (const entity of implementor) {
-        const box = { x: x + (COL_W - CARD_W) / 2, y, w: CARD_W, h: CARD_H }
-        cards.set(entity.key, box)
-        implCards.push(box)
-        y += CARD_H + ROW_GAP
-      }
-      const revLabelY = y // the last implementor card's bottom + ROW_GAP
-      const revCards: CanvasBox[] = []
-      y = revLabelY + SUB_LABEL_H + SUB_GAP
-      for (const entity of reviewer) {
-        const box = { x: x + (COL_W - CARD_W) / 2, y, w: CARD_W, h: CARD_H }
-        cards.set(entity.key, box)
-        revCards.push(box)
-        y += CARD_H + ROW_GAP
-      }
-      // Defensive tail: null-bucket entities in the sdd-implement column
-      // (impossible via the projection — every sdd-implement role is
-      // bucketed) stack below the reviewer partition.
-      for (const entity of rest) {
-        const box = { x: x + (COL_W - CARD_W) / 2, y, w: CARD_W, h: CARD_H }
-        cards.set(entity.key, box)
-        y += CARD_H + ROW_GAP
-      }
-      const colBottom = y - ROW_GAP // the last card's bottom edge
-      column.h = Math.max(colBottom - PAD_Y + COL_PAD, CARD_H + LABEL_H + COL_PAD * 2)
-      const band = (boxes: readonly CanvasBox[]): CanvasBox | null =>
-        boxes.length === 0
-          ? null
-          : { x, y: boxes[0]!.y, w: COL_W, h: boxes[boxes.length - 1]!.y + CARD_H - boxes[0]!.y }
-      const labelW = CARD_W
-      subBuckets.set(id, {
-        implementor: { label: { x: x + (COL_W - CARD_W) / 2, y: implLabelY, w: labelW }, band: band(implCards) },
-        reviewer: { label: { x: x + (COL_W - CARD_W) / 2, y: revLabelY, w: labelW }, band: band(revCards) },
-      })
-    } else if (id === unknownSinkId) {
-      // The LAST column (qa-gate in the current pipeline) hosts the unknown
-      // sub-partition (plan 20260812-panel-f5-design-system Task 5 — design
-      // doc §1.2): the flow cards (qa-gate entities) stack first, then the
-      //「unknown / 未匹配角色」caption row (SUB_LABEL_H) ROW_GAP below the last
-      // flow card, then the general cards SUB_GAP below the caption. The
-      // caption seat + band feed the render (data-sub-bucket="unknown").
-      const flowList = list.filter((e) => e.zone !== GENERAL_BUCKET)
-      const generalList = list.filter((e) => e.zone === GENERAL_BUCKET)
-      let y = PAD_Y + LABEL_H + COL_PAD
-      for (const entity of flowList) {
-        cards.set(entity.key, { x: x + (COL_W - CARD_W) / 2, y, w: CARD_W, h: CARD_H })
-        y += CARD_H + ROW_GAP
-      }
-      const unknownLabelY = y // the last flow card's bottom + ROW_GAP
-      const unknownBoxes: CanvasBox[] = []
-      y = unknownLabelY + SUB_LABEL_H + SUB_GAP
-      for (const entity of generalList) {
-        const box = { x: x + (COL_W - CARD_W) / 2, y, w: CARD_W, h: CARD_H }
-        cards.set(entity.key, box)
-        unknownBoxes.push(box)
-        y += CARD_H + ROW_GAP
-      }
-      const colBottom = y - ROW_GAP // the last card's bottom edge
-      column.h = Math.max(colBottom - PAD_Y + COL_PAD, CARD_H + LABEL_H + COL_PAD * 2)
-      const labelW = CARD_W
-      unknown = {
-        label: { x: x + (COL_W - CARD_W) / 2, y: unknownLabelY, w: labelW },
-        band: unknownBoxes.length === 0
-          ? null
-          : { x, y: unknownBoxes[0]!.y, w: COL_W, h: unknownBoxes[unknownBoxes.length - 1]!.y + CARD_H - unknownBoxes[0]!.y },
-      }
-    } else {
-      // Plain stack (every other column).
-      list.forEach((entity, i) => {
-        cards.set(entity.key, {
-          x: x + (COL_W - CARD_W) / 2,
-          y: PAD_Y + LABEL_H + COL_PAD + i * (CARD_H + ROW_GAP),
-          w: CARD_W,
-          h: CARD_H,
+        const revLabelY = cy // the last implementor card's bottom + ROW_GAP
+        const revCards: CanvasBox[] = []
+        cy = revLabelY + SUB_LABEL_H + SUB_GAP
+        for (const entity of reviewer) {
+          const box = { x: colX + (COL_W - CARD_W) / 2, y: cy, w: CARD_W, h: CARD_H }
+          cards.set(entity.key, box)
+          revCards.push(box)
+          cy += CARD_H + ROW_GAP
+        }
+        // Defensive tail: null-bucket entities in the sdd-implement column
+        // (impossible via the projection — every sdd-implement role is
+        // bucketed) stack below the reviewer partition.
+        for (const entity of rest) {
+          const box = { x: colX + (COL_W - CARD_W) / 2, y: cy, w: CARD_W, h: CARD_H }
+          cards.set(entity.key, box)
+          cy += CARD_H + ROW_GAP
+        }
+        const colBottom = cy - ROW_GAP // the last card's bottom edge
+        column.h = Math.max(colBottom - colY + COL_PAD, CARD_H + LABEL_H + COL_PAD * 2)
+        const band = (boxes: readonly CanvasBox[]): CanvasBox | null =>
+          boxes.length === 0
+            ? null
+            : { x: colX, y: boxes[0]!.y, w: COL_W, h: boxes[boxes.length - 1]!.y + CARD_H - boxes[0]!.y }
+        const labelW = CARD_W
+        subBuckets.set(id, {
+          implementor: { label: { x: colX + (COL_W - CARD_W) / 2, y: implLabelY, w: labelW }, band: band(implCards) },
+          reviewer: { label: { x: colX + (COL_W - CARD_W) / 2, y: revLabelY, w: labelW }, band: band(revCards) },
         })
-      })
-      const h = COL_PAD * 2 + LABEL_H + list.length * CARD_H + Math.max(0, list.length - 1) * ROW_GAP
-      column.h = Math.max(h, CARD_H + LABEL_H + COL_PAD * 2)
-    }
-    maxColH = Math.max(maxColH, column.h)
-    x += COL_W + COL_GAP
+      } else if (id === unknownSinkId) {
+        // The LAST column (qa-gate in the current pipeline) hosts the unknown
+        // sub-partition (plan 20260812-panel-f5-design-system Task 5 — design
+        // doc §1.2): the flow cards (qa-gate entities) stack first, then the
+        //「unknown / 未匹配角色」caption row (SUB_LABEL_H) ROW_GAP below the last
+        // flow card, then the general cards SUB_GAP below the caption. The
+        // caption seat + band feed the render (data-sub-bucket="unknown").
+        const flowList = list.filter((e) => e.zone !== GENERAL_BUCKET)
+        const generalList = list.filter((e) => e.zone === GENERAL_BUCKET)
+        let cy = colY + LABEL_H + COL_PAD
+        for (const entity of flowList) {
+          cards.set(entity.key, { x: colX + (COL_W - CARD_W) / 2, y: cy, w: CARD_W, h: CARD_H })
+          cy += CARD_H + ROW_GAP
+        }
+        const unknownLabelY = cy // the last flow card's bottom + ROW_GAP
+        const unknownBoxes: CanvasBox[] = []
+        cy = unknownLabelY + SUB_LABEL_H + SUB_GAP
+        for (const entity of generalList) {
+          const box = { x: colX + (COL_W - CARD_W) / 2, y: cy, w: CARD_W, h: CARD_H }
+          cards.set(entity.key, box)
+          unknownBoxes.push(box)
+          cy += CARD_H + ROW_GAP
+        }
+        const colBottom = cy - ROW_GAP // the last card's bottom edge
+        column.h = Math.max(colBottom - colY + COL_PAD, CARD_H + LABEL_H + COL_PAD * 2)
+        const labelW = CARD_W
+        unknown = {
+          label: { x: colX + (COL_W - CARD_W) / 2, y: unknownLabelY, w: labelW },
+          band: unknownBoxes.length === 0
+            ? null
+            : { x: colX, y: unknownBoxes[0]!.y, w: COL_W, h: unknownBoxes[unknownBoxes.length - 1]!.y + CARD_H - unknownBoxes[0]!.y },
+        }
+      } else {
+        // Plain stack (every other column).
+        list.forEach((entity, i) => {
+          cards.set(entity.key, {
+            x: colX + (COL_W - CARD_W) / 2,
+            y: colY + LABEL_H + COL_PAD + i * (CARD_H + ROW_GAP),
+            w: CARD_W,
+            h: CARD_H,
+          })
+        })
+        const h = COL_PAD * 2 + LABEL_H + list.length * CARD_H + Math.max(0, list.length - 1) * ROW_GAP
+        column.h = Math.max(h, CARD_H + LABEL_H + COL_PAD * 2)
+      }
+      groupBottom = Math.max(groupBottom, colY + column.h)
+    })
+    y = groupBottom + GROUP_GAP
   }
   return {
-    width: x - COL_GAP + PAD_X,
-    height: PAD_Y + maxColH + PAD_Y,
+    // Width = the WIDEST group (Phase 2: 3 columns → 760px; Phase 1: 1
+    // column → 248px) — the canvas is narrower than the old single-row 4
+    // columns, the height grows with the two stacked bands.
+    width: maxWidth,
+    height: y - GROUP_GAP + PAD_Y,
     columns,
     cards,
     subBuckets,
     unknown,
+    groups,
   }
 }
 
@@ -504,10 +610,14 @@ function portPoint(box: CanvasBox, port: PortId): { x: number; y: number } {
 }
 
 /** The canvas column index of a card box (deterministic — columns never
- * overlap, so exactly one column contains box.x; -1 only when the layout has
- * no columns — total function). */
+ * overlap in BOTH axes: the two-band group layout (plan
+ * 20260812-panel-f5-design-system Task 8) stacks the Phase-1 and Phase-2
+ * columns at the SAME x positions but disjoint y bands, so the containment
+ * test needs the y-range too — an x-only findIndex would resolve every
+ * Phase-2 card to the Phase-1 column at the same x. -1 only when the layout
+ * has no columns (total function). */
 function columnIndexOfBox(layout: CanvasLayout, box: CanvasBox): number {
-  return layout.columns.findIndex((c) => box.x >= c.x && box.x < c.x + c.w)
+  return layout.columns.findIndex((c) => box.x >= c.x && box.x < c.x + c.w && box.y >= c.y && box.y < c.y + c.h)
 }
 
 /** The sub-bucket CAPTION rows of a column (implementor / sdd-reviewer
@@ -527,6 +637,57 @@ function captionRows(layout: CanvasLayout, columnId: string): { x: number; y: nu
     rows.push({ x: layout.unknown.label.x, y: layout.unknown.label.y, w: layout.unknown.label.w, h: SUB_LABEL_H })
   }
   return rows
+}
+
+/** The deterministic label seats of the whole canvas (design doc §2.0 H2 —
+ * 线不叠任何文字): the Phase group label rows (plan
+ * 20260812-panel-f5-design-system Task 8 — the two-band layout adds them) +
+ * every column label row + the sub-bucket captions + the unknown caption.
+ * Full-row approximations (the same seats the H2 geometry test asserts) —
+ * deterministic, independent of rendered text width. */
+function labelSeats(layout: CanvasLayout): { x: number; y: number; w: number; h: number }[] {
+  const seats: { x: number; y: number; w: number; h: number }[] = []
+  for (const group of layout.groups) seats.push(group.label)
+  for (const col of layout.columns) seats.push({ x: col.x, y: col.y, w: col.w, h: LABEL_H })
+  for (const geometry of layout.subBuckets.values()) {
+    for (const p of [geometry.implementor, geometry.reviewer]) {
+      if (p.band !== null) seats.push({ x: p.label.x, y: p.label.y, w: p.label.w, h: SUB_LABEL_H })
+    }
+  }
+  if (layout.unknown !== null && layout.unknown.band !== null) {
+    seats.push({ x: layout.unknown.label.x, y: layout.unknown.label.y, w: layout.unknown.label.w, h: SUB_LABEL_H })
+  }
+  return seats
+}
+
+/** The convex-hull bbox of a HORIZONTAL bezier (design doc §2.6): controls
+ * at `(sx ± off, sy)` / `(tx ∓ off, ty)` with off = max(|dx|/2, 24) — the
+ * bbox y-range is the endpoint span (controls share the endpoint y's). */
+function horizontalBBox(sx: number, sy: number, tx: number, ty: number): { x: number; y: number; w: number; h: number } {
+  const off = Math.max(Math.abs(tx - sx) / 2, 24)
+  const xs = [sx, tx, sx + off, tx - off]
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(sy, ty)
+  const maxY = Math.max(sy, ty)
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+/** Axis-aligned box overlap (the H2 seat check — strict inequality, so a
+ * boundary touch at an equal coordinate is not a crossing). */
+function boxOverlaps(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+}
+
+/** Whether a DIRECT horizontal bezier's bbox intersects ANY label seat
+ * (design doc §2.0 H2 — 绕行策略 ②): an INTER-BAND flow (Phase 1 ↔ Phase 2 —
+ * e.g. writing-specialist → fullstack-dev, a real same-plan handoff) crosses
+ * the Phase-2 group label row + the column label rows at its diagonal, so it
+ * reroutes via the source's LEFT side gap as a vertical bezier (the same
+ * side-gap route as the caption-crossing same-column flows — design doc
+ * §2.0/§2.5). */
+function crossesLabelSeat(g: { x: number; y: number; w: number; h: number }, layout: CanvasLayout): boolean {
+  return labelSeats(layout).some((seat) => boxOverlaps(g, seat))
 }
 
 /** The standoff for a same-column south↔north flow: the doc's 10px would
@@ -592,6 +753,14 @@ function verticalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeom
  * caption) route in the column's LEFT side gap instead (design doc §2.0
  * 绕行策略 ② — 同列关系线移到卡片列外侧的间隙带): the vertical bezier hangs
  * at `card left edge − SIDE_GAP`, clear of every text (H2).
+ *
+ * Inter-band flows (plan 20260812-panel-f5-design-system Task 8 — the
+ * two-band layout): a Phase 1 ↔ Phase 2 handoff (e.g. writing-specialist →
+ * fullstack-dev — a real same-plan Review&Edit→implement transfer) would
+ * cross the Phase-2 group label row + the column label rows on its diagonal
+ * — the DIRECT horizontal bezier is replaced by the SAME side-gap vertical
+ * route (source SOUTH → target NORTH at `card left edge − SIDE_GAP`) when
+ * its bbox intersects any label seat (H2, 绕行策略 ②).
  */
 export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | null {
   if (edge.kind === 'supervise') {
@@ -611,18 +780,37 @@ export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | 
   if (sourceBox === undefined || targetBox === undefined) return null
   const srcCol = columnIndexOfBox(layout, sourceBox)
   const tgtCol = columnIndexOfBox(layout, targetBox)
+  // The inter-band / caption-crossing side-gap vertical reroute (design doc
+  // §2.0 绕行策略 ② / §2.5): source SOUTH → target NORTH hanging at
+  // `source card left edge − SIDE_GAP` — clear of every card and label row
+  // (H2); the arrow lands `standoff` px off the target's north port along
+  // the vertical tangent (H1). Shared by the same-column caption-crossing
+  // branch and the inter-band reroute below.
+  const sideGapVertical = (): EdgeGeometry => {
+    const srcBottom = sourceBox.y + sourceBox.h
+    const gap = targetBox.y - srcBottom
+    const standoff = sameColumnStandoff(Math.abs(gap))
+    const sideX = sourceBox.x - SIDE_GAP
+    return verticalCurve(sideX, srcBottom, sideX, targetBox.y - standoff)
+  }
   if (srcCol < tgtCol) {
     // Forward: source east → target west; the path ends 10px LEFT of the
-    // west edge (outside the card) with a horizontal tangent (H1).
+    // west edge (outside the card) with a horizontal tangent (H1). A direct
+    // diagonal whose bbox crosses any label seat (the inter-band case —
+    // Task 8) reroutes via the side gap (H2).
     const s = portPoint(sourceBox, 'east')
     const t = portPoint(targetBox, 'west')
-    return horizontalCurve(s.x, s.y, t.x - STANDOFF, t.y)
+    const endX = t.x - STANDOFF
+    if (crossesLabelSeat(horizontalBBox(s.x, s.y, endX, t.y), layout)) return sideGapVertical()
+    return horizontalCurve(s.x, s.y, endX, t.y)
   }
   if (srcCol > tgtCol) {
     // Reverse: source west → target east; ends 10px RIGHT of the east edge.
     const s = portPoint(sourceBox, 'west')
     const t = portPoint(targetBox, 'east')
-    return horizontalCurve(s.x, s.y, t.x + STANDOFF, t.y)
+    const endX = t.x + STANDOFF
+    if (crossesLabelSeat(horizontalBBox(s.x, s.y, endX, t.y), layout)) return sideGapVertical()
+    return horizontalCurve(s.x, s.y, endX, t.y)
   }
   // Same column: south → north (design doc §2.5). The center-x vertical line
   // must not cross a caption row of the column (H2 — e.g. implementor →
@@ -646,20 +834,30 @@ export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | 
 
 /* ------------------------------ card / edge pieces ------------------------------ */
 
-/** The card status point (spec §4): running glows, settled shows the ✓, idle stays muted. */
-function StatusPoint({ status }: { status: AgentEntityStatus }) {
+/** The card status point (spec §4): running glows, settled shows the ✓,
+ * idle stays muted. The ✓ is the COMPLETION marker (plan
+ * 20260812-panel-f5-design-system Task 8 — user 2026-08-12 feedback #1/#3):
+ * it renders ONLY for a settled entity whose emphasis is NOT 'off' (`done`
+ * — the card also carries the green done frame); a settled entity on an
+ * 'off' tier (already-passed / stage-less on-demand + general roles) shows
+ * the plain MUTED dot instead — the completed state never appears on a
+ * stage-less role (feedback #3). `data-agent-status` always reports the
+ * honest projected status; `data-agent-done` carries the frame decision. */
+function StatusPoint({ status, done }: { status: AgentEntityStatus; done: boolean }) {
   const className = css.agentStatusDot
     + (status === 'running'
       ? ` ${css.agentStatusRunning}`
       : status === 'settled'
-        ? ` ${css.agentStatusSettled}`
+        ? done
+          ? ` ${css.agentStatusSettled}`
+          : ` ${css.agentStatusIdle}` // settled + off → muted dot, NO ✓ (feedback #3)
         : status === 'error' || status === 'denied'
           ? ` ${css.agentStatusError}`
           : status === 'advisory'
             ? ` ${css.agentStatusAdvisory}`
             : ` ${css.agentStatusIdle}`)
-  if (status === 'settled') {
-    return <span className={className} data-agent-status={status} aria-label="settled">✓</span>
+  if (status === 'settled' && done) {
+    return <span className={className} data-agent-status={status} data-agent-done="true" aria-label="settled">✓</span>
   }
   return <span className={className} data-agent-status={status} aria-hidden="true" />
 }
@@ -671,6 +869,13 @@ function StatusPoint({ status }: { status: AgentEntityStatus }) {
  */
 function EntityCard({ entity, t, box }: { entity: AgentEntityView; t: TranslateNS<'mstar-panel'>; box: CanvasBox }) {
   const running = entity.status === 'running'
+  // Done frame (plan 20260812-panel-f5-design-system Task 8 — user 2026-08-12
+  // feedback #1/#3): settled AND emphasis ≠ 'off' → the standalone GREEN
+  // frame + green ✓. emphasis === 'off' (already-passed / stage-less
+  // on-demand + general roles) NEVER shows the completion marker — the
+  // completed state cannot appear on an off-tier role (feedback #3: the
+  // v3 bug — the settled ✓ leaked through the off-tier low transparency).
+  const done = entity.status === 'settled' && entity.emphasis !== 'off'
   // title = agent 名 (spec §4 — role display id/name; idle cards carry
   // displayName ?? id through `entity.name`); the session id is a record field.
   const title = entity.idle ? entity.name : entity.role !== '' ? entity.role : entity.name
@@ -679,12 +884,19 @@ function EntityCard({ entity, t, box }: { entity: AgentEntityView; t: TranslateN
   if (entity.task !== null) record.push(entity.task)
   return (
     <li
-      className={entity.idle ? `${css.agentCard} ${css.agentCardIdle}` : running ? `${css.agentCard} ${css.agentCardRunning}` : css.agentCard}
+      className={entity.idle
+        ? `${css.agentCard} ${css.agentCardIdle}`
+        : running
+          ? `${css.agentCard} ${css.agentCardRunning}`
+          : done
+            ? `${css.agentCard} ${css.agentCardDone}`
+            : css.agentCard}
       style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
       data-agent-entity={entity.key}
       data-agent-status={entity.status}
       data-agent-idle={entity.idle ? 'true' : undefined}
       data-agent-running={running ? 'true' : undefined}
+      data-agent-done={done ? 'true' : 'false'}
       data-agent-stage={entity.stage === null ? entity.zone : `${entity.stage.phase}:${entity.stage.stage}`}
       data-agent-bucket={entity.bucket ?? undefined}
       data-agent-emphasis={entity.emphasis ?? undefined}
@@ -712,7 +924,7 @@ function EntityCard({ entity, t, box }: { entity: AgentEntityView; t: TranslateN
       <span className={css.agentPort} data-agent-port="east" aria-hidden="true" />
       <div className={css.agentCardLine}>
         <span className={css.agentCardName} title={title}>{title}</span>
-        <StatusPoint status={entity.status} />
+        <StatusPoint status={entity.status} done={done} />
         {entity.count > 1 && (
           <span className={css.agentCount} data-agent-count={entity.count}>{`×${entity.count}`}</span>
         )}
@@ -729,7 +941,7 @@ function EntityCard({ entity, t, box }: { entity: AgentEntityView; t: TranslateN
 
 /* ------------------------------ the page ------------------------------ */
 
-export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
+export function AgentCanvasPage({ view, iteration, t, initialPan }: AgentCanvasPageProps) {
   const { entities, edges, degraded, note, executing, pending } = view
   const [pan, setPan] = useState<PanState>(() => initialPan ?? PAN_ORIGIN)
   const dragRef = useRef<PanDrag | null>(null)
@@ -777,6 +989,12 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
 
   return (
     <div className={css.canvasPage} data-mstar-page="agents">
+      {/* The SHARED iteration info section (plan 20260812-panel-f5-design-system
+          Task 8 — user 2026-08-12 feedback #4): the SAME block the tasks tab
+          renders (IterationInfoSection), from the SAME `view.iteration` data —
+          两个 tab 显示同一迭代信息块. */}
+      <IterationInfoSection iteration={iteration} t={t} />
+
       <header className={css.canvasHeader}>
         <h2 className={css.canvasTitle}>{t('zone.agents.title')}</h2>
         <span
@@ -809,6 +1027,48 @@ export function AgentCanvasPage({ view, t, initialPan }: AgentCanvasPageProps) {
           data-canvas-pan
           style={{ transform: panTransform(pan), width: layout.width, height: layout.height }}
         >
+          {/* Phase group labels (plan 20260812-panel-f5-design-system Task 8 —
+           * user 2026-08-12 feedback #2): the canvas splits into TWO vertical
+           * bands — Phase 1 (the sequential review-edit-chain) ABOVE, Phase 2
+           * (the iterative plan loop: sdd-implement → qc-tri → qa-gate) BELOW.
+           * The Phase-2 row carries the CURRENT-PLAN annotation (the projected
+           * `activePlanId` — the first InProgress `state.plans[]` row; muted
+           * 「无进行中 plan」 when none; `+N more` when several run in
+           * parallel — honest, never hides the rest). */}
+          {layout.groups.map((group) => (
+            <span
+              key={group.phase}
+              className={css.canvasGroupLabel}
+              style={{ left: group.label.x, top: group.label.y, width: group.label.w }}
+              data-canvas-group={group.phase}
+              data-canvas-group-index={group.index}
+            >
+              {group.phase === 'iteration-start'
+                ? t('zone.agents.group.phase-1')
+                : group.phase === 'autonomous-execute'
+                  ? t('zone.agents.group.phase-2')
+                  : t('zone.agents.group.phase-n', { n: String(group.index) })}
+              {group.planNote && (
+                view.activePlanId === null
+                  ? (
+                    <span className={css.canvasGroupNoPlan} data-canvas-group-no-plan>
+                      {t('zone.agents.group.no-plan')}
+                    </span>
+                  )
+                  : (
+                    <span className={css.canvasGroupPlan} data-canvas-group-plan={view.activePlanId}>
+                      {t('zone.agents.group.plan', { plan: view.activePlanId })}
+                      {view.activePlanCount > 1 && (
+                        <span className={css.canvasGroupPlanMore} data-canvas-group-plan-more>
+                          {t('zone.agents.group.plan-more', { n: String(view.activePlanCount - 1) })}
+                        </span>
+                      )}
+                    </span>
+                  )
+              )}
+            </span>
+          ))}
+
           {layout.columns.map((col) => (
             <span
               key={col.id}

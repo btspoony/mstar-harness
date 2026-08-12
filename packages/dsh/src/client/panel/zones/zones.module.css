@@ -135,6 +135,17 @@
   border-bottom: 3px solid var(--dsw-alias-label-caption);
 }
 
+/* Phase-group swatch (plan 20260812-panel-f5-design-system Task 8 — design
+ * doc §1.2, user 2026-08-12 feedback #2): the canvas splits into TWO
+ * vertical phase bands — Phase 1 (the sequential review-edit-chain) ABOVE,
+ * Phase 2 (the iterative plan loop sdd-implement → qc-tri → qa-gate, with
+ * the current-plan annotation) BELOW — a primary label bar over a caption
+ * note bar (group label row over the plan note row). */
+.swatchGroup {
+  border-top: 3px solid var(--dsw-alias-label-primary);
+  border-bottom: 3px solid var(--dsw-alias-label-caption);
+}
+
 /* Supervise-line swatch (plan f5 Task 2 + Task 5): the implementor ↔
  * sdd-reviewer bidirectional supervision line — dim dashed caption (the lit
  * business state is evidence-driven; the arrowheads are implied). Task 5

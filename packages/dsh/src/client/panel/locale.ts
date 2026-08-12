@@ -159,6 +159,7 @@ export type PanelKey =
   | 'zone.legend.title'
   | 'zone.legend.flow-actual'
   | 'zone.legend.port'
+  | 'zone.legend.group'
   | 'zone.legend.sub-bucket'
   | 'zone.legend.supervise'
   | 'zone.legend.on-demand'
@@ -197,6 +198,12 @@ export type PanelKey =
   | 'zone.agents.unknown-sub'
   | 'zone.agents.bucket.implementor'
   | 'zone.agents.bucket.reviewer'
+  | 'zone.agents.group.phase-1'
+  | 'zone.agents.group.phase-2'
+  | 'zone.agents.group.phase-n'
+  | 'zone.agents.group.plan'
+  | 'zone.agents.group.no-plan'
+  | 'zone.agents.group.plan-more'
   | 'flow.empty'
   | 'flow.settle-only'
   | 'flow.degraded'
@@ -277,12 +284,13 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': '图例',
   'zone.legend.flow-actual': '实际交接边（曲线 · 端口锚定 · 箭头沿线）',
   'zone.legend.port': '卡片端口（hover 显示 · 4 固定锚点 · 线止于 standoff 不贴卡）',
+  'zone.legend.group': 'Phase 分组（上：Phase 1 顺序链 / 下：Phase 2 循环迭代 + 当前 plan 标注）',
   'zone.legend.sub-bucket': 'sdd-implement 子桶（implementor / sdd-reviewer）',
   'zone.legend.supervise': 'implementor ↔ sdd-reviewer 双向监督线（侧隙垂直锚点）',
   'zone.legend.on-demand': '按需执行角色（implementor 子桶徽标）',
   'zone.legend.unknown': 'unknown 分区（qa-gate 列底部 · 未匹配 / general 角色）',
   'zone.legend.agent-running': '执行中实体（发光）',
-  'zone.legend.agent-settled': '已结算实体（✓）',
+  'zone.legend.agent-settled': '已完成实体（独立绿框 + ✓；off 阶段不显示）',
   'zone.legend.agent-idle': '未工作实体（虚线）',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
@@ -315,6 +323,12 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.unknown-sub': 'unknown / 未匹配角色',
   'zone.agents.bucket.implementor': 'implementor',
   'zone.agents.bucket.reviewer': 'sdd-reviewer',
+  'zone.agents.group.phase-1': 'Phase 1 · 顺序完成（review-edit-chain）',
+  'zone.agents.group.phase-2': 'Phase 2 · 循环迭代 plans',
+  'zone.agents.group.phase-n': 'Phase {n}',
+  'zone.agents.group.plan': 'plan: {plan}',
+  'zone.agents.group.no-plan': '无进行中 plan',
+  'zone.agents.group.plan-more': '+{n} 更多',
   'flow.empty': '暂无实际派发（记录自 agent-flow plan 合并起生效）',
   'flow.settle-only': '仅有结算记录（无派发证据）',
   'flow.degraded': 'agentFlow 证据缺失',
@@ -390,12 +404,13 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': 'Legend',
   'zone.legend.flow-actual': 'actual handoff edge (curve · port-anchored · arrow along the line)',
   'zone.legend.port': 'card ports (hover-visible · 4 fixed anchors · line ends at the standoff, off the card)',
+  'zone.legend.group': 'Phase groups (Phase 1 sequential chain above / Phase 2 iterative plan loop below + current-plan note)',
   'zone.legend.sub-bucket': 'sdd-implement sub-buckets (implementor / sdd-reviewer)',
   'zone.legend.supervise': 'implementor ↔ sdd-reviewer bidirectional supervise line (side-gap vertical anchor)',
   'zone.legend.on-demand': 'on-demand role (implementor sub-bucket badge)',
   'zone.legend.unknown': 'unknown partition (bottom of the qa-gate column · unmatched / general roles)',
   'zone.legend.agent-running': 'agent running (glow)',
-  'zone.legend.agent-settled': 'agent settled (✓)',
+  'zone.legend.agent-settled': 'settled agent (green done frame + ✓; off-tier roles show neither)',
   'zone.legend.agent-idle': 'idle agent (dashed)',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
@@ -428,6 +443,12 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.agents.unknown-sub': 'unknown / unmatched roles',
   'zone.agents.bucket.implementor': 'implementor',
   'zone.agents.bucket.reviewer': 'sdd-reviewer',
+  'zone.agents.group.phase-1': 'Phase 1 · sequential (review-edit-chain)',
+  'zone.agents.group.phase-2': 'Phase 2 · iterative plan loop',
+  'zone.agents.group.phase-n': 'Phase {n}',
+  'zone.agents.group.plan': 'plan: {plan}',
+  'zone.agents.group.no-plan': 'no in-progress plan',
+  'zone.agents.group.plan-more': '+{n} more',
   'flow.empty': 'No actual dispatches yet (recording starts at agent-flow plan merge)',
   'flow.settle-only': 'Settle records only (no dispatch evidence)',
   'flow.degraded': 'No agent-flow evidence (ledger missing)',

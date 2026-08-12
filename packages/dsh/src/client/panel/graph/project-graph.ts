@@ -399,6 +399,16 @@ export interface AgentZoneView {
   executing: number
   /** Sum of expected roles of stages with no dispatch evidence — the summary "M 待执行". */
   pending: number
+  /** The FIRST `state.plans[]` row with status 'InProgress' (catalog order);
+   * null when no plan is in progress (plan 20260812-panel-f5-design-system
+   * Task 8 — the Phase 2 group's current-plan annotation, user 2026-08-12
+   * feedback #2). Total function: state/plans missing or no InProgress row →
+   * null (never fabricated). */
+  activePlanId: string | null
+  /** How many `state.plans[]` rows are InProgress (the render shows
+   * `+N more` when several plans run in parallel — honest, same shape as the
+   * kanban overflow hint; never hides the count behind the first id). */
+  activePlanCount: number
 }
 
 /* ---------------------------------- ZoneView (spec §3) ---------------------------------- */
@@ -963,6 +973,12 @@ function idleZone(known: KnownAgent): AgentZone {
  * the projection ('empty' / 'settle-only' / null — see `AgentZoneNote`); the
  * UI consumes it directly and never infers settle-only from the entity list
  * (garbage rows would fake it).
+ *
+ * Phase-2 plan note (plan 20260812-panel-f5-design-system Task 8 — user
+ * 2026-08-12 feedback #2): `activePlanId` / `activePlanCount` ride the
+ * `state.plans[]` InProgress rows (catalog order) — the Phase 2 group label
+ * annotates the current plan; degraded/empty branches include the note too
+ * (it is a state.plans annotation, independent of the ledger evidence).
  */
 export function projectAgents(source: MstarEngineStatusSource | null, currentStep: number | null): AgentZoneView {
   const stages: AgentZoneStage[] = EXPECTED_ROLE_FLOW.map((s) => ({
@@ -978,15 +994,36 @@ export function projectAgents(source: MstarEngineStatusSource | null, currentSte
   const rawEvents = rawAgentFlow === null || rawAgentFlow === undefined || typeof rawAgentFlow !== 'object'
     ? null
     : rawAgentFlow.events
+
+  // The Phase-2 current-plan annotation (plan 20260812-panel-f5-design-system
+  // Task 8 — design doc §1.2, user 2026-08-12 feedback #2): the
+  // `state.plans[]` rows with status 'InProgress' (catalog order).
+  // `activePlanId` = the FIRST one; `activePlanCount` = all of them (the
+  // render shows `+N more` when several plans run in parallel — honest,
+  // never hides the rest behind the first id). Total function: state /
+  // plans missing or no InProgress row → null / 0 (never fabricated).
+  const rawPlans = state == null ? undefined : (state as { plans?: unknown }).plans
+  const activePlans = Array.isArray(rawPlans)
+    ? rawPlans
+        .map((p) => ({ id: str((p as { id?: unknown })?.id), status: str((p as { status?: unknown })?.status) }))
+        .filter((p) => p.status === 'InProgress' && p.id !== '')
+        .map((p) => p.id)
+    : []
+  const activePlanId = activePlans[0] ?? null
+  const activePlanCount = activePlans.length
+
   if (rawEvents === null || !Array.isArray(rawEvents)) {
     // No ledger evidence at all → every known agent is idle (spec §6.2);
     // `note` is null — the `degraded` flag IS the note for this branch. The
     // supervise edge still exists (STATIC design knowledge), dimmed
-    // (evidenced false — no evidence to light it).
+    // (evidenced false — no evidence to light it). The Phase-2 plan note
+    // still renders (it is a state.plans annotation, independent of the
+    // ledger evidence).
     return {
       stages, degraded: true, empty: false, note: null,
       entities: idleEntities(new Set(), new Set(), currentStep),
       edges: superviseEdges(stages, []), executing: 0, pending: 0,
+      activePlanId, activePlanCount,
     }
   }
 
@@ -1052,7 +1089,7 @@ export function projectAgents(source: MstarEngineStatusSource | null, currentSte
   // Pending = expected roles of stages with NO dispatch evidence (spec §4).
   const pending = stages.reduce((sum, s) => sum + (evidenced.has(s.id) ? 0 : s.roles.length), 0)
 
-  return { stages, degraded: false, empty, note, entities, edges, executing, pending }
+  return { stages, degraded: false, empty, note, entities, edges, executing, pending, activePlanId, activePlanCount }
 }
 
 /* ---------------------------------- flow events projection (spec §3 — moved from `flow.*`) ---------------------------------- */
