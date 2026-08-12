@@ -74,8 +74,10 @@ export const TRANSITION_TO_PHASE: Readonly<Record<string, PhaseId>> = {
  * - review-edit-chain: product-manager → architect → writing-specialist —
  *   the mstar-iteration §1.6 Review & Edit chain (Prepare-phase design
  *   review, Phase 1).
- * - sdd-implement: fullstack-dev / fullstack-dev-2 / frontend-dev — the
- *   mstar-sdd implementer roles (Phase 2 task execution).
+ * - sdd-implement: fullstack-dev / fullstack-dev-2 / frontend-dev /
+ *   code-reviewer — the mstar-sdd implementer roles PLUS the L2 task
+ *   reviewer `code-reviewer` (v2.1.1, upstream roles.ts SSOT — the former
+ *   `generalPurpose` seat; Phase 2 task execution + per-task review).
  * - qc-tri: qc-specialist ×3 — the mstar-sdd plan QC triage (Phase 2).
  * - qa-gate: qa-engineer — the QA gate (Phase 2 closing — the pipeline
  *   TERMINAL stage; ops-engineer is NOT in the pipeline).
@@ -85,22 +87,27 @@ export const TRANSITION_TO_PHASE: Readonly<Record<string, PhaseId>> = {
  * Off-pipeline roles (plan 20260811-panel-f3-agent-general) live in the
  * KNOWN_AGENTS roster with `zone` markers, NOT here: `ops-engineer` and
  * `prompt-engineer` are on-demand dispatches (mstar-roles routing table,
- * as needed) rendered in their own on-demand column; the SDD per-task
- * reviewer (the former `sdd-task-review` stage / `generalPurpose` role —
- * mstar-sdd L2 reviewer) moved OFF the pipeline into the single `general`
- * bucket (plan 20260811-panel-f3-agent-general — user decision), which also
- * collects every unmatched / anonymous dispatch (role '').
+ * as needed) — they stay OUTSIDE this union (their event-log `unexpected`
+ * badge is unchanged; bucket membership and expectedness are ORTHOGONAL
+ * dimensions — plan 20260812-panel-f5-agent-layout Task 1, see
+ * SDD_BUCKET_ROLES). The single `general` bucket (plan
+ * 20260811-panel-f3-agent-general) collects every unmatched / anonymous
+ * dispatch (role ''), plus stray off-roster roles like `scout`; the SDD
+ * per-task reviewer is now the PIPELINE role `code-reviewer` (v2.1.1 — the
+ * former `generalPurpose` seat), so the `general` bucket no longer
+ * describes a pipeline seat.
  *
- * General-bucket PLACEMENT (plan 20260811-panel-f4-agent-view Task 1, user
- * F4.2): the `general` bucket no longer has its OWN canvas column — the
- * projection still emits `zone: 'general'` entities (semantics unchanged,
- * placement is a RENDER-layer decision), and the render places them at the
- * BOTTOM INSIDE the `sdd-implement` column bucket. The former SDD
- * implement ↔ review skeleton EDGE (sdd-implement → general back-edge, the
- * `loop: true` arrow) is REMOVED from the projection (plan
- * 20260811-panel-f4-agent-view Task 1); a future "dynamic-lines" iteration
- * (per real dispatch/settle evidence — compass Roadmap Position) may
- * reintroduce evidence-driven connections.
+ * General-bucket PLACEMENT (plan 20260812-panel-f5-agent-layout Task 1 —
+ * user 2026-08-12 decision): the `general` bucket moves to its OWN rightmost
+ * UNKNOWN column — the projection still emits `zone: 'general'` entities
+ * (semantics unchanged, placement is a RENDER-layer decision), and the
+ * render (Task 2) places them in that rightmost column. The earlier F4.2
+ * placement (BOTTOM INSIDE the `sdd-implement` column bucket) is
+ * superseded by the F5 user decision; the former SDD implement ↔ review
+ * skeleton EDGE (sdd-implement → general back-edge, the `loop: true` arrow)
+ * stays REMOVED from the projection (plan 20260811-panel-f4-agent-view Task
+ * 1); the F5 supervise line is a SEPARATE sub-bucket edge (see
+ * project-graph.ts `superviseEdges`).
  *
  * Matching rules (spec §2.3 — implemented by `projectGraph`'s flow
  * projection): `expected` ⟺ `event.role` ∈ the union of ALL `roles` below
@@ -118,24 +125,51 @@ export interface ExpectedRoleStage {
   roles: readonly string[]
 }
 
-/** Expected role pipeline skeleton: 4 stages (spec agent-flow-catalog-graph §2.3,
- * plan 20260811-panel-f3-agent-general — sdd-task-review removed, the SDD L2
- * reviewer moved off-pipeline into the `general` bucket; qa-gate is the
+/** Expected role pipeline skeleton: 4 stages (spec agent-flow-catalog-graph
+ * §2.3; plan 20260812-panel-f5-agent-layout Task 1 — `code-reviewer` joins
+ * the sdd-implement stage: v2.1.1 makes the SDD L2 task reviewer a routine
+ * pipeline role, the former `generalPurpose` seat; ops-engineer /
+ * prompt-engineer stay OFF the pipeline — on-demand; qa-gate is the
  * terminal stage). */
 export const EXPECTED_ROLE_FLOW: readonly ExpectedRoleStage[] = [
   { phase: 'iteration-start',    stage: 'review-edit-chain', roles: ['product-manager', 'architect', 'writing-specialist'] },
-  { phase: 'autonomous-execute', stage: 'sdd-implement',     roles: ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev'] },
+  { phase: 'autonomous-execute', stage: 'sdd-implement',     roles: ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev', 'code-reviewer'] },
   { phase: 'autonomous-execute', stage: 'qc-tri',            roles: ['qc-specialist', 'qc-specialist-2', 'qc-specialist-3'] },
   { phase: 'autonomous-execute', stage: 'qa-gate',           roles: ['qa-engineer'] },
 ]
 
 /**
+ * SDD sub-bucket membership (plan 20260812-panel-f5-agent-layout Task 1 —
+ * CLIENT-SIDE DESIGN KNOWLEDGE): which roles live in which sub-bucket of the
+ * `sdd-implement` column — `implementor` (the implementer roles PLUS the
+ * on-demand ops-engineer / prompt-engineer: they are implementor-family
+ * dispatches, not a separate stage) and `reviewer` (code-reviewer, the SDD
+ * L2 task reviewer — v2.1.1, upstream roles.ts SSOT).
+ *
+ * ORTHOGONAL to expectedness: sub-bucket membership is a LAYOUT dimension,
+ * the `expected` badge follows the EXPECTED_ROLE_FLOW union (a separate
+ * dimension). `implementor` ⊇ the sdd-implement union roles (it also holds
+ * ops-engineer / prompt-engineer, which stay OUTSIDE the union — their
+ * event-log `unexpected` badge is unchanged); `reviewer` ⊆ the union. Do NOT
+ * add on-demand roles to EXPECTED_ROLE_FLOW.roles to "fix" their badge —
+ * that would silently flip it (compass Non-Goal: no event-log classification
+ * changes).
+ */
+export const SDD_BUCKET_ROLES: { implementor: readonly string[]; reviewer: readonly string[] } = {
+  implementor: ['fullstack-dev', 'fullstack-dev-2', 'frontend-dev', 'ops-engineer', 'prompt-engineer'],
+  reviewer: ['code-reviewer'],
+}
+
+/**
  * The known-agent roster (spec §4 / §6.2 / decision point D3 + plan
- * 20260811-panel-f3-agent-general): the static FULL set of ASSIGNABLE roles
- * the panel may ever show — every EXPECTED_ROLE_FLOW role PLUS the
- * off-pipeline roles `prompt-engineer` (in the mstar-roles table but not in
- * the pipeline) and `ops-engineer` (on-demand ops dispatch), PLUS `general`
- * (the single general bucket — see below). Exactly 13 roles.
+ * 20260811-panel-f3-agent-general + plan 20260812-panel-f5-agent-layout Task
+ * 1): the static FULL set of ASSIGNABLE roles the panel may ever show —
+ * every EXPECTED_ROLE_FLOW role PLUS the off-pipeline roles `prompt-engineer`
+ * (in the mstar-roles table but not in the pipeline) and `ops-engineer`
+ * (on-demand ops dispatch), PLUS `general` (the single general bucket — see
+ * below). Exactly 14 roles (upstream v2.1.1 roles.ts = 13 assignable +
+ * project-manager is the semantic SSOT — the roster adds `code-reviewer`,
+ * the SDD L2 task reviewer, to reach 14).
  *
  * `explore` is DELIBERATELY NOT in the roster (plan
  * 20260811-panel-f3-agent-general — user F3 feedback): it is a scouting
@@ -153,47 +187,46 @@ export const EXPECTED_ROLE_FLOW: readonly ExpectedRoleStage[] = [
  * evidence projects as an `idle` entity (spec §6.2 — degraded/empty
  * branches included). `stage` = the role's stage in EXPECTED_ROLE_FLOW
  * (first constant-order match); null for the off-pipeline roles, which
- * carry an explicit `zone` — `on-demand` (ops-engineer / prompt-engineer,
- * their own canvas column) or `general` (the general bucket = the SDD
- * per-task reviewer — the former `generalPurpose` role — plus ANY
- * unmatched / anonymous dispatch (role '') in the projection).
+ * carry an explicit `zone` — `on-demand` (ops-engineer / prompt-engineer:
+ * implementor-sub-bucket dispatches with an on-demand badge — the render
+ * places them inside the `sdd-implement` column's implementor partition,
+ * Task 2) or `general` (the general bucket = ANY unmatched / anonymous
+ * dispatch (role '') in the projection — the rightmost UNKNOWN column,
+ * Task 2).
  *
- * General-bucket placement (plan 20260811-panel-f4-agent-view Task 1, user
- * F4.2): the `general` bucket has NO column of its own — the render places
- * `zone: 'general'` entities at the BOTTOM INSIDE the `sdd-implement`
- * column bucket (dev cards above, general card below; see the schema note
- * above and the render layout in AgentCanvasPage). The zone VALUE
- * ('general') is unchanged — placement is a render-layer decision, the
- * projection keeps declaring the zone.
+ * General-bucket placement (plan 20260812-panel-f5-agent-layout Task 1,
+ * user 2026-08-12): the `general` bucket gets its OWN rightmost unknown
+ * column — the projection keeps emitting `zone: 'general'` entities (the
+ * zone VALUE is unchanged — placement is a render-layer decision, Task 2).
  */
 /** The general-bucket id (plan 20260811-panel-f3-agent-general): the single
- * bucket every off-roster / anonymous dispatch folds into — the SDD per-task
- * reviewer (the former `generalPurpose` role) plus ANY unmatched / anonymous
- * dispatch (role '') in the projection. Single source for the value:
+ * bucket every off-roster / anonymous dispatch folds into — the former SDD
+ * per-task reviewer seat is now the PIPELINE role `code-reviewer` (v2.1.1),
+ * so `general` is purely the unmatched/anonymous catch-all (role '' +
+ * stray roles like `scout`). Single source for the value:
  * `entityKeyOf`'s fallback key, `roleZone` / `idleZone` defaults and the
  * KNOWN_AGENTS roster id ALL derive from it — renaming the bucket changes
  * exactly one constant.
  *
- * Placement (plan 20260811-panel-f4-agent-view Task 1, user F4.2): the
- * bucket no longer has its own canvas column — the render places
- * `zone: 'general'` entities at the BOTTOM INSIDE the `sdd-implement`
- * column bucket (Task 2 removes the render's `GENERAL_COLUMN`; the former
- * SDD-loop edge target is gone — `expectedEdges` no longer emits the
- * sdd-implement → general back-edge, Task 1). The `'general'` literal in
- * the `AgentZone` / `KnownAgent.zone` unions below is the type-level
- * binding (a union member cannot reference a value) — keep them in sync
- * with this constant. */
+ * Placement (plan 20260812-panel-f5-agent-layout Task 1, user 2026-08-12):
+ * the bucket gets its OWN rightmost UNKNOWN canvas column — the render
+ * (Task 2) places `zone: 'general'` entities there; the former F4.2
+ * placement (BOTTOM INSIDE the `sdd-implement` column) is superseded. The
+ * `'general'` literal in the `AgentZone` / `KnownAgent.zone` unions below
+ * is the type-level binding (a union member cannot reference a value) —
+ * keep them in sync with this constant. */
 export const GENERAL_BUCKET = 'general' as const
 
 /**
  * Agent-entity column zone (plan 20260811-panel-f3-agent-general + plan
- * 20260811-panel-f4-agent-view Task 1): `'flow'` (stage columns), `'on-demand'`
- * (ops-engineer / prompt-engineer — their own on-demand column, unchanged) or
- * `'general'` (the general bucket). Placement semantics (F4.2, user
- * decision): the `general` zone has NO column of its own — the render places
- * `zone: 'general'` entities at the BOTTOM INSIDE the `sdd-implement` column
- * bucket. The zone VALUE is projection-owned and unchanged; only the render
- * layout (Task 2) changes.
+ * 20260812-panel-f5-agent-layout Task 1): `'flow'` (stage columns),
+ * `'on-demand'` (ops-engineer / prompt-engineer — implementor-sub-bucket
+ * dispatches, rendered inside the `sdd-implement` column's implementor
+ * partition with an on-demand badge; the standalone on-demand column is
+ * REMOVED — Task 2) or `'general'` (the general bucket). Placement
+ * semantics (user 2026-08-12 decision): `'general'` renders in its OWN
+ * rightmost UNKNOWN column (Task 2). The zone VALUE is projection-owned and
+ * unchanged; only the render layout (Task 2) changes.
  */
 export type AgentZone = 'flow' | 'on-demand' | 'general'
 
@@ -205,19 +238,26 @@ export interface KnownAgent {
   /** The role's EXPECTED_ROLE_FLOW stage; null → off-pipeline role. */
   stage?: { phase: PhaseId; stage: string } | null
   /** Off-pipeline zone (plan 20260811-panel-f3-agent-general): 'on-demand'
-   * for the on-demand column, 'general' (the default when omitted) for the
-   * general bucket. The `'general'` literal is the type-level binding of
-   * `GENERAL_BUCKET` (see above) — a union member cannot reference a value. */
+   * for the implementor-sub-bucket on-demand roles (ops-engineer /
+   * prompt-engineer — rendered inside the `sdd-implement` column's
+   * implementor partition with an on-demand badge, plan
+   * 20260812-panel-f5-agent-layout Task 1 / Task 2), 'general' (the default
+   * when omitted) for the general bucket. The `'general'` literal is the
+   * type-level binding of `GENERAL_BUCKET` (see above) — a union member
+   * cannot reference a value. */
   zone?: 'on-demand' | 'general'
 }
 
-/** Known-agent roster — 13 roles, spec §4 order (project-manager + explore excluded). */
+/** Known-agent roster — 14 roles, spec §4 order (project-manager + explore
+ * excluded; `code-reviewer` added by plan 20260812-panel-f5-agent-layout
+ * Task 1 — upstream v2.1.1 roles.ts is the semantic SSOT). */
 export const KNOWN_AGENTS: readonly KnownAgent[] = [
   { id: 'product-manager', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
   { id: 'architect', stage: { phase: 'iteration-start', stage: 'review-edit-chain' } },
   { id: 'fullstack-dev', stage: { phase: 'autonomous-execute', stage: 'sdd-implement' } },
   { id: 'fullstack-dev-2', stage: { phase: 'autonomous-execute', stage: 'sdd-implement' } },
   { id: 'frontend-dev', stage: { phase: 'autonomous-execute', stage: 'sdd-implement' } },
+  { id: 'code-reviewer', stage: { phase: 'autonomous-execute', stage: 'sdd-implement' } },
   { id: 'qa-engineer', stage: { phase: 'autonomous-execute', stage: 'qa-gate' } },
   { id: 'qc-specialist', stage: { phase: 'autonomous-execute', stage: 'qc-tri' } },
   { id: 'qc-specialist-2', stage: { phase: 'autonomous-execute', stage: 'qc-tri' } },

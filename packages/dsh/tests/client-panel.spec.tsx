@@ -2261,9 +2261,9 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     for (const known of KNOWN_AGENTS) {
       expect(html).toContain(`data-agent-entity="${known.id}"`)
     }
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
     // Degraded → every roster member is an idle card (spec §6.2), zero claims.
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(KNOWN_AGENTS.length)
     expect(html).toContain('data-canvas-note="degraded"')
     expect(html).toContain('data-agent-summary-executing="0"')
     expect(html).toContain('data-agent-summary-pending="0"')
@@ -2271,10 +2271,10 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
 
   it('lit cards carry the agent-name title + record fields; idle cards are muted with no fabricated record', () => {
     const html = agentsHtml(evidenceSource)
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
-    // 3 lit (fullstack-dev / general / qc-specialist — role-keyed) + 10 idle
-    // roster members (spec §6.2 suppression rule).
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(10)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
+    // 3 lit (fullstack-dev / general / qc-specialist — role-keyed) + 11 idle
+    // roster members (spec §6.2 suppression rule; roster 14 — plan f5 T1).
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(11)
     // Title = the agent name (role id); the session id rides the record line.
     expect(html).toContain('title="fullstack-dev"')
     expect(html).toContain('title="general"') // the generalPurpose dispatch folds into the bucket
@@ -2294,8 +2294,9 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
     expect(html).not.toContain('data-canvas-note')
     expect(html).toContain('data-agent-summary-executing="2"')
     // Pending = un-evidenced stage roles: review-edit-chain (3) + qa-gate (1)
-    // = 4 — the 10-role in-flow semantics (plan f3; ops-engineer out of the
-    // flow and generalPurpose off the pipeline).
+    // = 4 — sdd-implement is evidenced (fullstack-dev) incl. code-reviewer
+    // (plan f5 T1), ops-engineer stays out of the flow (on-demand) and the
+    // generalPurpose dispatch is off the pipeline.
     expect(html).toContain('data-agent-summary-pending="4"')
   })
 
@@ -2309,11 +2310,11 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       dispatchEvent({ ts: 35, role: 'qa-engineer', agent: 'p1' }),
       dispatchEvent({ ts: 34, role: 'generalPurpose', agent: 'p1' }), // → general bucket
     ]))
-    // 7 lit (6 in-flow + the general bucket) + 6 idle (fullstack-dev-2,
+    // 7 lit (6 in-flow + the general bucket) + 7 idle (fullstack-dev-2,
     // frontend-dev, qc-specialist-2, qc-specialist-3, ops-engineer,
-    // prompt-engineer) = 13.
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(6)
+    // prompt-engineer, code-reviewer — the f5 T1 roster addition) = 14.
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(7)
     // All 7 lit dispatches are running (no settles).
     expect(html).toContain('data-agent-summary-executing="7"')
     // Every stage evidenced → no pending.
@@ -2505,7 +2506,7 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
       note: null,
       entities: [{
         key: 'general', agent: null, name: 'general', role: 'general', task: null,
-        status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'general',
+        status: 'idle', idle: true, count: 0, ts: 0, stage: null, zone: 'general', bucket: null,
       }],
       edges: [],
       executing: 0,
@@ -2521,15 +2522,15 @@ describe('workflow panel — agent canvas page (spec panel-tabs §4/§6.2, plan 
   it('F-001: a non-roster session id is only a record field — the ROLE keys the card, ONE card per key, honest summary', () => {
     // dispatch agent = 'explore' (session id, no longer a roster id) with role
     // 'fullstack-dev' — the card is keyed by the ROLE; the session id rides
-    // the record line. 1 lit + 12 idle = 13 unique entities (roster 13) and
-    // the summary matches the visible cards.
+    // the record line. 1 lit + 13 idle = 14 unique entities (roster 14 — plan
+    // f5 T1 adds code-reviewer) and the summary matches the visible cards.
     const html = agentsHtml(flowSource([
       dispatchEvent({ ts: 7, role: 'fullstack-dev', agent: 'explore' }),
     ]))
-    expect(html.match(/data-agent-entity="/g)).toHaveLength(13)
+    expect(html.match(/data-agent-entity="/g)).toHaveLength(KNOWN_AGENTS.length)
     expect(html.match(/data-agent-entity="fullstack-dev"/g)).toHaveLength(1)
     expect(html).not.toContain('data-agent-entity="explore"')
-    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(12)
+    expect(html.match(/data-agent-idle="true"/g)).toHaveLength(13)
     // The lit card is visible and honest (running, no idle marker, record = session).
     const lit = cardRegion(html, 'fullstack-dev')
     expect(lit).toContain('data-agent-status="running"')
