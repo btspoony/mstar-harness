@@ -50,25 +50,24 @@ const ENV_KEY = "MSTAR_HARNESS_DIR";
 /** Canonical snippet text — verbatim from plan-conventions § Git 跟踪策略. */
 const CANONICAL_SNIPPET = `# Morning Star harness (.mstar/)
 # Principle: process stays local; results are shared with the team.
-# Ignored (process / coordination):
-.mstar/archived/
-.mstar/iterations/
-.mstar/plans/
-.mstar/sdd/
-.mstar/notes.json
-.mstar/status.json
-# Tracked (results): .mstar/AGENTS.md, .mstar/knowledge/, .mstar/specs/
+# Default-ignore everything under .mstar/, then re-include the tracked results.
+.mstar/**
+!.mstar/AGENTS.md
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
 `;
 
 /** Legacy snippet text — verbatim from plan-conventions § Git 跟踪策略 ("Legacy `.agents/` 等价"). */
 const CANONICAL_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
-.agents/archived/
-.agents/iterations/
-.agents/plans/
-.agents/sdd/
-.agents/notes.json
-.agents/status.json
-# Tracked (results): .agents/AGENTS.md, .agents/knowledge/, .agents/specs/
+# Default-ignore everything under .agents/, then re-include the tracked results.
+.agents/**
+!.agents/AGENTS.md
+!.agents/knowledge/
+!.agents/knowledge/**
+!.agents/specs/
+!.agents/specs/**
 `;
 
 function tmpRoot(prefix: string): string {
@@ -537,16 +536,16 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
     try {
       writeFileSync(
         join(root, ".gitignore"),
-        "# Morning Star harness (.mstar/)\n.mstar/plans/\n.mstar/status.json\n",
+        "# Morning Star harness (.mstar/)\n.mstar/**\n!.mstar/AGENTS.md\n",
       );
       const result = validateGitignore(root);
       expect(result.ok).toBe(false);
       expect(result.code).toBe("gitignore.missing-entries");
       // Unknown kind — reports the set needing the fewest additions (.mstar/ here).
-      expect(result.message).toContain(".mstar/archived/");
-      expect(result.message).toContain(".mstar/iterations/");
-      expect(result.message).toContain(".mstar/sdd/");
-      expect(result.message).toContain(".mstar/notes.json");
+      expect(result.message).toContain("!.mstar/knowledge/");
+      expect(result.message).toContain("!.mstar/knowledge/**");
+      expect(result.message).toContain("!.mstar/specs/");
+      expect(result.message).toContain("!.mstar/specs/**");
       expect(result.severity).toBe("medium");
     } finally {
       rmSync(root, { recursive: true, force: true });
