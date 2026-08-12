@@ -66,7 +66,9 @@
   /* Narrow fallback (spec panel-f4 §2.3 R8): the iteration split stacks
      vertically — branches (DOM-first) above, steps below. The Task 2 width
      cap applies to the ROW main axis only (flex-basis would otherwise set
-     a 260px HEIGHT in the column stack) — reset to content height. */
+     a 260px HEIGHT in the column stack) — reset to content height. The cap
+     is scoped to `@media (min-width: 861px)` below, so nothing competes
+     with this reset at ≤860px (plan QC W-001/F-001 cascade fix). */
   .iterationHeadSplit {
     flex-direction: column;
   }
@@ -277,10 +279,15 @@
  * (small half, DOM-first) LEFT + steps (large half) RIGHT — a plain flex
  * row; the DOM already puts branches before steps. Narrow widths stack
  * vertically (the same 860px breakpoint as the root grid, below).
- * Width cap (plan 20260812-panel-f5-iteration-zone-fix Task 2): the branch
- * panel is width-constrained (flex-basis 260px, capped 280px — it never
- * stretches with the container; the branch values stay compact) and the
- * steps row absorbs ALL remaining width (flex 1 1 0). */
+ * Width cap (plan 20260812-panel-f5-iteration-zone-fix Task 2): in the ROW
+ * layout the branch panel is width-constrained (flex-basis 260px, capped
+ * 280px — it never stretches with the container; the branch values stay
+ * compact) and the steps row absorbs ALL remaining width (flex 1 1 0).
+ * The cap is scoped to `@media (min-width: 861px)` so the ≤860px column
+ * stack never sees flex-basis 260px / max-width 280px — the narrow reset
+ * above is the ONLY branch rule at ≤860px, with no cascade competition
+ * (plan QC W-001/F-001: an earlier source order let the later
+ * same-specificity base rule win). */
 .iterationHeadSplit {
   display: flex;
   align-items: stretch;
@@ -288,10 +295,13 @@
   min-width: 0;
 }
 
-.iterationHeadSplit > .iterationBranches {
-  flex: 0 1 260px;   /* width-capped (plan f5 T2) — branch info never stretches */
-  max-width: 280px;
-  min-width: 0;
+@media (min-width: 861px) {
+  /* Row-mode width cap — scoped to ≥861px (see the split comment above). */
+  .iterationHeadSplit > .iterationBranches {
+    flex: 0 1 260px;   /* width-capped (plan f5 T2) — branch info never stretches */
+    max-width: 280px;
+    min-width: 0;
+  }
 }
 
 .iterationHeadSplit > .iterationStepsRow {

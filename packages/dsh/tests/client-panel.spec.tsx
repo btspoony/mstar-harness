@@ -1509,6 +1509,18 @@ describe('workflow panel — F4.3 iteration zone: split layout + verdict badge s
     // 260px HEIGHT in the stack, so the cap is lifted for the column axis).
     expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*\{[\s\S]*?flex-direction:\s*column/)
     expect(cssText).toMatch(/@media\s*\(max-width:\s*860px\)\s*\{[\s\S]*?\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?max-width:\s*none/)
+    // Regression guard (plan QC W-001/F-001): the ≤860px column stack must
+    // NEVER see the row-mode cap. The cap is scoped inside a SINGLE
+    // `@media (min-width: 861px)` block — at ≤860px only the content-height
+    // reset above exists, so no cascade competition remains (an earlier
+    // source-order bug let the later same-specificity base rule win and
+    // defeat the reset). A text-presence assertion alone cannot catch this.
+    expect(cssText.match(/@media\s*\(min-width:\s*861px\)\s*\{/g)).toHaveLength(1)
+    const capBlock = cssText.match(/@media\s*\(min-width:\s*861px\)\s*\{([\s\S]*?)\n\}/)
+    expect(capBlock).not.toBeNull()
+    expect(capBlock![1]).toMatch(/\.iterationHeadSplit\s*>\s*\.iterationBranches\s*\{[\s\S]*?flex:\s*0\s+1\s+260px[\s\S]*?max-width:\s*280px/)
+    // The reset must stay in the ≤860px fallback, never inside the ≥861px block.
+    expect(capBlock![1]).not.toContain('max-width: none')
     // Verdict alignment fix: every step reserves a fixed-height flex seat; the
     // badge rule carries NO align-self (the `align-self: flex-start` skew
     // root cause is gone — spec §2.3 R9 "不再歪斜、不导致 Step 对齐偏移").
