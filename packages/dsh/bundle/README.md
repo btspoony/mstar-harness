@@ -103,10 +103,17 @@ lays out three zones projected from the catalog by the pure `projectGraph`
 function (schema constants vs catalog evidence strictly separated; never
 throws; explicit degraded states — muted empty states, never orange warn
 boxes): an **iteration zone** (Step 1–5 stepper + `Step N/5` badge,
-active-highlight / inactive dimmed states, and the branch panel — iteration
+active-highlight / inactive dimmed states; the steps carry a FOUR-STATE machine —
+`current` / `next` / `done` / `idle` (plan `20260812-panel-f5-iteration-zone-fix`
+Task 1): every step BEFORE the current one projects `done`「已完成」(completed —
+a finished Step 1 must not read as idle while Step 2 is current), `next` is the
+single forward target, `idle` is schema-only — and the branch panel — iteration
 base / target / spec integration, rendered only while active; the expanded
-head is a LEFT-RIGHT SPLIT — branches (small left half) + steps (large right
-half) via `data-iteration-head-split`, stacking on narrow widths, and NO
+head is a LEFT-RIGHT SPLIT — branches (small left half, WIDTH-CAPPED —
+`flex: 0 1 260px` + `max-width: 280px`, never stretches with the container; the
+<860px column stack resets to content height) + steps (large right half,
+`flex: 1 1 0` absorbing the remaining width) via `data-iteration-head-split`,
+stacking on narrow widths, and NO
 branch panel when there is no active iteration; the current step follows the
 steering compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
 (iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge —
@@ -177,7 +184,9 @@ Known limitations (this iteration): the iteration stepper's Step 1
 `status: active` (Phase 1 in flight — catalog `compassStatus` field), carrying
 NO PASS/FAIL badge (Phase 1 has no gate verdict); Step 5 (merge-ready) can
 never be the current step —
-the engine phase gate only evaluates Phase 2→3→4, so it always renders idle;
+the engine phase gate only evaluates Phase 2→3→4 (merge-ready is never a gate
+transition); it renders `next` only while Step 4 (pr-delivery) is current, idle
+otherwise;
 the current step follows the TTL-refreshed `compassStatus` — up to one catalog
 interval (60 s) behind a mid-session `active`→`locked` flip (bounded,
 documented staleness, never a wrong verdict);

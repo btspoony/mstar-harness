@@ -1,10 +1,10 @@
 /**
  * Pure projection tests for `projectGraph` (spec panel-zones §3 + §8): the
  * total function maps an `mstar-engine-status` catalog source to a `ZoneView`
- * — iteration zone (5 PHASE_IDS steps + Step N + current/next/idle + verdict
- * + branches + disabled determination), tasks zone (6 kanban columns +
- * exact-match bucketing + unknown column + shared plan-sort key + Done cap 5
- * + truncated), agents skeleton (EXPECTED_ROLE_FLOW pending stages +
+ * — iteration zone (5 PHASE_IDS steps + Step N + current/next/done/idle +
+ * verdict + branches + disabled determination), tasks zone (6 kanban columns
+ * + exact-match bucketing + unknown column + shared plan-sort key + Done cap
+ * 5 + truncated), agents skeleton (EXPECTED_ROLE_FLOW pending stages +
  * degraded/empty from `state.agentFlow` presence), and the migrated top-level
  * verdict / violations / events / unexpected / degraded.
  *
@@ -34,7 +34,7 @@ import { describe, expect, it } from 'bun:test'
 import type { MstarEngineStatusSource } from '../src/types'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
-import { pairSettleIndexes, projectGraph } from '../src/client/panel/graph/project-graph'
+import { pairSettleIndexes, projectGraph, type ZoneView } from '../src/client/panel/graph/project-graph'
 import { eventLogEntries, type EventLogEntry } from '../src/client/panel/graph/event-log'
 import {
   EXPECTED_ROLE_FLOW, KNOWN_AGENTS, PHASE_IDS, PLAN_STATE_IDS,
@@ -108,7 +108,7 @@ const noHarnessSource: MstarEngineStatusSource = {
 }
 
 /* ---------------------------------------------------------------------------
- * Iteration zone (spec §3): steps / Step N / current/next/idle / verdict /
+ * Iteration zone (spec §3): steps / Step N / current/next/done/idle / verdict /
  * branches / disabled determination.
  * ------------------------------------------------------------------------- */
 
@@ -120,12 +120,15 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     expect(view.iteration.steps.map((s) => s.step)).toEqual([1, 2, 3, 4, 5])
   })
 
-  it('lights the transition step as current and its forward target as next', () => {
+  it('lights the transition step as current, its forward target as next, and completed steps before it as done', () => {
     const byId = new Map(view.iteration.steps.map((s) => [s.id, s]))
     expect(byId.get('autonomous-execute')!.state).toBe('current')
     expect(byId.get('iteration-close')!.state).toBe('next')
-    // Schema-only steps stay idle — never lit by the gate (Phase 1/5 known limitation).
-    expect(byId.get('iteration-start')!.state).toBe('idle')
+    // Steps BEFORE the current step are `done` (plan
+    // 20260812-panel-f5-iteration-zone-fix Task 1 — a completed Step 1 must
+    // not read as idle「待命」); only post-current schema-only steps stay idle
+    // (Phase 5 never lights — the engine gate emits 2→3→4 only).
+    expect(byId.get('iteration-start')!.state).toBe('done')
     expect(byId.get('pr-delivery')!.state).toBe('idle')
     expect(byId.get('merge-ready')!.state).toBe('idle')
   })
@@ -314,6 +317,57 @@ describe('projectGraph — iteration zone (spec §3)', () => {
     expect(v.iteration.currentStep).toBe(2)
     expect(v.iteration.verdict).toBe('pass')
     expect(v.degraded.iteration).toBe(false)
+  })
+})
+
+describe('projectGraph — iteration steps done state (plan 20260812-panel-f5-iteration-zone-fix T1)', () => {
+  /** The 5 step states of a PROJECTED view, in PHASE_IDS order. */
+  const statesOf = (view: ZoneView): string[] => view.iteration.steps.map((s) => s.state)
+
+  it('phase-2-execute + locked → [done, current, next, idle, idle] (a completed Step 1 shows done, not idle)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'locked' },
+    })
+    expect(statesOf(v)).toEqual(['done', 'current', 'next', 'idle', 'idle'])
+    expect(v.iteration.currentStep).toBe(2)
+    // Done steps are not the current step → they carry no verdict.
+    expect(v.iteration.steps.find((s) => s.id === 'iteration-start')!.verdict).toBe('unknown')
+  })
+
+  it('phase-3-close → [done, done, current, next, idle]', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: {
+        ...fullSource.iteration!,
+        gate: { ...fullSource.iteration!.gate, transition: 'phase-3-close' },
+      },
+    })
+    expect(statesOf(v)).toEqual(['done', 'done', 'current', 'next', 'idle'])
+    expect(v.iteration.currentStep).toBe(3)
+  })
+
+  it('phase-4-pr-delivery → [done, done, done, current, next]', () => {
+    const v = projectGraph(prDeliverySource)
+    expect(statesOf(v)).toEqual(['done', 'done', 'done', 'current', 'next'])
+    expect(v.iteration.currentStep).toBe(4)
+  })
+
+  it('Phase 1 in flight (compassStatus active + phase-2-execute) → [current, next, idle, idle, idle] — no done (nothing precedes Step 1)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: { ...fullSource.iteration!, compassStatus: 'active' },
+    })
+    expect(statesOf(v)).toEqual(['current', 'next', 'idle', 'idle', 'idle'])
+    expect(v.iteration.currentStep).toBe(1)
+  })
+
+  it('no iteration → all 5 steps stay idle (no done without a resolved transition)', () => {
+    const v = projectGraph({
+      ...fullSource,
+      iteration: undefined,
+    } as unknown as MstarEngineStatusSource)
+    expect(statesOf(v)).toEqual(['idle', 'idle', 'idle', 'idle', 'idle'])
   })
 })
 

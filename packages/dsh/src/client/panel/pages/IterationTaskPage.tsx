@@ -78,10 +78,13 @@ export function nextExpandedOnActivation(prev: boolean, prevActive: boolean, nex
   return !prevActive && nextActive ? true : prev
 }
 
-/** Step-state chip label seat (spec §3 — current/next/idle, localized). */
+/** Step-state chip label seat (spec §3 + plan 20260812-panel-f5-iteration-zone-fix
+ * Task 2 — current/next/done/idle, localized; `done` rides the projection's
+ * explicit four-state machine, Task 1). */
 const STATE_LABEL = {
   current: 'zone.iteration.step.current',
   next: 'zone.iteration.step.next',
+  done: 'zone.iteration.step.done',
   idle: 'zone.iteration.step.idle',
 } as const
 
@@ -213,7 +216,7 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
                 (flex 1 1 0, centered content, --mstar-space-* gap; the old
                 connector bars are removed, the gap replaces them), the
                 current step highlighted on the block itself (honest — the
-                schema knows only current/next/idle). */}
+                schema knows only current/next/done/idle). */}
             {iterationSplitActive(active, iteration.branches) ? (
               /* LEFT-RIGHT split (spec panel-f4 §2.3 R8, plan f4.3 Task 2):
                  branches LEFT (small half) + steps RIGHT (large half). DOM
