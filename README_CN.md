@@ -39,6 +39,8 @@ Harness Workflow Engine · Agent Plugin
 
 ## 安装
 
+> **dsh 经自带插件管理器安装，不走 CLI。** `npx @mstar-harness/cli init` **没有 dsh target**（仅覆盖 omp / OpenCode / Cursor / Kimi / ZCode / Codex）。在 dsh（DeepSeek Harness）上，用宿主自带命令安装 profile bundle：`dsh plugin --profile web add @mstar-harness/dsh`。
+
 ```bash
 npx @mstar-harness/cli init
 # 或：bunx @mstar-harness/cli init

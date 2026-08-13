@@ -39,6 +39,8 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 
 ## Install
 
+> **dsh installs through its own plugin manager — not the CLI.** `npx @mstar-harness/cli init` has **no dsh target** (it covers omp / OpenCode / Cursor / Kimi / ZCode / Codex only). On dsh (DeepSeek Harness), install the profile bundle with the host's own command: `dsh plugin --profile web add @mstar-harness/dsh`.
+
 ```bash
 npx @mstar-harness/cli init
 # or: bunx @mstar-harness/cli init
