@@ -38,5 +38,8 @@
   "omp": {
     "name": "morning-star-harness",
     "description": "Morning Star multi-agent harness skills and iteration commands for omp."
+  },
+  "overrides": {
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.3"
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Registry peer contract (rc.5 from npm, no link farm): the private
+ * Registry peer contract (rc.3 from npm, no link farm): the private
  * `@deepseek-ai/*` packages are peerDependencies ONLY (never
  * devDependencies / dependencies), resolved from the npm registry at dev
  * time via bun's default peer auto-install + the monorepo-root `.npmrc`
@@ -9,7 +9,7 @@
  * Bun installs peer dependencies by default (unlike pnpm, which needs the
  * `autoInstallPeers: true` workspace flag), so the registry switch is wired
  * solely by the monorepo-root `.npmrc` (`@deepseek-ai` registry + the
- * `${NPM_TOKEN}` auth token) and the pinned `^0.0.1-rc.5` peer ranges.
+ * `${NPM_TOKEN}` auth token) and the pinned `^0.1.0-rc.3` peer ranges.
  */
 import { describe, expect, it } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
@@ -34,7 +34,7 @@ const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
 const deepseekKeys = (field: Record<string, string> | undefined): string[] =>
   Object.keys(field ?? {}).filter((name) => name.startsWith('@deepseek-ai/')).sort()
 
-describe('registry peer contract (rc.5 from npm, no link farm)', () => {
+describe('registry peer contract (rc.3 from npm, no link farm)', () => {
   it('every @deepseek-ai/* entry is a peerDependency and appears in no other dependency field', () => {
     const peers = deepseekKeys(pkg.peerDependencies)
     expect(peers.length).toBeGreaterThan(0)
@@ -45,10 +45,10 @@ describe('registry peer contract (rc.5 from npm, no link farm)', () => {
     }
   })
 
-  it('every @deepseek-ai/dsh-* peer is pinned to ^0.0.1-rc.5', () => {
+  it('every @deepseek-ai/dsh-* peer is pinned to ^0.1.0-rc.3', () => {
     for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
       if (name.startsWith('@deepseek-ai/dsh-')) {
-        expect(range, name).toBe('^0.0.1-rc.5')
+        expect(range, name).toBe('^0.1.0-rc.3')
       }
     }
   })
