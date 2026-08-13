@@ -137,7 +137,7 @@ Kimi: not a CLI target — use `/plugins install` in Kimi TUI (see [INSTALL.md](
 dsh is **not** a CLI target — the harness is not installed via `npx @mstar-harness/cli init`. dsh consumes Morning Star through the **profile bundle** of the `@mstar-harness/dsh` package, added to the shipped `web` profile with the host's own plugin manager:
 
 ```sh
-dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh
+dsh plugin --profile web add @mstar-harness/dsh
 # or, from a local checkout:
 cd <repo>/packages/dsh && dsh plugin --profile web add .
 ```
