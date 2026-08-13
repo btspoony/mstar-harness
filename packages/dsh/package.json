@@ -7,6 +7,11 @@
     "dsh-plugin"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/btspoony/mstar-harness.git",
+    "directory": "packages/dsh"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
