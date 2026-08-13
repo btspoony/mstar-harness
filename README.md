@@ -18,22 +18,6 @@ English / [中文](README_CN.md)
 
 </div>
 
-<!-- ============ dsh provider (private) — DELETE THIS ENTIRE BLOCK before public release ============ -->
-
-## 🔒 dsh provider（private · internal testing）
-
-The dsh provider (`@mstar-harness/dsh` — the cordis plugin that makes dsh a first-class Morning Star host: engine `HostAdapter`, in-process hard gates, skills mount, profile bundle) is currently **private (internal testing)** and intentionally not folded into this public README. Docs: [`packages/dsh/`](packages/dsh/README.md).
-
-**Install from this repo (one line):**
-
-```sh
-dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh
-```
-
-<!-- ============ dsh-private-end ============ -->
-
----
-
 **Morning Star** is an Agent Plugin for harness engineering workflows: a TypeScript **Harness Workflow Engine** (`@mstar-harness/engine`) enforces deterministic workflow gates, while `mstar-*` judgment skills drive multi-agent code delivery.
 
 - **Deterministic gates, enforced by a TS engine** — path/status/lease/dispatch/sdd/iteration/lint gates run in `@mstar-harness/engine`, not as prompt suggestions
@@ -62,7 +46,7 @@ npx @mstar-harness/cli init
 
 | Host | Command |
 |------|---------|
-| dsh (DeepSeek Harness) | `dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh` (repo install; published form: `dsh plugin --profile web add @mstar-harness/dsh`) |
+| dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` |
 | omp | `npx @mstar-harness/cli init --target omp` (links `~/.mstar/harness`) or `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |

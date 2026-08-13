@@ -13,17 +13,17 @@ row over the dsh-base layer.
 Two profile-bundle install forms into the shipped `web` profile
 (`dsh plugin --profile web add <spec>`; `dsh web` boots it):
 
-Local checkout install (local-only — no npm publish yet):
+Registry install (published form — the npm package carries the built `dist/`):
+
+```sh
+dsh plugin --profile web add @mstar-harness/dsh
+```
+
+Local checkout install (dev — requires a prior `bun run build` in the package):
 
 ```sh
 cd <repo>/packages/dsh
 dsh plugin --profile web add .
-```
-
-Repo URL install (the git repo hosting the package, pnpm `path:` spec selecting the monorepo subdirectory):
-
-```sh
-dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh
 ```
 
 `dsh plugin --profile <name> add <spec>` initializes the profile on first use
@@ -33,11 +33,9 @@ directory, and reconciles the profile's `dsh.profile.bundles` layer list from
 the installed state: any dependency whose package.json declares `dsh.bundle`
 joins the layer stack. Relative specs (`.`, and `file:`/`link:` forms) anchor
 to the invoking directory, so `add .` must run from the package checkout.
-pnpm must be on PATH. Git-hosted specs build on install via the package
-`prepare` script (`bun run build` → `dist/`), which pnpm ≥10 blocks until
-allowed — the first `add` fails with pnpm's `allowBuilds` hint; add the
-printed key under `allowBuilds` in the profile's `pnpm-workspace.yaml`, then
-re-run.
+pnpm must be on PATH. The package has no `prepare` script (the monorepo
+builds packages explicitly, matching cli/opencode), so a local checkout must
+be built before `add .`.
 
 Bundle resolution is two-anchored: a bundle name resolves from the dsh
 installation first, then from the profile directory. During local
@@ -309,8 +307,6 @@ acceptance (R1 folded into this iteration's AC-1/2).
   exits 0 — pnpm links the local checkout, the reconcile step joins
   `@mstar-harness/dsh` to `dsh.profile.bundles`, and
   `dsh --profile web --dump-config` composes the `mstar` row over the web
-  template layers. The repo-URL path (`add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh`)
-  runs through the same pnpm + reconcile mechanism (verified against the real
-  remote); it builds via the `prepare` script, which pnpm ≥10 blocks until an
-  `allowBuilds` entry is added (see Install). No public-registry install is
-  offered yet.
+  template layers. The registry form (`add @mstar-harness/dsh`) runs through
+  the same pnpm + reconcile mechanism; a local checkout must be built first
+  (no `prepare` script — see Install).

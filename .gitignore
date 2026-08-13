@@ -1,6 +1,7 @@
 node_modules
 /.tmp/
 /.worktrees/
+/.pnpm-store/
 secrets.env
 .secrets/
 .harness/

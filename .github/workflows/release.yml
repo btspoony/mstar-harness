@@ -76,8 +76,9 @@ jobs:
         run: |
           bun run cli:build
           bun run opencode:build
+          bun run dsh:build
 
-      # Engine is published standalone for direct consumers; cli/opencode
+      # Engine is published standalone for direct consumers; cli/opencode/dsh
       # BUNDLE it at build time (devDependency), so their published artifacts
       # are self-contained — no registry ordering constraint. Keep engine first
       # for tidy publication history.
@@ -89,6 +90,9 @@ jobs:
 
       - name: Publish @mstar-harness/opencode
         run: npm publish --workspace @mstar-harness/opencode --access public
+
+      - name: Publish @mstar-harness/dsh
+        run: npm publish --workspace @mstar-harness/dsh --access public
 
       - name: Configure git identity
         run: |

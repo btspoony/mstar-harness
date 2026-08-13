@@ -86,6 +86,13 @@ jobs:
       - name: Build OpenCode
         run: bun run opencode:build
 
+      # dsh build resolves @mstar-harness/engine via packages/engine/dist —
+      # must run after "Build engine". The dsh prepare script also builds the
+      # engine when run inside the monorepo (bun workspace install), so a plain
+      # `bun install` in a fresh checkout is self-sufficient.
+      - name: Build dsh
+        run: bun run dsh:build
+
       - name: CLI smoke check
         run: bun run --cwd packages/cli check
 

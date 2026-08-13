@@ -10,22 +10,22 @@ How a dsh app consumes the plugin — install paths, configuration, what mounts 
 
 ### Install paths
 
-The package ships as a workspace package (`workspaces: ["packages/*"]`) with the engine bundled into `dist/` at build time (`bun run build`; dist is gitignored). The only install path is the **profile bundle**, added to the shipped `web` profile (`dsh --profile web` — the ready-made web app profile, `dsh web`), through the `dsh.bundle.patch` manifest — a patch layer mounted over the dsh-base defaults — in two spec forms:
+The package ships as a workspace package (`workspaces: ["packages/*"]`) with the engine bundled into `dist/` at build time (`bun run build`; dist is gitignored). The install path is the **profile bundle**, added to the shipped `web` profile (`dsh --profile web` — the ready-made web app profile, `dsh web`), through the `dsh.bundle.patch` manifest — a patch layer mounted over the dsh-base defaults:
 
-**(a) Local checkout install** — the package checkout itself (local-only — no npm publish yet):
+**(a) Registry install (published form)** — the npm package carries the built `dist/` (no build step on install):
+
+```sh
+dsh plugin --profile web add @mstar-harness/dsh
+```
+
+**(b) Local checkout install (dev)** — the package checkout itself, for iterating on the plugin:
 
 ```sh
 cd <repo>/packages/dsh
 dsh plugin --profile web add .
 ```
 
-**(b) Repo URL install** — the git repo hosting the package, pnpm `path:` spec selecting the monorepo subdirectory:
-
-```sh
-dsh plugin --profile web add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh
-```
-
-`dsh plugin --profile <name> add <spec>` initializes the profile on first use (`web` starts from the shipped template: `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`), forwards `<spec>` to pnpm in the profile directory, and reconciles the profile's `dsh.profile.bundles` layer list from the installed state: any dependency whose package.json declares `dsh.bundle` joins the layer stack. Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add .` runs from the package checkout; pnpm must be on PATH. Git-hosted specs build on install via the package `prepare` script (`bun run build` → `dist/`), which pnpm ≥10 blocks until allowed — the first `add` fails with pnpm's `allowBuilds` hint; add the printed key under `allowBuilds` in the profile's `pnpm-workspace.yaml`, then re-run. Details, layer position, and the shipped defaults live in [`bundle/README.md`](bundle/README.md) — the local checkout is **verified**; the repo-URL form runs through the same pnpm + reconcile mechanism. `cordis` and the `@deepseek-ai/dsh-*` seams are peerDependencies — the composed dsh app provides them.
+`dsh plugin --profile <name> add <spec>` initializes the profile on first use (`web` starts from the shipped template: `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`), forwards `<spec>` to pnpm in the profile directory, and reconciles the profile's `dsh.profile.bundles` layer list from the installed state: any dependency whose package.json declares `dsh.bundle` joins the layer stack. Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add .` runs from the package checkout; pnpm must be on PATH. A local checkout needs a prior `bun run build` (the `prepare` script is intentionally NOT used — the monorepo builds packages explicitly, matching cli/opencode).
 
 ### Configuration
 
@@ -440,7 +440,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **Content-blind skill-lint blind spots** — the `fs/write-intent` slot carries only `(target, actor)`: first-create incoming content is not linted, and valid→invalid overwrites are not detected on the listener path (it lints the pre-write on-disk document only). Warn/hard advisories surface pre-existing on-disk violations only — the same class of limitation as the status gate.
 - **Explicit relative `bundledSkillDir` overrides are cwd-anchored** — skill-filesystem resolves a relative bundled root with plain `join()` semantics against the dsh **process cwd** at boot. The plugin's DEFAULT bundled root is the package's OWN `harness-skills/` mirror resolved package-relative (NOT cwd-anchored — works from any launch cwd); only an explicit RELATIVE override inherits the cwd anchoring, so deployments overriding the default should pass an **absolute path in the profile layer** (see `bundle/README.md`).
 - **Bundled mirror is a build-time sync** — `harness-skills/` + `harness-commands/` are produced by `bundle-assets` at build/postinstall (repo-root `skills/` + `commands/` mirrors; gitignored). A checkout where `bundle-assets` has not run mounts no bundled skills and registers no commands (the default mount is inert, not an error).
-- **Profile-bundle install into the `web` profile: local checkout and repo URL, no registry path** — `dsh plugin --profile web add <local checkout>` is verified, and the repo-URL form (`add git+https://github.com/dsh-external/mstar-workflow.git#path:/packages/dsh`) runs through the same pnpm + reconcile mechanism and was verified against the real remote (pnpm resolves the `path:` spec, the reconcile step joins `@mstar-harness/dsh` to `dsh.profile.bundles`); no public-registry install is offered yet. Git-hosted installs build via the package `prepare` script, which pnpm ≥10 blocks until allowed — the `allowBuilds` key must be added to the profile's `pnpm-workspace.yaml` (the first `add` fails with pnpm's hint, then succeeds on re-run).
+- **Profile-bundle install into the `web` profile: registry and local checkout** — `dsh plugin --profile web add @mstar-harness/dsh` (registry) and `add <local checkout>` are the supported paths; both run through the same pnpm + reconcile mechanism (the reconcile step joins `@mstar-harness/dsh` to `dsh.profile.bundles`). A local checkout needs a prior `bun run build` — the package has no `prepare` script (the monorepo builds packages explicitly), so an unbuilt checkout installs an empty `dist/`.
 - **`lintSkillWrite` typed veto not production-wired** — the incoming-document hard veto (`SkillLintVetoError`, code `skill-lint.veto`) is exported and test-covered, but has no production caller yet: the engine `HostAdapter` has no content-carrying skill-write hook (only `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`), and the fs intent slot is content-blind. Wiring lands with a future content-carrying hook; until then the listener path enforces only via the repair-escape advisory (never a veto).
 - **CLI `HOST_SIGNALS` lacks the `subagent` token** — the engine `ToolSignal` union includes it and `detectHost` handles it, but `packages/cli` `HOST_SIGNALS` is not updated yet, so `mstar host detect --signals subagent` would reject until the CLI list is updated on upstreaming.
 - **Entry is a module index over `src/gates/*`** — the split shipped: `src/index.ts` (371 lines) re-exports the frozen 27-name export surface from the gate modules (`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`) and keeps the plugin manifest, the single cordis augmentation point, the command registration, and the `apply()` startup wiring. The surface (17 value + 10 type-only names; `Config` counts once) is frozen by `tests/export-surface.spec.ts` — the runtime value-export set plus, under `typecheck:tests` (`bunx tsc --noEmit -p tests/tsconfig.json`), the value-namespace identity and the per-name type-only probes.
