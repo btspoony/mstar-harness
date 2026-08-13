@@ -117,7 +117,7 @@ export function TaskBoard({ view, t }: TaskBoardProps) {
                   <span className={css.kanbanColumnTitle}>{t(COLUMN_TITLE[column.id])}</span>
                   <span className={css.kanbanCount} data-kanban-count={column.count}>{column.count}</span>
                 </header>
-                <ul className={css.kanbanCards}>
+                <ul className={css.kanbanCards} id={`kanban-cards-${column.id}`}>
                   {shown.map((plan, j) => (
                     <li
                       key={plan.id === '' ? `card-${j}` : plan.id}
@@ -137,6 +137,8 @@ export function TaskBoard({ view, t }: TaskBoardProps) {
                         type="button"
                         className={css.kanbanMoreButton}
                         data-kanban-more={isExpanded ? 'collapse' : 'expand'}
+                        aria-expanded={isExpanded}
+                        aria-controls={`kanban-cards-${column.id}`}
                         onClick={() => toggle(column.id)}
                       >
                         {isExpanded

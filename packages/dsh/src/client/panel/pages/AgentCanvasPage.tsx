@@ -1089,6 +1089,14 @@ export function AgentCanvasPage({ view, iteration, t, initialPan }: AgentCanvasP
   const [pan, setPan] = useState<PanState>(() => initialPan ?? PAN_ORIGIN)
   const dragRef = useRef<PanDrag | null>(null)
   const layout = useMemo(() => layoutAgents(view), [view])
+  // F-002 (qc3): edge geometries are hoisted off the pan-drag hot path — the
+  // pointer handlers re-render the canvas every pan frame, and `edgePath`
+  // (with its cross-card clearance scans) must not run per frame. It
+  // recomputes only when `edges` or `layout` change (one-to-one with edges).
+  const edgeGeoms = useMemo(
+    () => edges.map((edge) => ({ edge, curve: edgePath(edge, layout) })),
+    [edges, layout],
+  )
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !e.isPrimary) return // primary pointer/button only
@@ -1294,36 +1302,36 @@ export function AgentCanvasPage({ view, iteration, t, initialPan }: AgentCanvasP
                 <path className={css.canvasArrowSuperviseLit} d="M 0 1 L 6 4 L 0 7 z" />
               </marker>
             </defs>
-            {edges.map((edge, i) => {
-              const curve = edgePath(edge, layout)
+            {edgeGeoms.map((geom, i) => {
+              const curve = geom.curve
               if (curve === null) return null
-              if (edge.kind === 'supervise') {
+              if (geom.edge.kind === 'supervise') {
                 // The static bidirectional supervision line (plan f5 Task 2 +
                 // Task 5): dim dashed without implement/review dispatch
                 // evidence, lit business with it — `evidenced` is PROJECTED,
                 // never a render-side fabrication. A vertical bezier in the
                 // side gap (card right edge + SIDE_GAP) — H2 (clear of the
                 // "sdd-reviewer" caption text).
-                const lit = edge.evidenced === true
+                const lit = geom.edge.evidenced === true
                 return (
                   <path
-                    key={`supervise-${i}-${edge.source}-${edge.target}`}
+                    key={`supervise-${i}-${geom.edge.source}-${geom.edge.target}`}
                     className={`${css.canvasEdgeCurve} ${lit ? `${css.canvasEdgeSupervise} ${css.canvasEdgeSuperviseLit}` : css.canvasEdgeSupervise}`}
                     d={curve.d}
                     markerStart={lit ? 'url(#canvas-arrow-supervise-lit)' : 'url(#canvas-arrow-supervise)'}
                     markerEnd={lit ? 'url(#canvas-arrow-supervise-lit)' : 'url(#canvas-arrow-supervise)'}
-                    data-agent-edge-supervise={`${edge.source}->${edge.target}`}
+                    data-agent-edge-supervise={`${geom.edge.source}->${geom.edge.target}`}
                     data-agent-edge-supervise-lit={lit ? 'true' : undefined}
                   />
                 )
               }
               return (
                 <path
-                  key={`actual-${i}-${edge.source}-${edge.target}`}
+                  key={`actual-${i}-${geom.edge.source}-${geom.edge.target}`}
                   className={`${css.canvasEdgeCurve} ${css.canvasEdgeActual}`}
                   d={curve.d}
                   markerEnd="url(#canvas-arrow-actual)"
-                  data-agent-edge-actual={`${edge.source}->${edge.target}`}
+                  data-agent-edge-actual={`${geom.edge.source}->${geom.edge.target}`}
                 />
               )
             })}

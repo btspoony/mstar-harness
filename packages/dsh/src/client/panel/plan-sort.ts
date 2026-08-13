@@ -57,3 +57,26 @@ export function comparePlans(
 export function sortPlans<T extends { readonly id: string; readonly doneAt: string | null }>(plans: readonly T[]): T[] {
   return Array.from(plans).sort(comparePlans)
 }
+
+/**
+ * The「最近一次迭代」recency comparator (plan 20260813-panel-quick-fixes Task
+ * 2 — shared by the current-iteration filter in `project-graph.ts`, which
+ * previously duplicated this order as a local `moreRecentPlan`). DIFFERENT
+ * key order from {@link comparePlans}: the 8-digit id-date prefix is PRIMARY,
+ * doneAt SECONDARY — the projection's former `moreRecentPlan` behavior, kept
+ * EXACTLY. All keys DESC: `< 0` means `a` is more recent than `b` (id-date
+ * prefix, then digitized doneAt, then id lexicographic DESC for
+ * determinism).
+ */
+export function comparePlansByIterationRecency(
+  a: { readonly id: string; readonly doneAt: string | null },
+  b: { readonly id: string; readonly doneAt: string | null },
+): number {
+  const aDate = idDateKey(a.id)
+  const bDate = idDateKey(b.id)
+  if (aDate !== bDate) return aDate < bDate ? 1 : -1
+  const aDone = doneAtKey(a.doneAt)
+  const bDone = doneAtKey(b.doneAt)
+  if (aDone !== bDone) return aDone < bDone ? 1 : -1
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0
+}

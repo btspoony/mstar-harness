@@ -1101,6 +1101,76 @@ describe('projectGraph — agents current-iteration filter (plan 20260813-panel-
     expect(agents.executing).toBe(0)
     expect(agents.edges.filter((e) => e.kind === 'actual')).toEqual([])
   })
+
+  // QC F-3 — the compass-active kept-branches of the decision tree: a plan
+  // with EMPTY iterationRefs carries no cross-iteration signal, so its
+  // dispatch survives the filter even while the compass names a different id.
+  it('compass active keeps a plan with EMPTY iterationRefs (standalone plan never hidden)', () => {
+    const source = iterSource(
+      [{ id: 'plan-standalone', status: 'InProgress', doneAt: null, iterationRefs: [] }],
+      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-standalone' })],
+    )
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    // The compass is active (fullSource iterationId), but plan-standalone has
+    // EMPTY refs → nothing provably cross-iteration → the dispatch is kept.
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+    expect(byKey.get('fullstack-dev')!.status).toBe('running')
+  })
+
+  // QC F-3 — the plan-less branch: `planId: null` is never cross-iteration.
+  it('compass active keeps a plan-less dispatch (planId null → never cross-iteration)', () => {
+    const source = iterSource(
+      [{ id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] }],
+      // `dispatchRow` leaves planId null by default — no plan identity at all.
+      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })],
+    )
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+  })
+
+  // QC F-3 — settle pairing is exact-identity (agent, role, planId, taskId):
+  // a settle from a CROSS-ITERATION plan never settles a same-role current
+  // dispatch, even with the same agent (the planId leg differs).
+  it("a settle from a cross-iteration plan stays UNPAIRED (does not settle the same-role current dispatch)", () => {
+    const source = iterSource(
+      [
+        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] },
+        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-20260801-old'] },
+      ],
+      [
+        dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-current' }),
+        settleRow({ ts: 4, role: 'fullstack-dev', agent: 'a1', planId: 'plan-old', outcome: 'ok' }),
+      ],
+    )
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+    // The current dispatch has NO paired settle → honest 'running', not a
+    // fabricated completion from the cross-iteration settle.
+    expect(byKey.get('fullstack-dev')!.status).toBe('running')
+  })
+
+  // QC F-3 — aggregation runs on the FILTERED rows: a NEWER cross-iteration
+  // dispatch cannot overwrite an already-lit role's ts/verdict/identity.
+  it("a newer cross-iteration dispatch does not overwrite an already-lit role's ts/verdict", () => {
+    const source = iterSource(
+      [
+        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] },
+        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-20260801-old'] },
+      ],
+      [
+        // The cross-iteration dispatch is NEWER (ts 5) — filtered out BEFORE
+        // aggregation, so the entity keeps the current dispatch's identity.
+        dispatchRow({ ts: 5, role: 'fullstack-dev', agent: 'a-old', planId: 'plan-old' }),
+        dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a-current', planId: 'plan-current' }),
+      ],
+    )
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    const entity = byKey.get('fullstack-dev')!
+    expect(entity.idle).toBe(false)
+    expect(entity.ts).toBe(3) // the cross-iteration ts 5 did NOT overwrite
+    expect(entity.agent).toBe('a-current')
+    expect(entity.status).toBe('running') // verdict falls through → no pair → running
+  })
 })
 
 /* ---------------------------------------------------------------------------

@@ -82,7 +82,7 @@
 
 import type { MstarEngineStatusSource } from '../../../types.ts'
 import { bool, count, str } from '../guards.ts'
-import { PLAN_CAP, sortPlans } from '../plan-sort.ts'
+import { comparePlansByIterationRecency, PLAN_CAP, sortPlans } from '../plan-sort.ts'
 import {
   EXPECTED_ROLE_FLOW, GENERAL_BUCKET, KNOWN_AGENTS, PHASE_EDGES, PHASE_IDS, PLAN_STATE_IDS, SDD_BUCKET_ROLES, TRANSITION_TO_PHASE,
   type AgentZone, type KnownAgent, type PhaseId, type PlanStateId,
@@ -326,7 +326,14 @@ function emphasisOf(
  * an advisory-verdict dispatch now falls through to its settle pair (or
  * `running`); the advisory VERDICT still renders in the event log.
  */
-export type AgentEntityStatus = 'running' | 'settled' | 'error' | 'denied' | 'advisory' | 'idle'
+export type AgentEntityStatus =
+  | 'running'
+  | 'settled'
+  | 'error'
+  | 'denied'
+  /** Retained for shape compat; the derivation (entityStatus) no longer emits it. */
+  | 'advisory'
+  | 'idle'
 
 /** Edge kinds (spec §4 + plan 20260812-panel-f5-design-system Task 5 — the
  * 2026-08-12 finalized line semantics, design doc §2.2): handoff / sub-bucket
@@ -975,34 +982,6 @@ function idleZone(known: KnownAgent): AgentZone {
 }
 
 /**
- * First-8-digits date prefix of a plan id ('' when the id does not start with
- * 8 digits) — mirrors `plan-sort.ts`'s module-private `idDateKey` (reused, not
- * redefined, in spirit): the「当前迭代」filter needs the same 8-digit key but a
- * DIFFERENT sort order (date prefix PRIMARY, doneAt SECONDARY — see
- * {@link moreRecentPlan}).
- */
-function idDatePrefix(id: string): string {
-  return /^\d{8}/.test(id) ? id.slice(0, 8) : ''
-}
-
-/** Digitized doneAt key ('' when missing/garbage) — mirrors `plan-sort.ts`'s
- * `doneAtKey` (the「最近一次迭代」tie-break key). */
-function doneAtDigitized(doneAt: string | null): string {
-  return typeof doneAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(doneAt) ? doneAt.replaceAll('-', '') : ''
-}
-
-/** Is plan `a` more recent than plan `b`? (max 8-digit id date prefix, then max doneAt, then id lexicographic DESC for determinism). */
-function moreRecentPlan(a: PlanRow, b: PlanRow): boolean {
-  const aDate = idDatePrefix(a.id)
-  const bDate = idDatePrefix(b.id)
-  if (aDate !== bDate) return aDate > bDate
-  const aDone = doneAtDigitized(a.doneAt)
-  const bDone = doneAtDigitized(b.doneAt)
-  if (aDone !== bDone) return aDone > bDone
-  return a.id > b.id
-}
-
-/**
  * The「当前迭代」iteration-id set (plan 20260813-panel-quick-fixes Task 2 — the
  * Clarify filter口径). Only `projectAgents` consumes it; `projectFlowEvents`
  * is unfiltered. Total function — never throws, an empty set is legal.
@@ -1010,7 +989,8 @@ function moreRecentPlan(a: PlanRow, b: PlanRow): boolean {
  * - Steering compass active (`iterationId` non-null): the current iteration
  *   IS that id → the set is `{ iterationId }`.
  * - No compass (`iterationId` null): the「最近一次迭代」 — among plans with
- *   NON-EMPTY `iterationRefs`, the single most-recent plan (max 8-digit id
+ *   NON-EMPTY `iterationRefs`, the single most-recent plan (the SHARED
+ *   `comparePlansByIterationRecency` order from `plan-sort.ts`: max 8-digit id
  *   date prefix, tie-break max doneAt, then id DESC) names the latest
  *   iteration → the set is that plan's `iterationRefs` (empty when none).
  */
@@ -1019,7 +999,7 @@ function currentIterationIds(iterationId: string | null, plans: readonly PlanRow
   let latest: PlanRow | undefined
   for (const plan of plans) {
     if (plan.iterationRefs.length === 0) continue
-    if (latest === undefined || moreRecentPlan(plan, latest)) latest = plan
+    if (latest === undefined || comparePlansByIterationRecency(plan, latest) < 0) latest = plan
   }
   return new Set(latest === undefined ? [] : latest.iterationRefs)
 }
