@@ -48,7 +48,7 @@
     "dsh:link": "bun run scripts/setup-dsh-links.ts",
     "dsh:link:check": "bun run scripts/setup-dsh-links.ts --check",
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external @deepseek-ai/cordis --external @deepseek-ai/dsh-skill-local --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bun run build-client && bunx tsc",
+    "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external @deepseek-ai/cordis --external @deepseek-ai/dsh-skill-filesystem --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bun run build-client && bunx tsc",
     "build-client": "bun run scripts/build-client-bundle.ts",
     "prepare": "bun run scripts/setup-dsh-links.ts && bun run build",
     "prepublishOnly": "bun run build"
@@ -59,13 +59,13 @@
   "dependencies": {},
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
-    "@deepseek-ai/dsh-agent": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-commands": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-fs": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-llm": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-skill": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-skill-local": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1"
+    "@deepseek-ai/dsh-agent": "^0.0.1-rc.2",
+    "@deepseek-ai/dsh-commands": "^0.0.1-rc.2",
+    "@deepseek-ai/dsh-fs": "^0.0.1-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.0.1-rc.2",
+    "@deepseek-ai/dsh-skill": "^0.0.1-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": "^0.0.1-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.2"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
@@ -86,7 +86,7 @@
     "@deepseek-ai/dsh-skill": {
       "optional": true
     },
-    "@deepseek-ai/dsh-skill-local": {
+    "@deepseek-ai/dsh-skill-filesystem": {
       "optional": true
     },
     "@deepseek-ai/dsh-tools": {

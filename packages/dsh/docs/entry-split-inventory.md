@@ -11,7 +11,7 @@
 
 | # | Section | 行范围 | 内容 |
 |---|---------|--------|------|
-| 1 | 头部注释 + imports | 1–93 | 模块注释（**禁 default export**，Loader 丢 `inject` 元数据）；node:fs/path/url、cordis、schemastery、dsh-skill-local、`@mstar-harness/engine`（34 个函数 + 8 个类型）、dsh-fs/dsh-tools/dsh-commands/dsh-llm/dsh-agent、`./service.ts`、`./types.ts` |
+| 1 | 头部注释 + imports | 1–93 | 模块注释（**禁 default export**，Loader 丢 `inject` 元数据）；node:fs/path/url、cordis、schemastery、dsh-skill-filesystem、`@mstar-harness/engine`（34 个函数 + 8 个类型）、dsh-fs/dsh-tools/dsh-commands/dsh-llm/dsh-agent、`./service.ts`、`./types.ts` |
 | 2 | 公开 re-export | 95–101 | `DshMstar`（service.ts）、`DshMstarOptions`（type）、`MstarEngineStatusSource`/`MstarHarnessState`/`MstarIterationGateView`（type，types.ts）——cordis `Context` augmentation（`ctx.dshMstar`）所在 service.d.ts 的入口引用 |
 | 3 | 插件 manifest | 103–111 | `export const name = 'dsh'`、`export const inject: string[] = []` |
 | 4 | 模块常量 | 113–148 | `LOGGER_NAME`、`STATUS_FILE`、`DISPATCH_LOGGER`、`HOST_LOGGER`、`SKILL_LINT_LOGGER`、`CATALOG_LOGGER`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`RESIDUAL_SEVERITIES`、`DEFAULT_DISPATCH_TOOLS`、`ASSIGNMENT_HEADING_RE`、`ASSIGNMENT_FIELD_RE` |
@@ -22,13 +22,13 @@
 | 9 | **skill-lint gate** | 589–826 | `SkillLintVetoError`（typed veto）、`stripFrontmatter`、`lintSkillDoc`、`lintSkillWrite`、`skillRootsOf`、`isSkillTarget`、`skillNameOf`、`skillCanonicalForm`、`resolveSeamHard`、`gateSkillIntent`（repair-escape）、`skillWriteIntentListener` |
 | 10 | **artifact seam gates** | 828–1201 | `SEAM_LOGGERS`、`isIndexFile`、`isMarkdownDoc`、`isAuditPlanTarget`、`isRolesTarget`、`rolesDirOf`、`isSeamTarget`、`auditSecretsViolations`（Hard Rule 4 只引用 file:line）、`validateDesignDoc`、`validateAuditDoc`、`validateCompoundDoc`、`validateRolesState`、`validateSeamDoc`、`emitSeamAdvisory`、`gateSeamIntent`、`seamWriteIntentListener`、`SeamVetoError`、`lintSeamWrite` + 4 个 seam 绑定（`lintDesignMdWrite`/`lintAuditWrite`/`lintCompoundWrite`/`lintRolesWrite`） |
 | 11 | **dispatch gate** | 1203–1728 | `isAssignmentShaped`、`resolveDispatchHard`、`denyReason`、`leaseViolation`、`assignmentHeaderValue`、`firstToken`、`assignmentHeaderValues`、`isNaValue`、`planIdOf`、`sessionIdOf`、`leaseGateViolations`（dsh 增量 lease 检查）、`worktreeViolation`、`worktreeL2Violations`、`worktreeL1Violations`、`dispatchGateCore`（engine 单一组合 + worktree 增量）、`gateDispatch`、`preExecuteListener`（deny 短路 / degrade 包络）、`assignmentTextFromFields` |
-| 12 | packaged dirs + skill-local config | 1730–1794 | `packagedSkillsDir`、`packagedCommandsDir`（import.meta.url 包相对，非 cwd 锚定）、`skillLocalConfig`（provider `mstar`、`includeDefaultRoots: false`） |
+| 12 | packaged dirs + skill-filesystem config | 1730–1794 | `packagedSkillsDir`、`packagedCommandsDir`（import.meta.url 包相对，非 cwd 锚定）、`skillLocalConfig`（provider `mstar`、`includeDefaultRoots: false`） |
 | 13 | **host adapter** | 1796–1956 | `DshHostAdapterOptions`、`DshHostAdapter extends Service implements HostAdapter`（`statusGate`/`dispatchGate` 共享核心 + `beforeStatusWrite`/`beforeDispatch`/`beforeMerge` hooks） |
 | 14 | **engine-status catalog**（pre-step） | 1958–2418 | `pluginVersion`、`engineStatusSource`、`CatalogCacheEntry`、`buildCatalogSources`、`catalogSourcesFor`（TTL）、`renderEngineStatusCatalog`、`harnessStateSource`、`knowledgeDigest`、`compassDirection`、`steeringCompassPath`、`iterationGateSource`、`preStepCatalogListener`（digest 门控重发）、`TurnDigest`、`agentDigestKey` |
 | 15 | 视图映射 + **工具注册** | 2420–2896 | `iterationViolationView`、`iterationGateView`、`ITERATION_VIOLATION_SCHEMA`、`registerSddIterationTools`（`mstar_sdd_workspace`/`mstar_sdd_task_brief`/`mstar_iteration_gate`）、`registerSeamTools`（`mstar_design_md_validate`/`mstar_audit_validate`/`mstar_compound_validate`/`mstar_roles_validate`）——均 `ctx.inject(['tools'], …)` 延迟注册 |
 | 16 | 命令注册 | 2898–2967 | `commandFrontmatterField`、`parseCommandMarkdown`、`registerMstarCommands`（`ctx.inject(['commands'], …)`，`source: { kind: 'user' }` steer） |
 | 17 | **HarnessResolver** + session 助手 | 2969–3031 | `HarnessResolver`（per-workspace 探测，explicit 优先，memoized）、`sessionCwdOf`、`actorAgentOf` |
-| 18 | **apply()** | 3033–3184 | 启动接线：resolver 构造 → `DshMstar` service → `DshHostAdapter` service → `registerMstarCommands` → skill-local mount → boot 观测 warn（hard 缺 dispatchBinding/dispatchTools）→ fs 三组 gate 注册（prepend）→ `tools/pre-execute` → `agent/pre-step` catalog（TTL cache + digest）→ sdd/iteration 工具 → seam 工具 |
+| 18 | **apply()** | 3033–3184 | 启动接线：resolver 构造 → `DshMstar` service → `DshHostAdapter` service → `registerMstarCommands` → skill-filesystem mount → boot 观测 warn（hard 缺 dispatchBinding/dispatchTools）→ fs 三组 gate 注册（prepend）→ `tools/pre-execute` → `agent/pre-step` catalog（TTL cache + digest）→ sdd/iteration 工具 → seam 工具 |
 
 **横切观察**：
 - **adapter 是共享 gate 核心的宿主面**：`gateStatusIntent`/`gateDispatch` 经 `adapter.statusGate`/`adapter.dispatchGate` 复用同一校验路径；listener 与 host hooks 共享 ONE code path。
@@ -96,7 +96,7 @@
 
 `src/index.ts` 保留：
 - 头部注释（禁 default export 契约）、`name`/`inject` manifest、`declare module '@deepseek-ai/cordis'` augmentation（单一 augmentation 点）。
-- **`apply()` 启动接线**（不搬移）：resolver 构造、`DshMstar`/`DshHostAdapter` service 构造、skill-local mount、boot 观测 warn、5 个事件槽注册（fs×3 组 + pre-execute + pre-step）、catalog cache/digest 装配、两个工具注册调用。
+- **`apply()` 启动接线**（不搬移）：resolver 构造、`DshMstar`/`DshHostAdapter` service 构造、skill-filesystem mount、boot 观测 warn、5 个事件槽注册（fs×3 组 + pre-execute + pre-step）、catalog cache/digest 装配、两个工具注册调用。
 - **命令注册**（§16，非 gate 实现，属启动接线）：`registerMstarCommands` + `parseCommandMarkdown` + `commandFrontmatterField` + `packagedCommandsDir` 留在 entry。
 - 全部 27 个不同具名导出（28 个导出形态，`Config` 值+类型同名）改为从 gates/_shared/service/types **原样 re-export**（`export { X } from './gates/…'`），零签名变化。
 
@@ -119,7 +119,7 @@ status / skill-lint / seams / dispatch / catalog ──> _shared
 | `new HarnessResolver(config.harnessDir)` / `resolver.forWorkspace` | `_shared` | §17 |
 | `new DshMstar(ctx, …)` | `service.ts`（不变） | §2 |
 | `new DshHostAdapter(ctx, { resolver, config })` | `adapter` | §13 |
-| `ctx.plugin(skill-local, skillLocalConfig(config))` | `_shared` | §12 |
+| `ctx.plugin(skill-filesystem, skillLocalConfig(config))` | `_shared` | §12 |
 | boot warn（hard 缺 binding/tools）`ctx.logger(DISPATCH_LOGGER)` | `dispatch` | §11/§18 |
 | `fs/write-intent` → `writeIntentListener` / `editIntentListener` | `status` | §8 |
 | `fs/write-intent` → `skillWriteIntentListener` | `skill-lint` | §9 |

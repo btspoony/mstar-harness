@@ -517,7 +517,7 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
   })
 
   it('a relative bundledSkillDir resolves against the launch cwd (fixture proof)', async () => {
-    // `./tests/fixtures/skills` is relative: skill-local `join()` semantics
+    // `./tests/fixtures/skills` is relative: skill-filesystem `join()` semantics
     // anchor it to process.cwd() (the package root), so the committed
     // fixture skill is discovered as a BUNDLED source. If the root were
     // anchored anywhere else (install dir, module dir), discovery would be

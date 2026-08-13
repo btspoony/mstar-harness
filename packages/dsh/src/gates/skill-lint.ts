@@ -146,7 +146,7 @@ function skillRootsOf(config: Config): string[] {
 
 /**
  * Whether a target is a `SKILL.md` UNDER one of the configured skill roots
- * (resolved-path containment — skill-local shapes `<root>/<name>/SKILL.md`).
+ * (resolved-path containment — skill-filesystem shapes `<root>/<name>/SKILL.md`).
  * Matching is by resolved path on `displayPath` (the local backend reports
  * absolute paths; remote/URI backends never resolve under a local root and
  * the gate is inert for them — status-gate discipline).

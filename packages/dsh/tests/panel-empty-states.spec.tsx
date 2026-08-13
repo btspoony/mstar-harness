@@ -21,7 +21,7 @@ import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
+import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type { ConversationNode, ConversationSnapshot, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -35,15 +35,15 @@ import { PanelView } from '../src/client/panel/PanelView'
 // The REAL client service values — loaded from the browser bundles through the
 // loader shim (tests/client-bundles.ts).
 type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
-const { LocaleService: LocaleServiceCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
-  Pick<LocaleClientExports, 'LocaleService'>
+const { LocaleRuntime: LocaleRuntimeCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
+  Pick<LocaleClientExports, 'LocaleRuntime'>
 type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
 const { createSnapshotStore } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
   Pick<RuntimeClientExports, 'createSnapshotStore'>
 
-/** One real LocaleService over a fresh cordis context. */
-function newLocale(): LocaleService {
-  return new LocaleServiceCtor(new Context())
+/** One real LocaleRuntime over a fresh cordis context. */
+function newLocale(): LocaleRuntime {
+  return new LocaleRuntimeCtor(new Context())
 }
 
 /* ------------------------------ fixtures ------------------------------ */

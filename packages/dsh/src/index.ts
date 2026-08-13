@@ -17,7 +17,7 @@ import {
   Config as SkillLocalSchema,
   inject as skillLocalInject,
   name as skillLocalName,
-} from '@deepseek-ai/dsh-skill-local'
+} from '@deepseek-ai/dsh-skill-filesystem'
 import { resolveCompassEnforcement } from '@mstar-harness/engine'
 // Type-only: loads the `ctx.commands` cordis augmentation + the command
 // handler invocation shape from the (peer-stub / real) dsh-commands seam —
@@ -324,7 +324,7 @@ export function apply(ctx: Context, config: Config): void {
   // the window stay unpaired (documented honest degrade; no cross-apply
   // pairing). Shared by the dispatch recording (callId → dispatchRef via the
   // adapter), the post-execute settle listener (reads callId, writes the
-  // background taskId) and the onTaskDone wiring (reads taskId).
+  // background taskId) and the onJobDone wiring (reads taskId).
   const pairing: AgentFlowPairing = {
     dispatchByCallId: new Map(),
     dispatchByTaskId: new Map(),
@@ -340,7 +340,7 @@ export function apply(ctx: Context, config: Config): void {
   // `tools/post-execute` settle listener (plan `20260811-panel-f4-timeliness`
   // Task 1 — the seam IS emitted by the real registry, verified; foreground
   // dispatch calls settle here, background subagents settle via the
-  // `ctx.tasks.onTaskDone` pairing wired below). The dispatch side records
+  // `ctx.jobs.onJobDone` pairing wired below). The dispatch side records
   // unconditionally via `DshHostAdapter.dispatchGate` (+ the callId pairing).
   setAgentFlowLogger((level, message) => {
     const logger = ctx.logger(AGENT_FLOW_LOGGER)
@@ -355,36 +355,36 @@ export function apply(ctx: Context, config: Config): void {
   // task id (stored by the post-execute background branch) to the dispatch
   // that started it → recordSettle (completed→ok / killed→denied /
   // failed→error; durationMs = finishedAt − startedAt when available).
-  // Deferred with `ctx.inject(['tasks'], …)` — the SAME optional-unit
+  // Deferred with `ctx.inject(['jobs'], …)` — the SAME optional-unit
   // pattern as `registerMstarCommands`: cordis 4 service visibility requires
-  // inject (a direct `ctx.tasks` access throws "cannot get property without
-  // inject"), and the plugin must boot without the tasks service (a
-  // composition without dsh-tasks keeps the ledger dispatch+settle for
-  // foreground calls and leaves background tasks unpaired — honest degrade).
-  // 'tasks' is deliberately NOT in the top-level `inject` (that would block
+  // inject (a direct `ctx.jobs` access throws "cannot get property without
+  // inject"), and the plugin must boot without the jobs service (a
+  // composition without dsh-jobs keeps the ledger dispatch+settle for
+  // foreground calls and leaves background jobs unpaired — honest degrade).
+  // 'jobs' is deliberately NOT in the top-level `inject` (that would block
   // the whole plugin apply on the service). The child fiber's registrations
   // are effect-scoped and unwind with this apply.
-  ctx.inject(['tasks'], (tasksCtx) => {
-    // The dsh-tasks service is an OPTIONAL seam — the plugin deliberately
+  ctx.inject(['jobs'], (jobsCtx) => {
+    // The dsh-jobs service is an OPTIONAL seam — the plugin deliberately
     // carries no runtime/type import of it (structural `TaskDoneSnapshot`
-    // contract in agent-flow.ts), so the runtime `tasksCtx.tasks` is cast to
-    // the ONE consumed surface: `onTaskDone(listener)` with the upstream
-    // `TaskDoneListener = (snapshot, owner) => void | PromiseLike<void>`.
-    const tasks = (tasksCtx as unknown as { tasks: { onTaskDone(listener: (snapshot: TaskDoneSnapshot, _owner: unknown) => void): unknown } }).tasks
+    // contract in agent-flow.ts), so the runtime `jobsCtx.jobs` is cast to
+    // the ONE consumed surface: `onJobDone(listener)` with the upstream
+    // `JobDoneListener = (snapshot, owner) => void | PromiseLike<void>`.
+    const jobs = (jobsCtx as unknown as { jobs: { onJobDone(listener: (snapshot: TaskDoneSnapshot, _owner: unknown) => void): unknown } }).jobs
     try {
       // Registration contained (qc2 F-004 fix-wave) for symmetry with the
       // rest of the seam wiring: the listener body itself is already
       // try/catch-contained (`recordTaskSettle`), but a THROWING registration
       // would surface as an unhandled child-fiber error at an arbitrary later
-      // time (whenever the tasks service appears) — contained here instead
+      // time (whenever the jobs service appears) — contained here instead
       // (a failed registration only degrades background settle pairing,
       // honestly: the child fiber still unwinds with this apply).
-      tasks.onTaskDone((snapshot, _owner) => {
+      jobs.onJobDone((snapshot, _owner) => {
         recordTaskSettle(snapshot, pairing)
       })
     } catch (error) {
       ctx.logger(AGENT_FLOW_LOGGER).error(
-        `tasks.onTaskDone registration failed (contained — background settle pairing degraded): ${(error as Error).message}`,
+        `jobs.onJobDone registration failed (contained — background settle pairing degraded): ${(error as Error).message}`,
       )
     }
   })
@@ -399,9 +399,9 @@ export function apply(ctx: Context, config: Config): void {
   registerMstarCommands(ctx)
 
   // Skills mount — single canonical mount: register configured
-  // skill roots with the dsh skill-local provider contract. The object form
+  // skill roots with the dsh skill-filesystem provider contract. The object form
   // mirrors the module shape the dsh Loader composes for the real
-  // `@deepseek-ai/dsh-skill-local` package (`{ name, inject, Config, apply }`),
+  // `@deepseek-ai/dsh-skill-filesystem` package (`{ name, inject, Config, apply }`),
   // so `inject: ['skills']` defers the child fiber until `ctx.skills` exists
   // regardless of mount order. Dev-time the seam package is a peer stub (no
   // real runtime) — this call is the contract-typed registration; real-runtime

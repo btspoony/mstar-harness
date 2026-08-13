@@ -24,7 +24,7 @@ export const inject = ['invariants']
  * L1/L2 gates), the advisory `agent/pre-step` catalog listener (engine-status
  * watermark + iteration-gate row), the v2 seam tools registered on `ctx.tools`
  * (`mstar_sdd_*`, `mstar_iteration_gate`, the validate wrappers), the
- * `ctx.dshMstar` and `ctx.dshHostAdapter` services, and the child skill-local
+  * `ctx.dshMstar` and `ctx.dshHostAdapter` services, and the child skill-filesystem
  * mount (skills provider registration) — whose presence and removal are
  * asserted by the real-composition suites and the HMR-safety disposal tests
  * (hmr-safety.spec.ts aggregate, catalog.spec.ts teardown, skill-lint.spec.ts

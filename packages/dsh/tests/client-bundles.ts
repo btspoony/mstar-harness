@@ -32,11 +32,11 @@ windowObj.__ModuleLoader__ = {
     factories.set(entry.id, entry.factory)
   },
 }
-// The real LocaleService resolves the initial locale from the browser
+// The real LocaleRuntime resolves the initial locale from the browser
 // `navigator` (bun exposes a global navigator whose `language` is undefined)
 // and persists the preference to `localStorage` — provide both so the
 // browser bundles run headless. zh-CN matches the panel specs' initial-locale
-// expectations (the removed peer-stub LocaleService defaulted to the
+// expectations (the removed peer-stub LocaleRuntime defaulted to the
 // first-registered locale, zh; the real one follows the browser).
 Object.defineProperty(globalThis, 'navigator', {
   value: { language: 'zh-CN', languages: ['zh-CN'] },

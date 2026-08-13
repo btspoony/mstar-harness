@@ -23,4 +23,4 @@ A failing test passes after the fix.
 
 ## References
 
-Open the skill-local provider module.
+Open the skill-filesystem provider module.

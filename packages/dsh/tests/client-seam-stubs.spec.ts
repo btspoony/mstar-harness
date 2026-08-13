@@ -22,8 +22,8 @@ import { describe, expect, it } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
 import { clientExports } from './client-bundles.ts'
 import { resolveSlotLabel, SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ContextMessageNode, ConversationNode, ConversationSnapshot, SessionId, SlotsService } from '@deepseek-ai/dsh-client-runtime/client'
-import type { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
+import type { ContextMessageNode, ConversationNode, ConversationSnapshot, SessionId, SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type { ConvViewProps, ViewTab } from '@deepseek-ai/dsh-client-ui-conversation/client'
 // The plugin's OWN `LocaleNamespaceMap` augmentation (src/client/panel/locale.ts)
 // is the single declaration of the `'mstar-panel'` namespace — importing it
@@ -35,14 +35,14 @@ import { NS, type PanelKey } from '../src/client/panel/locale.ts'
 // The REAL client service values — loaded from the browser bundles through the
 // loader shim (tests/client-bundles.ts): the `/client` subpath entries are
 // `window.__ModuleLoader__` browser bundles, not Node ESM modules. The real
-// SlotsService / LocaleService are cordis services (constructed with a
+// SlotRegistry / LocaleRuntime are cordis services (constructed with a
 // Context), unlike the removed peer-stub stand-ins.
 type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
-const { createSnapshotStore, SlotsService: SlotsServiceCtor } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
-  Pick<RuntimeClientExports, 'createSnapshotStore' | 'SlotsService'>
+const { createSnapshotStore, SlotRegistry: SlotRegistryCtor } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
+  Pick<RuntimeClientExports, 'createSnapshotStore' | 'SlotRegistry'>
 type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
-const { LocaleService: LocaleServiceCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
-  Pick<LocaleClientExports, 'LocaleService'>
+const { LocaleRuntime: LocaleRuntimeCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
+  Pick<LocaleClientExports, 'LocaleRuntime'>
 
 const zh = {
   'view.mstar-workflow': '工作流',
@@ -59,7 +59,7 @@ const en = {
 const PanelView = (_props: ConvViewProps & { t: (key: PanelKey) => string }) => null
 
 /** Register the fixture view-ring declaration chain (ui-conversation apply, spec §3.2). */
-function declareViewRing(slots: SlotsService): () => void {
+function declareViewRing(slots: SlotRegistry): () => void {
   // Runtime slot names are plain strings; the real chain is `conversation` →
   // `conversation.session` → `conversation.view`, rooted at the a-priori
   // 'root' hole (single/root). The intermediate names live OUTSIDE the
@@ -76,7 +76,7 @@ function declareViewRing(slots: SlotsService): () => void {
 }
 
 /** Project the view-ring tabs exactly like ui-conversation's `views.list()` (spec §3.2). */
-function projectTabs(slots: SlotsService): ViewTab[] {
+function projectTabs(slots: SlotRegistry): ViewTab[] {
   return slots.entries('conversation.view').map(entry => ({
     id: entry.options.id!,
     label: resolveSlotLabel(entry.options.label) ?? entry.options.id!,
@@ -92,15 +92,15 @@ describe('dsh client-seam peer stubs — slot registry (conversation.view)', () 
 
   it('inject waits for the declaration, then the panel entry registers the view tab (spec §4.1 shape)', () => {
     const ctx = new Context()
-    const slots = new SlotsServiceCtor(ctx)
-    const locale = new LocaleServiceCtor(ctx)
+    const slots = new SlotRegistryCtor(ctx)
+    const locale = new LocaleRuntimeCtor(ctx)
     // Untyped single-locale register: the fixture registers only the 3 keys it
     // asserts, while the typed 2-arg form would demand the full 60-key
     // `LocaleDictOf<'mstar-panel'>` union (the real plugin dicts are covered
     // by client-panel.spec.tsx).
     locale.register(NS, 'zh', zh)
     locale.register(NS, 'en', en)
-    // The real LocaleService's initial locale follows the browser/persisted
+    // The real LocaleRuntime's initial locale follows the browser/persisted
     // preference (the removed peer-stub defaulted to the first-registered
     // locale) — pin zh explicitly for the deterministic assertion.
     locale.setLocale('zh')
@@ -139,7 +139,7 @@ describe('dsh client-seam peer stubs — slot registry (conversation.view)', () 
 
   it('disposing the declarer collapses the child slot (disposer cascade)', () => {
     const ctx = new Context()
-    const slots = new SlotsServiceCtor(ctx)
+    const slots = new SlotRegistryCtor(ctx)
     const disposeDeclarer = declareViewRing(slots)
     expect(slots.spec('conversation.view')).not.toBeUndefined()
     disposeDeclarer()

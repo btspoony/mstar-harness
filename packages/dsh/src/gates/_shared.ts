@@ -5,7 +5,7 @@
  * configuration contract (`Config` interface + schemastery schema), the
  * per-workspace `{HARNESS_DIR}` resolver (+ session helpers), the shared
  * violation/record helpers, the seam hard-enforcement resolution, the
- * packaged skills-dir resolution, the skill-local registration payload,
+ * packaged skills-dir resolution, the skill-filesystem registration payload,
  * the iteration-gate view mapping (shared by the catalog and the tools),
  * and the canonical status file name.
  *
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import z from 'schemastery'
 import { resolveCompassEnforcement, resolveHarnessDir } from '@mstar-harness/engine'
 import type { GateResult, ValidationResult } from '@mstar-harness/engine'
-import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-local'
+import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-filesystem'
 import type { IterationGateListView, IterationGateViolationView } from '../types.ts'
 /** Canonical harness status file name (mstar-plan-artifacts status.json). */
 export const STATUS_FILE = 'status.json'
@@ -59,8 +59,8 @@ export interface Config {
    */
   dispatchBinding?: string
   /**
-   * Additional skill roots registered with the dsh skill-local provider
-   * (skill-local `Config.customSkillDirs` semantics — scanned after project
+   * Additional skill roots registered with the dsh skill-filesystem provider
+   * (skill-filesystem `Config.customSkillDirs` semantics — scanned after project
    * roots and before user roots — single canonical mount).
    * Dev-time: the mirror `<repo-root>/skills` absolute path. Each root's
    * children are skill dirs (`<name>/SKILL.md`) or flat skill files
@@ -68,8 +68,8 @@ export interface Config {
    */
   skillRoots?: string[]
   /**
-   * Bundled skill root registered with the dsh skill-local provider
-   * (skill-local `Config.bundledSkillDir` semantics — scanned last, trusted).
+   * Bundled skill root registered with the dsh skill-filesystem provider
+   * (skill-filesystem `Config.bundledSkillDir` semantics — scanned last, trusted).
    * Production: a `skills/` dir shipped inside the plugin package (the
    * canonical published form — dsh defaults `$DSH_BUNDLED_SKILL_DIR` when
    * default roots are included; this plugin mounts an isolated provider, so
@@ -283,8 +283,8 @@ export function iterationGateView(gate: GateResult): IterationGateListView {
   return { ok: gate.ok, violations: gate.violations.map(iterationViolationView) }
 }
 /**
- * Build the dsh skill-local registration payload from the plugin Config
- * (single canonical mount). Semantics mirror the skill-local
+ * Build the dsh skill-filesystem registration payload from the plugin Config
+ * (single canonical mount). Semantics mirror the skill-filesystem
  * `Config` contract: `skillRoots` → `customSkillDirs` (custom roots),
  * `bundledSkillDir` → `bundledSkillDir` (bundled root). The provider is
  * named `mstar` and default roots are excluded (`includeDefaultRoots: false`

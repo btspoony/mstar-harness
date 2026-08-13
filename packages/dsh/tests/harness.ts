@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
-import type { TaskDoneListener, TaskSnapshot } from '@deepseek-ai/dsh-tasks'
+import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 
@@ -48,27 +48,27 @@ import * as plugin from '../src/index.ts'
 }
 
 /**
- * Minimal in-memory `tasks` service for the settle-pairing tests (plan
+ * Minimal in-memory `jobs` service for the settle-pairing tests (plan
  * `20260811-panel-f4-timeliness` Task 1 — Step 1 seam probe): implements the
- * ONE contract the plugin consumes — `onTaskDone(listener)` with the upstream
- * `TaskDoneListener` signature `(snapshot, owner)` — and lets the test drive
+ * ONE contract the plugin consumes — `onJobDone(listener)` with the upstream
+ * `JobDoneListener` signature `(snapshot, owner)` — and lets the test drive
  * terminal snapshots through {@link fireDone}. Mounted as the
- * `@deepseek-ai/dsh-tasks-fake` module row (`bootApp({ tasksService: 'fake' })`)
- * so the plugin's REAL `ctx.inject(['tasks'])` wiring registers against it —
- * the full Loader → apply → inject → onTaskDone composition under test,
- * without the heavy real registry (dsh-tasks-local + dsh-agent + a live
+ * `@deepseek-ai/dsh-jobs-fake` module row (`bootApp({ jobsService: 'fake' })`)
+ * so the plugin's REAL `ctx.inject(['jobs'])` wiring registers against it —
+ * the full Loader → apply → inject → onJobDone composition under test,
+ * without the heavy real registry (dsh-jobs-local + dsh-agent + a live
  * registered agent). The upstream snapshot contract (terminal statuses,
  * startedAt/finishedAt) is verified in the spec fixtures against the
- * `@deepseek-ai/dsh-tasks` types.
+ * `@deepseek-ai/dsh-jobs` types.
  */
-export class FakeTaskService extends Service {
-  private listener: TaskDoneListener | undefined
+export class FakeJobRegistry extends Service {
+  private listener: JobDoneListener | undefined
 
   constructor(ctx: Context) {
-    super(ctx, 'tasks')
+    super(ctx, 'jobs')
   }
 
-  onTaskDone(listener: TaskDoneListener): () => void {
+  onJobDone(listener: JobDoneListener): () => void {
     this.listener = listener
     return () => {
       if (this.listener === listener) this.listener = undefined
@@ -76,7 +76,7 @@ export class FakeTaskService extends Service {
   }
 
   /** Test driver: fire a terminal snapshot through the registered listener. */
-  fireDone(snapshot: TaskSnapshot, owner?: Agent): void {
+  fireDone(snapshot: JobSnapshot, owner?: Agent): void {
     const listener = this.listener
     if (listener !== undefined) void listener(snapshot, owner)
   }
@@ -90,19 +90,19 @@ export interface BootOptions {
   dispatchTools?: string[]
   /** The dispatching agent's own harness role (Config `dispatchBinding`). */
   dispatchBinding?: string
-  /** Additional skill roots registered with skill-local (Config `skillRoots`). */
+  /** Additional skill roots registered with skill-filesystem (Config `skillRoots`). */
   skillRoots?: string[]
-  /** Bundled skill root registered with skill-local (Config `bundledSkillDir`). */
+  /** Bundled skill root registered with skill-filesystem (Config `bundledSkillDir`). */
   bundledSkillDir?: string
   /** Catalog cache refresh interval in ms (Config `catalogTtlMs`). */
   catalogTtlMs?: number
   /**
-   * Mount the {@link FakeTaskService} as the `tasks` service (the
-   * `@deepseek-ai/dsh-tasks-fake` row + module map) so the plugin's
-   * `ctx.inject(['tasks'])` onTaskDone wiring registers against it (plan
+   * Mount the {@link FakeJobRegistry} as the `jobs` service (the
+   * `@deepseek-ai/dsh-jobs-fake` row + module map) so the plugin's
+   * `ctx.inject(['jobs'])` onJobDone wiring registers against it (plan
    * `20260811-panel-f4-timeliness` Task 1 seam probe).
    */
-  tasksService?: 'fake'
+  jobsService?: 'fake'
   /** App root override (default: a fresh temp dir). */
   root?: string
   /**
@@ -178,7 +178,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   await mkdir(harnessDir, { recursive: true })
 
   // The dsh skill registry row mounts first (real dsh app layout): the
-  // `@mstar-harness/dsh` plugin mounts skill-local as a child, which injects
+  // `@mstar-harness/dsh` plugin mounts skill-filesystem as a child, which injects
   // the `skills` service. The tool/command registry rows mount before the
   // plugin so `ctx.tools` / `ctx.commands` exist when the v2 seams register
   // (the real dsh app always composes them).
@@ -196,10 +196,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // exists when the bundled mstar commands register (the real dsh app
     // always composes dsh-commands).
     { name: '@deepseek-ai/dsh-commands' },
-    // The fake tasks service row (only when requested — plan
-    // `20260811-panel-f4-timeliness` Task 1): provides `ctx.tasks` so the
-    // plugin's deferred `ctx.inject(['tasks'])` onTaskDone wiring fires.
-    ...(options.tasksService !== undefined ? [{ name: '@deepseek-ai/dsh-tasks-fake' }] : []),
+    // The fake jobs service row (only when requested — plan
+    // `20260811-panel-f4-timeliness` Task 1): provides `ctx.jobs` so the
+    // plugin's deferred `ctx.inject(['jobs'])` onJobDone wiring fires.
+    ...(options.jobsService !== undefined ? [{ name: '@deepseek-ai/dsh-jobs-fake' }] : []),
     // Last row: the mstar plugin (carries the boot-time Config below).
     { name: '@mstar-harness/dsh' },
   ]
@@ -245,13 +245,13 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // it at runtime via peerDependencies).
     ['@deepseek-ai/dsh-tools', await import('@deepseek-ai/dsh-tools')],
     // The `ctx.commands` registry seam — the REAL package (link farm) whose
-    // named exports provide the CommandService (the host app provides it at
+    // named exports provide the CommandRuntime (the host app provides it at
     // runtime via peerDependencies).
     ['@deepseek-ai/dsh-commands', await import('@deepseek-ai/dsh-commands')],
-    // The fake `tasks` service (plan `20260811-panel-f4-timeliness` Task 1):
+    // The fake `jobs` service (plan `20260811-panel-f4-timeliness` Task 1):
     // a `{ default }` module so the seam unwrap resolves the class.
-    ...(options.tasksService !== undefined
-      ? [['@deepseek-ai/dsh-tasks-fake', { default: FakeTaskService }] as const]
+    ...(options.jobsService !== undefined
+      ? [['@deepseek-ai/dsh-jobs-fake', { default: FakeJobRegistry }] as const]
       : []),
   ])
   for (const row of rows) {

@@ -261,7 +261,7 @@ acceptance (R1 folded into this iteration's AC-1/2).
   resolved package-relative via `import.meta.url` — it works from any launch
   cwd (the default is not cwd-anchored). An
   explicit RELATIVE `bundledSkillDir` override resolves against the dsh
-  **process cwd** at boot (skill-local `join` semantics — covered by
+  **process cwd** at boot (skill-filesystem `join` semantics — covered by
   `tests/e2e-session.spec.ts` § bundledSkillDir), so deployments
   overriding the default should pass an **absolute path** in the profile's
   `cordis.patch.yml`.

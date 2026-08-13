@@ -1,6 +1,6 @@
 /**
  * Copies repo-root `skills/` and `commands/` into this package for the dsh
- * skill-local bundled mount (`harness-skills/`) and the `ctx.commands`
+ * skill-filesystem bundled mount (`harness-skills/`) and the `ctx.commands`
  * registrations (`harness-commands/`). Run from `packages/dsh` via the
  * `bundle-assets` script (monorepo checkout required; outputs are gitignored
  * — the mirror lives once in the repo root, same as `packages/opencode`).

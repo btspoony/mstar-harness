@@ -22,11 +22,11 @@
  *   no settle + one warn, non-dispatch tool → no record, and the settle
  *   carries the PAIRED dispatch identity (role/planId/taskId — schema +
  *   view `paired` marker + JSONL round-trip); `recordTaskSettle` maps the
- *   three onTaskDone terminal statuses (completed→ok / killed→denied /
+ *   three onJobDone terminal statuses (completed→ok / killed→denied /
  *   failed→error) + durationMs and stays silent for unpaired task ids;
  *   the catalog-invalidation hook fires after successful records (Task 2
  *   seam); the upstream seam probes prove the REAL registry emits
- *   `tools/post-execute` and the `ctx.inject(['tasks'])` onTaskDone wiring
+ *   `tools/post-execute` and the `ctx.inject(['jobs'])` onJobDone wiring
  *   registers + receives terminals (Step 1 — 先证后写);
  * - catalog integration: `state.agentFlow` surfaces the ledger (events ≤ 50 +
  *   summary), the model text gains ONE compact line only when events > 0, and
@@ -41,7 +41,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { defineTool, type PreToolDecision, type ToolExecution, type ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { CallId } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import { TaskId } from '@deepseek-ai/dsh-tasks'
+import { JobId } from '@deepseek-ai/dsh-jobs'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import {
   AGENT_FLOW_FILE,
@@ -62,7 +62,7 @@ import {
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
-import { bootApp, seedHarness, FakeTaskService, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, FakeJobRegistry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -546,7 +546,7 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
 })
 
 /* ===========================================================================
- * 4. Settle pairing — post-execute three-shape branch + onTaskDone terminal
+ * 4. Settle pairing — post-execute three-shape branch + onJobDone terminal
  *    (plan `20260811-panel-f4-timeliness` Task 1) + verification-gate trace
  * ========================================================================== */
 
@@ -795,7 +795,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
     }
   })
 
-  it('a background result stores taskId → dispatchRef and records NO settle until the onTaskDone terminal', async () => {
+  it('a background result stores taskId → dispatchRef and records NO settle until the onJobDone terminal', async () => {
     const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-background-')
     const ctx = new Context()
     const pairing = pairingOf()
@@ -921,7 +921,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 })
 
-describe('agent-flow settle — recordTaskSettle terminal mapping (onTaskDone)', () => {
+describe('agent-flow settle — recordTaskSettle terminal mapping (onJobDone)', () => {
   /** Seed one taskId → dispatchRef pairing directly. */
   function seededPairing(harnessDir: string, taskId: string, role = 'fullstack-dev'): AgentFlowPairing {
     const pairing = pairingOf()
@@ -1009,8 +1009,8 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
  * 4b. Upstream seam probes (plan `20260811-panel-f4-timeliness` T1 Step 1 —
  *     prove the seams BEFORE writing the pairing): the REAL dsh-tools
  *     registry emits `tools/post-execute` for every tool call
- *     (`runPostExecute` pipeline), and `ctx.tasks.onTaskDone` is registrable
- *     via `ctx.inject(['tasks'])` and receives terminal snapshots.
+ *     (`runPostExecute` pipeline), and `ctx.jobs.onJobDone` is registrable
+ *     via `ctx.inject(['jobs'])` and receives terminal snapshots.
  * ========================================================================== */
 
 describe('upstream seam probe — real dsh-tools registry emits tools/post-execute (T1 Step 1)', () => {
@@ -1051,9 +1051,9 @@ describe('upstream seam probe — real dsh-tools registry emits tools/post-execu
   })
 })
 
-describe('upstream seam probe — ctx.inject([\'tasks\']) onTaskDone wiring (T1 Step 1)', () => {
-  it('registers against a provided tasks service and receives a terminal snapshot — full chain dispatch → background → terminal → settle', async () => {
-    const app = booted = await bootApp({ tasksService: 'fake' })
+describe('upstream seam probe — ctx.inject([\'jobs\']) onJobDone wiring (T1 Step 1)', () => {
+  it('registers against a provided jobs service and receives a terminal snapshot — full chain dispatch → background → terminal → settle', async () => {
+    const app = booted = await bootApp({ jobsService: 'fake' })
     // A dispatch tool returning the VERIFIED background shape (canonical
     // `{ kind: 'background', taskId }` — the upstream dsh-tool-subagent
     // output schema) so the post-execute branch stores taskId → dispatchRef.
@@ -1092,11 +1092,11 @@ describe('upstream seam probe — ctx.inject([\'tasks\']) onTaskDone wiring (T1 
     let view = readAgentFlow(app.harnessDir)!
     expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
 
-    // Fire the terminal through the onTaskDone listener the plugin's
-    // `ctx.inject(['tasks'])` wiring registered on the fake tasks service.
-    const tasks = app.ctx.tasks as unknown as FakeTaskService
-    tasks.fireDone({
-      id: TaskId('subagent-1'),
+    // Fire the terminal through the onJobDone listener the plugin's
+    // `ctx.inject(['jobs'])` wiring registered on the fake jobs service.
+    const jobs = app.ctx.jobs as unknown as FakeJobRegistry
+    jobs.fireDone({
+      id: JobId('subagent-1'),
       kind: 'subagent',
       label: 'probe',
       status: 'completed',
@@ -1118,10 +1118,10 @@ describe('upstream seam probe — ctx.inject([\'tasks\']) onTaskDone wiring (T1 
     })
   })
 
-  it('the inject wiring is INERT without a tasks service (the plugin boots fine)', async () => {
-    // bootApp WITHOUT tasksService: the deferred `ctx.inject(['tasks'])` child
+  it('the inject wiring is INERT without a jobs service (the plugin boots fine)', async () => {
+    // bootApp WITHOUT jobsService: the deferred `ctx.inject(['jobs'])` child
     // fiber simply never activates — the plugin apply and the dispatch gate
-    // work normally (no top-level `'tasks'` inject blocking boot).
+    // work normally (no top-level `'jobs'` inject blocking boot).
     const app = booted = await bootApp()
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })

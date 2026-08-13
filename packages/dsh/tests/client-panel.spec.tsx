@@ -96,8 +96,8 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ClientContext, ConversationNode, ConversationSnapshot, SessionId, SlotsService } from '@deepseek-ai/dsh-client-runtime/client'
-import type { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
+import type { ClientContext, ConversationNode, ConversationSnapshot, SessionId, SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { clientExports } from './client-bundles.ts'
@@ -120,22 +120,22 @@ import {
 } from '../src/client/panel/pages/AgentCanvasPage'
 
 // The REAL client service values — loaded from the browser bundles through the
-// loader shim; SlotsService / LocaleService are cordis services (ctx).
+// loader shim; SlotRegistry / LocaleRuntime are cordis services (ctx).
 type RuntimeClientExports = typeof import('@deepseek-ai/dsh-client-runtime/client')
-const { createSnapshotStore, SlotsService: SlotsServiceCtor } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
-  Pick<RuntimeClientExports, 'createSnapshotStore' | 'SlotsService'>
+const { createSnapshotStore, SlotRegistry: SlotRegistryCtor } = clientExports('@deepseek-ai/dsh-client-runtime') as unknown as
+  Pick<RuntimeClientExports, 'createSnapshotStore' | 'SlotRegistry'>
 type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
-const { LocaleService: LocaleServiceCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
-  Pick<LocaleClientExports, 'LocaleService'>
+const { LocaleRuntime: LocaleRuntimeCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
+  Pick<LocaleClientExports, 'LocaleRuntime'>
 
-/** One real SlotsService over a fresh cordis context (services are ctx-bound). */
-function newSlots(): SlotsService {
-  return new SlotsServiceCtor(new Context())
+/** One real SlotRegistry over a fresh cordis context (services are ctx-bound). */
+function newSlots(): SlotRegistry {
+  return new SlotRegistryCtor(new Context())
 }
 
-/** One real LocaleService over a fresh cordis context. */
-function newLocale(): LocaleService {
-  return new LocaleServiceCtor(new Context())
+/** One real LocaleRuntime over a fresh cordis context. */
+function newLocale(): LocaleRuntime {
+  return new LocaleRuntimeCtor(new Context())
 }
 import { en, NS, zh } from '../src/client/panel/locale'
 import { PanelContent, PanelView } from '../src/client/panel/PanelView'
@@ -323,7 +323,7 @@ function snapshotFor(source: MstarEngineStatusSource | null, lastUpdated: number
 /** Render the panel to static HTML through the real data path: snapshot store → useSession → hook → PanelView (default copy pinned to en). */
 function panelHtml(
   source: MstarEngineStatusSource | null,
-  locale: LocaleService = newLocale(),
+  locale: LocaleRuntime = newLocale(),
   lastUpdated: number | null = 1_720_001_000_000,
   lang: 'en' | 'zh' = 'en',
 ): string {
@@ -596,7 +596,7 @@ describe('workflow panel — FAIL gate verdict and zh body (spec §2.2, §4.3)',
 
 describe('workflow panel — data wiring through the hook (spec §5)', () => {
   /** Render the panel against a live snapshot store (real PanelView + useMstarEngineStatus path). */
-  function renderAgainst(store: { getSnapshot(): ConversationSnapshot }, locale: LocaleService): string {
+  function renderAgainst(store: { getSnapshot(): ConversationSnapshot }, locale: LocaleRuntime): string {
     return renderToStaticMarkup(createElement(PanelView, {
       ...kitProps({ useSession: bindUseSession(store) }),
       t: locale.bind(NS),
@@ -648,11 +648,11 @@ describe('workflow panel — data wiring through the hook (spec §5)', () => {
 
 describe('workflow panel — plugin entry registers locale + conversation.view tab (spec §4)', () => {
   /** Real cordis context over the real services (slots + locale + sessions faces). */
-  function makeCtx(): { ctx: ClientContext; slots: SlotsService; locale: LocaleService } {
+  function makeCtx(): { ctx: ClientContext; slots: SlotRegistry; locale: LocaleRuntime } {
     const ctx = new Context() as unknown as ClientContext
-    const slots = new SlotsServiceCtor(ctx)
-    const locale = new LocaleServiceCtor(ctx)
-    // LocaleService is a plain class (not a cordis Service) — attach the
+    const slots = new SlotRegistryCtor(ctx)
+    const locale = new LocaleRuntimeCtor(ctx)
+    // LocaleRuntime is a plain class (not a cordis Service) — attach the
     // faces the plugin's client entry injects (slots registers itself).
     ;(ctx as unknown as Record<string, unknown>).locale = locale
     ;(ctx as unknown as Record<string, unknown>).sessions = {}
@@ -660,7 +660,7 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
   }
 
   /** Declare the view-ring chain exactly like ui-conversation apply (spec §3.2). */
-  function declareViewRing(slots: SlotsService): () => void {
+  function declareViewRing(slots: SlotRegistry): () => void {
     slots.register({
       name: 'root' as 'conversation.view',
       children: { 'conversation.session': { kind: 'single', scope: 'session' } } as never,
@@ -674,7 +674,7 @@ describe('workflow panel — plugin entry registers locale + conversation.view t
   it('registers the mstar-panel dictionaries on apply', () => {
     const { ctx, locale } = makeCtx()
     apply(ctx)
-    // Pin zh: the real LocaleService's initial locale is browser/persisted
+    // Pin zh: the real LocaleRuntime's initial locale is browser/persisted
     // derived (the removed peer-stub defaulted to the first-registered one).
     locale.setLocale('zh')
     expect(locale.bind(NS)('view.mstar-workflow')).toBe('MStar 工作流')

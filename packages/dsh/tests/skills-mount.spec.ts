@@ -1,14 +1,14 @@
 /**
- * Task 3 — skills mounting via skill-local (single canonical mount) (plan
+ * Task 3 — skills mounting via skill-filesystem (single canonical mount) (plan
  * 20260808-dsh-host-adapter).
  *
  * Dev-time reality: the dsh seam packages resolve from a real dsh source
  * tree via the link farm (scripts/setup-dsh-links.ts), so the plugin's
  * registration call is implemented against the CONTRACT —
- * the skill-local `{ name, inject, Config, apply }` plugin module and the
+ * the skill-filesystem `{ name, inject, Config, apply }` plugin module and the
  * `customSkillDirs` / `bundledSkillDir` Config semantics. Verification is
  * threefold (brief): (a) contract-shape tests — the registration payload
- * built by `skillLocalConfig` matches the skill-local Config schema
+ * built by `skillLocalConfig` matches the skill-filesystem Config schema
  * expectations; (b) frontmatter parse checks on the ACTUAL mirror `skills/`
  * via the engine `lintSkillFrontmatter` (already a dependency); (c)
  * `resolveSkillRoot('dsh', …)` resolves per the frozen canonical form
@@ -25,8 +25,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { lintSkillFrontmatter, resolveSkillRoot } from '@mstar-harness/engine'
-import SkillService from '@deepseek-ai/dsh-skill'
-import { Config as SkillLocalSchema } from '@deepseek-ai/dsh-skill-local'
+import SkillRegistry from '@deepseek-ai/dsh-skill'
+import { Config as SkillLocalSchema } from '@deepseek-ai/dsh-skill-filesystem'
 import * as plugin from '../src/index.ts'
 import { DshHostAdapter, skillLocalConfig } from '../src/index.ts'
 import { resolvePackagedSkillsDir } from '../src/gates/_shared.ts'
@@ -95,7 +95,7 @@ describe('skillLocalConfig — registration payload contract shape', () => {
     expect(payload.customSkillDirs).toBeUndefined()
   })
 
-  it('maps skillRoots to the skill-local customSkillDirs semantics', () => {
+  it('maps skillRoots to the skill-filesystem customSkillDirs semantics', () => {
     const payload = skillLocalConfig({ skillRoots: ['/mirror/skills'] })
     expect(payload).toEqual({
       providerName: 'mstar',
@@ -127,7 +127,7 @@ describe('skillLocalConfig — registration payload contract shape', () => {
     expect(skillLocalConfig({ skillRoots: ['/a/skills', '', '/b/skills'] })?.customSkillDirs).toEqual(['/a/skills', '/b/skills'])
   })
 
-  it('every payload parses through the skill-local Config schema (the loader expectation)', () => {
+  it('every payload parses through the skill-filesystem Config schema (the loader expectation)', () => {
     for (const payload of [
       skillLocalConfig({ skillRoots: ['/mirror/skills'] }),
       skillLocalConfig({ bundledSkillDir: '/pkg/skills' }),
@@ -293,7 +293,7 @@ describe('skills mount via the plugin (real composition)', () => {
 
   it('duplicate provider names are rejected by the registry (contract)', async () => {
     const ctx = new Context()
-    const registry = new SkillService(ctx)
+    const registry = new SkillRegistry(ctx)
     const first = registry.registerProvider(() => ({
       name: 'mstar',
       list: async () => [],
@@ -313,11 +313,11 @@ describe('skills mount via the plugin (real composition)', () => {
 
   it('observes same-context provider removal on fiber.dispose (skill mount HMR)', async () => {
     // Same-context observation: the skills registry service (dev-time stub)
-    // stays alive while the plugin's child skill-local fiber — and with it
+    // stays alive while the plugin's child skill-filesystem fiber — and with it
     // the registered provider — is disposed and re-mounted.
     const tempRoot = await seedSkillRoot()
     const ctx = new Context()
-    new SkillService(ctx)
+    new SkillRegistry(ctx)
     try {
       const fiber = await ctx.plugin(plugin, { skillRoots: [tempRoot] })
       expect((await ctx.skills.list()).map((skill) => skill.name)).toContain('temp-one')

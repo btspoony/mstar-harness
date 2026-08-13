@@ -49,7 +49,7 @@
 import { describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { LocaleService } from '@deepseek-ai/dsh-client-locale/client'
+import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type { MstarEngineStatusSource } from '../src/types'
 import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
@@ -68,12 +68,12 @@ import {
 import { en, NS, zh } from '../src/client/panel/locale'
 
 type LocaleClientExports = typeof import('@deepseek-ai/dsh-client-locale/client')
-const { LocaleService: LocaleServiceCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
-  Pick<LocaleClientExports, 'LocaleService'>
+const { LocaleRuntime: LocaleRuntimeCtor } = clientExports('@deepseek-ai/dsh-client-locale') as unknown as
+  Pick<LocaleClientExports, 'LocaleRuntime'>
 
-/** One real LocaleService over a fresh cordis context. */
-function newLocale(): LocaleService {
-  return new LocaleServiceCtor(new Context())
+/** One real LocaleRuntime over a fresh cordis context. */
+function newLocale(): LocaleRuntime {
+  return new LocaleRuntimeCtor(new Context())
 }
 
 /* ------------------------------ fixtures ------------------------------ */
