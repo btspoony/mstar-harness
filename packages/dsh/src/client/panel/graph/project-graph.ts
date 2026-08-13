@@ -315,13 +315,16 @@ function emphasisOf(
 }
 
 /**
- * Entity status (spec §4, hardcoded priority): `denied`/`advisory` come from
- * the LATEST dispatch's verdict (verdict wins regardless of settling);
- * `error`/`settled` come from the settle paired with that dispatch; `running`
- * = no paired settle yet (exact identity pairing — an unpaired settle stays
- * unpaired, honest); `idle` = a
- * KNOWN_AGENTS roster member with no dispatch evidence (spec §6.2 — never
- * guessed as running/settled).
+ * Entity status (spec §4, hardcoded priority; plan
+ * 20260813-panel-quick-fixes Task 2): `denied` comes from the LATEST dispatch's
+ * verdict (the only terminal verdict — settle-independent); `error`/`settled`
+ * come from the settle paired with that dispatch; `running` = no paired settle
+ * yet (exact identity pairing — an unpaired settle stays unpaired, honest);
+ * `idle` = a KNOWN_AGENTS roster member with no dispatch evidence (spec §6.2 —
+ * never guessed as running/settled). `advisory` is RETAINED as a union member
+ * for backward shape, but the derivation (entityStatus) no longer emits it —
+ * an advisory-verdict dispatch now falls through to its settle pair (or
+ * `running`); the advisory VERDICT still renders in the event log.
  */
 export type AgentEntityStatus = 'running' | 'settled' | 'error' | 'denied' | 'advisory' | 'idle'
 
@@ -461,20 +464,27 @@ function idleStep(id: PhaseId, step: number): IterationStepView {
   return { id, step, state: 'idle', verdict: 'unknown' }
 }
 
-/** One guarded plan row: id/status str()-guarded (missing → ''), doneAt str()-guarded (missing → null). */
+/** One guarded plan row: id/status str()-guarded (missing → ''), doneAt str()-guarded (missing → null), iterationRefs guarded (missing → []). */
 interface PlanRow {
   id: string
   status: string
   doneAt: string | null
+  iterationRefs: string[]
+}
+
+/** Guarded `iterationRefs`: non-empty-string array, else [] (missing → []). */
+function iterationRefsOf(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v !== '') : []
 }
 
 /** One guarded plan row: id/status str()-guarded, missing → '' (never fabricated). */
 function planRow(raw: unknown): PlanRow {
-  const row = raw as { id?: unknown; status?: unknown; doneAt?: unknown } | null | undefined
+  const row = raw as { id?: unknown; status?: unknown; doneAt?: unknown; iterationRefs?: unknown } | null | undefined
   return {
     id: str(row?.id) ?? '',
     status: str(row?.status) ?? '',
     doneAt: str(row?.doneAt),
+    iterationRefs: iterationRefsOf(row?.iterationRefs),
   }
 }
 
@@ -774,14 +784,19 @@ function roleZone(role: string, stage: { phase: PhaseId; stage: string } | null)
 }
 
 /**
- * Entity status (spec §4 hardcoded priority): the latest-dispatch verdict
- * wins (denied/advisory, settle-independent); otherwise the settle paired
- * with that dispatch — `error` → error, `ok`/`denied` → settled; no pair →
+ * Entity status (spec §4 hardcoded priority; plan
+ * 20260813-panel-quick-fixes Task 2): `denied` is the ONLY terminal verdict —
+ * a denied dispatch stays denied, settle-independent. `advisory` is NO LONGER
+ * terminal (a soft-enforcement dispatch is a "放行" pass-through, not a final
+ * state — it must not mask a real completion): the settle paired with that
+ * dispatch decides — `error` → error, `ok`/`denied` → settled; no pair →
  * running (exact identity pairing — an unpaired settle stays unpaired, honest).
+ * `advisory` stays a valid `AgentEntityStatus` union member for backward shape
+ * but nothing projects it now; the advisory VERDICT still renders in the event
+ * log via `dispatchStatus` (unchanged).
  */
 function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEventStatus>): AgentEntityStatus {
   if (acc.verdict === 'denied') return 'denied'
-  if (acc.verdict === 'advisory') return 'advisory'
   const paired = pairStatus.get(acc.latestIndex)
   return paired === 'error' ? 'error' : paired === undefined ? 'running' : 'settled'
 }
@@ -960,6 +975,77 @@ function idleZone(known: KnownAgent): AgentZone {
 }
 
 /**
+ * First-8-digits date prefix of a plan id ('' when the id does not start with
+ * 8 digits) — mirrors `plan-sort.ts`'s module-private `idDateKey` (reused, not
+ * redefined, in spirit): the「当前迭代」filter needs the same 8-digit key but a
+ * DIFFERENT sort order (date prefix PRIMARY, doneAt SECONDARY — see
+ * {@link moreRecentPlan}).
+ */
+function idDatePrefix(id: string): string {
+  return /^\d{8}/.test(id) ? id.slice(0, 8) : ''
+}
+
+/** Digitized doneAt key ('' when missing/garbage) — mirrors `plan-sort.ts`'s
+ * `doneAtKey` (the「最近一次迭代」tie-break key). */
+function doneAtDigitized(doneAt: string | null): string {
+  return typeof doneAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(doneAt) ? doneAt.replaceAll('-', '') : ''
+}
+
+/** Is plan `a` more recent than plan `b`? (max 8-digit id date prefix, then max doneAt, then id lexicographic DESC for determinism). */
+function moreRecentPlan(a: PlanRow, b: PlanRow): boolean {
+  const aDate = idDatePrefix(a.id)
+  const bDate = idDatePrefix(b.id)
+  if (aDate !== bDate) return aDate > bDate
+  const aDone = doneAtDigitized(a.doneAt)
+  const bDone = doneAtDigitized(b.doneAt)
+  if (aDone !== bDone) return aDone > bDone
+  return a.id > b.id
+}
+
+/**
+ * The「当前迭代」iteration-id set (plan 20260813-panel-quick-fixes Task 2 — the
+ * Clarify filter口径). Only `projectAgents` consumes it; `projectFlowEvents`
+ * is unfiltered. Total function — never throws, an empty set is legal.
+ *
+ * - Steering compass active (`iterationId` non-null): the current iteration
+ *   IS that id → the set is `{ iterationId }`.
+ * - No compass (`iterationId` null): the「最近一次迭代」 — among plans with
+ *   NON-EMPTY `iterationRefs`, the single most-recent plan (max 8-digit id
+ *   date prefix, tie-break max doneAt, then id DESC) names the latest
+ *   iteration → the set is that plan's `iterationRefs` (empty when none).
+ */
+function currentIterationIds(iterationId: string | null, plans: readonly PlanRow[]): ReadonlySet<string> {
+  if (iterationId !== null && iterationId !== '') return new Set([iterationId])
+  let latest: PlanRow | undefined
+  for (const plan of plans) {
+    if (plan.iterationRefs.length === 0) continue
+    if (latest === undefined || moreRecentPlan(plan, latest)) latest = plan
+  }
+  return new Set(latest === undefined ? [] : latest.iterationRefs)
+}
+
+/**
+ * The「当前迭代」keep predicate (plan 20260813-panel-quick-fixes Task 2): a
+ * dispatch row is filtered OUT only when it is PROVABLY cross-iteration — its
+ * plan is KNOWN (present in `state.plans`), carries a NON-EMPTY `iterationRefs`,
+ * and NONE of those refs are in the current-iteration id set. Everything else
+ * is kept: plan-less dispatches (`planId === null`), dispatches whose plan is
+ * unknown to the registry, and dispatches whose plan has EMPTY `iterationRefs`
+ * (standalone / current work) — never hidden, because there is no
+ * cross-iteration signal to filter on. Total function, never throws.
+ */
+function isCurrentIterationDispatch(
+  planId: string | null,
+  planRefs: ReadonlyMap<string, readonly string[]>,
+  currentIds: ReadonlySet<string>,
+): boolean {
+  if (planId === null) return true
+  const refs = planRefs.get(planId)
+  if (refs === undefined || refs.length === 0) return true
+  return refs.some((it) => currentIds.has(it))
+}
+
+/**
  * `projectAgents(source, currentStep): AgentZoneView` — the agents zone (spec
  * §4 + §6.2). `currentStep` is the ITERATION's current step (1-based into
  * PHASE_IDS, null when inactive — already computed by `projectGraph`, spec
@@ -1056,18 +1142,41 @@ export function projectAgents(source: MstarEngineStatusSource | null, currentSte
   // any dispatch row (anonymous included — it IS dispatch evidence) → null.
   const note: AgentZoneNote = empty ? 'empty' : entries.some((e) => e.view.kind === 'dispatch') ? null : 'settle-only'
 
+  // The「当前迭代」filter (plan 20260813-panel-quick-fixes Task 2): entities
+  // and actual edges derive ONLY from the current iteration's dispatch rows.
+  // Settle rows are always kept (they carry the pairing identity); a dispatch
+  // row survives unless it is PROVABLY cross-iteration (see
+  // `isCurrentIterationDispatch`). A cross-iteration plan's events therefore
+  // produce no entity/edge (the roster falls back to idle). `note`/`empty`/
+  // `degraded` stay computed from the RAW ledger above — the event-log tab
+  // (projectFlowEvents) is unfiltered too.
+  const iterationRow = source == null ? null : (source as { iteration?: unknown }).iteration
+  const iterationId = iterationRow === null || iterationRow === undefined
+    ? null
+    : str((iterationRow as { iterationId?: unknown }).iterationId)
+  const planRows: PlanRow[] = Array.isArray(rawPlans) ? rawPlans.map(planRow) : []
+  const planRefs = new Map<string, readonly string[]>()
+  for (const plan of planRows) planRefs.set(plan.id, plan.iterationRefs)
+  const currentIds = currentIterationIds(iterationId, planRows)
+  const filtered = entries.filter((e) =>
+    e.view.kind === 'settle' || isCurrentIterationDispatch(e.view.planId, planRefs, currentIds),
+  )
+
   // Evidence (spec §4): a stage is evidenced when any dispatch row's role maps
   // to it (roles are unique across stages, so this equals literal role
-  // membership). Counted from ALL dispatch rows — a session re-dispatched under
-  // several roles lights EACH role's stage (per-role aggregation). The same
-  // set drives the per-stage `evidenced` flag (the render's
-  // pending-placeholder decision) and the `pending` count — no drift.
+  // membership). Counted from the FILTERED dispatch rows (plan
+  // 20260813-panel-quick-fixes Task 2 — a cross-iteration dispatch lights no
+  // stage) — a session re-dispatched under several roles lights EACH role's
+  // stage (per-role aggregation). The same set drives the per-stage `evidenced`
+  // flag (the render's pending-placeholder decision) and the `pending` count —
+  // no drift.
   const evidenced = new Set<string>()
-  // Role evidence (spec §6.2): the roles with ANY dispatch row — drives the
-  // idle-roster suppression (a known agent with dispatch evidence is never
-  // ALSO shown idle; garbage rows degrade to role '' and never match).
+  // Role evidence (spec §6.2): the roles with ANY filtered dispatch row — drives
+  // the idle-roster suppression (a known agent with current-iteration dispatch
+  // evidence is never ALSO shown idle; garbage rows degrade to role '' and never
+  // match).
   const evidencedRoles = new Set<string>()
-  for (const e of entries) {
+  for (const e of filtered) {
     if (e.view.kind !== 'dispatch') continue
     if (e.view.stage !== null) evidenced.add(`${e.view.stage.phase}:${e.view.stage.stage}`)
     if (e.view.role !== '') evidencedRoles.add(e.view.role)
@@ -1081,7 +1190,7 @@ export function projectAgents(source: MstarEngineStatusSource | null, currentSte
   // settle carries — `view.status` already carries settleStatus(outcome) for
   // settle rows, so the record values are the settle statuses directly.
   const pairStatus = pairSettleStatus(
-    entries.map((e) => ({
+    filtered.map((e) => ({
       kind: e.view.kind,
       agent: e.view.agent,
       role: e.view.role,
@@ -1092,7 +1201,7 @@ export function projectAgents(source: MstarEngineStatusSource | null, currentSte
     })),
   )
 
-  const lit = aggregateEntities(entries, pairStatus, currentStep)
+  const lit = aggregateEntities(filtered, pairStatus, currentStep)
   // F-001: the evidence-derived key set drives the idle-twin suppression —
   // a lit `general` key (from any non-roster dispatch) never coexists with the
   // idle roster `general` card.
@@ -1100,9 +1209,12 @@ export function projectAgents(source: MstarEngineStatusSource | null, currentSte
   const entities = [...lit, ...idleEntities(evidencedRoles, litKeys, currentStep)]
   // Task 5 line set (design doc §2.2): actual (filtered handoffs) + supervise
   // (static design knowledge). `expected` skeleton / `next` animation edges
-  // are REMOVED — 简洁化 (user 2026-08-12 feedback #1/#5).
+  // are REMOVED — 简洁化 (user 2026-08-12 feedback #1/#5). The actual edges
+  // derive from the FILTERED rows (plan 20260813-panel-quick-fixes Task 2);
+  // the supervise line stays UNCHANGED (raw rows — its evidence-driven lighting
+  // is sub-bucket presence, independent of the iteration filter).
   const edges = [
-    ...actualEdges(entries),
+    ...actualEdges(filtered),
     ...superviseEdges(stages, entries),
   ]
 

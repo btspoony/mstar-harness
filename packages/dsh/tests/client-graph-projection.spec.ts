@@ -881,12 +881,27 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('denied')
   })
 
-  it('latest-dispatch verdict advisory → advisory (verdict priority, settle ignored)', () => {
+  it('advisory verdict is NOT terminal — with a paired ok settle it projects settled (plan 20260813-panel-quick-fixes Task 2)', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
+  })
+
+  it('advisory verdict with a paired error settle → error (the settle decides, not the advisory verdict)', () => {
     const view = projectGraph(flowSource([
       settleRow({ ts: 8, agent: 'a1', outcome: 'error', role: 'fullstack-dev' }),
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
     ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('advisory')
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('error')
+  })
+
+  it('advisory verdict without a settle → running (not a terminal advisory state)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
   })
 
   it('paired settle ok → settled (identity-paired: agent + role + plan/task)', () => {
@@ -946,6 +961,118 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Agents zone current-iteration filter (plan 20260813-panel-quick-fixes Task
+ * 2): entities/actual edges derive ONLY from the current iteration's dispatch
+ * rows — a cross-iteration plan's events produce no entity/edge, the roster
+ * still renders all KNOWN_AGENTS (cross-iteration roles fall back to idle);
+ * `projectFlowEvents` (view.events) stays unfiltered.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents current-iteration filter (plan 20260813-panel-quick-fixes T2)', () => {
+  /** A source with the given plans + events, keeping `fullSource`'s ACTIVE
+   * iteration (iterationId 'iter-20260810-panel-zones' → the compass branch). */
+  function iterSource(plans: readonly unknown[], events: readonly unknown[]): MstarEngineStatusSource {
+    return {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: plans as never,
+        agentFlow: { events, summary: [] } as unknown as AgentFlowView,
+      },
+    }
+  }
+
+  it('a cross-iteration plan\'s dispatch produces no entity/edge; the current plan\'s does (roster never hidden)', () => {
+    const source = iterSource(
+      [
+        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] },
+        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-20260801-old'] },
+      ],
+      [
+        dispatchRow({ ts: 5, role: 'fullstack-dev', agent: 'a1', planId: 'plan-current' }),
+        dispatchRow({ ts: 4, role: 'qc-specialist', agent: 'a2', planId: 'plan-old' }),
+      ],
+    )
+    const view = projectGraph(source)
+    const byKey = new Map(view.agents.entities.map((e) => [e.key, e]))
+    // The current-plan dispatch lights fullstack-dev; the cross-iteration
+    // qc-specialist dispatch is filtered → its card falls back to idle.
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+    expect(byKey.get('qc-specialist')!.idle).toBe(true)
+    expect(byKey.get('qc-specialist')!.status).toBe('idle')
+    // No actual edge (the cross-iteration plan contributes nothing).
+    expect(view.agents.edges.filter((e) => e.kind === 'actual')).toEqual([])
+    // The full roster is never hidden.
+    expect(view.agents.entities).toHaveLength(KNOWN_AGENTS.length)
+    // The event-log tab is UNFILTERED — both dispatches still appear.
+    expect(view.events).toHaveLength(2)
+  })
+
+  it('cross-iteration events form no actual edge even when the same roles are current', () => {
+    const source = iterSource(
+      [
+        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] },
+        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-20260801-old'] },
+      ],
+      [
+        dispatchRow({ ts: 4, role: 'fullstack-dev', agent: 'a1', planId: 'plan-current' }),
+        dispatchRow({ ts: 3, role: 'frontend-dev', agent: 'a2', planId: 'plan-current' }),
+        dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a3', planId: 'plan-old' }),
+        dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a4', planId: 'plan-old' }),
+      ],
+    )
+    const actual = projectGraph(source).agents.edges.filter((e) => e.kind === 'actual')
+    // Only the current-plan adjacent pair (frontend-dev → fullstack-dev, ts 3→4)
+    // survives; the cross-iteration pair is gone.
+    expect(actual.map((e) => [e.source, e.target])).toEqual([['frontend-dev', 'fullstack-dev']])
+  })
+
+  it('no compass → the most-recent iteration (max 8-digit id date prefix) + empty-refs standalone plans are current', () => {
+    const source = {
+      ...fullSource,
+      iteration: undefined,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: '20260813-standalone', status: 'InProgress', doneAt: null, iterationRefs: [] },
+          { id: '20260812-recent', status: 'Done', doneAt: '2026-08-12', iterationRefs: ['iter-20260812'] },
+          { id: '20260810-old', status: 'Done', doneAt: '2026-08-10', iterationRefs: ['iter-20260810'] },
+        ],
+        agentFlow: {
+          events: [
+            dispatchRow({ ts: 3, role: 'frontend-dev', agent: 'a1', planId: '20260813-standalone' }),
+            dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a2', planId: '20260812-recent' }),
+            dispatchRow({ ts: 1, role: 'qc-specialist', agent: 'a3', planId: '20260810-old' }),
+          ],
+          summary: [],
+        } as unknown as AgentFlowView,
+      },
+    } as unknown as MstarEngineStatusSource
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    // most-recent iteration = iter-20260812 (plan id date prefix 20260812 is the
+    // max) → fullstack-dev (20260812-recent) is lit; the older iter-20260810 is
+    // cross → qc-specialist idle; the empty-refs standalone plan is never
+    // hidden → frontend-dev lit.
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+    expect(byKey.get('frontend-dev')!.idle).toBe(false)
+    expect(byKey.get('qc-specialist')!.idle).toBe(true)
+  })
+
+  it('compass active but no plan references it → empty set → roster idle, no lit entities (graceful, never throws)', () => {
+    const source = iterSource(
+      [{ id: 'plan-a', status: 'InProgress', doneAt: null, iterationRefs: ['iter-some-other'] }],
+      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-a' })],
+    )
+    const agents = projectGraph(source).agents
+    // plan-a references a DIFFERENT iteration → the current set is empty → the
+    // dispatch is cross-iteration noise → every known agent is idle.
+    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
+    expect(agents.executing).toBe(0)
+    expect(agents.edges.filter((e) => e.kind === 'actual')).toEqual([])
   })
 })
 

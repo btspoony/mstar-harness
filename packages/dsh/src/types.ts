@@ -113,6 +113,13 @@ export interface HarnessPlanView {
    * optional fields like `verdict?`).
    */
   readonly doneAt: string | null
+  /**
+   * The `status.json` plan row `metadata.iteration_refs` (array of iteration
+   * ids the plan is registered under). ALWAYS-present array (plan
+   * `20260813-panel-quick-fixes` Task 2): a missing/non-array value projects
+   * to `[]` — the empty default, never an omitted field (lossless JSON).
+   */
+  readonly iterationRefs: string[]
 }
 
 /** One open residual finding of the harness-state digest (`planId` = the owning `residual_findings` root key). */

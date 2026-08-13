@@ -445,11 +445,11 @@ describe('mstar-engine-status — doneAt passthrough (spec §6)', () => {
     expect(source.state).not.toBeNull()
     if (state === null) return
     expect(state.plans).toEqual([
-      { id: 'plan-a', status: 'Done', doneAt: '2026-08-09' },
-      { id: 'plan-b', status: 'Done', doneAt: null },
-      { id: 'plan-c', status: 'Done', doneAt: null },
-      { id: 'plan-d', status: 'Done', doneAt: null },
-      { id: 'plan-e', status: 'Done', doneAt: null },
+      { id: 'plan-a', status: 'Done', doneAt: '2026-08-09', iterationRefs: [] },
+      { id: 'plan-b', status: 'Done', doneAt: null, iterationRefs: [] },
+      { id: 'plan-c', status: 'Done', doneAt: null, iterationRefs: [] },
+      { id: 'plan-d', status: 'Done', doneAt: null, iterationRefs: [] },
+      { id: 'plan-e', status: 'Done', doneAt: null, iterationRefs: [] },
     ])
   })
 })
