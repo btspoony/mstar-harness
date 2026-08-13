@@ -85,7 +85,7 @@
  *   model.
  *
  * Renderer: `react-dom/server.renderToStaticMarkup` over the real component
- * (dev-time seams linked from the dsh source tree; the `*.module.css` import
+ * (dev-time seams installed from the npm registry; the `*.module.css` import
  * resolves to the raw
  * file-path string under `bun test`, so class attributes are dropped —
  * assertions pin `data-mstar-*` attributes, never class names).

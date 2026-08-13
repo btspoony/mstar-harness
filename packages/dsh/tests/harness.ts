@@ -8,9 +8,8 @@
  * `ctx.plugin` path, with no `@cordisjs/plugin-loader` involved (the plugin
  * bundle carries no bare `cordis` dependency; only `@deepseek-ai/cordis`).
  *
- * Seam boundary: dev-time the dsh seam packages resolve from a real dsh
- * source tree via the link farm (`scripts/setup-dsh-links.ts` → repo-root
- * `node_modules/@deepseek-ai/`), but this suite deliberately drives the fs
+ * Seam boundary: dev-time the dsh seam packages resolve from the npm registry
+ * (into repo-root `node_modules/@deepseek-ai/`), but this suite deliberately drives the fs
  * intent waterfalls with a minimal typed harness — the same `ctx.waterfall`
  * dispatch the real `@deepseek-ai/dsh-tool-fs` write/edit tools perform
  * (`ctx.waterfall('fs/write-intent', target, exec, () => undefined)`).
@@ -233,18 +232,17 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   // function as `default` (CJS-style); the mstar plugin is named-only.
   const modules = new Map<string, unknown>([
     ['@mstar-harness/dsh', plugin],
-    // The `ctx.skills` registry seam — the REAL package, linked from a local
-    // dsh source tree by the link farm (`scripts/setup-dsh-links.ts`); the
-    // host app provides it at runtime via peerDependencies.
+    // The `ctx.skills` registry seam — the REAL package, installed from the
+    // npm registry; the host app provides it at runtime via peerDependencies.
     ['@deepseek-ai/dsh-skill', await import('@deepseek-ai/dsh-skill')],
     // The `ctx.systemPrompt` service seam the real dsh-tools ToolRegistry
-    // injects — the REAL package (link farm).
+    // injects — the REAL package (npm registry).
     ['@deepseek-ai/dsh-system-prompt', await import('@deepseek-ai/dsh-system-prompt')],
-    // The `ctx.tools` registry seam — the REAL package (link farm) whose
+    // The `ctx.tools` registry seam — the REAL package (npm registry) whose
     // default export provides the ToolRegistry service (the host app provides
     // it at runtime via peerDependencies).
     ['@deepseek-ai/dsh-tools', await import('@deepseek-ai/dsh-tools')],
-    // The `ctx.commands` registry seam — the REAL package (link farm) whose
+    // The `ctx.commands` registry seam — the REAL package (npm registry) whose
     // named exports provide the CommandRuntime (the host app provides it at
     // runtime via peerDependencies).
     ['@deepseek-ai/dsh-commands', await import('@deepseek-ai/dsh-commands')],

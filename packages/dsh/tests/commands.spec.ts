@@ -13,8 +13,7 @@
  * menu pick (composer insert + args wait) instead of executing it detached —
  * the interaction contract this spec pins down.
  *
- * The commands service resolves from a real dsh source tree via the link farm
- * (`scripts/setup-dsh-links.ts`); the registrations are deferred with
+ * The commands service resolve from the npm registry* ; the registrations are deferred with
  * `ctx.inject(['commands'], …)` so the plugin boots without the service.
  */
 import { describe, expect, it, afterEach } from 'bun:test'

@@ -3,7 +3,7 @@
  * tool (plan 20260808-dsh-package-core).
  *
  * Harness approach: same real-composition boot as Task 3 — the dsh seam
- * packages resolve from a real dsh source tree via the link farm, and the
+ * packages resolve from the npm registry, and the
  * waterfall is simulated with the typed harness: the exact
  * `ctx.waterfall('tools/pre-execute', exec,
  * () => Promise.resolve({ kind: 'allow' }))` dispatch the real ToolRegistry

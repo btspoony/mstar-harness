@@ -2,6 +2,10 @@
   "name": "@mstar-harness/dsh",
   "version": "2.1.1",
   "description": "Morning Star harness dsh (DeepSeek Harness) cordis function plugin — in-process engine gates (status/dispatch/lease) with hard refusal channels.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin"
+  ],
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -45,12 +49,10 @@
     "pretest": "bun run build-client",
     "test": "bun test",
     "typecheck:tests": "bunx tsc --noEmit -p tests/tsconfig.json",
-    "dsh:link": "bun run scripts/setup-dsh-links.ts",
-    "dsh:link:check": "bun run scripts/setup-dsh-links.ts --check",
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
     "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external @deepseek-ai/cordis --external @deepseek-ai/dsh-skill-filesystem --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bun run build-client && bunx tsc",
     "build-client": "bun run scripts/build-client-bundle.ts",
-    "prepare": "bun run scripts/setup-dsh-links.ts && bun run build",
+    "prepare": "bun run build",
     "prepublishOnly": "bun run build"
   },
   "engines": {
@@ -59,39 +61,19 @@
   "dependencies": {},
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
-    "@deepseek-ai/dsh-agent": "^0.0.1-rc.2",
-    "@deepseek-ai/dsh-commands": "^0.0.1-rc.2",
-    "@deepseek-ai/dsh-fs": "^0.0.1-rc.2",
-    "@deepseek-ai/dsh-llm": "^0.0.1-rc.2",
-    "@deepseek-ai/dsh-skill": "^0.0.1-rc.2",
-    "@deepseek-ai/dsh-skill-filesystem": "^0.0.1-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.2"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-agent": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-commands": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-fs": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-llm": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-skill": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-skill-filesystem": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-tools": {
-      "optional": true
-    }
+    "@deepseek-ai/dsh-agent": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-client-locale": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-client-runtime": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-commands": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-fs": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-jobs": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-llm": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-skill": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-skill-filesystem": "^0.0.1-rc.5",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.5"
   },
   "publishConfig": {
     "access": "public"

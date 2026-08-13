@@ -6,8 +6,7 @@
  * semantics, config validation, fiber mounting, and settlement are cordis's
  * own `ctx.plugin` path (no `@cordisjs/plugin-loader`, no bare `cordis`).
  *
- * Seam boundary: at dev time the dsh seam packages resolve from a real dsh
- * source tree via the link farm (scripts/setup-dsh-links.ts), so this boot
+ * Seam boundary: at dev time the dsh seam packages resolve from the npm registry, so this boot
  * composes the plugin + engine + the REAL registry seams; Tasks 3–5 extend
  * the same boot with the linked seam packages.
  */
