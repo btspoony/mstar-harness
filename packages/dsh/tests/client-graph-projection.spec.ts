@@ -2,9 +2,10 @@
  * Pure projection tests for `projectGraph` (spec panel-zones §3 + §8): the
  * total function maps an `mstar-engine-status` catalog source to a `ZoneView`
  * — iteration zone (5 PHASE_IDS steps + Step N + current/next/done/idle +
- * verdict + branches + disabled determination), tasks zone (6 kanban columns
- * + exact-match bucketing + unknown column + shared plan-sort key + Done cap
- * 5 + truncated), agents skeleton (EXPECTED_ROLE_FLOW pending stages +
+ * verdict + branches + disabled determination), tasks zone (5 kanban columns
+ * + status bucketing with Blocked/unknown merged into `blocked-unknown` +
+ * shared plan-sort key on Done + per-column cap reported as `capped` +
+ * truncated), agents skeleton (EXPECTED_ROLE_FLOW pending stages +
  * degraded/empty from `state.agentFlow` presence), and the migrated top-level
  * verdict / violations / events / unexpected / degraded.
  *
@@ -24,7 +25,9 @@
  *
  * The shared plan-sort rule lives in `plan-sort.ts` (its own unit tests stay
  * untouched); this file adds the projection-side integration: the Done column
- * applies `sortPlans` + PLAN_CAP, `tasks.truncated` = Done rows > 5.
+ * applies `sortPlans` (no slice — every row is KEPT, plan
+ * 20260813-panel-quick-fixes Task 1), every column reports `capped` (PLAN_CAP)
+ * when it overflows, and `tasks.truncated` = any column rows > 5.
  *
  * No React / ReactFlow imports — the projection is DOM-free and fully
  * unit-testable (spec §2.1).
@@ -67,11 +70,11 @@ const fullSource: MstarEngineStatusSource = {
   },
   state: {
     plans: [
-      { id: 'plan-a', status: 'Todo', doneAt: null },
-      { id: 'plan-b', status: 'InProgress', doneAt: null },
-      { id: 'plan-c', status: 'Done', doneAt: '2026-08-08' },
-      { id: 'plan-d', status: 'Blocked', doneAt: null },
-      { id: 'plan-e', status: 'custom-stalled', doneAt: null },
+      { id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] },
+      { id: 'plan-b', status: 'InProgress', doneAt: null, iterationRefs: [] },
+      { id: 'plan-c', status: 'Done', doneAt: '2026-08-08', iterationRefs: [] },
+      { id: 'plan-d', status: 'Blocked', doneAt: null, iterationRefs: [] },
+      { id: 'plan-e', status: 'custom-stalled', doneAt: null, iterationRefs: [] },
     ],
     residuals: [],
     residualFindings: null,
@@ -444,49 +447,51 @@ describe('projectGraph — iteration disabled determination (spec §3 / §8)', (
 })
 
 /* ---------------------------------------------------------------------------
- * Tasks zone (spec §3): 6 columns / exact-match bucketing / unknown column /
- * shared sort key / Done cap / truncated / total.
+ * Tasks zone (spec §3): 5 columns / status bucketing (Blocked + unknown merged)
+ * / shared sort key / per-column cap / truncated / total.
  * ------------------------------------------------------------------------- */
 
 describe('projectGraph — tasks zone (spec §3)', () => {
   const view = projectGraph(fullSource)
 
-  it('emits the fixed 6 columns in PLAN_STATE_IDS order', () => {
+  it('emits the fixed 5 columns in PLAN_STATE_IDS order', () => {
     expect(view.tasks.columns.map((c) => c.id)).toEqual([...PLAN_STATE_IDS])
-    expect(view.tasks.columns.map((c) => c.id)).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'Blocked', 'unknown'])
+    expect(view.tasks.columns.map((c) => c.id)).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'blocked-unknown'])
   })
 
-  it('buckets each plan row by EXACT status match; any other string lands in unknown', () => {
+  it('buckets each plan row: Blocked AND any non-matching status both land in the merged blocked-unknown column', () => {
     const byId = new Map(view.tasks.columns.map((c) => [c.id, c]))
     expect(byId.get('Todo')!.plans).toEqual([{ id: 'plan-a', status: 'Todo' }])
     expect(byId.get('InProgress')!.plans).toEqual([{ id: 'plan-b', status: 'InProgress' }])
     expect(byId.get('Done')!.plans).toEqual([{ id: 'plan-c', status: 'Done' }])
-    expect(byId.get('Blocked')!.plans).toEqual([{ id: 'plan-d', status: 'Blocked' }])
     expect(byId.get('InReview')!.plans).toEqual([])
-    // Unknown bucket keeps the raw status string as-is (not translated, not guessed).
-    expect(byId.get('unknown')!.plans).toEqual([{ id: 'plan-e', status: 'custom-stalled' }])
+    // The merged column keeps the raw status string as-is (not translated,
+    // not guessed) — input order preserved (Blocked then the catch-all row).
+    expect(byId.get('blocked-unknown')!.plans).toEqual([
+      { id: 'plan-d', status: 'Blocked' },
+      { id: 'plan-e', status: 'custom-stalled' },
+    ])
   })
 
-  it('counts every column (full, pre-cap) and totals plans including unknown', () => {
+  it('counts every column (full, pre-cap) and totals plans including the merged column', () => {
     const byId = new Map(view.tasks.columns.map((c) => [c.id, c]))
     expect(byId.get('Todo')!.count).toBe(1)
     expect(byId.get('InProgress')!.count).toBe(1)
     expect(byId.get('Done')!.count).toBe(1)
-    expect(byId.get('Blocked')!.count).toBe(1)
-    expect(byId.get('unknown')!.count).toBe(1)
     expect(byId.get('InReview')!.count).toBe(0)
+    // Merged count = blocked (1) + unknown (1).
+    expect(byId.get('blocked-unknown')!.count).toBe(2)
     expect(view.tasks.total).toBe(5)
   })
 
-  it('no Done overflow on the full fixture → capped null, truncated false', () => {
-    const done = view.tasks.columns.find((c) => c.id === 'Done')!
-    expect(done.capped).toBeNull()
+  it('no overflow on the full fixture → capped null, truncated false', () => {
+    for (const column of view.tasks.columns) expect(column.capped).toBeNull()
     expect(view.tasks.truncated).toBe(false)
   })
 
-  it('state null → 6-column skeleton (count 0) + degraded.state (+ plans)', () => {
+  it('state null → 5-column skeleton (count 0) + degraded.state (+ plans)', () => {
     const v = projectGraph(noHarnessSource)
-    expect(v.tasks.columns).toHaveLength(6)
+    expect(v.tasks.columns).toHaveLength(5)
     expect(v.tasks.columns.every((c) => c.plans.length === 0 && c.count === 0 && c.capped === null)).toBe(true)
     expect(v.tasks.total).toBe(0)
     expect(v.tasks.truncated).toBe(false)
@@ -505,7 +510,7 @@ describe('projectGraph — tasks zone (spec §3)', () => {
     expect(v.degraded.state).toBe(false)
   })
 
-  it('non-string / missing plan status → unknown bucket, no fabricated status value', () => {
+  it('non-string / missing plan status → merged column, no fabricated status value', () => {
     const v = projectGraph({
       ...fullSource,
       state: {
@@ -517,9 +522,9 @@ describe('projectGraph — tasks zone (spec §3)', () => {
         ],
       } as unknown as MstarEngineStatusSource['state'],
     })
-    const unknown = v.tasks.columns.find((c) => c.id === 'unknown')!
+    const merged = v.tasks.columns.find((c) => c.id === 'blocked-unknown')!
     // Raw non-string statuses degrade to an empty display string (never a guessed label).
-    expect(unknown.plans).toEqual([
+    expect(merged.plans).toEqual([
       { id: 'plan-x', status: '' },
       { id: 'plan-y', status: '' },
     ])
@@ -527,14 +532,14 @@ describe('projectGraph — tasks zone (spec §3)', () => {
   })
 })
 
-describe('projectGraph — Done column sort + cap (spec §3, shared plan-sort key)', () => {
+describe('projectGraph — Done column sort + per-column cap (spec §3, shared plan-sort key)', () => {
   /** A source whose Done column carries the given rows (id → doneAt). */
   function doneSource(rows: { id: string; doneAt: string | null }[]): MstarEngineStatusSource {
     return {
       ...fullSource,
       state: {
         ...fullSource.state!,
-        plans: rows.map((r) => ({ id: r.id, status: 'Done', doneAt: r.doneAt })),
+        plans: rows.map((r) => ({ id: r.id, status: 'Done', doneAt: r.doneAt, iterationRefs: [] })),
       },
     }
   }
@@ -564,17 +569,20 @@ describe('projectGraph — Done column sort + cap (spec §3, shared plan-sort ke
     expect(got).toEqual(['plan-a', 'plan-b', '20260810-x', '20260809-y', 'plan-z'])
   })
 
-  it('cap 5: 7 Done plans → display top 5 sorted, count 7, capped 5, truncated true, total 7', () => {
+  it('cap 5: 7 Done plans → ALL 7 kept (no slice), count 7, capped 5, truncated true, total 7', () => {
     const rows = Array.from({ length: 7 }, (_, i) => ({ id: `202608${String(i + 1).padStart(2, '0')}-p${i}`, doneAt: null }))
     const v = projectGraph(doneSource(rows))
     const done = v.tasks.columns.find((c) => c.id === 'Done')!
-    expect(done.plans).toHaveLength(PLAN_CAP)
+    // Task 1: the projection NEVER drops rows — `plans` = the FULL sorted
+    // column; the render truncates to PLAN_CAP. `capped` is the render's
+    // overflow signal.
+    expect(done.plans).toHaveLength(7)
     expect(done.count).toBe(7)
     expect(done.capped).toBe(PLAN_CAP)
     expect(v.tasks.truncated).toBe(true)
     expect(v.tasks.total).toBe(7)
-    // Display = the shared sort order's top PLAN_CAP (id-date DESC here).
-    expect(done.plans.map((p) => p.id)).toEqual(sortPlans(rows).slice(0, PLAN_CAP).map((r) => r.id))
+    // Full sort order preserved (id-date DESC here), no silent slice.
+    expect(done.plans.map((p) => p.id)).toEqual(sortPlans(rows).map((r) => r.id))
   })
 
   it('cap boundary: exactly 5 Done plans → all shown, capped null, truncated false', () => {
@@ -587,15 +595,15 @@ describe('projectGraph — Done column sort + cap (spec §3, shared plan-sort ke
     expect(v.tasks.truncated).toBe(false)
   })
 
-  it('non-Done columns are NOT capped and keep input order (only Done sorts)', () => {
+  it('non-Done columns keep input order (only Done sorts); ≤PLAN_CAP → capped null', () => {
     const v = projectGraph({
       ...fullSource,
       state: {
         ...fullSource.state!,
         plans: [
-          { id: 'todo-2', status: 'Todo', doneAt: null },
-          { id: 'todo-1', status: 'Todo', doneAt: null },
-          { id: 'todo-3', status: 'Todo', doneAt: '2026-08-08' },
+          { id: 'todo-2', status: 'Todo', doneAt: null, iterationRefs: [] },
+          { id: 'todo-1', status: 'Todo', doneAt: null, iterationRefs: [] },
+          { id: 'todo-3', status: 'Todo', doneAt: '2026-08-08', iterationRefs: [] },
         ],
       },
     })
@@ -604,6 +612,34 @@ describe('projectGraph — Done column sort + cap (spec §3, shared plan-sort ke
     expect(todo.capped).toBeNull()
     expect(todo.count).toBe(3)
     expect(v.tasks.truncated).toBe(false)
+  })
+
+  it('a non-Done column overflow (7 blocked/unknown plans) sets capped + truncated true, all rows kept in input order', () => {
+    const v = projectGraph({
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: 'blocked-1', status: 'Blocked', doneAt: null, iterationRefs: [] },
+          { id: 'blocked-2', status: 'Blocked', doneAt: null, iterationRefs: [] },
+          { id: 'blocked-3', status: 'Blocked', doneAt: null, iterationRefs: [] },
+          { id: 'unknown-1', status: 'Paused', doneAt: null, iterationRefs: [] },
+          { id: 'unknown-2', status: 'Stalled', doneAt: null, iterationRefs: [] },
+          { id: 'unknown-3', status: 'Weird', doneAt: null, iterationRefs: [] },
+          { id: 'unknown-4', status: 'Other', doneAt: null, iterationRefs: [] },
+        ],
+      },
+    })
+    const merged = v.tasks.columns.find((c) => c.id === 'blocked-unknown')!
+    // Merged column keeps every row in INPUT order (Blocked first, then the
+    // catch-all statuses), NOT sorted, NOT sliced.
+    expect(merged.plans.map((p) => p.id)).toEqual([
+      'blocked-1', 'blocked-2', 'blocked-3', 'unknown-1', 'unknown-2', 'unknown-3', 'unknown-4',
+    ])
+    expect(merged.count).toBe(7)
+    expect(merged.capped).toBe(PLAN_CAP)
+    expect(v.tasks.truncated).toBe(true)
+    expect(v.tasks.total).toBe(7)
   })
 })
 
@@ -845,12 +881,27 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('denied')
   })
 
-  it('latest-dispatch verdict advisory → advisory (verdict priority, settle ignored)', () => {
+  it('advisory verdict is NOT terminal — with a paired ok settle it projects settled (plan 20260813-panel-quick-fixes Task 2)', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
+  })
+
+  it('advisory verdict with a paired error settle → error (the settle decides, not the advisory verdict)', () => {
     const view = projectGraph(flowSource([
       settleRow({ ts: 8, agent: 'a1', outcome: 'error', role: 'fullstack-dev' }),
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
     ]))
-    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('advisory')
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('error')
+  })
+
+  it('advisory verdict without a settle → running (not a terminal advisory state)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'advisory' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
   })
 
   it('paired settle ok → settled (identity-paired: agent + role + plan/task)', () => {
@@ -910,6 +961,215 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Agents zone current-iteration filter (plan 20260813-panel-quick-fixes Task
+ * 2): entities/actual edges derive ONLY from the current iteration's dispatch
+ * rows — a cross-iteration plan's events produce no entity/edge, the roster
+ * still renders all KNOWN_AGENTS (cross-iteration roles fall back to idle);
+ * `projectFlowEvents` (view.events) stays unfiltered.
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — agents current-iteration filter (plan 20260813-panel-quick-fixes T2)', () => {
+  /** A source with the given plans + events, keeping `fullSource`'s ACTIVE
+   * iteration (iterationId 'iter-20260810-panel-zones' → the compass branch). */
+  function iterSource(plans: readonly unknown[], events: readonly unknown[]): MstarEngineStatusSource {
+    return {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: plans as never,
+        agentFlow: { events, summary: [] } as unknown as AgentFlowView,
+      },
+    }
+  }
+
+  it('a cross-iteration plan\'s dispatch produces no entity/edge; the current plan\'s does (roster never hidden)', () => {
+    const source = iterSource(
+      [
+        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] },
+        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-20260801-old'] },
+      ],
+      [
+        dispatchRow({ ts: 5, role: 'fullstack-dev', agent: 'a1', planId: 'plan-current' }),
+        dispatchRow({ ts: 4, role: 'qc-specialist', agent: 'a2', planId: 'plan-old' }),
+      ],
+    )
+    const view = projectGraph(source)
+    const byKey = new Map(view.agents.entities.map((e) => [e.key, e]))
+    // The current-plan dispatch lights fullstack-dev; the cross-iteration
+    // qc-specialist dispatch is filtered → its card falls back to idle.
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+    expect(byKey.get('qc-specialist')!.idle).toBe(true)
+    expect(byKey.get('qc-specialist')!.status).toBe('idle')
+    // No actual edge (the cross-iteration plan contributes nothing).
+    expect(view.agents.edges.filter((e) => e.kind === 'actual')).toEqual([])
+    // The full roster is never hidden.
+    expect(view.agents.entities).toHaveLength(KNOWN_AGENTS.length)
+    // The event-log tab is UNFILTERED — both dispatches still appear.
+    expect(view.events).toHaveLength(2)
+  })
+
+  it('cross-iteration events form no actual edge even when the same roles are current', () => {
+    const source = iterSource(
+      [
+        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] },
+        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-20260801-old'] },
+      ],
+      [
+        dispatchRow({ ts: 4, role: 'fullstack-dev', agent: 'a1', planId: 'plan-current' }),
+        dispatchRow({ ts: 3, role: 'frontend-dev', agent: 'a2', planId: 'plan-current' }),
+        dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a3', planId: 'plan-old' }),
+        dispatchRow({ ts: 1, role: 'frontend-dev', agent: 'a4', planId: 'plan-old' }),
+      ],
+    )
+    const actual = projectGraph(source).agents.edges.filter((e) => e.kind === 'actual')
+    // Only the current-plan adjacent pair (frontend-dev → fullstack-dev, ts 3→4)
+    // survives; the cross-iteration pair is gone.
+    expect(actual.map((e) => [e.source, e.target])).toEqual([['frontend-dev', 'fullstack-dev']])
+  })
+
+  it('no compass → the most-recent iteration (max 8-digit id date prefix) + empty-refs standalone plans are current', () => {
+    const source = {
+      ...fullSource,
+      iteration: undefined,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: '20260813-standalone', status: 'InProgress', doneAt: null, iterationRefs: [] },
+          { id: '20260812-recent', status: 'Done', doneAt: '2026-08-12', iterationRefs: ['iter-20260812'] },
+          { id: '20260810-old', status: 'Done', doneAt: '2026-08-10', iterationRefs: ['iter-20260810'] },
+        ],
+        agentFlow: {
+          events: [
+            dispatchRow({ ts: 3, role: 'frontend-dev', agent: 'a1', planId: '20260813-standalone' }),
+            dispatchRow({ ts: 2, role: 'fullstack-dev', agent: 'a2', planId: '20260812-recent' }),
+            dispatchRow({ ts: 1, role: 'qc-specialist', agent: 'a3', planId: '20260810-old' }),
+          ],
+          summary: [],
+        } as unknown as AgentFlowView,
+      },
+    } as unknown as MstarEngineStatusSource
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    // most-recent iteration = iter-20260812 (plan id date prefix 20260812 is the
+    // max) → fullstack-dev (20260812-recent) is lit; the older iter-20260810 is
+    // cross → qc-specialist idle; the empty-refs standalone plan is never
+    // hidden → frontend-dev lit.
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+    expect(byKey.get('frontend-dev')!.idle).toBe(false)
+    expect(byKey.get('qc-specialist')!.idle).toBe(true)
+  })
+
+  it('tie-break: two plans share the SAME 8-digit id date prefix → the max-doneAt iteration wins (Clarify口径)', () => {
+    const source = {
+      ...fullSource,
+      iteration: undefined,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: '20260812-old', status: 'Done', doneAt: '2026-08-12', iterationRefs: ['iter-20260812-old'] },
+          { id: '20260812-new', status: 'Done', doneAt: '2026-08-14', iterationRefs: ['iter-20260812-new'] },
+        ],
+        agentFlow: {
+          events: [
+            dispatchRow({ ts: 2, role: 'qc-specialist', agent: 'a1', planId: '20260812-new' }),
+            dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a2', planId: '20260812-old' }),
+          ],
+          summary: [],
+        } as unknown as AgentFlowView,
+      },
+    } as unknown as MstarEngineStatusSource
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    // Same 8-digit date prefix (20260812): the more-recent doneAt (2026-08-14)
+    // names the current iteration → qc-specialist (new) lit; fullstack-dev (old)
+    // is cross-iteration → idle.
+    expect(byKey.get('qc-specialist')!.idle).toBe(false)
+    expect(byKey.get('fullstack-dev')!.idle).toBe(true)
+  })
+
+  it('compass active but no plan references it → empty set → roster idle, no lit entities (graceful, never throws)', () => {
+    const source = iterSource(
+      [{ id: 'plan-a', status: 'InProgress', doneAt: null, iterationRefs: ['iter-some-other'] }],
+      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-a' })],
+    )
+    const agents = projectGraph(source).agents
+    // plan-a references a DIFFERENT iteration → the current set is empty → the
+    // dispatch is cross-iteration noise → every known agent is idle.
+    expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
+    expect(agents.executing).toBe(0)
+    expect(agents.edges.filter((e) => e.kind === 'actual')).toEqual([])
+  })
+
+  // QC F-3 — the compass-active kept-branches of the decision tree: a plan
+  // with EMPTY iterationRefs carries no cross-iteration signal, so its
+  // dispatch survives the filter even while the compass names a different id.
+  it('compass active keeps a plan with EMPTY iterationRefs (standalone plan never hidden)', () => {
+    const source = iterSource(
+      [{ id: 'plan-standalone', status: 'InProgress', doneAt: null, iterationRefs: [] }],
+      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-standalone' })],
+    )
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    // The compass is active (fullSource iterationId), but plan-standalone has
+    // EMPTY refs → nothing provably cross-iteration → the dispatch is kept.
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+    expect(byKey.get('fullstack-dev')!.status).toBe('running')
+  })
+
+  // QC F-3 — the plan-less branch: `planId: null` is never cross-iteration.
+  it('compass active keeps a plan-less dispatch (planId null → never cross-iteration)', () => {
+    const source = iterSource(
+      [{ id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] }],
+      // `dispatchRow` leaves planId null by default — no plan identity at all.
+      [dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1' })],
+    )
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+  })
+
+  // QC F-3 — settle pairing is exact-identity (agent, role, planId, taskId):
+  // a settle from a CROSS-ITERATION plan never settles a same-role current
+  // dispatch, even with the same agent (the planId leg differs).
+  it("a settle from a cross-iteration plan stays UNPAIRED (does not settle the same-role current dispatch)", () => {
+    const source = iterSource(
+      [
+        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] },
+        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-20260801-old'] },
+      ],
+      [
+        dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-current' }),
+        settleRow({ ts: 4, role: 'fullstack-dev', agent: 'a1', planId: 'plan-old', outcome: 'ok' }),
+      ],
+    )
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    expect(byKey.get('fullstack-dev')!.idle).toBe(false)
+    // The current dispatch has NO paired settle → honest 'running', not a
+    // fabricated completion from the cross-iteration settle.
+    expect(byKey.get('fullstack-dev')!.status).toBe('running')
+  })
+
+  // QC F-3 — aggregation runs on the FILTERED rows: a NEWER cross-iteration
+  // dispatch cannot overwrite an already-lit role's ts/verdict/identity.
+  it("a newer cross-iteration dispatch does not overwrite an already-lit role's ts/verdict", () => {
+    const source = iterSource(
+      [
+        { id: 'plan-current', status: 'InProgress', doneAt: null, iterationRefs: ['iter-20260810-panel-zones'] },
+        { id: 'plan-old', status: 'Done', doneAt: '2026-08-08', iterationRefs: ['iter-20260801-old'] },
+      ],
+      [
+        // The cross-iteration dispatch is NEWER (ts 5) — filtered out BEFORE
+        // aggregation, so the entity keeps the current dispatch's identity.
+        dispatchRow({ ts: 5, role: 'fullstack-dev', agent: 'a-old', planId: 'plan-old' }),
+        dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a-current', planId: 'plan-current' }),
+      ],
+    )
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    const entity = byKey.get('fullstack-dev')!
+    expect(entity.idle).toBe(false)
+    expect(entity.ts).toBe(3) // the cross-iteration ts 5 did NOT overwrite
+    expect(entity.agent).toBe('a-current')
+    expect(entity.status).toBe('running') // verdict falls through → no pair → running
   })
 })
 
@@ -1669,7 +1929,7 @@ describe('projectGraph — agents activePlanId / activePlanCount (plan 20260812-
     // Empty ledger (0 events) + no InProgress → null.
     const empty = projectGraph({
       ...flowSource([]),
-      state: { ...flowSource([]).state!, plans: [{ id: 'plan-d', status: 'Todo', doneAt: null }] },
+      state: { ...flowSource([]).state!, plans: [{ id: 'plan-d', status: 'Todo', doneAt: null, iterationRefs: [] }] },
     })
     expect(empty.agents.empty).toBe(true)
     expect(empty.agents.activePlanId).toBeNull()
@@ -2017,7 +2277,7 @@ describe('projectGraph — totality (spec §8)', () => {
     expect(v.iteration.steps.every((s) => s.state === 'idle')).toBe(true)
     expect(v.iteration.currentStep).toBeNull()
     expect(v.iteration.branches).toBeNull()
-    expect(v.tasks.columns).toHaveLength(6)
+    expect(v.tasks.columns).toHaveLength(5)
     expect(v.tasks.columns.every((c) => c.count === 0)).toBe(true)
     expect(v.tasks.total).toBe(0)
     expect(v.tasks.truncated).toBe(false)
@@ -2094,7 +2354,7 @@ describe('projectGraph — ZoneView shape (spec §3)', () => {
     const phaseIds: PhaseId[] = view.iteration.steps.map((s) => s.id)
     const stateIds: PlanStateId[] = view.tasks.columns.map((c) => c.id)
     expect(phaseIds).toContain('merge-ready')
-    expect(stateIds).toContain('unknown')
+    expect(stateIds).toContain('blocked-unknown')
     expect(view.tasks.columns[0]!.capped).toBeNull()
     expect(view.iteration.verdict).toBe('pass')
   })

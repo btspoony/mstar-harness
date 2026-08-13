@@ -26,8 +26,10 @@ export const PHASE_IDS = [
 ] as const
 export type PhaseId = (typeof PHASE_IDS)[number]
 
-/** Plan state machine bucket ids (spec §2.4): 5 known states + the `unknown` catch-all. */
-export const PLAN_STATE_IDS = ['Todo', 'InProgress', 'InReview', 'Done', 'Blocked', 'unknown'] as const
+/** Plan state machine bucket ids (spec §2.4): 4 known states + the merged
+ * `blocked-unknown` catch-all (plan 20260813-panel-quick-fixes Task 1 — the
+ * `Blocked` state and the former `unknown` catch-all fold into ONE column). */
+export const PLAN_STATE_IDS = ['Todo', 'InProgress', 'InReview', 'Done', 'blocked-unknown'] as const
 export type PlanStateId = (typeof PLAN_STATE_IDS)[number]
 
 export interface PhaseEdge {
@@ -45,13 +47,15 @@ export const PHASE_EDGES: PhaseEdge[] = [
   { source: 'merge-ready', target: 'iteration-start', kind: 'loop' },
 ]
 
-/** Plan state machine edges (spec §2.4): `Done` and `unknown` are terminal (no out-edges). */
+/** Plan state machine edges (spec §2.4): `Done` is terminal (no out-edges);
+ * `blocked-unknown` keeps the InProgress↔Blocked recovery back-edge (plan
+ * 20260813-panel-quick-fixes Task 1 — the merged column docks the Blocked ⇄). */
 export const PLAN_STATE_EDGES: { source: PlanStateId; target: PlanStateId }[] = [
   { source: 'Todo', target: 'InProgress' },
   { source: 'InProgress', target: 'InReview' },
-  { source: 'InProgress', target: 'Blocked' },
+  { source: 'InProgress', target: 'blocked-unknown' },
   { source: 'InReview', target: 'Done' },
-  { source: 'Blocked', target: 'InProgress' },
+  { source: 'blocked-unknown', target: 'InProgress' },
 ]
 
 /** `gate.transition` → phase id (spec §2.3): the engine emits only these three. */

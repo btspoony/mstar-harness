@@ -341,6 +341,9 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
     const doc = readJson(statusPath) as StatusDoc
     const str = (value: unknown): string | null =>
       typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+    /** `plans[].metadata.iteration_refs` → non-empty string[]; missing/non-array → [] (lossless). */
+    const iterationRefsOf = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : []
     const plans: HarnessPlanView[] = []
     const leases: HarnessLeaseView[] = []
     if (Array.isArray(doc.plans)) {
@@ -348,12 +351,17 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
         if (row === undefined) continue
         const id = typeof row.plan_id === 'string' ? row.plan_id : typeof row.id === 'string' ? row.id : undefined
         if (id === undefined) continue
+        const metadata = asRecord(row.metadata)
         plans.push({
           id,
           status: typeof row.status === 'string' ? row.status : '',
           // done_at passthrough: trimmed string; missing/empty → null (an
           // ALWAYS-present nullable scalar — lossless JSON, never omitted).
           doneAt: str(row.done_at),
+          // Iteration memberships (plan 20260813-panel-quick-fixes Task 2):
+          // `metadata.iteration_refs` array of iteration ids; missing/non-array
+          // → [] (an ALWAYS-present array — lossless JSON, never omitted).
+          iterationRefs: iterationRefsOf(metadata?.iteration_refs),
         })
         const lease = asRecord(row.execution_lease)
         if (lease !== undefined && typeof lease.holder === 'string') {

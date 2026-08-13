@@ -13,8 +13,9 @@
  * data (one implementation, two mounts; the anchor family `data-iteration-*`
  * is unchanged).
  *
- * Task area (spec §3/D2): the standard 6-column kanban (Todo / InProgress /
- * InReview / Done / Blocked / unknown) via the REUSED TaskBoard
+ * Task area (spec §3/D2): the standard 5-column kanban (Todo / InProgress /
+ * InReview / Done / blocked-unknown — Blocked + unknown merged) via the
+ * REUSED TaskBoard
  * (`view.tasks`) — the Done overflow stays the projection's PLAN_CAP
  * handling (TaskBoard only surfaces the `+N more` hint). The page fills the
  * content region as a flex column: the head is flex:none (fixed), the tasks
@@ -24,7 +25,7 @@
  *
  * Degradation (spec §8): the projection never throws — an inactive/missing
  * iteration renders the collapsed muted summary; state/plans missing render
- * the muted 6-column kanban skeleton (TaskBoard) — never an orange warn box.
+ * the muted 5-column kanban skeleton (TaskBoard) — never an orange warn box.
  */
 
 import * as React from 'react'

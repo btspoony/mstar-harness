@@ -318,6 +318,47 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
   })
 })
 
+describe('mstar-engine-status catalog — plan iterationRefs (plan 20260813-panel-quick-fixes Task 2)', () => {
+  /** Boot with a status.json whose plans carry (or omit) `metadata.iteration_refs`, then return the state section. */
+  async function stateWithPlans(plans: unknown[]): Promise<NonNullable<MstarEngineStatusSource['state']>> {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-iterationrefs-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-13', plans, residual_findings: {}, metadata: {} }),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { source } = catalogRowOf(decision)
+    const state = source.state
+    if (state === null) throw new Error('expected a non-null state section')
+    return state
+  }
+
+  it('projects each plan\'s metadata.iteration_refs into `iterationRefs` (string[]; missing → [])', async () => {
+    const state = await stateWithPlans([
+      { id: 'plan-a', status: 'Done', metadata: { iteration_refs: ['iter-20260812', 'iter-20260813'] } },
+      { id: 'plan-b', status: 'Done', metadata: { iteration_refs: [] } },
+      { id: 'plan-c', status: 'Done', metadata: {} },
+      { id: 'plan-d', status: 'Done' },
+    ])
+    expect(state.plans.map((p) => p.iterationRefs)).toEqual([
+      ['iter-20260812', 'iter-20260813'],
+      [],
+      [],
+      [],
+    ])
+  })
+
+  it('a non-array / partially-garbage iteration_refs → [] (or only the string members) — never omitted', async () => {
+    const state = await stateWithPlans([
+      { id: 'plan-a', status: 'Done', metadata: { iteration_refs: 'iter-x' } },
+      { id: 'plan-b', status: 'Done', metadata: { iteration_refs: [42, 'iter-y', null, ''] } },
+    ])
+    expect(state.plans.map((p) => p.iterationRefs)).toEqual([[], ['iter-y']])
+  })
+})
+
 describe('catalog TTL invalidation — ledger change refreshes within the TTL (plan 20260811-panel-f4-timeliness Task 2)', () => {
   /** A minimal Assignment for the ledger record (role derives to `fullstack-dev`). */
   const ASSIGNMENT = `## Assignment
