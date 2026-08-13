@@ -1,15 +1,17 @@
 /**
- * Registry peer contract (rc.3 from npm, no link farm): the private
+ * Registry peer contract (rc.6 from npm, no link farm): the private
  * `@deepseek-ai/*` packages are peerDependencies ONLY (never
  * devDependencies / dependencies), resolved from the npm registry at dev
- * time via bun's default peer auto-install + the monorepo-root `.npmrc`
- * auth token — no local link farm. Data-driven over the ACTUAL package.json,
- * so the peer set can grow without this test silently going stale.
+ * time via bun's default peer auto-install — no local link farm, no
+ * scoped-registry `.npmrc` (the 0c884d47 npmrc cleanup dropped the root
+ * auth token: `@deepseek-ai` is public on registry.npmjs.org). Data-driven
+ * over the ACTUAL package.json, so the peer set can grow without this test
+ * silently going stale.
  *
  * Bun installs peer dependencies by default (unlike pnpm, which needs the
  * `autoInstallPeers: true` workspace flag), so the registry switch is wired
- * solely by the monorepo-root `.npmrc` (`@deepseek-ai` registry + the
- * `${NPM_TOKEN}` auth token) and the pinned `^0.1.0-rc.3` peer ranges.
+ * solely by the pinned `^0.1.0-rc.6` peer ranges resolving against the
+ * default registry.
  */
 import { describe, expect, it } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
@@ -34,7 +36,7 @@ const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
 const deepseekKeys = (field: Record<string, string> | undefined): string[] =>
   Object.keys(field ?? {}).filter((name) => name.startsWith('@deepseek-ai/')).sort()
 
-describe('registry peer contract (rc.3 from npm, no link farm)', () => {
+describe('registry peer contract (rc.6 from npm, no link farm)', () => {
   it('every @deepseek-ai/* entry is a peerDependency and appears in no other dependency field', () => {
     const peers = deepseekKeys(pkg.peerDependencies)
     expect(peers.length).toBeGreaterThan(0)
@@ -45,10 +47,10 @@ describe('registry peer contract (rc.3 from npm, no link farm)', () => {
     }
   })
 
-  it('every @deepseek-ai/dsh-* peer is pinned to ^0.1.0-rc.3', () => {
+  it('every @deepseek-ai/dsh-* peer is pinned to ^0.1.0-rc.6', () => {
     for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
       if (name.startsWith('@deepseek-ai/dsh-')) {
-        expect(range, name).toBe('^0.1.0-rc.3')
+        expect(range, name).toBe('^0.1.0-rc.6')
       }
     }
   })
@@ -62,10 +64,21 @@ describe('registry peer contract (rc.3 from npm, no link farm)', () => {
     }
   })
 
-  it('registry resolution is wired at the monorepo root (no link farm)', () => {
-    const npmrc = readFileSync(join(repoRoot, '.npmrc'), 'utf8')
-    expect(npmrc).toMatch(/@deepseek-ai:registry=https:\/\/registry\.npmjs\.org\//)
-    expect(npmrc).toMatch(/_authToken=\$\{NPM_TOKEN\}/)
+  it('registry resolution needs no root .npmrc (public npm registry, no link farm)', () => {
+    // The 0c884d47 npmrc cleanup removed the root `.npmrc` auth token —
+    // `@deepseek-ai` is public on registry.npmjs.org and bun auto-installs
+    // peers from the default registry. No scoped-registry mapping may come
+    // back (that was the link-farm era wiring).
+    const npmrcPath = join(repoRoot, '.npmrc')
+    if (existsSync(npmrcPath)) {
+      const npmrc = readFileSync(npmrcPath, 'utf8')
+      expect(npmrc).not.toMatch(/@deepseek-ai\s*:/)
+    }
+    // Behavioral half: the dev-time seam must resolve to the pinned line.
+    const llm = JSON.parse(
+      readFileSync(require.resolve('@deepseek-ai/dsh-llm/package.json'), 'utf8'),
+    ) as { version: string }
+    expect(llm.version).toBe('0.1.0-rc.6')
   })
 
   it('prepare is build-only; dsh:link scripts and the link-farm script are gone', () => {

@@ -175,7 +175,7 @@ bun run build
 
 `bun run test` 会先构建客户端 bundle（`pretest` 钩子执行 `build-client`——manifest-contract 套件断言 `dist/client.js` 存在）；fresh checkout 下直接 `bun test` 会以 `bun run build` 提示失败而非裸断言。
 
-开发期 seam 表面（类型、事件形态、运行时）是来自 npm registry（受限 scope）的**真实** `@deepseek-ai/dsh-*` 包，通过 monorepo 根 `.npmrc` 的 `${NPM_TOKEN}` 认证 token 安装（bun 默认自动安装 peer）。
+开发期 seam 表面（类型、事件形态、运行时）是来自公开 npm registry（`registry.npmjs.org`，无需根 `.npmrc`）的**真实** `@deepseek-ai/dsh-*` 包（bun 默认自动安装 peer）。
 
 ## Model Experience
 
@@ -197,7 +197,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 
 ## Known Limitations and Deferred Work
 
-- **开发期 seam 从 npm registry 解析** —— `@deepseek-ai/dsh-*` 各 seam 仅为 peerDependencies（运行时由宿主提供）；开发期 typecheck/测试/构建从 npm registry（受限 scope）解析，通过 monorepo 根 `.npmrc` 的 `${NPM_TOKEN}` 认证 token（bun 默认自动安装 peer）。**全部运行时 seam 导入在构建时外部化**（`--external @deepseek-ai/cordis / @deepseek-ai/dsh-skill-filesystem / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm`——发布的 `dist/` 导入它们而非内联占位代码）；闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证。本包套件直接运行来自 npm registry 的**真实** seam 包——不再有提交的 `peer-stubs/` 占位、不再有本地 link farm。
+- **开发期 seam 从 npm registry 解析** —— `@deepseek-ai/dsh-*` 各 seam 仅为 peerDependencies（运行时由宿主提供）；开发期 typecheck/测试/构建从公开 npm registry（`registry.npmjs.org`，无需根 `.npmrc`）解析（bun 默认自动安装 peer）。**全部运行时 seam 导入在构建时外部化**（`--external @deepseek-ai/cordis / @deepseek-ai/dsh-skill-filesystem / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm`——发布的 `dist/` 导入它们而非内联占位代码）；闸门通过真实注册表/fs 工具执行的同一 `ctx.waterfall` 派发来验证。本包套件直接运行来自 npm registry 的**真实** seam 包——不再有提交的 `peer-stubs/` 占位、不再有本地 link farm。
 - **反递归绑定为 Config 声明** —— dsh 在工具执行上下文上不暴露每 agent 角色，故 `dispatchBinding` 声明单一部署级角色；`Execute as` 不同的 Assignment 无法被识别为自我递归，多角色派发方需要按实例拆分插件。
 - **租约闸门有意与 opencode 分叉** —— opencode 的 `beforeDispatch` 不运行租约检查；dsh 租约闸门是新增的（`lease.dispatch.*` 码），且仅对可写 SDD/InProgress 派发触发，故对齐覆盖字段集而非租约面。
 - **已采纳 engine 共享组合** —— 派发闸门核心即 engine 的单一 `composeDispatchGate`（与 opencode/omp/CLI 对齐，字段/分支/反递归违规码按构造即相同），compass frontmatter 解析器即 engine 的共享 `parseCompassFrontmatter`（本地 dsh 镜像与 CLI 副本均已删除——不再有可漂移的分叉）。两者都运行在 dsh 头区域切片上；租约 + worktree L1/L2 检查仍为叠加上去的 dsh 侧扩展。

@@ -402,7 +402,7 @@ bun run build
 a direct `bun test` on a fresh checkout fails with a `bun run build` hint
 instead of a bare assertion.
 
-The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepseek-ai/dsh-*` packages, installed from the npm registry (restricted scope) via the `${NPM_TOKEN}` auth token in the monorepo-root `.npmrc` (bun auto-installs peers by default).
+The dev-time seam surfaces (types, event shapes, runtimes) are the REAL `@deepseek-ai/dsh-*` packages, installed from the public npm registry (`registry.npmjs.org`, no root `.npmrc` needed — bun auto-installs peers by default).
 
 ## Model Experience
 
@@ -424,7 +424,7 @@ The catalog row is appended at the END of the composed step messages, after dele
 
 ## Known Limitations and Deferred Work
 
-- **Dev-time seams resolve from the npm registry** — the `@deepseek-ai/dsh-*` seams are peerDependencies only (the host provides them at runtime); dev-time typecheck/tests/build resolve them from the npm registry (restricted scope) via the `${NPM_TOKEN}` auth token in the monorepo-root `.npmrc` (bun auto-installs peers by default). **All runtime seam imports are externalized at build time** (`--external @deepseek-ai/cordis / @deepseek-ai/dsh-skill-filesystem / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. The suite runs against the REAL seam packages from the npm registry — no committed `peer-stubs/` stand-ins, no local link farm.
+- **Dev-time seams resolve from the npm registry** — the `@deepseek-ai/dsh-*` seams are peerDependencies only (the host provides them at runtime); dev-time typecheck/tests/build resolve them from the public npm registry (`registry.npmjs.org`, no root `.npmrc` needed — bun auto-installs peers by default). **All runtime seam imports are externalized at build time** (`--external @deepseek-ai/cordis / @deepseek-ai/dsh-skill-filesystem / @deepseek-ai/dsh-tools / @deepseek-ai/dsh-llm` — the published `dist/` imports them instead of inlining); the gates are exercised through the exact `ctx.waterfall` dispatch the real registry/fs tools perform. The suite runs against the REAL seam packages from the npm registry — no committed `peer-stubs/` stand-ins, no local link farm.
 - **Anti-recursion binding is Config-declared** — dsh exposes no per-agent role on the tool-execution context, so `dispatchBinding` declares one deployment-wide role; an Assignment with a different `Execute as` cannot be caught as self-recursion, and multi-role dispatchers need per-instance plugins.
 - **Lease gate diverges from opencode by design** — opencode's `beforeDispatch` runs no lease checks; the dsh lease gate is additive (`lease.dispatch.*` codes) and fires only for writable SDD/InProgress dispatches, so parity covers the field set, not the lease surface.
 - **Shared engine composition adopted** — the dispatch gate core is the engine's single `composeDispatchGate` (opencode/omp/CLI parity, so field/branch/anti-recursion violation codes are identical by construction), and the compass frontmatter parser is the engine's shared `parseCompassFrontmatter` (no local fork — nothing left to drift). Both run over the dsh header-region slice; the lease + worktree L1/L2 checks stay dsh-side additions on top.
