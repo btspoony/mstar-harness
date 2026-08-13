@@ -175,8 +175,8 @@ const fullSource: MstarEngineStatusSource = {
   },
   state: {
     plans: [
-      { id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null },
-      { id: '20260808-dsh-package-core', status: 'Done', doneAt: '2026-08-08' },
+      { id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null, iterationRefs: [] },
+      { id: '20260808-dsh-package-core', status: 'Done', doneAt: '2026-08-08', iterationRefs: [] },
     ],
     residuals: [
       { severity: 'high', count: 2 },
@@ -226,7 +226,7 @@ const noGateSource: MstarEngineStatusSource = {
   harnessDir: '/proj/.mstar',
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: {
-    plans: [{ id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null }],
+    plans: [{ id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null, iterationRefs: [] }],
     residuals: [],
     residualFindings: null,
     iterationBaseBranch: null,
@@ -1093,13 +1093,13 @@ describe('workflow panel — T3 sidebar reorg: plan cap/sort, residual findings 
       state: {
         ...fullSource.state!,
         plans: [
-          { id: 'plan-1', status: 'Todo', doneAt: null },
-          { id: 'plan-2', status: 'InProgress', doneAt: null },
-          { id: 'plan-3', status: 'InProgress', doneAt: null },
-          { id: 'plan-4', status: 'InReview', doneAt: null },
-          { id: 'plan-5', status: 'InReview', doneAt: null },
-          { id: 'plan-6', status: 'Done', doneAt: '2026-08-08' },
-          { id: 'plan-7', status: 'Done', doneAt: '2026-08-09' },
+          { id: 'plan-1', status: 'Todo', doneAt: null, iterationRefs: [] },
+          { id: 'plan-2', status: 'InProgress', doneAt: null, iterationRefs: [] },
+          { id: 'plan-3', status: 'InProgress', doneAt: null, iterationRefs: [] },
+          { id: 'plan-4', status: 'InReview', doneAt: null, iterationRefs: [] },
+          { id: 'plan-5', status: 'InReview', doneAt: null, iterationRefs: [] },
+          { id: 'plan-6', status: 'Done', doneAt: '2026-08-08', iterationRefs: [] },
+          { id: 'plan-7', status: 'Done', doneAt: '2026-08-09', iterationRefs: [] },
         ],
       },
     })
@@ -1773,13 +1773,13 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
     state: {
       ...fullSource.state!,
       plans: [
-        { id: 'plan-todo-1', status: 'Todo', doneAt: null },
-        { id: 'plan-todo-2', status: 'Todo', doneAt: null },
-        { id: 'plan-ip-1', status: 'InProgress', doneAt: null },
-        { id: 'plan-ir-1', status: 'InReview', doneAt: null },
-        { id: 'plan-done-1', status: 'Done', doneAt: '2026-08-01' },
-        { id: 'plan-blocked-1', status: 'Blocked', doneAt: null },
-        { id: 'plan-weird-1', status: 'Paused', doneAt: null },
+        { id: 'plan-todo-1', status: 'Todo', doneAt: null, iterationRefs: [] },
+        { id: 'plan-todo-2', status: 'Todo', doneAt: null, iterationRefs: [] },
+        { id: 'plan-ip-1', status: 'InProgress', doneAt: null, iterationRefs: [] },
+        { id: 'plan-ir-1', status: 'InReview', doneAt: null, iterationRefs: [] },
+        { id: 'plan-done-1', status: 'Done', doneAt: '2026-08-01', iterationRefs: [] },
+        { id: 'plan-blocked-1', status: 'Blocked', doneAt: null, iterationRefs: [] },
+        { id: 'plan-weird-1', status: 'Paused', doneAt: null, iterationRefs: [] },
       ],
     },
   }
@@ -1853,13 +1853,13 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
       state: {
         ...fullSource.state!,
         plans: [
-          { id: '20260807-plan', status: 'Done', doneAt: '2026-08-07' },
-          { id: '20260806-plan', status: 'Done', doneAt: '2026-08-06' },
-          { id: '20260805-plan', status: 'Done', doneAt: '2026-08-05' },
-          { id: '20260804-plan', status: 'Done', doneAt: '2026-08-04' },
-          { id: '20260803-plan', status: 'Done', doneAt: '2026-08-03' },
-          { id: '20260802-plan', status: 'Done', doneAt: '2026-08-02' },
-          { id: '20260801-plan', status: 'Done', doneAt: '2026-08-01' },
+          { id: '20260807-plan', status: 'Done', doneAt: '2026-08-07', iterationRefs: [] },
+          { id: '20260806-plan', status: 'Done', doneAt: '2026-08-06', iterationRefs: [] },
+          { id: '20260805-plan', status: 'Done', doneAt: '2026-08-05', iterationRefs: [] },
+          { id: '20260804-plan', status: 'Done', doneAt: '2026-08-04', iterationRefs: [] },
+          { id: '20260803-plan', status: 'Done', doneAt: '2026-08-03', iterationRefs: [] },
+          { id: '20260802-plan', status: 'Done', doneAt: '2026-08-02', iterationRefs: [] },
+          { id: '20260801-plan', status: 'Done', doneAt: '2026-08-01', iterationRefs: [] },
         ],
       },
     }
@@ -1891,6 +1891,7 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
           id: `2026080${i + 1}-plan`,
           status: 'Done',
           doneAt: `2026-08-0${i + 1}`,
+          iterationRefs: [],
         })),
       },
     }
@@ -1906,9 +1907,9 @@ describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + 
       state: {
         ...fullSource.state!,
         plans: [
-          { id: 'plan-z', status: 'Todo', doneAt: null },
-          { id: 'plan-a', status: 'Todo', doneAt: null },
-          { id: 'plan-m', status: 'Todo', doneAt: null },
+          { id: 'plan-z', status: 'Todo', doneAt: null, iterationRefs: [] },
+          { id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] },
+          { id: 'plan-m', status: 'Todo', doneAt: null, iterationRefs: [] },
         ],
       },
     }
@@ -1941,7 +1942,7 @@ describe('workflow panel — Task 1 「更多」 interaction (plan 20260813-pane
       ...fullSource,
       state: {
         ...fullSource.state!,
-        plans: Array.from({ length: 7 }, (_, i) => ({ id: `p-${i}`, status: 'Done', doneAt: null })),
+        plans: Array.from({ length: 7 }, (_, i) => ({ id: `p-${i}`, status: 'Done', doneAt: null, iterationRefs: [] })),
       },
     })
     const done = v.tasks.columns.find((c) => c.id === 'Done')!

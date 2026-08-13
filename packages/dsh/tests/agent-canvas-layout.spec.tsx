@@ -790,8 +790,8 @@ describe('agent canvas — Phase 1/2 groups + current-plan annotation (plan 2026
       state: {
         ...baseSource.state!,
         plans: [
-          ...inProgress.map((id) => ({ id, status: 'InProgress', doneAt: null })),
-          { id: 'plan-done', status: 'Done', doneAt: '2026-08-08' },
+          ...inProgress.map((id) => ({ id, status: 'InProgress', doneAt: null, iterationRefs: [] })),
+          { id: 'plan-done', status: 'Done', doneAt: '2026-08-08', iterationRefs: [] },
         ],
       },
     }

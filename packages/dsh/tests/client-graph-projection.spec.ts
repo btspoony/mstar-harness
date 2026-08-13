@@ -70,11 +70,11 @@ const fullSource: MstarEngineStatusSource = {
   },
   state: {
     plans: [
-      { id: 'plan-a', status: 'Todo', doneAt: null },
-      { id: 'plan-b', status: 'InProgress', doneAt: null },
-      { id: 'plan-c', status: 'Done', doneAt: '2026-08-08' },
-      { id: 'plan-d', status: 'Blocked', doneAt: null },
-      { id: 'plan-e', status: 'custom-stalled', doneAt: null },
+      { id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] },
+      { id: 'plan-b', status: 'InProgress', doneAt: null, iterationRefs: [] },
+      { id: 'plan-c', status: 'Done', doneAt: '2026-08-08', iterationRefs: [] },
+      { id: 'plan-d', status: 'Blocked', doneAt: null, iterationRefs: [] },
+      { id: 'plan-e', status: 'custom-stalled', doneAt: null, iterationRefs: [] },
     ],
     residuals: [],
     residualFindings: null,
@@ -539,7 +539,7 @@ describe('projectGraph — Done column sort + per-column cap (spec §3, shared p
       ...fullSource,
       state: {
         ...fullSource.state!,
-        plans: rows.map((r) => ({ id: r.id, status: 'Done', doneAt: r.doneAt })),
+        plans: rows.map((r) => ({ id: r.id, status: 'Done', doneAt: r.doneAt, iterationRefs: [] })),
       },
     }
   }
@@ -601,9 +601,9 @@ describe('projectGraph — Done column sort + per-column cap (spec §3, shared p
       state: {
         ...fullSource.state!,
         plans: [
-          { id: 'todo-2', status: 'Todo', doneAt: null },
-          { id: 'todo-1', status: 'Todo', doneAt: null },
-          { id: 'todo-3', status: 'Todo', doneAt: '2026-08-08' },
+          { id: 'todo-2', status: 'Todo', doneAt: null, iterationRefs: [] },
+          { id: 'todo-1', status: 'Todo', doneAt: null, iterationRefs: [] },
+          { id: 'todo-3', status: 'Todo', doneAt: '2026-08-08', iterationRefs: [] },
         ],
       },
     })
@@ -620,13 +620,13 @@ describe('projectGraph — Done column sort + per-column cap (spec §3, shared p
       state: {
         ...fullSource.state!,
         plans: [
-          { id: 'blocked-1', status: 'Blocked', doneAt: null },
-          { id: 'blocked-2', status: 'Blocked', doneAt: null },
-          { id: 'blocked-3', status: 'Blocked', doneAt: null },
-          { id: 'unknown-1', status: 'Paused', doneAt: null },
-          { id: 'unknown-2', status: 'Stalled', doneAt: null },
-          { id: 'unknown-3', status: 'Weird', doneAt: null },
-          { id: 'unknown-4', status: 'Other', doneAt: null },
+          { id: 'blocked-1', status: 'Blocked', doneAt: null, iterationRefs: [] },
+          { id: 'blocked-2', status: 'Blocked', doneAt: null, iterationRefs: [] },
+          { id: 'blocked-3', status: 'Blocked', doneAt: null, iterationRefs: [] },
+          { id: 'unknown-1', status: 'Paused', doneAt: null, iterationRefs: [] },
+          { id: 'unknown-2', status: 'Stalled', doneAt: null, iterationRefs: [] },
+          { id: 'unknown-3', status: 'Weird', doneAt: null, iterationRefs: [] },
+          { id: 'unknown-4', status: 'Other', doneAt: null, iterationRefs: [] },
         ],
       },
     })
@@ -1060,6 +1060,33 @@ describe('projectGraph — agents current-iteration filter (plan 20260813-panel-
     expect(byKey.get('fullstack-dev')!.idle).toBe(false)
     expect(byKey.get('frontend-dev')!.idle).toBe(false)
     expect(byKey.get('qc-specialist')!.idle).toBe(true)
+  })
+
+  it('tie-break: two plans share the SAME 8-digit id date prefix → the max-doneAt iteration wins (Clarify口径)', () => {
+    const source = {
+      ...fullSource,
+      iteration: undefined,
+      state: {
+        ...fullSource.state!,
+        plans: [
+          { id: '20260812-old', status: 'Done', doneAt: '2026-08-12', iterationRefs: ['iter-20260812-old'] },
+          { id: '20260812-new', status: 'Done', doneAt: '2026-08-14', iterationRefs: ['iter-20260812-new'] },
+        ],
+        agentFlow: {
+          events: [
+            dispatchRow({ ts: 2, role: 'qc-specialist', agent: 'a1', planId: '20260812-new' }),
+            dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a2', planId: '20260812-old' }),
+          ],
+          summary: [],
+        } as unknown as AgentFlowView,
+      },
+    } as unknown as MstarEngineStatusSource
+    const byKey = new Map(projectGraph(source).agents.entities.map((e) => [e.key, e]))
+    // Same 8-digit date prefix (20260812): the more-recent doneAt (2026-08-14)
+    // names the current iteration → qc-specialist (new) lit; fullstack-dev (old)
+    // is cross-iteration → idle.
+    expect(byKey.get('qc-specialist')!.idle).toBe(false)
+    expect(byKey.get('fullstack-dev')!.idle).toBe(true)
   })
 
   it('compass active but no plan references it → empty set → roster idle, no lit entities (graceful, never throws)', () => {
@@ -1832,7 +1859,7 @@ describe('projectGraph — agents activePlanId / activePlanCount (plan 20260812-
     // Empty ledger (0 events) + no InProgress → null.
     const empty = projectGraph({
       ...flowSource([]),
-      state: { ...flowSource([]).state!, plans: [{ id: 'plan-d', status: 'Todo', doneAt: null }] },
+      state: { ...flowSource([]).state!, plans: [{ id: 'plan-d', status: 'Todo', doneAt: null, iterationRefs: [] }] },
     })
     expect(empty.agents.empty).toBe(true)
     expect(empty.agents.activePlanId).toBeNull()
