@@ -8,8 +8,10 @@
  *
  * Two strictly separated inputs (spec §3):
  * - schema constants (`./schema.ts`) — the 5 iteration steps (PHASE_IDS), the
- *   6 kanban buckets (PLAN_STATE_IDS) and the expected role pipeline
- *   (EXPECTED_ROLE_FLOW), all client-side design knowledge;
+ *   5 kanban buckets (PLAN_STATE_IDS — Blocked/unknown merged into
+ *   `blocked-unknown`, plan 20260813-panel-quick-fixes Task 1) and the
+ *   expected role pipeline (EXPECTED_ROLE_FLOW), all client-side design
+ *   knowledge;
  * - catalog evidence — `iteration.gate.transition` lights the current step
  *   (steps before it become `done` — plan 20260812-panel-f5-iteration-zone-fix
  *   Task 1, its forward target becomes `next`), `gate.ok/violations` become
@@ -67,7 +69,7 @@
  * missing iteration / unresolvable transition → `active: false` + 5 idle
  * steps + `degraded.iteration` (the old `degraded.transition` is merged into
  * `iteration.active === false` — `degraded.iteration ⟺ !active`); `state`
- * null → 6-column skeleton (count 0) + `degraded.state`; `state.plans`
+ * null → 5-column skeleton (count 0) + `degraded.state`; `state.plans`
  * missing → same skeleton + `degraded.plans`; `state.agentFlow`
  * missing/unreadable → agents roster + `degraded` (full KNOWN_AGENTS idle
  * cards, no executing/pending claims); 0 events → `empty` (idle roster +
@@ -157,19 +159,22 @@ export interface IterationStepView {
 /* ---------------------------------- tasks zone (spec §3) ---------------------------------- */
 
 /**
- * One kanban column (spec §3): the PLAN_STATE_IDS skeleton with plan rows
- * bucketed by EXACT status match (any other status → `unknown`). `count` is
- * the FULL column count; the Done column is additionally sorted with the
- * shared plan-sort key (`plan-sort.ts`) and capped at PLAN_CAP — `capped`
- * carries the display count (PLAN_CAP) when the column overflows, else null.
+ * One kanban column (spec §3 + plan 20260813-panel-quick-fixes Task 1): the
+ * PLAN_STATE_IDS skeleton with plan rows bucketed by status — `Blocked` and
+ * any non-matching status (the former `unknown` catch-all) both fold into the
+ * single `blocked-unknown` column. `count` is the FULL column count; `plans`
+ * keeps EVERY row (no slice — the render truncates to PLAN_CAP and offers a
+ * 「更多」 expand). The Done column is additionally sorted with the shared
+ * plan-sort key (`plan-sort.ts`); every other column keeps input order.
+ * `capped` carries PLAN_CAP when the column overflows, else null.
  */
 export interface KanbanColumnView {
   id: PlanStateId
-  /** Displayed rows (Done: top PLAN_CAP of the plan-sort order). */
+  /** ALL rows (Done: plan-sort order; others: input order). */
   plans: { id: string; status: string }[]
-  /** Full column count (before the Done cap). */
+  /** Full column count (equal to `plans.length`). */
   count: number
-  /** PLAN_CAP when the column overflows (Done > 5); null otherwise. */
+  /** PLAN_CAP when the column overflows (count > PLAN_CAP); null otherwise. */
   capped: number | null
 }
 
@@ -430,11 +435,11 @@ export interface ZoneView {
     violationCount: number | null
   }
   tasks: {
-    /** 6 columns: Todo/InProgress/InReview/Done/Blocked/unknown (spec §3). */
+    /** 5 columns: Todo/InProgress/InReview/Done/blocked-unknown (spec §3). */
     columns: KanbanColumnView[]
-    /** Plan total across all columns, unknown included. */
+    /** Plan total across all columns, the merged column included. */
     total: number
-    /** Done column overflow (rows > PLAN_CAP). */
+    /** Any column overflow (rows > PLAN_CAP). */
     truncated: boolean
   }
   agents: AgentZoneView
@@ -470,6 +475,21 @@ function planRow(raw: unknown): PlanRow {
     id: str(row?.id) ?? '',
     status: str(row?.status) ?? '',
     doneAt: str(row?.doneAt),
+  }
+}
+
+/** The kanban bucket of a plan status (plan 20260813-panel-quick-fixes Task 1):
+ * the 4 exact-match states map to their own column; `Blocked` and every other
+ * (unknown/catch-all) status fold into the single `blocked-unknown` column. */
+function planBucket(status: string): PlanStateId {
+  switch (status) {
+    case 'Todo':
+    case 'InProgress':
+    case 'InReview':
+    case 'Done':
+      return status
+    default:
+      return 'blocked-unknown'
   }
 }
 
@@ -582,7 +602,8 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
   // `degraded.transition` is merged into `iteration.active === false` (spec §3).
   degraded.iteration = !active
 
-  // --- tasks zone: 6-column skeleton, evidence = exact status match (spec §3) ---
+  // --- tasks zone: 5-column skeleton (Blocked + unknown merged into
+  // `blocked-unknown`, plan 20260813-panel-quick-fixes Task 1) ---
   const columns: KanbanColumnView[] = PLAN_STATE_IDS.map((id) => ({ id, plans: [], count: 0, capped: null }))
   const doneRows: PlanRow[] = []
   let total = 0
@@ -600,13 +621,11 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
       for (const raw of plans) {
         const row = planRow(raw)
         total += 1
-        const bucket = (PLAN_STATE_IDS as readonly string[]).includes(row.status)
-          ? (row.status as PlanStateId)
-          : 'unknown'
+        const bucket = planBucket(row.status)
         const column = columns.find((c) => c.id === bucket)!
         column.count += 1
         if (bucket === 'Done') {
-          // Done rows are sorted + capped below (needs doneAt — not a view field).
+          // Done rows are sorted below (needs doneAt — not a view field).
           doneRows.push(row)
         } else {
           column.plans.push({ id: row.id, status: row.status })
@@ -616,14 +635,16 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
   }
 
   // Done column: shared plan-sort key (spec §3 — `plan-sort.ts`, reused not
-  // copied) + PLAN_CAP; `tasks.truncated` = Done column rows > PLAN_CAP.
+  // copied). ALL rows are KEPT (no slice — the render truncates to PLAN_CAP
+  // and offers the 「更多」 expand); the cap is a RENDER concern, so every
+  // column only reports `capped` (PLAN_CAP) when it overflows.
   const doneColumn = columns.find((c) => c.id === 'Done')!
-  doneColumn.plans = sortPlans(doneRows)
-    .slice(0, PLAN_CAP)
-    .map((r) => ({ id: r.id, status: r.status }))
-  if (doneRows.length > PLAN_CAP) {
-    truncated = true
-    doneColumn.capped = PLAN_CAP
+  doneColumn.plans = sortPlans(doneRows).map((r) => ({ id: r.id, status: r.status }))
+  for (const column of columns) {
+    if (column.count > PLAN_CAP) {
+      column.capped = PLAN_CAP
+      truncated = true
+    }
   }
 
   // --- agents zone + flow events (spec §3/§4) ---

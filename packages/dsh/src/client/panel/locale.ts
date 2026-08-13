@@ -24,11 +24,13 @@
  * placeholder.
  *
  * T4 (spec panel-zones §3): the task board kanban is filled in —
- * `zone.state.*` (the 6 PLAN_STATE_IDS column names — en is the raw status
- * word, zh the localized name), `zone.tasks.total` (zone header plan total),
- * `zone.tasks.no-plans` (the muted empty note) and `zone.tasks.more` (the
- * Done-column `+N more` overflow hint). `zone.tasks.placeholder` is gone with
- * the placeholder.
+ * `zone.state.*` (the 5 PLAN_STATE_IDS column names — en is the raw status
+ * word, zh the localized name; `blocked-unknown` is the merged
+ * Blocked/unknown column, plan 20260813-panel-quick-fixes Task 1),
+ * `zone.tasks.total` (zone header plan total), `zone.tasks.no-plans` (the
+ * muted empty note), `zone.tasks.more` (the per-column `+N more` expand
+ * affordance) and `zone.tasks.collapse` (the 「收起」 collapse label).
+ * `zone.tasks.placeholder` is gone with the placeholder.
  *
  * T2 (spec panel-zones §4, plan 20260810-panel-agent-flow-zone): the agents
  * zone is filled in — `zone.agents.summary` (`N executing · M pending`).
@@ -187,12 +189,12 @@ export type PanelKey =
   | 'zone.tasks.total'
   | 'zone.tasks.no-plans'
   | 'zone.tasks.more'
+  | 'zone.tasks.collapse'
   | 'zone.state.Todo'
   | 'zone.state.InProgress'
   | 'zone.state.InReview'
   | 'zone.state.Done'
-  | 'zone.state.Blocked'
-  | 'zone.state.unknown'
+  | 'zone.state.blocked-unknown'
   | 'zone.agents.title'
   | 'zone.agents.summary'
   | 'zone.agents.on-demand'
@@ -305,12 +307,12 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.tasks.total': '{count} 个计划',
   'zone.tasks.no-plans': '暂无计划',
   'zone.tasks.more': '+{count} 更多',
+  'zone.tasks.collapse': '收起',
   'zone.state.Todo': '待办',
   'zone.state.InProgress': '进行中',
   'zone.state.InReview': '审查中',
   'zone.state.Done': '已完成',
-  'zone.state.Blocked': '受阻',
-  'zone.state.unknown': '未知',
+  'zone.state.blocked-unknown': '受阻/未知',
   'zone.agents.title': '代理执行',
   'zone.agents.summary': '{executing} 执行中 · {pending} 待执行',
   'zone.agents.on-demand': '按需执行',
@@ -418,12 +420,12 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.tasks.total': '{count} plans',
   'zone.tasks.no-plans': 'no plans',
   'zone.tasks.more': '+{count} more',
+  'zone.tasks.collapse': 'collapse',
   'zone.state.Todo': 'Todo',
   'zone.state.InProgress': 'InProgress',
   'zone.state.InReview': 'InReview',
   'zone.state.Done': 'Done',
-  'zone.state.Blocked': 'Blocked',
-  'zone.state.unknown': 'unknown',
+  'zone.state.blocked-unknown': 'Blocked / Unknown',
   'zone.agents.title': 'Agent Flow',
   'zone.agents.summary': '{executing} executing · {pending} pending',
   'zone.agents.on-demand': 'On-demand',

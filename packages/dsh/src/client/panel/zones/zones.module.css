@@ -125,12 +125,13 @@
   border: 1px dashed var(--dsw-alias-label-caption);
 }
 
-/* --- task board kanban (spec §3/§5/§7): 6 columns + count badges + plan
-   cards + dim inter-column flow arrows + Done-cap overflow hint + muted
-   no-plans empty state. Colors are --dsw-* tokens only (the unknown catch-all
-   column is muted NEUTRAL — deliberately NOT the warn/orange treatment);
-   spacing rides the --mstar-space-* ramp; hover feedback sits in the
-   120–150ms window (the panel root's reduced-motion rule kills all motion). --- */
+/* --- task board kanban (spec §3/§5/§7, plan 20260813-panel-quick-fixes
+   Task 1): 5 columns + count badges + plan cards + dim inter-column flow
+   arrows + per-column 「更多」 expand affordance + muted no-plans empty
+   state. Colors are --dsw-* tokens only (the blocked-unknown catch-all column
+   is muted NEUTRAL — deliberately NOT the warn/orange treatment); spacing
+   rides the --mstar-space-* ramp; hover feedback sits in the 120–150ms
+   window (the panel root's reduced-motion rule kills all motion). --- */
 
 .tasksHeader {
   display: flex;
@@ -147,7 +148,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Horizontal 6-column row; on the IterationTaskPage the tasks area scrolls
+/* Horizontal 5-column row; on the IterationTaskPage the tasks area scrolls
    vertically (the page's independent scroll body) and the columns SPREAD
    full-width (flex: 1 1 0, no width cap — spec panel-tabs §3/D2); on very
    narrow widths the row scrolls internally. */
@@ -162,11 +163,11 @@
 
 /* box-sizing: border-box keeps `min-width` an OUTER width — under the
    default content-box the 150px floor silently became 166px per column and
-   the six columns (+ flow arrows) overflowed the content area at normal
-   desktop widths, hiding the trailing columns behind the internal scrollbar
+   the columns (+ flow arrows) overflowed the content area at normal desktop
+   widths, hiding the trailing columns behind the internal scrollbar
    (plan 20260811-panel-tabs-shell Task 3 browser verification finding). 120px
-   outer floor: the six columns spread the content width down to ~1130px
-   viewport; below that the row scrolls internally (the narrow-width
+   outer floor: the columns spread the content width down to narrower
+   viewports; below that the row scrolls internally (the narrow-width
    fallback, spec §3/D2). */
 .kanbanColumn {
   box-sizing: border-box;
@@ -186,9 +187,10 @@
   border-color: var(--dsw-alias-border-l2);
 }
 
-/* unknown catch-all column (spec §3/§8): muted NEUTRAL — dimmed, dashed,
-   caption-colored. NOT the react-flow-era orange `stateUnknown` bucket. */
-[data-kanban-column='unknown'] {
+/* blocked-unknown catch-all column (spec §3/§8, plan 20260813-panel-quick-fixes
+   Task 1 — the merged Blocked/unknown column): muted NEUTRAL — dimmed,
+   dashed, caption-colored. NOT the react-flow-era orange `stateUnknown` bucket. */
+[data-kanban-column='blocked-unknown'] {
   border-style: dashed;
   color: var(--dsw-alias-label-caption);
   opacity: 0.7;
@@ -296,13 +298,31 @@
   font-weight: 600;
 }
 
-/* Done-cap overflow hint (spec §3): `+N more`, dashed placeholder. */
+/* Overflow toggle row (spec §3, plan 20260813-panel-quick-fixes Task 1): the
+   clickable 「更多」/「收起」 button — a dashed caption affordance (mirrors the
+   MenuTab borderless-button pattern: `background: none` + token colors). */
 .kanbanMore {
-  padding: var(--mstar-space-1) var(--mstar-space-2);
+  margin: 0;
+  padding: 0;
+}
+
+.kanbanMoreButton {
+  appearance: none;
+  display: block;
+  width: 100%;
   border: 1px dashed var(--dsw-alias-border-l2);
   border-radius: 8px;
+  background: none;
+  padding: var(--mstar-space-1) var(--mstar-space-2);
   color: var(--dsw-alias-label-caption);
   font: var(--dsw-font-xxxs-11);
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;   /* hover 120–150ms */
+}
+
+.kanbanMoreButton:hover {
+  border-color: var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
 }
 

@@ -7,7 +7,7 @@
  * - full fixture (iteration + state + freshness): every section renders —
  *   the sidebar meta dock (version/harness, header removed), the
  *   IterationTaskPage on the tasks tab (Content Head with the horizontal
- *   Step 1–5 row + branches, and the full-width 6-column kanban — the
+ *   Step 1–5 row + branches, and the full-width 5-column kanban — the
  *   WorkflowCanvas zone dashboard is replaced by Task 2 and no longer
  *   renders here), plan status board, residual counts, branch/policy/lease
  *   anchors, knowledge digest, direction one-liner, last-updated marker;
@@ -40,7 +40,7 @@
  *   summary with the muted "not started" note + toggle affordance), the
  *   horizontal 5-step row (PHASE_IDS order, current/next/done/idle, connectors,
  *   current-step verdict) and the branches panel; the kanban anchors
- *   (`data-kanban-column` 6 columns / `data-tasks-total` / `data-mstar-kanban`)
+ *   (`data-kanban-column` 5 columns / `data-tasks-total` / `data-mstar-kanban`)
  *   ride the reused TaskBoard; css asserts the tasks area is the independent
  *   vertical scroll body and the kanban columns spread full-width. The
  *   WorkflowCanvas-era render surfaces (zone frames, footer legend/gate
@@ -147,6 +147,8 @@ import {
   nextExpandedOnActivation,
 } from '../src/client/panel/pages/IterationInfoSection'
 import { EventLogPage } from '../src/client/panel/pages/EventLogPage'
+import { toggleKanbanExpanded, visibleKanbanPlans } from '../src/client/panel/zones/TaskBoard'
+import { PLAN_CAP } from '../src/client/panel/plan-sort'
 
 /** Full fixture: every field the panel renders (spec §2.1–§2.3). */
 const fullSource: MstarEngineStatusSource = {
@@ -1355,12 +1357,12 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(zhInactive).toContain('迭代未启动')
   })
 
-  it('renders the full-width kanban in the tasks scroll area: 6 columns + total', () => {
+  it('renders the full-width kanban in the tasks scroll area: 5 columns + total', () => {
     expect(html).toContain('data-mstar-tasks-scroll')
     expect(html).toContain('data-zone="tasks"')
     expect(html).toContain('data-mstar-kanban')
     const cols = [...html.matchAll(/data-kanban-column="([^"]+)"/g)].map((m) => m[1]!)
-    expect(cols).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'Blocked', 'unknown'])
+    expect(cols).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'blocked-unknown'])
     expect(html).toContain('data-tasks-total="2"')
     expect(html).toContain('data-plan-id="20260809-dsh-workflow-viz-panel"')
     expect(html).toContain('data-plan-status="InProgress"')
@@ -1373,12 +1375,12 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
     expect(html).not.toContain('data-mstar-legend')
   })
 
-  it('state null → the muted 6-column kanban skeleton + no-plans note, never an orange box (spec §8)', () => {
+  it('state null → the muted 5-column kanban skeleton + no-plans note, never an orange box (spec §8)', () => {
     const g = panelHtml({ ...fullSource, state: null })
     expect(g).toContain('data-mstar-page="tasks"')
     expect(g).toContain('data-zone="tasks"')
-    expect(g.match(/data-kanban-column="/g)).toHaveLength(6)
-    expect(g.match(/data-kanban-count="0"/g)).toHaveLength(6)
+    expect(g.match(/data-kanban-column="/g)).toHaveLength(5)
+    expect(g.match(/data-kanban-count="0"/g)).toHaveLength(5)
     expect(g).toContain('data-zone-empty="no-plans"')
     expect(g).toContain('no plans')
     expect(g).not.toContain('data-graph-empty="no-state"')
@@ -1390,7 +1392,7 @@ describe('workflow panel — T7 iteration-task page: content head collapse/expan
       state: { ...fullSource.state!, plans: undefined },
     } as unknown as MstarEngineStatusSource)
     expect(g).toContain('data-zone="tasks"')
-    expect(g.match(/data-kanban-column="/g)).toHaveLength(6)
+    expect(g.match(/data-kanban-column="/g)).toHaveLength(5)
     expect(g).toContain('data-zone-empty="no-plans"')
     expect(g).toContain('no plans')
     expect(g).not.toContain('data-graph-empty="no-plans"')
@@ -1646,16 +1648,16 @@ describe('workflow panel — T5 AC-3 orange-box zeroing: old anchors/texts gone,
     }
   })
 
-  it('the .stateUnknown orange bucket class is deleted from the zones css; unknown column stays muted NEUTRAL', () => {
+  it('the .stateUnknown orange bucket class is deleted from the zones css; blocked-unknown column stays muted NEUTRAL', () => {
     const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
     // The react-flow-era `.stateUnknown` RULE (dashed warn border + warn
     // label) is gone with graph.module.css — no selector rule survives (a
     // comment may name the old class; the rule must not).
     expect(cssText).not.toMatch(/\.stateUnknown\s*\{/)
-    // The unknown kanban column rule is the muted neutral treatment (spec §3):
-    // caption-colored, dimmed — no warn/error/business state token (AC-3
-    // umbrella re-assert; T4 pins the same rule).
-    const unknownRule = cssText.match(/\[data-kanban-column='unknown'\]\s*\{[\s\S]*?\}/)
+    // The merged blocked-unknown kanban column rule is the muted neutral
+    // treatment (spec §3): caption-colored, dimmed — no warn/error/business
+    // state token (AC-3 umbrella re-assert; T4 pins the same rule).
+    const unknownRule = cssText.match(/\[data-kanban-column='blocked-unknown'\]\s*\{[\s\S]*?\}/)
     expect(unknownRule).not.toBeNull()
     expect(unknownRule![0]).toContain('--dsw-alias-label-caption')
     expect(unknownRule![0]).toContain('opacity')
@@ -1737,18 +1739,19 @@ describe('workflow panel — T7 data projection integration (spec panel-tabs §3
 })
 
 /* ---------------------------------------------------------------------------
- * T4 task board kanban (spec panel-zones §3/§8): the 6 PLAN_STATE_IDS columns
- * with localized headers + count badges, plan cards (data-plan-id /
- * data-plan-status — the anchors shared with the sidebar), the dim inter-
- * column flow arrows (chain + Blocked ⇄), the Done cap hint (the projection
- * applied sortPlans + PLAN_CAP — the render surfaces the +N more), the muted
- * no-plans empty state, and the unknown column's muted NEUTRAL (non-orange)
- * treatment. The sort/cap assertions here are RENDER-layer only — the
- * projection-side tests in client-graph-projection.spec.ts are independent
- * (compass Risk Register).
+ * T4 task board kanban (spec panel-zones §3/§8, plan 20260813-panel-quick-fixes
+ * Task 1): the 5 PLAN_STATE_IDS columns with localized headers + count badges,
+ * plan cards (data-plan-id / data-plan-status — the anchors shared with the
+ * sidebar), the dim inter-column flow arrows (chain + Blocked ⇄ docking at the
+ * merged column), the clickable per-column 「更多」 expand (the projection
+ * KEEPS all rows and reports `capped` — the render truncates to PLAN_CAP and
+ * surfaces the +N more button), the muted no-plans empty state, and the merged
+ * blocked-unknown column's muted NEUTRAL (non-orange) treatment. The sort/cap
+ * assertions here are RENDER-layer only — the projection-side tests in
+ * client-graph-projection.spec.ts are independent (compass Risk Register).
  * ------------------------------------------------------------------------- */
 
-describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + arrows + Done cap + empty state (spec panel-zones §3/§8)', () => {
+describe('workflow panel — T4 task board kanban: 5 columns + counts + cards + arrows + 「更多」 expand + empty state (spec panel-zones §3/§8)', () => {
   /** The tasks zone slice: from the TaskBoard zone frame to the resident sidebar. */
   function tasksSlice(html: string): string {
     const start = html.indexOf('data-zone="tasks"')
@@ -1763,7 +1766,8 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     return start === -1 ? '' : next === -1 ? html.slice(start) : html.slice(start, next)
   }
 
-  /** A plan-status spread covering every bucket (unknown = non-5-state status). */
+  /** A plan-status spread covering every column (Blocked + a non-5-state
+   * status both fold into the merged blocked-unknown column). */
   const kanbanSource: MstarEngineStatusSource = {
     ...fullSource,
     state: {
@@ -1781,16 +1785,16 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
   }
   const html = panelHtml(kanbanSource)
 
-  it('renders 6 columns in PLAN_STATE_IDS order with count badges and the total', () => {
+  it('renders 5 columns in PLAN_STATE_IDS order with count badges and the total', () => {
     expect(html).toContain('data-mstar-kanban')
     const cols = [...html.matchAll(/data-kanban-column="([^"]+)"/g)].map((m) => m[1]!)
-    expect(cols).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'Blocked', 'unknown'])
-    // Header total (spec §3 — plan total across all columns, unknown included).
+    expect(cols).toEqual(['Todo', 'InProgress', 'InReview', 'Done', 'blocked-unknown'])
+    // Header total (spec §3 — plan total across all columns, merged included).
     expect(html).toContain('data-tasks-total="7"')
     expect(html).toContain('7 plans')
-    // Count badges: Todo 2, one plan in each other bucket.
-    expect(html).toContain('data-kanban-count="2"')
-    expect(html.match(/data-kanban-count="1"/g)).toHaveLength(5)
+    // Count badges: Todo 2, merged (Blocked + Paused) 2, three columns at 1.
+    expect(html.match(/data-kanban-count="2"/g)).toHaveLength(2)
+    expect(html.match(/data-kanban-count="1"/g)).toHaveLength(3)
   })
 
   it('buckets plan cards into their columns: data-plan-id / data-plan-status (shared anchors)', () => {
@@ -1803,24 +1807,30 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     expect(ip).toContain('data-plan-id="plan-ip-1"')
     expect(ip).toContain('data-plan-status="InProgress"')
     expect(ip).not.toContain('data-plan-id="plan-todo-1"')
-    // The non-5-state status (Paused) lands in the unknown bucket (spec §3).
-    const unknown = columnSlice(html, 'unknown')
-    expect(unknown).toContain('data-plan-id="plan-weird-1"')
-    expect(unknown).toContain('data-plan-status="Paused"')
+    // Blocked AND the non-5-state status (Paused) both land in the merged
+    // blocked-unknown column (plan 20260813-panel-quick-fixes Task 1).
+    const merged = columnSlice(html, 'blocked-unknown')
+    expect(merged).toContain('data-plan-id="plan-blocked-1"')
+    expect(merged).toContain('data-plan-status="Blocked"')
+    expect(merged).toContain('data-plan-id="plan-weird-1"')
+    expect(merged).toContain('data-plan-status="Paused"')
+    // The old separate Blocked / unknown columns no longer exist.
+    expect(html).not.toContain('data-kanban-column="Blocked"')
+    expect(html).not.toContain('data-kanban-column="unknown"')
   })
 
-  it('unknown column is muted NEUTRAL (spec §3) — never the warn/orange treatment', () => {
+  it('blocked-unknown column is muted NEUTRAL (spec §3) — never the warn/orange treatment', () => {
     const cssText = readFileSync(new URL('../src/client/panel/zones/zones.module.css', import.meta.url), 'utf8')
-    const unknownRule = cssText.match(/\[data-kanban-column='unknown'\]\s*\{[\s\S]*?\}/)
-    expect(unknownRule).not.toBeNull()
+    const mergedRule = cssText.match(/\[data-kanban-column='blocked-unknown'\]\s*\{[\s\S]*?\}/)
+    expect(mergedRule).not.toBeNull()
     // Muted neutral: caption-colored text + dimmed, dashed frame.
-    expect(unknownRule![0]).toContain('--dsw-alias-label-caption')
-    expect(unknownRule![0]).toContain('opacity')
-    // NOT orange: no warn/error/business state token in the unknown rule.
-    expect(unknownRule![0]).not.toMatch(/--dsw-alias-state-(?:warn|error|business)/)
+    expect(mergedRule![0]).toContain('--dsw-alias-label-caption')
+    expect(mergedRule![0]).toContain('opacity')
+    // NOT orange: no warn/error/business state token in the merged rule.
+    expect(mergedRule![0]).not.toMatch(/--dsw-alias-state-(?:warn|error|business)/)
   })
 
-  it('renders the dim inter-column flow arrows: chain → + Blocked ⇄ (spec §2.4)', () => {
+  it('renders the dim inter-column flow arrows: chain → + Blocked ⇄ docking at the merged column (spec §2.4)', () => {
     const k = tasksSlice(html)
     expect(k.match(/data-kanban-arrow=/g)).toHaveLength(4)
     expect(k).toContain('data-kanban-arrow="Todo-InProgress"')
@@ -1834,10 +1844,10 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     expect(pos('data-kanban-column="Todo"')).toBeLessThan(pos('data-kanban-arrow="Todo-InProgress"'))
     expect(pos('data-kanban-arrow="Todo-InProgress"')).toBeLessThan(pos('data-kanban-column="InProgress"'))
     expect(pos('data-kanban-column="InProgress"')).toBeLessThan(pos('data-kanban-arrow="InProgress-Blocked"'))
-    expect(pos('data-kanban-arrow="InProgress-Blocked"')).toBeLessThan(pos('data-kanban-column="Blocked"'))
+    expect(pos('data-kanban-arrow="InProgress-Blocked"')).toBeLessThan(pos('data-kanban-column="blocked-unknown"'))
   })
 
-  it('Done cap 5: 7 Done plans → top-5 in plan-sort order + count 7 + +2 more hint (data-kanban-truncated)', () => {
+  it('overflow: 7 Done plans → top-5 rendered + count 7 + a clickable +2 more button (data-kanban-more)', () => {
     const doneOverflow: MstarEngineStatusSource = {
       ...fullSource,
       state: {
@@ -1855,14 +1865,16 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     }
     const g = panelHtml(doneOverflow)
     const done = columnSlice(g, 'Done')
-    // Full count on the badge, top PLAN_CAP cards rendered (spec §3).
+    // Full count on the badge, top PLAN_CAP cards rendered by default (Task 1).
     expect(done).toContain('data-kanban-count="7"')
     expect(done.match(/data-plan-id="/g)).toHaveLength(5)
     // Plan-sort order (shared key, projection-side): doneAt digitized DESC.
     expect(done.indexOf('data-plan-id="20260807-plan"')).toBeLessThan(done.indexOf('data-plan-id="20260806-plan"'))
     expect(done.indexOf('data-plan-id="20260806-plan"')).toBeLessThan(done.indexOf('data-plan-id="20260803-plan"'))
-    // Overflow hint: the hidden count + the localized +N more wording.
-    expect(done).toContain('data-kanban-truncated="2"')
+    // Overflow: a real <button> with the data-kanban-more anchor + the
+    // localized +N more wording; the hidden rows are not rendered yet.
+    expect(done).toContain('<button')
+    expect(done).toContain('data-kanban-more="expand"')
     expect(done).toContain('+2 more')
     expect(done).not.toContain('data-plan-id="20260802-plan"')
     expect(done).not.toContain('data-plan-id="20260801-plan"')
@@ -1870,7 +1882,7 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     // pins the RENDER of the capped column only.
   })
 
-  it('Done cap boundary: exactly 5 Done plans → no truncation hint', () => {
+  it('overflow boundary: exactly 5 Done plans → no 「更多」 button', () => {
     const five: MstarEngineStatusSource = {
       ...fullSource,
       state: {
@@ -1884,11 +1896,11 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     }
     const done = columnSlice(panelHtml(five), 'Done')
     expect(done.match(/data-plan-id="/g)).toHaveLength(5)
-    expect(done).not.toContain('data-kanban-truncated')
+    expect(done).not.toContain('data-kanban-more')
     expect(done).not.toContain('+1 more')
   })
 
-  it('non-Done columns are never sorted or capped — input order preserved (spec §3)', () => {
+  it('non-Done columns keep input order (only Done sorts); ≤PLAN_CAP → no 「更多」 button (spec §3)', () => {
     const unsorted: MstarEngineStatusSource = {
       ...fullSource,
       state: {
@@ -1905,14 +1917,14 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     // column would apply.
     expect(todo.indexOf('data-plan-id="plan-z"')).toBeLessThan(todo.indexOf('data-plan-id="plan-a"'))
     expect(todo.indexOf('data-plan-id="plan-a"')).toBeLessThan(todo.indexOf('data-plan-id="plan-m"'))
-    expect(todo).not.toContain('data-kanban-truncated')
+    expect(todo).not.toContain('data-kanban-more')
   })
 
   it('zh locale: localized column headers, total label and the muted no-plans note', () => {
     const zhHtml = panelHtml(kanbanSource, undefined, undefined, 'zh')
     const zhTasks = tasksSlice(zhHtml)
-    // Column headers ride the zone.state.* keys (en is the raw status word).
-    for (const label of ['待办', '进行中', '审查中', '已完成', '受阻', '未知']) {
+    // Column headers ride the zone.state.* keys (the merged column is「受阻/未知」).
+    for (const label of ['待办', '进行中', '审查中', '已完成', '受阻/未知']) {
       expect(zhTasks).toContain(label)
     }
     expect(zhTasks).toContain('7 个计划')
@@ -1920,6 +1932,34 @@ describe('workflow panel — T4 task board kanban: 6 columns + counts + cards + 
     const zhEmpty = panelHtml({ ...fullSource, state: null }, undefined, undefined, 'zh')
     expect(tasksSlice(zhEmpty)).toContain('暂无计划')
     expect(zhEmpty).toContain('data-zone-empty="no-plans"')
+  })
+})
+
+describe('workflow panel — Task 1 「更多」 interaction (plan 20260813-panel-quick-fixes)', () => {
+  it('visibleKanbanPlans truncates to PLAN_CAP by default and reveals ALL rows when expanded', () => {
+    const v = projectGraph({
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        plans: Array.from({ length: 7 }, (_, i) => ({ id: `p-${i}`, status: 'Done', doneAt: null })),
+      },
+    })
+    const done = v.tasks.columns.find((c) => c.id === 'Done')!
+    expect(done.plans).toHaveLength(7)
+    // Collapsed → top PLAN_CAP; expanded → every row (no silent drop).
+    expect(visibleKanbanPlans(done, false)).toHaveLength(PLAN_CAP)
+    expect(visibleKanbanPlans(done, true)).toHaveLength(7)
+    expect(visibleKanbanPlans(done, true).map((p) => p.id)).toEqual(done.plans.map((p) => p.id))
+  })
+
+  it('toggleKanbanExpanded adds/removes a column id (the click path)', () => {
+    const on = toggleKanbanExpanded(new Set(), 'Done')
+    expect(on.has('Done')).toBe(true)
+    expect(toggleKanbanExpanded(on, 'Done').has('Done')).toBe(false)
+    // Independent columns — toggling one never touches another.
+    const both = toggleKanbanExpanded(new Set(['Todo']), 'Done')
+    expect(both.has('Todo')).toBe(true)
+    expect(both.has('Done')).toBe(true)
   })
 })
 
