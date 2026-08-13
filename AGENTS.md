@@ -174,17 +174,13 @@ If one of these checks fails, stop and report why.
 
 ## Local maintenance workspace (`.harness/`, gitignored)
 
-Use **`.harness/`** only for **in-progress maint work** on this repo (not published runtime skills):
+Use **`.harness/`** only for **in-progress maint docs** on this repo (not published runtime skills):
 
 | Path | Purpose |
 |------|---------|
-| `.harness/docs/` | Design specs, decomposition notes, ADRs for harness changes |
-| `.harness/specs/` | Spec drafts while iterating |
-| `.harness/plans/` | Implementation plans, task boards, maint status notes |
-| `.harness/status.json` | Maintainer plan registry (same schema as consumer `{HARNESS_DIR}/status.json`) |
-| `.harness/sdd/` | Optional SDD scratch during maint smoke (gitignored; inner `*` per plan-id) |
+| `.harness/docs/` | Design specs, decomposition notes, ADRs, reports for harness changes |
 
-**This repository** uses `.harness/` as its local harness root — not `.mstar/`. Consumer projects still default to `.mstar/` per `mstar-plan-conventions`.
+**This repository's harness root is `.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `plans/`, `iterations/`, `knowledge/`, `sdd/`, `references/`, `archived/` all live under `.mstar/`. `.harness/` is NOT a harness root — it holds maintenance docs only; do not create plan/status artifacts there.
 
 **Runtime SSOT** for `mstar-*` skills stays in repo-root **`skills/`** (bundled via `packages/opencode` `bundle-assets`). Do not treat `.harness/skills/` as the publish path.
 
