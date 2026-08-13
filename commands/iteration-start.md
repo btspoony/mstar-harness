@@ -2,6 +2,7 @@
 name: iteration-start
 description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain (long-lived {SPECS_DIR}/ + {ITERATION_DIR}/<id>/ package; compound promotes package at close only), PM lock, integration branch; then auto-continue Phase 2→5 (execute → close → PR → merge-ready) unless `pause` arg given."
 agent: project-manager
+input: "[direction] [pause]"
 ---
 
 # Start Iteration
@@ -111,7 +112,7 @@ command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate "<la
 if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validate "<latest-assignment-file>" || exit 1; fi
 ```
 
-> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
+> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开。
 
 **Prepare gate (per plan in compass)**:
 

@@ -14,6 +14,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
   { label: "@mstar-harness/cli", path: "packages/cli/package.json" },
   { label: "@mstar-harness/opencode", path: "packages/opencode/package.json" },
   { label: "@mstar-harness/engine", path: "packages/engine/package.json" },
+  { label: "@mstar-harness/dsh", path: "packages/dsh/package.json" },
   { label: "Cursor plugin", path: ".cursor-plugin/plugin.json" },
   { label: "Codex plugin", path: ".codex-plugin/plugin.json" },
   { label: "Kimi plugin", path: ".kimi-plugin/plugin.json" },
@@ -31,7 +32,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
 export type ChangelogTarget = {
   path: string;
   lang: "en" | "cn";
-  pkg: "root" | "cli" | "opencode" | "engine";
+  pkg: "root" | "cli" | "opencode" | "engine" | "dsh";
   hasRegistryTable: boolean;
 };
 
@@ -41,6 +42,7 @@ export const CHANGELOGS: readonly ChangelogTarget[] = [
   { path: "packages/cli/CHANGELOG.md", lang: "en", pkg: "cli", hasRegistryTable: false },
   { path: "packages/opencode/CHANGELOG.md", lang: "en", pkg: "opencode", hasRegistryTable: false },
   { path: "packages/engine/CHANGELOG.md", lang: "en", pkg: "engine", hasRegistryTable: false },
+  { path: "packages/dsh/CHANGELOG.md", lang: "en", pkg: "dsh", hasRegistryTable: false },
 ] as const;
 
 /** INSTALL.md ZCode marketplace example carries a quoted version field. */

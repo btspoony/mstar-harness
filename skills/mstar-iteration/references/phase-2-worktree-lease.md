@@ -1,10 +1,9 @@
 # Phase 2 control worktree + execution lease
 
-Normative field names and claim/release/merge semantics → maintenance ADR
-`.harness/docs/2026-07-22-iteration-worktree-plan-lease.md` (this repo) or
-`mstar-plan-artifacts/references/status-and-residuals.md` (runtime SSOT after
-plan-artifacts sync). This reference is the **iteration-command execution
-checklist**; do not invent alternate lease field names.
+Normative field names and claim/release/merge semantics → runtime SSOT
+`mstar-plan-artifacts/references/status-and-residuals.md`. This reference is
+the **iteration-command execution checklist**; do not invent alternate lease
+field names.
 
 ## When it applies
 

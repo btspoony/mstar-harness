@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="Morning Star Harness" width="96">
 
-# Morning Star
+# [Morning Star](https://github.com/btspoony/mstar-harness)
 
 Harness Workflow Engine · Agent Plugin
 
@@ -22,9 +22,9 @@ English / [中文](README_CN.md)
 
 - **Deterministic gates, enforced by a TS engine** — path/status/lease/dispatch/sdd/iteration/lint gates run in `@mstar-harness/engine`, not as prompt suggestions
 - **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment
-- **One engine across hosts** — the same engine + skills power omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
+- **One engine across hosts** — the same engine + skills power dsh (DeepSeek Harness), omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
 - **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
-- **Recommended host order** (best → usable): **omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex** — omp/OpenCode/Cursor have the richest subagent + Plan UX; Kimi/ZCode work with built-in agent types only; Codex has the most constrained dispatch surface.
+- **Recommended host** (best → usable): **dsh = omp ≥ OpenCode ≥ Cursor > Kimi = ZCode > Codex**
 
 **What ships**
 
@@ -33,7 +33,7 @@ English / [中文](README_CN.md)
 | Harness Workflow Engine | `@mstar-harness/engine` — TS enforcement of deterministic workflow gates |
 | mstar CLI | `@mstar-harness/cli` — installer bootstrap + `mstar` workflow verbs |
 | `mstar-*` skills | Role, gate, and workflow judgment (single source of truth) |
-| Host adapters | omp, OpenCode, Cursor, Kimi Code, ZCode, Codex |
+| Host adapters | dsh, omp, OpenCode, Cursor, Kimi Code, ZCode, Codex |
 
 Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
@@ -46,6 +46,7 @@ npx @mstar-harness/cli init
 
 | Host | Command |
 |------|---------|
+| dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` |
 | omp | `npx @mstar-harness/cli init --target omp` (links `~/.mstar/harness`) or `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
@@ -72,6 +73,7 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 
 | Host | Enter PM |
 |------|----------|
+| dsh (DeepSeek Harness) | `pm` skill (via the mstar skill provider; no auto-load) |
 | omp | `/skill:pm` each session (no auto-load) |
 | OpenCode | `agent.project-manager` (`agents/project-manager.md`) |
 | Cursor | `/pm` |
@@ -99,8 +101,9 @@ Read-only advisory — never edits source. Output feeds iteration-start Research
 
 | Host | How commands load |
 |------|-------------------|
+| dsh (DeepSeek Harness) | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit` (bundled `harness-commands/` via `ctx.commands`) |
 | omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit` (filename commands from plugin `commands/`) |
-| Cursor / OpenCode | Bundled from `commands/` (OpenCode: plugin `harness-commands/`) |
+| OpenCode / Cursor | Bundled from `commands/` (OpenCode: plugin `harness-commands/`) |
 | Kimi / ZCode | `/morning-star-harness:iteration-start` · `:codebase-audit` (etc.) via plugin manifest |
 | Codex project | `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
 | Codex global | Project-scoped commands **not** installed — use `--scope project` |
@@ -188,7 +191,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-skill-authoring` | General skill authoring (SkillsBench gate) |
 | `mstar-audit` | Read-only codebase audit → prioritized improvement plans |
 | `mstar-roles` | Role prompts + load lists |
-| `mstar-host` | Host adapters (omp / OpenCode / Cursor / Kimi / ZCode / Codex) |
+| `mstar-host` | Host adapters (dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex) |
 | `pm` | `/pm` / `/skill:pm` / host PM entry |
 
 Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Details → `mstar-plan-conventions`.

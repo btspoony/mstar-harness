@@ -1,0 +1,555 @@
+/**
+ * AgentCanvasPage styles (spec panel-tabs §4/§6.2, plan 20260811-panel-agent-canvas
+ * Task 2): the draggable agent canvas — pointer-event pan (translate-only, no
+ * zoom), the coordinate-space content layer with the moving grid background,
+ * the scattered entity cards (agent-name title / status point / record fields;
+ * idle cards muted via the dashed border + caption treatment), the stage
+ * column labels (+ the sdd-implement sub-bucket captions / on-demand badge /
+ * supervise line — plan 20260812-panel-f5-agent-layout Task 2, and the
+ * LAST-column "unknown / 未匹配角色" sub-partition caption — plan
+ * 20260812-panel-f5-design-system Task 5: the standalone unknown column is
+ * removed, general entities sink into the last column's bottom sub-partition),
+ * the card PORT anchors (4 edge-midpoint dots, hover-visible, Task 5), the
+ * Legend seat (plan Task 3), and the AgentEdge collaboration paths (actual
+ * handoffs + the bidirectional supervise line — Task 5: bezier `C` curves,
+ * port-anchored, expected/next edges REMOVED). Plus the emphasis tiers
+ * (plan 20260812-panel-f5-design-system Task 4 — design doc §3): chrome
+ * colors mix toward the layer background by the projected
+ * `data-agent-emphasis` tier (current 100% / next 75% / off 45% — NEVER a
+ * whole-card opacity, so the status point + running glow stay opaque).
+ *
+ * Token discipline (spec §1.2/§7 — the T4/T5 css audits): EVERY color is a
+ * verified --dsw-alias-* token (zero bare hex/rgb — dark mode is the host
+ * token flip); spacing rides the --mstar-space-1..6 ramp; fonts ride the
+ * --dsw-font-xxxs-11/xxs-12/xs-13 ramp; hover feedback 150ms (120–150ms
+ * window); radius is the unified 8px/999px pair; motion (the running-card
+ * pulse — the next-edge dash flow is REMOVED with the next edge, Task 5) is
+ * killed by the panel root's global `prefers-reduced-motion` rule
+ * (`* { animation: none !important }`) — this module declares no
+ * self-contained reduced-motion block.
+ */
+
+/* --- page frame: fills the content region as a flex column --- */
+
+.canvasPage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  padding: var(--mstar-space-3);
+  /* Canvas emphasis tiers (design doc §3.5 — canvas semantic tokens, this
+   * plan declares them; theme-independent, light/dark same values): the
+   * chrome-alpha PERCENTAGES the tier rules mix chrome colors toward the
+   * viewport layer background (design doc §3.4 — numeric equivalents:
+   * current 1 / next 0.75 / off 0.45). */
+  --mstar-canvas-emphasis-current: 100%;
+  --mstar-canvas-emphasis-next: 75%;
+  --mstar-canvas-emphasis-off: 45%;
+}
+
+.canvasHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  flex: none;
+  min-width: 0;
+}
+
+.canvasTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+  font-weight: 600;
+}
+
+/* Summary row (spec §4): `N executing · M pending` — projection counts. */
+.canvasSummary {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Muted degradation note (spec §8 — never an orange warn frame). */
+.canvasNote {
+  flex: none;
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxs-12);
+}
+
+/* Legend seat (plan Task 3 — the Legend component renders its own frame;
+ * this wrapper just keeps it from shrinking inside the flex column). */
+.canvasLegend {
+  flex: none;
+}
+
+/* --- canvas viewport: the pan surface (pointer capture target) --- */
+
+.canvasViewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;          /* free pan — the page itself never scrolls */
+  touch-action: none;        /* pointer-event pan: no native scroll/zoom gestures */
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  cursor: grab;
+  user-select: none;         /* no text selection while dragging */
+}
+
+.canvasViewport:active {
+  cursor: grabbing;
+}
+
+/* --- content layer: the coordinate space; translate() by the pan state,
+ * grid background moves WITH the content (spec §6.2 — 网格背景随动) --- */
+
+.canvasContent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background-color: var(--dsw-alias-bg-layer-1);
+  background-image:
+    linear-gradient(var(--dsw-alias-border-l1) 1px, transparent 1px),
+    linear-gradient(90deg, var(--dsw-alias-border-l1) 1px, transparent 1px);
+  background-size: 24px 24px;
+  will-change: transform;
+}
+
+/* Stage column label (caption, uppercase — the pipeline-order context). */
+.canvasColumnLabel {
+  position: absolute;
+  padding: 0 var(--mstar-space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Phase group label row (plan 20260812-panel-f5-design-system Task 8 — user
+ * 2026-08-12 feedback #2, design doc §1.2; side-by-side layout per plan
+ * 20260813-panel-agent-canvas-legend-layout Task 2): the canvas splits into
+ * TWO side-by-side groups — Phase 1 (the sequential review-edit-chain) on
+ * the LEFT, Phase 2 (the iterative plan loop: sdd-implement → qc-tri →
+ * qa-gate) on the RIGHT, top-aligned (all group label rows share the same
+ * `y = PAD_Y`) — each with its own label row; the Phase-2 row additionally
+ * carries the CURRENT-PLAN annotation (the projected `activePlanId` — the
+ * first InProgress `state.plans[]` row, or the muted「无进行中 plan」note). */
+.canvasGroupLabel {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+  padding: 0 var(--mstar-space-1);
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Current-plan annotation chip (Phase 2 group only): the projected
+ * `activePlanId` in a caption pill — bounded width + ellipsis so a long plan
+ * id never stretches the fixed-geometry canvas (the viewport clips the
+ * overflow; the chip keeps the row tidy). */
+.canvasGroupPlan {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  max-width: 220px;
+  padding: 0 var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+/* The `+N more` honesty count (several InProgress plans — the annotation
+ * shows the first, never hides the rest). */
+.canvasGroupPlanMore {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* The muted「无进行中 plan」note (no InProgress `state.plans[]` row). */
+.canvasGroupNoPlan {
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* --- collaboration edges (plan 20260812-panel-f5-design-system Task 5 —
+ * design doc §2.2/§2.6): actual handoff + supervise — SVG bezier PATHS,
+ * non-interactive overlay (expected/next edges are REMOVED) --- */
+
+.canvasEdges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+/* The shared path base (design doc §2.6): every edge is a cubic-bezier
+ * `C` path — `fill: none` is mandatory for SVG paths (the default black
+ * fill would swallow the stroke + arrowheads). */
+.canvasEdgeCurve {
+  fill: none;
+}
+
+.canvasEdgeActual {
+  stroke: var(--dsw-alias-state-business-primary);
+  stroke-width: 1.5;
+}
+
+/* Arrowhead fills (QC S-002): the marker <path> elements carry these classes
+ * directly (AgentCanvasPage.tsx marker defs), so the fill must target the
+ * class itself — a `.canvasArrowX path` descendant selector would never match
+ * and the SVG default (black) fill would win. One direct rule per marker. */
+.canvasArrowActual {
+  fill: var(--dsw-alias-state-business-primary);
+}
+
+/* --- entity cards (spec §4/§6.2): agent-name title / status point /
+ * record fields; idle = dashed muted card, running = business ring + glow --- */
+
+.canvasCards {
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agentCard {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  padding: var(--mstar-space-2);
+  /* Emphasis chrome alpha (plan 20260812-panel-f5-design-system Task 4 —
+   * design doc §3.4 HARD): the tier percentage applied to the card CHROME
+   * colors via color-mix toward the layer background — NEVER a whole-card
+   * `opacity` (a parent opacity would fade the status point + running glow,
+   * violating the status-point highest-priority rule). Default = the
+   * current tier (100% → identity mix); the `data-agent-emphasis` rules
+   * below swap it. The status point / running ring + glow use their OWN
+   * full-strength token colors and are never mixed. */
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-current);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+/* Emphasis tier overrides (design doc §3.3/§3.5): swap the chrome alpha
+ * only — `current` renders the attribute but changes nothing (100% = the
+ * default). No tier → no attribute → no override (the no-iteration /
+ * no-plan case, design doc §3.1 null). */
+.agentCard[data-agent-emphasis='next'] {
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-next);
+}
+
+.agentCard[data-agent-emphasis='off'] {
+  --mstar-chrome-alpha: var(--mstar-canvas-emphasis-off);
+}
+
+.agentCard:hover {
+  /* Hover brightening (spec §4.1 — border-l1 → border-l2) mixed with the
+   * card's own chrome alpha: the tier fade persists on hover instead of the
+   * neutral hover color overriding it. */
+  border-color: color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+}
+
+/* Running card (spec §4): business ring + soft glow pulse — the "执行中高亮"
+   treatment. The pulse is motion, killed by the root reduced-motion rule. */
+.agentCardRunning {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  animation: canvas-card-pulse 1.6s ease-in-out infinite;
+}
+
+.agentCardRunning:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+@keyframes canvas-card-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+  }
+  50% {
+    box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary), 0 0 6px 0 var(--dsw-alias-state-business-primary);
+  }
+}
+
+/* Idle card (spec §6.2 — the muted "未工作" card): dashed frame, caption
+ * text — never a guessed status. The border-color rides the card's chrome
+ * alpha (design doc §3.4: idle dashed + emphasis coexist — border-style is
+ * a DIFFERENT property plane than the chrome fade). */
+.agentCardIdle {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+}
+
+.agentCardIdle:hover {
+  border-color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+}
+
+/* Done card (plan 20260812-panel-f5-design-system Task 8 — user 2026-08-12
+ * feedback #1/#3): settled AND emphasis ≠ 'off' → a STANDALONE GREEN frame
+ * (success border + 1px ring on the ROUNDED card body — the single rounded
+ * element rule §1.4) + the green ✓ in the status point. Full-strength
+ * success token — an EVIDENCE state, the same priority class as the running
+ * ring/glow (design doc §3.4: never chrome-mixed / never faded by the
+ * emphasis tier). emphasis === 'off' (already-passed / stage-less on-demand
+ * + general roles) NEVER shows the green frame or ✓ — the completed state
+ * cannot appear on an off-tier role (feedback #3 — the v3 leak: the settled
+ * ✓ survived the off-tier low transparency). */
+.agentCardDone {
+  border-color: var(--dsw-alias-state-success-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-success-primary);
+}
+
+.agentCardDone:hover {
+  border-color: var(--dsw-alias-state-success-primary);
+}
+
+/* Card ports (plan 20260812-panel-f5-design-system Task 5 — design doc §2.5):
+ * the 4 fixed edge-midpoint anchors (north / south / west / east), 3px dots.
+ * STATIC-INVISIBLE (opacity 0 at rest — pure geometry, no visual noise);
+ * revealed on card hover / selected (design doc §2.5 可见性) — running cards
+ * hover in business color. Non-interactive (pointer-events: none — ports are
+ * anchors, not controls; the edges are non-interactive too, spec §4.1). */
+.agentPort {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--dsw-alias-label-caption);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+.agentCard:hover .agentPort {
+  opacity: 1;
+}
+
+.agentCardRunning:hover .agentPort {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.agentPort[data-agent-port='north'] {
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.agentPort[data-agent-port='south'] {
+  bottom: 0;
+  left: 50%;
+  transform: translate(-50%, 50%);
+}
+
+.agentPort[data-agent-port='west'] {
+  left: 0;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.agentPort[data-agent-port='east'] {
+  right: 0;
+  top: 50%;
+  transform: translate(50%, -50%);
+}
+
+/* On-demand badge (plan 20260812-panel-f5-agent-layout Task 2): the
+ * implementor-sub-bucket on-demand roles (ops-engineer / prompt-engineer)
+ * carry a dashed business chip — the tag marks the on-demand nature inside
+ * the implementor partition (the standalone on-demand column is gone).
+ * Token discipline: colors --dsw-alias-*, spacing --mstar-space-*, font
+ * --dsw-font-xxxs-11 — zero bare hex. */
+.onDemandBadge {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px dashed color-mix(in srgb, var(--dsw-alias-state-business-primary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--dsw-alias-label-secondary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* Sub-bucket caption (plan f5 Task 2): the implementor / sdd-reviewer
+ * partition labels inside the `sdd-implement` column — a tiny uppercase
+ * caption + the dashed rule filling the rest of the row (the former
+ * generalBucketTag pattern, now carrying the partition labels). `width` is
+ * set inline from the layout (the deterministic caption seat). */
+.subBucketLabel {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* The dashed separator rule filling the rest of the caption row. */
+.subBucketLabel::after {
+  content: '';
+  flex: 1;
+  border-top: 1px dashed var(--dsw-alias-border-l2);
+}
+
+/* Supervise line (plan f5 Task 2 + Task 5): the implementor ↔ sdd-reviewer
+ * mutual supervision edge — dim dashed by default, lit business when the
+ * projected `evidenced` flag is true (dispatch evidence in an SDD sub-bucket;
+ * never a fabricated activation). The bidirectional double arrow comes from
+ * the auto-start-reverse markers (both ends point outward). Task 5 (design
+ * doc §2.7): the line hangs on the SIDE-GAP vertical anchor (card right edge
+ * + 18px) — clear of the "sdd-reviewer" caption text (H2); evidenced → solid
+ * business — the lit rule BELOW explicitly cancels the dash (QC W-001: the
+ * dash survived the lit state before because no rule reset it). */
+.canvasEdgeSupervise {
+  stroke: var(--dsw-alias-label-caption);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.canvasEdgeSuperviseLit {
+  /* QC W-001 (plan QC tri): the evidenced supervise line must render 1.5px
+   * business SOLID (design doc §2.7 — 降低虚线噪音). The base rule's
+   * `stroke-dasharray` is single-class specificity (0,1,0), so only an
+   * EXPLICIT reset in this same-specificity rule wins the cascade — a
+   * stroke-only override leaves the dash in place. */
+  stroke: var(--dsw-alias-state-business-primary);
+  stroke-dasharray: none;
+}
+
+.canvasArrowSupervise {
+  fill: var(--dsw-alias-label-caption);
+}
+
+.canvasArrowSuperviseLit {
+  fill: var(--dsw-alias-state-business-primary);
+}
+
+.agentCardLine {
+  display: flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.agentCardName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--dsw-alias-label-primary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.agentCardIdle .agentCardName {
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+}
+
+/* ×N count badge (spec §4 — count > 1 only); the name's flex:1 pushes it
+   right without a non-ramp margin. */
+.agentCount {
+  flex: none;
+  min-width: 18px;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.agentRoleChip {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-border-l2) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--dsw-alias-label-secondary) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+}
+
+/* Record fields (spec §4 — session id / task tag are auxiliary, never the
+ * title): monospace caption line. */
+.agentRecord {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--dsw-alias-label-caption) var(--mstar-chrome-alpha), var(--dsw-alias-bg-layer-1));
+  font: var(--dsw-font-xxxs-11);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status point (spec §4): dot colored by status; running glows (business),
+   settled shows the ✓ (success), error/denied carry error, advisory warn,
+   idle stays muted caption. */
+.agentStatusDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.agentStatusRunning {
+  color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+.agentStatusSettled {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  background: none;
+  color: var(--dsw-alias-state-success-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+.agentStatusError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.agentStatusAdvisory {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.agentStatusIdle {
+  color: var(--dsw-alias-label-caption);
+}

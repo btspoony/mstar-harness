@@ -1,0 +1,95 @@
+/**
+ * Registry peer contract (rc.6 from npm, no link farm): the private
+ * `@deepseek-ai/*` packages are peerDependencies ONLY (never
+ * devDependencies / dependencies), resolved from the npm registry at dev
+ * time via bun's default peer auto-install — no local link farm, no
+ * scoped-registry `.npmrc` (the 0c884d47 npmrc cleanup dropped the root
+ * auth token: `@deepseek-ai` is public on registry.npmjs.org). Data-driven
+ * over the ACTUAL package.json, so the peer set can grow without this test
+ * silently going stale.
+ *
+ * Bun installs peer dependencies by default (unlike pnpm, which needs the
+ * `autoInstallPeers: true` workspace flag), so the registry switch is wired
+ * solely by the pinned `^0.1.0-rc.6` peer ranges resolving against the
+ * default registry.
+ */
+import { describe, expect, it } from 'bun:test'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const pkgDir = resolve(here, '..')
+// The monorepo root owns the registry/auth `.npmrc` (bun workspaces share it).
+const repoRoot = resolve(here, '..', '..', '..')
+
+const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
+  scripts: Record<string, string>
+  keywords?: string[]
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
+}
+
+const deepseekKeys = (field: Record<string, string> | undefined): string[] =>
+  Object.keys(field ?? {}).filter((name) => name.startsWith('@deepseek-ai/')).sort()
+
+describe('registry peer contract (rc.6 from npm, no link farm)', () => {
+  it('every @deepseek-ai/* entry is a peerDependency and appears in no other dependency field', () => {
+    const peers = deepseekKeys(pkg.peerDependencies)
+    expect(peers.length).toBeGreaterThan(0)
+    for (const name of peers) {
+      expect(pkg.dependencies?.[name], `${name} in dependencies`).toBeUndefined()
+      expect(pkg.devDependencies?.[name], `${name} in devDependencies`).toBeUndefined()
+      expect(pkg.optionalDependencies?.[name], `${name} in optionalDependencies`).toBeUndefined()
+    }
+  })
+
+  it('every @deepseek-ai/dsh-* peer is pinned to ^0.1.0-rc.6', () => {
+    for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
+      if (name.startsWith('@deepseek-ai/dsh-')) {
+        expect(range, name).toBe('^0.1.0-rc.6')
+      }
+    }
+  })
+
+  it('peers are NOT marked optional (bun must auto-install them from the registry)', () => {
+    // `peerDependenciesMeta.optional: true` was the old link-farm workaround
+    // (skip unpublished peers). With registry resolution it silently skips
+    // the install — the peers must be non-optional so bun installs them.
+    for (const name of deepseekKeys(pkg.peerDependencies)) {
+      expect(pkg.peerDependenciesMeta?.[name]?.optional, `${name} marked optional`).toBeUndefined()
+    }
+  })
+
+  it('registry resolution needs no root .npmrc (public npm registry, no link farm)', () => {
+    // The 0c884d47 npmrc cleanup removed the root `.npmrc` auth token —
+    // `@deepseek-ai` is public on registry.npmjs.org and bun auto-installs
+    // peers from the default registry. No scoped-registry mapping may come
+    // back (that was the link-farm era wiring).
+    const npmrcPath = join(repoRoot, '.npmrc')
+    if (existsSync(npmrcPath)) {
+      const npmrc = readFileSync(npmrcPath, 'utf8')
+      expect(npmrc).not.toMatch(/@deepseek-ai\s*:/)
+    }
+    // Behavioral half: the dev-time seam must resolve to the pinned line.
+    const llm = JSON.parse(
+      readFileSync(require.resolve('@deepseek-ai/dsh-llm/package.json'), 'utf8'),
+    ) as { version: string }
+    expect(llm.version).toBe('0.1.0-rc.6')
+  })
+
+  it('prepare is build-only; dsh:link scripts and the link-farm script are gone', () => {
+    expect(pkg.scripts.prepare).toBe('bun run build')
+    expect(pkg.scripts['dsh:link']).toBeUndefined()
+    expect(pkg.scripts['dsh:link:check']).toBeUndefined()
+    expect(existsSync(join(pkgDir, 'scripts', 'setup-dsh-links.ts'))).toBe(false)
+  })
+
+  it('package is tagged dsh / dsh-plugin for npm discovery', () => {
+    expect(pkg.keywords).toContain('dsh')
+    expect(pkg.keywords).toContain('dsh-plugin')
+  })
+})

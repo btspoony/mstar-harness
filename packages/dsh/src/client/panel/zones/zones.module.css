@@ -1,0 +1,328 @@
+/**
+ * Zone component styles (spec panel-zones §2/§7, plan 20260811-panel-tabs-shell
+ * Task 3): the WorkflowCanvas zone dashboard layout is GONE with the
+ * Tabs+Content rework — the canvas/scroll/zones grid, the footer bar
+ * (legend + gate summary + violations), the vertical IterationZone stepper
+ * AND the AgentFlowZone stage pipeline styles were removed here (the
+ * agent-canvas plan deleted the AgentFlowZone component and its css — the
+ * stage columns / entity cards / expected-actual-next arrows now live in
+ * `pages/agent-canvas.module.css`). The AgentEventDock and its event-row
+ * styles were removed by the event-log plan (spec §5 — 无双份日志: the dock
+ * content migrated into `pages/EventLogPage.tsx` + `pages/event-log.module.css`).
+ * What remains serves the components mounted today:
+ *   - the shared `.zone` frame (TaskBoard),
+ *   - the TaskBoard kanban (reused full-width by IterationTaskPage),
+ *   - the Legend agent-pipeline + entity-status swatches (mounted on the
+ *     agent canvas, plan 20260811-panel-agent-canvas Task 3).
+ *
+ * Hard metrics (spec §1.2/§7): spacing from the --mstar-space-* ramp (defined
+ * at the panel root) only; EVERY color is a verified --dsw-* alias token —
+ * zero bare hex/rgb, so dark mode is the host token flip; motion ≤200ms
+ * state switches (the panel root's prefers-reduced-motion rule disables all
+ * transitions/animations).
+ */
+
+/* --- zone frame (shared by the TaskBoard / agent-flow zone) --- */
+
+.zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+  padding: var(--mstar-space-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.zone:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.zoneHeader {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.zoneEmpty {
+  margin: 0;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.legendTitle {
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.legendList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mstar-space-1) var(--mstar-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mstar-space-1);
+}
+
+.legendSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* Agent-pipeline legend swatches (spec §7, plan 20260811-panel-tabs-shell
+ * Task 3): the zone-dashboard legend items (iteration/current/disabled/
+ * tasks/verdicts) were removed with the WorkflowCanvas (spec §6.1 — the
+ * legend re-mounts on the agent-canvas page). The collaboration-edge /
+ * layout swatches (actual handoff edge / card ports / sub-buckets /
+ * supervise line / on-demand badge / unknown partition) are REMOVED with
+ * the legend simplification (plan 20260813-panel-agent-canvas-legend-layout
+ * Task 1 — the legend is the role-card status description only); only the
+ * 3 entity-status swatches stay. */
+
+/* Entity status swatches (plan 20260811-panel-agent-canvas Task 3): the
+ * agent-canvas card treatments — running = business dot with the 1px ring
+ * the running-card glow uses; settled = the success ✓ color; idle = the
+ * dashed muted card frame (caption border, like `agentCardIdle`). */
+.swatchAgentRunning {
+  background: var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--dsw-alias-bg-layer-1), 0 0 0 2px var(--dsw-alias-state-business-primary);
+}
+
+.swatchAgentSettled {
+  background: var(--dsw-alias-state-success-primary);
+  border-radius: 999px;
+}
+
+.swatchAgentIdle {
+  border: 1px dashed var(--dsw-alias-label-caption);
+}
+
+/* --- task board kanban (spec §3/§5/§7, plan 20260813-panel-quick-fixes
+   Task 1): 5 columns + count badges + plan cards + dim inter-column flow
+   arrows + per-column 「更多」 expand affordance + muted no-plans empty
+   state. Colors are --dsw-* tokens only (the blocked-unknown catch-all column
+   is muted NEUTRAL — deliberately NOT the warn/orange treatment); spacing
+   rides the --mstar-space-* ramp; hover feedback sits in the 120–150ms
+   window (the panel root's reduced-motion rule kills all motion). --- */
+
+.tasksHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+.tasksTotal {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Horizontal 5-column row; on the IterationTaskPage the tasks area scrolls
+   vertically (the page's independent scroll body) and the columns SPREAD
+   full-width (flex: 1 1 0, no width cap — spec panel-tabs §3/D2); on very
+   narrow widths the row scrolls internally. */
+.kanban {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+}
+
+/* box-sizing: border-box keeps `min-width` an OUTER width — under the
+   default content-box the 150px floor silently became 166px per column and
+   the columns (+ flow arrows) overflowed the content area at normal desktop
+   widths, hiding the trailing columns behind the internal scrollbar
+   (plan 20260811-panel-tabs-shell Task 3 browser verification finding). 120px
+   outer floor: the columns spread the content width down to narrower
+   viewports; below that the row scrolls internally (the narrow-width
+   fallback, spec §3/D2). */
+.kanbanColumn {
+  box-sizing: border-box;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: var(--mstar-space-2);
+  min-width: 120px;
+  padding: var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.kanbanColumn:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* blocked-unknown catch-all column (spec §3/§8, plan 20260813-panel-quick-fixes
+   Task 1 — the merged Blocked/unknown column): muted NEUTRAL — dimmed,
+   dashed, caption-colored. NOT the react-flow-era orange `stateUnknown` bucket. */
+[data-kanban-column='blocked-unknown'] {
+  border-style: dashed;
+  color: var(--dsw-alias-label-caption);
+  opacity: 0.7;
+}
+
+.kanbanColumnHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+}
+
+.kanbanColumnTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.kanbanCount {
+  flex: none;
+  min-width: 18px;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.kanbanCards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  min-width: 0;
+  padding: var(--mstar-space-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 150ms ease;   /* hover 120–150ms window */
+}
+
+.planCard:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.planCardId {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status chip — the sidebar `data-status` coloring convention, shared
+   semantics (Done = success, InProgress = business, others neutral). */
+.planCardStatus {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  transition: color 150ms ease, border-color 150ms ease;   /* hover 120–150ms */
+}
+
+.planCardStatus[data-status='Done'] {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.planCardStatus[data-status='InProgress'] {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/* Dim inter-column flow arrow (spec §2.4): the chain → and the Blocked ⇄. */
+.kanbanArrow {
+  flex: none;
+  align-self: center;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
+/* Overflow toggle row (spec §3, plan 20260813-panel-quick-fixes Task 1): the
+   clickable 「更多」/「收起」 button — a dashed caption affordance (mirrors the
+   MenuTab borderless-button pattern: `background: none` + token colors). */
+.kanbanMore {
+  margin: 0;
+  padding: 0;
+}
+
+.kanbanMoreButton {
+  appearance: none;
+  display: block;
+  width: 100%;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: none;
+  padding: var(--mstar-space-1) var(--mstar-space-2);
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;   /* hover 120–150ms */
+}
+
+.kanbanMoreButton:hover {
+  border-color: var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+}
+

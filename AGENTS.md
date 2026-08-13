@@ -75,7 +75,7 @@ When a change affects shared harness behavior, treat OpenCode, Cursor, Codex, Ki
 
 ## Release Process
 
-Releases are PR-driven and mostly automated. Every release ships one version across all 11 version surfaces (root + 3 npm packages + 7 plugin manifests [6 host + portable Agent Plugins]); also bump the INSTALL.md marketplace example.
+Releases are PR-driven and mostly automated. Every release ships one version across all 12 version surfaces (root + 4 npm packages + 7 plugin manifests [6 host + portable Agent Plugins]); also bump the INSTALL.md marketplace example.
 
 ### 1. During development — add a changelog fragment
 
@@ -165,19 +165,22 @@ If one of these checks fails, stop and report why.
   - Add/update trigger phrases when scenarios expand.
 - If a change alters behavior (not just wording), include evaluation evidence.
 
+## Local scratch layout (`.tmp/`, `.worktrees/`)
+
+统一本地布局约定（gitignored，用完即清）：
+
+- 临时文件（一次性探针、日志、浏览器 profile、验证脚本等）→ 仓库根 **`.tmp/*`**，用完即清，不跨轮次残留
+- Git feature worktrees → **`.worktrees/*`**（每 plan 一个子目录，如 `.worktrees/<plan-id>-<slug>`，`git worktree add .worktrees/<slug> -b feature/<plan-slug>`）；合并后 `git worktree remove` 并 `git worktree prune`
+
 ## Local maintenance workspace (`.harness/`, gitignored)
 
-Use **`.harness/`** only for **in-progress maint work** on this repo (not published runtime skills):
+Use **`.harness/`** only for **in-progress maint docs** on this repo (not published runtime skills):
 
 | Path | Purpose |
 |------|---------|
-| `.harness/docs/` | Design specs, decomposition notes, ADRs for harness changes |
-| `.harness/specs/` | Spec drafts while iterating |
-| `.harness/plans/` | Implementation plans, task boards, maint status notes |
-| `.harness/status.json` | Maintainer plan registry (same schema as consumer `{HARNESS_DIR}/status.json`) |
-| `.harness/sdd/` | Optional SDD scratch during maint smoke (gitignored; inner `*` per plan-id) |
+| `.harness/docs/` | Design specs, decomposition notes, ADRs, reports for harness changes |
 
-**This repository** uses `.harness/` as its local harness root — not `.mstar/`. Consumer projects still default to `.mstar/` per `mstar-plan-conventions`.
+**This repository's harness root is `.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `plans/`, `iterations/`, `knowledge/`, `sdd/`, `references/`, `archived/` all live under `.mstar/`. `.harness/` is NOT a harness root — it holds maintenance docs only; do not create plan/status artifacts there.
 
 **Runtime SSOT** for `mstar-*` skills stays in repo-root **`skills/`** (bundled via `packages/opencode` `bundle-assets`). Do not treat `.harness/skills/` as the publish path.
 

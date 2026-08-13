@@ -2,6 +2,7 @@
 name: iteration-loop
 description: "Autonomous full iteration loop for cloud agents — Phase 1 (code-first auto direction lock + compass/plans + Review & Edit chain) through Phase 2–5 (execute → close → PR → merge-ready). Optional args: direction, scale (S|M|L|XL, default M). Not Done until Phase 5 exit checklist passes. Minimal human intervention; no grill-me."
 agent: project-manager
+input: "[direction] [scale]"
 ---
 
 # Iteration Loop
@@ -129,7 +130,7 @@ command -v mstar-harness >/dev/null 2>&1 && mstar-harness dispatch validate "<la
 if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validate "<latest-assignment-file>" || exit 1; fi
 ```
 
-> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开（qc2 W-2）。
+> 路径必须加引号且替换为具体文件（如最新 `{SDD_DIR}/task-N-brief.md`，勿留尖括号）——agent 代入的路径不得进入 shell 无引号展开。
 
 **Loop 特有**：Phase 5 push cadence（HARD）→ **`mstar-iteration` §5.1a**；exit checklist → **`mstar-iteration` §5.2**（`references/phase-4-5-pr-delivery.md` §5.2）。
 

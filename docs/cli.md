@@ -1,6 +1,6 @@
 # mstar-harness CLI Guide
 
-This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, Codex, ZCode, and omp bootstrap. Kimi Code uses Kimi TUI `/plugins install` — see [INSTALL.md](../INSTALL.md#kimi).
+This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, Codex, ZCode, and omp bootstrap. Kimi Code uses Kimi TUI `/plugins install` — see [INSTALL.md](../INSTALL.md#kimi). dsh (DeepSeek Harness) is **not** a CLI target — see the [dsh section](#dsh-deepseek-harness) below.
 
 ## Fast Path
 
@@ -131,6 +131,18 @@ Codex install:
   - Codex-specific clarify, dispatch, sandbox, and tool-discovery rules live in **`mstar-host`** → `references/codex.md`.
 
 Kimi: not a CLI target — use `/plugins install` in Kimi TUI (see [INSTALL.md](../INSTALL.md#kimi)).
+
+### dsh (DeepSeek Harness)
+
+dsh is **not** a CLI target — the harness is not installed via `npx @mstar-harness/cli init`. dsh consumes Morning Star through the **profile bundle** of the `@mstar-harness/dsh` package, added to the shipped `web` profile with the host's own plugin manager:
+
+```sh
+dsh plugin --profile web add @mstar-harness/dsh
+# or, from a local checkout:
+cd <repo>/packages/dsh && dsh plugin --profile web add .
+```
+
+`dsh web` then boots the harness: in-process engine gates (status/dispatch/lease/worktree/seams), the bundled `mstar-*` skills mount, and the bundled slash commands (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`). Host behavior (tools, gates, enforcement, PM dispatch) → **`mstar-host`** → `references/dsh.md`; package docs → [`packages/dsh/README.md`](../packages/dsh/README.md).
 
 ### `mstar-harness doctor`
 

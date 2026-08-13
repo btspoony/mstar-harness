@@ -55,6 +55,7 @@ const DEFAULT_CATEGORY: Record<string, string> = {
   cli: "Changed",
   opencode: "Bundled harness skills (`harness-skills/` at publish)",
   engine: "Changed",
+  dsh: "Changed",
 };
 
 function parseArgs(argv: string[]): { version?: string; bump: "patch" | "minor" } {
@@ -156,14 +157,14 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
       lines.push(
         "### 版本对齐",
         "",
-        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、\`@mstar-harness/engine\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ ${version}**。`,
+        `- 提升 monorepo 根、\`@mstar-harness/opencode\`、\`@mstar-harness/cli\`、\`@mstar-harness/engine\`、\`@mstar-harness/dsh\`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ ${version}**。`,
         "",
       );
     } else {
       lines.push(
         "### Version alignment",
         "",
-        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, \`@mstar-harness/engine\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ ${version}**.`,
+        `- Bump monorepo root, \`@mstar-harness/opencode\`, \`@mstar-harness/cli\`, \`@mstar-harness/engine\`, \`@mstar-harness/dsh\`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ ${version}**.`,
         "",
       );
     }
@@ -259,7 +260,7 @@ async function bumpInstall(oldV: string, newV: string): Promise<void> {
 /** Internal consumers bundle the engine at build time; keep their devDependency
  *  spec aligned with the bumped engine version (workspace resolution, no 404). */
 async function syncEngineDevDepSpec(newV: string): Promise<void> {
-  for (const p of ["packages/cli/package.json", "packages/opencode/package.json"]) {
+  for (const p of ["packages/cli/package.json", "packages/opencode/package.json", "packages/dsh/package.json"]) {
     const text = await Bun.file(p).text();
     const re = /("@mstar-harness\/engine"\s*:\s*")[^"]+(")/;
     if (!re.test(text)) throw new Error(`${p}: could not find @mstar-harness/engine devDependency spec`);
@@ -317,12 +318,12 @@ async function main(): Promise<void> {
     console.log(`bump: ${s.path}`);
   }
 
-  // Internal consumers (cli/opencode) bundle the engine at build time, so the
-  // engine is a devDependency with a version spec. Keep the spec aligned with
-  // the bumped engine version so bun resolves it from the workspace (a
+  // Internal consumers (cli/opencode/dsh) bundle the engine at build time, so
+  // the engine is a devDependency with a version spec. Keep the spec aligned
+  // with the bumped engine version so bun resolves it from the workspace (a
   // mismatched spec would fall back to the registry and 404 pre-publish).
   await syncEngineDevDepSpec(version);
-  console.log(`sync: @mstar-harness/engine devDependency spec -> ${version} (cli + opencode)`);
+  console.log(`sync: @mstar-harness/engine devDependency spec -> ${version} (cli + opencode + dsh)`);
 
   await bumpInstall(current, version);
   console.log(`bump: ${INSTALL_REF.path}`);

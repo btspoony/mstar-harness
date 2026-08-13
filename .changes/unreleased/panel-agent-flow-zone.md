@@ -1,0 +1,11 @@
+---
+category: Harness
+packages: root
+---
+
+- **dsh plugin**: the MStar workflow panel's agent-execution zone now renders the real subagent flow — the six EXPECTED_ROLE_FLOW stage/phase columns with **entity cards** aggregated from actual dispatch evidence (agent display name / role chip / task tag `planId#taskId` / status point / ×N count; running entities get a business glow-pulse highlight, un-evidenced stages show a dashed "pending" placeholder with their expected role chips, and the header carries the `N executing · M pending` summary). Flow arrows: dim expected skeleton arrows between consecutive columns, small in-column handoff arrows between same-column cards, and an **animated "next" edge** — a business dash-flow arrow (`@keyframes agent-dash-flow`, disabled under `prefers-reduced-motion`) from the latest running entity's stage to the next constant-order column, drawn only while a running entity exists. The zone degrades to muted empty states (never orange warn boxes) when the ledger is missing/empty/settle-only.
+- **dsh plugin**: the agent zone and the agent-flow event dock were verified in the browser harness on **light + dark** themes — entity cards, status points, pending placeholders, the next-edge dash animation (declaration + computed `animation-name`) and the dock's event-row status colors were probed for computed styles in both themes, including a `prefers-reduced-motion` run asserting the animations are disabled; evidence in the iteration guide `iter-20260810-panel-zones/guides/agent-flow-zone-dual-theme-verification.md`.
+
+<!-- CN -->
+- **dsh 插件**：MStar 工作流面板的代理执行区现渲染真实 subagent 流转——六个 EXPECTED_ROLE_FLOW stage/phase 列承载由实际派发证据聚合的**实体卡**（agent 显示名 / role chip / 任务标签 `planId#taskId` / 状态点 / ×N 计数；执行中实体带 business glow-pulse 高亮，无证据 stage 显示虚线「待执行」占位并列出预期 role chips，头部带 `N 执行中 · M 待执行` 摘要）。流转箭头：列间 dim expected 骨架箭头、同列卡片间小交接箭头，以及**带动画的「next」边**——business dash-flow 箭头（`@keyframes agent-dash-flow`，`prefers-reduced-motion` 下关闭）自最新执行中实体所在 stage 指向常量序下一列，仅存在 running 实体时绘制。ledger 缺失/为空/仅 settle 时区降级为 muted 空态（绝无橙色 warn 框）。
+- **dsh 插件**：代理区与 agent 流转事件 dock 已由浏览器 harness 在 **light + dark** 双主题下验证——对实体卡、状态点、待执行占位、next 边 dash 动画（声明 + computed `animation-name`）与 dock 事件行状态色做了双主题计算样式探针，并含一次 `prefers-reduced-motion` 运行断言动画被关闭；证据见迭代 guide `iter-20260810-panel-zones/guides/agent-flow-zone-dual-theme-verification.md`。

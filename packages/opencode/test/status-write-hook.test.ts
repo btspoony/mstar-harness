@@ -15,6 +15,7 @@
  * end-to-end at the bottom.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,8 +71,20 @@ const invalidDoc = {
   },
 };
 
-const makeHarnessStatusFile = (doc: unknown): string => {
+/**
+ * Temp project rooted in a real git repo. `resolveHarnessDir` bounds its
+ * upward probe at the git top-level (roadmap §7c; a non-git start probes
+ * only itself), so harness fixtures must live inside a git work tree —
+ * matching real consumer repos.
+ */
+const makeProject = (): string => {
   const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+  execFileSync("git", ["init", "-q", project], { stdio: "ignore" });
+  return project;
+};
+
+const makeHarnessStatusFile = (doc: unknown): string => {
+  const project = makeProject();
   mkdirSync(join(project, ".mstar"));
   const statusPath = join(project, ".mstar", "status.json");
   writeFileSync(statusPath, JSON.stringify(doc, null, 2));
@@ -113,7 +126,7 @@ describe("validateStatusWrite (exported hook module)", () => {
   });
 
   test("doc-based validation (write-tool content) catches invalid content pre-write", () => {
-    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    const project = makeProject();
     mkdirSync(join(project, ".mstar"));
     const statusPath = join(project, ".mstar", "status.json");
     try {
@@ -137,7 +150,7 @@ describe("validateStatusWrite (exported hook module)", () => {
   });
 
   test("never throws on garbage content — degrades to invalid-json warn", () => {
-    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    const project = makeProject();
     mkdirSync(join(project, ".mstar"));
     const statusPath = join(project, ".mstar", "status.json");
     writeFileSync(statusPath, "not json {{{");
@@ -208,7 +221,7 @@ describe("plugin wiring (tool.execute.before)", () => {
 
   test("write tool with invalid content warns; valid content stays silent", async () => {
     const plugin = await MorningStarHarnessPlugin();
-    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    const project = makeProject();
     mkdirSync(join(project, ".mstar"));
     const statusPath = join(project, ".mstar", "status.json");
     try {
@@ -264,7 +277,7 @@ describe("plugin wiring (tool.execute.before)", () => {
 
   test("write tool accepts args.path alias and object content; getter re-access stays quiet", async () => {
     const plugin = await MorningStarHarnessPlugin();
-    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    const project = makeProject();
     mkdirSync(join(project, ".mstar"));
     const statusPath = join(project, ".mstar", "status.json");
     try {
@@ -320,7 +333,7 @@ describe("hard mode (compass enforcement: hard — Slice 5, roadmap §8.5 C4/D2)
 
   /** Create a project with `.mstar/status.json` + an iteration compass. */
   const makeHardRepo = (hard: boolean): { project: string; statusPath: string } => {
-    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    const project = makeProject();
     const harness = join(project, ".mstar");
     mkdirSync(join(harness, "iterations", "20260808-demo"), { recursive: true });
     const enforcement = hard ? "enforcement: hard\n" : "";
@@ -385,7 +398,7 @@ describe("hard mode (compass enforcement: hard — Slice 5, roadmap §8.5 C4/D2)
 
   test("explicit write-context enforcement (opts.enforcement) overrides the compass probe", () => {
     // No compass at all — the explicit flag decides.
-    const project = mkdtempSync(join(tmpdir(), "mstar-opencode-"));
+    const project = makeProject();
     mkdirSync(join(project, ".mstar"));
     const statusPath = join(project, ".mstar", "status.json");
     try {
