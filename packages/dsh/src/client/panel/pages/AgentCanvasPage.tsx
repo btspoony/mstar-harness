@@ -99,7 +99,8 @@
  * settle-only = events but no dispatch rows — review T2-Imp-2 restored the
  * old zone's distinct settle-only anchor; F-002: the empty/settle-only note
  * is PROJECTED metadata, never inferred from the entity list). The Legend
- * (idle / collaboration swatches, plan Task 3) sits above the viewport.
+ * (idle / collaboration swatches, plan Task 3) sits BELOW the viewport
+ * (plan 20260813-panel-quick-fixes Task 3 — user 2026-08-13 feedback).
  * `initialPan` is a deterministic SSR/test seed — the live page starts at the
  * origin.
  */
@@ -700,8 +701,10 @@ function crossesCardBody(g: { x: number; y: number; w: number; h: number }, layo
  * at `(sx ± off, sy)` / `(tx ∓ off, ty)` with off = max(|dx|/2, 24) — the
  * bbox y-range is the endpoint span (controls share the endpoint y's). */
 function horizontalBBox(sx: number, sy: number, tx: number, ty: number): { x: number; y: number; w: number; h: number } {
-  const off = Math.max(Math.abs(tx - sx) / 2, 24)
-  const xs = [sx, tx, sx + off, tx - off]
+  const dx = tx - sx
+  const off = Math.max(Math.abs(dx) / 2, 24)
+  const dir = dx < 0 ? -1 : 1
+  const xs = [sx, tx, sx + dir * off, tx - dir * off]
   const minX = Math.min(...xs)
   const maxX = Math.max(...xs)
   const minY = Math.min(sy, ty)
@@ -778,6 +781,31 @@ function sameColumnStandoff(gap: number): number {
   return Math.min(STANDOFF, Math.max(2, gap - 8))
 }
 
+/** Whether a same-column VERTICAL flow's center-x line crosses ANY OTHER card
+ * body in the column (design doc §2.0 H1 — a handoff between two NON-ADJACENT
+ * cards skips the idle card(s) between them, e.g. fullstack-dev → frontend-dev
+ * skips the idle fullstack-dev-2: the center-x line at x=cx would run straight
+ * through those card bodies). Detected against the zero-width vertical segment
+ * spanning `startY`↔`endY` at `cx`; the source/target cards themselves are the
+ * allowed ports (excluded). When it fires, the flow reroutes into the column's
+ * LEFT side gap (like the caption-crossing case — H1, the user 2026-08-13
+ * "线穿过卡片" report). */
+function crossesSameColumnCard(
+  layout: CanvasLayout,
+  cx: number,
+  startY: number,
+  endY: number,
+  sourceBox: CanvasBox,
+  targetBox: CanvasBox,
+): boolean {
+  const seg = { x: cx, y: Math.min(startY, endY), w: 0, h: Math.abs(endY - startY) }
+  for (const box of layout.cards.values()) {
+    if (box === sourceBox || box === targetBox) continue
+    if (boxOverlaps(seg, box)) return true
+  }
+  return false
+}
+
 /** One edge's bezier geometry (design doc §2.6): the `d` path + the
  * endpoint coordinates (start = the source port, end = the target STANDOFF
  * point — the arrow tip lands there, 10px off the card border H1). Null
@@ -795,12 +823,18 @@ export interface EdgeGeometry {
   y2: number
 }
 
-/** The horizontal bezier (design doc §2.6): `M sx sy C (sx+off) sy,
- * (tx−off) ty, tx ty` with off = max(|tx−sx|/2, 24) — endpoint tangents
- * horizontal → the arrow rides the line (H1). */
+/** The horizontal bezier (design doc §2.6): `M sx sy C (sx + dir·off) sy,
+ * (tx − dir·off) ty, tx ty` with off = max(|tx−sx|/2, 24) — endpoint tangents
+ * horizontal → the arrow rides the line (H1). DIRECTION-AWARE (plan
+ * 20260813-panel-quick-fixes T3 H1): `dir` = the x direction, so the controls
+ * always fall BETWEEN the endpoints — a REVERSE flow (source west → target
+ * east, traveling LEFT) keeps its S-curve inside the inter-column gap instead
+ * of bulging past each endpoint into the adjacent cards/text. */
 function horizontalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeometry {
-  const off = Math.max(Math.abs(tx - sx) / 2, 24)
-  const d = `M ${sx} ${sy} C ${sx + off} ${sy}, ${tx - off} ${ty}, ${tx} ${ty}`
+  const dx = tx - sx
+  const off = Math.max(Math.abs(dx) / 2, 24)
+  const dir = dx < 0 ? -1 : 1
+  const d = `M ${sx} ${sy} C ${sx + dir * off} ${sy}, ${tx - dir * off} ${ty}, ${tx} ${ty}`
   return { d, x1: sx, y1: sy, x2: tx, y2: ty }
 }
 
@@ -845,9 +879,12 @@ function verticalCurve(sx: number, sy: number, tx: number, ty: number): EdgeGeom
  * Same-column flows whose center-x vertical line would cross a sub-bucket
  * CAPTION row (the implementor↔reviewer flow crosses the "sdd-reviewer"
  * caption, the qa-gate↔unknown flow crosses the「unknown / 未匹配角色」
- * caption) route in the column's LEFT side gap instead (design doc §2.0
- * 绕行策略 ② — 同列关系线移到卡片列外侧的间隙带): the vertical bezier hangs
- * at `card left edge − SIDE_GAP`, clear of every text (H2).
+ * caption) OR another CARD body (a handoff between non-adjacent cards, e.g.
+ * fullstack-dev → frontend-dev skips the idle fullstack-dev-2 — the
+ * 2026-08-13 "线穿过卡片" report) route in the column's LEFT side gap instead
+ * (design doc §2.0 绕行策略 ② — 同列关系线移到卡片列外侧的间隙带): the vertical
+ * bezier hangs at `card left edge − SIDE_GAP`, clear of every text (H2) and
+ * every card body (H1).
  *
  * Inter-phase flows (plan 20260812-panel-f5-design-system Task 8 + plan
  * 20260813-panel-agent-canvas-legend-layout Task 2 — the left-right
@@ -931,7 +968,7 @@ export function edgePath(edge: AgentEdge, layout: CanvasLayout): EdgeGeometry | 
   const crossesCaption = colId !== undefined && captionRows(layout, colId).some(
     (row) => cx >= row.x && cx <= row.x + row.w && Math.min(startY, endY) < row.y + row.h && Math.max(startY, endY) > row.y,
   )
-  if (crossesCaption) {
+  if (crossesCaption || crossesSameColumnCard(layout, cx, startY, endY, sourceBox, targetBox)) {
     const sideX = sourceBox.x - SIDE_GAP
     return verticalCurve(sideX, startY, sideX, endY)
   }
@@ -1114,10 +1151,6 @@ export function AgentCanvasPage({ view, iteration, t, initialPan }: AgentCanvasP
       </header>
 
       {noteInfo !== null && <p className={css.canvasNote} data-canvas-note={noteInfo.anchor}>{noteInfo.text}</p>}
-
-      <div className={css.canvasLegend}>
-        <Legend t={t} />
-      </div>
 
       <div
         className={css.canvasViewport}
@@ -1307,6 +1340,13 @@ export function AgentCanvasPage({ view, iteration, t, initialPan }: AgentCanvasP
             })}
           </ul>
         </div>
+      </div>
+
+      {/* Legend BELOW the canvas (plan 20260813-panel-quick-fixes Task 3 — user
+       * 2026-08-13 feedback: the legend moves UNDER the viewport, after the
+       * draggable canvas; the header / summary / note stay above). */}
+      <div className={css.canvasLegend}>
+        <Legend t={t} />
       </div>
     </div>
   )

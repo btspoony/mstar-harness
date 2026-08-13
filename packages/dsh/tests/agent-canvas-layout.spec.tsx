@@ -55,7 +55,7 @@ import type { AgentFlowEventView, AgentFlowView } from '../src/types'
 import type { EnforcementSource } from '@mstar-harness/engine'
 import { clientExports } from './client-bundles.ts'
 import { Context } from '@deepseek-ai/cordis'
-import { projectGraph } from '../src/client/panel/graph/project-graph'
+import { projectGraph, type AgentEdge } from '../src/client/panel/graph/project-graph'
 import { KNOWN_AGENTS } from '../src/client/panel/graph/schema'
 import {
   AgentCanvasPage,
@@ -486,6 +486,15 @@ describe('agent canvas layout — legend & locale (plan 20260813-panel-agent-can
     expect(zhHtml).toContain('执行中实体（发光）')
     expect(zhHtml).toContain('已完成实体（独立绿框 + ✓；off 阶段不显示）')
     expect(zhHtml).toContain('未工作实体（虚线）')
+  })
+
+  it('legend renders BELOW the viewport (DOM order: data-canvas-viewport before data-mstar-legend)', () => {
+    const html = agentsHtml(baseSource)
+    const viewport = html.indexOf('data-canvas-viewport')
+    const legend = html.indexOf('data-mstar-legend')
+    expect(viewport).toBeGreaterThan(-1)
+    expect(legend).toBeGreaterThan(-1)
+    expect(viewport).toBeLessThan(legend)
   })
 })
 
@@ -1147,5 +1156,92 @@ describe('agent canvas — settled done frame + off interaction (plan 20260812-p
     expect(html.match(/>✓</g)).toHaveLength(2)
     expect(html.match(/data-agent-done="true" data-agent-stage/g)).toHaveLength(2) // the card-level frame
     expect(cardRegion(html, 'product-manager')).toContain('data-agent-done="false"')
+  })
+})
+
+describe('agent canvas — comprehensive H1/H2: every edge shape clears card bodies + text seats (plan 20260813-panel-quick-fixes T3)', () => {
+  /** Assert one edge's route clears every text seat + every card body other
+   * than its own source/target (per segment — the strict H1/H2 invariant). */
+  function assertEdgeClear(label: string, edge: AgentEdge, layout: CanvasLayout): void {
+    const g = edgePath(edge, layout)
+    expect(g, `${label} geometry`).not.toBeNull()
+    const seats = textSeats(layout)
+    for (const seg of pathSegments(g!.d)) {
+      const box = segmentBox(seg)
+      for (const seat of seats) {
+        expect(overlaps(box, seat), `${label} segment vs text seat ${JSON.stringify(seat)}`).toBe(false)
+      }
+      for (const [key, card] of layout.cards) {
+        if (key === edge.source || key === edge.target) continue
+        expect(overlaps(box, card), `${label} segment vs card ${key}`).toBe(false)
+      }
+    }
+  }
+
+  it('every same-column / adjacent (incl. diagonal) / col-skip / supervise edge clears all cards + text (per segment)', () => {
+    const view = projectGraph(baseSource).agents
+    const layout = layoutAgents(view)
+    const pairs: [string, string][] = [
+      // same-column — clean adjacent (center-x)
+      ['fullstack-dev', 'fullstack-dev-2'],
+      ['fullstack-dev-2', 'fullstack-dev'],
+      // same-column — crossing an in-between card (side-gap after fix)
+      ['fullstack-dev', 'frontend-dev'],
+      ['frontend-dev', 'fullstack-dev'],
+      ['product-manager', 'writing-specialist'],
+      ['writing-specialist', 'product-manager'],
+      ['qc-specialist', 'qc-specialist-3'],
+      ['qc-specialist-3', 'qc-specialist'],
+      // same-column — caption-crossing (side-gap)
+      ['fullstack-dev', 'code-reviewer'],
+      ['code-reviewer', 'fullstack-dev'],
+      // adjacent cross-column — forward/reverse, same-y + DIAGONAL (diff y)
+      ['writing-specialist', 'fullstack-dev'],
+      ['product-manager', 'fullstack-dev'],
+      ['fullstack-dev', 'qc-specialist'],
+      ['code-reviewer', 'qc-specialist'],
+      ['qc-specialist', 'code-reviewer'],
+      ['qc-specialist', 'qa-engineer'],
+      ['qc-specialist-3', 'qa-engineer'],
+      ['qa-engineer', 'qc-specialist-3'],
+      // col-skip — forward/reverse side-gap detour
+      ['writing-specialist', 'qc-specialist'],
+      ['qc-specialist', 'writing-specialist'],
+      ['writing-specialist', 'qa-engineer'],
+      ['qa-engineer', 'writing-specialist'],
+      ['fullstack-dev', 'qa-engineer'],
+      ['qa-engineer', 'fullstack-dev'],
+    ]
+    for (const [source, target] of pairs) {
+      assertEdgeClear(`${source}->${target}`, { kind: 'actual', source, target, entityKey: null }, layout)
+    }
+    // The static supervise line too.
+    for (const edge of view.edges) {
+      if (edge.kind === 'supervise') assertEdgeClear('supervise', edge, layout)
+    }
+  })
+
+  it('same-column FORWARD crossing an in-between card reroutes to the LEFT side gap (H1)', () => {
+    // fullstack-dev → frontend-dev skips the idle fullstack-dev-2 between them;
+    // the center-x vertical line would run straight through it (186..258).
+    const layout = layoutAgents(projectGraph(baseSource).agents)
+    const g = edgePath({ kind: 'actual', source: 'fullstack-dev', target: 'frontend-dev', entityKey: null }, layout)!
+    const d = parsePath(g.d)
+    expect(d.x1).toBe(248 + 12 - 18) // card left − SIDE_GAP
+    expect(d.x2).toBe(248 + 12 - 18)
+    expect(d.y1).toBe(102 + 72) // source south port
+    expect(d.y2).toBe(270 - 10) // target north − STANDOFF
+  })
+
+  it('same-column REVERSE crossing an in-between card reroutes to the LEFT side gap (H1)', () => {
+    // frontend-dev → fullstack-dev (source below target) skips fullstack-dev-2;
+    // the center-x line would run through it — the side-gap route keeps clear.
+    const layout = layoutAgents(projectGraph(baseSource).agents)
+    const g = edgePath({ kind: 'actual', source: 'frontend-dev', target: 'fullstack-dev', entityKey: null }, layout)!
+    const d = parsePath(g.d)
+    expect(d.x1).toBe(248 + 12 - 18)
+    expect(d.x2).toBe(248 + 12 - 18)
+    expect(d.y1).toBe(270) // source north port
+    expect(d.y2).toBe(102 + 72 + 10) // target south + STANDOFF
   })
 })
