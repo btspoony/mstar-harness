@@ -42,6 +42,14 @@
   min-height: 0;
   width: 100%;
   padding: 0;                                     /* padding pushed into the areas */
+  /* Full-tab height (plan 20260813-panel-quick-fixes T4): the panel opts into
+   * the host composer overlay (PanelView `data-conversation-composer-overlay`),
+   * which floats the composer over the panel bottom. Reserve clearance so the
+   * fixed freshness footer (main) + meta dock (sidebar) stay visible above it.
+   * `--dsh-composer-height` is the host-published live composer height (a
+   * measured fallback, not a --mstar-space-* spacing token — same 152px
+   * fallback the host's own TrajectoryView uses). */
+  padding-bottom: calc(var(--dsh-composer-height, 152px) + var(--mstar-space-3));
   overflow: hidden;                               /* full-tab: page never scrolls */
 }
 

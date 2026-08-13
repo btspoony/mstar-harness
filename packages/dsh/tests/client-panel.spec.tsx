@@ -740,6 +740,20 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(cssText).not.toMatch(/rgb\(|rgba\(/)
   })
 
+  it('opts the panel root into the host composer overlay so height:100% resolves — the scroll root-cause fix (plan quick-fixes T4)', () => {
+    // The panel root's `height: 100%` only resolves when the host's `.viewArea`
+    // wrapper is a definite-height container. The host flips it via
+    // `:has([data-conversation-composer-overlay])`; without the opt-in it keeps
+    // `.viewArea { min-height: auto; flex: 1 0 auto }`, so `height: 100%`
+    // collapses to auto and the host's resident scrollport scrolls the WHOLE
+    // panel instead of the event-log `.rowList` scrolling internally.
+    expect(html).toContain('data-conversation-composer-overlay')
+    // The root reserves clearance for the now-floating composer (host-published
+    // `--dsh-composer-height`) so the fixed freshness footer + meta dock clear it.
+    const cssText = readFileSync(new URL('../src/client/panel/panel.module.css', import.meta.url), 'utf8')
+    expect(cssText).toMatch(/padding-bottom:\s*calc\(var\(--dsh-composer-height/)
+  })
+
   it('sidebar renders the plans / residuals / knowledge / leases status areas + the fixed meta dock', () => {
     expect(html).toContain('data-mstar-sidebar')
     expect(html).toContain('data-mstar-sidebar-scroll')

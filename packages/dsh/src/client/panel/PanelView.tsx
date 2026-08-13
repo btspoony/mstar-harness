@@ -100,7 +100,7 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
   const [tab, setTab] = useState<PanelTab>('tasks')
   if (source === null || source === undefined) {
     return (
-      <div className={css.emptyRoot} data-mstar-panel="waiting">
+      <div className={css.emptyRoot} data-mstar-panel="waiting" data-conversation-composer-overlay="">
         <p className={css.empty} data-mstar-empty="waiting">{t('empty.waiting')}</p>
       </div>
     )
@@ -122,7 +122,7 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
     // The `data-mstar-graph` anchor stays on the main container (its layout
     // contract slot).
     return (
-      <div className={css.root} data-mstar-panel="no-harness">
+      <div className={css.root} data-mstar-panel="no-harness" data-conversation-composer-overlay="">
         <main className={css.main} data-mstar-graph>
           <div className={css.noHarnessCard} data-mstar-empty-card>
             <svg
@@ -151,8 +151,19 @@ export function PanelView({ t, useSession }: MstarPanelViewProps) {
       </div>
     )
   }
+  // Full-tab height (spec panel-tabs §2, plan 20260813-panel-quick-fixes Task
+  // 4): the host only gives a view a definite height when the view opts into
+  // the composer overlay. The `data-conversation-composer-overlay` attribute
+  // flips the host's `.viewArea` wrapper from flow content (`min-height: auto;
+  // flex: 1 0 auto` — which makes `.root`'s `height: 100%` resolve to auto and
+  // the WHOLE page scroll) to a fixed-height container (`flex: 1 1 0;
+  // min-height: 0; overflow: hidden`). Only then does the panel's own height
+  // chain (`height: 100%` → `.main` → `.content` → `.eventLogPage` →
+  // `.rowList`) constrain, so each partition scrolls internally. The waiting
+  // and no-harness roots carry the SAME opt-in so `height: 100%` also centers
+  // their content and the composer position never jumps on transition.
   return (
-    <div className={css.root} data-mstar-panel="panel">
+    <div className={css.root} data-mstar-panel="panel" data-conversation-composer-overlay="">
       <main className={css.main}>
         <TabNav active={tab} onChange={setTab} t={t} />
         <div className={css.content} data-mstar-graph>
