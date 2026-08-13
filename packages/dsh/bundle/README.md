@@ -119,8 +119,14 @@ steering compass: `compassStatus: 'active'` (Phase 1 in flight) → Step 1
 (iteration-start) is CURRENT with verdict `unknown` — no PASS/FAIL badge —
 plan `20260811-panel-f4-iteration-zone`; the branches
 block left the sidebar for this in plan `20260810-panel-sidebar-info`), a
-**tasks zone** (6-column kanban: Todo / InProgress / InReview / Done /
-Blocked / unknown with count badges, Done ≤5 + `+N more`), an
+**tasks zone** (5-column kanban: Todo / InProgress / InReview / Done /
+`blocked-unknown` — the Blocked state and the former unknown catch-all fold
+into ONE merged column titled「受阻/未知」/「Blocked / Unknown」, plan
+`20260813-panel-quick-fixes` Task 1 — with count badges; every column caps
+its rendered rows at `PLAN_CAP` with a clickable 「更多」/「收起」 expand
+button (`data-kanban-more` anchor) unfolding the full column — the
+projection keeps ALL plan rows, the cap is a render concern never a
+discard), an
 **agent-execution zone** (the four EXPECTED_ROLE_FLOW stage/phase columns
 — review-edit-chain → sdd-implement → qc-tri → qa-gate (the terminal
 stage; the former `sdd-task-review` stage is removed, its SDD L2 reviewer
@@ -178,7 +184,18 @@ stay opaque). Settled entities get a **standalone GREEN done frame + green
 on the rounded card body + the ✓ in the status point) **ONLY when
 `emphasis ≠ 'off'`** — an off-tier role (already-passed / stage-less
 on-demand + general) renders the muted dot instead and NEVER shows the
-completion marker. The **iteration info section is SHARED by the tasks AND
+completion marker. The agent canvas filters dispatch evidence to the
+**current iteration's plans only** (plan `20260813-panel-quick-fixes` Task
+2): the steering compass `iterationId` when active, else the nearest
+iteration from the catalog `plans[].iterationRefs` (most-recent plan by
+8-digit id date prefix + doneAt); provably cross-iteration events produce
+no entity/edge — the roster keeps its idle cards, and plan-less /
+unknown-plan / standalone dispatches are never hidden. Status honesty (Task
+2): `advisory` is no longer terminal — a soft-enforcement dispatch falls
+through to its paired settle (green ✓ when a settle exists, `running` when
+none), `denied` stays terminal, and the advisory verdict still renders in
+the event log. The canvas legend sits BELOW the viewport (Task 3, moved
+from above). The **iteration info section is SHARED by the tasks AND
 agents tabs** (Task 8, decision #4 — one `IterationInfoSection` component,
 both tabs render the same `view.iteration` block). Edges — plan `20260812-panel-f5-design-system` Task 5 (design
 doc §2): the `expected` stage skeleton arrows AND the ANIMATED **next** edge
@@ -193,7 +210,12 @@ ports (north / south / east / west; static-invisible, hover-revealed as
 small dots) with the arrow tip pulled back to a **10px standoff** off the
 port — the arrow follows the line's local tangent at the anchor (**H1**),
 and no line's stroke or arrow crosses any text (**H2**: standoff + side-gap
-routing, design doc §2.0/§2.5/§2.6) — plus the **bidirectional supervise
+routing, design doc §2.0/§2.5/§2.6; tightened in plan
+`20260813-panel-quick-fixes` Task 3 — same-column vertical flows whose
+center-x line would cross an in-between card body reroute into the column's
+LEFT side gap (forward AND reverse), and reverse horizontal beziers keep
+direction-aware control points BETWEEN the endpoints, never bulging into
+the adjacent column) — plus the **bidirectional supervise
 line** (plan `20260812-panel-f5-agent-layout` Task 1/2) — one static
 design-knowledge sub-bucket edge inside the `sdd-implement` column
 (implementor ↔ sdd-reviewer — the mstar-sdd mutual-supervision contract),
@@ -209,7 +231,13 @@ partitions (Agent 流转事件 / 违规记录), every row an expandable native
 states — the two partitions render SIDE BY SIDE in a locked-height
 two-column grid (`repeat(2, minmax(0, 1fr))` — the page never scrolls as a
 whole; each partition pins its title and owns an internal `overflow-y`
-scroll on its row list), falling back to two stacked 50/50 locked rows
+scroll on its row list; plan `20260813-panel-quick-fixes` Task 4
+root-caused the whole-page scroll — the panel root opts into the host
+`data-conversation-composer-overlay` (the host's full-height opt-in), so
+`height:100%` resolves and `.rowList`'s `overflow-y: auto` scrolls INSIDE
+the partition (the host page no longer scrolls), with bottom clearance
+reserving the floating composer via the host-published
+`--dsh-composer-height`), falling back to two stacked 50/50 locked rows
 below 1200px (`data-event-log-*` anchors unchanged, plan
 `20260811-panel-f3-agent-general`) — the canvas-corner **AgentEventDock** is REMOVED with the page
 (无双份日志, spec §5; the fixed footer bar — zone legend + gate summary +
@@ -249,7 +277,10 @@ documented staleness, never a wrong verdict);
 the agent-entity status derivation pairs a PAIRED settle exactly by its
 dispatch identity (agent, role, planId, taskId — QC-tri N=3 settles land on
 their own cards), and an unpaired dispatch stays running (no paired settle,
-never faked); no historical
+never faked); the current-iteration filter with NO steering compass infers
+the iteration from plan ids (8-digit date prefix) + doneAt — a
+deterministic, documented heuristic, and only provably cross-iteration
+events are dropped; no historical
 back-scan of resumed long logs; no custom top-level slot (the
 `conversation.view` tab is the only session-level panel seat without
 dsh-private layout changes). Browser UI observation is the user-restart
