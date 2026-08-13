@@ -2,8 +2,7 @@
  * Task 3 — skills mounting via skill-filesystem (single canonical mount) (plan
  * 20260808-dsh-host-adapter).
  *
- * Dev-time reality: the dsh seam packages resolve from a real dsh source
- * tree via the link farm (scripts/setup-dsh-links.ts), so the plugin's
+ * Dev-time reality: the dsh seam packages resolve from the npm registry, so the plugin's
  * registration call is implemented against the CONTRACT —
  * the skill-filesystem `{ name, inject, Config, apply }` plugin module and the
  * `customSkillDirs` / `bundledSkillDir` Config semantics. Verification is

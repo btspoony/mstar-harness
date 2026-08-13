@@ -7,7 +7,7 @@
  * (CLI `mstar design-md validate` / `mstar compound validate` mirrors).
  *
  * Composition: the app boots the REAL-composition harness with the dsh-tools
- * registry linked from the dsh source tree (same harness as
+ * registry installed from the npm registry (same harness as
  * sdd-iteration-tools.spec), so gate listeners and tool registrations
  * exercise the shipping plugin path.
  */

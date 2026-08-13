@@ -5,8 +5,7 @@
 # plugin so `ctx.skills`, `ctx.tools`, and `ctx.commands` exist when the
 # plugin's gates, v2 seam tools, and bundled mstar commands register.
 #
-# Dev-time the dsh seam packages resolve from a real dsh source tree via the
-# link farm (scripts/setup-dsh-links.ts): the mountable registry rows below
+# Dev-time the dsh seam packages resolve from the npm registry: the mountable registry rows below
 # are the REAL packages. The remaining seams (dsh-agent / dsh-llm) are not
 # mounted as rows (this composition needs no plugin shape from them), so
 # their waterfall events (agent/pre-step, tools/pre-execute, fs/write-intent)

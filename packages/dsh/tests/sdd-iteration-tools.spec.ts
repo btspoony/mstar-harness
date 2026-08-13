@@ -5,7 +5,7 @@
  * the engine in-app against control-path artifacts.
  *
  * Composition: the app boots the REAL-composition harness with the
- * `@deepseek-ai/dsh-tools` registry linked from the dsh source tree (its
+ * `@deepseek-ai/dsh-tools` registry installed from the npm registry (its
  * default export provides the `ctx.tools` service), so registration and
  * execution exercise
  * the shipping plugin path — tools are looked up and executed through the

@@ -2,8 +2,7 @@
  * Task 3 — status hard gate: `fs/write-intent` + `fs/edit-intent` on
  * `{HARNESS_DIR}/status.json` (plan 20260808-dsh-package-core).
  *
- * Harness approach: the dsh seam packages resolve from a real dsh source
- * tree via the link farm (scripts/setup-dsh-links.ts), and the waterfalls
+ * Harness approach: the dsh seam packages resolve from the npm registry, and the waterfalls
  * are simulated with a minimal typed harness — the same
  * `ctx.waterfall('fs/write-intent', target, exec, () => undefined)`
  * dispatch the real `@deepseek-ai/dsh-tool-fs` write/edit tools perform

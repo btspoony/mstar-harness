@@ -572,11 +572,11 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
 describe('agent-flow — real settle pairing (real call through the composed registry)', () => {
   it('a real subagent call through the composed registry records a dispatch AND a paired settle (post-execute foreground completion)', async () => {
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
-    // Dev-time reality: the linked dsh-tools registry ships no delegation
+    // Dev-time reality: the real dsh-tools registry ships no delegation
     // tool, so the test registers the `subagent` tool it would have mounted —
     // the composed pipeline (pre-execute waterfall → validation → body →
     // render → post-execute waterfall) is the shipping registry code
-    // (link-farm dsh-tools).
+    // (real dsh-tools).
     booted.ctx.tools.register(defineTool({
       name: 'subagent',
       description: 'delegate a task to a subagent',

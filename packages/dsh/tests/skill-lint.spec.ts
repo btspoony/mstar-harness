@@ -25,7 +25,7 @@
  *   `degraded: true` advisory (error-containment envelope).
  *
  * Harness approach (status-gate.spec.ts parity): the dsh seam packages
- * resolve from a real dsh source tree via the link farm, and the waterfall
+ * resolve from the npm registry, and the waterfall
  * is simulated with the same
  * `ctx.waterfall('fs/write-intent', target, exec, () => undefined)` dispatch
  * the real `@deepseek-ai/dsh-tool-fs` write tool performs.
