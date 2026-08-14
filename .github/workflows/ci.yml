@@ -58,7 +58,10 @@ jobs:
 
       - name: OpenCode dep tree (no commander/inquirer)
         run: |
-          TREE="$(npm ls --workspace @mstar-harness/opencode 2>&1)" || {
+          # --omit=dev: engine is a workspace:* devDependency (bundled at build
+          # time); npm ls cannot validate workspace: edges against a
+          # bun-installed tree, and the guard only covers runtime deps.
+          TREE="$(npm ls --workspace @mstar-harness/opencode --omit=dev 2>&1)" || {
             echo "::error::npm ls failed for @mstar-harness/opencode (unresolved dep tree)"
             echo "$TREE"
             exit 1

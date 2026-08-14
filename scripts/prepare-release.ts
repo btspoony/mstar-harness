@@ -308,7 +308,7 @@ async function main(): Promise<void> {
   }
 
   // Internal consumers (cli/opencode/dsh) bundle the engine at build time; their
-  // devDependency uses `workspace:^`, so no per-release spec sync is needed.
+  // devDependency uses `workspace:*`, so no per-release spec sync is needed.
   await bumpInstall(current, version);
   console.log(`bump: ${INSTALL_REF.path}`);
 

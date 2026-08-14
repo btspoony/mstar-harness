@@ -1,11 +1,11 @@
 /**
  * scripts/ci-dep-guard.ts — dep-tree guard semantics (qc2 F-004).
  *
- * The CI workflow pipes `npm ls --workspace @mstar-harness/opencode` into
- * `bun run ci:dep-guard`; this test pins the pattern against realistic
- * `npm ls` output lines — scoped `@inquirer/*` packages MUST match (the
- * roadmap's named anti-pattern), while `@commander-js/…`-style names and
- * bare tokens MUST NOT false-positive.
+ * The CI workflow pipes `npm ls --workspace @mstar-harness/opencode
+ * --omit=dev` into `bun run ci:dep-guard`; this test pins the pattern
+ * against realistic `npm ls` output lines — scoped `@inquirer/*` packages
+ * MUST match (the roadmap's named anti-pattern), while `@commander-js/…`-style
+ * names and bare tokens MUST NOT false-positive.
  */
 import { describe, expect, test } from "bun:test";
 import { findForbiddenDeps } from "./ci-dep-guard.ts";

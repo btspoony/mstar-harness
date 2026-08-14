@@ -6,8 +6,11 @@
  * `@inquirer/core`, `@inquirer/type` — the roadmap names exactly
  * `commander` + `@inquirer/prompts` as the anti-pattern).
  *
- * Reads `npm ls --workspace @mstar-harness/opencode` output on stdin and
- * exits 1 when a forbidden package appears. The pattern is word-bounded and
+ * Reads `npm ls --workspace @mstar-harness/opencode --omit=dev` output on
+ * stdin and exits 1 when a forbidden package appears. `--omit=dev` prunes
+ * the engine devDependency edge (`workspace:*` — npm ls cannot validate
+ * workspace: edges against a bun-installed tree), leaving the runtime dep
+ * tree the guard covers. The pattern is word-bounded and
  * tolerates the `@` scope prefix so:
  * - `└── @inquirer/prompts@8.4.2` MATCHES (scoped — the slice-3 guard missed
  *   these because the char before `inquirer` was `@`, never `^`/whitespace);
