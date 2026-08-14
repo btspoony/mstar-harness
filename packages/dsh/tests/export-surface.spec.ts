@@ -39,13 +39,17 @@ const FROZEN_VALUE_EXPORTS = [
   'AGENT_FLOW_FILE',
   'AGENT_FLOW_MAX_EVENTS',
   'Config',
+  'DECORATION_LOGGER',
   'DshHostAdapter',
   'DshMstar',
   'HarnessResolver',
+  'PERSONA_SECTION_NAME',
+  'PERSONA_SECTION_ORDER',
   'SETTLE_SEAM',
   'SeamVetoError',
   'SkillLintVetoError',
   'apply',
+  'decorateSubagentStart',
   'inject',
   'lintAuditWrite',
   'lintCompoundWrite',
@@ -58,6 +62,7 @@ const FROZEN_VALUE_EXPORTS = [
   'readAgentFlow',
   'recordDispatch',
   'recordSettle',
+  'setDecorationLogger',
   'skillLocalConfig',
 ] as const
 
@@ -67,6 +72,8 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'AgentFlowEventView',
   'AgentFlowSummaryRow',
   'AgentFlowView',
+  'DecorationLogLevel',
+  'DecorationLogSink',
   'DispatchGateAdvisory',
   'DispatchVerdict',
   'DshHostAdapterOptions',
@@ -79,6 +86,7 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'SettleOutcome',
   'SkillLintAdvisory',
   'StatusGateAdvisory',
+  'SubagentRunInfoView',
 ] as const
 
 type Assert<T extends true> = T
@@ -121,6 +129,8 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       AgentFlowEventView: null as unknown as EntryTypes.AgentFlowEventView,
       AgentFlowSummaryRow: null as unknown as EntryTypes.AgentFlowSummaryRow,
       AgentFlowView: null as unknown as EntryTypes.AgentFlowView,
+      DecorationLogLevel: null as unknown as EntryTypes.DecorationLogLevel,
+      DecorationLogSink: null as unknown as EntryTypes.DecorationLogSink,
       DispatchGateAdvisory: null as unknown as EntryTypes.DispatchGateAdvisory,
       DispatchVerdict: null as unknown as EntryTypes.DispatchVerdict,
       DshHostAdapterOptions: null as unknown as EntryTypes.DshHostAdapterOptions,
@@ -133,6 +143,7 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       SettleOutcome: null as unknown as EntryTypes.SettleOutcome,
       SkillLintAdvisory: null as unknown as EntryTypes.SkillLintAdvisory,
       StatusGateAdvisory: null as unknown as EntryTypes.StatusGateAdvisory,
+      SubagentRunInfoView: null as unknown as EntryTypes.SubagentRunInfoView,
     }
     expect(Object.keys(typeProbe).sort()).toEqual([...FROZEN_TYPE_ONLY_EXPORTS].sort())
   })

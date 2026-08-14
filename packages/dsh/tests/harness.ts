@@ -105,6 +105,38 @@ export class FakeJobRegistry extends Service {
   }
 }
 
+/**
+ * Minimal in-memory `agents` service for the subagent-decoration tests (plan
+ * `20260814-dsh-fallbacks-integration` Task 2): implements the ONE contract
+ * the decoration consumes — `get(id)` child resolution at `subagent/start`
+ * emit time (documented in the `@deepseek-ai/dsh-subagent` event contract) —
+ * plus `register(agent)` so a test can fake-register a child agent (the
+ * hooks-claude-code coverage pattern). Mounted as the
+ * `@deepseek-ai/dsh-agent-fake` module row (`bootApp({ agentsService: 'fake' })`).
+ * The real `AgentRegistry` additionally owns factory/loop wiring and emits
+ * `agent/created` / `agent/disposed` — none of it consumed by the decoration.
+ */
+export class FakeAgentRegistry extends Service {
+  private readonly live = new Map<string, Agent>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'agents')
+  }
+
+  /** Record one live agent (the real registry's `register` contract). */
+  register(agent: Agent): () => void {
+    this.live.set(agent.id, agent)
+    return () => {
+      if (this.live.get(agent.id) === agent) this.live.delete(agent.id)
+    }
+  }
+
+  /** Look up a live agent by id (the decoration's ONE consumed surface). */
+  get(id: string): Agent | undefined {
+    return this.live.get(id)
+  }
+}
+
 /** Boot options for {@link bootApp}. */
 export interface BootOptions {
   /** `Enforcement` override for the plugin Config (`hard` | `soft`). */
@@ -126,6 +158,19 @@ export interface BootOptions {
    * `20260811-panel-f4-timeliness` Task 1 seam probe).
    */
   jobsService?: 'fake'
+  /**
+   * Mount the {@link FakeAgentRegistry} as the `agents` service (the
+   * `@deepseek-ai/dsh-agent-fake` row + module map) so the `subagent/start`
+   * decoration resolves fake-registered children via
+   * `ctx.get('agents')?.get(info.id)` (plan
+   * `20260814-dsh-fallbacks-integration` Task 2 — the real dsh app always
+   * composes dsh-agent before the subagent seam).
+   */
+  agentsService?: 'fake'
+  /** Taxonomy bridge (Config `roleMap`): mstar role id → fallbacks role id. */
+  roleMap?: Record<string, string>
+  /** Persona map (Config `rolePersonas`): mstar role id → persona text. */
+  rolePersonas?: Record<string, string>
   /** App root override (default: a fresh temp dir). */
   root?: string
   /**
@@ -228,6 +273,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // `20260811-panel-f4-timeliness` Task 1): provides `ctx.jobs` so the
     // plugin's deferred `ctx.inject(['jobs'])` onJobDone wiring fires.
     ...(options.jobsService !== undefined ? [{ name: '@deepseek-ai/dsh-jobs-fake' }] : []),
+    // The fake agents service row (only when requested — plan
+    // `20260814-dsh-fallbacks-integration` Task 2): provides `ctx.get('agents')`
+    // so the `subagent/start` decoration can resolve fake-registered children.
+    ...(options.agentsService !== undefined ? [{ name: '@deepseek-ai/dsh-agent-fake' }] : []),
     // Last row: the mstar plugin (carries the boot-time Config below).
     { name: '@mstar-harness/dsh' },
   ]
@@ -258,6 +307,8 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   if (options.skillRoots !== undefined) config.skillRoots = options.skillRoots
   if (options.bundledSkillDir !== undefined) config.bundledSkillDir = options.bundledSkillDir
   if (options.catalogTtlMs !== undefined) config.catalogTtlMs = options.catalogTtlMs
+  if (options.roleMap !== undefined) config.roleMap = options.roleMap
+  if (options.rolePersonas !== undefined) config.rolePersonas = options.rolePersonas
 
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root).href + '/'
@@ -286,6 +337,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // a `{ default }` module so the seam unwrap resolves the class.
     ...(options.jobsService !== undefined
       ? [['@deepseek-ai/dsh-jobs-fake', { default: FakeJobRegistry }] as const]
+      : []),
+    // The fake `agents` service (plan `20260814-dsh-fallbacks-integration`
+    // Task 2): a `{ default }` module so the seam unwrap resolves the class.
+    ...(options.agentsService !== undefined
+      ? [['@deepseek-ai/dsh-agent-fake', { default: FakeAgentRegistry }] as const]
       : []),
   ])
   for (const row of rows) {

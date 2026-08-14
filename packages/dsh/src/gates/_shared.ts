@@ -87,9 +87,26 @@ export interface Config {
    * per interval). Absent → 60000.
    */
   catalogTtlMs?: number
+  /**
+   * Taxonomy bridge: mstar role id → fallbacks role id (the
+   * `dsh-llm-fallbacks` role taxonomy). Logging + future rule-driven
+   * interop only — NOT required for persona injection (`rolePersonas` is
+   * the decoration's only payload source). Absent → no bridge mapping.
+   */
+  roleMap?: Record<string, string>
+  /**
+   * mstar role id → persona text — the subagent decoration's only payload
+   * source (plan `20260814-dsh-fallbacks-integration` Task 2). A
+   * role-matched `subagent/start` registers the persona as the child's
+   * `mstar:role-persona` system-prompt section (agent-scoped on
+   * `Agent.ctx`, unwinds on disposal). Lookup is DIRECT — never gated on
+   * `roleMap` or on the fallbacks mounted state (unmounted → same
+   * injection from Config + one debug log). Absent → no decoration.
+   */
+  rolePersonas?: Record<string, string>
 }
 
-/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall), so both dispatch keys preserve omission via `.default(undefined)`. */
+/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the decoration keys all preserve omission via `.default(undefined)`. */
 export const Config: z<Config> = z.object({
   harnessDir: z.string(),
   enforcement: z.union(['hard', 'soft']),
@@ -98,6 +115,8 @@ export const Config: z<Config> = z.object({
   skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
   bundledSkillDir: z.string().default(undefined as unknown as string),
   catalogTtlMs: z.number().default(undefined as unknown as number),
+  roleMap: z.dict(z.string()).default(undefined as unknown as Record<string, string>),
+  rolePersonas: z.dict(z.string()).default(undefined as unknown as Record<string, string>),
 })
 /** One violation line for logs and the typed veto message. */
 export function formatViolation(violation: ValidationResult): string {

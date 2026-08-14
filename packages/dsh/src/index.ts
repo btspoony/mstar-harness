@@ -60,6 +60,12 @@ import {
   setAgentFlowLogger,
 } from './gates/agent-flow.ts'
 import type { AgentFlowPairing, TaskDoneSnapshot } from './gates/agent-flow.ts'
+import {
+  DECORATION_LOGGER,
+  decorateSubagentStart,
+  setDecorationLogger,
+} from './gates/fallbacks-decoration.ts'
+import type { SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -91,6 +97,14 @@ export type { SkillLintAdvisory } from './gates/skill-lint.ts'
 export { SeamVetoError, lintSeamWrite, lintDesignMdWrite, lintAuditWrite, lintCompoundWrite, lintRolesWrite } from './gates/seams.ts'
 export type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 export type { DispatchGateAdvisory } from './gates/dispatch.ts'
+export {
+  DECORATION_LOGGER,
+  PERSONA_SECTION_NAME,
+  PERSONA_SECTION_ORDER,
+  decorateSubagentStart,
+  setDecorationLogger,
+} from './gates/fallbacks-decoration.ts'
+export type { DecorationLogLevel, DecorationLogSink, SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
 export { DshHostAdapter } from './gates/adapter.ts'
 export type { DshHostAdapterOptions } from './gates/adapter.ts'
 
@@ -350,6 +364,15 @@ export function apply(ctx: Context, config: Config): void {
     else if (level === 'error') logger.error(message)
     else logger.info(message)
   })
+  // Subagent-decoration logger sink (plan `20260814-dsh-fallbacks-integration`
+  // Task 2 — the `subagent/start` decoration logs through the same
+  // module-sink pattern as the agent-flow ledger).
+  setDecorationLogger((level, message) => {
+    const logger = ctx.logger(DECORATION_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else if (level === 'info') logger.info(message)
+    else logger.warn(message)
+  })
   registerSettleListener(ctx, config, pairing)
 
   // Background-task settle pairing — the SECOND real completion seam: a
@@ -467,6 +490,20 @@ export function apply(ctx: Context, config: Config): void {
   // chain and make this security gate unreachable — "a deny short-circuits
   // regardless of order" holds only once the listener is reached.
   ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, resolver, config, adapter, exec, next), { prepend: true })
+
+  // Role-based subagent decoration — `subagent/start` emit (plan
+  // `20260814-dsh-fallbacks-integration` Task 2): the SYNCHRONOUS listener
+  // resolves the published child via `ctx.get('agents')?.get(info.id)` and
+  // registers the configured persona as the child's agent-scoped
+  // `mstar:role-persona` system-prompt section (before the child's first
+  // LLM call). Plain emit-mode registration — no `prepend`, no `next()`.
+  // The dispatch gate is NOT modified by the decoration (exec args are
+  // deep-frozen; persona never flows through call args). `ctx.events.on`
+  // (the untyped `EventsService.on` — same registration path as the
+  // mixined `ctx.on`) because `subagent/start` is declared by
+  // `@deepseek-ai/dsh-subagent`, which this plugin deliberately does not
+  // depend on — the payload is consumed structurally.
+  ctx.events.on('subagent/start', (info: SubagentRunInfoView) => decorateSubagentStart(ctx, config, info))
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
   // (agent catalog): calls `next()` (never vetoes or
