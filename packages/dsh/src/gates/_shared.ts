@@ -43,10 +43,11 @@ export interface Config {
   enforcement?: 'hard' | 'soft'
   /**
    * Model-facing delegation tool name(s) the dispatch gate matches. The dsh
-   * subagent tool registers as `subagent` by default, but its `toolName`
-   * config may rename instances (tool-subagent README: each instance needs a
-   * distinct name), so the match list is deployment-settable. Defaults to
-   * `['subagent']`.
+   * subagent tool registers as `subagent` by default (its fork sibling
+   * `subagent_fork` carries the same Assignment-shaped args and is gated
+   * too), but the `toolName` config may rename instances (tool-subagent
+   * README: each instance needs a distinct name), so the match list is
+   * deployment-settable. Defaults to `['subagent', 'subagent_fork']`.
    */
   dispatchTools?: string[]
   /**

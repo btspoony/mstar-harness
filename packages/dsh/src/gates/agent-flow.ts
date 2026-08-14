@@ -50,8 +50,9 @@
  * `ctx.jobs.onJobDone` reports background-job terminal snapshots. Settles
  * are recorded ONLY for dispatches that can be paired to a real completion:
  * - `registerSettleListener` (the `tools/post-execute` listener) matches the
- *   dispatch TOOLS (Config `dispatchTools`, default `['subagent']` — the
- *   shared `DEFAULT_DISPATCH_TOOLS` from `dispatch.ts`), looks up the exec's
+ *   dispatch TOOLS (Config `dispatchTools`, default
+ *   `['subagent', 'subagent_fork']` — the shared `DEFAULT_DISPATCH_TOOLS`
+ *   from `dispatch.ts`), looks up the exec's
  *   agent-namespaced call key (`${sessionId}\u0000${callId}` — a raw `callId`
  *   alone is not globally unique across sessions in one process, qc1 F-101
  *   fix-wave) in the apply-scoped pairing store, and branches on the
