@@ -14,9 +14,9 @@
  *   drift (removal, rename, or accidental addition);
  * - type layer (enforced by `typecheck:tests` — `bunx tsc --noEmit -p
  *   tests/tsconfig.json`): the exact VALUE export namespace (`keyof typeof
- *   entry` vs the frozen 17-name value union — type-only names never appear
+ *   entry` vs the frozen 28-name value union — type-only names never appear
  *   on the module namespace object, so a `keyof` union cannot carry them),
- *   the 10 type-only names pinned individually (`EntryTypes.X` probes — each
+ *   the 19 type-only names pinned individually (`EntryTypes.X` probes — each
  *   reference fails typecheck if the export disappears), plus the cordis
  *   `Context` / `Events` augmentation probes.
  *
@@ -95,8 +95,8 @@ type Assert<T extends true> = T
  * Exact VALUE export-namespace identity: `keyof typeof entry` exposes only the
  * runtime-visible (value) exports — type-only exports never appear on the
  * module namespace object, so they cannot join a `keyof` union. The exact-set
- * check therefore runs against the frozen VALUE names (17, `Config` once),
- * and the 10 type-only names are pinned individually by the `EntryTypes.X`
+ * check therefore runs against the frozen VALUE names (28, `Config` once),
+ * and the 19 type-only names are pinned individually by the `EntryTypes.X`
  * probes below (each reference fails typecheck if the export disappears).
  * Fails typecheck on ANY value-export drift — removal, rename, or addition.
  */

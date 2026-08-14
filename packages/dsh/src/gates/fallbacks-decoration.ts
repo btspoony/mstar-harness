@@ -26,7 +26,14 @@
  * Degradation (the listener never throws — contained like the dispatch
  * gate's degrade path): `agents` service absent → skip + one debug log
  * (documented Known Limitation for compositions without dsh-agent);
- * child unresolved / non-Assignment / role-unmatched → silent no-op.
+ * child unresolved / non-Assignment / role-unmatched → silent no-op. A
+ * throwing log sink is contained inside the log helper itself (plan QC
+ * F-002) — the sink must not escape the listener either.
+ *
+ * Persona text is rendered by dsh system-prompt's STRICT `{{...}}`
+ * interpolation, so persona values MUST NOT contain `{{` paired with a
+ * later `}}` — the Config schema rejects such values at plugin mount (see
+ * `_shared.ts` `rolePersonas` / `PERSONA_INTERPOLATION_HAZARD`).
  *
  * Module boundary: no barrel — the entry imports this module by explicit
  * relative path and re-exports the public names verbatim.
@@ -148,6 +155,12 @@ function seededTaskPrompt(child: Agent): string | undefined {
  */
 export function decorateSubagentStart(ctx: Context, config: Config, info: SubagentRunInfoView): void {
   try {
+    // Perf guard (plan QC F-001): with `rolePersonas` unset (or empty) there
+    // is nothing to decorate — skip the agents lookup and the Assignment
+    // header parse entirely. The `agents`-absent debug log is intentionally
+    // suppressed on this path (no persona payload exists to inject).
+    const personas = config.rolePersonas
+    if (personas === undefined || Object.keys(personas).length === 0) return
     // The `agents` service is absent in compositions without dsh-agent —
     // skip + one debug log (documented Known Limitation), never crash.
     const agents = ctx.get('agents') as AgentsView | undefined
@@ -196,5 +209,10 @@ export function decorateSubagentStart(ctx: Context, config: Config, info: Subage
 }
 
 function log(level: DecorationLogLevel, message: string): void {
-  decorationLogSink(level, message)
+  try {
+    decorationLogSink(level, message)
+  } catch {
+    // Never-throws invariant (plan QC F-002): a throwing log sink must not
+    // escape the decoration listener — the dispatch is never affected.
+  }
 }

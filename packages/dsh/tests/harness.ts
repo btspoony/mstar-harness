@@ -20,9 +20,13 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
+import { createScope } from '@deepseek-ai/dsh-scope'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
+import type { SubagentRunInfoView } from '../src/gates/fallbacks-decoration.ts'
 import * as plugin from '../src/index.ts'
 
 /**
@@ -135,6 +139,61 @@ export class FakeAgentRegistry extends Service {
   get(id: string): Agent | undefined {
     return this.live.get(id)
   }
+}
+
+let fakeChildSeq = 0
+
+/**
+ * Seed a detached session carrying one `user/message` with `prompt` text —
+ * the shape the decoration's `seededTaskPrompt` reads from the child's event
+ * log at `subagent/start` emit time.
+ */
+export function seededSession(id: SessionId, prompt: string): Session {
+  return Session.create(id, [{
+    type: 'user/message',
+    seq: 0,
+    time: 1_700_000_000_000,
+    data: {
+      id: MessageId(`seed-${id}`),
+      role: 'user',
+      content: [{ type: 'text', text: prompt }],
+      source: { kind: 'user' },
+    },
+    surfaceOp: 'append',
+  }])
+}
+
+/**
+ * Build a fake registered child around a caller-provided session: an
+ * agent-scoped ctx (`createScope`, the dsh-scope primitive the agent runtime
+ * uses) with `systemPrompt` injected, wrapped as the structural `Agent` the
+ * decoration resolves via `ctx.get('agents')?.get(info.id)`. The
+ * `subagent/start` seam is driven directly (the hooks-claude-code coverage
+ * pattern); the child's prompt assembly is viewed through `scopeKey`.
+ */
+export async function fakeChildWithSession(ctx: Context, session: Session): Promise<{ agent: Agent; scopeKey: object }> {
+  const scopeKey = { id: session.id }
+  let childCtx: Context | undefined
+  await ctx.inject(['systemPrompt'], (scoped) => {
+    childCtx = createScope(scoped, scopeKey).ctx
+  })
+  const agent = {
+    id: session.id,
+    ctx: childCtx!,
+    session,
+  } as unknown as Agent
+  return { agent, scopeKey }
+}
+
+/** Build a fake registered child whose session is seeded with `prompt`. */
+export async function fakeChild(ctx: Context, prompt: string): Promise<{ agent: Agent; scopeKey: object }> {
+  const id = SessionId(`child-${fakeChildSeq++}`)
+  return fakeChildWithSession(ctx, seededSession(id, prompt))
+}
+
+/** A structural `subagent/start` payload (the decoration's consumed surface). */
+export function startInfo(id: string, provider = 'in-process'): SubagentRunInfoView {
+  return { runId: `run-${id}`, provider, id, local: true }
 }
 
 /** Boot options for {@link bootApp}. */

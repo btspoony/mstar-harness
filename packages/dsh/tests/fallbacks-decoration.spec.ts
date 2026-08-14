@@ -18,20 +18,17 @@
  * service version.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import type { Context } from '@deepseek-ai/cordis'
-import { createScope } from '@deepseek-ai/dsh-scope'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { MessageId } from '@deepseek-ai/dsh-llm'
 import * as fallbacks from 'dsh-llm-fallbacks'
-import { bootApp, type BootResult } from './harness.ts'
+import * as plugin from '../src/index.ts'
+import { FakeLoaderRegistry, bootApp, fakeChild, fakeChildWithSession, startInfo, type BootResult } from './harness.ts'
 import { fallbacksMounted } from '../src/gates/fallbacks-probe.ts'
 import {
   PERSONA_SECTION_NAME,
   PERSONA_SECTION_ORDER,
   setDecorationLogger,
   type DecorationLogLevel,
-  type SubagentRunInfoView,
 } from '../src/gates/fallbacks-decoration.ts'
 
 let booted: BootResult | undefined
@@ -58,50 +55,6 @@ const ASSIGNMENT_PROMPT = [
 
 /** A non-Assignment task prompt (no header fields). */
 const PLAIN_PROMPT = 'Summarize the attached file.'
-
-let childSeq = 0
-
-/** A structural `subagent/start` payload (the plugin's consumed surface). */
-function startInfo(id: string, provider = 'in-process'): SubagentRunInfoView {
-  return { runId: `run-${id}`, provider, id, local: true }
-}
-
-/** Seed a detached session carrying one `user/message` with `prompt` text. */
-function seededSession(id: SessionId, prompt: string): Session {
-  return Session.create(id, [{
-    type: 'user/message',
-    seq: 0,
-    time: 1_700_000_000_000,
-    data: {
-      id: MessageId(`seed-${id}`),
-      role: 'user',
-      content: [{ type: 'text', text: prompt }],
-      source: { kind: 'user' },
-    },
-    surfaceOp: 'append',
-  }])
-}
-
-/**
- * Build a fake registered child: a REAL session seeded with `prompt` plus an
- * agent-scoped ctx (`createScope`, the dsh-scope primitive the agent runtime
- * uses) with `systemPrompt` injected. Returns the assembled child and the
- * scope key the child's prompt assembly views through.
- */
-async function fakeChild(ctx: Context, prompt: string): Promise<{ agent: Agent; scopeKey: object }> {
-  const id = SessionId(`child-${childSeq++}`)
-  const scopeKey = { id }
-  let childCtx: Context | undefined
-  await ctx.inject(['systemPrompt'], (scoped) => {
-    childCtx = createScope(scoped, scopeKey).ctx
-  })
-  const agent = {
-    id,
-    ctx: childCtx!,
-    session: seededSession(id, prompt),
-  } as unknown as Agent
-  return { agent, scopeKey }
-}
 
 /** Capture decoration logs through the module sink (agent-flow test pattern). */
 function captureLogs(): { captured: Array<[DecorationLogLevel, string]>; restore: () => void } {
@@ -197,6 +150,77 @@ describe('subagent/start decoration — mstar:role-persona injection', () => {
       expect(unresolved.captured).toHaveLength(0)
     } finally {
       unresolved.restore()
+    }
+  })
+
+  it('(f) child with an empty seed (no user message yet) → silent no-op, no log', async () => {
+    booted = await bootApp({ agentsService: 'fake', rolePersonas: { [EXECUTE_AS]: PERSONA } })
+    const { agent, scopeKey } = await fakeChildWithSession(booted.ctx, Session.create(SessionId('child-empty'), []))
+    booted.ctx.get('agents')!.register(agent)
+
+    const { captured, restore } = captureLogs()
+    try {
+      booted.ctx.events.emit('subagent/start', startInfo(agent.id))
+
+      const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
+      expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)).toBeUndefined()
+      expect(captured).toHaveLength(0) // empty seed → seededTaskPrompt undefined → silent no-op
+    } finally {
+      restore()
+    }
+  })
+
+  it('(g) persona values containing the {{...}} interpolation hazard are rejected at config validation (W-001)', async () => {
+    // dsh system-prompt strict interpolation renders persona section text and
+    // throws on any `{{` paired with a later `}}` at child prompt assembly —
+    // the Config schema rejects such values at plugin mount with a clear
+    // error instead of breaking every role-matched dispatch later.
+    expect(() => plugin.Config({ rolePersonas: { [EXECUTE_AS]: `You are {{role}}` } } as never)).toThrow(/rolePersonas\["fullstack-dev"\] must not contain/)
+    // A lone `{{` with no later `}}` renders as literal prose (safe) — allowed.
+    expect(() => plugin.Config({ rolePersonas: { [EXECUTE_AS]: 'Use single braces in prose: {like this}.' } } as never)).not.toThrow()
+    // Plain persona text without the hazard passes.
+    expect(() => plugin.Config({ rolePersonas: { [EXECUTE_AS]: PERSONA } } as never)).not.toThrow()
+    // The same rejection surfaces on the mount path: `ctx.plugin` validates
+    // the config against the shipping schemastery schema (the loader path),
+    // so a violating persona fails at APPLY with the clear error — never
+    // deferred to a broken child prompt assembly.
+    const ctx = new Context()
+    new FakeLoaderRegistry(ctx)
+    let rejected = false
+    try {
+      await ctx.plugin(plugin, { rolePersonas: { [EXECUTE_AS]: `You are {{role}}` } } as never)
+    } catch (error) {
+      rejected = true
+      expect((error as Error).message).toContain('must not contain')
+    } finally {
+      await ctx.fiber.dispose().catch(() => {})
+    }
+    expect(rejected).toBe(true)
+  })
+
+  it('(h) a throwing log sink never escapes the decoration listener (never-throws containment, F-002)', async () => {
+    const app = booted = await bootApp({ agentsService: 'fake', rolePersonas: { [EXECUTE_AS]: PERSONA } })
+    const { agent, scopeKey } = await fakeChild(app.ctx, ASSIGNMENT_PROMPT)
+    app.ctx.get('agents')!.register(agent)
+
+    const prior = setDecorationLogger(() => { throw new Error('sink exploded') })
+    try {
+      // Happy path: the injection debug log throws INSIDE the contained sink —
+      // the listener still completes and the persona still lands.
+      expect(() => app.ctx.events.emit('subagent/start', startInfo(agent.id))).not.toThrow()
+      const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
+      expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
+
+      // Degrade path: the catch block's warn log ALSO throws inside the
+      // contained sink — the listener still never escapes. A pre-registered
+      // duplicate `mstar:role-persona` section forces the section() insert to
+      // throw, driving the decoration into its catch block.
+      const dup = await fakeChild(app.ctx, ASSIGNMENT_PROMPT)
+      app.ctx.get('agents')!.register(dup.agent)
+      dup.agent.ctx.systemPrompt.section({ name: PERSONA_SECTION_NAME, order: PERSONA_SECTION_ORDER, text: 'pre-registered' })
+      expect(() => app.ctx.events.emit('subagent/start', startInfo(dup.agent.id))).not.toThrow()
+    } finally {
+      setDecorationLogger(prior)
     }
   })
 
