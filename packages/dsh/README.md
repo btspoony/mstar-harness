@@ -27,14 +27,24 @@ dsh plugin --profile web add .
 
 `dsh plugin --profile <name> add <spec>` initializes the profile on first use (`web` starts from the shipped template: `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`), forwards `<spec>` to pnpm in the profile directory, and reconciles the profile's `dsh.profile.bundles` layer list from the installed state: any dependency whose package.json declares `dsh.bundle` joins the layer stack. Relative specs (`.`, `file:`/`link:`) anchor to the invoking directory, so `add .` runs from the package checkout; pnpm must be on PATH. A local checkout needs a prior `bun run build` (the `prepare` script is intentionally NOT used — the monorepo builds packages explicitly, matching cli/opencode).
 
+**(c) Optional capability: `dsh-llm-fallbacks` (second command)** — the role-based subagent configuration capability (see LLM fallbacks integration) is a SEPARATE plugin row and must be installed with its own command:
+
+```sh
+dsh plugin --profile web add dsh-llm-fallbacks
+```
+
+The **two-command install is the contract** — folding a `dsh-llm-fallbacks` row into this bundle's patch is explicitly rejected (roadmap §8.3 F4): the loader has no insert-if-absent semantics, so a same-`id` insert is a `duplicate loader entry id` boot failure (the whole dsh session fails to start), and a different-`id` insert mounts the plugin twice — two `apply()` runs with split fallback state (per-context state stores, double listeners, config-override lottery) for anyone who also installs the package directly. Layer order is the reconcile append order: `dsh-llm-fallbacks` lands **after `dsh-base`/`llm-retry`** (its hard ordering requirement) and after the mstar row. Single-command multi-activation is an upstream feature gap (reconcile dedup or insert-if-absent patch semantics), not actionable from this repo.
+
 ### Configuration
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `harnessDir` | `string` | per-session workspace probe (`.mstar/` → `.agents/` → `.plans/` → `plans/`, from the session workspace root — **never the launch cwd**) | Explicit harness root; wins over engine probing. **Required for repos whose harness root is not a probed name** — e.g. this mstar-workflow repo itself uses `.harness/` (maintenance root, deliberately NOT probed); the probe starts from the session workspace root (never the launch cwd) and STOPS there — it never walks above the session workspace, so a harness dir above it (e.g. a global `~/.mstar`) is never adopted. |
 | `enforcement` | `'hard' \| 'soft'` | compass, else warn-only | Per-deployment override. Precedence: Config wins; else the Assignment's own `**Enforcement**: hard` header flag (dispatch gate only); else the iteration compass frontmatter; else warn-only. Config `soft` is the ONLY local rollback — an Assignment-level `soft` does NOT override a hard compass. |
-| `dispatchTools` | `string[]` | `['subagent']` | Delegation tool names the dispatch gate matches (the dsh subagent tool's `toolName` may rename instances). |
+| `dispatchTools` | `string[]` | `['subagent', 'subagent_fork']` | Delegation tool names the dispatch gate matches — the dsh preset's TWO delegation tools, `subagent` and its fork sibling `subagent_fork` (both carry Assignment-shaped `{ description, prompt }` args; a `toolName` config may rename instances). |
 | `dispatchBinding` | `string` | unset (precheck skipped) | The dispatching agent's own harness role; an Assignment whose `Execute as` equals it is self-recursion. |
+| `roleMap` | `Record<string, string>` | unset | mstar role id (`Execute as`) → dsh-llm-fallbacks role id. A taxonomy bridge for logging + future rule-driven interop ONLY — never consulted by the decoration (see LLM fallbacks integration). |
+| `rolePersonas` | `Record<string, string>` | unset | mstar role id (`Execute as`) → persona text; the role-based subagent decoration's only payload source — a role-matched `subagent/start` registers the persona as the child's `mstar:role-persona` system-prompt section (see LLM fallbacks integration). |
 | `skillRoots` | `string[]` | unset (no custom-root registration) | Additional skill roots registered with the dsh skill-filesystem provider (`customSkillDirs` semantics — scanned before user roots). Dev-time: the mirror `<repo-root>/skills` absolute path. |
 | `bundledSkillDir` | `string` | packaged `harness-skills/` mirror (package-relative) | Bundled skill root registered with the dsh skill-filesystem provider (`bundledSkillDir` semantics — scanned last, trusted). Defaults to the package's OWN `harness-skills/` mirror (synced by `bundle-assets`; gitignored) — package-relative, NOT cwd-anchored. An explicit value wins. |
 | `catalogTtlMs` | `number` | `60000` | Pre-step catalog cache refresh interval (ms): how often the per-workspace unified `mstar-engine-status` catalog row (watermark + iteration gate + workspace-state digest) re-reads `status.json` / the compass / the knowledge index. The hot path is a timestamp compare + cache hit between refreshes; a mid-session plan/compass/residual change lands within one interval. |
@@ -85,6 +95,32 @@ Additive beyond the opencode field set: for writable dispatches whose Assignment
 ### Skill lint gate
 
 `fs/write-intent` listener scoped to `SKILL.md` files under the configured skill roots runs the engine skill-authoring lints (`lintFrontmatter` + `lintFiveQuestion` — the CLI `mstar skill lint` combination) on the pre-write on-disk document. The slot is **content-blind** (the intent waterfall carries only `(target, actor)`), so: missing file = first create = pass; clean on-disk doc = silent pass; violations in warn mode = advisory + delegate; violations in hard mode = **repair escape** — the document is ALREADY invalid, so this write may BE the repair (error-level log + `hard: true, repair: true` advisory with the enforced `hardBlocked` verdict). Enforcement resolves like the other gates (Config override, else the iteration compass, else warn-only). The gate never throws; read failures and unexpected errors degrade to allow with a `degraded: true` advisory. The typed hard veto (`SkillLintVetoError`, code `skill-lint.veto`) lives on the incoming-document branch (`lintSkillWrite`) — see Known Limitations for its current wiring.
+
+## LLM fallbacks integration
+
+The optional `dsh-llm-fallbacks` plugin (installed with the second command — see Install paths) powers **role-based subagent configuration**: a role-matched subagent dispatch injects the configured persona into the child session's system prompt. The mstar plugin declares it as a registry `dependencies` entry and imports it **type-only** — `dist/` carries ZERO runtime references to the package (`--external dsh-llm-fallbacks` in the build stays as the guard for any future library-form import); the interop is a decision-point **capability probe**, never a module-internals read.
+
+### Capability probe
+
+Two views over the mounted state (point-in-time reads at decision points, no cache — loader mounts entries concurrently):
+
+- `fallbacksService(ctx)` — the named cordis service (`ctx.get('llm-fallbacks')`) while the plugin is applied; `undefined` during HMR/fiber-swap windows even when the loader entry lives (the entry is declarative and outlives a fiber swap).
+- `fallbacksMounted(ctx)` — capability view, **service-first with a loader-entries fallback**: the loader entry named `dsh-llm-fallbacks` is present, enabled (respecting `entry.disabled` and group rows), and has a live fiber.
+
+Distinct states: **mounted** (service applied — full capability), **unmounted** (no entry: the fallbacks plugin was not installed — the mstar capability degrades, never breaks), **disabled** (entry present but disabled/grouped — capability off), and the HMR window (entry lives, service absent — the loader fallback covers it).
+
+### Role-based decoration
+
+Decoration rides the `subagent/start` EMIT — not `tools/pre-execute` (tool args are deep-frozen snapshots; persona/`agentOptions` come from tool-subagent's own Config, never call args). The synchronous listener resolves the published child via `ctx.get('agents')?.get(info.id)` and, when the child's seeded task prompt is Assignment-shaped and `rolePersonas[executeAs]` is configured, registers the persona as the child's **agent-scoped `mstar:role-persona` system-prompt section** (order 1 — right after the deployment persona slot; unwinds on child disposal). Role identity uses the SAME engine Assignment header grammar as the dispatch gate. Persona lookup is `rolePersonas[executeAs]` directly — **never gated on `roleMap` or on the fallbacks mounted state**.
+
+**Unmounted degradation is same-channel + one debug log**: no fallbacks entry → the persona is still injected from the mstar Config through the identical decoration channel, with exactly one debug log; mounted → one info-level interop log carrying the service version. The listener never throws — `agents` service absent, child unresolvable, non-Assignment or role-unmatched prompts are skip/no-op (the dispatch itself is never affected).
+
+### Config surface
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `roleMap` | `Record<string, string>` | unset | mstar role id → fallbacks role id. **Taxonomy bridge** for logging + future rule-driven interop only — unused in decoration by design (persona injection is `rolePersonas`-sourced). |
+| `rolePersonas` | `Record<string, string>` | unset | mstar role id → persona text; the decoration's only payload source. |
 
 ## Service
 
@@ -389,7 +425,7 @@ closed and archived 2026-08-10.
 
 ## Development
 
-Commands (from `packages/dsh`): the coverage gate is per-file 100% on `src/` (dsh testing policy); the build bun-bundles the src entries into `dist/` (engine + schemastery inlined; `@deepseek-ai/cordis` and the runtime seam imports — `@deepseek-ai/dsh-skill-filesystem`, `@deepseek-ai/dsh-tools` (`defineTool`), `@deepseek-ai/dsh-llm` — external), runs `build-client` (`scripts/build-client-bundle.ts` — the closure-factory CJS browser bundle per spec §6.2, `dist/client.js`) and emits tsc declarations.
+Commands (from `packages/dsh`): the coverage gate is per-file 100% on `src/` (dsh testing policy); the build bun-bundles the src entries into `dist/` (engine + schemastery inlined; `@deepseek-ai/cordis` and the runtime seam imports — `@deepseek-ai/dsh-skill-filesystem`, `@deepseek-ai/dsh-tools` (`defineTool`), `@deepseek-ai/dsh-llm` — external, plus the type-only `dsh-llm-fallbacks`), runs `build-client` (`scripts/build-client-bundle.ts` — the closure-factory CJS browser bundle per spec §6.2, `dist/client.js`) and emits tsc declarations.
 
 ```sh
 bun test --coverage
@@ -446,3 +482,8 @@ The catalog row is appended at the END of the composed step messages, after dele
 - **Entry is a module index over `src/gates/*`** — the split shipped: `src/index.ts` (371 lines) re-exports the frozen 27-name export surface from the gate modules (`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`) and keeps the plugin manifest, the single cordis augmentation point, the command registration, and the `apply()` startup wiring. The surface (17 value + 10 type-only names; `Config` counts once) is frozen by `tests/export-surface.spec.ts` — the runtime value-export set plus, under `typecheck:tests` (`bunx tsc --noEmit -p tests/tsconfig.json`), the value-namespace identity and the per-name type-only probes.
 - **Engine dsh rows are upstreaming-destined** — the dsh changes to engine `host.ts` (`DetectResult`, `ToolSignal`, `resolveSkillRoot`) live in the mstar-workflow engine mirror and are intended for a user-authorized upstream PR into mstar-harness; the `mstar-host` skill mirror (§ Detect / § Resolve loaded skill root / `references/dsh.md`) updates with it.
 - **Iteration stepper: Step 1 is compass-driven, Step 5 is schema-driven** — the zone dashboard's Step 1 (iteration-start) is the current step while the steering compass is `status: active` (Phase 1 in flight — no gate verdict, so no PASS/FAIL badge); Step 5 (merge-ready) is a schema constant the engine gate never lights as current (transition covers Phase 2→3→4 only), so it always renders idle — recorded in the iteration guide, not a defect. The full panel-limitation list lives in the Web client plugin section.
+- **`dsh-llm-fallbacks` is a registry `dependencies` entry with type-only imports** — declared `^0.1.0-alpha.4` (caret range admits alpha.5/beta/stable; the probe shape-assertion test is the executable drift gate) and `--external` in the build, so `dist/` carries zero runtime references; activation is a SEPARATE explicit install (two-command contract), never transitive. The library-form dependency exists so future value imports resolve without a manifest change; `--external` remains the guard.
+- **Role→model override NOT delivered this batch** — routing a role to a fallbacks `model` (or persona via fallbacks rules) would require rewriting the child's `agentOptions` on the start request, but start-request options are caller-controlled (tool-subagent's own Config; call args are `description`/`prompt`/`run_in_background` only, deep-frozen). Awaits upstream `fallbacks-explicit-role-tool` or the N-B1 systemPrompt adoption (roadmap §10.4).
+- **Decoration is a minimal per-child section, not the N-B1 systemPrompt adoption** — `mstar:role-persona` is one agent-scoped section on the child's context; no harness-rules sections, no PromptContext, no variables. N-B1 (roadmap §10.4) may absorb or replace this channel later without changing the observable (AC-3).
+- **Persona injection is fallbacks-independent** — `dsh-llm-fallbacks` only routes LLM failures; it is never required for decoration. Unmounted → the same persona lands from the mstar Config through the same channel with one debug log (AC-4). If `ctx.get('agents')` is absent in a composition (no dsh-agent), decoration is skipped with one debug log.
+- **Fork gating is default-only; explicit `dispatchTools` can omit `subagent_fork`** — a custom `dispatchTools` list overrides the default wholesale (pre-existing rename pattern), so a deployment that declares its own list must include `subagent_fork` to keep fork dispatches gated.

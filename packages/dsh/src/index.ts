@@ -456,7 +456,7 @@ export function apply(ctx: Context, config: Config): void {
   // is surfaced instead of only documented.
   if (effectiveHard && config.dispatchTools === undefined) {
     ctx.logger(DISPATCH_LOGGER).warn(
-      'Enforcement: hard is active but dispatchTools is unset — the dispatch gate matches the default tool name "subagent"; a deployment renaming the dsh subagent tool (toolName) without declaring dispatchTools silently disables the gate',
+      'Enforcement: hard is active but dispatchTools is unset — the dispatch gate matches the default tool names "subagent" and "subagent_fork"; a deployment renaming either dsh subagent tool (toolName) without declaring dispatchTools silently disables the gate',
     )
   }
 

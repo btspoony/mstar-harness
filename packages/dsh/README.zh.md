@@ -27,14 +27,24 @@ dsh plugin --profile web add .
 
 `dsh plugin --profile <name> add <spec>` 首次使用时初始化 profile（`web` 从出厂模板起步：`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`），把 `<spec>` 转发给 profile 目录中的 pnpm，并按已安装状态对账 `dsh.profile.bundles` 层列表：任何 package.json 声明 `dsh.bundle` 的依赖都会加入层栈。相对 spec（`.`、`file:`/`link:`）锚定调用目录，因此 `add .` 须在包检出目录内执行；pnpm 须在 PATH 上。local checkout 需要先执行过 `bun run build`（本包**不使用** `prepare` 脚本——monorepo 与 cli/opencode 一致，显式构建各包）。细节、层位置与出厂默认见 [`bundle/README.md`](bundle/README.md)——registry 与 local checkout 形态均走同一 pnpm + reconcile 机制。`cordis` 与 `@deepseek-ai/dsh-*` 各 seam 均为 peerDependencies——由组合后的 dsh 应用提供。
 
+**（c）可选能力：`dsh-llm-fallbacks`（第二条命令）**——基于角色的 subagent 配置能力（见 LLM fallbacks integration）是**独立的插件行**，须以单独命令安装：
+
+```sh
+dsh plugin --profile web add dsh-llm-fallbacks
+```
+
+**双命令安装即契约**——把 `dsh-llm-fallbacks` 行折叠进本 bundle 的补丁**明确否决**（roadmap §8.3 F4）：loader 没有 insert-if-absent 语义，因此同 `id` 插入是 `duplicate loader entry id` 启动失败（整个 dsh 会话无法启动）；异 `id` 插入则插件被挂载两次——对同时直接安装该包的人，会出现两次 `apply()` 与分裂的 fallback 状态（各自独立的 state store、双份监听器、配置覆盖抽签）。层序为 reconcile 追加序：`dsh-llm-fallbacks` 落在 **`dsh-base`/`llm-retry` 之后**（其硬性排序要求）并位于 mstar 行之后。单命令多激活是上游功能缺口（reconcile 去重或 insert-if-absent 补丁语义），本仓库无法实施。
+
 ### Configuration
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `harnessDir` | `string` | 按会话工作区探测（`.mstar/` → `.agents/` → `.plans/` → `plans/`，从会话工作区根目录开始——**绝不从启动 cwd**） | 显式 harness 根目录；优先于 engine 探测。**harness 根不在探测名列表中的仓库必须配置**——例如本 mstar-workflow 仓库自身用 `.harness/`（维护根，刻意不探测）；探测从会话工作区根开始（绝不从启动 cwd）并在那里**停止**——永不越过会话工作区向上，因此其上方的 harness 目录（如全局 `~/.mstar`）永远不会被采纳。 |
 | `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖。优先级：Config 优先；否则取 Assignment 自身的 `**Enforcement**: hard` 头字段（仅派发闸门）；否则取迭代 compass frontmatter；否则仅告警。Config `soft` 是唯一的本地回滚——Assignment 级 `soft` 不能覆盖 hard compass。 |
-| `dispatchTools` | `string[]` | `['subagent']` | 派发闸门匹配的委派工具名（dsh subagent 工具的 `toolName` 可重命名实例）。 |
+| `dispatchTools` | `string[]` | `['subagent', 'subagent_fork']` | 派发闸门匹配的委派工具名——dsh preset 的**两个**委派工具：`subagent` 及其 fork 兄弟 `subagent_fork`（两者都携带 Assignment 形态的 `{ description, prompt }` 参数；`toolName` 配置可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
+| `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id（`Execute as`）→ dsh-llm-fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——装饰从不读取它（见 LLM fallbacks integration）。 |
+| `rolePersonas` | `Record<string, string>` | 未设置 | mstar 角色 id（`Execute as`）→ persona 文本；基于角色的 subagent 装饰的唯一载荷来源——角色匹配的 `subagent/start` 会把 persona 注册为子会话的 `mstar:role-persona` system-prompt 段（见 LLM fallbacks integration）。 |
 | `skillRoots` | `string[]` | 未设置（不注册自定义根） | 向 dsh skill-filesystem 提供者注册的额外技能根（`customSkillDirs` 语义——先于用户根扫描）。开发期：镜像 `<repo-root>/skills` 的绝对路径。 |
 | `bundledSkillDir` | `string` | 打包的 `harness-skills/` 镜像（包相对路径） | 向 dsh skill-filesystem 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。默认取包内自带的 `harness-skills/` 镜像（`bundle-assets` 同步；gitignore）——包相对路径，**非** cwd 锚定。显式值优先。 |
 | `catalogTtlMs` | `number` | `60000` | pre-step catalog 缓存刷新间隔（毫秒）：按工作区缓存的统一 `mstar-engine-status` 行（水印 + 迭代闸门 + 工作区摘要）多久重读一次 `status.json` / compass / 知识索引。刷新间隔之间热路径只是时间戳比较 + Map 命中；会话中 plan/compass/residual 的变化会在一个间隔内落地。 |
@@ -85,6 +95,32 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 ### Skill lint gate
 
 作用于已配置技能根下 `SKILL.md` 文件的 `fs/write-intent` 监听器，对写入前的磁盘文档运行 engine 技能撰写 lint（`lintFrontmatter` + `lintFiveQuestion`——与 CLI `mstar skill lint` 组合一致）。该槽位**内容盲**（intent 瀑布链只携带 `(target, actor)`）：文件缺失 = 首次创建 = 放行；磁盘文档干净 = 静默放行；告警模式下有违规 = 咨询 + 委托；hard 模式下有违规 = **修复逃生**——文档**已经**非法，本次写入可能就是修复本身（error 级日志 + `hard: true, repair: true` 咨询，携带强制执行后的 `hardBlocked` 判定）。强制执行解析方式与其他闸门相同（Config 覆盖优先，否则取迭代 compass，否则仅告警）。闸门从不抛出；读取失败与意外错误降级为放行并发出 `degraded: true` 咨询。类型化 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）位于传入文档分支（`lintSkillWrite`）——当前接线见 Known Limitations。
+
+## LLM fallbacks integration
+
+可选的 `dsh-llm-fallbacks` 插件（以第二条命令安装——见 Install paths）驱动**基于角色的 subagent 配置**：角色匹配的 subagent 派发会把配置的 persona 注入子会话的 system prompt。mstar 插件将其声明为 registry `dependencies` 条目并**仅作类型导入**——`dist/` 对该包**零运行时引用**（构建中的 `--external dsh-llm-fallbacks` 仍是对未来库形态导入的护栏）；互操作是决策点**能力探测**，绝不读取其他插件的模块内部。
+
+### 能力探测
+
+挂载状态的两个视图（决策点即时读取，无缓存——loader 并发挂载条目）：
+
+- `fallbacksService(ctx)`——插件被 apply 期间命名的 cordis 服务（`ctx.get('llm-fallbacks')`）；HMR/纤程切换窗口内即使 loader 条目仍在，服务也为 `undefined`（条目是声明式的，比纤程活得久）。
+- `fallbacksMounted(ctx)`——能力视图，**服务优先 + loader 条目回退**：名为 `dsh-llm-fallbacks` 的 loader 条目存在、启用（尊重 `entry.disabled` 与 group 行）且纤程存活。
+
+状态区分：**mounted**（服务已 apply——完整能力）、**unmounted**（无条目：未安装 fallbacks 插件——mstar 能力降级，绝不中断）、**disabled**（条目存在但禁用/分组——能力关闭），以及 HMR 窗口（条目在、服务缺——loader 回退覆盖）。
+
+### 基于角色的装饰
+
+装饰挂在 `subagent/start` EMIT 上——而非 `tools/pre-execute`（工具参数是深度冻结快照；persona/`agentOptions` 来自 tool-subagent 自己的 Config，绝不来自调用参数）。同步监听器经 `ctx.get('agents')?.get(info.id)` 解析已发布的子会话，当子会话的种子任务提示为 Assignment 形态且配置了 `rolePersonas[executeAs]` 时，把 persona 注册为子会话的 **agent 作用域 `mstar:role-persona` system-prompt 段**（order 1——紧随部署 persona 槽之后；子会话销毁时自动卸载）。角色身份使用与派发闸门**相同**的 engine Assignment 头语法。persona 查找直接取 `rolePersonas[executeAs]`——**绝不**以 `roleMap` 或 fallbacks 挂载状态为前提。
+
+**未挂载的降级为同通道 + 一条 debug 日志**：无 fallbacks 条目 → persona 仍经完全相同的装饰通道从 mstar Config 注入，仅多一条 debug 日志；已挂载 → 一条携带服务版本的 info 级互操作日志。监听器绝不抛出——`agents` 服务缺失、子会话无法解析、非 Assignment 或角色未匹配的提示均跳过/无操作（派发本身永不受影响）。
+
+### 配置面
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id → fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——装饰按设计不使用（persona 注入以 `rolePersonas` 为源）。 |
+| `rolePersonas` | `Record<string, string>` | 未设置 | mstar 角色 id → persona 文本；装饰的唯一载荷来源。 |
 
 ## Service
 
@@ -165,7 +201,7 @@ dsh web                     # 启动 → 服务 /plugins/@mstar-harness/dsh/clie
 
 ## Development
 
-命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 条目 bun 打包进 `dist/`（内联 engine 与 schemastery；`@deepseek-ai/cordis` 与运行时 seam 导入——`@deepseek-ai/dsh-skill-filesystem`、`@deepseek-ai/dsh-tools`（`defineTool`）、`@deepseek-ai/dsh-llm`——保持外部），运行 `build-client`（`scripts/build-client-bundle.ts`——按 spec §6.2 产出的 closure-factory CJS 浏览器 bundle `dist/client.js`）并输出 tsc 声明。
+命令（在 `packages/dsh` 下执行）：覆盖率门禁为 `src/` 逐文件 100%（dsh 测试策略）；构建命令把 src 条目 bun 打包进 `dist/`（内联 engine 与 schemastery；`@deepseek-ai/cordis` 与运行时 seam 导入——`@deepseek-ai/dsh-skill-filesystem`、`@deepseek-ai/dsh-tools`（`defineTool`）、`@deepseek-ai/dsh-llm`——保持外部，外加仅类型导入的 `dsh-llm-fallbacks`），运行 `build-client`（`scripts/build-client-bundle.ts`——按 spec §6.2 产出的 closure-factory CJS 浏览器 bundle `dist/client.js`）并输出 tsc 声明。
 
 ```sh
 bun test --coverage
@@ -219,3 +255,8 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **入口是 `src/gates/*` 之上的模块索引**——拆分已交付：`src/index.ts`（371 行）从各 gate 模块（`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`）原样 re-export 冻结的 27 名导出面，并保留插件 manifest、单一 cordis augmentation 点、命令注册与 `apply()` 启动接线。导出面（17 值导出 + 10 type-only 名；`Config` 计一次）由 `tests/export-surface.spec.ts` 冻结——运行时值导出集 + `typecheck:tests`（`bunx tsc --noEmit -p tests/tsconfig.json`）下的值命名空间恒等与逐名类型探测。
 - **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。
 - **迭代 stepper：Step 1 为 compass 驱动，Step 5 为 schema 驱动**——zone dashboard 的 Step 1（iteration-start）在 steering compass `status: active`（Phase 1 进行中）时为当前步（无 gate 判定 → 无 PASS/FAIL 徽标）；Step 5（merge-ready）是 engine 闸门永不点亮为当前的 schema 常量（transition 只覆盖 Phase 2→3→4，merge-ready 从不是 gate transition）；仅当 Step 4 为当前步时作为 `next` 渲染，其余为 idle——已记录于迭代 guide，非缺陷。完整面板限制清单见 Web 客户端插件一节。
+- **`dsh-llm-fallbacks` 为 registry `dependencies` 条目且仅类型导入**——声明 `^0.1.0-alpha.4`（caret 范围允许 alpha.5/beta/stable；探测形状断言测试是可执行的漂移闸门）并在构建中 `--external`，因此 `dist/` 零运行时引用；激活是**单独显式安装**（双命令契约），绝不传递。库形态依赖存在是为未来值导入无需改 manifest 即可解析；`--external` 仍是护栏。
+- **本批次未交付角色→模型覆盖**——把角色路由到 fallbacks `model`（或经 fallbacks 规则路由 persona）需要改写启动请求上的子会话 `agentOptions`，但启动请求选项由调用方控制（tool-subagent 自己的 Config；调用参数仅为 `description`/`prompt`/`run_in_background`，且深度冻结）。等待上游 `fallbacks-explicit-role-tool` 或 N-B1 systemPrompt 采纳（roadmap §10.4）。
+- **装饰是最小化的每子会话段，而非 N-B1 systemPrompt 采纳**——`mstar:role-persona` 是子上下文上的一个 agent 作用域段；无 harness 规则段、无 PromptContext、无变量。N-B1（roadmap §10.4）日后可吸收或替换该通道而不改变可观察行为（AC-3）。
+- **persona 注入与 fallbacks 无关**——`dsh-llm-fallbacks` 只路由 LLM 失败；装饰从不依赖它。未挂载 → 同一 persona 经同一通道来自 mstar Config，仅多一条 debug 日志（AC-4）。若组合中缺 `ctx.get('agents')`（无 dsh-agent），装饰以一条 debug 日志跳过。
+- **fork 门禁仅默认开启；显式 `dispatchTools` 可省略 `subagent_fork`**——自定义 `dispatchTools` 列表整体覆盖默认（既有重命名模式），因此自行声明列表的部署须包含 `subagent_fork` 才能继续门禁 fork 派发。
