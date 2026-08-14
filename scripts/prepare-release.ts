@@ -257,17 +257,6 @@ async function bumpInstall(oldV: string, newV: string): Promise<void> {
   await Bun.write(INSTALL_REF.path, text.replace(re, `$1${newV}$2`));
 }
 
-/** Internal consumers bundle the engine at build time; keep their devDependency
- *  spec aligned with the bumped engine version (workspace resolution, no 404). */
-async function syncEngineDevDepSpec(newV: string): Promise<void> {
-  for (const p of ["packages/cli/package.json", "packages/opencode/package.json", "packages/dsh/package.json"]) {
-    const text = await Bun.file(p).text();
-    const re = /("@mstar-harness\/engine"\s*:\s*")[^"]+(")/;
-    if (!re.test(text)) throw new Error(`${p}: could not find @mstar-harness/engine devDependency spec`);
-    await Bun.write(p, text.replace(re, `$1${newV}$2`));
-  }
-}
-
 function archiveFragments(version: string, frags: Fragment[]): void {
   if (!frags.length) return;
   const dest = `${ARCHIVE_DIR}/${version}`;
@@ -318,13 +307,8 @@ async function main(): Promise<void> {
     console.log(`bump: ${s.path}`);
   }
 
-  // Internal consumers (cli/opencode/dsh) bundle the engine at build time, so
-  // the engine is a devDependency with a version spec. Keep the spec aligned
-  // with the bumped engine version so bun resolves it from the workspace (a
-  // mismatched spec would fall back to the registry and 404 pre-publish).
-  await syncEngineDevDepSpec(version);
-  console.log(`sync: @mstar-harness/engine devDependency spec -> ${version} (cli + opencode + dsh)`);
-
+  // Internal consumers (cli/opencode/dsh) bundle the engine at build time; their
+  // devDependency uses `workspace:^`, so no per-release spec sync is needed.
   await bumpInstall(current, version);
   console.log(`bump: ${INSTALL_REF.path}`);
 
