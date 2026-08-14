@@ -22,6 +22,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
 import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
 import * as plugin from '../src/index.ts'
 
 /**
@@ -43,6 +44,29 @@ import * as plugin from '../src/index.ts'
     return rendered.includes('[native code]')
       ? `function ${this.name || 'anonymous'}() { [native code] }`
       : rendered
+  }
+}
+
+/**
+ * Minimal in-memory `loader` service for the composition boot (plan
+ * `20260814-dsh-fallbacks-integration` Task 1 — Step 5 `inject: ['loader']`):
+ * the mstar plugin's top-level `inject` now requires the `loader` service
+ * before apply (the real dsh app always boots the profile loader first —
+ * plugin-inventory precedent), so the harness mounts a structural fake that
+ * answers `entries()` with a test-drivable entry list — the ONE contract the
+ * Task 1 probe consumes (`fallbacksMounted` loader-entries fallback).
+ * Mounted BEFORE the plugin row in every boot composition.
+ */
+export class FakeLoaderRegistry extends Service {
+  /** Test-drivable entry list (the loader `EntryTree.entries()` contract). */
+  entriesList: LoaderEntryView[] = []
+
+  constructor(ctx: Context) {
+    super(ctx, 'loader')
+  }
+
+  *entries(): Generator<LoaderEntryView> {
+    yield* this.entriesList
   }
 }
 
@@ -182,6 +206,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   // plugin so `ctx.tools` / `ctx.commands` exist when the v2 seams register
   // (the real dsh app always composes them).
   const inlineRows: ReadonlyArray<{ name: string; config?: Record<string, unknown> }> = [
+    // The fake loader row mounts FIRST: the mstar plugin's top-level
+    // `inject: ['loader']` (plan 20260814-dsh-fallbacks-integration Task 1)
+    // requires the service before apply — the real dsh app always boots the
+    // profile loader before composing plugin rows.
+    { name: '@deepseek-ai/dsh-loader-fake' },
     { name: '@deepseek-ai/dsh-skill' },
     // The real dsh-tools ToolRegistry service injects `systemPrompt`
     // (unlike the removed peer-stub), so the system-prompt row mounts
@@ -215,6 +244,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
       }
       return { name: (row as { name: string }).name, config: (row as { config?: Record<string, unknown> }).config }
     })
+    // The loader service is app-level in the real dsh app (the profile loader
+    // boots the row composition), so it is prepended here for the fixture
+    // composition too — the plugin's `inject: ['loader']` must resolve.
+    rows = [{ name: '@deepseek-ai/dsh-loader-fake' }, ...rows]
   }
 
   const config: Record<string, unknown> = {}
@@ -246,6 +279,9 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // named exports provide the CommandRuntime (the host app provides it at
     // runtime via peerDependencies).
     ['@deepseek-ai/dsh-commands', await import('@deepseek-ai/dsh-commands')],
+    // The fake `loader` service (plan `20260814-dsh-fallbacks-integration`
+    // Task 1): a `{ default }` module so the seam unwrap resolves the class.
+    ['@deepseek-ai/dsh-loader-fake', { default: FakeLoaderRegistry }],
     // The fake `jobs` service (plan `20260811-panel-f4-timeliness` Task 1):
     // a `{ default }` module so the seam unwrap resolves the class.
     ...(options.jobsService !== undefined

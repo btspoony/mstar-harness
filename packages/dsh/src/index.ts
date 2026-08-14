@@ -99,10 +99,12 @@ export const name = 'dsh'
 
 /**
  * Services required before this plugin's `apply` fiber starts.
- * Empty for the scaffold: the plan's gates register on events (`fs/write-intent`,
- * `tools/pre-execute`), not on injected services; `inject` grows if a service seam is needed.
+ * `loader` — the dsh profile loader's entry tree — is guaranteed before
+ * apply (the plugin row is composed BY the loader), so the Task 1 probe can
+ * read `ctx.loader.entries()` at decision points (plugin-inventory
+ * precedent; no runtime dependency on `@deepseek-ai/cordis-plugin-loader`).
  */
-export const inject: string[] = []
+export const inject: string[] = ['loader']
 
 declare module '@deepseek-ai/cordis' {
   interface Context {

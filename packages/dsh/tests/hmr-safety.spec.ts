@@ -30,7 +30,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
-import { INVALID_STATUS, seedHarness } from './harness.ts'
+import { FakeLoaderRegistry, INVALID_STATUS, seedHarness } from './harness.ts'
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
 const MISSING_EXECUTE_AS = `## Assignment
@@ -100,6 +100,9 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
     const harnessDir = join(root, 'harness')
     const ctx = new Context()
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
     // Advisory capture proves listener liveness: the status gate never throws
     // (repair-escape design, qc3 F-1), so a live mount with an invalid on-disk
     // document emits a repair advisory on BOTH intent slots; a disposed mount
@@ -155,6 +158,9 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     const harnessDir = join(root, 'harness')
     const skillRoot = join(root, 'skills')
     const ctx = new Context()
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
     await mkdir(join(skillRoot, 'broken-skill'), { recursive: true })
     await writeFile(join(skillRoot, 'broken-skill', 'SKILL.md'), INVALID_SKILL)
     const skillAdvisories: SkillLintAdvisory[] = []

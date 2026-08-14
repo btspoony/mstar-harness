@@ -50,14 +50,16 @@
     "test": "bun test",
     "typecheck:tests": "bunx tsc --noEmit -p tests/tsconfig.json",
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external @deepseek-ai/cordis --external @deepseek-ai/dsh-skill-filesystem --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bun run build-client && bunx tsc",
+    "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external @deepseek-ai/cordis --external @deepseek-ai/dsh-skill-filesystem --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm --external dsh-llm-fallbacks && bun run build-client && bunx tsc",
     "build-client": "bun run scripts/build-client-bundle.ts",
     "prepublishOnly": "bun run build"
   },
   "engines": {
     "bun": ">=1.2.17"
   },
-  "dependencies": {},
+  "dependencies": {
+    "dsh-llm-fallbacks": "^0.1.0-alpha.4"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
