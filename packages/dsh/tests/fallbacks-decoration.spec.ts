@@ -224,6 +224,27 @@ describe('subagent/start decoration — mstar:role-persona injection', () => {
     }
   })
 
+  it('(i) rolePersonas: null config → dispatch proceeds, silent no-op (null-safe perf guard, N-002)', async () => {
+    // schemastery's `isNullable` passes `null` through the Config transform
+    // unvalidated (QC re-review probe: `~standard.validate(null)` → value
+    // `null`), so `config.rolePersonas` can be `null` at runtime despite the
+    // TS type. The perf guard must be null-safe: dispatch proceeds, silent
+    // no-op — no throw, no log (same contract as the unset case).
+    const app = booted = await bootApp({ agentsService: 'fake', rolePersonas: null as never })
+    const { agent, scopeKey } = await fakeChild(app.ctx, ASSIGNMENT_PROMPT)
+    app.ctx.get('agents')!.register(agent)
+
+    const { captured, restore } = captureLogs()
+    try {
+      expect(() => app.ctx.events.emit('subagent/start', startInfo(agent.id))).not.toThrow()
+      const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
+      expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)).toBeUndefined()
+      expect(captured).toHaveLength(0) // silent no-op
+    } finally {
+      restore()
+    }
+  })
+
   it('(e) composition with dsh-llm-fallbacks applied → persona injected + one info interop log carrying service.version', async () => {
     booted = await bootApp({ agentsService: 'fake', rolePersonas: { [EXECUTE_AS]: PERSONA } })
     // The real registry plugin applied as a row (same entry-shape cast the

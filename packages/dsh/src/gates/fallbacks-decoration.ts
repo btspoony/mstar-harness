@@ -160,7 +160,10 @@ export function decorateSubagentStart(ctx: Context, config: Config, info: Subage
     // header parse entirely. The `agents`-absent debug log is intentionally
     // suppressed on this path (no persona payload exists to inject).
     const personas = config.rolePersonas
-    if (personas === undefined || Object.keys(personas).length === 0) return
+    // `== null` covers both `undefined` and `null`: schemastery's `isNullable`
+    // passes `null` through the Config transform unvalidated, so the runtime
+    // value can be `null` despite the TS type (QC re-review N-002).
+    if (personas == null || Object.keys(personas).length === 0) return
     // The `agents` service is absent in compositions without dsh-agent —
     // skip + one debug log (documented Known Limitation), never crash.
     const agents = ctx.get('agents') as AgentsView | undefined
