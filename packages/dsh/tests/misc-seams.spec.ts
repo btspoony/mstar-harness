@@ -28,7 +28,7 @@ import {
   lintRolesWrite,
   type SeamLintAdvisory,
 } from '../src/index.ts'
-import { bootApp, seedHarness, valueOf, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, seedHarness, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -763,6 +763,9 @@ describe('shared envelope', () => {
   it('HMR disposal: fiber.dispose unwinds all four listeners; a reloaded fiber restores them', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-seams-hmr-'))
     const ctx = new Context()
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
     const advisories = captureAdvisories(ctx)
     try {
       const harnessDir = join(root, 'harness')

@@ -43,10 +43,11 @@ export interface Config {
   enforcement?: 'hard' | 'soft'
   /**
    * Model-facing delegation tool name(s) the dispatch gate matches. The dsh
-   * subagent tool registers as `subagent` by default, but its `toolName`
-   * config may rename instances (tool-subagent README: each instance needs a
-   * distinct name), so the match list is deployment-settable. Defaults to
-   * `['subagent']`.
+   * subagent tool registers as `subagent` by default (its fork sibling
+   * `subagent_fork` carries the same Assignment-shaped args and is gated
+   * too), but the `toolName` config may rename instances (tool-subagent
+   * README: each instance needs a distinct name), so the match list is
+   * deployment-settable. Defaults to `['subagent', 'subagent_fork']`.
    */
   dispatchTools?: string[]
   /**
@@ -87,9 +88,51 @@ export interface Config {
    * per interval). Absent → 60000.
    */
   catalogTtlMs?: number
+  /**
+   * Taxonomy bridge: mstar role id → fallbacks role id (the
+   * `dsh-llm-fallbacks` role taxonomy). Logging + future rule-driven
+   * interop only — NOT required for persona injection (`rolePersonas` is
+   * the decoration's only payload source). Absent → no bridge mapping.
+   */
+  roleMap?: Record<string, string>
+  /**
+   * mstar role id → persona text — the subagent decoration's only payload
+   * source (plan `20260814-dsh-fallbacks-integration` Task 2). A
+   * role-matched `subagent/start` registers the persona as the child's
+   * `mstar:role-persona` system-prompt section (agent-scoped on
+   * `Agent.ctx`, unwinds on disposal). Lookup is DIRECT — never gated on
+   * `roleMap` or on the fallbacks mounted state (unmounted → same
+   * injection from Config + one debug log). Absent → no decoration.
+   *
+   * INTERPOLATION CONSTRAINT: dsh system-prompt renders section text with
+   * STRICT `{{variable}}` interpolation and throws on any `{{` paired with a
+   * later `}}` (unknown/malformed/undefined reference), so persona values
+   * MUST NOT contain that pattern — a violating persona would break child
+   * prompt assembly at the child's first render, for EVERY role-matched
+   * dispatch. The Config schema rejects such values at plugin mount with a
+   * clear error (see {@link PERSONA_INTERPOLATION_HAZARD}); a lone `{{` with
+   * no later `}}` is literal prose (safe), and the escape rule is single
+   * braces or rewording. Keep persona text concise; bound its length at
+   * deployment.
+   */
+  rolePersonas?: Record<string, string>
 }
 
-/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall), so both dispatch keys preserve omission via `.default(undefined)`. */
+/**
+ * dsh system-prompt strict `{{variable}}` interpolation hazard: the renderer
+ * (`renderPrompt` → `interpolate` in `@deepseek-ai/dsh-system-prompt`) scans
+ * section text for `{{` and THROWS on any `{{` paired with a later `}}` in
+ * the same text (unknown variable, malformed group, or undefined value).
+ * Persona text lands in the `mstar:role-persona` section verbatim, so a
+ * persona containing this pattern breaks child prompt assembly at the
+ * child's first render — every role-matched dispatch. The Config schema
+ * rejects such values at validation (plugin mount) with a clear error. A
+ * lone `{{` with no later `}}` is literal prose (safe); the escape rule is
+ * single braces or rewording.
+ */
+const PERSONA_INTERPOLATION_HAZARD = /\{\{[\s\S]*\}\}/
+
+/** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the decoration keys all preserve omission via `.default(undefined)`. */
 export const Config: z<Config> = z.object({
   harnessDir: z.string(),
   enforcement: z.union(['hard', 'soft']),
@@ -98,6 +141,28 @@ export const Config: z<Config> = z.object({
   skillRoots: z.array(z.string()).default(undefined as unknown as string[]),
   bundledSkillDir: z.string().default(undefined as unknown as string),
   catalogTtlMs: z.number().default(undefined as unknown as number),
+  roleMap: z.dict(z.string()).default(undefined as unknown as Record<string, string>),
+  // Hardening (plan QC W-001): persona text is rendered by dsh system-prompt
+  // strict interpolation — a `{{` paired with a later `}}` throws at child
+  // prompt assembly. Reject such values HERE so a violating persona fails
+  // plugin mount with a clear error instead of breaking every role-matched
+  // dispatch later. The vendored schemastery fork has no `.refine`, and its
+  // transform callback receives no `options` (fork quirk), so the role key is
+  // interpolated into the message directly.
+  rolePersonas: z.transform(
+    z.dict(z.string()),
+    (value) => {
+      for (const [role, persona] of Object.entries(value)) {
+        if (PERSONA_INTERPOLATION_HAZARD.test(persona)) {
+          throw new z.ValidationError(
+            `rolePersonas["${role}"] must not contain a "{{" paired with a later "}}" (dsh system-prompt strict interpolation renders persona text and throws on unknown or malformed references — use single braces or reword)`,
+            {},
+          )
+        }
+      }
+      return value
+    },
+  ).default(undefined as unknown as Record<string, string>),
 })
 /** One violation line for logs and the typed veto message. */
 export function formatViolation(violation: ValidationResult): string {

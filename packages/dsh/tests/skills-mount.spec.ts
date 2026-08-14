@@ -29,7 +29,7 @@ import { Config as SkillLocalSchema } from '@deepseek-ai/dsh-skill-filesystem'
 import * as plugin from '../src/index.ts'
 import { DshHostAdapter, skillLocalConfig } from '../src/index.ts'
 import { resolvePackagedSkillsDir } from '../src/gates/_shared.ts'
-import { bootApp, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -317,6 +317,9 @@ describe('skills mount via the plugin (real composition)', () => {
     const tempRoot = await seedSkillRoot()
     const ctx = new Context()
     new SkillRegistry(ctx)
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
     try {
       const fiber = await ctx.plugin(plugin, { skillRoots: [tempRoot] })
       expect((await ctx.skills.list()).map((skill) => skill.name)).toContain('temp-one')

@@ -37,6 +37,16 @@ pnpm must be on PATH. The package has no `prepare` script (the monorepo
 builds packages explicitly, matching cli/opencode), so a local checkout must
 be built before `add .`.
 
+The optional `dsh-llm-fallbacks` capability plugin is a SECOND install
+(`dsh plugin --profile web add dsh-llm-fallbacks`) — the two-command install
+is the contract. This bundle's patch will NEVER fold a fallbacks row in: the
+loader has no insert-if-absent semantics, so a same-`id` insert is a
+`duplicate loader entry id` boot failure and a different-`id` insert mounts
+the plugin twice (two `apply()` runs, split fallback state) for anyone who
+also installs the package directly (roadmap §8.3 F4). Reconcile append order
+places `dsh-llm-fallbacks` after `dsh-base`/`llm-retry` (its hard ordering
+requirement) and after this bundle's `mstar` row.
+
 Bundle resolution is two-anchored: a bundle name resolves from the dsh
 installation first, then from the profile directory. During local
 development `@mstar-harness/dsh` is not installed into the dsh installation,
@@ -68,7 +78,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 |---|---|---|
 | `harnessDir` | unset (resolved per session workspace) | explicit `{HARNESS_DIR}` root — **required for repos whose harness root is not a probed name** (`.mstar/` → `.agents/` → `.plans/` → `plans/`): e.g. the mstar-workflow maintenance repo itself uses `.harness/` (deliberately not probed), so set `harnessDir: <repo>/.harness` in the profile layer. Without the config the probe starts from the SESSION workspace root (the session cwd — **never the process/launch cwd**) and **stops there** — it never walks above the session workspace, so a global `~/.mstar` is never adopted |
 | `enforcement` | **unset — default OFF** | `hard` / `soft` override; absent → the iteration compass decides, warn-only when no compass hardens (never a global always-on hard gate) |
-| `dispatchTools` | unset (plugin default `['subagent']`) | delegation tool names the dispatch gate matches |
+| `dispatchTools` | unset (plugin default `['subagent', 'subagent_fork']`) | delegation tool names the dispatch gate matches — the dsh preset's TWO delegation tools (`subagent` + its fork sibling `subagent_fork`, both Assignment-shaped); a custom list overrides the default wholesale, so it must include `subagent_fork` to keep fork dispatches gated |
 | `dispatchBinding` | unset | the dispatching agent's role for the anti-recursion precheck |
 | `skillRoots` | unset | additional skill roots (custom mirrors) |
 | `bundledSkillDir` | unset → plugin resolves its OWN packaged `harness-skills/` mirror package-relative | bundled skill mount — the repo-root `skills/` mirror synced by `bundle-assets` at build/postinstall (gitignored), resolved package-relative (NOT cwd-anchored). An explicit value wins; a RELATIVE override stays cwd-anchored, so pass an absolute path in the profile layer |
