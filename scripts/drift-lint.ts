@@ -12,7 +12,10 @@
  *      and omissions like a missing `bug` / `direction` both fail).
  *   2. README bilingual pairing — README.md and README_CN.md must change
  *      together over the committed range merge-base(origin/main, HEAD)..HEAD
- *      (AGENTS.md bilingual rule); skipped silently when git has no range.
+ *      (AGENTS.md bilingual rule); skipped silently when git has no range
+ *      (local non-commit runs), but a missing range under GITHUB_ACTIONS
+ *      fails loudly — the drift-lint CI job checks out with fetch-depth: 0
+ *      so origin/main exists and PR runs are the enforcement surface.
  *   3. skills corpus — no ephemeral citations anywhere in the skills/
  *      markdown tree (engine findEphemeralCitations over the full corpus),
  *      turning the manual corpus smoke into a permanent CI guard.
@@ -107,6 +110,83 @@ export function checkBilingualPairing(changedFiles: string[]): string[] {
   return [
     `${updated} changed but ${missing} did not — update the paired README in the same change set (AGENTS.md bilingual rule)`,
   ];
+}
+
+export function isGitHubActions(): boolean {
+  return process.env.GITHUB_ACTIONS === "true";
+}
+
+export type BilingualGuardResult =
+  | { status: "checked"; failures: string[] }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; failures: string[] };
+
+/**
+ * Guard 2 decision given the git range result and CI context:
+ * - `changedFiles === null` — git could not resolve the range (no repo /
+ *   no origin/main). Locally this is a legitimate non-commit run and skips
+ *   silently; under GITHUB_ACTIONS it is a wiring failure (the drift-lint
+ *   job must checkout with fetch-depth: 0 so origin/main exists) and fails
+ *   loudly instead of silently skipping.
+ * - `changedFiles === []` — range resolved but empty (direct-to-main push
+ *   where origin/main == HEAD). Uncovered by design; PR runs are the
+ *   enforcement surface, so this skips in CI too.
+ * - non-empty — run the pairing check.
+ * Exported as a test seam; `opts.ci` defaults to the GITHUB_ACTIONS env var
+ * (the main block passes nothing, tests inject the env explicitly).
+ */
+export function evaluateBilingualGuard(
+  changedFiles: string[] | null,
+  opts: { ci?: boolean } = {},
+): BilingualGuardResult {
+  const ci = opts.ci ?? isGitHubActions();
+  if (changedFiles === null) {
+    if (ci) {
+      return {
+        status: "failed",
+        failures: [
+          "README bilingual pairing guard: no git range in CI (merge-base failed or origin/main missing) — the drift-lint job must checkout with fetch-depth: 0 so the pairing check can run (PR runs are the enforcement surface)",
+        ],
+      };
+    }
+    return { status: "skipped", reason: "no git range (non-CI run)" };
+  }
+  if (changedFiles.length === 0) {
+    return { status: "skipped", reason: "empty range (direct-to-main push)" };
+  }
+  return { status: "checked", failures: checkBilingualPairing(changedFiles) };
+}
+
+/**
+ * Category tokens from the `<category>` keyword-table row: the backticked
+ * cell values after the keyword cell, filtered to lowercase-kebab codes
+ * (`^[a-z][a-z-]*$`). The filter drops the `<category>` placeholder cell and
+ * the plan-field reference "plan `Category` field values" (capitalized) —
+ * neither is a category code. Exported as a test seam for guard 1.
+ */
+export function extractCategoryRowTokens(row: string): string[] {
+  return [...row.split("|").slice(2).join("|").matchAll(/`([^`]+)`/g)]
+    .map((mm) => mm[1])
+    .filter((t) => /^[a-z][a-z-]*$/.test(t));
+}
+
+/** True when the citation at `index` is prefixed by a `.harness/` path
+ * (gitignored roadmap / ADR — not part of the skills tree). */
+export function citesHarnessPath(text: string, index: number): boolean {
+  return text.slice(Math.max(0, index - 40), index).includes(".harness/");
+}
+
+/** True when the bare token at `index` is itself the file name of a
+ * knowledge-conventions citation — the citation path starts with
+ * `conventions/` ("conventions/<file>" / "knowledge \`conventions/<file>\`").
+ * Such docs resolve under `{KNOWLEDGE_DIR}/conventions/` (`.mstar/knowledge/`,
+ * gitignored), so existence is not verifiable in CI. The exemption is
+ * anchored to the cited token itself: `conventions/` must immediately
+ * precede it and start a path segment (`x-conventions/<file>` and
+ * `sub/conventions/<file>` are NOT exempt), so nearby unrelated citations
+ * are still existence-checked. Mirrors the `.harness/` exemption. */
+export function citesKnowledgeConventions(text: string, index: number): boolean {
+  return /(?:^|[^\w./-])conventions\/$/.test(text.slice(Math.max(0, index - 200), index));
 }
 
 if (import.meta.main) {
@@ -235,21 +315,6 @@ if (import.meta.main) {
     "schema.yaml",
   ]);
 
-  /** True when the citation at `index` is prefixed by a `.harness/` path
-   * (gitignored roadmap / ADR — not part of the skills tree). */
-  function citesHarnessPath(text: string, index: number): boolean {
-    return text.slice(Math.max(0, index - 40), index).includes(".harness/");
-  }
-
-  /** True when the citation at `index` is a knowledge-conventions reference
-   * ("knowledge \`conventions/<file>\`" / "conventions/<file>") — such docs
-   * resolve under `{KNOWLEDGE_DIR}/conventions/` (`.mstar/knowledge/`,
-   * gitignored), so they are harness-local docs, not skill files, and
-   * existence is not verifiable in CI. Mirrors the `.harness/` exemption. */
-  function citesKnowledgeConventions(text: string, index: number): boolean {
-    return /(?:knowledge\s*)?`?conventions\//.test(text.slice(Math.max(0, index - 60), index));
-  }
-
   const engineModules = collectFiles("packages/engine/src", ".ts").filter(
     (f) => !f.endsWith("/index.ts"),
   );
@@ -347,10 +412,7 @@ if (import.meta.main) {
     if (rowIdx === -1) {
       fail(`${file}: could not locate the \`<category>\` keyword-table row (expected a row starting with \`| \`<category>\` |\`)`);
     } else {
-      const cells = lines[rowIdx].split("|");
-      const tokens = [...cells.slice(2).join("|").matchAll(/`([^`]+)`/g)]
-        .map((mm) => mm[1])
-        .filter((t) => /^[a-z][a-z-]*$/.test(t));
+      const tokens = extractCategoryRowTokens(lines[rowIdx]);
       categoryTokensChecked += tokens.length;
       for (const t of tokens) {
         if (!auditCategories.has(t)) {
@@ -385,11 +447,16 @@ if (import.meta.main) {
   /* Guard 2: README.md / README_CN.md bilingual pairing (AGENTS.md)      */
   /* ------------------------------------------------------------------ */
 
-  const changedFiles = changedFilesSinceMergeBase();
+  const outcome = evaluateBilingualGuard(changedFilesSinceMergeBase());
   let bilingualStatus = "skipped (no git range)";
-  if (changedFiles !== null && changedFiles.length > 0) {
+  if (outcome.status === "checked") {
     bilingualStatus = "checked";
-    for (const line of checkBilingualPairing(changedFiles)) fail(line);
+    for (const line of outcome.failures) fail(line);
+  } else if (outcome.status === "failed") {
+    bilingualStatus = "failed (no git range in CI)";
+    for (const line of outcome.failures) fail(line);
+  } else {
+    bilingualStatus = `skipped (${outcome.reason})`;
   }
 
   /* ------------------------------------------------------------------ */
