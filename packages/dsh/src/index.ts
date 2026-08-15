@@ -67,6 +67,11 @@ import {
   setDecorationAgentsDir,
   setDecorationLogger,
 } from './gates/fallbacks-decoration.ts'
+import {
+  WORKFLOW_LEDGER_LOGGER,
+  registerWorkflowLedger,
+  setWorkflowLedgerLogger,
+} from './gates/workflow-ledger.ts'
 import type { SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
 import {
   ADVISORY_LOGGER,
@@ -413,6 +418,23 @@ export function apply(ctx: Context, config: Config): void {
   }
   runAdvisoryPass()
   registerSettleListener(ctx, config, pairing)
+
+  // Workflow-ledger session-event consumer (plan `20260815-dsh-workflow-ledger`
+  // Task 3 — the W-B2 producer half): a cold scan over `ctx.sessions.list()`
+  // at apply (durable `tool-workflow/*` rows already in each session's events
+  // snapshot — constructor-seeded events never hit the firehose) plus a live
+  // `session/event` firehose listener, both appending through
+  // `recordWorkflowEvent` (fully try/catch-contained). The dsh-session seam
+  // is STRUCTURAL (`ctx.get('sessions')` — the package is not a dependency);
+  // an absent service degrades to one debug log with the consumer disabled.
+  // Observe-only: a failing ledger write never crashes or alters a workflow
+  // run.
+  setWorkflowLedgerLogger((level, message) => {
+    const logger = ctx.logger(WORKFLOW_LEDGER_LOGGER)
+    if (level === 'warn') logger.warn(message)
+    else logger.debug(message)
+  })
+  registerWorkflowLedger(ctx, resolver)
 
   // Background-task settle pairing — the SECOND real completion seam: a
   // terminal task snapshot (completed/killed/failed) pairs via the registry

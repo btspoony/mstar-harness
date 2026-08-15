@@ -189,6 +189,30 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 该行是 **digest 门控**的：按 agent+workspace，每个 turn 只注入一次，仅当渲染文本变化时重新注入——20 步的 turn 只显示一次 catalog，而不是 20 次。source 共享**同一**按工作区缓存条目：显式 `harnessDir` 时在 boot 构建（否则在工作区首次 pre-step 构建），并按 TTL 刷新（`catalogTtlMs`，默认 60 秒）——刷新间隔之间热路径只是时间戳比较 + Map 命中，会话中 plan/compass/residual 的变化在一个间隔内落地。
 
+## Agent-flow ledger（workflow 行）
+
+agent-flow 账本——`{HARNESS_DIR}/agent-flow.jsonl`，即 catalog 的 `state.agentFlow` 证据所读的同一 JSONL——同样记录 **workflow / ralph 扇出运行**：一个会话事件消费者（日志器 `mstar/workflow-ledger`，apply 时注册）把四个持久化的 `tool-workflow/*` 会话事件映射为三种新账本类型。事实来源是**持久化会话事件**——追加进**调用方父会话**的日志（仅顶层运行；嵌套 transport 调用上游不记录任何东西），而**不是**内存中的 `workflow/*` emits（roadmap §10.4 N4）：会话日志才是可回放的事实，因此消费者以 **apply 时冷扫描**（构造期种子事件从不进 firehose——`firstLiveSeq`）加实时 **`session/event` firehose** 监听覆盖它，按**持久化逐会话水位线**（会话日志 `seq` 位置）去重——水位线持久化到 `{HARNESS_DIR}/workflow-ledger-cursors.json`（账本旁的小型有界 sidecar，temp 文件 + rename 原子写入）。
+
+| `tool-workflow/*` 事件 | 账本行 | 字段 |
+| --- | --- | --- |
+| `run-start` | `workflow-run` | `runId`、`name`、`agent?`（承载的父会话 id） |
+| `agent-start` | `workflow-agent` | `runId`、`seq`（1 起始的成员序号）、`label`、`phase?`、`childId` |
+| `run-end` | `workflow-run-end` | `runId`、`stopReason`（`completed` / `cancelled` / `error`） |
+
+`tool-workflow/agent-end` 是上游成员簿记，**没有账本类型**（成员 `outcome` 有意不持久化），被过滤掉。可选字段（`agent` / `phase`）缺席时从序列化行省略（lossless-JSON 纪律）；三种类型共用账本的 `AGENT_FLOW_MAX_EVENTS` 截断 + 大小门禁，畸形行读取时收敛为 `undefined`（绝不重序列化）。展示字段（`name` / `label` / `phase`）在边界确定性限长（`WORKFLOW_LEDGER_MAX_NAME_LENGTH` 1024、`WORKFLOW_LEDGER_MAX_LABEL_LENGTH` 512——超长值以 `…` 标记截断）；id 尺寸字段（`runId` / `childId`，上限 512）超长时**整行跳过**——绝不截断成碰撞。
+
+**去重与回放范围。** 持久化水位线即去重机制：**冷热重叠**以及**插件重应用/重启**（重注册读取持久化水位线而非从空游标开始）下每个 `(runId, kind, seq)` 只产一行。**apply 之后创建**、带构造期种子日志（恢复/分叉会话——其种子从不进 firehose）的会话会在上游 `session/created` 事件上**冷扫描一次**，水位线同样保证该回填幂等。水位线 sidecar 有界（每 harness 会话数上限，驱逐优先已不在线的会话）且完全受控：水位线不可读/不可写时降级为仅内存并告警一次——重启后会重录（诚实的去重欠录，绝不丢数据、绝不阻塞）。
+
+**childId 关联 + 成员计数。** `workflow-agent` 行保留已发布成员的 `childId`（子会话 id）；运行的展示 `name` 只存在于 `workflow-run` 行，面板为 agent/end 行经窗口查找解析（同一 `runId`——成员行本身不带名称）。面板把成员 COUNT 挂到 `workflow-run` 行（窗口内该 `runId` 的 `workflow-agent` 行数；窗口有界——被 ≤50 事件窗口截掉的成员如实缺席，绝不猜 0）。
+
+**深度咨询（观察时）。** `agent-start` 时，消费者经 `sessions.get(childId)` 解析子会话，当其 `header.delegationDepth` ≥ 2 时告警——每个运行**至多一次**（per-runId 闩锁），日志器 `mstar/workflow-ledger`。仅观察时，**绝不是拒绝通道**：子会话读取抛出只降级咨询本身，绝不影响行或运行。
+
+**零行为变更保证。** 消费者仅观察：**零门禁**——每次读取与追加都 try/catch 包裹；账本写入失败绝不崩溃或改变 workflow 运行；会话读取抛出只记一条 warn 并继续。`sessions` 服务经 `ctx.get('sessions')` **结构化**读取——对 `@deepseek-ai/dsh-session` 无运行时依赖。
+
+**挂载顺序说明。** 消费者只在 apply 时 `sessions` 服务可用时激活——**dsh-session 行必须先于 mstar 行挂载**（标准 `web` profile 顺序即如此）。dsh-session 后于插件挂载（或缺失）的组合**静默**降级：一条 debug 日志（`sessions service absent — workflow-ledger consumer disabled`）且不记录任何行——绝不是错误，绝不是运行损坏。
+
+**面板可见性。** 三种 workflow 行经现有事件行样式（无重设计）渲染在 **事件记录（Event Log）tab** 的 Agent 流转事件分区：摘要身份是运行 NAME（agent/end 行经窗口查找解析；回退 runId → 「未知」），详情体新增四个 workflow 字段——run-id / name / members / stop-reason（缺失 → 「—」）——expected/settled 席位渲染「—」（workflow 行不是角色派发——不存在 settle 配对，与 settle 行同先例）。未知 kind 字符串渲染为**通用行**（kind 原文、无 workflow 字段）——绝不丢弃、绝不猜测。catalog 摘要把 workflow 行计为**独立** `workflow` 桶（模型行 `by role: workflow N`）——绝不并入派发角色计数。
+
 ## Web 客户端插件（工作流面板）
 
 本包为 dsh **web** profile 提供浏览器客户端半体，在**已安装的 `mstar` bundle 行**上被自动发现（package.json 的 `dsh.client` 声明 + `exports["./client"]` → `dist/client.js`——上游 web `dsh.client` 发现逻辑扫描 loader entries，并把每个客户端的 `exports["./client"]` 解析进 boot 图）——**无需独立 profile 层或安装步骤**（spec §6.1）。web 应用在 `/plugins/@mstar-harness/dsh/client.js` 提供该 bundle，并经 closure-factory loader 握手加载（`window.__ModuleLoader__.load({ id, factory })`）。

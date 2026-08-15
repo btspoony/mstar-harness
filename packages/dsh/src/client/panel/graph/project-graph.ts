@@ -100,29 +100,33 @@ export interface GraphViolation {
 
 /* ------------------------------ flow events (spec §3 — moved from `flow.*`) ------------------------------ */
 
-/** Event status coloring: dispatch → dispatched|advisory|denied; settle → ok|error|denied. */
-export type FlowEventStatus = 'dispatched' | 'advisory' | 'denied' | 'ok' | 'error'
+/** Event status coloring: dispatch → dispatched|advisory|denied; settle → ok|error|denied; workflow/unknown rows → unknown (no gate status — honest). */
+export type FlowEventStatus = 'dispatched' | 'advisory' | 'denied' | 'ok' | 'error' | 'unknown'
 
 /**
  * One projected agent-flow event (spec agent-flow-catalog-graph §2.4 —
- * unchanged by the zone refactor). Every field degrades individually via
- * `guards.ts` — a missing/illegal value becomes `null`/''/`0`/a base status,
- * never a throw and never a guessed value. Rows whose `kind` is not
- * dispatch/settle cannot be classified and are skipped entirely
- * (belt-and-suspenders: the T1 ledger reader already normalizes kind).
+ * unchanged by the zone refactor; plan `20260815-dsh-workflow-ledger` Task 4
+ * adds the workflow kinds + the unknown-kind degradation path). Every field
+ * degrades individually via `guards.ts` — a missing/illegal value becomes
+ * `null`/''/`0`/a base status, never a throw and never a guessed value.
+ * Dispatch/settle rows keep their gate semantics; the three WORKFLOW kinds
+ * project with their run identity (no verdict/outcome → status `unknown`);
+ * any UNKNOWN kind string renders as a GENERIC row — never dropped, never
+ * guessed. Only a row WITHOUT a kind is unclassifiable and skipped.
  */
 export interface FlowEventView {
   /** `${ts}-${kind}-${index}` — stable id (index = position in the projected window). */
   id: string
   ts: number
-  kind: 'dispatch' | 'settle'
-  /** `Execute as`; '' for settle rows without a paired identity. */
+  /** The ledger kind verbatim: dispatch | settle | the three workflow kinds | any unknown kind string (generic row). */
+  kind: 'dispatch' | 'settle' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | (string & {})
+  /** `Execute as`; '' for settle rows without a paired identity and for workflow/unknown rows. */
   role: string
   planId: string | null
   taskId: string | null
   taskCategory: string | null
   agent: string | null
-  /** dispatch → dispatched|advisory|denied; settle → ok|error|denied (spec §2.4). */
+  /** dispatch → dispatched|advisory|denied; settle → ok|error|denied; workflow/unknown → unknown (spec §2.4). */
   status: FlowEventStatus
   /** `role` ∈ the EXPECTED_ROLE_FLOW role union (spec §2.3 exact-string match). */
   expected: boolean
@@ -133,6 +137,22 @@ export interface FlowEventView {
   /** Settle rows only (plan `20260811-panel-f4-timeliness` Task 1): the settle carries the PAIRED dispatch's identity (exact pairing). */
   paired?: boolean
   durationMs: number | null
+  /** Workflow run identity (workflow-* + unknown rows, when carried; absent otherwise). */
+  readonly runId?: string
+  /** Workflow run display name (workflow-run rows only). */
+  readonly name?: string
+  /** The run's member count in the window (workflow-run rows only — the window's `workflow-agent` rows for the runId; absent when 0/truncated, never a 0 guess). */
+  readonly memberCount?: number
+  /** Run-member 1-based sequence (workflow-agent rows only). */
+  readonly seq?: number
+  /** Run-member display label (workflow-agent rows only). */
+  readonly label?: string
+  /** Run-member phase (workflow-agent rows only, when carried). */
+  readonly phase?: string
+  /** The published member's child session identity (workflow-agent rows only). */
+  readonly childId?: string
+  /** Terminal workflow run reason (workflow-run-end rows only). */
+  readonly stopReason?: string
 }
 
 /* ---------------------------------- iteration zone (spec §3) ---------------------------------- */
@@ -1244,11 +1264,15 @@ function settleStatus(outcome: unknown): FlowEventStatus {
 }
 
 /**
- * One guarded ledger row (spec §2.4): every field degrades individually via
- * `guards.ts` (missing → `null`/''/`0`, never a fabricated value). A row
- * whose `kind` is not dispatch/settle cannot be classified (no status, no
- * stage semantics) → `null` (skipped — belt-and-suspenders: the T1 ledger
- * reader already normalizes kind).
+ * One guarded ledger row (spec §2.4 + plan `20260815-dsh-workflow-ledger`
+ * Task 4): every field degrades individually via `guards.ts` (missing →
+ * `null`/''/`0`, never a fabricated value). Dispatch/settle rows keep their
+ * gate semantics; the three WORKFLOW kinds project with their run identity
+ * (no verdict/outcome → status `unknown`); any UNKNOWN kind string renders
+ * as a GENERIC row — never dropped (a future ledger kind stays visible),
+ * never guessed. Only a row WITHOUT a kind string is unclassifiable → `null`
+ * (skipped — belt-and-suspenders: the T1 ledger reader already normalizes
+ * kind).
  * @param raw - one `agentFlow.events` row.
  * @param index - position in the projected window (stable id component).
  */
@@ -1261,37 +1285,97 @@ function flowEventOf(
     ts?: unknown; kind?: unknown; role?: unknown; planId?: unknown; taskId?: unknown
     taskCategory?: unknown; agent?: unknown; verdict?: unknown; outcome?: unknown; durationMs?: unknown
     paired?: unknown
+    runId?: unknown; name?: unknown; seq?: unknown; label?: unknown; phase?: unknown; childId?: unknown
+    stopReason?: unknown
   } | null | undefined
-  const kind = row?.kind
-  if (kind !== 'dispatch' && kind !== 'settle') return null
+  const kind = str(row?.kind)
+  if (kind === null) return null
   const role = str(row?.role) ?? ''
   const matched = stageIndex.get(role)
   const ts = count(row?.ts) ?? 0
+  if (kind === 'dispatch') {
+    return {
+      id: `${ts}-${kind}-${index}`,
+      ts,
+      kind,
+      role,
+      planId: str(row?.planId),
+      taskId: str(row?.taskId),
+      taskCategory: str(row?.taskCategory),
+      agent: str(row?.agent),
+      status: dispatchStatus(row?.verdict),
+      expected: matched !== undefined,
+      stage: matched ?? null,
+      settled: false,
+      durationMs: count(row?.durationMs),
+    }
+  }
+  if (kind === 'settle') {
+    return {
+      id: `${ts}-${kind}-${index}`,
+      ts,
+      kind,
+      // A PAIRED settle carries the dispatch identity — the role/stage/
+      // expected seats map from it (the paired identity is exact, plan
+      // `20260811-panel-f4-timeliness` Task 1; an unpaired settle has role ''
+      // → no stage, never expected — the honest degradation).
+      role,
+      planId: str(row?.planId),
+      taskId: str(row?.taskId),
+      taskCategory: str(row?.taskCategory),
+      agent: str(row?.agent),
+      status: settleStatus(row?.outcome),
+      expected: matched !== undefined,
+      stage: matched ?? null,
+      settled: false,
+      // Paired-identity presence (settle rows only — the exact-pairing marker,
+      // plan `20260811-panel-f4-timeliness` Task 1).
+      ...(row?.paired === true ? { paired: true } : {}),
+      durationMs: count(row?.durationMs),
+    }
+  }
+  // Workflow kinds + unknown kinds: the generic base row (no gate status —
+  // honest `unknown`), plus the workflow run identity when carried.
+  const runId = str(row?.runId)
+  const name = str(row?.name)
+  const seq = count(row?.seq)
+  const label = str(row?.label)
+  const phase = str(row?.phase)
+  const childId = str(row?.childId)
+  const stopReason = str(row?.stopReason)
   return {
     id: `${ts}-${kind}-${index}`,
     ts,
     kind,
-    role,
-    planId: str(row?.planId),
-    taskId: str(row?.taskId),
-    taskCategory: str(row?.taskCategory),
+    role: '',
+    planId: null,
+    taskId: null,
+    taskCategory: null,
     agent: str(row?.agent),
-    status: kind === 'dispatch' ? dispatchStatus(row?.verdict) : settleStatus(row?.outcome),
-    expected: matched !== undefined,
-    stage: matched ?? null,
+    status: 'unknown',
+    expected: false,
+    stage: null,
     settled: false,
-    // Paired-identity presence (settle rows only — the exact-pairing marker,
-    // plan `20260811-panel-f4-timeliness` Task 1).
-    ...(kind === 'settle' && row?.paired === true ? { paired: true } : {}),
-    durationMs: count(row?.durationMs),
+    durationMs: null,
+    ...(runId !== null ? { runId } : {}),
+    ...(kind === 'workflow-run' && name !== null ? { name } : {}),
+    ...(kind === 'workflow-agent' ? {
+      ...(seq !== null ? { seq } : {}),
+      ...(label !== null ? { label } : {}),
+      ...(phase !== null ? { phase } : {}),
+      ...(childId !== null ? { childId } : {}),
+    } : {}),
+    ...(kind === 'workflow-run-end' && stopReason !== null ? { stopReason } : {}),
   }
 }
 
 /** One row of the pairing walk — the identity a PAIRED settle carries (plan
  * `20260811-panel-f4-timeliness` Task 1, spec R1: exact identity pairing,
- * never owner+time guessing). */
+ * never owner+time guessing). The kind is the FULL projected kind union:
+ * workflow/unknown rows are walk no-ops (they carry no paired marker) —
+ * widened so the classify output feeds the walk unchanged. */
 interface PairingRow {
-  kind: 'dispatch' | 'settle'
+  kind: FlowEventView['kind']
   agent: string | null
   role?: string
   planId?: string | null
@@ -1351,20 +1435,42 @@ export function pairSettleIndexes(rows: readonly PairingRow[]): ReadonlySet<numb
 }
 
 /**
- * Classify the windowed ledger rows into guarded event entries (spec §2.4):
- * unclassifiable rows (kind ∉ dispatch|settle) are skipped — never guessed;
- * valid rows degrade per field via `flowEventOf`. Latest-first order is
- * preserved (the pairing walk and the entity aggregation both depend on it).
+ * Classify the windowed ledger rows into guarded event entries (spec §2.4 +
+ * plan `20260815-dsh-workflow-ledger` Task 4): rows WITHOUT a kind are
+ * skipped — never guessed; dispatch/settle/workflow/unknown kind STRINGS all
+ * classify and degrade per field via `flowEventOf` (unknown kinds → generic
+ * rows). Latest-first order is preserved (the pairing walk and the entity
+ * aggregation both depend on it). Workflow-run rows additionally carry the
+ * run's member count — the window's `workflow-agent` rows for that runId
+ * (window-bound: an older run's members truncated out of the window are
+ * honestly absent, never a 0 guess).
  */
 function classifyFlowRows(rawEvents: readonly unknown[]): { view: FlowEventView }[] {
   const stageIndex = roleStageIndex()
   const windowed = rawEvents.slice(0, FLOW_EVENT_WINDOW)
+  // Pre-count the member rows per runId so the workflow-run row can carry the
+  // count (a member row itself has no count — the run row is the run's face).
+  const memberCounts = new Map<string, number>()
+  for (const raw of windowed) {
+    const row = raw as { kind?: unknown; runId?: unknown } | null | undefined
+    if (row?.kind !== 'workflow-agent') continue
+    const runId = str(row.runId)
+    if (runId !== null) memberCounts.set(runId, (memberCounts.get(runId) ?? 0) + 1)
+  }
   const entries: { view: FlowEventView }[] = []
   windowed.forEach((raw, i) => {
     const view = flowEventOf(raw, i, stageIndex)
     if (view === null) return
     entries.push({ view })
   })
+  // The view fields are readonly — attach the member count by rebuilding the
+  // workflow-run rows that have a count (absent = 0/truncated → honest omit).
+  for (const entry of entries) {
+    const v = entry.view
+    if (v.kind !== 'workflow-run' || v.runId === undefined) continue
+    const n = memberCounts.get(v.runId)
+    if (n !== undefined && n > 0) entry.view = { ...v, memberCount: n }
+  }
   return entries
 }
 
@@ -1374,11 +1480,15 @@ function classifyFlowRows(rawEvents: readonly unknown[]): { view: FlowEventView 
  * `flow.stages` merged into the plan-3 agents projection). Total function:
  * NEVER throws, NEVER fabricates values.
  *
- * - events: the actual events, latest first, ≤50 (dispatch + settle rows);
+ * - events: the actual events, latest first, ≤50 — dispatch, settle, the
+ *   three workflow kinds (run identity: name / member count / stopReason,
+ *   plan `20260815-dsh-workflow-ledger` Task 4) and ANY unknown kind string
+ *   as a generic row (degradation — never dropped, never guessed);
  * - unexpected: DISPATCH events whose role is not in the expected role union
  *   (e.g. `general` / `explore` / `scout`). Settle rows are completion
  *   records — they carry no role at all, so they never flag as unexpected
- *   even though their `expected` field is false ('' ∉ union);
+ *   even though their `expected` field is false ('' ∉ union). Workflow /
+ *   unknown rows are not dispatches → never unexpected either;
  * - settled: EXACT identity pairing via `pairSettleIndexes` (the same walk the
  *   agent-entity status derivation uses; an unpaired settle stays unpaired —
  *   honest). The panel never depends on the pairing's correctness;

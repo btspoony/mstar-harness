@@ -43,6 +43,7 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { FlowEventView, ZoneView } from '../graph/project-graph.ts'
 import {
   eventLogEntries,
+  isWorkflowKind,
   type EventLogEventEntry,
   type EventLogViolationEntry,
 } from '../graph/event-log.ts'
@@ -137,7 +138,10 @@ function EventDetailsBody({
       <DetailField
         field="kind"
         label={t('event-log.field.kind')}
-        value={entry.eventKind === 'dispatch' ? t('event-log.kind.dispatch') : t('event-log.kind.settle')}
+        // Dispatch/settle get their labels; workflow/unknown rows render the
+        // ledger kind VERBATIM (the kind names ARE the honest vocabulary —
+        // no invented label for a future kind).
+        value={entry.eventKind === 'dispatch' ? t('event-log.kind.dispatch') : entry.eventKind === 'settle' ? t('event-log.kind.settle') : entry.eventKind}
       />
       <DetailField field="status" label={t('event-log.field.status')} value={flowStatusLabel(entry.status, t)} />
       <DetailField
@@ -146,20 +150,33 @@ function EventDetailsBody({
         // F-001 (QC wave): a SETTLE row is a completion record — the
         // expected-role seat is not applicable there (the projection always
         // sets `expected: false` on settles), so it renders「—」like the
-        // `settled` seat (T2-Min-2 precedent); only a DISPATCH row renders
-        // the honest yes/no.
-        value={entry.eventKind === 'settle' ? '' : entry.expected ? t('event-log.yes') : t('event-log.no')}
+        // `settled` seat (T2-Min-2 precedent); a WORKFLOW row is not a role
+        // dispatch either — same「—」(plan `20260815-dsh-workflow-ledger`
+        // Task 4); only a DISPATCH row renders the honest yes/no.
+        value={entry.eventKind === 'settle' || isWorkflowKind(entry.eventKind) ? '' : entry.expected ? t('event-log.yes') : t('event-log.no')}
       />
       <DetailField
         field="settled"
         label={t('event-log.field.settled')}
         // T2-Min-2: a SETTLE row IS the completion record — the field is not
         // applicable there, so it renders「—」like any missing value (a flat
-        // 'no' would misread as "not settled"); a dispatch row renders the
-        // honest yes/no.
-        value={entry.eventKind === 'settle' ? '' : entry.settled ? t('event-log.yes') : t('event-log.no')}
+        // 'no' would misread as "not settled"); a WORKFLOW row has no settle
+        // pairing either (plan `20260815-dsh-workflow-ledger` Task 4 — same
+        //「—」); a dispatch row renders the honest yes/no.
+        value={entry.eventKind === 'settle' || isWorkflowKind(entry.eventKind) ? '' : entry.settled ? t('event-log.yes') : t('event-log.no')}
       />
       <DetailField field="duration" label={t('event-log.field.duration')} value={entry.durationMs === null ? '' : `${entry.durationMs}ms`} />
+      {/* Workflow run identity (plan `20260815-dsh-workflow-ledger` Task 4):
+          name / member count / stopReason — the workflow-run row's face is
+          the run; the end row's is the terminal reason; missing →「—». */}
+      {isWorkflowKind(entry.eventKind) && (
+        <>
+          <DetailField field="run-id" label={t('event-log.field.run-id')} value={source?.runId ?? ''} />
+          <DetailField field="name" label={t('event-log.field.name')} value={entry.name} />
+          <DetailField field="members" label={t('event-log.field.members')} value={source?.memberCount !== undefined ? String(source.memberCount) : ''} />
+          <DetailField field="stop-reason" label={t('event-log.field.stop-reason')} value={source?.stopReason ?? ''} />
+        </>
+      )}
     </div>
   )
 }
@@ -175,6 +192,12 @@ function EventLogEventRow({
   t: TranslateNS<'mstar-panel'>
 }) {
   const time = formatEventTime(entry.ts)
+  // Workflow rows carry no role (plan `20260815-dsh-workflow-ledger` Task 4):
+  // the summary identity is the run — its name (agent/end rows resolve it via
+  // the window lookup), falling back to the run id, then「未知」.
+  const workflowIdentity = isWorkflowKind(entry.eventKind)
+    ? entry.name !== '' ? entry.name : entry.runId !== '' ? entry.runId : ''
+    : ''
   return (
     <li className={css.eventRow} data-event-log-row-kind="event" data-event-log-row-id={entry.id} data-event-log-expected={entry.expected ? 'true' : 'false'}>
       <details className={css.eventDetails} data-event-log-details>
@@ -184,7 +207,9 @@ function EventLogEventRow({
               // Settle rows carry no role (T1 sets '') — the glyph marks the
               // completion record itself; the outcome is the status chip.
               ? <span className={css.settleGlyph} aria-hidden="true">✓</span>
-              : entry.role !== '' ? entry.role : t('panel.unknown')}
+              : workflowIdentity !== ''
+                ? <span data-event-log-name={workflowIdentity}>{workflowIdentity}</span>
+                : entry.role !== '' ? entry.role : t('panel.unknown')}
           </span>
           {entry.stage !== '' && <span className={css.eventStage} data-event-log-stage={entry.stage}>{entry.stage}</span>}
           {entry.task !== '' && <span className={css.eventTarget} data-event-log-target={entry.task}>{entry.task}</span>}
