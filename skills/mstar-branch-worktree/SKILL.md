@@ -217,3 +217,10 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 - 若 **QA 与同仓其他可写角色并发**提交测试代码，仍须遵守上文「同仓并发写入」**worktree** 规则（可为 QA 单开一条写入 worktree，**同一 `Working branch`**，由 PM 在 Assignment 写明）。
 
 派发前清单与常见反模式 → **`references/parallel-writable-pre-dispatch.md`**。
+
+## History rewrite 与推送安全
+
+- 已推送分支的任何 history rewrite：先 `git fetch` 记录远端**精确 OID**，发布用 `--force-with-lease=<branch>:<observed-oid>`；**禁止**裸 `--force`。
+- Rewrite 推送后：重新 fetch heads；rewrite 前的 review threads / approvals / check 结果**不再是当前证据** — merge 结论前须重审（commit hash 与 inline-comment anchor 已失效）。
+- 证据最窄原则（audit / QA Assignment 场景）：选择会在目标回归上失败的**最窄**检查；不因「push 在即」重跑已通过的检查。
+- 本节只管 rewrite / lease / 证据失效面；CI / review 波次 push 门禁（时序）SSOT → `mstar-iteration` §5.1a。

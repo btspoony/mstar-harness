@@ -32,6 +32,7 @@ Use this document as the primary maintenance contract for contributors and agent
   - Keep the shortest executable path: Install → Use (**without iteration** vs **with iteration**) → Workflow diagram → Roles/skills tables.
   - Put narrative, deep install, and host quirks in `INSTALL.md`, `docs/`, or `mstar-*` skills — not in the README body.
   - Edit both language files together when README content changes.
+  - **Bilingual minimal updates**: for paired docs (README.md/README_CN.md, packages/dsh README triplets), apply the minimal counterpart edit — never re-translate a document to apply an update — and re-record pairing hashes (`git hash-object`) in the same change set.
 
 ## Cursor + OpenCode + Codex + Kimi + ZCode + omp Sync Policy
 
