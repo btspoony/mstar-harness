@@ -76,6 +76,43 @@ Do **not** restate generic knowledge the model already has — that wastes token
 6. **Pressure / paired check** — 2–3 prompts that fail without the skill; confirm improvement (P4, P6).
 7. **Ship note** — list deletions/compressions (P2/P5) and how P6 was verified.
 
+## Authoring devices
+
+Small, composable techniques for specific authoring problems; each maps onto one or two
+principles above. Pull one in when it fits — do not encode all six into every skill.
+
+1. **Calibrated examples file** (serves P2/P5) — keep one small reference of real cases
+   distilled into annotated judgments; readers identify the governing principle, not text
+   templates, and it is written back when a new rule settles. In this harness: the Q1–Q8
+   worked judgments in `mstar-compound` `references/compound-workflow.md`; this iteration's
+   fold-B overcorrection checklist (device 3) is a softer second instance.
+
+2. **Recall batteries** (serves P5) — for audit/hunt skills: over-matching probes that
+   force a semantic judgment, plus a documented list of known false-positive families; a
+   zero-hit pattern proves nothing until you have seen it match. In this harness: the recon
+   hints `mstar-audit` fans out to scout subagents — scoping facts, domain risk hints, and
+   decided-tradeoff "don't report" pointers.
+
+3. **Overcorrection traps** (adjacent to P6) — a short section per skill naming the failure
+   modes of over-applying its own rules, so the skill guards its own bias. In this harness:
+   the overcorrection-traps row in `mstar-compound` `references/compound-workflow.md`
+   (obligation↛endorsement flips, hypotheticals stay marked, delete clauses, not sentences).
+
+4. **Required-explicit-input** (adjacent to P3) — when the required scope or answers are
+   missing, report and stop; never infer a repo-wide default. In this harness: `mstar-audit`
+   asks which findings to turn into plans — "do not write 30 plans nobody asked for" —
+   instead of inferring the scope itself.
+
+5. **Questions ≠ write authority** (serves P6) — interaction and calibration gates never
+   change edit authority; only the evaluation does. In this harness: `grill-me` interviews
+   without editing, and `mstar-sdd` keeps the per-task reviewer's report separate from the
+   implementer's application.
+
+6. **Invocation boundary** (adjacent to P3) — declare expensive workflows user-invocable
+   only; never put them in a skill load order. In this harness: the `/iteration-*` lifecycle
+   lives in `commands/`; `mstar-harness-core` keeps command-layer references out of the
+   `mstar-*` load matrix.
+
 ## Output template
 
 ```markdown
