@@ -109,6 +109,15 @@ export function setDecorationLogger(sink: DecorationLogSink): DecorationLogSink 
 let decorationAgentsDir: string | undefined
 
 /**
+ * S-002: once-per-apply latch for the case-(e) mirror-absent debug — the
+ * latch is keyed on the agents-dir binding (each `setDecorationAgentsDir`
+ * call, i.e. each apply, resets it), so the "no mirror" debug fires at most
+ * once per apply instead of once per `subagent/start` emit (advisory-latch
+ * pattern).
+ */
+let mirrorAbsentDebugged = false
+
+/**
  * Bind the persona-defaults mirror root. Returns the PRIOR binding so a
  * caller can restore it (test pattern: {@link setDecorationLogger}).
  * @param dir - the mirror root, or `undefined` to disable mirror defaults.
@@ -116,6 +125,7 @@ let decorationAgentsDir: string | undefined
 export function setDecorationAgentsDir(dir: string | undefined): string | undefined {
   const prior = decorationAgentsDir
   decorationAgentsDir = dir
+  mirrorAbsentDebugged = false
   return prior
 }
 
@@ -222,11 +232,13 @@ export function decorateSubagentStart(ctx: Context, config: Config, info: Subage
     const persona = personaFor(executeAs, { rolePersonas: config.rolePersonas, agentsDir }, (message) => log('warn', message))
     if (persona === undefined) {
       // Case (e): with NO mirror the lookup was config-only — one debug log
-      // per apply (the lookup runs once per emit) when the config missed
-      // too; a config HIT logs its own single line below. With the mirror
-      // present and no eligible shell, the miss stays silent.
-      if (agentsDir === undefined) {
-        log('debug', `harness-agents mirror absent — mstar:role-persona skipped for role '${executeAs}' (config-only lookups)`)
+      // per APPLY (S-002: latch keyed on the agents-dir binding), not per
+      // emit, when the config missed too; a config HIT logs its own single
+      // line below. With the mirror present and no eligible shell, the miss
+      // stays silent.
+      if (agentsDir === undefined && !mirrorAbsentDebugged) {
+        mirrorAbsentDebugged = true
+        log('debug', 'harness-agents mirror absent — mstar:role-persona skipped (config-only lookups; mirror defaults unavailable)')
       }
       return
     }
@@ -252,8 +264,13 @@ export function decorateSubagentStart(ctx: Context, config: Config, info: Subage
   } catch (error) {
     // Contained like the gate's degrade path: skip decoration, never crash
     // the dispatch.
-    log('warn', `mstar:role-persona decoration aborted (degraded — subagent dispatch unaffected): ${(error as Error).message}`)
+    log('warn', `mstar:role-persona decoration aborted (degraded — subagent dispatch unaffected): ${errorMessage(error)}`)
   }
+}
+
+/** Best-effort human-readable message from an arbitrary thrown value (agent-flow `errorMessage` pattern). */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function log(level: DecorationLogLevel, message: string): void {

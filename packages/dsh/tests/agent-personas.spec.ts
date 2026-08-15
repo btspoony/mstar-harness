@@ -15,7 +15,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { personaFor, type PersonaWarnSink } from '../src/gates/agent-personas.ts'
+import { personaFor, ROLE_ID_PATTERN, subagentRoleIds, type PersonaWarnSink } from '../src/gates/agent-personas.ts'
 import { resolvePackagedAgentsDir } from '../src/gates/_shared.ts'
 import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 
@@ -110,6 +110,15 @@ describe('personaFor — the decoration single lookup (config → mirror default
       .toEqual({ text: 'Writing prose.', source: 'default' })
   })
 
+  it('(g) any mode other than absent-or-subagent is NOT eligible (S-001 mode-gate strictness)', async () => {
+    await seedShell('ops-engineer', ['description: |-', '  The ops engineer runs the fleet.', 'mode: primary-everything'])
+    expect(personaFor('ops-engineer', { agentsDir: mirror }, warn)).toBeUndefined()
+    await seedShell('writing-specialist', ['description: Writing prose.', 'mode: subagent-everything'])
+    expect(personaFor('writing-specialist', { agentsDir: mirror }, warn)).toBeUndefined()
+    // Unknown modes are excluded silently — no hazard warn.
+    expect(warns).toHaveLength(0)
+  })
+
   it('plain-scalar description and quoted mode parse (constrained repo-owned YAML)', async () => {
     await seedShell('architect', ['description: One-line persona.', 'mode: "subagent"'])
     expect(personaFor('architect', { agentsDir: mirror }))
@@ -125,6 +134,72 @@ describe('personaFor — the decoration single lookup (config → mirror default
     await promise
     await seedShell(ROLE, ['description: |-', '  Version B.', 'mode: subagent'])
     expect(personaFor(ROLE, { agentsDir: mirror })).toEqual({ text: 'Version B.', source: 'default' })
+  })
+})
+
+describe('subagentRoleIds — the mirror-derived taxonomy set honors the absent-or-subagent mode gate', () => {
+  it('each mode branch: absent and subagent are eligible; primary and any other value are excluded', async () => {
+    await seedShell('sub-agent', ['description: d.', 'mode: subagent'])
+    await seedShell('no-mode', ['description: d.'])
+    await seedShell('primary-role', ['description: d.', 'mode: primary'])
+    await seedShell('unknown-mode', ['description: d.', 'mode: something-else'])
+    expect(subagentRoleIds(mirror)).toEqual(['no-mode', 'sub-agent'])
+  })
+})
+
+describe('F-001 — hostile role ids never reach the filesystem', () => {
+  // A trap shell OUTSIDE the mirror (reachable via `../` join normalization):
+  // if the traversal were honored, personaFor would resolve it — the role-id
+  // guard must return undefined without ever stat/reading it.
+  let trap: string
+  let trapRoleId: string
+
+  beforeEach(async () => {
+    const stem = `trap-${Math.random().toString(36).slice(2)}`
+    trap = join(mirror, '..', `${stem}.md`)
+    trapRoleId = `../${stem}` // `join(mirror, `${trapRoleId}.md`)` → the trap
+    await writeFile(trap, shell(['description: |-', '  TRAPPED — must never be read from outside agentsDir.', 'mode: subagent']))
+  })
+
+  afterEach(async () => {
+    await rm(trap, { force: true })
+  })
+
+  it('dot-traversal stems resolve to undefined — never fs access outside agentsDir', async () => {
+    // `../trap-…` would join to the trap file (an existing, eligible shell).
+    // The guard must reject the id before any path join / stat / read.
+    expect(personaFor(trapRoleId, { agentsDir: mirror }, warn)).toBeUndefined()
+    expect(personaFor('..', { agentsDir: mirror }, warn)).toBeUndefined()
+    expect(warns).toHaveLength(0)
+  })
+
+  it('path-separator, absolute, overlong, empty and uppercase ids → undefined, never throw', async () => {
+    const hostile: string[] = ['a/b', '/etc/passwd', 'x'.repeat(33), '', 'FullStack-Dev', 'evil..name']
+    for (const id of hostile) {
+      expect(() => personaFor(id, { agentsDir: mirror }, warn)).not.toThrow()
+      expect(personaFor(id, { agentsDir: mirror }, warn)).toBeUndefined()
+    }
+    expect(warns).toHaveLength(0)
+  })
+
+  it('valid ids still resolve from the same mirror — the guard rejects only hostile shapes', async () => {
+    await seedShell(ROLE, ['description: |-', '  Legit mirror default.', 'mode: subagent'])
+    expect(personaFor(ROLE, { agentsDir: mirror }, warn))
+      .toEqual({ text: 'Legit mirror default.', source: 'default' })
+    expect(personaFor('../evil', { agentsDir: mirror }, warn)).toBeUndefined()
+    expect(personaFor('a/b', { agentsDir: mirror }, warn)).toBeUndefined()
+    expect(warns).toHaveLength(0)
+  })
+})
+
+describe('ROLE_ID_PATTERN — upstream ROLE_ID_PATTERN semantics, implemented locally', () => {
+  it('accepts the 14 mirror stems and rejects every hostile shape', () => {
+    for (const id of ['architect', 'code-reviewer', 'fullstack-dev', 'fullstack-dev-2', 'project-manager', 'qa-engineer', 'qc-specialist-2', 'writing-specialist']) {
+      expect(ROLE_ID_PATTERN.test(id)).toBe(true)
+    }
+    for (const id of ['../evil', 'a/b', '/etc/passwd', 'x'.repeat(33), '', 'FullStack-Dev', '..', 'role with spaces']) {
+      expect(ROLE_ID_PATTERN.test(id)).toBe(false)
+    }
   })
 })
 

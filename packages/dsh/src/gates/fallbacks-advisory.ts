@@ -107,7 +107,14 @@ export function runFallbacksAdvisory(ctx: Context, agentsDir: string | undefined
       return true
     }
     const declared = new Map<string, RoleEntityView>()
-    for (const entity of list) {
+    for (let index = 0; index < list.length; index++) {
+      const entity = list[index]
+      // S-003: a null/primitive entry must not abort the pass — skip the
+      // malformed entry with one debug and keep checking the rest.
+      if (entity === null || typeof entity !== 'object') {
+        log('debug', `fallbacks roles.list entry ${index} is not an object (${entity === null ? 'null' : typeof entity}) — skipped`)
+        continue
+      }
       const view = entity as RoleEntityView
       if (typeof view.id !== 'string' || view.id === '') continue
       declared.set(view.id, view)
@@ -115,7 +122,7 @@ export function runFallbacksAdvisory(ctx: Context, agentsDir: string | undefined
     // (b) Missing ids — ONE warn listing them.
     const missing = mstarIds.filter((id) => !declared.has(id))
     if (missing.length > 0) {
-      log('warn', `fallbacks roles.list is missing mstar roles: ${missing.join(', ')} — declare them (or a taxonomy alias) so role-matched fallback chains resolve`)
+      log('warn', `fallbacks roles.list is missing mstar roles: ${missing.join(', ')} — declare them under the mstar role id (or map via a taxonomy that uses those ids) so role-matched fallback chains resolve`)
     }
     // (c) Empty personas — ONE warn naming them.
     const emptyPersona = [...declared.values()]
@@ -130,9 +137,14 @@ export function runFallbacksAdvisory(ctx: Context, agentsDir: string | undefined
     return true
   } catch (error) {
     // Contained like the gate's degrade path: skip the pass, never crash.
-    log('warn', `fallbacks adoption advisory aborted (degraded — warn-only, deployment config untouched): ${(error as Error).message}`)
+    log('warn', `fallbacks adoption advisory aborted (degraded — warn-only, deployment config untouched): ${errorMessage(error)}`)
     return true
   }
+}
+
+/** Best-effort human-readable message from an arbitrary thrown value (agent-flow `errorMessage` pattern). */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**

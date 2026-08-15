@@ -32,8 +32,18 @@
  * is the only consumer; its public surface is `personaFor`).
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { PERSONA_INTERPOLATION_HAZARD } from './_shared.ts'
+
+/**
+ * The role-id shape the mirror lookup accepts — upstream `ROLE_ID_PATTERN`
+ * semantics (`/^[a-z0-9-]{1,32}$/`, dsh-llm-fallbacks `src/config.ts`),
+ * implemented locally (no import-shape assumptions). The role id flows from
+ * the child's Assignment header (`Execute as`) into a filesystem path, so
+ * it is constrained to this shape BEFORE any path join: no `..`, no path
+ * separators, no absolute roots, bounded length. All 14 mirror stems comply.
+ */
+export const ROLE_ID_PATTERN = /^[a-z0-9-]{1,32}$/
 
 /** One resolved persona: the text and its source. */
 export interface PersonaResult {
@@ -113,7 +123,9 @@ export function subagentRoleIds(agentsDir: string): string[] {
     } catch {
       continue
     }
-    if (parseShellFrontmatter(content).mode !== 'primary') ids.push(roleId)
+    const mode = parseShellFrontmatter(content).mode
+    // S-001 mode-gate strictness: absent-or-`subagent` only.
+    if (mode === undefined || mode === 'subagent') ids.push(roleId)
   }
   return ids.sort()
 }
@@ -127,7 +139,18 @@ export function subagentRoleIds(agentsDir: string): string[] {
  * shell changes.
  */
 function defaultFromMirror(agentsDir: string, roleId: string, warn: PersonaWarnSink | undefined): string | undefined {
-  const file = join(agentsDir, `${roleId}.md`)
+  // F-001: the role id is attacker-influenced (the child's Assignment header)
+  // and flows into a filesystem path — reject any id outside the upstream
+  // ROLE_ID_PATTERN shape before the join. A hostile id is a SILENT skip
+  // (mirror-present misses stay silent like an absent shell) — never a
+  // throw, never a warn, never fs access outside the mirror root.
+  if (!ROLE_ID_PATTERN.test(roleId)) return undefined
+  const root = resolve(agentsDir)
+  const file = resolve(agentsDir, `${roleId}.md`)
+  // Defense-in-depth containment: the resolved path must stay under the
+  // mirror root. The format check already forbids traversal; this pins the
+  // boundary even if the join inputs ever change shape.
+  if (!file.startsWith(root + sep)) return undefined
   let stat
   try {
     stat = statSync(file)
@@ -137,7 +160,16 @@ function defaultFromMirror(agentsDir: string, roleId: string, warn: PersonaWarnS
   if (!stat.isFile()) return undefined
   const hit = defaultCache.get(file)
   if (hit !== undefined && hit.mtimeMs === stat.mtimeMs) return hit.text
-  const text = extractShellPersona(readFileSync(file, 'utf8'), roleId, warn)
+  // S-004: the read is individually guarded (stat is only the cache key) — a
+  // delete/perm race between stat and read degrades THIS file to undefined
+  // instead of aborting the whole decoration for the emit.
+  let content: string
+  try {
+    content = readFileSync(file, 'utf8')
+  } catch {
+    return undefined
+  }
+  const text = extractShellPersona(content, roleId, warn)
   defaultCache.set(file, { mtimeMs: stat.mtimeMs, text })
   return text
 }
@@ -151,9 +183,11 @@ function extractShellPersona(content: string, roleId: string, warn: PersonaWarnS
   const parsed = parseShellFrontmatter(content)
   const description = parsed.description
   if (description === undefined || description.trim() === '') return undefined
-  // `mode: primary` shells are role shells for the main agent — never offered
-  // as a subagent persona default. Excluded silently (no hazard warn).
-  if (parsed.mode === 'primary') return undefined
+  // S-001 mode-gate strictness (plan Task 3 case (f)): eligible ONLY when
+  // `mode` is absent or exactly `subagent` — a `primary` shell or any
+  // other/typo'd value is never offered as a subagent persona default.
+  // Excluded silently (no hazard warn).
+  if (parsed.mode !== undefined && parsed.mode !== 'subagent') return undefined
   if (PERSONA_INTERPOLATION_HAZARD.test(description)) {
     warn?.(`harness-agents default skipped for role '${roleId}' — description contains a "{{" paired with a later "}}" (dsh system-prompt strict interpolation renders persona text and throws on unknown or malformed references — use single braces or reword)`)
     return undefined
@@ -196,7 +230,7 @@ function parseShellFrontmatter(content: string): ShellFrontmatter {
     const label = key[1]!
     const rest = key[2]!
     if (label === 'description') {
-      const block = /^\|(?<chomp>[-+]?)(?<indent>\d*)[ \t]*$/.exec(rest)
+      const block = /^\|[+-]?(?<indent>\d*)[ \t]*$/.exec(rest)
       result.description = block !== null
         ? extractBlockScalar(frontmatter, i + 1, block.groups?.indent)
         : unquote(rest.trim())

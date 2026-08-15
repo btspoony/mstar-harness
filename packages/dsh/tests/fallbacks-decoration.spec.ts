@@ -402,7 +402,7 @@ describe('subagent/start decoration — mstar:role-persona injection', () => {
     }
   })
 
-  it('(n) mirror absent → config-only lookups, one debug log per apply (not per lookup)', async () => {
+  it('(n) mirror absent → config-only lookups, one debug log per apply (not per emit)', async () => {
     booted = await bootApp({ agentsService: 'fake', rolePersonas: { [EXECUTE_AS]: PERSONA } })
     // Force the mirror absent (the apply binds the packaged mirror).
     const prior = setDecorationAgentsDir(undefined)
@@ -411,20 +411,24 @@ describe('subagent/start decoration — mstar:role-persona injection', () => {
       booted.ctx.get('agents')!.register(agent)
       const unmatched = await fakeChild(booted.ctx, ASSIGNMENT_PROMPT.replace(EXECUTE_AS, 'scout'))
       booted.ctx.get('agents')!.register(unmatched.agent)
+      const another = await fakeChild(booted.ctx, ASSIGNMENT_PROMPT.replace(EXECUTE_AS, 'explorer'))
+      booted.ctx.get('agents')!.register(another.agent)
 
       const { captured, restore } = captureLogs()
       try {
         booted.ctx.events.emit('subagent/start', startInfo(agent.id))
         booted.ctx.events.emit('subagent/start', startInfo(unmatched.agent.id))
+        booted.ctx.events.emit('subagent/start', startInfo(another.agent.id))
 
         // Config hit → persona injected + its single unmounted debug log.
         const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
         expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
-        // Config miss + no mirror → skipped + ONE mirror-absent debug per apply.
+        // Config miss + no mirror → skipped + ONE mirror-absent debug per apply
+        // (the latch holds across further emits — never per lookup, never per role).
         const unmatchedAssembly = await unmatched.agent.ctx.systemPrompt.assemble({ scope: unmatched.scopeKey })
         expect(unmatchedAssembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)).toBeUndefined()
 
-        // Two applies → two debug lines (one per apply, never per lookup).
+        // Three applies → still exactly two debug lines (one inject + one mirror-absent).
         expect(captured).toHaveLength(2)
         expect(captured[0]![0]).toBe('debug')
         expect(captured[1]![0]).toBe('debug')
@@ -434,6 +438,38 @@ describe('subagent/start decoration — mstar:role-persona injection', () => {
       }
     } finally {
       setDecorationAgentsDir(prior)
+    }
+  })
+
+  it('(o) hostile Execute as (dot-traversal) → no section, no fs access outside the mirror, never throws', async () => {
+    const app = booted = await bootApp({ agentsService: 'fake' })
+    const fixture = await fixtureMirror([[`${EXECUTE_AS}.md`, MIRROR_SHELL]])
+    // A trap shell OUTSIDE the fixture mirror, reachable via `../` join
+    // normalization — if the role id reached the filesystem, its persona
+    // would be injected (the exact QC F-001 attack path through the
+    // decoration's Assignment-header parse).
+    const stem = `evil-${Math.random().toString(36).slice(2)}`
+    const trap = join(tmpdir(), `${stem}.md`)
+    await writeFile(trap, MIRROR_SHELL)
+    const prior = setDecorationAgentsDir(fixture.dir)
+    try {
+      const hostile = await fakeChild(app.ctx, ASSIGNMENT_PROMPT.replace(EXECUTE_AS, `../${stem}`))
+      app.ctx.get('agents')!.register(hostile.agent)
+
+      const { captured, restore } = captureLogs()
+      try {
+        expect(() => app.ctx.events.emit('subagent/start', startInfo(hostile.agent.id))).not.toThrow()
+        const assembly = await hostile.agent.ctx.systemPrompt.assemble({ scope: hostile.scopeKey })
+        expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)).toBeUndefined()
+        // Invalid role id → silent skip (mirror present): no logs at all.
+        expect(captured).toHaveLength(0)
+      } finally {
+        restore()
+      }
+    } finally {
+      setDecorationAgentsDir(prior)
+      await fixture.cleanup()
+      await rm(trap, { force: true })
     }
   })
 })

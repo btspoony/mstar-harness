@@ -159,6 +159,31 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
     }
   })
 
+  it('(c2) a null/non-object entry in roles.list → skipped + one debug each; the pass continues for the other entries (S-003)', async () => {
+    const mirror = await fixtureMirror()
+    try {
+      const cfg = rowConfig([role('architect', 'Architect persona'), null, 'not-an-entity', role('fullstack-dev', 'Dev persona')])
+      const ctx = ctxWithLoader([liveEntry(cfg)])
+      const { captured, restore } = captureLogs()
+      try {
+        expect(runFallbacksAdvisory(ctx, mirror.dir)).toBe(true)
+        // The malformed entries are skipped; the well-formed entries still
+        // drive the taxonomy checks — scout is still missing → ONE warn.
+        const warns = captured.filter(([level]) => level === 'warn')
+        expect(warns).toHaveLength(1)
+        expect(warns[0]![1]).toContain('scout')
+        // Each skipped malformed entry → one debug (null + string = 2).
+        const debugs = captured.filter(([level]) => level === 'debug')
+        expect(debugs).toHaveLength(2)
+        expect(debugs.every(([, message]) => message.includes('roles.list entry'))).toBe(true)
+      } finally {
+        restore()
+      }
+    } finally {
+      await mirror.cleanup()
+    }
+  })
+
   it('(d) legacy keys in role entities → ONE warn citing detectLegacyKeys semantics', async () => {
     const mirror = await fixtureMirror()
     try {
