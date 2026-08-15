@@ -16,24 +16,33 @@
  * Role identity uses the engine Assignment header grammar — the SAME
  * parsers the dispatch gate uses (`assignmentHeaderRegion` +
  * `parseAssignmentFields`) — over the child's seeded task prompt (the
- * child session's first `user/message`). Persona lookup is
- * `rolePersonas[executeAs]` DIRECTLY — never gated on `roleMap` or on the
- * fallbacks mounted state: unmounted fallbacks degrades to the same
- * Config-sourced injection with exactly one debug log (probe at the
- * decision point, no cache). `roleMap` is a taxonomy bridge for logging +
- * future rule-driven interop only.
+ * child session's first `user/message`). Persona lookup (plan
+ * `20260815-dsh-fallbacks-personas` Task 3) is the single
+ * {@link personaFor} surface — `Config.rolePersonas[executeAs]` →
+ * `harness-agents/` mirror default → skip (never gated on `roleMap` or on
+ * the fallbacks mounted state: unmounted fallbacks degrades to the same
+ * injection with exactly one debug log; probe at the decision point, no
+ * cache). `roleMap` is a taxonomy bridge for logging + future rule-driven
+ * interop only. The mirror root is bound at apply (`setDecorationAgentsDir`
+ * ← `packagedAgentsDir()`), package-relative so the shipped bundle works
+ * from any launch cwd.
  *
  * Degradation (the listener never throws — contained like the dispatch
  * gate's degrade path): `agents` service absent → skip + one debug log
  * (documented Known Limitation for compositions without dsh-agent);
- * child unresolved / non-Assignment / role-unmatched → silent no-op. A
- * throwing log sink is contained inside the log helper itself (plan QC
- * F-002) — the sink must not escape the listener either.
+ * child unresolved / non-Assignment / role-unmatched → silent no-op
+ * (role-unmatched with the mirror present and no eligible shell stays
+ * silent; with NO mirror the config-miss path logs ONE debug per apply —
+ * case (e) semantics). A throwing log sink is contained inside the log
+ * helper itself (plan QC F-002) — the sink must not escape the listener
+ * either.
  *
  * Persona text is rendered by dsh system-prompt's STRICT `{{...}}`
  * interpolation, so persona values MUST NOT contain `{{` paired with a
  * later `}}` — the Config schema rejects such values at plugin mount (see
- * `_shared.ts` `rolePersonas` / `PERSONA_INTERPOLATION_HAZARD`).
+ * `_shared.ts` `rolePersonas` / `PERSONA_INTERPOLATION_HAZARD`); a mirror
+ * default carrying the hazard is warned + skipped at extraction (never a
+ * boot throw).
  *
  * Module boundary: no barrel — the entry imports this module by explicit
  * relative path and re-exports the public names verbatim.
@@ -42,6 +51,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import type { Config } from './_shared.ts'
+import { personaFor } from './agent-personas.ts'
 import { fallbacksMounted, fallbacksService } from './fallbacks-probe.ts'
 
 /** Logger label for the subagent decoration (dsh logger naming: `<scope>/<subject>`). */
@@ -87,6 +97,25 @@ let decorationLogSink: DecorationLogSink = () => {}
 export function setDecorationLogger(sink: DecorationLogSink): DecorationLogSink {
   const prior = decorationLogSink
   decorationLogSink = sink
+  return prior
+}
+
+/**
+ * The persona-defaults mirror root (`harness-agents/`), bound by the entry
+ * `apply` to the packaged mirror (package-relative resolution — the shipped
+ * bundle works from any launch cwd). `undefined` → the decoration is
+ * config-only (no mirror defaults).
+ */
+let decorationAgentsDir: string | undefined
+
+/**
+ * Bind the persona-defaults mirror root. Returns the PRIOR binding so a
+ * caller can restore it (test pattern: {@link setDecorationLogger}).
+ * @param dir - the mirror root, or `undefined` to disable mirror defaults.
+ */
+export function setDecorationAgentsDir(dir: string | undefined): string | undefined {
+  const prior = decorationAgentsDir
+  decorationAgentsDir = dir
   return prior
 }
 
@@ -155,15 +184,18 @@ function seededTaskPrompt(child: Agent): string | undefined {
  */
 export function decorateSubagentStart(ctx: Context, config: Config, info: SubagentRunInfoView): void {
   try {
-    // Perf guard (plan QC F-001): with `rolePersonas` unset (or empty) there
-    // is nothing to decorate — skip the agents lookup and the Assignment
-    // header parse entirely. The `agents`-absent debug log is intentionally
-    // suppressed on this path (no persona payload exists to inject).
+    // Perf guard (plan QC F-001) reworked for zero-config defaults (plan
+    // `20260815-dsh-fallbacks-personas` Task 3): with `rolePersonas` unset
+    // (or empty) AND no persona mirror there is nothing to decorate — skip
+    // the agents lookup and the Assignment header parse entirely. The
+    // `agents`-absent debug log is intentionally suppressed on this path (no
+    // persona payload source exists to inject). `== null` covers both
+    // `undefined` and `null`: schemastery's `isNullable` passes `null`
+    // through the Config transform unvalidated, so the runtime value can be
+    // `null` despite the TS type (QC re-review N-002).
     const personas = config.rolePersonas
-    // `== null` covers both `undefined` and `null`: schemastery's `isNullable`
-    // passes `null` through the Config transform unvalidated, so the runtime
-    // value can be `null` despite the TS type (QC re-review N-002).
-    if (personas == null || Object.keys(personas).length === 0) return
+    const agentsDir = decorationAgentsDir
+    if ((personas == null || Object.keys(personas).length === 0) && agentsDir === undefined) return
     // The `agents` service is absent in compositions without dsh-agent —
     // skip + one debug log (documented Known Limitation), never crash.
     const agents = ctx.get('agents') as AgentsView | undefined
@@ -184,8 +216,20 @@ export function decorateSubagentStart(ctx: Context, config: Config, info: Subage
     const executeAs = parseAssignmentFields(assignmentHeaderRegion(taskPrompt)).executeAs
     if (executeAs === undefined) return
 
-    const persona = config.rolePersonas?.[executeAs]
-    if (persona === undefined || persona === '') return
+    // Single lookup (personaFor): `rolePersonas[role]` → mirror default →
+    // skip. A mirror default carrying the interpolation hazard is warned +
+    // skipped at extraction (never a boot throw).
+    const persona = personaFor(executeAs, { rolePersonas: config.rolePersonas, agentsDir }, (message) => log('warn', message))
+    if (persona === undefined) {
+      // Case (e): with NO mirror the lookup was config-only — one debug log
+      // per apply (the lookup runs once per emit) when the config missed
+      // too; a config HIT logs its own single line below. With the mirror
+      // present and no eligible shell, the miss stays silent.
+      if (agentsDir === undefined) {
+        log('debug', `harness-agents mirror absent — mstar:role-persona skipped for role '${executeAs}' (config-only lookups)`)
+      }
+      return
+    }
 
     // Register the agent-scoped section on the child's own context —
     // contributions are agent-local and unwind on disposal (Agent.ctx
@@ -193,16 +237,17 @@ export function decorateSubagentStart(ctx: Context, config: Config, info: Subage
     ;(child.ctx as unknown as ChildContextView).systemPrompt.section({
       name: PERSONA_SECTION_NAME,
       order: PERSONA_SECTION_ORDER,
-      text: persona,
+      text: persona.text,
     })
 
     // Decision-point probe (no cache — loader mounts entries concurrently):
     // mounted → one info-level interop log carrying the service version;
-    // unmounted → same injection from Config + exactly one debug log.
+    // unmounted → same injection from the resolved source + exactly one
+    // debug log (source-aware: config override vs mirror default).
     if (fallbacksMounted(ctx)) {
       log('info', `dsh-llm-fallbacks mounted (v${fallbacksService(ctx)?.version ?? 'unknown'}) — mstar:role-persona injected for role '${executeAs}'`)
     } else {
-      log('debug', `dsh-llm-fallbacks unmounted — mstar:role-persona injected from mstar Config for role '${executeAs}' (decoration channel unchanged)`)
+      log('debug', `dsh-llm-fallbacks unmounted — mstar:role-persona injected from ${persona.source === 'config' ? 'mstar Config' : 'harness-agents default'} for role '${executeAs}' (decoration channel unchanged)`)
     }
   } catch (error) {
     // Contained like the gate's degrade path: skip decoration, never crash

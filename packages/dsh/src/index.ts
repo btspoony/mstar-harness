@@ -28,6 +28,7 @@ import { DshMstar } from './service.ts'
 import {
   Config,
   HarnessResolver,
+  packagedAgentsDir,
   skillLocalConfig,
 } from './gates/_shared.ts'
 import {
@@ -63,6 +64,7 @@ import type { AgentFlowPairing, TaskDoneSnapshot } from './gates/agent-flow.ts'
 import {
   DECORATION_LOGGER,
   decorateSubagentStart,
+  setDecorationAgentsDir,
   setDecorationLogger,
 } from './gates/fallbacks-decoration.ts'
 import type { SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
@@ -102,6 +104,7 @@ export {
   PERSONA_SECTION_NAME,
   PERSONA_SECTION_ORDER,
   decorateSubagentStart,
+  setDecorationAgentsDir,
   setDecorationLogger,
 } from './gates/fallbacks-decoration.ts'
 export type { DecorationLogLevel, DecorationLogSink, SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
@@ -373,6 +376,13 @@ export function apply(ctx: Context, config: Config): void {
     else if (level === 'info') logger.info(message)
     else logger.warn(message)
   })
+  // Persona-defaults mirror root (plan `20260815-dsh-fallbacks-personas`
+  // Task 3): the packaged `harness-agents/` mirror (synced from the repo
+  // root by `bundle-assets`; gitignored) — bound at apply so the
+  // decoration's zero-config default lookup is package-relative (dist-depth)
+  // regardless of launch cwd; absent when `bundle-assets` has not run
+  // (config-only decoration).
+  setDecorationAgentsDir(packagedAgentsDir())
   registerSettleListener(ctx, config, pairing)
 
   // Background-task settle pairing — the SECOND real completion seam: a

@@ -35,6 +35,7 @@
     "dist",
     "bundle",
     "harness-skills",
+    "harness-agents",
     "harness-commands"
   ],
   "dsh": {

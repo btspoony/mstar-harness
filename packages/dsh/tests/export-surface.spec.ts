@@ -62,6 +62,10 @@ const FROZEN_VALUE_EXPORTS = [
   'readAgentFlow',
   'recordDispatch',
   'recordSettle',
+  // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 3:
+  // the persona-defaults mirror-root binding (mirror of setDecorationLogger
+  // — apply binds it, tests restore it).
+  'setDecorationAgentsDir',
   'setDecorationLogger',
   'skillLocalConfig',
 ] as const

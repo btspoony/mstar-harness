@@ -20,6 +20,9 @@
 import { describe, expect, it, afterEach } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import * as fallbacks from 'dsh-llm-fallbacks'
 import * as plugin from '../src/index.ts'
 import { FakeLoaderRegistry, bootApp, fakeChild, fakeChildWithSession, startInfo, type BootResult } from './harness.ts'
@@ -27,6 +30,7 @@ import { fallbacksMounted } from '../src/gates/fallbacks-probe.ts'
 import {
   PERSONA_SECTION_NAME,
   PERSONA_SECTION_ORDER,
+  setDecorationAgentsDir,
   setDecorationLogger,
   type DecorationLogLevel,
 } from '../src/gates/fallbacks-decoration.ts'
@@ -55,6 +59,41 @@ const ASSIGNMENT_PROMPT = [
 
 /** A non-Assignment task prompt (no header fields). */
 const PLAIN_PROMPT = 'Summarize the attached file.'
+
+/** The mirror default persona for `fullstack-dev` (multiline `|-` description). */
+const MIRROR_DEFAULT = 'Line one of the mirror default.\nLine two of the mirror default.'
+
+/** A fixture mirror shell whose default differs from the config PERSONA. */
+const MIRROR_SHELL = [
+  '---',
+  `name: ${EXECUTE_AS}`,
+  'description: |-',
+  '  Line one of the mirror default.',
+  '  Line two of the mirror default.',
+  'mode: subagent',
+  '---',
+  '',
+  '## Morning Star Role Binding',
+].join('\n')
+
+/** A fixture mirror shell whose description carries the interpolation hazard. */
+const HAZARD_SHELL = [
+  '---',
+  `name: ${EXECUTE_AS}`,
+  'description: |-',
+  '  You are the {{role}} executor.',
+  'mode: subagent',
+  '---',
+  '',
+  '## Morning Star Role Binding',
+].join('\n')
+
+/** Seed a throwaway fixture mirror (each test gets a fresh root — unique cache keys). */
+async function fixtureMirror(shells: Array<[string, string]>): Promise<{ dir: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-decoration-mirror-'))
+  for (const [name, content] of shells) await writeFile(join(dir, name), content)
+  return { dir, cleanup: () => rm(dir, { recursive: true, force: true }) }
+}
 
 /** Capture decoration logs through the module sink (agent-flow test pattern). */
 function captureLogs(): { captured: Array<[DecorationLogLevel, string]>; restore: () => void } {
@@ -86,8 +125,12 @@ describe('subagent/start decoration — mstar:role-persona injection', () => {
 
   it('(b) role-unmatched or non-Assignment prompt → no section, no log spam', async () => {
     booted = await bootApp({ agentsService: 'fake', rolePersonas: { [EXECUTE_AS]: PERSONA } })
-    // Role-unmatched: an Assignment whose Execute as has NO configured persona.
-    const unmatched = await fakeChild(booted.ctx, ASSIGNMENT_PROMPT.replace(EXECUTE_AS, 'product-manager'))
+    // Role-unmatched: an Assignment whose Execute as has NO configured persona
+    // AND no mirror shell (Task 3 defaults — the packaged mirror IS bound at
+    // apply, so the unmatched role must be absent from it: `scout` is not one
+    // of the 14 pinned shells, and the mirror shell set itself is pinned by
+    // harness-agents-mirror.spec.ts).
+    const unmatched = await fakeChild(booted.ctx, ASSIGNMENT_PROMPT.replace(EXECUTE_AS, 'scout'))
     booted.ctx.get('agents')!.register(unmatched.agent)
     // Non-Assignment: a plain task prompt with no header fields.
     const plain = await fakeChild(booted.ctx, PLAIN_PROMPT)
@@ -229,19 +272,28 @@ describe('subagent/start decoration — mstar:role-persona injection', () => {
     // unvalidated (QC re-review probe: `~standard.validate(null)` → value
     // `null`), so `config.rolePersonas` can be `null` at runtime despite the
     // TS type. The perf guard must be null-safe: dispatch proceeds, silent
-    // no-op — no throw, no log (same contract as the unset case).
+    // no-op — no throw, no log (same contract as the unset case). Guard
+    // semantics reworked for Task 3 defaults: "no rolePersonas AND no mirror
+    // → skip silently" (case (e)) — the mirror is bound ABSENT here so the
+    // guard path is exercised deterministically (the apply binds the
+    // packaged mirror, which would otherwise supply a fullstack-dev default).
     const app = booted = await bootApp({ agentsService: 'fake', rolePersonas: null as never })
-    const { agent, scopeKey } = await fakeChild(app.ctx, ASSIGNMENT_PROMPT)
-    app.ctx.get('agents')!.register(agent)
-
-    const { captured, restore } = captureLogs()
+    const prior = setDecorationAgentsDir(undefined)
     try {
-      expect(() => app.ctx.events.emit('subagent/start', startInfo(agent.id))).not.toThrow()
-      const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
-      expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)).toBeUndefined()
-      expect(captured).toHaveLength(0) // silent no-op
+      const { agent, scopeKey } = await fakeChild(app.ctx, ASSIGNMENT_PROMPT)
+      app.ctx.get('agents')!.register(agent)
+
+      const { captured, restore } = captureLogs()
+      try {
+        expect(() => app.ctx.events.emit('subagent/start', startInfo(agent.id))).not.toThrow()
+        const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
+        expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)).toBeUndefined()
+        expect(captured).toHaveLength(0) // silent no-op
+      } finally {
+        restore()
+      }
     } finally {
-      restore()
+      setDecorationAgentsDir(prior)
     }
   })
 
@@ -261,12 +313,127 @@ describe('subagent/start decoration — mstar:role-persona injection', () => {
 
       const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
       expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
-      // One info-level interop log carrying the service version.
+      // One info-level interop log carrying the service version. The version
+      // itself is deliberately NOT pinned (it moves with the caret range —
+      // pre-existing drift stop-gate, re-anchored version-agnostic in Task 3).
       expect(captured).toHaveLength(1)
       expect(captured[0]![0]).toBe('info')
-      expect(captured[0]![1]).toContain('0.1.0-alpha.4')
+      expect(captured[0]![1]).toContain('dsh-llm-fallbacks mounted (v')
     } finally {
       restore()
+    }
+  })
+
+  // ---- Task 3 lookup chain (plan 20260815-dsh-fallbacks-personas): config → mirror default → skip ----
+
+  it('(j) config persona wins over a mirror default (lookup chain: config → default)', async () => {
+    booted = await bootApp({ agentsService: 'fake', rolePersonas: { [EXECUTE_AS]: PERSONA } })
+    const fixture = await fixtureMirror([[`${EXECUTE_AS}.md`, MIRROR_SHELL]])
+    const prior = setDecorationAgentsDir(fixture.dir)
+    try {
+      const { agent, scopeKey } = await fakeChild(booted.ctx, ASSIGNMENT_PROMPT)
+      booted.ctx.get('agents')!.register(agent)
+      booted.ctx.events.emit('subagent/start', startInfo(agent.id))
+
+      const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
+      // The configured persona wins — the mirror default is never consulted.
+      expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
+    } finally {
+      setDecorationAgentsDir(prior)
+      await fixture.cleanup()
+    }
+  })
+
+  it('(k) no configured persona → the mirror default is injected (multiline |- description)', async () => {
+    booted = await bootApp({ agentsService: 'fake' })
+    const fixture = await fixtureMirror([[`${EXECUTE_AS}.md`, MIRROR_SHELL]])
+    const prior = setDecorationAgentsDir(fixture.dir)
+    try {
+      const { agent, scopeKey } = await fakeChild(booted.ctx, ASSIGNMENT_PROMPT)
+      booted.ctx.get('agents')!.register(agent)
+      const { captured, restore } = captureLogs()
+      try {
+        booted.ctx.events.emit('subagent/start', startInfo(agent.id))
+
+        const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
+        expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)?.text).toBe(MIRROR_DEFAULT)
+        // Exactly one debug log (unmounted channel), naming the default source.
+        expect(captured).toHaveLength(1)
+        expect(captured[0]![0]).toBe('debug')
+        expect(captured[0]![1]).toContain('harness-agents default')
+      } finally {
+        restore()
+      }
+    } finally {
+      setDecorationAgentsDir(prior)
+      await fixture.cleanup()
+    }
+  })
+
+  it('(m) a mirror shell whose description carries the {{...}} hazard → default skipped + one warn, never throws', async () => {
+    const app = booted = await bootApp({ agentsService: 'fake' })
+    const fixture = await fixtureMirror([[`${EXECUTE_AS}.md`, HAZARD_SHELL]])
+    const prior = setDecorationAgentsDir(fixture.dir)
+    try {
+      const first = await fakeChild(app.ctx, ASSIGNMENT_PROMPT)
+      app.ctx.get('agents')!.register(first.agent)
+      const second = await fakeChild(app.ctx, ASSIGNMENT_PROMPT)
+      app.ctx.get('agents')!.register(second.agent)
+
+      const { captured, restore } = captureLogs()
+      try {
+        expect(() => app.ctx.events.emit('subagent/start', startInfo(first.agent.id))).not.toThrow()
+        expect(() => app.ctx.events.emit('subagent/start', startInfo(second.agent.id))).not.toThrow()
+
+        const assembly = await first.agent.ctx.systemPrompt.assemble({ scope: first.scopeKey })
+        expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)).toBeUndefined()
+        // Exactly ONE warn across both applies — the per-(mirrorRoot, mtime)
+        // cache warns at extraction time (first miss) and serves the cached
+        // skip on the second lookup. No other logs: mirror present, no inject.
+        expect(captured).toHaveLength(1)
+        expect(captured[0]![0]).toBe('warn')
+        expect(captured[0]![1]).toContain(EXECUTE_AS)
+      } finally {
+        restore()
+      }
+    } finally {
+      setDecorationAgentsDir(prior)
+      await fixture.cleanup()
+    }
+  })
+
+  it('(n) mirror absent → config-only lookups, one debug log per apply (not per lookup)', async () => {
+    booted = await bootApp({ agentsService: 'fake', rolePersonas: { [EXECUTE_AS]: PERSONA } })
+    // Force the mirror absent (the apply binds the packaged mirror).
+    const prior = setDecorationAgentsDir(undefined)
+    try {
+      const { agent, scopeKey } = await fakeChild(booted.ctx, ASSIGNMENT_PROMPT)
+      booted.ctx.get('agents')!.register(agent)
+      const unmatched = await fakeChild(booted.ctx, ASSIGNMENT_PROMPT.replace(EXECUTE_AS, 'scout'))
+      booted.ctx.get('agents')!.register(unmatched.agent)
+
+      const { captured, restore } = captureLogs()
+      try {
+        booted.ctx.events.emit('subagent/start', startInfo(agent.id))
+        booted.ctx.events.emit('subagent/start', startInfo(unmatched.agent.id))
+
+        // Config hit → persona injected + its single unmounted debug log.
+        const assembly = await agent.ctx.systemPrompt.assemble({ scope: scopeKey })
+        expect(assembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
+        // Config miss + no mirror → skipped + ONE mirror-absent debug per apply.
+        const unmatchedAssembly = await unmatched.agent.ctx.systemPrompt.assemble({ scope: unmatched.scopeKey })
+        expect(unmatchedAssembly.sections.find((s) => s.name === PERSONA_SECTION_NAME)).toBeUndefined()
+
+        // Two applies → two debug lines (one per apply, never per lookup).
+        expect(captured).toHaveLength(2)
+        expect(captured[0]![0]).toBe('debug')
+        expect(captured[1]![0]).toBe('debug')
+        expect(captured[1]![1]).toContain('mirror absent')
+      } finally {
+        restore()
+      }
+    } finally {
+      setDecorationAgentsDir(prior)
     }
   })
 })
