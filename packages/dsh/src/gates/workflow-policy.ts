@@ -34,6 +34,16 @@
  * and a fresh apply starts with an empty cache. The cache records only
  * RESOLVED decisions (`allow` | `deny`) keyed by workflow name.
  *
+ * Cache-key normalization (Task 5 fold-in — the Task-4 Important congruence
+ * fix): every key — the gate's `metaName` (composed through
+ * {@link normalizeWorkflowName} in dispatch.ts `workflowGateInputOf`), the
+ * run-start observation's `runName` (workflow-ledger.ts), and the explicit
+ * `record()` API — is the ASCII-control-char-stripped, UNCAPPED name. One
+ * shared function, both seams; a control-char name (`au\u0000dit`) gates and
+ * observes under the same normalized key (`audit`), and the length is never
+ * capped on the identity axis (the ledger ROW display field is capped
+ * separately — the cache key stays the full name, matching the gate).
+ *
  * Answer-recording seam (`WorkflowAskCache.record`): the gate CANNOT observe
  * the ask outcome directly — the tool registry's `serviceAsk` consumes the
  * approval result internally (`deepseek-harness packages/core/tools/src/
@@ -72,6 +82,27 @@ export const WORKFLOW_NAME_UNKNOWN_CODE = 'workflow.name.unknown'
  * the reason cites the uncovered plan id).
  */
 export const WORKFLOW_LEASE_UNCOVERED_CODE = 'workflow.lease.uncovered'
+
+/** ASCII control characters (C0 + DEL) — stripped from workflow names (the log-forging surface, qc2 S-1). */
+const WORKFLOW_NAME_CONTROL_CHARS = /[\u0000-\u001F\u007F]/g
+
+/**
+ * Strip ASCII control characters (newlines / tabs / CR — the log-forging
+ * surface, qc2 S-1) from one workflow name. THE shared P-c cache-key
+ * normalization (plan `20260815-dsh-workflow-gate` Task 5 fold-in — the
+ * Task-4 Important congruence fix): the gate's `metaName` (composed in
+ * dispatch.ts `workflowGateInputOf`) and the run-start observation's
+ * `runName` (workflow-ledger.ts) MUST key the ask cache through the SAME
+ * function — a raw-vs-stripped mismatch (e.g. `au\u0000dit` gating under
+ * one key while the observation records another) would re-ask a resolved
+ * name forever. Pure — NEVER throws. The ledger's other display fields
+ * (`label` / `phase`) use the same strip; ID-sized fields (`runId` /
+ * `childId`) are NOT routed here — they keep their skip-if-oversized
+ * semantics.
+ */
+export function normalizeWorkflowName(value: string): string {
+  return value.replace(WORKFLOW_NAME_CONTROL_CHARS, '')
+}
 
 /**
  * P-a allowlist membership: a workflow name is UNKNOWN when `workflowNames`

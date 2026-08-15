@@ -43,12 +43,16 @@ import type {
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { STATUS_FILE, asRecord, formatViolation, HarnessResolver } from './_shared.ts'
 import type { Config } from './_shared.ts'
-// The P-a/P-c policy + cache (plan `20260815-dsh-workflow-gate` Task 2 — the
-// SINGLE four-tier decision point; this module maps the verdict to the
-// PreToolDecision refusal vocabulary). workflow-policy imports THIS module
-// type-only (`WorkflowGateInput` — erased at runtime), so the value edge is
-// one-way: no runtime cycle.
-import { workflowPolicy } from './workflow-policy.ts'
+// The P-a/P-c policy + cache + the SHARED name normalization (plan
+// `20260815-dsh-workflow-gate` Task 2 — the SINGLE four-tier decision point;
+// this module maps the verdict to the PreToolDecision refusal vocabulary).
+// `normalizeWorkflowName` is the Task 5 congruence fold-in: the gate composes
+// `metaName` through the SAME function the run-start observation keys the
+// ask cache with (workflow-ledger.ts), so a control-char name gates and
+// observes under one key. workflow-policy imports THIS module type-only
+// (`WorkflowGateInput` — erased at runtime), so the value edge is one-way:
+// no runtime cycle.
+import { normalizeWorkflowName, workflowPolicy } from './workflow-policy.ts'
 // Type-only (erased at runtime — no cycle): the P-c cache class, referenced
 // by the gateWorkflow doc (`WorkflowAskCache.record` — the answer seam).
 import type { WorkflowAskCache } from './workflow-policy.ts'
@@ -632,6 +636,16 @@ export interface WorkflowGateInput {
  * (`tool-ralph/src/index.ts:76,416-419`)). Returns undefined for malformed
  * args — workflow without a non-empty string `meta.name`, ralph without a
  * string `objective` — the fail-open + one-warn path.
+ *
+ * `meta.name` is NORMALIZED through {@link normalizeWorkflowName} (control
+ * chars stripped) BEFORE the empty check — the P-c cache-key congruence
+ * fold-in (plan Task 5): the run-start observation (workflow-ledger.ts)
+ * keys the ask cache with the SAME normalized name, so a control-char name
+ * (`au\u0000dit`) asks once and observes under one key instead of re-asking
+ * forever. The length is NEVER capped here (the gate's identity axis is
+ * uncapped — the ledger ROW display field is capped separately). A name
+ * that is ONLY control characters normalizes to '' → malformed (fail-open),
+ * matching the ledger's read boundary.
  */
 export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | undefined {
   const args = asRecord(exec.arguments)
@@ -643,8 +657,8 @@ export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | un
   }
   if (exec.name === 'workflow') {
     const meta = asRecord(args.meta)
-    const metaName = typeof meta?.name === 'string' && meta.name !== '' ? meta.name : undefined
-    if (meta === undefined || metaName === undefined) return undefined
+    const metaName = typeof meta?.name === 'string' ? normalizeWorkflowName(meta.name) : undefined
+    if (meta === undefined || metaName === undefined || metaName === '') return undefined
     return { tool: exec.name, metaName, exec }
   }
   return undefined

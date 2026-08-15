@@ -60,8 +60,10 @@
  * bounded and contained: it fires only on the FIRST successful recording of
  * a run-start (the watermark gate above), keyed on the UNCAPPED run name
  * (`row.runName` — it must match the gate's `meta.name`, which is never
- * truncated), and a throwing cache record degrades the observation with one
- * warn — the ledger row is already appended, the run is never affected.
+ * truncated AND is normalized through the SAME `normalizeWorkflowName` the
+ * gate composes with — the Task 5 congruence fold-in), and a throwing cache
+ * record degrades the observation with one warn — the ledger row is already
+ * appended, the run is never affected.
  *
  * Observe-only (plan Global Constraints: W3 / N5): ZERO gating — every read
  * and append is try/catch-contained; a throwing session read logs one warn
@@ -93,6 +95,15 @@ import {
 import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
 import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
+// The SHARED P-c cache-key normalization (plan `20260815-dsh-workflow-gate`
+// Task 5 fold-in — the Task-4 Important congruence fix): the run-start
+// observation MUST key the ask cache through the SAME function the gate
+// composes `metaName` with (dispatch.ts `workflowGateInputOf`), or a
+// control-char name re-asks forever. Also the display-field control-char
+// strip this consumer used to own locally (`sanitizeLedgerDisplay`) — now
+// one shared implementation for the run name AND the label/phase fields.
+// workflow-policy imports dispatch.ts type-only — no runtime cycle.
+import { normalizeWorkflowName } from './workflow-policy.ts'
 // Type-only (erased at runtime — no cycle): the P-c per-session ask cache
 // (plan `20260815-dsh-workflow-gate` Task 4 fold-in) — this consumer
 // OBSERVES the run-start and records the allow answer into the apply-scoped
@@ -162,21 +173,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** ASCII control characters (C0 + DEL) — stripped from display fields at the consumer boundary (qc2 S-1). */
-const LEDGER_DISPLAY_CONTROL_CHARS = /[\u0000-\u001F\u007F]/g
-
-/**
- * Strip ASCII control characters (newlines / tabs / CR — the log-forging
- * surface, qc2 S-1) from one display field. A hostile model-controlled
- * `name` / `label` / `phase` must never reach the depth-advisory warn
- * interpolation or a JSONL line. Pure — NEVER throws. ID-sized fields
- * (`runId` / `childId`) are NOT routed here — they keep their
- * skip-if-oversized semantics.
- */
-function sanitizeLedgerDisplay(value: string): string {
-  return value.replace(LEDGER_DISPLAY_CONTROL_CHARS, '')
-}
-
 /**
  * Minimal structural view of the `sessions` service the consumer reads
  * (`@deepseek-ai/dsh-session` `SessionStore` contract — the runtime read is
@@ -207,11 +203,14 @@ interface WorkflowLedgerRow {
   /** The published member's child session id (agent-start only — for the depth advisory). */
   childId?: string
   /**
-   * The SANITIZED (but UNCAPPED) run display name — run-start rows only:
-   * the P-c cache key (plan `20260815-dsh-workflow-gate` Task 4 fold-in).
-   * The ledger event's `name` is deterministically capped at the read
-   * boundary; the cache must key on the FULL name — it matches the gate's
-   * `meta.name` (the allowlist/ask identity), which is never truncated.
+   * The NORMALIZED (control chars stripped via the SHARED
+   * `normalizeWorkflowName` — the gate's own metaName normalization, plan
+   * `20260815-dsh-workflow-gate` Task 5 congruence fold-in) but UNCAPPED
+   * run display name — run-start rows only: the P-c cache key (Task 4
+   * fold-in). The ledger event's `name` is deterministically capped at the
+   * read boundary; the cache must key on the FULL name — it matches the
+   * gate's `meta.name` (the allowlist/ask identity), which is never
+   * truncated.
    */
   runName?: string
 }
@@ -369,8 +368,10 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
   if (type === TOOL_WORKFLOW_RUN_START) {
     // Control chars are stripped BEFORE the empty check — a display field
     // that is ONLY control characters must not record (the read boundary
-    // would drop it as empty, so write and read stay consistent).
-    const name = typeof data.name === 'string' ? sanitizeLedgerDisplay(data.name) : data.name
+    // would drop it as empty, so write and read stay consistent). The strip
+    // is the SHARED P-c cache-key normalization (workflow-policy.ts) — the
+    // observation must key the ask cache identically to the gate.
+    const name = typeof data.name === 'string' ? normalizeWorkflowName(data.name) : data.name
     if (typeof name !== 'string' || name === '') return undefined
     const agent = sessionIdOf(session)
     return {
@@ -393,7 +394,7 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
     if (typeof data.seq !== 'number' || !Number.isInteger(data.seq) || data.seq < 1 || data.seq >= WORKFLOW_LEDGER_MAX_SEQ) {
       return undefined
     }
-    const label = typeof data.label === 'string' ? sanitizeLedgerDisplay(data.label) : data.label
+    const label = typeof data.label === 'string' ? normalizeWorkflowName(data.label) : data.label
     if (typeof label !== 'string' || label === '') return undefined
     if (typeof data.childId !== 'string' || data.childId === '' || data.childId.length > WORKFLOW_LEDGER_MAX_ID_LENGTH) return undefined
     return {
@@ -407,7 +408,7 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
         seq: data.seq,
         label: truncateLedgerField(label, WORKFLOW_LEDGER_MAX_LABEL_LENGTH),
         ...(typeof data.phase === 'string'
-          ? { phase: truncateLedgerField(sanitizeLedgerDisplay(data.phase), WORKFLOW_LEDGER_MAX_LABEL_LENGTH) }
+          ? { phase: truncateLedgerField(normalizeWorkflowName(data.phase), WORKFLOW_LEDGER_MAX_LABEL_LENGTH) }
           : {}),
         childId: data.childId,
       },

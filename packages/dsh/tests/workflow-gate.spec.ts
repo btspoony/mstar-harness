@@ -39,6 +39,16 @@
  * the decision without re-asking; a denied answer produces no run → the
  * next call re-asks (fail-closed). The cache-recording failure is
  * contained — it never breaks the ledger append.
+ *
+ * Task 5 fold-ins (tests 13–15): (13) the P-c cache-key congruence fix
+ * (the Task-4 review Important) — the gate and the run-start observation
+ * key the ask cache through ONE shared normalization
+ * (`normalizeWorkflowName`), so a control-char name asks once, observes
+ * under the same key, and never re-asks; (14) the ask-deny fail-closed e2e
+ * — an ask answered deny produces NO run rows and NO cache entry, and the
+ * next same-name call re-asks through the real gate; (15) the >1024-char
+ * name congruence — the cache key is the UNCAPPED full name on both seams
+ * (the ledger ROW's display name is capped separately).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -827,5 +837,101 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
       await ctx.fiber.dispose().catch(() => {})
       await rm(root, { recursive: true, force: true })
     }
+  })
+
+  it('(13) P-c cache-key congruence (Task-5 fold-in): a control-char name gates and observes under ONE normalized key — second call no re-ask', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake' })
+    const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
+    const parent = parentSession('parent-ctrl-e2e', app.root)
+    sessions.register(parent)
+    // `au\u0000dit` — the gate composes `metaName` through the shared
+    // `normalizeWorkflowName` (ASCII control chars stripped); the run-start
+    // observation keys the cache with the SAME normalized name. Pre-fix the
+    // gate looked up the RAW key while the observation recorded the
+    // stripped one → the resolved name re-asked forever.
+    const rawName = 'au\u0000dit'
+    const normalized = 'audit'
+
+    const first = await app.ctx.waterfall('tools/pre-execute', workflowExec(rawName), defaultAllow)
+    expect(first.kind).toBe('ask')
+    if (first.kind !== 'ask') throw new Error('expected ask')
+    // The ask's identity (and the verdict row) is the NORMALIZED name —
+    // the gate speaks one identity everywhere.
+    expect(first.reason).toContain(normalized)
+    expect(ledgerEvents(app)[0]).toMatchObject({ kind: 'workflow-verdict', verdict: 'ask', workflow: normalized, mode: 'ask' })
+
+    // The human approves: the call runs → the durable run-start lands with
+    // the name as the tool received it (raw, control char included). The
+    // consumer records `allow` under the NORMALIZED key — the same key the
+    // gate used for the ask.
+    sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-ctrl-e2e', name: rawName })
+    expect(app.ctx.dshHostAdapter.workflowAskCache.get(normalized)).toBe('allow')
+    // The RAW key is never recorded — congruence comes from the shared
+    // normalization, not from storing both spellings.
+    expect(app.ctx.dshHostAdapter.workflowAskCache.get(rawName)).toBeUndefined()
+
+    // Second same-name call: the cached allow is reused — NO re-ask.
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExec(rawName), defaultAllow)
+    expect(second).toEqual({ kind: 'allow' })
+    expect(ledgerEvents(app)[0]).toMatchObject({ kind: 'workflow-verdict', verdict: 'ok', workflow: normalized, mode: 'ask' })
+  })
+
+  it('(14) ask answered deny → call denied, NO run rows, next call re-asks (fail-closed — no grant evidence, never an invented allow)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake' })
+    const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
+    const parent = parentSession('parent-deny-e2e', app.root)
+    sessions.register(parent)
+
+    const first = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(first.kind).toBe('ask')
+    expect(ledgerEvents(app).map((e) => e.kind)).toEqual(['workflow-verdict'])
+
+    // The human DENIES: the upstream approval waterfall refuses the call —
+    // the gate never sees the answer (the registry's serviceAsk consumes
+    // the approval result internally) and the workflow never runs. The
+    // observable gate-side facts of a denied ask: NO run-start event, NO
+    // W-B2 run rows, NO cache entry (no grant evidence).
+    expect(ledgerEvents(app).filter((e) => e.kind === 'workflow-run')).toHaveLength(0)
+    expect(app.ctx.dshHostAdapter.workflowAskCache.get('deploy-x')).toBeUndefined()
+
+    // Next same-name call: still unresolved → the gate ASKS again
+    // (fail-closed — it never invents an allow OR a deny from a missing
+    // answer; a grant must be observed, never assumed).
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(second.kind).toBe('ask')
+    expect(ledgerEvents(app).map((e) => e.kind)).toEqual(['workflow-verdict', 'workflow-verdict'])
+  })
+
+  it('(15) name exceeding MAX_NAME still gate-keys consistently: the cache key is the UNCAPPED full name on both seams (the ledger ROW display name is capped separately)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake' })
+    const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
+    const parent = parentSession('parent-long-e2e', app.root)
+    sessions.register(parent)
+    const longName = `long-${'x'.repeat(1100)}` // > WORKFLOW_LEDGER_MAX_NAME_LENGTH (1024)
+
+    // The gate path never caps ids: the full name IS the allowlist/ask
+    // identity. First-seen → ask (the reason carries the full name).
+    const first = await app.ctx.waterfall('tools/pre-execute', workflowExec(longName), defaultAllow)
+    expect(first.kind).toBe('ask')
+    if (first.kind !== 'ask') throw new Error('expected ask')
+    expect(first.reason).toContain(longName)
+
+    // Approval → run-start lands → the consumer records `allow` keyed on
+    // the UNCAPPED runName (`row.runName` — never the capped row field).
+    sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-long-e2e', name: longName })
+    expect(app.ctx.dshHostAdapter.workflowAskCache.get(longName)).toBe('allow')
+    // The ledger ROW's display name IS capped (1024 + '…') — the cap is
+    // display-only, the cache identity stays the full name (pins the
+    // uncapped congruence explicitly).
+    const runRow = ledgerEvents(app).find((e) => e.kind === 'workflow-run')
+    expect(runRow).toBeDefined()
+    if (runRow === undefined) throw new Error('expected workflow-run row')
+    expect(runRow.name).not.toBe(longName)
+    expect(runRow.name).toMatch(/…$/)
+
+    // Second same-name call: the uncapped congruence holds — the cached
+    // allow reuses the full-name key, NO re-ask.
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExec(longName), defaultAllow)
+    expect(second).toEqual({ kind: 'allow' })
   })
 })
