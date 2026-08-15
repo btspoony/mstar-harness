@@ -98,7 +98,7 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 |------|------|
 | `/codebase-audit` | Survey a repo read-only → prioritized, self-contained improvement plans in `{PLAN_DIR}/audit-<date>/` |
 
-Read-only advisory — never edits source. Output feeds iteration-start Research or normal Prepare → Execute. Effort levels: `quick` / `standard` (default) / `deep`; category focus (`security`, `perf`, `tests`, …) or `branch` / `next` variants. SSOT → `mstar-audit`.
+Usage: `/codebase-audit [keywords]` — read-only advisory, never edits source. Output feeds iteration-start Research or normal Prepare → Execute. Keywords: effort level `quick` / `deep` (default `standard`); scope variant — category focus (`security`, `perf`, `tests`, …), `branch` (current-branch changes only), `next` / `roadmap` (direction candidates only), or `simplify` (DEBT-focused deep pass over dead / duplicated / speculative / over-built surfaces, with prove-or-reject consumer classification). SSOT → `mstar-audit`.
 
 ### Command loading
 

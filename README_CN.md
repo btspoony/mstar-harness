@@ -98,7 +98,7 @@ npx @mstar-harness/cli init
 |------|------|
 | `/codebase-audit` | 只读扫描代码库 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划 |
 
-只读顾问——**不**改源码。产出可喂给 iteration-start Research 或常规 Prepare → Execute。深度级别：`quick` / `standard`（默认） / `deep`；可按类别聚焦（`security`、`perf`、`tests`、…）或用 `branch` / `next` 变体。SSOT → `mstar-audit`。
+用法：`/codebase-audit [关键词]` —— 只读顾问，**不**改源码。产出可喂给 iteration-start Research 或常规 Prepare → Execute。关键词：深度级别 `quick` / `deep`（默认 `standard`）；范围变体 —— 按类别聚焦（`security`、`perf`、`tests`、…）、`branch`（仅当前分支变更）、`next` / `roadmap`（仅方向候选）、或 `simplify`（聚焦技术债的深扫：死码 / 重复 / 投机性 / 过度构建面，配 prove-or-reject 消费方分类）。SSOT → `mstar-audit`。
 
 ### 命令加载
 
