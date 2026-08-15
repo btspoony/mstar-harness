@@ -126,11 +126,13 @@ export interface Config {
  * Persona text lands in the `mstar:role-persona` section verbatim, so a
  * persona containing this pattern breaks child prompt assembly at the
  * child's first render — every role-matched dispatch. The Config schema
- * rejects such values at validation (plugin mount) with a clear error. A
+ * rejects such values at validation (plugin mount) with a clear error. The
+ * mirror-default extraction (agent-personas.ts) reuses this constant: a
+ * violating default is WARNED + skipped at extraction, never a boot throw. A
  * lone `{{` with no later `}}` is literal prose (safe); the escape rule is
  * single braces or rewording.
  */
-const PERSONA_INTERPOLATION_HAZARD = /\{\{[\s\S]*\}\}/
+export const PERSONA_INTERPOLATION_HAZARD = /\{\{[\s\S]*\}\}/
 
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the decoration keys all preserve omission via `.default(undefined)`. */
 export const Config: z<Config> = z.object({
@@ -250,6 +252,43 @@ export function packagedSkillsDir(): string | undefined {
   if (dir !== undefined) packagedSkillsDirMemo = dir
   return dir
 }
+/**
+ * Resolve the plugin package's own `harness-agents/` mirror (synced from the
+ * repo root by `bundle-assets` at build/postinstall; gitignored) — the
+ * zero-config role-persona default source (plan
+ * `20260815-dsh-fallbacks-personas` Task 3). Same dual-depth probe semantics
+ * as {@link resolvePackagedSkillsDir}: `'../harness-agents'` (dist layout
+ * candidate) then `'../../harness-agents'` (source-layout candidate);
+ * `src/harness-agents` is non-canonical and skipped shallow-first.
+ * @param fileUrl - the module's `import.meta.url` string (or any file URL at
+ * the depth whose layout should be probed).
+ */
+export function resolvePackagedAgentsDir(fileUrl: string): string | undefined {
+  for (const rel of ['../harness-agents', '../../harness-agents'] as const) {
+    try {
+      const dir = fileURLToPath(new URL(rel, fileUrl))
+      if (existsSync(dir)) return dir
+    } catch {
+      // no mirror at this depth — try the next
+    }
+  }
+  return undefined
+}
+
+/**
+ * Memoized thin wrapper over {@link resolvePackagedAgentsDir} — same cache
+ * semantics as {@link packagedSkillsDir} (only a RESOLVED value is memoized;
+ * an absent mirror is re-probed later so a mid-process `bundle-assets` run
+ * is still picked up).
+ */
+let packagedAgentsDirMemo: string | undefined
+export function packagedAgentsDir(): string | undefined {
+  if (packagedAgentsDirMemo !== undefined) return packagedAgentsDirMemo
+  const dir = resolvePackagedAgentsDir(import.meta.url)
+  if (dir !== undefined) packagedAgentsDirMemo = dir
+  return dir
+}
+
 /**
  * Per-workspace `{HARNESS_DIR}` resolution for the plugin.
  *

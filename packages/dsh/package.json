@@ -35,6 +35,7 @@
     "dist",
     "bundle",
     "harness-skills",
+    "harness-agents",
     "harness-commands"
   ],
   "dsh": {
@@ -63,7 +64,7 @@
     "bun": ">=1.2.17"
   },
   "dependencies": {
-    "dsh-llm-fallbacks": "^0.1.0-alpha.4"
+    "dsh-llm-fallbacks": "^0.1.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
