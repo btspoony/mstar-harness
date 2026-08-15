@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as plugin from '../src/index.ts'
+import { ENGINE_VERSION } from './engine-version.ts'
 
 describe('@mstar-harness/dsh function-plugin contract', () => {
   it('exposes named exports name/inject/Config/apply with no default export', () => {
@@ -17,7 +18,7 @@ describe('@mstar-harness/dsh function-plugin contract', () => {
       plugin.apply(ctx, {})
       expect(ctx.dshMstar).toBeDefined()
       // The service is engine-backed: the single-version invariant holds.
-      expect(ctx.dshMstar.readHarnessVersion()).toBe('2.1.1')
+      expect(ctx.dshMstar.readHarnessVersion()).toBe(ENGINE_VERSION)
     } finally {
       await ctx.fiber.dispose()
     }
