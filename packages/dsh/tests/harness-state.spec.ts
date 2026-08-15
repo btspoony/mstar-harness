@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
 
@@ -187,7 +188,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     })
     const text = textOf(row)
     expect(text).toContain('<mstar_engine_status>')
-    expect(text).toContain('mstar version: 2.1.1')
+    expect(text).toContain(`mstar version: ${ENGINE_VERSION}`)
     expect(text).toContain('harness dir:')
     expect(text).toContain('iteration: v2.2.0')
     expect(text).toContain('gate: PASS')

@@ -15,6 +15,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readHarnessVersion } from '@mstar-harness/engine'
 import { bootApp, INVALID_STATUS, VALID_STATUS, type BootResult } from './harness.ts'
+import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
 
@@ -42,13 +43,13 @@ describe('@mstar-harness/dsh REAL-composition boot (direct ctx.plugin rows)', ()
     expect(rejected.violations.map((v) => v.code)).toContain('status.invalid-plans')
   })
 
-  it('exposes the engine version 2.1.1 through the service and the direct import surface', async () => {
+  it('exposes the engine version through the service and the direct import surface', async () => {
     const app = booted = await bootApp()
     const { ctx, harnessDir } = app
     const badStatusPath = join(harnessDir, 'bad-status.json')
     await writeFile(badStatusPath, JSON.stringify(INVALID_STATUS))
-    expect(ctx.dshMstar.readHarnessVersion()).toBe('2.1.1')
-    expect(readHarnessVersion()).toBe('2.1.1')
+    expect(ctx.dshMstar.readHarnessVersion()).toBe(ENGINE_VERSION)
+    expect(readHarnessVersion()).toBe(ENGINE_VERSION)
 
     // Enforcement overlay: hard + violations → hardBlocked; warn-only otherwise.
     const verdict = ctx.dshMstar.validateStatus(badStatusPath)
