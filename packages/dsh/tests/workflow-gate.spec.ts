@@ -188,6 +188,9 @@ const DONE_NO_LEASE: Record<string, unknown> = {
 /** statusDoc for a MALFORMED status.json — the P-b read-failure case. */
 const UNREADABLE_STATUS = '{ "version": 1, "plans": ' // truncated — readJson throws
 
+/** A PARSEABLE but shape-invalid status.json (`plans` non-array) — P-b degraded like the unreadable case (F-301). */
+const SHAPE_INVALID_STATUS = '{ "version": 1, "plans": {} }'
+
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
 
@@ -377,6 +380,20 @@ describe('workflow gate — hard mode (P-a allowlist)', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
 
     expect(decision.kind).toBe('deny')
+  })
+
+  it('(g) allowlist entry containing a control char matches the normalized gate identity (qc1-S2)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x\u0000'] })
+    const advisories = captureAdvisories(app.ctx)
+
+    // The gate composes `metaName` through `normalizeWorkflowName`; the
+    // allowlist comparison normalizes its entries at the boundary too — an
+    // operator-pasted control-char variant matches the same identity (the
+    // config itself is never mutated). Under hard, a miss would deny.
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
   })
 
   it('fold-in: ralph under hard — valid objective → allow (P-a/P-c never apply, no meta.name); malformed (no objective) → pass + ONE warn (fail-open)', async () => {
@@ -586,6 +603,55 @@ describe('workflow gate — P-b lease attribution', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
     expect(warns.length - warnSnapshot).toBe(1)
+  })
+
+  it('(g) parseable-but-shape-invalid status.json → fail-open + ONE warn (P-b degraded with parity to the unreadable read); P-a still runs (F-301)', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-g-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': SHAPE_INVALID_STATUS })
+    const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x'], harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    // Allowlisted under hard: P-b is degraded (fail-open + ONE warn — the
+    // same loudness as the unreadable read, F-301), P-a still evaluates and
+    // passes — the call is allowed, exactly ONE warn, no advisory.
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+    expect(warns.length - warnSnapshot).toBe(1)
+  })
+
+  it('(h) unreadable status + workflow + hard + unknown name → P-a deny survives the degraded P-b (workflow.name.unknown, exactly ONE warn) (F-304)', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-h-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': UNREADABLE_STATUS })
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    // The deny is the P-a unknown-name veto, NOT the lease red line — the
+    // P-b degrade did not swallow the name-axis policy.
+    expect(decision.reason).toContain('deploy-x')
+    expect(decision.reason).not.toContain('workflow.lease.uncovered')
+    expect(advisories).toHaveLength(0)
+    // Exactly ONE warn: the P-b degrade warn (the deny logs at error level).
+    expect(warns.length - warnSnapshot).toBe(1)
+    // The verdict row carries the P-a code.
+    const events = readAgentFlow(join(ws, '.agents'))!.events
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'workflow-verdict',
+      verdict: 'denied',
+      workflow: 'deploy-x',
+      mode: 'hard',
+      code: 'workflow.name.unknown',
+    })
   })
 })
 
@@ -933,5 +999,73 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // allow reuses the full-name key, NO re-ask.
     const second = await app.ctx.waterfall('tools/pre-execute', workflowExec(longName), defaultAllow)
     expect(second).toEqual({ kind: 'allow' })
+  })
+
+  it('(16) W-1: a run observed before any ask is never cached — the ask channel survives a P-b-uncovered window (ask mode still asks after recovery)', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-w1-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const app = booted = await bootApp({ workflowGate: 'ask', harnessDir: null, sessionsService: 'fake' })
+    const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
+    const parent = parentSession('parent-w1-e2e', ws)
+    sessions.register(parent)
+
+    // The P-b red line preempts P-c: the name is NEVER asked (advisory warn
+    // verdict under ask mode, not an ask) — but the call RUNS, so the
+    // durable run-start lands in the parent session log.
+    const first = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+    expect(first).toEqual({ kind: 'allow' })
+    sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-w1-e2e', name: 'deploy-x' })
+
+    // W-1: never asked ⇒ never cached — the observation must NOT promote the
+    // run to allow (a P-b advisory run is not an approval resolution).
+    expect(app.ctx.dshHostAdapter.workflowAskCache.get('deploy-x')).toBeUndefined()
+
+    // The workspace is recovered (the orphan plan is resolved): P-b passes.
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(DONE_NO_LEASE) })
+
+    // Ask mode keeps its promise for the never-resolved name: ASK again —
+    // the pre-ask run did not pre-authorize it.
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+    expect(second.kind).toBe('ask')
+  })
+
+  it('(17) WorkflowAskCache record + markAsked normalize keys internally (F-302 doc contract; wasAsked matches raw spellings)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask' })
+    const cache = app.ctx.dshHostAdapter.workflowAskCache
+
+    // F-302: the explicit record() seam stores under the STRIPPED key — a
+    // raw-key record is never consulted by the normalized gate lookups.
+    cache.record('au\u0000dit', 'allow')
+    expect(cache.get('audit')).toBe('allow')
+    expect(cache.get('au\u0000dit')).toBeUndefined()
+
+    // W-1: markAsked/wasAsked normalize identically — raw spellings match
+    // the marked identity (the observation feeds the run name through the
+    // same shared normalization before either call).
+    cache.markAsked('deploy-x\u0000')
+    expect(cache.wasAsked('deploy-x')).toBe(true)
+    expect(cache.wasAsked('deploy-x\u0000')).toBe(true)
+    expect(cache.wasAsked('other-x')).toBe(false)
+  })
+
+  it('(18) W-2: ralph objective with control chars is stripped at the verdict-row write boundary (hostile objective never reaches the ledger view)', async () => {
+    const app = booted = await bootApp()
+
+    // A hostile objective: NUL + BEL embedded in the model-controlled text.
+    // The JSONL line is line-safe (JSON.stringify escapes), but the panel
+    // view passes the objective through raw — the write boundary must strip
+    // the control chars (same discipline as the name/label/phase fields).
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExec('probe \u0000the\u0007 codebase'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    const events = ledgerEvents(app)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'workflow-verdict',
+      tool: 'ralph',
+      objective: 'probe the codebase',
+      mode: 'warn',
+      verdict: 'ok',
+    })
   })
 })

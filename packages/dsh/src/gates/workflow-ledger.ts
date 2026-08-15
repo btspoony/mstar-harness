@@ -54,8 +54,13 @@
  * (name carried) lands in the parent session log — the consumer maps it to
  * the `workflow-run` row AND records `allow` for the run name into the
  * apply-scoped {@link WorkflowAskCache} (`registerWorkflowLedger`'s third
- * parameter — the host adapter's instance). A DENIED answer produces no run
- * → no observation → the next same-name call under `ask` re-asks
+ * parameter — the host adapter's instance). W-1 (qc2 fix-wave): the record
+ * fires ONLY for names the policy marked asked in this apply
+ * (`WorkflowAskCache.markAsked` on every ask verdict; the observation
+ * promotes via `wasAsked`) — a run observed without a prior ask (P-b
+ * advisory under `ask` mode, `warn`/`off`-mode runs) is not an approval
+ * resolution and never pre-authorizes the name. A DENIED answer produces no
+ * run → no observation → the next same-name call under `ask` re-asks
  * (fail-closed — no grant evidence, never an invented allow). The hook is
  * bounded and contained: it fires only on the FIRST successful recording of
  * a run-start (the watermark gate above), keyed on the UNCAPPED run name
@@ -545,9 +550,22 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
       // unaffected. The key is the UNCAPPED run name (`row.runName` —
       // matches the gate's `meta.name`); the ledger display field is
       // capped separately.
+      //
+      // W-1 (qc2 fix-wave): `allow` is recorded ONLY for names that
+      // received an `ask` verdict in THIS apply (`markAsked` at the
+      // policy's single ask point — `wasAsked` below). A run observed
+      // WITHOUT a prior ask — a P-b advisory under `ask` mode (uncovered
+      // InProgress plan preempts P-c), a `warn`/`off`-mode run — is NOT an
+      // approval resolution: caching it would pre-authorize the name and
+      // silently disable the ask channel for the rest of the apply (the
+      // human saw the advisory warns, but the deployment-chosen approval
+      // gate must still fire for a never-asked first-seen name).
       if (workflowAskCache !== undefined && row.event.kind === 'workflow-run') {
         try {
-          workflowAskCache.record(row.runName ?? row.event.name, 'allow')
+          const runName = row.runName ?? row.event.name
+          if (workflowAskCache.wasAsked(runName)) {
+            workflowAskCache.record(runName, 'allow')
+          }
         } catch (error) {
           log('warn', `workflow P-c allow observation degraded (contained — the ledger row stays): ${errorMessage(error)}`)
         }

@@ -436,12 +436,16 @@ export function apply(ctx: Context, config: Config): void {
   // is STRUCTURAL (`ctx.get('sessions')` — the package is not a dependency);
   // an absent service degrades to one debug log with the consumer disabled.
   // Observe-only: a failing ledger write never crashes or alters a workflow
-  // run. The consumer also carries the P-c answer observation (plan
+  // The consumer also carries the P-c answer observation (plan
   // `20260815-dsh-workflow-gate` Task 4 fold-in — the Task-2 Important
   // handoff): a recorded run-start means the approval waterfall allowed the
   // call, so the run's name is cached `allow` in the adapter's apply-scoped
   // `workflowAskCache` — a later same-name call under `ask` reuses the
-  // decision without re-asking. Bounded + contained (see workflow-ledger.ts).
+  // decision without re-asking. W-1 (qc2 fix-wave): the observation
+  // promotes ONLY names the policy marked asked this apply (`markAsked` on
+  // every ask verdict) — a run observed without a prior ask (P-b advisory
+  // under ask mode, warn/off runs) never pre-authorizes the name. Bounded +
+  // contained (see workflow-ledger.ts).
   setWorkflowLedgerLogger((level, message) => {
     const logger = ctx.logger(WORKFLOW_LEDGER_LOGGER)
     if (level === 'warn') logger.warn(message)

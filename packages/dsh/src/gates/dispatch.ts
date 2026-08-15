@@ -523,7 +523,13 @@ function worktreeL1Violations(harnessDir: string | null, header: string): Valida
  * → nothing to attribute; missing status.json → no plans to attribute; a
  * THROWING read → `unreadable` (the caller emits ONE warn — a broken status
  * read must not brick fan-out, plan Clarify; P-a/P-c still run on the name
- * axis, which has no status dependency).
+ * axis, which has no status dependency). A PARSEABLE-but-shape-invalid doc
+ * (`plans` missing / non-array — e.g. a hand-edited `{}` or `{"plans": {}}`)
+ * is `unreadable` TOO (qc3 F-301): the caller's ONE warn gives it the same
+ * loudness as the throwing read, so a corrupt-but-parseable status cannot
+ * silently disable the P-b red line while looking like a healthy
+ * read-only workspace. Fail-open is preserved in every case — P-b degrades
+ * for the call, never bricks fan-out.
  *
  * @returns the first uncovered plan id (undefined = covered / nothing to
  * attribute) + the unreadable flag.
@@ -538,7 +544,7 @@ function writableFanOutUncovered(harnessDir: string | null): { uncoveredPlanId?:
   } catch {
     return { unreadable: true } // fail-open (plan Clarify): broken status must not brick fan-out
   }
-  if (!Array.isArray(doc.plans)) return { unreadable: false }
+  if (!Array.isArray(doc.plans)) return { unreadable: true } // shape-invalid (qc3 F-301): same one-warn degrade as the throwing read
   for (const raw of doc.plans) {
     const row = asRecord(raw)
     if (row === undefined || row.status !== 'InProgress') continue

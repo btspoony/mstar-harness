@@ -92,6 +92,13 @@ import type { AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../
 import { asRecord } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS } from './dispatch.ts'
+// The SHARED ASCII-control-char strip (qc2 W-2 fix-wave): the ralph
+// `objective` — model-controlled display text, like the workflow name —
+// is routed through the same normalization at the verdict-row WRITE
+// boundary (parity with the W-B2 name/label/phase discipline), so a
+// hostile objective (ESC/ANSI/NEL embedded) never reaches the ledger view.
+// workflow-policy imports dispatch.ts type-only — no runtime cycle.
+import { normalizeWorkflowName } from './workflow-policy.ts'
 
 /** The agent-flow ledger file name under `{HARNESS_DIR}`. */
 export const AGENT_FLOW_FILE = 'agent-flow.jsonl'
@@ -695,9 +702,14 @@ export interface WorkflowVerdictInput {
  * workflow call. The event is serialized lossless — optional fields
  * (`agent` / `workflow` / `objective` / `code`) omit when absent; the
  * display identity fields (`workflow` / `objective`) are capped at the
- * ledger boundary (same discipline as the W-B2 name cap). Malformed input
- * is a caller bug — the strict narrowing applies on READ
- * (`eventFromUnknown`), never here.
+ * ledger boundary (same discipline as the W-B2 name cap) and the ralph
+ * `objective` is routed through the SHARED `normalizeWorkflowName` strip at
+ * this write boundary (qc2 W-2 — control-char discipline parity with the
+ * name/label/phase fields; the gate already normalizes `workflow`). The
+ * JSONL line is line-safe either way (`JSON.stringify` escapes), but the
+ * panel view passes the objective through raw — a hostile objective
+ * (ESC/ANSI/NEL) must never reach it. Malformed input is a caller bug —
+ * the strict narrowing applies on READ (`eventFromUnknown`), never here.
  * @param input - the gate's decision identity (see {@link WorkflowVerdictInput}).
  */
 export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
@@ -713,7 +725,7 @@ export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
         ? { workflow: truncateLedgerField(input.workflow, WORKFLOW_LEDGER_MAX_NAME_LENGTH) }
         : {}),
       ...(input.objective !== undefined && input.objective !== ''
-        ? { objective: truncateLedgerField(input.objective, WORKFLOW_LEDGER_MAX_NAME_LENGTH) }
+        ? { objective: truncateLedgerField(normalizeWorkflowName(input.objective), WORKFLOW_LEDGER_MAX_NAME_LENGTH) }
         : {}),
       mode: input.mode,
       verdict: input.verdict,
