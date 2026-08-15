@@ -189,6 +189,28 @@ An advisory `agent/pre-step` waterfall listener appends ONE **`mstar-engine-stat
 
 The row is **digest-gated**: per agent+workspace it is injected once per turn and re-injected only when its rendered text changed — a 20-step turn shows the catalog once, not 20 times. The source shares ONE per-workspace cache entry, built at boot for an explicit `harnessDir` (else on the workspace's first pre-step) and TTL-refreshed (`catalogTtlMs`, default 60 s) — the hot path is a timestamp compare + Map lookup between refreshes, and a mid-session plan/compass/residual change lands within one interval.
 
+## Agent-flow ledger (workflow rows)
+
+The agent-flow ledger — `{HARNESS_DIR}/agent-flow.jsonl`, the same JSONL the catalog's `state.agentFlow` evidence reads — also records **workflow / ralph fan-out runs**: a session-event consumer (logger `mstar/workflow-ledger`, registered at apply) maps the FOUR durable `tool-workflow/*` session events into three new ledger kinds. Source of record is the **durable session events** appended into the CALLING PARENT session's log (top-level runs only — nested transport calls record nothing upstream), **not** the in-memory `workflow/*` emits (roadmap §10.4 N4): the session log is the replayable truth, so the consumer covers it with a **cold scan at apply** (constructor-seeded events never hit the firehose — `firstLiveSeq`) plus a live **`session/event` firehose** listener, deduped by ONE delta cursor per session id (session-log `seq` position) — one row per `(runId, kind, seq)` across cold+live overlap.
+
+| `tool-workflow/*` event | Ledger row | Fields |
+| --- | --- | --- |
+| `run-start` | `workflow-run` | `runId`, `name`, `agent?` (the carrying parent session id) |
+| `agent-start` | `workflow-agent` | `runId`, `seq` (1-based member sequence), `label`, `phase?`, `childId` |
+| `run-end` | `workflow-run-end` | `runId`, `stopReason` (`completed` / `cancelled` / `error`) |
+
+`tool-workflow/agent-end` is upstream member bookkeeping with **no ledger kind** (the member `outcome` is intentionally not persisted) and is filtered out. Optional fields (`agent` / `phase`) are omitted from the serialized line when absent (lossless-JSON discipline); the three kinds share the ledger's `AGENT_FLOW_MAX_EVENTS` truncation + size gate, and malformed lines narrow to `undefined` on read (never re-serialized).
+
+**childId linkage + member counts.** The `workflow-agent` row preserves the published member's `childId` (the child session id); the run's display `name` lives on the `workflow-run` row only, and the panel resolves it for agent/end rows via the window lookup (same `runId` — a member row itself carries no name). The panel attaches the member COUNT to the `workflow-run` row (the window's `workflow-agent` rows for that `runId`; window-bound — members truncated out of the ≤50-event window are honestly absent, never a 0 guess).
+
+**Depth advisory (observe-time).** On `agent-start`, the consumer resolves the child session via `sessions.get(childId)` and warns when its `header.delegationDepth` is ≥ 2 — ONCE per run (per-runId latch), logger `mstar/workflow-ledger`. Observe-time only, **never a refusal path**: a throwing child read degrades the advisory, never the row or the run.
+
+**No-behavior-change guarantee.** The consumer is observe-only: ZERO gating — every read and append is try/catch-contained; a failing ledger write never crashes or alters a workflow run; a throwing session read logs one warn and the pass continues. The `sessions` service is read STRUCTURALLY via `ctx.get('sessions')` — no runtime dependency on `@deepseek-ai/dsh-session`.
+
+**Mount-order note.** The consumer activates only when the `sessions` service is available at apply — the **dsh-session row must mount BEFORE the mstar row** (the standard `web` profile order does). A composition where dsh-session mounts after the plugin (or is absent) degrades **silently**: ONE debug log (`sessions service absent — workflow-ledger consumer disabled`) and no rows are recorded — never an error, never a broken run.
+
+**Panel visibility.** The three workflow rows render in the **事件记录 (Event Log) tab**'s Agent 流转事件 partition through the existing event-row chrome (no redesign): the summary identity is the run NAME (agent/end rows resolve it via the window lookup; fallback runId → 「未知」), the detail body adds four workflow fields — run-id / name / members / stop-reason (missing → 「—」) — and the expected/settled seats render 「—」 (a workflow row is not a role dispatch — no settle pairing exists, same precedent as settle rows). Unknown kind strings render as GENERIC rows (verbatim kind, no workflow fields) — never dropped, never guessed. The catalog summary counts workflow rows as a DISTINCT `workflow` bucket (`by role: workflow N` in the model-facing line) — never folded into dispatch-role counts.
+
 ## Web client plugin (workflow panel)
 
 The package ships a browser client half for the dsh **web** profile, discovered
