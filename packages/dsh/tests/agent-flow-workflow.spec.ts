@@ -15,16 +15,23 @@
  * narrow to `undefined`.
  */
 import { describe, expect, it } from 'bun:test'
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { AGENT_FLOW_FILE, AGENT_FLOW_MAX_EVENTS, readAgentFlow, recordDispatch, recordSettle } from '../src/index.ts'
-import { AGENT_FLOW_SIZE_GATE_BYTES, recordWorkflowEvent } from '../src/gates/agent-flow.ts'
+import {
+  AGENT_FLOW_SIZE_GATE_BYTES,
+  recordWorkflowEvent,
+  WORKFLOW_LEDGER_MAX_ID_LENGTH,
+  WORKFLOW_LEDGER_MAX_LABEL_LENGTH,
+  WORKFLOW_LEDGER_MAX_NAME_LENGTH,
+  WORKFLOW_LEDGER_TRUNCATION_MARKER,
+} from '../src/gates/agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from '../src/gates/agent-flow.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
-import { registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
+import { registerWorkflowLedger, setWorkflowLedgerLogger, WORKFLOW_LEDGER_WATERMARK_FILE } from '../src/gates/workflow-ledger.ts'
 import {
   agentEnd,
   agentEndMissingRunId,
@@ -229,6 +236,36 @@ describe('agent-flow workflow kinds — malformed lines narrow to undefined', ()
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('fractional / non-positive member seq and oversized fields narrow at the read boundary too (W-2 / W-3)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-workflow-caps-')
+    try {
+      const file = join(harnessDir, AGENT_FLOW_FILE)
+      const T = 1_700_000_000_000
+      const seed = [
+        // fractional member seq → narrows to undefined
+        JSON.stringify({ v: 1, ts: T, kind: 'workflow-agent', runId: 'r', seq: 1.5, label: 'w', childId: 'c' }),
+        // non-positive member seq → narrows to undefined
+        JSON.stringify({ v: 1, ts: T, kind: 'workflow-agent', runId: 'r', seq: 0, label: 'w', childId: 'c' }),
+        // oversized runId → narrows to undefined (id fields are never
+        // silently truncated into collisions at the panel boundary either)
+        JSON.stringify({ v: 1, ts: T, kind: 'workflow-run', runId: 'x'.repeat(WORKFLOW_LEDGER_MAX_ID_LENGTH + 100), name: 'a' }),
+        // oversized name (display) → the VIEW carries the capped name
+        JSON.stringify({ v: 1, ts: T, kind: 'workflow-run', runId: 'r', name: 'n'.repeat(WORKFLOW_LEDGER_MAX_NAME_LENGTH + 100) }),
+      ].join('\n') + '\n'
+      await writeFile(file, seed)
+
+      const view = readAgentFlow(harnessDir)
+      expect(view!.events).toHaveLength(1)
+      expect(view!.events[0]).toMatchObject({ kind: 'workflow-run', runId: 'r' })
+      expect(view!.events[0].name!).toHaveLength(WORKFLOW_LEDGER_MAX_NAME_LENGTH)
+      expect(view!.events[0].name!.endsWith(WORKFLOW_LEDGER_TRUNCATION_MARKER)).toBe(true)
+      // Read NEVER rewrites the file.
+      expect(readFileSync(file, 'utf8')).toBe(seed)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 /* ===========================================================================
@@ -390,6 +427,19 @@ class FakeSessionRegistry extends Service {
   /** Record one live session (the real store's `create`/`enter` contract). */
   register(session: FakeSession): void {
     this.live.set(session.id, session)
+  }
+
+  /**
+   * Drive a full session creation — register + `session/created` announce —
+   * the real store's `create()` = prepare → enter → announce contract
+   * (upstream `session/src/index.ts:822-844`; the seed events enter the log
+   * in the constructor, BEFORE the announce, so the created listener sees
+   * the seeded snapshot). Emitted with the carrier FIRST, like the
+   * `session/event` driver.
+   */
+  create(session: FakeSession): void {
+    this.live.set(session.id, session)
+    this.app.events.emit({}, 'session/created', session)
   }
 
   /** Look up a live session by id (the consumer's depth-advisory read). */
@@ -659,6 +709,176 @@ describe('workflow-ledger consumer — cold scan over session event snapshots (p
       const view = readAgentFlow(harnessDir)
       expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run'])
       expect(view!.events[2]).toMatchObject({ kind: 'workflow-run', runId: 'run-ok', agent: 'parent-1' })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('re-apply (second registration) does NOT duplicate rows — the durable watermark survives registrations (W-1b / F-301)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-workflow-consumer-reapply-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart() },
+      { type: 'tool-workflow/agent-start', data: agentStart() },
+      { type: 'tool-workflow/agent-end', data: agentEnd() },
+      { type: 'tool-workflow/run-end', data: runEnd() },
+    ], { id: 'parent-1', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      // FIRST registration: the cold scan records 3 rows (agent-end filtered).
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      // SECOND registration on the same context (HMR reload / config re-mount):
+      // a fresh registration used to start with EMPTY cursors and re-record
+      // every row of the same live session — the durable watermark must
+      // suppress the already-recorded envelopes.
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      const view = readAgentFlow(harnessDir)
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run'])
+      const lines = readFileSync(join(harnessDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')
+      expect(lines).toHaveLength(3)
+      // The durable watermark sidecar was written into the harness dir — the
+      // exact format a fresh process reads on restart (the cross-restart
+      // dedupe contract): session id → next expected envelope seq (4 = the
+      // snapshot length; the seq-2 agent-end envelope was filtered, so the
+      // cursor advanced only past the three mapped rows).
+      expect(existsSync(join(harnessDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(true)
+      const watermark = JSON.parse(readFileSync(join(harnessDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8'))
+      expect(watermark).toEqual({ v: 1, cursors: { 'parent-1': 4 } })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a session created AFTER apply with constructor-seeded events is cold-scanned once on session/created (W-1a / S-304)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-workflow-consumer-created-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      // The session is created AFTER apply with a constructor-seeded log
+      // (replay/resume/fork — seeded events NEVER publish on the firehose,
+      // `firstLiveSeq`), so only the `session/created` backfill can see them.
+      const parent = fakeSession([
+        { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-seeded' }) },
+        { type: 'tool-workflow/agent-start', data: agentStart({ runId: 'run-seeded', childId: 'child-seeded' }) },
+        { type: 'tool-workflow/run-end', data: runEnd({ runId: 'run-seeded' }) },
+      ], { id: 'parent-seeded', header: { cwd: root } })
+      sessions.create(parent)
+      const view = readAgentFlow(harnessDir)
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run'])
+      expect(view!.events[2]).toMatchObject({ kind: 'workflow-run', runId: 'run-seeded', agent: 'parent-seeded' })
+      // A second apply re-walks the same live session — the durable watermark
+      // keeps the backfill idempotent (no duplicates, no re-record).
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      const after = readAgentFlow(harnessDir)
+      expect(after!.events).toHaveLength(3)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fractional envelope seq is skipped WITHOUT corrupting the cursor — later integer envelopes still record (W-2)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-workflow-consumer-fracseq-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // Built manually (not via fakeSession): a hostile envelope with seq 1.5
+    // between valid integer envelopes. A permissive `Number.isFinite` guard
+    // would accept it, advance the cursor to 2.5, and silently drop every
+    // later integer envelope (seq 2, 3, …) — the W-2 corruption mode.
+    sessions.register({
+      id: 'parent-1',
+      header: { cwd: root },
+      events: [
+        { type: 'tool-workflow/run-start', seq: 0, time: SESSION_T0, data: runStart() },
+        { type: 'tool-workflow/agent-start', seq: 1.5, time: SESSION_T0 + 1, data: agentStart() },
+        { type: 'tool-workflow/agent-start', seq: 2, time: SESSION_T0 + 2, data: agentStart({ seq: 2, label: 'reviewer', childId: 'child-2' }) },
+        { type: 'tool-workflow/run-end', seq: 3, time: SESSION_T0 + 3, data: runEnd() },
+      ],
+    })
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      const view = readAgentFlow(harnessDir)
+      // The fractional envelope is skipped; the integer envelopes AFTER it
+      // are NOT dropped (the cursor never advanced past them).
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run'])
+      expect(view!.events[1]).toMatchObject({ kind: 'workflow-agent', runId: 'run-1', seq: 2, label: 'reviewer', childId: 'child-2' })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fractional / non-positive member seq skips the agent row (W-2)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-workflow-consumer-fracmember-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart() },
+      { type: 'tool-workflow/agent-start', data: agentStart({ seq: 1.5 }) },
+      { type: 'tool-workflow/agent-start', data: agentStart({ seq: 1, childId: 'child-1' }) },
+      { type: 'tool-workflow/agent-start', data: agentStart({ seq: 0 }) },
+      { type: 'tool-workflow/run-end', data: runEnd() },
+    ], { id: 'parent-1', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      const view = readAgentFlow(harnessDir)
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run'])
+      expect(view!.events[1]).toMatchObject({ kind: 'workflow-agent', runId: 'run-1', seq: 1, childId: 'child-1' })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('oversized id fields skip the row; oversized display fields truncate with a suffix marker (W-3)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-workflow-consumer-caps-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    const longId = 'x'.repeat(WORKFLOW_LEDGER_MAX_ID_LENGTH + 100)
+    const longName = 'n'.repeat(WORKFLOW_LEDGER_MAX_NAME_LENGTH + 100)
+    const longLabel = 'l'.repeat(WORKFLOW_LEDGER_MAX_LABEL_LENGTH + 100)
+    sessions.register(fakeSession([
+      // run-start with an oversized runId → SKIPPED (id fields must never be
+      // silently truncated into collisions).
+      { type: 'tool-workflow/run-start', data: runStart({ runId: longId }) },
+      // run-start with an oversized NAME (display) → truncated deterministically.
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-ok', name: longName }) },
+      // agent-start with an oversized childId → SKIPPED.
+      { type: 'tool-workflow/agent-start', data: agentStart({ runId: 'run-ok', seq: 1, label: 'worker', childId: longId }) },
+      // agent-start with oversized LABEL + PHASE (display) → both truncated.
+      { type: 'tool-workflow/agent-start', data: agentStart({ runId: 'run-ok', seq: 2, label: longLabel, phase: longLabel, childId: 'child-2' }) },
+      // run-end with an oversized runId → SKIPPED.
+      { type: 'tool-workflow/run-end', data: runEnd({ runId: longId }) },
+    ], { id: 'parent-1', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      const view = readAgentFlow(harnessDir)
+      // Only the two shape-valid rows survive; every oversized-id row is gone.
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-agent', 'workflow-run'])
+      const run = view!.events[1]
+      expect(run).toMatchObject({ kind: 'workflow-run', runId: 'run-ok' })
+      expect(run.name!).toHaveLength(WORKFLOW_LEDGER_MAX_NAME_LENGTH)
+      expect(run.name!.endsWith(WORKFLOW_LEDGER_TRUNCATION_MARKER)).toBe(true)
+      expect(run.name!.startsWith('n'.repeat(WORKFLOW_LEDGER_MAX_NAME_LENGTH - WORKFLOW_LEDGER_TRUNCATION_MARKER.length))).toBe(true)
+      const agent = view!.events[0]
+      expect(agent).toMatchObject({ kind: 'workflow-agent', runId: 'run-ok', seq: 2, childId: 'child-2' })
+      expect(agent.label!).toHaveLength(WORKFLOW_LEDGER_MAX_LABEL_LENGTH)
+      expect(agent.label!.endsWith(WORKFLOW_LEDGER_TRUNCATION_MARKER)).toBe(true)
+      expect(agent.phase!).toHaveLength(WORKFLOW_LEDGER_MAX_LABEL_LENGTH)
+      expect(agent.phase!.endsWith(WORKFLOW_LEDGER_TRUNCATION_MARKER)).toBe(true)
     } finally {
       setWorkflowLedgerLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})

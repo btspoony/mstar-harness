@@ -109,6 +109,40 @@ export const AGENT_FLOW_DEFAULT_LIMIT = 50
  * small-file append path free of a full read per dispatch).
  */
 export const AGENT_FLOW_SIZE_GATE_BYTES = 64 * 1024
+/**
+ * WORKFLOW field length caps (qc2 W-3 fix-wave) — ONE constant family at
+ * the ledger boundary, enforced on BOTH the consumer (workflow-ledger
+ * `rowOf`) and the read narrow (`eventFromUnknown`): a hostile or
+ * model-controlled multi-MB string must never defeat the
+ * `AGENT_FLOW_MAX_EVENTS` line-count truncation or reach the panel
+ * unbounded. ID-sized fields (`runId`, `childId`) SKIP the row when
+ * oversized — truncating them could forge collisions; display fields
+ * (`name`, `label`, `phase`) are truncated deterministically with a suffix
+ * marker. `2^31` bounds every sequence number (envelope + member) — the
+ * cursor-math safe range (see the consumer's durable watermark).
+ */
+export const WORKFLOW_LEDGER_MAX_ID_LENGTH = 512
+/** Cap for label-sized display fields (`label`, `phase`). */
+export const WORKFLOW_LEDGER_MAX_LABEL_LENGTH = 512
+/** Cap for the run display `name`. */
+export const WORKFLOW_LEDGER_MAX_NAME_LENGTH = 1024
+/** The deterministic suffix marker appended to capped display fields. */
+export const WORKFLOW_LEDGER_TRUNCATION_MARKER = '…'
+/** Upper bound (exclusive) for envelope + member sequence numbers. */
+export const WORKFLOW_LEDGER_MAX_SEQ = 2 ** 31
+
+/**
+ * Deterministically cap one display field: values at or under the cap pass
+ * through unchanged; longer values are truncated to `cap − marker` chars
+ * plus the {@link WORKFLOW_LEDGER_TRUNCATION_MARKER} suffix (the marker
+ * guarantees the truncation is visible in the panel — never a silent cut).
+ * Pure — NEVER throws.
+ */
+export function truncateLedgerField(value: string, cap: number): string {
+  if (value.length <= cap) return value
+  const keep = cap - WORKFLOW_LEDGER_TRUNCATION_MARKER.length
+  return value.slice(0, keep > 0 ? keep : 0) + WORKFLOW_LEDGER_TRUNCATION_MARKER
+}
 /** Logger label for the agent-flow ledger (dsh logger naming: `<scope>/<subject>`). */
 export const AGENT_FLOW_LOGGER = 'mstar/agent-flow'
 /**
@@ -642,7 +676,15 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
   // (workflow-agent only) omit when absent — lossless at the read boundary
   // too. Positional invariants (post-end updates, duplicate member seq) are
   // the CONSUMER's job — the ledger persists what it sees.
-  if (typeof rec.runId !== 'string' || rec.runId === '') return undefined
+  //
+  // Length caps (qc2 W-3 fix-wave): id-sized fields (`runId`, `childId`)
+  // SKIP the row when oversized (never truncated into collisions); display
+  // fields (`name`, `label`, `phase`) are capped deterministically — a
+  // multi-MB line written by an older producer must not defeat the
+  // line-count truncation or reach the panel unbounded. Member `seq` must
+  // be an integer in [1, 2^31) (qc2 W-2 — upstream `memberSeq` positive
+  // safe integer; fractional values corrupt consumer cursor math).
+  if (typeof rec.runId !== 'string' || rec.runId === '' || rec.runId.length > WORKFLOW_LEDGER_MAX_ID_LENGTH) return undefined
   if (kind === 'workflow-run') {
     if (typeof rec.name !== 'string' || rec.name === '') return undefined
     return {
@@ -651,21 +693,28 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
       kind: 'workflow-run',
       ...(agent !== undefined ? { agent } : {}),
       runId: rec.runId,
-      name: rec.name,
+      name: truncateLedgerField(rec.name, WORKFLOW_LEDGER_MAX_NAME_LENGTH),
     }
   }
   if (kind === 'workflow-agent') {
-    if (typeof rec.seq !== 'number' || !Number.isFinite(rec.seq)) return undefined
+    if (
+      typeof rec.seq !== 'number' ||
+      !Number.isInteger(rec.seq) ||
+      rec.seq < 1 ||
+      rec.seq >= WORKFLOW_LEDGER_MAX_SEQ
+    ) {
+      return undefined
+    }
     if (typeof rec.label !== 'string' || rec.label === '') return undefined
-    if (typeof rec.childId !== 'string' || rec.childId === '') return undefined
+    if (typeof rec.childId !== 'string' || rec.childId === '' || rec.childId.length > WORKFLOW_LEDGER_MAX_ID_LENGTH) return undefined
     return {
       v: 1,
       ts: rec.ts,
       kind: 'workflow-agent',
       runId: rec.runId,
       seq: rec.seq,
-      label: rec.label,
-      ...(typeof rec.phase === 'string' ? { phase: rec.phase } : {}),
+      label: truncateLedgerField(rec.label, WORKFLOW_LEDGER_MAX_LABEL_LENGTH),
+      ...(typeof rec.phase === 'string' ? { phase: truncateLedgerField(rec.phase, WORKFLOW_LEDGER_MAX_LABEL_LENGTH) } : {}),
       childId: rec.childId,
     }
   }
