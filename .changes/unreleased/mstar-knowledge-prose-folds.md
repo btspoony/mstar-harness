@@ -1,0 +1,13 @@
+---
+category: Harness
+packages: root
+---
+
+- **Knowledge-doc prose hygiene**: `mstar-compound` workflow gains §3.5 — a HEAD-resolvability quality gate (a reader at HEAD — no chat transcripts, dispatch prompts, or unmerged drafts — can resolve every reference and verify every claim) with an mstar-adapted leakage taxonomy (dead session citations, change narration, review choreography, hedges without `simplify:`/`temporary` markers, authoring-language slips) and sanctioned keep rules (R#/finding ids in review bundles, issue references, measured bounds, iteration/plan ids); `writing-specialist` Output Guidance points to the SSOT without duplicating it.
+- **Future-decision-value classification**: `mstar-compound-refresh` Phase 2 gains a second axis — docs whose rationale / alternatives considered / negative guarantees / reintroduction conditions still guide a future change are **kept regardless of length** — plus a guardrail (a captured rejected approach stays only while the losing idea remains a tempting, meaningful mistake) and an explicit exclusion of frozen-archive seal machinery (rule 6 delete-don't-archive intact).
+- **Editorial rubric for writing-specialist**: Output Guidance adds the complete-proposition rule (enumerate actor+action / condition / modality / negative guarantee / ownership before trimming; trim only when every factual clause survives), a coverage-by-artifact table over the six mstar surfaces (knowledge docs / plans / review bundles / SKILL.md / README / completion reports), and doc standards (atomic-move rule, tutorial-vs-reference classification).
+
+<!-- CN -->
+- **知识文档行文卫生**：`mstar-compound` workflow 新增 §3.5 HEAD-resolvability 质量门（HEAD 读者——无 chat transcript / dispatch prompt / 未合并草稿——可解析每个引用并核验每个声明），含 mstar 适配的泄漏分类（dead session citations、change narration、review choreography、无 `simplify:`/`temporary` 标记的 hedges、authoring-language slips）与 sanctioned keep 规则（review bundle 内 R#/finding id、issue 引用、measured bounds、iteration/plan id）；`writing-specialist` Output Guidance 仅以指针指向 SSOT，不复制正文。
+- **未来决策价值分类轴**：`mstar-compound-refresh` Phase 2 新增第二轴——正文中的 rationale / alternatives considered / negative guarantees / reintroduction conditions 仍指导未来变更的文档**无论长度一律 Keep**——并附守护规则（captured rejected approach 仅在败方仍是 tempting、meaningful mistake 时保留），以及对 frozen-archive seal 机制的显式排除（规则 6 delete-don't-archive 保持不变）。
+- **writing-specialist 编辑准则**：Output Guidance 新增 complete-proposition rule（修剪前列举 actor+action / condition / modality / negative guarantee / ownership 命题，仅当每个事实子句存活时才可修剪）、按 6 类 mstar 产物（knowledge docs / plans / review bundles / SKILL.md / README / completion reports）的 coverage-by-artifact 表，以及 doc standards（atomic-move 规则、tutorial-vs-reference 分类）。
