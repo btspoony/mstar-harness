@@ -33,7 +33,7 @@ The audit is **advisory** — it does not enter the per-plan state machine (`Tod
 
 ## Execute
 
-Execute **`mstar-audit`** end to end（SKILL.md：Recon → Audit → Vet & prioritize → Write plans；effort `quick` / `standard` / `deep`；scope variants `security` / `perf` / `tests` / `branch` / `next` / `roadmap`）。Plans → `{PLAN_DIR}/audit-<YYYY-MM-DD>/NNN-<slug>.md` + `README.md` index，per **`mstar-plan-artifacts/references/plan-quality-bar.md`**。
+Execute **`mstar-audit`** end to end（SKILL.md：Recon → Audit → Vet & prioritize → Write plans；effort `quick` / `standard` / `deep`；scope variants `security` / `perf` / `tests` / `branch` / `next` / `roadmap` / `simplify`）。Plans → `{PLAN_DIR}/audit-<YYYY-MM-DD>/NNN-<slug>.md` + `README.md` index，per **`mstar-plan-artifacts/references/plan-quality-bar.md`**。
 
 Executor: PM dispatches `@code-reviewer`；大型仓库 scout 扇出经 Assignment `Delegation: allowed (scout/explore only, read-only)`（Routing 表）。
 

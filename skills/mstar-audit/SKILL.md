@@ -112,6 +112,7 @@ If an audit directory from a previous run exists, **reconcile, don't duplicate**
 | Category focus (`security`, `perf`, `tests`, ...) | Recon, then that category only, then plan | Useful for targeted sweeps |
 | `branch` | Current branch changes only | Files changed since merge-base with default branch + their direct importers. Tag every finding `introduced` or `pre-existing` |
 | `next` / `roadmap` | Direction category only, in depth | 4–6 grounded suggestions; selected ones become design/spike plans |
+| `simplify` | DEBT-focused deep pass: dead / duplicated / speculative / over-built / added-then-removed / hand-rolled-where-a-dependency-exists surfaces | Prove-or-reject per playbook §5; findings use Category DEBT; tiny-real items → "considered and rejected" rows, never inline TODOs (Hard Rule 1) |
 
 ## Output format
 

@@ -170,6 +170,28 @@ Exit codes:
 
 Non-fatal findings are reported separately: an unknown top-level field, a non-object `extensions` field, or a non-object `extensions.<namespace>` entry is reported and ignored (validation continues), and a `skills/` child directory without `SKILL.md` prints a yellow warning without failing validation. Non-conforming skills are skipped the same way (§7.1): a `SKILL.md` with missing or invalid frontmatter, a `name` that does not match its directory or violates Agent Skills name rules, or a missing `description` prints a `skills:` warning and that skill is skipped while validation of the remaining components continues.
 
+## Harness Slash Commands (not CLI subcommands)
+
+`/codebase-audit` and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).
+
+### `/codebase-audit`
+
+Read-only codebase survey that writes prioritized, self-contained improvement plans to `{PLAN_DIR}/audit-<YYYY-MM-DD>/` (numbered plan files + `README.md` index). Never edits source; selected plans feed the normal Prepare → Execute flow.
+
+```text
+/codebase-audit [keywords]
+```
+
+| Token | Meaning | Default |
+|---|---|---|
+| `quick` / `deep` | Effort level: `quick` = hotspot-only (0–1 subagents, top ~6 HIGH-confidence findings); `deep` = whole repo, every package (≤8 subagents, one per category) | `standard` (hotspot-weighted, key packages, ≤4 subagents) |
+| `<category>` | Category focus — recon, then that category only: `bug`, `security`, `perf`, `tests`, `tech-debt`, `migration`, `dx`, `docs`, `direction` (plan `Category` field values) | all nine |
+| `branch` | Current-branch changes only (since merge-base with the default branch); findings tagged `introduced` / `pre-existing` | full codebase |
+| `next` / `roadmap` | Direction category only, in depth — 4–6 grounded suggestions → design/spike plans | — |
+| `simplify` | DEBT-focused deep pass: dead / duplicated / speculative / over-built / added-then-removed / hand-rolled-where-a-dependency-exists surfaces, proved or rejected via consumer classification; findings use category `tech-debt` (finding code `DEBT`); tiny-real items land in "considered and rejected", never inline TODOs | — |
+
+Examples: `/codebase-audit`, `/codebase-audit deep security`, `/codebase-audit branch`, `/codebase-audit simplify`. Full workflow SSOT → **`mstar-audit`** skill.
+
 ## What `init` Ensures
 
 OpenCode `init` enforces these baseline requirements in `opencode.json`:

@@ -49,6 +49,39 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - If unspecified, choose the clearest structure for target audience
 - Keep writing usable and publication-ready
 - Include source notes when factual claims require evidence
+- Durable harness artifacts (knowledge docs, plans, README, promoted guides) must pass the **HEAD-resolvability test**: a reader at HEAD — no chat transcripts, dispatch prompts, or unmerged drafts — can resolve every reference and verify every claim.
+- Leakage taxonomy and keep rules (mstar-sanctioned): SSOT → `mstar-compound/references/compound-workflow.md`.
+- The same rubric applies to writing scenarios; do not duplicate its prose here.
+
+### Complete-proposition rule
+
+Before trimming or restating a passage, enumerate the propositions it makes:
+
+- actor + action
+- condition / timing / ordering
+- modality (must / may / must not)
+- negative guarantee + exception
+- ownership / side-effect / failure / consequence
+
+Trim modifiers, repetition, or narration **only when every factual clause survives** the edit. Word count alone is not an improvement — a shorter sentence that drops a guarantee, a condition, or an ownership boundary changes the contract, not the prose.
+
+### Coverage-by-artifact
+
+One explanation has one home; essential contract facts may repeat locally. Each durable artifact type has a coverage focus:
+
+| Artifact | Coverage focus |
+|----------|----------------|
+| Knowledge docs | unique rationale, alternatives considered, shipped verification evidence, named coverage gaps |
+| Plans | prerequisites, actions, observable verification |
+| Review bundles | defect / location / impact / evidence; blockers separated from suggestions |
+| SKILL.md | behavioral guardrails + explicit "guidance, not script" scope limitation |
+| README | consumer contract: config / semantics / failures / limitations / extension points — durable gaps, not cleanup inventories |
+| Completion reports | what / why / verification |
+
+### Doc standards
+
+- **Atomic-move rule**: a move = remove + add + fixing every inbound link in the same change; no orphaned references may survive the change set.
+- **Tutorial vs reference**: user-facing docs are either a tutorial (ordered steps to an observable outcome) or a reference (explicitly scoped lookup).
 
 ## Completion Report
 
