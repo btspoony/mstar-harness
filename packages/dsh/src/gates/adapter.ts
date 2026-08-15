@@ -37,6 +37,11 @@ import {
 } from './dispatch.ts'
 import { recordDispatch, AGENT_FLOW_LOGGER } from './agent-flow.ts'
 import type { AgentFlowPairing } from './agent-flow.ts'
+// P-c first-seen ask cache (plan `20260815-dsh-workflow-gate` Task 2):
+// apply-scoped, owned here (constructed with the adapter) so the dispatch
+// gate and tests share ONE instance per plugin apply. workflow-policy
+// imports dispatch.ts type-only — no runtime cycle.
+import { WorkflowAskCache } from './workflow-policy.ts'
 /** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
 const HOST_LOGGER = 'mstar/host-adapter'
 /** Options for {@link DshHostAdapter}. */
@@ -58,6 +63,14 @@ export interface DshHostAdapterOptions {
    * construction) → no pairing registration (record-only).
    */
   readonly pairing?: AgentFlowPairing
+  /**
+   * The P-c first-seen ask cache (plan `20260815-dsh-workflow-gate`
+   * Task 2): workflow name → resolved decision, apply-scoped. The entry
+   * passes the shared instance; absent (direct adapter construction) → a
+   * private throwaway cache is constructed (inert — the workflow branch
+   * only runs through the entry-wired `tools/pre-execute` listener).
+   */
+  readonly workflowAskCache?: WorkflowAskCache
   /**
    * Log sink for `HostAdapter.log`. Defaults to the dsh ctx logger scoped
    * `mstar/host-adapter` (dsh logger naming: `<scope>/<subject>`).
@@ -102,6 +115,14 @@ export class DshHostAdapter extends Service implements HostAdapter {
   private readonly resolver: HarnessResolver
   private readonly config: Config
   private readonly pairing: AgentFlowPairing | undefined
+  /**
+   * The P-c first-seen ask cache (plan `20260815-dsh-workflow-gate`
+   * Task 2) — apply-scoped with the adapter: the dispatch gate reads it
+   * through `gateDispatch`, and tests/answerer integrations reach the same
+   * instance via `ctx.dshHostAdapter.workflowAskCache`. Dies with the
+   * fiber (no module-level reference — an HMR reload starts a fresh cache).
+   */
+  readonly workflowAskCache: WorkflowAskCache
   private readonly logSink: (level: 'info' | 'warn' | 'error', msg: string) => void
 
   constructor(ctx: Context, options: DshHostAdapterOptions) {
@@ -111,6 +132,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     this.resolver = options.resolver
     this.config = options.config
     this.pairing = options.pairing
+    this.workflowAskCache = options.workflowAskCache ?? new WorkflowAskCache()
     this.logSink = options.log ?? ((level, msg) => {
       const logger = ctx.logger(HOST_LOGGER)
       if (level === 'warn') logger.warn(msg)

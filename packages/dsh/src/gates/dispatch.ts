@@ -43,6 +43,12 @@ import type {
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { STATUS_FILE, asRecord, formatViolation, HarnessResolver } from './_shared.ts'
 import type { Config } from './_shared.ts'
+// The P-a/P-c policy + cache (plan `20260815-dsh-workflow-gate` Task 2 — the
+// SINGLE four-tier decision point; this module maps the verdict to the
+// PreToolDecision refusal vocabulary). workflow-policy imports THIS module
+// type-only (`WorkflowGateInput` — erased at runtime), so the value edge is
+// one-way: no runtime cycle.
+import { workflowPolicy, WorkflowAskCache, WORKFLOW_NAME_UNKNOWN_CODE } from './workflow-policy.ts'
 // Type-only (erased at runtime — no cycle): the adapter owns the shared
 // dispatch-gate core and is constructed by the entry `apply`; the listener
 // signatures type their adapter parameter through the adapter module.
@@ -73,13 +79,6 @@ export const DEFAULT_DISPATCH_TOOLS = ['subagent', 'subagent_fork'] as const
  * Constraint — that list stays `['subagent', 'subagent_fork']`).
  */
 export const DEFAULT_WORKFLOW_TOOLS = ['workflow', 'ralph'] as const
-
-/**
- * The workflow-gate advisory violation code for a name outside the P-a
- * allowlist (warn-mode advisory / future hard-mode veto reason). Task 2/3
- * policies reuse the vocabulary.
- */
-export const WORKFLOW_NAME_UNKNOWN_CODE = 'workflow.name.unknown'
 
 /** `## Assignment` heading marker (opencode parity — shape guard only). */
 const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
@@ -590,19 +589,7 @@ export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | un
 }
 
 /**
- * P-a allowlist membership (plan `20260815-dsh-workflow-gate` Task 1): a
- * workflow name is UNKNOWN when `workflowNames` is absent or empty (⇒ every
- * name unknown — documented, the gate is NOT "allow all" by omission) or
- * the name is not listed. Ralph calls carry no `meta.name` — P-a never
- * applies to them (callers guard on `input.metaName !== undefined` first).
- */
-export function workflowNameUnknown(config: Config, metaName: string): boolean {
-  const names = config.workflowNames
-  return names === undefined || names.length === 0 || !names.includes(metaName)
-}
-
-/**
- * The workflow/ralph gate branch (plan `20260815-dsh-workflow-gate` Task 1
+ * The workflow/ralph gate branch (plan `20260815-dsh-workflow-gate` Task 2
  * — the args-shape branch placed BEFORE the subagent prompt branch in
  * {@link gateDispatch}).
  *
@@ -611,23 +598,34 @@ export function workflowNameUnknown(config: Config, metaName: string): boolean {
  * semantics unchanged.
  *
  * Mode short-circuit: `workflowGate: 'off'` → pass-through immediately, NO
- * verdict row. Under the default `warn` mode a workflow call with a
- * policy-unknown name (empty/absent `workflowNames` ⇒ every name unknown)
- * is ALLOWED with an advisory verdict row — the `mstar/dispatch-gate`
- * advisory (the existing dispatch record path — Task 4 wires the durable
- * verdict rows) + a warn. Ralph carries no `meta.name`, so the P-a
- * advisory never applies to it (P-b arrives in Task 3).
+ * verdict row (also precedes malformed-args handling — a malformed call
+ * under `off` stays silent).
+ *
+ * Every other mode composes the {@link WorkflowGateInput} and runs the
+ * Task 2 policy ({@link workflowPolicy} — the SINGLE four-tier decision
+ * point: P-a name allowlist + P-c first-seen ask). The verdict maps to the
+ * `tools/pre-execute` refusal vocabulary:
+ *
+ * - `allow` → undefined (delegate via `next()`; allowlisted names and ralph
+ *   pass under any mode).
+ * - `warn` (default) → allowed WITH an advisory verdict row — the
+ *   `mstar/dispatch-gate` advisory (the existing dispatch record path —
+ *   Task 4 wires the durable verdict rows) + one warn (Task 1 behavior,
+ *   now centralized in the policy).
+ * - `ask` → `{kind:'ask', reason}` returned WITHOUT `next()` (terminal —
+ *   the registry services it through the approval waterfall; fail-closed
+ *   upstream, this gate invents no answerer). P-c: first-seen names ask;
+ *   resolved names (via {@link WorkflowAskCache.record}) use the cached
+ *   decision, never a re-ask.
+ * - `deny` → `{kind:'deny', reason}` WITHOUT `next()` (short-circuits the
+ *   chain — the veto lands before any child starts).
  *
  * Malformed args (workflow without `meta`/`meta.name`, ralph without a
  * string `objective`) → pass-through + ONE warn (fail-open, documented —
- * never crash a compliant call).
- *
- * `ask`/`hard` modes land their policies in Task 2 (P-a name allowlist +
- * P-c first-seen ask) and Task 3 (P-b lease attribution) — until then
- * every non-`off` mode composes the {@link WorkflowGateInput} and passes
- * through. NEVER throws: every read is structural.
+ * never crash a compliant call; under `hard` too). NEVER throws: every
+ * read is structural.
  */
-function gateWorkflow(ctx: Context, config: Config, exec: ToolExecution): PreToolDecision | undefined {
+function gateWorkflow(ctx: Context, config: Config, cache: WorkflowAskCache, exec: ToolExecution): PreToolDecision | undefined {
   const toolName = exec.name
   if (!(DEFAULT_WORKFLOW_TOOLS as readonly string[]).includes(toolName)) return undefined
   const mode = config.workflowGate ?? 'warn'
@@ -641,26 +639,41 @@ function gateWorkflow(ctx: Context, config: Config, exec: ToolExecution): PreToo
     )
     return undefined
   }
-  if (mode === 'warn' && input.metaName !== undefined && workflowNameUnknown(config, input.metaName)) {
-    ctx.logger(DISPATCH_LOGGER).warn(
-      `workflow gate (${toolName}) (advisory): workflow name "${input.metaName}" is not in the workflowNames allowlist; call allowed (workflowGate: warn)`,
-    )
-    ctx.emit('mstar/dispatch-gate', {
-      tool: toolName,
-      role: '',
-      result: {
-        ok: false,
-        violations: [{
+  const verdict = workflowPolicy(config, cache, input)
+  switch (verdict.decision) {
+    case 'allow':
+      return undefined
+    case 'warn':
+      // Advisory + ONE warn (Task 1 behavior, decision now centralized in
+      // the policy). The advisory reuses the existing dispatch record path
+      // (Task 4 wires the durable verdict rows).
+      ctx.logger(DISPATCH_LOGGER).warn(
+        `workflow gate (${toolName}) (advisory): ${verdict.reason}`,
+      )
+      ctx.emit('mstar/dispatch-gate', {
+        tool: toolName,
+        role: '',
+        result: {
           ok: false,
-          severity: 'medium',
-          code: WORKFLOW_NAME_UNKNOWN_CODE,
-          message: `workflow name "${input.metaName}" is not in the workflowNames allowlist (workflowGate: warn — advisory only)`,
-        }],
-      },
-      hard: false,
-    })
+          violations: [{
+            ok: false,
+            severity: 'medium',
+            code: WORKFLOW_NAME_UNKNOWN_CODE,
+            message: verdict.reason,
+          }],
+        },
+        hard: false,
+      })
+      return undefined
+    case 'ask':
+      // Terminal decision — the registry services it via the approval
+      // waterfall (fail-closed upstream). Returned WITHOUT `next()` so no
+      // downstream listener can swallow the ask.
+      return { kind: 'ask', reason: verdict.reason }
+    case 'deny':
+      ctx.logger(DISPATCH_LOGGER).error(`workflow gate (${toolName}) vetoed: ${verdict.reason}`)
+      return { kind: 'deny', reason: verdict.reason }
   }
-  return undefined
 }
 
 /**
@@ -685,7 +698,7 @@ function gateDispatch(
   // if the names were added to the dispatch-tool match list (W4 double
   // no-op). Keyed on the FIXED tool names — the workflow tools are gated
   // by their own branch, never by `DEFAULT_DISPATCH_TOOLS` addition.
-  const workflowDecision = gateWorkflow(ctx, config, exec)
+  const workflowDecision = gateWorkflow(ctx, config, adapter.workflowAskCache, exec)
   if (workflowDecision !== undefined) return workflowDecision
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)

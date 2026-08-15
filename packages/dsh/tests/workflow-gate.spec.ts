@@ -1,12 +1,23 @@
 /**
- * Plan `20260815-dsh-workflow-gate` Task 1 — config surface + args-shape
- * branch skeleton: the `workflowGate` mode short-circuit (`off` →
- * pass-through, no verdict row), the default-`warn` advisory for
- * policy-unknown workflow names, non-workflow tools unaffected, and the
- * malformed-args fail-open + one warn path. The branch composes a
- * `WorkflowGateInput` for the Task 2/3 policies; verdict rows surface
- * through the existing dispatch record path (`mstar/dispatch-gate`
- * advisory) until Task 4 wires the durable ledger rows.
+ * Plan `20260815-dsh-workflow-gate` — the workflow/ralph gate branch.
+ *
+ * Task 1 — config surface + args-shape branch skeleton: the `workflowGate`
+ * mode short-circuit (`off` → pass-through, no verdict row), the
+ * default-`warn` advisory for policy-unknown workflow names, non-workflow
+ * tools unaffected, and the malformed-args fail-open + one warn path.
+ *
+ * Task 2 — the centralized policy (`gates/workflow-policy.ts`): P-a name
+ * allowlist (allowlisted names pass under ANY mode) + P-c first-seen ask
+ * (`ask` mode: first-seen → `{kind:'ask'}` through the approval waterfall;
+ * the answer recorded via the apply-scoped `WorkflowAskCache` is reused —
+ * no re-ask; the cache dies with the context). Hard mode denies unknown
+ * names naming the name; empty `workflowNames` ⇒ every name unknown.
+ * Ralph has no `meta.name`, so P-a/P-c never apply to it (including the
+ * malformed-args fold-in: ralph without `objective` → pass + one warn).
+ *
+ * Verdict rows surface through the existing dispatch record path
+ * (`mstar/dispatch-gate` advisory) until Task 4 wires the durable ledger
+ * rows.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
@@ -211,5 +222,128 @@ describe('workflow gate — non-workflow tools unaffected', () => {
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
+  })
+})
+
+/* ---------------------------------- hard mode (P-a allowlist) ---------------------------------- */
+
+describe('workflow gate — hard mode (P-a allowlist)', () => {
+  it('(a) allowlisted name under hard → allow, no advisory (P-a)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x'] })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(b) unknown name under hard → deny, reason names the workflow name', async () => {
+    const app = booted = await bootApp({ workflowGate: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    expect(decision.reason).toContain('deploy-x')
+    // A deny short-circuits the chain — no advisory emit (the error log is
+    // the signal, same as the subagent hard-deny path).
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(f) empty workflowNames ⇒ every name unknown — hard denies', async () => {
+    const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: [] })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+  })
+
+  it('fold-in: ralph under hard — valid objective → allow (P-a/P-c never apply, no meta.name); malformed (no objective) → pass + ONE warn (fail-open)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    const valid = await app.ctx.waterfall('tools/pre-execute', ralphExec('probe the codebase'), defaultAllow)
+    expect(valid).toEqual({ kind: 'allow' })
+
+    const malformed = await app.ctx.waterfall('tools/pre-execute', toolExec('ralph', { maxRounds: 3 }), defaultAllow)
+    expect(malformed).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+    expect(warns.length - warnSnapshot).toBe(1)
+  })
+})
+
+/* ---------------------------------- ask mode (P-c first-seen ask) ---------------------------------- */
+
+describe('workflow gate — ask mode (P-c first-seen ask)', () => {
+  it('(a) allowlisted name under ask → allow, no ask, no advisory (P-a)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask', workflowNames: ['deploy-x'] })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(c) unknown first-seen → {kind: ask}; answer allow → allowed + cached; second same-name call → no ask', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask' })
+
+    const first = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(first.kind).toBe('ask')
+    if (first.kind !== 'ask') throw new Error('expected ask')
+    expect(first.reason).toContain('deploy-x')
+
+    // The ask is serviced by the dsh approval waterfall (upstream). The
+    // ANSWER (allowed-once) reaches the cache through the answerer
+    // integration seam — simulated here on the apply-scoped cache.
+    app.ctx.dshHostAdapter.workflowAskCache.record('deploy-x', 'allow')
+
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(second).toEqual({ kind: 'allow' })
+  })
+
+  it('(d) answer deny → denied + cached; second same-name call → no ask', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask' })
+
+    const first = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(first.kind).toBe('ask')
+
+    app.ctx.dshHostAdapter.workflowAskCache.record('deploy-x', 'deny')
+
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(second.kind).toBe('deny')
+    if (second.kind !== 'deny') throw new Error('expected deny')
+    expect(second.reason).toContain('deploy-x')
+  })
+
+  it('(e) cache dies with the context — HMR-safe (fresh apply starts empty)', async () => {
+    const appA = booted = await bootApp({ workflowGate: 'ask' })
+    const first = await appA.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(first.kind).toBe('ask')
+    appA.ctx.dshHostAdapter.workflowAskCache.record('deploy-x', 'allow')
+    const second = await appA.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(second).toEqual({ kind: 'allow' })
+
+    // Tear the fiber down (HMR reload = dispose + fresh apply): the cache
+    // is apply-scoped — a new apply starts with an EMPTY cache, so the
+    // same name is first-seen again and asks. No module-level Map survives.
+    await appA.dispose()
+    booted = undefined
+
+    const appB = booted = await bootApp({ workflowGate: 'ask' })
+    const third = await appB.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(third.kind).toBe('ask')
+  })
+
+  it('(f) empty workflowNames ⇒ every name unknown — ask first-seen', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask', workflowNames: [] })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision.kind).toBe('ask')
   })
 })
