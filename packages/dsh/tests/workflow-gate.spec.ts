@@ -15,13 +15,27 @@
  * Ralph has no `meta.name`, so P-a/P-c never apply to it (including the
  * malformed-args fold-in: ralph without `objective` → pass + one warn).
  *
+ * Task 3 — P-b lease attribution: the calling workspace's status.json is
+ * read through the contained resolver path (agent session cwd → harness
+ * dir); any plan `InProgress` lacking `execution_lease` coverage (engine
+ * `verifyPlanExecutionLease`) makes writable fan-out uncovered — deny
+ * under `hard` (reason cites the plan id), advisory + warn under
+ * `warn`/`ask`, allow for read-only workspaces / no harness dir / no
+ * active plans. A status read failure is fail-open + ONE warn (a broken
+ * status must not brick fan-out; P-a/P-c still run). P-b applies to ralph
+ * too (no `meta.name` needed). Fold-ins from the Task 2 review: the
+ * allowlisted-under-`warn` case (no advisory).
+ *
  * Verdict rows surface through the existing dispatch record path
  * (`mstar/dispatch-gate` advisory) until Task 4 wires the durable ledger
  * rows.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { mkdir, mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 
@@ -62,11 +76,12 @@ Do the thing.
 let seq = 0
 
 /** One pending tool call in the registry pipeline shape (dsh-tools 9451be2). */
-function toolExec(name: string, args: unknown): ToolExecution {
+function toolExec(name: string, args: unknown, agent?: unknown): ToolExecution {
   return {
     callId: `c${++seq}` as ToolExecution['callId'],
     name,
     arguments: args,
+    ...(agent !== undefined ? { agent: agent as ToolExecution['agent'] } : {}),
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
@@ -79,8 +94,73 @@ const workflowExec = (metaName: string): ToolExecution =>
 /** A well-formed `ralph` call (shape: `{ objective, maxRounds?, maxHandoffChars? }`). */
 const ralphExec = (objective: string): ToolExecution => toolExec('ralph', { objective })
 
+/** An agent whose session cwd is a workspace root (P-b attribution input). */
+const agentIn = (cwd: string): unknown => ({ session: { header: { cwd } } })
+
+/** A `workflow` call attributed to an agent in the given workspace. */
+const workflowExecFrom = (metaName: string, cwd: string): ToolExecution =>
+  toolExec('workflow', { script: 'probe', meta: { name: metaName, description: 'probe' } }, agentIn(cwd))
+
+/** A `ralph` call attributed to an agent in the given workspace. */
+const ralphExecFrom = (objective: string, cwd: string): ToolExecution =>
+  toolExec('ralph', { objective }, agentIn(cwd))
+
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */
 const subagentExec = (prompt: string): ToolExecution => toolExec('subagent', { description: 'probe', prompt })
+
+/* ------------------------------ P-b fixtures (Task 3) ------------------------------ */
+
+/** A fresh workspace root (no harness dir) — the P-b "no harness" case. */
+async function makeWorkspace(prefix: string): Promise<string> {
+  return await mkdtemp(join(tmpdir(), prefix))
+}
+
+/** A workspace with a `.agents/` harness dir (probe candidate #2). */
+async function makeHarnessWorkspace(prefix: string): Promise<string> {
+  const ws = await makeWorkspace(prefix)
+  await mkdir(join(ws, '.agents'), { recursive: true })
+  return ws
+}
+
+/** status.json wrapping one plan row (lease-gate fixture shape). */
+const statusDoc = (plan: Record<string, unknown>): string =>
+  JSON.stringify({
+    version: 1,
+    updated_at: '2026-08-08',
+    plans: [plan],
+    residual_findings: {},
+    metadata: {},
+  })
+
+/** InProgress plan row WITHOUT a lease — orphan (uncovered). */
+const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
+  id: 'plan-orphan',
+  title: 'orphan plan',
+  status: 'InProgress',
+}
+
+/** InProgress plan row WITH a valid execution_lease (covered). */
+const IN_PROGRESS_WITH_LEASE: Record<string, unknown> = {
+  id: 'plan-leased',
+  title: 'leased plan',
+  status: 'InProgress',
+  execution_lease: {
+    holder: 'test-agent',
+    claimed_at: '2026-08-08',
+    worktree_path: '/tmp/lease-worktree',
+    working_branch: 'feature/lease',
+  },
+}
+
+/** Done plan row without a lease — not active, never uncovered. */
+const DONE_NO_LEASE: Record<string, unknown> = {
+  id: 'plan-done',
+  title: 'done plan',
+  status: 'Done',
+}
+
+/** statusDoc for a MALFORMED status.json — the P-b read-failure case. */
+const UNREADABLE_STATUS = '{ "version": 1, "plans": ' // truncated — readJson throws
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
@@ -146,6 +226,19 @@ describe('workflow gate — warn mode', () => {
     expect(advisories[0]!.result.ok).toBe(false)
     expect(violationCodes(advisories[0])).toContain('workflow.name.unknown')
     expect(warns.length - warnSnapshot).toBe(1)
+  })
+
+  it('fold-in (Task-2 review minor): allowlisted name under warn → allow, NO advisory (P-a passes under every mode)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'warn', workflowNames: ['deploy-x'] })
+    const advisories = captureAdvisories(app.ctx)
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+    expect(warns.length - warnSnapshot).toBe(0)
   })
 
   it('(e) workflowGate defaults to warn when the key is absent', async () => {
@@ -345,5 +438,127 @@ describe('workflow gate — ask mode (P-c first-seen ask)', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
 
     expect(decision.kind).toBe('ask')
+  })
+})
+
+/* ---------------------------------- P-b lease attribution (Task 3) ---------------------------------- */
+
+describe('workflow gate — P-b lease attribution', () => {
+  it('(a) uncovered InProgress plan (no lease) + hard → deny, reason cites the plan id', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-a-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    expect(decision.reason).toContain('plan-orphan')
+    // A deny short-circuits the chain — no advisory emit.
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(b) uncovered InProgress plan under warn → allowed + advisory (workflow.lease.uncovered) + warn', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-b1-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const app = booted = await bootApp({ workflowGate: 'warn', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.tool).toBe('workflow')
+    expect(advisories[0]!.role).toBe('')
+    expect(advisories[0]!.hard).toBe(false)
+    expect(advisories[0]!.result.ok).toBe(false)
+    expect(violationCodes(advisories[0])).toContain('workflow.lease.uncovered')
+    expect(advisories[0]!.result.violations[0]!.message).toContain('plan-orphan')
+    expect(warns.length - warnSnapshot).toBe(1)
+  })
+
+  it('(b) uncovered InProgress plan under ask → allowed + advisory + warn (P-b never asks — workspace red line, advisory only)', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-b2-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const app = booted = await bootApp({ workflowGate: 'ask', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    expect(violationCodes(advisories[0])).toContain('workflow.lease.uncovered')
+    expect(warns.length - warnSnapshot).toBe(1)
+  })
+
+  it('(c) lease-covered InProgress plan → allow, no advisory (P-b passes; P-a allowlist still honored under hard)', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-c-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x'], harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(d) no harness dir → allow (nothing to attribute); ralph under hard stays clean', async () => {
+    const ws = await makeWorkspace('dsh-ws-pb-d1-')
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(d) harness dir with no active plans → allow (read-only workspace; non-InProgress rows never uncovered)', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-d2-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(DONE_NO_LEASE) })
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(e) ralph call in an uncovered writable workspace + hard → deny (P-b applies to ralph; P-a/P-c do not)', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-e-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    expect(decision.reason).toContain('plan-orphan')
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(f) status read failure → fail-open + ONE warn (broken status must not brick fan-out; P-a/P-c still run)', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-f-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': UNREADABLE_STATUS })
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    // Ralph under hard: P-b is degraded (fail-open + warn), P-a/P-c never
+    // apply — the call is allowed with exactly ONE warn.
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+    expect(warns.length - warnSnapshot).toBe(1)
   })
 })

@@ -1,6 +1,7 @@
 /**
- * Workflow/ralph gate policy — the P-a name allowlist + P-c first-seen ask
- * (plan `20260815-dsh-workflow-gate` Task 2, W-B3). The policy is the SINGLE
+ * Workflow/ralph gate policy — the P-a name allowlist + P-b lease
+ * attribution + P-c first-seen ask (plan `20260815-dsh-workflow-gate`
+ * Tasks 2–3, W-B3). The policy is the SINGLE
  * decision point for the four-tier `workflowGate` mode semantics
  * (`off | warn | ask | hard`, default `warn`): it turns one composed
  * {@link WorkflowGateInput} (Task 1) into `allow | warn | ask | deny` + a
@@ -10,18 +11,21 @@
  * through dsh's own approval waterfall (fail-closed upstream, this gate
  * invents no answerer).
  *
- * Policy matrix (mode × P-a/P-c):
+ * Policy matrix (mode × P-a/P-b/P-c):
  *
  * | input | mode | verdict |
  * |---|---|---|
- * | ralph (no `meta.name`) | any | allow — P-a/P-c NEVER apply to ralph (no allowlist identity; P-b arrives in Task 3) |
- * | workflow, name ∈ `workflowNames` (non-empty list) | any | allow — the allowlist passes under every mode |
- * | workflow, unknown (empty/absent list ⇒ EVERY name unknown) | `off` | allow — the gate short-circuits `off` before the policy; kept here for a total policy |
- * | workflow, unknown | `warn` | warn — advisory + one warn (Task 1 behavior, now centralized) |
- * | workflow, unknown | `hard` | deny — reason names the workflow name, veto before any child starts |
- * | workflow, unknown, first-seen (no cached decision) | `ask` | ask — `{kind:'ask'}` through the approval waterfall |
- * | workflow, unknown, cached allow | `ask` | allow — cached decision, NO re-ask |
- * | workflow, unknown, cached deny | `ask` | deny — cached decision, NO re-ask |
+ * | uncovered InProgress plan (P-b) | `off` | allow — the gate short-circuits `off` before the policy; kept here for a total policy |
+ * | uncovered InProgress plan (P-b) | `hard` | deny — reason cites the uncovered plan id, veto before any child starts |
+ * | uncovered InProgress plan (P-b) | `warn`/`ask` | warn — allowed + advisory verdict + one warn (the ask channel is for first-seen NAMES, never the workspace red line) |
+ * | ralph (no `meta.name`), covered/read-only | any | allow — P-a/P-c NEVER apply to ralph (no allowlist identity); P-b applies |
+ * | workflow, name ∈ `workflowNames` (non-empty list), covered | any | allow — the allowlist passes under every mode |
+ * | workflow, unknown (empty/absent list ⇒ EVERY name unknown), covered | `off` | allow — the gate short-circuits `off` before the policy; kept here for a total policy |
+ * | workflow, unknown, covered | `warn` | warn — advisory + one warn (Task 1 behavior, now centralized) |
+ * | workflow, unknown, covered | `hard` | deny — reason names the workflow name, veto before any child starts |
+ * | workflow, unknown, covered, first-seen (no cached decision) | `ask` | ask — `{kind:'ask'}` through the approval waterfall |
+ * | workflow, unknown, covered, cached allow | `ask` | allow — cached decision, NO re-ask |
+ * | workflow, unknown, covered, cached deny | `ask` | deny — cached decision, NO re-ask |
  *
  * P-c cache lifecycle: the {@link WorkflowAskCache} is apply-scoped — created
  * per plugin `apply` (owned by the host adapter, constructed with it) and
@@ -58,6 +62,14 @@ import type { WorkflowGateInput } from './dispatch.ts'
  * share this vocabulary).
  */
 export const WORKFLOW_NAME_UNKNOWN_CODE = 'workflow.name.unknown'
+
+/**
+ * The workflow-gate advisory/deny violation code for P-b lease attribution
+ * (Task 3): the calling workspace has an `InProgress` plan without
+ * `execution_lease` coverage (warn-mode advisory / hard-mode veto reason —
+ * the reason cites the uncovered plan id).
+ */
+export const WORKFLOW_LEASE_UNCOVERED_CODE = 'workflow.lease.uncovered'
 
 /**
  * P-a allowlist membership: a workflow name is UNKNOWN when `workflowNames`
@@ -101,10 +113,14 @@ export class WorkflowAskCache {
 /** The four-tier policy decision vocabulary (plan W-B3, Task 2). */
 export type WorkflowPolicyDecision = 'allow' | 'warn' | 'ask' | 'deny'
 
-/** One policy verdict: the decision + a human-readable reason. */
+/**
+ * One policy verdict: the decision + a human-readable reason + the violation
+ * code for the warn/ask/deny vocabulary (the caller emits `code` in the
+ * advisory row — the gate never guesses which policy fired).
+ */
 export type WorkflowPolicyVerdict =
-  | { decision: 'allow'; reason?: undefined }
-  | { decision: 'warn' | 'ask' | 'deny'; reason: string }
+  | { decision: 'allow'; reason?: undefined; code?: undefined }
+  | { decision: 'warn' | 'ask' | 'deny'; reason: string; code: string }
 
 /**
  * The workflow/ralph gate policy — P-a name allowlist + P-c first-seen ask
@@ -113,36 +129,66 @@ export type WorkflowPolicyVerdict =
  * the `PreToolDecision` refusal vocabulary and owns the advisory emit/log
  * infrastructure. NEVER throws.
  *
+ * P-b: `input.uncoveredPlanId` (the dispatch gate computes it from the
+ * calling workspace's status.json — see dispatch.ts `writableFanOutUncovered`)
+ * → hard denies (reason cites the plan id), warn/ask emit the advisory
+ * verdict; `off` always allows. Preempts P-a/P-c: an orphan InProgress plan
+ * is a workspace red line independent of the workflow name.
  * P-a: `metaName ∈ workflowNames` (empty/absent list ⇒ every name unknown);
  * allowlisted → allow under ANY mode. Unknown → per-mode: `warn` → advisory
  * verdict; `hard` → deny (reason names the workflow name); `ask` → first-seen
  * `{kind:'ask'}` verdict, afterwards the cached decision (allow/deny), never
  * a re-ask for a resolved name. Ralph carries no `meta.name` — P-a/P-c never
- * apply to it (allow; P-b is Task 3).
+ * apply to it (P-b applies).
  */
 export function workflowPolicy(config: Config, cache: WorkflowAskCache, input: WorkflowGateInput): WorkflowPolicyVerdict {
   const mode = config.workflowGate ?? 'warn'
+  // The gate short-circuits `off` before the policy — kept for a total
+  // policy (a caller that skips the short-circuit still cannot block).
+  if (mode === 'off') return { decision: 'allow' }
+  // P-b lease attribution (Task 3) — FIRST, a workspace-level red line that
+  // applies to workflow AND ralph (no `meta.name` needed): the calling
+  // workspace has an `InProgress` plan without `execution_lease` coverage.
+  // It preempts the name-based policies — an orphan plan means NO writable
+  // fan-out should start children until the plan is recovered, regardless of
+  // allowlist identity (same red line as the Assignment-keyed lease gate).
+  if (input.uncoveredPlanId !== undefined) {
+    if (mode === 'hard') {
+      return {
+        decision: 'deny',
+        code: WORKFLOW_LEASE_UNCOVERED_CODE,
+        reason: `workflow gate (${input.tool}) vetoed: plan "${input.uncoveredPlanId}" is InProgress without execution_lease coverage (workflowGate: hard — no writable fan-out until the plan is recovered)`,
+      }
+    }
+    // warn / ask: allowed with an advisory verdict + one warn. The ask
+    // channel is for first-seen NAMES (P-c), never a substitute for the
+    // workspace red line — an uncovered workspace stays advisory-only unless
+    // the deployment opts into hard.
+    return {
+      decision: 'warn',
+      code: WORKFLOW_LEASE_UNCOVERED_CODE,
+      reason: `plan "${input.uncoveredPlanId}" is InProgress without execution_lease coverage (workflowGate: warn — advisory only)`,
+    }
+  }
   if (input.metaName === undefined) {
-    // Ralph has no allowlist identity — P-a/P-c never apply (documented;
-    // P-b lease attribution for ralph lands in Task 3).
+    // Ralph has no allowlist identity — P-a/P-c never apply (documented);
+    // P-b ran above (no uncovered plan → allow).
     return { decision: 'allow' }
   }
   const name = input.metaName
   // P-a: allowlisted names pass under every mode.
   if (!workflowNameUnknown(config, name)) return { decision: 'allow' }
   switch (mode) {
-    // The gate short-circuits `off` before the policy — kept for a total
-    // policy (a caller that skips the short-circuit still cannot block).
-    case 'off':
-      return { decision: 'allow' }
     case 'warn':
       return {
         decision: 'warn',
+        code: WORKFLOW_NAME_UNKNOWN_CODE,
         reason: `workflow name "${name}" is not in the workflowNames allowlist (workflowGate: warn — advisory only)`,
       }
     case 'hard':
       return {
         decision: 'deny',
+        code: WORKFLOW_NAME_UNKNOWN_CODE,
         reason: `workflow gate (${input.tool}) vetoed: workflow name "${name}" is not in the workflowNames allowlist (workflowGate: hard)`,
       }
     case 'ask': {
@@ -151,6 +197,7 @@ export function workflowPolicy(config: Config, cache: WorkflowAskCache, input: W
       if (cached === 'deny') {
         return {
           decision: 'deny',
+          code: WORKFLOW_NAME_UNKNOWN_CODE,
           reason: `workflow gate (${input.tool}) vetoed: workflow name "${name}" was denied earlier in this session (workflowGate: ask — cached decision)`,
         }
       }
@@ -158,6 +205,7 @@ export function workflowPolicy(config: Config, cache: WorkflowAskCache, input: W
       // route through dsh's approval waterfall (fail-closed upstream).
       return {
         decision: 'ask',
+        code: WORKFLOW_NAME_UNKNOWN_CODE,
         reason: `workflow name "${name}" is not in the workflowNames allowlist (workflowGate: ask — first-seen; approve to allow this session, or deny to veto; the decision is cached)`,
       }
     }

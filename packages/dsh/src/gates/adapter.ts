@@ -65,10 +65,12 @@ export interface DshHostAdapterOptions {
   readonly pairing?: AgentFlowPairing
   /**
    * The P-c first-seen ask cache (plan `20260815-dsh-workflow-gate`
-   * Task 2): workflow name → resolved decision, apply-scoped. The entry
-   * passes the shared instance; absent (direct adapter construction) → a
-   * private throwaway cache is constructed (inert — the workflow branch
-   * only runs through the entry-wired `tools/pre-execute` listener).
+   * Task 2): workflow name → resolved decision, apply-scoped. Absent (the
+   * entry relies on this default — `index.ts` constructs the adapter
+   * without it) → the constructor builds ONE cache per adapter per apply,
+   * shared by the gate and any answerer integration via the readonly
+   * property. An explicit instance may be passed to share a specific cache
+   * (host-adapter tests / direct construction).
    */
   readonly workflowAskCache?: WorkflowAskCache
   /**
