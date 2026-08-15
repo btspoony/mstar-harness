@@ -116,6 +116,23 @@ export interface Config {
    * deployment.
    */
   rolePersonas?: Record<string, string>
+  /**
+   * Workflow/ralph gate mode (plan `20260815-dsh-workflow-gate` W-B3, AC-7):
+   * `off` disables the gate entirely (workflow/ralph calls pass through
+   * untouched, NO verdict row); `warn` (default) logs an advisory for
+   * policy-unknown fan-out without ever blocking; `ask` routes first-seen
+   * workflow names through the dsh approval channel (`{kind:'ask'}` —
+   * fail-closed upstream, this gate invents no answerer); `hard` vetoes a
+   * policy-violating fan-out call before any child starts. Absent → 'warn'.
+   */
+  workflowGate?: 'off' | 'warn' | 'ask' | 'hard'
+  /**
+   * Workflow name allowlist (P-a): `meta.name` values treated as KNOWN by
+   * the gate. Empty or absent ⇒ every name is unknown (documented — the
+   * gate is NOT "allow all" by omission). Ralph calls carry no `meta.name`,
+   * so P-a never applies to them.
+   */
+  workflowNames?: string[]
 }
 
 /**
@@ -165,6 +182,15 @@ export const Config: z<Config> = z.object({
       return value
     },
   ).default(undefined as unknown as Record<string, string>),
+  // Workflow/ralph gate (plan `20260815-dsh-workflow-gate`): `workflowGate`
+  // defaults to 'warn' (no surprise hard-block — the gate is advisory-only
+  // unless the deployment opts into ask/hard); `workflowNames` preserves
+  // omission via `.default(undefined)` (schemastery empty-value default
+  // would materialize an omitted array as `[]` — which IS the documented
+  // "every name unknown" semantics, but keep the same explicit pattern as
+  // the dispatch/decoration array keys so absence stays observable).
+  workflowGate: z.union(['off', 'warn', 'ask', 'hard']).default('warn'),
+  workflowNames: z.array(z.string()).default(undefined as unknown as string[]),
 })
 /** One violation line for logs and the typed veto message. */
 export function formatViolation(violation: ValidationResult): string {

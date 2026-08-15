@@ -230,6 +230,10 @@ export interface BootOptions {
   roleMap?: Record<string, string>
   /** Persona map (Config `rolePersonas`): mstar role id → persona text. */
   rolePersonas?: Record<string, string>
+  /** Workflow/ralph gate mode (Config `workflowGate`, plan `20260815-dsh-workflow-gate`). */
+  workflowGate?: 'off' | 'warn' | 'ask' | 'hard'
+  /** Workflow name allowlist (Config `workflowNames`; empty/absent ⇒ every name unknown). */
+  workflowNames?: string[]
   /** App root override (default: a fresh temp dir). */
   root?: string
   /**
@@ -368,6 +372,8 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   if (options.catalogTtlMs !== undefined) config.catalogTtlMs = options.catalogTtlMs
   if (options.roleMap !== undefined) config.roleMap = options.roleMap
   if (options.rolePersonas !== undefined) config.rolePersonas = options.rolePersonas
+  if (options.workflowGate !== undefined) config.workflowGate = options.workflowGate
+  if (options.workflowNames !== undefined) config.workflowNames = options.workflowNames
 
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root).href + '/'

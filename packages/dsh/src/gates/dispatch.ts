@@ -61,6 +61,26 @@ export const DISPATCH_LOGGER = 'mstar/dispatch-gate'
  */
 export const DEFAULT_DISPATCH_TOOLS = ['subagent', 'subagent_fork'] as const
 
+/**
+ * The fixed workflow/ralph tool names the workflow gate matches (plan
+ * `20260815-dsh-workflow-gate` — architect-verified): the workflow tool
+ * registers under Config-default name `'workflow'` and is RENAMEABLE per
+ * instance (`toolName`, `tool-workflow/src/index.ts:41`); `ralph` is a
+ * fixed name (`tool-ralph/src/index.ts:413`). A renamed instance is out
+ * of reach until its name is configured — the same documented caveat as
+ * `DEFAULT_DISPATCH_TOOLS`. The workflow tools are gated by THEIR OWN
+ * branch, never by addition to `DEFAULT_DISPATCH_TOOLS` (plan Global
+ * Constraint — that list stays `['subagent', 'subagent_fork']`).
+ */
+export const DEFAULT_WORKFLOW_TOOLS = ['workflow', 'ralph'] as const
+
+/**
+ * The workflow-gate advisory violation code for a name outside the P-a
+ * allowlist (warn-mode advisory / future hard-mode veto reason). Task 2/3
+ * policies reuse the vocabulary.
+ */
+export const WORKFLOW_NAME_UNKNOWN_CODE = 'workflow.name.unknown'
+
 /** `## Assignment` heading marker (opencode parity — shape guard only). */
 const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
 
@@ -522,6 +542,127 @@ export function dispatchGateCore(
   return { violations, writable }
 }
 
+/* ------------------------------- workflow/ralph branch ------------------------------- */
+
+/**
+ * The workflow-gate input composed from one `workflow`/`ralph` tool call
+ * (plan `20260815-dsh-workflow-gate` Task 1 — consumed by the Task 2 P-a /
+ * P-c and Task 3 P-b policies): the tool name + the structural reads of
+ * `meta` (workflow) / `objective` (ralph) + the in-flight call.
+ */
+export interface WorkflowGateInput {
+  /** The matched tool name (`'workflow'` | `'ralph'`). */
+  tool: string
+  /** `meta.name` for workflow calls — the P-a allowlist input; absent for ralph (no meta). */
+  metaName?: string
+  /** `objective` for ralph calls (objective-based ledger logging, P-b); absent for workflow. */
+  objective?: string
+  /** The in-flight tool call — Task 3 P-b lease attribution reads the calling agent/session off it. */
+  exec: ToolExecution
+}
+
+/**
+ * Compose the {@link WorkflowGateInput} from one workflow/ralph tool call's
+ * arguments — structural reads, NEVER throws (plan
+ * `20260815-dsh-workflow-gate` Task 1; args shapes architect-verified:
+ * workflow `{ script, meta: { name, description, whenToUse?, phases? },
+ * args? }` (`tool-workflow/src/index.ts:152-161`); ralph
+ * `{ objective, maxRounds?, maxHandoffChars? }`
+ * (`tool-ralph/src/index.ts:76,416-419`)). Returns undefined for malformed
+ * args — workflow without a non-empty string `meta.name`, ralph without a
+ * string `objective` — the fail-open + one-warn path.
+ */
+export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | undefined {
+  const args = asRecord(exec.arguments)
+  if (args === undefined) return undefined
+  if (exec.name === 'ralph') {
+    const objective = typeof args.objective === 'string' ? args.objective : undefined
+    if (objective === undefined) return undefined
+    return { tool: exec.name, objective, exec }
+  }
+  if (exec.name === 'workflow') {
+    const meta = asRecord(args.meta)
+    const metaName = typeof meta?.name === 'string' && meta.name !== '' ? meta.name : undefined
+    if (meta === undefined || metaName === undefined) return undefined
+    return { tool: exec.name, metaName, exec }
+  }
+  return undefined
+}
+
+/**
+ * P-a allowlist membership (plan `20260815-dsh-workflow-gate` Task 1): a
+ * workflow name is UNKNOWN when `workflowNames` is absent or empty (⇒ every
+ * name unknown — documented, the gate is NOT "allow all" by omission) or
+ * the name is not listed. Ralph calls carry no `meta.name` — P-a never
+ * applies to them (callers guard on `input.metaName !== undefined` first).
+ */
+export function workflowNameUnknown(config: Config, metaName: string): boolean {
+  const names = config.workflowNames
+  return names === undefined || names.length === 0 || !names.includes(metaName)
+}
+
+/**
+ * The workflow/ralph gate branch (plan `20260815-dsh-workflow-gate` Task 1
+ * — the args-shape branch placed BEFORE the subagent prompt branch in
+ * {@link gateDispatch}).
+ *
+ * Name guard on the FIXED tool names ({@link DEFAULT_WORKFLOW_TOOLS}).
+ * Non-workflow tools return undefined — the subagent branch owns them,
+ * semantics unchanged.
+ *
+ * Mode short-circuit: `workflowGate: 'off'` → pass-through immediately, NO
+ * verdict row. Under the default `warn` mode a workflow call with a
+ * policy-unknown name (empty/absent `workflowNames` ⇒ every name unknown)
+ * is ALLOWED with an advisory verdict row — the `mstar/dispatch-gate`
+ * advisory (the existing dispatch record path — Task 4 wires the durable
+ * verdict rows) + a warn. Ralph carries no `meta.name`, so the P-a
+ * advisory never applies to it (P-b arrives in Task 3).
+ *
+ * Malformed args (workflow without `meta`/`meta.name`, ralph without a
+ * string `objective`) → pass-through + ONE warn (fail-open, documented —
+ * never crash a compliant call).
+ *
+ * `ask`/`hard` modes land their policies in Task 2 (P-a name allowlist +
+ * P-c first-seen ask) and Task 3 (P-b lease attribution) — until then
+ * every non-`off` mode composes the {@link WorkflowGateInput} and passes
+ * through. NEVER throws: every read is structural.
+ */
+function gateWorkflow(ctx: Context, config: Config, exec: ToolExecution): PreToolDecision | undefined {
+  const toolName = exec.name
+  if (!(DEFAULT_WORKFLOW_TOOLS as readonly string[]).includes(toolName)) return undefined
+  const mode = config.workflowGate ?? 'warn'
+  if (mode === 'off') return undefined
+  const input = workflowGateInputOf(exec)
+  if (input === undefined) {
+    // Fail-open + ONE warn (plan Global Constraint — a malformed call must
+    // never crash a compliant run; the warn keeps the degraded control loud).
+    ctx.logger(DISPATCH_LOGGER).warn(
+      `workflow gate (${toolName}) (fail-open): malformed arguments — no ${toolName === 'ralph' ? 'objective' : 'meta'} to gate on; call allowed`,
+    )
+    return undefined
+  }
+  if (mode === 'warn' && input.metaName !== undefined && workflowNameUnknown(config, input.metaName)) {
+    ctx.logger(DISPATCH_LOGGER).warn(
+      `workflow gate (${toolName}) (advisory): workflow name "${input.metaName}" is not in the workflowNames allowlist; call allowed (workflowGate: warn)`,
+    )
+    ctx.emit('mstar/dispatch-gate', {
+      tool: toolName,
+      role: '',
+      result: {
+        ok: false,
+        violations: [{
+          ok: false,
+          severity: 'medium',
+          code: WORKFLOW_NAME_UNKNOWN_CODE,
+          message: `workflow name "${input.metaName}" is not in the workflowNames allowlist (workflowGate: warn — advisory only)`,
+        }],
+      },
+      hard: false,
+    })
+  }
+  return undefined
+}
+
 /**
  * Run the dispatch gate over one delegation tool call (opencode
  * `validateDispatchAssignment` parity — the SAME engine fns, so violation
@@ -538,6 +679,14 @@ function gateDispatch(
   exec: ToolExecution,
 ): PreToolDecision | undefined {
   const toolName = exec.name
+  // WORKFLOW/RALPH BRANCH — BEFORE the subagent prompt branch (plan
+  // `20260815-dsh-workflow-gate` Task 1): `workflow`/`ralph` carry no
+  // `args.prompt`, so the prompt guard below would pass them through even
+  // if the names were added to the dispatch-tool match list (W4 double
+  // no-op). Keyed on the FIXED tool names — the workflow tools are gated
+  // by their own branch, never by `DEFAULT_DISPATCH_TOOLS` addition.
+  const workflowDecision = gateWorkflow(ctx, config, exec)
+  if (workflowDecision !== undefined) return workflowDecision
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)
   const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
