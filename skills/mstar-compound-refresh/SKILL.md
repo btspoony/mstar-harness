@@ -50,6 +50,9 @@ For each candidate document, classify into one of five outcomes:
 | **Replace** | Old doc is misleading; known better replacement exists | Create trustworthy successor, then delete old |
 | **Delete** | No longer useful, applicable, or distinct | Delete — git history preserves it |
 
+> **Guardrail — rejected approaches:** a captured rejected approach stays only while the losing idea remains a tempting, meaningful mistake; delete it once obsolete or no longer plausible.
+> **Calibration:** first real run of this axis — the 9 size-divergent (36–78 lines) `dsh-*` docs under `{KNOWLEDGE_DIR}/architecture-patterns/` classified at fold time, all kept by future value (task-2 report, plan `20260815-mstar-knowledge-prose-folds`); length proved not to be a criterion.
+
 ## Core rules
 
 1. **Evidence over opinion.** Signals are inputs, not a scorecard. Use engineering judgment.
@@ -58,6 +61,7 @@ For each candidate document, classify into one of five outcomes:
 4. **Be decisive.** When evidence is clear (file renamed, class moved), apply. Only ask PM when genuinely ambiguous.
 5. **Avoid low-value churn.** Don't edit for typos, polish, or cosmetic changes that don't improve accuracy.
 6. **Delete, don't archive** — **except** formal **iteration-start** §1.6 corpus hygiene (`mstar-iteration/references/iteration-corpus-hygiene.md`), which **moves** superseded/redundant knowledge/specs to `{HARNESS_DIR}/archived/knowledge|specs/`. Outside that gate, git history is the archive; `git log --diff-filter=D -- <path>` finds deleted docs.
+   > **Not adopted:** frozen-archive seal machinery, `Archived:` triplets, or a verifier — they contradict rule 6 (delete, don't archive; git history is the archive); do not reintroduce.
 7. **Evaluate document-set design.** Check whether two+ docs overlap and should be consolidated. Redundant docs silently drift apart.
 
 ## Scope selection
@@ -92,6 +96,7 @@ For each doc, check:
 2. **Referenced conventions still match?** — check against current `AGENTS.md`, `CONCEPTS.md`, lint configs.
 3. **Solution still the recommended approach?** — has a newer pattern superseded it?
 4. **Overlap with other docs?** — search for same module/tags to find duplicates.
+5. **Future decision value?** — rationale / alternatives considered / negative guarantees / reintroduction conditions that would still guide a future change → **Keep, regardless of length**. A completed decision whose body has no future leverage left (one-off fix detail, superseded mechanics) enters the Delete candidate pool. Word count and age remain discovery aids, never criteria.
 
 ### Phase 3: Classify and act
 
