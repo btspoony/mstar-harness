@@ -49,6 +49,9 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - If unspecified, choose the clearest structure for target audience
 - Keep writing usable and publication-ready
 - Include source notes when factual claims require evidence
+- Durable harness artifacts (knowledge docs, plans, README, promoted guides) must pass the **HEAD-resolvability test**: a reader at HEAD — no chat transcripts, dispatch prompts, or unmerged drafts — can resolve every reference and verify every claim.
+- Leakage taxonomy and keep rules (mstar-sanctioned): SSOT → `mstar-compound/references/compound-workflow.md`.
+- The same rubric applies to writing scenarios; do not duplicate its prose here.
 
 ## Completion Report
 
