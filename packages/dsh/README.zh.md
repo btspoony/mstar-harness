@@ -48,6 +48,8 @@ dsh plugin --profile web add dsh-llm-fallbacks
 | `skillRoots` | `string[]` | 未设置（不注册自定义根） | 向 dsh skill-filesystem 提供者注册的额外技能根（`customSkillDirs` 语义——先于用户根扫描）。开发期：镜像 `<repo-root>/skills` 的绝对路径。 |
 | `bundledSkillDir` | `string` | 打包的 `harness-skills/` 镜像（包相对路径） | 向 dsh skill-filesystem 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。默认取包内自带的 `harness-skills/` 镜像（`bundle-assets` 同步；gitignore）——包相对路径，**非** cwd 锚定。显式值优先。 |
 | `catalogTtlMs` | `number` | `60000` | pre-step catalog 缓存刷新间隔（毫秒）：按工作区缓存的统一 `mstar-engine-status` 行（水印 + 迭代闸门 + 工作区摘要）多久重读一次 `status.json` / compass / 知识索引。刷新间隔之间热路径只是时间戳比较 + Map 命中；会话中 plan/compass/residual 的变化会在一个间隔内落地。 |
+| `workflowGate` | `'off' \| 'warn' \| 'ask' \| 'hard'` | `'warn'` | workflow/ralph 闸门模式（见 Gates → Workflow / ralph gate）。`off` = 直通且不产生 verdict 行；`warn` = 仅咨询；`ask` = 首见名字走审批瀑布（P-c）；`hard` = 策略违规在任何子进程启动前否决。默认 `warn` 不改任何 hard 行为——除非部署显式选入 `ask`/`hard`，闸门仅咨询。 |
+| `workflowNames` | `string[]` | 未设置 | workflow 名字白名单（P-a）：被闸门视为 KNOWN 的 `meta.name` 值。为空或缺省 ⇒ **每个**名字都 unknown（有文档——闸门**绝不**因缺省而"全放行"）。ralph 调用不携带 `meta.name`——P-a 对其永不适用。 |
 
 `bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像（见 Skills mount）——显式 Config 值仍然优先。相对覆盖仍是 **cwd 锚定**（skill-filesystem 以 `join()` 语义相对 dsh **进程 cwd** 解析），因此覆盖默认的部署应在 **profile 层传绝对路径**（见 `bundle/README.md`）。
 
@@ -95,6 +97,31 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 ### Skill lint gate
 
 作用于已配置技能根下 `SKILL.md` 文件的 `fs/write-intent` 监听器，对写入前的磁盘文档运行 engine 技能撰写 lint（`lintFrontmatter` + `lintFiveQuestion`——与 CLI `mstar skill lint` 组合一致）。该槽位**内容盲**（intent 瀑布链只携带 `(target, actor)`）：文件缺失 = 首次创建 = 放行；磁盘文档干净 = 静默放行；告警模式下有违规 = 咨询 + 委托；hard 模式下有违规 = **修复逃生**——文档**已经**非法，本次写入可能就是修复本身（error 级日志 + `hard: true, repair: true` 咨询，携带强制执行后的 `hardBlocked` 判定）。强制执行解析方式与其他闸门相同（Config 覆盖优先，否则取迭代 compass，否则仅告警）。闸门从不抛出；读取失败与意外错误降级为放行并发出 `degraded: true` 咨询。类型化 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）位于传入文档分支（`lintSkillWrite`）——当前接线见 Known Limitations。
+
+### Workflow / ralph gate
+
+`tools/pre-execute` 的一个分支（位于 subagent prompt 分支**之前**）把关 **`workflow`** 与 **`ralph`** 工具调用——这是剩余的不携带 Assignment 文本、模型可达的扇出路径。它匹配**固定**工具名（`workflow` / `ralph`）；重命名后的 `workflow` 实例不在范围（名字守卫是固定默认）。非 workflow 工具不受影响——subagent 分支照旧拥有它们，语义不变。
+
+**四级模式**（Config `workflowGate`，默认 `warn`）：`off`（直通，无 verdict 行）、`warn`（仅咨询）、`ask`（首见名字走 dsh 审批瀑布——`{kind:'ask'}`，上游 fail-closed；本闸门不自造应答器）、`hard`（策略违规在任何子进程启动前否决）。策略是**单一**决策点——P-b 租约归属**最先**运行并抢占 P-a/P-c，然后才是 P-a 名字白名单，最后 P-c 首见 ask。
+
+| 策略 | `off` | `warn`（默认） | `ask` | `hard` |
+| --- | --- | --- | --- | --- |
+| **P-b**：调用工作区存在 `InProgress` 且无 `execution_lease` 覆盖的 plan | allow（闸门短路 `off`） | **warn**——放行 + 咨询（`workflow.lease.uncovered`）+ 一条 warn | **warn**——放行 + 咨询 + 一条 warn（ask 通道只服务首见**名字**，绝不替代工作区红线） | **deny**——在任何子进程启动前否决（`workflow.lease.uncovered`），reason 引用 plan id |
+| **P-a**：workflow 名字 ∈ `workflowNames`（非空列表） | allow（短路） | allow——无咨询（P-a 在任何模式下都放行） | allow——无 ask | allow |
+| **P-a**：workflow 名字 unknown（空/缺省列表 ⇒ **每个**名字都 unknown） | allow（短路） | **warn**——放行 + 咨询（`workflow.name.unknown`）+ 一条 warn | **ask**（首见）→ `{kind:'ask'}`；之后复用缓存决策（allow/deny）——已解析名字**绝不**再 ask | **deny**——在任何子进程启动前否决（`workflow.name.unknown`），reason 点名该名字 |
+| **ralph**（无 `meta.name`——无白名单身份） | allow（短路） | allow——P-a/P-c 永不适用 | allow——P-a/P-c 永不适用 | allow——P-a/P-c 永不适用；P-b 仍适用（uncovered 时 deny） |
+
+**默认 `warn` 的理由。** 默认 `warn` 使闸门**绝不**让部署意外吃硬阻断：除非操作者显式选入 `ask`（人工 ask 通道）或 `hard`（否决），闸门仅咨询。`workflowNames` 空/缺省使每个名字都 unknown——闸门**绝不**因缺省而"全放行"，但默认模式把这一点变成咨询而非阻断。
+
+**与 `Enforcement: hard` 的交互。** workflow 闸门的模式是它**自己**的 Config 旋钮——跨切面的 `Enforcement: hard` 解析（compass / Assignment 头字段 / Config `enforcement`）**不会**升级 `workflowGate`。hard-enforcement 部署仍按已配置模式运行 workflow 闸门（默认 `warn` = 仅咨询），除非同时设置 `workflowGate: 'ask'` 或 `'hard'`；反之 `workflowGate: 'hard'` 与跨切面解析无关地否决。二者不可混淆：workflow 闸门**只在部署把模式选入**时才关闭 "Enforcement: hard 下的未把关扇出" 缺口。
+
+**Fail-open 边缘（有文档，绝不崩溃合规调用）。**（1）畸形参数——`workflow` 调用缺少非空字符串 `meta.name`（控制字符归一化之后），或 `ralph` 调用缺少字符串 `objective` → 在**每个**模式下（hard 亦然）直通 + 一条 warn，且**无** verdict 行（未产生策略判定）。只含控制字符的名字归一化为空 → 视为畸形。（2）`status.json` 不可读——经含容解析器路径的 P-b 状态读取抛出 → 仅本次调用的 P-b 降级 + 一条 warn；P-a/P-c（基于名字，无状态依赖）照常运行。闸门**从不抛出**：每次读取都是结构化的。
+
+**Verdict 账本行。** 每个被把关的调用都在 agent-flow 账本记录**一条**持久化 `workflow-verdict` 行（P2 账本 plan 的记录路径，完全含容——账本写入失败绝不波及闸门）：`tool`（`workflow` \| `ralph`）、`workflow`（归一化后的 `meta.name`）或 `objective`、`mode`（绝不为 `off`——off 在策略前短路）、判定词汇 **`ok` / `advisory` / `denied` / `ask`**（`ask` 判定是本次扩展：首见 ask 本身也是被把关的调用，其行携带 `ask` 直到审批瀑布解析——"每次被把关的调用一行"）。违规码来自判定、绝不猜测：`workflow.name.unknown`（P-a）vs `workflow.lease.uncovered`（P-b）。fail-open 路径（畸形参数 / 状态不可读）不记录；未解析出 harness 目录的调用跳过该行（与派发记录路径相同的静默 no-op）。
+
+**P-c 答案观测 seam。** 闸门无法观测 ask 结果——工具注册表的 `serviceAsk` 在内部消费审批结果。**run-start 观测就是答案 seam**：被 ALLOW 的 ask 执行调用 → 持久化 `tool-workflow/run-start` 会话事件落入父会话日志 → workflow-ledger 消费者记录 W-B2 `workflow-run` 行**并**把 `allow` 按运行名缓存进 apply 作用域的 `WorkflowAskCache`。被 DENY 的答案不产生运行 → 无观测 → `ask` 模式下下一次同名调用**重新 ask**（fail-closed——无授权证据，绝不发明 allow）。缓存键在两个 seam 都是**归一化**（剥离 ASCII 控制字符）**不截断**的名字——闸门合成 `meta.name` 与观测记录 `runName` 都走同一个 `normalizeWorkflowName`，因此含控制字符的名字（`au\u0000dit`）永远无法卡死缓存（ask 一次、同一键观测），>1024 字符的名字仍以完整名字为键（账本行的展示名字单独截断；身份轴从不截断）。缓存是 apply 作用域的——新 apply（HMR 重载）从空开始，因此未解析的首见名字每次调用都会重新 ask，直到一次观测（或显式 `record()`）落地。缓存记录抛错时观测降级为一条 warn——账本行已追加，运行不受影响。
+
+**P-b 抢占。** 租约红线最先运行：调用工作区存在 uncovered 的 `InProgress` plan 意味着在 plan 恢复前**不应**启动任何可写扇出子进程——与 workflow 名字无关（与 Assignment 键控的租约闸门同一条红线），对 ralph 同样适用。`warn`/`ask` 下仅咨询（放行 + 一条 warn）；ask 通道绝不替代工作区红线。
 
 ## LLM fallbacks integration
 
@@ -200,6 +227,8 @@ agent-flow 账本——`{HARNESS_DIR}/agent-flow.jsonl`，即 catalog 的 `state
 | `run-end` | `workflow-run-end` | `runId`、`stopReason`（`completed` / `cancelled` / `error`） |
 
 `tool-workflow/agent-end` 是上游成员簿记，**没有账本类型**（成员 `outcome` 有意不持久化），被过滤掉。可选字段（`agent` / `phase`）缺席时从序列化行省略（lossless-JSON 纪律）；三种类型共用账本的 `AGENT_FLOW_MAX_EVENTS` 截断 + 大小门禁，畸形行读取时收敛为 `undefined`（绝不重序列化）。展示字段（`name` / `label` / `phase`）在边界确定性限长（`WORKFLOW_LEDGER_MAX_NAME_LENGTH` 1024、`WORKFLOW_LEDGER_MAX_LABEL_LENGTH` 512——超长值以 `…` 标记截断）；id 尺寸字段（`runId` / `childId`，上限 512）超长时**整行跳过**——绝不截断成碰撞。
+
+**第四种类型 `workflow-verdict`** 由 workflow/ralph 闸门（而非本消费者）写入——每个被把关的调用一行（`tool`、`workflow`/`objective`、`mode`、判定 `ok`/`advisory`/`denied`/`ask`、违规 `code`）——见 Gates → Workflow / ralph gate。展示身份字段（`workflow` / `objective`）同样带 1024 字符上限；判定的违规码绝不猜测（P-a `workflow.name.unknown` vs P-b `workflow.lease.uncovered`）。
 
 **去重与回放范围。** 持久化水位线即去重机制：**冷热重叠**以及**插件重应用/重启**（重注册读取持久化水位线而非从空游标开始）下每个 `(runId, kind, seq)` 只产一行。**apply 之后创建**、带构造期种子日志（恢复/分叉会话——其种子从不进 firehose）的会话会在上游 `session/created` 事件上**冷扫描一次**，水位线同样保证该回填幂等。水位线 sidecar 有界（每 harness 会话数上限，驱逐优先已不在线的会话）且完全受控：水位线不可读/不可写时降级为仅内存并告警一次——重启后会重录（诚实的去重欠录，绝不丢数据、绝不阻塞）。
 

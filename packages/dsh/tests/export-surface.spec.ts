@@ -28,6 +28,12 @@
  * `readAgentFlow` + `AGENT_FLOW_FILE` / `AGENT_FLOW_MAX_EVENTS` /
  * `SETTLE_SEAM`) and its event/view types joined the entry surface — a
  * deliberate, reviewed addition (new module), not a split drift.
+ *
+ * Extended for plan `20260815-dsh-workflow-gate` (Task 4): the durable
+ * workflow/ralph gate verdict record (`recordWorkflowVerdict` + the
+ * `workflow-verdict` vocabulary types) joined the entry surface — the
+ * ledger plan's record path, matching the `recordDispatch` / `recordSettle`
+ * precedent.
  */
 import { describe, expect, it } from 'bun:test'
 import type { Context, Events } from '@deepseek-ai/cordis'
@@ -67,6 +73,10 @@ const FROZEN_VALUE_EXPORTS = [
   'readAgentFlow',
   'recordDispatch',
   'recordSettle',
+  // Deliberate addition for plan `20260815-dsh-workflow-gate` Task 4: the
+  // durable workflow/ralph gate verdict record (one row per gated call —
+  // the ledger plan's record path; the `workflow-verdict` kind).
+  'recordWorkflowVerdict',
   'runFallbacksAdvisory',
   // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 3:
   // the persona-defaults mirror-root binding (mirror of setDecorationLogger
@@ -100,6 +110,12 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'SkillLintAdvisory',
   'StatusGateAdvisory',
   'SubagentRunInfoView',
+  // Deliberate additions for plan `20260815-dsh-workflow-gate` Task 4: the
+  // `workflow-verdict` ledger vocabulary (verdict + mode + record input —
+  // the adapter's public `recordWorkflowVerdict` method types).
+  'WorkflowGateMode',
+  'WorkflowVerdict',
+  'WorkflowVerdictInput',
 ] as const
 
 type Assert<T extends true> = T
@@ -159,6 +175,9 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       SkillLintAdvisory: null as unknown as EntryTypes.SkillLintAdvisory,
       StatusGateAdvisory: null as unknown as EntryTypes.StatusGateAdvisory,
       SubagentRunInfoView: null as unknown as EntryTypes.SubagentRunInfoView,
+      WorkflowGateMode: null as unknown as EntryTypes.WorkflowGateMode,
+      WorkflowVerdict: null as unknown as EntryTypes.WorkflowVerdict,
+      WorkflowVerdictInput: null as unknown as EntryTypes.WorkflowVerdictInput,
     }
     expect(Object.keys(typeProbe).sort()).toEqual([...FROZEN_TYPE_ONLY_EXPORTS].sort())
   })

@@ -35,8 +35,13 @@ import {
   isAssignmentShaped,
   resolveDispatchHard,
 } from './dispatch.ts'
-import { recordDispatch, AGENT_FLOW_LOGGER } from './agent-flow.ts'
-import type { AgentFlowPairing } from './agent-flow.ts'
+import { recordDispatch, recordWorkflowVerdict as appendWorkflowVerdict, AGENT_FLOW_LOGGER } from './agent-flow.ts'
+import type { AgentFlowPairing, WorkflowVerdictInput } from './agent-flow.ts'
+// P-c first-seen ask cache (plan `20260815-dsh-workflow-gate` Task 2):
+// apply-scoped, owned here (constructed with the adapter) so the dispatch
+// gate and tests share ONE instance per plugin apply. workflow-policy
+// imports dispatch.ts type-only — no runtime cycle.
+import { WorkflowAskCache } from './workflow-policy.ts'
 /** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
 const HOST_LOGGER = 'mstar/host-adapter'
 /** Options for {@link DshHostAdapter}. */
@@ -58,6 +63,16 @@ export interface DshHostAdapterOptions {
    * construction) → no pairing registration (record-only).
    */
   readonly pairing?: AgentFlowPairing
+  /**
+   * The P-c first-seen ask cache (plan `20260815-dsh-workflow-gate`
+   * Task 2): workflow name → resolved decision, apply-scoped. Absent (the
+   * entry relies on this default — `index.ts` constructs the adapter
+   * without it) → the constructor builds ONE cache per adapter per apply,
+   * shared by the gate and any answerer integration via the readonly
+   * property. An explicit instance may be passed to share a specific cache
+   * (host-adapter tests / direct construction).
+   */
+  readonly workflowAskCache?: WorkflowAskCache
   /**
    * Log sink for `HostAdapter.log`. Defaults to the dsh ctx logger scoped
    * `mstar/host-adapter` (dsh logger naming: `<scope>/<subject>`).
@@ -102,6 +117,14 @@ export class DshHostAdapter extends Service implements HostAdapter {
   private readonly resolver: HarnessResolver
   private readonly config: Config
   private readonly pairing: AgentFlowPairing | undefined
+  /**
+   * The P-c first-seen ask cache (plan `20260815-dsh-workflow-gate`
+   * Task 2) — apply-scoped with the adapter: the dispatch gate reads it
+   * through `gateDispatch`, and tests/answerer integrations reach the same
+   * instance via `ctx.dshHostAdapter.workflowAskCache`. Dies with the
+   * fiber (no module-level reference — an HMR reload starts a fresh cache).
+   */
+  readonly workflowAskCache: WorkflowAskCache
   private readonly logSink: (level: 'info' | 'warn' | 'error', msg: string) => void
 
   constructor(ctx: Context, options: DshHostAdapterOptions) {
@@ -111,6 +134,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     this.resolver = options.resolver
     this.config = options.config
     this.pairing = options.pairing
+    this.workflowAskCache = options.workflowAskCache ?? new WorkflowAskCache()
     this.logSink = options.log ?? ((level, msg) => {
       const logger = ctx.logger(HOST_LOGGER)
       if (level === 'warn') logger.warn(msg)
@@ -195,6 +219,23 @@ export class DshHostAdapter extends Service implements HostAdapter {
       }
     }
     return { ok: violations.length === 0, violations }
+  }
+
+  /**
+   * Record one workflow/ralph gate verdict row (plan
+   * `20260815-dsh-workflow-gate` Task 4 — the durable ledger row for every
+   * gated workflow/ralph call: verdict + metaName/objective + mode, via the
+   * ledger plan's record path). `gateWorkflow` routes the record through
+   * this adapter method so dispatch.ts stays free of a runtime agent-flow
+   * import (the ledger imports dispatch helpers — the adapter is the
+   * acyclic junction, the same role it plays for `dispatchGate`). The
+   * underlying record is fully try/catch-contained (a failing ledger write
+   * logs and never reaches the gate) — this method never throws.
+   * @param input - the gate's decision identity (harness dir + tool +
+   *   workflow/objective + mode + verdict + code).
+   */
+  recordWorkflowVerdict(input: WorkflowVerdictInput): void {
+    appendWorkflowVerdict(input)
   }
 
   /**

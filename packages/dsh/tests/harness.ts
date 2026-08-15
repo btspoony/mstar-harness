@@ -141,6 +141,62 @@ export class FakeAgentRegistry extends Service {
   }
 }
 
+/**
+ * Minimal in-memory `sessions` service for the workflow-ledger consumer e2e
+ * tests (plan `20260815-dsh-workflow-gate` Task 4 — the W-B2 run rows +
+ * the P-c answer observation alongside the gate verdict rows): implements
+ * the ONE contract the workflow-ledger consumer reads — `get(id)` /
+ * `list()` over live sessions (the depth advisory + cold scan) — plus
+ * `register(session)` and an `append(session, type, data)` driver that
+ * pushes an envelope into the session's `events` log and emits it on the
+ * `session/event` firehose (the real store's append+emit contract). The
+ * sessions are STRUCTURAL FAKES (plain objects): the consumer reads only
+ * `id` / `events` / `header.cwd` / `header.delegationDepth` structurally,
+ * and `@deepseek-ai/dsh-session` cannot construct under Bun/JSC. Mounted as
+ * the `@deepseek-ai/dsh-session-fake` module row
+ * (`bootApp({ sessionsService: 'fake' })`) so the plugin's REAL
+ * `registerWorkflowLedger` wiring registers against it — the gate → session
+ * event → consumer → ledger composition under test.
+ */
+export class FakeSessionsRegistry extends Service {
+  private readonly app: Context
+  private readonly live = new Map<string, unknown>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'sessions')
+    this.app = ctx
+  }
+
+  /** Record one live session (the real store's `create`/`enter` contract). */
+  register(session: unknown): void {
+    const id = (session as { id?: unknown } | null | undefined)?.id
+    if (typeof id === 'string' && id !== '') this.live.set(id, session)
+  }
+
+  /** Look up a live session by id (the consumer's depth-advisory read). */
+  get(id: string): unknown {
+    return this.live.get(id)
+  }
+
+  /** All live sessions, in registration order (the consumer's cold-scan read). */
+  list(): unknown[] {
+    return [...this.live.values()]
+  }
+
+  /**
+   * Drive one append + `session/event` firehose emit — the real store's
+   * append+emit contract (`seq = log.length`, push, then post-commit emit).
+   * The CARRIER comes FIRST — the real store dispatches
+   * `[carrier, 'session/event', session, event]` and cordis `dispatch`
+   * shifts the leading object as `this` before the event name.
+   */
+  append(session: { id: string; events: unknown[] }, type: string, data: object): void {
+    const event = { type, seq: session.events.length, time: 1_700_000_000_000 + session.events.length, data }
+    session.events.push(event)
+    this.app.events.emit({}, 'session/event', session, event)
+  }
+}
+
 let fakeChildSeq = 0
 
 /**
@@ -226,10 +282,22 @@ export interface BootOptions {
    * composes dsh-agent before the subagent seam).
    */
   agentsService?: 'fake'
+  /**
+   * Mount the {@link FakeSessionsRegistry} as the `sessions` service (the
+   * `@deepseek-ai/dsh-session-fake` row + module map) so the plugin's
+   * `registerWorkflowLedger` consumer wiring registers against it — the W-B2
+   * run rows + the P-c answer observation e2e (plan `20260815-dsh-workflow-gate`
+   * Task 4; the real dsh app always composes dsh-session before the plugin).
+   */
+  sessionsService?: 'fake'
   /** Taxonomy bridge (Config `roleMap`): mstar role id → fallbacks role id. */
   roleMap?: Record<string, string>
   /** Persona map (Config `rolePersonas`): mstar role id → persona text. */
   rolePersonas?: Record<string, string>
+  /** Workflow/ralph gate mode (Config `workflowGate`, plan `20260815-dsh-workflow-gate`). */
+  workflowGate?: 'off' | 'warn' | 'ask' | 'hard'
+  /** Workflow name allowlist (Config `workflowNames`; empty/absent ⇒ every name unknown). */
+  workflowNames?: string[]
   /** App root override (default: a fresh temp dir). */
   root?: string
   /**
@@ -336,6 +404,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // `20260814-dsh-fallbacks-integration` Task 2): provides `ctx.get('agents')`
     // so the `subagent/start` decoration can resolve fake-registered children.
     ...(options.agentsService !== undefined ? [{ name: '@deepseek-ai/dsh-agent-fake' }] : []),
+    // The fake sessions service row (only when requested — plan
+    // `20260815-dsh-workflow-gate` Task 4): provides `ctx.get('sessions')`
+    // so the plugin's `registerWorkflowLedger` consumer registers (W-B2 run
+    // rows + the P-c answer observation e2e).
+    ...(options.sessionsService !== undefined ? [{ name: '@deepseek-ai/dsh-session-fake' }] : []),
     // Last row: the mstar plugin (carries the boot-time Config below).
     { name: '@mstar-harness/dsh' },
   ]
@@ -368,6 +441,8 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   if (options.catalogTtlMs !== undefined) config.catalogTtlMs = options.catalogTtlMs
   if (options.roleMap !== undefined) config.roleMap = options.roleMap
   if (options.rolePersonas !== undefined) config.rolePersonas = options.rolePersonas
+  if (options.workflowGate !== undefined) config.workflowGate = options.workflowGate
+  if (options.workflowNames !== undefined) config.workflowNames = options.workflowNames
 
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root).href + '/'
@@ -401,6 +476,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // Task 2): a `{ default }` module so the seam unwrap resolves the class.
     ...(options.agentsService !== undefined
       ? [['@deepseek-ai/dsh-agent-fake', { default: FakeAgentRegistry }] as const]
+      : []),
+    // The fake `sessions` service (plan `20260815-dsh-workflow-gate` Task 4):
+    // a `{ default }` module so the seam unwrap resolves the class.
+    ...(options.sessionsService !== undefined
+      ? [['@deepseek-ai/dsh-session-fake', { default: FakeSessionsRegistry }] as const]
       : []),
   ])
   for (const row of rows) {

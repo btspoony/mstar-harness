@@ -45,6 +45,31 @@
  * member `outcome` is intentionally not persisted) and is filtered out.
  * `ts` takes the envelope's `time`.
  *
+ * P-c answer observation (plan `20260815-dsh-workflow-gate` Task 4 fold-in —
+ * the Task-2 Important handoff): the workflow GATE cannot observe the ask
+ * outcome — the tool registry's `serviceAsk` consumes the approval result
+ * internally, and the gate invents no answerer. The run-start observation
+ * IS the answer seam: when the approval waterfall ALLOWS a workflow call,
+ * the call executes and the durable `tool-workflow/run-start` session event
+ * (name carried) lands in the parent session log — the consumer maps it to
+ * the `workflow-run` row AND records `allow` for the run name into the
+ * apply-scoped {@link WorkflowAskCache} (`registerWorkflowLedger`'s third
+ * parameter — the host adapter's instance). W-1 (qc2 fix-wave): the record
+ * fires ONLY for names the policy marked asked in this apply
+ * (`WorkflowAskCache.markAsked` on every ask verdict; the observation
+ * promotes via `wasAsked`) — a run observed without a prior ask (P-b
+ * advisory under `ask` mode, `warn`/`off`-mode runs) is not an approval
+ * resolution and never pre-authorizes the name. A DENIED answer produces no
+ * run → no observation → the next same-name call under `ask` re-asks
+ * (fail-closed — no grant evidence, never an invented allow). The hook is
+ * bounded and contained: it fires only on the FIRST successful recording of
+ * a run-start (the watermark gate above), keyed on the UNCAPPED run name
+ * (`row.runName` — it must match the gate's `meta.name`, which is never
+ * truncated AND is normalized through the SAME `normalizeWorkflowName` the
+ * gate composes with — the Task 5 congruence fold-in), and a throwing cache
+ * record degrades the observation with one warn — the ledger row is already
+ * appended, the run is never affected.
+ *
  * Observe-only (plan Global Constraints: W3 / N5): ZERO gating — every read
  * and append is try/catch-contained; a throwing session read logs one warn
  * and the run is unaffected; all appends go through `recordWorkflowEvent`
@@ -75,6 +100,20 @@ import {
 import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
 import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
+// The SHARED P-c cache-key normalization (plan `20260815-dsh-workflow-gate`
+// Task 5 fold-in — the Task-4 Important congruence fix): the run-start
+// observation MUST key the ask cache through the SAME function the gate
+// composes `metaName` with (dispatch.ts `workflowGateInputOf`), or a
+// control-char name re-asks forever. Also the display-field control-char
+// strip this consumer used to own locally (`sanitizeLedgerDisplay`) — now
+// one shared implementation for the run name AND the label/phase fields.
+// workflow-policy imports dispatch.ts type-only — no runtime cycle.
+import { normalizeWorkflowName } from './workflow-policy.ts'
+// Type-only (erased at runtime — no cycle): the P-c per-session ask cache
+// (plan `20260815-dsh-workflow-gate` Task 4 fold-in) — this consumer
+// OBSERVES the run-start and records the allow answer into the apply-scoped
+// cache owned by the host adapter.
+import type { WorkflowAskCache } from './workflow-policy.ts'
 
 /** Logger label for the workflow-ledger consumer (dsh logger naming: `<scope>/<subject>`). */
 export const WORKFLOW_LEDGER_LOGGER = 'mstar/workflow-ledger'
@@ -139,21 +178,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** ASCII control characters (C0 + DEL) — stripped from display fields at the consumer boundary (qc2 S-1). */
-const LEDGER_DISPLAY_CONTROL_CHARS = /[\u0000-\u001F\u007F]/g
-
-/**
- * Strip ASCII control characters (newlines / tabs / CR — the log-forging
- * surface, qc2 S-1) from one display field. A hostile model-controlled
- * `name` / `label` / `phase` must never reach the depth-advisory warn
- * interpolation or a JSONL line. Pure — NEVER throws. ID-sized fields
- * (`runId` / `childId`) are NOT routed here — they keep their
- * skip-if-oversized semantics.
- */
-function sanitizeLedgerDisplay(value: string): string {
-  return value.replace(LEDGER_DISPLAY_CONTROL_CHARS, '')
-}
-
 /**
  * Minimal structural view of the `sessions` service the consumer reads
  * (`@deepseek-ai/dsh-session` `SessionStore` contract — the runtime read is
@@ -183,6 +207,17 @@ interface WorkflowLedgerRow {
   event: AgentFlowWorkflowEvent
   /** The published member's child session id (agent-start only — for the depth advisory). */
   childId?: string
+  /**
+   * The NORMALIZED (control chars stripped via the SHARED
+   * `normalizeWorkflowName` — the gate's own metaName normalization, plan
+   * `20260815-dsh-workflow-gate` Task 5 congruence fold-in) but UNCAPPED
+   * run display name — run-start rows only: the P-c cache key (Task 4
+   * fold-in). The ledger event's `name` is deterministically capped at the
+   * read boundary; the cache must key on the FULL name — it matches the
+   * gate's `meta.name` (the allowlist/ask identity), which is never
+   * truncated.
+   */
+  runName?: string
 }
 
 /** The session's stable id (structural read; branded `SessionId` is a string). */
@@ -338,12 +373,15 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
   if (type === TOOL_WORKFLOW_RUN_START) {
     // Control chars are stripped BEFORE the empty check — a display field
     // that is ONLY control characters must not record (the read boundary
-    // would drop it as empty, so write and read stay consistent).
-    const name = typeof data.name === 'string' ? sanitizeLedgerDisplay(data.name) : data.name
+    // would drop it as empty, so write and read stay consistent). The strip
+    // is the SHARED P-c cache-key normalization (workflow-policy.ts) — the
+    // observation must key the ask cache identically to the gate.
+    const name = typeof data.name === 'string' ? normalizeWorkflowName(data.name) : data.name
     if (typeof name !== 'string' || name === '') return undefined
     const agent = sessionIdOf(session)
     return {
       seq,
+      runName: name,
       event: {
         v: 1,
         ts: time,
@@ -361,7 +399,7 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
     if (typeof data.seq !== 'number' || !Number.isInteger(data.seq) || data.seq < 1 || data.seq >= WORKFLOW_LEDGER_MAX_SEQ) {
       return undefined
     }
-    const label = typeof data.label === 'string' ? sanitizeLedgerDisplay(data.label) : data.label
+    const label = typeof data.label === 'string' ? normalizeWorkflowName(data.label) : data.label
     if (typeof label !== 'string' || label === '') return undefined
     if (typeof data.childId !== 'string' || data.childId === '' || data.childId.length > WORKFLOW_LEDGER_MAX_ID_LENGTH) return undefined
     return {
@@ -375,7 +413,7 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
         seq: data.seq,
         label: truncateLedgerField(label, WORKFLOW_LEDGER_MAX_LABEL_LENGTH),
         ...(typeof data.phase === 'string'
-          ? { phase: truncateLedgerField(sanitizeLedgerDisplay(data.phase), WORKFLOW_LEDGER_MAX_LABEL_LENGTH) }
+          ? { phase: truncateLedgerField(normalizeWorkflowName(data.phase), WORKFLOW_LEDGER_MAX_LABEL_LENGTH) }
           : {}),
         childId: data.childId,
       },
@@ -444,8 +482,13 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
  * @param ctx - the plugin's registrant context (the app composition root).
  * @param resolver - the shared per-workspace `{HARNESS_DIR}` resolver
  *   (harnessDir attribution from the carrying session's `header.cwd`).
+ * @param workflowAskCache - the apply-scoped P-c ask cache (plan
+ *   `20260815-dsh-workflow-gate` Task 4 fold-in — the host adapter's
+ *   instance; see the module doc "P-c answer observation"). Absent → the
+ *   observation hook is disabled (W-B2 tests / compositions without the
+ *   workflow gate).
  */
-export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver): void {
+export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, workflowAskCache?: WorkflowAskCache): void {
   // The `sessions` service is absent in compositions without dsh-session —
   // skip + one debug log (documented degrade), never crash.
   const sessions = ctx.get('sessions') as SessionsView | undefined
@@ -492,6 +535,41 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver):
     // calls — the duplicate mode the design already accepts and documents.
     if (recordWorkflowEvent({ harnessDir, event: row.event })) {
       advanceWatermark(harnessDir, sid, row.seq + 1, (candidate) => sessions.get(candidate) === undefined)
+      // P-c answer observation (plan `20260815-dsh-workflow-gate` Task 4
+      // fold-in — the Task-2 Important handoff; see the module doc): a
+      // run-start that produced a ledger row means the call RAN — the
+      // approval waterfall allowed it (or the allow path let it through).
+      // Record `allow` for the run's workflow name so a subsequent
+      // same-name call under `ask` mode reuses the decision instead of
+      // re-asking. A DENIED answer produces no run → no observation → the
+      // next call re-asks (fail-closed — correct). The cache is only ever
+      // consulted for non-allowlisted workflow names under `ask`, so
+      // allowlisted / ralph entries are no-ops. CONTAINED: a throwing
+      // cache record degrades the observation only — the ledger row above
+      // is already appended (and the watermark advanced), the run is
+      // unaffected. The key is the UNCAPPED run name (`row.runName` —
+      // matches the gate's `meta.name`); the ledger display field is
+      // capped separately.
+      //
+      // W-1 (qc2 fix-wave): `allow` is recorded ONLY for names that
+      // received an `ask` verdict in THIS apply (`markAsked` at the
+      // policy's single ask point — `wasAsked` below). A run observed
+      // WITHOUT a prior ask — a P-b advisory under `ask` mode (uncovered
+      // InProgress plan preempts P-c), a `warn`/`off`-mode run — is NOT an
+      // approval resolution: caching it would pre-authorize the name and
+      // silently disable the ask channel for the rest of the apply (the
+      // human saw the advisory warns, but the deployment-chosen approval
+      // gate must still fire for a never-asked first-seen name).
+      if (workflowAskCache !== undefined && row.event.kind === 'workflow-run') {
+        try {
+          const runName = row.runName ?? row.event.name
+          if (workflowAskCache.wasAsked(runName)) {
+            workflowAskCache.record(runName, 'allow')
+          }
+        } catch (error) {
+          log('warn', `workflow P-c allow observation degraded (contained — the ledger row stays): ${errorMessage(error)}`)
+        }
+      }
     }
     // Depth advisory — observe-time only, contained (a throwing child read
     // degrades the advisory, never the row or the run).

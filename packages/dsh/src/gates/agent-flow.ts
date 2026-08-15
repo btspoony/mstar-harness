@@ -92,6 +92,13 @@ import type { AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../
 import { asRecord } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS } from './dispatch.ts'
+// The SHARED ASCII-control-char strip (qc2 W-2 fix-wave): the ralph
+// `objective` — model-controlled display text, like the workflow name —
+// is routed through the same normalization at the verdict-row WRITE
+// boundary (parity with the W-B2 name/label/phase discipline), so a
+// hostile objective (ESC/ANSI/NEL embedded) never reaches the ledger view.
+// workflow-policy imports dispatch.ts type-only — no runtime cycle.
+import { normalizeWorkflowName } from './workflow-policy.ts'
 
 /** The agent-flow ledger file name under `{HARNESS_DIR}`. */
 export const AGENT_FLOW_FILE = 'agent-flow.jsonl'
@@ -176,6 +183,22 @@ export type DispatchVerdict = 'ok' | 'advisory' | 'denied'
 export type SettleOutcome = 'ok' | 'error' | 'denied'
 /** Workflow run terminal reason (`tool-workflow` vocabulary — `workflow/src/types.ts:63`). */
 export type WorkflowStopReason = 'completed' | 'cancelled' | 'error'
+/**
+ * Workflow/ralph gate verdict vocabulary (plan `20260815-dsh-workflow-gate`
+ * Task 4): the RESOLVED outcomes reuse the dispatch verdict vocabulary
+ * (`ok`/`advisory`/`denied` — the plan interface "the workflow verdict
+ * vocabulary"); `ask` is the PENDING-decision member — the first-seen ask
+ * itself is a gated call, so its row carries `ask` until the approval
+ * waterfall resolves it ("one ledger row per gated call").
+ */
+export type WorkflowVerdict = DispatchVerdict | 'ask'
+/**
+ * The workflow/ralph gate mode (Config `workflowGate` — plan
+ * `20260815-dsh-workflow-gate` Task 1), recorded on every verdict row.
+ * `off` rows never exist: the gate short-circuits `off` BEFORE the policy,
+ * so no verdict is produced.
+ */
+export type WorkflowGateMode = 'off' | 'warn' | 'ask' | 'hard'
 
 /**
  * One v1 workflow ledger event (plan `20260815-dsh-workflow-ledger` Task 2 —
@@ -270,6 +293,25 @@ export type AgentFlowEvent =
       role?: string
       planId?: string
       taskId?: string
+    }
+  | {
+      v: 1
+      ts: number
+      kind: 'workflow-verdict'
+      /** The calling session's stable id, when carried. */
+      agent?: string
+      /** The matched tool name (`'workflow'` | `'ralph'`). */
+      tool: 'workflow' | 'ralph'
+      /** `meta.name` for workflow calls — the P-a/P-c allowlist identity. */
+      workflow?: string
+      /** `objective` for ralph calls — the ralph identity. */
+      objective?: string
+      /** The effective `workflowGate` mode at decision time (never `off` — off records nothing). */
+      mode: WorkflowGateMode
+      /** The gate verdict (ok/advisory/denied/ask). */
+      verdict: WorkflowVerdict
+      /** The policy violation code (advisory/ask/denied rows only). */
+      code?: string
     }
   | AgentFlowWorkflowEvent
 
@@ -626,6 +668,80 @@ export function recordWorkflowEvent(input: { harnessDir: string; event: AgentFlo
   }
 }
 
+/**
+ * Input for {@link recordWorkflowVerdict} — one gated workflow/ralph call's
+ * decision identity (plan `20260815-dsh-workflow-gate` Task 4: verdict +
+ * metaName/objective + mode).
+ */
+export interface WorkflowVerdictInput {
+  /** The resolved `{HARNESS_DIR}` the row records into. */
+  harnessDir: string
+  /** The in-flight tool call (structural read for the carrying session id). */
+  exec?: unknown
+  /** The matched tool name (`'workflow'` | `'ralph'`). */
+  tool: 'workflow' | 'ralph'
+  /** `meta.name` for workflow calls (the P-a/P-c allowlist identity). */
+  workflow?: string
+  /** `objective` for ralph calls (the ralph identity). */
+  objective?: string
+  /** The effective `workflowGate` mode at decision time. */
+  mode: WorkflowGateMode
+  /** The gate verdict. */
+  verdict: WorkflowVerdict
+  /** The policy violation code (advisory/ask/denied rows only). */
+  code?: string
+}
+
+/**
+ * Record one workflow/ralph gate verdict row (plan `20260815-dsh-workflow-gate`
+ * Task 4 — "one ledger row per gated workflow/ralph call" via the ledger
+ * plan's record path, the `workflow-verdict` kind). Fully
+ * try/catch-contained — NEVER throws into the gate (`gateWorkflow` calls
+ * this on EVERY policy decision); a failing record logs only
+ * (`mstar/agent-flow`), so a ledger write never crashes or alters a
+ * workflow call. The event is serialized lossless — optional fields
+ * (`agent` / `workflow` / `objective` / `code`) omit when absent; the
+ * display identity fields (`workflow` / `objective`) are capped at the
+ * ledger boundary (same discipline as the W-B2 name cap) and the ralph
+ * `objective` is routed through the SHARED `normalizeWorkflowName` strip at
+ * this write boundary (qc2 W-2 — control-char discipline parity with the
+ * name/label/phase fields; the gate already normalizes `workflow`). The
+ * JSONL line is line-safe either way (`JSON.stringify` escapes), but the
+ * panel view passes the objective through raw — a hostile objective
+ * (ESC/ANSI/NEL) must never reach it. Malformed input is a caller bug —
+ * the strict narrowing applies on READ (`eventFromUnknown`), never here.
+ * @param input - the gate's decision identity (see {@link WorkflowVerdictInput}).
+ */
+export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
+  try {
+    const agent = input.exec !== undefined ? agentOfExec(input.exec) : undefined
+    const event: AgentFlowEvent = {
+      v: 1,
+      ts: Date.now(),
+      kind: 'workflow-verdict',
+      ...(agent !== undefined ? { agent } : {}),
+      tool: input.tool,
+      ...(input.workflow !== undefined && input.workflow !== ''
+        ? { workflow: truncateLedgerField(input.workflow, WORKFLOW_LEDGER_MAX_NAME_LENGTH) }
+        : {}),
+      ...(input.objective !== undefined && input.objective !== ''
+        ? { objective: truncateLedgerField(normalizeWorkflowName(input.objective), WORKFLOW_LEDGER_MAX_NAME_LENGTH) }
+        : {}),
+      mode: input.mode,
+      verdict: input.verdict,
+      ...(input.code !== undefined && input.code !== '' ? { code: input.code } : {}),
+    }
+    appendEvent(input.harnessDir, event)
+    try {
+      invalidator?.(input.harnessDir)
+    } catch (error) {
+      log('error', `catalog invalidation failed (contained): ${errorMessage(error)}`)
+    }
+  } catch (error) {
+    log('error', `workflow verdict record failed (contained — the gate proceeds): ${errorMessage(error)}`)
+  }
+}
+
 /** Narrow an unknown JSONL line to a valid v1 event (malformed lines → undefined). */
 function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
   const rec = asRecord(value)
@@ -634,6 +750,7 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
   if (
     kind !== 'dispatch' &&
     kind !== 'settle' &&
+    kind !== 'workflow-verdict' &&
     kind !== 'workflow-run' &&
     kind !== 'workflow-agent' &&
     kind !== 'workflow-run-end'
@@ -674,6 +791,43 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
       ...(typeof rec.role === 'string' ? { role: rec.role } : {}),
       ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
       ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
+    }
+  }
+  if (kind === 'workflow-verdict') {
+    // Gate verdict rows (plan `20260815-dsh-workflow-gate` Task 4): the
+    // tool / mode / verdict are vocabulary-validated; the per-tool identity
+    // (`workflow` for workflow calls, `objective` for ralph) must be a
+    // non-empty string (the producer's invariant — the gate records a row
+    // only for shape-valid inputs); `agent` / `code` omit when absent.
+    // Display identity fields (`workflow` / `objective`) are capped
+    // deterministically (same W-B2 discipline — a hostile multi-MB
+    // `objective` must not defeat the line-count truncation or reach the
+    // panel unbounded).
+    if (rec.tool !== 'workflow' && rec.tool !== 'ralph') return undefined
+    const mode = rec.mode
+    if (mode !== 'off' && mode !== 'warn' && mode !== 'ask' && mode !== 'hard') return undefined
+    const verdict = rec.verdict
+    if (verdict !== 'ok' && verdict !== 'advisory' && verdict !== 'denied' && verdict !== 'ask') return undefined
+    if (rec.tool === 'workflow') {
+      if (typeof rec.workflow !== 'string' || rec.workflow === '') return undefined
+    } else if (typeof rec.objective !== 'string' || rec.objective === '') {
+      return undefined
+    }
+    return {
+      v: 1,
+      ts: rec.ts,
+      kind: 'workflow-verdict',
+      ...(agent !== undefined ? { agent } : {}),
+      tool: rec.tool,
+      ...(typeof rec.workflow === 'string' && rec.workflow !== ''
+        ? { workflow: truncateLedgerField(rec.workflow, WORKFLOW_LEDGER_MAX_NAME_LENGTH) }
+        : {}),
+      ...(typeof rec.objective === 'string' && rec.objective !== ''
+        ? { objective: truncateLedgerField(rec.objective, WORKFLOW_LEDGER_MAX_NAME_LENGTH) }
+        : {}),
+      mode,
+      verdict,
+      ...(typeof rec.code === 'string' && rec.code !== '' ? { code: rec.code } : {}),
     }
   }
   // Workflow kinds (plan `20260815-dsh-workflow-ledger` Task 2). `runId` is
@@ -792,6 +946,23 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
       stopReason: event.stopReason,
     }
   }
+  if (event.kind === 'workflow-verdict') {
+    return {
+      ts: event.ts,
+      kind: 'workflow-verdict',
+      agent: event.agent ?? null,
+      role: '',
+      planId: null,
+      taskId: null,
+      taskCategory: null,
+      tool: event.tool,
+      ...(event.workflow !== undefined ? { workflow: event.workflow } : {}),
+      ...(event.objective !== undefined ? { objective: event.objective } : {}),
+      mode: event.mode,
+      verdict: event.verdict,
+      ...(event.code !== undefined ? { code: event.code } : {}),
+    }
+  }
   return {
     ts: event.ts,
     kind: 'settle',
@@ -812,19 +983,26 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
 function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
   const counts = new Map<string, number>()
   for (const event of events) {
-    // Workflow kinds (plan `20260815-dsh-workflow-ledger` Task 4) count as a
-    // DISTINCT bucket — a dedicated `workflow` pseudo-role, never folded into
-    // the dispatch-role counts (replaces the Task-2 stopgap role=''
-    // kind-bucket). The outcome is the STABLE kind name, so run / member /
-    // run-end rows stay distinguishable in the summary; every event lands in
-    // exactly one bucket (the role×outcome sum = the window's event count).
+    // Workflow kinds (plan `20260815-dsh-workflow-ledger` Task 4 + plan
+    // `20260815-dsh-workflow-gate` Task 4) count as a DISTINCT bucket — a
+    // dedicated `workflow` pseudo-role, never folded into the
+    // dispatch-role counts (replaces the Task-2 stopgap role=''
+    // kind-bucket). The outcome is the STABLE kind name for run / member /
+    // run-end rows (so they stay distinguishable in the summary) and the
+    // VERDICT for the gate's `workflow-verdict` rows (`ok`/`advisory`/
+    // `denied`/`ask` — the model-visible gate surface); every event lands
+    // in exactly one bucket (the role×outcome sum = the window's event
+    // count).
     const role =
       event.kind === 'dispatch' ? event.role
-      : event.kind === 'workflow-run' || event.kind === 'workflow-agent' || event.kind === 'workflow-run-end'
+      : event.kind === 'workflow-run' || event.kind === 'workflow-agent' || event.kind === 'workflow-run-end' || event.kind === 'workflow-verdict'
         ? 'workflow'
         : ''
     const outcome =
-      event.kind === 'dispatch' ? event.verdict : event.kind === 'settle' ? event.outcome : event.kind
+      event.kind === 'dispatch' ? event.verdict
+      : event.kind === 'workflow-verdict' ? event.verdict
+      : event.kind === 'settle' ? event.outcome
+      : event.kind
     const key = `${role}\u0000${outcome}`
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
