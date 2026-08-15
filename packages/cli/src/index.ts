@@ -21,6 +21,7 @@ import {
   detectHost,
   evaluatePhaseGate,
   executionModeToN,
+  findEphemeralCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
   isReadOnlyAssignmentRole,
@@ -1293,7 +1294,8 @@ skillCommand
   .command("lint")
   .description(
     "Lint <skill-dir>/SKILL.md: frontmatter contract (name lowercase-hyphen, description trigger contract) " +
-      "+ the five-question body (exit 1 on violations, 2 on usage)",
+      "+ the five-question body + ephemeral-citation scan (task-<digits>-* artifacts and .mstar/sdd/… deeplinks — " +
+      "exit 1 on violations, 2 on usage)",
   )
   .argument("[skill-dir]", "Skill directory containing SKILL.md")
   .action((skillDir?: string) => {
@@ -1309,6 +1311,23 @@ skillCommand
       const fiveQuestion = lintFiveQuestion(stripFrontmatter(text));
       printChecklist("skill lint (five questions)", fiveQuestion);
       violations.push(...fiveQuestion.violations);
+      // findEphemeralCitations is a discovery finder (array, no GateResult);
+      // wrap into a GateResult like the other skill lint checklists — empty
+      // array passes, each citation is one violation (codes
+      // skill.ephemeral.<kind>, knowledge conventions §3).
+      const ephemeral = findEphemeralCitations(text);
+      const ephemeralGate: GateResult = {
+        ok: ephemeral.length === 0,
+        violations: ephemeral.map((citation) => ({
+          ok: false,
+          severity: "medium",
+          code: `skill.ephemeral.${citation.kind}`,
+          message: `ephemeral ${citation.kind} citation at line ${citation.line}: "${citation.match}" — task artifacts and SDD deeplinks survive nothing; durable skill text cites in-repo artifacts only (knowledge conventions/skill-content-porting-discipline.md §3)`,
+          fix: `rewrite "${citation.match}" as a placeholder form (e.g. task-N-report, <plan-id>, {SDD_DIR}/task-N-report.md) or cite a stable in-repo artifact instead`,
+        })),
+      };
+      printChecklist("skill lint (ephemeral citations)", ephemeralGate);
+      violations.push(...ephemeralGate.violations);
       if (violations.length > 0) process.exitCode = 1;
     } catch (error) {
       failScript(error, "skill lint");
