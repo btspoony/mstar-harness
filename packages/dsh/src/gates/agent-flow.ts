@@ -757,10 +757,17 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
 function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
   const counts = new Map<string, number>()
   for (const event of events) {
-    const role = event.kind === 'dispatch' ? event.role : ''
-    // Workflow kinds (plan `20260815-dsh-workflow-ledger` Task 2) carry no
-    // role/outcome — bucket them by kind so workflow rows stay DISTINCT from
-    // the dispatch/settle counts (Task 4 refines the catalog presentation).
+    // Workflow kinds (plan `20260815-dsh-workflow-ledger` Task 4) count as a
+    // DISTINCT bucket — a dedicated `workflow` pseudo-role, never folded into
+    // the dispatch-role counts (replaces the Task-2 stopgap role=''
+    // kind-bucket). The outcome is the STABLE kind name, so run / member /
+    // run-end rows stay distinguishable in the summary; every event lands in
+    // exactly one bucket (the role×outcome sum = the window's event count).
+    const role =
+      event.kind === 'dispatch' ? event.role
+      : event.kind === 'workflow-run' || event.kind === 'workflow-agent' || event.kind === 'workflow-run-end'
+        ? 'workflow'
+        : ''
     const outcome =
       event.kind === 'dispatch' ? event.verdict : event.kind === 'settle' ? event.outcome : event.kind
     const key = `${role}\u0000${outcome}`

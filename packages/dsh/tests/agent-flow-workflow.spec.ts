@@ -666,3 +666,71 @@ describe('workflow-ledger consumer — cold scan over session event snapshots (p
     }
   })
 })
+
+/* ===========================================================================
+ * 5. Catalog view — workflow rows + the DISTINCT summary bucket
+ *    (plan `20260815-dsh-workflow-ledger` Task 4)
+ * ========================================================================== */
+
+describe('catalog view — workflow rows + distinct summary bucket (plan W-B2 Task 4)', () => {
+  it('summary counts workflow runs as a DISTINCT bucket — never folded into dispatch-role counts', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-workflow-summary-')
+    try {
+      const T0 = 1_700_000_000_000
+      recordWorkflowEvent({ harnessDir, event: { v: 1, ts: T0, kind: 'workflow-run', runId: 'run-1', name: 'fan-out' } })
+      recordWorkflowEvent({ harnessDir, event: { v: 1, ts: T0 + 1, kind: 'workflow-agent', runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' } })
+      recordWorkflowEvent({ harnessDir, event: { v: 1, ts: T0 + 2, kind: 'workflow-run-end', runId: 'run-1', stopReason: 'completed' } })
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+
+      const view = readAgentFlow(harnessDir)
+      expect(view).not.toBeNull()
+      // The workflow rows classify with their STABLE catalog field names
+      // (runId/name/seq/label/childId/stopReason — the panel contract).
+      // Latest first: the dispatch (recorded at wall-clock NOW, after the T0
+      // workflow rows) is the newest event.
+      expect(view!.events.map((e) => e.kind)).toEqual(['dispatch', 'workflow-run-end', 'workflow-agent', 'workflow-run'])
+      expect(view!.events[1]).toMatchObject({ kind: 'workflow-run-end', runId: 'run-1', stopReason: 'completed' })
+      expect(view!.events[2]).toMatchObject({ kind: 'workflow-agent', runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' })
+      expect(view!.events[3]).toMatchObject({ kind: 'workflow-run', runId: 'run-1', name: 'fan-out' })
+      // Summary: workflow rows sit in a DISTINCT 'workflow' pseudo-role bucket
+      // (outcome = the stable kind name); the dispatch-role counts stay
+      // untouched — the Task-2 stopgap role='' kind-bucket is replaced.
+      expect(view!.summary).toEqual([
+        { role: 'fullstack-dev', outcome: 'ok', count: 1 },
+        { role: 'workflow', outcome: 'workflow-agent', count: 1 },
+        { role: 'workflow', outcome: 'workflow-run', count: 1 },
+        { role: 'workflow', outcome: 'workflow-run-end', count: 1 },
+      ])
+      // No workflow row hides under an empty role (stopgap behavior) and no
+      // dispatch-role row absorbs a workflow count.
+      expect(view!.summary.filter((r) => r.role === '')).toEqual([])
+      expect(view!.summary.filter((r) => r.role === 'fullstack-dev')).toEqual([{ role: 'fullstack-dev', outcome: 'ok', count: 1 }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('multiple runs + repeated members aggregate into the SAME distinct workflow buckets', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-agentflow-workflow-summary2-')
+    try {
+      const T0 = 1_700_000_000_000
+      recordWorkflowEvent({ harnessDir, event: { v: 1, ts: T0, kind: 'workflow-run', runId: 'run-1', name: 'fan-out' } })
+      recordWorkflowEvent({ harnessDir, event: { v: 1, ts: T0 + 1, kind: 'workflow-agent', runId: 'run-1', seq: 1, label: 'worker', childId: 'c1' } })
+      recordWorkflowEvent({ harnessDir, event: { v: 1, ts: T0 + 2, kind: 'workflow-agent', runId: 'run-1', seq: 2, label: 'worker', childId: 'c2' } })
+      recordWorkflowEvent({ harnessDir, event: { v: 1, ts: T0 + 3, kind: 'workflow-run', runId: 'run-2', name: 'audit' } })
+      recordWorkflowEvent({ harnessDir, event: { v: 1, ts: T0 + 4, kind: 'workflow-run-end', runId: 'run-2', stopReason: 'error' } })
+
+      const view = readAgentFlow(harnessDir)
+      expect(view!.summary).toEqual([
+        { role: 'workflow', outcome: 'workflow-agent', count: 2 },
+        { role: 'workflow', outcome: 'workflow-run', count: 2 },
+        { role: 'workflow', outcome: 'workflow-run-end', count: 1 },
+      ])
+      // The sum of the summary counts = the window's event count (every event
+      // lands in exactly one bucket — the role×outcome invariant).
+      expect(view!.summary.reduce((sum, r) => sum + r.count, 0)).toBe(view!.events.length)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
