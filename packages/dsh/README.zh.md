@@ -44,10 +44,12 @@ dsh plugin --profile web add dsh-llm-fallbacks
 | `dispatchTools` | `string[]` | `['subagent', 'subagent_fork']` | 派发闸门匹配的委派工具名——dsh preset 的**两个**委派工具：`subagent` 及其 fork 兄弟 `subagent_fork`（两者都携带 Assignment 形态的 `{ description, prompt }` 参数；`toolName` 配置可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
 | `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id（`Execute as`）→ dsh-llm-fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——装饰从不读取它（见 LLM fallbacks integration）。 |
-| `rolePersonas` | `Record<string, string>` | 未设置 | mstar 角色 id（`Execute as`）→ persona 文本；基于角色的 subagent 装饰的唯一载荷来源——角色匹配的 `subagent/start` 会把 persona 注册为子会话的 `mstar:role-persona` system-prompt 段（见 LLM fallbacks integration）。 |
+| `rolePersonas` | `Record<string, string>` | 未设置（打包镜像默认） | mstar 角色 id（`Execute as`）→ persona 文本；基于角色的 subagent 装饰的**覆盖**来源——角色匹配的 `subagent/start` 会把 persona 注册为子会话的 `mstar:role-persona` system-prompt 段；某角色未设置时使用打包的 `harness-agents/` 镜像默认值（见 LLM fallbacks integration）。 |
 | `skillRoots` | `string[]` | 未设置（不注册自定义根） | 向 dsh skill-filesystem 提供者注册的额外技能根（`customSkillDirs` 语义——先于用户根扫描）。开发期：镜像 `<repo-root>/skills` 的绝对路径。 |
 | `bundledSkillDir` | `string` | 打包的 `harness-skills/` 镜像（包相对路径） | 向 dsh skill-filesystem 提供者注册的打包技能根（`bundledSkillDir` 语义——最后扫描、受信任）。默认取包内自带的 `harness-skills/` 镜像（`bundle-assets` 同步；gitignore）——包相对路径，**非** cwd 锚定。显式值优先。 |
 | `catalogTtlMs` | `number` | `60000` | pre-step catalog 缓存刷新间隔（毫秒）：按工作区缓存的统一 `mstar-engine-status` 行（水印 + 迭代闸门 + 工作区摘要）多久重读一次 `status.json` / compass / 知识索引。刷新间隔之间热路径只是时间戳比较 + Map 命中；会话中 plan/compass/residual 的变化会在一个间隔内落地。 |
+| `workflowGate` | `'off' \| 'warn' \| 'ask' \| 'hard'` | `'warn'` | workflow/ralph 闸门模式（见 Gates → Workflow / ralph gate）。`off` = 直通且不产生 verdict 行；`warn` = 仅咨询；`ask` = 首见名字走审批瀑布（P-c）；`hard` = 策略违规在任何子进程启动前否决。默认 `warn` 不改任何 hard 行为——除非部署显式选入 `ask`/`hard`，闸门仅咨询。 |
+| `workflowNames` | `string[]` | 未设置 | workflow 名字白名单（P-a）：被闸门视为 KNOWN 的 `meta.name` 值。为空或缺省 ⇒ **每个**名字都 unknown（有文档——闸门**绝不**因缺省而"全放行"）。ralph 调用不携带 `meta.name`——P-a 对其永不适用。 |
 
 `bundledSkillDir` 默认取包内自带的 `harness-skills/` 镜像（见 Skills mount）——显式 Config 值仍然优先。相对覆盖仍是 **cwd 锚定**（skill-filesystem 以 `join()` 语义相对 dsh **进程 cwd** 解析），因此覆盖默认的部署应在 **profile 层传绝对路径**（见 `bundle/README.md`）。
 
@@ -96,6 +98,31 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 作用于已配置技能根下 `SKILL.md` 文件的 `fs/write-intent` 监听器，对写入前的磁盘文档运行 engine 技能撰写 lint（`lintFrontmatter` + `lintFiveQuestion`——与 CLI `mstar skill lint` 组合一致）。该槽位**内容盲**（intent 瀑布链只携带 `(target, actor)`）：文件缺失 = 首次创建 = 放行；磁盘文档干净 = 静默放行；告警模式下有违规 = 咨询 + 委托；hard 模式下有违规 = **修复逃生**——文档**已经**非法，本次写入可能就是修复本身（error 级日志 + `hard: true, repair: true` 咨询，携带强制执行后的 `hardBlocked` 判定）。强制执行解析方式与其他闸门相同（Config 覆盖优先，否则取迭代 compass，否则仅告警）。闸门从不抛出；读取失败与意外错误降级为放行并发出 `degraded: true` 咨询。类型化 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）位于传入文档分支（`lintSkillWrite`）——当前接线见 Known Limitations。
 
+### Workflow / ralph gate
+
+`tools/pre-execute` 的一个分支（位于 subagent prompt 分支**之前**）把关 **`workflow`** 与 **`ralph`** 工具调用——这是剩余的不携带 Assignment 文本、模型可达的扇出路径。它匹配**固定**工具名（`workflow` / `ralph`）；重命名后的 `workflow` 实例不在范围（名字守卫是固定默认）。非 workflow 工具不受影响——subagent 分支照旧拥有它们，语义不变。
+
+**四级模式**（Config `workflowGate`，默认 `warn`）：`off`（直通，无 verdict 行）、`warn`（仅咨询）、`ask`（首见名字走 dsh 审批瀑布——`{kind:'ask'}`，上游 fail-closed；本闸门不自造应答器）、`hard`（策略违规在任何子进程启动前否决）。策略是**单一**决策点——P-b 租约归属**最先**运行并抢占 P-a/P-c，然后才是 P-a 名字白名单，最后 P-c 首见 ask。
+
+| 策略 | `off` | `warn`（默认） | `ask` | `hard` |
+| --- | --- | --- | --- | --- |
+| **P-b**：调用工作区存在 `InProgress` 且无 `execution_lease` 覆盖的 plan | allow（闸门短路 `off`） | **warn**——放行 + 咨询（`workflow.lease.uncovered`）+ 一条 warn | **warn**——放行 + 咨询 + 一条 warn（ask 通道只服务首见**名字**，绝不替代工作区红线） | **deny**——在任何子进程启动前否决（`workflow.lease.uncovered`），reason 引用 plan id |
+| **P-a**：workflow 名字 ∈ `workflowNames`（非空列表） | allow（短路） | allow——无咨询（P-a 在任何模式下都放行） | allow——无 ask | allow |
+| **P-a**：workflow 名字 unknown（空/缺省列表 ⇒ **每个**名字都 unknown） | allow（短路） | **warn**——放行 + 咨询（`workflow.name.unknown`）+ 一条 warn | **ask**（首见）→ `{kind:'ask'}`；之后复用缓存决策（allow/deny）——已解析名字**绝不**再 ask | **deny**——在任何子进程启动前否决（`workflow.name.unknown`），reason 点名该名字 |
+| **ralph**（无 `meta.name`——无白名单身份） | allow（短路） | allow——P-a/P-c 永不适用 | allow——P-a/P-c 永不适用 | allow——P-a/P-c 永不适用；P-b 仍适用（uncovered 时 deny） |
+
+**默认 `warn` 的理由。** 默认 `warn` 使闸门**绝不**让部署意外吃硬阻断：除非操作者显式选入 `ask`（人工 ask 通道）或 `hard`（否决），闸门仅咨询。`workflowNames` 空/缺省使每个名字都 unknown——闸门**绝不**因缺省而"全放行"，但默认模式把这一点变成咨询而非阻断。
+
+**与 `Enforcement: hard` 的交互。** workflow 闸门的模式是它**自己**的 Config 旋钮——跨切面的 `Enforcement: hard` 解析（compass / Assignment 头字段 / Config `enforcement`）**不会**升级 `workflowGate`。hard-enforcement 部署仍按已配置模式运行 workflow 闸门（默认 `warn` = 仅咨询），除非同时设置 `workflowGate: 'ask'` 或 `'hard'`；反之 `workflowGate: 'hard'` 与跨切面解析无关地否决。二者不可混淆：workflow 闸门**只在部署把模式选入**时才关闭 "Enforcement: hard 下的未把关扇出" 缺口。
+
+**Fail-open 边缘（有文档，绝不崩溃合规调用）。**（1）畸形参数——`workflow` 调用缺少非空字符串 `meta.name`（控制字符归一化之后），或 `ralph` 调用缺少字符串 `objective` → 在**每个**模式下（hard 亦然）直通 + 一条 warn，且**无** verdict 行（未产生策略判定）。只含控制字符的名字归一化为空 → 视为畸形。（2）`status.json` 不可读——经含容解析器路径的 P-b 状态读取抛出 → 仅本次调用的 P-b 降级 + 一条 warn；P-a/P-c（基于名字，无状态依赖）照常运行。闸门**从不抛出**：每次读取都是结构化的。
+
+**Verdict 账本行。** 每个被把关的调用都在 agent-flow 账本记录**一条**持久化 `workflow-verdict` 行（P2 账本 plan 的记录路径，完全含容——账本写入失败绝不波及闸门）：`tool`（`workflow` \| `ralph`）、`workflow`（归一化后的 `meta.name`）或 `objective`、`mode`（绝不为 `off`——off 在策略前短路）、判定词汇 **`ok` / `advisory` / `denied` / `ask`**（`ask` 判定是本次扩展：首见 ask 本身也是被把关的调用，其行携带 `ask` 直到审批瀑布解析——"每次被把关的调用一行"）。违规码来自判定、绝不猜测：`workflow.name.unknown`（P-a）vs `workflow.lease.uncovered`（P-b）。fail-open 路径（畸形参数 / 状态不可读）不记录；未解析出 harness 目录的调用跳过该行（与派发记录路径相同的静默 no-op）。
+
+**P-c 答案观测 seam。** 闸门无法观测 ask 结果——工具注册表的 `serviceAsk` 在内部消费审批结果。**run-start 观测就是答案 seam**：被 ALLOW 的 ask 执行调用 → 持久化 `tool-workflow/run-start` 会话事件落入父会话日志 → workflow-ledger 消费者记录 W-B2 `workflow-run` 行**并**把 `allow` 按运行名缓存进 apply 作用域的 `WorkflowAskCache`。被 DENY 的答案不产生运行 → 无观测 → `ask` 模式下下一次同名调用**重新 ask**（fail-closed——无授权证据，绝不发明 allow）。缓存键在两个 seam 都是**归一化**（剥离 ASCII 控制字符）**不截断**的名字——闸门合成 `meta.name` 与观测记录 `runName` 都走同一个 `normalizeWorkflowName`，因此含控制字符的名字（`au\u0000dit`）永远无法卡死缓存（ask 一次、同一键观测），>1024 字符的名字仍以完整名字为键（账本行的展示名字单独截断；身份轴从不截断）。缓存是 apply 作用域的——新 apply（HMR 重载）从空开始，因此未解析的首见名字每次调用都会重新 ask，直到一次观测（或显式 `record()`）落地。缓存记录抛错时观测降级为一条 warn——账本行已追加，运行不受影响。
+
+**P-b 抢占。** 租约红线最先运行：调用工作区存在 uncovered 的 `InProgress` plan 意味着在 plan 恢复前**不应**启动任何可写扇出子进程——与 workflow 名字无关（与 Assignment 键控的租约闸门同一条红线），对 ralph 同样适用。`warn`/`ask` 下仅咨询（放行 + 一条 warn）；ask 通道绝不替代工作区红线。
+
 ## LLM fallbacks integration
 
 可选的 `dsh-llm-fallbacks` 插件（以第二条命令安装——见 Install paths）驱动**基于角色的 subagent 配置**：角色匹配的 subagent 派发会把配置的 persona 注入子会话的 system prompt。mstar 插件将其声明为 registry `dependencies` 条目并**仅作类型导入**——`dist/` 对该包**无打包运行时导入**（仅 3 处命名该包的字符串字面量——探测的 loader 条目匹配与两条装饰日志——绝非导入；构建中的 `--external dsh-llm-fallbacks` 仍是对未来库形态导入的护栏）；互操作是决策点**能力探测**，绝不读取其他插件的模块内部。
@@ -111,18 +138,30 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 ### 基于角色的装饰
 
-装饰挂在 `subagent/start` EMIT 上——而非 `tools/pre-execute`（工具参数是深度冻结快照；persona/`agentOptions` 来自 tool-subagent 自己的 Config，绝不来自调用参数）。同步监听器经 `ctx.get('agents')?.get(info.id)` 解析已发布的子会话，当子会话的种子任务提示为 Assignment 形态且配置了 `rolePersonas[executeAs]` 时，把 persona 注册为子会话的 **agent 作用域 `mstar:role-persona` system-prompt 段**（order 1——紧随部署 persona 槽之后；子会话销毁时自动卸载）。角色身份使用与派发闸门**相同**的 engine Assignment 头语法。persona 查找直接取 `rolePersonas[executeAs]`——**绝不**以 `roleMap` 或 fallbacks 挂载状态为前提。
+装饰挂在 `subagent/start` EMIT 上——而非 `tools/pre-execute`（工具参数是深度冻结快照；persona/`agentOptions` 来自 tool-subagent 自己的 Config，绝不来自调用参数）。同步监听器经 `ctx.get('agents')?.get(info.id)` 解析已发布的子会话，当子会话的种子任务提示为 Assignment 形态时，把 persona 注册为子会话的 **agent 作用域 `mstar:role-persona` system-prompt 段**（order 1——紧随部署 persona 槽之后；子会话销毁时自动卸载）。角色身份使用与派发闸门**相同**的 engine Assignment 头语法。persona 查找是单一 `personaFor` 链——`rolePersonas[executeAs]` → 打包镜像默认值 → 跳过——**绝不**以 `roleMap` 或 fallbacks 挂载状态为前提。
 
-**未挂载的降级为同通道 + 一条 debug 日志**：无 fallbacks 条目 → persona 仍经完全相同的装饰通道从 mstar Config 注入，仅多一条 debug 日志；已挂载 → 一条携带服务版本的 info 级互操作日志。监听器绝不抛出——`agents` 服务缺失、子会话无法解析、非 Assignment 或角色未匹配的提示均跳过/无操作（派发本身永不受影响）。
+**零配置默认值**：当 `rolePersonas` 未为某角色配置条目时，persona 取自打包的 `harness-agents/` 镜像——构建时由 `bundle-assets` 从仓库根 `agents/` 同步（随发布 tarball 携带；包相对路径解析，任意启动 cwd 均可用）。镜像文件名主干即角色 id；默认值为其 frontmatter `description` 块标量。镜像 shell 在 frontmatter `mode` 缺失或为 `subagent` 时才有资格——`primary` shell（`project-manager`）绝不作为 subagent persona 默认值。默认值 description 若含插值风险（配对的 `{{`/`}}`）则在提取时告警并跳过（绝非启动抛错）；shell 改动（mtime 变化）会在下一次决策点读取时重新提取。镜像缺失（未运行 `bundle-assets`）时查找仅走配置，配置也未命中时每次 apply 记一条 debug。
+
+**未挂载的降级为同通道 + 一条 debug 日志**：无 fallbacks 条目 → persona 仍经完全相同的装饰通道注入（来自 mstar Config 或 harness-agents 镜像默认值），仅多一条来源可辨的 debug 日志；已挂载 → 一条携带服务版本的 info 级互操作日志。监听器绝不抛出——`agents` 服务缺失、子会话无法解析、非 Assignment 或角色未匹配的提示均跳过/无操作（派发本身永不受影响）。
 
 **persona 文本约束**：dsh system-prompt 以**严格 `{{variable}}` 插值**渲染 persona 文本，因此 persona 值**绝不能**包含与后文 `}}` 配对的 `{{`（渲染器在子会话提示组装时对未知/畸形引用直接抛错——会破坏每一次角色匹配的派发）。Config schema 会在插件挂载时以清晰报错拒绝此类 `rolePersonas` 值。不带后续 `}}` 的孤立 `{{` 按字面散文渲染（安全）；转义规则是改用单花括号或改写措辞。persona 文本保持简短（几句话）；长度在部署侧设限。
+
+### 采纳建议（Adoption advisory）
+
+当可选的 `dsh-llm-fallbacks` 能力**已挂载**时，一条只告警的采纳建议通道**每次 apply 只跑一遍**（日志器 `mstar/fallbacks-advisory`）：结构化读取部署的 fallbacks 行配置（loader 条目的 `options.config`——与 fallbacks 插件 `apply()` 收到的值相同；绝不读插件模块内部），并按**每类至多一条告警**有界告警：
+
+- **（b）缺失 mstar 角色**——`roles.list` 中缺失的 mstar 角色 id（一条告警列出全部）。id 集合派生自 `harness-agents/` 镜像（文件名主干按 `mode: subagent` 过滤）——绝不硬编码；无镜像 → 分类检查跳过并记一条 debug。
+- **（c）空 persona**——已声明角色实体其 `persona` 缺失/空白（一条告警点名）。
+- **（d）遗留键**——`chains`、`roles.default`、`roles.list[].label`/`.description`、悬空 `roles.rules[].role` 引用，经已应用服务自带的 `detectLegacyKeys`（一条告警引用其语义；loader 回退探测路径上跳过——绝不重新实现）。
+
+行配置缺失或非对象、或 `roles.list` 不可读 → 跳过并记一条 debug。该建议**绝不写入** fallbacks 配置（对部署配置层只读）、绝不抛出，且 **fallbacks 未挂载时不调用**——它是信号，不是闸门。通道在 apply 时先尝试一次；当 fallbacks 行在 `dsh` 之后挂载（loader 并发挂载条目）时，改在首个 `subagent/start` 决策点只跑一遍。
 
 ### 配置面
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id → fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——装饰按设计不使用（persona 注入以 `rolePersonas` 为源）。 |
-| `rolePersonas` | `Record<string, string>` | 未设置 | mstar 角色 id → persona 文本；装饰的唯一载荷来源。 |
+| `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id → fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——装饰按设计不使用（persona 注入以 `rolePersonas`/镜像为源）。 |
+| `rolePersonas` | `Record<string, string>` | 未设置（打包镜像默认） | mstar 角色 id → persona 文本；装饰的**覆盖**来源——某角色无条目时使用镜像默认值。 |
 
 ## Service
 
@@ -176,6 +215,32 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 一个咨询式 `agent/pre-step` 瀑布监听器向每个组合后的步骤追加**一条** **`mstar-engine-status`** catalog MessageSource（`kind`/`form: 'catalog'` 契约，镜像 dsh tool-skill 先例）：模型可见的 `<mstar_engine_status>` 块渲染水印字段——**mstar 版本**（插件自身清单；单一版本不变量把打包的 engine 钉在同一版本）、**harness 目录**（解析后的 `{HARNESS_DIR}`，缺失为 `none`）、**enforcement**（compass 模式，`soft` / `hard (compass)`）——以及 **迭代相位闸门段**（当 steering compass + `status.json` 可解析时：迭代 id、transition、all-plans-done、闸门判定 + 违规码——即 `mstar iteration gate` 工具结果形态）与 **工作区状态摘要段**（当工作区有 `status.json` 时）：**plans**（`id(status)` 注册表）、**residuals**（按 severity 的 open 计数）、**branch**（base → target、spec 集成）、**policy**（push 政策、worktree 模式、control 根）、**leases**（活跃 plan 执行租约：持有者 + worktree）、**knowledge**（知识索引文档数与分类）与 **direction**（steering compass 的 problem statement 一句话）。监听器先调用 `next()` 并基于委托后的决策追加——从不否决步骤、从不替换已组合的消息。模型可见 ⟺ 已记录：持久化的 `catalog` 形态 source 在模型面向的散文旁记录了其发布的事实，会话日志无需重新解析该块即可重建该行（dsh packages/AGENTS.md）。fiber 销毁即移除监听器（HMR 安全）。
 
 该行是 **digest 门控**的：按 agent+workspace，每个 turn 只注入一次，仅当渲染文本变化时重新注入——20 步的 turn 只显示一次 catalog，而不是 20 次。source 共享**同一**按工作区缓存条目：显式 `harnessDir` 时在 boot 构建（否则在工作区首次 pre-step 构建），并按 TTL 刷新（`catalogTtlMs`，默认 60 秒）——刷新间隔之间热路径只是时间戳比较 + Map 命中，会话中 plan/compass/residual 的变化在一个间隔内落地。
+
+## Agent-flow ledger（workflow 行）
+
+agent-flow 账本——`{HARNESS_DIR}/agent-flow.jsonl`，即 catalog 的 `state.agentFlow` 证据所读的同一 JSONL——同样记录 **workflow / ralph 扇出运行**：一个会话事件消费者（日志器 `mstar/workflow-ledger`，apply 时注册）把四个持久化的 `tool-workflow/*` 会话事件映射为三种新账本类型。事实来源是**持久化会话事件**——追加进**调用方父会话**的日志（仅顶层运行；嵌套 transport 调用上游不记录任何东西），而**不是**内存中的 `workflow/*` emits（roadmap §10.4 N4）：会话日志才是可回放的事实，因此消费者以 **apply 时冷扫描**（构造期种子事件从不进 firehose——`firstLiveSeq`）加实时 **`session/event` firehose** 监听覆盖它，按**持久化逐会话水位线**（会话日志 `seq` 位置）去重——水位线持久化到 `{HARNESS_DIR}/workflow-ledger-cursors.json`（账本旁的小型有界 sidecar，temp 文件 + rename 原子写入）。
+
+| `tool-workflow/*` 事件 | 账本行 | 字段 |
+| --- | --- | --- |
+| `run-start` | `workflow-run` | `runId`、`name`、`agent?`（承载的父会话 id） |
+| `agent-start` | `workflow-agent` | `runId`、`seq`（1 起始的成员序号）、`label`、`phase?`、`childId` |
+| `run-end` | `workflow-run-end` | `runId`、`stopReason`（`completed` / `cancelled` / `error`） |
+
+`tool-workflow/agent-end` 是上游成员簿记，**没有账本类型**（成员 `outcome` 有意不持久化），被过滤掉。可选字段（`agent` / `phase`）缺席时从序列化行省略（lossless-JSON 纪律）；三种类型共用账本的 `AGENT_FLOW_MAX_EVENTS` 截断 + 大小门禁，畸形行读取时收敛为 `undefined`（绝不重序列化）。展示字段（`name` / `label` / `phase`）在边界确定性限长（`WORKFLOW_LEDGER_MAX_NAME_LENGTH` 1024、`WORKFLOW_LEDGER_MAX_LABEL_LENGTH` 512——超长值以 `…` 标记截断）；id 尺寸字段（`runId` / `childId`，上限 512）超长时**整行跳过**——绝不截断成碰撞。
+
+**第四种类型 `workflow-verdict`** 由 workflow/ralph 闸门（而非本消费者）写入——每个被把关的调用一行（`tool`、`workflow`/`objective`、`mode`、判定 `ok`/`advisory`/`denied`/`ask`、违规 `code`）——见 Gates → Workflow / ralph gate。展示身份字段（`workflow` / `objective`）同样带 1024 字符上限；判定的违规码绝不猜测（P-a `workflow.name.unknown` vs P-b `workflow.lease.uncovered`）。
+
+**去重与回放范围。** 持久化水位线即去重机制：**冷热重叠**以及**插件重应用/重启**（重注册读取持久化水位线而非从空游标开始）下每个 `(runId, kind, seq)` 只产一行。**apply 之后创建**、带构造期种子日志（恢复/分叉会话——其种子从不进 firehose）的会话会在上游 `session/created` 事件上**冷扫描一次**，水位线同样保证该回填幂等。水位线 sidecar 有界（每 harness 会话数上限，驱逐优先已不在线的会话）且完全受控：水位线不可读/不可写时降级为仅内存并告警一次——重启后会重录（诚实的去重欠录，绝不丢数据、绝不阻塞）。
+
+**childId 关联 + 成员计数。** `workflow-agent` 行保留已发布成员的 `childId`（子会话 id）；运行的展示 `name` 只存在于 `workflow-run` 行，面板为 agent/end 行经窗口查找解析（同一 `runId`——成员行本身不带名称）。面板把成员 COUNT 挂到 `workflow-run` 行（窗口内该 `runId` 的 `workflow-agent` 行数；窗口有界——被 ≤50 事件窗口截掉的成员如实缺席，绝不猜 0）。
+
+**深度咨询（观察时）。** `agent-start` 时，消费者经 `sessions.get(childId)` 解析子会话，当其 `header.delegationDepth` ≥ 2 时告警——每个运行**至多一次**（per-runId 闩锁），日志器 `mstar/workflow-ledger`。仅观察时，**绝不是拒绝通道**：子会话读取抛出只降级咨询本身，绝不影响行或运行。
+
+**零行为变更保证。** 消费者仅观察：**零门禁**——每次读取与追加都 try/catch 包裹；账本写入失败绝不崩溃或改变 workflow 运行；会话读取抛出只记一条 warn 并继续。`sessions` 服务经 `ctx.get('sessions')` **结构化**读取——对 `@deepseek-ai/dsh-session` 无运行时依赖。
+
+**挂载顺序说明。** 消费者只在 apply 时 `sessions` 服务可用时激活——**dsh-session 行必须先于 mstar 行挂载**（标准 `web` profile 顺序即如此）。dsh-session 后于插件挂载（或缺失）的组合**静默**降级：一条 debug 日志（`sessions service absent — workflow-ledger consumer disabled`）且不记录任何行——绝不是错误，绝不是运行损坏。
+
+**面板可见性。** 三种 workflow 行经现有事件行样式（无重设计）渲染在 **事件记录（Event Log）tab** 的 Agent 流转事件分区：摘要身份是运行 NAME（agent/end 行经窗口查找解析；回退 runId → 「未知」），详情体新增四个 workflow 字段——run-id / name / members / stop-reason（缺失 → 「—」）——expected/settled 席位渲染「—」（workflow 行不是角色派发——不存在 settle 配对，与 settle 行同先例）。未知 kind 字符串渲染为**通用行**（kind 原文、无 workflow 字段）——绝不丢弃、绝不猜测。catalog 摘要把 workflow 行计为**独立** `workflow` 桶（模型行 `by role: workflow N`）——绝不并入派发角色计数。
 
 ## Web 客户端插件（工作流面板）
 
@@ -257,7 +322,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **入口是 `src/gates/*` 之上的模块索引**——拆分已交付：`src/index.ts`（371 行）从各 gate 模块（`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`）原样 re-export 冻结的 47 名导出面（28 值导出 + 19 type-only 名；`Config` 计一次），并保留插件 manifest、单一 cordis augmentation 点、命令注册与 `apply()` 启动接线。导出面由 `tests/export-surface.spec.ts` 冻结——运行时值导出集 + `typecheck:tests`（`bunx tsc --noEmit -p tests/tsconfig.json`）下的值命名空间恒等与逐名类型探测。
 - **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。
 - **迭代 stepper：Step 1 为 compass 驱动，Step 5 为 schema 驱动**——zone dashboard 的 Step 1（iteration-start）在 steering compass `status: active`（Phase 1 进行中）时为当前步（无 gate 判定 → 无 PASS/FAIL 徽标）；Step 5（merge-ready）是 engine 闸门永不点亮为当前的 schema 常量（transition 只覆盖 Phase 2→3→4，merge-ready 从不是 gate transition）；仅当 Step 4 为当前步时作为 `next` 渲染，其余为 idle——已记录于迭代 guide，非缺陷。完整面板限制清单见 Web 客户端插件一节。
-- **`dsh-llm-fallbacks` 为 registry `dependencies` 条目且仅类型导入**——声明 `^0.1.0-alpha.4`（caret 范围允许 alpha.5/beta/stable；探测形状断言测试是可执行的漂移闸门）并在构建中 `--external`，因此 `dist/` 无打包运行时导入（仅 3 处命名该包的字符串字面量）；激活是**单独显式安装**（双命令契约），绝不传递。库形态依赖存在是为未来值导入无需改 manifest 即可解析；`--external` 仍是护栏。
+- **`dsh-llm-fallbacks` 为 registry `dependencies` 条目且仅类型导入**——声明 `^0.1.3`（caret 范围允许 0.1.4/0.2.0；探测形状断言测试是可执行的漂移闸门）并在构建中 `--external`，因此 `dist/` 无打包运行时导入（仅 3 处命名该包的字符串字面量——探测的 loader 条目匹配与两条装饰日志；建议日志写作 `fallbacks`）；激活是**单独显式安装**（双命令契约），绝不传递。库形态依赖存在是为未来值导入无需改 manifest 即可解析；`--external` 仍是护栏。
 - **本批次未交付角色→模型覆盖**——把角色路由到 fallbacks `model`（或经 fallbacks 规则路由 persona）需要改写启动请求上的子会话 `agentOptions`，但启动请求选项由调用方控制（tool-subagent 自己的 Config；调用参数仅为 `description`/`prompt`/`run_in_background`，且深度冻结）。等待上游 `fallbacks-explicit-role-tool` 或 N-B1 systemPrompt 采纳（roadmap §10.4）。
 - **装饰是最小化的每子会话段，而非 N-B1 systemPrompt 采纳**——`mstar:role-persona` 是子上下文上的一个 agent 作用域段；无 harness 规则段、无 PromptContext、无变量。N-B1（roadmap §10.4）日后可吸收或替换该通道而不改变可观察行为（AC-3）。
 - **persona 注入与 fallbacks 无关**——`dsh-llm-fallbacks` 只路由 LLM 失败；装饰从不依赖它。未挂载 → 同一 persona 经同一通道来自 mstar Config，仅多一条 debug 日志（AC-4）。若组合中缺 `ctx.get('agents')`（无 dsh-agent），装饰以一条 debug 日志跳过。

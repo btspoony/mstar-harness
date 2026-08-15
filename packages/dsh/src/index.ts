@@ -28,6 +28,7 @@ import { DshMstar } from './service.ts'
 import {
   Config,
   HarnessResolver,
+  packagedAgentsDir,
   skillLocalConfig,
 } from './gates/_shared.ts'
 import {
@@ -63,9 +64,20 @@ import type { AgentFlowPairing, TaskDoneSnapshot } from './gates/agent-flow.ts'
 import {
   DECORATION_LOGGER,
   decorateSubagentStart,
+  setDecorationAgentsDir,
   setDecorationLogger,
 } from './gates/fallbacks-decoration.ts'
+import {
+  WORKFLOW_LEDGER_LOGGER,
+  registerWorkflowLedger,
+  setWorkflowLedgerLogger,
+} from './gates/workflow-ledger.ts'
 import type { SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
+import {
+  ADVISORY_LOGGER,
+  runFallbacksAdvisory,
+  setAdvisoryLogger,
+} from './gates/fallbacks-advisory.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -88,8 +100,16 @@ export {
   readAgentFlow,
   recordDispatch,
   recordSettle,
+  recordWorkflowVerdict,
 } from './gates/agent-flow.ts'
-export type { AgentFlowEvent, DispatchVerdict, SettleOutcome } from './gates/agent-flow.ts'
+export type {
+  AgentFlowEvent,
+  DispatchVerdict,
+  SettleOutcome,
+  WorkflowGateMode,
+  WorkflowVerdict,
+  WorkflowVerdictInput,
+} from './gates/agent-flow.ts'
 export { Config, HarnessResolver, skillLocalConfig } from './gates/_shared.ts'
 export type { StatusGateAdvisory } from './gates/status.ts'
 export { SkillLintVetoError, lintSkillDoc, lintSkillWrite } from './gates/skill-lint.ts'
@@ -102,9 +122,12 @@ export {
   PERSONA_SECTION_NAME,
   PERSONA_SECTION_ORDER,
   decorateSubagentStart,
+  setDecorationAgentsDir,
   setDecorationLogger,
 } from './gates/fallbacks-decoration.ts'
 export type { DecorationLogLevel, DecorationLogSink, SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
+export { ADVISORY_LOGGER, runFallbacksAdvisory, setAdvisoryLogger } from './gates/fallbacks-advisory.ts'
+export type { AdvisoryLogLevel, AdvisoryLogSink } from './gates/fallbacks-advisory.ts'
 export { DshHostAdapter } from './gates/adapter.ts'
 export type { DshHostAdapterOptions } from './gates/adapter.ts'
 
@@ -373,7 +396,62 @@ export function apply(ctx: Context, config: Config): void {
     else if (level === 'info') logger.info(message)
     else logger.warn(message)
   })
+  // Persona-defaults mirror root (plan `20260815-dsh-fallbacks-personas`
+  // Task 3): the packaged `harness-agents/` mirror (synced from the repo
+  // root by `bundle-assets`; gitignored) — bound at apply so the
+  // decoration's zero-config default lookup is package-relative (dist-depth)
+  // regardless of launch cwd; absent when `bundle-assets` has not run
+  // (config-only decoration).
+  setDecorationAgentsDir(packagedAgentsDir())
+  // Adoption advisory (plan `20260815-dsh-fallbacks-personas` Task 4) — the
+  // warn-only deployment-taxonomy pass: when fallbacks is mounted, ONE pass
+  // per apply structurally reads the deployment's fallbacks row config
+  // (loader entry `options.config` — never the fallbacks plugin's module
+  // internals) and warns on missing mstar roles / empty personas / legacy
+  // keys (logger `mstar/fallbacks-advisory`). Never writes the fallbacks
+  // config; unreadable config → skip + one debug.
+  setAdvisoryLogger((level, message) => {
+    const logger = ctx.logger(ADVISORY_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else logger.warn(message)
+  })
+  // One-shot latch: the pass is attempted at apply (profiles that declare
+  // the fallbacks row before dsh) and — when unmounted at boot — at the
+  // first `subagent/start` decision point (the loader mounts entries
+  // concurrently; the same decision-point probe pattern as the decoration).
+  let advisoryPassed = false
+  const runAdvisoryPass = (): void => {
+    if (advisoryPassed) return
+    advisoryPassed = runFallbacksAdvisory(ctx, packagedAgentsDir())
+  }
+  runAdvisoryPass()
   registerSettleListener(ctx, config, pairing)
+
+  // Workflow-ledger session-event consumer (plan `20260815-dsh-workflow-ledger`
+  // Task 3 — the W-B2 producer half): a cold scan over `ctx.sessions.list()`
+  // at apply (durable `tool-workflow/*` rows already in each session's events
+  // snapshot — constructor-seeded events never hit the firehose) plus a live
+  // `session/event` firehose listener, both appending through
+  // `recordWorkflowEvent` (fully try/catch-contained). The dsh-session seam
+  // is STRUCTURAL (`ctx.get('sessions')` — the package is not a dependency);
+  // an absent service degrades to one debug log with the consumer disabled.
+  // Observe-only: a failing ledger write never crashes or alters a workflow
+  // The consumer also carries the P-c answer observation (plan
+  // `20260815-dsh-workflow-gate` Task 4 fold-in — the Task-2 Important
+  // handoff): a recorded run-start means the approval waterfall allowed the
+  // call, so the run's name is cached `allow` in the adapter's apply-scoped
+  // `workflowAskCache` — a later same-name call under `ask` reuses the
+  // decision without re-asking. W-1 (qc2 fix-wave): the observation
+  // promotes ONLY names the policy marked asked this apply (`markAsked` on
+  // every ask verdict) — a run observed without a prior ask (P-b advisory
+  // under ask mode, warn/off runs) never pre-authorizes the name. Bounded +
+  // contained (see workflow-ledger.ts).
+  setWorkflowLedgerLogger((level, message) => {
+    const logger = ctx.logger(WORKFLOW_LEDGER_LOGGER)
+    if (level === 'warn') logger.warn(message)
+    else logger.debug(message)
+  })
+  registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache)
 
   // Background-task settle pairing — the SECOND real completion seam: a
   // terminal task snapshot (completed/killed/failed) pairs via the registry
@@ -503,7 +581,13 @@ export function apply(ctx: Context, config: Config): void {
   // mixined `ctx.on`) because `subagent/start` is declared by
   // `@deepseek-ai/dsh-subagent`, which this plugin deliberately does not
   // depend on — the payload is consumed structurally.
-  ctx.events.on('subagent/start', (info: SubagentRunInfoView) => decorateSubagentStart(ctx, config, info))
+  ctx.events.on('subagent/start', (info: SubagentRunInfoView) => {
+    // Adoption advisory decision point: the loader has settled by the first
+    // dispatch, so an advisory skipped at apply (fallbacks row mounted after
+    // dsh) runs its ONE pass here instead — never more than once per apply.
+    runAdvisoryPass()
+    decorateSubagentStart(ctx, config, info)
+  })
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
   // (agent catalog): calls `next()` (never vetoes or

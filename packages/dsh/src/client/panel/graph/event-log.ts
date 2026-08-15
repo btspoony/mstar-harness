@@ -17,7 +17,10 @@
  *   re-implemented). Off-pipeline (unexpected) DISPATCHES fold in via
  *   `expected: false`: `view.unexpected` is a RE-LIST of rows already inside
  *   `view.events`, so reading it here would double-append — the page decides
- *   how to section/badge them.
+ *   how to section/badge them. Workflow rows (plan `20260815-dsh-workflow-ledger`
+ *   Task 4) carry the run identity (`runId` / `name` — agent/end rows resolve
+ *   the run's name from the window's workflow-run row); unknown kinds pass
+ *   through as generic rows (`name` '' — never fabricated).
  * - `violation` rows — `view.violations` (gate violations, str()-guarded)
  *   after the event rows; the page renders them in their own 违规记录
  *   partition.
@@ -25,13 +28,18 @@
 
 import type { FlowEventStatus, FlowEventView, ZoneView } from './project-graph.ts'
 
+/** The three workflow ledger kinds (plan `20260815-dsh-workflow-ledger` W-B2). */
+export function isWorkflowKind(kind: FlowEventView['kind']): boolean {
+  return kind === 'workflow-run' || kind === 'workflow-agent' || kind === 'workflow-run-end'
+}
+
 /** One agent-flow event row: the log's 流转事件 partition (spec §5). */
 export interface EventLogEventEntry {
   /** Entry discriminator — this row is an agent-flow event. */
   kind: 'event'
   /** Stable per-projection id (reuses the projected event's window id — React key). */
   id: string
-  /** 'dispatch' | 'settle' — the page distinguishes settle rows (✓ glyph, no role). */
+  /** The ledger kind verbatim — the page distinguishes settle rows (✓ glyph, no role) and workflow rows (run name). */
   eventKind: FlowEventView['kind']
   /** `Execute as`; '' for settle rows and missing roles (never fabricated). */
   role: string
@@ -43,7 +51,7 @@ export interface EventLogEventEntry {
   task: string
   /** Event timestamp; 0 when missing (the render shows「—」— never a guessed time). */
   ts: number
-  /** Dispatch → dispatched|advisory|denied; settle → ok|error|denied (token-colored). */
+  /** Dispatch → dispatched|advisory|denied; settle → ok|error|denied; workflow/unknown → unknown (token-colored). */
   status: FlowEventStatus
   /** Dispatch with an exact-identity-paired settle (an unpaired settle stays unpaired — honest); settle rows are never "settled". */
   settled: boolean
@@ -51,6 +59,16 @@ export interface EventLogEventEntry {
   durationMs: number | null
   /** role ∈ EXPECTED_ROLE_FLOW union — false = off-pipeline (unexpected) dispatch. */
   expected: boolean
+  /** Workflow run id (workflow-* + unknown rows, when carried); '' otherwise. */
+  runId: string
+  /**
+   * The workflow run's display name (plan `20260815-dsh-workflow-ledger`
+   * Task 4): the workflow-run row carries its own name; workflow-agent /
+   * workflow-run-end rows resolve the run's name from the window's
+   * workflow-run row (same runId — honest, the ledger row itself carries no
+   * name); '' when not a workflow row or the run row is truncated out.
+   */
+  name: string
 }
 
 /** One gate violation row: the log's 违规记录 partition (spec §5). */
@@ -79,7 +97,7 @@ function taskTag(event: FlowEventView): string {
 }
 
 /** One event row: every field degrades individually (missing → ''/0/null). */
-function eventEntryOf(event: FlowEventView): EventLogEventEntry {
+function eventEntryOf(event: FlowEventView, runNames: ReadonlyMap<string, string>): EventLogEventEntry {
   return {
     kind: 'event',
     id: event.id,
@@ -93,6 +111,13 @@ function eventEntryOf(event: FlowEventView): EventLogEventEntry {
     settled: event.settled,
     durationMs: event.durationMs,
     expected: event.expected,
+    // Workflow run identity (plan `20260815-dsh-workflow-ledger` Task 4): the
+    // workflow-run row carries its own name; agent/end rows resolve the run's
+    // name via the window lookup ('' when absent — never fabricated).
+    runId: event.runId ?? '',
+    name: event.kind === 'workflow-run' && event.name !== undefined
+      ? event.name
+      : event.runId !== undefined ? runNames.get(event.runId) ?? '' : '',
   }
 }
 
@@ -105,7 +130,16 @@ function eventEntryOf(event: FlowEventView): EventLogEventEntry {
  * state when the whole array is empty (spec §8).
  */
 export function eventLogEntries(view: ZoneView): EventLogEntry[] {
-  const entries: EventLogEntry[] = view.events.map(eventEntryOf)
+  // Workflow run names (plan `20260815-dsh-workflow-ledger` Task 4): the run
+  // name lives on the workflow-run row only — agent/end rows of the same run
+  // resolve it from the window (truncated-out run rows degrade to '').
+  const runNames = new Map<string, string>()
+  for (const event of view.events) {
+    if (event.kind === 'workflow-run' && event.name !== undefined && event.name !== '') {
+      runNames.set(event.runId ?? '', event.name)
+    }
+  }
+  const entries: EventLogEntry[] = view.events.map((event) => eventEntryOf(event, runNames))
   view.violations.forEach((violation, i) => {
     entries.push({
       kind: 'violation',

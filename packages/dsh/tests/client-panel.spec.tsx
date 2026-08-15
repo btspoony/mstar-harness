@@ -2235,6 +2235,43 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).not.toContain('<details')
   })
 
+  it('workflow rows render with the run name + workflow detail fields; unknown kinds render as generic rows (plan W-B2 Task 4)', () => {
+    const html = eventsHtml(flowSource([
+      { ts: 3_000, kind: 'workflow-run-end', runId: 'run-1', stopReason: 'completed' },
+      { ts: 2_000, kind: 'workflow-agent', runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' },
+      { ts: 1_000, kind: 'workflow-run', runId: 'run-1', name: 'fan-out', agent: 'sess-1' },
+      { ts: 500, kind: 'future-kind' }, // unknown kind → generic row (degradation path)
+    ]))
+    // All four rows render — none dropped: 3 workflow + 1 unknown-kind generic.
+    expect(html.match(/data-event-log-row-kind="event"/g)).toHaveLength(4)
+    expect(html).toContain('data-event-log-row-id="3000-workflow-run-end-0"')
+    expect(html).toContain('data-event-log-row-id="2000-workflow-agent-1"')
+    expect(html).toContain('data-event-log-row-id="1000-workflow-run-2"')
+    expect(html).toContain('data-event-log-row-id="500-future-kind-3"')
+    // The summary identity shows the run name (agent/end rows resolve it via
+    // the window lookup; the run row carries its own name).
+    expect(html.match(/data-event-log-name="fan-out"/g)).toHaveLength(3)
+    // Workflow detail fields render (run-id / name / members / stop-reason).
+    for (const field of ['run-id', 'name', 'members', 'stop-reason']) {
+      expect(html).toContain(`data-event-log-field="${field}"`)
+    }
+    // The run-END row (rendered first, latest-first) carries the stop reason.
+    const endRow = html.match(/data-event-log-row-id="3000-workflow-run-end-0"[\s\S]*?<\/li>/)?.[0] ?? ''
+    const stopField = endRow.match(/data-event-log-field="stop-reason"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(stopField).toContain('data-event-log-missing="false"')
+    expect(stopField).toContain('>completed</span>')
+    // The workflow-RUN row carries the member count (1 agent row in the
+    // window); the end/agent rows have no count (「—」).
+    const runRow = html.match(/data-event-log-row-id="1000-workflow-run-2"[\s\S]*?<\/li>/)?.[0] ?? ''
+    const membersField = runRow.match(/data-event-log-field="members"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(membersField).toContain('data-event-log-missing="false"')
+    expect(membersField).toContain('>1</span>')
+    const endMembers = endRow.match(/data-event-log-field="members"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(endMembers).toContain('data-event-log-missing="true"')
+    // No unexpected badge on workflow/generic rows (dispatch-only marker).
+    expect(html).not.toContain('data-event-log-unexpected')
+  })
+
   it('mixed empty: violations only → the events partition degrades independently (its own muted note)', () => {
     // fullSource: agentFlow null (0 events) + 2 gate violations.
     const html = eventsHtml(fullSource)

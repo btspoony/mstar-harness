@@ -28,6 +28,12 @@
  * `readAgentFlow` + `AGENT_FLOW_FILE` / `AGENT_FLOW_MAX_EVENTS` /
  * `SETTLE_SEAM`) and its event/view types joined the entry surface — a
  * deliberate, reviewed addition (new module), not a split drift.
+ *
+ * Extended for plan `20260815-dsh-workflow-gate` (Task 4): the durable
+ * workflow/ralph gate verdict record (`recordWorkflowVerdict` + the
+ * `workflow-verdict` vocabulary types) joined the entry surface — the
+ * ledger plan's record path, matching the `recordDispatch` / `recordSettle`
+ * precedent.
  */
 import { describe, expect, it } from 'bun:test'
 import type { Context, Events } from '@deepseek-ai/cordis'
@@ -36,6 +42,11 @@ import type * as EntryTypes from '../src/index.ts'
 
 /** The frozen VALUE exports (runtime-visible; `Config` is also an interface). */
 const FROZEN_VALUE_EXPORTS = [
+  // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 4:
+  // the warn-only adoption advisory surface (logger label, the one-pass
+  // entry, and the apply-bound sink setter — mirror of the decoration's
+  // logger pattern).
+  'ADVISORY_LOGGER',
   'AGENT_FLOW_FILE',
   'AGENT_FLOW_MAX_EVENTS',
   'Config',
@@ -62,12 +73,24 @@ const FROZEN_VALUE_EXPORTS = [
   'readAgentFlow',
   'recordDispatch',
   'recordSettle',
+  // Deliberate addition for plan `20260815-dsh-workflow-gate` Task 4: the
+  // durable workflow/ralph gate verdict record (one row per gated call —
+  // the ledger plan's record path; the `workflow-verdict` kind).
+  'recordWorkflowVerdict',
+  'runFallbacksAdvisory',
+  // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 3:
+  // the persona-defaults mirror-root binding (mirror of setDecorationLogger
+  // — apply binds it, tests restore it).
+  'setAdvisoryLogger',
+  'setDecorationAgentsDir',
   'setDecorationLogger',
   'skillLocalConfig',
 ] as const
 
 /** The frozen TYPE-ONLY exports (erased at runtime — pinned for typecheck). */
 const FROZEN_TYPE_ONLY_EXPORTS = [
+  'AdvisoryLogLevel',
+  'AdvisoryLogSink',
   'AgentFlowEvent',
   'AgentFlowEventView',
   'AgentFlowSummaryRow',
@@ -87,6 +110,12 @@ const FROZEN_TYPE_ONLY_EXPORTS = [
   'SkillLintAdvisory',
   'StatusGateAdvisory',
   'SubagentRunInfoView',
+  // Deliberate additions for plan `20260815-dsh-workflow-gate` Task 4: the
+  // `workflow-verdict` ledger vocabulary (verdict + mode + record input —
+  // the adapter's public `recordWorkflowVerdict` method types).
+  'WorkflowGateMode',
+  'WorkflowVerdict',
+  'WorkflowVerdictInput',
 ] as const
 
 type Assert<T extends true> = T
@@ -125,6 +154,8 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
     // fails typecheck if the export disappears. The probe object pins the
     // frozen list as documentation and in the test output.
     const typeProbe = {
+      AdvisoryLogLevel: null as unknown as EntryTypes.AdvisoryLogLevel,
+      AdvisoryLogSink: null as unknown as EntryTypes.AdvisoryLogSink,
       AgentFlowEvent: null as unknown as EntryTypes.AgentFlowEvent,
       AgentFlowEventView: null as unknown as EntryTypes.AgentFlowEventView,
       AgentFlowSummaryRow: null as unknown as EntryTypes.AgentFlowSummaryRow,
@@ -144,6 +175,9 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
       SkillLintAdvisory: null as unknown as EntryTypes.SkillLintAdvisory,
       StatusGateAdvisory: null as unknown as EntryTypes.StatusGateAdvisory,
       SubagentRunInfoView: null as unknown as EntryTypes.SubagentRunInfoView,
+      WorkflowGateMode: null as unknown as EntryTypes.WorkflowGateMode,
+      WorkflowVerdict: null as unknown as EntryTypes.WorkflowVerdict,
+      WorkflowVerdictInput: null as unknown as EntryTypes.WorkflowVerdictInput,
     }
     expect(Object.keys(typeProbe).sort()).toEqual([...FROZEN_TYPE_ONLY_EXPORTS].sort())
   })

@@ -150,6 +150,10 @@ export type PanelKey =
   | 'event-log.field.expected'
   | 'event-log.field.settled'
   | 'event-log.field.duration'
+  | 'event-log.field.run-id'
+  | 'event-log.field.name'
+  | 'event-log.field.members'
+  | 'event-log.field.stop-reason'
   | 'event-log.field.severity'
   | 'event-log.field.code'
   | 'event-log.field.message'
@@ -268,6 +272,10 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.expected': '预期角色',
   'event-log.field.settled': '已结算',
   'event-log.field.duration': '耗时',
+  'event-log.field.run-id': '运行 ID',
+  'event-log.field.name': '运行名称',
+  'event-log.field.members': '成员数',
+  'event-log.field.stop-reason': '停止原因',
   'event-log.field.severity': '严重度',
   'event-log.field.code': '代码',
   'event-log.field.message': '信息',
@@ -381,6 +389,10 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.expected': 'Expected role',
   'event-log.field.settled': 'Settled',
   'event-log.field.duration': 'Duration',
+  'event-log.field.run-id': 'Run ID',
+  'event-log.field.name': 'Run name',
+  'event-log.field.members': 'Members',
+  'event-log.field.stop-reason': 'Stop reason',
   'event-log.field.severity': 'Severity',
   'event-log.field.code': 'Code',
   'event-log.field.message': 'Message',

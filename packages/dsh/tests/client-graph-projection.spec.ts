@@ -2182,6 +2182,139 @@ describe('projectGraph — events / unexpected (spec §3 migration)', () => {
   })
 })
 
+/* ---------------------------------------------------------------------------
+ * Workflow rows (plan `20260815-dsh-workflow-ledger` Task 4): the three
+ * workflow kinds project as workflow rows (run identity — name / member
+ * count / stopReason — no gate status), UNKNOWN kinds degrade to GENERIC
+ * rows (never dropped, never guessed); workflow rows never become agent
+ * entities / unexpected entries.
+ * ------------------------------------------------------------------------- */
+
+/** One workflow-run row as the ledger view emits it (W-B2 view schema). */
+function workflowRunRow(over: { ts: number; runId?: string; name?: string; agent?: string }): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'workflow-run',
+    agent: over.agent ?? null,
+    role: '',
+    planId: null,
+    taskId: null,
+    taskCategory: null,
+    ...(over.runId !== undefined ? { runId: over.runId } : {}),
+    ...(over.name !== undefined ? { name: over.name } : {}),
+  }
+}
+
+/** One workflow-agent row as the ledger view emits it (W-B2 view schema). */
+function workflowAgentRow(over: {
+  ts: number
+  runId?: string
+  seq?: number
+  label?: string
+  phase?: string
+  childId?: string
+}): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'workflow-agent',
+    agent: null,
+    role: '',
+    planId: null,
+    taskId: null,
+    taskCategory: null,
+    ...(over.runId !== undefined ? { runId: over.runId } : {}),
+    ...(over.seq !== undefined ? { seq: over.seq } : {}),
+    ...(over.label !== undefined ? { label: over.label } : {}),
+    ...(over.phase !== undefined ? { phase: over.phase } : {}),
+    ...(over.childId !== undefined ? { childId: over.childId } : {}),
+  }
+}
+
+/** One workflow-run-end row as the ledger view emits it (W-B2 view schema). */
+function workflowEndRow(over: { ts: number; runId?: string; stopReason?: 'completed' | 'cancelled' | 'error' }): AgentFlowEventView {
+  return {
+    ts: over.ts,
+    kind: 'workflow-run-end',
+    agent: null,
+    role: '',
+    planId: null,
+    taskId: null,
+    taskCategory: null,
+    ...(over.runId !== undefined ? { runId: over.runId } : {}),
+    ...(over.stopReason !== undefined ? { stopReason: over.stopReason } : {}),
+  }
+}
+
+describe('projectGraph — workflow rows + unknown-kind degradation (plan 20260815-dsh-workflow-ledger T4)', () => {
+  it('projects the three workflow kinds with the run identity; status unknown; never unexpected; no agent entities', () => {
+    const view = projectGraph(flowSource([
+      workflowEndRow({ ts: 6, runId: 'run-1', stopReason: 'completed' }),
+      workflowAgentRow({ ts: 5, runId: 'run-1', seq: 2, label: 'worker', phase: 'implement', childId: 'child-2' }),
+      workflowAgentRow({ ts: 4, runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' }),
+      workflowRunRow({ ts: 3, runId: 'run-1', name: 'fan-out', agent: 'sess-1' }),
+    ]))
+    expect(view.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-agent', 'workflow-run'])
+    const [end, agent2, agent1, run] = view.events
+    expect(run).toMatchObject({ kind: 'workflow-run', runId: 'run-1', name: 'fan-out', agent: 'sess-1', status: 'unknown', expected: false, stage: null })
+    expect(agent1).toMatchObject({ kind: 'workflow-agent', runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1', status: 'unknown' })
+    expect(agent2).toMatchObject({ kind: 'workflow-agent', runId: 'run-1', seq: 2, phase: 'implement', childId: 'child-2', status: 'unknown' })
+    expect(end).toMatchObject({ kind: 'workflow-run-end', runId: 'run-1', stopReason: 'completed', status: 'unknown' })
+    // Workflow rows are NOT dispatches — never unexpected, never lit entities.
+    expect(view.unexpected).toEqual([])
+    expect(view.agents.entities.filter((e) => !e.idle)).toHaveLength(0)
+    // Rows but no dispatch → the settle-only canvas note (unchanged — the
+    // note classifies dispatch EVIDENCE, not workflow activity).
+    expect(view.agents.note).toBe('settle-only')
+  })
+
+  it('the workflow-run row carries the run member count (the window\'s workflow-agent rows for that runId)', () => {
+    const view = projectGraph(flowSource([
+      workflowRunRow({ ts: 9, runId: 'run-1', name: 'fan-out' }),
+      workflowAgentRow({ ts: 8, runId: 'run-1', seq: 2, label: 'worker', childId: 'child-2' }),
+      workflowAgentRow({ ts: 7, runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' }),
+      workflowRunRow({ ts: 6, runId: 'run-2', name: 'audit' }),
+    ]))
+    const run1 = view.events.find((e) => e.kind === 'workflow-run' && e.runId === 'run-1')!
+    const run2 = view.events.find((e) => e.kind === 'workflow-run' && e.runId === 'run-2')!
+    expect(run1.memberCount).toBe(2)
+    // No member rows in the window → the count is ABSENT (degrade, never a 0 guess).
+    expect(run2.memberCount).toBeUndefined()
+  })
+
+  it('an UNKNOWN kind renders as a generic row — never dropped, never guessed', () => {
+    const view = projectGraph(flowSource([
+      { kind: 'workflow-pause', ts: 5, runId: 'run-9' },
+    ]))
+    expect(view.events).toHaveLength(1)
+    expect(view.events[0]).toMatchObject({
+      kind: 'workflow-pause',
+      ts: 5,
+      role: '',
+      status: 'unknown',
+      expected: false,
+      stage: null,
+      settled: false,
+      durationMs: null,
+      runId: 'run-9',
+    })
+    expect(view.unexpected).toEqual([]) // generic rows are not dispatch → never unexpected
+    expect(view.events[0]!.id).toBe('5-workflow-pause-0')
+  })
+
+  it('garbage workflow rows degrade per field (missing/illegal run identity → omitted, never fabricated)', () => {
+    const view = projectGraph(flowSource([
+      { kind: 'workflow-run', ts: 'nope', runId: 42 } as unknown,
+      { kind: 'workflow-run-end', ts: 7, stopReason: 42 } as unknown,
+    ]))
+    const [run, end] = view.events
+    expect(run).toMatchObject({ kind: 'workflow-run', ts: 0, status: 'unknown' })
+    expect(run.runId).toBeUndefined()
+    expect(run.name).toBeUndefined()
+    expect(end).toMatchObject({ kind: 'workflow-run-end', ts: 7, status: 'unknown' })
+    expect(end.stopReason).toBeUndefined()
+  })
+})
+
 describe('projectGraph — settle pairing (identity-based, plan 20260811-panel-f4-timeliness T1)', () => {
   it('a paired settle lands on the most recent same-IDENTITY dispatch BEFORE it in file order', () => {
     // File order: D1(a1, fullstack-dev, t1) → D2(a1, fullstack-dev, t3) →
@@ -2315,12 +2448,12 @@ describe('projectGraph — totality (spec §8)', () => {
     }
   })
 
-  it('never throws on garbage agent-flow rows; unclassifiable rows are skipped, valid rows still project', () => {
+  it('never throws on garbage agent-flow rows; kind-less rows are skipped, unknown kinds degrade to generic rows, valid rows still project', () => {
     const source = flowSource([
       42,
       null,
       'garbage',
-      { kind: 'banana', ts: 9 },                  // unclassifiable kind → skipped
+      { kind: 'banana', ts: 9 },                  // UNKNOWN kind (plan W-B2 Task 4) → generic row, never dropped
       { kind: 'dispatch', role: 42, ts: 8 },      // valid kind, garbage fields → degraded row
       { kind: 'settle', outcome: 42, ts: 7 },     // valid kind, garbage outcome → base status
       dispatchRow({ ts: 6, role: 'fullstack-dev', verdict: 'ok' }),
@@ -2328,11 +2461,13 @@ describe('projectGraph — totality (spec §8)', () => {
     ])
     expect(() => projectGraph(source)).not.toThrow()
     const view = projectGraph(source)
-    expect(view.events.map((e) => e.ts)).toEqual([8, 7, 6, 5])
-    expect(view.events.map((e) => e.kind)).toEqual(['dispatch', 'settle', 'dispatch', 'settle'])
-    expect(view.events.map((e) => e.status)).toEqual(['dispatched', 'ok', 'dispatched', 'error'])
-    expect(view.events[3]!.durationMs).toBe(120)
-    expect(view.unexpected.map((e) => e.role)).toEqual(['']) // the role-42 dispatch degrades to ''
+    expect(view.events.map((e) => e.ts)).toEqual([9, 8, 7, 6, 5])
+    expect(view.events.map((e) => e.kind)).toEqual(['banana', 'dispatch', 'settle', 'dispatch', 'settle'])
+    // The unknown kind has no verdict/outcome → the honest base status is
+    // `unknown` (never a guessed dispatched/ok).
+    expect(view.events.map((e) => e.status)).toEqual(['unknown', 'dispatched', 'ok', 'dispatched', 'error'])
+    expect(view.events[4]!.durationMs).toBe(120)
+    expect(view.unexpected.map((e) => e.role)).toEqual(['']) // the role-42 dispatch degrades to ''; the banana row is NOT a dispatch → never unexpected
     expect(view.agents.degraded).toBe(false)
     expect(view.agents.empty).toBe(false)
   })
@@ -2398,6 +2533,8 @@ describe('eventLogEntries — event rows (spec §5, plan event-log Task 1)', () 
       settled: false, // settle rows are never "settled" themselves
       durationMs: 120,
       expected: true, // the paired role ∈ the EXPECTED_ROLE_FLOW union
+      runId: '', // not a workflow row (plan W-B2 Task 4)
+      name: '',
     })
     expect(dispatch).toEqual({
       kind: 'event',
@@ -2412,6 +2549,8 @@ describe('eventLogEntries — event rows (spec §5, plan event-log Task 1)', () 
       settled: true, // paired with the settle (exact identity)
       durationMs: null, // dispatch rows carry no duration
       expected: true,
+      runId: '', // not a workflow row (plan W-B2 Task 4)
+      name: '',
     })
   })
 
@@ -2444,6 +2583,8 @@ describe('eventLogEntries — event rows (spec §5, plan event-log Task 1)', () 
       settled: false,
       durationMs: null,
       expected: false,
+      runId: '', // not a workflow row (plan W-B2 Task 4)
+      name: '',
     })
     expect(entries[1]).toMatchObject({
       kind: 'event',
@@ -2521,5 +2662,33 @@ describe('eventLogEntries — unexpected folding + window invariant (spec §5, p
     const entries = eventLogEntries(view)
     expect(entries).toHaveLength(50 + view.violations.length)
     expect(entries.filter((e) => e.kind === 'event')).toHaveLength(50)
+  })
+})
+
+describe('eventLogEntries — workflow rows (plan 20260815-dsh-workflow-ledger T4)', () => {
+  it('carries the workflow run identity; agent/end rows get the run name via the window lookup', () => {
+    const view = projectGraph(flowSource([
+      workflowEndRow({ ts: 9, runId: 'run-1', stopReason: 'completed' }),
+      workflowAgentRow({ ts: 8, runId: 'run-1', seq: 1, label: 'worker', childId: 'child-1' }),
+      workflowRunRow({ ts: 7, runId: 'run-1', name: 'fan-out' }),
+    ]))
+    const events = eventLogEntries(view).filter((e) => e.kind === 'event')
+    expect(events).toHaveLength(3)
+    // The workflow-run row shows its OWN name; the agent/end rows resolve the
+    // run's name from the window's workflow-run row (same runId — honest, the
+    // ledger row itself carries no name).
+    expect(events[0]).toMatchObject({ eventKind: 'workflow-run-end', runId: 'run-1', name: 'fan-out', role: '', status: 'unknown' })
+    expect(events[1]).toMatchObject({ eventKind: 'workflow-agent', runId: 'run-1', name: 'fan-out', role: '' })
+    expect(events[2]).toMatchObject({ eventKind: 'workflow-run', runId: 'run-1', name: 'fan-out', role: '' })
+  })
+
+  it('truncated run row → the agent/end name degrades to "" (never fabricated)', () => {
+    const view = projectGraph(flowSource([
+      workflowEndRow({ ts: 5, runId: 'run-x', stopReason: 'cancelled' }),
+      workflowAgentRow({ ts: 4, runId: 'run-x', seq: 1, label: 'worker', childId: 'c1' }),
+    ]))
+    const events = eventLogEntries(view).filter((e) => e.kind === 'event')
+    expect(events[0]).toMatchObject({ eventKind: 'workflow-run-end', runId: 'run-x', name: '' })
+    expect(events[1]).toMatchObject({ eventKind: 'workflow-agent', runId: 'run-x', name: '' })
   })
 })
