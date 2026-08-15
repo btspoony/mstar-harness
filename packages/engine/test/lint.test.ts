@@ -23,12 +23,19 @@
  * - STRATEGY.md structure: `mstar-strategy` SKILL.md § STRATEGY.md structure —
  *   six required sections (Vision, What we build, What we don't build,
  *   Guiding Principles, Technology Direction, Decision Log).
+ * - Ephemeral citations: knowledge `conventions/skill-content-porting-discipline.md`
+ *   §3 ("No ephemeral citations in durable skill text") + session evaluation
+ *   2026-08-16 discrimination contract — placeholder artifact refs
+ *   (`task-N-*`, `<plan-id>`, `{SDD_DIR}`, `.mstar/sdd/<plan-id>/`) pass;
+ *   concrete instances (`task-2-report`, `task-1.diff`,
+ *   `.mstar/sdd/20260815-x/`) are flagged.
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   assertSddTddTriple,
+  findEphemeralCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
   lintSkillFrontmatter,
@@ -109,6 +116,41 @@ const TEMPORARY_PLAN_PATH = `
 
 const TEMPORARY_REMOVAL_PATH_LABEL = `
 // temporary: fast path. removal path: status.json residual R7.
+`;
+
+/** Concrete ephemeral citations — every line must be flagged: concrete task
+ * artifacts (report / dot-diff / fix-report) and a concrete sdd-deeplink. */
+const EPHEMERAL_CONCRETE = `- write report to task-2-report.md
+- review diff at task-1.diff
+- fix report at task-3-fix-report.md
+- deeplink .mstar/sdd/20260815-x/
+`;
+
+/** Placeholder-shaped references that must NOT be flagged (discrimination
+ * contract: letter `N`, `<...>`, `{...}` are template forms, not citations). */
+const EPHEMERAL_PLACEHOLDERS = `- placeholder brief task-N-brief.md
+- placeholder report task-N-report
+- template <plan-id>
+- report path {SDD_DIR}/task-N-report.md
+- deeplink .mstar/sdd/<plan-id>/review/
+- deeplink .mstar/sdd/{SDD_DIR}/
+`;
+
+/** Real corpus line — `skills/mstar-sdd/references/file-handoffs.md` line 26
+ * ("Implementer writes full report to `task-N-report.md`."). The mstar-sdd
+ * SKILL.md itself carries no `task-N-*` literal, so the corpus regression
+ * uses the same skill's reference file. Placeholder `N` → must pass. */
+const EPHEMERAL_REAL_CORPUS = `Implementer writes full report to \`task-N-report.md\`. Return to PM only:
+`;
+
+/** Real corpus regression — `skills/mstar-plan-artifacts/references/
+ * plan-files-and-reports.md` line 80: a global path-allowlist glob
+ * (`.mstar/sdd/**`) is a pattern, not a concrete deeplink → must pass. */
+const EPHEMERAL_REAL_GLOB = `全局 agent 提示词应允许 \`.mstar/sdd/**\`、\`.agents/sdd/**\` 及 worktree 下对应路径。
+`;
+
+/** One line carrying both citation kinds — source order must be preserved. */
+const EPHEMERAL_MULTI = `both on one line: .mstar/sdd/20260815-x/ contains task-3-report.md
 `;
 
 /** Complete TDD triple per mstar-sdd/references/file-handoffs.md:
@@ -403,6 +445,93 @@ describe("findTemporaryMarkers", () => {
     const result = findTemporaryMarkers('const re = /\\s*temporary\\b/;');
     expect(result.ok).toBe(true);
     expect(result.markers).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findEphemeralCitations — knowledge conventions/
+// skill-content-porting-discipline.md §3 ("no ephemeral citations in durable
+// skill text") + session evaluation 2026-08-16 discrimination contract:
+// placeholders pass, concrete instances fail.
+// ---------------------------------------------------------------------------
+
+describe("findEphemeralCitations", () => {
+  test("flags concrete task artifacts with kind task-artifact and 1-based lines", () => {
+    const citations = findEphemeralCitations(EPHEMERAL_CONCRETE);
+    expect(citations).toHaveLength(4);
+    expect(citations.map((c) => c.line)).toEqual([1, 2, 3, 4]);
+    expect(citations.map((c) => c.kind)).toEqual([
+      "task-artifact",
+      "task-artifact",
+      "task-artifact",
+      "sdd-deeplink",
+    ]);
+    expect(citations.map((c) => c.match)).toEqual([
+      "task-2-report",
+      "task-1.diff",
+      "task-3-fix-report",
+      ".mstar/sdd/20260815-x",
+    ]);
+  });
+
+  test("matches multi-digit task numbers and the bare (extension-less) forms", () => {
+    const citations = findEphemeralCitations(
+      "- task-12-report\n- task-1-brief\n- task-2-diff\n",
+    );
+    expect(citations.map((c) => c.match)).toEqual([
+      "task-12-report",
+      "task-1-brief",
+      "task-2-diff",
+    ]);
+  });
+
+  test("does not treat task-N-* / <...> placeholder references as citations", () => {
+    expect(findEphemeralCitations(EPHEMERAL_PLACEHOLDERS)).toEqual([]);
+  });
+
+  test("word boundary keeps task-2-reporting out of the artifact set", () => {
+    expect(findEphemeralCitations("mentions task-2-reporting")).toEqual([]);
+  });
+
+  test("flags concrete sdd-deeplinks under both .mstar/sdd/ and .agents/sdd/", () => {
+    const citations = findEphemeralCitations(
+      "- .agents/sdd/20260815-x/\n- .mstar/sdd/20260816-mechanical-verification/task-3-report.md\n",
+    );
+    expect(citations).toHaveLength(3);
+    expect(citations[0].kind).toBe("sdd-deeplink");
+    expect(citations[0].match).toBe(".agents/sdd/20260815-x");
+    // concrete first segment → deeplink, plus the concrete task artifact inside
+    expect(citations[1]).toEqual({
+      line: 2,
+      match: ".mstar/sdd/20260816-mechanical-verification",
+      kind: "sdd-deeplink",
+    });
+    expect(citations[2]).toEqual({
+      line: 2,
+      match: "task-3-report",
+      kind: "task-artifact",
+    });
+  });
+
+  test("passes the real mstar-sdd corpus line (placeholder task-N-report.md)", () => {
+    expect(findEphemeralCitations(EPHEMERAL_REAL_CORPUS)).toEqual([]);
+  });
+
+  test("passes the real corpus path-allowlist glob (.mstar/sdd/**)", () => {
+    expect(findEphemeralCitations(EPHEMERAL_REAL_GLOB)).toEqual([]);
+  });
+
+  test("reports all citations on one line in source order", () => {
+    const citations = findEphemeralCitations(EPHEMERAL_MULTI);
+    expect(citations).toHaveLength(2);
+    expect(citations[0].kind).toBe("sdd-deeplink");
+    expect(citations[1].kind).toBe("task-artifact");
+    expect(citations[0].line).toBe(1);
+    expect(citations[1].line).toBe(1);
+  });
+
+  test("returns [] for empty input", () => {
+    expect(findEphemeralCitations("")).toEqual([]);
   });
 });
 
