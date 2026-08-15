@@ -201,13 +201,14 @@ export interface MstarHarnessState {
 }
 
 /**
- * One agent-flow ledger event in the catalog view. Optional dispatch/settle
- * fields are OMITTED (never `undefined`-valued properties — `Session.append`
+ * One agent-flow ledger event in the catalog view. Optional fields (dispatch/
+ * settle + the W-B2 `workflow-*` kinds — plan `20260815-dsh-workflow-ledger`
+ * Task 2) are OMITTED (never `undefined`-valued properties — `Session.append`
  * rejects non-lossless JSON) using the `iterationViolationView` omit pattern.
  */
 export interface AgentFlowEventView {
   readonly ts: number
-  readonly kind: 'dispatch' | 'settle'
+  readonly kind: 'dispatch' | 'settle' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end'
   /** The session's stable id; null when the event carried none. */
   readonly agent: string | null
   /** Assignment `Execute as` ('' for settle rows without a paired identity). */
@@ -231,6 +232,20 @@ export interface AgentFlowEventView {
    * they stay unpaired (honest, no owner+time guessing).
    */
   readonly paired?: boolean
+  /** Workflow run identity (workflow events only). */
+  readonly runId?: string
+  /** Workflow run display name (workflow-run events only). */
+  readonly name?: string
+  /** Run-member 1-based sequence within the run (workflow-agent events only). */
+  readonly seq?: number
+  /** Run-member display label (workflow-agent events only). */
+  readonly label?: string
+  /** Run-member phase — workflow-agent events only, when carried. */
+  readonly phase?: string
+  /** The published member's child session identity (workflow-agent events only). */
+  readonly childId?: string
+  /** Terminal workflow run reason (workflow-run-end events only). */
+  readonly stopReason?: 'completed' | 'cancelled' | 'error'
 }
 
 /** One role × outcome count of the agent-flow summary (count desc). */

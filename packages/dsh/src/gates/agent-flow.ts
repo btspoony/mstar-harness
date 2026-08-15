@@ -140,11 +140,60 @@ export const SETTLE_SEAM_PAIRING_NOTE =
 export type DispatchVerdict = 'ok' | 'advisory' | 'denied'
 /** Settle outcome vocabulary (spec §2.1.3). */
 export type SettleOutcome = 'ok' | 'error' | 'denied'
+/** Workflow run terminal reason (`tool-workflow` vocabulary — `workflow/src/types.ts:63`). */
+export type WorkflowStopReason = 'completed' | 'cancelled' | 'error'
 
 /**
- * One v1 ledger event (spec §2.1.3 schema — the JSONL line). Optional fields
- * are OMITTED from the serialized line when absent (Session.append's lossless
- * JSON discipline starts at the record boundary).
+ * One v1 workflow ledger event (plan `20260815-dsh-workflow-ledger` Task 2 —
+ * the W-B2 schema). Produced from the durable `tool-workflow/*` session events
+ * by the Task 3 consumer (`run-start` → `workflow-run`, `agent-start` →
+ * `workflow-agent`, `run-end` → `workflow-run-end`; the upstream `agent-end`
+ * member outcome has no ledger kind). Optional fields (`agent` / `phase`) are
+ * OMITTED from the serialized line when absent (lossless-JSON discipline).
+ */
+export type AgentFlowWorkflowEvent =
+  | {
+      v: 1
+      ts: number
+      kind: 'workflow-run'
+      /** The workflow run's stable id (upstream `runId`). */
+      runId: string
+      /** The run's display name (upstream `name`). */
+      name: string
+      /** The calling session's stable id, when carried. */
+      agent?: string
+    }
+  | {
+      v: 1
+      ts: number
+      kind: 'workflow-agent'
+      /** The workflow run's stable id (upstream `runId`). */
+      runId: string
+      /** 1-based `agent()` call sequence within the run (upstream `seq`). */
+      seq: number
+      /** The published member's display label (upstream `label`). */
+      label: string
+      /** The member's phase, when carried (upstream `phase?`). */
+      phase?: string
+      /** The published child session's stable id (upstream `childId`). */
+      childId: string
+    }
+  | {
+      v: 1
+      ts: number
+      kind: 'workflow-run-end'
+      /** The workflow run's stable id (upstream `runId`). */
+      runId: string
+      /** Terminal run reason (upstream `stopReason`). */
+      stopReason: WorkflowStopReason
+    }
+
+/**
+ * One v1 ledger event (spec §2.1.3 + plan `20260815-dsh-workflow-ledger`
+ * Task 2 — the JSONL line). Optional fields are OMITTED from the serialized
+ * line when absent (Session.append's lossless JSON discipline starts at the
+ * record boundary). The three `workflow-*` kinds are the W-B2 addition —
+ * see {@link AgentFlowWorkflowEvent}.
  */
 export type AgentFlowEvent =
   | {
@@ -188,6 +237,7 @@ export type AgentFlowEvent =
       planId?: string
       taskId?: string
     }
+  | AgentFlowWorkflowEvent
 
 /**
  * The identity of one recorded dispatch, carried by the pairing store so a
@@ -510,12 +560,46 @@ export function recordSettle(input: {
   }
 }
 
+/**
+ * Record one workflow ledger event (plan `20260815-dsh-workflow-ledger` Task 2
+ * — the W-B2 schema). Fully try/catch-contained — NEVER throws into the
+ * session-event consumer (Task 3 wires it); a failing record logs only
+ * (`mstar/agent-flow`), so a ledger write never crashes or alters a workflow
+ * run (Global Constraint: observe-only events are never refusal channels).
+ * The event is serialized lossless — optional fields (`agent` / `phase`) are
+ * omitted when absent at the record boundary; the caller shapes the event
+ * from the durable `tool-workflow/*` session event (`ts` takes the envelope's
+ * `time`). Malformed input is a caller bug — the strict narrowing applies on
+ * READ (`eventFromUnknown`), never here.
+ * @param input - harness dir + the fully-shaped v1 workflow event.
+ */
+export function recordWorkflowEvent(input: { harnessDir: string; event: AgentFlowWorkflowEvent }): void {
+  try {
+    appendEvent(input.harnessDir, input.event)
+    try {
+      invalidator?.(input.harnessDir)
+    } catch (error) {
+      log('error', `catalog invalidation failed (contained): ${errorMessage(error)}`)
+    }
+  } catch (error) {
+    log('error', `workflow record failed (contained — the workflow run proceeds): ${errorMessage(error)}`)
+  }
+}
+
 /** Narrow an unknown JSONL line to a valid v1 event (malformed lines → undefined). */
 function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
   const rec = asRecord(value)
   if (rec === undefined || rec.v !== 1 || typeof rec.ts !== 'number' || !Number.isFinite(rec.ts)) return undefined
   const kind = rec.kind
-  if (kind !== 'dispatch' && kind !== 'settle') return undefined
+  if (
+    kind !== 'dispatch' &&
+    kind !== 'settle' &&
+    kind !== 'workflow-run' &&
+    kind !== 'workflow-agent' &&
+    kind !== 'workflow-run-end'
+  ) {
+    return undefined
+  }
   const agent = typeof rec.agent === 'string' && rec.agent !== '' ? rec.agent : undefined
   if (kind === 'dispatch') {
     if (typeof rec.role !== 'string' || typeof rec.hard !== 'boolean') return undefined
@@ -534,21 +618,65 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
       hard: rec.hard,
     }
   }
-  const outcome = rec.outcome
-  if (outcome !== 'ok' && outcome !== 'error' && outcome !== 'denied') return undefined
+  if (kind === 'settle') {
+    const outcome = rec.outcome
+    if (outcome !== 'ok' && outcome !== 'error' && outcome !== 'denied') return undefined
+    return {
+      v: 1,
+      ts: rec.ts,
+      kind: 'settle',
+      ...(agent !== undefined ? { agent } : {}),
+      outcome,
+      ...(typeof rec.durationMs === 'number' && Number.isFinite(rec.durationMs) ? { durationMs: rec.durationMs } : {}),
+      // Paired-dispatch identity (plan `20260811-panel-f4-timeliness` Task 1):
+      // `role` presence marks a PAIRED settle (kept even when '' — an
+      // empty-role identity is still an identity); planId/taskId omit when empty.
+      ...(typeof rec.role === 'string' ? { role: rec.role } : {}),
+      ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
+      ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
+    }
+  }
+  // Workflow kinds (plan `20260815-dsh-workflow-ledger` Task 2). `runId` is
+  // REQUIRED non-empty on all three (upstream stringId — `tool-workflow`'s
+  // invariant contract); `agent` (workflow-run only) and `phase`
+  // (workflow-agent only) omit when absent — lossless at the read boundary
+  // too. Positional invariants (post-end updates, duplicate member seq) are
+  // the CONSUMER's job — the ledger persists what it sees.
+  if (typeof rec.runId !== 'string' || rec.runId === '') return undefined
+  if (kind === 'workflow-run') {
+    if (typeof rec.name !== 'string' || rec.name === '') return undefined
+    return {
+      v: 1,
+      ts: rec.ts,
+      kind: 'workflow-run',
+      ...(agent !== undefined ? { agent } : {}),
+      runId: rec.runId,
+      name: rec.name,
+    }
+  }
+  if (kind === 'workflow-agent') {
+    if (typeof rec.seq !== 'number' || !Number.isFinite(rec.seq)) return undefined
+    if (typeof rec.label !== 'string' || rec.label === '') return undefined
+    if (typeof rec.childId !== 'string' || rec.childId === '') return undefined
+    return {
+      v: 1,
+      ts: rec.ts,
+      kind: 'workflow-agent',
+      runId: rec.runId,
+      seq: rec.seq,
+      label: rec.label,
+      ...(typeof rec.phase === 'string' ? { phase: rec.phase } : {}),
+      childId: rec.childId,
+    }
+  }
+  const stopReason = rec.stopReason
+  if (stopReason !== 'completed' && stopReason !== 'cancelled' && stopReason !== 'error') return undefined
   return {
     v: 1,
     ts: rec.ts,
-    kind: 'settle',
-    ...(agent !== undefined ? { agent } : {}),
-    outcome,
-    ...(typeof rec.durationMs === 'number' && Number.isFinite(rec.durationMs) ? { durationMs: rec.durationMs } : {}),
-    // Paired-dispatch identity (plan `20260811-panel-f4-timeliness` Task 1):
-    // `role` presence marks a PAIRED settle (kept even when '' — an
-    // empty-role identity is still an identity); planId/taskId omit when empty.
-    ...(typeof rec.role === 'string' ? { role: rec.role } : {}),
-    ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
-    ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
+    kind: 'workflow-run-end',
+    runId: rec.runId,
+    stopReason,
   }
 }
 
@@ -565,6 +693,48 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
       taskCategory: event.taskCategory ?? null,
       ...(event.verdict !== undefined ? { verdict: event.verdict } : {}),
       ...(event.hard !== undefined ? { hard: event.hard } : {}),
+    }
+  }
+  if (event.kind === 'workflow-run') {
+    return {
+      ts: event.ts,
+      kind: 'workflow-run',
+      agent: event.agent ?? null,
+      role: '',
+      planId: null,
+      taskId: null,
+      taskCategory: null,
+      runId: event.runId,
+      name: event.name,
+    }
+  }
+  if (event.kind === 'workflow-agent') {
+    return {
+      ts: event.ts,
+      kind: 'workflow-agent',
+      agent: null,
+      role: '',
+      planId: null,
+      taskId: null,
+      taskCategory: null,
+      runId: event.runId,
+      seq: event.seq,
+      label: event.label,
+      ...(event.phase !== undefined ? { phase: event.phase } : {}),
+      childId: event.childId,
+    }
+  }
+  if (event.kind === 'workflow-run-end') {
+    return {
+      ts: event.ts,
+      kind: 'workflow-run-end',
+      agent: null,
+      role: '',
+      planId: null,
+      taskId: null,
+      taskCategory: null,
+      runId: event.runId,
+      stopReason: event.stopReason,
     }
   }
   return {
@@ -588,7 +758,11 @@ function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
   const counts = new Map<string, number>()
   for (const event of events) {
     const role = event.kind === 'dispatch' ? event.role : ''
-    const outcome = event.kind === 'dispatch' ? event.verdict : event.outcome
+    // Workflow kinds (plan `20260815-dsh-workflow-ledger` Task 2) carry no
+    // role/outcome — bucket them by kind so workflow rows stay DISTINCT from
+    // the dispatch/settle counts (Task 4 refines the catalog presentation).
+    const outcome =
+      event.kind === 'dispatch' ? event.verdict : event.kind === 'settle' ? event.outcome : event.kind
     const key = `${role}\u0000${outcome}`
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
