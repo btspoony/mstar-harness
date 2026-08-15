@@ -113,6 +113,22 @@ After writing, validate the YAML frontmatter:
 - `date` is YYYY-MM-DD format
 - Array fields use `[item1, item2]` syntax
 
+### 3.5 知识文档质量门：HEAD-resolvability & prose hygiene
+
+写作完成、进入 Phase 4 前，对文档运行本质量门（writing-specialist 编辑 durable harness artifacts 时适用同一 rubric — 见 `mstar-roles/references/writing-specialist.md` Output Guidance 指针）：
+
+- **The one test**：读者在 HEAD（无 chat transcript / dispatch prompt / 未合并草稿访问权）能否解析每个引用并验证每个声明？
+- **mstar 泄漏分类**（vantage 来自 authoring session 而非仓库现状；修剪或重述）：
+  - dead session citations：chat-only decision 序号 → 引 plan/knowledge/roadmap 属主路径，或独立重述事实
+  - durable docs 中的 change narration：knowledge/roadmap/README 陈述现状；已修回归 → counterfactual-present（「without X, Y happens」）
+  - review choreography：谁在哪轮确认 → 平实事实；finding id 留在 review bundle（其 sanctioned genre）
+  - reviewer-addressed justification（向评审自辩的措辞）
+  - control-flow narration（过程/控制流叙述）
+  - hedges without markers → 既有 `simplify:` / `temporary` 标记约定（`mstar-coding-behavior`；引用不重复）
+  - authoring-language slips：双语对之外的 zh/en 混杂
+- **Keep 规则（mstar-sanctioned）**：review bundle / QC report 内的 R# 与 finding id（durable 文档引用 QC 证据的 sanctioned pattern 是经 review bundle 路径引用：finding id 留在 bundle 内，durable 文档只引用 bundle 路径本身）；issue 引用；带 provenance 词的 measured bounds；runtime old/new 生命周期态；Alternatives-considered genre 节；HEAD 持久工件中的 iteration/plan id
+- **过度修正陷阱**：义务↛背书翻转；hypothetical 保持标记；共享一句时删子句不删句。「修剪前枚举命题」→ complete-proposition rule（`mstar-roles/references/writing-specialist.md` Output Guidance — SSOT，不在本节重述）
+
 ## Phase 4: Discoverability check
 
 Check whether the project's `AGENTS.md` or `CLAUDE.md` would lead a future agent to discover `{KNOWLEDGE_DIR}`.
