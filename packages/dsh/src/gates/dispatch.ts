@@ -48,11 +48,19 @@ import type { Config } from './_shared.ts'
 // PreToolDecision refusal vocabulary). workflow-policy imports THIS module
 // type-only (`WorkflowGateInput` — erased at runtime), so the value edge is
 // one-way: no runtime cycle.
-import { workflowPolicy, WorkflowAskCache } from './workflow-policy.ts'
+import { workflowPolicy } from './workflow-policy.ts'
+// Type-only (erased at runtime — no cycle): the P-c cache class, referenced
+// by the gateWorkflow doc (`WorkflowAskCache.record` — the answer seam).
+import type { WorkflowAskCache } from './workflow-policy.ts'
 // Type-only (erased at runtime — no cycle): the adapter owns the shared
 // dispatch-gate core and is constructed by the entry `apply`; the listener
 // signatures type their adapter parameter through the adapter module.
 import type { DshHostAdapter } from './adapter.ts'
+// Type-only (erased at runtime — no cycle): the durable workflow-verdict
+// ledger vocabulary. The RECORD goes through the adapter method (it imports
+// agent-flow values) — dispatch.ts itself stays free of a runtime
+// agent-flow edge (the ledger imports dispatch helpers).
+import type { WorkflowVerdict } from './agent-flow.ts'
 /** Logger label for the dispatch gate (dsh logger naming: `<scope>/<subject>`). */
 export const DISPATCH_LOGGER = 'mstar/dispatch-gate'
 
@@ -594,8 +602,8 @@ export function dispatchGateCore(
  * `meta` (workflow) / `objective` (ralph) + the in-flight call.
  */
 export interface WorkflowGateInput {
-  /** The matched tool name (`'workflow'` | `'ralph'`). */
-  tool: string
+  /** The matched tool name (`'workflow'` | `'ralph'` — the gate name-guards on {@link DEFAULT_WORKFLOW_TOOLS} first). */
+  tool: 'workflow' | 'ralph'
   /** `meta.name` for workflow calls — the P-a allowlist input; absent for ralph (no meta). */
   metaName?: string
   /** `objective` for ralph calls (objective-based ledger logging, P-b); absent for workflow. */
@@ -660,33 +668,40 @@ export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | un
  * workspace's status.json — resolved through the contained resolver path)
  * and runs the policy ({@link workflowPolicy} — the SINGLE four-tier
  * decision point: P-b lease attribution + P-a name allowlist + P-c
- * first-seen ask). The verdict maps to the
- * `tools/pre-execute` refusal vocabulary:
+ * first-seen ask). EVERY policy decision records ONE durable
+ * `workflow-verdict` ledger row (Task 4 — verdict + metaName/objective +
+ * mode, via the ledger plan's record path through
+ * {@link DshHostAdapter.recordWorkflowVerdict}; the record is fully
+ * contained and skipped when no harness dir resolved). The verdict maps to
+ * the `tools/pre-execute` refusal vocabulary:
  *
  * - `allow` → undefined (delegate via `next()`; allowlisted names and ralph
- *   pass under any mode).
+ *   pass under any mode) + an `ok` verdict row.
  * - `warn` (default) → allowed WITH an advisory verdict row — the
- *   `mstar/dispatch-gate` advisory (the existing dispatch record path —
- *   Task 4 wires the durable verdict rows) + one warn (Task 1 behavior,
- *   now centralized in the policy).
+ *   `mstar/dispatch-gate` advisory (the existing dispatch record path) +
+ *   one warn (Task 1 behavior, now centralized in the policy) + an
+ *   `advisory` durable verdict row.
  * - `ask` → `{kind:'ask', reason}` returned WITHOUT `next()` (terminal —
  *   the registry services it through the approval waterfall; fail-closed
  *   upstream, this gate invents no answerer). P-c: first-seen names ask;
  *   resolved names (via {@link WorkflowAskCache.record}) use the cached
- *   decision, never a re-ask.
+ *   decision, never a re-ask. The ask itself records an `ask` verdict row
+ *   (pending resolution — the approval-allow outcome is observed later by
+ *   the workflow-ledger consumer's run-start hook).
  * - `deny` → `{kind:'deny', reason}` WITHOUT `next()` (short-circuits the
- *   chain — the veto lands before any child starts).
+ *   chain — the veto lands before any child starts) + a `denied` verdict
+ *   row (no child ledger rows: the veto precedes start).
  *
  * Malformed args (workflow without `meta`/`meta.name`, ralph without a
  * string `objective`) → pass-through + ONE warn (fail-open, documented —
- * never crash a compliant call; under `hard` too). NEVER throws: every
- * read is structural.
+ * never crash a compliant call; under `hard` too) and NO verdict row (no
+ * policy verdict was produced). NEVER throws: every read is structural.
  */
 function gateWorkflow(
   ctx: Context,
   harnessDir: string | null,
   config: Config,
-  cache: WorkflowAskCache,
+  adapter: DshHostAdapter,
   exec: ToolExecution,
 ): PreToolDecision | undefined {
   const toolName = exec.name
@@ -715,18 +730,39 @@ function gateWorkflow(
       `workflow gate (${toolName}) (fail-open): cannot read ${statusLabel} — P-b lease attribution degraded; call allowed`,
     )
   }
-  const verdict = workflowPolicy(config, cache, {
+  const verdict = workflowPolicy(config, adapter.workflowAskCache, {
     ...input,
     ...(pb.uncoveredPlanId !== undefined ? { uncoveredPlanId: pb.uncoveredPlanId } : {}),
   })
+  // Task 4 — ONE durable verdict row per gated call (the ledger plan's
+  // record path, routed through the adapter so dispatch.ts keeps no runtime
+  // agent-flow edge; the record is fully contained — a failing ledger write
+  // never reaches the gate). The fail-open paths above (malformed args /
+  // unreadable status) record nothing — no policy verdict was produced;
+  // `off` short-circuited above. `harnessDir === null` (no workspace) skips
+  // the row — the same silent no-op as the dispatch record path.
+  const recordVerdict = (v: WorkflowVerdict, code?: string): void => {
+    if (harnessDir === null) return
+    adapter.recordWorkflowVerdict({
+      harnessDir,
+      exec,
+      tool: input.tool,
+      ...(input.metaName !== undefined ? { workflow: input.metaName } : {}),
+      ...(input.objective !== undefined ? { objective: input.objective } : {}),
+      mode,
+      verdict: v,
+      ...(code !== undefined ? { code } : {}),
+    })
+  }
   switch (verdict.decision) {
     case 'allow':
+      recordVerdict('ok')
       return undefined
     case 'warn':
       // Advisory + ONE warn (Task 1 behavior, decision now centralized in
       // the policy). The advisory reuses the existing dispatch record path
-      // (Task 4 wires the durable verdict rows). The violation code comes
-      // from the verdict — the gate never guesses which policy fired
+      // (the durable verdict row is the Task 4 wiring). The violation code
+      // comes from the verdict — the gate never guesses which policy fired
       // (P-a `workflow.name.unknown` vs P-b `workflow.lease.uncovered`).
       ctx.logger(DISPATCH_LOGGER).warn(
         `workflow gate (${toolName}) (advisory): ${verdict.reason}`,
@@ -745,13 +781,17 @@ function gateWorkflow(
         },
         hard: false,
       })
+      recordVerdict('advisory', verdict.code)
       return undefined
     case 'ask':
       // Terminal decision — the registry services it via the approval
       // waterfall (fail-closed upstream). Returned WITHOUT `next()` so no
-      // downstream listener can swallow the ask.
+      // downstream listener can swallow the ask. The ask itself is a gated
+      // call → its verdict row carries `ask` (pending resolution).
+      recordVerdict('ask', verdict.code)
       return { kind: 'ask', reason: verdict.reason }
     case 'deny':
+      recordVerdict('denied', verdict.code)
       ctx.logger(DISPATCH_LOGGER).error(`workflow gate (${toolName}) vetoed: ${verdict.reason}`)
       return { kind: 'deny', reason: verdict.reason }
   }
@@ -779,7 +819,7 @@ function gateDispatch(
   // if the names were added to the dispatch-tool match list (W4 double
   // no-op). Keyed on the FIXED tool names — the workflow tools are gated
   // by their own branch, never by `DEFAULT_DISPATCH_TOOLS` addition.
-  const workflowDecision = gateWorkflow(ctx, harnessDir, config, adapter.workflowAskCache, exec)
+  const workflowDecision = gateWorkflow(ctx, harnessDir, config, adapter, exec)
   if (workflowDecision !== undefined) return workflowDecision
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)

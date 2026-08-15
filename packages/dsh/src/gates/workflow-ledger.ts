@@ -45,6 +45,24 @@
  * member `outcome` is intentionally not persisted) and is filtered out.
  * `ts` takes the envelope's `time`.
  *
+ * P-c answer observation (plan `20260815-dsh-workflow-gate` Task 4 fold-in —
+ * the Task-2 Important handoff): the workflow GATE cannot observe the ask
+ * outcome — the tool registry's `serviceAsk` consumes the approval result
+ * internally, and the gate invents no answerer. The run-start observation
+ * IS the answer seam: when the approval waterfall ALLOWS a workflow call,
+ * the call executes and the durable `tool-workflow/run-start` session event
+ * (name carried) lands in the parent session log — the consumer maps it to
+ * the `workflow-run` row AND records `allow` for the run name into the
+ * apply-scoped {@link WorkflowAskCache} (`registerWorkflowLedger`'s third
+ * parameter — the host adapter's instance). A DENIED answer produces no run
+ * → no observation → the next same-name call under `ask` re-asks
+ * (fail-closed — no grant evidence, never an invented allow). The hook is
+ * bounded and contained: it fires only on the FIRST successful recording of
+ * a run-start (the watermark gate above), keyed on the UNCAPPED run name
+ * (`row.runName` — it must match the gate's `meta.name`, which is never
+ * truncated), and a throwing cache record degrades the observation with one
+ * warn — the ledger row is already appended, the run is never affected.
+ *
  * Observe-only (plan Global Constraints: W3 / N5): ZERO gating — every read
  * and append is try/catch-contained; a throwing session read logs one warn
  * and the run is unaffected; all appends go through `recordWorkflowEvent`
@@ -75,6 +93,11 @@ import {
 import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
 import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
+// Type-only (erased at runtime — no cycle): the P-c per-session ask cache
+// (plan `20260815-dsh-workflow-gate` Task 4 fold-in) — this consumer
+// OBSERVES the run-start and records the allow answer into the apply-scoped
+// cache owned by the host adapter.
+import type { WorkflowAskCache } from './workflow-policy.ts'
 
 /** Logger label for the workflow-ledger consumer (dsh logger naming: `<scope>/<subject>`). */
 export const WORKFLOW_LEDGER_LOGGER = 'mstar/workflow-ledger'
@@ -183,6 +206,14 @@ interface WorkflowLedgerRow {
   event: AgentFlowWorkflowEvent
   /** The published member's child session id (agent-start only — for the depth advisory). */
   childId?: string
+  /**
+   * The SANITIZED (but UNCAPPED) run display name — run-start rows only:
+   * the P-c cache key (plan `20260815-dsh-workflow-gate` Task 4 fold-in).
+   * The ledger event's `name` is deterministically capped at the read
+   * boundary; the cache must key on the FULL name — it matches the gate's
+   * `meta.name` (the allowlist/ask identity), which is never truncated.
+   */
+  runName?: string
 }
 
 /** The session's stable id (structural read; branded `SessionId` is a string). */
@@ -344,6 +375,7 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
     const agent = sessionIdOf(session)
     return {
       seq,
+      runName: name,
       event: {
         v: 1,
         ts: time,
@@ -444,8 +476,13 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
  * @param ctx - the plugin's registrant context (the app composition root).
  * @param resolver - the shared per-workspace `{HARNESS_DIR}` resolver
  *   (harnessDir attribution from the carrying session's `header.cwd`).
+ * @param workflowAskCache - the apply-scoped P-c ask cache (plan
+ *   `20260815-dsh-workflow-gate` Task 4 fold-in — the host adapter's
+ *   instance; see the module doc "P-c answer observation"). Absent → the
+ *   observation hook is disabled (W-B2 tests / compositions without the
+ *   workflow gate).
  */
-export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver): void {
+export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, workflowAskCache?: WorkflowAskCache): void {
   // The `sessions` service is absent in compositions without dsh-session —
   // skip + one debug log (documented degrade), never crash.
   const sessions = ctx.get('sessions') as SessionsView | undefined
@@ -492,6 +529,28 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver):
     // calls — the duplicate mode the design already accepts and documents.
     if (recordWorkflowEvent({ harnessDir, event: row.event })) {
       advanceWatermark(harnessDir, sid, row.seq + 1, (candidate) => sessions.get(candidate) === undefined)
+      // P-c answer observation (plan `20260815-dsh-workflow-gate` Task 4
+      // fold-in — the Task-2 Important handoff; see the module doc): a
+      // run-start that produced a ledger row means the call RAN — the
+      // approval waterfall allowed it (or the allow path let it through).
+      // Record `allow` for the run's workflow name so a subsequent
+      // same-name call under `ask` mode reuses the decision instead of
+      // re-asking. A DENIED answer produces no run → no observation → the
+      // next call re-asks (fail-closed — correct). The cache is only ever
+      // consulted for non-allowlisted workflow names under `ask`, so
+      // allowlisted / ralph entries are no-ops. CONTAINED: a throwing
+      // cache record degrades the observation only — the ledger row above
+      // is already appended (and the watermark advanced), the run is
+      // unaffected. The key is the UNCAPPED run name (`row.runName` —
+      // matches the gate's `meta.name`); the ledger display field is
+      // capped separately.
+      if (workflowAskCache !== undefined && row.event.kind === 'workflow-run') {
+        try {
+          workflowAskCache.record(row.runName ?? row.event.name, 'allow')
+        } catch (error) {
+          log('warn', `workflow P-c allow observation degraded (contained — the ledger row stays): ${errorMessage(error)}`)
+        }
+      }
     }
     // Depth advisory — observe-time only, contained (a throwing child read
     // degrades the advisory, never the row or the run).

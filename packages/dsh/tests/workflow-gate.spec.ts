@@ -26,18 +26,34 @@
  * too (no `meta.name` needed). Fold-ins from the Task 2 review: the
  * allowlisted-under-`warn` case (no advisory).
  *
- * Verdict rows surface through the existing dispatch record path
- * (`mstar/dispatch-gate` advisory) until Task 4 wires the durable ledger
- * rows.
+ * Task 4 — ledger integration (this file's last describe block): every
+ * gated workflow/ralph call produces ONE durable `workflow-verdict` ledger
+ * row (verdict + metaName/objective + mode) through the ledger plan's
+ * record path; a denied call produces NO child (W-B2 run) rows; a
+ * compliant call still produces the W-B2 run rows via the workflow-ledger
+ * consumer (the P2 ledger plan's consumer, active when a `sessions`
+ * service is present). The P-c answer observation (the Task-2 Important
+ * handoff fold-in): an ALLOWED ask executes the call, the consumer
+ * observes `tool-workflow/run-start`, records the W-B2 run row AND caches
+ * `allow` for the run name — a second same-name call under `ask` reuses
+ * the decision without re-asking; a denied answer produces no run → the
+ * next call re-asks (fail-closed). The cache-recording failure is
+ * contained — it never breaks the ledger append.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdir, mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
+import { readAgentFlow } from '../src/gates/agent-flow.ts'
+import { registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
+import { HarnessResolver } from '../src/gates/_shared.ts'
+import type { AgentFlowEventView } from '../src/types.ts'
+import type { WorkflowAskCache } from '../src/gates/workflow-policy.ts'
 
 let booted: BootResult | undefined
 
@@ -560,5 +576,256 @@ describe('workflow gate — P-b lease attribution', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
     expect(warns.length - warnSnapshot).toBe(1)
+  })
+})
+
+/* ---------------------------------- Task 4: ledger integration ---------------------------------- */
+
+/** The booted app's agent-flow ledger events, latest first (the verdict-row read). */
+function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
+  const view = readAgentFlow(app.harnessDir)
+  if (view === null) throw new Error(`ledger unreadable at ${app.harnessDir}`)
+  return view.events
+}
+
+/** One structural fake parent session for the e2e consumer tests (consumer-read surface). */
+const parentSession = (id: string, cwd: string): { id: string; events: unknown[]; header: { cwd: string } } =>
+  ({ id, events: [], header: { cwd } })
+
+describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observation)', () => {
+  it('(1) warn + unknown name → ONE advisory verdict row (workflow-verdict, mode + name carried)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'warn' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    const events = ledgerEvents(app)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'workflow-verdict',
+      tool: 'workflow',
+      workflow: 'deploy-x',
+      mode: 'warn',
+      verdict: 'advisory',
+      code: 'workflow.name.unknown',
+    })
+  })
+
+  it('(2) warn + allowlisted name → ONE ok verdict row (P-a passes; the durable row still lands)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'warn', workflowNames: ['deploy-x'] })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    const events = ledgerEvents(app)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ kind: 'workflow-verdict', verdict: 'ok', workflow: 'deploy-x', mode: 'warn' })
+  })
+
+  it('(3) hard + unknown name → denied verdict row + NO child rows (veto precedes start)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'hard' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    const events = ledgerEvents(app)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'workflow-verdict',
+      verdict: 'denied',
+      workflow: 'deploy-x',
+      mode: 'hard',
+      code: 'workflow.name.unknown',
+    })
+    // The veto short-circuited before start: NO W-B2 run/member rows exist.
+    expect(events.filter((e) => e.kind !== 'workflow-verdict')).toHaveLength(0)
+  })
+
+  it('(4) ask first-seen → ask verdict row; allow answer observed via run-start → cache records allow; second same-name call allowed without re-ask', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake' })
+    const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
+    const parent = parentSession('parent-ask-e2e', app.root)
+    sessions.register(parent)
+
+    const first = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(first.kind).toBe('ask')
+    let events = ledgerEvents(app)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ kind: 'workflow-verdict', verdict: 'ask', workflow: 'deploy-x', mode: 'ask' })
+
+    // The human approves: the registry executes the workflow → the durable
+    // run-start lands in the parent session log. The consumer observes it:
+    // the W-B2 run row lands AND the allow answer caches per-session (the
+    // Task-2 Important handoff fold-in — no approval-outcome access needed).
+    sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-ask-e2e', name: 'deploy-x' })
+    events = ledgerEvents(app)
+    expect(events.map((e) => e.kind)).toEqual(['workflow-run', 'workflow-verdict'])
+    expect(app.ctx.dshHostAdapter.workflowAskCache.get('deploy-x')).toBe('allow')
+
+    // Second same-name call: the cached allow is reused — no re-ask, allowed.
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(second).toEqual({ kind: 'allow' })
+    events = ledgerEvents(app)
+    expect(events.map((e) => e.kind)).toEqual(['workflow-verdict', 'workflow-run', 'workflow-verdict'])
+    expect(events[0]).toMatchObject({ kind: 'workflow-verdict', verdict: 'ok', workflow: 'deploy-x', mode: 'ask' })
+  })
+
+  it('(5) ask cached deny → denied + verdict row; no re-ask', async () => {
+    const app = booted = await bootApp({ workflowGate: 'ask' })
+
+    const first = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(first.kind).toBe('ask')
+    app.ctx.dshHostAdapter.workflowAskCache.record('deploy-x', 'deny')
+
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(second.kind).toBe('deny')
+    const events = ledgerEvents(app)
+    expect(events.map((e) => e.kind)).toEqual(['workflow-verdict', 'workflow-verdict'])
+    expect(events[0]).toMatchObject({ kind: 'workflow-verdict', verdict: 'denied', workflow: 'deploy-x', mode: 'ask' })
+    expect(events[1]).toMatchObject({ kind: 'workflow-verdict', verdict: 'ask', workflow: 'deploy-x', mode: 'ask' })
+  })
+
+  it('(6) P-b uncovered + hard → denied verdict row with workflow.lease.uncovered', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-t4-pb-hard-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    // The row records into the CALLING workspace's resolved harness dir
+    // (`.agents/` — the boot has no explicit harness dir, so the resolver
+    // attributes the call to the agent's session workspace).
+    const events = readAgentFlow(join(ws, '.agents'))!.events
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'workflow-verdict',
+      verdict: 'denied',
+      workflow: 'deploy-x',
+      mode: 'hard',
+      code: 'workflow.lease.uncovered',
+    })
+  })
+
+  it('(7) P-b uncovered + warn → advisory verdict row with workflow.lease.uncovered', async () => {
+    const ws = await makeHarnessWorkspace('dsh-ws-t4-pb-warn-')
+    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    const app = booted = await bootApp({ workflowGate: 'warn', harnessDir: null })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    const events = readAgentFlow(join(ws, '.agents'))!.events
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'workflow-verdict',
+      verdict: 'advisory',
+      workflow: 'deploy-x',
+      mode: 'warn',
+      code: 'workflow.lease.uncovered',
+    })
+  })
+
+  it('(8) ralph (objective present) → ok verdict row carrying the objective (no workflow name)', async () => {
+    const app = booted = await bootApp()
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExec('probe the codebase'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    const events = ledgerEvents(app)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'workflow-verdict',
+      tool: 'ralph',
+      objective: 'probe the codebase',
+      mode: 'warn',
+      verdict: 'ok',
+    })
+    expect(events[0]).not.toHaveProperty('workflow')
+  })
+
+  it('(9) compliant workflow run produces the W-B2 run rows alongside the verdict row (consumer integration)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'warn', sessionsService: 'fake' })
+    const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
+    const parent = parentSession('parent-warn-e2e', app.root)
+    sessions.register(parent)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(ledgerEvents(app)).toHaveLength(1) // the advisory verdict row
+
+    // The compliant call RAN: the real tool emits the durable tool-workflow
+    // session events; the workflow-ledger consumer records the W-B2 rows
+    // into the SAME ledger, beside the gate's verdict row.
+    sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-warn-e2e', name: 'deploy-x' })
+    sessions.append(parent, 'tool-workflow/agent-start', { runId: 'run-warn-e2e', seq: 1, label: 'worker', childId: 'child-1' })
+    sessions.append(parent, 'tool-workflow/run-end', { runId: 'run-warn-e2e', stopReason: 'completed' })
+
+    const events = ledgerEvents(app)
+    expect(events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run', 'workflow-verdict'])
+    expect(events[0]).toMatchObject({ kind: 'workflow-run-end', runId: 'run-warn-e2e', stopReason: 'completed' })
+    expect(events[1]).toMatchObject({ kind: 'workflow-agent', runId: 'run-warn-e2e', childId: 'child-1' })
+    expect(events[2]).toMatchObject({ kind: 'workflow-run', runId: 'run-warn-e2e', name: 'deploy-x' })
+    expect(events[3]).toMatchObject({ kind: 'workflow-verdict', verdict: 'advisory', workflow: 'deploy-x', mode: 'warn' })
+  })
+
+  it('(10) off → NO verdict row (the short-circuit precedes the policy)', async () => {
+    const app = booted = await bootApp({ workflowGate: 'off' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(ledgerEvents(app)).toHaveLength(0)
+  })
+
+  it('(11) malformed args → pass-through + NO verdict row (fail-open has no policy verdict)', async () => {
+    const app = booted = await bootApp()
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('workflow', { script: 'probe' }), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(ledgerEvents(app)).toHaveLength(0)
+  })
+
+  it('(12) P-c observation is contained: a throwing cache never breaks the ledger append', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-ws-t4-contain-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    const ctx = new Context()
+    const sessions = new FakeSessionsRegistry(ctx)
+    const parent = parentSession('parent-throw-e2e', root)
+    sessions.register(parent)
+    const throwingCache = {
+      record(): never {
+        throw new Error('cache exploded')
+      },
+      get(): undefined {
+        return undefined
+      },
+    } as unknown as WorkflowAskCache
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger((level, message) => {
+      if (level === 'warn') captured.push(message)
+    })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), throwingCache)
+      sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-throw-e2e', name: 'deploy-x' })
+      const view = readAgentFlow(harnessDir)
+      expect(view).not.toBeNull()
+      // The ledger append succeeded despite the throwing cache hook.
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run'])
+      expect(view!.events[0]).toMatchObject({ kind: 'workflow-run', runId: 'run-throw-e2e', name: 'deploy-x' })
+      // The hook's OWN containment absorbed the throw: the observation
+      // degrade warn fired, and the listener-level catch never ran (a
+      // propagating hook throw would log 'live consume failed').
+      expect(captured.filter((m) => m.includes('P-c allow observation degraded'))).toHaveLength(1)
+      expect(captured.filter((m) => m.includes('live consume failed'))).toHaveLength(0)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

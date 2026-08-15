@@ -208,7 +208,7 @@ export interface MstarHarnessState {
  */
 export interface AgentFlowEventView {
   readonly ts: number
-  readonly kind: 'dispatch' | 'settle' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end'
+  readonly kind: 'dispatch' | 'settle' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | 'workflow-verdict'
   /** The session's stable id; null when the event carried none. */
   readonly agent: string | null
   /** Assignment `Execute as` ('' for settle rows without a paired identity). */
@@ -216,8 +216,8 @@ export interface AgentFlowEventView {
   readonly planId: string | null
   readonly taskId: string | null
   readonly taskCategory: string | null
-  /** Dispatch gate verdict (dispatch events only). */
-  readonly verdict?: 'ok' | 'advisory' | 'denied'
+  /** Gate verdict (dispatch + workflow-verdict events only; `ask` is the workflow-verdict pending-decision member). */
+  readonly verdict?: 'ok' | 'advisory' | 'denied' | 'ask'
   /** resolveDispatchHard result (dispatch events only). */
   readonly hard?: boolean
   /** Settle outcome (settle events only). */
@@ -246,6 +246,16 @@ export interface AgentFlowEventView {
   readonly childId?: string
   /** Terminal workflow run reason (workflow-run-end events only). */
   readonly stopReason?: 'completed' | 'cancelled' | 'error'
+  /** The matched workflow/ralph tool name (workflow-verdict events only). */
+  readonly tool?: 'workflow' | 'ralph'
+  /** The workflow `meta.name` (workflow-verdict events only). */
+  readonly workflow?: string
+  /** The ralph `objective` (workflow-verdict events only). */
+  readonly objective?: string
+  /** The effective `workflowGate` mode at decision time (workflow-verdict events only). */
+  readonly mode?: 'off' | 'warn' | 'ask' | 'hard'
+  /** The policy violation code (workflow-verdict events only, non-ok verdicts). */
+  readonly code?: string
 }
 
 /** One role × outcome count of the agent-flow summary (count desc). */

@@ -35,17 +35,19 @@
  * RESOLVED decisions (`allow` | `deny`) keyed by workflow name.
  *
  * Answer-recording seam (`WorkflowAskCache.record`): the gate CANNOT observe
- * the ask outcome — the tool registry's `serviceAsk` consumes the approval
- * result internally (`deepseek-harness packages/core/tools/src/index.ts`,
- * `prepareExecution`/`serviceAsk`) — so the ANSWER reaches the cache through
- * the explicit `record()` API (the approval owner / answerer integration
- * calls it; the tests drive it to simulate the answerer). An ask whose
- * answer is never recorded leaves no cache entry: the next same-name call
- * asks again (fail-closed — no grant evidence, never an invented allow).
- * simplify: no approval-outcome observer yet; a deployment wiring a
- * persistent answerer must call `record(name, decision)` (or a future
- * session-event observer) for cross-call caching — until then an unanswered
- * first-seen re-asks per call.
+ * the ask outcome directly — the tool registry's `serviceAsk` consumes the
+ * approval result internally (`deepseek-harness packages/core/tools/src/
+ * index.ts`, `prepareExecution`/`serviceAsk`) — so the ANSWER reaches the
+ * cache through the workflow-ledger consumer's run-start observation (plan
+ * `20260815-dsh-workflow-gate` Task 4 fold-in — the Task-2 Important
+ * handoff): an ALLOWED ask executes the call, the durable
+ * `tool-workflow/run-start` session event carries the run name, and the
+ * consumer records `allow` for it (`workflow-ledger.ts`). A DENIED answer
+ * produces no run → no observation → the next same-name call re-asks
+ * (fail-closed — no grant evidence, never an invented allow). The explicit
+ * `record()` API stays the general seam — an answerer integration or the
+ * tests may drive it directly, and an unresolved first-seen re-asks per
+ * call until the observation (or an explicit record) lands.
  *
  * Module boundary: no barrel. This module imports dispatch.ts TYPE-ONLY
  * (`WorkflowGateInput` — erased at runtime, no cycle); dispatch.ts imports

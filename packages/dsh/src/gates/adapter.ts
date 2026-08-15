@@ -35,8 +35,8 @@ import {
   isAssignmentShaped,
   resolveDispatchHard,
 } from './dispatch.ts'
-import { recordDispatch, AGENT_FLOW_LOGGER } from './agent-flow.ts'
-import type { AgentFlowPairing } from './agent-flow.ts'
+import { recordDispatch, recordWorkflowVerdict as appendWorkflowVerdict, AGENT_FLOW_LOGGER } from './agent-flow.ts'
+import type { AgentFlowPairing, WorkflowVerdictInput } from './agent-flow.ts'
 // P-c first-seen ask cache (plan `20260815-dsh-workflow-gate` Task 2):
 // apply-scoped, owned here (constructed with the adapter) so the dispatch
 // gate and tests share ONE instance per plugin apply. workflow-policy
@@ -219,6 +219,23 @@ export class DshHostAdapter extends Service implements HostAdapter {
       }
     }
     return { ok: violations.length === 0, violations }
+  }
+
+  /**
+   * Record one workflow/ralph gate verdict row (plan
+   * `20260815-dsh-workflow-gate` Task 4 — the durable ledger row for every
+   * gated workflow/ralph call: verdict + metaName/objective + mode, via the
+   * ledger plan's record path). `gateWorkflow` routes the record through
+   * this adapter method so dispatch.ts stays free of a runtime agent-flow
+   * import (the ledger imports dispatch helpers — the adapter is the
+   * acyclic junction, the same role it plays for `dispatchGate`). The
+   * underlying record is fully try/catch-contained (a failing ledger write
+   * logs and never reaches the gate) — this method never throws.
+   * @param input - the gate's decision identity (harness dir + tool +
+   *   workflow/objective + mode + verdict + code).
+   */
+  recordWorkflowVerdict(input: WorkflowVerdictInput): void {
+    appendWorkflowVerdict(input)
   }
 
   /**

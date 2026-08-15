@@ -100,8 +100,16 @@ export {
   readAgentFlow,
   recordDispatch,
   recordSettle,
+  recordWorkflowVerdict,
 } from './gates/agent-flow.ts'
-export type { AgentFlowEvent, DispatchVerdict, SettleOutcome } from './gates/agent-flow.ts'
+export type {
+  AgentFlowEvent,
+  DispatchVerdict,
+  SettleOutcome,
+  WorkflowGateMode,
+  WorkflowVerdict,
+  WorkflowVerdictInput,
+} from './gates/agent-flow.ts'
 export { Config, HarnessResolver, skillLocalConfig } from './gates/_shared.ts'
 export type { StatusGateAdvisory } from './gates/status.ts'
 export { SkillLintVetoError, lintSkillDoc, lintSkillWrite } from './gates/skill-lint.ts'
@@ -428,13 +436,18 @@ export function apply(ctx: Context, config: Config): void {
   // is STRUCTURAL (`ctx.get('sessions')` — the package is not a dependency);
   // an absent service degrades to one debug log with the consumer disabled.
   // Observe-only: a failing ledger write never crashes or alters a workflow
-  // run.
+  // run. The consumer also carries the P-c answer observation (plan
+  // `20260815-dsh-workflow-gate` Task 4 fold-in — the Task-2 Important
+  // handoff): a recorded run-start means the approval waterfall allowed the
+  // call, so the run's name is cached `allow` in the adapter's apply-scoped
+  // `workflowAskCache` — a later same-name call under `ask` reuses the
+  // decision without re-asking. Bounded + contained (see workflow-ledger.ts).
   setWorkflowLedgerLogger((level, message) => {
     const logger = ctx.logger(WORKFLOW_LEDGER_LOGGER)
     if (level === 'warn') logger.warn(message)
     else logger.debug(message)
   })
-  registerWorkflowLedger(ctx, resolver)
+  registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache)
 
   // Background-task settle pairing — the SECOND real completion seam: a
   // terminal task snapshot (completed/killed/failed) pairs via the registry
