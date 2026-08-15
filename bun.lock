@@ -29,6 +29,9 @@
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
       "version": "2.1.1",
+      "dependencies": {
+        "dsh-llm-fallbacks": "^0.1.0-alpha.4",
+      },
       "devDependencies": {
         "@mstar-harness/engine": "2.1.1",
         "@types/node": "^25.6.0",
@@ -131,7 +134,11 @@
 
     "@deepseek-ai/dsh-client-ui-settings": ["@deepseek-ai/dsh-client-ui-settings@0.1.0-rc.6", "", { "peerDependencies": { "@deepseek-ai/cordis": "^4.0.1", "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-schema-form": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6", "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6", "@deepseek-ai/dsh-settings": "^0.1.0-rc.6", "react": "^18.2.0" } }, "sha512-g+6w62SWnwMWkn6VuLK6MHcSKbXQZD7oTYLG5wjhDRDULOEBCgikXD3LJo/esOsVncXABDiih8KuDW3Fg8TfSQ=="],
 
+    "@deepseek-ai/dsh-client-ui-settings-plugins": ["@deepseek-ai/dsh-client-ui-settings-plugins@0.1.0-rc.6", "", { "dependencies": { "clsx": "^2.0.0" }, "peerDependencies": { "@deepseek-ai/cordis": "^4.0.1", "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-web-react": "^0.1.0-rc.6", "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6", "react": "^18.2.0" } }, "sha512-KdBqYbXmkt5WMdEC9Hi0jcCd4T19YqE4VgdZSFBsvNHR4RVMAS4G7EgZey2NdAl911Imc/kKsANxWLZ/ETquwQ=="],
+
     "@deepseek-ai/dsh-client-ui-slots": ["@deepseek-ai/dsh-client-ui-slots@0.1.0-rc.6", "", { "peerDependencies": { "@deepseek-ai/cordis": "^4.0.1", "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6" } }, "sha512-F4VZA60bMRi4DAbZvNipM4E/Jl01QC0cQCPpeIEIh1/lq/y/bpc7IqujtzWESHPe3qSljTURip3hkANfsYs3UA=="],
+
+    "@deepseek-ai/dsh-client-web-react": ["@deepseek-ai/dsh-client-web-react@0.1.0-rc.6", "", { "dependencies": { "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6", "react": "^18.2.0", "use-sync-external-store": "1.2.0" }, "peerDependencies": { "@deepseek-ai/cordis": "^4.0.1", "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6" } }, "sha512-2PAnRsZzokVr/nCcwX87axdxzobQYp76xzX70vYSqghlDab1phsIdgDSm1JxpszN9G3ETBMTLPM9xz30iodqYQ=="],
 
     "@deepseek-ai/dsh-code-runtime": ["@deepseek-ai/dsh-code-runtime@0.1.0-rc.6", "", { "peerDependencies": { "@deepseek-ai/cordis": "^4.0.1", "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6" } }, "sha512-aw8D4IOeMo11A3uxQeE4LFoW3bvaQnVkGFqqtS+lsINDARrOCJHXLUgecoKpys+Lc5erZZ4UQDnymJmL4OCcKA=="],
 
@@ -596,6 +603,8 @@
     "devlop": ["devlop@1.1.0", "", { "dependencies": { "dequal": "^2.0.0" } }, "sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA=="],
 
     "devtools-protocol": ["devtools-protocol@0.0.1638949", "", {}, "sha512-mXwg4Fqnv0WR4iuAT/gYUmctNkjILwXFHyZ+m7Ty1dfr0ezZt2U3gnrrJTfRobJTHoXf+IbuFvFITzLrLFjwJA=="],
+
+    "dsh-llm-fallbacks": ["dsh-llm-fallbacks@0.1.0-alpha.4", "", { "peerDependencies": { "@deepseek-ai/cordis": "^4.0.1", "@deepseek-ai/dsh-agent": "^0.1.0-rc.6", "@deepseek-ai/dsh-api-gateway": "^0.1.0-rc.6", "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-settings-plugins": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6", "@deepseek-ai/dsh-client-web-react": "^0.1.0-rc.6", "@deepseek-ai/dsh-commands": "^0.1.0-rc.6", "@deepseek-ai/dsh-llm": "^0.1.0-rc.6", "@deepseek-ai/dsh-settings": "^0.1.0-rc.6", "@deepseek-ai/dsh-typert-protocol": "^0.1.0-rc.6", "@deepseek-ai/dsh-typert-registry": "^0.1.0-rc.6", "@deepseek-ai/schemastery": "^3.18.1", "react": "^18.2.0" } }, "sha512-Ht0Os/xNTw/KS6z7zwTCATndYBON7XecrOFMvzyZNRgV+G1GoTgJe7SUfvqfmOkR2h+UkuWUvwmeU5qzf5NXLA=="],
 
     "effect": ["effect@4.0.0-beta.48", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.6.0", "find-my-way-ts": "^0.1.6", "ini": "^6.0.0", "kubernetes-types": "^1.30.0", "msgpackr": "^1.11.9", "multipasta": "^0.2.7", "toml": "^4.1.1", "uuid": "^13.0.0", "yaml": "^2.8.3" } }, "sha512-MMAM/ZabuNdNmgXiin+BAanQXK7qM8mlt7nfXDoJ/Gn9V8i89JlCq+2N0AiWmqFLXjGLA0u3FjiOjSOYQk5uMw=="],
 

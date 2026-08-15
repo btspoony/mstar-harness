@@ -41,7 +41,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusSource } from '../src/index.ts'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, seedHarness, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -509,6 +509,9 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-'))
     const harnessDir = join(root, 'harness')
     const ctx = new Context()
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
     const inbox = [inboxMessage()]
     try {
       // Mount 1 — the catalog is appended on pre-step.

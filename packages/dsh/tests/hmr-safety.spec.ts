@@ -24,13 +24,14 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import SystemPromptPlugin from '@deepseek-ai/dsh-system-prompt'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
-import { INVALID_STATUS, seedHarness } from './harness.ts'
+import { FakeAgentRegistry, FakeLoaderRegistry, INVALID_STATUS, fakeChild, seedHarness, startInfo } from './harness.ts'
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
 const MISSING_EXECUTE_AS = `## Assignment
@@ -41,6 +42,21 @@ const MISSING_EXECUTE_AS = `## Assignment
 
 Do the thing.
 `
+
+/** The mstar role id the decoration test Assignment declares + persona key. */
+const EXECUTE_AS = 'fullstack-dev'
+
+/** The configured persona text for `fullstack-dev`. */
+const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
+
+/** One mstar-style Assignment prompt seeded into a child session. */
+const ASSIGNMENT_PROMPT = [
+  '**Execute as**: fullstack-dev',
+  '**Delegation**: forbidden',
+  '**Task category**: logic',
+  '',
+  'Implement the assigned work.',
+].join('\n')
 
 /** FsTarget for `{HARNESS_DIR}/status.json` (local-backend shape). */
 const statusTarget = (harnessDir: string): FsTarget => ({
@@ -100,6 +116,9 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
     const harnessDir = join(root, 'harness')
     const ctx = new Context()
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
     // Advisory capture proves listener liveness: the status gate never throws
     // (repair-escape design, qc3 F-1), so a live mount with an invalid on-disk
     // document emits a repair advisory on BOTH intent slots; a disposed mount
@@ -155,6 +174,9 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     const harnessDir = join(root, 'harness')
     const skillRoot = join(root, 'skills')
     const ctx = new Context()
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
     await mkdir(join(skillRoot, 'broken-skill'), { recursive: true })
     await writeFile(join(skillRoot, 'broken-skill', 'SKILL.md'), INVALID_SKILL)
     const skillAdvisories: SkillLintAdvisory[] = []
@@ -182,6 +204,52 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
       expect(skillAdvisories.length).toBe(before + 1)
       const again = await ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
       expect(lastMessage(again)?.source).toMatchObject({ kind: 'mstar-engine-status' })
+      await reloaded.dispose()
+    } finally {
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('disposes the subagent/start decoration listener on fiber.dispose; a reloaded fiber restores it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
+    const harnessDir = join(root, 'harness')
+    const ctx = new Context()
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
+    // The decoration registers the persona through the child's agent-scoped
+    // `systemPrompt` and resolves children via the `agents` service — mount
+    // the same real registry seam + fake agents row `bootApp` composes.
+    await ctx.plugin(SystemPromptPlugin)
+    new FakeAgentRegistry(ctx)
+    try {
+      // Mount 1 — the decoration is live: a role-matched subagent/start
+      // registers the mstar:role-persona section on the child.
+      const fiber = await ctx.plugin(plugin, { harnessDir, rolePersonas: { [EXECUTE_AS]: PERSONA } })
+      const live = await fakeChild(ctx, ASSIGNMENT_PROMPT)
+      ctx.get('agents')!.register(live.agent)
+      ctx.events.emit('subagent/start', startInfo(live.agent.id))
+      const liveAssembly = await live.agent.ctx.systemPrompt.assemble({ scope: live.scopeKey })
+      expect(liveAssembly.sections.find((s) => s.name === plugin.PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
+
+      // Dispose — the decoration listener is unwound: a NEW child emitted
+      // after dispose receives no persona section (the listener is gone, not
+      // merely silent on this child).
+      await fiber.dispose()
+      const after = await fakeChild(ctx, ASSIGNMENT_PROMPT)
+      ctx.get('agents')!.register(after.agent)
+      ctx.events.emit('subagent/start', startInfo(after.agent.id))
+      const afterAssembly = await after.agent.ctx.systemPrompt.assemble({ scope: after.scopeKey })
+      expect(afterAssembly.sections.find((s) => s.name === plugin.PERSONA_SECTION_NAME)).toBeUndefined()
+
+      // HMR reload — a fresh fiber restores the decoration.
+      const reloaded = await ctx.plugin(plugin, { harnessDir, rolePersonas: { [EXECUTE_AS]: PERSONA } })
+      const revived = await fakeChild(ctx, ASSIGNMENT_PROMPT)
+      ctx.get('agents')!.register(revived.agent)
+      ctx.events.emit('subagent/start', startInfo(revived.agent.id))
+      const revivedAssembly = await revived.agent.ctx.systemPrompt.assemble({ scope: revived.scopeKey })
+      expect(revivedAssembly.sections.find((s) => s.name === plugin.PERSONA_SECTION_NAME)?.text).toBe(PERSONA)
       await reloaded.dispose()
     } finally {
       await ctx.fiber.dispose().catch(() => {})

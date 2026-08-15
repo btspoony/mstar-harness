@@ -52,12 +52,14 @@ export const DISPATCH_LOGGER = 'mstar/dispatch-gate'
 
 /**
  * Default delegation tool names the dispatch gate matches (tool-subagent
- * default id). Exported SHARED with the agent-flow settle pairing
+ * default id + its fork sibling — roadmap §9 W-B1: fork dispatches carry the
+ * same Assignment-shaped `{ description, prompt }` args and must be gated
+ * like `subagent`). Exported SHARED with the agent-flow settle pairing
  * (`registerSettleListener` matches the same tool set — plan
  * `20260811-panel-f4-timeliness` Task 1) so the default cannot drift between
  * the gate and the settle seam.
  */
-export const DEFAULT_DISPATCH_TOOLS = ['subagent'] as const
+export const DEFAULT_DISPATCH_TOOLS = ['subagent', 'subagent_fork'] as const
 
 /** `## Assignment` heading marker (opencode parity — shape guard only). */
 const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m

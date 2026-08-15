@@ -20,8 +20,13 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
+import { createScope } from '@deepseek-ai/dsh-scope'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { JobDoneListener, JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
+import type { SubagentRunInfoView } from '../src/gates/fallbacks-decoration.ts'
 import * as plugin from '../src/index.ts'
 
 /**
@@ -43,6 +48,29 @@ import * as plugin from '../src/index.ts'
     return rendered.includes('[native code]')
       ? `function ${this.name || 'anonymous'}() { [native code] }`
       : rendered
+  }
+}
+
+/**
+ * Minimal in-memory `loader` service for the composition boot (plan
+ * `20260814-dsh-fallbacks-integration` Task 1 — Step 5 `inject: ['loader']`):
+ * the mstar plugin's top-level `inject` now requires the `loader` service
+ * before apply (the real dsh app always boots the profile loader first —
+ * plugin-inventory precedent), so the harness mounts a structural fake that
+ * answers `entries()` with a test-drivable entry list — the ONE contract the
+ * Task 1 probe consumes (`fallbacksMounted` loader-entries fallback).
+ * Mounted BEFORE the plugin row in every boot composition.
+ */
+export class FakeLoaderRegistry extends Service {
+  /** Test-drivable entry list (the loader `EntryTree.entries()` contract). */
+  entriesList: LoaderEntryView[] = []
+
+  constructor(ctx: Context) {
+    super(ctx, 'loader')
+  }
+
+  *entries(): Generator<LoaderEntryView> {
+    yield* this.entriesList
   }
 }
 
@@ -81,6 +109,93 @@ export class FakeJobRegistry extends Service {
   }
 }
 
+/**
+ * Minimal in-memory `agents` service for the subagent-decoration tests (plan
+ * `20260814-dsh-fallbacks-integration` Task 2): implements the ONE contract
+ * the decoration consumes — `get(id)` child resolution at `subagent/start`
+ * emit time (documented in the `@deepseek-ai/dsh-subagent` event contract) —
+ * plus `register(agent)` so a test can fake-register a child agent (the
+ * hooks-claude-code coverage pattern). Mounted as the
+ * `@deepseek-ai/dsh-agent-fake` module row (`bootApp({ agentsService: 'fake' })`).
+ * The real `AgentRegistry` additionally owns factory/loop wiring and emits
+ * `agent/created` / `agent/disposed` — none of it consumed by the decoration.
+ */
+export class FakeAgentRegistry extends Service {
+  private readonly live = new Map<string, Agent>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'agents')
+  }
+
+  /** Record one live agent (the real registry's `register` contract). */
+  register(agent: Agent): () => void {
+    this.live.set(agent.id, agent)
+    return () => {
+      if (this.live.get(agent.id) === agent) this.live.delete(agent.id)
+    }
+  }
+
+  /** Look up a live agent by id (the decoration's ONE consumed surface). */
+  get(id: string): Agent | undefined {
+    return this.live.get(id)
+  }
+}
+
+let fakeChildSeq = 0
+
+/**
+ * Seed a detached session carrying one `user/message` with `prompt` text —
+ * the shape the decoration's `seededTaskPrompt` reads from the child's event
+ * log at `subagent/start` emit time.
+ */
+export function seededSession(id: SessionId, prompt: string): Session {
+  return Session.create(id, [{
+    type: 'user/message',
+    seq: 0,
+    time: 1_700_000_000_000,
+    data: {
+      id: MessageId(`seed-${id}`),
+      role: 'user',
+      content: [{ type: 'text', text: prompt }],
+      source: { kind: 'user' },
+    },
+    surfaceOp: 'append',
+  }])
+}
+
+/**
+ * Build a fake registered child around a caller-provided session: an
+ * agent-scoped ctx (`createScope`, the dsh-scope primitive the agent runtime
+ * uses) with `systemPrompt` injected, wrapped as the structural `Agent` the
+ * decoration resolves via `ctx.get('agents')?.get(info.id)`. The
+ * `subagent/start` seam is driven directly (the hooks-claude-code coverage
+ * pattern); the child's prompt assembly is viewed through `scopeKey`.
+ */
+export async function fakeChildWithSession(ctx: Context, session: Session): Promise<{ agent: Agent; scopeKey: object }> {
+  const scopeKey = { id: session.id }
+  let childCtx: Context | undefined
+  await ctx.inject(['systemPrompt'], (scoped) => {
+    childCtx = createScope(scoped, scopeKey).ctx
+  })
+  const agent = {
+    id: session.id,
+    ctx: childCtx!,
+    session,
+  } as unknown as Agent
+  return { agent, scopeKey }
+}
+
+/** Build a fake registered child whose session is seeded with `prompt`. */
+export async function fakeChild(ctx: Context, prompt: string): Promise<{ agent: Agent; scopeKey: object }> {
+  const id = SessionId(`child-${fakeChildSeq++}`)
+  return fakeChildWithSession(ctx, seededSession(id, prompt))
+}
+
+/** A structural `subagent/start` payload (the decoration's consumed surface). */
+export function startInfo(id: string, provider = 'in-process'): SubagentRunInfoView {
+  return { runId: `run-${id}`, provider, id, local: true }
+}
+
 /** Boot options for {@link bootApp}. */
 export interface BootOptions {
   /** `Enforcement` override for the plugin Config (`hard` | `soft`). */
@@ -102,6 +217,19 @@ export interface BootOptions {
    * `20260811-panel-f4-timeliness` Task 1 seam probe).
    */
   jobsService?: 'fake'
+  /**
+   * Mount the {@link FakeAgentRegistry} as the `agents` service (the
+   * `@deepseek-ai/dsh-agent-fake` row + module map) so the `subagent/start`
+   * decoration resolves fake-registered children via
+   * `ctx.get('agents')?.get(info.id)` (plan
+   * `20260814-dsh-fallbacks-integration` Task 2 — the real dsh app always
+   * composes dsh-agent before the subagent seam).
+   */
+  agentsService?: 'fake'
+  /** Taxonomy bridge (Config `roleMap`): mstar role id → fallbacks role id. */
+  roleMap?: Record<string, string>
+  /** Persona map (Config `rolePersonas`): mstar role id → persona text. */
+  rolePersonas?: Record<string, string>
   /** App root override (default: a fresh temp dir). */
   root?: string
   /**
@@ -182,6 +310,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   // plugin so `ctx.tools` / `ctx.commands` exist when the v2 seams register
   // (the real dsh app always composes them).
   const inlineRows: ReadonlyArray<{ name: string; config?: Record<string, unknown> }> = [
+    // The fake loader row mounts FIRST: the mstar plugin's top-level
+    // `inject: ['loader']` (plan 20260814-dsh-fallbacks-integration Task 1)
+    // requires the service before apply — the real dsh app always boots the
+    // profile loader before composing plugin rows.
+    { name: '@deepseek-ai/dsh-loader-fake' },
     { name: '@deepseek-ai/dsh-skill' },
     // The real dsh-tools ToolRegistry service injects `systemPrompt`
     // (unlike the removed peer-stub), so the system-prompt row mounts
@@ -199,6 +332,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // `20260811-panel-f4-timeliness` Task 1): provides `ctx.jobs` so the
     // plugin's deferred `ctx.inject(['jobs'])` onJobDone wiring fires.
     ...(options.jobsService !== undefined ? [{ name: '@deepseek-ai/dsh-jobs-fake' }] : []),
+    // The fake agents service row (only when requested — plan
+    // `20260814-dsh-fallbacks-integration` Task 2): provides `ctx.get('agents')`
+    // so the `subagent/start` decoration can resolve fake-registered children.
+    ...(options.agentsService !== undefined ? [{ name: '@deepseek-ai/dsh-agent-fake' }] : []),
     // Last row: the mstar plugin (carries the boot-time Config below).
     { name: '@mstar-harness/dsh' },
   ]
@@ -215,6 +352,10 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
       }
       return { name: (row as { name: string }).name, config: (row as { config?: Record<string, unknown> }).config }
     })
+    // The loader service is app-level in the real dsh app (the profile loader
+    // boots the row composition), so it is prepended here for the fixture
+    // composition too — the plugin's `inject: ['loader']` must resolve.
+    rows = [{ name: '@deepseek-ai/dsh-loader-fake' }, ...rows]
   }
 
   const config: Record<string, unknown> = {}
@@ -225,6 +366,8 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   if (options.skillRoots !== undefined) config.skillRoots = options.skillRoots
   if (options.bundledSkillDir !== undefined) config.bundledSkillDir = options.bundledSkillDir
   if (options.catalogTtlMs !== undefined) config.catalogTtlMs = options.catalogTtlMs
+  if (options.roleMap !== undefined) config.roleMap = options.roleMap
+  if (options.rolePersonas !== undefined) config.rolePersonas = options.rolePersonas
 
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root).href + '/'
@@ -246,10 +389,18 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // named exports provide the CommandRuntime (the host app provides it at
     // runtime via peerDependencies).
     ['@deepseek-ai/dsh-commands', await import('@deepseek-ai/dsh-commands')],
+    // The fake `loader` service (plan `20260814-dsh-fallbacks-integration`
+    // Task 1): a `{ default }` module so the seam unwrap resolves the class.
+    ['@deepseek-ai/dsh-loader-fake', { default: FakeLoaderRegistry }],
     // The fake `jobs` service (plan `20260811-panel-f4-timeliness` Task 1):
     // a `{ default }` module so the seam unwrap resolves the class.
     ...(options.jobsService !== undefined
       ? [['@deepseek-ai/dsh-jobs-fake', { default: FakeJobRegistry }] as const]
+      : []),
+    // The fake `agents` service (plan `20260814-dsh-fallbacks-integration`
+    // Task 2): a `{ default }` module so the seam unwrap resolves the class.
+    ...(options.agentsService !== undefined
+      ? [['@deepseek-ai/dsh-agent-fake', { default: FakeAgentRegistry }] as const]
       : []),
   ])
   for (const row of rows) {

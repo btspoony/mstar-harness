@@ -38,7 +38,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import * as plugin from '../src/index.ts'
 import { lintSkillDoc, lintSkillWrite, SkillLintVetoError, type SkillLintAdvisory } from '../src/index.ts'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, seedHarness, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -397,6 +397,9 @@ describe('skill lint gate — fs/write-intent listener (content-blind slot)', ()
   it('HMR disposal: fiber.dispose unwinds the listener; a reloaded fiber restores it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-skilllint-'))
     const ctx = new Context()
+    // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
+    // before apply — same loader-guarantee the real dsh app provides.
+    new FakeLoaderRegistry(ctx)
     const advisories = captureAdvisories(ctx)
     try {
       await seedSkill(root, 'broken-skill', NO_DESCRIPTION_SKILL)
