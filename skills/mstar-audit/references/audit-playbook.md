@@ -74,6 +74,25 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Public-but-one-caller: a public method on a generic service with a single internal caller is a private-capability closure candidate.
 - Unjustified defaults/public options: flag defaults or public operations/formats with no current-consumer evidence or prior art.
 
+### Prove-or-reject before reporting DEBT (`simplify` scope)
+
+**Prove before reporting dead code.** Classify consumers first — production corpus / tests-docs-only / ambiguous (examples, scripts: inspect, don't assume). Grep the exact symbol, plus event/field/config names, both quoted and bare. Read the call sites — a grep hit is a lead, not a verdict. "Tests are the only consumer" is a finding-enabler when the pinned behavior is non-load-bearing; "an invariant/test existing only to protect an unused API" is itself the signal.
+
+**Hand-rolled vs dependency swap bar.** Name the exact surface the package covers — residual semantics count against the swap. Health-check the dependency honestly. A recorded decision (ADR/knowledge doc) beats the swap claim — re-litigating a settled tradeoff needs new evidence. Weigh net deletion: implementation + dedicated tests + docs − remaining glue. A wrapper that relocates the same complexity is not a win.
+
+**Mirrored-fact test.** When several mechanisms track the same liveness/settlement fact, propose one controller — but preserve machinery protecting publication, rollback, callback containment, and first-terminal arbitration.
+
+**Strong-candidate families** (one line per family):
+- Symbols with no production consumer.
+- Tests/docs-only consumers pinning non-load-bearing behavior.
+- Two representations mirroring the same fact.
+- Seam methods fully implemented for support but with zero consumption.
+- Speculative product generality.
+- Invariants/rollbacks/expected-outputs existing only to protect an unused API.
+- Hand-rolled where a dependency exists.
+
+**Guards.** A production caller exists → feature decision, not cleanup (reject). A recorded seam/ADR rationale → new evidence must beat it. Tiny-but-real items → "considered and rejected" rows in the index, never inline TODOs (Hard Rule 1).
+
 ## 6. Dependencies & Migrations
 
 - Major-version lag on core framework/runtime (the ones with real cost to staying behind: EOL, security-fix cutoffs, ecosystem incompatibility).
