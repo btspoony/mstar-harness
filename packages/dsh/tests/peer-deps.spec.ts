@@ -81,8 +81,10 @@ describe('registry peer contract (rc.6 from npm, no link farm)', () => {
     expect(llm.version).toBe('0.1.0-rc.6')
   })
 
-  it('prepare is build-only; dsh:link scripts and the link-farm script are gone', () => {
-    expect(pkg.scripts.prepare).toBe('bun run build')
+  it('no install-time side effects; prepare, dsh:link scripts and the link-farm script are gone', () => {
+    // 787957b deliberately dropped the prepare script: the monorepo builds
+    // packages explicitly (no build on install), matching cli/opencode.
+    expect(pkg.scripts.prepare).toBeUndefined()
     expect(pkg.scripts['dsh:link']).toBeUndefined()
     expect(pkg.scripts['dsh:link:check']).toBeUndefined()
     expect(existsSync(join(pkgDir, 'scripts', 'setup-dsh-links.ts'))).toBe(false)
