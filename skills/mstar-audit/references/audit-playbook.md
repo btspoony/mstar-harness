@@ -18,6 +18,8 @@ The highest-trust category — real bugs found by reading, not speculation.
 - Concurrency: check-then-act on shared resources, missing transactions around multi-write operations, idempotency of retried operations (webhooks, queues).
 - Type escape hatches: `any` / `as` casts / `@ts-ignore` clusters — each one is a place the compiler was overruled.
 - Resource leaks: unclosed handles, connections, subscriptions; missing `finally`.
+- Derived-state drift: every cache, replay, projection, denormalized copy, or UI echo must trace to an authoritative source and an invalidation point; flag retained state with neither.
+- Bounds covering the final operation: who owns the complete emitted/retained result (wrappers and metadata included)? Probe tiny/exact limits, oversized single chunks, and multibyte text against byte limits.
 
 ## 2. Security
 
@@ -34,6 +36,7 @@ Review only what is directly supported by code evidence. Keep findings framed as
 - Dependency posture: run the ecosystem's audit command (`npm audit`, `pip-audit`, `cargo audit`) in read-only mode. Report only critical/high advisories that affect reachable runtime code.
 - Production configuration: overly broad CORS where credentials are allowed, missing response-hardening headers (e.g. CSP), cookies missing appropriate `HttpOnly`/`Secure`/`SameSite` attributes, debug/verbose behavior enabled in production.
 - Data minimization: PII or sensitive operational data in logs, stack traces returned to clients, internal error details exposed through API responses.
+- Enforcement bypass: for every validation/rejection point, look for alternate callers that route around it — direct calls, wrappers, facades, schema-less paths, listener ordering.
 
 ## 3. Performance
 
@@ -56,6 +59,9 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Existing test quality: tests that assert nothing meaningful, heavy mocking that tests the mocks, snapshot tests nobody reads, flaky patterns (real timers, real network, order dependence).
 - Missing test layers: unit-only suites with zero integration coverage on API boundaries, or the inverse.
 - Verification infrastructure: is there a one-command way to know the codebase works? If not, that's finding #1 and a prerequisite plan for any risky change.
+- Real entry path: do tests exercise the shipped entry (CLI, loader, plugin boot) rather than a hand-mounted equivalent?
+- Externally observable state: assertions verify logs, events, files, exit codes — never implementation restatement or agent-reported success.
+- User-visible output is behavior (conditional): in repos shipping UI copy, CLI output, API error shapes, or prompt text, wording is behavior — snapshot or e2e coverage should pin it.
 
 ## 5. Tech Debt & Architecture
 
@@ -65,6 +71,8 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - God objects/modules: files an order of magnitude larger than the repo median that everything touches; functions with double-digit parameters or deep conditional nesting.
 - Inconsistent patterns: three ways of doing data fetching / error handling / styling — pick the winner (the one the team converged on most recently) and plan the consolidation.
 - Abstraction mismatches: premature abstractions with a single implementation, or missing abstractions where the same change always requires touching N files in lockstep.
+- Public-but-one-caller: a public method on a generic service with a single internal caller is a private-capability closure candidate.
+- Unjustified defaults/public options: flag defaults or public operations/formats with no current-consumer evidence or prior art.
 
 ## 6. Dependencies & Migrations
 
