@@ -36,6 +36,11 @@ import type * as EntryTypes from '../src/index.ts'
 
 /** The frozen VALUE exports (runtime-visible; `Config` is also an interface). */
 const FROZEN_VALUE_EXPORTS = [
+  // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 4:
+  // the warn-only adoption advisory surface (logger label, the one-pass
+  // entry, and the apply-bound sink setter — mirror of the decoration's
+  // logger pattern).
+  'ADVISORY_LOGGER',
   'AGENT_FLOW_FILE',
   'AGENT_FLOW_MAX_EVENTS',
   'Config',
@@ -62,9 +67,11 @@ const FROZEN_VALUE_EXPORTS = [
   'readAgentFlow',
   'recordDispatch',
   'recordSettle',
+  'runFallbacksAdvisory',
   // Deliberate addition for plan `20260815-dsh-fallbacks-personas` Task 3:
   // the persona-defaults mirror-root binding (mirror of setDecorationLogger
   // — apply binds it, tests restore it).
+  'setAdvisoryLogger',
   'setDecorationAgentsDir',
   'setDecorationLogger',
   'skillLocalConfig',
@@ -72,6 +79,8 @@ const FROZEN_VALUE_EXPORTS = [
 
 /** The frozen TYPE-ONLY exports (erased at runtime — pinned for typecheck). */
 const FROZEN_TYPE_ONLY_EXPORTS = [
+  'AdvisoryLogLevel',
+  'AdvisoryLogSink',
   'AgentFlowEvent',
   'AgentFlowEventView',
   'AgentFlowSummaryRow',
@@ -129,6 +138,8 @@ describe('src/index.ts export surface (frozen — plan 20260810-dsh-entry-split 
     // fails typecheck if the export disappears. The probe object pins the
     // frozen list as documentation and in the test output.
     const typeProbe = {
+      AdvisoryLogLevel: null as unknown as EntryTypes.AdvisoryLogLevel,
+      AdvisoryLogSink: null as unknown as EntryTypes.AdvisoryLogSink,
       AgentFlowEvent: null as unknown as EntryTypes.AgentFlowEvent,
       AgentFlowEventView: null as unknown as EntryTypes.AgentFlowEventView,
       AgentFlowSummaryRow: null as unknown as EntryTypes.AgentFlowSummaryRow,

@@ -68,6 +68,11 @@ import {
   setDecorationLogger,
 } from './gates/fallbacks-decoration.ts'
 import type { SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
+import {
+  ADVISORY_LOGGER,
+  runFallbacksAdvisory,
+  setAdvisoryLogger,
+} from './gates/fallbacks-advisory.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -108,6 +113,8 @@ export {
   setDecorationLogger,
 } from './gates/fallbacks-decoration.ts'
 export type { DecorationLogLevel, DecorationLogSink, SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
+export { ADVISORY_LOGGER, runFallbacksAdvisory, setAdvisoryLogger } from './gates/fallbacks-advisory.ts'
+export type { AdvisoryLogLevel, AdvisoryLogSink } from './gates/fallbacks-advisory.ts'
 export { DshHostAdapter } from './gates/adapter.ts'
 export type { DshHostAdapterOptions } from './gates/adapter.ts'
 
@@ -383,6 +390,28 @@ export function apply(ctx: Context, config: Config): void {
   // regardless of launch cwd; absent when `bundle-assets` has not run
   // (config-only decoration).
   setDecorationAgentsDir(packagedAgentsDir())
+  // Adoption advisory (plan `20260815-dsh-fallbacks-personas` Task 4) — the
+  // warn-only deployment-taxonomy pass: when fallbacks is mounted, ONE pass
+  // per apply structurally reads the deployment's fallbacks row config
+  // (loader entry `options.config` — never the fallbacks plugin's module
+  // internals) and warns on missing mstar roles / empty personas / legacy
+  // keys (logger `mstar/fallbacks-advisory`). Never writes the fallbacks
+  // config; unreadable config → skip + one debug.
+  setAdvisoryLogger((level, message) => {
+    const logger = ctx.logger(ADVISORY_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else logger.warn(message)
+  })
+  // One-shot latch: the pass is attempted at apply (profiles that declare
+  // the fallbacks row before dsh) and — when unmounted at boot — at the
+  // first `subagent/start` decision point (the loader mounts entries
+  // concurrently; the same decision-point probe pattern as the decoration).
+  let advisoryPassed = false
+  const runAdvisoryPass = (): void => {
+    if (advisoryPassed) return
+    advisoryPassed = runFallbacksAdvisory(ctx, packagedAgentsDir())
+  }
+  runAdvisoryPass()
   registerSettleListener(ctx, config, pairing)
 
   // Background-task settle pairing — the SECOND real completion seam: a
@@ -513,7 +542,13 @@ export function apply(ctx: Context, config: Config): void {
   // mixined `ctx.on`) because `subagent/start` is declared by
   // `@deepseek-ai/dsh-subagent`, which this plugin deliberately does not
   // depend on — the payload is consumed structurally.
-  ctx.events.on('subagent/start', (info: SubagentRunInfoView) => decorateSubagentStart(ctx, config, info))
+  ctx.events.on('subagent/start', (info: SubagentRunInfoView) => {
+    // Adoption advisory decision point: the loader has settled by the first
+    // dispatch, so an advisory skipped at apply (fallbacks row mounted after
+    // dsh) runs its ONE pass here instead — never more than once per apply.
+    runAdvisoryPass()
+    decorateSubagentStart(ctx, config, info)
+  })
 
   // Engine-status catalog — advisory `agent/pre-step` waterfall listener
   // (agent catalog): calls `next()` (never vetoes or

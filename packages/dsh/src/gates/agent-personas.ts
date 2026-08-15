@@ -31,7 +31,7 @@
  * explicit relative path; the entry does not re-export it (the decoration
  * is the only consumer; its public surface is `personaFor`).
  */
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { PERSONA_INTERPOLATION_HAZARD } from './_shared.ts'
 
@@ -84,6 +84,38 @@ export function personaFor(roleId: string, lookup: PersonaLookup, warn?: Persona
   const text = defaultFromMirror(lookup.agentsDir, roleId, warn)
   if (text === undefined || text.trim() === '') return undefined
   return { text, source: 'default' }
+}
+
+/**
+ * The mstar role-id set for one mirror: the file stems of the shells
+ * eligible as subagent role defaults (`mode` absent-or-`subagent` — a
+ * `primary` shell like `project-manager` is excluded), sorted for
+ * deterministic warn listings. The adoption advisory (plan
+ * `20260815-dsh-fallbacks-personas` Task 4) derives its taxonomy reference
+ * from here — never hardcoded. Reads the mirror directory + each shell's
+ * frontmatter once per call (the advisory invokes it once per apply — no
+ * cache needed). Returns `[]` for an unreadable/absent mirror directory.
+ */
+export function subagentRoleIds(agentsDir: string): string[] {
+  let names: string[]
+  try {
+    names = readdirSync(agentsDir)
+  } catch {
+    return []
+  }
+  const ids: string[] = []
+  for (const name of names) {
+    if (!name.endsWith('.md')) continue
+    const roleId = name.slice(0, -3)
+    let content: string
+    try {
+      content = readFileSync(join(agentsDir, name), 'utf8')
+    } catch {
+      continue
+    }
+    if (parseShellFrontmatter(content).mode !== 'primary') ids.push(roleId)
+  }
+  return ids.sort()
 }
 
 /**
