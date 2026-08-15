@@ -29,7 +29,10 @@
  * every scan (cold / created-backfill / live): envelopes with `seq` below it
  * were already recorded — across cold+live overlap AND across plugin
  * re-applies (a re-registration no longer re-records the same live
- * sessions). The in-memory Map is the durable file's mirror (module-level
+ * sessions). The watermark advances only AFTER the ledger row appended
+ * successfully (qc3 R-401 — a failing append leaves the cursor behind, so
+ * the row is re-attempted at the next scan, never permanently lost). The
+ * in-memory Map is the durable file's mirror (module-level
  * cache, bounded by the session cap); any watermark read/write failure
  * degrades to in-memory-only with one warn — a ledger row is never lost and
  * the workflow run is never affected.
@@ -134,6 +137,21 @@ function log(level: WorkflowLedgerLogLevel, message: string): void {
 /** Best-effort human-readable message from an arbitrary thrown value. */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** ASCII control characters (C0 + DEL) — stripped from display fields at the consumer boundary (qc2 S-1). */
+const LEDGER_DISPLAY_CONTROL_CHARS = /[\u0000-\u001F\u007F]/g
+
+/**
+ * Strip ASCII control characters (newlines / tabs / CR — the log-forging
+ * surface, qc2 S-1) from one display field. A hostile model-controlled
+ * `name` / `label` / `phase` must never reach the depth-advisory warn
+ * interpolation or a JSONL line. Pure — NEVER throws. ID-sized fields
+ * (`runId` / `childId`) are NOT routed here — they keep their
+ * skip-if-oversized semantics.
+ */
+function sanitizeLedgerDisplay(value: string): string {
+  return value.replace(LEDGER_DISPLAY_CONTROL_CHARS, '')
 }
 
 /**
@@ -299,7 +317,9 @@ function advanceWatermark(harnessDir: string, sid: string, nextSeq: number, isEv
  * [1, 2^31) (upstream `memberSeq` positive safe integer). ID-sized fields
  * (`runId`, `childId`) SKIP the row when oversized — truncating them could
  * forge collisions; display fields (`name`, `label`, `phase`) are capped
- * deterministically with a suffix marker.
+ * deterministically with a suffix marker AND stripped of ASCII control
+ * characters (qc2 S-1 — a newline/tab/CR in a model-controlled display field
+ * must never reach the depth-advisory warn or a JSONL line).
  */
 function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefined {
   const record = asRecord(envelope)
@@ -316,7 +336,11 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
   if (typeof runId !== 'string' || runId === '' || runId.length > WORKFLOW_LEDGER_MAX_ID_LENGTH) return undefined
 
   if (type === TOOL_WORKFLOW_RUN_START) {
-    if (typeof data.name !== 'string' || data.name === '') return undefined
+    // Control chars are stripped BEFORE the empty check — a display field
+    // that is ONLY control characters must not record (the read boundary
+    // would drop it as empty, so write and read stay consistent).
+    const name = typeof data.name === 'string' ? sanitizeLedgerDisplay(data.name) : data.name
+    if (typeof name !== 'string' || name === '') return undefined
     const agent = sessionIdOf(session)
     return {
       seq,
@@ -325,7 +349,7 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
         ts: time,
         kind: 'workflow-run',
         runId,
-        name: truncateLedgerField(data.name, WORKFLOW_LEDGER_MAX_NAME_LENGTH),
+        name: truncateLedgerField(name, WORKFLOW_LEDGER_MAX_NAME_LENGTH),
         ...(agent !== undefined ? { agent } : {}),
       },
     }
@@ -337,7 +361,8 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
     if (typeof data.seq !== 'number' || !Number.isInteger(data.seq) || data.seq < 1 || data.seq >= WORKFLOW_LEDGER_MAX_SEQ) {
       return undefined
     }
-    if (typeof data.label !== 'string' || data.label === '') return undefined
+    const label = typeof data.label === 'string' ? sanitizeLedgerDisplay(data.label) : data.label
+    if (typeof label !== 'string' || label === '') return undefined
     if (typeof data.childId !== 'string' || data.childId === '' || data.childId.length > WORKFLOW_LEDGER_MAX_ID_LENGTH) return undefined
     return {
       seq,
@@ -348,9 +373,9 @@ function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefin
         kind: 'workflow-agent',
         runId,
         seq: data.seq,
-        label: truncateLedgerField(data.label, WORKFLOW_LEDGER_MAX_LABEL_LENGTH),
+        label: truncateLedgerField(label, WORKFLOW_LEDGER_MAX_LABEL_LENGTH),
         ...(typeof data.phase === 'string'
-          ? { phase: truncateLedgerField(data.phase, WORKFLOW_LEDGER_MAX_LABEL_LENGTH) }
+          ? { phase: truncateLedgerField(sanitizeLedgerDisplay(data.phase), WORKFLOW_LEDGER_MAX_LABEL_LENGTH) }
           : {}),
         childId: data.childId,
       },
@@ -397,16 +422,20 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
 }
 
 /**
- * Register the workflow-ledger consumer: (1) a bounded cold scan over
+ * Register the workflow-ledger consumer: (1) a `session/created` backfill
+ * listener (registered FIRST — qc3 S-305 — so no apply-time window exists
+ * between the snapshot and the attach); (2) a bounded cold scan over
  * `ctx.sessions.list()` reading each session's `events` snapshot for
  * `tool-workflow/*` rows (covers pre-restart runs — constructor-seeded
- * events never hit the firehose, `firstLiveSeq`); (2) a live
- * `ctx.events.on('session/event', …)` listener filtering the four types;
- * (3) a `session/created` backfill for sessions created after apply with a
- * seeded log (qc3 S-304 / qc2 W-1a). One DURABLE watermark per session id
- * (session-log `seq` position, persisted to
- * `{HARNESS_DIR}/workflow-ledger-cursors.json`) — re-applies never
- * duplicate; no other cache. Every read/append is try/catch-contained; the
+ * events never hit the firehose, `firstLiveSeq`); (3) a live
+ * `ctx.events.on('session/event', …)` listener filtering the four types.
+ * One DURABLE watermark per session id (session-log `seq` position,
+ * persisted to `{HARNESS_DIR}/workflow-ledger-cursors.json`) — re-applies
+ * never duplicate; no other cache. The watermark advances only AFTER a
+ * successful ledger append (qc3 R-401 — a failing append leaves the cursor
+ * behind so the row is re-attempted at the next scan, never lost). Every
+ * read/append is try/catch-contained — including `sessions.list()` itself
+ * (qc2 S-7: one warn, the cold scan skipped, the consumer stays live); the
  * `sessions` service absent → one debug log + consumer disabled (composition
  * without dsh-session). All appends go through `recordWorkflowEvent` (itself
  * fully contained — a failing ledger write never crashes or alters a
@@ -455,8 +484,15 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver):
     const events = (session as SessionView).events
     if (Array.isArray(events) && events.length < next) next = 0
     if (row.seq < next) return // earlier-scan coverage — already recorded
-    advanceWatermark(harnessDir, sid, row.seq + 1, (candidate) => sessions.get(candidate) === undefined)
-    recordWorkflowEvent({ harnessDir, event: row.event })
+    // Record-then-advance (qc3 R-401): the ledger row is appended FIRST and
+    // the durable watermark advances ONLY on success — a failing append
+    // leaves the cursor behind, so the row is re-attempted at the next scan
+    // (re-apply / restart), never permanently lost. The only residual is one
+    // bounded, visible duplicate row if the process dies between the two fs
+    // calls — the duplicate mode the design already accepts and documents.
+    if (recordWorkflowEvent({ harnessDir, event: row.event })) {
+      advanceWatermark(harnessDir, sid, row.seq + 1, (candidate) => sessions.get(candidate) === undefined)
+    }
     // Depth advisory — observe-time only, contained (a throwing child read
     // degrades the advisory, never the row or the run).
     if (row.event.kind === 'workflow-agent') {
@@ -480,20 +516,9 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver):
     for (const envelope of events) consume(session, envelope)
   }
 
-  // COLD SCAN — bounded per session: each session's events snapshot is read
-  // ONCE; a throwing read logs one warn and the pass continues with the next
-  // session (the run is never affected).
-  for (const session of sessions.list()) {
-    const sid = sessionIdOf(session)
-    if (sid === undefined) continue
-    try {
-      scanSession(session)
-    } catch (error) {
-      log('warn', `workflow-ledger cold scan failed for session ${sid} (contained — other sessions unaffected): ${errorMessage(error)}`)
-    }
-  }
-
-  // SESSION-CREATED BACKFILL — a session created AFTER apply with a
+  // SESSION-CREATED BACKFILL — registered BEFORE the cold scan (qc3 S-305):
+  // a session created between the `sessions.list()` snapshot and the listener
+  // attach would be covered by neither. A session created AFTER apply with a
   // constructor-seeded log (replay/resume/fork) never publishes its seeds on
   // the firehose (`firstLiveSeq`); `session/created` fires after the seed
   // enters the log (upstream `session/src/index.ts:961-995`), so this
@@ -507,6 +532,27 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver):
       log('warn', `workflow-ledger session-created backfill failed (contained — the session publication proceeds): ${errorMessage(error)}`)
     }
   })
+
+  // COLD SCAN — bounded per session: each session's events snapshot is read
+  // ONCE; a throwing `list()` or read logs one warn and the pass is skipped
+  // (qc2 S-7 — the consumer stays live: the firehose and the created
+  // backfill above keep recording; the run is never affected).
+  let sessionsSnapshot: readonly unknown[]
+  try {
+    sessionsSnapshot = sessions.list()
+  } catch (error) {
+    log('warn', `workflow-ledger cold scan could not list sessions (contained — the live firehose and session-created backfill stay active): ${errorMessage(error)}`)
+    sessionsSnapshot = []
+  }
+  for (const session of sessionsSnapshot) {
+    const sid = sessionIdOf(session)
+    if (sid === undefined) continue
+    try {
+      scanSession(session)
+    } catch (error) {
+      log('warn', `workflow-ledger cold scan failed for session ${sid} (contained — other sessions unaffected): ${errorMessage(error)}`)
+    }
+  }
 
   // LIVE FIREHOSE — post-commit append feed for ALL sessions (root-context
   // listener; the store's scope carrier admits untagged listeners — Task 1

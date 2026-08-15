@@ -24,6 +24,7 @@ import { AGENT_FLOW_FILE, AGENT_FLOW_MAX_EVENTS, readAgentFlow, recordDispatch, 
 import {
   AGENT_FLOW_SIZE_GATE_BYTES,
   recordWorkflowEvent,
+  setAgentFlowLogger,
   WORKFLOW_LEDGER_MAX_ID_LENGTH,
   WORKFLOW_LEDGER_MAX_LABEL_LENGTH,
   WORKFLOW_LEDGER_MAX_NAME_LENGTH,
@@ -879,6 +880,118 @@ describe('workflow-ledger consumer — cold scan over session event snapshots (p
       expect(agent.label!.endsWith(WORKFLOW_LEDGER_TRUNCATION_MARKER)).toBe(true)
       expect(agent.phase!).toHaveLength(WORKFLOW_LEDGER_MAX_LABEL_LENGTH)
       expect(agent.phase!.endsWith(WORKFLOW_LEDGER_TRUNCATION_MARKER)).toBe(true)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a failing ledger append does NOT advance the watermark — a re-apply re-attempts the row (R-401)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-workflow-consumer-appendfail-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-1' }) },
+    ], { id: 'parent-1', header: { cwd: root } }))
+    // Corrupt the ledger FILE SLOT: a DIRECTORY named agent-flow.jsonl makes
+    // every append fail (EISDIR) while the same-dir watermark sidecar path
+    // stays writable — the exact failure asymmetry R-401 describes.
+    const ledgerFile = join(harnessDir, AGENT_FLOW_FILE)
+    await mkdir(ledgerFile, { recursive: true })
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    const priorAgentFlowSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
+    try {
+      // FIRST registration: the append fails (contained — one warn), the
+      // durable watermark must NOT advance; advanceWatermark is the only
+      // writer of the sidecar, so no watermark file exists.
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(captured.some((m) => m.includes('workflow record failed'))).toBe(true)
+      expect(existsSync(join(harnessDir, WORKFLOW_LEDGER_WATERMARK_FILE))).toBe(false)
+      // Repair the ledger slot, then re-apply: the cold scan re-walks the
+      // same envelope (cursor still 0) and RE-ATTEMPTS the row — bounded
+      // re-attempt, NOT permanent loss.
+      await rm(ledgerFile, { recursive: true, force: true })
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      const view = readAgentFlow(harnessDir)
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run'])
+      expect(view!.events[0]).toMatchObject({ kind: 'workflow-run', runId: 'run-1', name: 'audit', agent: 'parent-1' })
+      // The watermark now covers the row — a THIRD registration must not
+      // duplicate it (the success path is unaffected by the ordering swap).
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(readAgentFlow(harnessDir)!.events).toHaveLength(1)
+    } finally {
+      setAgentFlowLogger(priorAgentFlowSink)
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a throwing sessions.list() is contained — one warn, the cold scan skipped, the consumer stays live (S7)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-workflow-consumer-listthrows-')
+    const ctx = new Context()
+    class ThrowingListRegistry extends FakeSessionRegistry {
+      override list(): FakeSession[] {
+        throw new Error('list exploded')
+      }
+    }
+    const sessions = new ThrowingListRegistry(ctx)
+    const captured: Array<{ level: string; message: string }> = []
+    const priorSink = setWorkflowLedgerLogger((level, message) => { captured.push({ level, message }) })
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      // Exactly one warn for the failed list(); the cold scan is skipped —
+      // the registration must NOT throw (a service-level list() failure can
+      // no longer fail plugin apply).
+      expect(captured.filter((c) => c.level === 'warn' && c.message.includes('could not list sessions'))).toHaveLength(1)
+      // The consumer is still live: a session appended AFTER the registration
+      // records through the firehose (S7 skips the COLD SCAN only).
+      const parent = fakeSession([], { id: 'parent-live', header: { cwd: root } })
+      sessions.register(parent)
+      sessions.append(parent, 'tool-workflow/run-start', runStart({ runId: 'run-live' }))
+      sessions.append(parent, 'tool-workflow/agent-start', agentStart({ runId: 'run-live', childId: 'child-live' }))
+      const view = readAgentFlow(harnessDir)
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-agent', 'workflow-run'])
+      // No other warns escaped — the consumer stayed contained throughout.
+      expect(captured.filter((c) => c.level === 'warn')).toHaveLength(1)
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('control characters are stripped from display fields at the consumer boundary — no log/line forging (S1)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-workflow-consumer-controlchars-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    sessions.register(fakeSession([
+      // A hostile run name carrying newline/tab/CR → sanitized, row recorded.
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-clean', name: 'audit\nSECOND' }) },
+      // A hostile member label + phase → both sanitized.
+      { type: 'tool-workflow/agent-start', data: agentStart({ runId: 'run-clean', seq: 1, label: 'worker\rX', phase: 'review\t1', childId: 'child-1' }) },
+      // A display field that is ONLY control characters → the row is skipped
+      // (stripped to '' — the same empty-display rule the read boundary
+      // applies, so write and read stay consistent).
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-empty', name: '\n\t' }) },
+      { type: 'tool-workflow/run-end', data: runEnd({ runId: 'run-clean' }) },
+    ], { id: 'parent-1', header: { cwd: root } }))
+    const priorSink = setWorkflowLedgerLogger(() => {})
+    try {
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      const view = readAgentFlow(harnessDir)
+      expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run-end', 'workflow-agent', 'workflow-run'])
+      expect(view!.events[2]).toMatchObject({ kind: 'workflow-run', runId: 'run-clean', name: 'auditSECOND' })
+      expect(view!.events[1]).toMatchObject({ kind: 'workflow-agent', runId: 'run-clean', seq: 1, label: 'workerX', phase: 'review1', childId: 'child-1' })
+      // Only run-clean recorded; the all-controls run-empty row was skipped.
+      expect(view!.events.filter((e) => e.kind === 'workflow-run').map((e) => e.runId)).toEqual(['run-clean'])
+      // The JSONL file holds exactly the mapped rows and no raw control
+      // characters anywhere.
+      const lines = readFileSync(join(harnessDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')
+      expect(lines).toHaveLength(3)
+      expect(lines.every((line) => !/[\u0000-\u001F\u007F]/.test(line))).toBe(true)
     } finally {
       setWorkflowLedgerLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})

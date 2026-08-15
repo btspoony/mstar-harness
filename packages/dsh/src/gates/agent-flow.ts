@@ -606,8 +606,12 @@ export function recordSettle(input: {
  * `time`). Malformed input is a caller bug — the strict narrowing applies on
  * READ (`eventFromUnknown`), never here.
  * @param input - harness dir + the fully-shaped v1 workflow event.
+ * @returns `true` when the row was appended (the caller may durably advance
+ *   its watermark); `false` on a contained append failure — the caller must
+ *   leave the cursor behind so the row is re-attempted at the next scan
+ *   (qc3 R-401: advance-then-record made a failed append permanent loss).
  */
-export function recordWorkflowEvent(input: { harnessDir: string; event: AgentFlowWorkflowEvent }): void {
+export function recordWorkflowEvent(input: { harnessDir: string; event: AgentFlowWorkflowEvent }): boolean {
   try {
     appendEvent(input.harnessDir, input.event)
     try {
@@ -615,8 +619,10 @@ export function recordWorkflowEvent(input: { harnessDir: string; event: AgentFlo
     } catch (error) {
       log('error', `catalog invalidation failed (contained): ${errorMessage(error)}`)
     }
+    return true
   } catch (error) {
     log('error', `workflow record failed (contained — the workflow run proceeds): ${errorMessage(error)}`)
+    return false
   }
 }
 

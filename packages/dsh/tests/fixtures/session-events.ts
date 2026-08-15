@@ -140,9 +140,11 @@ export function runEnd(
 // (`tool-workflow/src/invariant.ts`) when placed in its documented context:
 // - missing runId        → `stringId` fails (`${type} runId must be a non-empty
 //   string`, invariant.ts:78)
-// - duplicate seq        → `agent-start repeats member seq` (invariant.ts:97)
-// - post-end update      → `appears after tool-workflow/run-end for run …`
-//   (invariant.ts:71, via `openRun`)
+//
+// Positional invariants (duplicate member seq, post-end updates) are the
+// upstream consumer's job — the ledger persists what it sees (plan Global
+// Constraints; qc2 S-5) — so no fixtures model them; the original
+// duplicateSeq/postEnd builders were unused and removed.
 // ---------------------------------------------------------------------------
 
 /** `run-start` data with the `runId` field omitted entirely. */
@@ -179,59 +181,4 @@ export function runEndMissingRunId(
   init: { stopReason?: WorkflowStopReason } = {},
 ): ToolWorkflowRunEndData {
   return { stopReason: init.stopReason ?? 'completed' } as ToolWorkflowRunEndData
-}
-
-/**
- * The SECOND `agent-start` for one `(runId, seq)` — append it after an
- * `agentStart({ runId, seq })` of the same pair to violate the member-seq
- * uniqueness invariant. The payload itself is shape-valid; the violation is
- * positional (duplicate member sequence within the run).
- */
-export function duplicateSeqAgentStart(
-  runId: string = DEFAULT_RUN_ID,
-  seq: number = 1,
-  init: { label?: string; phase?: string; childId?: string } = {},
-): ToolWorkflowAgentStartData {
-  return {
-    runId,
-    seq,
-    label: init.label ?? DEFAULT_LABEL,
-    ...init.phase === undefined ? {} : { phase: init.phase },
-    childId: init.childId ?? DEFAULT_CHILD_ID,
-  }
-}
-
-/**
- * An `agent-start` update for a run that has already ended — append it AFTER
- * `runEnd({ runId })` of the same run to violate the post-end update
- * invariant (`appears after tool-workflow/run-end`, invariant.ts:71).
- */
-export function postEndAgentStart(
-  runId: string = DEFAULT_RUN_ID,
-  init: { seq?: number; label?: string; phase?: string; childId?: string } = {},
-): ToolWorkflowAgentStartData {
-  return {
-    runId,
-    seq: init.seq ?? 1,
-    label: init.label ?? DEFAULT_LABEL,
-    ...init.phase === undefined ? {} : { phase: init.phase },
-    childId: init.childId ?? DEFAULT_CHILD_ID,
-  }
-}
-
-/**
- * An `agent-end` update for a run that has already ended — append it AFTER
- * `runEnd({ runId })` of the same run to violate the post-end update
- * invariant (`appears after tool-workflow/run-end`, invariant.ts:71).
- */
-export function postEndAgentEnd(
-  runId: string = DEFAULT_RUN_ID,
-  seq: number = 1,
-  init: { outcome?: WorkflowAgentOutcome } = {},
-): ToolWorkflowAgentEndData {
-  return {
-    runId,
-    seq,
-    outcome: init.outcome ?? 'completed',
-  }
 }
