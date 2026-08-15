@@ -1,11 +1,13 @@
 /**
  * The tracked engine manifest version (`packages/engine/package.json`
- * `.version`, resolved relative to the dsh package under the monorepo) —
- * the same source the runtime's `readHarnessVersion()` reads (engine
- * `core.ts` reads `<moduleDir>/../package.json`; both the src layout and the
- * bundled `dist/` layout land on the engine package manifest). Engine-version
- * assertions use this shared value instead of a hardcoded pin so future
- * engine releases do not re-break the dsh suite.
+ * `.version`, resolved relative to the source test layout
+ * `packages/dsh/tests/` under the monorepo). This helper is only correct
+ * from source — it anchors `../../engine/package.json` relative to
+ * `import.meta.url` and is used where tests run from source (`bun test`);
+ * the runtime's `readHarnessVersion()` is the one that handles src and
+ * bundled `dist/` layouts via its own module dir. Engine-version assertions
+ * use this shared value instead of a hardcoded pin so future engine
+ * releases do not re-break the dsh suite.
  */
 import { readFileSync } from 'node:fs'
 
