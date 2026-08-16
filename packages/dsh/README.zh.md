@@ -146,15 +146,19 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 **persona 文本约束**：dsh system-prompt 以**严格 `{{variable}}` 插值**渲染 persona 文本，因此 persona 值**绝不能**包含与后文 `}}` 配对的 `{{`（渲染器在子会话提示组装时对未知/畸形引用直接抛错——会破坏每一次角色匹配的派发）。Config schema 会在插件挂载时以清晰报错拒绝此类 `rolePersonas` 值。不带后续 `}}` 的孤立 `{{` 按字面散文渲染（安全）；转义规则是改用单花括号或改写措辞。persona 文本保持简短（几句话）；长度在部署侧设限。
 
-### 采纳建议（Adoption advisory）
+### 角色 seeds 与采纳建议（Adoption advisory）
 
-当可选的 `dsh-llm-fallbacks` 能力**已挂载**时，一条只告警的采纳建议通道**每次 apply 只跑一遍**（日志器 `mstar/fallbacks-advisory`）：结构化读取部署的 fallbacks 行配置（loader 条目的 `options.config`——与 fallbacks 插件 `apply()` 收到的值相同；绝不读插件模块内部），并按**每类至多一条告警**有界告警：
+当可选的 `dsh-llm-fallbacks` 能力**已挂载**（第二条安装命令——见 Install paths）时，mstar 插件会向 fallbacks seed registry **零配置声明 13 个 `mode: subagent` mstar 角色 seed**：persona = `harness-agents/` 镜像 `description`（原样）+ 一行强制加载引导（`Load mstar-roles (references/<role-id>.md) and the role's Required Skill Dependencies before acting.`）；含 `{{...}}` 插值风险的 persona 跳过并告警，绝不声明。声明会**合并保留 readback 中当前已 seeded 的非 mstar id**——例如上游包在其自身 apply 时自声明的 7 个 omp 风格 preset 角色：上游 `declare` **全量替换** registry，若不保留，mstar-only 批会摘掉 preset id 的 seeded 注记（行仍在，仅失去 seeded）。声明在每次 fallbacks（重新）apply（HMR/纤程切换）时幂等重放——绝不用一次性 latch——因此两种 boot 顺序（presets 先或 mstar 先）都收敛到同一 20-id 全 seeded registry。
 
-- **（b）缺失 mstar 角色**——`roles.list` 中缺失的 mstar 角色 id（一条告警列出全部）。id 集合派生自 `harness-agents/` 镜像（文件名主干按 `mode: subagent` 过滤）——绝不硬编码；无镜像 → 分类检查跳过并记一条 debug。
-- **（c）空 persona**——已声明角色实体其 `persona` 缺失/空白（一条告警点名）。
-- **（d）遗留键**——`chains`、`roles.default`、`roles.list[].label`/`.description`、悬空 `roles.rules[].role` 引用，经已应用服务自带的 `detectLegacyKeys`（一条告警引用其语义；loader 回退探测路径上跳过——绝不重新实现）。
+一条只告警的采纳建议通道（日志器 `mstar/fallbacks-advisory`）**每次 apply 只跑一遍**——apply 时先尝试一次；当 fallbacks 行在 `dsh` 之后挂载（loader 并发挂载条目）时，改在首个 `subagent/start` 决策点只跑一遍。服务存在时，通道**先 await 幂等 re-declare**（闭合 boot 竞争窗口）再读取**有效状态**（`getEffectiveRoles`），并按**每类至多一条告警**有界报告：
 
-行配置缺失或非对象、或 `roles.list` 不可读 → 跳过并记一条 debug。该建议**绝不写入** fallbacks 配置（对部署配置层只读）、绝不抛出，且 **fallbacks 未挂载时不调用**——它是信号，不是闸门。通道在 apply 时先尝试一次；当 fallbacks 行在 `dsh` 之后挂载（loader 并发挂载条目）时，改在首个 `subagent/start` 决策点只跑一遍。
+- **缺失 mstar 角色**——无有效行的 mstar id（一条告警列出全部；id 集合派生自 `harness-agents/` 镜像——绝不硬编码；无镜像 → 检查跳过并记一条 debug）；
+- **persona 覆盖**——行 persona 与 seed 默认值不同的 mstar 角色（一条告警点名 + revert 入口：`fallbacks/revert-seed` gateway / fallbacks 设置卡片回滚按钮——操作者覆盖在 revert 前保留）；
+- **空 persona**——`persona` 缺失/空白的行，仅限非 seeded 或 overridden-empty（一条告警点名）；
+- **遗留键**——`chains`、`roles.default`、`roles.list[].label`/`.description`、悬空 `roles.rules[].role` 引用，经已应用服务自带的 `detectLegacyKeys`（一条告警引用其语义）；
+- **declare 跳过/冲突**——本地跳过（`interpolation` / `no-persona`）+ 上游跳过/冲突（码 `persona-source`——操作者覆盖保留）合并为**一条**告警；默认已 seeded 静默（一条 debug 点名）。
+
+loader 回退路径（无服务）保留结构化 `roles.list` 读取（缺失 id / 空 persona；无 revert 入口——无 seeds 面；遗留键检查跳过——绝不重新实现）。行配置缺失或非对象、或 `roles.list` 不可读 → 跳过并记一条 debug。该建议**绝不写入** fallbacks 配置——唯一写路径是经已发布 seeds 面的幂等 seeds re-declare（无差异 → 上游零设置写入）——绝不抛出，且 **fallbacks 未挂载时不调用**：它是信号，不是闸门。
 
 ### 配置面
 
