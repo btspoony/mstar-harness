@@ -1,0 +1,9 @@
+---
+category: Changed
+packages: cli
+---
+
+- **Import-only validator CLI surface**: five new maintainer commands exposing engine validators that skill callouts previously cited as import-only — `mstar status tech-debt [path]` (`techDebtRollup`; prints the rollup and PASS/DRIFT vs stored `metadata.tech_debt_summary`, exit 1 on DRIFT), `mstar status findings-cleanup <plan-id>` (`findingsCleanupGate`; mode resolution via Assignment/metadata `zero-residual`, else `allow-residual`), `mstar lease verify-integration` (`validateIntegrationMergeLease`; unclaimed lease = OK, distinct from `lease verify`), `mstar worktree qc-alignment <assignment-file>...` (`assertQcAlignment`; byte-identical `plan_id` / `Review range` / `Diff basis` across QC tri + QA Assignments), and `mstar host skill-root --host <id> --skill <name> [--rel <path>]` (`resolveSkillRoot`). Engine-check callouts in `mstar-plan-artifacts` (incl. `references/status-and-residuals.md`), `mstar-iteration`, `mstar-branch-worktree`, and `mstar-host` now cite the CLI forms.
+
+<!-- CN -->
+- **Import-only 校验器 CLI 表面**：新增五个维护命令，暴露此前 skill callout 标注为 import-only 的引擎校验器 —— `mstar status tech-debt [path]`（`techDebtRollup`；打印 rollup 并与存储的 `metadata.tech_debt_summary` 对比 PASS/DRIFT，DRIFT 时 exit 1）、`mstar status findings-cleanup <plan-id>`（`findingsCleanupGate`；模式解析：Assignment/metadata `zero-residual`，否则 `allow-residual`）、`mstar lease verify-integration`（`validateIntegrationMergeLease`；未认领 = OK，与 `lease verify` 不同）、`mstar worktree qc-alignment <assignment-file>...`（`assertQcAlignment`；QC 三审 + QA Assignment 间 `plan_id` / `Review range` / `Diff basis` 逐字相同）、`mstar host skill-root --host <id> --skill <name> [--rel <path>]`（`resolveSkillRoot`）。`mstar-plan-artifacts`（含 `references/status-and-residuals.md`）、`mstar-iteration`、`mstar-branch-worktree`、`mstar-host` 的 engine-check callout 现改为引用 CLI 形态。

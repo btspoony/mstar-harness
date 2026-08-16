@@ -184,6 +184,74 @@ Exit codes:
 - `0` — OK: prints `roles validate (mapping): OK` and `roles validate (load order): OK`, then the summary `roles validate: OK` with the violation, sibling-skill-scanned, and load-order-checked counts (the load-order count excludes `mstar-harness-core`, exempt by design)
 - `1` — violations: prints a FAIL header plus one violation row per mapping / load-order violation on stderr (same stream split as the other `printChecklist` commands); the `roles validate: FAIL (N violations, …)` summary line stays on stdout
 
+## Maintainer Commands
+
+Engine-backed harness checks for maintainers (thin wrappers — business logic lives in `@mstar-harness/engine`). Each command mirrors an engine validator that skill engine-check callouts cite; exit codes follow the CLI convention (0 = OK, 1 = violations/data errors, 2 = usage).
+
+### `mstar-harness status tech-debt`
+
+Print the residual tech-debt rollup (`total_open` / `by_severity` / `by_target` / `by_plan` over open root `residual_findings`) and compare it field-by-field against the stored `metadata.tech_debt_summary` — a thin mirror of the engine `techDebtRollup` check cited in `mstar-plan-artifacts` (`references/status-and-residuals.md`).
+
+- `npx @mstar-harness/cli status tech-debt`
+- `npx @mstar-harness/cli status tech-debt path/to/status.json`
+
+Without a path argument the command uses `{HARNESS_DIR}/status.json` (resolved like `status validate`).
+
+Exit codes:
+
+- `0` — PASS: prints the computed rollup then `tech_debt_summary: PASS`
+- `1` — DRIFT: computed fields differ from the stored summary (or no summary is stored); prints `tech_debt_summary: DRIFT (N/4 fields: …)`. The engine does not write `status.json` — copy the computed values into `metadata.tech_debt_summary` to clear.
+
+### `mstar-harness status findings-cleanup`
+
+Enforce a plan's `Findings cleanup` mode on its open residuals — a thin mirror of the engine `findingsCleanupGate` check cited in `mstar-plan-artifacts`. Mode resolution follows the engine: explicit Assignment/metadata `zero-residual`, else the `allow-residual` default (plans without open residuals pass trivially).
+
+- `npx @mstar-harness/cli status findings-cleanup <plan-id> --harness <path>`
+
+`--harness` defaults to the resolved `{HARNESS_DIR}` (its `status.json` is used).
+
+Exit codes:
+
+- `0` — OK: no open-residual violations under the resolved mode
+- `1` — violations: prints one `findings.*` row per open residual on stderr
+
+### `mstar-harness lease verify-integration`
+
+Verify the root `metadata.integration_merge_lease` object when present — a thin mirror of the engine `validateIntegrationMergeLease` check cited in `mstar-plan-artifacts` / `mstar-iteration`. Distinct from `mstar-harness lease verify` (the plan-level `execution_lease`): this is the serial integration-merge lease.
+
+- `npx @mstar-harness/cli lease verify-integration --harness <path>`
+
+`--harness` defaults to the resolved `{HARNESS_DIR}`.
+
+Exit codes:
+
+- `0` — OK: no `integration_merge_lease` (unclaimed) or a valid lease (prints the holder)
+- `1` — invalid lease: missing/invalid `holder` / `claimed_at` / `plan_id` / `source_branch` / `target_branch`, or a `null`/tombstone object
+
+### `mstar-harness worktree qc-alignment`
+
+Assert the QC/QA alignment fields (`plan_id` / `Review range` / `Diff basis`) are byte-identical across the given Assignment files — a thin mirror of the engine `assertQcAlignment` check cited in `mstar-branch-worktree`.
+
+- `npx @mstar-harness/cli worktree qc-alignment qc1.md qc2.md qc3.md qa.md`
+
+Each file is parsed for the three header fields (bold or plain forms). Exit codes:
+
+- `0` — OK: all three fields byte-identical across every file
+- `1` — mismatch: prints `qc.alignment.mismatch` per differing field, or `qc.alignment.field.missing` when a file lacks a required field
+- `2` — usage: no assignment files given
+
+### `mstar-harness host skill-root`
+
+Resolve the loaded skill root for a host — a thin mirror of the engine `resolveSkillRoot` check cited in `mstar-host` (table at "Resolve loaded skill root").
+
+- `npx @mstar-harness/cli host skill-root --host opencode --skill mstar-roles`
+- `npx @mstar-harness/cli host skill-root --host cursor --skill mstar-roles --rel references/opencode.md`
+
+Exit codes:
+
+- `0` — prints the canonical skill-root string (e.g. `harness-skills/mstar-roles`); `pi` prints the deferred-resolution notice in yellow
+- `2` — usage: unknown `--host` id
+
 ## Harness Slash Commands (not CLI subcommands)
 
 `/codebase-audit` and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).

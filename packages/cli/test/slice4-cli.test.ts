@@ -1145,3 +1145,286 @@ A topic skill body without a Load Order heading.
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// mstar status tech-debt — rollup + PASS/DRIFT (audit-004)
+// ---------------------------------------------------------------------------
+
+/** status.json whose stored metadata.tech_debt_summary matches the computed
+ * rollup of its one open residual (by_severity in SEVERITY_ORDER: critical,
+ * high, medium, low, nit — key order matters for the stringify comparison). */
+const STATUS_TECH_DEBT_PASS = `{
+  "plans": [{ "id": "p1", "status": "InReview" }],
+  "residual_findings": {
+    "demo-plan": [
+      { "id": "R1", "title": "Fix ordering bug", "severity": "high", "lifecycle": "open", "decision": "accept", "target": "next-iteration", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
+    ]
+  },
+  "metadata": {
+    "tech_debt_summary": {
+      "total_open": 1,
+      "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "nit": 0 },
+      "by_target": { "next-iteration": 1 },
+      "by_plan": { "demo-plan": 1 }
+    }
+  }
+}`;
+
+describe("mstar status tech-debt — rollup + PASS/DRIFT vs stored summary (audit-004)", () => {
+  test("matching stored summary prints the rollup and PASS (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS);
+      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("total_open: 1");
+      expect(result.stdout).toContain('by_severity: {"critical":0,"high":1,"medium":0,"low":0,"nit":0}');
+      expect(result.stdout).toContain('by_target: {"next-iteration":1}');
+      expect(result.stdout).toContain('by_plan: {"demo-plan":1}');
+      expect(result.stdout).toContain("tech_debt_summary: PASS");
+      expect(result.stderr).toBe("");
+    });
+  });
+
+  test("drifted stored summary prints DRIFT with the failing fields (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS.replace('"total_open": 1,', '"total_open": 0,'));
+      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("tech_debt_summary: DRIFT (1/4 fields: total_open)");
+    });
+  });
+
+  test("no stored summary is DRIFT with a note (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS.replace(/"tech_debt_summary": \{[\s\S]*?\n    \}/, '"bogus": {}'));
+      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("DRIFT (4/4 fields: total_open, by_severity, by_target, by_plan)");
+      expect(result.stderr).toContain("no stored metadata.tech_debt_summary");
+    });
+  });
+
+  test("missing status file fails with exit 1", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "tech-debt", join(dir, "nope.json")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("status file not found");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar status findings-cleanup — cleanup mode gate (audit-004)
+// ---------------------------------------------------------------------------
+
+/** One open non-critical residual under plan p1 — allow-residual passes. */
+const STATUS_CLEANUP_ALLOW_PASS = `{
+  "plans": [{ "id": "p1", "status": "InReview" }],
+  "residual_findings": {
+    "p1": [
+      { "id": "R1", "title": "Style nit follow-up", "severity": "low", "lifecycle": "open", "decision": "accept", "target": "next-iteration", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
+    ]
+  }
+}`;
+
+/** Same doc but the residual is critical — allow-residual blocks Approve. */
+const STATUS_CLEANUP_ALLOW_FAIL = STATUS_CLEANUP_ALLOW_PASS.replace('"severity": "low"', '"severity": "critical"');
+
+/** zero-residual via plans[].metadata.findings_cleanup with a fixable open residual. */
+const STATUS_CLEANUP_ZERO_FAIL = `{
+  "plans": [{ "id": "p1", "status": "InProgress", "metadata": { "findings_cleanup": "zero-residual" } }],
+  "residual_findings": {
+    "p1": [
+      { "id": "R1", "title": "Fixable finding", "severity": "medium", "lifecycle": "open", "decision": "accept", "target": "", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
+    ]
+  }
+}`;
+
+describe("mstar status findings-cleanup — cleanup-mode gate over open residuals (audit-004)", () => {
+  test("allow-residual with non-critical open residual passes (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ALLOW_PASS);
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("findings-cleanup p1: OK");
+    });
+  });
+
+  test("allow-residual with an unresolved critical fails (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ALLOW_FAIL);
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("findings-cleanup p1: FAIL (1 violation)");
+      expect(result.stderr).toContain("findings.allow-residual-critical");
+    });
+  });
+
+  test("zero-residual via plan metadata blocks a fixable open residual (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ZERO_FAIL);
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("findings.zero-residual-open-fixable");
+    });
+  });
+
+  test("missing status file fails with exit 1", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("status file not found");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar lease verify-integration — integration merge lease (audit-004)
+// ---------------------------------------------------------------------------
+
+const LEASE_VALID = `{
+  "metadata": {
+    "integration_merge_lease": {
+      "holder": "Main",
+      "claimed_at": "2026-08-16",
+      "plan_id": "20260816-audit-004",
+      "source_branch": "feature/20260816-audit-004-validator-cli",
+      "target_branch": "spec_integration_branch"
+    }
+  }
+}`;
+
+const LEASE_MISSING_HOLDER = LEASE_VALID.replace('"holder": "Main",\n      ', "");
+
+const LEASE_UNCLAIMED = `{
+  "metadata": { "iteration_base_branch": "main" }
+}`;
+
+describe("mstar lease verify-integration — root metadata.integration_merge_lease (audit-004)", () => {
+  test("valid lease prints holder and passes (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), LEASE_VALID);
+      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("integration_merge_lease valid (holder Main)");
+    });
+  });
+
+  test("absent lease is the valid unclaimed state (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), LEASE_UNCLAIMED);
+      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("no integration_merge_lease (unclaimed)");
+    });
+  });
+
+  test("lease missing a required field fails with the engine code (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), LEASE_MISSING_HOLDER);
+      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("lease verify-integration: FAIL (1 violation)");
+      expect(result.stderr).toContain("lease.merge-lease.missing-holder");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar worktree qc-alignment — byte-identical alignment fields (audit-004)
+// ---------------------------------------------------------------------------
+
+/** One QC Assignment fixture with the three alignment fields (bold form). */
+function qcAssignmentFixture(planId: string, range: string): string {
+  return `## Assignment
+**Execute as**: qc-specialist
+**Task category**: logic
+**plan_id**: ${planId}
+**Review range**: ${range}
+**Diff basis**: ${range}
+`;
+}
+
+describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", () => {
+  test("identical fields across three assignments pass (exit 0)", () => {
+    withTempDir((dir) => {
+      for (const name of ["qc1.md", "qc2.md", "qc3.md"]) {
+        writeFileSync(join(dir, name), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      }
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md"), join(dir, "qc3.md")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("worktree qc-alignment: OK (3 assignments, 3 fields byte-identical)");
+    });
+  });
+
+  test("a differing Diff basis fails with qc.alignment.mismatch (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "qc1.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      writeFileSync(join(dir, "qc2.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD~1"));
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree qc-alignment: FAIL (2 violations)");
+      expect(result.stderr).toContain('"Review range" is not byte-identical');
+      expect(result.stderr).toContain('"Diff basis" is not byte-identical');
+    });
+  });
+
+  test("assignment missing an alignment field fails with qc.alignment.field.missing (exit 1)", () => {
+    withTempDir((dir) => {
+      const incomplete = qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD").replace(
+        "**Diff basis**: merge-base: main + tip: HEAD\n",
+        "",
+      );
+      writeFileSync(join(dir, "qc1.md"), incomplete);
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("qc.alignment.field.missing");
+      expect(result.stderr).toContain('missing "Diff basis" header field');
+    });
+  });
+
+  test("no assignment files is a usage error (exit 2)", () => {
+    const result = runCli(["worktree", "qc-alignment"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("usage: worktree qc-alignment <assignment-file>...");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar host skill-root — per-host resolution matrix (audit-004)
+// ---------------------------------------------------------------------------
+
+describe("mstar host skill-root — loaded skill-root resolution (audit-004)", () => {
+  test("opencode resolves to the package-internal harness-skills mount (exit 0)", () => {
+    const result = runCli(["host", "skill-root", "--host", "opencode", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("harness-skills/mstar-roles");
+  });
+
+  test("cursor resolves with a skill-relative path suffix (exit 0)", () => {
+    const result = runCli([
+      "host",
+      "skill-root",
+      "--host",
+      "cursor",
+      "--skill",
+      "mstar-roles",
+      "--rel",
+      "references/opencode.md",
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("~/.cursor/plugins/local/morning-star-harness/skills/mstar-roles/references/opencode.md");
+  });
+
+  test("omp resolves to the skill:// URI form (exit 0)", () => {
+    const result = runCli(["host", "skill-root", "--host", "omp", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("skill://mstar-roles");
+  });
+
+  test("unknown host is a usage error (exit 2)", () => {
+    const result = runCli(["host", "skill-root", "--host", "bogus", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('unknown host "bogus"');
+  });
+});

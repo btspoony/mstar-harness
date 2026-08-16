@@ -11,6 +11,7 @@ import {
   assertDefaultBranchProtected,
   assertIndexRows,
   assertLightDarkParity,
+  assertQcAlignment,
   assertSddTddTriple,
   assertTriIdentity,
   AUDIT_CATEGORIES,
@@ -24,6 +25,7 @@ import {
   findEphemeralCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  findingsCleanupGate,
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
@@ -38,6 +40,7 @@ import {
   planQualityBar,
   pushCadenceProbe,
   resolveHarnessDir,
+  resolveSkillRoot,
   resolveSpecsDir,
   reviewPackage,
   scaffoldAuditPlan,
@@ -46,8 +49,10 @@ import {
   sddWorkspace,
   stripFrontmatter,
   taskBrief,
+  techDebtRollup,
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
+  validateIntegrationMergeLease,
   validateRoleMapping,
   validateSchemaYaml,
   validateStatus,
@@ -58,7 +63,10 @@ import {
   type AuditRisk,
   type FiveQuestionMode,
   type GateResult,
+  type HostId,
   type L1PreDispatchInput,
+  type QcAlignmentAssignment,
+  type StatusDoc,
   type ToolSignal,
   type ValidationResult,
   type WorktreeTrack,
@@ -408,9 +416,70 @@ statusCommand
     }
   });
 
+statusCommand
+  .command("tech-debt")
+  .description(
+    "Print the residual tech-debt rollup (total_open / by_severity / by_target / by_plan) and PASS/DRIFT vs stored " +
+      "metadata.tech_debt_summary (exit 1 on DRIFT \u2014 refresh the stored summary to clear)",
+  )
+  .argument("[path]", "status.json path (default: {HARNESS_DIR}/status.json)")
+  .action((pathArg?: string) => {
+    try {
+      const statusPath = resolveStatusFilePath(pathArg);
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const rollup = techDebtRollup(statusPath);
+      console.log(`status tech-debt: ${statusPath}`);
+      console.log(`total_open: ${rollup.computed.total_open}`);
+      console.log(`by_severity: ${JSON.stringify(rollup.computed.by_severity)}`);
+      console.log(`by_target: ${JSON.stringify(rollup.computed.by_target)}`);
+      console.log(`by_plan: ${JSON.stringify(rollup.computed.by_plan)}`);
+      if (rollup.overall === "PASS") {
+        console.log(pc.green("tech_debt_summary: PASS (all 4 fields match stored)"));
+        return;
+      }
+      const drifts = rollup.checks.filter((check) => check.status === "DRIFT").map((check) => check.field);
+      const note = rollup.stored === null ? " (no stored metadata.tech_debt_summary)" : "";
+      console.error(pc.red(`tech_debt_summary: DRIFT (${drifts.length}/4 fields: ${drifts.join(", ")})${note}`));
+      process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`status tech-debt failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+statusCommand
+  .command("findings-cleanup")
+  .description(
+    "Enforce a plan's findings-cleanup mode on its open residuals (zero-residual via Assignment/metadata, else " +
+      "allow-residual; exit 1 on violations)",
+  )
+  .argument("<plan-id>", "Plan id whose open residuals are checked against the cleanup mode")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .action((planId: string, options: { harness?: string }) => {
+    try {
+      const statusPath = options.harness ? path.join(path.resolve(options.harness), "status.json") : resolveStatusFilePath();
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const doc = readJson(statusPath) as StatusDoc;
+      const gate = findingsCleanupGate(doc, planId);
+      if (gate.ok) {
+        console.log(pc.green(`findings-cleanup ${planId}: OK`));
+        return;
+      }
+      printChecklist(`findings-cleanup ${planId}`, gate);
+      process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`status findings-cleanup failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
 const leaseCommand = program
   .command("lease")
-  .description("execution_lease checks (engine-backed) \u2014 integration_merge_lease validation stays import-only via @mstar-harness/engine until a dedicated subcommand exists");
+  .description("execution_lease / integration_merge_lease checks (engine-backed)");
 
 /** Resolve the harness dir for lease commands: --harness wins, else {HARNESS_DIR} resolution. */
 function resolveLeaseHarnessDir(harnessArg?: string): string {
@@ -467,6 +536,39 @@ leaseCommand
       process.exitCode = 1;
     } catch (error) {
       console.error(pc.red(`lease verify failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+leaseCommand
+  .command("verify-integration")
+  .description(
+    "Verify the root metadata.integration_merge_lease when present (absent/unclaimed \u2192 OK; invalid lease \u2192 exit 1)",
+  )
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .action((options: { harness?: string }) => {
+    try {
+      const harnessDir = resolveLeaseHarnessDir(options.harness);
+      const statusPath = path.join(harnessDir, "status.json");
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const doc = readJson(statusPath);
+      const metadata = (doc.metadata ?? {}) as Record<string, unknown>;
+      if (metadata.integration_merge_lease === undefined) {
+        console.log(pc.green(`${statusPath}: OK \u2014 no integration_merge_lease (unclaimed)`));
+        return;
+      }
+      const gate = validateIntegrationMergeLease(metadata.integration_merge_lease);
+      if (gate.ok) {
+        const lease = metadata.integration_merge_lease as Record<string, unknown>;
+        console.log(pc.green(`${statusPath}: OK \u2014 integration_merge_lease valid (holder ${String(lease.holder ?? "")})`));
+        return;
+      }
+      printChecklist("lease verify-integration", gate);
+      process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`lease verify-integration failed: ${(error as Error).message}`));
       process.exitCode = 1;
     }
   });
@@ -788,6 +890,76 @@ worktreeCommand
       }
     },
   );
+
+/** Parse one Assignment header field (`**Label**: value` or `Label: value`, list bullets tolerated). */
+function parseAssignmentHeaderField(assignmentText: string, label: string): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const boldRe = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*\\s*:\\s*(.*)$`);
+  const plainRe = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}\\s*:\\s*(.*)$`);
+  for (const line of assignmentText.split(/\r?\n/)) {
+    const match = line.match(boldRe) ?? line.match(plainRe);
+    if (match) return match[1]!.trim();
+  }
+  return "";
+}
+
+/** QC/QA alignment fields asserted byte-identical across QC tri + QA Assignments (engine contract). */
+const QC_ALIGNMENT_FIELDS: ReadonlyArray<{ key: keyof QcAlignmentAssignment; label: string }> = [
+  { key: "planId", label: "plan_id" },
+  { key: "reviewRange", label: "Review range" },
+  { key: "diffBasis", label: "Diff basis" },
+];
+
+worktreeCommand
+  .command("qc-alignment")
+  .description(
+    "Assert the QC/QA alignment fields (plan_id / Review range / Diff basis) are byte-identical across the given " +
+      "Assignment files (exit 1 on mismatch or missing field, 2 on usage)",
+  )
+  .argument("[assignment-files...]", "QC tri + QA Assignment markdown files (at least one required)")
+  .action((files: string[]) => {
+    try {
+      if (files.length === 0) {
+        throw new SddScriptError("usage: worktree qc-alignment <assignment-file>...", 2);
+      }
+      const assignments: QcAlignmentAssignment[] = [];
+      for (const fileArg of files) {
+        const file = path.resolve(fileArg);
+        if (!fs.existsSync(file)) {
+          throw new Error(`assignment file not found: ${file}`);
+        }
+        const text = fs.readFileSync(file, "utf8");
+        const missing = QC_ALIGNMENT_FIELDS.filter((field) => parseAssignmentHeaderField(text, field.label) === "");
+        if (missing.length > 0) {
+          console.error(pc.red(`worktree qc-alignment: FAIL ${file}`));
+          for (const field of missing) {
+            console.error(`  - [high] qc.alignment.field.missing: missing "${field.label}" header field`);
+          }
+          process.exitCode = 1;
+          return;
+        }
+        assignments.push({
+          planId: parseAssignmentHeaderField(text, "plan_id"),
+          reviewRange: parseAssignmentHeaderField(text, "Review range"),
+          diffBasis: parseAssignmentHeaderField(text, "Diff basis"),
+        });
+      }
+      const gate = assertQcAlignment(assignments);
+      if (gate.ok) {
+        console.log(
+          pc.green(
+            `worktree qc-alignment: OK (${assignments.length} assignment${assignments.length === 1 ? "" : "s"}, ` +
+              `${QC_ALIGNMENT_FIELDS.length} fields byte-identical)`,
+          ),
+        );
+        return;
+      }
+      printChecklist("worktree qc-alignment", gate);
+      process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "worktree qc-alignment");
+    }
+  });
 
 const reviewCommand = program
   .command("review")
@@ -1244,6 +1416,12 @@ const HOST_SIGNALS: readonly ToolSignal[] = [
 /** Membership lookup for the signal list above. */
 const HOST_SIGNAL_LOOKUP = lookupTable(HOST_SIGNALS);
 
+/** Valid `host skill-root --host` ids (engine HostId union — no drift). */
+const HOST_IDS: readonly HostId[] = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode"];
+
+/** Membership lookup for the host ids above. */
+const HOST_ID_LOOKUP = lookupTable(HOST_IDS);
+
 const hostCommand = program
   .command("host")
   .description("host detection from session tool shapes (engine-backed)");
@@ -1276,6 +1454,31 @@ hostCommand
       }
     } catch (error) {
       failScript(error, "host detect");
+    }
+  });
+
+hostCommand
+  .command("skill-root")
+  .description(
+    "Resolve the loaded skill root for a host (mstar-host \u00a7 Resolve loaded skill root): prints the canonical " +
+      "skill-root string for --host / --skill (exit 2 on usage)",
+  )
+  .requiredOption("--host <id>", "Host id (opencode | omp | pi | dsh | cursor | codex | kimi | zcode)")
+  .requiredOption("--skill <name>", "Skill name to resolve")
+  .option("--rel <path>", "Optional skill-relative path suffix")
+  .action((options: { host: string; skill: string; rel?: string }) => {
+    try {
+      if (HOST_ID_LOOKUP[options.host] !== true) {
+        throw new SddScriptError(`usage: host skill-root \u2014 unknown host "${options.host}" (valid: ${HOST_IDS.join(", ")})`, 2);
+      }
+      const root = resolveSkillRoot(options.host as HostId, { skill: options.skill, rel: options.rel });
+      if (options.host === "pi") {
+        console.log(pc.yellow(root));
+      } else {
+        console.log(pc.green(root));
+      }
+    } catch (error) {
+      failScript(error, "host skill-root");
     }
   });
 
