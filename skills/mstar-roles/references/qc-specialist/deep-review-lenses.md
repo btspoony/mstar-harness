@@ -75,6 +75,8 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 
 所有透镜发现归入主报告的 `## Findings` 三节（Critical / Warning / Suggestion）中，每个发现的 `Source Type` 标注为对应透镜名（如 `deep-lens: Security Lens`），与主审查者的 `manual-reasoning` 发现同等待遇。
 
+每个透镜 finding 必须附 **diff / read / grep 锚点** + **预期 vs 实际（Expected vs observed）**——无锚点不入报告（宁可漏报不虚报）。
+
 ```markdown
 ## Scope
 - plan_id: <id>
@@ -86,6 +88,8 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 ### 🔴 Critical
 - [DS-001] Auth middleware missing on POST /api/admin/users → <fix>
   - Source Type: deep-lens: Auth Lens
+  - Verification: diff/read/grep anchor（`src/routes/admin.ts:41-52` 缺 auth 中间件引用 vs `src/middleware/auth.ts` 注册路径）
+  - Expected vs observed: 预期所有 `/api/admin/*` 经 auth 中间件 vs 实际 `POST /api/admin/users` 直入 handler
   - Confidence: High
 ```
 
