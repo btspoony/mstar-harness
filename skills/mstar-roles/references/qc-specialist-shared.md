@@ -102,9 +102,11 @@ report_kind: qc
 reviewer: {role_id}
 reviewer_index: {reviewer_index}
 plan_id: "<id>"
-verdict: "Approve | Request Changes | Needs Discussion"
+verdict: "Approve | Request Changes | Needs Discussion | Unconfirmed"
 generated_at: "YYYY-MM-DD"
 ---
+
+Verdict enumeration and rules (incl. `Unconfirmed` semantics) → **`references/qc-specialist/report-template.md`**.
 ```
 
 ## Completion Report

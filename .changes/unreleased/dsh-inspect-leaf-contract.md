@@ -1,0 +1,11 @@
+---
+category: Harness
+packages: root
+---
+
+- **Dataflow-directed debugging protocol**: `mstar-coding-behavior` §4 Debugging gains a compact diagnosis procedure — map the data flow before judging (input → processing → storage → output, who writes/reads at each step; a bug is a state deviation from expectation at a flow point), four verifiable cross-checks (re-run the repro / log comparison / input-output comparison / dual-path comparison — a hypothesis that cannot be verified on the spot is not a conclusion), and falsify the fix (after fixing, re-run the original repro and compare with expectation; report "verification failed" explicitly instead of pretending success) — cross-referencing, not restating, the existing root-cause and repro-test bullets.
+- **QC report evidence contract + `Unconfirmed` verdict**: `qc-specialist` report-template findings entries now require `Verification` + `Expected vs observed` on every severity class — Critical/Warning may use the four cross-checks (or a `diff/read/grep` anchor), Suggestion is `diff/read/grep` anchor only — backed by two hard rules (no verifiable cross-check → do not report the finding; a failed evidence channel is not "no problem" — mark the affected scope **Unconfirmed**); the verdict enum gains `Unconfirmed` for evidence-channel failure; `deep-review-lenses.md` now requires every lens finding to carry a diff/read/grep anchor + expected vs observed (no anchor, no report).
+
+<!-- CN -->
+- **数据流定向调试规程**：`mstar-coding-behavior` §4 Debugging 新增紧凑诊断规程——先画数据流再下判断（输入 → 处理 → 存储 → 输出，每步谁写谁读；bug = 数据流某处状态偏离预期），四类可互验交叉检查（re-run the repro / log comparison / input-output comparison / dual-path comparison——当场无法验证的假设不构成结论），以及修复证伪（修复后重跑原复现并与预期对照；明确报告「verification failed」，绝不假装成功）——与既有 root-cause / repro-test 条目互指而非重述。
+- **QC 报告证据契约 + `Unconfirmed` verdict**：`qc-specialist` report-template 的 findings 条目现要求每个严重级别都附 `Verification` + `Expected vs observed`——Critical/Warning 可用四类交叉验证（或 `diff/read/grep` 锚点），Suggestion 仅用 `diff/read/grep` 锚点——并由两条硬规则背书（无法陈述可验证交叉检查 → 不报该 finding；证据通道失败 ≠ 「无问题」——受影响范围标 **Unconfirmed**，不得默认无发现）；verdict 枚举新增 `Unconfirmed` 以覆盖证据通道失败；`deep-review-lenses.md` 现要求每个透镜 finding 附 diff/read/grep 锚点 + 预期 vs 实际（无锚点不入报告）。

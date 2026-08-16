@@ -92,6 +92,11 @@ When something does not work, investigate; do not guess.
 - **Run existing tests before and after changes.** If they passed before and fail after, you broke something. If they were already failing, say so.
 - **If stuck, say so.** "I tried X and Y; neither worked. I'm seeing Z. I think it might be W but am not sure" is infinitely more useful than silently trying random things for 20 iterations.
 
+**Dataflow-directed diagnosis — how to locate, verify, and falsify** (for where to fix, see Surgical Changes · bug=root-cause; for the pre-fix repro test, see the bullets above):
+- **Map the data flow before judging.** Trace input → processing → storage → output, noting who writes and who reads at each step. A bug is a state deviation from expectation at some point in that flow (expected state vs observed state) — locate it from the data, not by static code reading.
+- **Four verifiable cross-checks.** Every hypothesis must be cross-checkable: re-run the repro / log comparison / input-output comparison / dual-path comparison. A hypothesis that cannot be verified on the spot is not a conclusion.
+- **Falsify the fix.** After the fix, re-run the original repro and compare output with expectation. If the problem did not disappear, the root cause was wrong — report "verification failed" explicitly; never pretend success.
+
 ## 5) Goal-Driven Execution
 
 Convert vague requests into verifiable outcomes and iterate until verified. Define concrete success criteria before major edits; use brief `Step -> verify` checkpoints for multi-step tasks; for split delivery, maintain a durable roadmap (current slice, later slices, dependencies, owner/trigger, completion condition); prefer evidence-backed completion (tests, command output, reproducible checks). If verification fails, loop on diagnosis and fix before declaring completion. Do not finish with "next plan / later / follow-up" only in prose — remaining work must be written to the plan/status artifact or the task reports `Partial` / `Blocked`.
