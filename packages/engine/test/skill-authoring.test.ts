@@ -18,7 +18,15 @@
  *   § Resolve loaded skill root.
  */
 import { describe, expect, test } from "bun:test";
-import { lintFiveQuestion, lintFrontmatter, resolveAssetPath } from "../src/skill-authoring.js";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import {
+  lintFiveQuestion,
+  lintFrontmatter,
+  resolveAssetPath,
+  RUNTIME_HEADING_ALIASES,
+  stripFrontmatter,
+} from "../src/skill-authoring.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -207,6 +215,61 @@ Zero violations.
 Open references/skillsbench-authoring.md when needed.
 `;
 
+/** Body answering all five questions via runtime alias headings only
+ * (RUNTIME_HEADING_ALIASES): Load Order stays canonical (no alias exists
+ * for it), Workflow → process, Decision Rules → hard rules, Evidence →
+ * output format, References → dependencies. Fails authoring, passes runtime. */
+const BODY_RUNTIME_ALIASES = `# Skill Title
+
+## Load Order
+
+Read mstar-harness-core first.
+
+## Process
+
+1. Parse the frontmatter.
+2. Check the body sections.
+
+## Hard Rules
+
+Never flag prose-only skills; keep heuristics conservative.
+
+## Output format
+
+A passing lint gate with zero violations.
+
+## Dependencies
+
+Open references/skillsbench-authoring.md when a full loop is needed.
+`;
+
+// ---------------------------------------------------------------------------
+// Corpus fixtures — the shipped mstar-* topic-skill pack (runtime mode)
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
+const SKILLS_ROOT = join(REPO_ROOT, "skills");
+
+/** Skills excluded from runtime corpus lint: `mstar-harness-core` is exempt
+ * by design (hub headings — plan constraint), `mstar-skill-authoring` is the
+ * standard's own definition and always lints in authoring/strict mode. */
+const CORPUS_EXCLUDED = new Set(["mstar-harness-core", "mstar-skill-authoring"]);
+
+/** Every shipped runtime skill body: the `SKILL.md` under each
+ * `skills/mstar-*` directory, minus the corpus exclusions, sorted by name. */
+function runtimeCorpus(): Array<{ name: string; body: string }> {
+  if (!existsSync(SKILLS_ROOT)) {
+    throw new Error(`corpus test requires the repo skills/ tree (missing: ${SKILLS_ROOT})`);
+  }
+  return readdirSync(SKILLS_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("mstar-") && !CORPUS_EXCLUDED.has(entry.name))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => ({
+      name: entry.name,
+      body: stripFrontmatter(readFileSync(join(SKILLS_ROOT, entry.name, "SKILL.md"), "utf8")),
+    }));
+}
+
 // ---------------------------------------------------------------------------
 // lintFrontmatter — reuses lint.lintSkillFrontmatter (single parser)
 // ---------------------------------------------------------------------------
@@ -309,6 +372,71 @@ describe("lintFiveQuestion", () => {
     expect(lintFiveQuestion(body).ok).toBe(true);
   });
 
+  test("fenced fake headings never count as coverage (fence-aware, both modes)", () => {
+    // A gitignore-style fence containing a `# Workflow ...` comment line must
+    // not satisfy the workflow question — in either mode. The only in-fence
+    // "heading" in the corpus was exactly this shape (mstar-plan-conventions
+    // gitignore snippet) and previously produced a false green.
+    const body = `# Skill Title
+
+## Load Order
+
+Read core first.
+
+## Decision Rules
+
+Never break the gates.
+
+## Evidence
+
+A report.
+
+## References
+
+Open refs.
+
+\`\`\`gitignore
+# Workflow: run the pipeline in order.
+\`\`\`
+`;
+    expect(lintFiveQuestion(body, "authoring").ok).toBe(false);
+    const runtime = lintFiveQuestion(body, "runtime");
+    expect(runtime.ok).toBe(false);
+    expect(runtime.violations.map((v) => v.code)).toContain("skill-authoring.five-question.workflow");
+  });
+
+  test("~~~ fences are skipped too; real headings after the closing fence still count", () => {
+    const body = `# Skill Title
+
+## Load Order
+
+\`\`\`
+# Workflow inside backtick fence
+\`\`\`
+
+## Hard Rules
+
+Never X.
+
+## Output format
+
+A report.
+
+## Dependencies
+
+Open refs.
+
+~~~text
+# Evidence inside tilde fence
+~~~
+
+## Workflow
+
+1. Go.
+`;
+    expect(lintFiveQuestion(body, "runtime").ok).toBe(true);
+  });
+
   test("empty body → all five questions uncovered", () => {
     const result = lintFiveQuestion("");
     expect(result.ok).toBe(false);
@@ -319,6 +447,100 @@ describe("lintFiveQuestion", () => {
       "skill-authoring.five-question.evidence",
       "skill-authoring.five-question.references",
     ]);
+  });
+
+  test("default mode is authoring (canonical-only, unchanged 1-arg callers)", () => {
+    // Runtime alias headings must NOT satisfy the default mode…
+    expect(lintFiveQuestion(BODY_RUNTIME_ALIASES).ok).toBe(false);
+    // …and must fail identically when passed explicitly.
+    expect(lintFiveQuestion(BODY_RUNTIME_ALIASES, "authoring").ok).toBe(false);
+    // Canonical headings satisfy both modes.
+    expect(lintFiveQuestion(BODY_COMPLETE, "authoring").ok).toBe(true);
+    expect(lintFiveQuestion(BODY_COMPLETE, "runtime").ok).toBe(true);
+  });
+
+  test("runtime mode accepts the locked alias headings; authoring rejects them", () => {
+    const result = lintFiveQuestion(BODY_RUNTIME_ALIASES, "runtime");
+    expect(result.ok).toBe(true);
+  });
+
+  test("runtime alias matching is case-insensitive (alias substrings, any level)", () => {
+    const body = BODY_RUNTIME_ALIASES
+      .replace(/## Output format/, "### output FORMAT")
+      .replace(/## Hard Rules/, "## hard rules — locked")
+      .replace(/## Dependencies/, "#### DEPENDENCIES");
+    expect(lintFiveQuestion(body, "runtime").ok).toBe(true);
+  });
+
+  test("greenfield body without canonical headings still fails in BOTH modes", () => {
+    // BODY_NO_EVIDENCE lacks Evidence and carries no alias heading for it:
+    // authoring fails (canonical missing), runtime fails (no alias covers it).
+    const authoring = lintFiveQuestion(BODY_NO_EVIDENCE, "authoring");
+    const runtime = lintFiveQuestion(BODY_NO_EVIDENCE, "runtime");
+    expect(authoring.ok).toBe(false);
+    expect(runtime.ok).toBe(false);
+    expect(runtime.violations.map((v) => v.code)).toContain("skill-authoring.five-question.evidence");
+    // A canonical-less greenfield body (no canonical / no alias headings at
+    // all) fails every question in runtime mode too — aliases do not weaken
+    // "section present" into "any heading exists".
+    const bare = "# Skill Title\n\n## Scope\n\nCovers lint checks.\n";
+    const bareRuntime = lintFiveQuestion(bare, "runtime");
+    expect(bareRuntime.ok).toBe(false);
+    expect(bareRuntime.violations.map((v) => v.code)).toEqual([
+      "skill-authoring.five-question.load-order",
+      "skill-authoring.five-question.workflow",
+      "skill-authoring.five-question.decision-rules",
+      "skill-authoring.five-question.evidence",
+      "skill-authoring.five-question.references",
+    ]);
+  });
+
+  test("runtime mode does not skip load-order (no alias exists for it)", () => {
+    // Workflow/decision-rules/evidence/references covered by aliases, but
+    // load-order has no alias row — the question stays uncovered.
+    const body = `# Skill Title
+
+## Workflow
+
+1. Go.
+
+## Hard Rules
+
+Never X.
+
+## Output format
+
+A report.
+
+## Dependencies
+
+Open references/x.md.
+`;
+    const result = lintFiveQuestion(body, "runtime");
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toEqual(["skill-authoring.five-question.load-order"]);
+  });
+
+  test("alias table shape is locked (plan Step 2 verbatim rows)", () => {
+    expect(RUNTIME_HEADING_ALIASES).toEqual({
+      workflow: ["process", "playbook"],
+      "decision-rules": ["hard rules", "core rules", "rule", "gate", "not to do", "red flags", "反模式", "红线", "规则", "门禁"],
+      evidence: ["output format", "证据"],
+      references: ["dependencies", "关系"],
+    });
+  });
+
+  test("corpus: every shipped mstar-* runtime skill passes runtime-mode lint", () => {
+    const corpus = runtimeCorpus();
+    expect(corpus.length).toBeGreaterThan(0);
+    const failures: string[] = [];
+    for (const { name, body } of corpus) {
+      const result = lintFiveQuestion(body, "runtime");
+      if (!result.ok) {
+        failures.push(`${name}: ${result.violations.map((v) => v.code).join(", ")}`);
+      }
+    }
+    expect(failures).toEqual([]);
   });
 });
 

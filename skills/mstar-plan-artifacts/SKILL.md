@@ -45,3 +45,24 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq` examples → **`references/status-and-residuals.md`**.
 
 **Templates (this skill):** `templates/status.empty.json`, `templates/notes.empty.json` — copy into `{HARNESS_DIR}/` (`templates/README.md`).
+
+## Workflow
+
+产物生命周期主链：主 plan 落盘 `{PLAN_DIR}`（命名见 `references/plan-files-and-reports.md`）→ 实现推进时更新 `{HARNESS_DIR}/status.json`（`plans[]` 行 + root `residual_findings`）→ 审查波次产出 `{SDD_DIR}/review/` bundle（raw QC/QA reports）+ durable gate summary 回写主 plan / status → 关闭后 residual 归档 `{HARNESS_DIR}/archived/residuals/<plan-id>.json` → Done 行 compaction（Profile A/B，`references/done-compaction.md`）。索引（`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` / `{PLAN_DIR}`）随产物更新。
+
+## Decision Rules
+
+- residual **severity** 是机器字段 SSOT（`references/status-and-residuals.md`）；每条新 finding 只登记 root `residual_findings`，`metadata.residual_findings` 仅 legacy 只读，**禁止**双写。
+- **`Findings cleanup: zero-residual`** 默认（迭代 Phase 2）：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap。
+- 登记前必须过 `validateResidual` / `validateStatus`（fail-loud handoff）；malformed → reject + rewrite。
+
+## Evidence
+
+正确结果 = 可复核产物链：`{SDD_DIR}/review/` 审查 bundle 落盘 + 主 plan / `status.json` 的 durable gate summary + residual 生命周期间档（open → verified close → archived）+ Done 行 compaction 完成。拒绝「仅对话声称」。
+
+## References
+
+- `references/plan-files-and-reports.md` — 主 plan / review bundle 命名、QC 波次、durable summaries
+- `references/status-and-residuals.md` — `status.json`、residual severity / lifecycle / `jq`
+- `references/done-compaction.md` — Done 行 compaction Profile A/B
+- `references/knowledge-and-designs.md` — knowledge / iterations / specs 边界与索引

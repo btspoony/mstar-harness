@@ -17,7 +17,11 @@ description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门�
 
 详细 writer 流程与输出模板 → `references/skillsbench-authoring.md`（需要完整循环时再读）。
 
-## 6 条作者原则（必须遵守）
+## Workflow
+
+主链：按「Frontmatter Contract」先定触发契约（原则 3）→ 按「Body 必须回答的 5 问」写默认紧凑 body（原则 2）→ 变体细节按「Progressive Disclosure」进 `references/` / `templates/` / `scripts/` → 行为塑形改动按「验证门控（Evidence，原则 4 + 6）」留 paired 证据 → 按「Review Template」自审并完成「完成时主动说明」三问。
+
+## 6 条作者原则（Decision Rules，必须遵守）
 
 来源：SkillsBench 大规模实验。违反任一都会降低 agent 性能。
 
@@ -41,6 +45,20 @@ description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门�
 5. **主路径不够时打开哪些额外资源？**
 
 答不进这 5 问的内容 → 删或移到 `references/`。
+
+### 运行时别名（runtime alias map）
+
+已发布的 `mstar-*` 专题 skill 允许**运行时模式**（`lintFiveQuestion(body, "runtime")`）用**锁定别名表**回答同一问题（引擎常量 `RUNTIME_HEADING_ALIASES`）：
+
+| 问题 | 运行时别名（标题子串，大小写不敏感） |
+|------|------|
+| Workflow | `process`、`playbook` |
+| Decision Rules | `hard rules`、`core rules`、`rule`、`gate`、`not to do`、`red flags`、`反模式`、`红线`、`规则`、`门禁` |
+| Evidence | `output format`、`证据` |
+| References | `dependencies`、`关系` |
+
+- 别名表是**锁定表**：改表必须同步引擎回归测试与 corpus。
+- **新写 / greenfield skill（authoring / strict）仍要求 canonical 标题**；运行时别名只豁免已发布专题 skill 的机械 lint，**不豁免语义**——别名标题必须真实回答对应问题，正文不得因别名而缩水。
 
 ## Skill Purpose Test
 
@@ -109,7 +127,7 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 多宿主 / 多域细节按文件拆分，并在 body 写明「何时打开哪份」。
 
-## 验证门控（原则 4 + 6）
+## 验证门控（Evidence，原则 4 + 6）
 
 行为塑形改动必须留下证据，任选可观测形式：
 

@@ -391,3 +391,11 @@ Iteration Phase 2 附加：
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**
 - **不要在 iteration-start §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-compound`**）
 - **不要在 per-plan Done 后立即 compound** — 等 iteration-close 统一做
+
+## Workflow
+
+Phase 1–5 总览见上文 **`## 设计思路`** 图：`iteration-start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（§2.4 per-plan 循环：分支 → 实现 → QC → QA gate → Done → 串行 merge）→ `iteration-close`（§3.1–§3.5 + `mstar-compound`）→ `PR delivery`（Phase 4）→ `PR merge-ready loop`（Phase 5 至 §5.5 exit）。每波用 §2.1 session todos 设护栏防范围漂移。
+
+## Evidence
+
+迭代交付完成 = Phase 5 §5.5 exit checklist 全 `[x]` + PR mergeable + required CI 全绿 + reviews resolved。Phase 3 完成标志 = compass frontmatter `status: completed` + `end_date`（§3.4）+ §3.5 exit checklist。close 证据在磁盘产物（compass / plans / specs 修订 + 索引 + metadata），不要求单独迭代审查报告（§1.6）。
