@@ -33,6 +33,12 @@
  * summary, and the `{HARNESS_DIR}/status.json` residual pointer — so the
  * operator acts without reverse-engineering the host. Advisory-only: ZERO
  * harness writes (the mirror stays one-way; status.json remains SSOT).
+ *
+ * Task 4b (planMode bridge) — the module also SHARES three structural
+ * helpers with `gates/plan-mode-bridge.ts` via explicit no-barrel imports:
+ * {@link isRootLikeAgent}, {@link steeringCompass} and {@link rootAgentOf}
+ * (the planMode bridge reuses the same root discriminator, the same
+ * active-iteration compass scan, and the same `subagent/start` root walk).
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -208,9 +214,11 @@ export function iterationGoalObjective(iterationId: string): string {
  * `status` is `active` or `locked` — the directory name IS the iteration id
  * (plan-conventions `{ITERATION_DIR}/<id>/`). Completed/status-less/archived
  * compasses do not steer. Silent on any read failure (advisory degrade).
+ * Shared with the planMode bridge via explicit no-barrel import (Task 4b —
+ * the same "is an active iteration steering" read).
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  */
-function steeringCompass(harnessDir: string): { iterationId: string } | undefined {
+export function steeringCompass(harnessDir: string): { iterationId: string } | undefined {
   const iterationsDir = resolveIterationDir(harnessDir)
   if (!existsSync(iterationsDir)) return undefined
   let entries
@@ -384,9 +392,11 @@ function warnBlockedGoal(harnessDir: string, advisory: BlockedGoalAdvisory): voi
  * which IS the parent agent id (a session per agent); the walk stops at the
  * first root-like ancestor. `undefined` when unresolvable (fork lineage,
  * non-in-process provider, registry gap, or a cycle guard) — the decision
- * point then silently skips.
+ * point then silently skips. Shared with the planMode bridge via explicit
+ * no-barrel import (Task 4b — the same `subagent/start` decision-point
+ * root walk).
  */
-function rootAgentOf(agent: unknown, agents: AgentsView): unknown | undefined {
+export function rootAgentOf(agent: unknown, agents: AgentsView): unknown | undefined {
   let current: unknown = agent
   for (;;) {
     const header = (current as AgentView | null | undefined)?.session?.header

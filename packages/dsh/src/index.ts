@@ -77,6 +77,11 @@ import {
   registerGoalBridge,
   setGoalBridgeLogger,
 } from './gates/goal-bridge.ts'
+import {
+  PLAN_MODE_BRIDGE_LOGGER,
+  registerPlanModeBridge,
+  setPlanModeBridgeLogger,
+} from './gates/plan-mode-bridge.ts'
 import type { SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
 import {
   ADVISORY_LOGGER,
@@ -557,6 +562,24 @@ export function apply(ctx: Context, config: Config): void {
     else logger.warn(message)
   })
   registerGoalBridge(ctx, resolver, config)
+
+  // PlanMode bridge (plan `20260816-dsh-nb2-goal-bridge` Task 4b — N-B3):
+  // the Prepare-phase flag flip — a one-way mirror of the harness Prepare
+  // state (active steering compass + ≥1 plan row `Todo` in status.json)
+  // into the host plan-mode session state (`ctx.get('planMode')` structural
+  // read — no peer dependency). The module sink is bound to the dsh logger
+  // (goal-bridge precedent); the registration is optional-unit: the planMode
+  // service absent → ONE debug log + boot unaffected. `set` is idempotent
+  // (`'noop'` — repeated evaluation at the session-start + `subagent/start`
+  // decision points never churns `plan/mode` events). The bridge never
+  // writes harness state (`{HARNESS_DIR}` / status.json stay SSOT — one-way
+  // mirror, plan Global Constraints).
+  setPlanModeBridgeLogger((level, message) => {
+    const logger = ctx.logger(PLAN_MODE_BRIDGE_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else logger.warn(message)
+  })
+  registerPlanModeBridge(ctx, resolver)
 
   // Background-task settle pairing — the SECOND real completion seam: a
   // terminal task snapshot (completed/killed/failed) pairs via the registry
