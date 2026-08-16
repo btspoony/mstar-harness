@@ -29,6 +29,7 @@ import {
   l2PreDispatchCheck,
   lintFiveQuestion,
   lintFrontmatter,
+  lintLoadOrder,
   lintStrategySections,
   parseAssignmentBranchForms,
   parseAssignmentFields,
@@ -47,6 +48,7 @@ import {
   taskBrief,
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
+  validateRoleMapping,
   validateSchemaYaml,
   validateStatus,
   type AuditCategory,
@@ -1336,6 +1338,67 @@ skillCommand
       if (violations.length > 0) process.exitCode = 1;
     } catch (error) {
       failScript(error, "skill lint");
+    }
+  });
+
+const rolesCommand = program
+  .command("roles")
+  .description("mstar-roles mapping / load-order checks (engine-backed)");
+
+rolesCommand
+  .command("validate")
+  .description(
+    "Validate the mstar-roles skill-dir state: role mapping / parameter tables against the on-disk " +
+      "references layout plus load-order declarations across sibling mstar-* skills " +
+      "(exit 1 on violations)",
+  )
+  .option(
+    "--roles-dir <dir>",
+    "mstar-roles skill directory (default: skills/mstar-roles, resolved against the project root)",
+  )
+  .option("--skills-dir <dir>", "Skills root scanned for sibling mstar-* skills (default: parent of the roles dir)")
+  .action((options: { rolesDir?: string; skillsDir?: string }) => {
+    try {
+      const rolesDir = resolveCliPath(options.rolesDir ?? "skills/mstar-roles");
+      const skillsRoot = options.skillsDir ? resolveCliPath(options.skillsDir) : path.dirname(rolesDir);
+      // Thin mirror of the dsh seam validateRolesState (packages/dsh/src/gates/seams.ts):
+      // validateRoleMapping(rolesDir) + lintLoadOrder over sibling mstar-* SKILL.md
+      // texts; unreadable siblings are skipped best-effort so a bad read can never
+      // take the gate down.
+      const violations: ValidationResult[] = [];
+      const mapping = validateRoleMapping(rolesDir);
+      printChecklist("roles validate (mapping)", mapping);
+      violations.push(...mapping.violations);
+      const skillTexts: Record<string, string> = {};
+      for (const entry of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !entry.name.startsWith("mstar-")) continue;
+        const skillFile = path.join(skillsRoot, entry.name, "SKILL.md");
+        if (!fs.existsSync(skillFile)) continue;
+        try {
+          skillTexts[entry.name] = fs.readFileSync(skillFile, "utf8");
+        } catch {
+          // skip unreadable sibling — the mapping checks still stand
+        }
+      }
+      const loadOrder = lintLoadOrder(skillTexts);
+      printChecklist("roles validate (load order)", loadOrder);
+      violations.push(...loadOrder.violations);
+      const total = violations.length;
+      // Two distinct counts for the same corpus: siblings scanned (all
+      // readable mstar-* dirs, incl. mstar-harness-core) vs skills actually
+      // load-order-linted (core is exempt inside the engine) — keep the
+      // labels distinct so 18-vs-17 is not misread as a discrepancy.
+      const siblingCount = Object.keys(skillTexts).length;
+      const loadOrderChecked = Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length;
+      const coreExempt = loadOrderChecked !== siblingCount;
+      console.log(
+        `roles validate: ${total === 0 ? "OK" : "FAIL"} (${total} violation${total === 1 ? "" : "s"}, ` +
+          `${siblingCount} sibling skill${siblingCount === 1 ? "" : "s"} scanned; ` +
+          `load-order over ${loadOrderChecked}${coreExempt ? ", core exempt" : ""})`,
+      );
+      if (total > 0) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "roles validate");
     }
   });
 

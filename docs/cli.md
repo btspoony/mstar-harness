@@ -170,6 +170,20 @@ Exit codes:
 
 Non-fatal findings are reported separately: an unknown top-level field, a non-object `extensions` field, or a non-object `extensions.<namespace>` entry is reported and ignored (validation continues), and a `skills/` child directory without `SKILL.md` prints a yellow warning without failing validation. Non-conforming skills are skipped the same way (§7.1): a `SKILL.md` with missing or invalid frontmatter, a `name` that does not match its directory or violates Agent Skills name rules, or a missing `description` prints a `skills:` warning and that skill is skipped while validation of the remaining components continues.
 
+### `mstar-harness roles validate`
+
+Maintainer/dev check for the mstar-roles skill layout (the engine check cited in the `mstar-roles` skill): validates the role mapping / parameter tables in `skills/mstar-roles/SKILL.md` against the on-disk `references/*.md` files, and lints the load-order declarations across every sibling `mstar-*` skill. A thin mirror of the engine `validateRoleMapping` + `lintLoadOrder` checks (unreadable sibling `SKILL.md` files are skipped best-effort).
+
+- `npx @mstar-harness/cli roles validate`
+- `npx @mstar-harness/cli roles validate --roles-dir skills/mstar-roles --skills-dir skills`
+
+Without flags, `--roles-dir` defaults to `skills/mstar-roles` and `--skills-dir` to its parent (`skills`), both resolved against the project root.
+
+Exit codes:
+
+- `0` — OK: prints `roles validate (mapping): OK` and `roles validate (load order): OK`, then the summary `roles validate: OK` with the violation, sibling-skill-scanned, and load-order-checked counts (the load-order count excludes `mstar-harness-core`, exempt by design)
+- `1` — violations: prints a FAIL header plus one violation row per mapping / load-order violation on stderr (same stream split as the other `printChecklist` commands); the `roles validate: FAIL (N violations, …)` summary line stays on stdout
+
 ## Harness Slash Commands (not CLI subcommands)
 
 `/codebase-audit` and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).
