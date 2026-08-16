@@ -183,6 +183,16 @@ export async function declareMstarSeeds(
   }
   // 6. Declare (replacement semantics upstream). A rejection propagates —
   //    the entry wiring's terminal `.catch` absorbs it (never out of apply).
+  //    Empty-batch guard (plan QC fix wave S-empty): upstream declare is
+  //    REPLACEMENT semantics — its no-delta check compares against the
+  //    PREVIOUS batch, so an empty batch differs and COMMITS an empty
+  //    registry, stripping any annotations a concurrent declarer (the preset
+  //    child) committed in the readback→commit window. With nothing to
+  //    declare, skip the upstream call entirely: the registry is untouched.
+  if (declared.length === 0) {
+    log('debug', 'no mstar or preserved seeds to declare — empty batch skipped (registry untouched)')
+    return { declared, skipped, preserved, outcome: EMPTY_OUTCOME }
+  }
   const outcome = await service.declareSeeds(declared)
   log('debug', `mstar seeds declared: ${declared.length} ids (${mstarIds.length} mstar + ${preserved.length} preserved); ${skipped.length} skipped locally`)
   return { declared, skipped, preserved, outcome }

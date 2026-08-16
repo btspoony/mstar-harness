@@ -66,6 +66,21 @@ export function setAdvisoryLogger(sink: AdvisoryLogSink): AdvisoryLogSink {
   return prior
 }
 
+/**
+ * Warn id-list cap: an id-list warn line lists at most this many ids before
+ * the `… and K more` suffix — a huge registry (thousands of rows) must not
+ * produce a multi-KB log line (plan QC fix wave S-cap). Exported for the
+ * suite's cap assertions; module surface only — the entry's frozen 47-name
+ * export surface deliberately does not re-export it.
+ */
+export const ADVISORY_ID_LIST_CAP = 20
+
+/** Format an id list for one warn/debug line: first N ids, then `… and K more`. */
+function capIdList(items: readonly string[]): string {
+  if (items.length <= ADVISORY_ID_LIST_CAP) return items.join(', ')
+  return `${items.slice(0, ADVISORY_ID_LIST_CAP).join(', ')}… and ${items.length - ADVISORY_ID_LIST_CAP} more`
+}
+
 /** Structural view of one declared fallbacks role entity (`roles.list` entry). */
 interface RoleEntityView {
   id?: unknown
@@ -128,7 +143,7 @@ async function runSeedsAdvisory(
   // independent: runs even without a mirror).
   const legacy = service.detectLegacyKeys(config)
   if (legacy.length > 0) {
-    log('warn', `fallbacks config carries legacy keys (detectLegacyKeys): ${legacy.join(', ')} — migrate to the current shape (role entities use 'persona'; 'chains', 'roles.default', 'label' and 'description' are removed)`)
+    log('warn', `fallbacks config carries legacy keys (detectLegacyKeys): ${capIdList(legacy)} — migrate to the current shape (role entities use 'persona'; 'chains', 'roles.default', 'label' and 'description' are removed)`)
   }
   // The mstar role-id set is mirror-derived (never hardcoded): no mirror →
   // no taxonomy reference → one debug. The re-declare is gated the same way
@@ -203,7 +218,7 @@ function runStructuralAdvisory(config: Record<string, unknown>, agentsDir: strin
   // (b) Missing ids — ONE warn listing them.
   const missing = mstarIds.filter((id) => !declared.has(id))
   if (missing.length > 0) {
-    log('warn', `fallbacks roles.list is missing mstar roles: ${missing.join(', ')} — declare them under the mstar role id (or map via a taxonomy that uses those ids) so role-matched fallback chains resolve`)
+    log('warn', `fallbacks roles.list is missing mstar roles: ${capIdList(missing)} — declare them under the mstar role id (or map via a taxonomy that uses those ids) so role-matched fallback chains resolve`)
   }
   // (c) Empty personas — ONE warn naming them.
   const emptyPersona = [...declared.values()]
@@ -213,7 +228,7 @@ function runStructuralAdvisory(config: Record<string, unknown>, agentsDir: strin
     })
     .map((entity) => entity.id as string)
   if (emptyPersona.length > 0) {
-    log('warn', `fallbacks roles.list declares roles with an empty persona: ${emptyPersona.join(', ')} — declare a persona (or remove the role)`)
+    log('warn', `fallbacks roles.list declares roles with an empty persona: ${capIdList(emptyPersona)} — declare a persona (or remove the role)`)
   }
   return true
 }
@@ -224,7 +239,17 @@ function runStructuralAdvisory(config: Record<string, unknown>, agentsDir: strin
  */
 function reportEffectiveState(mstarIds: string[], readback: EffectiveRolesReadback): void {
   const byId = new Map<string, EffectiveRolesReadback['roles'][number]>()
-  for (const row of readback.roles) byId.set(row.id.trim(), row)
+  for (const row of readback.roles) {
+    const key = row.id.trim()
+    // Plan QC fix wave S-byid: upstream tolerates duplicate ids (materialize
+    // keeps both rows), so the trimmed-key map must not let a later duplicate
+    // row flip the three-state report — FIRST row wins, surfaced on debug.
+    if (byId.has(key)) {
+      log('debug', `effective readback carries a duplicate id '${key}' after trimming — first row wins for the three-state report`)
+      continue
+    }
+    byId.set(key, row)
+  }
   const missing: string[] = []
   const overridden: string[] = []
   const seeded: string[] = []
@@ -246,16 +271,16 @@ function reportEffectiveState(mstarIds: string[], readback: EffectiveRolesReadba
     if (row.seeded) seeded.push(id)
   }
   if (missing.length > 0) {
-    log('warn', `fallbacks taxonomy is missing mstar roles: ${missing.join(', ')} — declare them under the mstar role id (or map via a taxonomy that uses those ids) so role-matched fallback chains resolve`)
+    log('warn', `fallbacks taxonomy is missing mstar roles: ${capIdList(missing)} — declare them under the mstar role id (or map via a taxonomy that uses those ids) so role-matched fallback chains resolve`)
   }
   if (seeded.length > 0) {
-    log('debug', `fallbacks taxonomy: mstar roles seeded at their defaults — ${seeded.join(', ')}`)
+    log('debug', `fallbacks taxonomy: mstar roles seeded at their defaults — ${capIdList(seeded)}`)
   }
   if (overridden.length > 0) {
     // Revert affordance: the upstream `fallbacks/revert-seed` gateway / the
     // fallbacks settings-card rollback button restores the CURRENT seed
     // default (the operator override is retained until then).
-    log('warn', `fallbacks taxonomy overrides the seed persona for mstar roles: ${overridden.join(', ')} — the operator override is retained; revert to the seed default via the fallbacks settings card rollback button (fallbacks/revert-seed gateway)`)
+    log('warn', `fallbacks taxonomy overrides the seed persona for mstar roles: ${capIdList(overridden)} — the operator override is retained; revert to the seed default via the fallbacks settings card rollback button (fallbacks/revert-seed gateway)`)
   }
   // (iv) Empty personas — ONLY non-seeded rows or overridden-empty rows (a
   // seeded-at-default row cannot carry an empty persona from our seeds).
@@ -267,7 +292,7 @@ function reportEffectiveState(mstarIds: string[], readback: EffectiveRolesReadba
     })
     .map((row) => row.id)
   if (emptyPersona.length > 0) {
-    log('warn', `fallbacks taxonomy declares roles with an empty persona: ${emptyPersona.join(', ')} — declare a persona (or remove the role)`)
+    log('warn', `fallbacks taxonomy declares roles with an empty persona: ${capIdList(emptyPersona)} — declare a persona (or remove the role)`)
   }
 }
 
@@ -284,13 +309,13 @@ function reportDeclareOutcome(view: SeedOutcomeView): void {
   if (skipped.length === 0 && outcome.skipped.length === 0 && conflicts.length === 0) return
   const parts: string[] = []
   if (skipped.length > 0) {
-    parts.push(`skipped locally: ${skipped.map((s) => `${s.id} (${s.reason})`).join(', ')}`)
+    parts.push(`skipped locally: ${capIdList(skipped.map((s) => `${s.id} (${s.reason})`))}`)
   }
   if (outcome.skipped.length > 0) {
-    parts.push(`skipped upstream: ${outcome.skipped.map((s) => `${s.id} (${s.reason})`).join(', ')}`)
+    parts.push(`skipped upstream: ${capIdList(outcome.skipped.map((s) => `${s.id} (${s.reason})`))}`)
   }
   if (conflicts.length > 0) {
-    parts.push(`conflicts: ${conflicts.map((c) => `${c.id} (${c.kind} — operator override retained)`).join(', ')}`)
+    parts.push(`conflicts: ${capIdList(conflicts.map((c) => `${c.id} (${c.kind} — operator override retained)`))}`)
   }
   const revertNote = conflicts.length > 0 ? ' — revert an override via the fallbacks settings card rollback button (fallbacks/revert-seed gateway)' : ''
   log('warn', `fallbacks seed declaration: ${parts.join('; ')}${revertNote}`)

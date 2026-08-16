@@ -256,6 +256,37 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
     }
   })
 
+  it('(c-cap) structural empty-persona warn is capped: first 20 ids + "… and K more" (S-cap)', async () => {
+    const mirror = await fixtureMirror()
+    try {
+      // 25 declared roles with an empty persona — the structural (b)/(c)
+      // warn must not emit a multi-KB line (bounded: first N + count).
+      const empty = Array.from({ length: 25 }, (_, i) => role(`empty-${i}`, ''))
+      const cfg = rowConfig([
+        role('architect', 'Architect persona'),
+        role('fullstack-dev', 'Dev persona'),
+        role('scout', 'Scout persona'),
+        ...empty,
+      ])
+      const ctx = ctxWithLoader([liveEntry(cfg)])
+      const { captured, restore } = captureLogs()
+      try {
+        expect(await runFallbacksAdvisory(ctx, mirror.dir)).toBe(true)
+        const warns = captured.filter(([level]) => level === 'warn')
+        expect(warns).toHaveLength(1)
+        const message = warns[0]![1]
+        expect(message).toContain('empty-0')
+        expect(message).toContain('empty-19')
+        expect(message).not.toContain('empty-20')
+        expect(message).toContain('… and 5 more')
+      } finally {
+        restore()
+      }
+    } finally {
+      await mirror.cleanup()
+    }
+  })
+
   it('(d) legacy keys in the row config → ONE warn citing detectLegacyKeys semantics (service-present path)', async () => {
     const mirror = await fixtureMirror()
     try {
@@ -395,6 +426,79 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
       const before = captured.length
       booted.ctx.events.emit('subagent/start', startInfo('agent-2'))
       expect(captured.slice(before)).toEqual([])
+    } finally {
+      restore()
+    }
+  })
+
+  it('wiring — a burst of decision points runs ONE pass (passInFlight guard; no re-entrant duplicate pass)', async () => {
+    const mirror = packagedAgentsDir()
+    if (mirror === undefined) return // bundle-assets not run — the live mirror is a precondition
+    booted = await bootApp()
+    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    const { captured, restore } = captureLogs()
+    try {
+      // Two decision points in the SAME tick: the loader-fallback pass is
+      // synchronous (no awaits), so without an in-flight guard both
+      // emissions would run the pass and duplicate every warn. The guard
+      // lets only the first emission through; the second is a no-op.
+      booted.ctx.events.emit('subagent/start', startInfo('agent-1'))
+      booted.ctx.events.emit('subagent/start', startInfo('agent-2'))
+      await Promise.resolve() // settle the pass promise chain + arm the latch
+      const missingWarns = captured.filter(([, message]) => message.includes('roles.list is missing'))
+      expect(missingWarns).toHaveLength(1)
+    } finally {
+      restore()
+    }
+  })
+
+  it('wiring — the advisory latch re-arms when the llm-fallbacks service disappears (HMR re-convergence)', async () => {
+    const mirror = packagedAgentsDir()
+    if (mirror === undefined) return // bundle-assets not run — the live mirror is a precondition
+    booted = await bootApp()
+    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    // A fake fallbacks provider whose fiber can be disposed — the cordis
+    // service appears/disappears with the plugin apply (HMR/fiber swap).
+    const provider = (fake: FakeAdvisoryService): { name: string; apply(ctx: Context): void } => ({
+      name: 'fake-fallbacks-provider',
+      apply(ctx: Context) {
+        ctx.provide('llm-fallbacks', fake as unknown as FallbacksService)
+      },
+    })
+    const waitFor = async (predicate: () => boolean, timeoutMs = 3000): Promise<void> => {
+      const start = Date.now()
+      while (!predicate()) {
+        if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out')
+        const { promise, resolve } = Promise.withResolvers<void>()
+        setTimeout(resolve, 10)
+        await promise
+      }
+    }
+    const { captured, restore } = captureLogs()
+    try {
+      // First service instance — the first decision point runs ONE pass
+      // (the service-present path is async: re-declare → readback → report).
+      const first = new FakeAdvisoryService({ roles: [] })
+      const fiber1 = await booted.ctx.plugin(provider(first))
+      booted.ctx.events.emit('subagent/start', startInfo('agent-1'))
+      await waitFor(() => captured.some(([, message]) => message.includes('mstar seeds declared')))
+      // Latch armed: a second decision point emits nothing new.
+      const afterFirst = captured.length
+      booted.ctx.events.emit('subagent/start', startInfo('agent-2'))
+      await Promise.resolve()
+      expect(captured.slice(afterFirst)).toEqual([])
+      // Service disappears (fiber swap window) → the inject teardown resets
+      // the one-shot latch. Without the reset the post-HMR decision point
+      // would stay silent and the re-declare convergence would never re-run.
+      await fiber1.dispose()
+      // Service re-appears (fallbacks re-applied / HMR) → the NEXT decision
+      // point re-runs the pass (the mstar side re-converges).
+      const second = new FakeAdvisoryService({ roles: [] })
+      const fiber2 = await booted.ctx.plugin(provider(second))
+      const beforeReconverge = captured.length
+      booted.ctx.events.emit('subagent/start', startInfo('agent-3'))
+      await waitFor(() => captured.slice(beforeReconverge).some(([, message]) => message.includes('mstar seeds declared')))
+      await fiber2.dispose()
     } finally {
       restore()
     }
@@ -689,6 +793,64 @@ describe('fallbacks adoption advisory — seeds-aware effective state (service p
         expect(perIdDebugs).toHaveLength(2)
         expect(perIdDebugs.some(([, message]) => message.includes("role 'architect'"))).toBe(true)
         expect(perIdDebugs.some(([, message]) => message.includes("role 'scout'"))).toBe(true)
+      } finally {
+        restore()
+      }
+    } finally {
+      await mirror.cleanup()
+    }
+  })
+
+  it('(s11) trimmed duplicate ids in the readback → FIRST row wins for the three-state report + one debug (S-byid)', async () => {
+    const mirror = await fixtureMirror()
+    try {
+      const fake = new FakeAdvisoryService({
+        roles: [
+          // First occurrence: seeded at the default — the report must read
+          // THIS state. The later ` scout ` row (same id after trimming) is
+          // an operator-error duplicate; upstream tolerates duplicates, so
+          // the advisory must not let the LAST row flip the three-state.
+          effRow('scout', 'Scout default.', true, false, 'Scout default.'),
+          effRow(' scout ', 'Operator override of scout', true, true, 'Scout default.'),
+          effRow('architect', 'Architect default.', true, false, 'Architect default.'),
+          effRow('fullstack-dev', 'Dev default.', true, false, 'Dev default.'),
+        ],
+      })
+      const ctx = ctxWithService(fake, rowConfig([]))
+      const { captured, restore } = captureLogs()
+      try {
+        expect(await runFallbacksAdvisory(ctx, mirror.dir)).toBe(true)
+        // First-wins: scout reads seeded-at-default → NO overridden warn.
+        expect(captured.filter(([level]) => level === 'warn')).toEqual([])
+        // The duplicate is surfaced on debug (operator-visible, not silent).
+        expect(captured.some(([, message]) => message.includes("duplicate id 'scout'") && message.includes('first row wins'))).toBe(true)
+      } finally {
+        restore()
+      }
+    } finally {
+      await mirror.cleanup()
+    }
+  })
+
+  it('(s12) declare-outcome id lists are capped: first 20 ids + "… and K more" (S-cap)', async () => {
+    const mirror = await fixtureMirror()
+    try {
+      // 25 upstream skips — the consolidated declaration warn must not emit
+      // a multi-KB line; it lists the first ADVISORY_ID_LIST_CAP ids, then
+      // the remainder count.
+      const manySkipped = Array.from({ length: 25 }, (_, i) => ({ id: `extra-${i}`, reason: 'invalid-id' as const }))
+      const fake = new FakeAdvisoryService(seededReadback(), { applied: [], skipped: manySkipped, conflicts: [] })
+      const ctx = ctxWithService(fake, rowConfig([]))
+      const { captured, restore } = captureLogs()
+      try {
+        expect(await runFallbacksAdvisory(ctx, mirror.dir)).toBe(true)
+        const warns = captured.filter(([level]) => level === 'warn')
+        expect(warns).toHaveLength(1)
+        const message = warns[0]![1]
+        expect(message).toContain('extra-0')
+        expect(message).toContain('extra-19')
+        expect(message).not.toContain('extra-20')
+        expect(message).toContain('… and 5 more')
       } finally {
         restore()
       }

@@ -426,12 +426,25 @@ export function apply(ctx: Context, config: Config): void {
   // the fallbacks row before dsh) and — when unmounted at boot — at the
   // first `subagent/start` decision point (the loader mounts entries
   // concurrently; the same decision-point probe pattern as the decoration).
+  // The latch is RE-ARMED when the `llm-fallbacks` service disappears (the
+  // seeds inject child below returns a teardown resetting it): after an HMR
+  // fiber swap the fresh seed registry needs a new decision-point pass to
+  // re-converge (plan QC fix wave W-1).
   let advisoryPassed = false
+  // In-flight guard (plan QC fix wave S-reentry): the service-present pass
+  // is async, so a burst of decision points inside its settle window must
+  // not re-enter the pass (each re-entry would duplicate every warn).
+  let advisoryPassInFlight = false
   const runAdvisoryPass = (): void => {
-    if (advisoryPassed) return
-    void runFallbacksAdvisory(ctx, packagedAgentsDir()).then((ran) => {
-      if (ran) advisoryPassed = true
-    })
+    if (advisoryPassed || advisoryPassInFlight) return
+    advisoryPassInFlight = true
+    void runFallbacksAdvisory(ctx, packagedAgentsDir())
+      .then((ran) => {
+        if (ran) advisoryPassed = true
+      })
+      .finally(() => {
+        advisoryPassInFlight = false
+      })
   }
   runAdvisoryPass()
 
@@ -462,8 +475,21 @@ export function apply(ctx: Context, config: Config): void {
         else logger.debug(message)
       },
     }).catch((error) => {
-      ctx.logger(SEEDS_LOGGER).error(`mstar seeds declaration failed (contained — fallbacks taxonomy unchanged): ${(error as Error).message}`)
+      // Non-Error rejections (string/plain object — plausible from a
+      // settings seam) must not log `undefined`; align with the upstream
+      // preset child's `error?.message ?? String(error)` (plan QC fix wave
+      // S-log; `instanceof` is the type-safe TS equivalent of that shape).
+      ctx.logger(SEEDS_LOGGER).error(`mstar seeds declaration failed (contained — fallbacks taxonomy unchanged): ${error instanceof Error ? error.message : String(error)}`)
     })
+    // HMR/fiber-swap re-arm (plan QC fix wave W-1): when the fallbacks
+    // service disappears, reset the advisory one-shot latch so the NEXT
+    // decision point re-converges the seeds state. The seed registry is
+    // per-apply in-memory state and a fiber swap drops it; without the
+    // reset, `advisoryPassed` would stay armed from the pre-swap pass and
+    // the re-declare convergence would never run again.
+    return () => {
+      advisoryPassed = false
+    }
   })
   registerSettleListener(ctx, config, pairing)
 

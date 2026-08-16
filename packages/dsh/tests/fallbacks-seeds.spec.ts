@@ -250,6 +250,24 @@ describe('declareMstarSeeds — persona payload + merge-preserve + gates', () =>
     expect(fake.declareCalls).toHaveLength(0)
     expect(records.some(([level, message]) => level === 'warn' && message.includes('readback'))).toBe(true)
   })
+
+  it('(k) empty declaration batch → the upstream declareSeeds is NEVER called (registry untouched; S-empty guard)', async () => {
+    // No mstar ids (agentsDir absent) and the only seeded non-mstar row
+    // carries the interpolation hazard → declared = []. Upstream declare is
+    // REPLACEMENT semantics: calling declareSeeds([]) would commit an empty
+    // registry, stripping any annotations a concurrent declarer (the preset
+    // child) committed in the readback→commit window. The guard skips the
+    // upstream call entirely — the registry is untouched.
+    const fake = new FakeSeedsService({
+      roles: [seededRow('designer', 'You are the {{role}} executor.')],
+    })
+    const { view, records } = await runSeeds(fake, undefined)
+    expect(view.declared).toEqual([])
+    expect(view.skipped).toEqual([{ id: 'designer', reason: 'interpolation' }])
+    expect(fake.declareCalls).toHaveLength(0)
+    // One debug documents the skip (the upstream call was never made).
+    expect(records.some(([level, message]) => level === 'debug' && message.includes('empty batch'))).toBe(true)
+  })
 })
 
 describe('entry wiring — ctx.inject([\'llm-fallbacks\']) conditional child re-fires per service (re-)apply', () => {
