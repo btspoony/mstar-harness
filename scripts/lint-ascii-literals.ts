@@ -42,7 +42,7 @@ interface Finding {
   codePoint: string;
 }
 
-function findings(file: string, src: string): Finding[] {
+export function findings(file: string, src: string): Finding[] {
   const mask = commentMask(src);
   const out: Finding[] = [];
   let line = 1;
@@ -68,21 +68,29 @@ function findings(file: string, src: string): Finding[] {
   return out;
 }
 
-const all: Finding[] = [];
-for (const dir of SCAN_DIRS) {
-  const files: string[] = [];
-  collectTsFiles(join(ROOT, dir), files);
-  for (const file of files) {
-    all.push(...findings(file, readFileSync(file, "utf8")));
+/** Recursively scan every `.ts` file under `dirRoots` and return all code-literal findings. */
+export function scanDirs(dirRoots: string[]): Finding[] {
+  const all: Finding[] = [];
+  for (const dir of dirRoots) {
+    const files: string[] = [];
+    collectTsFiles(dir, files);
+    for (const file of files) {
+      all.push(...findings(file, readFileSync(file, "utf8")));
+    }
   }
+  return all;
 }
 
-if (all.length > 0) {
-  console.error(`lint:ascii-literals: ${all.length} non-ASCII character(s) in code literals (comments excluded):`);
-  for (const f of all) {
-    console.error(`  ${f.file}:${f.line}:${f.col}: ${f.char} (${f.codePoint})`);
+if (import.meta.main) {
+  const all = scanDirs(SCAN_DIRS.map((dir) => join(ROOT, dir)));
+
+  if (all.length > 0) {
+    console.error(`lint:ascii-literals: ${all.length} non-ASCII character(s) in code literals (comments excluded):`);
+    for (const f of all) {
+      console.error(`  ${f.file}:${f.line}:${f.col}: ${f.char} (${f.codePoint})`);
+    }
+    console.error("escape every literal to \\uXXXX (e.g. — → \\u2014) — bun misdecodes raw UTF-8 in the CLI bundle");
+    process.exit(1);
   }
-  console.error("escape every literal to \\uXXXX (e.g. — → \\u2014) — bun misdecodes raw UTF-8 in the CLI bundle");
-  process.exit(1);
+  console.log("lint:ascii-literals: OK — no non-ASCII characters in src code literals");
 }
-console.log("lint:ascii-literals: OK — no non-ASCII characters in src code literals");

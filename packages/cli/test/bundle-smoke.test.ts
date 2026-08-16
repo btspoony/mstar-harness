@@ -97,4 +97,31 @@ describe("mstar dispatch validate — built bundle (bun runtime) with non-ASCII 
       expect(result.stdout).toContain("dispatch validate: OK");
     });
   });
+
+  test("legal UTF-8 en-dash separator (U+2013) validates — spec §7.1 matrix column", () => {
+    const enDash = EM_DASH_ASSIGNMENT.replace("direct on main — hotfix: fix now", "direct on main – hotfix: fix now");
+    withAssignment(enDash, (file) => {
+      const result = runBundle(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("dispatch validate: OK");
+    });
+  });
+});
+
+describe("mstar dispatch validate — fix-hint UTF-8 rendering in the built bundle", () => {
+  // qc2 W-1 / qc3 F-2: plan Step 4(a) requires the fix hint to render `—`
+  // (U+2014), not `â` (the bun 1.2.17 misdecode). This is the message-string
+  // path guarded by the dist escaper — the regex-parsing path above is fixed
+  // by source-level \uXXXX escapes alone, so this assertion is the one that
+  // goes red if `escape-dist-literals.ts` is removed from the CLI build.
+  test("missing-reason violation prints the literal em-dash fix hint to stderr", () => {
+    const missingReason = EM_DASH_ASSIGNMENT.replace("**Branch policy**: direct on main — hotfix: fix now", "**Branch policy**: direct on main");
+    withAssignment(missingReason, (file) => {
+      const result = runBundle(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("assignment.field.branch-policy-missing-reason");
+      expect(result.stderr).toContain('append "— <reason>" after the branch name');
+      expect(result.stderr).not.toContain("â");
+    });
+  });
 });

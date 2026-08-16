@@ -7,8 +7,11 @@
  * with string awareness (single/double/backtick + template `${}` expressions)
  * and regex-literal awareness (a regex char class may contain quote
  * characters, e.g. `/["'\`]/`), so a `//` inside a literal never starts a
- * comment and a quote inside a regex never opens a string. Returns a
- * Uint8Array of the same length as `src` (1 = inside comment).
+ * comment and a quote inside a regex never opens a string. Regex-vs-division
+ * is a heuristic: after an adjacent `++`/`--` or after a regex literal ends,
+ * `/` is treated as division so a trailing `//` still opens a line comment
+ * (`i++ / 2 // 注释`). Returns a Uint8Array of the same length as `src`
+ * (1 = inside comment).
  */
 export function commentMask(src: string): Uint8Array {
   const mask = new Uint8Array(src.length);
@@ -87,14 +90,16 @@ export function commentMask(src: string): Uint8Array {
       else if (c === "]" && regexInClass) regexInClass = false;
       else if (c === "/" && !regexInClass) {
         state = "code";
-        prevSig = "/";
+        // ")": the regex is a complete operand — a following `/` is division,
+        // not a regex (else `x = /a/ / 2 // 注释` swallows the line comment).
+        prevSig = ")";
         lastToken = "";
         i++;
         continue;
       } else if (c === "\n") {
         // unterminated regex — bail to code so the rest of the line scans normally
         state = "code";
-        prevSig = "/";
+        prevSig = ")";
         lastToken = "";
         i++;
         continue;
@@ -179,7 +184,15 @@ export function commentMask(src: string): Uint8Array {
       lastToken += c;
       prevSig = c;
     } else if (!/\s/.test(c)) {
-      prevSig = c;
+      if ((c === "+" || c === "-") && prevSig === c && src[i - 1] === c) {
+        // Adjacent `++` / `--`: the operand is complete, so a following `/`
+        // is division, not a regex — else `i++ / 2 // 注释` would enter the
+        // regex state, consume the line comment's slashes, and leave the
+        // comment content unmasked. ")" = operand position.
+        prevSig = ")";
+      } else {
+        prevSig = c;
+      }
       lastToken = "";
     }
     i++;

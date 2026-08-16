@@ -21,14 +21,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { commentMask } from "./ascii-literal-utils.ts";
 
-const files = process.argv.slice(2);
-if (files.length === 0) {
-  console.error("usage: bun scripts/escape-dist-literals.ts <file...>");
-  process.exit(2);
-}
-
-for (const file of files) {
-  const src = readFileSync(file, "utf8");
+/**
+ * Escape every non-ASCII character outside comments to a `\uXXXX` escape.
+ * Value-identical to the raw char; comments are skipped for cleanliness.
+ * Returns the escaped text and the number of escaped code units.
+ */
+export function escapeLiterals(src: string): { out: string; count: number } {
   const mask = commentMask(src);
   let out = "";
   let count = 0;
@@ -43,10 +41,24 @@ for (const file of files) {
       out += src[i];
     }
   }
-  if (count > 0) {
-    writeFileSync(file, out);
-    console.log(`escape-dist-literals: ${file}: ${count} non-ASCII character(s) escaped`);
-  } else {
-    console.log(`escape-dist-literals: ${file}: clean`);
+  return { out, count };
+}
+
+if (import.meta.main) {
+  const files = process.argv.slice(2);
+  if (files.length === 0) {
+    console.error("usage: bun scripts/escape-dist-literals.ts <file...>");
+    process.exit(2);
+  }
+
+  for (const file of files) {
+    const src = readFileSync(file, "utf8");
+    const { out, count } = escapeLiterals(src);
+    if (count > 0) {
+      writeFileSync(file, out);
+      console.log(`escape-dist-literals: ${file}: ${count} non-ASCII character(s) escaped`);
+    } else {
+      console.log(`escape-dist-literals: ${file}: clean`);
+    }
   }
 }
