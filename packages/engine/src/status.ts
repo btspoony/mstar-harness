@@ -28,7 +28,7 @@
  * - Rollup aggregates + drift check (total_open / by_severity / by_target /
  *   by_plan; PASS/DRIFT vs stored `metadata.tech_debt_summary`):
  *   § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
- *   `techDebtRollup` (engine; no CLI form).
+ *   `techDebtRollup` (CLI form: `mstar status tech-debt [path]`).
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";

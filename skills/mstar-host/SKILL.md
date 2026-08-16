@@ -72,7 +72,7 @@ Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **R
 
 Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and asset paths. Per-host URI / mount detail: `references/<host>.md`.
 
-> **Engine check (when available):** import `resolveSkillRoot` from `@mstar-harness/engine` in a host hook to resolve the loaded skill root per the table above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar host skill-root --host <id> --skill <name>` (or import `resolveSkillRoot` from `@mstar-harness/engine` in a host hook) to resolve the loaded skill root per the table above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Conflict order（Decision Rules）
 

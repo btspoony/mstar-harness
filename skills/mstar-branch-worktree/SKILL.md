@@ -189,7 +189,7 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 - **逐字对齐（强制）**：三份 QC Assignment 与 QA Assignment 间 **`plan_id`** 与 **`Review range` / `Diff basis`**（连同 `Review cwd` / `Working branch`）**必须完全相同**；**`qa-engineer`** 验证同一 feature 时**复用同一组字段**。**热修 / QC 单审**路径也须含**同一组字段**，仅承接方份数为 1。
 - 三审并行时三名 reviewer **共用同一组**字段（对业务仓**只读 diff 审查**）；一般不必为每位 reviewer 各开 worktree，除非宿主/环境要求进程级隔离。
 
-> **Engine check (when available):** import `assertQcAlignment` / `singleReviewSnapshot` from `@mstar-harness/engine` in a host hook to assert the QC/QA alignment fields above (byte-identical `plan_id` + `Review range` / `Diff basis` across tri + QA; single review snapshot before dispatch). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar worktree qc-alignment <assignment-file>...`（或 import `assertQcAlignment` / `singleReviewSnapshot` from `@mstar-harness/engine` in a host hook）以断言上述 QC/QA 对齐字段（tri + QA 间 `plan_id` 与 `Review range` / `Diff basis` 逐字相同；派发前 single review snapshot）。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### 多 worktree 并行 → 单一待审快照（派 QC 前置）
 
