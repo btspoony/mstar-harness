@@ -10,23 +10,37 @@
  * Content discipline:
  * - The section is a POINTER block (presence / enforcement word / resolved
  *   `{HARNESS_DIR}` / one read-mstar-harness-core directive) — deliberately
- *   minimal, never a rules dump (plan pointer-block constraint). Static
- *   text with zero complete `{{...}}` groups: dsh system-prompt renders
- *   section AND context text with STRICT `{{variable}}` interpolation and
- *   throws on unknown/malformed/undefined references (`interpolate` in
- *   `@deepseek-ai/dsh-system-prompt`), so every injected string must carry
- *   no complete group. The harness dir is boot-resolved; the enforcement
- *   word is LIVE — the section text is a provider (the plan:policy
- *   precedent) that re-reads `resolveCompassEnforcement` per assembly (the
- *   same existing read the gates and the catalog use — no new config key),
- *   so a mid-session compass soft/hard flip lands on the next assembly
- *   without re-registration.
+ *   minimal, never a rules dump (plan pointer-block constraint). The
+ *   OUTPUT is zero-complete-`{{...}}`-groups text: dsh system-prompt
+ *   renders section AND context text with STRICT `{{variable}}`
+ *   interpolation and throws on unknown/malformed/undefined references
+ *   (`interpolate` in `@deepseek-ai/dsh-system-prompt`), so every injected
+ *   string must carry no complete group. The mechanism is LIVE, not static
+ *   (plan QC fix wave W-1): every operator-controlled value embedded below
+ *   (harness dir, plan ids, iteration id, lease fields, direction prose)
+ *   is passed through `stripInterpolationHazard` — complete `{{…}}` groups
+ *   are screened so a hostile value can never break prompt assembly, while
+ *   a lone `{{` stays literal prose.
+ * - The harness dir is resolved PER ASSEMBLY from the assembly context's
+ *   agent (plan QC fix wave W-2 — the catalog pre-step precedent): the
+ *   session cwd of the agent whose prompt is being assembled, via
+ *   `resolver.forAgent`, with the boot value (`forWorkspace(undefined)`,
+ *   the explicit config or null) as the fallback when the assembly carries
+ *   no agent. Zero-config deployments (no explicit `harnessDir`, the
+ *   probe-discovers-`.mstar/` default) therefore resolve the pointer and
+ *   the status context to the session's own workspace instead of rendering
+ *   a permanent `none`/`soft`. The enforcement word is LIVE — the section
+ *   text is a provider (the plan:policy precedent) that re-reads
+ *   `resolveCompassEnforcement` per assembly (the same existing read the
+ *   gates and the catalog use — no new config key), so a mid-session
+ *   compass soft/hard flip lands on the next assembly without
+ *   re-registration, in zero-config and explicit-config deployments alike.
  * - The context provider reuses the catalog's unified machine-summary
  *   source (`buildCatalogSources` — the SAME builder the engine-status
  *   pre-step catalog row uses) and projects a BOUNDED subset: watermark +
  *   iteration gate + compact state line. Full status.json content
  *   (residual detail, agent-flow events, knowledge digest, branch/policy
- *   anchors) stays out. The build is TTL-memoized per apply
+ *   anchors) stays out. The build is TTL-memoized PER RESOLVED HARNESS DIR
  *   (`DEFAULT_CATALOG_TTL_MS`) so the per-assembly hot path does not
  *   re-read status.json / the compass / the ledger on every prompt
  *   assembly (the catalog's documented staleness tradeoff).
@@ -38,14 +52,21 @@
  *   read throws "cannot get property without inject" on a started cordis
  *   fiber when the service is not composed. Absent service → return `false`
  *   + exactly one debug log.
- * - Registration is deferred through `ctx.inject(['systemPrompt'], …)` so
- *   the section/context effects unwind with THIS plugin's apply (HMR-safe:
- *   a re-apply disposes the old registrations before registering fresh
- *   ones — a direct global registration through the service instance would
- *   throw duplicate-name on re-apply, because its effect would land on the
- *   systemPrompt service fiber, which survives the plugin's HMR).
+ * - Registration is deferred through `ctx.inject(['systemPrompt'], …)`
+ *   (HMR-safe re-apply): the `section()`/`context()` calls run on the
+ *   inject child, and the exact disposers they return are collected on
+ *   that child via `systemPromptCtx.effect` (plan QC fix wave W-HMR) — the
+ *   registrations therefore unwind with THIS plugin's apply by explicit
+ *   ownership, so a re-apply disposes the old registrations before
+ *   registering fresh ones (no duplicate-name throw, no stale closure from
+ *   the previous apply). A direct global registration through the service
+ *   instance without the collected disposers would instead rely on the
+ *   cordis traceable-proxy `this.ctx` rebind for ownership — implicit and
+ *   version-fragile; the explicit collection removes that dependency.
  * - Registration errors are contained (warn + return `false`); a throwing
- *   log sink is contained inside the log helper (never-throws invariant).
+ *   log sink is contained inside the log helper (never-throws invariant);
+ *   the collected disposers run inside a try/catch so an exotic disposal
+ *   throw can never break the fiber teardown.
  *
  * Module boundary: no barrel — the entry imports this module by explicit
  * relative path and does NOT re-export its public names (plan constraint);
@@ -56,7 +77,7 @@ import { resolveCompassEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusSource } from '../types.ts'
 import { DEFAULT_CATALOG_TTL_MS, buildCatalogSources } from './catalog.ts'
-import type { HarnessResolver } from './_shared.ts'
+import { stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
 export const HARNESS_PROMPT_LOGGER = 'mstar/harness-prompt'
@@ -109,11 +130,36 @@ interface PromptContextInput {
 /**
  * The global prompt surface the module registers through (`ctx.systemPrompt`
  * while dsh-system-prompt is composed — the structural view proves the
- * dependency-free pattern; the package is NOT a peer dependency).
+ * dependency-free pattern; the package is NOT a peer dependency). `section` /
+ * `context` return the exact Cordis effect disposer of the registration.
  */
 interface SystemPromptView {
-  section(section: PromptSectionInput): unknown
-  context(context: PromptContextInput): unknown
+  section(section: PromptSectionInput): () => void
+  context(context: PromptContextInput): () => void
+}
+
+/**
+ * The harness dir for ONE assembly: resolved from the assembly context's
+ * agent (the session cwd → `resolver.forAgent`, the catalog pre-step
+ * precedent — plan QC fix wave W-2), with the boot value as the fallback
+ * when the assembly carries no agent. Zero-config deployments (no explicit
+ * `harnessDir` config) therefore render per session workspace instead of a
+ * permanent `none`. Never throws: a resolver failure degrades to the boot
+ * value (the provider must stay throw-free).
+ * @param context - the assembly context (dsh `assembleContextFor(agent)`
+ *   passes the real agent handle; structural read, never trusts the shape).
+ * @param resolver - the per-workspace `{HARNESS_DIR}` resolver.
+ * @param fallback - the boot value (`resolver.forWorkspace(undefined)`).
+ */
+function resolveAssemblyHarnessDir(context: object, resolver: HarnessResolver, fallback: string | null): string | null {
+  const agent = (context as { agent?: unknown } | null | undefined)?.agent
+  if (agent === undefined || agent === null) return fallback
+  try {
+    return resolver.forAgent(agent)
+  } catch (error) {
+    log('debug', `mstar:harness-rules per-assembly harness-dir resolution failed (falling back to the boot value): ${errorMessage(error)}`)
+    return fallback
+  }
 }
 
 /**
@@ -122,11 +168,13 @@ interface SystemPromptView {
  *
  * @param ctx - the registrant context (the plugin's apply ctx; unscoped →
  *   the registrations land on the global layer).
- * @param options.resolver - the per-workspace `{HARNESS_DIR}` resolver; the
- *   boot value (`forWorkspace(undefined)`, the explicit config or null) is
- *   baked into the pointer and the provider's data source, while the
- *   enforcement word is re-resolved per assembly by the section text
- *   provider.
+ * @param options.resolver - the per-workspace `{HARNESS_DIR}` resolver.
+ *   The BOOT value (`forWorkspace(undefined)`, the explicit config or null)
+ *   is the fallback; the section and context providers resolve the harness
+ *   dir PER ASSEMBLY from the assembly context's agent (the session
+ *   workspace), and the section's enforcement word is re-read from the
+ *   compass per assembly — so both stay correct in zero-config deployments
+ *   and follow mid-session compass flips.
  * @returns `true` when the service exists and registration was scheduled;
  *   `false` when `ctx.systemPrompt` is structurally absent (one debug log,
  *   boot unaffected) or the synchronous registration path threw (contained
@@ -142,32 +190,60 @@ export function registerHarnessPrompt(ctx: Context, options: { resolver: Harness
     log('debug', 'systemPrompt service absent — mstar:harness-rules injection skipped (composition without dsh-system-prompt)')
     return false
   }
-  let harnessDir: string | null
+  let bootHarnessDir: string | null
   try {
-    harnessDir = options.resolver.forWorkspace(undefined)
+    bootHarnessDir = options.resolver.forWorkspace(undefined)
   } catch (error) {
     log('warn', `mstar:harness-rules injection aborted (degraded — session boot unaffected): ${errorMessage(error)}`)
     return false
   }
   // Deferred through an inject child so the registrations unwind with THIS
-  // plugin's apply (HMR-safe re-apply; see the module doc).
+  // plugin's apply (HMR-safe re-apply; see the module doc). The exact
+  // disposers `section()`/`context()` return are additionally collected on
+  // the inject child via `systemPromptCtx.effect` — explicit ownership that
+  // does not depend on the cordis traceable-proxy `this.ctx` rebind (plan QC
+  // fix wave W-HMR): on a re-apply the child fiber disposal runs the
+  // disposers FIRST, so the fresh apply registers without a duplicate-name
+  // throw and no stale closure (old resolver/harness dir) lingers.
   ctx.inject(['systemPrompt'], (systemPromptCtx) => {
     try {
       const view = systemPromptCtx.systemPrompt as unknown as SystemPromptView
-      view.section({
+      const disposeSection = view.section({
         name: HARNESS_RULES_SECTION_NAME,
         order: HARNESS_RULES_SECTION_ORDER,
         // Live text provider (plan:policy precedent — provider text, no
-        // re-registration): the enforcement word is re-read from the compass
-        // per assembly, so a mid-session soft/hard flip lands on the next
-        // assembly. The harness dir stays boot-resolved.
-        text: () => harnessRulesText(harnessDir, sectionEnforcement(harnessDir)),
+        // re-registration): the harness dir resolves per assembly from the
+        // assembly context's agent (zero-config per-workspace), and the
+        // enforcement word is re-read from that workspace's compass per
+        // assembly, so a mid-session soft/hard flip lands on the next
+        // assembly — in zero-config and explicit-config deployments alike.
+        text: (context) => {
+          const harnessDir = resolveAssemblyHarnessDir(context, options.resolver, bootHarnessDir)
+          return harnessRulesText(harnessDir, sectionEnforcement(harnessDir))
+        },
       })
-      view.context({
+      const disposeContext = view.context({
         name: ENGINE_STATUS_CONTEXT_NAME,
         order: ENGINE_STATUS_CONTEXT_ORDER,
-        text: engineStatusProvider(ctx, harnessDir),
+        text: engineStatusProvider(ctx, options.resolver, bootHarnessDir),
       })
+      systemPromptCtx.effect(function* () {
+        yield () => {
+          // Idempotent + contained: the disposers remove only their own
+          // entries; a throw here would surface in the fiber teardown, so
+          // each is individually guarded (never-throws discipline).
+          try {
+            disposeSection()
+          } catch {
+            // ignore — the layer entry is already gone
+          }
+          try {
+            disposeContext()
+          } catch {
+            // ignore — the layer entry is already gone
+          }
+        }
+      }, 'mstar:harness-rules disposer collection')
     } catch (error) {
       log('warn', `mstar:harness-rules registration failed (contained — session boot unaffected): ${errorMessage(error)}`)
     }
@@ -190,13 +266,15 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
 /**
  * The pointer block: presence / enforcement word / resolved
  * `{HARNESS_DIR}` / one read-mstar-harness-core directive. Zero complete
- * `{{...}}` groups by construction (STRICT interpolation safety).
+ * `{{...}}` groups by construction (STRICT interpolation safety — plan QC
+ * fix wave W-1): the operator-controlled harness dir is screened before
+ * embedding, so a path containing `{{…}}` can never break prompt assembly.
  */
 function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFlag): string {
   return [
     'This session runs under the Morning Star (mstar) harness: prompts and tool calls are governed by the harness gates and rules.',
     `enforcement: ${enforcement.hard ? 'hard' : 'soft'}`,
-    `harness dir: ${harnessDir ?? 'none'}`,
+    `harness dir: ${stripInterpolationHazard(harnessDir ?? 'none')}`,
     'Before non-trivial work, read the skill `skill://mstar-harness-core` — the authoritative harness entry point (mstar-harness-core first, then topic skills).',
   ].join('\n')
 }
@@ -204,25 +282,30 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
 /**
  * The apply-scoped engine-status provider: a TTL-memoized bounded projection
  * over `buildCatalogSources` (the catalog's unified machine-summary builder
- * — same source as the pre-step engine-status row). The memo keeps one
- * bounded disk read per `DEFAULT_CATALOG_TTL_MS` per apply instead of a
- * status.json/compass/ledger read on every prompt assembly.
+ * — same source as the pre-step engine-status row). The harness dir resolves
+ * PER ASSEMBLY from the assembly context's agent (plan QC fix wave W-2 — the
+ * zero-config default), and the memo is keyed by the resolved harness dir so
+ * distinct session workspaces keep independent bounded rows instead of
+ * sharing one stale boot row. The memo keeps one bounded disk read per
+ * `DEFAULT_CATALOG_TTL_MS` per resolved dir instead of a status.json /
+ * compass / ledger read on every prompt assembly.
  */
 // simplify: separate per-provider TTL cache — a ledger-change invalidation
 // clears the CATALOG's entry but not this memo, so the provider serves up to
 // one TTL of staleness after a ledger change (same documented tradeoff as the
 // catalog). Upgrade path: share the apply-scoped catalog cache + invalidation
 // hook with the provider.
-function engineStatusProvider(ctx: Context, harnessDir: string | null): () => string {
-  let cached: MstarEngineStatusSource | null = null
-  let builtAt = 0
-  return () => {
+function engineStatusProvider(ctx: Context, resolver: HarnessResolver, bootHarnessDir: string | null): (context: object) => string {
+  const memo = new Map<string | null, { source: MstarEngineStatusSource; builtAt: number }>()
+  return (context) => {
+    const harnessDir = resolveAssemblyHarnessDir(context, resolver, bootHarnessDir)
     const now = Date.now()
-    if (cached === null || now - builtAt >= DEFAULT_CATALOG_TTL_MS) {
-      cached = buildCatalogSources(ctx, harnessDir)
-      builtAt = now
+    let entry = memo.get(harnessDir)
+    if (entry === undefined || now - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) {
+      entry = { source: buildCatalogSources(ctx, harnessDir), builtAt: now }
+      memo.set(harnessDir, entry)
     }
-    return engineStatusSummary(cached)
+    return engineStatusSummary(entry.source)
   }
 }
 
@@ -231,24 +314,32 @@ function engineStatusProvider(ctx: Context, harnessDir: string | null): () => st
  * state line (+ the compass direction one-liner when present). Deliberately
  * EXCLUDES the full status.json surface — residual finding detail,
  * agent-flow events, knowledge digest and branch/policy anchors stay out.
+ *
+ * STRICT-interpolation safety (plan QC fix wave W-1): every operator-
+ * controlled value (harness dir, plan ids, plan statuses, iteration id,
+ * lease planId/holder, direction prose) is screened through
+ * `stripInterpolationHazard` before embedding — a hostile `{{…}}` in any of
+ * them can never throw the renderer. Engine-derived literals (version,
+ * enforcement word, violation codes, transition, severities) are constants,
+ * not operator text, and stay unscreened.
  */
 function engineStatusSummary(source: MstarEngineStatusSource): string {
   const lines = [
-    `mstar engine status: v${source.version} | harness ${source.harnessDir ?? 'none'} | enforcement ${source.enforcement.hard ? 'hard' : 'soft'}`,
+    `mstar engine status: v${source.version} | harness ${stripInterpolationHazard(source.harnessDir ?? 'none')} | enforcement ${source.enforcement.hard ? 'hard' : 'soft'}`,
   ]
   const iteration = source.iteration
   if (iteration !== undefined) {
     const gate = iteration.gate
     const codes = gate.violations.map((v) => v.code).join(', ')
-    lines.push(`iteration ${iteration.iterationId}: gate ${gate.ok ? 'PASS' : `FAIL (${codes})`} | transition ${gate.transition} | all plans done ${gate.all_plans_done}`)
+    lines.push(`iteration ${stripInterpolationHazard(iteration.iterationId)}: gate ${gate.ok ? 'PASS' : `FAIL (${codes})`} | transition ${gate.transition} | all plans done ${gate.all_plans_done}`)
   }
   const state = source.state
   if (state !== null) {
-    const plans = state.plans.length === 0 ? 'none' : state.plans.map((p) => `${p.id}(${p.status})`).join(' ')
+    const plans = state.plans.length === 0 ? 'none' : state.plans.map((p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`).join(' ')
     const residuals = state.residuals.length === 0 ? 'none' : state.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')
-    const leases = state.leases.length === 0 ? 'none active' : state.leases.map((l) => `${l.planId} → ${l.holder}`).join('; ')
+    const leases = state.leases.length === 0 ? 'none active' : state.leases.map((l) => `${stripInterpolationHazard(l.planId)} → ${stripInterpolationHazard(l.holder)}`).join('; ')
     lines.push(`plans: ${plans} | residuals: ${residuals} | leases: ${leases}`)
-    if (state.direction !== null) lines.push(`direction: ${state.direction}`)
+    if (state.direction !== null) lines.push(`direction: ${stripInterpolationHazard(state.direction)}`)
   }
   return lines.join('\n')
 }

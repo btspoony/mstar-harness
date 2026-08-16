@@ -151,6 +151,32 @@ export interface Config {
  */
 export const PERSONA_INTERPOLATION_HAZARD = /\{\{[\s\S]*\}\}/
 
+/**
+ * Screen ONE dynamic string before it is embedded into dsh system-prompt
+ * section/context text (plan QC fix wave W-1): break every COMPLETE
+ * `{{...}}` group (the renderer's STRICT `interpolate` throws on any `{{`
+ * paired with a later `}}` — unknown variable, malformed group, undefined
+ * value), while leaving a LONE `{{` without a later `}}` verbatim (upstream
+ * renders it as literal prose — already safe, do not mangle it).
+ *
+ * A complete group is rewritten to `{ {…} }` (a space inside each pair), so
+ * no adjacent `{{`/`}}` survives the renderer scan; the rewrite is re-scanned
+ * because a nested/adjacent brace at either boundary can expose a fresh pair.
+ * The output is plain text the renderer treats as literal — operator-chosen
+ * values (paths, plan/iteration ids, lease fields, compass direction prose)
+ * can never break prompt assembly.
+ */
+export function stripInterpolationHazard(text: string): string {
+  let out = text
+  for (;;) {
+    const open = out.indexOf('{{')
+    if (open < 0) return out
+    const close = out.indexOf('}}', open + 2)
+    if (close < 0) return out // lone `{{` — literal upstream; keep verbatim
+    out = `${out.slice(0, open)}{ {${out.slice(open + 2, close)}} }${out.slice(close + 2)}`
+  }
+}
+
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the decoration keys all preserve omission via `.default(undefined)`. */
 export const Config: z<Config> = z.object({
   harnessDir: z.string(),
