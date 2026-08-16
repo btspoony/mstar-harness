@@ -9,7 +9,7 @@
  * with the stale re-read retry, and the service-missing degrade.
  */
 import { describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -415,6 +415,209 @@ describe('goal bridge — apply wiring (agent/session-start + subagent/start dec
         const ref = edits[0]!.args[1] as GoalRefView
         expect(ref).toEqual({ id: 'goal-1', revision: 1 })
         expect(goals.current!.objective).toContain('iter-20260816-d2')
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * One durable `goal/change` session-event envelope (upstream `GoalChangeMeta`
+ * — `{kind, version, operation, goal, roundsStarted, createdAt, updatedAt}`
+ * inside the firehose envelope's `data`; the bridge reads it STRUCTURALLY,
+ * never trusting the runtime shape). The fixture is built from overrides so
+ * every filter branch (operation, phase, version, blockedReason) is driven
+ * by the test, not by a shared literal.
+ */
+function goalChangeEnvelope(overrides: {
+  operation?: unknown
+  version?: unknown
+  phase?: unknown
+  blockedReason?: unknown
+  objective?: unknown
+} = {}): unknown {
+  return {
+    type: 'goal/change',
+    seq: 1,
+    time: 1000,
+    data: {
+      kind: 'goal/change',
+      version: overrides.version ?? 1,
+      operation: overrides.operation ?? 'edit',
+      goal: {
+        id: 'goal-1',
+        revision: 3,
+        objective:
+          overrides.objective ??
+          'Run iteration iter-20260816-advisory through the complete flow: iteration-start → per-plan cycles → iteration-close → PR delivery → merge-ready. Exit: merged.',
+        phase: overrides.phase ?? 'active',
+        ...(overrides.blockedReason !== undefined ? { blockedReason: overrides.blockedReason } : {}),
+        maxGoalRounds: 256,
+      },
+      roundsStarted: 7,
+      createdAt: 100,
+      updatedAt: 1000,
+    },
+  }
+}
+
+/** A goal-owning session for the `session/event` firehose (`header.cwd` — the workspace attribution read). */
+const goalSession = (cwd: string): unknown => ({ id: 'sess-goal-1', header: { cwd }, events: [] })
+
+describe('goal bridge — blocked sync advisory (session/event firehose)', () => {
+  it('operation "block" → ONE warn with blockedReason.code + objective summary + status.json residual pointer; ZERO status.json writes', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-block-')
+    try {
+      // Seed a status.json fixture — the advisory must NEVER touch it (one-way mirror).
+      const statusPath = join(harnessDir, 'status.json')
+      const beforeStatus = JSON.stringify({ v: 1, plans: [], residual_findings: {} }, null, 2)
+      await writeFile(statusPath, beforeStatus)
+      const beforeEntries = (await readdir(harnessDir)).sort()
+
+      const ctx = new Context()
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir), {})
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({
+          operation: 'block',
+          phase: 'blocked',
+          blockedReason: { code: 'rounds-exhausted', message: 'max autonomous rounds reached' },
+        }))
+
+        expect(captured.filter((m) => m.startsWith('warn:'))).toHaveLength(1)
+        const warn = captured.find((m) => m.startsWith('warn:'))!
+        expect(warn).toContain('goal blocked [rounds-exhausted]')
+        expect(warn).toContain('max autonomous rounds reached')
+        expect(warn).toContain('objective: Run iteration iter-20260816-advisory')
+        expect(warn).toContain(`${harnessDir}/status.json`)
+        expect(warn).toMatch(/residual/i)
+
+        // Zero status.json writes: byte-identical fixture + no file created/removed.
+        expect(await readFile(statusPath, 'utf8')).toBe(beforeStatus)
+        expect((await readdir(harnessDir)).sort()).toEqual(beforeEntries)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('goal.phase "blocked" WITHOUT a block operation (an edit while blocked) also warns once', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-blockedphase-')
+    try {
+      const ctx = new Context()
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir), {})
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({
+          operation: 'edit',
+          phase: 'blocked',
+          blockedReason: { code: 'iteration-closed', message: 'the steering iteration closed' },
+        }))
+
+        const warns = captured.filter((m) => m.startsWith('warn:'))
+        expect(warns).toHaveLength(1)
+        expect(warns[0]).toContain('goal blocked [iteration-closed]')
+        expect(warns[0]).toContain(`${harnessDir}/status.json`)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('unknown version → silent skip (defensive): zero warns, the emit never throws', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-version-')
+    try {
+      const ctx = new Context()
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir), {})
+        expect(() => ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({
+          version: 2,
+          operation: 'block',
+          phase: 'blocked',
+          blockedReason: { code: 'rounds-exhausted', message: 'max autonomous rounds reached' },
+        }))).not.toThrow()
+        expect(captured.filter((m) => m.startsWith('warn:'))).toHaveLength(0)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('non-blocked goal/change and non-goal events are filtered (zero warns)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-filter-')
+    try {
+      const ctx = new Context()
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir), {})
+        // Active-phase goal mutation — not blocked.
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({ operation: 'edit', phase: 'active' }))
+        // A completely unrelated firehose envelope.
+        ctx.events.emit('session/event', goalSession(root), { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } })
+        // A goal/change envelope with a malformed data payload.
+        ctx.events.emit('session/event', goalSession(root), { type: 'goal/change', seq: 2, time: 1, data: 'not-a-record' })
+
+        expect(captured.filter((m) => m.startsWith('warn:'))).toHaveLength(0)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('unresolvable harness → the blocked event is skipped silently (workspace attribution, workflow-ledger precedent)', async () => {
+    const { root } = await tempHarness('dsh-goal-bridge-attrib-')
+    try {
+      // A workspace WITHOUT a harness root (probe resolver — no explicit dir).
+      const noHarnessWs = join(root, 'plain-workspace')
+      await mkdir(noHarnessWs, { recursive: true })
+
+      const ctx = new Context()
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(undefined), {})
+        // Session cwd at a workspace with no harness → no attribution → silent skip.
+        ctx.events.emit('session/event', { id: 'sess-plain', header: { cwd: noHarnessWs }, events: [] }, goalChangeEnvelope({
+          operation: 'block',
+          phase: 'blocked',
+          blockedReason: { code: 'rounds-exhausted', message: 'max autonomous rounds reached' },
+        }))
+        // No session workspace at all → same skip.
+        ctx.events.emit('session/event', { id: 'sess-nocwd', header: {}, events: [] }, goalChangeEnvelope({
+          operation: 'block',
+          phase: 'blocked',
+          blockedReason: { code: 'rounds-exhausted', message: 'max autonomous rounds reached' },
+        }))
+        expect(captured.filter((m) => m.startsWith('warn:'))).toHaveLength(0)
+
+        // Control: a workspace WITH a harness root (.mstar) attributes and warns.
+        const ws = join(root, 'workspace')
+        const wsHarness = join(ws, '.mstar')
+        await mkdir(wsHarness, { recursive: true })
+        ctx.events.emit('session/event', { id: 'sess-ws', header: { cwd: ws }, events: [] }, goalChangeEnvelope({
+          operation: 'block',
+          phase: 'blocked',
+          blockedReason: { code: 'rounds-exhausted', message: 'max autonomous rounds reached' },
+        }))
+        const warns = captured.filter((m) => m.startsWith('warn:'))
+        expect(warns).toHaveLength(1)
+        expect(warns[0]).toContain(`${wsHarness}/status.json`)
       } finally {
         setGoalBridgeLogger(prior)
       }

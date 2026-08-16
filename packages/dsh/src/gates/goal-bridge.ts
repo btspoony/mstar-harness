@@ -23,12 +23,31 @@
  * `{HARNESS_DIR}` / `status.json` stay SSOT. The goals service absent →
  * boot unaffected + ONE debug log (optional-unit degrade); every listener
  * and interaction is try/catch-contained.
+ *
+ * Task 3 — blocked sync advisory: a `session/event` firehose listener
+ * (workflow-ledger consumer precedent) structurally filters the durable
+ * `goal/change` events (upstream `GoalChangeMeta`), gates on
+ * `version === 1` (unknown versions → silent skip), and when the goal is
+ * blocked (`operation: 'block'` OR `goal.phase === 'blocked'`) logs ONE
+ * `mstar/goal-bridge` warn — the `blockedReason.code`, a bounded objective
+ * summary, and the `{HARNESS_DIR}/status.json` residual pointer — so the
+ * operator acts without reverse-engineering the host. Advisory-only: ZERO
+ * harness writes (the mirror stays one-way; status.json remains SSOT).
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { resolveIterationDir } from '@mstar-harness/engine'
+import { asRecord, STATUS_FILE } from './_shared.ts'
 import type { Config, HarnessResolver } from './_shared.ts'
+// The shared display-field bounds (`truncateLedgerField`) and control-char
+// strip (`normalizeWorkflowName`) — the same sanitization the workflow-ledger
+// consumer applies to its warn/ledger display fields (the goal objective and
+// block-reason message are model-controlled text; a newline/tab/CR must never
+// reach the advisory line). Pure imports — neither module imports goal-bridge
+// (no cycle).
+import { truncateLedgerField } from './agent-flow.ts'
+import { normalizeWorkflowName } from './workflow-policy.ts'
 
 /** Logger label for the goal bridge (dsh logger naming: `<scope>/<subject>`). */
 export const GOAL_BRIDGE_LOGGER = 'mstar/goal-bridge'
@@ -46,6 +65,15 @@ export const DEFAULT_MAX_GOAL_ROUNDS = 256
  * never a sub-stage).
  */
 const FLOW_SEQUENCE = 'iteration-start → per-plan cycles → iteration-close → PR delivery → merge-ready'
+
+/** The session-event type of one durable goal mutation (upstream `GoalChangeMeta`; `domain.ts:61-68`). */
+const GOAL_CHANGE_EVENT_TYPE = 'goal/change'
+/** The one supported durable goal-change wire version (upstream `GOAL_CHANGE_VERSION = 1` — `runtime.ts:8`). */
+const GOAL_CHANGE_VERSION = 1
+/** Cap for the goal-objective summary inside the blocked advisory (bounded display field). */
+const GOAL_ADVISORY_OBJECTIVE_CAP = 512
+/** Cap for the block-reason message inside the blocked advisory (bounded display field). */
+const GOAL_ADVISORY_MESSAGE_CAP = 512
 
 /** Consumer log levels the module sink understands. */
 export type GoalBridgeLogLevel = 'debug' | 'warn'
@@ -129,6 +157,31 @@ export interface GoalsServiceView {
 /** The `agents` service surface the `subagent/start` root walk reads. */
 interface AgentsView {
   get(id: string): unknown
+}
+
+/** Structural view of the session the `session/event` firehose carries (`header.cwd` — the workspace attribution read). */
+interface SessionView {
+  header?: { cwd?: unknown }
+}
+
+/** Structural view of one durable goal-change payload (upstream `GoalSnapshotChangeMeta`; `domain.ts:24-32`). */
+interface GoalChangeDataView {
+  version?: unknown
+  operation?: unknown
+  goal?: GoalSnapshotDataView
+}
+
+/** Structural view of one goal snapshot (upstream `GoalSnapshot`; `types.ts:59-68`). */
+interface GoalSnapshotDataView {
+  phase?: unknown
+  objective?: unknown
+  blockedReason?: BlockedReasonDataView
+}
+
+/** Structural view of the block reason (upstream `GoalBlockReason`; `types.ts:51-56` — code lower-kebab, non-empty message). */
+interface BlockedReasonDataView {
+  code?: unknown
+  message?: unknown
 }
 
 /* ---------------------------------- objective text ---------------------------------- */
@@ -263,6 +316,65 @@ export function mirrorIterationGoal(agent: unknown, input: MirrorIterationGoalIn
   }
 }
 
+/* ---------------------------------- blocked sync advisory ---------------------------------- */
+
+/** The blocked-advisory facts extracted from ONE goal-change envelope. */
+interface BlockedGoalAdvisory {
+  /** The stable lower-kebab block code (upstream-validated non-empty — safe to surface verbatim). */
+  code: string
+  /** The block-reason message (upstream-validated non-empty). */
+  message: string
+  /** The goal objective the advisory summarizes. */
+  objective: string
+}
+
+/**
+ * Extract the blocked-advisory facts from ONE `session/event` envelope when
+ * it is a `goal/change` (upstream `GoalChangeMeta` — structural read, never
+ * trusts the runtime shape): `operation === 'block'` OR `goal.phase ===
+ * 'blocked'` (defensive dual check — a block commits phase 'blocked' with
+ * `operation: 'block'`, and a LATER mutation while blocked (e.g. an `edit`)
+ * re-surfaces the same blocked state; each matching event warns once).
+ * Unknown `version` → silently skipped (forward-compat defensive: a v2 wire
+ * must not be half-read as v1). Returns undefined for non-goal events,
+ * malformed envelopes, unknown versions, and non-blocked goals. Pure —
+ * NEVER throws.
+ */
+function blockedAdvisoryOf(envelope: unknown): BlockedGoalAdvisory | undefined {
+  const record = asRecord(envelope)
+  if (record === undefined || record.type !== GOAL_CHANGE_EVENT_TYPE) return undefined
+  const data = asRecord(record.data)
+  if (data === undefined) return undefined
+  if (data.version !== GOAL_CHANGE_VERSION) return undefined // unknown version — silent skip
+  const goal = asRecord(data.goal)
+  if (goal === undefined) return undefined
+  if (data.operation !== 'block' && goal.phase !== 'blocked') return undefined
+  const blockedReason = asRecord(goal.blockedReason)
+  if (blockedReason === undefined) return undefined
+  const code = blockedReason.code
+  const message = blockedReason.message
+  const objective = goal.objective
+  if (typeof code !== 'string' || code === '' || typeof message !== 'string' || message === '' || typeof objective !== 'string' || objective === '') {
+    return undefined
+  }
+  return { code, message, objective }
+}
+
+/**
+ * Log ONE blocked-advisory warn: the stable `blockedReason.code`, the
+ * sanitized (ASCII control chars stripped) + bounded reason message, a
+ * bounded objective summary, and the `{HARNESS_DIR}/status.json` residual
+ * pointer (`residual_findings` — mstar-plan-artifacts SSOT) — the operator
+ * acts without reverse-engineering the host. Advisory-only: ZERO harness
+ * writes (the one-way mirror; status.json stays SSOT). Never throws (the
+ * sink is a no-op before bind; `log` itself is a plain call).
+ */
+function warnBlockedGoal(harnessDir: string, advisory: BlockedGoalAdvisory): void {
+  const reason = truncateLedgerField(normalizeWorkflowName(advisory.message), GOAL_ADVISORY_MESSAGE_CAP)
+  const objective = truncateLedgerField(normalizeWorkflowName(advisory.objective), GOAL_ADVISORY_OBJECTIVE_CAP)
+  log('warn', `goal blocked [${advisory.code}] — ${reason}; objective: ${objective}; residuals: see ${harnessDir}/${STATUS_FILE} (residual_findings) — advisory only, zero harness writes`)
+}
+
 /* ---------------------------------- apply wiring ---------------------------------- */
 
 /**
@@ -292,11 +404,16 @@ function rootAgentOf(agent: unknown, agents: AgentsView): unknown | undefined {
  * inside the mirror — root and children alike fire, `runtime-types.ts:217`)
  * plus a decision-point re-evaluation on `subagent/start` (the existing
  * decision point — index.ts decoration slot), resolving the delegating ROOT
- * via the `parentSession` walk. Both are idempotent (get + compare when the
- * mirror is in place — no churn). The goals service is an OPTIONAL seam
- * (`ctx.get('goals')` structural read): absent → ONE debug log + the
- * listeners stay inert, never a boot failure. Every listener body is
- * try/catch-contained.
+ * via the `parentSession` walk — the two mirror edges are idempotent (get +
+ * compare when the mirror is in place — no churn) — plus a THIRD, advisory
+ * listener on the `session/event` firehose (Task 3): a `goal/change`
+ * envelope whose goal is blocked logs ONE warn (code + objective summary +
+ * `{HARNESS_DIR}/status.json` residual pointer) with ZERO harness writes
+ * (the one-way mirror; see {@link warnBlockedGoal}). The goals service is an
+ * OPTIONAL seam (`ctx.get('goals')` structural read): absent → ONE debug log
+ * + the mirror stays inert, never a boot failure — the blocked advisory is
+ * independent of it (it only needs the firehose + resolver). Every listener
+ * body is try/catch-contained.
  *
  * @param ctx - the plugin's registrant context (the app composition root).
  * @param resolver - the shared per-workspace `{HARNESS_DIR}` resolver.
@@ -336,5 +453,29 @@ export function registerGoalBridge(ctx: Context, resolver: HarnessResolver, conf
     if (child === undefined) return
     const root = rootAgentOf(child, agents)
     if (root !== undefined) mirror(root)
+  })
+  // Task 3 — blocked sync advisory (plan Global Constraints: one-way mirror;
+  // `blocked.code` → warn with the status.json residual pointer, zero writes):
+  // a `session/event` firehose listener (workflow-ledger consumer precedent)
+  // structurally filters the durable `goal/change` envelopes (upstream
+  // `GoalChangeMeta`), gates on `version === 1` (unknown versions → silent
+  // skip, forward-compat defensive), and when the goal is blocked
+  // (`operation: 'block'` OR `goal.phase === 'blocked'`) logs ONE warn —
+  // `blockedReason.code` + a bounded objective summary + the
+  // `{HARNESS_DIR}/status.json` residual pointer — and writes NOTHING.
+  // Workspace attribution from the goal-owning session's `header.cwd`
+  // (workflow-ledger precedent); unresolvable harness → silent skip. Every
+  // envelope is try/catch-contained.
+  ctx.events.on('session/event', (session: unknown, envelope: unknown) => {
+    try {
+      const advisory = blockedAdvisoryOf(envelope)
+      if (advisory === undefined) return
+      const cwd = (session as SessionView | null | undefined)?.header?.cwd
+      const harnessDir = resolver.forWorkspace(typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined)
+      if (harnessDir === null) return
+      warnBlockedGoal(harnessDir, advisory)
+    } catch (error) {
+      log('warn', `goal blocked advisory degraded (contained — the session proceeds): ${errorMessage(error)}`)
+    }
   })
 }
