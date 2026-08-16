@@ -78,6 +78,11 @@ import {
   runFallbacksAdvisory,
   setAdvisoryLogger,
 } from './gates/fallbacks-advisory.ts'
+import {
+  SEEDS_LOGGER,
+  declareMstarSeeds,
+} from './gates/fallbacks-seeds.ts'
+import { fallbacksMounted, fallbacksService } from './gates/fallbacks-probe.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -425,6 +430,37 @@ export function apply(ctx: Context, config: Config): void {
     advisoryPassed = runFallbacksAdvisory(ctx, packagedAgentsDir())
   }
   runAdvisoryPass()
+
+  // Mstar role seeds (plan `20260816-dsh-b4-seeds` Task 2): zero-config
+  // declaration of the 13 `mode: subagent` roles into the fallbacks seed
+  // registry. The seed registry is an upstream per-apply in-memory state
+  // (the `FallbacksSeedManager` is constructed inside the fallbacks
+  // `apply()`; a fiber dispose drops it), so the upstream companion
+  // contract is "re-declare at your own apply/mount" — this conditional
+  // child (`ctx.inject(['llm-fallbacks'])`) fires when the service appears
+  // and RE-FIRES on every re-apply (HMR / fiber swap): no one-shot latch.
+  // Unmounted at apply → the child stays inactive and fires on a later
+  // fallbacks apply; one debug log documents the armed state. Fire-and-
+  // forget with a terminal `.catch` (the upstream preset self-declare
+  // pattern) — declare never throws out of apply.
+  if (!fallbacksMounted(ctx)) {
+    ctx.logger(SEEDS_LOGGER).debug('fallbacks not mounted at apply — mstar seeds inject child armed; declare fires when the llm-fallbacks service appears (apply/HMR)')
+  }
+  ctx.inject(['llm-fallbacks'], (serviceCtx) => {
+    const service = fallbacksService(serviceCtx)
+    if (service === undefined) return
+    declareMstarSeeds(service, {
+      agentsDir: packagedAgentsDir(),
+      log: (level, message) => {
+        const logger = ctx.logger(SEEDS_LOGGER)
+        if (level === 'warn') logger.warn(message)
+        else if (level === 'error') logger.error(message)
+        else logger.debug(message)
+      },
+    }).catch((error) => {
+      ctx.logger(SEEDS_LOGGER).error(`mstar seeds declaration failed (contained — fallbacks taxonomy unchanged): ${(error as Error).message}`)
+    })
+  })
   registerSettleListener(ctx, config, pairing)
 
   // Workflow-ledger session-event consumer (plan `20260815-dsh-workflow-ledger`
