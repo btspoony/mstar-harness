@@ -31,9 +31,10 @@
  * the real `@deepseek-ai/dsh-tool-fs` write tool performs.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import * as plugin from '../src/index.ts'
@@ -99,6 +100,13 @@ ${BODY}
 
 /** No frontmatter at all (hostile input). */
 const HOSTILE_SKILL = 'not a skill document at all\nno frontmatter, no sections\n'
+
+/** Ephemeral-citation fixture builder (plan 20260816-dsh-surface-sync Task 2
+ * — knowledge conventions/skill-content-porting-discipline.md §3): VALID_SKILL
+ * plus one calibration sentence, so an ephemeral finding is the ONLY reason
+ * the doc can fail the gate. */
+const EPHEMERAL_SKILL = (citation: string) =>
+  VALID_SKILL.replace('Lint the document, then decide.', `Lint the document, then decide. Calibrate against ${citation}.`)
 
 /** FsTarget for `<root>/<name>/SKILL.md` (local-backend shape). */
 const skillTarget = (root: string, name: string): FsTarget => ({
@@ -168,6 +176,75 @@ description: Use when the harness lints skill writes in dev-time composition tes
     expect(codes).toContain('skill-authoring.five-question.workflow')
     expect(codes).toContain('skill-authoring.five-question.references')
     expect(codes).toContain('skill-authoring.five-question.load-order')
+  })
+})
+
+describe('lintSkillDoc — ephemeral citation wiring (plan 20260816-dsh-surface-sync Task 2)', () => {
+  it('concrete task-artifact citation → skill.ephemeral.task-artifact (medium); warn gate / hard veto via lintSkillWrite', () => {
+    const doc = EPHEMERAL_SKILL('task-2-report')
+    const gate = lintSkillDoc(doc)
+    expect(gate.ok).toBe(false)
+    const hit = gate.violations.find((v) => v.code === 'skill.ephemeral.task-artifact')
+    expect(hit).toBeDefined()
+    expect(hit!.severity).toBe('medium')
+
+    // Warn mode: advisory gate (no throw), inherited through lintSkillWrite.
+    expect(lintSkillWrite(doc, { target: '/s/SKILL.md', hard: false }).ok).toBe(false)
+
+    // Hard mode: typed veto carrying the ephemeral violation (inherited).
+    let veto: unknown
+    try {
+      lintSkillWrite(doc, { target: '/s/SKILL.md', hard: true })
+    } catch (error) {
+      veto = error
+    }
+    expect(veto).toBeInstanceOf(SkillLintVetoError)
+    expect((veto as SkillLintVetoError).violations.map((v) => v.code)).toContain('skill.ephemeral.task-artifact')
+  })
+
+  it('concrete sdd-deeplink citation → skill.ephemeral.sdd-deeplink (medium); hard veto inherited', () => {
+    const doc = EPHEMERAL_SKILL('.mstar/sdd/20260816-surface-sync')
+    const gate = lintSkillDoc(doc)
+    expect(gate.ok).toBe(false)
+    const hit = gate.violations.find((v) => v.code === 'skill.ephemeral.sdd-deeplink')
+    expect(hit).toBeDefined()
+    expect(hit!.severity).toBe('medium')
+    expect(() => lintSkillWrite(doc, { target: '/s/SKILL.md', hard: true })).toThrow(SkillLintVetoError)
+  })
+
+  it('both kinds on one line → both violations in source order, all medium', () => {
+    const doc = EPHEMERAL_SKILL('.mstar/sdd/20260816-surface-sync/review/ cites task-3-report.md')
+    const gate = lintSkillDoc(doc)
+    const ephemeral = gate.violations.filter((v) => v.code.startsWith('skill.ephemeral.'))
+    expect(ephemeral.map((v) => v.code)).toEqual([
+      'skill.ephemeral.sdd-deeplink',
+      'skill.ephemeral.task-artifact',
+    ])
+    expect(ephemeral.every((v) => v.severity === 'medium')).toBe(true)
+  })
+
+  it('placeholder references (task-N-report, {SDD_DIR}, <plan-id>) pass the ephemeral check', () => {
+    const doc = EPHEMERAL_SKILL('task-N-report or {SDD_DIR}/task-N-report.md or <plan-id>')
+    const gate = lintSkillDoc(doc)
+    expect(gate.ok).toBe(true)
+    expect(gate.violations.filter((v) => v.code.startsWith('skill.ephemeral.'))).toEqual([])
+  })
+
+  it('real skills/ corpus sample: zero ephemeral violations (wiring adds no false-positive surface)', async () => {
+    const skillsDir = fileURLToPath(new URL('../../../skills/', import.meta.url))
+    const sample = [
+      'mstar-sdd',
+      'mstar-harness-core',
+      'mstar-roles',
+      'mstar-coding-behavior',
+      'mstar-skill-authoring',
+      'mstar-plan-artifacts',
+    ]
+    for (const name of sample) {
+      const doc = await readFile(join(skillsDir, name, 'SKILL.md'), 'utf8')
+      const gate = lintSkillDoc(doc)
+      expect(gate.violations.filter((v) => v.code.startsWith('skill.ephemeral.'))).toEqual([])
+    }
   })
 })
 

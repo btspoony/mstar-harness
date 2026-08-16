@@ -16,12 +16,13 @@ import { basename, dirname, resolve, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
+  findEphemeralCitations,
   lintFiveQuestion,
   lintFrontmatter,
   resolveAssetPath,
   resolveSkillRoot,
 } from '@mstar-harness/engine'
-import type { GateResult, ValidationResult } from '@mstar-harness/engine'
+import type { EphemeralCitation, GateResult, ValidationResult } from '@mstar-harness/engine'
 import type { FsTarget, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import { formatViolation, packagedSkillsDir, resolveSeamHard, HarnessResolver, actorAgentOf } from './_shared.ts'
 import type { Config } from './_shared.ts'
@@ -96,11 +97,32 @@ function stripFrontmatter(text: string): string {
   return text
 }
 
+/** Ephemeral-citation violation codes (knowledge
+ * conventions/skill-content-porting-discipline.md §3 — "No ephemeral
+ * citations in durable skill text": concrete per-task artifacts and SDD
+ * deeplinks survive nothing). Severity `medium` — the gate's warn/hard mode
+ * mapping is inherited from the caller (see {@link lintSkillWrite}). */
+const EPHEMERAL_CODES: Record<EphemeralCitation['kind'], string> = {
+  'task-artifact': 'skill.ephemeral.task-artifact',
+  'sdd-deeplink': 'skill.ephemeral.sdd-deeplink',
+}
+
+/** Wrap one engine {@link EphemeralCitation} as a ValidationResult violation. */
+function ephemeralViolation(citation: EphemeralCitation): ValidationResult {
+  return {
+    ok: false,
+    severity: 'medium',
+    code: EPHEMERAL_CODES[citation.kind],
+    message: `ephemeral citation \`${citation.match}\` on line ${citation.line} — durable skill text must reference in-repo artifacts only (knowledge conventions/skill-content-porting-discipline.md §3)`,
+  }
+}
+
 /**
  * Lint one SKILL.md document with the engine skill-authoring lints
- * (`lintFrontmatter` + `lintFiveQuestion` — the CLI `mstar skill lint`
- * combination; violation codes `lint.frontmatter.*` /
- * `skill-authoring.five-question.*`). Pure: no enforcement, no I/O.
+ * (`lintFrontmatter` + `lintFiveQuestion` + `findEphemeralCitations` — the
+ * CLI `mstar skill lint` combination plus the ephemeral-citation gate;
+ * violation codes `lint.frontmatter.*` / `skill-authoring.five-question.*`
+ * / `skill.ephemeral.*`). Pure: no enforcement, no I/O.
  * @param doc - the full SKILL.md text.
  */
 export function lintSkillDoc(doc: string): GateResult {
@@ -109,6 +131,12 @@ export function lintSkillDoc(doc: string): GateResult {
   if (!frontmatter.ok) violations.push(...frontmatter.violations)
   const body = lintFiveQuestion(stripFrontmatter(doc))
   if (!body.ok) violations.push(...body.violations)
+  // Ephemeral-citation finder is discovery-only (engine returns an array, not
+  // a GateResult) — wrap into violations here. Deliberately the ONLY wiring
+  // point: `lintSkillWrite` delegates to this entry (hard veto inherited) and
+  // `gateSkillIntent` lints the on-disk doc through the same path (repair
+  // escape inherited) — no double counting.
+  violations.push(...findEphemeralCitations(doc).map(ephemeralViolation))
   return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
 }
 
