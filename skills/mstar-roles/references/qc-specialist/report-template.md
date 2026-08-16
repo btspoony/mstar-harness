@@ -46,6 +46,7 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
 - Source Type: {git-diff | read | grep | doc-rule | manual-reasoning | deep-lens: <name> | assignment-ci-note}
 - Source Reference: {path/snippet — not a test/build log you produced}
 - Confidence: High | Medium | Low
+- Note: every finding carries `Verification` + `Expected vs observed` — see the Findings entry format above
 
 ## Summary
 | Severity | Count |
@@ -65,6 +66,8 @@ Report **Critical / Warning / Suggestion** sections are human-readable; PM maps 
 - No Critical/Warning but high-impact unresolved trade-off (often architectural Suggestion) → `Needs Discussion`
 - **Approve** only when Critical = 0 and Warning = 0 (unresolved)
 - Evidence channel failure (Review range cannot be established / key file unreadable) → `Unconfirmed` — report states the failure reason; PM-side handling per `mstar-review-qc` consolidated
+- **Partial** evidence-channel failure → mark only the affected findings **Unconfirmed** (keep verifiable findings; state channel gaps in Summary)
+- Any `Unconfirmed` finding (with or without Critical/Warning) → verdict `Unconfirmed`, never `Approve`; `Approve` additionally requires every finding's evidence channel intact
 
 ### CI / runtime evidence (read-only notes — do not re-run)
 
