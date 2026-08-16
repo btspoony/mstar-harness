@@ -263,7 +263,7 @@ export function steeringCompass(harnessDir: string): { iterationId: string } | u
 
 /* ---------------------------------- the mirror ---------------------------------- */
 
-/** The stable machine-routable code a stale CAS edit throws (`GoalError.code`). */
+/** The stable machine-routable code a stale CAS complete throws (`GoalError.code`). */
 const GOAL_STALE_REVISION = 'GOAL_STALE_REVISION'
 
 /** Narrow an arbitrary thrown value to its stable `code` field, when it has one. */
@@ -532,7 +532,8 @@ export function registerGoalBridge(ctx: Context, resolver: HarnessResolver, conf
   // Decision-point re-evaluation (idempotent — no churn when the mirror is
   // in place): autonomous Phase 2 drives by dispatching subagents, so each
   // `subagent/start` re-checks the root's goal against the CURRENT steering
-  // compass (a mid-session iteration flip CAS-edits the objective).
+  // compass (a mid-session iteration flip rebuilds the goal — complete then
+  // create — so the new iteration starts with a clean round budget).
   ctx.events.on('subagent/start', (info: { id?: unknown }) => {
     const agents = ctx.get('agents') as AgentsView | undefined
     if (agents === undefined || typeof info.id !== 'string') return

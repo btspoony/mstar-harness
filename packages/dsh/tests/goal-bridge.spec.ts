@@ -5,8 +5,9 @@
  * `maxGoalRounds` cap. The mirror is fake-testable: `mirrorIterationGoal`
  * receives the goals view + a per-workspace resolver + the resolved round
  * cap, so every branch is exercised against an in-memory fake — root filter,
- * steering-compass scan (active|locked), objective text contract, CAS edit
- * with the stale re-read retry, and the service-missing degrade.
+ * steering-compass scan (active|locked), objective text contract, the
+ * drift rebuild (complete then create) with the stale re-read retry, and
+ * the service-missing degrade.
  */
 import { describe, expect, it } from 'bun:test'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
