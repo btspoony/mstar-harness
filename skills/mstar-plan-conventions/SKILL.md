@@ -14,6 +14,10 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 | `mstar-review-qc` | 派 QC（PM 同轮必读；SDD 强制 tri） |
 | `mstar-sdd` | PM 执行 `Execution mode: sdd` 的 implement 波次 |
 
+## Workflow
+
+主链：按「路径符号」+「`{HARNESS_DIR}` 解析顺序」确定目录（默认 `.mstar/`，兼容 `.agents/`）→ 按「初始化 Plan 目录」建 `plans/` / `status.json` 并追加 gitignore 进程产物集（进程本地、结果共享）→ 多 Plan · 同一 Spec 时按「Spec 驱动的分支模型」登记 iteration base / spec 集成分支 / 各 Plan 实现分支 / PR target → 主 plan 写入 `{PLAN_DIR}`（**Plan-Writing Path Gate**，不引入外部默认 plan 目录）。未启用 plan 时 → 对话追踪，门禁（QC/QA）照常。
+
 ## 路径符号（SSOT）
 
 | 符号 | 默认 |
