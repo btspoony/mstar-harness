@@ -137,7 +137,7 @@ export function validateExecutionLease(lease: unknown): GateResult {
         violation(
           "high",
           "lease.execution-lease.invalid",
-          "execution_lease must be an object — null and tombstone objects are invalid; writers delete the key on release",
+          "execution_lease must be an object \u2014 null and tombstone objects are invalid; writers delete the key on release",
         ),
       ],
     };
@@ -173,7 +173,7 @@ export function validateExecutionLease(lease: unknown): GateResult {
       violation(
         "medium",
         "lease.execution-lease.invalid-worktree-path",
-        "worktree_path must be an absolute path — it identifies the dedicated feature-worktree root (and MUST differ from metadata.control_worktree_path)",
+        "worktree_path must be an absolute path \u2014 it identifies the dedicated feature-worktree root (and MUST differ from metadata.control_worktree_path)",
       ),
     );
   }
@@ -189,7 +189,7 @@ export function validateExecutionLease(lease: unknown): GateResult {
       violation(
         "medium",
         "lease.execution-lease.invalid-session-label",
-        "session_label must be a string (display only — never used for ownership comparison)",
+        "session_label must be a string (display only \u2014 never used for ownership comparison)",
       ),
     );
   }
@@ -214,7 +214,7 @@ export function validateIntegrationMergeLease(lease: unknown): GateResult {
         violation(
           "high",
           "lease.merge-lease.invalid",
-          "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release",
+          "integration_merge_lease must be an object \u2014 absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release",
         ),
       ],
     };
@@ -257,7 +257,7 @@ export function validateIntegrationMergeLease(lease: unknown): GateResult {
       violation(
         "medium",
         "lease.merge-lease.invalid-session-label",
-        "session_label must be a string (display only — never used for ownership comparison)",
+        "session_label must be a string (display only \u2014 never used for ownership comparison)",
       ),
     );
   }
@@ -299,7 +299,7 @@ export function claimLease(row: PlanRow, holder: string, fields: ClaimLeaseField
           violation(
             "high",
             "lease.claim.tombstone",
-            "execution_lease must be an object — null and tombstone objects are invalid; resolve the corrupt state before claiming",
+            "execution_lease must be an object \u2014 null and tombstone objects are invalid; resolve the corrupt state before claiming",
           ),
         ],
       };
@@ -312,7 +312,7 @@ export function claimLease(row: PlanRow, holder: string, fields: ClaimLeaseField
           violation(
             "high",
             "lease.claim.other-holder",
-            `execution_lease held by ${JSON.stringify(lease.holder)} — no timestamp makes it stealable; Blocked unless the current-turn user explicitly overrides (then audit plans[].notes)`,
+            `execution_lease held by ${JSON.stringify(lease.holder)} \u2014 no timestamp makes it stealable; Blocked unless the current-turn user explicitly overrides (then audit plans[].notes)`,
           ),
         ],
       };
@@ -325,7 +325,7 @@ export function claimLease(row: PlanRow, holder: string, fields: ClaimLeaseField
           violation(
             "high",
             "lease.claim.verify-held-lease",
-            `same holder but lease ${lease.worktree_path} @ ${lease.working_branch} does not match the Assignment ${fields.worktree_path} @ ${fields.working_branch} — verify-held-lease failed`,
+            `same holder but lease ${lease.worktree_path} @ ${lease.working_branch} does not match the Assignment ${fields.worktree_path} @ ${fields.working_branch} \u2014 verify-held-lease failed`,
           ),
         ],
       };
@@ -340,7 +340,7 @@ export function claimLease(row: PlanRow, holder: string, fields: ClaimLeaseField
         violation(
           "high",
           "lease.claim.orphan",
-          "plan is InProgress without an execution_lease — orphan: STOP, no writable dispatch until recovery (status-and-residuals.md § Orphan recovery); do not invent a lease",
+          "plan is InProgress without an execution_lease \u2014 orphan: STOP, no writable dispatch until recovery (status-and-residuals.md \u00a7 Orphan recovery); do not invent a lease",
         ),
       ],
     };
@@ -353,7 +353,7 @@ export function claimLease(row: PlanRow, holder: string, fields: ClaimLeaseField
         violation(
           "high",
           "lease.claim.status",
-          `claim requires status Todo or Blocked (got ${JSON.stringify(row.status)}) — claim-before-InProgress contract`,
+          `claim requires status Todo or Blocked (got ${JSON.stringify(row.status)}) \u2014 claim-before-InProgress contract`,
         ),
       ],
     };
@@ -398,7 +398,7 @@ export function releaseLease(row: PlanRow, holder: string): LeaseTransition {
         violation(
           "high",
           "lease.release.tombstone",
-          "execution_lease must be an object — null and tombstone objects are invalid; resolve the corrupt state before releasing",
+          "execution_lease must be an object \u2014 null and tombstone objects are invalid; resolve the corrupt state before releasing",
         ),
       ],
     };
@@ -411,7 +411,7 @@ export function releaseLease(row: PlanRow, holder: string): LeaseTransition {
         violation(
           "high",
           "lease.release.other-holder",
-          `execution_lease held by ${JSON.stringify(row.execution_lease.holder)} — release requires the same-session holder; a different holder must Blocked (no timestamp makes it stealable)`,
+          `execution_lease held by ${JSON.stringify(row.execution_lease.holder)} \u2014 release requires the same-session holder; a different holder must Blocked (no timestamp makes it stealable)`,
         ),
       ],
     };
@@ -498,7 +498,7 @@ export function verifyPlanExecutionLease(row: Record<string, unknown>, planId: s
           violation(
             "high",
             "lease.verify.orphan",
-            "plan is InProgress without an execution_lease — orphan: STOP, no writable dispatch until recovery (status-and-residuals.md § Orphan recovery)",
+            "plan is InProgress without an execution_lease \u2014 orphan: STOP, no writable dispatch until recovery (status-and-residuals.md \u00a7 Orphan recovery)",
           ),
         ],
       };
@@ -520,7 +520,7 @@ export function verifyPlanExecutionLease(row: Record<string, unknown>, planId: s
       violation(
         "high",
         "lease.verify.dual-write",
-        "execution_lease present in BOTH plans[].execution_lease (SSOT) and plans[].metadata.execution_lease — the row-level lease wins; delete the metadata copy to remove the dual write",
+        "execution_lease present in BOTH plans[].execution_lease (SSOT) and plans[].metadata.execution_lease \u2014 the row-level lease wins; delete the metadata copy to remove the dual write",
       ),
     );
   } else if (rowLease === undefined) {
@@ -528,7 +528,7 @@ export function verifyPlanExecutionLease(row: Record<string, unknown>, planId: s
       violation(
         "high",
         "lease.verify.non-ssot-location",
-        "execution_lease found only under plans[].metadata.execution_lease — the SSOT location is plans[].execution_lease; the metadata location is a legacy/hand-written read-compat fallback, not equivalent to SSOT success (migrate the lease to the plan row)",
+        "execution_lease found only under plans[].metadata.execution_lease \u2014 the SSOT location is plans[].execution_lease; the metadata location is a legacy/hand-written read-compat fallback, not equivalent to SSOT success (migrate the lease to the plan row)",
       ),
     );
   }
@@ -594,7 +594,7 @@ export async function withStatusWriteLock<T>(
   const held = heldLockDirs.getStore();
   if (held !== undefined && held.has(lockDir)) {
     throw new Error(
-      `${lockDir} is already held by this process in this async context — withStatusWriteLock is not reentrant; a nested acquisition on the same status.json is a bug`,
+      `${lockDir} is already held by this process in this async context \u2014 withStatusWriteLock is not reentrant; a nested acquisition on the same status.json is a bug`,
     );
   }
   const timeoutMs = opts.timeoutMs ?? 30_000;
@@ -611,7 +611,7 @@ export async function withStatusWriteLock<T>(
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (Date.now() >= deadline) {
         throw new Error(
-          `${lockDir} already exists — another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock). ` +
+          `${lockDir} already exists \u2014 another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md \u00a7 Same-host exclusive write lock). ` +
             `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
         );
       }

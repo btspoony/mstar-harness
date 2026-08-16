@@ -235,11 +235,11 @@ function validateManifest(manifest: unknown, errors: string[], warnings: string[
   // report it, ignore it, and never validate its values.
   if (doc.extensions !== undefined) {
     if (!isPlainObject(doc.extensions)) {
-      warnings.push('plugin.json: "extensions" is not an object — ignored');
+      warnings.push('plugin.json: "extensions" is not an object \u2014 ignored');
     } else {
       for (const [namespace, value] of Object.entries(doc.extensions as Record<string, unknown>)) {
         if (!isPlainObject(value)) {
-          warnings.push(`plugin.json: "extensions.${namespace}" is not an object — ignored`);
+          warnings.push(`plugin.json: "extensions.${namespace}" is not an object \u2014 ignored`);
         }
       }
     }
@@ -315,7 +315,7 @@ function validateMcpServer(name: string, entry: unknown, errors: string[]) {
         const remainder = stripMcpPathPrefix(server.cwd);
         if (remainder === null) {
           errors.push(
-            `${prefix}: "cwd" must be "./…", "${"${PLUGIN_ROOT}"}…", or "${"${PLUGIN_DATA}"}…"`,
+            `${prefix}: "cwd" must be "./\u2026", "${"${PLUGIN_ROOT}"}\u2026", or "${"${PLUGIN_DATA}"}\u2026"`,
           );
         } else if (escapesPluginRoot(remainder)) {
           errors.push(

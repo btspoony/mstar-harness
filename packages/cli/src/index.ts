@@ -316,8 +316,8 @@ pathCommand
       // plan-conventions § {HARNESS_DIR} 解析顺序: no .mstar/ → .agents/ →
       // .plans/|plans/ anywhere up the tree — harness not enabled from here.
       const guidance =
-        "no harness dir found — the bounded probe (.mstar/, .agents/, .plans/, plans/) walked up from " +
-        `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) — run \`mstar init\` to bootstrap, or pass a start dir inside a harness-enabled project`;
+        "no harness dir found \u2014 the bounded probe (.mstar/, .agents/, .plans/, plans/) walked up from " +
+        `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) \u2014 run \`mstar init\` to bootstrap, or pass a start dir inside a harness-enabled project`;
       if (options.json) {
         console.log(JSON.stringify({ ok: false, startDir, harnessDir: null, specsDir: null, guidance }));
       } else {
@@ -347,7 +347,7 @@ function resolveStatusFilePath(pathArg?: string): string {
   if (pathArg) return path.resolve(pathArg);
   const harnessDir = resolveHarnessDir();
   if (!harnessDir) {
-    throw new Error(`harness dir not found from ${process.cwd()} — pass a status.json path or set MSTAR_HARNESS_DIR`);
+    throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass a status.json path or set MSTAR_HARNESS_DIR`);
   }
   return path.join(harnessDir, "status.json");
 }
@@ -390,7 +390,7 @@ statusCommand
     try {
       const harnessDir = options.harness ?? resolveHarnessDir();
       if (!harnessDir) {
-        throw new Error(`harness dir not found from ${process.cwd()} — pass --harness or set MSTAR_HARNESS_DIR`);
+        throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness or set MSTAR_HARNESS_DIR`);
       }
       const result = await archiveResiduals(planId, harnessDir);
       if (result.archived === 0) {
@@ -406,21 +406,21 @@ statusCommand
 
 const leaseCommand = program
   .command("lease")
-  .description("execution_lease checks (engine-backed) — integration_merge_lease validation stays import-only via @mstar-harness/engine until a dedicated subcommand exists");
+  .description("execution_lease checks (engine-backed) \u2014 integration_merge_lease validation stays import-only via @mstar-harness/engine until a dedicated subcommand exists");
 
 /** Resolve the harness dir for lease commands: --harness wins, else {HARNESS_DIR} resolution. */
 function resolveLeaseHarnessDir(harnessArg?: string): string {
   if (harnessArg) return path.resolve(harnessArg);
   const harnessDir = resolveHarnessDir();
   if (!harnessDir) {
-    throw new Error(`harness dir not found from ${process.cwd()} — pass --harness or set MSTAR_HARNESS_DIR`);
+    throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness or set MSTAR_HARNESS_DIR`);
   }
   return harnessDir;
 }
 
 leaseCommand
   .command("verify")
-  .description("Verify a plan's execution_lease (missing/invalid/non-SSOT location → exit 1 with violations)")
+  .description("Verify a plan's execution_lease (missing/invalid/non-SSOT location \u2192 exit 1 with violations)")
   .argument("<plan-id>", "Plan id whose execution_lease is verified")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
   .action((planId: string, options: { harness?: string }) => {
@@ -451,7 +451,7 @@ leaseCommand
       const result = verifyPlanExecutionLease(matches[0], planId);
       if (result.ok) {
         const holder = String((result.lease as Record<string, unknown>).holder ?? "");
-        console.log(pc.green(`${statusPath}: OK plan ${planId} — execution_lease valid (holder ${holder})`));
+        console.log(pc.green(`${statusPath}: OK plan ${planId} \u2014 execution_lease valid (holder ${holder})`));
         return;
       }
       const count = result.violations.length;
@@ -571,15 +571,15 @@ iterationCommand
   .command("gate")
   .description(
     "Evaluate the phase-transition gate: prints the transition (phase-2-execute / phase-3-close / phase-4-pr-delivery) " +
-      "plus the §3.1 entry and §3.5 exit checklists. Exit 1 when the gate verdict fails — during the Phase-3 window " +
-      "(transition: phase-3-close) exit 1 is EXPECTED until the §3.4 close items (status: completed + end_date) are " +
+      "plus the \u00a73.1 entry and \u00a73.5 exit checklists. Exit 1 when the gate verdict fails \u2014 during the Phase-3 window " +
+      "(transition: phase-3-close) exit 1 is EXPECTED until the \u00a73.4 close items (status: completed + end_date) are " +
       "written: the exit checklist gates Phase 4, not the Phase-3 entry (qc2 F-003)",
   )
   .requiredOption("--status <path>", "status.json path")
   .requiredOption("--compass <path>", "delivery-compass.md path")
-  .option("--branch <branch>", "Current branch probe (exit §3.5 item 5)")
-  .option("--integration <branch>", "Spec integration branch probe (exit §3.5 item 5)")
-  .option("--target <branch>", "PR base branch probe (exit §3.5 item 6)")
+  .option("--branch <branch>", "Current branch probe (exit \u00a73.5 item 5)")
+  .option("--integration <branch>", "Spec integration branch probe (exit \u00a73.5 item 5)")
+  .option("--target <branch>", "PR base branch probe (exit \u00a73.5 item 6)")
   .action((options: { status: string; compass: string; branch?: string; integration?: string; target?: string }) => {
     try {
       const statusPath = path.resolve(options.status);
@@ -592,8 +592,8 @@ iterationCommand
         prBaseBranch: options.target,
       });
       console.log(`transition: ${result.transition}`);
-      printChecklist("entry (close §3.1)", result.entry);
-      printChecklist("exit (close §3.5)", result.exit);
+      printChecklist("entry (close \u00a73.1)", result.entry);
+      printChecklist("exit (close \u00a73.5)", result.exit);
       if (!result.ok) process.exitCode = 1;
     } catch (error) {
       console.error(pc.red(`iteration gate failed: ${(error as Error).message}`));
@@ -603,7 +603,7 @@ iterationCommand
 
 iterationCommand
   .command("push-cadence")
-  .description("§5.1a push-cadence probe: never push while CI or an AI review wave is running (exit 1 when blocked)")
+  .description("\u00a75.1a push-cadence probe: never push while CI or an AI review wave is running (exit 1 when blocked)")
   .option("--ci-running", "CI checks are still queued/in_progress on the current head")
   .option("--review-wave", "An AI/bot review wave is still running on the current head")
   .action((options: { ciRunning?: boolean; reviewWave?: boolean }) => {
@@ -691,11 +691,11 @@ function parseTracksArg(tracksJson: string): WorktreeTrack[] {
   try {
     parsed = JSON.parse(tracksJson);
   } catch {
-    throw new SddScriptError("usage: worktree check --l2 --tracks <json> — invalid JSON", 2);
+    throw new SddScriptError("usage: worktree check --l2 --tracks <json> \u2014 invalid JSON", 2);
   }
   if (!Array.isArray(parsed)) {
     throw new SddScriptError(
-      "usage: worktree check --l2 --tracks <json> — expected a JSON array of {worktreePath, workingBranch}",
+      "usage: worktree check --l2 --tracks <json> \u2014 expected a JSON array of {worktreePath, workingBranch}",
       2,
     );
   }
@@ -704,7 +704,7 @@ function parseTracksArg(tracksJson: string): WorktreeTrack[] {
     const record = item as { worktreePath?: unknown; workingBranch?: unknown } | null;
     if (record === null || typeof record !== "object" || typeof record.worktreePath !== "string" || typeof record.workingBranch !== "string") {
       throw new SddScriptError(
-        "usage: worktree check --l2 --tracks <json> — every track needs string worktreePath + workingBranch",
+        "usage: worktree check --l2 --tracks <json> \u2014 every track needs string worktreePath + workingBranch",
         2,
       );
     }
@@ -947,7 +947,7 @@ function lintOneFile(filePath: string): { violations: ValidationResult[]; marker
     }
     default:
       throw new SddScriptError(
-        `usage: lint <target> — unsupported file type "${path.basename(abs)}" (lintable: plan files, SKILL.md, STRATEGY.md, task-N-report.md, code files)`,
+        `usage: lint <target> \u2014 unsupported file type "${path.basename(abs)}" (lintable: plan files, SKILL.md, STRATEGY.md, task-N-report.md, code files)`,
         2,
       );
   }
@@ -957,12 +957,12 @@ function lintOneFile(filePath: string): { violations: ValidationResult[]; marker
 const lintCommand = program
   .command("lint")
   .description(
-    "lint harness artifacts by content type (engine-backed): plan files → quality bar, SKILL.md → frontmatter, " +
-      "STRATEGY.md → required sections, task-N-report.md → SDD TDD triple, code files → simplify:/temporary markers",
+    "lint harness artifacts by content type (engine-backed): plan files \u2192 quality bar, SKILL.md \u2192 frontmatter, " +
+      "STRATEGY.md \u2192 required sections, task-N-report.md \u2192 SDD TDD triple, code files \u2192 simplify:/temporary markers",
   );
 
 lintCommand
-  .description("Lint <target> (file or dir) — exit 1 on violations, 2 on usage")
+  .description("Lint <target> (file or dir) \u2014 exit 1 on violations, 2 on usage")
   .argument("[target]", "File or directory to lint")
   .action((target?: string) => {
     try {
@@ -982,7 +982,7 @@ lintCommand
           result = lintOneFile(file);
         } catch (error) {
           if (error instanceof SddScriptError) throw error;
-          console.error(pc.red(`${label}: ERROR — ${(error as Error).message}`));
+          console.error(pc.red(`${label}: ERROR \u2014 ${(error as Error).message}`));
           violations++;
           continue;
         }
@@ -1048,7 +1048,7 @@ designMdCommand
       console.log(`design-md completeness level: ${level.level}`);
       if (level.missing.length > 0) console.log(`  missing for next level: ${level.missing.join(", ")}`);
       if (level.bodyUnverified) {
-        console.log(pc.yellow("  note: body-only checklist items not verified — Production caps at Standard"));
+        console.log(pc.yellow("  note: body-only checklist items not verified \u2014 Production caps at Standard"));
       }
       if (violations.length > 0) process.exitCode = 1;
     } catch (error) {
@@ -1073,12 +1073,12 @@ function parseAuditFindings(text: string): AuditFinding[] {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new SddScriptError("usage: audit scaffold — findings file is not valid JSON", 2);
+    throw new SddScriptError("usage: audit scaffold \u2014 findings file is not valid JSON", 2);
   }
-  if (!Array.isArray(parsed)) throw new SddScriptError("usage: audit scaffold — findings file must be a JSON array", 2);
+  if (!Array.isArray(parsed)) throw new SddScriptError("usage: audit scaffold \u2014 findings file must be a JSON array", 2);
   return parsed.map((raw, index): AuditFinding => {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new SddScriptError(`usage: audit scaffold — findings[${index}] is not an object`, 2);
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}] is not an object`, 2);
     }
     const finding = raw as Record<string, unknown>;
     const title = typeof finding.title === "string" ? finding.title.trim() : "";
@@ -1088,24 +1088,24 @@ function parseAuditFindings(text: string): AuditFinding[] {
     const risk = typeof finding.risk === "string" ? finding.risk : "";
     const category = typeof finding.category === "string" ? finding.category : "";
     if (title === "" || impact === "") {
-      throw new SddScriptError(`usage: audit scaffold — findings[${index}] needs non-empty title and description`, 2);
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}] needs non-empty title and description`, 2);
     }
     if (AUDIT_PRIORITY_LOOKUP[priority] !== true) {
-      throw new SddScriptError(`usage: audit scaffold — findings[${index}].priority must be one of ${AUDIT_PRIORITIES.join("|")}`, 2);
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].priority must be one of ${AUDIT_PRIORITIES.join("|")}`, 2);
     }
     if (AUDIT_EFFORT_LOOKUP[effort] !== true) {
-      throw new SddScriptError(`usage: audit scaffold — findings[${index}].effort must be one of ${AUDIT_EFFORTS.join("|")}`, 2);
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].effort must be one of ${AUDIT_EFFORTS.join("|")}`, 2);
     }
     if (AUDIT_RISK_LOOKUP[risk] !== true) {
-      throw new SddScriptError(`usage: audit scaffold — findings[${index}].risk must be one of ${AUDIT_RISKS.join("|")}`, 2);
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].risk must be one of ${AUDIT_RISKS.join("|")}`, 2);
     }
     if (AUDIT_CATEGORY_LOOKUP[category] !== true) {
-      throw new SddScriptError(`usage: audit scaffold — findings[${index}].category must be one of ${AUDIT_CATEGORIES.join("|")}`, 2);
+      throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}].category must be one of ${AUDIT_CATEGORIES.join("|")}`, 2);
     }
     const rawDependsOn = typeof finding.dependsOn === "string" && finding.dependsOn.trim() !== "" ? finding.dependsOn.trim() : undefined;
     if (rawDependsOn !== undefined && !/^(?:none|plans\/\d{3}-[\w.*-]+\.md|\d{3})$/i.test(rawDependsOn)) {
       throw new SddScriptError(
-        `usage: audit scaffold — findings[${index}].dependsOn must be "none", "plans/NNN-*.md", or a plan number NNN`,
+        `usage: audit scaffold \u2014 findings[${index}].dependsOn must be "none", "plans/NNN-*.md", or a plan number NNN`,
         2,
       );
     }
@@ -1167,10 +1167,10 @@ auditCommand
       const abs = path.resolve(findingsFile);
       if (!fs.existsSync(abs)) throw new Error(`findings file not found: ${abs}`);
       if (options.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
-        throw new SddScriptError("usage: audit scaffold — --date must be YYYY-MM-DD", 2);
+        throw new SddScriptError("usage: audit scaffold \u2014 --date must be YYYY-MM-DD", 2);
       }
       if (options.sha !== undefined && !/^[0-9a-f]{7,40}$/.test(options.sha)) {
-        throw new SddScriptError("usage: audit scaffold — --sha must be a 7-40 char hex commit SHA", 2);
+        throw new SddScriptError("usage: audit scaffold \u2014 --sha must be a 7-40 char hex commit SHA", 2);
       }
       const date = options.date ?? new Date().toISOString().slice(0, 10);
       const outDir = options.dir !== undefined ? path.resolve(options.dir) : path.resolve(`audit-${date}`);
@@ -1178,7 +1178,7 @@ auditCommand
       const sha = resolveAuditShortSha(process.cwd(), options.sha);
       const result = scaffoldAuditPlan(outDir, findings, { date, repoName: options.repo, repoShortSha: sha });
       const count = result.files.length;
-      console.log(pc.green(`audit scaffold: OK — ${count} plan file${count === 1 ? "" : "s"} in ${result.outDir}`));
+      console.log(pc.green(`audit scaffold: OK \u2014 ${count} plan file${count === 1 ? "" : "s"} in ${result.outDir}`));
       for (const file of result.files) console.log(`  created: ${file}`);
     } catch (error) {
       failScript(error, "audit scaffold");
@@ -1272,12 +1272,12 @@ hostCommand
       if (signals.length === 0) throw new SddScriptError("usage: host detect --signals <comma-list>", 2);
       for (const signal of signals) {
         if (HOST_SIGNAL_LOOKUP[signal] !== true) {
-          throw new SddScriptError(`usage: host detect — unknown signal "${signal}" (valid: ${HOST_SIGNALS.join(", ")})`, 2);
+          throw new SddScriptError(`usage: host detect \u2014 unknown signal "${signal}" (valid: ${HOST_SIGNALS.join(", ")})`, 2);
         }
       }
       const result = detectHost(signals as ToolSignal[]);
       if (result === "ambiguous") {
-        console.log(pc.yellow("host: ambiguous — apply the mstar-host detection table and prompt judgment"));
+        console.log(pc.yellow("host: ambiguous \u2014 apply the mstar-host detection table and prompt judgment"));
       } else {
         console.log(pc.green(`host: ${result}`));
       }
@@ -1294,7 +1294,7 @@ skillCommand
   .command("lint")
   .description(
     "Lint <skill-dir>/SKILL.md: frontmatter contract (name lowercase-hyphen, description trigger contract) " +
-      "+ the five-question body + ephemeral-citation scan (task-<digits>-* artifacts and .mstar/sdd/… deeplinks — " +
+      "+ the five-question body + ephemeral-citation scan (task-<digits>-* artifacts and .mstar/sdd/\u2026 deeplinks \u2014 " +
       "exit 1 on violations, 2 on usage)",
   )
   .argument("[skill-dir]", "Skill directory containing SKILL.md")
@@ -1322,7 +1322,7 @@ skillCommand
           ok: false,
           severity: "medium",
           code: `skill.ephemeral.${citation.kind}`,
-          message: `ephemeral ${citation.kind} citation at line ${citation.line}: "${citation.match}" — task artifacts and SDD deeplinks survive nothing; durable skill text cites in-repo artifacts only (knowledge conventions/skill-content-porting-discipline.md §3)`,
+          message: `ephemeral ${citation.kind} citation at line ${citation.line}: "${citation.match}" \u2014 task artifacts and SDD deeplinks survive nothing; durable skill text cites in-repo artifacts only (knowledge conventions/skill-content-porting-discipline.md \u00a73)`,
           fix: `rewrite "${citation.match}" as a placeholder form (e.g. task-N-report, <plan-id>, {SDD_DIR}/task-N-report.md) or cite a stable in-repo artifact instead`,
         })),
       };

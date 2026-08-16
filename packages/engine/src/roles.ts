@@ -146,7 +146,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
         violation(
           "medium",
           "roles.mapping.reference.missing",
-          `role "${agentId}" maps to ${reference} which does not exist under ${rolesDir} (mstar-roles § Role Reference Mapping)`,
+          `role "${agentId}" maps to ${reference} which does not exist under ${rolesDir} (mstar-roles \u00a7 Role Reference Mapping)`,
           `create ${join(rolesDir, reference)} or fix the mapping row`,
         ),
       );
@@ -161,7 +161,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
         violation(
           "medium",
           "roles.mapping.family.member.missing",
-          `shared family "${family}" member "${id}" is absent from the role mapping (mstar-roles § Role Reference Mapping)`,
+          `shared family "${family}" member "${id}" is absent from the role mapping (mstar-roles \u00a7 Role Reference Mapping)`,
           `add "${id}" to the mapping`,
         ),
       );
@@ -173,7 +173,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
           violation(
             "medium",
             "roles.mapping.family.shared",
-            `shared family "${family}" (${memberIds.join(", ")}) must resolve to ONE shared reference file — got ${[...refs].join(", ")} (mstar-roles § Maintenance Rules: "Keep shared-family roles on one shared reference file")`,
+            `shared family "${family}" (${memberIds.join(", ")}) must resolve to ONE shared reference file \u2014 got ${[...refs].join(", ")} (mstar-roles \u00a7 Maintenance Rules: "Keep shared-family roles on one shared reference file")`,
             `point every "${family}" member at the same references/<role>-shared.md`,
           ),
         );
@@ -191,7 +191,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
           violation(
             "medium",
             "roles.param.role.duplicate",
-            `role "${row.roleId}" appears in both the ${existing} and ${table} parameter rows (mstar-roles § Parameter Table (SSOT))`,
+            `role "${row.roleId}" appears in both the ${existing} and ${table} parameter rows (mstar-roles \u00a7 Parameter Table (SSOT))`,
             "remove the duplicate row",
           ),
         );
@@ -203,7 +203,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
           violation(
             "medium",
             "roles.param.role.missing",
-            `${table} parameter row references unknown role "${row.roleId}" (mstar-roles § Parameter Table (SSOT))`,
+            `${table} parameter row references unknown role "${row.roleId}" (mstar-roles \u00a7 Parameter Table (SSOT))`,
             `add "${row.roleId}" to the role mapping or drop the row`,
           ),
         );
@@ -220,7 +220,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
         violation(
           "medium",
           "roles.param.track",
-          `dev track for "${row.roleId}" is "${String(row.track)}" — must be primary or parallel_secondary (mstar-roles § Parameter Table (SSOT))`,
+          `dev track for "${row.roleId}" is "${String(row.track)}" \u2014 must be primary or parallel_secondary (mstar-roles \u00a7 Parameter Table (SSOT))`,
           'set track to "primary" or "parallel_secondary"',
         ),
       );
@@ -236,7 +236,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
       violation(
         "high",
         "roles.param.qc.index.set",
-        `QC reviewer_index must be exactly {1, 2, 3} across the three qc-specialist* seats — got [${indices.join(", ")}] (mstar-roles § Parameter Table (SSOT))`,
+        `QC reviewer_index must be exactly {1, 2, 3} across the three qc-specialist* seats \u2014 got [${indices.join(", ")}] (mstar-roles \u00a7 Parameter Table (SSOT))`,
         "assign reviewer_index 1/2/3 to qc-specialist / qc-specialist-2 / qc-specialist-3",
       ),
     );
@@ -247,7 +247,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
         violation(
           "medium",
           "roles.param.qc.focus.missing",
-          `QC seat "${row.roleId}" (reviewer_index ${row.reviewerIndex}) has an empty focus (mstar-roles § Parameter Table (SSOT))`,
+          `QC seat "${row.roleId}" (reviewer_index ${row.reviewerIndex}) has an empty focus (mstar-roles \u00a7 Parameter Table (SSOT))`,
           "add the review focus",
         ),
       );
@@ -257,7 +257,7 @@ export function validateRoleMapping(rolesDir: string, options: RoleMappingOption
         violation(
           "medium",
           "roles.param.qc.suffix",
-          `QC seat "${row.roleId}" report_suffix "${row.reportSuffix}" must equal qc${row.reviewerIndex} — tri reports land at {SDD_DIR}/review/qc1.md…qc3.md (mstar-roles § Parameter Table (SSOT))`,
+          `QC seat "${row.roleId}" report_suffix "${row.reportSuffix}" must equal qc${row.reviewerIndex} \u2014 tri reports land at {SDD_DIR}/review/qc1.md\u2026qc3.md (mstar-roles \u00a7 Parameter Table (SSOT))`,
           `set report_suffix to qc${row.reviewerIndex}`,
         ),
       );
@@ -325,7 +325,7 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
         violation(
           "medium",
           "roles.loadorder.section.missing",
-          `skill "${name}" has no Load Order / First action section — every mstar-* topic skill must declare its first read (mstar-harness-core § 加载约定; mstar-roles § Load Order (Required))`,
+          `skill "${name}" has no Load Order / First action section \u2014 every mstar-* topic skill must declare its first read (mstar-harness-core \u00a7 \u52a0\u8f7d\u7ea6\u5b9a; mstar-roles \u00a7 Load Order (Required))`,
           `add a "## Load Order" section naming mstar-harness-core as the first read`,
         ),
       );
@@ -336,7 +336,7 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
         violation(
           "medium",
           "roles.loadorder.core.missing",
-          `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core § 加载约定: 凡 mstar-*（name ≠ mstar-harness-core）假定读者已 Read 本 skill)`,
+          `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core \u00a7 \u52a0\u8f7d\u7ea6\u5b9a: \u51e1 mstar-*\uff08name \u2260 mstar-harness-core\uff09\u5047\u5b9a\u8bfb\u8005\u5df2 Read \u672c skill)`,
           "name mstar-harness-core first in the Load Order section",
         ),
       );

@@ -163,7 +163,7 @@ export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
         violation(
           "medium",
           "lint.temporary.no-removal-path",
-          `temporary marker at line ${i + 1} records no removal path (plan/status artifact reference) — record one before claiming the task complete (mstar-coding-behavior § Simplification markers)`,
+          `temporary marker at line ${i + 1} records no removal path (plan/status artifact reference) \u2014 record one before claiming the task complete (mstar-coding-behavior \u00a7 Simplification markers)`,
           'add a plan/status reference to the marker, e.g. "removal tracked in status.json" or "plan 20260808-slice2 removes this"',
         ),
       );
@@ -263,7 +263,7 @@ const RUNNER_RE =
  * verdicts, or exit-code statements. Bare `OK`/`ERROR` prose ("OK, moving
  * on") deliberately does NOT count — output-shaped forms only (qc2 F-004). */
 const OUTPUT_TOKEN_RE =
-  /[✓✔✗✘]|\b(?:PASS|FAIL)\b|\b\d+\s+(?:pass(?:es|ed)?|fail(?:s|ed|ing)?|skipped|tests?|ok)\b|\bok\s+\d+\b|\ball\s+ok\b|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+/i;
+  /[\u2713\u2714\u2717\u2718]|\b(?:PASS|FAIL)\b|\b\d+\s+(?:pass(?:es|ed)?|fail(?:s|ed|ing)?|skipped|tests?|ok)\b|\bok\s+\d+\b|\ball\s+ok\b|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?\d+/i;
 
 /**
  * Assert the SDD TDD triple is present in a `task-N-report.md` text
@@ -308,7 +308,7 @@ export function assertSddTddTriple(reportText: string): GateResult {
       violation(
         "medium",
         "lint.sdd-tdd.missing-tests",
-        "task report carries no test file reference — the TDD triple needs covering test file(s) (mstar-coding-behavior § Integration Notes; mstar-sdd/references/file-handoffs.md)",
+        "task report carries no test file reference \u2014 the TDD triple needs covering test file(s) (mstar-coding-behavior \u00a7 Integration Notes; mstar-sdd/references/file-handoffs.md)",
         'add a "Covering test file(s): <path>.test.ts" line or a `.test.<ext>` path to the report',
       ),
     );
@@ -318,7 +318,7 @@ export function assertSddTddTriple(reportText: string): GateResult {
       violation(
         "medium",
         "lint.sdd-tdd.missing-command",
-        "task report carries no command — the TDD triple needs the exact command run (mstar-coding-behavior § Integration Notes; mstar-sdd/references/file-handoffs.md)",
+        "task report carries no command \u2014 the TDD triple needs the exact command run (mstar-coding-behavior \u00a7 Integration Notes; mstar-sdd/references/file-handoffs.md)",
         'add a "Command run: `bun test <file>`" line to the report',
       ),
     );
@@ -328,7 +328,7 @@ export function assertSddTddTriple(reportText: string): GateResult {
       violation(
         "medium",
         "lint.sdd-tdd.missing-output",
-        "task report carries no output evidence — the TDD triple needs the run output (pass/fail counts or exit code) (mstar-coding-behavior § Integration Notes; mstar-sdd/references/file-handoffs.md)",
+        "task report carries no output evidence \u2014 the TDD triple needs the run output (pass/fail counts or exit code) (mstar-coding-behavior \u00a7 Integration Notes; mstar-sdd/references/file-handoffs.md)",
         "paste the test-run output (e.g. \"12 pass / 0 fail\") into the report",
       ),
     );
@@ -509,7 +509,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
       violation(
         "medium",
         "lint.frontmatter.missing",
-        "no YAML frontmatter block found — a skill file must open with a `---` fenced frontmatter (mstar-skill-authoring § Frontmatter Contract)",
+        "no YAML frontmatter block found \u2014 a skill file must open with a `---` fenced frontmatter (mstar-skill-authoring \u00a7 Frontmatter Contract)",
         'add a frontmatter block with `name` and `description` at the top of the file',
       ),
     );
@@ -522,7 +522,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
       violation(
         "medium",
         "lint.frontmatter.name.missing",
-        "frontmatter `name` is missing — required (mstar-skill-authoring § Frontmatter Contract)",
+        "frontmatter `name` is missing \u2014 required (mstar-skill-authoring \u00a7 Frontmatter Contract)",
         'add `name: <lowercase-hyphen-id>` to the frontmatter',
       ),
     );
@@ -531,7 +531,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
       violation(
         "medium",
         "lint.frontmatter.name.format",
-        `frontmatter \`name\` must be lowercase-hyphen ("${name}") — e.g. example-skill (mstar-skill-authoring § Frontmatter Contract)`,
+        `frontmatter \`name\` must be lowercase-hyphen ("${name}") \u2014 e.g. example-skill (mstar-skill-authoring \u00a7 Frontmatter Contract)`,
         'rename to a stable lowercase-hyphen id, e.g. `name: example-skill`',
       ),
     );
@@ -543,7 +543,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
       violation(
         "medium",
         "lint.frontmatter.description.missing",
-        "frontmatter `description` is missing — the trigger contract is required (mstar-skill-authoring § Frontmatter Contract)",
+        "frontmatter `description` is missing \u2014 the trigger contract is required (mstar-skill-authoring \u00a7 Frontmatter Contract)",
         "add a `description:` that states when the skill loads (symptoms, context, roles, exclusions)",
       ),
     );
@@ -563,8 +563,8 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
         violation(
           "low",
           "lint.frontmatter.description.person",
-          `description uses first/second-person pronoun "${pronoun[0]}" — keep the trigger contract third person (mstar-skill-authoring § Frontmatter Contract)`,
-          'rewrite without I/we/you/my/our/your/us, e.g. "Use when the user asks …"',
+          `description uses first/second-person pronoun "${pronoun[0]}" \u2014 keep the trigger contract third person (mstar-skill-authoring \u00a7 Frontmatter Contract)`,
+          'rewrite without I/we/you/my/our/your/us, e.g. "Use when the user asks \u2026"',
         ),
       );
     }
@@ -574,7 +574,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
         violation(
           "low",
           "lint.frontmatter.description.workflow",
-          'description reads as a workflow summary ("Explains/Describes/Covers …") — the description is the trigger contract, not a summary of steps (mstar-skill-authoring § Frontmatter Contract)',
+          'description reads as a workflow summary ("Explains/Describes/Covers \u2026") \u2014 the description is the trigger contract, not a summary of steps (mstar-skill-authoring \u00a7 Frontmatter Contract)',
           'describe when to load the skill (symptoms, context, roles, exclusions) instead of summarizing its steps',
         ),
       );
@@ -585,7 +585,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
           violation(
             "low",
             "lint.frontmatter.description.workflow",
-            `description is ${words} words — paragraph-length summaries bury the trigger contract (threshold ${DESCRIPTION_MAX_WORDS}, above the longest corpus description at 114 words, mstar-design-md; mstar-skill-authoring § Frontmatter Contract)`,
+            `description is ${words} words \u2014 paragraph-length summaries bury the trigger contract (threshold ${DESCRIPTION_MAX_WORDS}, above the longest corpus description at 114 words, mstar-design-md; mstar-skill-authoring \u00a7 Frontmatter Contract)`,
             "trim the description to a scannable trigger contract and move detail into the body",
           ),
         );
@@ -663,7 +663,7 @@ export function lintStrategySections(docText: string): GateResult {
         violation(
           "medium",
           "lint.strategy.missing-section",
-          `missing required section "${required}" (mstar-strategy § STRATEGY.md structure)`,
+          `missing required section "${required}" (mstar-strategy \u00a7 STRATEGY.md structure)`,
           "add a `## <Section>` heading; required: Vision, What we build, What we don't build, Guiding Principles, Technology Direction, Decision Log",
         ),
       );

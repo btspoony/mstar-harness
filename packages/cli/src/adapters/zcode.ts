@@ -239,7 +239,7 @@ function runInit(scope: Scope, dryRun: boolean) {
   notes.push(`Registered ${MARKETPLACE_ID} marketplace in ${KNOWN_MARKETPLACES_PATH}`);
 
   notes.push(
-    `Then in ZCode: Settings → Plugin Management → Discover → install ${PLUGIN_NAME} from the ${MARKETPLACE_ID} marketplace.`,
+    `Then in ZCode: Settings \u2192 Plugin Management \u2192 Discover \u2192 install ${PLUGIN_NAME} from the ${MARKETPLACE_ID} marketplace.`,
   );
 
   return {
