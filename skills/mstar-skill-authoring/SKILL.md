@@ -153,6 +153,7 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 - Evidence for behavior change (P6):
 - Stale references checked:
 - Verdict: Approve | Request Changes | Needs Discussion | Unconfirmed
+- Unconfirmed: paired evidence (P6) cannot be established or verified
 ```
 
 ## References

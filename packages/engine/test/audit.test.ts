@@ -421,4 +421,12 @@ describe("scaffoldAuditPlan", () => {
     const plan = readFileSync(join(out, "001-document-the-fixture-layout.md"), "utf8");
     expect(plan).not.toContain("## Evidence");
   });
+
+  test("renders the Red-team dispositions section with the four-state placeholder", () => {
+    const out = join(tmp, "audit-2026-08-15");
+    scaffoldAuditPlan(out, findings, { date: "2026-08-15" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("## Red-team dispositions");
+    expect(readme).toContain("- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>");
+  });
 });

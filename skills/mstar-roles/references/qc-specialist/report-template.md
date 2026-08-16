@@ -41,6 +41,9 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
   - Verification: {diff/read/grep anchor}
   - Expected vs observed: {expected state} vs {actual observation}
 
+### ⚪ Unconfirmed
+- {finding} — channel gap: {reason}
+
 ## Source Trace
 - Finding ID: {F-001}
 - Source Type: {git-diff | read | grep | doc-rule | manual-reasoning | deep-lens: <name> | assignment-ci-note}
@@ -54,6 +57,7 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
 | 🔴 Critical | {n} |
 | 🟡 Warning | {n} |
 | 🟢 Suggestion | {n} |
+| ⚪ Unconfirmed | {n} |
 
 **Verdict**: Approve | Request Changes | Needs Discussion | Unconfirmed
 ```
@@ -62,12 +66,12 @@ Report **Critical / Warning / Suggestion** sections are human-readable; PM maps 
 
 ## Verdict rules (reviewer applies)
 
-- Unresolved **Critical** or **Warning** → `Request Changes`
-- No Critical/Warning but high-impact unresolved trade-off (often architectural Suggestion) → `Needs Discussion`
-- **Approve** only when Critical = 0 and Warning = 0 (unresolved)
 - Evidence channel failure (Review range cannot be established / key file unreadable) → `Unconfirmed` — report states the failure reason; PM-side handling per `mstar-review-qc` consolidated
 - **Partial** evidence-channel failure → mark only the affected findings **Unconfirmed** (keep verifiable findings; state channel gaps in Summary)
 - Any `Unconfirmed` finding (with or without Critical/Warning) → verdict `Unconfirmed`, never `Approve`; `Approve` additionally requires every finding's evidence channel intact
+- Unresolved **Critical** or **Warning** → `Request Changes`
+- No Critical/Warning but high-impact unresolved trade-off (often architectural Suggestion) → `Needs Discussion`
+- **Approve** only when Critical = 0 and Warning = 0 (unresolved)
 
 ### CI / runtime evidence (read-only notes — do not re-run)
 

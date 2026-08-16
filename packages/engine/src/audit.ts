@@ -412,6 +412,12 @@ function renderIndex(params: {
   if (rejectedRows !== "") {
     sections.push("", "## Findings considered and rejected", "", rejectedRows);
   }
+  sections.push(
+    "",
+    "## Red-team dispositions",
+    "",
+    "- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>",
+  );
   return `${sections.join("\n")}\n`;
 }
 

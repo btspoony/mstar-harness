@@ -80,7 +80,7 @@ Dispose per the five-state rule (single-pass version — the four dispositions b
 
 - **Survived** — passes to vet unchanged.
 - **Refuted** — drop, and record in the index's "considered and rejected" section: `- <finding>: not worth doing because <one line>`.
-- **Hallucinated** — the attack surfaced a claim never in the original finding set: discard it and log a red-team record line in the index (never into the findings table; it does not occupy a "considered and rejected" slot — it was never a finding).
+- **Hallucinated** — the attack surfaced a claim never in the original finding set: discard it and log a red-team record line in the index (never into the findings table; it does not occupy a "considered and rejected" slot — it was never a finding). Disambiguation: hallucinated = a claim the attack itself produced; fabricated/unsupported evidence inside the original finding goes to **Refuted** via the evidence-verifiability axis, not to Hallucinated.
 - **Uncovered** — the attack did not reach a finding: treat as unreviewed and keep for vet. Never drop a finding just because the attack missed it.
 
 Where the attack step decides whether a claim stands on its face, vet below confirms the code itself — opening cited files and disposing by-design / mis-attribution / duplicate cases; survived findings hand to vet below.
@@ -157,7 +157,7 @@ If an audit directory from a previous run exists, **reconcile, don't duplicate**
 
 ## Red-team dispositions
 
-- <finding>: <survived / refuted / hallucination-dropped>, <one-line reason>
+- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>
 ```
 
 Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED` | `REJECTED`
