@@ -91,7 +91,7 @@ PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; 
 
 ## Evidence
 
-正确结果 = 角色映射与加载契约可机器校验：`import { validateRoleMapping, lintLoadOrder } from "@mstar-harness/engine"`（host hook）通过，`references/*.md` 布局与上表一一对应，shared-family 角色共用同一 reference 文件（引擎校验可用时先跑；不可用时以本文件为准）。
+正确结果 = 角色映射与加载契约可机器校验：`mstar roles validate` 通过（映射 + 加载顺序 0 violations，见上方 Engine check blockquote 的 import 形态），`references/*.md` 布局与上表一一对应，shared-family 角色共用同一 reference 文件（引擎校验可用时先跑；不可用时以本文件为准）。
 
 ## References
 
