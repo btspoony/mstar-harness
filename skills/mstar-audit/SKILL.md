@@ -70,6 +70,21 @@ Every finding follows **`references/finding-format.md`** — read it before the 
 
 ### Phase 3 — Vet, prioritize, confirm
 
+**Attack before vet — claims must survive an adversarial pass first.** Take the top candidate findings (by leverage; scale the count to finding volume — attack the whole table when small, the head when large) and run a three-way attack on each:
+
+1. **Counter-example** — find a boundary case that makes the claim not hold.
+2. **Simpler explanation** — does a simpler explanation cover the same evidence?
+3. **Evidence verifiability** — open the cited `file:line` and check it actually supports the claim.
+
+Dispose per the five-state rule (single-pass version):
+
+- **Survived** — passes to vet unchanged.
+- **Refuted** — drop, and record in the index's "considered and rejected" section: `- <finding>: not worth doing because <one line>`.
+- **Hallucinated** — the attack surfaced a claim never in the original finding set: discard it and log a red-team record line in the index (never into the findings table; it does not occupy a "considered and rejected" slot — it was never a finding).
+- **Uncovered** — the attack did not reach a finding: treat as unreviewed and keep for vet. Never drop a finding just because the attack missed it.
+
+Where the attack step decides whether a claim stands on its face, vet below confirms the code itself — opening cited files and disposing by-design / mis-attribution / duplicate cases.
+
 **Vet before presenting — subagents over-report.** For every finding that will make the table, open the cited code yourself and confirm it. Three failure classes to expect:
 
 1. **By-design behavior** reported as a bug or vulnerability (e.g. honoring `https_proxy` flagged as SSRF — standard proxy convention; or a tradeoff explicitly recorded in an ADR).
