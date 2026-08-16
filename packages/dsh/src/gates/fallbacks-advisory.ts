@@ -114,8 +114,10 @@ export async function runFallbacksAdvisory(ctx: Context, agentsDir: string | und
 /**
  * Service-present path: legacy keys → mirror gate → await the idempotent
  * re-declare → effective readback → three-state report + declare-outcome
- * merge. The re-declare's own diagnostics go through the advisory sink
- * (level-mapped) — they explain seeding gaps to the same operator channel.
+ * merge. The re-declare's own diagnostics are forwarded on the advisory
+ * DEBUG channel only — per-id skip detail stays visible without breaking
+ * the ≤1-warn-per-category bound (the declaration/skip warn surface is the
+ * single consolidated `reportDeclareOutcome` line).
  */
 async function runSeedsAdvisory(
   service: FallbacksService,
@@ -144,7 +146,14 @@ async function runSeedsAdvisory(
   // read the EFFECTIVE state — the report deterministically reflects the
   // current declaration batch even when the entry's inject child is still in
   // flight (the boot dual-inject-child race window).
-  const seedsLog: SeedsLogSink = (level, message) => log(level === 'error' ? 'warn' : level, message)
+  // Re-declare diagnostics forward to the advisory DEBUG channel only: the
+  // warn surface for the declaration/skip category is the ONE consolidated
+  // line from `reportDeclareOutcome` (plan global constraint: ≤1 warn per
+  // category). Per-id skip detail (extraction/interpolation hazards) stays
+  // on debug for operators who raise the log level. Failures that matter
+  // still warn on their own path (rejecting declare → outer catch; throwing
+  // readback → the advisory's own readback warn).
+  const seedsLog: SeedsLogSink = (_level, message) => log('debug', message)
   const view = await declareMstarSeeds(service, { agentsDir, log: seedsLog })
   // Readback — sync (probe semantics: a throwing readback degrades to skip +
   // one warn; the adoption state is unavailable, never guessed).

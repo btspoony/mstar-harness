@@ -61,6 +61,26 @@ async function fixtureMirror(): Promise<{ dir: string; cleanup: () => Promise<vo
   return { dir, cleanup: () => rm(dir, { recursive: true, force: true }) }
 }
 
+/**
+ * A fixture mirror where the listed role descriptions carry a `{{...}}`
+ * interpolation hazard — extraction rejects those defaults (per-id skip +
+ * diagnostic) while the other shells stay clean (Task 3 Fix wave 1: the
+ * declaration/skip warn surface must stay ONE consolidated line).
+ */
+async function fixtureMirrorWithHazards(hazardIds: string[]): Promise<{ dir: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-advisory-mirror-'))
+  const bases: Array<[string, string]> = [
+    ['architect', 'Architect the plan.'],
+    ['fullstack-dev', 'Implement the task.'],
+    ['scout', 'Explore the repository.'],
+  ]
+  for (const [role, text] of bases) {
+    const description = hazardIds.includes(role) ? `${text} {{user}}` : text
+    await writeFile(join(dir, `${role}.md`), shell(['name: ' + role, 'description: |-', `  ${description}`, 'mode: subagent']))
+  }
+  return { dir, cleanup: () => rm(dir, { recursive: true, force: true }) }
+}
+
 /** One declared fallbacks role entity (`roles.list` entry). */
 function role(id: string, persona: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { id, persona, ...extra }
@@ -636,6 +656,39 @@ describe('fallbacks adoption advisory — seeds-aware effective state (service p
         // contained, no crash, no taxonomy guess.
         expect(captured.some(([, message]) => message.includes('effective-state readback failed'))).toBe(true)
         expect(captured.filter(([level]) => level === 'warn').length).toBeGreaterThanOrEqual(1)
+      } finally {
+        restore()
+      }
+    } finally {
+      await mirror.cleanup()
+    }
+  })
+
+  it('(s10) multi-role local skips → exactly ONE warn (the consolidated declaration line); per-id skip diagnostics stay on debug (≤1 warn per category)', async () => {
+    // architect + scout mirror defaults carry the `{{...}}` interpolation
+    // hazard → both skip locally at extraction with per-id diagnostics;
+    // fullstack-dev stays clean and is the only id reaching the declare.
+    const mirror = await fixtureMirrorWithHazards(['architect', 'scout'])
+    try {
+      const fake = new FakeAdvisoryService(seededReadback())
+      const ctx = ctxWithService(fake, rowConfig([]))
+      const { captured, restore } = captureLogs()
+      try {
+        expect(await runFallbacksAdvisory(ctx, mirror.dir)).toBe(true)
+        // Declaration/skip category: ONE consolidated warn — the per-id
+        // diagnostics must NOT surface as extra warns (plan global
+        // constraint: ≤1 warn per category).
+        const warns = captured.filter(([level]) => level === 'warn')
+        expect(warns).toHaveLength(1)
+        expect(warns[0]![1]).toContain('seed declaration')
+        expect(warns[0]![1]).toContain('skipped locally')
+        expect(warns[0]![1]).toContain('architect (no-persona)')
+        expect(warns[0]![1]).toContain('scout (no-persona)')
+        // Per-id skip diagnostics survive on the advisory DEBUG channel.
+        const perIdDebugs = captured.filter(([, message]) => message.includes('harness-agents default skipped for role'))
+        expect(perIdDebugs).toHaveLength(2)
+        expect(perIdDebugs.some(([, message]) => message.includes("role 'architect'"))).toBe(true)
+        expect(perIdDebugs.some(([, message]) => message.includes("role 'scout'"))).toBe(true)
       } finally {
         restore()
       }
