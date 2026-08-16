@@ -27,6 +27,10 @@
  *   contract (not a workflow summary), third person.
  * - STRATEGY.md structure: `mstar-strategy` SKILL.md § STRATEGY.md structure —
  *   six required sections.
+ * - Ephemeral citations: knowledge `conventions/skill-content-porting-discipline.md`
+ *   §3 ("No ephemeral citations in durable skill text") + session evaluation
+ *   2026-08-16 discrimination contract — concrete task-artifact references
+ *   and SDD deeplinks are ephemeral; placeholder forms are not.
  *
  * Enforcement depth: roadmap §8.5 C4 — v1 lints are non-blocking
  * `ValidationResult`s; callers surface them as warnings.
@@ -166,6 +170,78 @@ export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
     }
   }
   return { ok: violations.length === 0, violations, markers };
+}
+
+/**
+ * An ephemeral citation found in durable skill text: a concrete reference to
+ * a per-task artifact or an SDD deeplink that survives nothing (knowledge
+ * conventions/skill-content-porting-discipline.md §3 — "No ephemeral
+ * citations in durable skill text": a calibration line citing an SDD task
+ * report violates standalone + survives nothing; instances/examples cite
+ * in-repo artifacts only).
+ */
+export type EphemeralCitation = {
+  /** 1-based line number of the citation. */
+  line: number;
+  /** The matched citation token (artifact name or deeplink prefix). */
+  match: string;
+  /** `task-artifact`: `task-<digits>-(brief|report|fix-report|diff)`;
+   * `sdd-deeplink`: `.mstar/sdd/` / `.agents/sdd/` + a concrete first
+   * segment. */
+  kind: "task-artifact" | "sdd-deeplink";
+};
+
+/** Concrete task-artifact reference — `task-<digits>-(brief|report|fix-report|
+ * diff)`, 1+ digits being a real instance; the dot form `task-<digits>.diff`
+ * (review-package diff naming) is included. Placeholder forms (`task-N-*`,
+ * `task-<...>`, `{...}`) never match: `N` is a letter, and `<`/`{` are not
+ * digits. Word boundaries at both ends keep `task-2-reporting` out. */
+const TASK_ARTIFACT_RE = /\btask-\d+(?:-(?:brief|report|fix-report|diff)|\.diff)\b/g;
+
+/** Concrete SDD deeplink — `.mstar/sdd/` / `.agents/sdd/` followed by a
+ * first path segment that is not a placeholder. Segment chars exclude
+ * whitespace, `/`, quote/backtick, the placeholder brackets `<` `>` `{`
+ * `}` `[` `]`, and the glob wildcards `*` `?`, so `<plan-id>` / `{SDD_DIR}`
+ * / `<...>` segments and allowlist globs (`.mstar/sdd/**`) never match. */
+const SDD_DEEPLINK_RE = /\.(?:mstar|agents)\/sdd\/([^\s/<>{}\[\]"'\*\?]+)/g;
+
+/**
+ * Find ephemeral citations in skill text (knowledge
+ * conventions/skill-content-porting-discipline.md §3 + session evaluation
+ * 2026-08-16 discrimination contract).
+ *
+ * Discrimination (HARD — zero false positives on the skills corpus):
+ * - `task-<digits>-(brief|report|fix-report|diff)` with 1+ digits is a
+ *   concrete instance → reported (`task-2-report`, `task-1.diff`).
+ *   Placeholders (`task-N-brief`, `task-N-report`, `<plan-id>`,
+ *   `{SDD_DIR}/task-N-report.md`) never match.
+ * - `.mstar/sdd/<segment>` / `.agents/sdd/<segment>` with a concrete first
+ *   segment (`20260815-x`) → reported; `<plan-id>` / `{SDD_DIR}` segments
+ *   are template forms → never match.
+ *
+ * Discovery only — a finder returning an array, same shape as
+ * `findSimplifyMarkers`, NOT a GateResult; callers wrap findings into
+ * `ViolationResult`s (codes `skill.ephemeral.task-artifact` /
+ * `skill.ephemeral.sdd-deeplink`). Citations are reported line by line in
+ * 1-based line order, source order within a line.
+ */
+export function findEphemeralCitations(skillText: string): EphemeralCitation[] {
+  const citations: EphemeralCitation[] = [];
+  const lines = skillText.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const found: Array<{ index: number; match: string; kind: EphemeralCitation["kind"] }> = [];
+    for (const m of lines[i].matchAll(TASK_ARTIFACT_RE)) {
+      found.push({ index: m.index, match: m[0], kind: "task-artifact" });
+    }
+    for (const m of lines[i].matchAll(SDD_DEEPLINK_RE)) {
+      found.push({ index: m.index, match: m[0], kind: "sdd-deeplink" });
+    }
+    found.sort((a, b) => a.index - b.index);
+    for (const f of found) {
+      citations.push({ line: i + 1, match: f.match, kind: f.kind });
+    }
+  }
+  return citations;
 }
 
 /** Test-file reference: a path ending in `.test.<ext>` / `.spec.<ext>`

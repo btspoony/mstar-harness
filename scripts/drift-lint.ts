@@ -4,25 +4,36 @@
  * skills/ must reference real engine exports and real CLI subcommands, and
  * engine spec-citation comments must resolve to real skill files.
  *
- * Forward (skills → engine / CLI):
- *   - parse every `**Engine check (when available):**` callout in
- *     every markdown file under skills/ (blockquote runs)
- *   - every `import { X } from "@mstar-harness/engine"` name (in callouts or
- *     anywhere else in a skill file) must exist in
- *     packages/engine/src/index.ts exports (value and type exports)
- *   - every `mstar <verb>` / `mstar <verb> <sub>` command form in a callout
- *     must exist in the CLI command tree (packages/cli/src/index.ts
- *     `.command(...)` calls)
- * Reverse (engine → skills):
- *   - spec-citation comments in each packages/engine/src/<module>.ts header
- *     block (`mstar-*` SKILL.md / `references/<file>` citations) must resolve
- *     to an existing file under skills/
+ * Guards added by plan 20260816-mechanical-verification (Task 3):
+ *   1. docs audit enum — `/codebase-audit` category tokens in docs/cli.md
+ *      (the `<category>` keyword-table row) and README.md / README_CN.md
+ *      (the category-focus list) must be real AUDIT_CATEGORIES members;
+ *      docs/cli.md must enumerate the full nine (fabrications like `deps`
+ *      and omissions like a missing `bug` / `direction` both fail).
+ *   2. README bilingual pairing — README.md and README_CN.md must change
+ *      together over the committed range merge-base(origin/main, HEAD)..HEAD
+ *      (AGENTS.md bilingual rule); skipped silently when git has no range
+ *      (local non-commit runs), but a missing range under GITHUB_ACTIONS
+ *      fails loudly — the drift-lint CI job checks out with fetch-depth: 0
+ *      so origin/main exists and PR runs are the enforcement surface.
+ *   3. skills corpus — no ephemeral citations anywhere in the skills/
+ *      markdown tree (engine findEphemeralCitations over the full corpus),
+ *      turning the manual corpus smoke into a permanent CI guard.
+ *
+ * Engine symbols are imported from the source entry (../packages/engine/
+ * src/index.ts), NOT the "@mstar-harness/engine" package specifier: the CI
+ * drift-lint job runs `bun run validation:drift` in a fresh checkout with
+ * no `bun install`, and the package exports map resolves to the gitignored
+ * dist build. The engine source has zero runtime deps, so bun executes it
+ * directly.
  *
  * Usage: bun run scripts/drift-lint.ts
  * Exit 0 = no drift; exit 1 = drift found (one line per violation).
  */
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { AUDIT_CATEGORIES, findEphemeralCitations } from "../packages/engine/src/index.ts";
 
 const root = process.cwd();
 const failures: string[] = [];
@@ -56,214 +67,427 @@ function exists(rel: string): boolean {
 }
 
 /* ------------------------------------------------------------------ */
-/* Engine export inventory (packages/engine/src/index.ts)               */
+/* Guard 2 helpers: README bilingual pairing (AGENTS.md)               */
 /* ------------------------------------------------------------------ */
 
-const engineIndex = readFileSync(join(root, "packages/engine/src/index.ts"), "utf8");
-const engineExports = new Set<string>();
-const exportRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']+["']/g;
-let m: RegExpExecArray | null;
-while ((m = exportRe.exec(engineIndex))) {
-  for (let name of m[1].split(",")) {
-    name = name.trim().split(/\s+as\s+/)[0].trim();
-    if (name) engineExports.add(name);
+/**
+ * Changed files over the committed range merge-base(origin/main, HEAD)..HEAD
+ * (the push range in CI), or null when git cannot produce a range (no repo,
+ * no origin/main, empty diff). A null result skips the pairing guard — it
+ * must not block non-commit scenarios such as a plain local run while
+ * editing.
+ */
+function changedFilesSinceMergeBase(): string[] | null {
+  let base: string;
+  try {
+    base = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+  if (!base) return null;
+  try {
+    const out = execFileSync("git", ["diff", "--name-only", base, "HEAD"], { encoding: "utf8" });
+    return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return null;
   }
 }
-if (engineExports.size === 0) {
-  console.error("drift: could not parse any exports from packages/engine/src/index.ts");
-  process.exit(1);
+
+/**
+ * Pure pairing check — AGENTS.md ("README = developer consumer docs"):
+ * README.md and README_CN.md must change together. Both changed or both
+ * unchanged passes; exactly one changed fails. Returns failure lines
+ * ([] = pass) so callers can test it with plain file-name lists.
+ * Exported as a test seam — the script's own main block uses it for guard 2.
+ */
+export function checkBilingualPairing(changedFiles: string[]): string[] {
+  const changed = new Set(changedFiles);
+  const enChanged = changed.has("README.md");
+  const cnChanged = changed.has("README_CN.md");
+  if (enChanged === cnChanged) return [];
+  const updated = enChanged ? "README.md" : "README_CN.md";
+  const missing = enChanged ? "README_CN.md" : "README.md";
+  return [
+    `${updated} changed but ${missing} did not — update the paired README in the same change set (AGENTS.md bilingual rule)`,
+  ];
 }
 
-/* ------------------------------------------------------------------ */
-/* CLI command inventory (packages/cli/src/index.ts `.command(...)`)    */
-/* ------------------------------------------------------------------ */
+export function isGitHubActions(): boolean {
+  return process.env.GITHUB_ACTIONS === "true";
+}
 
-const cliSrc = readFileSync(join(root, "packages/cli/src/index.ts"), "utf8");
-const cliCommands = new Set<string>();
-const varPaths = new Map<string, string>();
-const commandRe = /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)\.command\(\s*"([a-z-]+)"\s*\)/g;
-while ((m = commandRe.exec(cliSrc))) {
-  const [, declared, receiver, name] = m;
-  if (declared) {
-    varPaths.set(declared, name);
-    cliCommands.add(name);
-  } else if (receiver === "program") {
-    cliCommands.add(name);
-  } else {
-    const parent = varPaths.get(receiver);
-    if (parent === undefined) {
-      fail(`CLI parent of "${receiver}.command("${name}")" is not a known command var`);
-      continue;
+export type BilingualGuardResult =
+  | { status: "checked"; failures: string[] }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; failures: string[] };
+
+/**
+ * Guard 2 decision given the git range result and CI context:
+ * - `changedFiles === null` — git could not resolve the range (no repo /
+ *   no origin/main). Locally this is a legitimate non-commit run and skips
+ *   silently; under GITHUB_ACTIONS it is a wiring failure (the drift-lint
+ *   job must checkout with fetch-depth: 0 so origin/main exists) and fails
+ *   loudly instead of silently skipping.
+ * - `changedFiles === []` — range resolved but empty (direct-to-main push
+ *   where origin/main == HEAD). Uncovered by design; PR runs are the
+ *   enforcement surface, so this skips in CI too.
+ * - non-empty — run the pairing check.
+ * Exported as a test seam; `opts.ci` defaults to the GITHUB_ACTIONS env var
+ * (the main block passes nothing, tests inject the env explicitly).
+ */
+export function evaluateBilingualGuard(
+  changedFiles: string[] | null,
+  opts: { ci?: boolean } = {},
+): BilingualGuardResult {
+  const ci = opts.ci ?? isGitHubActions();
+  if (changedFiles === null) {
+    if (ci) {
+      return {
+        status: "failed",
+        failures: [
+          "README bilingual pairing guard: no git range in CI (merge-base failed or origin/main missing) — the drift-lint job must checkout with fetch-depth: 0 so the pairing check can run (PR runs are the enforcement surface)",
+        ],
+      };
     }
-    cliCommands.add(parent ? `${parent} ${name}` : name);
+    return { status: "skipped", reason: "no git range (non-CI run)" };
   }
+  if (changedFiles.length === 0) {
+    return { status: "skipped", reason: "empty range (direct-to-main push)" };
+  }
+  return { status: "checked", failures: checkBilingualPairing(changedFiles) };
 }
 
-/* ------------------------------------------------------------------ */
-/* Forward: skill callouts → engine exports + CLI commands              */
-/* ------------------------------------------------------------------ */
+/**
+ * Category tokens from the `<category>` keyword-table row: the backticked
+ * cell values after the keyword cell, filtered to lowercase-kebab codes
+ * (`^[a-z][a-z-]*$`). The filter drops the `<category>` placeholder cell and
+ * the plan-field reference "plan `Category` field values" (capitalized) —
+ * neither is a category code. Exported as a test seam for guard 1.
+ */
+export function extractCategoryRowTokens(row: string): string[] {
+  return [...row.split("|").slice(2).join("|").matchAll(/`([^`]+)`/g)]
+    .map((mm) => mm[1])
+    .filter((t) => /^[a-z][a-z-]*$/.test(t));
+}
 
-const skillFiles = collectFiles("skills", ".md");
-for (const file of skillFiles) {
-  const text = readFileSync(file, "utf8");
-  const lines = text.split(/\r?\n/);
-  const rel = relative(root, file);
+/** True when the citation at `index` is prefixed by a `.harness/` path
+ * (gitignored roadmap / ADR — not part of the skills tree). */
+export function citesHarnessPath(text: string, index: number): boolean {
+  return text.slice(Math.max(0, index - 40), index).includes(".harness/");
+}
 
-  // Blockquote runs: consecutive lines starting with `>`.
-  const runs: Array<{ start: number; end: number; text: string }> = [];
-  let runStart = -1;
-  for (let i = 0; i <= lines.length; i++) {
-    const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-    if (isQuote && runStart === -1) runStart = i;
-    if (!isQuote && runStart !== -1) {
-      runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
-      runStart = -1;
+/** True when the bare token at `index` is itself the file name of a
+ * knowledge-conventions citation — the citation path starts with
+ * `conventions/` ("conventions/<file>" / "knowledge \`conventions/<file>\`").
+ * Such docs resolve under `{KNOWLEDGE_DIR}/conventions/` (`.mstar/knowledge/`,
+ * gitignored), so existence is not verifiable in CI. The exemption is
+ * anchored to the cited token itself: `conventions/` must immediately
+ * precede it and start a path segment (`x-conventions/<file>` and
+ * `sub/conventions/<file>` are NOT exempt), so nearby unrelated citations
+ * are still existence-checked. Mirrors the `.harness/` exemption. */
+export function citesKnowledgeConventions(text: string, index: number): boolean {
+  return /(?:^|[^\w./-])conventions\/$/.test(text.slice(Math.max(0, index - 200), index));
+}
+
+if (import.meta.main) {
+  /* ------------------------------------------------------------------ */
+  /* Engine export inventory (packages/engine/src/index.ts)               */
+  /* ------------------------------------------------------------------ */
+
+  const engineIndex = readFileSync(join(root, "packages/engine/src/index.ts"), "utf8");
+  const engineExports = new Set<string>();
+  const exportRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']+["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = exportRe.exec(engineIndex))) {
+    for (let name of m[1].split(",")) {
+      name = name.trim().split(/\s+as\s+/)[0].trim();
+      if (name) engineExports.add(name);
+    }
+  }
+  if (engineExports.size === 0) {
+    console.error("drift: could not parse any exports from packages/engine/src/index.ts");
+    process.exit(1);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* CLI command inventory (packages/cli/src/index.ts `.command(...)`)    */
+  /* ------------------------------------------------------------------ */
+
+  const cliSrc = readFileSync(join(root, "packages/cli/src/index.ts"), "utf8");
+  const cliCommands = new Set<string>();
+  const varPaths = new Map<string, string>();
+  const commandRe = /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)\.command\(\s*"([a-z-]+)"\s*\)/g;
+  while ((m = commandRe.exec(cliSrc))) {
+    const [, declared, receiver, name] = m;
+    if (declared) {
+      varPaths.set(declared, name);
+      cliCommands.add(name);
+    } else if (receiver === "program") {
+      cliCommands.add(name);
+    } else {
+      const parent = varPaths.get(receiver);
+      if (parent === undefined) {
+        fail(`CLI parent of "${receiver}.command("${name}")" is not a known command var`);
+        continue;
+      }
+      cliCommands.add(parent ? `${parent} ${name}` : name);
     }
   }
 
-  for (const run of runs) {
-    if (!run.text.includes("**Engine check (when available):**")) continue;
-    calloutsChecked++;
+  /* ------------------------------------------------------------------ */
+  /* Forward: skill callouts → engine exports + CLI commands              */
+  /* ------------------------------------------------------------------ */
 
-    for (const cm of run.text.matchAll(/mstar\s+([a-z-]+(?:\s+[a-z-]+)?)/g)) {
-      const cmd = cm[1];
-      if (!cliCommands.has(cmd)) {
-        fail(`${rel}:${run.start + 1} callout references unknown CLI command "mstar ${cmd}" (known: ${[...cliCommands].sort().join(", ")})`);
+  const skillFiles = collectFiles("skills", ".md");
+  for (const file of skillFiles) {
+    const text = readFileSync(file, "utf8");
+    const lines = text.split(/\r?\n/);
+    const rel = relative(root, file);
+
+    // Blockquote runs: consecutive lines starting with `>`.
+    const runs: Array<{ start: number; end: number; text: string }> = [];
+    let runStart = -1;
+    for (let i = 0; i <= lines.length; i++) {
+      const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
+      if (isQuote && runStart === -1) runStart = i;
+      if (!isQuote && runStart !== -1) {
+        runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
+        runStart = -1;
       }
     }
-    for (const im of run.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
+
+    for (const run of runs) {
+      if (!run.text.includes("**Engine check (when available):**")) continue;
+      calloutsChecked++;
+
+      for (const cm of run.text.matchAll(/mstar\s+([a-z-]+(?:\s+[a-z-]+)?)/g)) {
+        const cmd = cm[1];
+        if (!cliCommands.has(cmd)) {
+          fail(`${rel}:${run.start + 1} callout references unknown CLI command "mstar ${cmd}" (known: ${[...cliCommands].sort().join(", ")})`);
+        }
+      }
+      for (const im of run.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
+        for (const raw of im[1].split(",")) {
+          // Strip TS import modifiers so `import { type Foo }` / `import {
+          // Foo as Bar }` resolve to the exported name `Foo`.
+          const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
+          if (name && !engineExports.has(name)) {
+            fail(`${rel}:${run.start + 1} callout imports unknown engine export "${name}"`);
+          }
+        }
+      }
+    }
+
+    // Import statements anywhere in a skill file must reference real exports.
+    for (const im of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
       for (const raw of im[1].split(",")) {
-        // Strip TS import modifiers so `import { type Foo }` / `import {
-        // Foo as Bar }` resolve to the exported name `Foo`.
         const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
         if (name && !engineExports.has(name)) {
-          fail(`${rel}:${run.start + 1} callout imports unknown engine export "${name}"`);
+          fail(`${rel}: import of unknown engine export "${name}"`);
         }
       }
     }
   }
 
-  // Import statements anywhere in a skill file must reference real exports.
-  for (const im of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
-    for (const raw of im[1].split(",")) {
-      const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
-      if (name && !engineExports.has(name)) {
-        fail(`${rel}: import of unknown engine export "${name}"`);
+  /* ------------------------------------------------------------------ */
+  /* Reverse: engine module spec citations → skill files                  */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Non-skill spec sources the engine legitimately cites: generated artifact
+   * types (`main.md`, `task-N-report.md`, …), root convention docs
+   * (`STRATEGY.md`, `README.md`, …) and review-bundle files (`qcN.md`). These
+   * are not skill files — existence is not expected under skills/.
+   */
+  const ARTIFACT_SPEC_SOURCES = new Set([
+    "main.md",
+    "task-N-report.md",
+    "STRATEGY.md",
+    "delivery-compass.md",
+    "README.md",
+    "CONCEPTS.md",
+    "DESIGN.md",
+    "DESIGN.dark.md",
+    "qc1.md",
+    "qc2.md",
+    "qc3.md",
+    "qc-consolidated.md",
+    "schema.yaml",
+  ]);
+
+  const engineModules = collectFiles("packages/engine/src", ".ts").filter(
+    (f) => !f.endsWith("/index.ts"),
+  );
+  const skillRefFiles = collectFiles("skills", ".md").map((f) => relative(root, f));
+  const yamlRefs = collectFiles("skills", ".yaml").map((f) => relative(root, f));
+  const allSkillFiles = new Set([...skillRefFiles, ...yamlRefs]);
+
+  for (const file of engineModules) {
+    const rel = relative(root, file);
+    const lines = readFileSync(file, "utf8").split(/\r?\n/);
+
+    // Header block: contiguous comment lines at the top of the file.
+    const header: string[] = [];
+    for (const line of lines) {
+      const t = line.trim();
+      if (header.length === 0 && (t === "" || t.startsWith("/*") || t.startsWith("//") || t.startsWith("*"))) {
+        if (t !== "" || header.length > 0) header.push(line);
+        if (t.startsWith("*/")) break;
+      } else if (header.length > 0 && (t === "" || t.startsWith("*"))) {
+        header.push(line);
+        if (t.startsWith("*/")) break;
+      } else if (header.length > 0) {
+        break;
+      } else {
+        break;
+      }
+    }
+    const headerText = header.join("\n");
+    if (!/Spec|spec/.test(headerText)) continue;
+
+    // Explicit skill paths: skills/<skill>/SKILL.md
+    for (const sm of headerText.matchAll(/skills\/(mstar-[\w-]+)\/SKILL\.md/g)) {
+      const p = `skills/${sm[1]}/SKILL.md`;
+      if (!exists(p)) fail(`${rel}: spec citation "${p}" does not exist`);
+    }
+    // "<skill> SKILL.md" / "<skill> SKILL" token forms
+    for (const sm of headerText.matchAll(/`?(mstar-[\w-]+)`?\s+SKILL(?:\.md)?/g)) {
+      const p = `skills/${sm[1]}/SKILL.md`;
+      if (!exists(p)) fail(`${rel}: spec citation "${p}" does not exist`);
+    }
+    // "<skill>/references/<file>" and "<skill> `references/<file>`" forms
+    for (const sm of headerText.matchAll(/`?(mstar-[\w-]+)`?\s*(?:\/|\s+)`?references\/([\w.-]+)/g)) {
+      const p = `skills/${sm[1]}/references/${sm[2]}`;
+      if (!exists(p)) fail(`${rel}: spec citation "${p}" does not exist`);
+    }
+    // Bare "references/<file>" citations (no skill token): must exist under
+    // some skill — unless they are `.harness/` roadmap citations.
+    for (const rm of headerText.matchAll(/references\/([\w.-]+)/g)) {
+      if (citesHarnessPath(headerText, rm.index)) continue;
+      const candidates = [...allSkillFiles].filter((f) => f.endsWith(`/references/${rm[1]}`));
+      if (candidates.length === 0) {
+        fail(`${rel}: spec citation "references/${rm[1]}" does not exist under any skill`);
+      }
+    }
+    // Bare "<file>.md"/"<file>.yaml" next to a spec marker ("spec:" / "§"):
+    // must resolve under skills/, be a `.harness/` doc, or be a known
+    // artifact-type spec source.
+    for (const bm of headerText.matchAll(/(?<![-\w])([a-zA-Z0-9][\w-]*\.(?:md|yaml))/g)) {
+      const name = bm[1];
+      if (name === "SKILL.md") continue;
+      const nearSpec = headerText.slice(Math.max(0, bm.index - 60), (bm.index ?? 0) + name.length + 60);
+      if (!/spec|§/.test(nearSpec)) continue;
+      if (citesHarnessPath(headerText, bm.index)) continue;
+      if (citesKnowledgeConventions(headerText, bm.index)) continue;
+      if ([...allSkillFiles].some((f) => f.endsWith(`/${name}`))) continue;
+      if (ARTIFACT_SPEC_SOURCES.has(name)) continue;
+      fail(`${rel}: spec citation "${name}" does not exist under skills/ and is not a known artifact spec source`);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Guard 1: `/codebase-audit` docs tokens ↔ engine AUDIT_CATEGORIES     */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Category tokens in docs must be real `AUDIT_CATEGORIES` members, and
+   * docs/cli.md must enumerate the full set:
+   * - docs/cli.md: the `<category>` keyword-table row (set equality — a
+   *   fabricated token like `deps` fails, and so does an omission such as
+   *   a missing `bug` / `direction`).
+   * - README.md / README_CN.md: the category-focus list in the audit usage
+   *   line ("category focus (…)" / "按类别聚焦（…）") — membership only,
+   *   the list is illustrative (`…`).
+   * Only lowercase-kebab tokens are scanned (`^[a-z][a-z-]*$`); the
+   * placeholder `<category>` cell and the plan-field reference `Category`
+   * are not category codes.
+   */
+  const auditCategories = new Set<string>(AUDIT_CATEGORIES);
+  let categoryTokensChecked = 0;
+
+  {
+    const file = "docs/cli.md";
+    const lines = readFileSync(join(root, file), "utf8").split(/\r?\n/);
+    const rowIdx = lines.findIndex((l) => /^\|\s*`<category>`\s*\|/.test(l));
+    if (rowIdx === -1) {
+      fail(`${file}: could not locate the \`<category>\` keyword-table row (expected a row starting with \`| \`<category>\` |\`)`);
+    } else {
+      const tokens = extractCategoryRowTokens(lines[rowIdx]);
+      categoryTokensChecked += tokens.length;
+      for (const t of tokens) {
+        if (!auditCategories.has(t)) {
+          fail(`${file}:${rowIdx + 1} category token "${t}" is not an AUDIT_CATEGORY (valid: ${AUDIT_CATEGORIES.join(", ")})`);
+        }
+      }
+      for (const c of AUDIT_CATEGORIES) {
+        if (!tokens.includes(c)) {
+          fail(`${file}:${rowIdx + 1} category table omits AUDIT_CATEGORY "${c}" — add \`${c}\` to the <category> row`);
+        }
       }
     }
   }
-}
 
-/* ------------------------------------------------------------------ */
-/* Reverse: engine module spec citations → skill files                  */
-/* ------------------------------------------------------------------ */
-
-/**
- * Non-skill spec sources the engine legitimately cites: generated artifact
- * types (`main.md`, `task-N-report.md`, …), root convention docs
- * (`STRATEGY.md`, `README.md`, …) and review-bundle files (`qcN.md`). These
- * are not skill files — existence is not expected under skills/.
- */
-const ARTIFACT_SPEC_SOURCES = new Set([
-  "main.md",
-  "task-N-report.md",
-  "STRATEGY.md",
-  "delivery-compass.md",
-  "README.md",
-  "CONCEPTS.md",
-  "DESIGN.md",
-  "DESIGN.dark.md",
-  "qc1.md",
-  "qc2.md",
-  "qc3.md",
-  "qc-consolidated.md",
-  "schema.yaml",
-]);
-
-/** True when the citation at `index` is prefixed by a `.harness/` path
- * (gitignored roadmap / ADR — not part of the skills tree). */
-function citesHarnessPath(text: string, index: number): boolean {
-  return text.slice(Math.max(0, index - 40), index).includes(".harness/");
-}
-
-const engineModules = collectFiles("packages/engine/src", ".ts").filter(
-  (f) => !f.endsWith("/index.ts"),
-);
-const skillRefFiles = collectFiles("skills", ".md").map((f) => relative(root, f));
-const yamlRefs = collectFiles("skills", ".yaml").map((f) => relative(root, f));
-const allSkillFiles = new Set([...skillRefFiles, ...yamlRefs]);
-
-for (const file of engineModules) {
-  const rel = relative(root, file);
-  const lines = readFileSync(file, "utf8").split(/\r?\n/);
-
-  // Header block: contiguous comment lines at the top of the file.
-  const header: string[] = [];
-  for (const line of lines) {
-    const t = line.trim();
-    if (header.length === 0 && (t === "" || t.startsWith("/*") || t.startsWith("//") || t.startsWith("*"))) {
-      if (t !== "" || header.length > 0) header.push(line);
-      if (t.startsWith("*/")) break;
-    } else if (header.length > 0 && (t === "" || t.startsWith("*"))) {
-      header.push(line);
-      if (t.startsWith("*/")) break;
-    } else if (header.length > 0) {
-      break;
-    } else {
-      break;
+  for (const file of ["README.md", "README_CN.md"]) {
+    const text = readFileSync(join(root, file), "utf8");
+    const fm = text.match(/(?:category\s+focus|按类别聚焦)\s*[（(]([^）)]*)[）)]/i);
+    if (!fm) {
+      fail(`${file}: could not locate the category-focus list (expected "category focus (\`a\`, \`b\`, …)" / "按类别聚焦（…）")`);
+      continue;
+    }
+    const line = text.slice(0, fm.index ?? 0).split(/\r?\n/).length;
+    for (const t of fm[1].matchAll(/`([^`]+)`/g)) {
+      categoryTokensChecked++;
+      if (!auditCategories.has(t[1])) {
+        fail(`${file}:${line} category token "${t[1]}" is not an AUDIT_CATEGORY (valid: ${AUDIT_CATEGORIES.join(", ")})`);
+      }
     }
   }
-  const headerText = header.join("\n");
-  if (!/Spec|spec/.test(headerText)) continue;
 
-  // Explicit skill paths: skills/<skill>/SKILL.md
-  for (const sm of headerText.matchAll(/skills\/(mstar-[\w-]+)\/SKILL\.md/g)) {
-    const p = `skills/${sm[1]}/SKILL.md`;
-    if (!exists(p)) fail(`${rel}: spec citation "${p}" does not exist`);
+  /* ------------------------------------------------------------------ */
+  /* Guard 2: README.md / README_CN.md bilingual pairing (AGENTS.md)      */
+  /* ------------------------------------------------------------------ */
+
+  const outcome = evaluateBilingualGuard(changedFilesSinceMergeBase());
+  let bilingualStatus = "skipped (no git range)";
+  if (outcome.status === "checked") {
+    bilingualStatus = "checked";
+    for (const line of outcome.failures) fail(line);
+  } else if (outcome.status === "failed") {
+    bilingualStatus = "failed (no git range in CI)";
+    for (const line of outcome.failures) fail(line);
+  } else {
+    bilingualStatus = `skipped (${outcome.reason})`;
   }
-  // "<skill> SKILL.md" / "<skill> SKILL" token forms
-  for (const sm of headerText.matchAll(/`?(mstar-[\w-]+)`?\s+SKILL(?:\.md)?/g)) {
-    const p = `skills/${sm[1]}/SKILL.md`;
-    if (!exists(p)) fail(`${rel}: spec citation "${p}" does not exist`);
-  }
-  // "<skill>/references/<file>" and "<skill> `references/<file>`" forms
-  for (const sm of headerText.matchAll(/`?(mstar-[\w-]+)`?\s*(?:\/|\s+)`?references\/([\w.-]+)/g)) {
-    const p = `skills/${sm[1]}/references/${sm[2]}`;
-    if (!exists(p)) fail(`${rel}: spec citation "${p}" does not exist`);
-  }
-  // Bare "references/<file>" citations (no skill token): must exist under
-  // some skill — unless they are `.harness/` roadmap citations.
-  for (const rm of headerText.matchAll(/references\/([\w.-]+)/g)) {
-    if (citesHarnessPath(headerText, rm.index)) continue;
-    const candidates = [...allSkillFiles].filter((f) => f.endsWith(`/references/${rm[1]}`));
-    if (candidates.length === 0) {
-      fail(`${rel}: spec citation "references/${rm[1]}" does not exist under any skill`);
+
+  /* ------------------------------------------------------------------ */
+  /* Guard 3: skills corpus — ephemeral citations (engine lint)          */
+  /* ------------------------------------------------------------------ */
+
+  let ephemeralFilesScanned = 0;
+  let ephemeralCitationsFound = 0;
+  for (const file of skillFiles) {
+    ephemeralFilesScanned++;
+    const citations = findEphemeralCitations(readFileSync(file, "utf8"));
+    if (citations.length === 0) continue;
+    ephemeralCitationsFound += citations.length;
+    const rel = relative(root, file);
+    for (const c of citations) {
+      fail(`${rel}:${c.line} ephemeral citation "${c.match}" (${c.kind}) — concrete task artifacts / SDD deeplinks must not appear in durable skill text`);
     }
   }
-  // Bare "<file>.md"/"<file>.yaml" next to a spec marker ("spec:" / "§"):
-  // must resolve under skills/, be a `.harness/` doc, or be a known
-  // artifact-type spec source.
-  for (const bm of headerText.matchAll(/(?<![-\w])([a-zA-Z0-9][\w-]*\.(?:md|yaml))/g)) {
-    const name = bm[1];
-    if (name === "SKILL.md") continue;
-    const nearSpec = headerText.slice(Math.max(0, bm.index - 60), (bm.index ?? 0) + name.length + 60);
-    if (!/spec|§/.test(nearSpec)) continue;
-    if (citesHarnessPath(headerText, bm.index)) continue;
-    if ([...allSkillFiles].some((f) => f.endsWith(`/${name}`))) continue;
-    if (ARTIFACT_SPEC_SOURCES.has(name)) continue;
-    fail(`${rel}: spec citation "${name}" does not exist under skills/ and is not a known artifact spec source`);
+
+  /* ------------------------------------------------------------------ */
+
+  if (failures.length > 0) {
+    console.error(`drift-lint: ${failures.length} violation(s) found\n`);
+    for (const f of failures) console.error(`  ✗ ${f}`);
+    console.error(
+      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations)`,
+    );
+    process.exit(1);
   }
+
+  console.log(
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations`,
+  );
 }
-
-/* ------------------------------------------------------------------ */
-
-if (failures.length > 0) {
-  console.error(`drift-lint: ${failures.length} violation(s) found\n`);
-  for (const f of failures) console.error(`  ✗ ${f}`);
-  console.error(`\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands`);
-  process.exit(1);
-}
-
-console.log(
-  `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve`,
-);

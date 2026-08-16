@@ -196,6 +196,7 @@ export {
 } from "./compound.js";
 
 export type {
+  EphemeralCitation,
   PlanQualityFinding,
   PlanQualityResult,
   SimplifyMarker,
@@ -204,6 +205,7 @@ export type {
 } from "./lint.js";
 export {
   assertSddTddTriple,
+  findEphemeralCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
   lintSkillFrontmatter,

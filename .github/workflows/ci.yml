@@ -143,7 +143,7 @@ jobs:
         run: bun run --cwd packages/dsh typecheck:tests
 
       - name: Test scripts
-        run: bun test scripts/prepare-release.test.ts scripts/ci-dep-guard.test.ts
+        run: bun test scripts/prepare-release.test.ts scripts/ci-dep-guard.test.ts scripts/drift-lint.test.ts
 
       - name: Pack CLI tarball
         run: bun run cli:pack
@@ -176,8 +176,14 @@ jobs:
   drift-lint:
     runs-on: ubuntu-latest
     steps:
+      # Full history is required: Guard 2 (README bilingual pairing) resolves
+      # its range via `git merge-base origin/main HEAD` — a shallow
+      # fetch-depth: 1 checkout has no origin/main ref and the guard would
+      # (correctly, per its CI contract) fail loudly instead of running.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

@@ -128,6 +128,65 @@ A green CLI run is the success criterion.
 Open the engine tests when a fixture drifts.
 `;
 
+/** Skill body fixture: concrete ephemeral citations (task artifact +
+ * sdd deeplink) inside an otherwise five-question-complete skill. */
+const SKILL_EPHEMERAL = `---
+name: sample-skill
+description: Validates harness fixtures during CLI smoke tests.
+---
+
+## Load Order
+
+Read this skill when running smoke fixtures.
+
+## Workflow
+
+Create fixtures, run the CLI, assert exit codes. See task-3-report for the
+prior run.
+
+## Decision Rules
+
+Never mutate the control worktree. Check .mstar/sdd/20260815-x/ before edits.
+
+## Evidence
+
+A green CLI run is the success criterion.
+
+## References
+
+Open the engine tests when a fixture drifts.
+`;
+
+/** Skill body fixture: placeholder citation forms only — the
+ * discrimination contract (zero false positives) requires these to pass. */
+const SKILL_PLACEHOLDERS = `---
+name: sample-skill
+description: Validates harness fixtures during CLI smoke tests.
+---
+
+## Load Order
+
+Read this skill when running smoke fixtures.
+
+## Workflow
+
+Create fixtures, run the CLI, assert exit codes. task-N-report and
+{SDD_DIR}/task-N-report.md are templates; .mstar/sdd/<plan-id>/ is a
+deeplink template too.
+
+## Decision Rules
+
+Never mutate the control worktree.
+
+## Evidence
+
+A green CLI run is the success criterion.
+
+## References
+
+Open the engine tests when a fixture drifts.
+`;
+
 /** Knowledge-track doc that passes validateSchemaYaml. */
 const KNOWLEDGE_GOOD = `---
 module: engine
@@ -679,8 +738,8 @@ describe("mstar host detect — tool-shape host matrix", () => {
 // mstar skill lint
 // ---------------------------------------------------------------------------
 
-describe("mstar skill lint — frontmatter + five-question body", () => {
-  test("well-formed skill → both checks OK, exit 0", () => {
+describe("mstar skill lint — frontmatter + five-question body + ephemeral citations", () => {
+  test("well-formed skill → all checks OK, exit 0", () => {
     withTempDir((dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_GOOD);
@@ -688,6 +747,7 @@ describe("mstar skill lint — frontmatter + five-question body", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("skill lint (frontmatter): OK");
       expect(result.stdout).toContain("skill lint (five questions): OK");
+      expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
     });
   });
 
@@ -728,5 +788,40 @@ describe("mstar skill lint — frontmatter + five-question body", () => {
     const result = runCli(["skill", "lint"]);
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("usage: skill lint <skill-dir>");
+  });
+
+  test("concrete task-artifact citation → skill.ephemeral.task-artifact, exit 1", () => {
+    withTempDir((dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("skill lint (ephemeral citations): FAIL");
+      expect(result.stderr).toContain("skill.ephemeral.task-artifact");
+      expect(result.stderr).toContain('"task-3-report"');
+      expect(result.stderr).toContain("line 12");
+    });
+  });
+
+  test("concrete sdd deeplink → skill.ephemeral.sdd-deeplink, exit 1", () => {
+    withTempDir((dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("skill.ephemeral.sdd-deeplink");
+      expect(result.stderr).toContain('".mstar/sdd/20260815-x"');
+      expect(result.stderr).toContain("line 17");
+    });
+  });
+
+  test("placeholder citation forms → ephemeral checklist OK, exit 0 (discrimination contract)", () => {
+    withTempDir((dir) => {
+      mkdirSync(join(dir, "skill"));
+      writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_PLACEHOLDERS);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
+    });
   });
 });
