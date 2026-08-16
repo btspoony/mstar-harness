@@ -202,7 +202,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
       violation(
         "medium",
         "design-md.tokens.missing-frontmatter",
-        "no `---` YAML frontmatter block found — DESIGN.md must open with a fenced frontmatter holding the token SSOT (design-md-spec §1.5)",
+        "no `---` YAML frontmatter block found \u2014 DESIGN.md must open with a fenced frontmatter holding the token SSOT (design-md-spec \u00a71.5)",
         "add a `---` fenced frontmatter with version, name, description, and the colors/typography/spacing/rounded groups",
       ),
     );
@@ -222,18 +222,18 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
   for (const group of ["colors", "typography", "spacing", "rounded"] as const) {
     if (!isMap(fm[group])) {
       violations.push(
-        violation("medium", "design-md.tokens.group-not-map", `token group "${group}" must be a YAML map, not a scalar (design-md-spec §1.5)`, `rewrite \`${group}\` as a nested map`),
+        violation("medium", "design-md.tokens.group-not-map", `token group "${group}" must be a YAML map, not a scalar (design-md-spec \u00a71.5)`, `rewrite \`${group}\` as a nested map`),
       );
     } else if (!groupIsMap(group)) {
       violations.push(
-        violation("medium", "design-md.tokens.group-not-map", `token group "${group}" must be a YAML map, not a scalar (design-md-spec §1.5)`, `rewrite \`${group}\` as a nested map`),
+        violation("medium", "design-md.tokens.group-not-map", `token group "${group}" must be a YAML map, not a scalar (design-md-spec \u00a71.5)`, `rewrite \`${group}\` as a nested map`),
       );
     } else if (groupEntries(group).length === 0) {
       violations.push(
         violation(
           "medium",
           "design-md.tokens.missing-group",
-          `missing required token group "${group}" — colors/typography/spacing/rounded are required by the frontmatter SSOT (design-md-spec §1.5)`,
+          `missing required token group "${group}" \u2014 colors/typography/spacing/rounded are required by the frontmatter SSOT (design-md-spec \u00a71.5)`,
           `add an active \`${group}:\` block with concrete token values`,
         ),
       );
@@ -243,7 +243,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
   // but when present it must be a map.
   if (!isMap(fm.components) || !groupIsMap("components")) {
     violations.push(
-      violation("medium", "design-md.tokens.group-not-map", `token group "components" must be a YAML map, not a scalar (design-md-spec §1.5)`, `rewrite \`components\` as a nested map`),
+      violation("medium", "design-md.tokens.group-not-map", `token group "components" must be a YAML map, not a scalar (design-md-spec \u00a71.5)`, `rewrite \`components\` as a nested map`),
     );
   }
 
@@ -252,14 +252,14 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
       violation(
         "low",
         "design-md.tokens.placeholder",
-        `token "${group}.${name}" uses a "[...]" template value — placeholders never count as concrete tokens (completeness-checklist § How to use item 5)`,
+        `token "${group}.${name}" uses a "[...]" template value \u2014 placeholders never count as concrete tokens (completeness-checklist \u00a7 How to use item 5)`,
         `replace \`${value}\` with a concrete value`,
       ),
     );
 
   for (const [name, value] of groupEntries("colors")) {
     if (typeof value !== "string") {
-      violations.push(violation("medium", "design-md.tokens.color-format", `color "${name}" must be a string value (design-md-spec §2.2)`, "quote the color value"));
+      violations.push(violation("medium", "design-md.tokens.color-format", `color "${name}" must be a string value (design-md-spec \u00a72.2)`, "quote the color value"));
       continue;
     }
     if (isPlaceholder(value)) {
@@ -269,7 +269,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
         violation(
           "medium",
           "design-md.tokens.color-format",
-          `color "${name}" = "${value}" is not a hex (\`#rrggbb\`/\`#rrggbbaa\`) or oklch() value (design-md-spec §2.2)`,
+          `color "${name}" = "${value}" is not a hex (\`#rrggbb\`/\`#rrggbbaa\`) or oklch() value (design-md-spec \u00a72.2)`,
           "use an sRGB hex value, optionally with a `-p3` oklch() twin",
         ),
       );
@@ -279,7 +279,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
   for (const [name, value] of groupEntries("typography")) {
     if (!isMap(value)) {
       violations.push(
-        violation("medium", "design-md.tokens.typography-shape", `typography token "${name}" must be a map of the five properties (design-md-spec §1.5)`, "give it fontFamily/fontSize/fontWeight/lineHeight/letterSpacing"),
+        violation("medium", "design-md.tokens.typography-shape", `typography token "${name}" must be a map of the five properties (design-md-spec \u00a71.5)`, "give it fontFamily/fontSize/fontWeight/lineHeight/letterSpacing"),
       );
       continue;
     }
@@ -291,7 +291,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
         violation(
           "medium",
           "design-md.tokens.typography-shape",
-          `typography token "${name}" must have exactly the five properties fontFamily/fontSize/fontWeight/lineHeight/letterSpacing (design-md-spec §1.5)${missing.length > 0 ? ` — missing: ${missing.join(", ")}` : ""}${extra.length > 0 ? ` — extra: ${extra.join(", ")}` : ""}`,
+          `typography token "${name}" must have exactly the five properties fontFamily/fontSize/fontWeight/lineHeight/letterSpacing (design-md-spec \u00a71.5)${missing.length > 0 ? ` \u2014 missing: ${missing.join(", ")}` : ""}${extra.length > 0 ? ` \u2014 extra: ${extra.join(", ")}` : ""}`,
           "align the token with the five-property shape",
         ),
       );
@@ -301,7 +301,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
       if (typeof v === "string" && isPlaceholder(v)) placeholder("typography", name, v);
       else if (typeof v !== "string" || v.trim() === "") {
         violations.push(
-          violation("medium", "design-md.tokens.typography-shape", `typography token "${name}" has an empty \`${prop}\` (design-md-spec §1.5)`, `fill \`${prop}\` with a concrete value`),
+          violation("medium", "design-md.tokens.typography-shape", `typography token "${name}" has an empty \`${prop}\` (design-md-spec \u00a71.5)`, `fill \`${prop}\` with a concrete value`),
         );
       }
     }
@@ -311,20 +311,20 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
     const spacing = fm.spacing as Record<string, unknown>;
     if (!Object.prototype.hasOwnProperty.call(spacing, "base")) {
       violations.push(
-        violation("medium", "design-md.tokens.spacing-base", 'spacing must declare the base unit as `base` (design-md-spec §2.4)', "add `base: 4px` (or 8px) to the spacing group"),
+        violation("medium", "design-md.tokens.spacing-base", 'spacing must declare the base unit as `base` (design-md-spec \u00a72.4)', "add `base: 4px` (or 8px) to the spacing group"),
       );
     }
     for (const [name, value] of Object.entries(spacing)) {
       if (name !== "base" && name !== RAW_GROUP && !/^\d+$/.test(name)) {
         violations.push(
-          violation("medium", "design-md.tokens.spacing-key", `spacing key "${name}" must be \`base\` or a numeric multiplier (design-md-spec §1.5)`, "use numeric scale-step keys or `base`"),
+          violation("medium", "design-md.tokens.spacing-key", `spacing key "${name}" must be \`base\` or a numeric multiplier (design-md-spec \u00a71.5)`, "use numeric scale-step keys or `base`"),
         );
       }
       if (typeof value === "string" && isPlaceholder(value)) {
         placeholder("spacing", name, value);
       } else if (typeof value !== "string" || !PX_RE.test(value)) {
         violations.push(
-          violation("medium", "design-md.tokens.spacing-format", `spacing value "${name}" = "${String(value)}" is not a px length (design-md-spec §1.5)`, "use a pixel value like `4px`"),
+          violation("medium", "design-md.tokens.spacing-format", `spacing value "${name}" = "${String(value)}" is not a px length (design-md-spec \u00a71.5)`, "use a pixel value like `4px`"),
         );
       }
     }
@@ -335,7 +335,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
       placeholder("rounded", name, value);
     } else if (typeof value !== "string" || !PX_RE.test(value)) {
       violations.push(
-        violation("medium", "design-md.tokens.rounded-format", `rounded value "${name}" = "${String(value)}" is not a px length (design-md-spec §1.5)`, "use a pixel value like `6px`"),
+        violation("medium", "design-md.tokens.rounded-format", `rounded value "${name}" = "${String(value)}" is not a px length (design-md-spec \u00a71.5)`, "use a pixel value like `6px`"),
       );
     }
   }
@@ -343,7 +343,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
   for (const [name, value] of groupEntries("components")) {
     if (!isMap(value)) {
       violations.push(
-        violation("medium", "design-md.tokens.components-shape", `component token "${name}" must be a map of properties (design-md-spec §2.8)`, "give it backgroundColor/textColor/typography/rounded/padding/height"),
+        violation("medium", "design-md.tokens.components-shape", `component token "${name}" must be a map of properties (design-md-spec \u00a72.8)`, "give it backgroundColor/textColor/typography/rounded/padding/height"),
       );
       continue;
     }
@@ -365,7 +365,7 @@ export function validateDesignTokenFrontmatter(frontmatterText: string): GateRes
           violation(
             "medium",
             "design-md.tokens.ref-unresolved",
-            `component "${name}" references "${v}" which does not resolve to an active token in this frontmatter (design-md-spec §6 — {path} refs MUST trace back to a key)`,
+            `component "${name}" references "${v}" which does not resolve to an active token in this frontmatter (design-md-spec \u00a76 \u2014 {path} refs MUST trace back to a key)`,
             `add the referenced token or use a literal value`,
           ),
         );
@@ -401,7 +401,7 @@ export function assertLightDarkParity(lightFm: string, darkFm: string): GateResu
       violation(
         "medium",
         "design-md.parity.missing-frontmatter",
-        `light/dark parity needs a YAML frontmatter in both files — ${light === null ? "DESIGN.md" : "DESIGN.dark.md"} has none (design-md-spec §4 rules 1–2)`,
+        `light/dark parity needs a YAML frontmatter in both files \u2014 ${light === null ? "DESIGN.md" : "DESIGN.dark.md"} has none (design-md-spec \u00a74 rules 1\u20132)`,
         "add the fenced frontmatter to both theme files",
       ),
     );
@@ -426,7 +426,7 @@ export function assertLightDarkParity(lightFm: string, darkFm: string): GateResu
         violation(
           "medium",
           "design-md.parity.missing-dark",
-          `token "${key}" is active in DESIGN.md but missing from DESIGN.dark.md — both files must define the same token set (design-md-spec §4 rule 3)`,
+          `token "${key}" is active in DESIGN.md but missing from DESIGN.dark.md \u2014 both files must define the same token set (design-md-spec \u00a74 rule 3)`,
           "add the token to DESIGN.dark.md with a dark-appropriate value",
         ),
       );
@@ -438,7 +438,7 @@ export function assertLightDarkParity(lightFm: string, darkFm: string): GateResu
         violation(
           "medium",
           "design-md.parity.missing-light",
-          `token "${key}" is active in DESIGN.dark.md but missing from DESIGN.md — DESIGN.md is the SSOT for token names (design-md-spec §4 rules 3–4)`,
+          `token "${key}" is active in DESIGN.dark.md but missing from DESIGN.md \u2014 DESIGN.md is the SSOT for token names (design-md-spec \u00a74 rules 3\u20134)`,
           "add the token to DESIGN.md, or remove it from the dark file",
         ),
       );

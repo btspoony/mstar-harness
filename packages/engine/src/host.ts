@@ -131,7 +131,7 @@ export function resolveSkillRoot(host: HostId, paths: SkillRootPaths): string {
     case "dsh":
       return `$DSH_BUNDLED_SKILL_DIR/${skill}${suffix}`;
     case "pi":
-      return `deferred: pi has no plugin API in v1 — skill-root resolution lands with its adapter (roadmap §8.4)`;
+      return `deferred: pi has no plugin API in v1 \u2014 skill-root resolution lands with its adapter (roadmap \u00a78.4)`;
   }
 }
 

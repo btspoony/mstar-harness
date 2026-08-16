@@ -79,7 +79,7 @@ export function lintFiveQuestion(bodyText: string): GateResult {
         violation(
           "low",
           `skill-authoring.five-question.${section.key}`,
-          `body does not answer "${section.question}" — no "${section.label}" section (mstar-skill-authoring § Body 必须回答的 5 问 / § 默认 Body 结构)`,
+          `body does not answer "${section.question}" \u2014 no "${section.label}" section (mstar-skill-authoring \u00a7 Body \u5fc5\u987b\u56de\u7b54\u7684 5 \u95ee / \u00a7 \u9ed8\u8ba4 Body \u7ed3\u6784)`,
           `add a "## ${section.label}" section covering ${section.question}`,
         ),
       );
@@ -97,5 +97,5 @@ export function lintFiveQuestion(bodyText: string): GateResult {
  * an instruction string an agent reads to find the asset.
  */
 export function resolveAssetPath(skillName: string, relPath: string, host: HostId): string {
-  return `skill \`${skillName}\` → ${relPath} (${resolveSkillRoot(host, { skill: skillName, rel: relPath })})`;
+  return `skill \`${skillName}\` \u2192 ${relPath} (${resolveSkillRoot(host, { skill: skillName, rel: relPath })})`;
 }

@@ -241,6 +241,20 @@ describe("validateResidual", () => {
     expect(validateResidual(entry()).violations).toEqual([]);
   });
 
+  test("non-object residual entry is rejected (string / number / null / array)", () => {
+    // Locks existing fail-loud behavior (status.ts:266-268) — no silent
+    // pass-through for entries that cannot even be inspected.
+    for (const value of ["R1", 42, null, ["R1"]]) {
+      const result = validateResidual(value);
+      expect(result.ok).toBe(false);
+      expect(violationsOf(result)).toContain("status.residual.invalid");
+    }
+  });
+
+  test("required field with a non-string type is rejected (id: 42 → invalid-id)", () => {
+    violationCodes("status.residual.invalid-id")(validateResidual(entry({ id: 42 })));
+  });
+
   test("each required field is enforced (id/title/severity/source/scope/decision/owner/target/tracking)", () => {
     for (const field of ["id", "title", "severity", "source", "scope", "decision", "owner", "target", "tracking"]) {
       const { [field]: _drop, ...rest } = entry();
@@ -378,6 +392,14 @@ describe("validateStatus", () => {
     );
     expect(violationsOf(result)).toContain("status.plan-row.invalid-status");
     expect(violationsOf(result)).toContain("status.residual.invalid-severity");
+  });
+
+  test("non-object residual entry inside residual_findings aggregates into the gate result", () => {
+    // Full-path gate: every list entry routes through validateResidual
+    // (status.ts:435-437), so a non-object entry is rejected at doc level too.
+    const result = validateStatus(doc({ residual_findings: { "plan-a": ["oops"] } }));
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("status.residual.invalid");
   });
 });
 

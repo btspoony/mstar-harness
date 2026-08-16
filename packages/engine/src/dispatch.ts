@@ -36,7 +36,7 @@ import type { GateResult, ValidationResult, Severity } from "./core.js";
  * for writable assignments.
  */
 const BRANCH_FORMS_HINT =
-  '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"';
+  '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> \u2014 <reason>"';
 
 /** Parsed Assignment header fields relevant to dispatch validation. */
 export type AssignmentFields = {
@@ -291,7 +291,7 @@ export function parseAssignmentBranchForms(assignmentText: string): AssignmentBr
     // if mis-splits ever surface.
     const direct = fields.branchPolicy.match(/^direct\s+on\s+(\S+)/i);
     if (direct) {
-      const strict = fields.branchPolicy.match(/^direct\s+on\s+(\S+)(?:\s*(?:[—–]|--|-)\s*(.+))?$/);
+      const strict = fields.branchPolicy.match(/^direct\s+on\s+(\S+)(?:\s*(?:[\u2014\u2013]|--|-)\s*(.+))?$/);
       forms.directOn = { branch: direct[1]!.trim(), reason: strict ? (strict[2] ?? "").trim() : "" };
     }
   }
@@ -364,7 +364,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
         violation(
           "high",
           "assignment.field.branch-multiple",
-          `writable assignment contains ${formCount} branch forms (Working branch + Branch policy) — exactly one required`,
+          `writable assignment contains ${formCount} branch forms (Working branch + Branch policy) \u2014 exactly one required`,
           `keep exactly one of: ${BRANCH_FORMS_HINT}`,
         ),
       );
@@ -391,7 +391,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
           violation(
             "high",
             "assignment.field.branch-policy-missing-branch",
-            `unparseable Branch policy: "${fields.branchPolicy}" (expected "direct on <branch> — <reason>")`,
+            `unparseable Branch policy: "${fields.branchPolicy}" (expected "direct on <branch> \u2014 <reason>")`,
             "start the field with `direct on <branch>`",
           ),
         );
@@ -401,7 +401,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
             "high",
             "assignment.field.branch-policy-missing-reason",
             `Branch policy "direct on ${direct.branch}" is missing the reason`,
-            'append "— <reason>" after the branch name',
+            'append "\u2014 <reason>" after the branch name',
           ),
         );
       }
@@ -428,7 +428,7 @@ export function assertDefaultBranchProtected(branch: string, opts: DefaultBranch
         "high",
         "dispatch.default-branch.protected",
         `writable work on default protected branch "${normalized}" requires an explicit direct-on exception`,
-        `add "Branch policy: direct on ${normalized} — <reason>" to the Assignment, or use a feature branch`,
+        `add "Branch policy: direct on ${normalized} \u2014 <reason>" to the Assignment, or use a feature branch`,
       ),
     );
   }
@@ -464,7 +464,7 @@ export function executionModeToN(executionMode: string, opts: ExecutionModeToNOp
           "high",
           "dispatch.execution-mode.missing-seats",
           'execution mode "targeted" requires listed reviewer seats',
-          'add "QC re-review: targeted — reviewers: <role-id>, …" to the Assignment and pass the seats',
+          'add "QC re-review: targeted \u2014 reviewers: <role-id>, \u2026" to the Assignment and pass the seats',
         ),
       );
     } else if (seats.length > 3) {
@@ -472,7 +472,7 @@ export function executionModeToN(executionMode: string, opts: ExecutionModeToNOp
         violation(
           "high",
           "dispatch.execution-mode.too-many-seats",
-          `execution mode "targeted" lists ${seats.length} reviewer seats — at most 3 (targeted re-review seats are the tri seats, N = 1–3)`,
+          `execution mode "targeted" lists ${seats.length} reviewer seats \u2014 at most 3 (targeted re-review seats are the tri seats, N = 1\u20133)`,
           "list at most three reviewer seats for the targeted re-review",
         ),
       );

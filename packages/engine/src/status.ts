@@ -213,7 +213,7 @@ export function validatePlanRow(row: unknown): GateResult {
         violation(
           "medium",
           "status.plan-row.dual-id",
-          "row has both id and plan_id with different values — write one canonical key (prefer id)",
+          "row has both id and plan_id with different values \u2014 write one canonical key (prefer id)",
         ),
       );
     }
@@ -229,7 +229,7 @@ export function validatePlanRow(row: unknown): GateResult {
       violation(
         "medium",
         "status.plan-row.invalid-status",
-        `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`,
+        `status must be one of ${PLAN_STATUSES.join(" | ")} \u2014 got ${JSON.stringify(status)}`,
       ),
     );
   }
@@ -245,7 +245,7 @@ export function validatePlanRow(row: unknown): GateResult {
       violation(
         "medium",
         "status.plan-row.done-with-lease",
-        "plan status Done must not carry an execution_lease — the Done authority deletes the lease in the same complete-file update as status: \"Done\" (status-and-residuals.md § Hold, release, and override)",
+        "plan status Done must not carry an execution_lease \u2014 the Done authority deletes the lease in the same complete-file update as status: \"Done\" (status-and-residuals.md \u00a7 Hold, release, and override)",
         "delete plans[].execution_lease in the same update that sets status: \"Done\"",
       ),
     );
@@ -281,7 +281,7 @@ export function validateResidual(entry: unknown): GateResult {
       violation(
         "medium",
         "status.residual.invalid-severity",
-        `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`,
+        `severity must be one of ${SEVERITY_ORDER.join(" | ")} \u2014 got ${JSON.stringify(severity)}`,
       ),
     );
   } else if (severity === "warning") {
@@ -289,8 +289,8 @@ export function validateResidual(entry: unknown): GateResult {
       violation(
         "low",
         "status.residual.legacy-warning",
-        `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`,
-        "use \"low\" (normalizeSeverity maps 'warning' → 'low')",
+        `severity "warning" is legacy \u2014 forbidden on new entries; read paths normalize it to "low"`,
+        "use \"low\" (normalizeSeverity maps 'warning' \u2192 'low')",
       ),
     );
   }
@@ -302,7 +302,7 @@ export function validateResidual(entry: unknown): GateResult {
       violation(
         "medium",
         "status.residual.invalid-decision",
-        `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`,
+        `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} \u2014 got ${JSON.stringify(decision)}`,
       ),
     );
   }
@@ -336,7 +336,7 @@ export function validateResidual(entry: unknown): GateResult {
         violation(
           "medium",
           "status.residual.invalid-lifecycle",
-          `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`,
+          `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} \u2014 got ${JSON.stringify(lifecycle)}`,
         ),
       );
     } else if (lifecycle !== "open") {
@@ -400,7 +400,7 @@ export function validateStatus(docOrPath: StatusDoc | string): GateResult {
   } else if (typeof version !== "number" || !Number.isInteger(version)) {
     violations.push(violation("high", "status.invalid-version", "version must be an integer"));
   } else if (version !== 1) {
-    violations.push(violation("medium", "status.unsupported-version", `unsupported status.json schema version ${version} — expected 1`));
+    violations.push(violation("medium", "status.unsupported-version", `unsupported status.json schema version ${version} \u2014 expected 1`));
   }
 
   if (updated_at === undefined) {
@@ -429,7 +429,7 @@ export function validateStatus(docOrPath: StatusDoc | string): GateResult {
         violations.push(violation("high", "status.residual.invalid-list", `residual_findings["${planId}"] must be an array`));
       } else if (list.length === 0) {
         violations.push(
-          violation("low", "status.residual.empty-key", `residual_findings["${planId}"] is empty — delete the key (no "plan-id": [])`),
+          violation("low", "status.residual.empty-key", `residual_findings["${planId}"] is empty \u2014 delete the key (no "plan-id": [])`),
         );
       } else {
         for (const entry of list) {
@@ -448,7 +448,7 @@ export function validateStatus(docOrPath: StatusDoc | string): GateResult {
       violation(
         "medium",
         "status.dual-write-residuals",
-        "residual_findings must be root-only — metadata.residual_findings is legacy read-only; remove it (no dual-write)",
+        "residual_findings must be root-only \u2014 metadata.residual_findings is legacy read-only; remove it (no dual-write)",
         "move entries to root residual_findings and delete metadata.residual_findings",
       ),
     );
@@ -478,7 +478,7 @@ export function validateStatus(docOrPath: StatusDoc | string): GateResult {
 export async function archiveResiduals(planId: string, harnessDir?: string): Promise<ArchiveResult> {
   const dir = harnessDir !== undefined ? resolve(harnessDir) : resolveHarnessDir();
   if (dir === null) {
-    throw new Error(`harness dir not found from ${process.cwd()} — pass harnessDir or set MSTAR_HARNESS_DIR`);
+    throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass harnessDir or set MSTAR_HARNESS_DIR`);
   }
   assertSafePathComponent(planId, "planId");
   const statusPath = join(dir, "status.json");
@@ -573,7 +573,7 @@ export function findingsCleanupGate(
           violation(
             "medium",
             "findings.zero-residual-nit",
-            `${label}: style-only nits must be fixed in-session or dropped — never left open under zero-residual`,
+            `${label}: style-only nits must be fixed in-session or dropped \u2014 never left open under zero-residual`,
           ),
         );
       } else if (entry.decision === "risk-accepted" || entry.lifecycle === "waived") {
@@ -599,7 +599,7 @@ export function findingsCleanupGate(
           violation(
             "medium",
             "findings.zero-residual-open-fixable",
-            `${label}: fixable finding must not remain open under zero-residual — fix now or convert to a blocker-defer`,
+            `${label}: fixable finding must not remain open under zero-residual \u2014 fix now or convert to a blocker-defer`,
           ),
         );
       }

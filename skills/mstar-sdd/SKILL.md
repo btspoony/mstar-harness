@@ -87,7 +87,11 @@ Host mapping → **`mstar-host`** references (`model` / Task field).
 
 1. `mstar sdd review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}/review/`
 2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, **N=3** — with branch review-package path and report paths under `{SDD_DIR}/review/` → **`mstar-review-qc`** · **`mstar-dispatch-gates`**. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary. **Mandatory whenever `Execution mode: sdd`** (single-plan or iteration).
-3. Critical/Important QC findings → **one** fix dispatch (full list), then targeted re-review
+3. Critical/Important QC findings → **one** fix dispatch (full list), then targeted re-review. Fix rounds run on four mechanics — the per-task fix loop applies the same (`references/file-handoffs.md`):
+    - **Unverified rounds count**: a fix round without verification evidence (reviewer not confirmed / report not on disk) is **not clean** — re-check and count the round; never enter the convergence branch.
+    - **Full re-entry**: the next fix dispatch carries **all** open findings (including last round's unverified items) — never slice a subset.
+    - **Capped cross-round excerpt**: from round ≥2, the fix dispatch attaches an excerpt of prior rounds' findings and dispositions (advisory caps: ~500 words per round, ~1500 total — suggested values, not hard limits).
+    - **Honest non-convergence**: open findings at wave close → list them in detail and state the disposition — re-feed to the next fix round **or** transfer to residual tracking — never silently close.
 4. QA gate → **`mstar-harness-core`** Done rules; PM **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**
 
 ## Progress ledger

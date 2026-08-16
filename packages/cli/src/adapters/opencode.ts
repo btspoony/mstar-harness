@@ -105,12 +105,12 @@ function getDoctorWarnings(config: Record<string, unknown>): string[] {
   const hasLegacy = strings.some(isLegacyMorningStarGitPlugin);
   if (hasLegacy && !hasNpm) {
     warnings.push(
-      "Plugin list uses legacy `morning-star@git+…` for this harness; run `mstar-harness init --target opencode` to rewrite to `@mstar-harness/opencode@latest`.",
+      "Plugin list uses legacy `morning-star@git+\u2026` for this harness; run `mstar-harness init --target opencode` to rewrite to `@mstar-harness/opencode@latest`.",
     );
   }
   if (hasLegacy && hasNpm) {
     warnings.push(
-      "Both legacy `morning-star@git+…` and `@mstar-harness/opencode` appear in `plugin`; run `init` again to dedupe and keep a single npm plugin line.",
+      "Both legacy `morning-star@git+\u2026` and `@mstar-harness/opencode` appear in `plugin`; run `init` again to dedupe and keep a single npm plugin line.",
     );
   }
 
@@ -121,7 +121,7 @@ function getDoctorWarnings(config: Record<string, unknown>): string[] {
   });
   if (missingModels.length) {
     warnings.push(
-      `${missingModels.length} role(s) have no explicit agent.<role>.model — OpenCode default model will be used (recommended for fastest setup).`,
+      `${missingModels.length} role(s) have no explicit agent.<role>.model \u2014 OpenCode default model will be used (recommended for fastest setup).`,
     );
   }
   return warnings;
