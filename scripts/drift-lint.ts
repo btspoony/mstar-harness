@@ -219,6 +219,8 @@ export function citesKnowledgeConventions(text: string, index: number): boolean 
 export type RolesCorpusResult = {
   /** `skills/mstar-*` SKILL.md texts fed to lintLoadOrder (mstar-harness-core is exempt inside the engine) */
   skillsChecked: number;
+  /** violations reported by lintLoadOrder on the collected skill texts */
+  loadOrderViolations: number;
   /** violations reported by validateRoleMapping on `rolesDir` */
   mappingViolations: number;
   failures: string[];
@@ -253,9 +255,33 @@ export function checkRolesCorpus(
   }
   return {
     skillsChecked: Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length,
+    loadOrderViolations: loadOrder.violations.length,
     mappingViolations: mapping.violations.length,
     failures,
   };
+}
+
+/** Guard 4 corpus read — guard-or-clear-error (engine corpus test
+ * pattern): every skill `SKILL.md` under `skills/mstar-*` is read with a
+ * try/catch so an unreadable file (EISDIR/EPERM) becomes an explicit
+ * `roles: read` failure row instead of crashing drift-lint with a raw
+ * stack. The dsh seam and CLI skip unreadable siblings best-effort; the CI
+ * guard must fail loudly with a clear row, never die mid-scan. */
+export function readRolesCorpus(
+  files: string[],
+  root: string,
+): { entries: Array<{ rel: string; text: string }>; readFailures: string[] } {
+  const entries: Array<{ rel: string; text: string }> = [];
+  const readFailures: string[] = [];
+  for (const file of files) {
+    const rel = relative(root, file);
+    try {
+      entries.push({ rel, text: readFileSync(file, "utf8") });
+    } catch (error) {
+      readFailures.push(`roles: read ${rel} - ${(error as Error).message}`);
+    }
+  }
+  return { entries, readFailures };
 }
 
 /* ------------------------------------------------------------------ */
@@ -586,10 +612,9 @@ if (import.meta.main) {
   /* Guard 4: skills corpus — roles / load-order (engine lint)           */
   /* ------------------------------------------------------------------ */
 
-  const roles = checkRolesCorpus(
-    skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
-    join(root, "skills", "mstar-roles"),
-  );
+  const { entries: rolesEntries, readFailures: rolesReadFailures } = readRolesCorpus(skillFiles, root);
+  for (const row of rolesReadFailures) fail(row);
+  const roles = checkRolesCorpus(rolesEntries, join(root, "skills", "mstar-roles"));
   for (const row of roles.failures) fail(row);
 
   /* ------------------------------------------------------------------ */
@@ -603,16 +628,26 @@ if (import.meta.main) {
 
   /* ------------------------------------------------------------------ */
 
+  // Guard 4 footer fragment: report each check's own verdict + count so a
+  // load-order-only failure is never misstated as a combined/OK status.
+  const rolesSummary = `${roles.skillsChecked} mstar-* skills load-order lint ${
+    roles.loadOrderViolations === 0
+      ? "OK"
+      : `FAIL (${roles.loadOrderViolations} violation${roles.loadOrderViolations === 1 ? "" : "s"})`
+  }; roles mapping ${
+    roles.mappingViolations === 0 ? "OK" : `FAIL (${roles.mappingViolations} violation${roles.mappingViolations === 1 ? "" : "s"})`
+  }`;
+
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${roles.skillsChecked} mstar-* skills pass load-order lint and roles mapping ${roles.mappingViolations === 0 ? "OK" : "FAIL"} (${roles.mappingViolations} violations); ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${roles.skillsChecked} mstar-* skills pass load-order lint and roles mapping ${roles.mappingViolations === 0 ? "OK" : "FAIL"} (${roles.mappingViolations} violations); ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
   );
 }

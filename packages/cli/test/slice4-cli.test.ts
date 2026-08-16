@@ -1074,7 +1074,7 @@ A topic skill body without a Load Order heading.
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("roles validate (mapping): OK");
     expect(result.stdout).toContain("roles validate (load order): OK");
-    expect(result.stdout).toMatch(/roles validate: OK \(\d+ violations?, \d+ sibling skills?\)/);
+    expect(result.stdout).toMatch(/roles validate: OK \(\d+ violations?, \d+ sibling skills? scanned; load-order over \d+, core exempt\)/);
     expect(result.stderr).toBe("");
   });
 
@@ -1091,7 +1091,7 @@ A topic skill body without a Load Order heading.
       expect(result.stderr).toContain("roles validate (load order): FAIL (1 violation)");
       expect(result.stderr).toContain("roles.loadorder.section.missing");
       expect(result.stderr).toContain('skill "mstar-foo"');
-      expect(result.stdout).toContain("roles validate: FAIL (1 violation, 1 sibling skill)");
+      expect(result.stdout).toContain("roles validate: FAIL (1 violation, 1 sibling skill scanned; load-order over 1)");
     });
   });
 
@@ -1099,9 +1099,17 @@ A topic skill body without a Load Order heading.
     withTempDir((dir) => {
       const result = runCli(["roles", "validate", "--roles-dir", dir, "--skills-dir", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toMatch(/roles validate \(mapping\): FAIL \(\d+ violations?\)/);
-      expect(result.stderr).toContain("roles.mapping.reference.missing");
-      expect(result.stdout).toContain("roles validate: FAIL");
+      // Row-cardinality pin: the FAIL header count must equal the number of
+      // reference.missing violation rows on stderr (printChecklist emits one
+      // row per violation), and the stdout summary must agree.
+      const header = /roles validate \(mapping\): FAIL \((\d+) violations?\)/.exec(result.stderr);
+      expect(header).not.toBeNull();
+      const declared = Number(header![1]);
+      expect(declared).toBeGreaterThan(0);
+      expect((result.stderr.match(/roles\.mapping\.reference\.missing/g) ?? []).length).toBe(declared);
+      expect(result.stdout).toContain(
+        `roles validate: FAIL (${declared} violations, 0 sibling skills scanned; load-order over 0)`,
+      );
     });
   });
 
@@ -1115,7 +1123,7 @@ A topic skill body without a Load Order heading.
       const result = runCli(["roles", "validate", "--roles-dir", REPO_ROLES_DIR, "--skills-dir", skillsRoot]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("roles validate (load order): OK");
-      expect(result.stdout).toContain("roles validate: OK (0 violations, 0 sibling skills)");
+      expect(result.stdout).toContain("roles validate: OK (0 violations, 0 sibling skills scanned; load-order over 0)");
     });
   });
 
@@ -1133,7 +1141,7 @@ A topic skill body without a Load Order heading.
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("roles validate (mapping): OK");
       expect(result.stdout).toContain("roles validate (load order): OK");
-      expect(result.stdout).toContain("roles validate: OK (0 violations, 1 sibling skill)");
+      expect(result.stdout).toContain("roles validate: OK (0 violations, 1 sibling skill scanned; load-order over 1)");
     });
   });
 });

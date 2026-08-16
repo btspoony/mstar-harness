@@ -25,7 +25,7 @@
  *   reference files fails (roles.mapping.reference.missing); non-corpus
  *   files are ignored (load-bearing per plan Step 3).
  */
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -38,6 +38,7 @@ import {
   evaluateBilingualGuard,
   extractCategoryRowTokens,
   isGitHubActions,
+  readRolesCorpus,
 } from "./drift-lint.ts";
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
@@ -289,11 +290,15 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
     });
 
   test("real corpus passes load-order lint and role mapping (17 skills)", () => {
-    const { skillsChecked, mappingViolations, failures } = checkRolesCorpus(realCorpus(), ROLES_DIR);
+    const { skillsChecked, loadOrderViolations, mappingViolations, failures } = checkRolesCorpus(
+      realCorpus(),
+      ROLES_DIR,
+    );
     // 18 mstar-* skill dirs minus mstar-harness-core (exempt inside the
     // engine's lintLoadOrder) — a new mstar-* skill must declare its load
     // order or fail the guard (and this pin) loudly.
     expect(skillsChecked).toBe(17);
+    expect(loadOrderViolations).toBe(0);
     expect(mappingViolations).toBe(0);
     expect(failures).toEqual([]);
   });
@@ -353,5 +358,22 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
     );
     expect(skillsChecked).toBe(0);
     expect(failures).toEqual([]);
+  });
+
+  test("unreadable SKILL.md becomes an explicit roles: read row, not a crash (guard-or-clear-error)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-roles-read-"));
+    try {
+      // A directory named SKILL.md makes readFileSync throw EISDIR
+      // deterministically (same trick as the CLI best-effort test) — the
+      // guard must surface a clear row and keep scanning, never raw-stack.
+      mkdirSync(join(dir, "mstar-foo", "SKILL.md"), { recursive: true });
+      const { entries, readFailures } = readRolesCorpus([join(dir, "mstar-foo", "SKILL.md")], dir);
+      expect(entries).toEqual([]);
+      expect(readFailures.length).toBe(1);
+      expect(readFailures[0]).toContain("roles: read mstar-foo/SKILL.md");
+      expect(readFailures[0]).toContain("EISDIR");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

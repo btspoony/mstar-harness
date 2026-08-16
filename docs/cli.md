@@ -181,8 +181,8 @@ Without flags, `--roles-dir` defaults to `skills/mstar-roles` and `--skills-dir`
 
 Exit codes:
 
-- `0` — OK: prints `roles validate: OK` plus the violation and sibling-skill counts
-- `1` — violations: prints one line per mapping / load-order violation
+- `0` — OK: prints `roles validate (mapping): OK` and `roles validate (load order): OK`, then the summary `roles validate: OK` with the violation, sibling-skill-scanned, and load-order-checked counts (the load-order count excludes `mstar-harness-core`, exempt by design)
+- `1` — violations: prints a FAIL header plus one violation row per mapping / load-order violation on stderr (same stream split as the other `printChecklist` commands); the `roles validate: FAIL (N violations, …)` summary line stays on stdout
 
 ## Harness Slash Commands (not CLI subcommands)
 

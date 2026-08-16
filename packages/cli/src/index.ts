@@ -1350,7 +1350,7 @@ rolesCommand
   .description(
     "Validate the mstar-roles skill-dir state: role mapping / parameter tables against the on-disk " +
       "references layout plus load-order declarations across sibling mstar-* skills " +
-      "(exit 1 on violations, 2 on usage)",
+      "(exit 1 on violations)",
   )
   .option(
     "--roles-dir <dir>",
@@ -1384,9 +1384,17 @@ rolesCommand
       printChecklist("roles validate (load order)", loadOrder);
       violations.push(...loadOrder.violations);
       const total = violations.length;
+      // Two distinct counts for the same corpus: siblings scanned (all
+      // readable mstar-* dirs, incl. mstar-harness-core) vs skills actually
+      // load-order-linted (core is exempt inside the engine) — keep the
+      // labels distinct so 18-vs-17 is not misread as a discrepancy.
       const siblingCount = Object.keys(skillTexts).length;
+      const loadOrderChecked = Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length;
+      const coreExempt = loadOrderChecked !== siblingCount;
       console.log(
-        `roles validate: ${total === 0 ? "OK" : "FAIL"} (${total} violation${total === 1 ? "" : "s"}, ${siblingCount} sibling skill${siblingCount === 1 ? "" : "s"})`,
+        `roles validate: ${total === 0 ? "OK" : "FAIL"} (${total} violation${total === 1 ? "" : "s"}, ` +
+          `${siblingCount} sibling skill${siblingCount === 1 ? "" : "s"} scanned; ` +
+          `load-order over ${loadOrderChecked}${coreExempt ? ", core exempt" : ""})`,
       );
       if (total > 0) process.exitCode = 1;
     } catch (error) {
