@@ -143,7 +143,12 @@ jobs:
         run: bun run --cwd packages/dsh typecheck:tests
 
       - name: Test scripts
-        run: bun test scripts/prepare-release.test.ts scripts/ci-dep-guard.test.ts scripts/drift-lint.test.ts
+        run: bun test scripts/ascii-literal-utils.test.ts scripts/ci-dep-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/prepare-release.test.ts
+
+      # spec §7.4: src code literals must stay pure ASCII — bun 1.2.17
+      # misdecodes raw multi-byte UTF-8 in literals of the 366KB CLI bundle.
+      - name: Lint ASCII literals (src code)
+        run: bun run lint:ascii-literals
 
       - name: Pack CLI tarball
         run: bun run cli:pack

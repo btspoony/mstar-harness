@@ -229,7 +229,7 @@ export function validateCompassFrontmatter(doc: unknown): GateResult {
         violation(
           "medium",
           "COMPASS_INVALID_FIELD",
-          "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)",
+          "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration \u00a71.3)",
           "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md",
         ),
       ],
@@ -245,7 +245,7 @@ export function validateCompassFrontmatter(doc: unknown): GateResult {
           "medium",
           "COMPASS_INVALID_FIELD",
           `Compass frontmatter field '${field}' is invalid: ${issue.message}`,
-          `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`,
+          `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration \u00a71.3)`,
         );
       }),
     };
@@ -257,7 +257,7 @@ export function validateCompassFrontmatter(doc: unknown): GateResult {
       violation(
         "high",
         "COMPASS_END_DATE_REQUIRED",
-        "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)",
+        "Compass frontmatter status is 'completed' but end_date is missing \u2014 end_date is required at iteration-close (mstar-iteration \u00a73.4, template Fields guide)",
         "Add `end_date: YYYY-MM-DD` to the frontmatter",
       ),
     );
@@ -267,7 +267,7 @@ export function validateCompassFrontmatter(doc: unknown): GateResult {
       violation(
         "medium",
         "COMPASS_END_DATE_NOT_ALLOWED",
-        `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`,
+        `Compass frontmatter sets end_date while status is '${status}' \u2014 end_date is only written at iteration-close (mstar-iteration \u00a73.4)`,
         "Remove end_date until iteration-close",
       ),
     );
@@ -304,7 +304,7 @@ function entryPlansAllDone(statusDoc: StatusDoc, registered: string[]): Validati
       violation(
         "medium",
         "COMPASS_NO_PLANS",
-        "Compass frontmatter registers no plans — the all-plans-Done transition cannot be verified (mstar-iteration §1.3 / Phase transition gates)",
+        "Compass frontmatter registers no plans \u2014 the all-plans-Done transition cannot be verified (mstar-iteration \u00a71.3 / Phase transition gates)",
         "List the iteration's plan ids in the compass frontmatter `plans`",
       ),
     );
@@ -317,7 +317,7 @@ function entryPlansAllDone(statusDoc: StatusDoc, registered: string[]): Validati
         violation(
           "high",
           "PLAN_NOT_IN_STATUS",
-          `Plan '${planId}' is registered in the compass frontmatter but has no row in status.json plans[] (mstar-iteration §3.1 entry item 1)`,
+          `Plan '${planId}' is registered in the compass frontmatter but has no row in status.json plans[] (mstar-iteration \u00a73.1 entry item 1)`,
           "Add the plan row to {HARNESS_DIR}/status.json",
         ),
       );
@@ -328,7 +328,7 @@ function entryPlansAllDone(statusDoc: StatusDoc, registered: string[]): Validati
         violation(
           "high",
           "PLAN_NOT_DONE",
-          `Plan '${planId}' status is ${JSON.stringify(row.status)} in status.json — all compass-registered plans must be 'Done' before iteration-close (mstar-iteration §3.1 entry item 1)`,
+          `Plan '${planId}' status is ${JSON.stringify(row.status)} in status.json \u2014 all compass-registered plans must be 'Done' before iteration-close (mstar-iteration \u00a73.1 entry item 1)`,
         ),
       );
     }
@@ -354,7 +354,7 @@ function entryResidualsOpen(statusDoc: StatusDoc, planId: string): ValidationRes
       violation(
         "medium",
         "RESIDUAL_MALFORMED",
-        "status.json residual_findings must be a plan-id → entries object (mstar-iteration §3.1 entry item 2)",
+        "status.json residual_findings must be a plan-id \u2192 entries object (mstar-iteration \u00a73.1 entry item 2)",
       ),
     );
     return violations;
@@ -366,7 +366,7 @@ function entryResidualsOpen(statusDoc: StatusDoc, planId: string): ValidationRes
       violation(
         "medium",
         "RESIDUAL_MALFORMED",
-        `status.json residual_findings['${planId}'] must be an array of residual entries (mstar-iteration §3.1 entry item 2)`,
+        `status.json residual_findings['${planId}'] must be an array of residual entries (mstar-iteration \u00a73.1 entry item 2)`,
       ),
     );
     return violations;
@@ -388,7 +388,7 @@ function entryResidualsOpen(statusDoc: StatusDoc, planId: string): ValidationRes
       violation(
         "high",
         "OPEN_RESIDUALS",
-        `Plan '${planId}' has ${openIds.length} open residual finding(s) not exempted as blocker-defers (${openIds.join(", ")}) — residuals must be closed/archived before iteration-close; only zero-residual blocker-defers (decision: defer + target) may stay open (mstar-iteration §3.1 entry item 2)`,
+        `Plan '${planId}' has ${openIds.length} open residual finding(s) not exempted as blocker-defers (${openIds.join(", ")}) \u2014 residuals must be closed/archived before iteration-close; only zero-residual blocker-defers (decision: defer + target) may stay open (mstar-iteration \u00a73.1 entry item 2)`,
         "Close or archive the open residuals, or convert them into blocker-defers (decision: defer + non-empty target) per mstar-plan-artifacts Findings cleanup modes",
       ),
     );
@@ -409,7 +409,7 @@ function exitFrontmatterClosed(compassDoc: CompassDoc): ValidationResult[] {
       violation(
         "high",
         "EXIT_STATUS_NOT_COMPLETED",
-        `Compass frontmatter status must be 'completed' at close exit — current: ${JSON.stringify(compassDoc.status)} (mstar-iteration §3.4 / §3.5 exit item 4)`,
+        `Compass frontmatter status must be 'completed' at close exit \u2014 current: ${JSON.stringify(compassDoc.status)} (mstar-iteration \u00a73.4 / \u00a73.5 exit item 4)`,
       ),
     );
   }
@@ -419,7 +419,7 @@ function exitFrontmatterClosed(compassDoc: CompassDoc): ValidationResult[] {
       violation(
         "high",
         "EXIT_END_DATE_REQUIRED",
-        "Compass frontmatter end_date (YYYY-MM-DD) is required when closing (mstar-iteration §3.4 / §3.5 exit item 4)",
+        "Compass frontmatter end_date (YYYY-MM-DD) is required when closing (mstar-iteration \u00a73.4 / \u00a73.5 exit item 4)",
       ),
     );
   }
@@ -435,7 +435,7 @@ function exitBranchCheck(opts: PhaseGateOptions): ValidationResult[] {
       violation(
         "medium",
         "EXIT_BRANCH_UNVERIFIABLE",
-        "Cannot verify the current branch is spec_integration_branch — missing currentBranch / specIntegrationBranch probe inputs (mstar-iteration §3.5 exit item 5)",
+        "Cannot verify the current branch is spec_integration_branch \u2014 missing currentBranch / specIntegrationBranch probe inputs (mstar-iteration \u00a73.5 exit item 5)",
       ),
     );
   } else if (currentBranch !== specIntegrationBranch) {
@@ -443,7 +443,7 @@ function exitBranchCheck(opts: PhaseGateOptions): ValidationResult[] {
       violation(
         "high",
         "EXIT_BRANCH_MISMATCH",
-        `Current branch '${currentBranch}' is not the spec_integration_branch '${specIntegrationBranch}' (mstar-iteration §3.5 exit item 5)`,
+        `Current branch '${currentBranch}' is not the spec_integration_branch '${specIntegrationBranch}' (mstar-iteration \u00a73.5 exit item 5)`,
       ),
     );
   }
@@ -460,7 +460,7 @@ function exitPrBaseCheck(compassDoc: CompassDoc, opts: PhaseGateOptions): Valida
       violation(
         "medium",
         "EXIT_PR_BASE_UNVERIFIABLE",
-        "Cannot verify the PR base — missing prBaseBranch probe input (mstar-iteration §3.5 exit item 6)",
+        "Cannot verify the PR base \u2014 missing prBaseBranch probe input (mstar-iteration \u00a73.5 exit item 6)",
       ),
     );
   } else if (typeof target !== "string" || prBaseBranch !== target) {
@@ -468,7 +468,7 @@ function exitPrBaseCheck(compassDoc: CompassDoc, opts: PhaseGateOptions): Valida
       violation(
         "high",
         "EXIT_PR_BASE_MISMATCH",
-        `PR base '${prBaseBranch}' must equal the compass target_branch '${String(target)}' — not an undocumented branch (mstar-iteration §3.5 exit item 6)`,
+        `PR base '${prBaseBranch}' must equal the compass target_branch '${String(target)}' \u2014 not an undocumented branch (mstar-iteration \u00a73.5 exit item 6)`,
       ),
     );
   }
@@ -537,7 +537,7 @@ export function pushCadenceProbe(ciRunning: boolean, reviewWaveActive: boolean):
       violation(
         "high",
         "PUSH_BLOCKED_CI",
-        "CI checks are still queued/in_progress on the current head — do not push until the wave completes (mstar-iteration §5.1a push gate 1)",
+        "CI checks are still queued/in_progress on the current head \u2014 do not push until the wave completes (mstar-iteration \u00a75.1a push gate 1)",
         "Wait for CI to settle, then push once with the whole local batch",
       ),
     );
@@ -547,7 +547,7 @@ export function pushCadenceProbe(ciRunning: boolean, reviewWaveActive: boolean):
       violation(
         "high",
         "PUSH_BLOCKED_REVIEW_WAVE",
-        "An AI/bot review wave is still running on the current head — do not push until it settles (mstar-iteration §5.1a push gate 2)",
+        "An AI/bot review wave is still running on the current head \u2014 do not push until it settles (mstar-iteration \u00a75.1a push gate 2)",
         "Wait for the review wave, then push once",
       ),
     );
@@ -569,7 +569,7 @@ export function assertIndexRowObligations(iterationsDir: string): GateResult {
         violation(
           "high",
           "INDEX_ITERATIONS_DIR_MISSING",
-          `{ITERATION_DIR} '${iterationsDir}' does not exist (mstar-iteration §1.4)`,
+          `{ITERATION_DIR} '${iterationsDir}' does not exist (mstar-iteration \u00a71.4)`,
           "Create the iterations directory (path.resolveIterationDir)",
         ),
       ],
@@ -588,7 +588,7 @@ export function assertIndexRowObligations(iterationsDir: string): GateResult {
         violation(
           "high",
           "INDEX_README_MISSING",
-          `{ITERATION_DIR}/README.md does not exist — one row per iteration is required (mstar-iteration §1.4)`,
+          `{ITERATION_DIR}/README.md does not exist \u2014 one row per iteration is required (mstar-iteration \u00a71.4)`,
           `Create {ITERATION_DIR}/README.md with the header '${INDEX_HEADER}' and one row per iteration`,
         ),
       ],
@@ -601,7 +601,7 @@ export function assertIndexRowObligations(iterationsDir: string): GateResult {
       violation(
         "medium",
         "INDEX_HEADER_MISSING",
-        `{ITERATION_DIR}/README.md lacks the table header '${INDEX_HEADER}' (mstar-iteration §1.4)`,
+        `{ITERATION_DIR}/README.md lacks the table header '${INDEX_HEADER}' (mstar-iteration \u00a71.4)`,
         "Add the header row on first creation",
       ),
     );
@@ -617,7 +617,7 @@ export function assertIndexRowObligations(iterationsDir: string): GateResult {
         violation(
           "medium",
           "INDEX_ROW_MISSING",
-          `Iteration '${id}' has a delivery-compass.md but no index row in {ITERATION_DIR}/README.md — one row per iteration (mstar-iteration §1.4)`,
+          `Iteration '${id}' has a delivery-compass.md but no index row in {ITERATION_DIR}/README.md \u2014 one row per iteration (mstar-iteration \u00a71.4)`,
           `Add | \`${id}\` | [\`${id}/\`](${id}/) | <description> | <status> |`,
         ),
       );
@@ -682,7 +682,7 @@ function parseFlowArray(raw: string, filePath: string): string[] {
   const inner = raw.slice(1, -1);
   if (/[[\]]/.test(inner)) {
     throw new Error(
-      `nested flow-style array in ${filePath}: ${JSON.stringify(raw)} — only flat scalar items are supported (e.g. [a, b])`,
+      `nested flow-style array in ${filePath}: ${JSON.stringify(raw)} \u2014 only flat scalar items are supported (e.g. [a, b])`,
     );
   }
   // Quote-aware scan BEFORE the naive split: a comma inside a quoted item
@@ -698,7 +698,7 @@ function parseFlowArray(raw: string, filePath: string): string[] {
       else if (quote === ch) quote = null;
     } else if (ch === "," && quote !== null) {
       throw new Error(
-        `ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} — quoted item containing comma cannot be split unambiguously (flat scalar items only)`,
+        `ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} \u2014 quoted item containing comma cannot be split unambiguously (flat scalar items only)`,
       );
     }
   }

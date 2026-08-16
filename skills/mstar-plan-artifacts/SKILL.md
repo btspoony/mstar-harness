@@ -28,6 +28,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 
 > **Engine check (when available):** run `mstar status validate <path>` (or `import { validateStatus } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
+- **Fail-loud handoff**: findings must pass `validateResidual` (per entry) / `validateStatus` (whole file) before registration; malformed → reject + rewrite → **`references/status-and-residuals.md`** (“Fail-loud handoff contract”).
 - **Lifecycle**: open → verified close → **`archived/residuals/<plan-id>.json`**; machine **`severity`** enum in reference.
 
 > **Engine check (when available):** run `mstar status archive-residuals <plan-id>` (or `import { archiveResiduals } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.

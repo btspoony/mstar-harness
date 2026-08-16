@@ -152,7 +152,8 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 - Progressive disclosure:
 - Evidence for behavior change (P6):
 - Stale references checked:
-- Verdict: Approve | Request Changes | Needs Discussion
+- Verdict: Approve | Request Changes | Needs Discussion | Unconfirmed
+- Unconfirmed: paired evidence (P6) cannot be established or verified
 ```
 
 ## References
@@ -160,3 +161,4 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 | 何时 | 打开 |
 |------|------|
 | 需要完整 skill-writer 流程、原则细则、输出模板 | `references/skillsbench-authoring.md` |
+| 需要把「真实产物」固化为可重跑断言（P6 重武器选项） | `references/regression-fixation.md` |

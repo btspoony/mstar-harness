@@ -170,7 +170,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       violation(
         "high",
         "worktree.l1.control-missing",
-        "metadata.control_worktree_path is not recorded — the L1 control worktree (integration-branch checkout) must be recorded in status.json before writable dispatch",
+        "metadata.control_worktree_path is not recorded \u2014 the L1 control worktree (integration-branch checkout) must be recorded in status.json before writable dispatch",
         "record the control worktree path in status.json metadata.control_worktree_path",
       ),
     );
@@ -180,7 +180,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       violation(
         "high",
         "worktree.l1.lease-missing",
-        `execution_lease.worktree_path is empty for plan "${planId}" — no verified execution_lease to dispatch against`,
+        `execution_lease.worktree_path is empty for plan "${planId}" \u2014 no verified execution_lease to dispatch against`,
         "claim the execution_lease with an absolute feature worktree path before dispatch",
       ),
     );
@@ -202,7 +202,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       violation(
         "critical",
         "worktree.l1.lease-equals-control",
-        `execution_lease.worktree_path "${leaseWorktreePath}" equals metadata.control_worktree_path — the feature worktree MUST differ from the control worktree (L1 isolation; product edits never land in the control checkout)`,
+        `execution_lease.worktree_path "${leaseWorktreePath}" equals metadata.control_worktree_path \u2014 the feature worktree MUST differ from the control worktree (L1 isolation; product edits never land in the control checkout)`,
         "use a distinct feature worktree for the plan (git worktree add <path> <branch>) and update the lease",
       ),
     );
@@ -262,7 +262,7 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
       violation(
         "high",
         "worktree.l2.no-tracks",
-        "no parallel writable tracks — the L2 pre-dispatch checklist requires at least one track with an absolute worktreePath and Working branch",
+        "no parallel writable tracks \u2014 the L2 pre-dispatch checklist requires at least one track with an absolute worktreePath and Working branch",
         "pass each track's absolute Worktree path and PM-approved Working branch",
       ),
     );
@@ -285,7 +285,7 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
         violation(
           "high",
           "worktree.l2.track-path-relative",
-          `track ${index + 1} worktreePath "${track.worktreePath}" is not an absolute path — L2 tracks MUST use absolute worktree checkout paths (consistent with the lease validator's absolute worktree_path enforcement)`,
+          `track ${index + 1} worktreePath "${track.worktreePath}" is not an absolute path \u2014 L2 tracks MUST use absolute worktree checkout paths (consistent with the lease validator's absolute worktree_path enforcement)`,
           `use an absolute path for track ${index + 1} (e.g. /Users/<you>/worktrees/<branch>)`,
         ),
       );
@@ -299,7 +299,7 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
         violation(
           "high",
           "worktree.l2.track-path-collision",
-          `duplicate worktreePath "${track.worktreePath}" across parallel tracks — L2 parallel-writable isolation requires a distinct absolute Worktree path per track (N parallel invokes ≠ isolation)`,
+          `duplicate worktreePath "${track.worktreePath}" across parallel tracks \u2014 L2 parallel-writable isolation requires a distinct absolute Worktree path per track (N parallel invokes \u2260 isolation)`,
           "give every parallel track its own git worktree checkout",
         ),
       );
@@ -361,7 +361,7 @@ export function assertControlVsFeaturePath(controlWorktreePath: string, featureW
       violation(
         "critical",
         "worktree.control-feature.same",
-        `control worktree path equals feature/lease worktree path "${controlWorktreePath}" — execution_lease.worktree_path MUST differ from metadata.control_worktree_path`,
+        `control worktree path equals feature/lease worktree path "${controlWorktreePath}" \u2014 execution_lease.worktree_path MUST differ from metadata.control_worktree_path`,
         "use a distinct feature worktree for the plan's product edits",
       ),
     );
@@ -451,7 +451,7 @@ export function singleReviewSnapshot(assignments: readonly QcSnapshotAssignment[
         violation(
           "high",
           "qc.alignment.snapshot-missing",
-          `review head not provided for assignment ${index + 1} (plan_id "${a.planId}") — cannot confirm the single review snapshot precondition`,
+          `review head not provided for assignment ${index + 1} (plan_id "${a.planId}") \u2014 cannot confirm the single review snapshot precondition`,
           "precompute and pass the review HEAD (full SHA) for every assignment",
         ),
       );
@@ -464,7 +464,7 @@ export function singleReviewSnapshot(assignments: readonly QcSnapshotAssignment[
       violation(
         "high",
         "qc.alignment.single-snapshot",
-        `assignments cover ${distinct.length} different review heads (${distinct.join(", ")}) — all reviewable commits must sit on ONE Working branch HEAD before QC tri + QA`,
+        `assignments cover ${distinct.length} different review heads (${distinct.join(", ")}) \u2014 all reviewable commits must sit on ONE Working branch HEAD before QC tri + QA`,
         "merge the parallel tracks to a single Working branch HEAD, then re-derive the heads",
       ),
     );

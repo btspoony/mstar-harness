@@ -194,7 +194,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
       `mstar sdd workspace: linked worktree at ${root} has no {HARNESS_DIR}/status.json (default gitignore).\n` +
         `  Refusing to create a second SDD tree under the feature checkout.\n` +
         `  Re-run with MSTAR_CONTROL_ROOT=<control_worktree_path> or: mstar sdd workspace ${planId} <control_worktree_path>\n` +
-        `  See mstar-branch-worktree «Harness path SSOT under default gitignore».`,
+        `  See mstar-branch-worktree \u00abHarness path SSOT under default gitignore\u00bb.`,
       1,
     );
   }
@@ -453,7 +453,7 @@ export function implementerSessionStickyRules(input: StickyRulesInput): StickyRu
     return {
       resume: false,
       reason: `micro-batch of ${microBatchTasks} tasks is outside 1..3 (max 3 without user override, ` +
-        "sticky-implementer-session.md § Micro-batch fallback)",
+        "sticky-implementer-session.md \u00a7 Micro-batch fallback)",
     };
   }
   return { resume: true, reason: `sticky resume OK: host_agent_id ${session.host_agent_id}, next task ${nextTask}` };

@@ -199,7 +199,7 @@ export function resolvePlanDir(harnessDir: string): string {
 export function assertSafePathComponent(value: string, what: string): void {
   if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
     throw new Error(
-      `${what} must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", "..", or containing "/" or "\\") — got ${JSON.stringify(value)}`,
+      `${what} must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", "..", or containing "/" or "\\") \u2014 got ${JSON.stringify(value)}`,
     );
   }
 }
@@ -282,7 +282,7 @@ const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
  * `.agents/` 等价"), comments included. Used when the resolved harness kind
  * is `.agents`.
  */
-const GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
+const GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) \u2014 legacy
 # Default-ignore everything under .agents/, then re-include the tracked results.
 .agents/**
 !.agents/AGENTS.md
@@ -393,7 +393,7 @@ export function validateGitignore(root: string): ValidationResult {
     ok: true,
     severity: "low",
     code: "gitignore.ok",
-    message: `.gitignore at ${gitignorePath} contains a complete canonical harness ignore set — default-ignore + tracked re-includes (${label})`,
+    message: `.gitignore at ${gitignorePath} contains a complete canonical harness ignore set \u2014 default-ignore + tracked re-includes (${label})`,
   };
 }
 
@@ -420,7 +420,7 @@ export function assertPlanWritingPath(planPath: string, harnessDir: string | nul
       ok: false,
       severity: "high",
       code: "plan-path.no-harness",
-      message: `persistent plan tracking is not enabled — cannot place plan ${planAbs} under {PLAN_DIR}`,
+      message: `persistent plan tracking is not enabled \u2014 cannot place plan ${planAbs} under {PLAN_DIR}`,
       fix: "initialize the harness (scaffoldHarness) so plans land in {PLAN_DIR}",
     };
   }

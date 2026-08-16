@@ -1023,6 +1023,50 @@
         "skips the Review & Edit chain or PM lock",
         "assignment uses non-English field keys"
       ]
+    },
+    {
+      "id": "qc-consolidation-unconfirmed-blocks-approve",
+      "prompt": "plan QC tri consolidation：一席 Unconfirmed（证据通道失败），其余两席无 Critical/Warning——期望 Decision: Unconfirmed，补证据后 targeted re-review，绝不 Approve",
+      "expected_route": [
+        "@project-manager",
+        "QC-targeted-rereview"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "consolidated Decision: Unconfirmed when any seat is Unconfirmed (never Approve)",
+        "evidence supplement for the failed channel before re-converge",
+        "targeted re-review of the affected seat, not full tri re-dispatch",
+        "durable main-plan Review Gate Summary"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "Decision: Approve while any seat is Unconfirmed",
+        "treating an evidence-channel failure as no findings",
+        "full tri re-dispatch instead of targeted re-review for the affected seat",
+        "assignment uses non-English field keys",
+        "dispatching an implementer fix wave for an evidence-channel or coverage gap instead of evidence supplement + targeted re-review"
+      ]
+    },
+    {
+      "id": "qc-consolidation-unmentioned-is-unreviewed",
+      "prompt": "plan QC tri consolidation：某 finding 无任何 QC 席提及（未覆盖）——期望标 unreviewed 并转 re-review，绝不静默视为通过",
+      "expected_route": [
+        "@project-manager",
+        "QC-targeted-rereview"
+      ],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "unreviewed marking for findings no seat mentioned",
+        "re-review dispatch covering the unmentioned finding",
+        "durable main-plan Review Gate Summary"
+      ],
+      "hard_fail_if": [
+        "missing Context Loaded declaration",
+        "silently treating unmentioned findings as passed/approved",
+        "closing consolidation without covering every finding in the review range",
+        "assignment uses non-English field keys",
+        "dispatching an implementer fix wave for an evidence-channel or coverage gap instead of evidence supplement + targeted re-review"
+      ]
     }
   ]
 }

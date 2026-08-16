@@ -257,7 +257,7 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
       violation(
         "medium",
         "compound.schema.missing-frontmatter",
-        "no `---` YAML frontmatter block found — knowledge docs must open with the schema.yaml contract (mstar-compound/references/schema.yaml)",
+        "no `---` YAML frontmatter block found \u2014 knowledge docs must open with the schema.yaml contract (mstar-compound/references/schema.yaml)",
         "add the fenced frontmatter with module, date, problem_type, category, severity",
       ),
     );
@@ -294,7 +294,7 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
       violation(
         "medium",
         "compound.schema.invalid-problem-type",
-        `problem_type "${String(problemType)}" must be a string — one of the schema.yaml enum values (bug: build_error…config_error; knowledge: developer_experience…testing_pattern)`,
+        `problem_type "${String(problemType)}" must be a string \u2014 one of the schema.yaml enum values (bug: build_error\u2026config_error; knowledge: developer_experience\u2026testing_pattern)`,
         "pick the narrowest applicable problem_type from schema.yaml",
       ),
     );
@@ -305,14 +305,14 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
       violation(
         "medium",
         "compound.schema.invalid-problem-type",
-        `problem_type "${problemType}" is not one of the schema.yaml enum values (bug: build_error…config_error; knowledge: developer_experience…testing_pattern)`,
+        `problem_type "${problemType}" is not one of the schema.yaml enum values (bug: build_error\u2026config_error; knowledge: developer_experience\u2026testing_pattern)`,
         "pick the narrowest applicable problem_type from schema.yaml",
       ),
     );
   }
   if (doc.severity !== undefined && !isStr(doc.severity)) {
     violations.push(
-      violation("medium", "compound.schema.invalid-severity", `severity "${String(doc.severity)}" must be a string — critical | high | medium | low (schema.yaml required_fields.severity)`, "use one of the four severity values"),
+      violation("medium", "compound.schema.invalid-severity", `severity "${String(doc.severity)}" must be a string \u2014 critical | high | medium | low (schema.yaml required_fields.severity)`, "use one of the four severity values"),
     );
   }
   if (isStr(doc.severity) && !(KNOWLEDGE_SEVERITIES as readonly string[]).includes(doc.severity)) {
@@ -327,7 +327,7 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
         violation(
           "medium",
           "compound.schema.category-mismatch",
-          `category "${doc.category}" does not match problem_type "${problemType}" — category-mapping.md rule 1 maps it to "${expected}"`,
+          `category "${doc.category}" does not match problem_type "${problemType}" \u2014 category-mapping.md rule 1 maps it to "${expected}"`,
           `set \`category: ${expected}\` (the directory name under {KNOWLEDGE_DIR})`,
         ),
       );
@@ -372,7 +372,7 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
     if (!Array.isArray(doc.tags)) {
       violations.push(violation("low", "compound.schema.invalid-tags", "optional `tags` must be a YAML list (schema.yaml optional_fields.tags)", "list lowercase, hyphen-separated keywords"));
     } else if (doc.tags.length > 8) {
-      violations.push(violation("low", "compound.schema.tags-too-many", `tags has ${doc.tags.length} entries — max 8 (schema.yaml optional_fields.tags.max_items)`, "trim the tag list to at most 8 keywords"));
+      violations.push(violation("low", "compound.schema.tags-too-many", `tags has ${doc.tags.length} entries \u2014 max 8 (schema.yaml optional_fields.tags.max_items)`, "trim the tag list to at most 8 keywords"));
     }
   }
   if (doc.last_updated !== undefined && (!isStr(doc.last_updated) || !DATE_RE.test(doc.last_updated))) {
@@ -508,7 +508,7 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
         violation(
           "low",
           "compound.reference.module-missing",
-          `symbol ref \`${ref}\` — heuristic: no ${module}.ts|tsx|js|jsx|mjs|cjs module file found under ${repoRoot} (compound-refresh Phase 2)`,
+          `symbol ref \`${ref}\` \u2014 heuristic: no ${module}.ts|tsx|js|jsx|mjs|cjs module file found under ${repoRoot} (compound-refresh Phase 2)`,
           "verify the module file exists, or update the reference",
         ),
       );
@@ -580,7 +580,7 @@ export function assertIndexRows(knowledgeDir: string): GateResult {
       violation(
         "medium",
         "compound.index.missing-readme",
-        `missing ${readmePath} — the knowledge index is required (mstar-compound Phase 6: every doc gets a README.md row)`,
+        `missing ${readmePath} \u2014 the knowledge index is required (mstar-compound Phase 6: every doc gets a README.md row)`,
         "create knowledge/README.md with a Document / Source Plan / Description / Status table",
       ),
     );
@@ -665,7 +665,7 @@ export function scopeGuard(path: string, allowedRoots: readonly string[]): GateR
       violation(
         "medium",
         "compound.scope.outside",
-        `path "${path}" is outside the compound-refresh scope (allowed: ${allowedRoots.join(", ")}) — compound-refresh operates only on {HARNESS_DIR}/knowledge/**, {HARNESS_DIR}/knowledge/README.md, <repo-root>/CONCEPTS.md, {HARNESS_DIR}/status.json (mstar-compound-refresh SKILL.md § 产物与操作路径)`,
+        `path "${path}" is outside the compound-refresh scope (allowed: ${allowedRoots.join(", ")}) \u2014 compound-refresh operates only on {HARNESS_DIR}/knowledge/**, {HARNESS_DIR}/knowledge/README.md, <repo-root>/CONCEPTS.md, {HARNESS_DIR}/status.json (mstar-compound-refresh SKILL.md \u00a7 \u4ea7\u7269\u4e0e\u64cd\u4f5c\u8def\u5f84)`,
         "point the operation at one of the allowed paths",
       ),
     ],

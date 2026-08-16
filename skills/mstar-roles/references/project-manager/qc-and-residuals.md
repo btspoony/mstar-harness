@@ -47,7 +47,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 ```markdown
 ## QC Consolidated Decision
 
-**Decision**: Approve | Request Changes | Needs Discussion
+**Decision**: Approve | Request Changes | Needs Discussion | Unconfirmed
 **Blocking Items**: {list or None}
 **Residual Findings**: {list with owner/target date, or None}
 **Assigned Fix Owners**: {role list}
@@ -56,6 +56,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 ## Quick Decision Rules
 
+- Any seat `Unconfirmed` (evidence-channel failure) -> Decision: `Unconfirmed` (supplement evidence, then re-converge); never falls through to `Approve`
 - Any unresolved `Critical` -> `Request Changes`
 - No `Critical`, but unresolved high-impact warning with disagreement -> `Needs Discussion`
 - Otherwise -> `Approve`

@@ -107,7 +107,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
       violation(
         "medium",
         "audit.status.missing-block",
-        "no `## Status` block found — audit plan files carry the Status block fields (mstar-audit SKILL § Plan files)",
+        "no `## Status` block found \u2014 audit plan files carry the Status block fields (mstar-audit SKILL \u00a7 Plan files)",
         "add a `## Status` block with Priority, Effort, Risk, Depends on, Category, Planned at",
       ),
     );
@@ -122,7 +122,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
           violation(
             "medium",
             "audit.status.missing-field",
-            `Status block${label} missing required field "${field}" (mstar-audit SKILL § Plan files)`,
+            `Status block${label} missing required field "${field}" (mstar-audit SKILL \u00a7 Plan files)`,
             `add \`- **${field}**: <value>\` to the Status block`,
           ),
         );
@@ -136,7 +136,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
           violation(
             "medium",
             code,
-            `Status block${label} "${field}" = "${value}" — expected ${expected} (mstar-audit SKILL § Plan files)`,
+            `Status block${label} "${field}" = "${value}" \u2014 expected ${expected} (mstar-audit SKILL \u00a7 Plan files)`,
             `fix \`- **${field}**:\` to one of: ${expected}`,
           ),
         );
@@ -322,7 +322,7 @@ function slugify(title: string): string {
 }
 
 const escapeCell = (value: string) => value.replace(/\|/g, "\\|");
-const truncate = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}…` : value);
+const truncate = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}\u2026` : value);
 
 /** Render one numbered plan file from a finding (self-contained; no
  * placeholder tokens, per plan-quality-bar). The `## Evidence` section is
@@ -382,7 +382,7 @@ function renderIndex(params: {
     .join("\n");
   const directionRows = rows
     .filter((r) => r.category === "direction")
-    .map((r) => `- ${escapeCell(r.title)} — ${escapeCell(truncate(r.impact, 120))}`)
+    .map((r) => `- ${escapeCell(r.title)} \u2014 ${escapeCell(truncate(r.impact, 120))}`)
     .join("\n");
   const executionRows = rows
     .map((r) => `| ${r.num} | ${escapeCell(r.title)} | ${r.priority} | ${r.effort} | ${r.dependsOn} | TODO |`)
@@ -390,7 +390,7 @@ function renderIndex(params: {
   const rejectedRows = rejected.map((r) => `- ${escapeCell(r.title)}: ${escapeCell(r.reason)}`).join("\n");
 
   const sections = [
-    `# Audit Report — ${repoName} @ ${repoShortSha} (${date})`,
+    `# Audit Report \u2014 ${repoName} @ ${repoShortSha} (${date})`,
     "",
     "## Findings",
     "",
@@ -412,6 +412,12 @@ function renderIndex(params: {
   if (rejectedRows !== "") {
     sections.push("", "## Findings considered and rejected", "", rejectedRows);
   }
+  sections.push(
+    "",
+    "## Red-team dispositions",
+    "",
+    "- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>",
+  );
   return `${sections.join("\n")}\n`;
 }
 
@@ -463,14 +469,14 @@ export function scaffoldAuditPlan(
     return {
       num: file.slice(0, 3),
       title: summary.title,
-      category: fields.get("Category") ?? "—",
+      category: fields.get("Category") ?? "\u2014",
       impact: "see plan file",
-      effort: fields.get("Effort") ?? "—",
-      risk: fields.get("Risk") ?? "—",
-      confidence: "—",
-      evidence: fields.get("Evidence") ?? "—",
-      priority: fields.get("Priority") ?? "—",
-      dependsOn: fields.get("Depends on") ?? "—",
+      effort: fields.get("Effort") ?? "\u2014",
+      risk: fields.get("Risk") ?? "\u2014",
+      confidence: "\u2014",
+      evidence: fields.get("Evidence") ?? "\u2014",
+      priority: fields.get("Priority") ?? "\u2014",
+      dependsOn: fields.get("Depends on") ?? "\u2014",
     };
   });
 

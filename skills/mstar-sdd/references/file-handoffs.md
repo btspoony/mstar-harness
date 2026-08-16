@@ -48,6 +48,8 @@ Fix subagent appends to same `task-N-report.md` with test evidence:
 
 Re-dispatch reviewer only when all three are present.
 
+The per-task fix loop applies the same fix-round mechanics as plan-level QC fix waves (SKILL.md · "After all tasks" — unverified rounds count, full re-entry, capped cross-round excerpt, honest non-convergence): from round ≥2 the excerpt of prior rounds' findings/dispositions goes into the fix dispatch brief, and the round tally/verification history lands in `$SDD_DIR/progress.md`.
+
 ## Progress ledger
 
 On clean task review, append to `$SDD_DIR/progress.md`:

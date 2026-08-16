@@ -207,7 +207,7 @@ function ensureIterationSkillLinks(dryRun: boolean) {
   const gitignoreEntries = CODEX_PROJECT_COMMAND_NAMES.map(iterationSkillGitignoreEntry);
   notes.push(...appendGitignore(projectRoot, gitignoreEntries, dryRun));
   notes.push(
-    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit) — symlinked to harness commands/*.md.",
+    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit) \u2014 symlinked to harness commands/*.md.",
   );
   return notes;
 }
