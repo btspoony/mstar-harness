@@ -72,12 +72,32 @@ import {
   registerWorkflowLedger,
   setWorkflowLedgerLogger,
 } from './gates/workflow-ledger.ts'
+import {
+  GOAL_BRIDGE_LOGGER,
+  registerGoalBridge,
+  setGoalBridgeLogger,
+} from './gates/goal-bridge.ts'
+import {
+  PLAN_MODE_BRIDGE_LOGGER,
+  registerPlanModeBridge,
+  setPlanModeBridgeLogger,
+} from './gates/plan-mode-bridge.ts'
 import type { SubagentRunInfoView } from './gates/fallbacks-decoration.ts'
 import {
   ADVISORY_LOGGER,
   runFallbacksAdvisory,
   setAdvisoryLogger,
 } from './gates/fallbacks-advisory.ts'
+import {
+  SEEDS_LOGGER,
+  declareMstarSeeds,
+} from './gates/fallbacks-seeds.ts'
+import { fallbacksMounted, fallbacksService } from './gates/fallbacks-probe.ts'
+import {
+  HARNESS_PROMPT_LOGGER,
+  registerHarnessPrompt,
+  setHarnessPromptLogger,
+} from './gates/system-prompt.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -403,13 +423,29 @@ export function apply(ctx: Context, config: Config): void {
   // regardless of launch cwd; absent when `bundle-assets` has not run
   // (config-only decoration).
   setDecorationAgentsDir(packagedAgentsDir())
-  // Adoption advisory (plan `20260815-dsh-fallbacks-personas` Task 4) — the
-  // warn-only deployment-taxonomy pass: when fallbacks is mounted, ONE pass
-  // per apply structurally reads the deployment's fallbacks row config
-  // (loader entry `options.config` — never the fallbacks plugin's module
-  // internals) and warns on missing mstar roles / empty personas / legacy
-  // keys (logger `mstar/fallbacks-advisory`). Never writes the fallbacks
-  // config; unreadable config → skip + one debug.
+  // Harness-rules system-prompt injection (plan `20260816-dsh-nb1-systemprompt`
+  // Task 2): the global-layer `mstar:harness-rules` pointer section + the
+  // `mstar:engine-status` runtime-context summary (visible to the root
+  // session AND dispatched children; the child-scoped `mstar:role-persona`
+  // is untouched). The module sink is bound to the dsh logger (decoration
+  // pattern); the registration itself is optional-unit — a composition
+  // without dsh-system-prompt keeps boot unaffected (one debug log,
+  // `registerHarnessPrompt` returns false).
+  setHarnessPromptLogger((level, message) => {
+    const logger = ctx.logger(HARNESS_PROMPT_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else logger.warn(message)
+  })
+  registerHarnessPrompt(ctx, { resolver })
+  // Adoption advisory (plan `20260815-dsh-fallbacks-personas` Task 4 +
+  // `20260816-dsh-b4-seeds` Task 3) — the warn-only deployment-taxonomy
+  // pass: when fallbacks is mounted, ONE pass per apply reports the adoption
+  // state (seeded / persona-overridden / missing + revert affordance via the
+  // effective readback; the structural roles.list read on the loader-
+  // fallback path). Never writes the fallbacks config; unreadable config →
+  // skip + one debug. With the service present the pass is ASYNC — it awaits
+  // the idempotent re-declare before the readback, so the latch arms when
+  // the pass reports it ran (mounted).
   setAdvisoryLogger((level, message) => {
     const logger = ctx.logger(ADVISORY_LOGGER)
     if (level === 'debug') logger.debug(message)
@@ -419,12 +455,82 @@ export function apply(ctx: Context, config: Config): void {
   // the fallbacks row before dsh) and — when unmounted at boot — at the
   // first `subagent/start` decision point (the loader mounts entries
   // concurrently; the same decision-point probe pattern as the decoration).
+  // The latch is RE-ARMED when the `llm-fallbacks` service disappears (the
+  // seeds inject child below returns a teardown resetting it): after an HMR
+  // fiber swap the fresh seed registry needs a new decision-point pass to
+  // re-converge (plan QC fix wave W-1).
   let advisoryPassed = false
+  // In-flight guard (plan QC fix wave S-reentry): the service-present pass
+  // is async, so a burst of decision points inside its settle window must
+  // not re-enter the pass (each re-entry would duplicate every warn).
+  let advisoryPassInFlight = false
+  // Pass-generation guard (PR #97 finding 1 — advisory latch race after
+  // HMR): the async pass can outlive the `llm-fallbacks` inject teardown
+  // (a fiber swap while the pass is in flight). The teardown bumps the
+  // generation; a stale completion only arms the latch when its generation
+  // is still current — otherwise the NEXT decision point re-runs the pass
+  // and the HMR re-convergence is not lost.
+  let advisoryGeneration = 0
   const runAdvisoryPass = (): void => {
-    if (advisoryPassed) return
-    advisoryPassed = runFallbacksAdvisory(ctx, packagedAgentsDir())
+    if (advisoryPassed || advisoryPassInFlight) return
+    advisoryPassInFlight = true
+    const generation = advisoryGeneration
+    void runFallbacksAdvisory(ctx, packagedAgentsDir())
+      .then((ran) => {
+        if (ran && generation === advisoryGeneration) advisoryPassed = true
+      })
+      .finally(() => {
+        advisoryPassInFlight = false
+      })
   }
   runAdvisoryPass()
+
+  // Mstar role seeds (plan `20260816-dsh-b4-seeds` Task 2): zero-config
+  // declaration of the 13 `mode: subagent` roles into the fallbacks seed
+  // registry. The seed registry is an upstream per-apply in-memory state
+  // (the `FallbacksSeedManager` is constructed inside the fallbacks
+  // `apply()`; a fiber dispose drops it), so the upstream companion
+  // contract is "re-declare at your own apply/mount" — this conditional
+  // child (`ctx.inject(['llm-fallbacks'])`) fires when the service appears
+  // and RE-FIRES on every re-apply (HMR / fiber swap): no one-shot latch.
+  // Unmounted at apply → the child stays inactive and fires on a later
+  // fallbacks apply; one debug log documents the armed state. Fire-and-
+  // forget with a terminal `.catch` (the upstream preset self-declare
+  // pattern) — declare never throws out of apply.
+  if (!fallbacksMounted(ctx)) {
+    ctx.logger(SEEDS_LOGGER).debug('fallbacks not mounted at apply — mstar seeds inject child armed; declare fires when the llm-fallbacks service appears (apply/HMR)')
+  }
+  ctx.inject(['llm-fallbacks'], (serviceCtx) => {
+    const service = fallbacksService(serviceCtx)
+    if (service === undefined) return
+    declareMstarSeeds(service, {
+      agentsDir: packagedAgentsDir(),
+      log: (level, message) => {
+        const logger = ctx.logger(SEEDS_LOGGER)
+        if (level === 'warn') logger.warn(message)
+        else if (level === 'error') logger.error(message)
+        else logger.debug(message)
+      },
+    }).catch((error) => {
+      // Non-Error rejections (string/plain object — plausible from a
+      // settings seam) must not log `undefined`; align with the upstream
+      // preset child's `error?.message ?? String(error)` (plan QC fix wave
+      // S-log; `instanceof` is the type-safe TS equivalent of that shape).
+      ctx.logger(SEEDS_LOGGER).error(`mstar seeds declaration failed (contained — fallbacks taxonomy unchanged): ${error instanceof Error ? error.message : String(error)}`)
+    })
+    // HMR/fiber-swap re-arm (plan QC fix wave W-1 + PR #97 finding 1): when
+    // the fallbacks service disappears, reset the advisory one-shot latch so
+    // the NEXT decision point re-converges the seeds state. The seed registry
+    // is per-apply in-memory state and a fiber swap drops it; without the
+    // reset, `advisoryPassed` would stay armed from the pre-swap pass and the
+    // re-declare convergence would never run again. The generation bump also
+    // invalidates any pass still in flight from BEFORE the swap — its stale
+    // completion must not re-arm the latch (see `runAdvisoryPass`).
+    return () => {
+      advisoryPassed = false
+      advisoryGeneration += 1
+    }
+  })
   registerSettleListener(ctx, config, pairing)
 
   // Workflow-ledger session-event consumer (plan `20260815-dsh-workflow-ledger`
@@ -452,6 +558,39 @@ export function apply(ctx: Context, config: Config): void {
     else logger.debug(message)
   })
   registerWorkflowLedger(ctx, resolver, adapter.workflowAskCache)
+
+  // Goal bridge (plan `20260816-dsh-nb2-goal-bridge` Task 2): one-way mirror
+  // of the active iteration objective into the dsh goal service with a
+  // finite `maxGoalRounds` cap (autonomous Phase 2 bounded) — the module
+  // sink is bound to the dsh logger (agent-flow ledger precedent) and the
+  // registration is optional-unit: the goals service is a structural
+  // `ctx.get('goals')` read (no peer dependency), absent → one debug log +
+  // boot unaffected. The bridge never writes harness state (`{HARNESS_DIR}`
+  // / status.json stay SSOT — one-way mirror, mstar-host `/goal` rule).
+  setGoalBridgeLogger((level, message) => {
+    const logger = ctx.logger(GOAL_BRIDGE_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else logger.warn(message)
+  })
+  registerGoalBridge(ctx, resolver, config)
+
+  // PlanMode bridge (plan `20260816-dsh-nb2-goal-bridge` Task 4b — N-B3):
+  // the Prepare-phase flag flip — a one-way mirror of the harness Prepare
+  // state (active steering compass + ≥1 plan row `Todo` in status.json)
+  // into the host plan-mode session state (`ctx.get('planMode')` structural
+  // read — no peer dependency). The module sink is bound to the dsh logger
+  // (goal-bridge precedent); the registration is optional-unit: the planMode
+  // service absent → ONE debug log + boot unaffected. `set` is idempotent
+  // (`'noop'` — repeated evaluation at the session-start + `subagent/start`
+  // decision points never churns `plan/mode` events). The bridge never
+  // writes harness state (`{HARNESS_DIR}` / status.json stay SSOT — one-way
+  // mirror, plan Global Constraints).
+  setPlanModeBridgeLogger((level, message) => {
+    const logger = ctx.logger(PLAN_MODE_BRIDGE_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else logger.warn(message)
+  })
+  registerPlanModeBridge(ctx, resolver)
 
   // Background-task settle pairing — the SECOND real completion seam: a
   // terminal task snapshot (completed/killed/failed) pairs via the registry

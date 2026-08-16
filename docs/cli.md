@@ -179,7 +179,7 @@ Non-fatal findings are reported separately: an unknown top-level field, a non-ob
 Read-only codebase survey that writes prioritized, self-contained improvement plans to `{PLAN_DIR}/audit-<YYYY-MM-DD>/` (numbered plan files + `README.md` index). Never edits source; selected plans feed the normal Prepare → Execute flow.
 
 ```text
-/codebase-audit [keywords]
+/codebase-audit [simplify]
 ```
 
 | Token | Meaning | Default |

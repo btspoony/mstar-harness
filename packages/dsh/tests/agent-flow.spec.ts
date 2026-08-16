@@ -59,6 +59,8 @@ import {
   setAgentFlowLogger,
   SETTLE_SEAM_PAIRING_NOTE,
   taskIdOf,
+  truncateLedgerField,
+  WORKFLOW_LEDGER_TRUNCATION_MARKER,
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
@@ -415,6 +417,50 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('truncateLedgerField — code-point-safe truncation (qc2 S-5)', () => {
+  it('slices by CODE POINTS, never splitting a surrogate pair at the cap boundary', () => {
+    // 510 ASCII + the 2-unit emoji + 2 more = 513 CODE POINTS (515 UTF-16
+    // units) > 512, so the code-point gate trips. The cap boundary (511
+    // kept code points) lands on the emoji: a UTF-16 `slice(0, 511)` would
+    // cut INSIDE its surrogate pair and leave a lone high surrogate
+    // (rendered as U+FFFD in the log line). The code-point slice keeps the
+    // whole emoji.
+    const value = 'a'.repeat(510) + '😀' + 'bc'
+    const truncated = truncateLedgerField(value, 512)
+    expect(truncated.endsWith(WORKFLOW_LEDGER_TRUNCATION_MARKER)).toBe(true)
+    expect(truncated).toContain('😀')
+    // No lone surrogate in the result: no high unit without a following low,
+    // no low unit without a preceding high.
+    expect(truncated.match(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/)).toBeNull()
+    expect(truncated.match(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/)).toBeNull()
+  })
+
+  it('astral-dense values gate and slice by CODE POINTS — UTF-16 width never trips the cap (PR #97 finding 2)', () => {
+    // 300 emoji = 600 UTF-16 units but 300 code points: under the cap in
+    // code points, over it in UTF-16 units. A UTF-16 `.length` gate would
+    // false-positive truncate this (and re-inflate the result to cap code
+    // points — up to ~2× the cap in the unit the gate measured). The
+    // code-point gate passes it through untouched.
+    expect(truncateLedgerField('😀'.repeat(300), 512)).toBe('😀'.repeat(300))
+    // Exactly at the cap in code points (2× the cap in UTF-16 units).
+    expect(truncateLedgerField('😀'.repeat(512), 512)).toBe('😀'.repeat(512))
+    // Above the cap in code points: the result stays at or under cap code
+    // points with the visible marker intact.
+    const truncated = truncateLedgerField('😀'.repeat(600), 512)
+    expect(Array.from(truncated).length).toBeLessThanOrEqual(512)
+    expect(truncated).toBe('😀'.repeat(511) + WORKFLOW_LEDGER_TRUNCATION_MARKER)
+  })
+
+  it('ASCII values still truncate to cap − marker chars with the visible marker (regression)', () => {
+    expect(truncateLedgerField('x'.repeat(600), 512)).toBe('x'.repeat(511) + WORKFLOW_LEDGER_TRUNCATION_MARKER)
+  })
+
+  it('values at or under the cap pass through unchanged', () => {
+    expect(truncateLedgerField('short', 512)).toBe('short')
+    expect(truncateLedgerField('x'.repeat(512), 512)).toBe('x'.repeat(512))
   })
 })
 

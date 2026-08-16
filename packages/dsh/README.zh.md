@@ -146,15 +146,19 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 **persona 文本约束**：dsh system-prompt 以**严格 `{{variable}}` 插值**渲染 persona 文本，因此 persona 值**绝不能**包含与后文 `}}` 配对的 `{{`（渲染器在子会话提示组装时对未知/畸形引用直接抛错——会破坏每一次角色匹配的派发）。Config schema 会在插件挂载时以清晰报错拒绝此类 `rolePersonas` 值。不带后续 `}}` 的孤立 `{{` 按字面散文渲染（安全）；转义规则是改用单花括号或改写措辞。persona 文本保持简短（几句话）；长度在部署侧设限。
 
-### 采纳建议（Adoption advisory）
+### 角色 seeds 与采纳建议（Adoption advisory）
 
-当可选的 `dsh-llm-fallbacks` 能力**已挂载**时，一条只告警的采纳建议通道**每次 apply 只跑一遍**（日志器 `mstar/fallbacks-advisory`）：结构化读取部署的 fallbacks 行配置（loader 条目的 `options.config`——与 fallbacks 插件 `apply()` 收到的值相同；绝不读插件模块内部），并按**每类至多一条告警**有界告警：
+当可选的 `dsh-llm-fallbacks` 能力**已挂载**（第二条安装命令——见 Install paths）时，mstar 插件会向 fallbacks seed registry **零配置声明 13 个 `mode: subagent` mstar 角色 seed**：persona = `harness-agents/` 镜像 `description`（原样）+ 一行强制加载引导（`Load mstar-roles (references/<role-id>.md) and the role's Required Skill Dependencies before acting.`）；含 `{{...}}` 插值风险的 persona 跳过并告警，绝不声明。声明会**合并保留 readback 中当前已 seeded 的非 mstar id**——例如上游包在其自身 apply 时自声明的 7 个 omp 风格 preset 角色：上游 `declare` **全量替换** registry，若不保留，mstar-only 批会摘掉 preset id 的 seeded 注记（行仍在，仅失去 seeded）。声明在每次 fallbacks（重新）apply（HMR/纤程切换）时幂等重放——绝不用一次性 latch——因此两种 boot 顺序（presets 先或 mstar 先）都收敛到同一 20-id 全 seeded registry。
 
-- **（b）缺失 mstar 角色**——`roles.list` 中缺失的 mstar 角色 id（一条告警列出全部）。id 集合派生自 `harness-agents/` 镜像（文件名主干按 `mode: subagent` 过滤）——绝不硬编码；无镜像 → 分类检查跳过并记一条 debug。
-- **（c）空 persona**——已声明角色实体其 `persona` 缺失/空白（一条告警点名）。
-- **（d）遗留键**——`chains`、`roles.default`、`roles.list[].label`/`.description`、悬空 `roles.rules[].role` 引用，经已应用服务自带的 `detectLegacyKeys`（一条告警引用其语义；loader 回退探测路径上跳过——绝不重新实现）。
+一条只告警的采纳建议通道（日志器 `mstar/fallbacks-advisory`）**每次 apply 只跑一遍**——apply 时先尝试一次；当 fallbacks 行在 `dsh` 之后挂载（loader 并发挂载条目）时，改在首个 `subagent/start` 决策点只跑一遍。服务存在时，通道**先 await 幂等 re-declare**（闭合 boot 竞争窗口）再读取**有效状态**（`getEffectiveRoles`），并按**每类至多一条告警**有界报告：
 
-行配置缺失或非对象、或 `roles.list` 不可读 → 跳过并记一条 debug。该建议**绝不写入** fallbacks 配置（对部署配置层只读）、绝不抛出，且 **fallbacks 未挂载时不调用**——它是信号，不是闸门。通道在 apply 时先尝试一次；当 fallbacks 行在 `dsh` 之后挂载（loader 并发挂载条目）时，改在首个 `subagent/start` 决策点只跑一遍。
+- **缺失 mstar 角色**——无有效行的 mstar id（一条告警列出全部；id 集合派生自 `harness-agents/` 镜像——绝不硬编码；无镜像 → 检查跳过并记一条 debug）；
+- **persona 覆盖**——行 persona 与 seed 默认值不同的 mstar 角色（一条告警点名 + revert 入口：`fallbacks/revert-seed` gateway / fallbacks 设置卡片回滚按钮——操作者覆盖在 revert 前保留）；
+- **空 persona**——`persona` 缺失/空白的行，仅限非 seeded 或 overridden-empty（一条告警点名）；
+- **遗留键**——`chains`、`roles.default`、`roles.list[].label`/`.description`、悬空 `roles.rules[].role` 引用，经已应用服务自带的 `detectLegacyKeys`（一条告警引用其语义）；
+- **declare 跳过/冲突**——本地跳过（`interpolation` / `no-persona`）+ 上游跳过/冲突（码 `persona-source`——操作者覆盖保留）合并为**一条**告警；默认已 seeded 静默（一条 debug 点名）。
+
+loader 回退路径（无服务）保留结构化 `roles.list` 读取（缺失 id / 空 persona；无 revert 入口——无 seeds 面；遗留键检查跳过——绝不重新实现）。行配置缺失或非对象、或 `roles.list` 不可读 → 跳过并记一条 debug。该建议**绝不写入** fallbacks 配置——唯一写路径是经已发布 seeds 面的幂等 seeds re-declare（无差异 → 上游零设置写入）——绝不抛出，且 **fallbacks 未挂载时不调用**：它是信号，不是闸门。
 
 ### 配置面
 
@@ -322,9 +326,11 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **入口是 `src/gates/*` 之上的模块索引**——拆分已交付：`src/index.ts`（371 行）从各 gate 模块（`_shared` / `status` / `skill-lint` / `seams` / `dispatch` / `catalog` / `tools` / `adapter`）原样 re-export 冻结的 47 名导出面（28 值导出 + 19 type-only 名；`Config` 计一次），并保留插件 manifest、单一 cordis augmentation 点、命令注册与 `apply()` 启动接线。导出面由 `tests/export-surface.spec.ts` 冻结——运行时值导出集 + `typecheck:tests`（`bunx tsc --noEmit -p tests/tsconfig.json`）下的值命名空间恒等与逐名类型探测。
 - **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。
 - **迭代 stepper：Step 1 为 compass 驱动，Step 5 为 schema 驱动**——zone dashboard 的 Step 1（iteration-start）在 steering compass `status: active`（Phase 1 进行中）时为当前步（无 gate 判定 → 无 PASS/FAIL 徽标）；Step 5（merge-ready）是 engine 闸门永不点亮为当前的 schema 常量（transition 只覆盖 Phase 2→3→4，merge-ready 从不是 gate transition）；仅当 Step 4 为当前步时作为 `next` 渲染，其余为 idle——已记录于迭代 guide，非缺陷。完整面板限制清单见 Web 客户端插件一节。
-- **`dsh-llm-fallbacks` 为 registry `dependencies` 条目且仅类型导入**——声明 `^0.1.3`（caret 范围允许 0.1.4/0.2.0；探测形状断言测试是可执行的漂移闸门）并在构建中 `--external`，因此 `dist/` 无打包运行时导入（仅 3 处命名该包的字符串字面量——探测的 loader 条目匹配与两条装饰日志；建议日志写作 `fallbacks`）；激活是**单独显式安装**（双命令契约），绝不传递。库形态依赖存在是为未来值导入无需改 manifest 即可解析；`--external` 仍是护栏。
+- **`dsh-llm-fallbacks` 为 registry `dependencies` 条目且仅类型导入**——声明 `^0.2.0`（caret 范围允许 0.2.1+；探测形状断言测试是可执行的漂移闸门）并在构建中 `--external`，因此 `dist/` 无打包运行时导入（仅 3 处命名该包的字符串字面量——探测的 loader 条目匹配与两条装饰日志；建议日志写作 `fallbacks`）；激活是**单独显式安装**（双命令契约），绝不传递。库形态依赖存在是为未来值导入无需改 manifest 即可解析；`--external` 仍是护栏。
 - **本批次未交付角色→模型覆盖**——把角色路由到 fallbacks `model`（或经 fallbacks 规则路由 persona）需要改写启动请求上的子会话 `agentOptions`，但启动请求选项由调用方控制（tool-subagent 自己的 Config；调用参数仅为 `description`/`prompt`/`run_in_background`，且深度冻结）。等待上游 `fallbacks-explicit-role-tool` 或 N-B1 systemPrompt 采纳（roadmap §10.4）。
 - **装饰是最小化的每子会话段，而非 N-B1 systemPrompt 采纳**——`mstar:role-persona` 是子上下文上的一个 agent 作用域段；无 harness 规则段、无 PromptContext、无变量。N-B1（roadmap §10.4）日后可吸收或替换该通道而不改变可观察行为（AC-3）。
 - **persona 注入与 fallbacks 无关**——`dsh-llm-fallbacks` 只路由 LLM 失败；装饰从不依赖它。未挂载 → 同一 persona 经同一通道来自 mstar Config，仅多一条 debug 日志（AC-4）。若组合中缺 `ctx.get('agents')`（无 dsh-agent），装饰以一条 debug 日志跳过。
 - **fork 门禁仅默认开启；显式 `dispatchTools` 可省略 `subagent_fork`**——自定义 `dispatchTools` 列表整体覆盖默认（既有重命名模式），因此自行声明列表的部署须包含 `subagent_fork` 才能继续门禁 fork 派发。
 - **persona 值绝不能包含 `{{...}}`**——dsh system-prompt 以严格 `{{variable}}` 插值渲染 persona 文本，对与后文 `}}` 配对的 `{{`（未知/畸形/未定义引用）直接抛错，会破坏每一次角色匹配派发的子会话提示组装。Config schema 在插件挂载时以清晰报错拒绝此类 `rolePersonas` 值；转义规则是改用单花括号或改写措辞（不带后续 `}}` 的孤立 `{{` 按字面散文渲染）。
+- **fallbacks HMR 重挂后的 seeds 再收敛受 seeded-only preservation 设计边界限制**——seed registry 是每次 apply 的内存态，纤程切换（HMR / 设置编辑）会丢弃它并让双方 declarer 从头重放。mstar re-declare 只合并保留**已 seeded** 的 id（seeded-only，设计使然），因此在 preset-last 提交顺序下，preset 行的 seeded 注记不会被 re-declare 恢复——它们在下一次 fallbacks apply 时恢复（上游 preset 自声明重新播种）。`llm-fallbacks` 服务消失时 advisory 一次性 latch 会重新武装（inject teardown），因此下一个决策点会重新收敛 mstar 侧；preset 侧是 seeded-only preservation 设计的有文档说明的暂时现象。
+- **咨询跳过原因 `no-persona` 亦涵盖 extraction 失败**——在 extraction 期被拒绝的镜像默认（例如含 `{{...}}` 插值风险）会在合并的 declare-outcome 行中以 `no-persona` 呈现（extraction 在风险门之前就返回无可用的 persona）；逐 id 的 extraction 诊断保留在 debug 通道（`mstar/fallbacks-advisory` / `mstar/fallbacks-seeds`）。
