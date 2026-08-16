@@ -19,11 +19,21 @@ const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 
 /** Spawn env with ambient harness env vars pinned out (same as the other
- * CLI suites — engine dir resolution must not leak into fixtures). */
+ * CLI suites — engine dir resolution must not leak into fixtures).
+ * MSTAR_CLI_PROJECT_ROOT / INIT_CWD are pinned too: `resolveCliPath`
+ * (audit-002) reads them ahead of PWD, so an ambient value would redirect
+ * every relative-path fixture spuriously. */
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH") {
+    if (
+      key === "MSTAR_HARNESS_DIR" ||
+      key === "MSTAR_CONTROL_ROOT" ||
+      key === "SDD_DIR" ||
+      key === "MSTAR_WORKING_BRANCH" ||
+      key === "MSTAR_CLI_PROJECT_ROOT" ||
+      key === "INIT_CWD"
+    ) {
       continue;
     }
     if (value !== undefined) env[key] = value;
@@ -38,10 +48,10 @@ interface RunResult {
 }
 
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[], cwd: string = CLI_ROOT): RunResult {
+function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd,
-    env: cliEnv(),
+    cwd: opts.cwd ?? CLI_ROOT,
+    env: { ...cliEnv(), ...opts.env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -527,7 +537,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       // cwd = a temp dir outside any git repo → documented "unknown" fallback
       // (--date pinned: without it the audit-<date> dir derives from "today", a calendar flake)
-      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08"], dir);
+      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08"], { cwd: dir });
       expect(result.exitCode).toBe(0);
       expect(existsSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"))).toBe(true);
       const plan = readFileSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"), "utf8");
@@ -541,7 +551,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-07-01"], dir);
+      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-07-01"], { cwd: dir });
       expect(result.exitCode).toBe(0);
       expect(existsSync(join(dir, "audit-2026-07-01", "README.md"))).toBe(true);
       expect(existsSync(join(dir, "audit-2026-07-01", "001-fix-n-1-query.md"))).toBe(true);
@@ -822,6 +832,87 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// project-root path resolution (audit-002: resolveCliPath adoption)
+// ---------------------------------------------------------------------------
+
+describe("project-root path resolution — relative dev-command args (audit-002)", () => {
+  test("relative skill dir + MSTAR_CLI_PROJECT_ROOT → found from a nested cwd (exit 0)", () => {
+    withTempDir((dir) => {
+      mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
+      writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
+      // cwd is nested below the fixture root: the relative arg must resolve
+      // against MSTAR_CLI_PROJECT_ROOT, not the process cwd (the bug class
+      // this regression guards: `bun run cli:dev skill lint skills/mstar-audit`
+      // used to look under packages/cli/skills/...).
+      const result = runCli(["skill", "lint", "skills/mstar-audit"], {
+        cwd: join(dir, "skills"),
+        env: { MSTAR_CLI_PROJECT_ROOT: dir },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+      expect(result.stdout).toContain("skill lint (five questions): OK");
+      expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
+      expect(result.stderr).not.toContain("SKILL.md not found");
+    });
+  });
+
+  test("scrubbed env + nested member cwd → workspaces walk-up reaches the monorepo root (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "mono", workspaces: ["packages/*"] }));
+      const member = join(dir, "packages", "cli");
+      mkdirSync(member, { recursive: true });
+      mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
+      writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
+      // member manifest carries no workspaces — the walk must skip it and
+      // keep going up to the root `workspaces` marker (the `bun run --cwd
+      // packages/cli dev` shape: env unset, process cwd = packages/cli).
+      writeFileSync(join(member, "package.json"), JSON.stringify({ name: "@mono/cli" }));
+      const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: member });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+      expect(result.stderr).not.toContain("SKILL.md not found");
+    });
+  });
+
+  test("single-package consumer: nested cwd resolves to the nearest package.json root (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "consumer-app" }));
+      mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
+      writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
+      const nested = join(dir, "src", "deep");
+      mkdirSync(nested, { recursive: true });
+      const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: nested });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+    });
+  });
+
+  test("outside any package.json tree → cwd-relative terminal fallback (exit 1)", () => {
+    withTempDir((dir) => {
+      // no package.json anywhere above the fixture — relative args stay
+      // cwd-relative by terminal fallback, so the arg must NOT find the
+      // fixture under the bare cwd.
+      const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("SKILL.md not found");
+      expect(result.stderr).toContain(join(dir, "skills", "mstar-audit"));
+    });
+  });
+
+  test("absolute skill dir is unchanged even with MSTAR_CLI_PROJECT_ROOT set", () => {
+    withTempDir((dir) => {
+      mkdirSync(join(dir, "elsewhere"), { recursive: true });
+      writeFileSync(join(dir, "elsewhere", "SKILL.md"), SKILL_GOOD);
+      const result = runCli(["skill", "lint", join(dir, "elsewhere")], {
+        env: { MSTAR_CLI_PROJECT_ROOT: join(dir, "nope") },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (frontmatter): OK");
     });
   });
 });

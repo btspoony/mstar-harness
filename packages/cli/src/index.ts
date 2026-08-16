@@ -65,7 +65,7 @@ import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
 import type { DoctorOptions, InitOptions, PluginValidateOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
-import { parseCsv, readJson, writeJson, readHarnessVersion, resolveProjectRoot } from "./utils";
+import { parseCsv, readJson, writeJson, readHarnessVersion, resolveCliPath, resolveProjectRoot } from "./utils";
 
 const packageVersion = readHarnessVersion();
 
@@ -643,7 +643,7 @@ dispatchCommand
       if (!assignmentFile) {
         throw new SddScriptError("usage: dispatch validate <assignment-file> [--branch <branch>]", 2);
       }
-      const file = path.resolve(assignmentFile);
+      const file = resolveCliPath(assignmentFile);
       if (!fs.existsSync(file)) {
         throw new Error(`assignment file not found: ${file}`);
       }
@@ -967,7 +967,7 @@ lintCommand
   .action((target?: string) => {
     try {
       if (!target) throw new SddScriptError("usage: lint <target> (file or dir)", 2);
-      const abs = path.resolve(target);
+      const abs = resolveCliPath(target);
       if (!fs.existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
       const targets = fs.statSync(abs).isDirectory() ? collectLintTargets(abs) : [abs];
       if (targets.length === 0) {
@@ -1030,7 +1030,7 @@ designMdCommand
   .action((dir?: string) => {
     try {
       if (!dir) throw new SddScriptError("usage: design-md validate <dir>", 2);
-      const abs = path.resolve(dir);
+      const abs = resolveCliPath(dir);
       const lightPath = path.join(abs, "DESIGN.md");
       if (!fs.existsSync(lightPath)) throw new Error(`design file not found: ${lightPath}`);
       const light = fs.readFileSync(lightPath, "utf8");
@@ -1164,7 +1164,7 @@ auditCommand
   .action((findingsFile: string | undefined, options: { dir?: string; sha?: string; date?: string; repo?: string }) => {
     try {
       if (!findingsFile) throw new SddScriptError("usage: audit scaffold <findings-file> [--dir <out-dir>]", 2);
-      const abs = path.resolve(findingsFile);
+      const abs = resolveCliPath(findingsFile);
       if (!fs.existsSync(abs)) throw new Error(`findings file not found: ${abs}`);
       if (options.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
         throw new SddScriptError("usage: audit scaffold \u2014 --date must be YYYY-MM-DD", 2);
@@ -1173,7 +1173,7 @@ auditCommand
         throw new SddScriptError("usage: audit scaffold \u2014 --sha must be a 7-40 char hex commit SHA", 2);
       }
       const date = options.date ?? new Date().toISOString().slice(0, 10);
-      const outDir = options.dir !== undefined ? path.resolve(options.dir) : path.resolve(`audit-${date}`);
+      const outDir = options.dir !== undefined ? resolveCliPath(options.dir) : resolveCliPath(`audit-${date}`);
       const findings = parseAuditFindings(fs.readFileSync(abs, "utf8"));
       const sha = resolveAuditShortSha(process.cwd(), options.sha);
       const result = scaffoldAuditPlan(outDir, findings, { date, repoName: options.repo, repoShortSha: sha });
@@ -1200,7 +1200,7 @@ compoundCommand
   .action((docPath: string | undefined, options: { knowledgeDir?: string }) => {
     try {
       if (!docPath) throw new SddScriptError("usage: compound validate <doc-path> [--knowledge-dir <dir>]", 2);
-      const abs = path.resolve(docPath);
+      const abs = resolveCliPath(docPath);
       if (!fs.existsSync(abs)) throw new Error(`knowledge doc not found: ${abs}`);
       const text = fs.readFileSync(abs, "utf8");
       const violations: ValidationResult[] = [];
@@ -1208,7 +1208,7 @@ compoundCommand
       printChecklist("compound validate (schema)", schema);
       violations.push(...schema.violations);
       if (options.knowledgeDir !== undefined) {
-        const knowledgeDir = path.resolve(options.knowledgeDir);
+        const knowledgeDir = resolveCliPath(options.knowledgeDir);
         const index = assertIndexRows(knowledgeDir);
         printChecklist("compound validate (index rows)", index);
         violations.push(...index.violations);
@@ -1301,7 +1301,7 @@ skillCommand
   .action((skillDir?: string) => {
     try {
       if (!skillDir) throw new SddScriptError("usage: skill lint <skill-dir>", 2);
-      const skillFile = path.join(path.resolve(skillDir), "SKILL.md");
+      const skillFile = path.join(resolveCliPath(skillDir), "SKILL.md");
       if (!fs.existsSync(skillFile)) throw new Error(`SKILL.md not found: ${skillFile}`);
       const text = fs.readFileSync(skillFile, "utf8");
       const violations: ValidationResult[] = [];
