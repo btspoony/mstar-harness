@@ -14,7 +14,7 @@
  *   `mode: subagent`), never hardcoded;
  * - (c) declared role entities with an empty persona;
  * - (d) legacy keys in the row config — the service's own
- *   `detectLegacyKeys` when applied (one of the 6 service keys); when the
+ *   `detectLegacyKeys` when applied (one of the 9 service keys); when the
  *   service is absent (loader-fallback probe path) the legacy check is
  *   SKIPPED rather than reimplemented.
  *

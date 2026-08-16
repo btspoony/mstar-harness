@@ -6,7 +6,7 @@
  * Composition case (b) applies the REAL registry `dsh-llm-fallbacks` through
  * the harness real-composition boot (`bootApp` + `ctx.plugin`): its EXACT
  * service-surface assertion is the executable STOP gate for caret-range
- * drift (`^0.1.3` admits 0.1.4 / 0.2.0 — a drifted
+ * drift (`^0.1.7` admits 0.1.8 / 0.2.0 — a drifted
  * resolver fails the version/surface check HERE, not silently in
  * production).
  */
@@ -29,10 +29,10 @@ afterEach(async () => {
 })
 
 /** The exact service surface the plugin provides (shape STOP gate). */
-const SERVICE_KEYS = ['name', 'version', 'resolveRole', 'resolveChain', 'validateFallbacksConfig', 'detectLegacyKeys'] as const
+const SERVICE_KEYS = ['name', 'version', 'resolveRole', 'resolveChain', 'validateFallbacksConfig', 'detectLegacyKeys', 'declareSeeds', 'getEffectiveRoles', 'revertSeededPersona'] as const
 
 /** The resolved registry version the caret range must land on (drift STOP gate). */
-const RESOLVED_VERSION = '0.1.3'
+const RESOLVED_VERSION = '0.1.7'
 
 /** A live, enabled loader entry for the fallbacks row. */
 const liveEntry = (): LoaderEntryView => ({ options: { name: FALLBACKS_ENTRY_NAME }, disabled: false, fiber: {} })
@@ -57,12 +57,12 @@ describe('fallbacks probe — mounted / unmounted / disabled', () => {
     expect(fallbacksMounted(app.ctx)).toBe(true)
     const service = fallbacksService(app.ctx)
     expect(service).toBeDefined()
-    // Exact 6-key surface — the executable STOP gate for caret drift.
+    // Exact 9-key surface — the executable STOP gate for caret drift.
     expect(Object.keys(service!)).toEqual([...SERVICE_KEYS])
     expect(service!.name).toBe('llm-fallbacks')
     expect(typeof service!.version).toBe('string')
     expect(service!.version).toBe(RESOLVED_VERSION)
-    for (const key of ['resolveRole', 'resolveChain', 'validateFallbacksConfig', 'detectLegacyKeys'] as const) {
+    for (const key of ['resolveRole', 'resolveChain', 'validateFallbacksConfig', 'detectLegacyKeys', 'declareSeeds', 'getEffectiveRoles', 'revertSeededPersona'] as const) {
       expect(typeof service![key]).toBe('function')
     }
   })
