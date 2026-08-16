@@ -110,3 +110,9 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 - Prepare 阶段证据：问题定义、歧义结论、plan 链接。
 - Execute 阶段证据：tasks 清单、实现自检、审查/验证证据。
 - 结论证据：不得仅写"done"，必须可复核（命令、输出、截图或复现步骤）。
+
+## References
+
+- plan 文件落盘与路径符号 → **`mstar-plan-conventions`**
+- 多 task 默认 `Execution mode: sdd` 的 implement 波次 → **`mstar-sdd`**
+- QC / QA 审查链与 residual 登记 → **`mstar-review-qc`**

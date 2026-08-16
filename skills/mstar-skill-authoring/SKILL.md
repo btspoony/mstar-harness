@@ -42,6 +42,20 @@ description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门�
 
 答不进这 5 问的内容 → 删或移到 `references/`。
 
+### 运行时别名（runtime alias map）
+
+已发布的 `mstar-*` 专题 skill 允许**运行时模式**（`lintFiveQuestion(body, "runtime")`）用**锁定别名表**回答同一问题（引擎常量 `RUNTIME_HEADING_ALIASES`）：
+
+| 问题 | 运行时别名（标题子串，大小写不敏感） |
+|------|------|
+| Workflow | `process`、`playbook` |
+| Decision Rules | `hard rules`、`core rules`、`rule`、`gate`、`not to do`、`red flags`、`反模式`、`红线`、`规则`、`门禁` |
+| Evidence | `output format`、`证据` |
+| References | `dependencies`、`关系` |
+
+- 别名表是**锁定表**：改表必须同步引擎回归测试与 corpus。
+- **新写 / greenfield skill（authoring / strict）仍要求 canonical 标题**；运行时别名只豁免已发布专题 skill 的机械 lint，**不豁免语义**——别名标题必须真实回答对应问题，正文不得因别名而缩水。
+
 ## Skill Purpose Test
 
 仅当全部成立才新建 / 扩写 skill：

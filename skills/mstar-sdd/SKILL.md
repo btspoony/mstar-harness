@@ -38,7 +38,7 @@ Before Task 1, scan plan once for:
 
 Batch all findings for the human in one message. If clean, proceed silently.
 
-## Per-task loop (PM only)
+## Per-task loop (PM only · Workflow)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
 2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<control_worktree_path>` 或 `mstar sdd workspace <plan-id> <control_worktree_path>`；缺 status.json 的 linked worktree 会 fail closed）
@@ -94,7 +94,7 @@ Host mapping → **`mstar-host`** references (`model` / Task field).
     - **Honest non-convergence**: open findings at wave close → list them in detail and state the disposition — re-feed to the next fix round **or** transfer to residual tracking — never silently close.
 4. QA gate → **`mstar-harness-core`** Done rules; PM **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**
 
-## Progress ledger
+## Progress ledger（Evidence）
 
 At start: `cat {SDD_DIR}/progress.md`. Tasks marked complete are DONE — do not re-dispatch after compaction.
 

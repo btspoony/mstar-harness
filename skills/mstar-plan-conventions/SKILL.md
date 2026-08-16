@@ -156,6 +156,10 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 仅需路径符号与 `plans[].metadata` 的 `primary_spec` / `spec_refs` 时：读本 SKILL 至「路径符号」+ **`mstar-plan-artifacts/references/knowledge-and-designs.md`** 即可，**不必**通读 status/residual 全文。
 
+## Evidence
+
+正确结果 = 落盘产物可复核：`{HARNESS_DIR}/status.json` 含对应 plan 行（状态 + `metadata` 分支字段），plan 文件存在于 `{PLAN_DIR}`，`{HARNESS_DIR}/AGENTS.md` 分层与 gitignore 与本文约定一致（进程本地 / 结果共享），`mstar path resolve` 输出与路径符号表一致。
+
 ## References
 
 - `references/harness-bootstrap-and-agents-layering.md` — 新仓 harness + AGENTS 分层

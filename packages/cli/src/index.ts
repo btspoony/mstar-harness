@@ -53,6 +53,7 @@ import {
   type AuditFinding,
   type AuditPriority,
   type AuditRisk,
+  type FiveQuestionMode,
   type GateResult,
   type L1PreDispatchInput,
   type ToolSignal,
@@ -1308,9 +1309,23 @@ skillCommand
       const frontmatter = lintFrontmatter(text);
       printChecklist("skill lint (frontmatter)", frontmatter);
       violations.push(...frontmatter.violations);
-      const fiveQuestion = lintFiveQuestion(stripFrontmatter(text));
-      printChecklist("skill lint (five questions)", fiveQuestion);
-      violations.push(...fiveQuestion.violations);
+      // Five-question mode selection: runtime for shipped `mstar-*` topic
+      // skills (locked alias table), authoring / strict for
+      // `mstar-skill-authoring` (the standard's own definition) and for
+      // non-`mstar-*` skills. `mstar-harness-core` is exempt by design
+      // (hub headings) — print an explicit exempt row; frontmatter and
+      // ephemeral-citation checks still run.
+      const skillBase = path.basename(path.dirname(skillFile));
+      const isCore = skillBase === "mstar-harness-core";
+      const fiveQuestionMode: FiveQuestionMode =
+        skillBase.startsWith("mstar-") && !isCore && skillBase !== "mstar-skill-authoring" ? "runtime" : "authoring";
+      if (isCore) {
+        console.log(pc.yellow("skill lint (five questions): EXEMPT \u2014 mstar-harness-core is exempt by design (hub headings)"));
+      } else {
+        const fiveQuestion = lintFiveQuestion(stripFrontmatter(text), fiveQuestionMode);
+        printChecklist("skill lint (five questions)", fiveQuestion);
+        violations.push(...fiveQuestion.violations);
+      }
       // findEphemeralCitations is a discovery finder (array, no GateResult);
       // wrap into a GateResult like the other skill lint checklists — empty
       // array passes, each citation is one violation (codes

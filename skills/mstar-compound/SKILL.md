@@ -103,3 +103,7 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 - Do not edit AGENTS.md without user consent
 - Do not create CONCEPTS.md entries for general programming vocabulary
 - Do not modify product code — this skill writes documentation only
+
+## Evidence
+
+正确结果 = 一篇**可发现**的结晶文档：`{KNOWLEDGE_DIR}/<category>/<slug>.md` 通过 `references/schema.yaml` frontmatter 校验（Phase 3 Write）+ `{KNOWLEDGE_DIR}/README.md` 索引行（Phase 6 Indexes，iteration-close 强制）+ 达标领域词入 `CONCEPTS.md`（Phase 5）+ 源文件 / package README 标注 `Promoted to: <knowledge-path>`（Phase 4 Trace）。
