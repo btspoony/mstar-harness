@@ -15,9 +15,12 @@
  *   section AND context text with STRICT `{{variable}}` interpolation and
  *   throws on unknown/malformed/undefined references (`interpolate` in
  *   `@deepseek-ai/dsh-system-prompt`), so every injected string must carry
- *   no complete group. The enforcement word and the harness dir are
- *   boot-resolved (the same `resolveCompassEnforcement` read the gates and
- *   the catalog use — Task 3 makes the word live per assembly).
+ *   no complete group. The harness dir is boot-resolved; the enforcement
+ *   word is LIVE — the section text is a provider (the plan:policy
+ *   precedent) that re-reads `resolveCompassEnforcement` per assembly (the
+ *   same existing read the gates and the catalog use — no new config key),
+ *   so a mid-session compass soft/hard flip lands on the next assembly
+ *   without re-registration.
  * - The context provider reuses the catalog's unified machine-summary
  *   source (`buildCatalogSources` — the SAME builder the engine-status
  *   pre-step catalog row uses) and projects a BOUNDED subset: watermark +
@@ -89,11 +92,11 @@ export function setHarnessPromptLogger(sink: HarnessPromptLogSink): HarnessPromp
   return prior
 }
 
-/** One consumed prompt-section registration (`@deepseek-ai/dsh-system-prompt` `PromptSection` contract). */
+/** One consumed prompt-section registration (`@deepseek-ai/dsh-system-prompt` `PromptSection` contract — text may be a provider, same as {@link PromptContextInput}). */
 interface PromptSectionInput {
   readonly name: string
   readonly order: number
-  readonly text: string
+  readonly text: string | ((context: object) => string)
 }
 
 /** One consumed runtime-context registration (`PromptContext` contract — text may be a provider). */
@@ -121,11 +124,17 @@ interface SystemPromptView {
  *   the registrations land on the global layer).
  * @param options.resolver - the per-workspace `{HARNESS_DIR}` resolver; the
  *   boot value (`forWorkspace(undefined)`, the explicit config or null) is
- *   baked into the static pointer and the provider's data source.
+ *   baked into the pointer and the provider's data source, while the
+ *   enforcement word is re-resolved per assembly by the section text
+ *   provider.
  * @returns `true` when the service exists and registration was scheduled;
  *   `false` when `ctx.systemPrompt` is structurally absent (one debug log,
  *   boot unaffected) or the synchronous registration path threw (contained
- *   warn). Never throws.
+ *   warn). The actual registration runs in an inject child that settles
+ *   ASYNC — a failure there is contained to a warn and cannot be observed
+ *   through this return value (`true` only guarantees scheduling, not
+ *   landing; `apply` ignores the value, so boot is never affected). Never
+ *   throws.
  */
 export function registerHarnessPrompt(ctx: Context, options: { resolver: HarnessResolver }): boolean {
   const systemPrompt = ctx.get('systemPrompt') as SystemPromptView | undefined
@@ -134,10 +143,8 @@ export function registerHarnessPrompt(ctx: Context, options: { resolver: Harness
     return false
   }
   let harnessDir: string | null
-  let enforcement: EnforcementFlag
   try {
     harnessDir = options.resolver.forWorkspace(undefined)
-    enforcement = harnessDir === null ? { hard: false, source: 'none' } : resolveCompassEnforcement(harnessDir)
   } catch (error) {
     log('warn', `mstar:harness-rules injection aborted (degraded — session boot unaffected): ${errorMessage(error)}`)
     return false
@@ -150,7 +157,11 @@ export function registerHarnessPrompt(ctx: Context, options: { resolver: Harness
       view.section({
         name: HARNESS_RULES_SECTION_NAME,
         order: HARNESS_RULES_SECTION_ORDER,
-        text: harnessRulesText(harnessDir, enforcement),
+        // Live text provider (plan:policy precedent — provider text, no
+        // re-registration): the enforcement word is re-read from the compass
+        // per assembly, so a mid-session soft/hard flip lands on the next
+        // assembly. The harness dir stays boot-resolved.
+        text: () => harnessRulesText(harnessDir, sectionEnforcement(harnessDir)),
       })
       view.context({
         name: ENGINE_STATUS_CONTEXT_NAME,
@@ -165,7 +176,19 @@ export function registerHarnessPrompt(ctx: Context, options: { resolver: Harness
 }
 
 /**
- * The static pointer block: presence / enforcement word / resolved
+ * The section's live enforcement flag: re-resolved from the compass on every
+ * assembly (the same `resolveCompassEnforcement` read the gates and the
+ * catalog use — the existing read surface, no new config key). Fail-soft by
+ * contract: a missing/unreadable iterations dir or compass resolves to
+ * `soft`/`none` exactly like the gates themselves, so the pointer word never
+ * diverges from the actual gate state and the provider never throws.
+ */
+function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
+  return harnessDir === null ? { hard: false, source: 'none' } : resolveCompassEnforcement(harnessDir)
+}
+
+/**
+ * The pointer block: presence / enforcement word / resolved
  * `{HARNESS_DIR}` / one read-mstar-harness-core directive. Zero complete
  * `{{...}}` groups by construction (STRICT interpolation safety).
  */

@@ -8,7 +8,10 @@
  * existence check degrades (missing `ctx.systemPrompt` → `false` + one debug
  * log; boot unaffected), and the child-scoped `mstar:role-persona` section
  * (fallbacks-decoration) stays byte-stable alongside the new global section
- * (regression — plan HARD constraint "不撤销 mstar:role-persona").
+ * (regression — plan HARD constraint "不撤销 mstar:role-persona"). Task 3:
+ * the section's enforcement word is LIVE — a text provider re-reads the
+ * compass per assembly (soft/hard), so a mid-session enforcement flip lands
+ * on the next assembly without re-registration (h/i).
  *
  * Registration is exercised through the REAL-composition boot (the apply
  * wiring calls `registerHarnessPrompt` at apply; the REAL
@@ -119,6 +122,11 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     const personaIndex = assembly.sections.findIndex((s) => s.name === 'deployment:persona')
     const rulesIndex = assembly.sections.findIndex((s) => s.name === HARNESS_RULES_SECTION_NAME)
     expect(rulesIndex).toBeGreaterThan(personaIndex)
+    // Live-assembly order lock (L2 Minor 2): the assembled section carries no
+    // `order` field (only name + text), so the sorted position IS the order —
+    // in the real composition: harness:identity (-100) at 0, deployment:persona
+    // (0) at 1, mstar:harness-rules (2) at 2.
+    expect(rulesIndex).toBe(2)
     // Minimal pointer block: presence / enforcement word / resolved
     // {HARNESS_DIR} / one read-mstar-harness-core directive.
     expect(section!.text).toContain('Morning Star')
@@ -232,5 +240,34 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     // (global layer — root AND children).
     expect(assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)).toBeDefined()
     expect(assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)).toBeDefined()
+  })
+
+  it('(h) enforcement word is live — a hard steering compass renders `enforcement: hard` in the section text (soft covered by (a))', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-enforcement-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'iterations/v2.2.0/delivery-compass.md': RICH_COMPASS,
+    })
+    booted = await bootApp({ root })
+    const assembly = await booted.ctx.systemPrompt.assemble()
+    const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
+    expect(section).toBeDefined()
+    expect(section!.text).toContain('enforcement: hard')
+  })
+
+  it('(i) mid-session enforcement flip switches the section word on the next assembly without re-registration', async () => {
+    booted = await bootApp()
+    const before = await booted.ctx.systemPrompt.assemble()
+    expect(before.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text).toContain('enforcement: soft')
+    // Flip the compass to hard mid-session — same boot, same registration
+    // (the section text provider re-reads the compass per assembly).
+    await seedHarness(booted.harnessDir, {
+      'iterations/v2.2.0/delivery-compass.md': RICH_COMPASS,
+    })
+    const after = await booted.ctx.systemPrompt.assemble()
+    const section = after.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
+    expect(section).toBeDefined()
+    expect(section!.text).toContain('enforcement: hard')
   })
 })
