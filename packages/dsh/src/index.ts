@@ -408,13 +408,15 @@ export function apply(ctx: Context, config: Config): void {
   // regardless of launch cwd; absent when `bundle-assets` has not run
   // (config-only decoration).
   setDecorationAgentsDir(packagedAgentsDir())
-  // Adoption advisory (plan `20260815-dsh-fallbacks-personas` Task 4) — the
-  // warn-only deployment-taxonomy pass: when fallbacks is mounted, ONE pass
-  // per apply structurally reads the deployment's fallbacks row config
-  // (loader entry `options.config` — never the fallbacks plugin's module
-  // internals) and warns on missing mstar roles / empty personas / legacy
-  // keys (logger `mstar/fallbacks-advisory`). Never writes the fallbacks
-  // config; unreadable config → skip + one debug.
+  // Adoption advisory (plan `20260815-dsh-fallbacks-personas` Task 4 +
+  // `20260816-dsh-b4-seeds` Task 3) — the warn-only deployment-taxonomy
+  // pass: when fallbacks is mounted, ONE pass per apply reports the adoption
+  // state (seeded / persona-overridden / missing + revert affordance via the
+  // effective readback; the structural roles.list read on the loader-
+  // fallback path). Never writes the fallbacks config; unreadable config →
+  // skip + one debug. With the service present the pass is ASYNC — it awaits
+  // the idempotent re-declare before the readback, so the latch arms when
+  // the pass reports it ran (mounted).
   setAdvisoryLogger((level, message) => {
     const logger = ctx.logger(ADVISORY_LOGGER)
     if (level === 'debug') logger.debug(message)
@@ -427,7 +429,9 @@ export function apply(ctx: Context, config: Config): void {
   let advisoryPassed = false
   const runAdvisoryPass = (): void => {
     if (advisoryPassed) return
-    advisoryPassed = runFallbacksAdvisory(ctx, packagedAgentsDir())
+    void runFallbacksAdvisory(ctx, packagedAgentsDir()).then((ran) => {
+      if (ran) advisoryPassed = true
+    })
   }
   runAdvisoryPass()
 

@@ -1,35 +1,47 @@
 /**
  * Warn-only adoption advisory for the OPTIONAL `dsh-llm-fallbacks` plugin
- * (plan `20260815-dsh-fallbacks-personas` Task 4): when the capability is
- * mounted, ONE advisory pass per apply structurally reads the deployment's
- * fallbacks row config from the loader entry (`entry.options.config` —
- * architect-verified field: `EntryOptions.config` "Config passed to the
- * plugin", the same value the plugin's `apply()` receives) and warns
- * (bounded: ≤1 warn per category, logger `mstar/fallbacks-advisory`) on
- * taxonomy gaps:
+ * (plan `20260815-dsh-fallbacks-personas` Task 4 + `20260816-dsh-b4-seeds`
+ * Task 3): when the capability is mounted, ONE advisory pass per apply
+ * reports the deployment's fallbacks taxonomy state (bounded: ≤1 warn per
+ * category, logger `mstar/fallbacks-advisory`):
  *
- * - (b) mstar role ids missing from the deployment's `roles.list` — the
- *   mstar role-id set is derived from the `harness-agents/` mirror (Task 3
- *   surface: `subagentRoleIds` — shell file stems filtered to
- *   `mode: subagent`), never hardcoded;
- * - (c) declared role entities with an empty persona;
- * - (d) legacy keys in the row config — the service's own
- *   `detectLegacyKeys` when applied (one of the 9 service keys); when the
- *   service is absent (loader-fallback probe path) the legacy check is
- *   SKIPPED rather than reimplemented.
+ * - Service present (seeds-aware path): the decision point FIRST awaits the
+ *   idempotent re-declare (`declareMstarSeeds`) — converging the boot
+ *   dual-inject-child race window — then reads the EFFECTIVE state
+ *   (`getEffectiveRoles`, sync) and reports per mstar role id:
+ *   (i) missing row → missing warn; (ii) `seeded && !personaOverridden` →
+ *   seeded (silent, one debug); (iii) `personaOverridden` → persona-
+ *   overridden warn (ids + the revert entry: the `fallbacks/revert-seed`
+ *   gateway / settings-card rollback button). Empty-persona warns fire only
+ *   for non-seeded rows or overridden-empty rows. The declare outcome's
+ *   skips/conflicts (upstream conflict code `'persona-source'`) merge into
+ *   one warn. The legacy-keys check runs through the service's own
+ *   `detectLegacyKeys` on the row config.
+ * - Loader-fallback path (no service): the structural read is preserved
+ *   (`readRowConfig`/`readRolesList` — (b) missing ids / (c) empty personas
+ *   over the raw `roles.list`); the legacy check is SKIPPED (never
+ *   reimplemented) and no revert entry appears (no seeds surface).
+ *
+ * The mstar role-id set is derived from the `harness-agents/` mirror
+ * (`subagentRoleIds` — shell file stems filtered to `mode: subagent`),
+ * never hardcoded.
  *
  * Unreadable row config (absent field / non-object, or an unreadable
  * `roles.list`) → skip + one debug log. Unmounted → the pass is not invoked
  * (returns `false`, no logs). The advisory NEVER writes the fallbacks config
  * — the read is read-only over the deployment's config layer (never the
- * fallbacks plugin's module internals) — and never throws (the caller's
+ * fallbacks plugin's module internals); the only write path is the
+ * idempotent seeds re-declare through the released seeds surface (no-delta
+ * → no settings write upstream). The advisory never throws (the caller's
  * dispatch/apply flow is never affected).
  *
  * Module boundary: no barrel — the entry imports this module by explicit
  * relative path (the decoration-module pattern).
  */
 import type { Context } from '@deepseek-ai/cordis'
+import type { EffectiveRolesReadback, FallbacksService } from 'dsh-llm-fallbacks'
 import { subagentRoleIds } from './agent-personas.ts'
+import { declareMstarSeeds, type SeedOutcomeView, type SeedsLogSink } from './fallbacks-seeds.ts'
 import { fallbacksEntry, fallbacksMounted, fallbacksService } from './fallbacks-probe.ts'
 
 /** Logger label for the adoption advisory (dsh logger naming: `<scope>/<subject>`). */
@@ -62,9 +74,11 @@ interface RoleEntityView {
 
 /**
  * One advisory pass: unmounted → not invoked (`false`, no logs); mounted →
- * structurally read the deployment's fallbacks row config and warn on
- * taxonomy gaps (bounded: ≤1 warn per category). Never throws — every
- * failure mode degrades to skip + one debug log. Never writes.
+ * report the taxonomy adoption state (bounded: ≤1 warn per category). With
+ * the service present the pass is ASYNC: it awaits the idempotent re-declare
+ * before the effective-state readback (report determinism — the boot
+ * dual-inject-child race window is closed). Never throws — every failure
+ * mode degrades to skip + one debug/warn. Never writes the fallbacks config.
  *
  * @param ctx - the plugin's registrant context (the app composition root).
  * @param agentsDir - the `harness-agents/` mirror root the mstar role-id set
@@ -73,7 +87,7 @@ interface RoleEntityView {
  * @returns `true` when the pass ran (mounted), `false` when unmounted — the
  *   caller (entry `apply`) uses the boolean for the one-pass-per-apply latch.
  */
-export function runFallbacksAdvisory(ctx: Context, agentsDir: string | undefined): boolean {
+export async function runFallbacksAdvisory(ctx: Context, agentsDir: string | undefined): Promise<boolean> {
   try {
     if (!fallbacksMounted(ctx)) return false
     const config = readRowConfig(ctx)
@@ -81,65 +95,196 @@ export function runFallbacksAdvisory(ctx: Context, agentsDir: string | undefined
       log('debug', 'fallbacks row config unreadable (absent or non-object) — adoption advisory skipped')
       return true
     }
-    // (d) Legacy keys — the service's own detector when applied; skipped
-    // (never reimplemented) on the loader-fallback probe path.
     const service = fallbacksService(ctx)
     if (service !== undefined) {
-      const legacy = service.detectLegacyKeys(config)
-      if (legacy.length > 0) {
-        log('warn', `fallbacks config carries legacy keys (detectLegacyKeys): ${legacy.join(', ')} — migrate to the current shape (role entities use 'persona'; 'chains', 'roles.default', 'label' and 'description' are removed)`)
-      }
+      // Seeds-aware path: the effective state (seed annotations) only exists
+      // through the service; the structural roles.list read cannot tell
+      // seeded vs overridden, so it is replaced by the readback here.
+      return await runSeedsAdvisory(service, config, agentsDir)
     }
-    // The mstar role-id set is mirror-derived (Task 3 surface), never
-    // hardcoded: no mirror → no taxonomy reference → one debug.
-    if (agentsDir === undefined) {
-      log('debug', 'harness-agents mirror absent — fallbacks adoption taxonomy check skipped (config-only advisory)')
-      return true
-    }
-    const mstarIds = subagentRoleIds(agentsDir)
-    if (mstarIds.length === 0) {
-      log('debug', 'harness-agents mirror has no subagent-mode shells — fallbacks adoption taxonomy check skipped')
-      return true
-    }
-    const list = readRolesList(config)
-    if (list === undefined) {
-      log('debug', 'fallbacks roles block not structurally readable (roles.list absent or non-array) — adoption advisory skipped')
-      return true
-    }
-    const declared = new Map<string, RoleEntityView>()
-    for (let index = 0; index < list.length; index++) {
-      const entity = list[index]
-      // S-003: a null/primitive entry must not abort the pass — skip the
-      // malformed entry with one debug and keep checking the rest.
-      if (entity === null || typeof entity !== 'object') {
-        log('debug', `fallbacks roles.list entry ${index} is not an object (${entity === null ? 'null' : typeof entity}) — skipped`)
-        continue
-      }
-      const view = entity as RoleEntityView
-      if (typeof view.id !== 'string' || view.id === '') continue
-      declared.set(view.id, view)
-    }
-    // (b) Missing ids — ONE warn listing them.
-    const missing = mstarIds.filter((id) => !declared.has(id))
-    if (missing.length > 0) {
-      log('warn', `fallbacks roles.list is missing mstar roles: ${missing.join(', ')} — declare them under the mstar role id (or map via a taxonomy that uses those ids) so role-matched fallback chains resolve`)
-    }
-    // (c) Empty personas — ONE warn naming them.
-    const emptyPersona = [...declared.values()]
-      .filter((entity) => {
-        const persona = entity.persona
-        return typeof persona !== 'string' || persona.trim() === ''
-      })
-      .map((entity) => entity.id as string)
-    if (emptyPersona.length > 0) {
-      log('warn', `fallbacks roles.list declares roles with an empty persona: ${emptyPersona.join(', ')} — declare a persona (or remove the role)`)
-    }
-    return true
+    // Loader-fallback path (no service): preserve the structural read.
+    return runStructuralAdvisory(config, agentsDir)
   } catch (error) {
     // Contained like the gate's degrade path: skip the pass, never crash.
     log('warn', `fallbacks adoption advisory aborted (degraded — warn-only, deployment config untouched): ${errorMessage(error)}`)
     return true
   }
+}
+
+/**
+ * Service-present path: legacy keys → mirror gate → await the idempotent
+ * re-declare → effective readback → three-state report + declare-outcome
+ * merge. The re-declare's own diagnostics go through the advisory sink
+ * (level-mapped) — they explain seeding gaps to the same operator channel.
+ */
+async function runSeedsAdvisory(
+  service: FallbacksService,
+  config: Record<string, unknown>,
+  agentsDir: string | undefined,
+): Promise<boolean> {
+  // (d) Legacy keys — the service's own detector when applied (mirror-
+  // independent: runs even without a mirror).
+  const legacy = service.detectLegacyKeys(config)
+  if (legacy.length > 0) {
+    log('warn', `fallbacks config carries legacy keys (detectLegacyKeys): ${legacy.join(', ')} — migrate to the current shape (role entities use 'persona'; 'chains', 'roles.default', 'label' and 'description' are removed)`)
+  }
+  // The mstar role-id set is mirror-derived (never hardcoded): no mirror →
+  // no taxonomy reference → one debug. The re-declare is gated the same way
+  // (a preserved-only batch has no mstar analysis to converge).
+  if (agentsDir === undefined) {
+    log('debug', 'harness-agents mirror absent — fallbacks adoption taxonomy check skipped (config-only advisory)')
+    return true
+  }
+  const mstarIds = subagentRoleIds(agentsDir)
+  if (mstarIds.length === 0) {
+    log('debug', 'harness-agents mirror has no subagent-mode shells — fallbacks adoption taxonomy check skipped')
+    return true
+  }
+  // Decision-point convergence: await the idempotent re-declare FIRST, then
+  // read the EFFECTIVE state — the report deterministically reflects the
+  // current declaration batch even when the entry's inject child is still in
+  // flight (the boot dual-inject-child race window).
+  const seedsLog: SeedsLogSink = (level, message) => log(level === 'error' ? 'warn' : level, message)
+  const view = await declareMstarSeeds(service, { agentsDir, log: seedsLog })
+  // Readback — sync (probe semantics: a throwing readback degrades to skip +
+  // one warn; the adoption state is unavailable, never guessed).
+  let readback: EffectiveRolesReadback
+  try {
+    readback = service.getEffectiveRoles()
+  } catch (error) {
+    log('warn', `fallbacks effective-state readback failed — adoption state unavailable: ${errorMessage(error)}`)
+    return true
+  }
+  reportEffectiveState(mstarIds, readback)
+  reportDeclareOutcome(view)
+  return true
+}
+
+/** Loader-fallback path (no service): the structural roles.list read, unchanged. */
+function runStructuralAdvisory(config: Record<string, unknown>, agentsDir: string | undefined): boolean {
+  // The mstar role-id set is mirror-derived (Task 3 surface), never
+  // hardcoded: no mirror → no taxonomy reference → one debug.
+  if (agentsDir === undefined) {
+    log('debug', 'harness-agents mirror absent — fallbacks adoption taxonomy check skipped (config-only advisory)')
+    return true
+  }
+  const mstarIds = subagentRoleIds(agentsDir)
+  if (mstarIds.length === 0) {
+    log('debug', 'harness-agents mirror has no subagent-mode shells — fallbacks adoption taxonomy check skipped')
+    return true
+  }
+  const list = readRolesList(config)
+  if (list === undefined) {
+    log('debug', 'fallbacks roles block not structurally readable (roles.list absent or non-array) — adoption advisory skipped')
+    return true
+  }
+  const declared = new Map<string, RoleEntityView>()
+  for (let index = 0; index < list.length; index++) {
+    const entity = list[index]
+    // S-003: a null/primitive entry must not abort the pass — skip the
+    // malformed entry with one debug and keep checking the rest.
+    if (entity === null || typeof entity !== 'object') {
+      log('debug', `fallbacks roles.list entry ${index} is not an object (${entity === null ? 'null' : typeof entity}) — skipped`)
+      continue
+    }
+    const view = entity as RoleEntityView
+    if (typeof view.id !== 'string' || view.id === '') continue
+    declared.set(view.id, view)
+  }
+  // (b) Missing ids — ONE warn listing them.
+  const missing = mstarIds.filter((id) => !declared.has(id))
+  if (missing.length > 0) {
+    log('warn', `fallbacks roles.list is missing mstar roles: ${missing.join(', ')} — declare them under the mstar role id (or map via a taxonomy that uses those ids) so role-matched fallback chains resolve`)
+  }
+  // (c) Empty personas — ONE warn naming them.
+  const emptyPersona = [...declared.values()]
+    .filter((entity) => {
+      const persona = entity.persona
+      return typeof persona !== 'string' || persona.trim() === ''
+    })
+    .map((entity) => entity.id as string)
+  if (emptyPersona.length > 0) {
+    log('warn', `fallbacks roles.list declares roles with an empty persona: ${emptyPersona.join(', ')} — declare a persona (or remove the role)`)
+  }
+  return true
+}
+
+/**
+ * Three-state report per mstar id over the effective readback + the (iv)
+ * empty-persona filter (bounded: ≤1 warn per category).
+ */
+function reportEffectiveState(mstarIds: string[], readback: EffectiveRolesReadback): void {
+  const byId = new Map<string, EffectiveRolesReadback['roles'][number]>()
+  for (const row of readback.roles) byId.set(row.id.trim(), row)
+  const missing: string[] = []
+  const overridden: string[] = []
+  const seeded: string[] = []
+  for (const id of mstarIds) {
+    const row = byId.get(id)
+    if (row === undefined) {
+      // (i) No effective row — missing.
+      missing.push(id)
+      continue
+    }
+    if (row.personaOverridden) {
+      // (iii) Seeded but the row persona differs from the current default.
+      overridden.push(id)
+      continue
+    }
+    // (ii) Seeded at the default — silent-by-default (one debug below). A
+    // present-but-unseeded mstar row (e.g. an operator row that conflicted
+    // with the seed default) is explained by the declare-outcome report.
+    if (row.seeded) seeded.push(id)
+  }
+  if (missing.length > 0) {
+    log('warn', `fallbacks taxonomy is missing mstar roles: ${missing.join(', ')} — declare them under the mstar role id (or map via a taxonomy that uses those ids) so role-matched fallback chains resolve`)
+  }
+  if (seeded.length > 0) {
+    log('debug', `fallbacks taxonomy: mstar roles seeded at their defaults — ${seeded.join(', ')}`)
+  }
+  if (overridden.length > 0) {
+    // Revert affordance: the upstream `fallbacks/revert-seed` gateway / the
+    // fallbacks settings-card rollback button restores the CURRENT seed
+    // default (the operator override is retained until then).
+    log('warn', `fallbacks taxonomy overrides the seed persona for mstar roles: ${overridden.join(', ')} — the operator override is retained; revert to the seed default via the fallbacks settings card rollback button (fallbacks/revert-seed gateway)`)
+  }
+  // (iv) Empty personas — ONLY non-seeded rows or overridden-empty rows (a
+  // seeded-at-default row cannot carry an empty persona from our seeds).
+  const emptyPersona = readback.roles
+    .filter((row) => {
+      const persona = row.persona
+      if (typeof persona === 'string' && persona.trim() !== '') return false
+      return !row.seeded || row.personaOverridden
+    })
+    .map((row) => row.id)
+  if (emptyPersona.length > 0) {
+    log('warn', `fallbacks taxonomy declares roles with an empty persona: ${emptyPersona.join(', ')} — declare a persona (or remove the role)`)
+  }
+}
+
+/**
+ * Declare-outcome merge: local skips (`interpolation`/`no-persona`), upstream
+ * skips and conflicts (upstream code `'persona-source'`) fold into ONE warn —
+ * the operator sees why roles are not seeded at defaults. The revert entry
+ * appears when an override was retained (conflict); plain skips have no seed
+ * to revert to.
+ */
+function reportDeclareOutcome(view: SeedOutcomeView): void {
+  const { skipped, outcome } = view
+  const conflicts = outcome.conflicts
+  if (skipped.length === 0 && outcome.skipped.length === 0 && conflicts.length === 0) return
+  const parts: string[] = []
+  if (skipped.length > 0) {
+    parts.push(`skipped locally: ${skipped.map((s) => `${s.id} (${s.reason})`).join(', ')}`)
+  }
+  if (outcome.skipped.length > 0) {
+    parts.push(`skipped upstream: ${outcome.skipped.map((s) => `${s.id} (${s.reason})`).join(', ')}`)
+  }
+  if (conflicts.length > 0) {
+    parts.push(`conflicts: ${conflicts.map((c) => `${c.id} (${c.kind} — operator override retained)`).join(', ')}`)
+  }
+  const revertNote = conflicts.length > 0 ? ' — revert an override via the fallbacks settings card rollback button (fallbacks/revert-seed gateway)' : ''
+  log('warn', `fallbacks seed declaration: ${parts.join('; ')}${revertNote}`)
 }
 
 /** Best-effort human-readable message from an arbitrary thrown value (agent-flow `errorMessage` pattern). */
