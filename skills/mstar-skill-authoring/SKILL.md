@@ -17,7 +17,11 @@ description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门�
 
 详细 writer 流程与输出模板 → `references/skillsbench-authoring.md`（需要完整循环时再读）。
 
-## 6 条作者原则（必须遵守）
+## Workflow
+
+主链：按「Frontmatter Contract」先定触发契约（原则 3）→ 按「Body 必须回答的 5 问」写默认紧凑 body（原则 2）→ 变体细节按「Progressive Disclosure」进 `references/` / `templates/` / `scripts/` → 行为塑形改动按「验证门控（Evidence，原则 4 + 6）」留 paired 证据 → 按「Review Template」自审并完成「完成时主动说明」三问。
+
+## 6 条作者原则（Decision Rules，必须遵守）
 
 来源：SkillsBench 大规模实验。违反任一都会降低 agent 性能。
 
@@ -123,7 +127,7 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 多宿主 / 多域细节按文件拆分，并在 body 写明「何时打开哪份」。
 
-## 验证门控（原则 4 + 6）
+## 验证门控（Evidence，原则 4 + 6）
 
 行为塑形改动必须留下证据，任选可观测形式：
 
