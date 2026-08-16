@@ -53,6 +53,12 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 
 Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan/status artifacts.
 
+### 覆盖语义（未提及 = 未审查）
+
+- **未提及 = 未审查**：某 finding / severity 项 / 声明未被任何席位报告提及 → 不得在汇总中标记为已解决或通过；如实标注 `unreviewed`，按需转 targeted re-review 或补充席位。
+- **汇总层零注入**：consolidated 中每条发现可溯源到某 `qcN.md`；PM 不得在汇总层引入席位报告之外的新声明（PM 自身观察走独立 Status Update，不混入 gate 决策输入）。
+- **Unconfirmed 传导**：任一席位 verdict = `Unconfirmed`（`report-template.md` 定义的证据通道失败态）→ gate 决策不得为 `Approve`——先补证据（重发 review-package / 修 diff 基线）再收敛；受影响席位走既有 targeted re-review 机制（同 `qcN.md` `## Revalidation` 原位更新 verdict），不新增 re-review 形态、不改 N 规则。
+
 ## 证据规则（PM · consolidated 输入）
 
 - Critical 发现须含触发条件、影响范围、修复建议。

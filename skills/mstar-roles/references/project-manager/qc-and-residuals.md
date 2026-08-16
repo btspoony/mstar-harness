@@ -47,7 +47,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 ```markdown
 ## QC Consolidated Decision
 
-**Decision**: Approve | Request Changes | Needs Discussion
+**Decision**: Approve | Request Changes | Needs Discussion | Unconfirmed
 **Blocking Items**: {list or None}
 **Residual Findings**: {list with owner/target date, or None}
 **Assigned Fix Owners**: {role list}
