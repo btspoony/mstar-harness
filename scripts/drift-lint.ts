@@ -19,6 +19,14 @@
  *   3. skills corpus — no ephemeral citations anywhere in the skills/
  *      markdown tree (engine findEphemeralCitations over the full corpus),
  *      turning the manual corpus smoke into a permanent CI guard.
+ *   5. skills corpus — five-question runtime smoke (plan
+ *      20260816-audit-001-five-question-lint Task 2, audit finding 5):
+ *      every shipped runtime `skills/mstar-*` SKILL.md (excluding
+ *      `mstar-harness-core` and `mstar-skill-authoring`) must pass engine
+ *      `lintFiveQuestion` in runtime mode, so the corpus cannot drift out
+ *      of five-question alignment without failing CI. Lands after Guard 3;
+ *      plan 003's Guard 4 (roles/load-order) arrives later — numbers are
+ *      per-plan locked, not positional.
  *
  * Engine symbols are imported from the source entry (../packages/engine/
  * src/index.ts), NOT the "@mstar-harness/engine" package specifier: the CI
@@ -33,7 +41,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { AUDIT_CATEGORIES, findEphemeralCitations } from "../packages/engine/src/index.ts";
+import { AUDIT_CATEGORIES, findEphemeralCitations, lintFiveQuestion } from "../packages/engine/src/index.ts";
 
 const root = process.cwd();
 const failures: string[] = [];
@@ -187,6 +195,53 @@ export function citesHarnessPath(text: string, index: number): boolean {
  * are still existence-checked. Mirrors the `.harness/` exemption. */
 export function citesKnowledgeConventions(text: string, index: number): boolean {
   return /(?:^|[^\w./-])conventions\/$/.test(text.slice(Math.max(0, index - 200), index));
+}
+
+/* ------------------------------------------------------------------ */
+/* Guard 5 helpers: five-question runtime corpus smoke                 */
+/* ------------------------------------------------------------------ */
+
+/** Skills exempt from the five-question runtime corpus smoke (mirrors the
+ * engine corpus test and the CLI's mode selection): `mstar-harness-core`
+ * is exempt by design (hub headings), `mstar-skill-authoring` is the
+ * standard's own definition and always lints in authoring/strict mode. */
+export const FIVE_QUESTION_CORPUS_EXEMPT: Record<string, true> = {
+  "mstar-harness-core": true,
+  "mstar-skill-authoring": true,
+};
+
+/** Strip a leading `---`-fenced YAML frontmatter block (mirrors the CLI's
+ * `stripFrontmatter`; five-question lint takes the body only). */
+function stripFrontmatter(text: string): string {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (lines.length === 0 || lines[0].trim() !== "---") return text;
+  let end = 1;
+  while (end < lines.length && lines[end].trim() !== "---") end++;
+  return lines.slice(end + 1).join("\n");
+}
+
+/** Guard 5 result: runtime skills checked (minus the exempt pair) plus
+ * one failure row per uncovered question. */
+export type FiveQuestionCorpusResult = { checked: number; failures: string[] };
+
+/** Guard 5 — five-question runtime smoke over the shipped `mstar-*`
+ * corpus: every `skills/mstar-*` SKILL.md (excluding the exempt pair)
+ * must pass `lintFiveQuestion` in runtime mode. Load-bearing: deleting a
+ * Step-3 aligned heading or losing runtime alias coverage fails
+ * drift-lint (regression-pinned by scripts/drift-lint.test.ts). */
+export function checkFiveQuestionCorpus(files: Array<{ rel: string; text: string }>): FiveQuestionCorpusResult {
+  const failures: string[] = [];
+  let checked = 0;
+  for (const { rel, text } of files) {
+    const m = rel.match(/^skills\/(mstar-[\w-]+)\/SKILL\.md$/);
+    if (!m || FIVE_QUESTION_CORPUS_EXEMPT[m[1]]) continue;
+    checked++;
+    const result = lintFiveQuestion(stripFrontmatter(text), "runtime");
+    for (const v of result.violations) {
+      failures.push(`${rel}: five-question runtime smoke ${v.code} - ${v.message}`);
+    }
+  }
+  return { checked, failures };
 }
 
 if (import.meta.main) {
@@ -477,17 +532,26 @@ if (import.meta.main) {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Guard 5: skills corpus — five-question runtime smoke                */
+  /* ------------------------------------------------------------------ */
+
+  const fiveQuestion = checkFiveQuestionCorpus(
+    skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
+  );
+  for (const row of fiveQuestion.failures) fail(row);
+
+  /* ------------------------------------------------------------------ */
 
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations)`,
+      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
   );
 }

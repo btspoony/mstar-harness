@@ -12,13 +12,19 @@
  * - citesKnowledgeConventions (W-2) — the exemption is anchored to the
  *   cited token itself (the citation path starts with `conventions/`);
  *   proximity alone no longer exempts unrelated citations.
+ * - checkFiveQuestionCorpus (guard 5) — five-question runtime smoke over
+ *   the shipped `mstar-*` corpus: the real corpus passes runtime-mode
+ *   lint; deleting an alias-covered heading (mstar-audit `## Output
+ *   format`) or a Step-3 aligned heading (mstar-sdd `## Progress ledger`)
+ *   fails; non-corpus files are ignored (load-bearing per plan Step 7).
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
   checkBilingualPairing,
+  checkFiveQuestionCorpus,
   citesKnowledgeConventions,
   evaluateBilingualGuard,
   extractCategoryRowTokens,
@@ -160,5 +166,79 @@ describe("citesKnowledgeConventions — anchored exemption (W-2)", () => {
   test("token on the next line after conventions/ is NOT exempt (path is broken)", () => {
     const text = "spec: conventions/\nskill-content-porting-discipline.md";
     expect(citesKnowledgeConventions(text, idxOf(text, "skill-content-porting-discipline.md"))).toBe(false);
+  });
+});
+
+describe("checkFiveQuestionCorpus — Guard 5 five-question runtime smoke", () => {
+  const SKILLS_ROOT = join(import.meta.dir, "..", "skills");
+
+  /** The real shipped corpus as the guard sees it: every
+   * `skills/mstar-*` SKILL.md, with the repo-relative `rel` the guard
+   * filters on. */
+  const realCorpus = () =>
+    readdirSync(SKILLS_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("mstar-"))
+      .map((entry) => ({
+        rel: `skills/${entry.name}/SKILL.md`,
+        text: readFileSync(join(SKILLS_ROOT, entry.name, "SKILL.md"), "utf8"),
+      }));
+
+  /** Corpus fixture with every heading line matching `pattern` dropped
+   * from the entry at `rel` — simulates a Step-3 heading being removed. */
+  const dropHeading = (corpus: Array<{ rel: string; text: string }>, rel: string, pattern: RegExp) =>
+    corpus.map((entry) =>
+      entry.rel === rel
+        ? { ...entry, text: entry.text.split(/\r?\n/).filter((line) => !pattern.test(line)).join("\n") }
+        : entry,
+    );
+
+  test("real corpus passes runtime-mode five-question lint (16 runtime skills)", () => {
+    const { checked, failures } = checkFiveQuestionCorpus(realCorpus());
+    // 18 mstar-* skill dirs minus the two exempt (mstar-harness-core,
+    // mstar-skill-authoring) — a new runtime skill must be aligned or
+    // fail the guard (and this pin) loudly.
+    expect(checked).toBe(16);
+    expect(failures).toEqual([]);
+  });
+
+  test("removing an alias-covered heading (mstar-audit ## Output format) fails the guard", () => {
+    const corpus = realCorpus();
+    const audit = corpus.find((entry) => entry.rel === "skills/mstar-audit/SKILL.md");
+    expect(audit).toBeDefined();
+    expect(audit!.text).toContain("## Output format");
+    const gapped = dropHeading(corpus, "skills/mstar-audit/SKILL.md", /^#{1,6}\s+Output format\s*$/);
+    const { failures } = checkFiveQuestionCorpus(gapped);
+    expect(failures.length).toBeGreaterThan(0);
+    expect(
+      failures.some(
+        (row) => row.includes("skills/mstar-audit/SKILL.md") && row.includes("five-question.evidence"),
+      ),
+    ).toBe(true);
+  });
+
+  test("removing a Step-3 aligned heading (mstar-sdd ## Progress ledger) fails the guard", () => {
+    const corpus = realCorpus();
+    const sdd = corpus.find((entry) => entry.rel === "skills/mstar-sdd/SKILL.md");
+    expect(sdd).toBeDefined();
+    expect(sdd!.text).toContain("## Progress ledger");
+    const gapped = dropHeading(corpus, "skills/mstar-sdd/SKILL.md", /^#{1,6}\s+Progress ledger/);
+    const { failures } = checkFiveQuestionCorpus(gapped);
+    expect(failures.length).toBeGreaterThan(0);
+    expect(
+      failures.some(
+        (row) => row.includes("skills/mstar-sdd/SKILL.md") && row.includes("five-question.evidence"),
+      ),
+    ).toBe(true);
+  });
+
+  test("non-corpus files are ignored (references/, non-mstar, exempt pair)", () => {
+    const { checked, failures } = checkFiveQuestionCorpus([
+      { rel: "skills/mstar-roles/references/fullstack-dev-shared.md", text: "# no five questions here" },
+      { rel: "skills/grill-me/SKILL.md", text: "# no five questions here" },
+      { rel: "skills/mstar-harness-core/SKILL.md", text: "# hub headings — exempt by design" },
+      { rel: "skills/mstar-skill-authoring/SKILL.md", text: "# strict mode — exempt" },
+    ]);
+    expect(checked).toBe(0);
+    expect(failures).toEqual([]);
   });
 });
