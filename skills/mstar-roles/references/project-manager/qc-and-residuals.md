@@ -58,6 +58,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 - Any unresolved `Critical` -> `Request Changes`
 - No `Critical`, but unresolved high-impact warning with disagreement -> `Needs Discussion`
+- Any seat `Unconfirmed` (evidence-channel failure) -> not `Approve`; supplement evidence first
 - Otherwise -> `Approve`
 
 ## Residual Findings (Mandatory)
