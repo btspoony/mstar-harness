@@ -19,6 +19,7 @@ import {
   isRootLikeAgent,
   mirrorIterationGoal,
   registerGoalBridge,
+  rootAgentOf,
   setGoalBridgeLogger,
   type GoalRefView,
   type GoalView,
@@ -56,10 +57,10 @@ interface FakeGoalRecord {
 
 /** The fake registered as a cordis `goals` service (`ctx.get('goals')` — the structural read the bridge performs). */
 class FakeGoalsService extends Service {
-  calls: Array<{ op: 'get' | 'create' | 'edit'; args: unknown[] }> = []
+  calls: Array<{ op: 'get' | 'create' | 'complete'; args: unknown[] }> = []
   current: FakeGoalRecord | undefined
-  /** Consecutive `edit` calls to fail with `GOAL_STALE_REVISION` (0 = never). */
-  editStaleCount = 0
+  /** Consecutive `complete` calls to fail with `GOAL_STALE_REVISION` (0 = never). */
+  completeStaleCount = 0
 
   constructor(ctx: Context) {
     super(ctx, 'goals')
@@ -72,6 +73,12 @@ class FakeGoalsService extends Service {
 
   create(agent: unknown, request: { objective: string; maxGoalRounds?: number }): GoalView {
     this.calls.push({ op: 'create', args: [agent, request] })
+    // Upstream parity (goal/src/index.ts:244-257): `create` REPLACES a
+    // completed goal (fresh revision 1, phase active); every other live
+    // phase throws GOAL_ALREADY_EXISTS.
+    if (this.current !== undefined && this.current.phase !== 'complete') {
+      throw Object.assign(new Error(`goal "${this.current.id}" already exists with phase "${this.current.phase}"`), { code: 'GOAL_ALREADY_EXISTS' })
+    }
     this.current = {
       id: 'goal-1',
       revision: 1,
@@ -82,20 +89,16 @@ class FakeGoalsService extends Service {
     return this.current as GoalView
   }
 
-  edit(agent: unknown, ref: GoalRefView, request: { objective?: string; maxGoalRounds?: number }): GoalView {
-    this.calls.push({ op: 'edit', args: [agent, ref, request] })
-    if (this.editStaleCount > 0) {
-      this.editStaleCount -= 1
-      // Simulate the concurrent writer committing BETWEEN the mirror's get and edit:
+  complete(agent: unknown, ref: GoalRefView): GoalView {
+    this.calls.push({ op: 'complete', args: [agent, ref] })
+    if (this.completeStaleCount > 0) {
+      this.completeStaleCount -= 1
+      // Simulate the concurrent writer committing BETWEEN the mirror's get and complete:
       // the current goal advances one revision, so the mirror's ref is stale.
       this.current = { ...this.current!, revision: this.current!.revision + 1 }
       throw Object.assign(new Error(`stale goal ref "${ref.id}" revision ${ref.revision}`), { code: 'GOAL_STALE_REVISION' })
     }
-    this.current = {
-      ...this.current!,
-      revision: ref.revision + 1,
-      ...(request.objective !== undefined ? { objective: request.objective } : {}),
-    }
+    this.current = { ...this.current!, revision: ref.revision + 1, phase: 'complete' }
     return this.current as GoalView
   }
 }
@@ -219,14 +222,13 @@ describe('goal bridge — mirrorIterationGoal (objective mirror + round cap)', (
       // get-先行 prevents GOAL_ALREADY_EXISTS; no edit, no create.
       expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(true)
       expect(goals.calls.filter((c) => c.op === 'create')).toHaveLength(createsBefore)
-      expect(goals.calls.filter((c) => c.op === 'edit')).toHaveLength(0)
       expect(goals.current!.objective).toBe(createdObjective)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('objective drift (new active iteration) → CAS edit with the current { id, revision }', async () => {
+  it('objective drift on a LIVE goal (new active iteration) → complete the old goal FIRST, then create a fresh goal (clean round budget)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-goal-bridge-drift-')
     try {
       await seedCompass(harnessDir, 'iter-20260816-first', 'active')
@@ -235,52 +237,100 @@ describe('goal bridge — mirrorIterationGoal (objective mirror + round cap)', (
       expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(true)
 
       // The steering iteration flips (iteration-close → new iteration start):
-      // the first compass stops steering, the second one steers.
+      // the first compass stops steering, the second one steers. The old goal
+      // is still LIVE (phase active) — `create` alone would throw
+      // GOAL_ALREADY_EXISTS, so the mirror completes it first (qc3 F-001:
+      // the new goal must NOT inherit the old goal's spent round budget).
       await rm(join(harnessDir, 'iterations', 'iter-20260816-first'), { recursive: true, force: true })
       await seedCompass(harnessDir, 'iter-20260816-second', 'active')
 
       expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(true)
-      const edits = goals.calls.filter((c) => c.op === 'edit')
-      expect(edits).toHaveLength(1)
-      // CAS identity: the CURRENT goal's { id, revision }, objective-only request.
-      const ref = edits[0]!.args[1] as GoalRefView
-      const req = edits[0]!.args[2] as { objective: string }
-      expect(ref).toEqual({ id: 'goal-1', revision: 1 })
-      expect(req.objective).toContain('iter-20260816-second')
+      const completes = goals.calls.filter((c) => c.op === 'complete')
+      expect(completes).toHaveLength(1)
+      // CAS identity: the CURRENT goal's { id, revision }.
+      expect(completes[0]!.args[1]).toEqual({ id: 'goal-1', revision: 1 })
+      const creates = goals.calls.filter((c) => c.op === 'create')
+      expect(creates).toHaveLength(2)
+      // The replacement create ALWAYS carries the cap (qc3 F-008).
+      const replacement = creates[1]!.args[1] as { objective: string; maxGoalRounds: number }
+      expect(replacement.objective).toContain('iter-20260816-second')
+      expect(replacement.maxGoalRounds).toBe(64)
+      // Fresh goal: revision 1, phase active, new objective — zero round debt.
       expect(goals.current!.objective).toContain('iter-20260816-second')
-      expect(goals.calls.filter((c) => c.op === 'create')).toHaveLength(1)
+      expect(goals.current!.phase).toBe('active')
+      expect(goals.current!.revision).toBe(1)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('stale edit (GOAL_STALE_REVISION) → re-read once and retry the edit with the fresh ref', async () => {
+  it('objective drift on a COMPLETED goal (operator completed at iteration-close) → create REPLACES it directly; no edit, no complete (qc2 W-1)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-drift-completed-')
+    try {
+      await seedCompass(harnessDir, 'iter-20260816-c1', 'active')
+      const goals = new FakeGoalsService(new Context())
+      const resolver = new HarnessResolver(harnessDir)
+      expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(true)
+      // The operator completes the goal at iteration-close (upstream `complete`).
+      goals.complete(rootAgent(root), { id: goals.current!.id, revision: goals.current!.revision })
+      expect(goals.current!.phase).toBe('complete')
+
+      // New iteration steers → drift. Upstream `create` explicitly replaces a
+      // completed goal ("A completed goal may be replaced" — goal/src/
+      // index.ts:244-257): fresh revision 1, phase active, zero rounds.
+      // NEVER a CAS edit — edit preserves phase, which would leave a
+      // completed goal describing the ACTIVE iteration (a false "done").
+      await rm(join(harnessDir, 'iterations', 'iter-20260816-c1'), { recursive: true, force: true })
+      await seedCompass(harnessDir, 'iter-20260816-c2', 'active')
+
+      expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(true)
+      const creates = goals.calls.filter((c) => c.op === 'create')
+      expect(creates).toHaveLength(2)
+      // The only complete in the call log is the TEST's own operator complete
+      // (the mirror replaces a completed goal with create alone — the
+      // `edit` path is gone from the bridge surface entirely).
+      expect(goals.calls.filter((c) => c.op === 'complete')).toHaveLength(1)
+      const replacement = creates[1]!.args[1] as { objective: string; maxGoalRounds: number }
+      expect(replacement.objective).toContain('iter-20260816-c2')
+      expect(replacement.maxGoalRounds).toBe(64)
+      expect(goals.current!.phase).toBe('active')
+      expect(goals.current!.revision).toBe(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('stale complete (GOAL_STALE_REVISION) → re-read once and retry the drift rebuild with the fresh ref', async () => {
     const { root, harnessDir } = await tempHarness('dsh-goal-bridge-stale-')
     try {
       await seedCompass(harnessDir, 'iter-20260816-stale', 'active')
       const goals = new FakeGoalsService(new Context())
       const resolver = new HarnessResolver(harnessDir)
       expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(true)
-      // Drift + a concurrent mutation between get and edit.
+      // Drift + a concurrent mutation between get and complete.
       await rm(join(harnessDir, 'iterations', 'iter-20260816-stale'), { recursive: true, force: true })
       await seedCompass(harnessDir, 'iter-20260816-stale2', 'active')
-      goals.editStaleCount = 1 // the FIRST edit stales; the fake bumps the revision as the concurrent commit
+      goals.completeStaleCount = 1 // the FIRST complete stales; the fake bumps the revision as the concurrent commit
 
       expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(true)
-      const edits = goals.calls.filter((c) => c.op === 'edit')
-      expect(edits).toHaveLength(2)
-      // First edit used the STALE ref; the retry used the FRESH revision.
-      const firstRef = edits[0]!.args[1] as GoalRefView
-      const retryRef = edits[1]!.args[1] as GoalRefView
+      const completes = goals.calls.filter((c) => c.op === 'complete')
+      expect(completes).toHaveLength(2)
+      // First complete used the STALE ref; the retry used the FRESH revision.
+      const firstRef = completes[0]!.args[1] as GoalRefView
+      const retryRef = completes[1]!.args[1] as GoalRefView
       expect(firstRef.revision).toBe(1)
       expect(retryRef.revision).toBe(2)
+      // The drift rebuild then created the fresh goal for the new iteration.
+      expect(goals.calls.filter((c) => c.op === 'create')).toHaveLength(2)
       expect(goals.current!.objective).toContain('iter-20260816-stale2')
+      expect(goals.current!.phase).toBe('active')
+      expect(goals.current!.revision).toBe(1)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('stale edit twice → warn + abandon (false; no create, no third attempt)', async () => {
+  it('stale complete twice → warn + abandon (false; no third attempt)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-goal-bridge-stale2-')
     try {
       await seedCompass(harnessDir, 'iter-20260816-stale-a', 'active')
@@ -289,13 +339,13 @@ describe('goal bridge — mirrorIterationGoal (objective mirror + round cap)', (
       expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(true)
       await rm(join(harnessDir, 'iterations', 'iter-20260816-stale-a'), { recursive: true, force: true })
       await seedCompass(harnessDir, 'iter-20260816-stale-b', 'active')
-      goals.editStaleCount = 2 // BOTH the first edit AND the re-read retry stale
+      goals.completeStaleCount = 2 // BOTH the first complete AND the re-read retry stale
 
       const captured: string[] = []
       const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
       try {
         expect(mirrorIterationGoal(rootAgent(root), { resolver, goals, maxGoalRounds: 64 })).toBe(false)
-        expect(goals.calls.filter((c) => c.op === 'edit')).toHaveLength(2)
+        expect(goals.calls.filter((c) => c.op === 'complete')).toHaveLength(2)
         expect(goals.calls.filter((c) => c.op === 'create')).toHaveLength(1)
         expect(captured.some((m) => m.startsWith('warn:') && m.includes('GOAL_STALE_REVISION'))).toBe(true)
       } finally {
@@ -380,7 +430,7 @@ describe('goal bridge — apply wiring (agent/session-start + subagent/start dec
     }
   })
 
-  it('subagent/start decision point: the parentSession root walk re-evaluates idempotently (in place → no churn; drift → CAS edit)', async () => {
+  it('subagent/start decision point: the parentSession root walk re-evaluates idempotently (in place → no churn; drift → complete + fresh create)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-goal-bridge-decision-')
     try {
       await seedCompass(harnessDir, 'iter-20260816-d1', 'active')
@@ -403,18 +453,158 @@ describe('goal bridge — apply wiring (agent/session-start + subagent/start dec
         // Decision point with the SAME steering iteration → idempotent no-op (no churn).
         ctx.events.emit('subagent/start', { runId: 'run-1', provider: 'in-process', id: 'child-d1', local: true })
         expect(goals.calls.filter((c) => c.op === 'create')).toHaveLength(1)
-        expect(goals.calls.filter((c) => c.op === 'edit')).toHaveLength(0)
+        expect(goals.calls.filter((c) => c.op === 'complete')).toHaveLength(0)
 
-        // The steering iteration flips mid-session → the decision point CAS-edits.
+        // The steering iteration flips mid-session → the decision point
+        // completes the old goal and creates a fresh one for the new iteration.
         await rm(join(harnessDir, 'iterations', 'iter-20260816-d1'), { recursive: true, force: true })
         await seedCompass(harnessDir, 'iter-20260816-d2', 'active')
         ctx.events.emit('subagent/start', { runId: 'run-2', provider: 'in-process', id: 'child-d1', local: true })
 
-        const edits = goals.calls.filter((c) => c.op === 'edit')
-        expect(edits).toHaveLength(1)
-        const ref = edits[0]!.args[1] as GoalRefView
-        expect(ref).toEqual({ id: 'goal-1', revision: 1 })
+        const completes = goals.calls.filter((c) => c.op === 'complete')
+        expect(completes).toHaveLength(1)
+        expect(completes[0]!.args[1]).toEqual({ id: 'goal-1', revision: 1 })
         expect(goals.current!.objective).toContain('iter-20260816-d2')
+        expect(goals.current!.phase).toBe('active')
+        expect(goals.current!.revision).toBe(1)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rootAgentOf: a 2+ hop parentSession CYCLE returns undefined (seen-set guard — upstream liveLineage precedent; qc2 W-2)', () => {
+    // A→B→A: no root reachable — the walk must break on the REVISITED id
+    // instead of spinning forever (the sync decision-point listeners hang
+    // otherwise). The current 1-cycle guard (parent === current) cannot see
+    // this — the guard needs a seen-set over session ids.
+    const agentA = { id: 'cycle-a', session: { header: { parentSession: 'cycle-b' } } }
+    const agentB = { id: 'cycle-b', session: { header: { parentSession: 'cycle-a' } } }
+    const registry = { get: (id: string) => (id === 'cycle-a' ? agentA : id === 'cycle-b' ? agentB : undefined) }
+    expect(rootAgentOf(agentA, registry)).toBeUndefined()
+    expect(rootAgentOf(agentB, registry)).toBeUndefined()
+  })
+
+  it('subagent/start decision point: a 2+ hop parentSession CYCLE in the live registry does not hang the listener (no goal mirrored)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-cycle-')
+    try {
+      await seedCompass(harnessDir, 'iter-20260816-cycle', 'active')
+      const ctx = new Context()
+      const goals = new FakeGoalsService(ctx)
+      const agents = new FakeAgentRegistry(ctx)
+      // 2-cycle fixture: A.parentSession = B.id AND B.parentSession = A.id.
+      const agentA = { id: 'cycle-a', session: { header: { cwd: root, parentSession: 'cycle-b' } } }
+      const agentB = { id: 'cycle-b', session: { header: { cwd: root, parentSession: 'cycle-a' } } }
+      agents.register(agentA)
+      agents.register(agentB)
+      const prior = setGoalBridgeLogger(() => {})
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir), {})
+        // The decision point MUST return promptly (no infinite loop) and
+        // must NOT mirror any goal (the walk abandons on the revisited id).
+        expect(() => {
+          ctx.events.emit('subagent/start', { runId: 'run-1', provider: 'in-process', id: 'cycle-a', local: true })
+        }).not.toThrow()
+        expect(goals.calls.filter((c) => c.op === 'create')).toHaveLength(0)
+        expect(goals.calls.filter((c) => c.op === 'complete')).toHaveLength(0)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('invalid maxGoalRounds config (non-positive / non-integer) → ONE warn + fallback to the module default; the mirror still proceeds (qc3 F-004)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-badcap-')
+    try {
+      await seedCompass(harnessDir, 'iter-20260816-badcap', 'active')
+      const ctx = new Context()
+      const goals = new FakeGoalsService(ctx)
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir), { maxGoalRounds: 0 })
+        ctx.events.emit('agent/session-start', { agent: rootAgent(root), source: 'fresh' })
+
+        const create = goals.calls.find((c) => c.op === 'create')
+        expect(create).toBeDefined()
+        // The invalid value never reaches the service — the module default is used.
+        const createRequest = create!.args[1] as { maxGoalRounds: number } // the fake's own create request shape (test fixture)
+        expect(createRequest.maxGoalRounds).toBe(DEFAULT_MAX_GOAL_ROUNDS)
+        // ONE loud warn at registration (misconfiguration, not a transient service issue).
+        const warn = captured.filter((m) => m.startsWith('warn:') && m.includes('maxGoalRounds'))
+        expect(warn).toHaveLength(1)
+        expect(warn[0]).toContain('falling back')
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('negative / non-integer maxGoalRounds config → same fallback; a VALID cap passes through unwarned (control)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-badcap2-')
+    try {
+      await seedCompass(harnessDir, 'iter-20260816-badcap2', 'active')
+      for (const bad of [-5, 3.5]) {
+        const ctx = new Context()
+        const goals = new FakeGoalsService(ctx)
+        const captured: string[] = []
+        const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+        try {
+          registerGoalBridge(ctx, new HarnessResolver(harnessDir), { maxGoalRounds: bad })
+          ctx.events.emit('agent/session-start', { agent: rootAgent(root), source: 'fresh' })
+          const createRequest = goals.calls.find((c) => c.op === 'create')!.args[1] as { maxGoalRounds: number } // the fake's own create request shape (test fixture)
+          expect(createRequest.maxGoalRounds).toBe(DEFAULT_MAX_GOAL_ROUNDS)
+          expect(captured.filter((m) => m.startsWith('warn:') && m.includes('maxGoalRounds'))).toHaveLength(1)
+        } finally {
+          setGoalBridgeLogger(prior)
+        }
+      }
+      // Control: a valid cap passes through with NO warn.
+      const ctx = new Context()
+      const goals = new FakeGoalsService(ctx)
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir), { maxGoalRounds: 42 })
+        ctx.events.emit('agent/session-start', { agent: rootAgent(root), source: 'fresh' })
+        const createRequest = goals.calls.find((c) => c.op === 'create')!.args[1] as { maxGoalRounds: number } // the fake's own create request shape (test fixture)
+        expect(createRequest.maxGoalRounds).toBe(42)
+        expect(captured.filter((m) => m.startsWith('warn:') && m.includes('maxGoalRounds'))).toHaveLength(0)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a throwing AGENT resolver on session-start → contained mirror warn ("goal bridge mirror failed"), the emit never throws (F-006)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-catch-agent-')
+    try {
+      const ctx = new Context()
+      // The mirror is inert without the goals service (returns before the
+      // resolver read) — register the fake so the throw is reachable.
+      const goals = new FakeGoalsService(ctx)
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        class ThrowingAgentResolver extends HarnessResolver {
+          override forAgent(_agent: unknown): string | null {
+            throw new Error('resolver agent boom')
+          }
+        }
+        registerGoalBridge(ctx, new ThrowingAgentResolver(harnessDir), {})
+        expect(() => ctx.events.emit('agent/session-start', { agent: rootAgent(root), source: 'fresh' })).not.toThrow()
+        const warn = captured.find((m) => m.startsWith('warn:') && m.includes('goal bridge mirror failed'))
+        expect(warn).toBeDefined()
+        expect(warn).toContain('resolver agent boom')
+        expect(goals.calls.filter((c) => c.op === 'create')).toHaveLength(0) // the sync never reached the service
       } finally {
         setGoalBridgeLogger(prior)
       }
@@ -618,6 +808,67 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         const warns = captured.filter((m) => m.startsWith('warn:'))
         expect(warns).toHaveLength(1)
         expect(warns[0]).toContain(`${wsHarness}/status.json`)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a long blockedReason.code is length-capped in the advisory (bounded log line — qc2 S-1)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-codecap-')
+    try {
+      const ctx = new Context()
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        registerGoalBridge(ctx, new HarnessResolver(harnessDir), {})
+        // Upstream validates lower-kebab but NOT length — a model-driven or
+        // hostile code must not produce an unbounded log line.
+        const longCode = 'model-driven-block-code-' + 'x'.repeat(300)
+        ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({
+          operation: 'block',
+          phase: 'blocked',
+          blockedReason: { code: longCode, message: 'max autonomous rounds reached' },
+        }))
+
+        const warns = captured.filter((m) => m.startsWith('warn:'))
+        expect(warns).toHaveLength(1)
+        // Truncated to 128 (cap) with the visible marker — never the full code.
+        expect(warns[0]).toContain(`goal blocked [${longCode.slice(0, 127)}…]`)
+        expect(warns[0]).not.toContain('x'.repeat(300))
+        // Bounded line: capped code (128) + capped message (512) + capped objective (512) + fixed pointer.
+        expect(warns[0].length).toBeLessThan(1500)
+      } finally {
+        setGoalBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a throwing WORKSPACE resolver in the session/event listener → contained degrade warn ("goal blocked advisory degraded"), the emit never throws (qc2 S-4)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-goal-bridge-catch-event-')
+    try {
+      const ctx = new Context()
+      const captured: string[] = []
+      const prior = setGoalBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        class ThrowingWorkspaceResolver extends HarnessResolver {
+          override forWorkspace(_cwd: string | undefined): string | null {
+            throw new Error('resolver workspace boom')
+          }
+        }
+        registerGoalBridge(ctx, new ThrowingWorkspaceResolver(harnessDir), {})
+        expect(() => ctx.events.emit('session/event', goalSession(root), goalChangeEnvelope({
+          operation: 'block',
+          phase: 'blocked',
+          blockedReason: { code: 'rounds-exhausted', message: 'max autonomous rounds reached' },
+        }))).not.toThrow()
+        const degrade = captured.find((m) => m.startsWith('warn:') && m.includes('goal blocked advisory degraded'))
+        expect(degrade).toBeDefined()
+        expect(degrade).toContain('resolver workspace boom')
       } finally {
         setGoalBridgeLogger(prior)
       }

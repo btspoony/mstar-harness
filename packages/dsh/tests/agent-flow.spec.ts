@@ -59,6 +59,8 @@ import {
   setAgentFlowLogger,
   SETTLE_SEAM_PAIRING_NOTE,
   taskIdOf,
+  truncateLedgerField,
+  WORKFLOW_LEDGER_TRUNCATION_MARKER,
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
@@ -415,6 +417,32 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       setAgentFlowLogger(priorSink)
       await rm(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('truncateLedgerField — code-point-safe truncation (qc2 S-5)', () => {
+  it('slices by CODE POINTS, never splitting a surrogate pair at the cap boundary', () => {
+    // 510 ASCII units + the 2-unit emoji + 1 unit = 513 > 512. The cap
+    // boundary (511 kept units) falls INSIDE the emoji's surrogate pair —
+    // a UTF-16 `slice` would leave a lone high surrogate (rendered as
+    // U+FFFD in the log line). The code-point slice keeps the whole emoji.
+    const value = 'a'.repeat(510) + '😀' + 'b'
+    const truncated = truncateLedgerField(value, 512)
+    expect(truncated.endsWith(WORKFLOW_LEDGER_TRUNCATION_MARKER)).toBe(true)
+    expect(truncated).toContain('😀')
+    // No lone surrogate in the result: no high unit without a following low,
+    // no low unit without a preceding high.
+    expect(truncated.match(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/)).toBeNull()
+    expect(truncated.match(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/)).toBeNull()
+  })
+
+  it('ASCII values still truncate to cap − marker chars with the visible marker (regression)', () => {
+    expect(truncateLedgerField('x'.repeat(600), 512)).toBe('x'.repeat(511) + WORKFLOW_LEDGER_TRUNCATION_MARKER)
+  })
+
+  it('values at or under the cap pass through unchanged', () => {
+    expect(truncateLedgerField('short', 512)).toBe('short')
+    expect(truncateLedgerField('x'.repeat(512), 512)).toBe('x'.repeat(512))
   })
 })
 

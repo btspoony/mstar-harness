@@ -143,12 +143,18 @@ export const WORKFLOW_LEDGER_MAX_SEQ = 2 ** 31
  * through unchanged; longer values are truncated to `cap − marker` chars
  * plus the {@link WORKFLOW_LEDGER_TRUNCATION_MARKER} suffix (the marker
  * guarantees the truncation is visible in the panel — never a silent cut).
- * Pure — NEVER throws.
+ * CODE-POINT safe (plan QC fix wave — qc2 S-5): `String.prototype.slice`
+ * operates on UTF-16 code units and can split a surrogate pair at the cap
+ * boundary (a lone surrogate renders as U+FFFD in the log line);
+ * `Array.from` iterates code points, so the kept prefix never splits a
+ * pair (a multi-byte character at the boundary is kept whole, at the cost
+ * of at most one code point of slack). Pure — NEVER throws.
  */
 export function truncateLedgerField(value: string, cap: number): string {
   if (value.length <= cap) return value
   const keep = cap - WORKFLOW_LEDGER_TRUNCATION_MARKER.length
-  return value.slice(0, keep > 0 ? keep : 0) + WORKFLOW_LEDGER_TRUNCATION_MARKER
+  const prefix = keep > 0 ? Array.from(value).slice(0, keep).join('') : ''
+  return prefix + WORKFLOW_LEDGER_TRUNCATION_MARKER
 }
 /** Logger label for the agent-flow ledger (dsh logger naming: `<scope>/<subject>`). */
 export const AGENT_FLOW_LOGGER = 'mstar/agent-flow'

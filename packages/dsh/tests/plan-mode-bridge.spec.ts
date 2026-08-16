@@ -343,6 +343,35 @@ describe('planMode bridge — apply wiring (agent/session-start + subagent/start
     }
   })
 
+  it('a throwing resolver on session-start → contained sync warn ("planMode bridge sync failed"), the emit never throws (qc3 F-006)', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-planmode-catch-')
+    try {
+      await seedCompass(harnessDir, 'iter-20260816-catch', 'active')
+      await seedStatus(harnessDir, [{ id: 'plan-a', status: 'Todo' }])
+      const ctx = new Context()
+      const planMode = new FakePlanModeService(ctx)
+      const captured: string[] = []
+      const prior = setPlanModeBridgeLogger((level, message) => captured.push(`${level}: ${message}`))
+      try {
+        class ThrowingResolver extends HarnessResolver {
+          override forAgent(_agent: unknown): string | null {
+            throw new Error('planmode resolver boom')
+          }
+        }
+        registerPlanModeBridge(ctx, new ThrowingResolver(harnessDir))
+        expect(() => ctx.events.emit('agent/session-start', { agent: rootAgent(root), source: 'fresh' })).not.toThrow()
+        const warn = captured.find((m) => m.startsWith('warn:') && m.includes('planMode bridge sync failed'))
+        expect(warn).toBeDefined()
+        expect(warn).toContain('planmode resolver boom')
+        expect(planMode.setCalls).toBe(0) // the sync never reached the service
+      } finally {
+        setPlanModeBridgeLogger(prior)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('planMode service absent → ONE debug log at registration; emits never throw (optional-unit degrade)', async () => {
     const { root, harnessDir } = await tempHarness('dsh-planmode-wiring-absent-')
     try {
