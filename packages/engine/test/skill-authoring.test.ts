@@ -18,13 +18,14 @@
  *   § Resolve loaded skill root.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   lintFiveQuestion,
   lintFrontmatter,
   resolveAssetPath,
   RUNTIME_HEADING_ALIASES,
+  stripFrontmatter,
 } from "../src/skill-authoring.js";
 
 // ---------------------------------------------------------------------------
@@ -254,19 +255,12 @@ const SKILLS_ROOT = join(REPO_ROOT, "skills");
  * standard's own definition and always lints in authoring/strict mode. */
 const CORPUS_EXCLUDED = new Set(["mstar-harness-core", "mstar-skill-authoring"]);
 
-/** Strip a leading `---`-fenced YAML frontmatter block (mirrors the CLI's
- * `stripFrontmatter`; five-question lint takes the body only). */
-function stripFrontmatter(text: string): string {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
-  if (lines.length === 0 || lines[0].trim() !== "---") return text;
-  let end = 1;
-  while (end < lines.length && lines[end].trim() !== "---") end++;
-  return lines.slice(end + 1).join("\n");
-}
-
 /** Every shipped runtime skill body: the `SKILL.md` under each
  * `skills/mstar-*` directory, minus the corpus exclusions, sorted by name. */
 function runtimeCorpus(): Array<{ name: string; body: string }> {
+  if (!existsSync(SKILLS_ROOT)) {
+    throw new Error(`corpus test requires the repo skills/ tree (missing: ${SKILLS_ROOT})`);
+  }
   return readdirSync(SKILLS_ROOT, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("mstar-") && !CORPUS_EXCLUDED.has(entry.name))
     .sort((a, b) => a.name.localeCompare(b.name))
@@ -376,6 +370,71 @@ describe("lintFiveQuestion", () => {
   test("heading matching is case-insensitive", () => {
     const body = BODY_COMPLETE.replace(/## Load Order/, "## load order");
     expect(lintFiveQuestion(body).ok).toBe(true);
+  });
+
+  test("fenced fake headings never count as coverage (fence-aware, both modes)", () => {
+    // A gitignore-style fence containing a `# Workflow ...` comment line must
+    // not satisfy the workflow question — in either mode. The only in-fence
+    // "heading" in the corpus was exactly this shape (mstar-plan-conventions
+    // gitignore snippet) and previously produced a false green.
+    const body = `# Skill Title
+
+## Load Order
+
+Read core first.
+
+## Decision Rules
+
+Never break the gates.
+
+## Evidence
+
+A report.
+
+## References
+
+Open refs.
+
+\`\`\`gitignore
+# Workflow: run the pipeline in order.
+\`\`\`
+`;
+    expect(lintFiveQuestion(body, "authoring").ok).toBe(false);
+    const runtime = lintFiveQuestion(body, "runtime");
+    expect(runtime.ok).toBe(false);
+    expect(runtime.violations.map((v) => v.code)).toContain("skill-authoring.five-question.workflow");
+  });
+
+  test("~~~ fences are skipped too; real headings after the closing fence still count", () => {
+    const body = `# Skill Title
+
+## Load Order
+
+\`\`\`
+# Workflow inside backtick fence
+\`\`\`
+
+## Hard Rules
+
+Never X.
+
+## Output format
+
+A report.
+
+## Dependencies
+
+Open refs.
+
+~~~text
+# Evidence inside tilde fence
+~~~
+
+## Workflow
+
+1. Go.
+`;
+    expect(lintFiveQuestion(body, "runtime").ok).toBe(true);
   });
 
   test("empty body → all five questions uncovered", () => {

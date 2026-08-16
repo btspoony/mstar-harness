@@ -41,7 +41,12 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { AUDIT_CATEGORIES, findEphemeralCitations, lintFiveQuestion } from "../packages/engine/src/index.ts";
+import {
+  AUDIT_CATEGORIES,
+  findEphemeralCitations,
+  lintFiveQuestion,
+  stripFrontmatter,
+} from "../packages/engine/src/index.ts";
 
 const root = process.cwd();
 const failures: string[] = [];
@@ -209,16 +214,6 @@ export const FIVE_QUESTION_CORPUS_EXEMPT: Record<string, true> = {
   "mstar-harness-core": true,
   "mstar-skill-authoring": true,
 };
-
-/** Strip a leading `---`-fenced YAML frontmatter block (mirrors the CLI's
- * `stripFrontmatter`; five-question lint takes the body only). */
-function stripFrontmatter(text: string): string {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
-  if (lines.length === 0 || lines[0].trim() !== "---") return text;
-  let end = 1;
-  while (end < lines.length && lines[end].trim() !== "---") end++;
-  return lines.slice(end + 1).join("\n");
-}
 
 /** Guard 5 result: runtime skills checked (minus the exempt pair) plus
  * one failure row per uncovered question. */

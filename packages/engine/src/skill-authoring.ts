@@ -51,7 +51,40 @@ export const FIVE_QUESTION_SECTIONS: readonly FiveQuestionSection[] = [
   { key: "references", label: "References", question: "additional resources to open when the main path is not enough" },
 ];
 
+/** Strip a leading `---`-fenced YAML frontmatter block, returning the body
+ * (the five-question lint takes the body; the frontmatter lint takes the
+ * full doc). Returns the input unchanged when there is no closing fence —
+ * an unparseable block is treated as body rather than destroyed. Canonical
+ * helper shared by the CLI, drift-lint Guard 5 and the engine corpus test. */
+export function stripFrontmatter(text: string): string {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (lines.length === 0 || lines[0].trim() !== "---") return text;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") return lines.slice(i + 1).join("\n");
+  }
+  return text;
+}
+
 const HEADING_RE = /^#{1,6}\s+[^\r\n]+$/;
+
+/** Collect heading texts from a SKILL.md body, skipping lines inside
+ * ` ``` ` / ` ~~~ ` fenced blocks (a `# ...` comment inside a code fence is
+ * never a heading — fence state toggles on any line starting with the
+ * three-character marker, both modes). */
+function collectHeadings(bodyText: string): string[] {
+  const headings: string[] = [];
+  let inFence = false;
+  for (const line of bodyText.split(/\r?\n/)) {
+    if (line.startsWith("```") || line.startsWith("~~~")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence && HEADING_RE.test(line)) {
+      headings.push(line.replace(/^#{1,6}\s+/, "").trim().toLowerCase());
+    }
+  }
+  return headings;
+}
 
 /** Lint mode: `authoring` (canonical headings only — greenfield / strict)
  * or `runtime` (canonical plus the locked `RUNTIME_HEADING_ALIASES` table
@@ -102,10 +135,7 @@ export const RUNTIME_HEADING_ALIASES: Readonly<Record<string, readonly string[]>
  * question.
  */
 export function lintFiveQuestion(bodyText: string, mode: FiveQuestionMode = "authoring"): GateResult {
-  const headings = bodyText
-    .split(/\r?\n/)
-    .filter((line) => HEADING_RE.test(line))
-    .map((line) => line.replace(/^#{1,6}\s+/, "").trim().toLowerCase());
+  const headings = collectHeadings(bodyText);
   const violations: ValidationResult[] = [];
   for (const section of FIVE_QUESTION_SECTIONS) {
     const label = section.label.toLowerCase();

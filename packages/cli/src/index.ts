@@ -43,6 +43,7 @@ import {
   scopeGuard,
   SddScriptError,
   sddWorkspace,
+  stripFrontmatter,
   taskBrief,
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
@@ -1005,17 +1006,6 @@ lintCommand
       failScript(error, "lint");
     }
   });
-
-/** Strip a leading `---`-fenced YAML frontmatter block, returning the body
- * (five-question lint takes the body; the frontmatter lint takes the full doc). */
-function stripFrontmatter(text: string): string {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
-  if (lines.length === 0 || lines[0].trim() !== "---") return text;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") return lines.slice(i + 1).join("\n");
-  }
-  return text;
-}
 
 const designMdCommand = program
   .command("design-md")

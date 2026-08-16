@@ -236,4 +236,5 @@ export {
   lintFiveQuestion,
   lintFrontmatter,
   resolveAssetPath,
+  stripFrontmatter,
 } from "./skill-authoring.js";
