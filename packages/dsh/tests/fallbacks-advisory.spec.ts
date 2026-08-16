@@ -503,6 +503,75 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
       restore()
     }
   })
+
+  it('wiring — a stale in-flight pass never re-arms the latch after teardown (epoch guard; PR #97 finding 1)', async () => {
+    const mirror = packagedAgentsDir()
+    if (mirror === undefined) return // bundle-assets not run — the live mirror is a precondition
+    booted = await bootApp()
+    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    // A fake fallbacks provider whose fiber can be disposed — the cordis
+    // service appears/disappears with the plugin apply (HMR/fiber swap).
+    const provider = (fake: FakeAdvisoryService): { name: string; apply(ctx: Context): void } => ({
+      name: 'fake-fallbacks-provider',
+      apply(ctx: Context) {
+        ctx.provide('llm-fallbacks', fake as unknown as FallbacksService)
+      },
+    })
+    const { captured, restore } = captureLogs()
+    try {
+      // Service #1 with a CONTROLLED declareSeeds: the pass's await on the
+      // idempotent re-declare stays in flight until the test releases it —
+      // the deterministic in-flight window for the race.
+      const first = new FakeAdvisoryService({ roles: [] })
+      const waitFor = async (label: string, predicate: () => boolean, timeoutMs = 3000): Promise<void> => {
+        const start = Date.now()
+        while (!predicate()) {
+          if (Date.now() - start > timeoutMs) throw new Error(`waitFor[${label}] timed out`)
+          const { promise, resolve } = Promise.withResolvers<void>()
+          setTimeout(resolve, 10)
+          await promise
+        }
+      }
+      let releaseDeclare!: () => void
+      let heldDeclares = 0
+      const declareGate = new Promise<void>((resolve) => { releaseDeclare = resolve })
+      // The override replaces the spy method, so it records its own
+      // invocations: `heldDeclares === 2` (entry inject child + advisory
+      // pass) is the unambiguous in-flight signal — both callers are
+      // suspended at the held gate.
+      first.declareSeeds = async (seeds) => {
+        heldDeclares += 1
+        await declareGate
+        return { applied: seeds.map((s) => s.id), skipped: [], conflicts: [] }
+      }
+      const fiber1 = await booted.ctx.plugin(provider(first))
+      // First decision point: the service-present pass reaches the held
+      // declare and suspends (the entry inject child AND the advisory pass
+      // both await the same gate).
+      booted.ctx.events.emit('subagent/start', startInfo('agent-1'))
+      await waitFor('in-flight', () => heldDeclares === 2)
+      // Fiber swap while the pass is in flight: the inject teardown resets
+      // the one-shot latch (and, with the fix, bumps the pass generation).
+      await fiber1.dispose()
+      // The stale completion resolves AFTER the teardown. The bug: its
+      // `ran` re-arms `advisoryPassed`, so the next decision point never
+      // re-runs the pass and the HMR re-convergence is lost. The fix: the
+      // generation changed, so the completion is a no-op.
+      releaseDeclare()
+      await waitFor('stale-settle', () => first.calls.filter((c) => c === 'getEffectiveRoles').length === 3)
+      // Service re-appears (fallbacks re-applied / HMR) → the NEXT decision
+      // point MUST re-run the pass (the stale completion must not have
+      // armed the latch).
+      const second = new FakeAdvisoryService({ roles: [] })
+      const fiber2 = await booted.ctx.plugin(provider(second))
+      const beforeReconverge = captured.length
+      booted.ctx.events.emit('subagent/start', startInfo('agent-2'))
+      await waitFor('reconverge', () => captured.slice(beforeReconverge).some(([, message]) => message.includes('mstar seeds declared')))
+      await fiber2.dispose()
+    } finally {
+      restore()
+    }
+  })
 })
 
 describe('fallbacks adoption advisory — seeds-aware effective state (service present, plan 20260816-dsh-b4-seeds Task 3)', () => {

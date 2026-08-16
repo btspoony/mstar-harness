@@ -143,17 +143,22 @@ export const WORKFLOW_LEDGER_MAX_SEQ = 2 ** 31
  * through unchanged; longer values are truncated to `cap − marker` chars
  * plus the {@link WORKFLOW_LEDGER_TRUNCATION_MARKER} suffix (the marker
  * guarantees the truncation is visible in the panel — never a silent cut).
- * CODE-POINT safe (plan QC fix wave — qc2 S-5): `String.prototype.slice`
- * operates on UTF-16 code units and can split a surrogate pair at the cap
- * boundary (a lone surrogate renders as U+FFFD in the log line);
- * `Array.from` iterates code points, so the kept prefix never splits a
- * pair (a multi-byte character at the boundary is kept whole, at the cost
- * of at most one code point of slack). Pure — NEVER throws.
+ * CODE-POINT gated AND sliced (plan QC fix wave — qc2 S-5; PR #97 finding
+ * 2): `String.prototype.slice` operates on UTF-16 code units and can split
+ * a surrogate pair at the cap boundary (a lone surrogate renders as U+FFFD
+ * in the log line), and a UTF-16 `.length` gate would false-positive
+ * truncate astral-dense values (≤ cap code points but > cap UTF-16 units)
+ * then re-inflate the result to cap code points — up to ~2× the cap in the
+ * unit the gate measured. ONE `Array.from` drives both the gate and the
+ * slice, so the bound is measured and enforced in the same unit; a
+ * multi-byte character at the boundary is kept whole, at the cost of at
+ * most one code point of slack. Pure — NEVER throws.
  */
 export function truncateLedgerField(value: string, cap: number): string {
-  if (value.length <= cap) return value
+  const cps = Array.from(value)
+  if (cps.length <= cap) return value
   const keep = cap - WORKFLOW_LEDGER_TRUNCATION_MARKER.length
-  const prefix = keep > 0 ? Array.from(value).slice(0, keep).join('') : ''
+  const prefix = keep > 0 ? cps.slice(0, keep).join('') : ''
   return prefix + WORKFLOW_LEDGER_TRUNCATION_MARKER
 }
 /** Logger label for the agent-flow ledger (dsh logger naming: `<scope>/<subject>`). */

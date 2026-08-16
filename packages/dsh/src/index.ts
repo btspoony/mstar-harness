@@ -464,12 +464,20 @@ export function apply(ctx: Context, config: Config): void {
   // is async, so a burst of decision points inside its settle window must
   // not re-enter the pass (each re-entry would duplicate every warn).
   let advisoryPassInFlight = false
+  // Pass-generation guard (PR #97 finding 1 — advisory latch race after
+  // HMR): the async pass can outlive the `llm-fallbacks` inject teardown
+  // (a fiber swap while the pass is in flight). The teardown bumps the
+  // generation; a stale completion only arms the latch when its generation
+  // is still current — otherwise the NEXT decision point re-runs the pass
+  // and the HMR re-convergence is not lost.
+  let advisoryGeneration = 0
   const runAdvisoryPass = (): void => {
     if (advisoryPassed || advisoryPassInFlight) return
     advisoryPassInFlight = true
+    const generation = advisoryGeneration
     void runFallbacksAdvisory(ctx, packagedAgentsDir())
       .then((ran) => {
-        if (ran) advisoryPassed = true
+        if (ran && generation === advisoryGeneration) advisoryPassed = true
       })
       .finally(() => {
         advisoryPassInFlight = false
@@ -510,14 +518,17 @@ export function apply(ctx: Context, config: Config): void {
       // S-log; `instanceof` is the type-safe TS equivalent of that shape).
       ctx.logger(SEEDS_LOGGER).error(`mstar seeds declaration failed (contained — fallbacks taxonomy unchanged): ${error instanceof Error ? error.message : String(error)}`)
     })
-    // HMR/fiber-swap re-arm (plan QC fix wave W-1): when the fallbacks
-    // service disappears, reset the advisory one-shot latch so the NEXT
-    // decision point re-converges the seeds state. The seed registry is
-    // per-apply in-memory state and a fiber swap drops it; without the
-    // reset, `advisoryPassed` would stay armed from the pre-swap pass and
-    // the re-declare convergence would never run again.
+    // HMR/fiber-swap re-arm (plan QC fix wave W-1 + PR #97 finding 1): when
+    // the fallbacks service disappears, reset the advisory one-shot latch so
+    // the NEXT decision point re-converges the seeds state. The seed registry
+    // is per-apply in-memory state and a fiber swap drops it; without the
+    // reset, `advisoryPassed` would stay armed from the pre-swap pass and the
+    // re-declare convergence would never run again. The generation bump also
+    // invalidates any pass still in flight from BEFORE the swap — its stale
+    // completion must not re-arm the latch (see `runAdvisoryPass`).
     return () => {
       advisoryPassed = false
+      advisoryGeneration += 1
     }
   })
   registerSettleListener(ctx, config, pairing)
