@@ -83,6 +83,11 @@ import {
   declareMstarSeeds,
 } from './gates/fallbacks-seeds.ts'
 import { fallbacksMounted, fallbacksService } from './gates/fallbacks-probe.ts'
+import {
+  HARNESS_PROMPT_LOGGER,
+  registerHarnessPrompt,
+  setHarnessPromptLogger,
+} from './gates/system-prompt.ts'
 
 // Re-export the service type from the package entry: the cordis
 // `Context` augmentation (`ctx.dshMstar`) lives in service.d.ts, so the entry
@@ -408,6 +413,20 @@ export function apply(ctx: Context, config: Config): void {
   // regardless of launch cwd; absent when `bundle-assets` has not run
   // (config-only decoration).
   setDecorationAgentsDir(packagedAgentsDir())
+  // Harness-rules system-prompt injection (plan `20260816-dsh-nb1-systemprompt`
+  // Task 2): the global-layer `mstar:harness-rules` pointer section + the
+  // `mstar:engine-status` runtime-context summary (visible to the root
+  // session AND dispatched children; the child-scoped `mstar:role-persona`
+  // is untouched). The module sink is bound to the dsh logger (decoration
+  // pattern); the registration itself is optional-unit — a composition
+  // without dsh-system-prompt keeps boot unaffected (one debug log,
+  // `registerHarnessPrompt` returns false).
+  setHarnessPromptLogger((level, message) => {
+    const logger = ctx.logger(HARNESS_PROMPT_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else logger.warn(message)
+  })
+  registerHarnessPrompt(ctx, { resolver })
   // Adoption advisory (plan `20260815-dsh-fallbacks-personas` Task 4 +
   // `20260816-dsh-b4-seeds` Task 3) — the warn-only deployment-taxonomy
   // pass: when fallbacks is mounted, ONE pass per apply reports the adoption
