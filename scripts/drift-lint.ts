@@ -19,13 +19,18 @@
  *   3. skills corpus — no ephemeral citations anywhere in the skills/
  *      markdown tree (engine findEphemeralCitations over the full corpus),
  *      turning the manual corpus smoke into a permanent CI guard.
+ *   4. roles/load-order corpus (plan 20260816-audit-003-roles-validate-cli
+ *      Task 2): every `skills/mstar-*` SKILL.md must declare
+ *      `mstar-harness-core` in a Load Order / First action section (engine
+ *      `lintLoadOrder`) and the mstar-roles mapping / parameter tables
+ *      must resolve against the on-disk `references/<role>.md` layout
+ *      (engine `validateRoleMapping` on `skills/mstar-roles`).
  *   5. skills corpus — five-question runtime smoke (plan
  *      20260816-audit-001-five-question-lint Task 2, audit finding 5):
  *      every shipped runtime `skills/mstar-*` SKILL.md (excluding
  *      `mstar-harness-core` and `mstar-skill-authoring`) must pass engine
  *      `lintFiveQuestion` in runtime mode, so the corpus cannot drift out
- *      of five-question alignment without failing CI. Lands after Guard 3;
- *      plan 003's Guard 4 (roles/load-order) arrives later — numbers are
+ *      of five-question alignment without failing CI. Guard numbers are
  *      per-plan locked, not positional.
  *
  * Engine symbols are imported from the source entry (../packages/engine/
@@ -45,7 +50,9 @@ import {
   AUDIT_CATEGORIES,
   findEphemeralCitations,
   lintFiveQuestion,
+  lintLoadOrder,
   stripFrontmatter,
+  validateRoleMapping,
 } from "../packages/engine/src/index.ts";
 
 const root = process.cwd();
@@ -200,6 +207,55 @@ export function citesHarnessPath(text: string, index: number): boolean {
  * are still existence-checked. Mirrors the `.harness/` exemption. */
 export function citesKnowledgeConventions(text: string, index: number): boolean {
   return /(?:^|[^\w./-])conventions\/$/.test(text.slice(Math.max(0, index - 200), index));
+}
+
+/* ------------------------------------------------------------------ */
+/* Guard 4 helpers: roles/load-order corpus (plan audit-003 Task 2)    */
+/* ------------------------------------------------------------------ */
+
+/** Guard 4 result: mstar-* skill texts linted for their load-order
+ * declarations plus the role-mapping verdict over `rolesDir`, with one
+ * failure row per violation. */
+export type RolesCorpusResult = {
+  /** `skills/mstar-*` SKILL.md texts fed to lintLoadOrder (mstar-harness-core is exempt inside the engine) */
+  skillsChecked: number;
+  /** violations reported by validateRoleMapping on `rolesDir` */
+  mappingViolations: number;
+  failures: string[];
+};
+
+/** Guard 4 — roles/load-order corpus smoke over the shipped `mstar-*`
+ * corpus: every `skills/mstar-*` SKILL.md text must declare
+ * `mstar-harness-core` in a Load Order / First action section
+ * (`lintLoadOrder`; core itself is exempt by design) and the mstar-roles
+ * mapping / parameter tables must resolve against the on-disk
+ * `references/*.md` layout (`validateRoleMapping` on `rolesDir`).
+ * Load-bearing: deleting a Load Order heading or a mapped reference file
+ * fails drift-lint (regression-pinned by scripts/drift-lint.test.ts). */
+export function checkRolesCorpus(
+  files: Array<{ rel: string; text: string }>,
+  rolesDir: string,
+): RolesCorpusResult {
+  const failures: string[] = [];
+  const skillTexts: Record<string, string> = {};
+  for (const { rel, text } of files) {
+    const m = rel.match(/^skills\/(mstar-[\w-]+)\/SKILL\.md$/);
+    if (!m) continue;
+    skillTexts[m[1]] = text;
+  }
+  const loadOrder = lintLoadOrder(skillTexts);
+  for (const v of loadOrder.violations) {
+    failures.push(`roles: load-order ${v.code} - ${v.message}`);
+  }
+  const mapping = validateRoleMapping(rolesDir);
+  for (const v of mapping.violations) {
+    failures.push(`roles: mapping ${v.code} - ${v.message}`);
+  }
+  return {
+    skillsChecked: Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length,
+    mappingViolations: mapping.violations.length,
+    failures,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -527,6 +583,16 @@ if (import.meta.main) {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Guard 4: skills corpus — roles / load-order (engine lint)           */
+  /* ------------------------------------------------------------------ */
+
+  const roles = checkRolesCorpus(
+    skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
+    join(root, "skills", "mstar-roles"),
+  );
+  for (const row of roles.failures) fail(row);
+
+  /* ------------------------------------------------------------------ */
   /* Guard 5: skills corpus — five-question runtime smoke                */
   /* ------------------------------------------------------------------ */
 
@@ -541,12 +607,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${roles.skillsChecked} mstar-* skills pass load-order lint and roles mapping ${roles.mappingViolations === 0 ? "OK" : "FAIL"} (${roles.mappingViolations} violations); ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${roles.skillsChecked} mstar-* skills pass load-order lint and roles mapping ${roles.mappingViolations === 0 ? "OK" : "FAIL"} (${roles.mappingViolations} violations); ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
   );
 }
