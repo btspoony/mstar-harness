@@ -1,23 +1,55 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.2.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.3.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **2.2.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.2.0** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.2.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.2.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.2.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **2.2.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.2.0** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.2.0** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.2.0** |
-| Agent Plugins 清单 | `plugin.json` | **2.2.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **2.3.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.3.0** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.3.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.3.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.3.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **2.3.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.3.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.3.0** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.3.0** |
+| Agent Plugins 清单 | `plugin.json` | **2.3.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [2.3.0] - 2026-08-16
+
+### Harness
+
+- **SDD fix 轮次机械细节**：`mstar-sdd` 新增四条 PM fix 波次派发与收口机械规则——**未验证轮消耗轮次**（fix round 缺少验证证据——reviewer 未确认 / 报告未落盘——视为不 clean，重查并计轮，绝不进入收敛分支）、**全部问题重进**（下一轮 fix dispatch 携带全部 open findings（含上轮未验证项），绝不 slice 丢弃子集）、**跨轮上下文摘录（封顶）**（第 2 轮起 dispatch brief 附前几轮 findings 与处置摘录——约 500 词/轮、总量约 1500 词，为建议值而非硬上限）、**未收敛如实列出**（波次收尾仍有 open findings → 逐条明细 + 明确「重新喂给下一轮 fix 或转 residual 留档」处置，绝不静默收口）。C5 折入 `mstar-sdd` SKILL.md "After all tasks" + `references/file-handoffs.md` 互指（per-task fix loop 适用同一机械）。
+- **Residual fail-loud 交接契约**：`mstar-plan-artifacts` 的 `status-and-residuals.md` 现要求 findings 在登记 R# 前必须过 engine 校验——单条过 `validateResidual`、全量过 `validateStatus`；畸形条目（非对象、缺九必填字段 id/title/severity/source/scope/decision/owner/target/tracking 任一、或 severity 非枚举）一律**拒绝**——修正后重写，绝不静默透传、降级写入或先写后补。C6 折入；architect 核验 D-3 分支 = 已覆盖缺测试，故 `packages/engine` 补齐非对象拒绝回归用例（`validateResidual` 级 + `validateStatus` 聚合级各 1，engine 套件 658 pass / 0 fail），零源码 diff、无新增公共 API。
+- **CLI `dispatch validate` 非 ASCII 字面量修复**：bun 执行 CLI bundle 时对正则/字符串字面量的原始多字节 UTF-8 解码错误，导致合法的 `Branch policy: direct on main — <reason>`（em-dash）被误报为双 violation。`packages/engine` + `packages/cli` 共 20 个 src 文件的非 ASCII 字面量全部转 `\uXXXX`，另加 dist 构建后转义器（bun build 会把字符串转义还原为原始 UTF-8）、em-dash + ASCII 双 fixture 的 bundle-smoke 回归用例，以及 `bun run lint:ascii-literals` + CI 步骤防复发。守门范围覆盖 engine/cli 源码与 CLI dist bundle；opencode dist bundle 未接 escaper——不作为大 bun bundle 运行。
+- **回归固化 paired-evidence 参考**：新增 `mstar-skill-authoring/references/regression-fixation.md`——把「真实产物」当被测对象（built bundle / 命令序列，而非源码 import）、mock 宿主钩子、双路径断言一致、修复固化（复现 → FAIL → 修复 → PASS → 入回归集）；零外部依赖，明确为可选重武器（默认仍是 P6 before/after + 应用案例）。SKILL.md 补 References 指针并同步 verdict 枚举为 4 值 SSOT（Approve | Request Changes | Needs Discussion | Unconfirmed）。
+- **数据流定向调试规程**：`mstar-coding-behavior` §4 Debugging 新增紧凑诊断规程——先画数据流再下判断（输入 → 处理 → 存储 → 输出，每步谁写谁读；bug = 数据流某处状态偏离预期），四类可互验交叉检查（re-run the repro / log comparison / input-output comparison / dual-path comparison——当场无法验证的假设不构成结论），以及修复证伪（修复后重跑原复现并与预期对照；明确报告「verification failed」，绝不假装成功）——与既有 root-cause / repro-test 条目互指而非重述。
+- **QC 报告证据契约 + `Unconfirmed` verdict**：`qc-specialist` report-template 的 findings 条目现要求每个严重级别都附 `Verification` + `Expected vs observed`——Critical/Warning 可用四类交叉验证（或 `diff/read/grep` 锚点），Suggestion 仅用 `diff/read/grep` 锚点——并由两条硬规则背书（无法陈述可验证交叉检查 → 不报该 finding；证据通道失败 ≠ 「无问题」——受影响范围标 **Unconfirmed**，不得默认无发现）；verdict 枚举新增 `Unconfirmed` 以覆盖证据通道失败；`deep-review-lenses.md` 现要求每个透镜 finding 附 diff/read/grep 锚点 + 预期 vs 实际（无锚点不入报告）。
+- **Audit 红队攻击子步**：`mstar-audit` Phase 3 在人工 vet 前新增攻击子步——取 top candidate findings（按 leverage 排序，数量随 finding 总量自适应）逐条执行三向攻击（反例 / 更简单解释 / 证据可验证性）；survived 原样交 vet，refuted 剔除并记入 index 的 "considered and rejected" 节（沿用 `- <finding>: not worth doing because <one line>` 行格式），攻击自身产出的幻觉声明丢弃并记入红队记录行（绝不进 findings 表，也不占 "considered and rejected" 名额），未被攻击覆盖的 finding 视为未审查、保留交 vet——与 vet 步一行互指（攻击步判定「主张是否立得住」；vet 保留打开引用代码逐条核实 + by-design / mis-attribution / duplicate 处置）。
+- **QC 汇总覆盖语义 + `Unconfirmed` 传导**：`mstar-review-qc` PM consolidated 节现要求——未提及 = 未审查（未被任何席位提及的 finding / severity 项 / 声明不得标记为已解决或通过，如实标注 `unreviewed` 并按需转 targeted re-review）；汇总层零注入（每条 consolidated 发现可溯源到某 `qcN.md`，PM 自身观察走独立 Status Update）；任一席位 verdict = `Unconfirmed` → gate 决策不得为 `Approve`，先补证据再收敛（走既有 targeted re-review 机制——同 `qcN.md` `## Revalidation` 原位更新 verdict，不新增形态、不改 N 规则）。PM `Consolidated Decision Template` verdict 枚举同步为 4 值（Approve | Request Changes | Needs Discussion | Unconfirmed）。
+- 在 README 头部新增 **DSHFIND** badge，链接到 DSH 插件目录。
+- **短命引用 lint（engine）**：新增 `findEphemeralCitations` 扫描 skill 文本中的短命引用——具体 task 工件（`task-<digits>-(brief|report|fix-report|diff)`，含点号形式 `task-N.diff`）与 SDD 深链（`.mstar/sdd/` / `.agents/sdd/` + 具体首段）——同时判别占位符形式（`task-N-report`、`<plan-id>`、`{SDD_DIR}/…`、`.mstar/sdd/**` 路径 glob）：当前 `skills/` corpus 零误报。
+- **CLI `skill lint`**：`mstar skill lint` 五问 checklist 后接入第三项 `skill lint (ephemeral citations)`；每条引用报为 `skill.ephemeral.<kind>` 违规（行号 + 匹配 + 占位符改写建议）并置 exit 1。
+- **drift-lint 守卫**：docs 审计枚举集合相等（docs/cli.md `<category>` 行与 README 类别聚焦列表对 engine `AUDIT_CATEGORIES`——捕获 `deps` 这类杜撰 token 与 `bug` / `direction` 这类遗漏）、push 范围内 README.md / README_CN.md 同 commit 双语配对、以及复用 `findEphemeralCitations` 的 skills corpus 短命引用守卫；另加 `citesKnowledgeConventions` 豁免 harness 本地 knowledge 引用。
+- **历史改写推送安全**：`mstar-branch-worktree` 新增「History rewrite 与推送安全」节——已推送分支的任何 history rewrite 须先 `git fetch` 记录远端**精确 OID**，再以 `--force-with-lease=<branch>:<observed-oid>` 发布（禁止裸 `--force`）；改写后既有 review threads / approvals / check 结果不再构成当前证据，merge 结论前须重审；`mstar-iteration` phase-4-5 reference 现以该节为 rewrite / force-with-lease / 证据失效规则的 SSOT。
+- **装置库（Authoring devices）**：`skillsbench-authoring.md` 新增 6 个小型可组合撰写装置（calibrated examples file、recall batteries、overcorrection traps、required-explicit-input、questions ≠ write authority、invocation boundary），每个映射至一至两条 SkillsBench 原则并附仓内实例。
+- **双语最小对照编辑规则**：`AGENTS.md` Core Rules 新增规则——配对文档（README.md/README_CN.md、packages/dsh README 三件套）更新时只做最小对照编辑，**绝不**为应用一处更新而整篇重译，并在同一变更集内重录配对哈希（`git hash-object`）。
+- **知识文档行文卫生**：`mstar-compound` workflow 新增 §3.5 HEAD-resolvability 质量门（HEAD 读者——无 chat transcript / dispatch prompt / 未合并草稿——可解析每个引用并核验每个声明），含 mstar 适配的泄漏分类（dead session citations、change narration、review choreography、无 `simplify:`/`temporary` 标记的 hedges、authoring-language slips）与 sanctioned keep 规则（review bundle 内 R#/finding id、issue 引用、measured bounds、iteration/plan id）；`writing-specialist` Output Guidance 仅以指针指向 SSOT，不复制正文。
+- **未来决策价值分类轴**：`mstar-compound-refresh` Phase 2 新增第二轴——正文中的 rationale / alternatives considered / negative guarantees / reintroduction conditions 仍指导未来变更的文档**无论长度一律 Keep**——并附守护规则（captured rejected approach 仅在败方仍是 tempting、meaningful mistake 时保留），以及对 frozen-archive seal 机制的显式排除（规则 6 delete-don't-archive 保持不变）。
+- **writing-specialist 编辑准则**：Output Guidance 新增 complete-proposition rule（修剪前列举 actor+action / condition / modality / negative guarantee / ownership 命题，仅当每个事实子句存活时才可修剪）、按 6 类 mstar 产物（knowledge docs / plans / review bundles / SKILL.md / README / completion reports）的 coverage-by-artifact 表，以及 doc standards（atomic-move 规则、tutorial-vs-reference 分类）。
+- 在 README.md/README_CN.md 与 docs/cli.md 中补充 `/codebase-audit` 用法与关键词参数（深度级别、类别聚焦、`branch`、`next`/`roadmap`、`simplify`）。
+- **QC 深度评审透镜**：`deep-review-lenses.md` 新增 5 个透镜（Lifecycle & Concurrency、Ownership / Derived-State、Bounds、Enforcement-Path、Real-Entry-Path），每个含 2–4 条可由 diff/read/grep 回答的结构化追问；加深 Testing / Contract 透镜；信号映射默认席位同步（QC3 += Enforcement-Path / Ownership；QC2 += Bounds / Real-Entry-Path）。
+- **审计 playbook 探针**：`mstar-audit` playbook §1/§2/§4/§5 补 8 条代码库级探针（derived-state drift、bounds covering the final operation、enforcement bypass、real entry path、externally observable state、user-visible output is behavior、public-but-one-caller、unjustified defaults/public options）；§5 新增 prove-or-reject 方法论（消费方三分类、hand-rolled 与依赖替换的门槛、mirrored-fact test、strong-candidate 家族、守卫）。
+- **`/codebase-audit simplify`**：新增 `simplify` scope variant，复用现有命令路由——面向 DEBT 的深度扫描，findings 归 Category DEBT，绝不写 inline TODO。
+- cli/opencode/dsh 的 `@mstar-harness/engine` devDependency 改用 `workspace:*` 协议；移除 release-prep 中的 engine spec 同步步骤。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 2.3.0**。
 
 ## [2.2.0] - 2026-08-13
 

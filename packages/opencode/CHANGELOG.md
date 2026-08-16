@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-16
+
+### Harness
+
+- Internal `@mstar-harness/engine` devDependencies in cli/opencode/dsh now use the `workspace:*` protocol; the release-prep engine-spec sync step was removed.
+
+- Version alignment with harness **2.3.0** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **2.3.0**.
+
 ## [2.2.0] - 2026-08-13
 
 ### Bundled harness skills (`harness-skills/` at publish)
