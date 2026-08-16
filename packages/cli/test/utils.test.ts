@@ -81,6 +81,26 @@ describe("resolveCliPath", () => {
     }
   });
 
+  test("string-form workspaces walk-up: npm single-glob string resolves to the monorepo root (F-S1)", () => {
+    const dir = tempDir("mstar-utils-mono-str-");
+    try {
+      // npm accepts the string form ("workspaces": "./packages/*") alongside
+      // the array form — a consumer monorepo using it must still resolve to
+      // the workspace root, not the nearest plain package.json.
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "mono", workspaces: "./packages/*" }));
+      const member = join(dir, "packages", "cli");
+      mkdirSync(member, { recursive: true });
+      writeFileSync(join(member, "package.json"), JSON.stringify({ name: "@mono/cli" }));
+      withEnvRoot(undefined, () => {
+        withCwd(member, () => {
+          expect(resolveCliPath("skills/mstar-audit")).toBe(join(dir, "skills", "mstar-audit"));
+        });
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("single-package walk-up: nested dir resolves to the nearest package.json root", () => {
     const dir = tempDir("mstar-utils-single-");
     try {

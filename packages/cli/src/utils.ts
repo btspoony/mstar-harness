@@ -68,9 +68,13 @@ function findUpPackageRoot(startDir: string, predicate: (manifest: Record<string
   }
 }
 
-/** True for a manifest that declares a `workspaces` field (array or object). */
+/** True for a manifest that declares a `workspaces` field (array, string, or object). */
 function declaresWorkspaces(manifest: Record<string, unknown>): boolean {
-  return Array.isArray(manifest.workspaces) || (manifest.workspaces !== undefined && manifest.workspaces !== null && typeof manifest.workspaces === "object");
+  return (
+    Array.isArray(manifest.workspaces) ||
+    typeof manifest.workspaces === "string" ||
+    (manifest.workspaces !== undefined && manifest.workspaces !== null && typeof manifest.workspaces === "object")
+  );
 }
 
 /**
