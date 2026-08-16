@@ -1300,6 +1300,11 @@ const LEASE_UNCLAIMED = `{
   "metadata": { "iteration_base_branch": "main" }
 }`;
 
+/** Tombstone lease: `null` is invalid — writers delete the key on release. */
+const LEASE_NULL = `{
+  "metadata": { "integration_merge_lease": null, "iteration_base_branch": "main" }
+}`;
+
 describe("mstar lease verify-integration — root metadata.integration_merge_lease (audit-004)", () => {
   test("valid lease prints holder and passes (exit 0)", () => {
     withTempDir((dir) => {
@@ -1319,6 +1324,16 @@ describe("mstar lease verify-integration — root metadata.integration_merge_lea
     });
   });
 
+  test("null lease is a tombstone and fails with the engine code (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), LEASE_NULL);
+      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("lease verify-integration: FAIL (1 violation)");
+      expect(result.stderr).toContain("lease.merge-lease.invalid");
+    });
+  });
+
   test("lease missing a required field fails with the engine code (exit 1)", () => {
     withTempDir((dir) => {
       writeFileSync(join(dir, "status.json"), LEASE_MISSING_HOLDER);
@@ -1334,8 +1349,20 @@ describe("mstar lease verify-integration — root metadata.integration_merge_lea
 // mstar worktree qc-alignment — byte-identical alignment fields (audit-004)
 // ---------------------------------------------------------------------------
 
-/** One QC Assignment fixture with the three alignment fields (bold form). */
+/** One QC Assignment fixture with the three alignment fields — canonical
+ * combined `Review range / Diff basis` label form (the PM template shape,
+ * real QC/QA packs use it). */
 function qcAssignmentFixture(planId: string, range: string): string {
+  return `## Assignment
+**Execute as**: qc-specialist
+**Task category**: logic
+**plan_id**: ${planId}
+**Review range / Diff basis**: ${range}
+`;
+}
+
+/** Separate-label Assignment fixture (non-canonical form, still accepted). */
+function qcAssignmentSeparateFixture(planId: string, range: string): string {
   return `## Assignment
 **Execute as**: qc-specialist
 **Task category**: logic
@@ -1346,7 +1373,7 @@ function qcAssignmentFixture(planId: string, range: string): string {
 }
 
 describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", () => {
-  test("identical fields across three assignments pass (exit 0)", () => {
+  test("real-shape tri pack: 3 assignments, canonical combined label, byte-identical (exit 0)", () => {
     withTempDir((dir) => {
       for (const name of ["qc1.md", "qc2.md", "qc3.md"]) {
         writeFileSync(join(dir, name), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
@@ -1354,6 +1381,16 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md"), join(dir, "qc3.md")]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("worktree qc-alignment: OK (3 assignments, 3 fields byte-identical)");
+    });
+  });
+
+  test("separate-label form still parses as aligned (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "qc1.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      writeFileSync(join(dir, "qc2.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("worktree qc-alignment: OK (2 assignments, 3 fields byte-identical)");
     });
   });
 
@@ -1371,7 +1408,9 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
 
   test("assignment missing an alignment field fails with qc.alignment.field.missing (exit 1)", () => {
     withTempDir((dir) => {
-      const incomplete = qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD").replace(
+      // Separate-label variant with the Diff basis line removed (the combined
+      // form cannot drop a single range field).
+      const incomplete = qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD").replace(
         "**Diff basis**: merge-base: main + tip: HEAD\n",
         "",
       );
@@ -1380,6 +1419,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("qc.alignment.field.missing");
       expect(result.stderr).toContain('missing "Diff basis" header field');
+      expect(result.stderr).not.toContain('missing "Review range" header field');
     });
   });
 
@@ -1420,6 +1460,24 @@ describe("mstar host skill-root — loaded skill-root resolution (audit-004)", (
     const result = runCli(["host", "skill-root", "--host", "omp", "--skill", "mstar-roles"]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("skill://mstar-roles");
+  });
+
+  test("pi prints the deferred-resolution notice shape (exit 0)", () => {
+    const result = runCli(["host", "skill-root", "--host", "pi", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("deferred: pi has no plugin API in v1");
+  });
+
+  test("dsh resolves to the bundled skill dir form (exit 0)", () => {
+    const result = runCli(["host", "skill-root", "--host", "dsh", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("$DSH_BUNDLED_SKILL_DIR/mstar-roles");
+  });
+
+  test("empty --skill value is a usage error (exit 2)", () => {
+    const result = runCli(["host", "skill-root", "--host", "opencode", "--skill="]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--skill must be a non-empty skill name");
   });
 
   test("unknown host is a usage error (exit 2)", () => {

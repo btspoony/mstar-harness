@@ -914,7 +914,7 @@ worktreeCommand
   .command("qc-alignment")
   .description(
     "Assert the QC/QA alignment fields (plan_id / Review range / Diff basis) are byte-identical across the given " +
-      "Assignment files (exit 1 on mismatch or missing field, 2 on usage)",
+      "Assignment files (separate or combined `Review range / Diff basis` labels; exit 1 on mismatch or missing field, 2 on usage)",
   )
   .argument("[assignment-files...]", "QC tri + QA Assignment markdown files (at least one required)")
   .action((files: string[]) => {
@@ -929,7 +929,15 @@ worktreeCommand
           throw new Error(`assignment file not found: ${file}`);
         }
         const text = fs.readFileSync(file, "utf8");
-        const missing = QC_ALIGNMENT_FIELDS.filter((field) => parseAssignmentHeaderField(text, field.label) === "");
+        // The canonical PM label combines both range fields in one value
+        // (`**Review range / Diff basis**: ...`); a separate `Review range` /
+        // `Diff basis` label wins over the combined value for its own field.
+        const combinedRange = parseAssignmentHeaderField(text, "Review range / Diff basis");
+        const planId = parseAssignmentHeaderField(text, "plan_id");
+        const reviewRange = parseAssignmentHeaderField(text, "Review range") || combinedRange;
+        const diffBasis = parseAssignmentHeaderField(text, "Diff basis") || combinedRange;
+        const values = { planId, reviewRange, diffBasis };
+        const missing = QC_ALIGNMENT_FIELDS.filter((field) => values[field.key] === "");
         if (missing.length > 0) {
           console.error(pc.red(`worktree qc-alignment: FAIL ${file}`));
           for (const field of missing) {
@@ -938,11 +946,7 @@ worktreeCommand
           process.exitCode = 1;
           return;
         }
-        assignments.push({
-          planId: parseAssignmentHeaderField(text, "plan_id"),
-          reviewRange: parseAssignmentHeaderField(text, "Review range"),
-          diffBasis: parseAssignmentHeaderField(text, "Diff basis"),
-        });
+        assignments.push({ planId, reviewRange, diffBasis });
       }
       const gate = assertQcAlignment(assignments);
       if (gate.ok) {
@@ -1461,7 +1465,7 @@ hostCommand
   .command("skill-root")
   .description(
     "Resolve the loaded skill root for a host (mstar-host \u00a7 Resolve loaded skill root): prints the canonical " +
-      "skill-root string for --host / --skill (exit 2 on usage)",
+      "skill-root string for --host / --skill (exit 1 on missing required options, 2 on usage errors)",
   )
   .requiredOption("--host <id>", "Host id (opencode | omp | pi | dsh | cursor | codex | kimi | zcode)")
   .requiredOption("--skill <name>", "Skill name to resolve")
@@ -1470,6 +1474,9 @@ hostCommand
     try {
       if (HOST_ID_LOOKUP[options.host] !== true) {
         throw new SddScriptError(`usage: host skill-root \u2014 unknown host "${options.host}" (valid: ${HOST_IDS.join(", ")})`, 2);
+      }
+      if (options.skill.trim() === "") {
+        throw new SddScriptError("usage: host skill-root \u2014 --skill must be a non-empty skill name", 2);
       }
       const root = resolveSkillRoot(options.host as HostId, { skill: options.skill, rel: options.rel });
       if (options.host === "pi") {

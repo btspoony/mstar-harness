@@ -234,7 +234,7 @@ Assert the QC/QA alignment fields (`plan_id` / `Review range` / `Diff basis`) ar
 
 - `npx @mstar-harness/cli worktree qc-alignment qc1.md qc2.md qc3.md qa.md`
 
-Each file is parsed for the three header fields (bold or plain forms). Exit codes:
+Each file is parsed for the three header fields (bold or plain forms; `Review range` and `Diff basis` accepted either as separate labels or via the canonical combined `**Review range / Diff basis**:` label, whose value fills both fields). Exit codes:
 
 - `0` — OK: all three fields byte-identical across every file
 - `1` — mismatch: prints `qc.alignment.mismatch` per differing field, or `qc.alignment.field.missing` when a file lacks a required field
@@ -250,7 +250,8 @@ Resolve the loaded skill root for a host — a thin mirror of the engine `resolv
 Exit codes:
 
 - `0` — prints the canonical skill-root string (e.g. `harness-skills/mstar-roles`); `pi` prints the deferred-resolution notice in yellow
-- `2` — usage: unknown `--host` id
+- `1` — missing required `--host` / `--skill` option (commander default)
+- `2` — usage: unknown `--host` id, or an empty `--skill` value
 
 ## Harness Slash Commands (not CLI subcommands)
 

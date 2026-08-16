@@ -35,12 +35,12 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 
 - **Findings cleanup**: Assignment **`Findings cleanup: zero-residual | allow-residual`** (+ optional `metadata.findings_cleanup`); iteration Phase 2 defaults to **`zero-residual`** → **`references/status-and-residuals.md`** (“Findings cleanup modes”).
 
-> **Engine check (when available):** run `mstar status findings-cleanup <plan-id>`（或 import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook）以执行上述 Findings cleanup 模式。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar status findings-cleanup <plan-id>` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the Findings cleanup mode above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 - **`notes.json`**, optional **`tech_debt_summary`** (rollup view; compute via engine `techDebtRollup` — **`references/status-and-residuals.md`**).
 - **Iteration Phase 2 leases** (`metadata.control_worktree_path`, `plans[].execution_lease`, `metadata.integration_merge_lease`): claim-before-`InProgress`, resume vs steal, orphan recovery → **`references/status-and-residuals.md`** (“Iteration execution leases”).
 
-> **Engine check (when available):** run `mstar lease verify <plan-id>` 或 `mstar lease verify-integration`（或 import `validateExecutionLease` / `validateIntegrationMergeLease` from `@mstar-harness/engine` in a host hook）以校验上述迭代 lease（execution_lease / integration_merge_lease）。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar lease verify <plan-id>` or `mstar lease verify-integration` (or import `validateExecutionLease` / `validateIntegrationMergeLease` from `@mstar-harness/engine` in a host hook) to validate the iteration leases above (execution_lease / integration_merge_lease). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq` examples → **`references/status-and-residuals.md`**.
 
