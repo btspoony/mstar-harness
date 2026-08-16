@@ -59,6 +59,14 @@ Canonical vs legacy residual definitions → **`mstar-plan-artifacts` SKILL.md**
 
 **Open `detail_doc` (optional):** repo-relative path under **`{PLAN_DIR}/residuals/<plan-id>/`** matching **`id`** (e.g. `R1`); omit if prose layer unused (`knowledge-and-designs.md`).
 
+## Fail-loud handoff contract
+
+Findings must pass engine validation **before** registration into `residual_findings`: `validateResidual(entry)` per entry, `validateStatus(doc)` for the whole file (`mstar status validate` / engine import). Malformed entries — **non-object**, missing any of the nine required fields (`id`, `title`, `severity`, `source`, `scope`, `decision`, `owner`, `target`, `tracking` — mirroring engine `RESIDUAL_REQUIRED_FIELDS`, verified 2026-08-16), or **severity** outside the enum — are **rejected** (`ok:false` + violation): fix and rewrite — never silent pass-through, downgrade-write, or “write then patch”.
+
+dsh-derived findings map their keys per the engine-residual validation verification spec §5; dsh keys never enter the schema.
+
+---
+
 ## Residual findings: `severity` (SSOT, machine field)
 
 Each `residual_findings[<plan-id>][]` entry’s **`severity`** must be from this enum (legacy read paths → **`jq` examples** at end). QC report Markdown **Critical / Warning / Suggestion** are **section titles** — **do not** copy them verbatim into JSON `severity`.
