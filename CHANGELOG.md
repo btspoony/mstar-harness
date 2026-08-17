@@ -2,24 +2,47 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **2.3.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **2.4.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **2.3.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.3.0** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.3.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.3.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **2.3.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **2.3.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **2.3.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **2.3.0** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.3.0** |
-| Agent Plugins manifest | `plugin.json` | **2.3.0** |
+| Monorepo root | `morning-star` (`package.json`) | **2.4.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.4.0** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.4.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.4.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **2.4.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **2.4.0** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **2.4.0** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **2.4.0** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.4.0** |
+| Agent Plugins manifest | `plugin.json` | **2.4.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [2.4.0] - 2026-08-17
+
+### Changed
+
+- **dsh install target**: `npx @mstar-harness/cli init --target dsh` now installs the full dsh capability in one command — it runs **two independent** `dsh plugin --profile web add` calls (`@mstar-harness/dsh` first, then `dsh-llm-fallbacks`; never folded into a patch file). `doctor --target dsh` reports each plugin row as `uninstalled` / `disabled` / `mounted` and exits non-zero on any uninstalled or disabled row. `--no-fallbacks` (dsh target only) skips the `dsh-llm-fallbacks` row; `--dry-run` previews without probing or executing; re-runs are idempotent (already-installed rows skipped). README pair, `INSTALL.md`, and `docs/cli.md` updated.
+- **CLI `mstar` bin alias**: `@mstar-harness/cli` now installs a second executable, `mstar`, alongside the canonical `mstar-harness` — both map to the same `dist/mstar-harness.js` entry, so the two names are interchangeable (pinned by a new manifest test). `commands/` citations now use `mstar-harness` (version-proof: the long name exists in every released version; the short alias ships with this release), and `docs/cli.md` plus the README pair note the alias. **Caution**: `mstar` is a shared bin namespace — an unrelated third-party npm package named `mstar` claims the same command name, so bare `npx mstar …` only resolves to this CLI where `@mstar-harness/cli` is installed; keep the canonical `mstar-harness` in scripts and use the long name on any collision. Existing global installs obtain the `mstar` shim on their next upgrade: `npm i -g @mstar-harness/cli@latest` (or the bun equivalent) re-links all declared bins.
+- **Drift-lint bin-prefix guard**: `validation:drift` now checks the binary prefix of every backticked CLI citation in Engine-check callouts against the declared `bin` names from `packages/cli/package.json` (the manifest is SSOT), so citing a nonexistent executable (e.g. a typo like `mstarr`) fails drift-lint instead of silently passing while the subcommand paths validate.
+
+### Harness
+
+- **dsh full support (docs)**: the `packages/dsh` README triple's Install section now documents the one-command CLI entry (`init --target dsh` — the two `dsh plugin --profile web add` installs, orchestrated) and what a user gets zero-config once both rows are installed: the 13 `mode: subagent` mstar role seeds with mirror-default personas (revertible in settings; runtime advisory reports overrides), plus a fresh-publish `minimumReleaseAge` window note (re-run init or pin the version). The installed-deployment e2e closes the loop: a real CLI install into a temp `DSH_HOME`, booted from the installed artifacts, asserts all 13 roles seeded with non-empty personas. Root README pair adds the dsh full-support one-liner.
+- **Five-question lint runtime mode**: `lintFiveQuestion(body, mode?)` now supports `mode: "runtime"` (default `"authoring"`, non-breaking) with a locked `RUNTIME_HEADING_ALIASES` table — heading synonyms (e.g. `process`/`playbook` for Workflow, `hard rules`/`门禁` for Decision Rules, `output format`/`证据` for Evidence, `dependencies`/`关系` for References) that count as the canonical sections for shipped topic skills. `mstar skill lint` selects runtime mode for `mstar-*` skill dirs except `mstar-skill-authoring` (always authoring/strict); `mstar-harness-core` prints an explicit **exempt** row for the five-question checklist. Greenfield (authoring) lint still demands canonical headings.
+- **Runtime corpus alignment**: 15 shipped `mstar-*` topic skills gained minimal annotations/thin sections (Evidence ×13, Workflow ×9, References ×6, plus `mstar-host`'s load-order/decision-rules gaps) derived from existing material — every runtime skill now passes runtime-mode five-question lint; `mstar-audit` needed zero edits. `skills/mstar-skill-authoring/SKILL.md` documents the alias map (runtime-mode semantics stay SSOT: aliases exempt mechanical lint, not content).
+- **drift-lint Guard 5 (five-question corpus smoke)**: `bun run validation:drift` now loads every shipped runtime `skills/mstar-*/SKILL.md` (excluding `mstar-harness-core` and `mstar-skill-authoring`), strips frontmatter, and runs `lintFiveQuestion` in runtime mode — deleting a Step-3 aligned heading or losing runtime alias coverage fails CI (audit finding 5).
+- **`mstar-skill-authoring` strict self-lint**: the fence-aware heading scan exposed the standard's own `SKILL.md` as a fence false-green (five-question coverage came only from the `## 默认 Body 结构` template code fence), so real `## Workflow` / `## 6 条作者原则（Decision Rules，必须遵守）` / `## 验证门控（Evidence，原则 4 + 6）` sections now answer the five questions honestly and `mstar skill lint skills/mstar-skill-authoring` passes strict (authoring) mode.
+- **Fail-loud fragment validation**: `scripts/prepare-release.ts` now validates each changelog fragment's `packages:` tokens against the release-surface enum (`root | cli | opencode | engine | dsh`). A typo'd or unknown token (e.g. `clii`, `scripts`) previously matched no changelog target and silently dropped the fragment's bullets from every changelog; release prep now prints one error line per bad token to stderr and exits 1 before any changelog mutation or fragment archival. `validateFragmentPackages` is exported for tests.
+- **`mstar roles validate`**: new CLI command exposing the mstar-roles skill-dir checks — a thin mirror of the dsh seam `validateRolesState`: `validateRoleMapping` on the roles dir plus `lintLoadOrder` over every sibling `mstar-*` skill, with unreadable siblings skipped best-effort. Defaults resolve through the project-root path resolution (`--roles-dir` → `skills/mstar-roles`, `--skills-dir` → its parent); exit 0 prints OK + counts, violations exit 1 with one row each. `skills/mstar-roles/SKILL.md` engine-check callout now cites the CLI command.
+- **drift-lint Guard 4**: roles/load-order corpus guard in `scripts/drift-lint.ts` (plan 003 Task 2) — `lintLoadOrder` over every `skills/mstar-*/SKILL.md` text (each must declare `mstar-harness-core` in a Load Order / First action section) plus `validateRoleMapping` on `skills/mstar-roles` (mapping / parameter tables must resolve against the on-disk `references/*.md` layout); CI drift-lint now fails on role-table or load-order regressions.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 2.4.0**.
 
 ## [2.3.0] - 2026-08-16
 

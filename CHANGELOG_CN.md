@@ -1,23 +1,46 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.3.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.4.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **2.3.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.3.0** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.3.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.3.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.3.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **2.3.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.3.0** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.3.0** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.3.0** |
-| Agent Plugins 清单 | `plugin.json` | **2.3.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **2.4.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.4.0** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.4.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.4.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.4.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **2.4.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.4.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.4.0** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.4.0** |
+| Agent Plugins 清单 | `plugin.json` | **2.4.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [2.4.0] - 2026-08-17
+
+### Changed
+
+- **dsh 安装目标**：`npx @mstar-harness/cli init --target dsh` 现可一条命令装齐 dsh 全量能力——它运行**两条独立** `dsh plugin --profile web add` 调用（先 `@mstar-harness/dsh`，再 `dsh-llm-fallbacks`；绝不折叠进 patch 文件）。`doctor --target dsh` 逐行报告 `uninstalled` / `disabled` / `mounted`，存在未安装或禁用行时以非 0 退出。`--no-fallbacks`（仅 dsh target 生效）跳过 `dsh-llm-fallbacks` 行；`--dry-run` 纯预览，不探测不执行；重复执行幂等（已装行跳过）。README 双语对、`INSTALL.md`、`docs/cli.md` 已同步。
+- **CLI `mstar` bin 别名**：`@mstar-harness/cli` 现随规范名 `mstar-harness` 一起安装第二个可执行文件 `mstar`——两者映射到同一个 `dist/mstar-harness.js` 入口，两个名字可互换（由新增 manifest 测试固定）。`commands/` 中的引用改用 `mstar-harness`（版本稳健：长名存在于每个已发布版本；短别名随本版本发布），`docs/cli.md` 与 README 双语对补充了别名说明。**注意**：`mstar` 属于共享 bin 命名空间——名为 `mstar` 的无关第三方 npm 包声明了同一命令名，未安装 `@mstar-harness/cli` 时裸 `npx mstar …` 只会解析到该第三方工具；脚本中请保持规范名 `mstar-harness`，冲突时用长名。已全局安装旧版的用户，下次升级即可获得 `mstar` shim：`npm i -g @mstar-harness/cli@latest`（或 bun 等价命令）会重链全部已声明 bin。
+- **drift-lint 二进制前缀守卫**：`validation:drift` 现在会把 Engine-check callout 中每个反引号 CLI 引用的二进制前缀，与 `packages/cli/package.json` 声明的 `bin` 名称（manifest 为 SSOT）逐一比对，引用不存在的可执行名（如拼写错误 `mstarr`）会导致 drift-lint 失败，而不再是在子命令路径全部校验通过时被静默放过。
+
+### Harness
+
+- **dsh 全量支持（文档）**：`packages/dsh` README 三联的 Install 节现写明一条命令的 CLI 入口（`init --target dsh`——编排两条 `dsh plugin --profile web add` 安装）以及两条行装齐后零配置获得什么：13 个 `mode: subagent` mstar 角色种子、persona 取镜像默认（settings 可 revert、运行时 advisory 报告覆盖），并附 fresh publish 的 `minimumReleaseAge` 窗口提示（重跑 init 或显式 pin 版本）。installed-deployment e2e 闭环：真实 CLI 安装进临时 `DSH_HOME`、从安装产物 boot，断言 13 角色全部 seeded 且 persona 非空。根 README 双语对补充 dsh 全量支持一句。
+- **五问 lint 运行时模式**：`lintFiveQuestion(body, mode?)` 新增 `mode: "runtime"`（默认 `"authoring"`，非破坏）与锁定别名表 `RUNTIME_HEADING_ALIASES` —— 标题同义词（如 Workflow→`process`/`playbook`、Decision Rules→`hard rules`/`门禁`、Evidence→`output format`/`证据`、References→`dependencies`/`关系`）对已发布专题 skill 计为对应 canonical 章节。`mstar skill lint` 对 `mstar-*` 目录选 runtime 模式（`mstar-skill-authoring` 恒为 authoring/strict）；`mstar-harness-core` 打印显式 **exempt** 行。Greenfield（authoring）lint 仍要求 canonical 标题。
+- **运行时语料对齐**：15 个已发布 `mstar-*` 专题 skill 增加最小标注/薄章节（Evidence ×13、Workflow ×9、References ×6，另补 `mstar-host` 的 load-order/decision-rules 缺口），内容均取自既有素材 —— 全部运行时 skill 通过 runtime 模式五问 lint；`mstar-audit` 零改动。`skills/mstar-skill-authoring/SKILL.md` 记录别名表（运行时语义仍为 SSOT：别名豁免机械 lint，不豁免内容）。
+- **drift-lint Guard 5（五问语料冒烟）**：`bun run validation:drift` 现在加载全部已发布运行时 `skills/mstar-*/SKILL.md`（排除 `mstar-harness-core` 与 `mstar-skill-authoring`），剥离 frontmatter 后以 runtime 模式运行 `lintFiveQuestion` —— 删除 Step-3 对齐标题或失去运行时别名覆盖都会令 CI 失败（audit finding 5）。
+- **`mstar-skill-authoring` 自身 strict 自检**：fence 感知标题扫描暴露标准自身 `SKILL.md` 为 fence false-green（五问覆盖仅来自 `## 默认 Body 结构` 模板代码块），现已补真实 `## Workflow` / `## 6 条作者原则（Decision Rules，必须遵守）` / `## 验证门控（Evidence，原则 4 + 6）` 章节如实作答，`mstar skill lint skills/mstar-skill-authoring` 通过 strict（authoring）模式。
+- **fragment 校验 fail-loud**：`scripts/prepare-release.ts` 现对每个 changelog fragment 的 `packages:` token 按发布面枚举（`root | cli | opencode | engine | dsh`）校验。此前拼错的 token（如 `clii`、`scripts`）不匹配任何 changelog 目标，导致该 fragment 的要点被静默丢弃；现发版准备会在任何 changelog 改动或 fragment 归档前，逐行打印错误并以 exit 1 中止。`validateFragmentPackages` 已导出供测试使用。
+- **`mstar roles validate`**：新增 CLI 命令，暴露 mstar-roles skill 目录检查 —— dsh seam `validateRolesState` 的薄镜像：对 roles 目录运行 `validateRoleMapping`，并对每个同级 `mstar-*` skill 运行 `lintLoadOrder`，不可读的同级 skill 尽力跳过。默认路径走项目根解析（`--roles-dir` → `skills/mstar-roles`，`--skills-dir` → 其父目录）；exit 0 打印 OK 与计数，违规 exit 1 且每行一条。`skills/mstar-roles/SKILL.md` 的 engine-check callout 现改为引用 CLI 命令。
+- **drift-lint Guard 4**：`scripts/drift-lint.ts` 中的 roles/load-order corpus 护栏（plan 003 Task 2）—— 对每个 `skills/mstar-*/SKILL.md` 文本运行 `lintLoadOrder`（每个都必须在 Load Order / First action 章节声明 `mstar-harness-core`），并对 `skills/mstar-roles` 运行 `validateRoleMapping`（映射/参数表必须与磁盘上的 `references/*.md` 布局一致）；CI drift-lint 现会在角色表或 load-order 回归时失败。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 2.4.0**。
 
 ## [2.3.0] - 2026-08-16
 
