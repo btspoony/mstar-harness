@@ -40,35 +40,31 @@ Harness Workflow Engine · Agent Plugin
 
 ## 安装
 
-```bash
-npx @mstar-harness/cli init
-# 或：bunx @mstar-harness/cli init
-```
-
 | 宿主 | 命令 |
 |------|------|
-| dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh` |
 | omp | `npx @mstar-harness/cli init --target omp`（链接 `~/.mstar/harness`）或 `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
 | Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理安装 **morning-star-harness** |
 | Codex | `npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal` |
+| dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh`（dsh 自带插件管理器——不走 CLI） |
 | Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根（`plugin.json` + `skills/` 即便携包） |
 
-> **dsh 经自带插件管理器安装，不走 CLI。** `npx @mstar-harness/cli init` **没有 dsh target**（仅覆盖 omp / OpenCode / Cursor / Kimi / ZCode / Codex）；在 dsh 上用上表对应行。
+### 引擎门禁校验（可选）
 
-**可选 —— 引擎门禁校验（全局安装 CLI）。** `npm i -g @mstar-harness/cli` 将 `mstar-harness` 二进制（短别名 `mstar`）装上 PATH，技能文本引用的引擎校验命令（`mstar status validate`、`mstar dispatch validate`、`mstar iteration gate` 等）才真正可运行——不全局安装时 harness 照常工作，这些校验保持 advisory。在迭代 compass 里设 `enforcement: hard` 可让派发预检 fail-fast。
+`npm i -g @mstar-harness/cli` 将 `mstar-harness` 二进制（短别名 `mstar`）装上 PATH，技能文本引用的引擎校验命令（`mstar status validate`、`mstar dispatch validate`、`mstar iteration gate` 等）才真正可运行——不全局安装时 harness 照常工作，这些校验保持 advisory。在迭代 compass 里设 `enforcement: hard` 可让派发预检 fail-fast。
 
 > **注意**：`mstar` 是短别名，且属于**共享 bin 命名空间**——名为 `mstar` 的无关第三方 npm 包也声明了同名命令。该别名仅在安装了 `@mstar-harness/cli` 的环境中存在：未安装该包时裸 `npx mstar …` 会经 registry 解析到那个第三方工具；两者全局共存时，后安装者会静默覆盖 `mstar` shim。规范调用名保持 `mstar-harness`——冲突时请使用长名。
 
-仓库根提供便携式 **Agent Plugins v1.0.0** manifest（`plugin.json`），`skills/` 为 Agent Skills 组件。可用 `npx @mstar-harness/cli plugin validate` 校验。
-
-**校验**
+### 校验
 
 `npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp>`。
 
+仓库根提供便携式 **Agent Plugins v1.0.0** manifest（`plugin.json`），`skills/` 为 Agent Skills 组件——可用 `npx @mstar-harness/cli plugin validate` 校验。
+
 手动安装 / 路径布局：[`INSTALL.md`](INSTALL.md)。CLI 参数：[`docs/cli.md`](docs/cli.md)。
+
 
 ## 使用
 
