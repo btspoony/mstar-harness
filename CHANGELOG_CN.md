@@ -1,23 +1,34 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.4.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.4.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **2.4.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.4.0** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.4.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.4.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.4.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **2.4.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.4.0** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.4.0** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.4.0** |
-| Agent Plugins 清单 | `plugin.json` | **2.4.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **2.4.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.4.1** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.4.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.4.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.4.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **2.4.1** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.4.1** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.4.1** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.4.1** |
+| Agent Plugins 清单 | `plugin.json` | **2.4.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [2.4.1] - 2026-08-17
+
+### Harness
+
+- **dsh 插件**：`@deepseek-ai/dsh-*` peer 升级到 `0.1.0-rc.7` 线（`^0.1.0-rc.7`；`@deepseek-ai/cordis` 保持 `^4.0.1`）。对照本地 rc.6→rc.7 源码，已消费 seam 无需改适配层（`createUserMessage` / `ToolExecution` / `PreToolDecision` / `PreStepDecision` / `FsWriteIntent` / dump-config `disabled: true` 未变；`apps/cli/src` 仅为版本号）。lock 清除所有低于 `0.1.0-rc.7` 的条目——62 个唯一 `@deepseek-ai/dsh-*` 包、每包单份 hoisted、0 个嵌套副本。根 `dependencies` 保持仅 engine。
+- **README 可读性**：安装表 Command 用 `<br>` 分行；`npm i -g @mstar-harness/cli` 单独成块；迭代 / 代码库审计表列名为 **命令**（完整签名），**何时** 分行说明。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 2.4.1**。
 
 ## [2.4.0] - 2026-08-17
 
