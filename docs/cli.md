@@ -1,6 +1,6 @@
 # mstar-harness CLI Guide
 
-This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, Codex, ZCode, and omp bootstrap. Kimi Code uses Kimi TUI `/plugins install` — see [INSTALL.md](../INSTALL.md#kimi). dsh (DeepSeek Harness) is **not** a CLI target — see the [dsh section](#dsh-deepseek-harness) below.
+This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, Codex, ZCode, omp, and dsh bootstrap. Kimi Code uses Kimi TUI `/plugins install` — see [INSTALL.md](../INSTALL.md#kimi).
 
 The package installs two interchangeable binaries: `mstar-harness` (canonical) and the `mstar` short alias — both invoke the same CLI.
 
@@ -138,10 +138,22 @@ Kimi: not a CLI target — use `/plugins install` in Kimi TUI (see [INSTALL.md](
 
 ### dsh (DeepSeek Harness)
 
-dsh is **not** a CLI target — the harness is not installed via `npx @mstar-harness/cli init`. dsh consumes Morning Star through the **profile bundle** of the `@mstar-harness/dsh` package, added to the shipped `web` profile with the host's own plugin manager:
+`init --target dsh` installs the full dsh capability in one command — the `@mstar-harness/dsh` plugin **plus** the optional `dsh-llm-fallbacks` role-configuration plugin:
+
+- `npx @mstar-harness/cli init --target dsh`
+- `npx @mstar-harness/cli doctor --target dsh`
+
+The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Re-running is idempotent (already-installed rows are skipped, exit 0); `--dry-run` previews the would-run commands without probing installed state or executing anything.
+
+Skip the `dsh-llm-fallbacks` row (`--no-fallbacks` is a dsh-target-only flag — ignored for other targets):
+
+- `npx @mstar-harness/cli init --target dsh --no-fallbacks`
+
+Or run the two plugin-manager commands directly (the same contract the CLI executes):
 
 ```sh
 dsh plugin --profile web add @mstar-harness/dsh
+dsh plugin --profile web add dsh-llm-fallbacks
 # or, from a local checkout:
 cd <repo>/packages/dsh && dsh plugin --profile web add .
 ```
@@ -157,8 +169,9 @@ Check an existing config:
 - `npx @mstar-harness/cli doctor --target cursor --scope global`
 - `npx @mstar-harness/cli doctor --target cursor --scope project`
 - `npx @mstar-harness/cli doctor --target codex`
+- `npx @mstar-harness/cli doctor --target dsh`
 
-If validation fails, `doctor` exits with a non-zero status code.
+If validation fails, `doctor` exits with a non-zero status code. For the dsh target, each plugin row is reported as `uninstalled` / `disabled` / `mounted`; rows that are uninstalled or disabled are issues (exit 1), `mounted` is healthy.
 
 ### `mstar-harness plugin validate`
 
@@ -304,6 +317,8 @@ Codex `init` writes or updates marketplace metadata with a local-source entry:
 
 Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope also links `.codex/plugins/mstar-harness -> ~/.mstar/harness`, adds `.codex/plugins/mstar-harness` plus `.codex/agents/*.toml` to `.gitignore`, appends the same harness **process** gitignore set as Cursor project `init` (see above), and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
 
+dsh `init` runs the two `dsh plugin --profile web add` calls (`@mstar-harness/dsh` then `dsh-llm-fallbacks`) in the fixed `web` profile — idempotent (already-installed rows skipped), fail-loud when the `dsh` binary is missing, and `--no-fallbacks` skips the fallbacks row.
+
 ## What `doctor` Checks
 
 - Same schema and presence of **either** `@mstar-harness/opencode…` **or** a recognized legacy `morning-star@git+…` line (so existing git-based configs still pass).
@@ -341,9 +356,10 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 ### `init` options
 
 - `--yes`: non-interactive mode
-- `--target <opencode|cursor|codex>`
+- `--target <opencode|cursor|codex|zcode|omp|dsh>`
 - `--scope <global|project>` (default: `project`)
 - `--dry-run`
+- `--no-fallbacks`: skip installing the `dsh-llm-fallbacks` plugin row (dsh target only; ignored for other targets)
 - `--pm-model <model>` (optional advanced override)
 - `--strategic-models <a,b,c>` (optional)
 - `--dev-models <a,b,c>` (optional)

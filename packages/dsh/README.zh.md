@@ -12,6 +12,8 @@ dsh 应用如何使用本插件——安装路径、配置、挂载时发生什�
 
 本包以 workspace 包形式发布（`workspaces: ["packages/*"]`），构建时把 engine 打进 `dist/`（`bun run build`；dist 已被 gitignore）。安装途径是 **profile bundle**，装进现成的 `web` profile（`dsh --profile web`——开箱即用的 web 应用 profile，即 `dsh web`），经 `dsh.bundle.patch` 清单——一个叠在 dsh-base 默认层之上的补丁层：
 
+**一条命令的 CLI 入口（推荐）**——`npx @mstar-harness/cli init --target dsh` 一次性装齐全量能力：它按序运行下面两条 `dsh plugin --profile web add` 安装（先 mstar bundle，再 `dsh-llm-fallbacks`），并可用 `npx @mstar-harness/cli doctor --target dsh` 逐行报告 `uninstalled` / `disabled` / `mounted`。它编排的仍是同一条双命令安装；`--no-fallbacks` 跳过第二行（连带跳过 seeded 角色——见下文「零配置获得什么」）。
+
 **（a）registry 安装（发布形态）**——npm 包自带构建好的 `dist/`（安装时无需构建）：
 
 ```sh
@@ -34,6 +36,10 @@ dsh plugin --profile web add dsh-llm-fallbacks
 ```
 
 **双命令安装即契约**——把 `dsh-llm-fallbacks` 行折叠进本 bundle 的补丁**明确否决**（roadmap §8.3 F4）：loader 没有 insert-if-absent 语义，因此同 `id` 插入是 `duplicate loader entry id` 启动失败（整个 dsh 会话无法启动）；异 `id` 插入则插件被挂载两次——对同时直接安装该包的人，会出现两次 `apply()` 与分裂的 fallback 状态（各自独立的 state store、双份监听器、配置覆盖抽签）。层序为 reconcile 追加序：`dsh-llm-fallbacks` 落在 **`dsh-base`/`llm-retry` 之后**（其硬性排序要求）并位于 mstar 行之后。单命令多激活是上游功能缺口（reconcile 去重或 insert-if-absent 补丁语义），本仓库无法实施。
+
+**零配置获得什么**——两条行都装上后（经 CLI 入口或上面两条命令），mstar 插件在 boot 时把 13 个 `mode: subagent` 的 mstar 角色种子（从打包的 `harness-agents/` 镜像派生，排除 `project-manager`）声明进 fallbacks taxonomy：每个 seeded 角色的 persona 默认取其镜像 `description` 外加一行强制角色加载引导；seeded 状态保持可 revert（`fallbacks/revert-seed` 网关 / settings 回滚按钮）；运行时 advisory 报告缺失 id 与 persona 覆盖。该 seeds 机制即 B4（iter-20260816-dsh-seeds-bridges 已交付）——installed-deployment e2e（`tests/install-e2e.spec.ts`）本轮把验证闭环：真实 `init --target dsh` 安装进临时 `DSH_HOME`、从安装产物 boot，断言 13 个 id 全部出现在 effective taxonomy 且 persona 非空。不含模型路由、不含 automatch 派发、不含 dsh-tui。
+
+> **fresh publish 年龄窗口提示**：pnpm 的 `minimumReleaseAge` 门禁可能让 `dsh plugin add <spec>` 的 range 解析在全新发布后约 24h 内选中旧版本（不含 seeds surface）——窗口过后重跑 `npx @mstar-harness/cli init --target dsh`（或显式 pin 版本）即可收敛到最新 surface。
 
 ### Configuration
 
