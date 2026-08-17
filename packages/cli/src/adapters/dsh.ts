@@ -65,26 +65,45 @@ function resolveProfileDir(): string {
   return path.join(dshHome, DSH_PROFILES_DIR, DSH_PROFILE);
 }
 
-/** Loader entry names from a `dsh --profile <name> --dump-config` dump: a
- * flat list of loader entries (`- id: <id>` followed by indented keys), each
- * carrying exactly one `name: <spec>` line right after the id. */
-function loaderEntryNames(dump: string): string[] {
-  const names: string[] = [];
-  let inEntry = false;
+/** One loader entry from a `--dump-config` dump. `enabled` is false when the
+ * entry carries a literal `disabled: true` or `enabled: false` line (the
+ * patch-applied disable shape observed on dsh 0.1.0-rc.6: cordis.patch.yml
+ * with `- id: <id>` / `enabled: false` prints `enabled: false` on the row).
+ * `!!js` expressions (e.g. `disabled: !!js process.platform === 'win32'`) are
+ * not statically decidable and count as enabled. */
+type LoaderEntry = { name: string; enabled: boolean };
+
+/** Parse loader entries from a `dsh --profile <name> --dump-config` dump: a
+ * flat list of `- id: <id>` entries, each carrying a `name: <spec>` line plus
+ * optional keys at the same 2-space indent. Returns null when the dump is
+ * non-empty but yields no named entry (or an entry without a `name:` line) —
+ * format drift — so callers degrade loudly instead of misreporting the
+ * installed state. */
+function parseLoaderEntries(dump: string): LoaderEntry[] | null {
+  const entries: LoaderEntry[] = [];
+  let current: LoaderEntry | null = null;
   for (const line of dump.split("\n")) {
     if (/^- id: /.test(line)) {
-      inEntry = true;
-    } else if (inEntry) {
-      const match = /^  name: (.+)$/.exec(line);
-      if (match) {
-        names.push(match[1].trim().replace(/^['"]|['"]$/g, ""));
-        inEntry = false;
+      if (current) entries.push(current);
+      current = { name: "", enabled: true };
+    } else if (current) {
+      const nameMatch = /^  name: (.+)$/.exec(line);
+      if (nameMatch) {
+        current.name = nameMatch[1].trim().replace(/^['"]|['"]$/g, "");
+      } else if (/^  disabled: true$/.test(line) || /^  enabled: false$/.test(line)) {
+        current.enabled = false;
       } else if (line.trim() !== "" && !line.startsWith("  ")) {
-        inEntry = false;
+        // Top-level line outside the entry block: close the current entry.
+        entries.push(current);
+        current = null;
       }
     }
   }
-  return names;
+  if (current) entries.push(current);
+  if (dump.trim() !== "" && (entries.length === 0 || entries.some((entry) => !entry.name))) {
+    return null;
+  }
+  return entries;
 }
 
 /** Install orchestration for the dsh target. `scope` is accepted for the
@@ -98,6 +117,11 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   // Fail-loud when the dsh bin is absent: without it there is nothing an
   // init can complete (deliberate divergence from omp's note-and-continue,
   // whose local repo clone/link side effects still make progress).
+  //
+  // Dry-run is a pure preview contract (PM ruling on T1 review M1/M2): it
+  // never probes installed state, never fails on a missing bin, and always
+  // previews the full add list — the output is identical regardless of the
+  // machine's install state. (Task 3 documents this.)
   if (!dryRun && !dshAvailable()) {
     throw new Error(`${DSH_BIN} CLI not found on PATH. ${DSH_INSTALL_HINT}`);
   }
@@ -107,8 +131,14 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   const installed = new Set<string>();
   if (!dryRun) {
     try {
-      for (const name of loaderEntryNames(runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], dryRun))) {
-        installed.add(name);
+      const entries = parseLoaderEntries(runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], dryRun));
+      if (entries === null) {
+        // Format drift in the dump: degrade loudly instead of misreporting
+        // everything as uninstalled. Duplicate `add` is a pinned no-op
+        // (probe 2026-08-17), so the install stays idempotent.
+        notes.push("Warning: could not parse installed plugins from dump (unexpected format); proceeding with add (idempotent).");
+      } else {
+        for (const entry of entries) installed.add(entry.name);
       }
     } catch (error) {
       // Probe unavailable: degrade to unconditional adds. Duplicate `add` is
@@ -152,8 +182,59 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   return { location: profileDir, notes };
 }
 
+/** Doctor for the dsh install surface: reports each plugin row's capability
+ * state with the AC-2 words `uninstalled` / `disabled` / `mounted`
+ * (`mounted` = loader row present and not disabled; doctor probes the
+ * install surface, it does not boot a live fiber). Issue states
+ * (uninstalled/disabled) go to `errors` (the CLI exits 1); every state also
+ * gets a worded `notes` line so `mounted` is visible on a healthy run —
+ * never implied only by exit code 0. An unusable probe degrades into an
+ * explicit error line instead of a silent pass. `scope` is accepted for the
+ * shared AgentAdapter contract but has no dsh surface (machine-global
+ * profiles), mirroring runInit. */
+function runDoctor(scope: Scope): { location: string; errors: string[]; notes: string[] } {
+  const errors: string[] = [];
+  const notes: string[] = [];
+  const profileDir = resolveProfileDir();
+
+  if (!dshAvailable()) {
+    errors.push(`${DSH_BIN} CLI not found on PATH. ${DSH_INSTALL_HINT}`);
+    return { location: profileDir, errors, notes };
+  }
+
+  let dump: string;
+  try {
+    dump = runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], false);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(`Warning: could not probe installed plugins (${message}); cannot verify install state.`);
+    return { location: profileDir, errors, notes };
+  }
+
+  const entries = parseLoaderEntries(dump);
+  if (entries === null) {
+    errors.push("Warning: could not parse installed plugins from dump (unexpected format); cannot verify install state.");
+    return { location: profileDir, errors, notes };
+  }
+
+  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  for (const spec of DSH_PLUGIN_SPECS) {
+    const entry = byName.get(spec);
+    const state = !entry ? "uninstalled" : entry.enabled ? "mounted" : "disabled";
+    notes.push(`${spec}: ${state}`);
+    if (state === "mounted") continue;
+    const hint =
+      state === "uninstalled"
+        ? "Run: mstar-harness init --target dsh"
+        : "Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.";
+    errors.push(`${spec} is ${state}. ${hint}`);
+  }
+  return { location: profileDir, errors, notes };
+}
+
 export const dshAdapter: AgentAdapter = {
   target: "dsh",
   mode: "install",
   runInstallInit: (scope, dryRun, initFlags) => runInit(scope, dryRun, initFlags),
+  runInstallDoctor: (scope) => runDoctor(scope),
 };

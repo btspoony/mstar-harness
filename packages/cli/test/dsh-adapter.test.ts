@@ -11,9 +11,20 @@
  *   - missing dsh bin: fail-loud throw carrying an install hint;
  *   - dry-run: no subprocess at all, notes preview the would-run commands;
  *   - idempotency: lines already present in the composed loader tree are
- *     skipped (`skipped-existing` notes, zero add calls).
+ *     skipped (`skipped-existing` notes, zero add calls) — including rows
+ *     that are present but disabled;
+ *   - probe degradation: a failing `--dump-config` probe or a malformed
+ *     (format-drifted) dump yields an explicit warning note while the adds
+ *     still run (pinned no-op keeps it idempotent);
+ *   - add failure: a non-zero `add` exit throws `Failed to install <spec>`.
+ * Doctor (`runInstallDoctor`): reports each plugin row's capability state
+ * with the AC-2 words `uninstalled` / `disabled` / `mounted` — issue states
+ * (uninstalled/disabled) land in `errors` (CLI exits 1), every state also
+ * gets a worded notes line (healthy runs show `mounted`), and an unusable
+ * probe degrades into an explicit error rather than a silent pass.
  * Plus end-to-end wiring through the real CLI entry (`init --target dsh` /
- * `--no-fallbacks` / missing bin) with the fake bin injected via PATH.
+ * `--no-fallbacks` / missing bin / `doctor --target dsh`) with the fake bin
+ * injected via PATH.
  */
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -64,12 +75,17 @@ interface FakeDsh {
 /** Create a fake `dsh` executable in a temp dir: records argv (space-joined)
  * to logFile, answers `--version` (exit 0), prints the `--dump-config`
  * fixture, and exits 0 for `plugin ... add ...`. The script uses shell
- * builtins only so it works under a PATH restricted to the fake dir. */
-function makeFakeDsh(dumpFixture: string): FakeDsh {
+ * builtins only so it works under a PATH restricted to the fake dir.
+ * `opts.dumpExit` / `opts.addExit` force a non-zero exit on the
+ * `--dump-config` / `plugin ... add` branches to simulate probe and add
+ * failures. */
+function makeFakeDsh(dumpFixture: string, opts: { dumpExit?: number; addExit?: number } = {}): FakeDsh {
   const binDir = mkdtempSync(join(tmpdir(), "dsh-fake-"));
   const logFile = join(binDir, "argv.log");
   const dumpFile = join(binDir, "dump.yml");
   writeFileSync(dumpFile, dumpFixture);
+  const dumpExit = opts.dumpExit ?? 0;
+  const addExit = opts.addExit ?? 0;
   const binPath = join(binDir, "dsh");
   writeFileSync(
     binPath,
@@ -79,8 +95,9 @@ function makeFakeDsh(dumpFixture: string): FakeDsh {
       'if [ "$1" = "--version" ]; then exit 0; fi',
       `if [ "$1" = "--profile" ] && [ "$3" = "--dump-config" ]; then`,
       `  while IFS= read -r line; do printf '%s\\n' "$line"; done < "${dumpFile}"`,
-      "  exit 0",
+      `  exit ${dumpExit}`,
       "fi",
+      `if [ "$1" = "plugin" ]; then exit ${addExit}; fi`,
       "exit 0",
     ].join("\n") + "\n",
   );
@@ -135,6 +152,60 @@ const DUMP_BOTH = [
   "- id: llm-fallbacks",
   "  name: dsh-llm-fallbacks",
   "  config: {}",
+  "",
+].join("\n");
+
+/** Fallbacks row present but disabled via patch — `enabled: false` is the
+ * shape observed on dsh 0.1.0-rc.6 when cordis.patch.yml disables a row. */
+const DUMP_FALLBACKS_DISABLED = [
+  "# == @mstar-harness/dsh",
+  "- id: mstar",
+  "  name: '@mstar-harness/dsh'",
+  "  config: {}",
+  "# == dsh-llm-fallbacks, patched by .../cordis.patch.yml",
+  "- id: llm-fallbacks",
+  "  name: dsh-llm-fallbacks",
+  "  config: {}",
+  "  enabled: false",
+  "",
+].join("\n");
+
+/** Only the mstar row present; fallbacks uninstalled. */
+const DUMP_FALLBACKS_MISSING = [
+  "# == @mstar-harness/dsh",
+  "- id: mstar",
+  "  name: '@mstar-harness/dsh'",
+  "  config: {}",
+  "",
+].join("\n");
+
+/** Only the fallbacks row present; mstar uninstalled. */
+const DUMP_MSTAR_MISSING = [
+  "# == dsh-llm-fallbacks",
+  "- id: llm-fallbacks",
+  "  name: dsh-llm-fallbacks",
+  "  config: {}",
+  "",
+].join("\n");
+
+/** mstar row present but disabled; fallbacks mounted. */
+const DUMP_MSTAR_DISABLED = [
+  "# == @mstar-harness/dsh",
+  "- id: mstar",
+  "  name: '@mstar-harness/dsh'",
+  "  config: {}",
+  "  enabled: false",
+  "# == dsh-llm-fallbacks",
+  "- id: llm-fallbacks",
+  "  name: dsh-llm-fallbacks",
+  "  config: {}",
+  "",
+].join("\n");
+
+/** Non-empty output with no parseable loader entries (format drift). */
+const DUMP_MALFORMED = [
+  "not a loader dump",
+  "some: other: thing",
   "",
 ].join("\n");
 
@@ -224,6 +295,204 @@ describe("dshAdapter.runInstallInit", () => {
       fake.remove();
     }
   });
+
+  test("idempotent: a present-but-disabled row still counts as installed (skipped-existing)", () => {
+    const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED);
+    try {
+      let result: { location: string; notes: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallInit?.("global", false);
+      });
+      expect(result).toBeDefined();
+      expect(addLines(fake)).toEqual([]);
+      expectNote(result!.notes, `skipped-existing: ${MSTAR_SPEC}`);
+      expectNote(result!.notes, `skipped-existing: ${FALLBACKS_SPEC}`);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("probe failure (dump non-zero exit): warning note + still adds both (M4)", () => {
+    const fake = makeFakeDsh(DUMP_EMPTY, { dumpExit: 1 });
+    try {
+      let result: { location: string; notes: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallInit?.("global", false);
+      });
+      expect(result).toBeDefined();
+      expectNote(result!.notes, "Warning: could not probe installed plugins");
+      expect(addLines(fake)).toEqual([
+        `plugin --profile web add ${MSTAR_SPEC}`,
+        `plugin --profile web add ${FALLBACKS_SPEC}`,
+      ]);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("malformed dump (format drift): parse-degradation warning + still adds both (M3)", () => {
+    const fake = makeFakeDsh(DUMP_MALFORMED);
+    try {
+      let result: { location: string; notes: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallInit?.("global", false);
+      });
+      expect(result).toBeDefined();
+      expectNote(result!.notes, "Warning: could not parse installed plugins from dump");
+      expect(addLines(fake)).toEqual([
+        `plugin --profile web add ${MSTAR_SPEC}`,
+        `plugin --profile web add ${FALLBACKS_SPEC}`,
+      ]);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("add non-zero exit: throws Failed to install <spec> (M6)", () => {
+    const fake = makeFakeDsh(DUMP_EMPTY, { addExit: 1 });
+    try {
+      let error: unknown;
+      withPath(fake.binDir, () => {
+        try {
+          dshAdapter.runInstallInit?.("global", false);
+        } catch (e) {
+          error = e;
+        }
+      });
+      expect(String(error)).toContain(`Failed to install ${MSTAR_SPEC}`);
+      // The failing add was still attempted (argv recorded before the exit).
+      expect(addLines(fake)).toEqual([`plugin --profile web add ${MSTAR_SPEC}`]);
+    } finally {
+      fake.remove();
+    }
+  });
+});
+
+describe("dshAdapter.runInstallDoctor", () => {
+  test("both rows mounted: healthy, capability words present in notes", () => {
+    const fake = makeFakeDsh(DUMP_BOTH);
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expect(result!.errors).toEqual([]);
+      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
+      expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("fallbacks disabled: notes say disabled, errors carry the issue", () => {
+    const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED);
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
+      expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: disabled`);
+      expect(result!.errors.some((line) => line.includes(`${FALLBACKS_SPEC} is disabled`))).toBe(true);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("fallbacks missing: notes say uninstalled, errors carry the issue", () => {
+    const fake = makeFakeDsh(DUMP_FALLBACKS_MISSING);
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
+      expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: uninstalled`);
+      expect(result!.errors.some((line) => line.includes(`${FALLBACKS_SPEC} is uninstalled`))).toBe(true);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("mstar missing: errors carry the uninstalled issue", () => {
+    const fake = makeFakeDsh(DUMP_MSTAR_MISSING);
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: uninstalled`);
+      expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
+      expect(result!.errors.some((line) => line.includes(`${MSTAR_SPEC} is uninstalled`))).toBe(true);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("mstar disabled: errors carry the disabled issue", () => {
+    const fake = makeFakeDsh(DUMP_MSTAR_DISABLED);
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: disabled`);
+      expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
+      expect(result!.errors.some((line) => line.includes(`${MSTAR_SPEC} is disabled`))).toBe(true);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("probe failure: explicit degradation error, not a silent pass", () => {
+    const fake = makeFakeDsh(DUMP_BOTH, { dumpExit: 1 });
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expect(result!.errors.some((line) => line.includes("could not probe installed plugins"))).toBe(true);
+      expect(result!.errors.some((line) => line.includes("cannot verify install state"))).toBe(true);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("malformed dump: explicit parse-degradation error, not a silent pass", () => {
+    const fake = makeFakeDsh(DUMP_MALFORMED);
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expect(result!.errors.some((line) => line.includes("could not parse installed plugins from dump"))).toBe(
+        true,
+      );
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("missing dsh bin: doctor reports the fail-loud error", () => {
+    const emptyDir = mkdtempSync(join(tmpdir(), "dsh-nobin-"));
+    try {
+      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+      withPath(emptyDir, () => {
+        result = dshAdapter.runInstallDoctor?.("global");
+      });
+      expect(result).toBeDefined();
+      expect(result!.errors.some((line) => line.includes("dsh CLI not found on PATH"))).toBe(true);
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("CLI init --target dsh (fake dsh on PATH)", () => {
@@ -267,6 +536,49 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
       expect(result.stderr).toContain("Setup failed: dsh CLI not found on PATH");
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
+  const fakePathEnv = (fake: FakeDsh): { PATH: string } => ({
+    PATH: `${fake.binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+  });
+
+  test("both mounted: exit 0 and capability words are printed on the healthy run (AC-2)", () => {
+    const fake = makeFakeDsh(DUMP_BOTH);
+    try {
+      const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`${MSTAR_SPEC}: mounted`);
+      expect(result.stdout).toContain(`${FALLBACKS_SPEC}: mounted`);
+      expect(result.stdout).toContain("Doctor result: healthy");
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("fallbacks disabled: exit 1 and the disabled issue is printed", () => {
+    const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED);
+    try {
+      const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain(`${FALLBACKS_SPEC}: disabled`);
+      expect(result.stdout).toContain(`${FALLBACKS_SPEC} is disabled`);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("probe failure: exit 1 with the explicit degradation line (no silent pass)", () => {
+    const fake = makeFakeDsh(DUMP_BOTH, { dumpExit: 1 });
+    try {
+      const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain("could not probe installed plugins");
+      expect(result.stdout).toContain("cannot verify install state");
+    } finally {
+      fake.remove();
     }
   });
 });

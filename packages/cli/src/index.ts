@@ -204,6 +204,12 @@ function runDoctor(options: DoctorOptions) {
       throw new Error(`Adapter ${target} does not implement install doctor flow.`);
     }
     console.log(`Install location: ${result.location}`);
+    // Capability word lines (install-mode doctor notes, e.g. dsh
+    // uninstalled/disabled/mounted) print on every run, healthy included —
+    // a `mounted` state must not be implied only by exit code 0 (AC-2).
+    for (const note of result.notes ?? []) {
+      console.log(`  - ${note}`);
+    }
     if (!result.errors.length) {
       console.log(pc.green("Doctor result: healthy"));
       return;
