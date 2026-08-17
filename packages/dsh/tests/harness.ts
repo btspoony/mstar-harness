@@ -358,11 +358,11 @@ export interface BootOptions {
   pluginModule?: unknown
   /**
    * REAL `dsh-llm-fallbacks` row (plan `20260817-dsh-roles-e2e` Task 1):
-   * when set, a `dsh-llm-fallbacks` row is mounted BEFORE the mstar row
-   * with this module as its source (the real app composes the fallbacks
-   * layer before the mstar plugin row; the seeds inject child then fires
-   * at mstar apply). Absent by default — existing compositions are
-   * untouched.
+   * when set, a `dsh-llm-fallbacks` row is mounted AFTER the mstar row
+   * with this module as its source (the real profile entry-list order is
+   * mstar first, fallbacks second — the seeds inject child is armed at
+   * mstar apply and fires when the fallbacks service appears). Absent by
+   * default — existing compositions are untouched.
    */
   fallbacksModule?: unknown
   /**

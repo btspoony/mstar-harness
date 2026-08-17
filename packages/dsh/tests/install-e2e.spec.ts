@@ -102,6 +102,7 @@ function runDsh(dshHome: string, args: string[], timeoutMs = 120_000): string {
     env: dshEnv(dshHome),
     stdout: 'pipe',
     stderr: 'pipe',
+    timeout: timeoutMs,
   })
   const stdout = proc.stdout.toString()
   if (proc.exitCode !== 0) {
@@ -117,6 +118,7 @@ function runCliInit(dshHome: string, timeoutMs = 300_000): string {
     env: dshEnv(dshHome),
     stdout: 'pipe',
     stderr: 'pipe',
+    timeout: timeoutMs,
   })
   const stdout = proc.stdout.toString()
   if (proc.exitCode !== 0) {
@@ -230,6 +232,12 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e (plan 202608
       const pinned = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
       expect(pinned).toBe(repoVersion)
       expect(hasSeedsSurface(installedMstarDir(dshHome))).toBe(true)
+      // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the
+      // re-add must not duplicate a loader row — exactly one mstar row
+      // and one fallbacks row, the production dump shape.
+      const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
+      expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after pinned re-add').toBe(1)
+      expect((pinnedDump.match(/name: dsh-llm-fallbacks/g) ?? []).length, 'exactly one fallbacks loader row after pinned re-add').toBe(1)
       console.log(`install-e2e: pinned add installed @mstar-harness/dsh@${pinned} with the full seeds surface`)
     } else {
       console.log(`install-e2e: default add installed @mstar-harness/dsh@${installedVersion} WITH the seeds surface — no pin needed`)
@@ -238,7 +246,6 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e (plan 202608
     // 5. Single-instance resolution: copy the installed packages into the
     //    host module graph (real dirs, NOT symlinks — see header comment)
     //    so their bare imports resolve to the test-process instances.
-    const fallbacksVersion = await readVersion(join(installedFallbacksDir(dshHome), 'package.json'))
     hostCopyRoot = join(REPO_ROOT, 'node_modules/.mstar-e2e', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     const mstarCopy = join(hostCopyRoot, 'dsh')
     const fallbacksCopy = join(hostCopyRoot, 'fallbacks')

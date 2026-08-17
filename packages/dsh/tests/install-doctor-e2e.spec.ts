@@ -86,6 +86,7 @@ function runDsh(dshHome: string, args: string[], timeoutMs = 120_000): string {
     env: dshEnv(dshHome),
     stdout: 'pipe',
     stderr: 'pipe',
+    timeout: timeoutMs,
   })
   const stdout = proc.stdout.toString()
   if (proc.exitCode !== 0) {
@@ -101,6 +102,7 @@ function runCliInit(dshHome: string, extraArgs: string[] = [], timeoutMs = 300_0
     env: dshEnv(dshHome),
     stdout: 'pipe',
     stderr: 'pipe',
+    timeout: timeoutMs,
   })
   const stdout = proc.stdout.toString()
   if (proc.exitCode !== 0) {
@@ -110,13 +112,16 @@ function runCliInit(dshHome: string, extraArgs: string[] = [], timeoutMs = 300_0
 }
 
 /** Run the REAL CLI `doctor --target dsh` as a subprocess; returns the exit
- * code AND stdout (issue states exit 1 — the code is part of the evidence). */
-function runCliDoctor(dshHome: string): { exitCode: number | null; stdout: string } {
+ * code AND stdout (issue states exit 1 — the code is part of the evidence).
+ * `timeoutMs` bounds the child so a hung CLI surfaces as a kill instead of
+ * relying on the outer per-test timeout alone. */
+function runCliDoctor(dshHome: string, timeoutMs = 300_000): { exitCode: number | null; stdout: string } {
   const proc = Bun.spawnSync([process.execPath, 'run', CLI_ENTRY, 'doctor', '--target', 'dsh'], {
     cwd: join(REPO_ROOT, 'packages/cli'),
     env: dshEnv(dshHome),
     stdout: 'pipe',
     stderr: 'pipe',
+    timeout: timeoutMs,
   })
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString() }
 }
@@ -213,6 +218,11 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       const repoVersion = await readVersion(join(packageRoot, 'package.json'))
       console.log(`install-doctor-e2e: default add lacks the seeds surface — re-adding pinned @${repoVersion} (Task 1 deviation)`)
       runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `${MSTAR_SPEC}@${repoVersion}`], 300_000)
+      // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the
+      // re-add must not duplicate the mstar loader row (the --no-fallbacks
+      // shape keeps exactly one row).
+      const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
+      expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after pinned re-add').toBe(1)
     }
 
     // --- CELL 1: fallbacks uninstalled ---
