@@ -317,7 +317,7 @@ Codex `init` writes or updates marketplace metadata with a local-source entry:
 
 Codex `init` also links all `codex/agents/*.toml` files into `~/.codex/agents/` for global scope or `.codex/agents/` for project scope. Project scope also links `.codex/plugins/mstar-harness -> ~/.mstar/harness`, adds `.codex/plugins/mstar-harness` plus `.codex/agents/*.toml` to `.gitignore`, appends the same harness **process** gitignore set as Cursor project `init` (see above), and symlinks `iteration-start` / `iteration-drive` / `iteration-loop` into `.agents/skills/<name>/SKILL.md` from `~/.mstar/harness/commands/<name>.md` (also gitignored). Global scope skips iteration skills and prints a pollution-avoidance warning.
 
-dsh `init` runs the two `dsh plugin --profile web add` calls (`@mstar-harness/dsh` then `dsh-llm-fallbacks`) in the resolved profile (default `web`) — idempotent (already-installed rows skipped), fail-loud when the `dsh` binary is missing, and `--no-fallbacks` skips the fallbacks row.
+dsh `init` runs the two `dsh plugin --profile web add` calls (`@mstar-harness/dsh` then `dsh-llm-fallbacks`) in the fixed `web` profile — idempotent (already-installed rows skipped), fail-loud when the `dsh` binary is missing, and `--no-fallbacks` skips the fallbacks row.
 
 ## What `doctor` Checks
 

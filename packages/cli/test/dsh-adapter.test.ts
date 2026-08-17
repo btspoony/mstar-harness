@@ -16,12 +16,19 @@
  *   - probe degradation: a failing `--dump-config` probe or a malformed
  *     (format-drifted) dump yields an explicit warning note while the adds
  *     still run (pinned no-op keeps it idempotent);
- *   - add failure: a non-zero `add` exit throws `Failed to install <spec>`.
+ *   - add failure: a non-zero `add` exit throws `Failed to install <spec>`;
+ *   - stalled add: a hung pnpm forward is killed by the bounded subprocess
+ *     timeout (ETIMEDOUT) instead of blocking the CLI forever;
+ *   - `--dry-run` + `--no-fallbacks`: previews a single add with zero
+ *     subprocesses.
  * Doctor (`runInstallDoctor`): reports each plugin row's capability state
  * with the AC-2 words `uninstalled` / `disabled` / `mounted` — issue states
  * (uninstalled/disabled) land in `errors` (CLI exits 1), every state also
  * gets a worded notes line (healthy runs show `mounted`), and an unusable
- * probe degrades into an explicit error rather than a silent pass.
+ * probe degrades into an explicit error rather than a silent pass. Disabled
+ * rows are pinned in all literal marker shapes: standalone `enabled: false`,
+ * standalone `disabled: true`, and inline `disabled: true` on the `- id:` /
+ * `name:` lines.
  * Plus end-to-end wiring through the real CLI entry (`init --target dsh` /
  * `--no-fallbacks` / missing bin / `doctor --target dsh`) with the fake bin
  * injected via PATH.
@@ -78,14 +85,19 @@ interface FakeDsh {
  * builtins only so it works under a PATH restricted to the fake dir.
  * `opts.dumpExit` / `opts.addExit` force a non-zero exit on the
  * `--dump-config` / `plugin ... add` branches to simulate probe and add
- * failures. */
-function makeFakeDsh(dumpFixture: string, opts: { dumpExit?: number; addExit?: number } = {}): FakeDsh {
+ * failures; `opts.addSleepSec` makes the add branch sleep first (via
+ * /bin/sleep, PATH-independent) to simulate a stalled pnpm forward. */
+function makeFakeDsh(
+  dumpFixture: string,
+  opts: { dumpExit?: number; addExit?: number; addSleepSec?: number } = {},
+): FakeDsh {
   const binDir = mkdtempSync(join(tmpdir(), "dsh-fake-"));
   const logFile = join(binDir, "argv.log");
   const dumpFile = join(binDir, "dump.yml");
   writeFileSync(dumpFile, dumpFixture);
   const dumpExit = opts.dumpExit ?? 0;
   const addExit = opts.addExit ?? 0;
+  const addSleep = opts.addSleepSec ? `  /bin/sleep ${opts.addSleepSec}\n` : "";
   const binPath = join(binDir, "dsh");
   writeFileSync(
     binPath,
@@ -97,7 +109,10 @@ function makeFakeDsh(dumpFixture: string, opts: { dumpExit?: number; addExit?: n
       `  while IFS= read -r line; do printf '%s\\n' "$line"; done < "${dumpFile}"`,
       `  exit ${dumpExit}`,
       "fi",
-      `if [ "$1" = "plugin" ]; then exit ${addExit}; fi`,
+      'if [ "$1" = "plugin" ]; then',
+      addSleep,
+      `  exit ${addExit}`,
+      "fi",
       "exit 0",
     ].join("\n") + "\n",
   );
@@ -113,6 +128,19 @@ function withPath(pathEntry: string, fn: () => void): void {
     fn();
   } finally {
     process.env.PATH = prev;
+  }
+}
+
+/** Run fn with an env var set (snapshot/restore). */
+function withEnv(key: string, value: string | undefined, fn: () => void): void {
+  const prev = process.env[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+  try {
+    fn();
+  } finally {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
   }
 }
 
@@ -170,6 +198,49 @@ const DUMP_FALLBACKS_DISABLED = [
   "",
 ].join("\n");
 
+/** Fallbacks row disabled via a literal `disabled: true` line — the built-in
+ * shape observed on dsh 0.1.0-rc.6 (fresh-profile dump: the `hmr` row carries
+ * a standalone 2-space `disabled: true` under a `patched by ...` header). */
+const DUMP_FALLBACKS_DISABLED_TRUE = [
+  "# == @mstar-harness/dsh",
+  "- id: mstar",
+  "  name: '@mstar-harness/dsh'",
+  "  config: {}",
+  "# == dsh-llm-fallbacks, patched by .../cordis.patch.yml",
+  "- id: llm-fallbacks",
+  "  name: dsh-llm-fallbacks",
+  "  config: {}",
+  "  disabled: true",
+  "",
+].join("\n");
+
+/** Fallbacks row disabled inline on the `- id:` line (hypothetical dump-shape
+ * drift; the parser must still report the row as disabled, never mounted). */
+const DUMP_FALLBACKS_DISABLED_INLINE_ID = [
+  "# == @mstar-harness/dsh",
+  "- id: mstar",
+  "  name: '@mstar-harness/dsh'",
+  "  config: {}",
+  "# == dsh-llm-fallbacks, patched by .../cordis.patch.yml",
+  "- id: llm-fallbacks, disabled: true",
+  "  name: dsh-llm-fallbacks",
+  "  config: {}",
+  "",
+].join("\n");
+
+/** Fallbacks row disabled inline on the `name:` line (same drift class). */
+const DUMP_FALLBACKS_DISABLED_INLINE_NAME = [
+  "# == @mstar-harness/dsh",
+  "- id: mstar",
+  "  name: '@mstar-harness/dsh'",
+  "  config: {}",
+  "# == dsh-llm-fallbacks, patched by .../cordis.patch.yml",
+  "- id: llm-fallbacks",
+  "  name: dsh-llm-fallbacks, disabled: true",
+  "  config: {}",
+  "",
+].join("\n");
+
 /** Only the mstar row present; fallbacks uninstalled. */
 const DUMP_FALLBACKS_MISSING = [
   "# == @mstar-harness/dsh",
@@ -224,7 +295,8 @@ describe("dshAdapter.runInstallInit", () => {
       ]);
       expectNote(result!.notes, `installed: ${MSTAR_SPEC}`);
       expectNote(result!.notes, `installed: ${FALLBACKS_SPEC}`);
-      expect(result!.location).toContain(join("profiles", "web"));    } finally {
+      expect(result!.location).toContain(join("profiles", "web"));
+    } finally {
       fake.remove();
     }
   });
@@ -273,6 +345,23 @@ describe("dshAdapter.runInstallInit", () => {
       expect(argvLines(fake)).toEqual([]);
       expectNote(result!.notes, `Would run: dsh plugin --profile web add ${MSTAR_SPEC}`);
       expectNote(result!.notes, `Would run: dsh plugin --profile web add ${FALLBACKS_SPEC}`);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("dry-run + --no-fallbacks: previews a single add, zero subprocesses", () => {
+    const fake = makeFakeDsh(DUMP_EMPTY);
+    try {
+      let result: { location: string; notes: string[] } | undefined;
+      withPath(fake.binDir, () => {
+        result = dshAdapter.runInstallInit?.("global", true, { noFallbacks: true });
+      });
+      expect(result).toBeDefined();
+      expect(argvLines(fake)).toEqual([]);
+      expectNote(result!.notes, `Would run: dsh plugin --profile web add ${MSTAR_SPEC}`);
+      expectNote(result!.notes, `skipped-by-flag: ${FALLBACKS_SPEC}`);
+      expect(result!.notes.filter((note) => note.startsWith("Would run:")).length).toBe(1);
     } finally {
       fake.remove();
     }
@@ -366,6 +455,33 @@ describe("dshAdapter.runInstallInit", () => {
       fake.remove();
     }
   });
+
+  test("stalled add (hung pnpm forward) is killed by the subprocess timeout (S-001)", () => {
+    const fake = makeFakeDsh(DUMP_EMPTY, { addSleepSec: 30 });
+    try {
+      let error: unknown;
+      withPath(fake.binDir, () => {
+        // Shrink the conservative 300s network ceiling so the kill path is
+        // exercised fast: the fake add branch sleeps 30s, the timeout fires
+        // in 300ms, execFileSync kills the child and throws.
+        withEnv("MSTAR_DSH_SUBPROCESS_TIMEOUT_MS", "300", () => {
+          try {
+            dshAdapter.runInstallInit?.("global", false);
+          } catch (e) {
+            error = e;
+          }
+        });
+      });
+      expect(String(error)).toContain(`Failed to install ${MSTAR_SPEC}`);
+      // The timeout fired (execFileSync kills the child with SIGTERM and
+      // reports ETIMEDOUT), it did not simply exit non-zero.
+      expect(String(error)).toContain("ETIMEDOUT");
+      // The add was attempted and killed (argv recorded before the sleep).
+      expect(addLines(fake)).toEqual([`plugin --profile web add ${MSTAR_SPEC}`]);
+    } finally {
+      fake.remove();
+    }
+  });
 });
 
 describe("dshAdapter.runInstallDoctor", () => {
@@ -385,21 +501,28 @@ describe("dshAdapter.runInstallDoctor", () => {
     }
   });
 
-  test("fallbacks disabled: notes say disabled, errors carry the issue", () => {
-    const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED);
-    try {
-      let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withPath(fake.binDir, () => {
-        result = dshAdapter.runInstallDoctor?.("global");
-      });
-      expect(result).toBeDefined();
-      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
-      expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: disabled`);
-      expect(result!.errors.some((line) => line.includes(`${FALLBACKS_SPEC} is disabled`))).toBe(true);
-    } finally {
-      fake.remove();
-    }
-  });
+  for (const [label, dump] of [
+    ["enabled: false standalone", DUMP_FALLBACKS_DISABLED],
+    ["disabled: true standalone", DUMP_FALLBACKS_DISABLED_TRUE],
+    ["disabled: true inline on the - id: line", DUMP_FALLBACKS_DISABLED_INLINE_ID],
+    ["disabled: true inline on the name: line", DUMP_FALLBACKS_DISABLED_INLINE_NAME],
+  ] as const) {
+    test(`fallbacks disabled (${label}): notes say disabled, errors carry the issue`, () => {
+      const fake = makeFakeDsh(dump);
+      try {
+        let result: { location: string; errors: string[]; notes?: string[] } | undefined;
+        withPath(fake.binDir, () => {
+          result = dshAdapter.runInstallDoctor?.("global");
+        });
+        expect(result).toBeDefined();
+        expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
+        expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: disabled`);
+        expect(result!.errors.some((line) => line.includes(`${FALLBACKS_SPEC} is disabled`))).toBe(true);
+      } finally {
+        fake.remove();
+      }
+    });
+  }
 
   test("fallbacks missing: notes say uninstalled, errors carry the issue", () => {
     const fake = makeFakeDsh(DUMP_FALLBACKS_MISSING);
@@ -475,6 +598,9 @@ describe("dshAdapter.runInstallDoctor", () => {
       expect(result!.errors.some((line) => line.includes("could not parse installed plugins from dump"))).toBe(
         true,
       );
+      // Same granularity as the probe-failure test: the degradation line must
+      // keep its "cannot verify install state" tail (wording-drift guard).
+      expect(result!.errors.some((line) => line.includes("cannot verify install state"))).toBe(true);
     } finally {
       fake.remove();
     }
@@ -560,6 +686,18 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
 
   test("fallbacks disabled: exit 1 and the disabled issue is printed", () => {
     const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED);
+    try {
+      const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain(`${FALLBACKS_SPEC}: disabled`);
+      expect(result.stdout).toContain(`${FALLBACKS_SPEC} is disabled`);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("disabled: true standalone row: exit 1 and the disabled issue is printed", () => {
+    const fake = makeFakeDsh(DUMP_FALLBACKS_DISABLED_TRUE);
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
       expect(result.exitCode).toBe(1);

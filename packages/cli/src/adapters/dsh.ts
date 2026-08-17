@@ -28,6 +28,25 @@ const DSH_HOME_ENV = "DSH_HOME";
 const DSH_HOME_SUBDIR = ".dsh";
 const DSH_PROFILES_DIR = "profiles";
 
+/** Subprocess timeouts (ms). The `add` call forwards to pnpm over the
+ * network, so it gets a conservative ceiling: a stalled registry must
+ * surface as an error instead of hanging the CLI without output. Local
+ * probe calls (`--version`, `--dump-config`) are bounded tighter. The add
+ * timeout is overridable via `MSTAR_DSH_SUBPROCESS_TIMEOUT_MS` (mirrors the
+ * engine's MSTAR_GIT_PROBE_TIMEOUT_MS convention; tests shrink it to
+ * exercise the kill path). */
+const DSH_LOCAL_TIMEOUT_MS = 10_000;
+const DSH_ADD_TIMEOUT_MS = 300_000;
+const DSH_ADD_TIMEOUT_ENV = "MSTAR_DSH_SUBPROCESS_TIMEOUT_MS";
+
+/** Add-path timeout: env override wins, else the conservative default. */
+function addTimeoutMs(): number {
+  const raw = process.env[DSH_ADD_TIMEOUT_ENV];
+  if (raw === undefined || raw.trim() === "") return DSH_ADD_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DSH_ADD_TIMEOUT_MS;
+}
+
 /** Install order is the F4 double-command contract: mstar first, fallbacks
  * second (reconcile append order — the fallbacks row lands after the
  * dsh-base/llm-retry layers). The lines are never folded into any patch.
@@ -39,18 +58,25 @@ const DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
 const DSH_INSTALL_HINT =
   "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.";
 
-/** Run dsh with args; dry-run never spawns a subprocess (preview only). */
-function runDsh(args: string[], dryRun: boolean): string {
+/** Run dsh with args; dry-run never spawns a subprocess (preview only).
+ * `timeoutMs` bounds the child so a hung dsh/pnpm surfaces as an error
+ * instead of blocking the CLI forever. */
+function runDsh(args: string[], dryRun: boolean, timeoutMs: number): string {
   if (dryRun) return "";
   // Explicit `env` snapshot: Bun resolves the command against the env's PATH
   // only when `env` is passed (otherwise it uses the startup PATH), which is
   // what lets tests inject a fake dsh via PATH.
-  return execFileSync(DSH_BIN, args, { stdio: "pipe", encoding: "utf8", env: process.env });
+  return execFileSync(DSH_BIN, args, {
+    stdio: "pipe",
+    encoding: "utf8",
+    env: process.env,
+    timeout: timeoutMs,
+  });
 }
 
 function dshAvailable(): boolean {
   try {
-    runDsh(["--version"], false);
+    runDsh(["--version"], false, DSH_LOCAL_TIMEOUT_MS);
     return true;
   } catch {
     return false;
@@ -66,12 +92,16 @@ function resolveProfileDir(): string {
 }
 
 /** One loader entry from a `--dump-config` dump. `enabled` is false when the
- * entry carries a literal `disabled: true` or `enabled: false` line (the
- * patch-applied disable shape observed on dsh 0.1.0-rc.6: cordis.patch.yml
- * with `- id: <id>` / `enabled: false` prints `enabled: false` on the row).
- * `!!js` expressions (e.g. `disabled: !!js process.platform === 'win32'`) are
- * not statically decidable and count as enabled. */
+ * entry carries a literal `disabled: true` or `enabled: false` marker: as a
+ * standalone 2-space line (the real shapes observed on dsh 0.1.0-rc.6 — the
+ * patch-applied `enabled: false` row and the built-in `disabled: true` row)
+ * or inline on the `- id:` / `name:` line. `!!js` expressions (e.g.
+ * `disabled: !!js process.platform === 'win32'`) are not statically
+ * decidable and count as enabled. */
 type LoaderEntry = { name: string; enabled: boolean };
+
+/** Literal disable markers that make a loader row statically disabled. */
+const DISABLED_MARKERS = /\b(?:disabled: true|enabled: false)\b/;
 
 /** Parse loader entries from a `dsh --profile <name> --dump-config` dump: a
  * flat list of `- id: <id>` entries, each carrying a `name: <spec>` line plus
@@ -85,11 +115,19 @@ function parseLoaderEntries(dump: string): LoaderEntry[] | null {
   for (const line of dump.split("\n")) {
     if (/^- id: /.test(line)) {
       if (current) entries.push(current);
-      current = { name: "", enabled: true };
+      current = { name: "", enabled: !DISABLED_MARKERS.test(line) };
     } else if (current) {
       const nameMatch = /^  name: (.+)$/.exec(line);
       if (nameMatch) {
-        current.name = nameMatch[1].trim().replace(/^['"]|['"]$/g, "");
+        let name = nameMatch[1].trim();
+        if (DISABLED_MARKERS.test(line)) {
+          current.enabled = false;
+          // Inline marker on the name line (drift shape): strip a trailing
+          // `, disabled: true` / ` disabled: true` suffix before quote
+          // removal so the row still matches its spec.
+          name = name.replace(/\s*,?\s*(?:disabled: true|enabled: false)\s*$/, "");
+        }
+        current.name = name.replace(/^['"]|['"]$/g, "");
       } else if (/^  disabled: true$/.test(line) || /^  enabled: false$/.test(line)) {
         current.enabled = false;
       } else if (line.trim() !== "" && !line.startsWith("  ")) {
@@ -131,7 +169,9 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   const installed = new Set<string>();
   if (!dryRun) {
     try {
-      const entries = parseLoaderEntries(runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], dryRun));
+      const entries = parseLoaderEntries(
+        runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], dryRun, DSH_LOCAL_TIMEOUT_MS),
+      );
       if (entries === null) {
         // Format drift in the dump: degrade loudly instead of misreporting
         // everything as uninstalled. Duplicate `add` is a pinned no-op
@@ -163,7 +203,7 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
       continue;
     }
     try {
-      runDsh(addArgs, dryRun);
+      runDsh(addArgs, dryRun, addTimeoutMs());
       notes.push(`installed: ${spec} (${DSH_BIN} ${addArgs.join(" ")})`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -204,7 +244,7 @@ function runDoctor(scope: Scope): { location: string; errors: string[]; notes: s
 
   let dump: string;
   try {
-    dump = runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], false);
+    dump = runDsh([DSH_PROFILE_FLAG, DSH_PROFILE, DSH_DUMP_FLAG], false, DSH_LOCAL_TIMEOUT_MS);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     errors.push(`Warning: could not probe installed plugins (${message}); cannot verify install state.`);
