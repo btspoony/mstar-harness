@@ -50,6 +50,9 @@ const CHANGES_DIR = ".changes";
 const UNRELEASED_DIR = `${CHANGES_DIR}/unreleased`;
 const ARCHIVE_DIR = `${CHANGES_DIR}/archive`;
 
+// Valid `packages:` tokens for changelog fragments (.changes/README.md).
+const FRAGMENT_PACKAGES = ["root", "cli", "opencode", "engine", "dsh"];
+
 const DEFAULT_CATEGORY: Record<string, string> = {
   root: "Harness",
   cli: "Changed",
@@ -97,7 +100,7 @@ function parseFrontmatter(text: string): { fm: Record<string, string>; body: str
   return { fm, body };
 }
 
-function parseFragment(file: string, text: string): Fragment {
+export function parseFragment(file: string, text: string): Fragment {
   const { fm, body } = parseFrontmatter(text);
   const cnMarker = body.indexOf("\n<!-- CN -->");
   const strip = (s: string) => s.replace(/^\n+/, "").replace(/\n+$/, "");
@@ -116,14 +119,41 @@ function parseFragment(file: string, text: string): Fragment {
   };
 }
 
+/**
+ * Validate normalized fragment `packages:` tokens against the release-surface
+ * enum (root | cli | opencode | engine | dsh — .changes/README.md). Returns
+ * every error string (collect-all, not first-error); an empty list validates
+ * clean (callers keep the existing ["root"] default). Exported for tests,
+ * like ensureEngineRegistryRow.
+ */
+export function validateFragmentPackages(packages: string[], file: string): string[] {
+  const errors: string[] = [];
+  for (const tok of packages) {
+    if (!FRAGMENT_PACKAGES.includes(tok)) {
+      errors.push(`${file}: unknown packages token "${tok}" (expected one of ${FRAGMENT_PACKAGES.join("|")})`);
+    }
+  }
+  return errors;
+}
+
 async function readFragments(): Promise<Fragment[]> {
   if (!existsSync(UNRELEASED_DIR)) return [];
   const files = readdirSync(UNRELEASED_DIR)
     .filter((f) => f.endsWith(".md"))
     .sort();
   const out: Fragment[] = [];
+  const errors: string[] = [];
   for (const f of files) {
-    out.push(parseFragment(f, await Bun.file(`${UNRELEASED_DIR}/${f}`).text()));
+    const frag = parseFragment(f, await Bun.file(`${UNRELEASED_DIR}/${f}`).text());
+    errors.push(...validateFragmentPackages(frag.packages, f));
+    out.push(frag);
+  }
+  if (errors.length) {
+    // Fail loud: an unknown packages token matches no changelog target, so
+    // buildSectionBody's filter would silently drop the fragment from every
+    // changelog. Hard-stop before any changelog mutation or fragment archival.
+    for (const e of errors) console.error(e);
+    process.exit(1);
   }
   return out;
 }
