@@ -12,6 +12,7 @@
   - [Kimi Code CLI](https://www.kimi.com/code/docs/kimi-code-cli/) (for `/plugins install`)
   - [ZCode](https://zcode.z.ai) (for Plugin Management install)
   - [omp (Oh My Pi)](https://omp.sh) (for `omp plugin install` / `omp plugin link`)
+  - [dsh (DeepSeek Harness)](https://www.npmjs.com/package/@deepseek-ai/dsh) (for the `dsh` plugin manager; e.g. `npm install -g @deepseek-ai/dsh`)
 
 ## Recommended: CLI install
 
@@ -151,11 +152,42 @@ Project scope: `npx @mstar-harness/cli init --target omp --scope project`.
 - Enter PM with `/skill:pm`. Iteration commands: `/iteration-start`, `/iteration-drive`, `/iteration-loop`.
 - Host adapter: **`mstar-host`** → `references/omp.md` (`skill://mstar-host/references/omp.md`).
 
+### dsh
+
+One CLI command installs the full dsh capability — the `@mstar-harness/dsh` plugin **plus** the optional `dsh-llm-fallbacks` role-configuration plugin:
+
+```bash
+npx @mstar-harness/cli init --target dsh
+npx @mstar-harness/cli doctor --target dsh
+```
+
+The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Re-running is idempotent: already-installed rows are skipped (`skipped-existing`), exit 0.
+
+Skip the `dsh-llm-fallbacks` row (`--no-fallbacks` is a dsh-target-only flag — ignored for other targets):
+
+```bash
+npx @mstar-harness/cli init --target dsh --no-fallbacks
+```
+
+Or run the two plugin-manager commands directly (the same contract the CLI executes):
+
+```bash
+dsh plugin --profile web add @mstar-harness/dsh
+dsh plugin --profile web add dsh-llm-fallbacks
+```
+
+**Notes:**
+
+- `--dry-run` previews the would-run commands without probing installed state or executing anything.
+- dsh profiles are machine-global; `--scope` is accepted by the shared interface but has no dsh surface.
+- `doctor --target dsh` reports each plugin row as `uninstalled` / `disabled` / `mounted` and exits non-zero when any row is uninstalled or disabled.
+- Enter PM with the `pm` skill. Host adapter: **`mstar-host`** → `references/dsh.md` (`skill://mstar-host/references/dsh.md`).
+
 ## Manual install
 
 Use when you cannot run the CLI or need to mirror the same layout by hand.
 
-Supported targets: `opencode`, `cursor`, `codex`, `zcode`, `omp`. Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above).
+Supported targets: `opencode`, `cursor`, `codex`, `zcode`, `omp`, `dsh` (via the two `dsh plugin --profile web add` commands — see [dsh](#dsh) above). Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above).
 
 ### OpenCode
 

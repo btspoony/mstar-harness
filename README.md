@@ -42,7 +42,7 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 
 | Host | Command |
 |------|---------|
-| dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` (the dsh plugin manager — not the CLI) |
+| dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh` (one CLI command that runs two **independent** `dsh plugin --profile web add` installs: `@mstar-harness/dsh` + `dsh-llm-fallbacks`; `--no-fallbacks` skips the latter) or `dsh plugin --profile web add @mstar-harness/dsh` + `dsh plugin --profile web add dsh-llm-fallbacks` |
 | omp | `npx @mstar-harness/cli init --target omp` (links `~/.mstar/harness`) or `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
@@ -59,7 +59,7 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 
 ### Verify
 
-`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp>`.
+`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp\|dsh>`.
 
 The repo ships a portable **Agent Plugins v1.0.0** manifest (`plugin.json`) at its root; `skills/` is the Agent Skills component — verify it with `npx @mstar-harness/cli plugin validate`.
 

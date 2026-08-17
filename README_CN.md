@@ -42,7 +42,7 @@ Harness Workflow Engine · Agent Plugin
 
 | 宿主 | 命令 |
 |------|------|
-| dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh`（dsh 自带插件管理器——不走 CLI） |
+| dsh（DeepSeek Harness） | `npx @mstar-harness/cli init --target dsh`（一条 CLI 命令编排两条**独立** `dsh plugin --profile web add` 安装：`@mstar-harness/dsh` + `dsh-llm-fallbacks`；`--no-fallbacks` 可跳过后者）或 `dsh plugin --profile web add @mstar-harness/dsh` + `dsh plugin --profile web add dsh-llm-fallbacks` |
 | omp | `npx @mstar-harness/cli init --target omp`（链接 `~/.mstar/harness`）或 `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
@@ -59,7 +59,7 @@ Harness Workflow Engine · Agent Plugin
 
 ### 校验
 
-`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp>`。
+`npx @mstar-harness/cli doctor --target <opencode\|cursor\|codex\|zcode\|omp\|dsh>`。
 
 仓库根提供便携式 **Agent Plugins v1.0.0** manifest（`plugin.json`），`skills/` 为 Agent Skills 组件——可用 `npx @mstar-harness/cli plugin validate` 校验。
 
