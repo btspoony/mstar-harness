@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 /**
  * drift-lint.ts — roadmap §8.7 item 4 (guards risk R1): pointer callouts in
- * skills/ must reference real engine exports and real CLI subcommands, and
- * engine spec-citation comments must resolve to real skill files.
+ * skills/ must reference real engine exports, real CLI subcommands, and a
+ * declared CLI bin name, and engine spec-citation comments must resolve to
+ * real skill files.
  *
  * Guards added by plan 20260816-mechanical-verification (Task 3):
  *   1. docs audit enum — `/codebase-audit` category tokens in docs/cli.md
@@ -33,6 +34,13 @@
  *      of five-question alignment without failing CI. Guard numbers are
  *      per-plan locked, not positional.
  *
+ * The forward callout citation check (this plan, 20260817-cli-bin-alias
+ * Task 2) also validates the **binary prefix** of every backticked CLI
+ * citation in Engine-check callouts against the declared `bin` names read
+ * from packages/cli/package.json — the manifest is SSOT, never a hardcoded
+ * list — closing the blind spot where prose could cite a nonexistent
+ * executable while every subcommand path still validated.
+ *
  * Engine symbols are imported from the source entry (../packages/engine/
  * src/index.ts), NOT the "@mstar-harness/engine" package specifier: the CI
  * drift-lint job runs `bun run validation:drift` in a fresh checkout with
@@ -58,6 +66,7 @@ import {
 const root = process.cwd();
 const failures: string[] = [];
 let calloutsChecked = 0;
+let cliCitationsChecked = 0;
 
 function fail(message: string): void {
   failures.push(message);
@@ -321,6 +330,93 @@ export function checkFiveQuestionCorpus(files: Array<{ rel: string; text: string
   return { checked, failures };
 }
 
+/* ------------------------------------------------------------------ */
+/* Guard 1 forward helpers: Engine-check callouts (bin-prefix guard)   */
+/* ------------------------------------------------------------------ */
+
+export type EngineCalloutResult = {
+  calloutsChecked: number;
+  cliCitationsChecked: number;
+  failures: string[];
+};
+
+/**
+ * Guard 1 forward half — every `**Engine check (when available):**`
+ * blockquote run in a skill file. Backticked CLI citations
+ * (`mstar status validate`, `mstar-harness dispatch validate`, …) must
+ * reference a **declared CLI bin** (the caller passes the `bin` names read
+ * from packages/cli/package.json — the manifest is SSOT, never hardcoded)
+ * and a real `.command()` path from the CLI inventory; engine imports in
+ * the same callout must reference real engine exports. One failure row per
+ * violation. Load-bearing: an undeclared binary prefix (e.g. `mstarr`)
+ * fails drift-lint (regression-pinned by scripts/drift-lint.test.ts).
+ */
+export function checkEngineCallouts(
+  files: Array<{ rel: string; text: string }>,
+  opts: { cliCommands: Set<string>; engineExports: Set<string>; binNames: string[] },
+): EngineCalloutResult {
+  const failures: string[] = [];
+  let calloutsChecked = 0;
+  let cliCitationsChecked = 0;
+  const bins = new Set(opts.binNames);
+
+  for (const { rel, text } of files) {
+    const lines = text.split(/\r?\n/);
+
+    // Blockquote runs: consecutive lines starting with `>`.
+    const runs: Array<{ start: number; end: number; text: string }> = [];
+    let runStart = -1;
+    for (let i = 0; i <= lines.length; i++) {
+      const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
+      if (isQuote && runStart === -1) runStart = i;
+      if (!isQuote && runStart !== -1) {
+        runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
+        runStart = -1;
+      }
+    }
+
+    for (const run of runs) {
+      if (!run.text.includes("**Engine check (when available):**")) continue;
+      calloutsChecked++;
+
+      // Backticked CLI citations — anchored to the opening backtick so the
+      // prefix capture is exact (prose word pairs are never counted as
+      // citations). `<bin> <cmd>` with at most a two-word command path,
+      // preserving the pre-existing match surface (`mstar audit scaffold
+      // <file>` → prefix `mstar`, path `audit scaffold`).
+      for (const cm of run.text.matchAll(/`([a-z][a-z0-9-]*)\s+([a-z-]+(?:\s+[a-z-]+)?)/g)) {
+        const bin = cm[1];
+        const cmd = cm[2];
+        cliCitationsChecked++;
+        if (!bins.has(bin)) {
+          failures.push(
+            `${rel}:${run.start + 1} citation binary "${bin}" is not a declared CLI bin (${opts.binNames.join(" | ")})`,
+          );
+          continue;
+        }
+        if (!opts.cliCommands.has(cmd)) {
+          failures.push(
+            `${rel}:${run.start + 1} callout references unknown CLI command "${bin} ${cmd}" (known: ${[...opts.cliCommands].sort().join(", ")})`,
+          );
+        }
+      }
+
+      for (const im of run.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
+        for (const raw of im[1].split(",")) {
+          // Strip TS import modifiers so `import { type Foo }` / `import {
+          // Foo as Bar }` resolve to the exported name `Foo`.
+          const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
+          if (name && !opts.engineExports.has(name)) {
+            failures.push(`${rel}:${run.start + 1} callout imports unknown engine export "${name}"`);
+          }
+        }
+      }
+    }
+  }
+
+  return { calloutsChecked, cliCitationsChecked, failures };
+}
+
 if (import.meta.main) {
   /* ------------------------------------------------------------------ */
   /* Engine export inventory (packages/engine/src/index.ts)               */
@@ -367,50 +463,29 @@ if (import.meta.main) {
   }
 
   /* ------------------------------------------------------------------ */
-  /* Forward: skill callouts → engine exports + CLI commands              */
+  /* Forward: skill callouts → engine exports + CLI commands + bins      */
   /* ------------------------------------------------------------------ */
 
   const skillFiles = collectFiles("skills", ".md");
+
+  // Declared CLI bin names — the manifest is SSOT, never a hardcoded list.
+  const cliManifest = JSON.parse(
+    readFileSync(join(root, "packages/cli/package.json"), "utf8"),
+  ) as { bin?: Record<string, string> };
+  const binNames = Object.keys(cliManifest.bin ?? {});
+
+  const forward = checkEngineCallouts(
+    skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
+    { cliCommands, engineExports, binNames },
+  );
+  calloutsChecked += forward.calloutsChecked;
+  cliCitationsChecked += forward.cliCitationsChecked;
+  for (const row of forward.failures) fail(row);
+
+  // Import statements anywhere in a skill file must reference real exports.
   for (const file of skillFiles) {
-    const text = readFileSync(file, "utf8");
-    const lines = text.split(/\r?\n/);
     const rel = relative(root, file);
-
-    // Blockquote runs: consecutive lines starting with `>`.
-    const runs: Array<{ start: number; end: number; text: string }> = [];
-    let runStart = -1;
-    for (let i = 0; i <= lines.length; i++) {
-      const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-      if (isQuote && runStart === -1) runStart = i;
-      if (!isQuote && runStart !== -1) {
-        runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
-        runStart = -1;
-      }
-    }
-
-    for (const run of runs) {
-      if (!run.text.includes("**Engine check (when available):**")) continue;
-      calloutsChecked++;
-
-      for (const cm of run.text.matchAll(/mstar\s+([a-z-]+(?:\s+[a-z-]+)?)/g)) {
-        const cmd = cm[1];
-        if (!cliCommands.has(cmd)) {
-          fail(`${rel}:${run.start + 1} callout references unknown CLI command "mstar ${cmd}" (known: ${[...cliCommands].sort().join(", ")})`);
-        }
-      }
-      for (const im of run.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
-        for (const raw of im[1].split(",")) {
-          // Strip TS import modifiers so `import { type Foo }` / `import {
-          // Foo as Bar }` resolve to the exported name `Foo`.
-          const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
-          if (name && !engineExports.has(name)) {
-            fail(`${rel}:${run.start + 1} callout imports unknown engine export "${name}"`);
-          }
-        }
-      }
-    }
-
-    // Import statements anywhere in a skill file must reference real exports.
+    const text = readFileSync(file, "utf8");
     for (const im of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
       for (const raw of im[1].split(",")) {
         const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
@@ -642,12 +717,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
   );
 }

@@ -32,6 +32,7 @@ import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
   checkBilingualPairing,
+  checkEngineCallouts,
   checkFiveQuestionCorpus,
   checkRolesCorpus,
   citesKnowledgeConventions,
@@ -129,6 +130,79 @@ describe("extractCategoryRowTokens — docs/cli.md `<category>` row (guard 1)", 
   test("plan-field `Category` reference and `<category>` placeholder are filtered", () => {
     const row = "| `<category>` | plan `Category` field values: `bug` | all nine |";
     expect(extractCategoryRowTokens(row)).toEqual(["bug"]);
+  });
+});
+
+describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () => {
+  /** Declared bin names from the manifest — the guard's SSOT (a rename in
+   * packages/cli/package.json must move this pin with it, mirroring the
+   * manifest test from plan Task 1). */
+  const declaredBins = () => {
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dir, "..", "packages", "cli", "package.json"), "utf8"),
+    ) as { bin?: Record<string, string> };
+    return Object.keys(manifest.bin ?? {});
+  };
+
+  /** One Engine-check callout blockquote with `body` as its content. */
+  const callout = (body: string) =>
+    `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed.`;
+
+  test("both declared bin names pass — `mstar …` and `mstar-harness …` citations (load-bearing)", () => {
+    const binNames = declaredBins();
+    expect(binNames).toEqual(expect.arrayContaining(["mstar", "mstar-harness"]));
+    const { calloutsChecked, cliCitationsChecked, failures } = checkEngineCallouts(
+      [
+        { rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar status validate <path>`") },
+        { rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar-harness dispatch validate <file>`") },
+      ],
+      {
+        cliCommands: new Set(["status validate", "dispatch validate"]),
+        engineExports: new Set(["validateStatus"]),
+        binNames,
+      },
+    );
+    expect(calloutsChecked).toBe(2);
+    expect(cliCitationsChecked).toBe(2);
+    expect(failures).toEqual([]);
+  });
+
+  test("undeclared binary prefix fails — `mstarr status validate` (load-bearing)", () => {
+    const binNames = declaredBins();
+    const { failures } = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstarr status validate <path>`") }],
+      { cliCommands: new Set(["status validate"]), engineExports: new Set(), binNames },
+    );
+    expect(failures).toEqual([
+      `skills/mstar-foo/SKILL.md:1 citation binary "mstarr" is not a declared CLI bin (${binNames.join(" | ")})`,
+    ]);
+  });
+
+  test("unknown command path still fails under a declared bin", () => {
+    const { failures } = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar bogus validate <path>`") }],
+      {
+        cliCommands: new Set(["status validate"]),
+        engineExports: new Set(),
+        binNames: declaredBins(),
+      },
+    );
+    expect(failures).toEqual([
+      expect.stringContaining('callout references unknown CLI command "mstar bogus validate"'),
+    ]);
+  });
+
+  test("prose outside Engine-check callouts is not scanned", () => {
+    const { calloutsChecked, failures } = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: "run `mstarr status validate` in prose" }],
+      {
+        cliCommands: new Set(["status validate"]),
+        engineExports: new Set(),
+        binNames: declaredBins(),
+      },
+    );
+    expect(calloutsChecked).toBe(0);
+    expect(failures).toEqual([]);
   });
 });
 
