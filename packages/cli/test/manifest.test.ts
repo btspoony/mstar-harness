@@ -17,10 +17,11 @@ describe("@mstar-harness/cli manifest — bin aliases", () => {
     bin?: Record<string, string>;
   };
 
-  test("declares both `mstar-harness` and the `mstar` alias", () => {
-    expect(Object.keys(manifest.bin ?? {})).toEqual(
-      expect.arrayContaining(["mstar-harness", "mstar"]),
-    );
+  test("declares EXACTLY the `mstar-harness` + `mstar` bin pair", () => {
+    // Key-set equality, not containment: an undeclared third bin name
+    // (e.g. a legacy leftover) would install a shim neither the docs nor
+    // the drift-lint guard cover.
+    expect(Object.keys(manifest.bin ?? {}).sort()).toEqual(["mstar", "mstar-harness"]);
   });
 
   test("`mstar` points at the same dist entry as `mstar-harness`", () => {

@@ -49,6 +49,8 @@ npx @mstar-harness/cli init
 
 CLI 会安装两个等效二进制：`mstar-harness`（规范名，所有已发布版本均有）与 `mstar`（短别名）。
 
+> **注意**：`mstar` 是短别名，且属于**共享 bin 命名空间**——名为 `mstar` 的无关第三方 npm 包也声明了同名命令。该别名仅在安装了 `@mstar-harness/cli` 的环境中存在：未安装该包时裸 `npx mstar …` 会经 registry 解析到那个第三方工具；两者全局共存时，后安装者会静默覆盖 `mstar` shim。规范调用名保持 `mstar-harness`——冲突时请使用长名。
+
 | 宿主 | 命令 |
 |------|------|
 | dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh` |

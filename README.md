@@ -49,6 +49,8 @@ npx @mstar-harness/cli init
 
 The CLI installs two equivalent binaries: `mstar-harness` (canonical, present in every released version) and `mstar` (short alias).
 
+> **Caution**: `mstar` is a short alias and a **shared bin namespace** — an unrelated third-party npm package named `mstar` claims the same command name. The alias exists only where `@mstar-harness/cli` is installed: bare `npx mstar …` without the package resolves via the registry to that other tool, and globally co-installing both packages silently overwrites the `mstar` shim (last install wins). The canonical invocation name stays `mstar-harness` — use the long name on any conflict.
+
 | Host | Command |
 |------|---------|
 | dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` |

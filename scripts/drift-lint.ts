@@ -340,6 +340,86 @@ export type EngineCalloutResult = {
   failures: string[];
 };
 
+/** Engine export names from `packages/engine/src/index.ts` — every
+ * `export { … } from "…"` re-export name (strip `type` / `as` modifiers). */
+export function buildEngineExportNames(engineIndex: string): Set<string> {
+  const engineExports = new Set<string>();
+  const exportRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']+["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = exportRe.exec(engineIndex))) {
+    for (let name of m[1].split(",")) {
+      name = name.trim().split(/\s+as\s+/)[0].trim();
+      if (name) engineExports.add(name);
+    }
+  }
+  return engineExports;
+}
+
+/** CLI command inventory from `packages/cli/src/index.ts` — every
+ * `.command("name")` path (single tokens plus `parent child` composites). */
+export function buildCliCommandInventory(cliSrc: string): {
+  cliCommands: Set<string>;
+  failures: string[];
+} {
+  const cliCommands = new Set<string>();
+  const varPaths = new Map<string, string>();
+  const failures: string[] = [];
+  const commandRe = /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)\.command\(\s*"([a-z-]+)"\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = commandRe.exec(cliSrc))) {
+    const [, declared, receiver, name] = m;
+    if (declared) {
+      varPaths.set(declared, name);
+      cliCommands.add(name);
+    } else if (receiver === "program") {
+      cliCommands.add(name);
+    } else {
+      const parent = varPaths.get(receiver);
+      if (parent === undefined) {
+        failures.push(`CLI parent of "${receiver}.command("${name}")" is not a known command var`);
+        continue;
+      }
+      cliCommands.add(parent ? `${parent} ${name}` : name);
+    }
+  }
+  return { cliCommands, failures };
+}
+
+/** Declared CLI bin names — the manifest is SSOT, never a hardcoded list.
+ * Guard-or-clear-error (mirrors `readRolesCorpus`): a missing / corrupt /
+ * bin-less manifest returns one explicit failure row, never a silent skip —
+ * with no declared bins the prefix check would flood every citation. */
+export function readDeclaredBins(
+  manifestPath: string,
+): { binNames: string[]; failures: string[] } {
+  let raw: string;
+  try {
+    raw = readFileSync(manifestPath, "utf8");
+  } catch {
+    return {
+      binNames: [],
+      failures: [`drift: could not read CLI manifest at ${manifestPath} (declared-bin prefix check skipped)`],
+    };
+  }
+  let cliManifest: { bin?: Record<string, string> };
+  try {
+    cliManifest = JSON.parse(raw) as { bin?: Record<string, string> };
+  } catch {
+    return {
+      binNames: [],
+      failures: [`drift: CLI manifest at ${manifestPath} is not valid JSON (declared-bin prefix check skipped)`],
+    };
+  }
+  const binNames = Object.keys(cliManifest.bin ?? {});
+  if (binNames.length === 0) {
+    return {
+      binNames: [],
+      failures: [`drift: CLI manifest at ${manifestPath} declares no bin names (declared-bin prefix check skipped)`],
+    };
+  }
+  return { binNames, failures: [] };
+}
+
 /**
  * Guard 1 forward half — every `**Engine check (when available):**`
  * blockquote run in a skill file. Backticked CLI citations
@@ -423,15 +503,7 @@ if (import.meta.main) {
   /* ------------------------------------------------------------------ */
 
   const engineIndex = readFileSync(join(root, "packages/engine/src/index.ts"), "utf8");
-  const engineExports = new Set<string>();
-  const exportRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']+["']/g;
-  let m: RegExpExecArray | null;
-  while ((m = exportRe.exec(engineIndex))) {
-    for (let name of m[1].split(",")) {
-      name = name.trim().split(/\s+as\s+/)[0].trim();
-      if (name) engineExports.add(name);
-    }
-  }
+  const engineExports = buildEngineExportNames(engineIndex);
   if (engineExports.size === 0) {
     console.error("drift: could not parse any exports from packages/engine/src/index.ts");
     process.exit(1);
@@ -442,25 +514,8 @@ if (import.meta.main) {
   /* ------------------------------------------------------------------ */
 
   const cliSrc = readFileSync(join(root, "packages/cli/src/index.ts"), "utf8");
-  const cliCommands = new Set<string>();
-  const varPaths = new Map<string, string>();
-  const commandRe = /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)\.command\(\s*"([a-z-]+)"\s*\)/g;
-  while ((m = commandRe.exec(cliSrc))) {
-    const [, declared, receiver, name] = m;
-    if (declared) {
-      varPaths.set(declared, name);
-      cliCommands.add(name);
-    } else if (receiver === "program") {
-      cliCommands.add(name);
-    } else {
-      const parent = varPaths.get(receiver);
-      if (parent === undefined) {
-        fail(`CLI parent of "${receiver}.command("${name}")" is not a known command var`);
-        continue;
-      }
-      cliCommands.add(parent ? `${parent} ${name}` : name);
-    }
-  }
+  const { cliCommands, failures: cliInventoryFailures } = buildCliCommandInventory(cliSrc);
+  for (const row of cliInventoryFailures) fail(row);
 
   /* ------------------------------------------------------------------ */
   /* Forward: skill callouts → engine exports + CLI commands + bins      */
@@ -469,15 +524,22 @@ if (import.meta.main) {
   const skillFiles = collectFiles("skills", ".md");
 
   // Declared CLI bin names — the manifest is SSOT, never a hardcoded list.
-  const cliManifest = JSON.parse(
-    readFileSync(join(root, "packages/cli/package.json"), "utf8"),
-  ) as { bin?: Record<string, string> };
-  const binNames = Object.keys(cliManifest.bin ?? {});
-
-  const forward = checkEngineCallouts(
-    skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
-    { cliCommands, engineExports, binNames },
+  // A missing / corrupt / bin-less manifest is a loud failure row; with no
+  // declared bins the prefix check would flood every citation, so the
+  // callout scan is skipped (guard-or-clear-error) — the separate
+  // import-statement loop below still runs for engine exports.
+  const { binNames, failures: manifestFailures } = readDeclaredBins(
+    join(root, "packages/cli/package.json"),
   );
+  for (const row of manifestFailures) fail(row);
+
+  const forward =
+    manifestFailures.length === 0
+      ? checkEngineCallouts(
+          skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
+          { cliCommands, engineExports, binNames },
+        )
+      : { calloutsChecked: 0, cliCitationsChecked: 0, failures: [] as string[] };
   calloutsChecked += forward.calloutsChecked;
   cliCitationsChecked += forward.cliCitationsChecked;
   for (const row of forward.failures) fail(row);
