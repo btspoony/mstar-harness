@@ -42,18 +42,24 @@ Harness Workflow Engine · Agent Plugin
 
 | 宿主 | 命令 |
 |------|------|
-| dsh（DeepSeek Harness） | `npx @mstar-harness/cli init --target dsh`（一条 CLI 命令编排两条**独立** `dsh plugin --profile web add` 安装：`@mstar-harness/dsh` + `dsh-llm-fallbacks`；`--no-fallbacks` 可跳过后者）或 `dsh plugin --profile web add @mstar-harness/dsh` + `dsh plugin --profile web add dsh-llm-fallbacks` |
-| omp | `npx @mstar-harness/cli init --target omp`（链接 `~/.mstar/harness`）或 `omp plugin install github:btspoony/mstar-harness` |
+| dsh（DeepSeek Harness） | `npx @mstar-harness/cli init --target dsh`<br>（一条 CLI 命令编排两条**独立** `dsh plugin --profile web add` 安装：<br>`@mstar-harness/dsh` + `dsh-llm-fallbacks`；`--no-fallbacks` 可跳过后者）<br>或 `dsh plugin --profile web add @mstar-harness/dsh`<br>+ `dsh plugin --profile web add dsh-llm-fallbacks` |
+| omp | `npx @mstar-harness/cli init --target omp`<br>（链接 `~/.mstar/harness`）<br>或 `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
-| Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
-| ZCode | `npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理安装 **morning-star-harness** |
-| Codex | `npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal` |
-| Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根（`plugin.json` + `skills/` 即便携包） |
+| Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness`<br>→ `/plugins reload` |
+| ZCode | `npx @mstar-harness/cli init --target zcode`<br>然后在 ZCode → 设置 → 插件管理安装 **morning-star-harness** |
+| Codex | `npx @mstar-harness/cli init --target codex`<br>然后 `codex plugin add morning-star-harness --marketplace personal` |
+| Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根<br>（`plugin.json` + `skills/` 即便携包） |
 
 ### 引擎门禁校验（可选）
 
-`npm i -g @mstar-harness/cli` 将 `mstar-harness` 二进制（短别名 `mstar`）装上 PATH，技能文本引用的引擎校验命令（`mstar status validate`、`mstar dispatch validate`、`mstar iteration gate` 等）才真正可运行——不全局安装时 harness 照常工作，这些校验保持 advisory。在迭代 compass 里设 `enforcement: hard` 可让派发预检 fail-fast。
+```bash
+npm i -g @mstar-harness/cli
+```
+
+将 `mstar-harness` 二进制（短别名 `mstar`）装上 PATH，技能文本引用的引擎校验命令（`mstar status validate`、`mstar dispatch validate`、`mstar iteration gate` 等）才真正可运行。
+
+不全局安装时 harness 照常工作，这些校验保持 advisory。在迭代 compass 里设 `enforcement: hard` 可让派发预检 fail-fast。
 
 > **注意**：`mstar` 是短别名，且属于**共享 bin 命名空间**——名为 `mstar` 的无关第三方 npm 包也声明了同名命令。该别名仅在安装了 `@mstar-harness/cli` 的环境中存在：未安装该包时裸 `npx mstar …` 会经 registry 解析到那个第三方工具；两者全局共存时，后安装者会静默覆盖 `mstar` shim。规范调用名保持 `mstar-harness`——冲突时请使用长名。
 
@@ -86,19 +92,17 @@ Harness Workflow Engine · Agent Plugin
 
 ### 迭代
 
-| 路径 | 何时 |
+| 命令 | 何时 |
 |------|------|
-| `/iteration-start` | Phase 1（交互式 grill-me）后自动推进 Phase 2→5；`pause` 可止于 Phase 1 |
-| `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→5 |
-| `/iteration-loop` | Phase 1→5 全自动（无 grill-me；可选 `direction`、`scale` S\|M\|L\|XL） |
+| `/iteration-start [direction] [pause]` | 开始新迭代：Phase 1（交互式 grill-me），然后自动推进 Phase 2→5。<br>`direction` — 可选提示（仍走交互）。<br>`pause` — 止于 Phase 1；之后用 `/iteration-drive` 恢复。 |
+| `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→5。 |
+| `/iteration-loop [direction] [scale]` | Phase 1→5 全自动（无 grill-me）。<br>`direction` — 可选自由文本。<br>`scale` — `S` / `M` / `L` / `XL`（默认 `M`）。 |
 
 ### 代码库审计
 
-| 路径 | 何时 |
+| 命令 | 何时 |
 |------|------|
-| `/codebase-audit` | 只读扫描代码库 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划 |
-
-用法：`/codebase-audit [关键词]` —— 只读顾问，**不**改源码。产出可喂给 iteration-start Research 或常规 Prepare → Execute。关键词：深度级别 `quick` / `deep`（默认 `standard`）；范围变体 —— 按类别聚焦（`security`、`perf`、`tests`、…）、`branch`（仅当前分支变更）、`next` / `roadmap`（仅方向候选）、或 `simplify`（聚焦技术债的深扫：死码 / 重复 / 投机性 / 过度构建面，配 prove-or-reject 消费方分类）。SSOT → `mstar-audit`。
+| `/codebase-audit [关键词]` | 只读扫描 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划。<br>不改源码。产出可喂给 `/iteration-start` Research 或常规 Prepare → Execute。<br>深度：`quick` / `deep`（默认 `standard`）。<br>范围：按类别聚焦（`security`、`perf`、`tests`、…）；`branch`（仅当前分支变更）；`next` / `roadmap`（仅方向候选）；`simplify`（聚焦技术债的深扫）。<br>SSOT → `mstar-audit`。 |
 
 ### 命令加载
 
