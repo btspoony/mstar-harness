@@ -136,7 +136,7 @@ async function runInit(options: InitOptions) {
 
   if (adapter.mode === "install") {
     logStep("Step 2/2 - Run target install flow");
-    const installResult = adapter.runInstallInit?.(scope, !!options.dryRun);
+    const installResult = adapter.runInstallInit?.(scope, !!options.dryRun, { noFallbacks: options.noFallbacks });
     if (!installResult) {
       throw new Error(`Adapter ${target} does not implement install init flow.`);
     }
@@ -204,6 +204,12 @@ function runDoctor(options: DoctorOptions) {
       throw new Error(`Adapter ${target} does not implement install doctor flow.`);
     }
     console.log(`Install location: ${result.location}`);
+    // Capability word lines (install-mode doctor notes, e.g. dsh
+    // uninstalled/disabled/mounted) print on every run, healthy included —
+    // a `mounted` state must not be implied only by exit code 0 (AC-2).
+    for (const note of result.notes ?? []) {
+      console.log(`  - ${note}`);
+    }
     if (!result.errors.length) {
       console.log(pc.green("Doctor result: healthy"));
       return;
@@ -281,13 +287,16 @@ program
   .option("--scope <scope>", "Config scope: global|project (default: project)")
   .option("--output <path>", "Config file path override, relative to project root")
   .option("--dry-run", "Preview result without writing config")
+  .option("--no-fallbacks", "Skip installing the dsh-llm-fallbacks plugin (dsh target only)")
   .option("--pm-model <model>", "Optional: model for project-manager (advanced override)")
   .option("--strategic-models <a,b,c>", "Optional: models for architect/product-manager/prompt-engineer")
   .option("--dev-models <a,b,c>", "Optional: models for fullstack-dev/fullstack-dev-2/frontend-dev")
   .option("--qc-models <a,b,c>", "Optional: models for qc trio")
   .option("--other-models <a,b,c>", "Optional: models for remaining roles")
-  .action(async (options: InitOptions) => {
-    await runInit(options);
+  .action(async (options: InitOptions & { fallbacks?: boolean }) => {
+    // commander's negation `--no-fallbacks` parses as `fallbacks: false`
+    // (default true); map to the canonical `noFallbacks` name at the boundary.
+    await runInit({ ...options, noFallbacks: options.fallbacks === false });
   });
 
 program
