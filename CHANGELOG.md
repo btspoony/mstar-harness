@@ -2,24 +2,35 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **2.4.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **2.4.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **2.4.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.4.0** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.4.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.4.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **2.4.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **2.4.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **2.4.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **2.4.0** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.4.0** |
-| Agent Plugins manifest | `plugin.json` | **2.4.0** |
+| Monorepo root | `morning-star` (`package.json`) | **2.4.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.4.1** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.4.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.4.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **2.4.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **2.4.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **2.4.1** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **2.4.1** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.4.1** |
+| Agent Plugins manifest | `plugin.json` | **2.4.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [2.4.1] - 2026-08-17
+
+### Harness
+
+- **dsh plugin**: `@deepseek-ai/dsh-*` peers upgraded to the `0.1.0-rc.7` line (`^0.1.0-rc.7`; `@deepseek-ai/cordis` stays `^4.0.1`). Local rc.6→rc.7 source review of consumed seams found no adapter-code break (`createUserMessage` / `ToolExecution` / `PreToolDecision` / `PreStepDecision` / `FsWriteIntent` / dump-config `disabled: true` unchanged; `apps/cli/src` version-only). Lock purged every entry below `0.1.0-rc.7` — 62 unique `@deepseek-ai/dsh-*` packages, single hoisted copy each, 0 nested copies. Root `dependencies` stays engine-only.
+- **README readability**: Install Command cells wrap with `<br>`; `npm i -g @mstar-harness/cli` is a standalone fenced command; Iteration / Codebase audit tables use **Command** (full signatures) and wrap **When**.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 2.4.1**.
 
 ## [2.4.0] - 2026-08-17
 
