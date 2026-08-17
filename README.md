@@ -31,7 +31,6 @@ English / [中文](README_CN.md)
 
 | Component | What it is |
 |-----------|------------|
-| dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` (the dsh plugin manager — not the CLI) |
 | Harness Workflow Engine | `@mstar-harness/engine` — TS enforcement of deterministic workflow gates |
 | mstar CLI | `@mstar-harness/cli` — installer bootstrap + `mstar` workflow verbs |
 | `mstar-*` skills | Role, gate, and workflow judgment (single source of truth) |
@@ -43,6 +42,7 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 
 | Host | Command |
 |------|---------|
+| dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` (the dsh plugin manager — not the CLI) |
 | omp | `npx @mstar-harness/cli init --target omp` (links `~/.mstar/harness`) or `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |

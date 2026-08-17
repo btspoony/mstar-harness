@@ -31,7 +31,6 @@ Harness Workflow Engine · Agent Plugin
 
 | 组件 | 说明 |
 |------|------|
-| dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh`（dsh 自带插件管理器——不走 CLI） |
 | Harness Workflow Engine | `@mstar-harness/engine` —— 确定性工作流门禁的 TS 强制执行层 |
 | mstar CLI | `@mstar-harness/cli` —— 安装引导 + `mstar` 工作流动词 |
 | `mstar-*` skills | 角色、门禁与工作流判断（唯一事实来源） |
@@ -43,6 +42,7 @@ Harness Workflow Engine · Agent Plugin
 
 | 宿主 | 命令 |
 |------|------|
+| dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh`（dsh 自带插件管理器——不走 CLI） |
 | omp | `npx @mstar-harness/cli init --target omp`（链接 `~/.mstar/harness`）或 `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
