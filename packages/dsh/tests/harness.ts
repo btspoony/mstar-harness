@@ -18,7 +18,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { Context, Service } from '@deepseek-ai/cordis'
+import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
@@ -197,6 +197,38 @@ export class FakeSessionsRegistry extends Service {
   }
 }
 
+/**
+ * Minimal in-memory `settings` service for the REAL-fallbacks composition
+ * (plan `20260817-dsh-roles-e2e` Task 1 — installed-deployment e2e): the
+ * upstream `dsh-llm-fallbacks` plugin writes its seed registry through the
+ * `settings` service (`seedsIo.writeRoles` → `sctx.settings.update(...)`),
+ * which the real dsh app always provides (`dsh-settings-file` row). Without
+ * it the fallbacks `declareSeeds` rejects with
+ * `seedsSettingsUnavailable` and no mstar seed can land. This fake
+ * implements the ONE consumed contract — `update(namespace, data)` (+ a
+ * `get` readback for the spec) — mounted as the `@deepseek-ai/dsh-settings-fake`
+ * module row (`bootApp({ settingsService: 'fake' })`), the same
+ * structural-fake philosophy as the loader/jobs/agents/sessions fakes.
+ */
+export class FakeSettingsRegistry extends Service {
+  private readonly store = new Map<string, unknown>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'settings')
+  }
+
+  /** Persist one namespace payload (the fallbacks `update` contract). */
+  update(namespace: string, data: unknown): Promise<void> {
+    this.store.set(namespace, data)
+    return Promise.resolve()
+  }
+
+  /** Read one namespace payload (spec readback). */
+  get(namespace: string): unknown {
+    return this.store.get(namespace)
+  }
+}
+
 let fakeChildSeq = 0
 
 /**
@@ -316,6 +348,34 @@ export interface BootOptions {
    * temp `root/harness` dir.
    */
   harnessDir?: string | null
+  /**
+   * Module-source override for the `@mstar-harness/dsh` row (plan
+   * `20260817-dsh-roles-e2e` Task 1 — installed-deployment e2e): the
+   * default is the src plugin (`../src/index.ts`); an installed-artifact
+   * test passes the dist namespace imported from the real install. The
+   * default behavior is unchanged when omitted.
+   */
+  pluginModule?: unknown
+  /**
+   * REAL `dsh-llm-fallbacks` row (plan `20260817-dsh-roles-e2e` Task 1):
+   * when set, a `dsh-llm-fallbacks` row is mounted BEFORE the mstar row
+   * with this module as its source (the real app composes the fallbacks
+   * layer before the mstar plugin row; the seeds inject child then fires
+   * at mstar apply). Absent by default — existing compositions are
+   * untouched.
+   */
+  fallbacksModule?: unknown
+  /**
+   * Mount the {@link FakeSettingsRegistry} as the `settings` service (the
+   * `@deepseek-ai/dsh-settings-fake` row + module map): the REAL
+   * `dsh-llm-fallbacks` plugin writes its seed registry through
+   * `sctx.settings.update` (the real dsh app always composes the
+   * `dsh-settings-file` row), so a fallbacks composition without a
+   * settings seam cannot persist seed declarations. Mounted BEFORE the
+   * fallbacks row so `writeRoles` binds at fallbacks apply. Absent by
+   * default — existing compositions are untouched.
+   */
+  settingsService?: 'fake'
 }
 
 /** A booted app: context, temp root, resolved harness dir, and disposal. */
@@ -323,6 +383,13 @@ export interface BootResult {
   ctx: Context
   root: string
   harnessDir: string
+  /**
+   * The fallbacks row fiber (plan `20260817-dsh-roles-e2e` Task 1 — set
+   * when `fallbacksModule` was mounted): the host may dispose it and
+   * re-apply the row with a settings-derived config to model the real
+   * app's config-stack re-composition (settings write → HMR re-apply).
+   */
+  fallbacksFiber?: Fiber
   /** Dispose the app fiber and remove the temp root. */
   dispose(): Promise<void>
 }
@@ -409,8 +476,21 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // so the plugin's `registerWorkflowLedger` consumer registers (W-B2 run
     // rows + the P-c answer observation e2e).
     ...(options.sessionsService !== undefined ? [{ name: '@deepseek-ai/dsh-session-fake' }] : []),
-    // Last row: the mstar plugin (carries the boot-time Config below).
+    // The fake settings service row (only when requested — plan
+    // `20260817-dsh-roles-e2e` Task 1): mounted BEFORE the plugin layers
+    // so the real fallbacks plugin's `ctx.inject(['settings'])` child
+    // binds `writeRoles` at its own apply (the real dsh app composes the
+    // `dsh-settings-file` row before the plugin layers).
+    ...(options.settingsService !== undefined ? [{ name: '@deepseek-ai/dsh-settings-fake' }] : []),
+    // The mstar plugin row (carries the boot-time Config below).
     { name: '@mstar-harness/dsh' },
+    // The REAL fallbacks layer (only when requested — plan
+    // `20260817-dsh-roles-e2e` Task 1 installed-deployment e2e): the real
+    // dsh app's profile entry list puts `@mstar-harness/dsh` BEFORE
+    // `dsh-llm-fallbacks` (probed on dsh 0.1.0-rc.6), so the seeds inject
+    // child arms at mstar apply and fires when the fallbacks service
+    // appears — the same sequence the seeds wiring test pins.
+    ...(options.fallbacksModule !== undefined ? [{ name: 'dsh-llm-fallbacks' }] : []),
   ]
   let rows: ReadonlyArray<{ name: string; config?: Record<string, unknown> }> = inlineRows
   if (options.cordisYml !== undefined) {
@@ -449,7 +529,16 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   // Module seams, keyed by row name. The seam packages export their plugin
   // function as `default` (CJS-style); the mstar plugin is named-only.
   const modules = new Map<string, unknown>([
-    ['@mstar-harness/dsh', plugin],
+    // `pluginModule` overrides the src default with an installed-artifact
+    // module (plan `20260817-dsh-roles-e2e` Task 1).
+    ['@mstar-harness/dsh', options.pluginModule ?? plugin],
+    // The REAL fallbacks row module (plan `20260817-dsh-roles-e2e` Task 1;
+    // only mounted when the option is set, see the row list above). The
+    // seam unwrap handles the named-export plugin shape (`name`/`apply`/
+    // `provide` namespace — same path as the mstar dist).
+    ...(options.fallbacksModule !== undefined
+      ? [['dsh-llm-fallbacks', options.fallbacksModule] as const]
+      : []),
     // The `ctx.skills` registry seam — the REAL package, installed from the
     // npm registry; the host app provides it at runtime via peerDependencies.
     ['@deepseek-ai/dsh-skill', await import('@deepseek-ai/dsh-skill')],
@@ -482,19 +571,29 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     ...(options.sessionsService !== undefined
       ? [['@deepseek-ai/dsh-session-fake', { default: FakeSessionsRegistry }] as const]
       : []),
+    // The fake `settings` service (plan `20260817-dsh-roles-e2e` Task 1):
+    // a `{ default }` module so the seam unwrap resolves the class.
+    ...(options.settingsService !== undefined
+      ? [['@deepseek-ai/dsh-settings-fake', { default: FakeSettingsRegistry }] as const]
+      : []),
   ])
+  let fallbacksFiber: Fiber | undefined
   for (const row of rows) {
     const mod = modules.get(row.name)
     if (mod === undefined) throw new Error(`unexpected boot row: ${row.name}`)
     const mountable = (mod as { default?: unknown }).default ?? mod
     // `ctx.plugin` validates a plain config object against the plugin's
     // schemastery `Config` (the same validation the loader applied to rows).
-    await ctx.plugin(mountable as Parameters<Context['plugin']>[0], row.name === '@mstar-harness/dsh' && Object.keys(config).length > 0 ? config : undefined)
+    const fiber = await ctx.plugin(mountable as Parameters<Context['plugin']>[0], row.name === '@mstar-harness/dsh' && Object.keys(config).length > 0 ? config : undefined)
+    // The fallbacks row handle (plan `20260817-dsh-roles-e2e` Task 1): the
+    // e2e disposes it to model the host config-stack re-composition.
+    if (row.name === 'dsh-llm-fallbacks') fallbacksFiber = fiber
   }
   return {
     ctx,
     root,
     harnessDir,
+    fallbacksFiber,
     async dispose() {
       await ctx.fiber.dispose()
       await rm(root, { recursive: true, force: true })
