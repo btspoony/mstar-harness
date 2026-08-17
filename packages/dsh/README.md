@@ -12,6 +12,8 @@ How a dsh app consumes the plugin — install paths, configuration, what mounts 
 
 The package ships as a workspace package (`workspaces: ["packages/*"]`) with the engine bundled into `dist/` at build time (`bun run build`; dist is gitignored). The install path is the **profile bundle**, added to the shipped `web` profile (`dsh --profile web` — the ready-made web app profile, `dsh web`), through the `dsh.bundle.patch` manifest — a patch layer mounted over the dsh-base defaults:
 
+**One-command CLI entry (recommended)** — `npx @mstar-harness/cli init --target dsh` installs the full capability in one go: it runs the two `dsh plugin --profile web add` installs below in order (the mstar bundle first, then `dsh-llm-fallbacks`), and `npx @mstar-harness/cli doctor --target dsh` reports each plugin row as `uninstalled` / `disabled` / `mounted`. It is the same two-command install, orchestrated; `--no-fallbacks` skips the second row (and with it the seeded roles — see What you get below).
+
 **(a) Registry install (published form)** — the npm package carries the built `dist/` (no build step on install):
 
 ```sh
@@ -34,6 +36,10 @@ dsh plugin --profile web add dsh-llm-fallbacks
 ```
 
 The **two-command install is the contract** — folding a `dsh-llm-fallbacks` row into this bundle's patch is explicitly rejected (roadmap §8.3 F4): the loader has no insert-if-absent semantics, so a same-`id` insert is a `duplicate loader entry id` boot failure (the whole dsh session fails to start), and a different-`id` insert mounts the plugin twice — two `apply()` runs with split fallback state (per-context state stores, double listeners, config-override lottery) for anyone who also installs the package directly. Layer order is the reconcile append order: `dsh-llm-fallbacks` lands **after `dsh-base`/`llm-retry`** (its hard ordering requirement) and after the mstar row. Single-command multi-activation is an upstream feature gap (reconcile dedup or insert-if-absent patch semantics), not actionable from this repo.
+
+**What you get with zero configuration** — with BOTH rows installed (via the CLI entry or the two commands above), the mstar plugin declares the 13 `mode: subagent` mstar role seeds (derived from the bundled `harness-agents/` mirror, `project-manager` excluded) into the fallbacks taxonomy at boot: each seeded role's persona defaults to its mirror `description` plus the mandatory role-loading guidance line, the seeded state stays revertible (the `fallbacks/revert-seed` gateway / the settings rollback button), and the runtime advisory reports missing ids and persona overrides. The seeds mechanism is B4 (delivered iter-20260816-dsh-seeds-bridges) — the installed-deployment e2e (`tests/install-e2e.spec.ts`) closes the verification loop: a real `init --target dsh` install into a temp `DSH_HOME`, booted from the installed artifacts, asserts all 13 ids present in the effective taxonomy with non-empty personas. Not included: model routing, automatch dispatch, or the dsh TUI.
+
+> **Fresh-publish age window**: pnpm's `minimumReleaseAge` gate can make a `dsh plugin add <spec>` range resolution pick an older published version (without the seeds surface) for up to ~24h after a fresh publish — re-run `npx @mstar-harness/cli init --target dsh` after the window (or pin the version) to converge on the latest surface.
 
 ### Configuration
 

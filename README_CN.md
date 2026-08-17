@@ -51,6 +51,8 @@ Harness Workflow Engine · Agent Plugin
 | Codex | `npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal` |
 | Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根（`plugin.json` + `skills/` 即便携包） |
 
+**dsh 全量支持**——一条 CLI 命令（默认）装齐两条插件行并 seed 全部 13 个 `mode: subagent` mstar 角色（persona 取镜像默认）：零配置、settings 可 revert（详见 `packages/dsh/README.md`）。
+
 ### 引擎门禁校验（可选）
 
 `npm i -g @mstar-harness/cli` 将 `mstar-harness` 二进制（短别名 `mstar`）装上 PATH，技能文本引用的引擎校验命令（`mstar status validate`、`mstar dispatch validate`、`mstar iteration gate` 等）才真正可运行——不全局安装时 harness 照常工作，这些校验保持 advisory。在迭代 compass 里设 `enforcement: hard` 可让派发预检 fail-fast。

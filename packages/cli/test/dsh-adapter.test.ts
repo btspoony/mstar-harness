@@ -708,6 +708,19 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
     }
   });
 
+  test("fallbacks uninstalled: exit 1 and the uninstalled issue is printed", () => {
+    const fake = makeFakeDsh(DUMP_FALLBACKS_MISSING);
+    try {
+      const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain(`${MSTAR_SPEC}: mounted`);
+      expect(result.stdout).toContain(`${FALLBACKS_SPEC}: uninstalled`);
+      expect(result.stdout).toContain(`${FALLBACKS_SPEC} is uninstalled`);
+    } finally {
+      fake.remove();
+    }
+  });
+
   test("probe failure: exit 1 with the explicit degradation line (no silent pass)", () => {
     const fake = makeFakeDsh(DUMP_BOTH, { dumpExit: 1 });
     try {
