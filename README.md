@@ -51,8 +51,6 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 | Codex | `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal` |
 | Generic (Agent Plugins v1) | point any Agent Plugins v1.0.0 conformant client at this repo root (`plugin.json` + `skills/` are the portable package) |
 
-**dsh full support** — a single CLI command (default) installs both plugin rows and seeds all 13 `mode: subagent` mstar roles with mirror-default personas: zero-config, revertible in settings (details in `packages/dsh/README.md`).
-
 ### Engine gate checks (optional)
 
 `npm i -g @mstar-harness/cli` puts the `mstar-harness` binary (short alias `mstar`) on PATH, so the engine-check commands the skills cite (`mstar status validate`, `mstar dispatch validate`, `mstar iteration gate`, …) actually run — without a global install the harness still works and those checks stay advisory. Set `enforcement: hard` in an iteration compass to make dispatch preflights fail-fast.
