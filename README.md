@@ -42,18 +42,24 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 
 | Host | Command |
 |------|---------|
-| dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh` (one CLI command that runs two **independent** `dsh plugin --profile web add` installs: `@mstar-harness/dsh` + `dsh-llm-fallbacks`; `--no-fallbacks` skips the latter) or `dsh plugin --profile web add @mstar-harness/dsh` + `dsh plugin --profile web add dsh-llm-fallbacks` |
-| omp | `npx @mstar-harness/cli init --target omp` (links `~/.mstar/harness`) or `omp plugin install github:btspoony/mstar-harness` |
+| dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh`<br>(one CLI command that runs two **independent** `dsh plugin --profile web add` installs:<br>`@mstar-harness/dsh` + `dsh-llm-fallbacks`; `--no-fallbacks` skips the latter)<br>or `dsh plugin --profile web add @mstar-harness/dsh`<br>+ `dsh plugin --profile web add dsh-llm-fallbacks` |
+| omp | `npx @mstar-harness/cli init --target omp`<br>(links `~/.mstar/harness`)<br>or `omp plugin install github:btspoony/mstar-harness` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` |
-| Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
-| ZCode | `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** in ZCode → Settings → Plugin Management |
-| Codex | `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal` |
-| Generic (Agent Plugins v1) | point any Agent Plugins v1.0.0 conformant client at this repo root (`plugin.json` + `skills/` are the portable package) |
+| Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`<br>→ `/plugins reload` |
+| ZCode | `npx @mstar-harness/cli init --target zcode`<br>then install **morning-star-harness** in ZCode → Settings → Plugin Management |
+| Codex | `npx @mstar-harness/cli init --target codex`<br>then `codex plugin add morning-star-harness --marketplace personal` |
+| Generic (Agent Plugins v1) | point any Agent Plugins v1.0.0 conformant client at this repo root<br>(`plugin.json` + `skills/` are the portable package) |
 
 ### Engine gate checks (optional)
 
-`npm i -g @mstar-harness/cli` puts the `mstar-harness` binary (short alias `mstar`) on PATH, so the engine-check commands the skills cite (`mstar status validate`, `mstar dispatch validate`, `mstar iteration gate`, …) actually run — without a global install the harness still works and those checks stay advisory. Set `enforcement: hard` in an iteration compass to make dispatch preflights fail-fast.
+```bash
+npm i -g @mstar-harness/cli
+```
+
+Puts the `mstar-harness` binary (short alias `mstar`) on PATH, so the engine-check commands the skills cite (`mstar status validate`, `mstar dispatch validate`, `mstar iteration gate`, …) actually run.
+
+Without a global install the harness still works and those checks stay advisory. Set `enforcement: hard` in an iteration compass to make dispatch preflights fail-fast.
 
 > **Caution**: `mstar` is a short alias and a **shared bin namespace** — an unrelated third-party npm package named `mstar` claims the same command name. The alias exists only where `@mstar-harness/cli` is installed: bare `npx mstar …` without the package resolves via the registry to that other tool, and globally co-installing both packages silently overwrites the `mstar` shim (last install wins). The canonical invocation name stays `mstar-harness` — use the long name on any conflict.
 
@@ -85,19 +91,17 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 
 ### Iteration
 
-| Path | When |
-|------|------|
-| `/iteration-start` | Phase 1 (interactive grill-me) then auto-continues Phase 2→5; `pause` to stop after Phase 1 |
-| `/iteration-drive` | Resume Phase 2→5 on an already-locked iteration |
-| `/iteration-loop` | Full Phase 1→5 autonomous (no grill-me; optional `direction`, `scale` S\|M\|L\|XL) |
+| Command | When |
+|---------|------|
+| `/iteration-start [direction] [pause]` | Start a new iteration: Phase 1 (interactive grill-me), then auto-continue Phase 2→5.<br>`direction` — optional hint (still interactive).<br>`pause` — stop after Phase 1; resume with `/iteration-drive`. |
+| `/iteration-drive` | Resume Phase 2→5 on an already-locked iteration. |
+| `/iteration-loop [direction] [scale]` | Full Phase 1→5 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
 
 ### Codebase audit
 
-| Path | When |
-|------|------|
-| `/codebase-audit` | Survey a repo read-only → prioritized, self-contained improvement plans in `{PLAN_DIR}/audit-<date>/` |
-
-Usage: `/codebase-audit [keywords]` — read-only advisory, never edits source. Output feeds iteration-start Research or normal Prepare → Execute. Keywords: effort level `quick` / `deep` (default `standard`); scope variant — category focus (`security`, `perf`, `tests`, …), `branch` (current-branch changes only), `next` / `roadmap` (direction candidates only), or `simplify` (DEBT-focused deep pass over dead / duplicated / speculative / over-built surfaces, with prove-or-reject consumer classification). SSOT → `mstar-audit`.
+| Command | When |
+|---------|------|
+| `/codebase-audit [keywords]` | Read-only survey → prioritized, self-contained plans in `{PLAN_DIR}/audit-<date>/`.<br>Never edits source. Output feeds `/iteration-start` Research or normal Prepare → Execute.<br>Effort: `quick` / `deep` (default `standard`).<br>Scope: category focus (`security`, `perf`, `tests`, …); `branch` (current-branch changes only); `next` / `roadmap` (direction candidates only); `simplify` (DEBT-focused deep pass).<br>SSOT → `mstar-audit`. |
 
 ### Command loading
 
