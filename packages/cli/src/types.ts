@@ -1,4 +1,4 @@
-export const SUPPORTED_TARGETS = ["opencode", "cursor", "codex", "zcode", "omp"] as const;
+export const SUPPORTED_TARGETS = ["opencode", "cursor", "codex", "zcode", "omp", "dsh"] as const;
 export type Target = (typeof SUPPORTED_TARGETS)[number];
 export type Scope = "global" | "project";
 
@@ -8,6 +8,8 @@ export type InitOptions = {
   scope?: Scope;
   output?: string;
   dryRun?: boolean;
+  /** Skip installing the dsh-llm-fallbacks plugin row (dsh target only). */
+  noFallbacks?: boolean;
   pmModel?: string;
   strategicModels?: string;
   devModels?: string;
@@ -33,6 +35,11 @@ export type ModelSelections = {
   others: string[];
 };
 
+/** Flags forwarded to an install-mode adapter's runInstallInit. */
+export type InstallInitFlags = {
+  noFallbacks?: boolean;
+};
+
 export type AgentAdapter = {
   target: Target;
   mode: "config" | "install";
@@ -45,7 +52,11 @@ export type AgentAdapter = {
   validateConfig?: (config: Record<string, unknown>) => string[];
   /** Non-fatal notices printed after doctor validation passes (e.g. migration hints). */
   getDoctorWarnings?: (config: Record<string, unknown>) => string[];
-  runInstallInit?: (scope: Scope, dryRun: boolean) => { location: string; notes: string[] };
+  runInstallInit?: (
+    scope: Scope,
+    dryRun: boolean,
+    initFlags?: InstallInitFlags,
+  ) => { location: string; notes: string[] };
   runInstallDoctor?: (scope: Scope) => { location: string; errors: string[] };
   printPostSetupSummary?: (config: Record<string, unknown>) => void;
 };
