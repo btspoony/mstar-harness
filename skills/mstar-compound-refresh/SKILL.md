@@ -143,3 +143,12 @@ Read that file from the mstar-compound skill directory before Phase 6.
 - Do not ask PM about mechanical updates (path fixes, renamed modules)
 - Do not change code to match outdated docs — update docs to match code
 - Do not run without PM approval for destructive actions (Delete, Replace)
+
+## Evidence
+
+正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + `{KNOWLEDGE_DIR}/README.md` 索引更新（Phase 4）+ `status.json` 引用同步 + 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）。
+
+## References
+
+- 捕获侧规则与 CONCEPTS.md vocabulary 规则 → **`mstar-compound`**（Phase 6 前读 `references/concepts-vocabulary.md`）
+- 路径符号与产物存储 SSOT → **`mstar-plan-conventions`**（`references/artifact-storage-paths.md`）

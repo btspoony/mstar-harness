@@ -49,7 +49,7 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 - 承接方若判断必须增加 subagent，应先回报 **`Blocked`** 请 PM 重分派。
 - Per-task informal review, when PM explicitly allows it, must not use `qc-specialist*`; use `code-reviewer` (generic fallback only when the role agent is absent on the host) or PM-marked informal `qa-engineer`. Formal QC remains `mstar-review-qc`.
 
-## 并发分派完整性门禁（PM 强制）
+## 并发分派完整性门禁（PM 强制 · Evidence）
 
 当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**：
 
@@ -122,6 +122,10 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。
 - Assignment 已写、invoke 为零（paste-only）却进入下一 gate。
 - Task/subagent item 漏写角色绑定字段（omp 漏 `agent` / Cursor 漏 `subagent_type` / OpenCode 漏 `subagent`）⇒ **静默回退 generic worker**，却因 count=N 通过而误判「派发完成」；属 paste-only 同级的 **dispatch-incomplete**。N=1 顺序 Review-&-Edit 链最易在此漏字段。
+
+## Workflow
+
+派发检查顺序：承接方先读 Assignment 顶部 **IDENTITY / 反模式块**确认 leaf 身份（反递归红线）→ PM 核对字段契约（`Execute as` / `Delegation` / 角色绑定字段；**先自检字段再发送**）→ 同一条消息**一次性发满 N 次** invoke（工具并发；N 按 `Execution mode` 映射）→ 派发前完成同仓写隔离（L1/L2 worktree）→ SDD 波次**串行** implement + fresh reviewer → task 全完成后 `{SDD_DIR}/review/` review-package → **强制 tri-review N=3**（或 inline 单席 N=1）。准备用 read/bash 不计入 N，且与派发回合分离（**未齐不发**）。
 
 ## References
 

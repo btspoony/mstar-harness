@@ -7,6 +7,10 @@ description: Morning Star host adapter (OpenCode, Cursor, Codex, Kimi, ZCode, om
 
 Host-specific **capabilities and entry behavior** for Morning Star. Process gates and invariants stay in `mstar-harness-core` and topic `mstar-*` skills.
 
+## Load order
+
+**本 skill 总是在 `mstar-harness-core` 之后加载**（先 Read `mstar-harness-core` SKILL.md；宿主注入项目 `AGENTS.md` 也不跳过，见下 `## First action`）。本 skill 只适配宿主入口 / 检测 / 计划 UX；状态机与门禁以 `mstar-harness-core` 为准。
+
 ## First action
 
 Read **`mstar-harness-core`** before this skill (even when the host injects project `AGENTS.md`).
@@ -68,11 +72,25 @@ Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **R
 
 Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and asset paths. Per-host URI / mount detail: `references/<host>.md`.
 
-> **Engine check (when available):** import `resolveSkillRoot` from `@mstar-harness/engine` in a host hook to resolve the loaded skill root per the table above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar host skill-root --host <id> --skill <name>` (or import `resolveSkillRoot` from `@mstar-harness/engine` in a host hook) to resolve the loaded skill root per the table above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
-## Conflict order
+## Conflict order（Decision Rules）
 
 1. User explicit instructions (this turn)
 2. Project `AGENTS.md` / `CLAUDE.md`
 3. `mstar-harness-core` and related `mstar-*` skills
 4. This `mstar-host` skill and `references/*`
+
+## Workflow
+
+按 `## Default path` 执行：Read `mstar-harness-core` → 读本 skill 并按 `## Detect active host` 检测宿主（`cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`）→ 读 `references/<host>.md`（计划模式另读对应 plan-mode bridge）→ 经 `mstar-roles` 加载角色 → 执行并以证据收尾。topic skill 按需加载，不默认通读。
+
+## Evidence
+
+正确结果 = 检测输出：`mstar host detect --signals <comma-list>` 打印 `host: <id>`（或 `ambiguous` → 按检测表 + 判断降级）；已加载的是**对应当前宿主工具形状**的 `references/<host>.md`。计划模式按宿主 plan-mode bridge 完成双写 / 对齐。
+
+## References
+
+- 各宿主适配细则 → `references/<host>.md`（cursor / opencode / omp / dsh / kimi / zcode / codex；计划模式另见 plan-mode bridge references）
+- invoke-capable 宿主并行派发 → `references/parallel-dispatch.md`
+- 角色加载与参数 → **`mstar-roles`**

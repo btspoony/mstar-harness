@@ -60,7 +60,7 @@ DESIGN.md is a **Prepare-stage artifact** (like spec). It must be created and re
 
 For **hotfix** or plans with no UI changes, DESIGN.md check may be skipped.
 
-## Completeness levels
+## Completeness levels（Evidence）
 
 DESIGN.md supports three levels, each with built-in upgrade path:
 

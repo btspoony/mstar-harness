@@ -128,3 +128,17 @@ Ask for consent before applying.
 - Do not create without PM/architect input (ask the questions)
 - Do not keep outdated strategy as "historical reference" — git preserves it
 - Do not conflate strategy (direction) with conventions (how-to)
+
+## Workflow
+
+主链：**创建**（Phase 1 收集上下文 → Phase 2 访谈 PM → Phase 3 落盘 `<repo-root>/STRATEGY.md` → Phase 4 可发现性检查）→ **维护**（方向变更时果断替换旧策略、Decision Log 记决策理由、保持最新）→ **定期评审**（重大架构决策后 / 新技术栈引入时 / 季度评审）。作为 brainstorm / plan 的上游锚点被引用。
+
+## Evidence
+
+正确结果 = `<repo-root>/STRATEGY.md` 通过 `lintStrategySections` 六节检查（Vision / What we build / What we don't build / Guiding Principles / Technology Direction / Decision Log，`mstar lint <STRATEGY.md>`），一屏可读完，且 Decision Log 记录的是**理由**而非仅结论。
+
+## References
+
+- 迭代级战略对齐（iteration-start §1.1 读 STRATEGY.md）→ **`mstar-iteration`**
+- 知识维护 / bootstrap（战略变更后的知识对账）→ **`mstar-compound-refresh`**
+- 路径符号与产物存储 SSOT → **`mstar-plan-conventions`**

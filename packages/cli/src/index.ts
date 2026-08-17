@@ -11,6 +11,7 @@ import {
   assertDefaultBranchProtected,
   assertIndexRows,
   assertLightDarkParity,
+  assertQcAlignment,
   assertSddTddTriple,
   assertTriIdentity,
   AUDIT_CATEGORIES,
@@ -24,11 +25,13 @@ import {
   findEphemeralCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  findingsCleanupGate,
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   lintFiveQuestion,
   lintFrontmatter,
+  lintLoadOrder,
   lintStrategySections,
   parseAssignmentBranchForms,
   parseAssignmentFields,
@@ -37,15 +40,20 @@ import {
   planQualityBar,
   pushCadenceProbe,
   resolveHarnessDir,
+  resolveSkillRoot,
   resolveSpecsDir,
   reviewPackage,
   scaffoldAuditPlan,
   scopeGuard,
   SddScriptError,
   sddWorkspace,
+  stripFrontmatter,
   taskBrief,
+  techDebtRollup,
   validateAssignmentFields,
   validateDesignTokenFrontmatter,
+  validateIntegrationMergeLease,
+  validateRoleMapping,
   validateSchemaYaml,
   validateStatus,
   type AuditCategory,
@@ -53,8 +61,12 @@ import {
   type AuditFinding,
   type AuditPriority,
   type AuditRisk,
+  type FiveQuestionMode,
   type GateResult,
+  type HostId,
   type L1PreDispatchInput,
+  type QcAlignmentAssignment,
+  type StatusDoc,
   type ToolSignal,
   type ValidationResult,
   type WorktreeTrack,
@@ -65,7 +77,7 @@ import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
 import type { DoctorOptions, InitOptions, PluginValidateOptions, Target } from "./types";
 import { SUPPORTED_TARGETS } from "./types";
-import { parseCsv, readJson, writeJson, readHarnessVersion, resolveProjectRoot } from "./utils";
+import { parseCsv, readJson, writeJson, readHarnessVersion, resolveCliPath, resolveProjectRoot } from "./utils";
 
 const packageVersion = readHarnessVersion();
 
@@ -404,9 +416,70 @@ statusCommand
     }
   });
 
+statusCommand
+  .command("tech-debt")
+  .description(
+    "Print the residual tech-debt rollup (total_open / by_severity / by_target / by_plan) and PASS/DRIFT vs stored " +
+      "metadata.tech_debt_summary (exit 1 on DRIFT \u2014 refresh the stored summary to clear)",
+  )
+  .argument("[path]", "status.json path (default: {HARNESS_DIR}/status.json)")
+  .action((pathArg?: string) => {
+    try {
+      const statusPath = resolveStatusFilePath(pathArg);
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const rollup = techDebtRollup(statusPath);
+      console.log(`status tech-debt: ${statusPath}`);
+      console.log(`total_open: ${rollup.computed.total_open}`);
+      console.log(`by_severity: ${JSON.stringify(rollup.computed.by_severity)}`);
+      console.log(`by_target: ${JSON.stringify(rollup.computed.by_target)}`);
+      console.log(`by_plan: ${JSON.stringify(rollup.computed.by_plan)}`);
+      if (rollup.overall === "PASS") {
+        console.log(pc.green("tech_debt_summary: PASS (all 4 fields match stored)"));
+        return;
+      }
+      const drifts = rollup.checks.filter((check) => check.status === "DRIFT").map((check) => check.field);
+      const note = rollup.stored === null ? " (no stored metadata.tech_debt_summary)" : "";
+      console.error(pc.red(`tech_debt_summary: DRIFT (${drifts.length}/4 fields: ${drifts.join(", ")})${note}`));
+      process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`status tech-debt failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+statusCommand
+  .command("findings-cleanup")
+  .description(
+    "Enforce a plan's findings-cleanup mode on its open residuals (zero-residual via Assignment/metadata, else " +
+      "allow-residual; exit 1 on violations)",
+  )
+  .argument("<plan-id>", "Plan id whose open residuals are checked against the cleanup mode")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .action((planId: string, options: { harness?: string }) => {
+    try {
+      const statusPath = options.harness ? path.join(path.resolve(options.harness), "status.json") : resolveStatusFilePath();
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const doc = readJson(statusPath) as StatusDoc;
+      const gate = findingsCleanupGate(doc, planId);
+      if (gate.ok) {
+        console.log(pc.green(`findings-cleanup ${planId}: OK`));
+        return;
+      }
+      printChecklist(`findings-cleanup ${planId}`, gate);
+      process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`status findings-cleanup failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
 const leaseCommand = program
   .command("lease")
-  .description("execution_lease checks (engine-backed) \u2014 integration_merge_lease validation stays import-only via @mstar-harness/engine until a dedicated subcommand exists");
+  .description("execution_lease / integration_merge_lease checks (engine-backed)");
 
 /** Resolve the harness dir for lease commands: --harness wins, else {HARNESS_DIR} resolution. */
 function resolveLeaseHarnessDir(harnessArg?: string): string {
@@ -463,6 +536,39 @@ leaseCommand
       process.exitCode = 1;
     } catch (error) {
       console.error(pc.red(`lease verify failed: ${(error as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+leaseCommand
+  .command("verify-integration")
+  .description(
+    "Verify the root metadata.integration_merge_lease when present (absent/unclaimed \u2192 OK; invalid lease \u2192 exit 1)",
+  )
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .action((options: { harness?: string }) => {
+    try {
+      const harnessDir = resolveLeaseHarnessDir(options.harness);
+      const statusPath = path.join(harnessDir, "status.json");
+      if (!fs.existsSync(statusPath)) {
+        throw new Error(`status file not found: ${statusPath}`);
+      }
+      const doc = readJson(statusPath);
+      const metadata = (doc.metadata ?? {}) as Record<string, unknown>;
+      if (metadata.integration_merge_lease === undefined) {
+        console.log(pc.green(`${statusPath}: OK \u2014 no integration_merge_lease (unclaimed)`));
+        return;
+      }
+      const gate = validateIntegrationMergeLease(metadata.integration_merge_lease);
+      if (gate.ok) {
+        const lease = metadata.integration_merge_lease as Record<string, unknown>;
+        console.log(pc.green(`${statusPath}: OK \u2014 integration_merge_lease valid (holder ${String(lease.holder ?? "")})`));
+        return;
+      }
+      printChecklist("lease verify-integration", gate);
+      process.exitCode = 1;
+    } catch (error) {
+      console.error(pc.red(`lease verify-integration failed: ${(error as Error).message}`));
       process.exitCode = 1;
     }
   });
@@ -643,7 +749,7 @@ dispatchCommand
       if (!assignmentFile) {
         throw new SddScriptError("usage: dispatch validate <assignment-file> [--branch <branch>]", 2);
       }
-      const file = path.resolve(assignmentFile);
+      const file = resolveCliPath(assignmentFile);
       if (!fs.existsSync(file)) {
         throw new Error(`assignment file not found: ${file}`);
       }
@@ -784,6 +890,80 @@ worktreeCommand
       }
     },
   );
+
+/** Parse one Assignment header field (`**Label**: value` or `Label: value`, list bullets tolerated). */
+function parseAssignmentHeaderField(assignmentText: string, label: string): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const boldRe = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*\\s*:\\s*(.*)$`);
+  const plainRe = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}\\s*:\\s*(.*)$`);
+  for (const line of assignmentText.split(/\r?\n/)) {
+    const match = line.match(boldRe) ?? line.match(plainRe);
+    if (match) return match[1]!.trim();
+  }
+  return "";
+}
+
+/** QC/QA alignment fields asserted byte-identical across QC tri + QA Assignments (engine contract). */
+const QC_ALIGNMENT_FIELDS: ReadonlyArray<{ key: keyof QcAlignmentAssignment; label: string }> = [
+  { key: "planId", label: "plan_id" },
+  { key: "reviewRange", label: "Review range" },
+  { key: "diffBasis", label: "Diff basis" },
+];
+
+worktreeCommand
+  .command("qc-alignment")
+  .description(
+    "Assert the QC/QA alignment fields (plan_id / Review range / Diff basis) are byte-identical across the given " +
+      "Assignment files (separate or combined `Review range / Diff basis` labels; exit 1 on mismatch or missing field, 2 on usage)",
+  )
+  .argument("[assignment-files...]", "QC tri + QA Assignment markdown files (at least one required)")
+  .action((files: string[]) => {
+    try {
+      if (files.length === 0) {
+        throw new SddScriptError("usage: worktree qc-alignment <assignment-file>...", 2);
+      }
+      const assignments: QcAlignmentAssignment[] = [];
+      for (const fileArg of files) {
+        const file = path.resolve(fileArg);
+        if (!fs.existsSync(file)) {
+          throw new Error(`assignment file not found: ${file}`);
+        }
+        const text = fs.readFileSync(file, "utf8");
+        // The canonical PM label combines both range fields in one value
+        // (`**Review range / Diff basis**: ...`); a separate `Review range` /
+        // `Diff basis` label wins over the combined value for its own field.
+        const combinedRange = parseAssignmentHeaderField(text, "Review range / Diff basis");
+        const planId = parseAssignmentHeaderField(text, "plan_id");
+        const reviewRange = parseAssignmentHeaderField(text, "Review range") || combinedRange;
+        const diffBasis = parseAssignmentHeaderField(text, "Diff basis") || combinedRange;
+        const values = { planId, reviewRange, diffBasis };
+        const missing = QC_ALIGNMENT_FIELDS.filter((field) => values[field.key] === "");
+        if (missing.length > 0) {
+          console.error(pc.red(`worktree qc-alignment: FAIL ${file}`));
+          for (const field of missing) {
+            console.error(`  - [high] qc.alignment.field.missing: missing "${field.label}" header field`);
+          }
+          process.exitCode = 1;
+          return;
+        }
+        assignments.push({ planId, reviewRange, diffBasis });
+      }
+      const gate = assertQcAlignment(assignments);
+      if (gate.ok) {
+        console.log(
+          pc.green(
+            `worktree qc-alignment: OK (${assignments.length} assignment${assignments.length === 1 ? "" : "s"}, ` +
+              `${QC_ALIGNMENT_FIELDS.length} fields byte-identical)`,
+          ),
+        );
+        return;
+      }
+      printChecklist("worktree qc-alignment", gate);
+      process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "worktree qc-alignment");
+    }
+  });
 
 const reviewCommand = program
   .command("review")
@@ -967,7 +1147,7 @@ lintCommand
   .action((target?: string) => {
     try {
       if (!target) throw new SddScriptError("usage: lint <target> (file or dir)", 2);
-      const abs = path.resolve(target);
+      const abs = resolveCliPath(target);
       if (!fs.existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
       const targets = fs.statSync(abs).isDirectory() ? collectLintTargets(abs) : [abs];
       if (targets.length === 0) {
@@ -1005,17 +1185,6 @@ lintCommand
     }
   });
 
-/** Strip a leading `---`-fenced YAML frontmatter block, returning the body
- * (five-question lint takes the body; the frontmatter lint takes the full doc). */
-function stripFrontmatter(text: string): string {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
-  if (lines.length === 0 || lines[0].trim() !== "---") return text;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") return lines.slice(i + 1).join("\n");
-  }
-  return text;
-}
-
 const designMdCommand = program
   .command("design-md")
   .description("DESIGN.md token frontmatter / light-dark parity / completeness checks (engine-backed)");
@@ -1030,7 +1199,7 @@ designMdCommand
   .action((dir?: string) => {
     try {
       if (!dir) throw new SddScriptError("usage: design-md validate <dir>", 2);
-      const abs = path.resolve(dir);
+      const abs = resolveCliPath(dir);
       const lightPath = path.join(abs, "DESIGN.md");
       if (!fs.existsSync(lightPath)) throw new Error(`design file not found: ${lightPath}`);
       const light = fs.readFileSync(lightPath, "utf8");
@@ -1164,7 +1333,7 @@ auditCommand
   .action((findingsFile: string | undefined, options: { dir?: string; sha?: string; date?: string; repo?: string }) => {
     try {
       if (!findingsFile) throw new SddScriptError("usage: audit scaffold <findings-file> [--dir <out-dir>]", 2);
-      const abs = path.resolve(findingsFile);
+      const abs = resolveCliPath(findingsFile);
       if (!fs.existsSync(abs)) throw new Error(`findings file not found: ${abs}`);
       if (options.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
         throw new SddScriptError("usage: audit scaffold \u2014 --date must be YYYY-MM-DD", 2);
@@ -1173,7 +1342,7 @@ auditCommand
         throw new SddScriptError("usage: audit scaffold \u2014 --sha must be a 7-40 char hex commit SHA", 2);
       }
       const date = options.date ?? new Date().toISOString().slice(0, 10);
-      const outDir = options.dir !== undefined ? path.resolve(options.dir) : path.resolve(`audit-${date}`);
+      const outDir = options.dir !== undefined ? resolveCliPath(options.dir) : resolveCliPath(`audit-${date}`);
       const findings = parseAuditFindings(fs.readFileSync(abs, "utf8"));
       const sha = resolveAuditShortSha(process.cwd(), options.sha);
       const result = scaffoldAuditPlan(outDir, findings, { date, repoName: options.repo, repoShortSha: sha });
@@ -1200,7 +1369,7 @@ compoundCommand
   .action((docPath: string | undefined, options: { knowledgeDir?: string }) => {
     try {
       if (!docPath) throw new SddScriptError("usage: compound validate <doc-path> [--knowledge-dir <dir>]", 2);
-      const abs = path.resolve(docPath);
+      const abs = resolveCliPath(docPath);
       if (!fs.existsSync(abs)) throw new Error(`knowledge doc not found: ${abs}`);
       const text = fs.readFileSync(abs, "utf8");
       const violations: ValidationResult[] = [];
@@ -1208,7 +1377,7 @@ compoundCommand
       printChecklist("compound validate (schema)", schema);
       violations.push(...schema.violations);
       if (options.knowledgeDir !== undefined) {
-        const knowledgeDir = path.resolve(options.knowledgeDir);
+        const knowledgeDir = resolveCliPath(options.knowledgeDir);
         const index = assertIndexRows(knowledgeDir);
         printChecklist("compound validate (index rows)", index);
         violations.push(...index.violations);
@@ -1251,6 +1420,12 @@ const HOST_SIGNALS: readonly ToolSignal[] = [
 /** Membership lookup for the signal list above. */
 const HOST_SIGNAL_LOOKUP = lookupTable(HOST_SIGNALS);
 
+/** Valid `host skill-root --host` ids (engine HostId union — no drift). */
+const HOST_IDS: readonly HostId[] = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode"];
+
+/** Membership lookup for the host ids above. */
+const HOST_ID_LOOKUP = lookupTable(HOST_IDS);
+
 const hostCommand = program
   .command("host")
   .description("host detection from session tool shapes (engine-backed)");
@@ -1286,6 +1461,34 @@ hostCommand
     }
   });
 
+hostCommand
+  .command("skill-root")
+  .description(
+    "Resolve the loaded skill root for a host (mstar-host \u00a7 Resolve loaded skill root): prints the canonical " +
+      "skill-root string for --host / --skill (exit 1 on missing required options, 2 on usage errors)",
+  )
+  .requiredOption("--host <id>", "Host id (opencode | omp | pi | dsh | cursor | codex | kimi | zcode)")
+  .requiredOption("--skill <name>", "Skill name to resolve")
+  .option("--rel <path>", "Optional skill-relative path suffix")
+  .action((options: { host: string; skill: string; rel?: string }) => {
+    try {
+      if (HOST_ID_LOOKUP[options.host] !== true) {
+        throw new SddScriptError(`usage: host skill-root \u2014 unknown host "${options.host}" (valid: ${HOST_IDS.join(", ")})`, 2);
+      }
+      if (options.skill.trim() === "") {
+        throw new SddScriptError("usage: host skill-root \u2014 --skill must be a non-empty skill name", 2);
+      }
+      const root = resolveSkillRoot(options.host as HostId, { skill: options.skill, rel: options.rel });
+      if (options.host === "pi") {
+        console.log(pc.yellow(root));
+      } else {
+        console.log(pc.green(root));
+      }
+    } catch (error) {
+      failScript(error, "host skill-root");
+    }
+  });
+
 const skillCommand = program
   .command("skill")
   .description("skill-authoring lints (engine-backed)");
@@ -1301,16 +1504,30 @@ skillCommand
   .action((skillDir?: string) => {
     try {
       if (!skillDir) throw new SddScriptError("usage: skill lint <skill-dir>", 2);
-      const skillFile = path.join(path.resolve(skillDir), "SKILL.md");
+      const skillFile = path.join(resolveCliPath(skillDir), "SKILL.md");
       if (!fs.existsSync(skillFile)) throw new Error(`SKILL.md not found: ${skillFile}`);
       const text = fs.readFileSync(skillFile, "utf8");
       const violations: ValidationResult[] = [];
       const frontmatter = lintFrontmatter(text);
       printChecklist("skill lint (frontmatter)", frontmatter);
       violations.push(...frontmatter.violations);
-      const fiveQuestion = lintFiveQuestion(stripFrontmatter(text));
-      printChecklist("skill lint (five questions)", fiveQuestion);
-      violations.push(...fiveQuestion.violations);
+      // Five-question mode selection: runtime for shipped `mstar-*` topic
+      // skills (locked alias table), authoring / strict for
+      // `mstar-skill-authoring` (the standard's own definition) and for
+      // non-`mstar-*` skills. `mstar-harness-core` is exempt by design
+      // (hub headings) — print an explicit exempt row; frontmatter and
+      // ephemeral-citation checks still run.
+      const skillBase = path.basename(path.dirname(skillFile));
+      const isCore = skillBase === "mstar-harness-core";
+      const fiveQuestionMode: FiveQuestionMode =
+        skillBase.startsWith("mstar-") && !isCore && skillBase !== "mstar-skill-authoring" ? "runtime" : "authoring";
+      if (isCore) {
+        console.log(pc.yellow("skill lint (five questions): EXEMPT \u2014 mstar-harness-core is exempt by design (hub headings)"));
+      } else {
+        const fiveQuestion = lintFiveQuestion(stripFrontmatter(text), fiveQuestionMode);
+        printChecklist("skill lint (five questions)", fiveQuestion);
+        violations.push(...fiveQuestion.violations);
+      }
       // findEphemeralCitations is a discovery finder (array, no GateResult);
       // wrap into a GateResult like the other skill lint checklists — empty
       // array passes, each citation is one violation (codes
@@ -1331,6 +1548,67 @@ skillCommand
       if (violations.length > 0) process.exitCode = 1;
     } catch (error) {
       failScript(error, "skill lint");
+    }
+  });
+
+const rolesCommand = program
+  .command("roles")
+  .description("mstar-roles mapping / load-order checks (engine-backed)");
+
+rolesCommand
+  .command("validate")
+  .description(
+    "Validate the mstar-roles skill-dir state: role mapping / parameter tables against the on-disk " +
+      "references layout plus load-order declarations across sibling mstar-* skills " +
+      "(exit 1 on violations)",
+  )
+  .option(
+    "--roles-dir <dir>",
+    "mstar-roles skill directory (default: skills/mstar-roles, resolved against the project root)",
+  )
+  .option("--skills-dir <dir>", "Skills root scanned for sibling mstar-* skills (default: parent of the roles dir)")
+  .action((options: { rolesDir?: string; skillsDir?: string }) => {
+    try {
+      const rolesDir = resolveCliPath(options.rolesDir ?? "skills/mstar-roles");
+      const skillsRoot = options.skillsDir ? resolveCliPath(options.skillsDir) : path.dirname(rolesDir);
+      // Thin mirror of the dsh seam validateRolesState (packages/dsh/src/gates/seams.ts):
+      // validateRoleMapping(rolesDir) + lintLoadOrder over sibling mstar-* SKILL.md
+      // texts; unreadable siblings are skipped best-effort so a bad read can never
+      // take the gate down.
+      const violations: ValidationResult[] = [];
+      const mapping = validateRoleMapping(rolesDir);
+      printChecklist("roles validate (mapping)", mapping);
+      violations.push(...mapping.violations);
+      const skillTexts: Record<string, string> = {};
+      for (const entry of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !entry.name.startsWith("mstar-")) continue;
+        const skillFile = path.join(skillsRoot, entry.name, "SKILL.md");
+        if (!fs.existsSync(skillFile)) continue;
+        try {
+          skillTexts[entry.name] = fs.readFileSync(skillFile, "utf8");
+        } catch {
+          // skip unreadable sibling — the mapping checks still stand
+        }
+      }
+      const loadOrder = lintLoadOrder(skillTexts);
+      printChecklist("roles validate (load order)", loadOrder);
+      violations.push(...loadOrder.violations);
+      const total = violations.length;
+      // Two distinct counts for the same corpus: siblings scanned (all
+      // readable mstar-* dirs, incl. mstar-harness-core) vs skills actually
+      // load-order-linted (core is exempt inside the engine) — keep the
+      // labels distinct so 18-vs-17 is not misread as a discrepancy.
+      const siblingCount = Object.keys(skillTexts).length;
+      const loadOrderChecked = Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length;
+      const coreExempt = loadOrderChecked !== siblingCount;
+      console.log(
+        `roles validate: ${total === 0 ? "OK" : "FAIL"} (${total} violation${total === 1 ? "" : "s"}, ` +
+          `${siblingCount} sibling skill${siblingCount === 1 ? "" : "s"} scanned; ` +
+          `load-order over ${loadOrderChecked}${coreExempt ? ", core exempt" : ""})`,
+      );
+      if (total > 0) process.exitCode = 1;
+    } catch (error) {
+      failScript(error, "roles validate");
     }
   });
 

@@ -76,7 +76,7 @@ Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursi
 
 PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; no `<plan-id>` basename prefix) + durable main-plan summary. Naming SSOT: `mstar-plan-artifacts/references/plan-files-and-reports.md`.
 
-> **Engine check (when available):** import `validateRoleMapping` / `lintLoadOrder` from `@mstar-harness/engine` in a host hook to validate the mapping and parameter tables above against the on-disk `references/*.md` layout (shared families included) and lint the load-order declarations (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar roles validate` (or import `validateRoleMapping` / `lintLoadOrder` from `@mstar-harness/engine` in a host hook) to validate the mapping and parameter tables above against the on-disk `references/*.md` layout (shared families included) and lint the load-order declarations. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Maintenance Rules
 
@@ -84,3 +84,16 @@ PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; 
 - Edit role family parameters in this file.
 - Keep shared-family roles (`fullstack-dev*`, `qc-specialist*`) on one shared reference file.
 - Add new roles by updating mapping, parameters (if needed), and adding corresponding `agents/*.md` shell.
+
+## Workflow
+
+加载顺序：Read `mstar-harness-core` → Read 本 skill（角色映射 + 参数表）→ 解析对应 `references/<role>.md` → 展开角色参数（`role_id` / `track` / `reviewer_index` 等）→ 按该角色文件的 Required Skill Dependencies 追加加载 → 执行。映射 / 参数表与磁盘 `references/*.md` 布局不符时先修再继续。
+
+## Evidence
+
+正确结果 = 角色映射与加载契约可机器校验：`mstar roles validate` 通过（映射 + 加载顺序 0 violations，见上方 Engine check blockquote 的 import 形态），`references/*.md` 布局与上表一一对应，shared-family 角色共用同一 reference 文件（引擎校验可用时先跑；不可用时以本文件为准）。
+
+## References
+
+- 角色正文 → `references/<role>.md`（本 skill 内；leaf QC / QA 等子目录见 `references/qc-specialist/`、`references/qa-engineer/`）
+- 全局角色 → `mstar-harness-core` 加载矩阵与专题 skill 索引

@@ -12,17 +12,33 @@
  * - citesKnowledgeConventions (W-2) — the exemption is anchored to the
  *   cited token itself (the citation path starts with `conventions/`);
  *   proximity alone no longer exempts unrelated citations.
+ * - checkFiveQuestionCorpus (guard 5) — five-question runtime smoke over
+ *   the shipped `mstar-*` corpus: the real corpus passes runtime-mode
+ *   lint; deleting an alias-covered heading (mstar-audit `## Output
+ *   format`) or a Step-3 aligned heading (mstar-sdd `## Progress ledger`)
+ *   fails; non-corpus files are ignored (load-bearing per plan Step 7).
+ * - checkRolesCorpus (guard 4) — roles/load-order corpus smoke: the real
+ *   corpus passes load-order lint + role mapping (17 skills, 0 mapping
+ *   violations); deleting a Load Order section
+ *   (roles.loadorder.section.missing) or losing the core mention
+ *   (roles.loadorder.core.missing) fails; a roles dir missing mapped
+ *   reference files fails (roles.mapping.reference.missing); non-corpus
+ *   files are ignored (load-bearing per plan Step 3).
  */
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
   checkBilingualPairing,
+  checkFiveQuestionCorpus,
+  checkRolesCorpus,
   citesKnowledgeConventions,
   evaluateBilingualGuard,
   extractCategoryRowTokens,
   isGitHubActions,
+  readRolesCorpus,
 } from "./drift-lint.ts";
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
@@ -160,5 +176,204 @@ describe("citesKnowledgeConventions — anchored exemption (W-2)", () => {
   test("token on the next line after conventions/ is NOT exempt (path is broken)", () => {
     const text = "spec: conventions/\nskill-content-porting-discipline.md";
     expect(citesKnowledgeConventions(text, idxOf(text, "skill-content-porting-discipline.md"))).toBe(false);
+  });
+});
+
+describe("checkFiveQuestionCorpus — Guard 5 five-question runtime smoke", () => {
+  const SKILLS_ROOT = join(import.meta.dir, "..", "skills");
+
+  /** The real shipped corpus as the guard sees it: every
+   * `skills/mstar-*` SKILL.md, with the repo-relative `rel` the guard
+   * filters on. */
+  const realCorpus = () =>
+    readdirSync(SKILLS_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("mstar-"))
+      .map((entry) => ({
+        rel: `skills/${entry.name}/SKILL.md`,
+        text: readFileSync(join(SKILLS_ROOT, entry.name, "SKILL.md"), "utf8"),
+      }));
+
+  /** Corpus fixture with every heading line matching `pattern` dropped
+   * from the entry at `rel` — simulates a Step-3 heading being removed. */
+  const dropHeading = (corpus: Array<{ rel: string; text: string }>, rel: string, pattern: RegExp) =>
+    corpus.map((entry) =>
+      entry.rel === rel
+        ? { ...entry, text: entry.text.split(/\r?\n/).filter((line) => !pattern.test(line)).join("\n") }
+        : entry,
+    );
+
+  test("real corpus passes runtime-mode five-question lint (16 runtime skills)", () => {
+    const { checked, failures } = checkFiveQuestionCorpus(realCorpus());
+    // 18 mstar-* skill dirs minus the two exempt (mstar-harness-core,
+    // mstar-skill-authoring) — a new runtime skill must be aligned or
+    // fail the guard (and this pin) loudly.
+    expect(checked).toBe(16);
+    expect(failures).toEqual([]);
+  });
+
+  test("removing an alias-covered heading (mstar-audit ## Output format) fails the guard", () => {
+    const corpus = realCorpus();
+    const audit = corpus.find((entry) => entry.rel === "skills/mstar-audit/SKILL.md");
+    expect(audit).toBeDefined();
+    expect(audit!.text).toContain("## Output format");
+    const gapped = dropHeading(corpus, "skills/mstar-audit/SKILL.md", /^#{1,6}\s+Output format\s*$/);
+    const { failures } = checkFiveQuestionCorpus(gapped);
+    expect(failures.length).toBeGreaterThan(0);
+    expect(
+      failures.some(
+        (row) => row.includes("skills/mstar-audit/SKILL.md") && row.includes("five-question.evidence"),
+      ),
+    ).toBe(true);
+  });
+
+  test("removing a Step-3 aligned heading (mstar-sdd ## Progress ledger) fails the guard", () => {
+    const corpus = realCorpus();
+    const sdd = corpus.find((entry) => entry.rel === "skills/mstar-sdd/SKILL.md");
+    expect(sdd).toBeDefined();
+    expect(sdd!.text).toContain("## Progress ledger");
+    const gapped = dropHeading(corpus, "skills/mstar-sdd/SKILL.md", /^#{1,6}\s+Progress ledger/);
+    const { failures } = checkFiveQuestionCorpus(gapped);
+    expect(failures.length).toBeGreaterThan(0);
+    expect(
+      failures.some(
+        (row) => row.includes("skills/mstar-sdd/SKILL.md") && row.includes("five-question.evidence"),
+      ),
+    ).toBe(true);
+  });
+
+  test("non-corpus files are ignored (references/, non-mstar, exempt pair)", () => {
+    const { checked, failures } = checkFiveQuestionCorpus([
+      { rel: "skills/mstar-roles/references/fullstack-dev-shared.md", text: "# no five questions here" },
+      { rel: "skills/grill-me/SKILL.md", text: "# no five questions here" },
+      { rel: "skills/mstar-harness-core/SKILL.md", text: "# hub headings — exempt by design" },
+      { rel: "skills/mstar-skill-authoring/SKILL.md", text: "# strict mode — exempt" },
+    ]);
+    expect(checked).toBe(0);
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
+  const SKILLS_ROOT = join(import.meta.dir, "..", "skills");
+  const ROLES_DIR = join(SKILLS_ROOT, "mstar-roles");
+
+  /** The real shipped corpus as the guard sees it: every
+   * `skills/mstar-*` SKILL.md, with the repo-relative `rel` the guard
+   * filters on. */
+  const realCorpus = () =>
+    readdirSync(SKILLS_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("mstar-"))
+      .map((entry) => ({
+        rel: `skills/${entry.name}/SKILL.md`,
+        text: readFileSync(join(SKILLS_ROOT, entry.name, "SKILL.md"), "utf8"),
+      }));
+
+  /** Same heading contract as engine lintLoadOrder. */
+  const LOAD_ORDER_HEADING = /^#{1,6}\s+[^\r\n]*\b(?:load[\s-]*order|first\s+action)\b[^\r\n]*$/i;
+
+  /** Replace the first Load Order / First action section of the entry at
+   * `rel` with `replacement` lines (empty array deletes the section) —
+   * simulates a skill losing its load-order declaration. */
+  const replaceLoadOrderSection = (
+    corpus: Array<{ rel: string; text: string }>,
+    rel: string,
+    replacement: string[],
+  ) =>
+    corpus.map((entry) => {
+      if (entry.rel !== rel) return entry;
+      const lines = entry.text.split(/\r?\n/);
+      const start = lines.findIndex((line) => LOAD_ORDER_HEADING.test(line));
+      if (start === -1) return entry;
+      let end = start + 1;
+      while (end < lines.length && !/^#{1,6}\s/.test(lines[end])) end++;
+      return { ...entry, text: [...lines.slice(0, start), ...replacement, ...lines.slice(end)].join("\n") };
+    });
+
+  test("real corpus passes load-order lint and role mapping (17 skills)", () => {
+    const { skillsChecked, loadOrderViolations, mappingViolations, failures } = checkRolesCorpus(
+      realCorpus(),
+      ROLES_DIR,
+    );
+    // 18 mstar-* skill dirs minus mstar-harness-core (exempt inside the
+    // engine's lintLoadOrder) — a new mstar-* skill must declare its load
+    // order or fail the guard (and this pin) loudly.
+    expect(skillsChecked).toBe(17);
+    expect(loadOrderViolations).toBe(0);
+    expect(mappingViolations).toBe(0);
+    expect(failures).toEqual([]);
+  });
+
+  test("deleting a Load Order section (mstar-roles) fails the guard (roles.loadorder.section.missing)", () => {
+    const corpus = realCorpus();
+    const roles = corpus.find((entry) => entry.rel === "skills/mstar-roles/SKILL.md");
+    expect(roles).toBeDefined();
+    expect(roles!.text).toContain("## Load Order");
+    const gapped = replaceLoadOrderSection(corpus, "skills/mstar-roles/SKILL.md", []);
+    const { failures } = checkRolesCorpus(gapped, ROLES_DIR);
+    expect(failures.length).toBeGreaterThan(0);
+    expect(
+      failures.some(
+        (row) => row.includes("roles: load-order roles.loadorder.section.missing") && row.includes("mstar-roles"),
+      ),
+    ).toBe(true);
+  });
+
+  test("Load Order section without the core mention fails (roles.loadorder.core.missing)", () => {
+    const corpus = realCorpus();
+    const roles = corpus.find((entry) => entry.rel === "skills/mstar-roles/SKILL.md");
+    expect(roles).toBeDefined();
+    const gapped = replaceLoadOrderSection(corpus, "skills/mstar-roles/SKILL.md", [
+      "## Load Order (Required)",
+      "Read the role reference directly.",
+    ]);
+    const { failures } = checkRolesCorpus(gapped, ROLES_DIR);
+    expect(failures.length).toBeGreaterThan(0);
+    expect(
+      failures.some(
+        (row) => row.includes("roles: load-order roles.loadorder.core.missing") && row.includes("mstar-roles"),
+      ),
+    ).toBe(true);
+  });
+
+  test("mapped reference file missing from the roles dir fails (roles.mapping.reference.missing)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-roles-"));
+    try {
+      const { mappingViolations, failures } = checkRolesCorpus(realCorpus(), dir);
+      expect(mappingViolations).toBeGreaterThan(0);
+      expect(
+        failures.some((row) => row.includes("roles: mapping roles.mapping.reference.missing")),
+      ).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("non-corpus files are ignored (references/, non-mstar)", () => {
+    const { skillsChecked, failures } = checkRolesCorpus(
+      [
+        { rel: "skills/mstar-roles/references/fullstack-dev-shared.md", text: "# not a SKILL.md" },
+        { rel: "skills/grill-me/SKILL.md", text: "# no load order" },
+      ],
+      ROLES_DIR,
+    );
+    expect(skillsChecked).toBe(0);
+    expect(failures).toEqual([]);
+  });
+
+  test("unreadable SKILL.md becomes an explicit roles: read row, not a crash (guard-or-clear-error)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-roles-read-"));
+    try {
+      // A directory named SKILL.md makes readFileSync throw EISDIR
+      // deterministically (same trick as the CLI best-effort test) — the
+      // guard must surface a clear row and keep scanning, never raw-stack.
+      mkdirSync(join(dir, "mstar-foo", "SKILL.md"), { recursive: true });
+      const { entries, readFailures } = readRolesCorpus([join(dir, "mstar-foo", "SKILL.md")], dir);
+      expect(entries).toEqual([]);
+      expect(readFailures.length).toBe(1);
+      expect(readFailures[0]).toContain("roles: read mstar-foo/SKILL.md");
+      expect(readFailures[0]).toContain("EISDIR");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

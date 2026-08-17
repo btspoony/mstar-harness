@@ -178,7 +178,7 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 
 ## QC / QA 检出对齐与多 worktree 门禁衔接（强制；避免误派）
 
-### 对齐字段契约（canonical）
+### 对齐字段契约（canonical · Evidence）
 
 分派 **QC 三审** 与对齐的 **QA 验证** 时，PM **必须**在 Assignment 写明与待审实现一致的 **`Review cwd` / `Worktree path`**、**`Working branch`**、**`plan_id`**、**`Review range` / `Diff basis`**。开发在 **feature 分支**（往往在独立 worktree 中）完成后，QC/QA 针对的都是这份 feature，不是 `main` 或任意未对齐默认 cwd。
 
@@ -189,7 +189,7 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 - **逐字对齐（强制）**：三份 QC Assignment 与 QA Assignment 间 **`plan_id`** 与 **`Review range` / `Diff basis`**（连同 `Review cwd` / `Working branch`）**必须完全相同**；**`qa-engineer`** 验证同一 feature 时**复用同一组字段**。**热修 / QC 单审**路径也须含**同一组字段**，仅承接方份数为 1。
 - 三审并行时三名 reviewer **共用同一组**字段（对业务仓**只读 diff 审查**）；一般不必为每位 reviewer 各开 worktree，除非宿主/环境要求进程级隔离。
 
-> **Engine check (when available):** import `assertQcAlignment` / `singleReviewSnapshot` from `@mstar-harness/engine` in a host hook to assert the QC/QA alignment fields above (byte-identical `plan_id` + `Review range` / `Diff basis` across tri + QA; single review snapshot before dispatch). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar worktree qc-alignment <assignment-file>...`（或 import `assertQcAlignment` / `singleReviewSnapshot` from `@mstar-harness/engine` in a host hook）以断言上述 QC/QA 对齐字段（tri + QA 间 `plan_id` 与 `Review range` / `Diff basis` 逐字相同；派发前 single review snapshot）。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### 多 worktree 并行 → 单一待审快照（派 QC 前置）
 
@@ -224,3 +224,13 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, `note
 - Rewrite 推送后：重新 fetch heads；rewrite 前的 review threads / approvals / check 结果**不再是当前证据** — merge 结论前须重审（commit hash 与 inline-comment anchor 已失效）。
 - 证据最窄原则（audit / QA Assignment 场景）：选择会在目标回归上失败的**最窄**检查；不因「push 在即」重跑已通过的检查。
 - 本节只管 rewrite / lease / 证据失效面；CI / review 波次 push 门禁（时序）SSOT → `mstar-iteration` §5.1a。
+
+## Workflow
+
+主链：**PM 唯一分支决策**（`Working branch` / `Branch policy`，写进 Assignment）→ 实现者在 feature worktree 写产品编辑（L1：control worktree 管 harness SSOT、feature 管源码）→ **QC 前**全部待审提交归并到**单一 `Working branch` `HEAD`** → 派 QC 三审 / QA 时共用**同一套对齐字段**（`Review cwd` / `Working branch` / `plan_id` / `Review range` / `Diff basis`，逐字相同）→ 集成分支 merge 串行（`integration_merge_lease`）。并发写流在派发**前**完成 worktree 隔离（L1 跨 plan / L2 同 plan）。
+
+## References
+
+- 派发与反递归红线 → **`mstar-dispatch-gates`**
+- SDD implement 波次（file handoff / reviewer）→ **`mstar-sdd`**
+- 迭代 Phase 2 control worktree + lease 细则 → **`mstar-iteration`** §2（`references/phase-2-worktree-lease.md`）

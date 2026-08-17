@@ -64,3 +64,13 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 - Critical 发现须含触发条件、影响范围、修复建议。
 - 低置信度发现须含后续验证步骤。
 - 跨任务重复模式应标记。
+
+## Workflow
+
+QC 编排主链：plan 全部 task + L2 完成后 → PM 按 `Execution mode` 定座次（sdd 强制 tri **N=3** / inline 单席 **N=1**）→ 同一条消息发满 N 个 QC Assignment（含 branch review-package + `{SDD_DIR}/review/qcN.md` report paths）→ 席位按 `references/qc-specialist/report-template.md` 落盘 verdict → PM 汇总 `{SDD_DIR}/review/qc-consolidated.md`（覆盖语义：**未提及 = 未审查**；汇总层零注入）→ `Request Changes` 走 targeted re-review（同 `qcN.md` `## Revalidation` 原位更新 verdict）→ residual 按 `Findings cleanup` 留档 / 关闭 → durable summary 回写主 plan。
+
+## References
+
+- Leaf QC 执行（checklist / 报告模板 / 透镜）→ **`mstar-roles/references/qc-specialist/`**
+- Per-task review（L2，implement 波次内）→ **`mstar-sdd`**
+- Review bundle 命名与 QC 触发时机 → **`mstar-plan-artifacts/references/plan-files-and-reports.md`**

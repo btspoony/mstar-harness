@@ -483,7 +483,7 @@ Prefer **`archived/residuals/`**; migrate and delete history key when possible.
 # Replace .mstar with your resolved {HARNESS_DIR}; legacy projects may use .agents.
 jq '.residual_findings["01-data-infrastructure"] // .metadata.residual_findings["01-data-infrastructure"]' .mstar/status.json
 jq '.entries[] | select(.id == "R1")' .mstar/archived/residuals/01-data-infrastructure.json
-# Engine rollup (read-only, no CLI form): import { techDebtRollup } from "@mstar-harness/engine" in a host hook
+# Engine rollup (read-only): import { techDebtRollup } from "@mstar-harness/engine" in a host hook — CLI form: mstar status tech-debt <path>
 ```
 
 (`//` right-hand side = legacy read path.)
@@ -519,6 +519,7 @@ Append-only log for merge closure, batch archive, `tech_debt_summary` refresh, e
 // Engine check (when available) — pass status.json path if not .mstar/status.json
 import { techDebtRollup } from "@mstar-harness/engine";
 const rollup = techDebtRollup(".mstar/status.json"); // { computed, stored, checks, overall }
+// CLI form (same output; exit 1 on DRIFT): mstar status tech-debt <path> (default: {HARNESS_DIR}/status.json)
 ```
 
 - Prints computed `total_open`, `by_severity`, `by_target`, `by_plan`.

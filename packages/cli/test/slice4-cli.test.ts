@@ -3,14 +3,15 @@
  *   mstar lint <target>, mstar design-md validate <dir>,
  *   mstar audit scaffold <findings-file> [--dir <out-dir>], mstar compound validate
  *   <doc-path> [--knowledge-dir <dir>], mstar host detect --signals <list>,
- *   mstar skill lint <skill-dir>.
+ *   mstar skill lint <skill-dir>, mstar roles validate [--roles-dir <dir>]
+ *   [--skills-dir <dir>].
  *
  * Exit-code contract (slice-2/3 convention): 0 = OK, 1 = violations / file
  * errors, 2 = usage (missing/invalid args). Each case runs the real CLI as a
  * subprocess against /tmp fixtures and asserts exit code + reported codes.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { validateAuditStatusBlocks } from "@mstar-harness/engine";
@@ -19,11 +20,21 @@ const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 
 /** Spawn env with ambient harness env vars pinned out (same as the other
- * CLI suites — engine dir resolution must not leak into fixtures). */
+ * CLI suites — engine dir resolution must not leak into fixtures).
+ * MSTAR_CLI_PROJECT_ROOT / INIT_CWD are pinned too: `resolveCliPath`
+ * (audit-002) reads them ahead of PWD, so an ambient value would redirect
+ * every relative-path fixture spuriously. */
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH") {
+    if (
+      key === "MSTAR_HARNESS_DIR" ||
+      key === "MSTAR_CONTROL_ROOT" ||
+      key === "SDD_DIR" ||
+      key === "MSTAR_WORKING_BRANCH" ||
+      key === "MSTAR_CLI_PROJECT_ROOT" ||
+      key === "INIT_CWD"
+    ) {
       continue;
     }
     if (value !== undefined) env[key] = value;
@@ -38,10 +49,10 @@ interface RunResult {
 }
 
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[], cwd: string = CLI_ROOT): RunResult {
+function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd,
-    env: cliEnv(),
+    cwd: opts.cwd ?? CLI_ROOT,
+    env: { ...cliEnv(), ...opts.env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -527,7 +538,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       // cwd = a temp dir outside any git repo → documented "unknown" fallback
       // (--date pinned: without it the audit-<date> dir derives from "today", a calendar flake)
-      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08"], dir);
+      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08"], { cwd: dir });
       expect(result.exitCode).toBe(0);
       expect(existsSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"))).toBe(true);
       const plan = readFileSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"), "utf8");
@@ -541,7 +552,7 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-07-01"], dir);
+      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-07-01"], { cwd: dir });
       expect(result.exitCode).toBe(0);
       expect(existsSync(join(dir, "audit-2026-07-01", "README.md"))).toBe(true);
       expect(existsSync(join(dir, "audit-2026-07-01", "001-fix-n-1-query.md"))).toBe(true);
@@ -823,5 +834,655 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// project-root path resolution (audit-002: resolveCliPath adoption)
+// ---------------------------------------------------------------------------
+
+describe("project-root path resolution — relative dev-command args (audit-002)", () => {
+  test("relative skill dir + MSTAR_CLI_PROJECT_ROOT → found from a nested cwd (exit 0)", () => {
+    withTempDir((dir) => {
+      mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
+      writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
+      // cwd is nested below the fixture root: the relative arg must resolve
+      // against MSTAR_CLI_PROJECT_ROOT, not the process cwd (the bug class
+      // this regression guards: `bun run cli:dev skill lint skills/mstar-audit`
+      // used to look under packages/cli/skills/...).
+      const result = runCli(["skill", "lint", "skills/mstar-audit"], {
+        cwd: join(dir, "skills"),
+        env: { MSTAR_CLI_PROJECT_ROOT: dir },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+      expect(result.stdout).toContain("skill lint (five questions): OK");
+      expect(result.stdout).toContain("skill lint (ephemeral citations): OK");
+      expect(result.stderr).not.toContain("SKILL.md not found");
+    });
+  });
+
+  test("scrubbed env + nested member cwd → workspaces walk-up reaches the monorepo root (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "mono", workspaces: ["packages/*"] }));
+      const member = join(dir, "packages", "cli");
+      mkdirSync(member, { recursive: true });
+      mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
+      writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
+      // member manifest carries no workspaces — the walk must skip it and
+      // keep going up to the root `workspaces` marker (the `bun run --cwd
+      // packages/cli dev` shape: env unset, process cwd = packages/cli).
+      writeFileSync(join(member, "package.json"), JSON.stringify({ name: "@mono/cli" }));
+      const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: member });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+      expect(result.stderr).not.toContain("SKILL.md not found");
+    });
+  });
+
+  test("single-package consumer: nested cwd resolves to the nearest package.json root (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "consumer-app" }));
+      mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
+      writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
+      const nested = join(dir, "src", "deep");
+      mkdirSync(nested, { recursive: true });
+      const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: nested });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+    });
+  });
+
+  test("outside any package.json tree → cwd-relative terminal fallback (exit 1)", () => {
+    withTempDir((dir) => {
+      // no package.json anywhere above the fixture — relative args stay
+      // cwd-relative by terminal fallback, so the arg must NOT find the
+      // fixture under the bare cwd.
+      const result = runCli(["skill", "lint", "skills/mstar-audit"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("SKILL.md not found");
+      expect(result.stderr).toContain(join(dir, "skills", "mstar-audit"));
+    });
+  });
+
+  test("absolute skill dir is unchanged even with MSTAR_CLI_PROJECT_ROOT set", () => {
+    withTempDir((dir) => {
+      mkdirSync(join(dir, "elsewhere"), { recursive: true });
+      writeFileSync(join(dir, "elsewhere", "SKILL.md"), SKILL_GOOD);
+      const result = runCli(["skill", "lint", join(dir, "elsewhere")], {
+        env: { MSTAR_CLI_PROJECT_ROOT: join(dir, "nope") },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("skill lint (frontmatter): OK");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// all six resolveCliPath adoptions — parameterized subprocess proof (F-S2)
+// ---------------------------------------------------------------------------
+
+describe("project-root path resolution — all six dev commands with relative args (audit-002 F-S2)", () => {
+  /** Minimal well-formed writable assignment (same shape as the engine fixture). */
+  const ASSIGNMENT_GOOD = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+**Plan Path**: .mstar/plans/20260808-example.md
+`;
+
+  const AUDIT_FINDINGS = [
+    { title: "Fix N+1 query", priority: "P1", effort: "M", risk: "HIGH", category: "perf", dependsOn: "002", description: "Queries explode on the dashboard." },
+  ];
+
+  // Every documented dev command that resolves a relative path arg through
+  // resolveCliPath (all 8 adoption sites): fixture under the project root,
+  // relative arg(s), process cwd nested below the root, MSTAR_CLI_PROJECT_ROOT
+  // pinned to the root. Exit 0 + output landing under the root (NOT the nested
+  // cwd) prove the arg went through resolveCliPath end-to-end, not
+  // cwd-relative resolution.
+  const cases: {
+    name: string;
+    args: string[];
+    setup: (dir: string) => void;
+    assert: (dir: string, result: RunResult) => void;
+  }[] = [
+    {
+      name: "skill lint <relative skill dir>",
+      args: ["skill", "lint", "skills/mstar-audit"],
+      setup: (dir) => {
+        mkdirSync(join(dir, "skills", "mstar-audit"), { recursive: true });
+        writeFileSync(join(dir, "skills", "mstar-audit", "SKILL.md"), SKILL_GOOD);
+      },
+      assert: (_dir, result) => {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("skill lint (frontmatter): OK");
+        expect(result.stderr).not.toContain("SKILL.md not found");
+      },
+    },
+    {
+      name: "lint <relative STRATEGY.md>",
+      args: ["lint", "strategy/STRATEGY.md"],
+      setup: (dir) => {
+        mkdirSync(join(dir, "strategy"), { recursive: true });
+        writeFileSync(
+          join(dir, "strategy", "STRATEGY.md"),
+          ["# Strategy", "", "## Vision", "## What we build", "## What we don't build", "## Guiding Principles", "## Technology Direction", "## Decision Log", ""].join("\n"),
+        );
+      },
+      assert: (_dir, result) => {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("OK");
+        expect(result.stderr).toBe("");
+      },
+    },
+    {
+      name: "dispatch validate <relative assignment file>",
+      args: ["dispatch", "validate", "assignments/assignment.md"],
+      setup: (dir) => {
+        mkdirSync(join(dir, "assignments"), { recursive: true });
+        writeFileSync(join(dir, "assignments", "assignment.md"), ASSIGNMENT_GOOD);
+      },
+      assert: (_dir, result) => {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("dispatch validate: OK");
+        expect(result.stderr).toBe("");
+      },
+    },
+    {
+      name: "compound validate <relative doc> + <relative --knowledge-dir>",
+      args: ["compound", "validate", "knowledge/doc.md", "--knowledge-dir", "knowledge"],
+      setup: (dir) => {
+        mkdirSync(join(dir, "knowledge"), { recursive: true });
+        writeFileSync(join(dir, "knowledge", "doc.md"), KNOWLEDGE_GOOD);
+        writeFileSync(join(dir, "knowledge", "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n| [doc](doc.md) | 20260808-x | x | done |\n");
+      },
+      assert: (_dir, result) => {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("compound validate (schema): OK");
+        expect(result.stdout).toContain("compound validate (index rows): OK");
+        expect(result.stdout).toContain("compound validate (scope guard): OK");
+      },
+    },
+    {
+      name: "design-md validate <relative design dir>",
+      args: ["design-md", "validate", "design"],
+      setup: (dir) => {
+        mkdirSync(join(dir, "design"), { recursive: true });
+        writeFileSync(join(dir, "design", "DESIGN.md"), DESIGN_LEVEL1);
+      },
+      assert: (_dir, result) => {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("design-md validate (tokens): OK");
+        expect(result.stdout).toContain("design-md completeness level: MVP");
+      },
+    },
+    {
+      name: "audit scaffold <relative findings file> + <relative --dir>",
+      args: ["audit", "scaffold", "findings/findings.json", "--dir", "out", "--sha", "deadbee"],
+      setup: (dir) => {
+        mkdirSync(join(dir, "findings"), { recursive: true });
+        writeFileSync(join(dir, "findings", "findings.json"), JSON.stringify(AUDIT_FINDINGS));
+      },
+      assert: (dir, result) => {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("audit scaffold: OK");
+        expect(result.stdout).toContain("created: 001-fix-n-1-query.md");
+        // --dir "out" resolved against the project root, not the nested cwd.
+        expect(existsSync(join(dir, "out", "001-fix-n-1-query.md"))).toBe(true);
+        expect(existsSync(join(dir, "out", "README.md"))).toBe(true);
+      },
+    },
+  ];
+
+  for (const c of cases) {
+    test(`relative path args resolve against the project root — ${c.name} (exit 0)`, () => {
+      withTempDir((dir) => {
+        c.setup(dir);
+        const nested = join(dir, "nested", "deep");
+        mkdirSync(nested, { recursive: true });
+        const result = runCli(c.args, { cwd: nested, env: { MSTAR_CLI_PROJECT_ROOT: dir } });
+        c.assert(dir, result);
+      });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// mstar roles validate — mapping / load-order checks (audit-003)
+// ---------------------------------------------------------------------------
+
+describe("mstar roles validate — mapping / load-order checks (audit-003)", () => {
+  /** Real mstar-roles skill dir of this checkout — a passing fixture by
+   * definition of the drift-lint guard (Task 2 enforces the same corpus). */
+  const REPO_ROLES_DIR = join(resolve(CLI_ROOT, "..", ".."), "skills", "mstar-roles");
+
+  /** mstar-* sibling with no Load Order section (violates
+   * roles.loadorder.section.missing). */
+  const SIBLING_NO_LOAD_ORDER = `# mstar-foo
+
+A topic skill body without a Load Order heading.
+`;
+
+  test("default flags validate the shipped corpus (exit 0, OK + counts)", () => {
+    // cwd = packages/cli: resolveCliProjectRoot walks up to the monorepo root,
+    // so --roles-dir defaults to <root>/skills/mstar-roles and --skills-dir to
+    // <root>/skills — the real corpus must pass (same guarantee Task 2 guards).
+    const result = runCli(["roles", "validate"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("roles validate (mapping): OK");
+    expect(result.stdout).toContain("roles validate (load order): OK");
+    expect(result.stdout).toMatch(/roles validate: OK \(\d+ violations?, \d+ sibling skills? scanned; load-order over \d+, core exempt\)/);
+    expect(result.stderr).toBe("");
+  });
+
+  test("--roles-dir / --skills-dir overrides; load-order violation exits 1 with one row each", () => {
+    withTempDir((dir) => {
+      const skillsRoot = join(dir, "skills");
+      mkdirSync(join(skillsRoot, "mstar-foo"), { recursive: true });
+      writeFileSync(join(skillsRoot, "mstar-foo", "SKILL.md"), SIBLING_NO_LOAD_ORDER);
+      const result = runCli(["roles", "validate", "--roles-dir", REPO_ROLES_DIR, "--skills-dir", skillsRoot]);
+      expect(result.exitCode).toBe(1);
+      // Mapping still passes on the real roles dir — the failure is isolated to
+      // the load-order lint so the row contract is asserted exactly.
+      expect(result.stdout).toContain("roles validate (mapping): OK");
+      expect(result.stderr).toContain("roles validate (load order): FAIL (1 violation)");
+      expect(result.stderr).toContain("roles.loadorder.section.missing");
+      expect(result.stderr).toContain('skill "mstar-foo"');
+      expect(result.stdout).toContain("roles validate: FAIL (1 violation, 1 sibling skill scanned; load-order over 1)");
+    });
+  });
+
+  test("empty roles dir — mapping violations, one row each (exit 1)", () => {
+    withTempDir((dir) => {
+      const result = runCli(["roles", "validate", "--roles-dir", dir, "--skills-dir", dir]);
+      expect(result.exitCode).toBe(1);
+      // Row-cardinality pin: the FAIL header count must equal the number of
+      // reference.missing violation rows on stderr (printChecklist emits one
+      // row per violation), and the stdout summary must agree.
+      const header = /roles validate \(mapping\): FAIL \((\d+) violations?\)/.exec(result.stderr);
+      expect(header).not.toBeNull();
+      const declared = Number(header![1]);
+      expect(declared).toBeGreaterThan(0);
+      expect((result.stderr.match(/roles\.mapping\.reference\.missing/g) ?? []).length).toBe(declared);
+      expect(result.stdout).toContain(
+        `roles validate: FAIL (${declared} violations, 0 sibling skills scanned; load-order over 0)`,
+      );
+    });
+  });
+
+  test("unreadable sibling SKILL.md is skipped best-effort (exit 0)", () => {
+    withTempDir((dir) => {
+      const skillsRoot = join(dir, "skills");
+      // A directory named SKILL.md makes readFileSync throw (EISDIR)
+      // deterministically — exercises the best-effort skip without
+      // root-dependent chmod semantics.
+      mkdirSync(join(skillsRoot, "mstar-foo", "SKILL.md"), { recursive: true });
+      const result = runCli(["roles", "validate", "--roles-dir", REPO_ROLES_DIR, "--skills-dir", skillsRoot]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("roles validate (load order): OK");
+      expect(result.stdout).toContain("roles validate: OK (0 violations, 0 sibling skills scanned; load-order over 0)");
+    });
+  });
+
+  test("relative --roles-dir resolves against the project root (F-S2 pattern)", () => {
+    withTempDir((dir) => {
+      // Copy the real roles dir into the fixture project root so the mapping
+      // passes; the sibling scan then covers the copied mstar-roles SKILL.md.
+      cpSync(REPO_ROLES_DIR, join(dir, "skills", "mstar-roles"), { recursive: true });
+      const nested = join(dir, "nested", "deep");
+      mkdirSync(nested, { recursive: true });
+      const result = runCli(["roles", "validate", "--roles-dir", "skills/mstar-roles"], {
+        cwd: nested,
+        env: { MSTAR_CLI_PROJECT_ROOT: dir },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("roles validate (mapping): OK");
+      expect(result.stdout).toContain("roles validate (load order): OK");
+      expect(result.stdout).toContain("roles validate: OK (0 violations, 1 sibling skill scanned; load-order over 1)");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar status tech-debt — rollup + PASS/DRIFT (audit-004)
+// ---------------------------------------------------------------------------
+
+/** status.json whose stored metadata.tech_debt_summary matches the computed
+ * rollup of its one open residual (by_severity in SEVERITY_ORDER: critical,
+ * high, medium, low, nit — key order matters for the stringify comparison). */
+const STATUS_TECH_DEBT_PASS = `{
+  "plans": [{ "id": "p1", "status": "InReview" }],
+  "residual_findings": {
+    "demo-plan": [
+      { "id": "R1", "title": "Fix ordering bug", "severity": "high", "lifecycle": "open", "decision": "accept", "target": "next-iteration", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
+    ]
+  },
+  "metadata": {
+    "tech_debt_summary": {
+      "total_open": 1,
+      "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "nit": 0 },
+      "by_target": { "next-iteration": 1 },
+      "by_plan": { "demo-plan": 1 }
+    }
+  }
+}`;
+
+describe("mstar status tech-debt — rollup + PASS/DRIFT vs stored summary (audit-004)", () => {
+  test("matching stored summary prints the rollup and PASS (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS);
+      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("total_open: 1");
+      expect(result.stdout).toContain('by_severity: {"critical":0,"high":1,"medium":0,"low":0,"nit":0}');
+      expect(result.stdout).toContain('by_target: {"next-iteration":1}');
+      expect(result.stdout).toContain('by_plan: {"demo-plan":1}');
+      expect(result.stdout).toContain("tech_debt_summary: PASS");
+      expect(result.stderr).toBe("");
+    });
+  });
+
+  test("drifted stored summary prints DRIFT with the failing fields (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS.replace('"total_open": 1,', '"total_open": 0,'));
+      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("tech_debt_summary: DRIFT (1/4 fields: total_open)");
+    });
+  });
+
+  test("no stored summary is DRIFT with a note (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS.replace(/"tech_debt_summary": \{[\s\S]*?\n    \}/, '"bogus": {}'));
+      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("DRIFT (4/4 fields: total_open, by_severity, by_target, by_plan)");
+      expect(result.stderr).toContain("no stored metadata.tech_debt_summary");
+    });
+  });
+
+  test("missing status file fails with exit 1", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "tech-debt", join(dir, "nope.json")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("status file not found");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar status findings-cleanup — cleanup mode gate (audit-004)
+// ---------------------------------------------------------------------------
+
+/** One open non-critical residual under plan p1 — allow-residual passes. */
+const STATUS_CLEANUP_ALLOW_PASS = `{
+  "plans": [{ "id": "p1", "status": "InReview" }],
+  "residual_findings": {
+    "p1": [
+      { "id": "R1", "title": "Style nit follow-up", "severity": "low", "lifecycle": "open", "decision": "accept", "target": "next-iteration", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
+    ]
+  }
+}`;
+
+/** Same doc but the residual is critical — allow-residual blocks Approve. */
+const STATUS_CLEANUP_ALLOW_FAIL = STATUS_CLEANUP_ALLOW_PASS.replace('"severity": "low"', '"severity": "critical"');
+
+/** zero-residual via plans[].metadata.findings_cleanup with a fixable open residual. */
+const STATUS_CLEANUP_ZERO_FAIL = `{
+  "plans": [{ "id": "p1", "status": "InProgress", "metadata": { "findings_cleanup": "zero-residual" } }],
+  "residual_findings": {
+    "p1": [
+      { "id": "R1", "title": "Fixable finding", "severity": "medium", "lifecycle": "open", "decision": "accept", "target": "", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
+    ]
+  }
+}`;
+
+describe("mstar status findings-cleanup — cleanup-mode gate over open residuals (audit-004)", () => {
+  test("allow-residual with non-critical open residual passes (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ALLOW_PASS);
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("findings-cleanup p1: OK");
+    });
+  });
+
+  test("allow-residual with an unresolved critical fails (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ALLOW_FAIL);
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("findings-cleanup p1: FAIL (1 violation)");
+      expect(result.stderr).toContain("findings.allow-residual-critical");
+    });
+  });
+
+  test("zero-residual via plan metadata blocks a fixable open residual (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ZERO_FAIL);
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("findings.zero-residual-open-fixable");
+    });
+  });
+
+  test("missing status file fails with exit 1", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("status file not found");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar lease verify-integration — integration merge lease (audit-004)
+// ---------------------------------------------------------------------------
+
+const LEASE_VALID = `{
+  "metadata": {
+    "integration_merge_lease": {
+      "holder": "Main",
+      "claimed_at": "2026-08-16",
+      "plan_id": "20260816-audit-004",
+      "source_branch": "feature/20260816-audit-004-validator-cli",
+      "target_branch": "spec_integration_branch"
+    }
+  }
+}`;
+
+const LEASE_MISSING_HOLDER = LEASE_VALID.replace('"holder": "Main",\n      ', "");
+
+const LEASE_UNCLAIMED = `{
+  "metadata": { "iteration_base_branch": "main" }
+}`;
+
+/** Tombstone lease: `null` is invalid — writers delete the key on release. */
+const LEASE_NULL = `{
+  "metadata": { "integration_merge_lease": null, "iteration_base_branch": "main" }
+}`;
+
+describe("mstar lease verify-integration — root metadata.integration_merge_lease (audit-004)", () => {
+  test("valid lease prints holder and passes (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), LEASE_VALID);
+      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("integration_merge_lease valid (holder Main)");
+    });
+  });
+
+  test("absent lease is the valid unclaimed state (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), LEASE_UNCLAIMED);
+      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("no integration_merge_lease (unclaimed)");
+    });
+  });
+
+  test("null lease is a tombstone and fails with the engine code (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), LEASE_NULL);
+      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("lease verify-integration: FAIL (1 violation)");
+      expect(result.stderr).toContain("lease.merge-lease.invalid");
+    });
+  });
+
+  test("lease missing a required field fails with the engine code (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "status.json"), LEASE_MISSING_HOLDER);
+      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("lease verify-integration: FAIL (1 violation)");
+      expect(result.stderr).toContain("lease.merge-lease.missing-holder");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar worktree qc-alignment — byte-identical alignment fields (audit-004)
+// ---------------------------------------------------------------------------
+
+/** One QC Assignment fixture with the three alignment fields — canonical
+ * combined `Review range / Diff basis` label form (the PM template shape,
+ * real QC/QA packs use it). */
+function qcAssignmentFixture(planId: string, range: string): string {
+  return `## Assignment
+**Execute as**: qc-specialist
+**Task category**: logic
+**plan_id**: ${planId}
+**Review range / Diff basis**: ${range}
+`;
+}
+
+/** Separate-label Assignment fixture (non-canonical form, still accepted). */
+function qcAssignmentSeparateFixture(planId: string, range: string): string {
+  return `## Assignment
+**Execute as**: qc-specialist
+**Task category**: logic
+**plan_id**: ${planId}
+**Review range**: ${range}
+**Diff basis**: ${range}
+`;
+}
+
+describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", () => {
+  test("real-shape tri pack: 3 assignments, canonical combined label, byte-identical (exit 0)", () => {
+    withTempDir((dir) => {
+      for (const name of ["qc1.md", "qc2.md", "qc3.md"]) {
+        writeFileSync(join(dir, name), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      }
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md"), join(dir, "qc3.md")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("worktree qc-alignment: OK (3 assignments, 3 fields byte-identical)");
+    });
+  });
+
+  test("separate-label form still parses as aligned (exit 0)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "qc1.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      writeFileSync(join(dir, "qc2.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("worktree qc-alignment: OK (2 assignments, 3 fields byte-identical)");
+    });
+  });
+
+  test("a differing Diff basis fails with qc.alignment.mismatch (exit 1)", () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "qc1.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
+      writeFileSync(join(dir, "qc2.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD~1"));
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("worktree qc-alignment: FAIL (2 violations)");
+      expect(result.stderr).toContain('"Review range" is not byte-identical');
+      expect(result.stderr).toContain('"Diff basis" is not byte-identical');
+    });
+  });
+
+  test("assignment missing an alignment field fails with qc.alignment.field.missing (exit 1)", () => {
+    withTempDir((dir) => {
+      // Separate-label variant with the Diff basis line removed (the combined
+      // form cannot drop a single range field).
+      const incomplete = qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD").replace(
+        "**Diff basis**: merge-base: main + tip: HEAD\n",
+        "",
+      );
+      writeFileSync(join(dir, "qc1.md"), incomplete);
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("qc.alignment.field.missing");
+      expect(result.stderr).toContain('missing "Diff basis" header field');
+      expect(result.stderr).not.toContain('missing "Review range" header field');
+    });
+  });
+
+  test("no assignment files is a usage error (exit 2)", () => {
+    const result = runCli(["worktree", "qc-alignment"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("usage: worktree qc-alignment <assignment-file>...");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar host skill-root — per-host resolution matrix (audit-004)
+// ---------------------------------------------------------------------------
+
+describe("mstar host skill-root — loaded skill-root resolution (audit-004)", () => {
+  test("opencode resolves to the package-internal harness-skills mount (exit 0)", () => {
+    const result = runCli(["host", "skill-root", "--host", "opencode", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("harness-skills/mstar-roles");
+  });
+
+  test("cursor resolves with a skill-relative path suffix (exit 0)", () => {
+    const result = runCli([
+      "host",
+      "skill-root",
+      "--host",
+      "cursor",
+      "--skill",
+      "mstar-roles",
+      "--rel",
+      "references/opencode.md",
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("~/.cursor/plugins/local/morning-star-harness/skills/mstar-roles/references/opencode.md");
+  });
+
+  test("omp resolves to the skill:// URI form (exit 0)", () => {
+    const result = runCli(["host", "skill-root", "--host", "omp", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("skill://mstar-roles");
+  });
+
+  test("pi prints the deferred-resolution notice shape (exit 0)", () => {
+    const result = runCli(["host", "skill-root", "--host", "pi", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("deferred: pi has no plugin API in v1");
+  });
+
+  test("dsh resolves to the bundled skill dir form (exit 0)", () => {
+    const result = runCli(["host", "skill-root", "--host", "dsh", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("$DSH_BUNDLED_SKILL_DIR/mstar-roles");
+  });
+
+  test("empty --skill value is a usage error (exit 2)", () => {
+    const result = runCli(["host", "skill-root", "--host", "opencode", "--skill="]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--skill must be a non-empty skill name");
+  });
+
+  test("unknown host is a usage error (exit 2)", () => {
+    const result = runCli(["host", "skill-root", "--host", "bogus", "--skill", "mstar-roles"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('unknown host "bogus"');
   });
 });

@@ -150,3 +150,16 @@ Do not perform agreement. State the technical action, the verification result, o
 - Keep these principles centralized here.
 - Role prompts should reference this skill instead of duplicating long prose.
 - Only role-specific triggers, boundaries, and artifacts belong in role prompt files.
+
+## Workflow
+
+Apply the seven sections in reading order: **1) Think Before Coding**（读懂再改）→ **2) Simplicity First**（最小耐久切片）→ **3) Surgical Changes**（可追溯改动 / 根因修复）→ **4) Debugging**（先复现、一步一测）→ **5) Goal-Driven Execution**（Step → verify）→ **6) Review Feedback Handling**（先核实再改、证据反驳）→ **7) Communication**（说明做了什么与为什么）。
+
+## Evidence
+
+正确结果 = 可运行检查通过并附输出：非平凡逻辑留下一个**最小可失败检查**（§5）；bug 修复先写复现测试、红转绿（§4）；回报引用检查结果与输出，而非「我觉得应该没问题」。
+
+## References
+
+- 角色正文与加载矩阵 → **`mstar-roles`**
+- 阶段门禁 / 意图门禁 / 可验证编辑 → **`mstar-phase-gates`**
