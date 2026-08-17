@@ -214,8 +214,8 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   notes.push(`Profile: ${DSH_PROFILE} at ${profileDir}`);
   notes.push("Verify with: mstar-harness doctor --target dsh");
   notes.push(
-    `Alternate manual install: ${DSH_BIN} ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${DSH_PLUGIN_SPECS.join(
-      ` && ${DSH_BIN} ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add `,
+    `Alternate manual install: ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${DSH_PLUGIN_SPECS.join(
+      ` && ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add `,
     )}`,
   );
 

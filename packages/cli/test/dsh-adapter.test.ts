@@ -345,6 +345,10 @@ describe("dshAdapter.runInstallInit", () => {
       expect(argvLines(fake)).toEqual([]);
       expectNote(result!.notes, `Would run: dsh plugin --profile web add ${MSTAR_SPEC}`);
       expectNote(result!.notes, `Would run: dsh plugin --profile web add ${FALLBACKS_SPEC}`);
+      expectNote(
+        result!.notes,
+        `Alternate manual install: dsh plugin --profile web add ${MSTAR_SPEC} && dsh plugin --profile web add ${FALLBACKS_SPEC}`,
+      );
     } finally {
       fake.remove();
     }
