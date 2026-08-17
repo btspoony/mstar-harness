@@ -31,6 +31,7 @@ English / [中文](README_CN.md)
 
 | Component | What it is |
 |-----------|------------|
+| dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` (the dsh plugin manager — not the CLI) |
 | Harness Workflow Engine | `@mstar-harness/engine` — TS enforcement of deterministic workflow gates |
 | mstar CLI | `@mstar-harness/cli` — installer bootstrap + `mstar` workflow verbs |
 | `mstar-*` skills | Role, gate, and workflow judgment (single source of truth) |
@@ -48,7 +49,6 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 | Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode` then install **morning-star-harness** in ZCode → Settings → Plugin Management |
 | Codex | `npx @mstar-harness/cli init --target codex` then `codex plugin add morning-star-harness --marketplace personal` |
-| dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` (the dsh plugin manager — not the CLI) |
 | Generic (Agent Plugins v1) | point any Agent Plugins v1.0.0 conformant client at this repo root (`plugin.json` + `skills/` are the portable package) |
 
 ### Engine gate checks (optional)

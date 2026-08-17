@@ -31,6 +31,7 @@ Harness Workflow Engine · Agent Plugin
 
 | 组件 | 说明 |
 |------|------|
+| dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh`（dsh 自带插件管理器——不走 CLI） |
 | Harness Workflow Engine | `@mstar-harness/engine` —— 确定性工作流门禁的 TS 强制执行层 |
 | mstar CLI | `@mstar-harness/cli` —— 安装引导 + `mstar` 工作流动词 |
 | `mstar-*` skills | 角色、门禁与工作流判断（唯一事实来源） |
@@ -48,7 +49,6 @@ Harness Workflow Engine · Agent Plugin
 | Kimi | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness` → `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`，然后在 ZCode → 设置 → 插件管理安装 **morning-star-harness** |
 | Codex | `npx @mstar-harness/cli init --target codex`，然后 `codex plugin add morning-star-harness --marketplace personal` |
-| dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh`（dsh 自带插件管理器——不走 CLI） |
 | Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根（`plugin.json` + `skills/` 即便携包） |
 
 ### 引擎门禁校验（可选）
