@@ -2,6 +2,8 @@
 
 This guide documents the standalone `@mstar-harness/cli` package (command: `mstar-harness`) for OpenCode, Cursor, Codex, ZCode, and omp bootstrap. Kimi Code uses Kimi TUI `/plugins install` — see [INSTALL.md](../INSTALL.md#kimi). dsh (DeepSeek Harness) is **not** a CLI target — see the [dsh section](#dsh-deepseek-harness) below.
 
+The package installs two interchangeable binaries: `mstar-harness` (canonical) and the `mstar` short alias — both invoke the same CLI.
+
 ## Fast Path
 
 Use this sequence for the quickest user flow.

@@ -47,6 +47,8 @@ npx @mstar-harness/cli init
 # or: bunx @mstar-harness/cli init
 ```
 
+The CLI installs two equivalent binaries: `mstar-harness` (canonical, present in every released version) and `mstar` (short alias).
+
 | Host | Command |
 |------|---------|
 | dsh (DeepSeek Harness) | `dsh plugin --profile web add @mstar-harness/dsh` |

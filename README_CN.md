@@ -47,6 +47,8 @@ npx @mstar-harness/cli init
 # 或：bunx @mstar-harness/cli init
 ```
 
+CLI 会安装两个等效二进制：`mstar-harness`（规范名，所有已发布版本均有）与 `mstar`（短别名）。
+
 | 宿主 | 命令 |
 |------|------|
 | dsh（DeepSeek Harness） | `dsh plugin --profile web add @mstar-harness/dsh` |

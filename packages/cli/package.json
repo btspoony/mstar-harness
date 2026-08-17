@@ -13,7 +13,8 @@
     "dist"
   ],
   "bin": {
-    "mstar-harness": "dist/mstar-harness.js"
+    "mstar-harness": "dist/mstar-harness.js",
+    "mstar": "dist/mstar-harness.js"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
