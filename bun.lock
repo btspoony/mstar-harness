@@ -16,6 +16,7 @@
       "version": "2.2.0",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
+        "mstar": "dist/mstar-harness.js",
       },
       "dependencies": {
         "@inquirer/prompts": "^8.4.2",

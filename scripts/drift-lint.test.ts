@@ -24,20 +24,30 @@
  *   (roles.loadorder.core.missing) fails; a roles dir missing mapped
  *   reference files fails (roles.mapping.reference.missing); non-corpus
  *   files are ignored (load-bearing per plan Step 3).
+ * - readDeclaredBins (F-S2) — Guard 1's manifest read is guard-or-clear:
+ *   missing / corrupt / bin-less manifests each return one explicit
+ *   failure row (never a silent skip that would flood every citation).
+ * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
+ *   yields exactly 35 Engine-check callouts / 34 CLI citations against the
+ *   live CLI inventory + declared bins; corpus drift goes red.
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
+  buildCliCommandInventory,
+  buildEngineExportNames,
   checkBilingualPairing,
+  checkEngineCallouts,
   checkFiveQuestionCorpus,
   checkRolesCorpus,
   citesKnowledgeConventions,
   evaluateBilingualGuard,
   extractCategoryRowTokens,
   isGitHubActions,
+  readDeclaredBins,
   readRolesCorpus,
 } from "./drift-lint.ts";
 
@@ -129,6 +139,171 @@ describe("extractCategoryRowTokens — docs/cli.md `<category>` row (guard 1)", 
   test("plan-field `Category` reference and `<category>` placeholder are filtered", () => {
     const row = "| `<category>` | plan `Category` field values: `bug` | all nine |";
     expect(extractCategoryRowTokens(row)).toEqual(["bug"]);
+  });
+});
+
+describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () => {
+  /** Declared bin names from the manifest — the guard's SSOT (a rename in
+   * packages/cli/package.json must move this pin with it, mirroring the
+   * manifest test from plan Task 1). */
+  const declaredBins = () => {
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dir, "..", "packages", "cli", "package.json"), "utf8"),
+    ) as { bin?: Record<string, string> };
+    return Object.keys(manifest.bin ?? {});
+  };
+
+  /** One Engine-check callout blockquote with `body` as its content. */
+  const callout = (body: string) =>
+    `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed.`;
+
+  test("both declared bin names pass — `mstar …` and `mstar-harness …` citations (load-bearing)", () => {
+    const binNames = declaredBins();
+    expect(binNames).toEqual(expect.arrayContaining(["mstar", "mstar-harness"]));
+    const { calloutsChecked, cliCitationsChecked, failures } = checkEngineCallouts(
+      [
+        { rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar status validate <path>`") },
+        { rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar-harness dispatch validate <file>`") },
+      ],
+      {
+        cliCommands: new Set(["status validate", "dispatch validate"]),
+        engineExports: new Set(["validateStatus"]),
+        binNames,
+      },
+    );
+    expect(calloutsChecked).toBe(2);
+    expect(cliCitationsChecked).toBe(2);
+    expect(failures).toEqual([]);
+  });
+
+  test("undeclared binary prefix fails — `mstarr status validate` (load-bearing)", () => {
+    const binNames = declaredBins();
+    const { failures } = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstarr status validate <path>`") }],
+      { cliCommands: new Set(["status validate"]), engineExports: new Set(), binNames },
+    );
+    expect(failures).toEqual([
+      `skills/mstar-foo/SKILL.md:1 citation binary "mstarr" is not a declared CLI bin (${binNames.join(" | ")})`,
+    ]);
+  });
+
+  test("unknown command path still fails under a declared bin", () => {
+    const { failures } = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar bogus validate <path>`") }],
+      {
+        cliCommands: new Set(["status validate"]),
+        engineExports: new Set(),
+        binNames: declaredBins(),
+      },
+    );
+    expect(failures).toEqual([
+      expect.stringContaining('callout references unknown CLI command "mstar bogus validate"'),
+    ]);
+  });
+
+  test("prose outside Engine-check callouts is not scanned", () => {
+    const { calloutsChecked, failures } = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: "run `mstarr status validate` in prose" }],
+      {
+        cliCommands: new Set(["status validate"]),
+        engineExports: new Set(),
+        binNames: declaredBins(),
+      },
+    );
+    expect(calloutsChecked).toBe(0);
+    expect(failures).toEqual([]);
+  });
+
+  test("real corpus pins 35 Engine-check callouts / 34 CLI citations (F-S3, drift goes red)", () => {
+    const REPO_ROOT = join(import.meta.dir, "..");
+    const SKILLS_ROOT = join(REPO_ROOT, "skills");
+
+    /** Every `.md` file under skills/ with the repo-relative `rel` Guard 1
+     * sees in main — the 35/34 counts are a regression pin: adding or
+     * removing a backticked CLI citation inside an Engine-check callout
+     * (or adding a callout) fails this test loudly. */
+    const realCorpus = () => {
+      const files: string[] = [];
+      const walk = (dir: string) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const p = join(dir, entry.name);
+          if (entry.isDirectory()) walk(p);
+          else if (entry.name.endsWith(".md")) files.push(p);
+        }
+      };
+      walk(SKILLS_ROOT);
+      return files
+        .sort()
+        .map((file) => ({ rel: relative(REPO_ROOT, file), text: readFileSync(file, "utf8") }));
+    };
+
+    const cliSrc = readFileSync(join(REPO_ROOT, "packages", "cli", "src", "index.ts"), "utf8");
+    const { cliCommands, failures: cliFailures } = buildCliCommandInventory(cliSrc);
+    expect(cliFailures).toEqual([]);
+    const engineExports = buildEngineExportNames(
+      readFileSync(join(REPO_ROOT, "packages", "engine", "src", "index.ts"), "utf8"),
+    );
+    expect(engineExports.size).toBeGreaterThan(0);
+    const { binNames, failures: manifestFailures } = readDeclaredBins(
+      join(REPO_ROOT, "packages", "cli", "package.json"),
+    );
+    expect(manifestFailures).toEqual([]);
+    expect(binNames).toEqual(expect.arrayContaining(["mstar", "mstar-harness"]));
+
+    const { calloutsChecked, cliCitationsChecked, failures } = checkEngineCallouts(realCorpus(), {
+      cliCommands,
+      engineExports,
+      binNames,
+    });
+    expect(calloutsChecked).toBe(35);
+    expect(cliCitationsChecked).toBe(34);
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("readDeclaredBins — Guard 1 manifest read fail-loud (F-S2)", () => {
+  test("missing / corrupt / bin-less manifests each return one explicit failure row, never a silent skip", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-bins-"));
+    try {
+      expect(readDeclaredBins(join(dir, "missing.json"))).toEqual({
+        binNames: [],
+        failures: [expect.stringContaining("could not read CLI manifest")],
+      });
+
+      writeFileSync(join(dir, "corrupt.json"), "{ not json");
+      expect(readDeclaredBins(join(dir, "corrupt.json"))).toEqual({
+        binNames: [],
+        failures: [expect.stringContaining("is not valid JSON")],
+      });
+
+      writeFileSync(join(dir, "empty-bin.json"), JSON.stringify({ name: "x", bin: {} }));
+      expect(readDeclaredBins(join(dir, "empty-bin.json"))).toEqual({
+        binNames: [],
+        failures: [expect.stringContaining("declares no bin names")],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("valid manifest returns the declared bin names with no failures", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-bins-ok-"));
+    try {
+      const manifest = join(dir, "ok.json");
+      writeFileSync(
+        manifest,
+        JSON.stringify({
+          name: "@mstar-harness/cli",
+          bin: { "mstar-harness": "dist/mstar-harness.js", mstar: "dist/mstar-harness.js" },
+        }),
+      );
+      expect(readDeclaredBins(manifest)).toEqual({
+        binNames: ["mstar-harness", "mstar"],
+        failures: [],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

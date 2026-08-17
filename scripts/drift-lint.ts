@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 /**
  * drift-lint.ts — roadmap §8.7 item 4 (guards risk R1): pointer callouts in
- * skills/ must reference real engine exports and real CLI subcommands, and
- * engine spec-citation comments must resolve to real skill files.
+ * skills/ must reference real engine exports, real CLI subcommands, and a
+ * declared CLI bin name, and engine spec-citation comments must resolve to
+ * real skill files.
  *
  * Guards added by plan 20260816-mechanical-verification (Task 3):
  *   1. docs audit enum — `/codebase-audit` category tokens in docs/cli.md
@@ -33,6 +34,13 @@
  *      of five-question alignment without failing CI. Guard numbers are
  *      per-plan locked, not positional.
  *
+ * The forward callout citation check (this plan, 20260817-cli-bin-alias
+ * Task 2) also validates the **binary prefix** of every backticked CLI
+ * citation in Engine-check callouts against the declared `bin` names read
+ * from packages/cli/package.json — the manifest is SSOT, never a hardcoded
+ * list — closing the blind spot where prose could cite a nonexistent
+ * executable while every subcommand path still validated.
+ *
  * Engine symbols are imported from the source entry (../packages/engine/
  * src/index.ts), NOT the "@mstar-harness/engine" package specifier: the CI
  * drift-lint job runs `bun run validation:drift` in a fresh checkout with
@@ -58,6 +66,7 @@ import {
 const root = process.cwd();
 const failures: string[] = [];
 let calloutsChecked = 0;
+let cliCitationsChecked = 0;
 
 function fail(message: string): void {
   failures.push(message);
@@ -321,12 +330,19 @@ export function checkFiveQuestionCorpus(files: Array<{ rel: string; text: string
   return { checked, failures };
 }
 
-if (import.meta.main) {
-  /* ------------------------------------------------------------------ */
-  /* Engine export inventory (packages/engine/src/index.ts)               */
-  /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Guard 1 forward helpers: Engine-check callouts (bin-prefix guard)   */
+/* ------------------------------------------------------------------ */
 
-  const engineIndex = readFileSync(join(root, "packages/engine/src/index.ts"), "utf8");
+export type EngineCalloutResult = {
+  calloutsChecked: number;
+  cliCitationsChecked: number;
+  failures: string[];
+};
+
+/** Engine export names from `packages/engine/src/index.ts` — every
+ * `export { … } from "…"` re-export name (strip `type` / `as` modifiers). */
+export function buildEngineExportNames(engineIndex: string): Set<string> {
   const engineExports = new Set<string>();
   const exportRe = /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["'][^"']+["']/g;
   let m: RegExpExecArray | null;
@@ -336,19 +352,20 @@ if (import.meta.main) {
       if (name) engineExports.add(name);
     }
   }
-  if (engineExports.size === 0) {
-    console.error("drift: could not parse any exports from packages/engine/src/index.ts");
-    process.exit(1);
-  }
+  return engineExports;
+}
 
-  /* ------------------------------------------------------------------ */
-  /* CLI command inventory (packages/cli/src/index.ts `.command(...)`)    */
-  /* ------------------------------------------------------------------ */
-
-  const cliSrc = readFileSync(join(root, "packages/cli/src/index.ts"), "utf8");
+/** CLI command inventory from `packages/cli/src/index.ts` — every
+ * `.command("name")` path (single tokens plus `parent child` composites). */
+export function buildCliCommandInventory(cliSrc: string): {
+  cliCommands: Set<string>;
+  failures: string[];
+} {
   const cliCommands = new Set<string>();
   const varPaths = new Map<string, string>();
+  const failures: string[] = [];
   const commandRe = /(?:const\s+(\w+)\s*=\s*program\s*|(\w+)\s*)\.command\(\s*"([a-z-]+)"\s*\)/g;
+  let m: RegExpExecArray | null;
   while ((m = commandRe.exec(cliSrc))) {
     const [, declared, receiver, name] = m;
     if (declared) {
@@ -359,22 +376,72 @@ if (import.meta.main) {
     } else {
       const parent = varPaths.get(receiver);
       if (parent === undefined) {
-        fail(`CLI parent of "${receiver}.command("${name}")" is not a known command var`);
+        failures.push(`CLI parent of "${receiver}.command("${name}")" is not a known command var`);
         continue;
       }
       cliCommands.add(parent ? `${parent} ${name}` : name);
     }
   }
+  return { cliCommands, failures };
+}
 
-  /* ------------------------------------------------------------------ */
-  /* Forward: skill callouts → engine exports + CLI commands              */
-  /* ------------------------------------------------------------------ */
+/** Declared CLI bin names — the manifest is SSOT, never a hardcoded list.
+ * Guard-or-clear-error (mirrors `readRolesCorpus`): a missing / corrupt /
+ * bin-less manifest returns one explicit failure row, never a silent skip —
+ * with no declared bins the prefix check would flood every citation. */
+export function readDeclaredBins(
+  manifestPath: string,
+): { binNames: string[]; failures: string[] } {
+  let raw: string;
+  try {
+    raw = readFileSync(manifestPath, "utf8");
+  } catch {
+    return {
+      binNames: [],
+      failures: [`drift: could not read CLI manifest at ${manifestPath} (declared-bin prefix check skipped)`],
+    };
+  }
+  let cliManifest: { bin?: Record<string, string> };
+  try {
+    cliManifest = JSON.parse(raw) as { bin?: Record<string, string> };
+  } catch {
+    return {
+      binNames: [],
+      failures: [`drift: CLI manifest at ${manifestPath} is not valid JSON (declared-bin prefix check skipped)`],
+    };
+  }
+  const binNames = Object.keys(cliManifest.bin ?? {});
+  if (binNames.length === 0) {
+    return {
+      binNames: [],
+      failures: [`drift: CLI manifest at ${manifestPath} declares no bin names (declared-bin prefix check skipped)`],
+    };
+  }
+  return { binNames, failures: [] };
+}
 
-  const skillFiles = collectFiles("skills", ".md");
-  for (const file of skillFiles) {
-    const text = readFileSync(file, "utf8");
+/**
+ * Guard 1 forward half — every `**Engine check (when available):**`
+ * blockquote run in a skill file. Backticked CLI citations
+ * (`mstar status validate`, `mstar-harness dispatch validate`, …) must
+ * reference a **declared CLI bin** (the caller passes the `bin` names read
+ * from packages/cli/package.json — the manifest is SSOT, never hardcoded)
+ * and a real `.command()` path from the CLI inventory; engine imports in
+ * the same callout must reference real engine exports. One failure row per
+ * violation. Load-bearing: an undeclared binary prefix (e.g. `mstarr`)
+ * fails drift-lint (regression-pinned by scripts/drift-lint.test.ts).
+ */
+export function checkEngineCallouts(
+  files: Array<{ rel: string; text: string }>,
+  opts: { cliCommands: Set<string>; engineExports: Set<string>; binNames: string[] },
+): EngineCalloutResult {
+  const failures: string[] = [];
+  let calloutsChecked = 0;
+  let cliCitationsChecked = 0;
+  const bins = new Set(opts.binNames);
+
+  for (const { rel, text } of files) {
     const lines = text.split(/\r?\n/);
-    const rel = relative(root, file);
 
     // Blockquote runs: consecutive lines starting with `>`.
     const runs: Array<{ start: number; end: number; text: string }> = [];
@@ -392,25 +459,95 @@ if (import.meta.main) {
       if (!run.text.includes("**Engine check (when available):**")) continue;
       calloutsChecked++;
 
-      for (const cm of run.text.matchAll(/mstar\s+([a-z-]+(?:\s+[a-z-]+)?)/g)) {
-        const cmd = cm[1];
-        if (!cliCommands.has(cmd)) {
-          fail(`${rel}:${run.start + 1} callout references unknown CLI command "mstar ${cmd}" (known: ${[...cliCommands].sort().join(", ")})`);
+      // Backticked CLI citations — anchored to the opening backtick so the
+      // prefix capture is exact (prose word pairs are never counted as
+      // citations). `<bin> <cmd>` with at most a two-word command path,
+      // preserving the pre-existing match surface (`mstar audit scaffold
+      // <file>` → prefix `mstar`, path `audit scaffold`).
+      for (const cm of run.text.matchAll(/`([a-z][a-z0-9-]*)\s+([a-z-]+(?:\s+[a-z-]+)?)/g)) {
+        const bin = cm[1];
+        const cmd = cm[2];
+        cliCitationsChecked++;
+        if (!bins.has(bin)) {
+          failures.push(
+            `${rel}:${run.start + 1} citation binary "${bin}" is not a declared CLI bin (${opts.binNames.join(" | ")})`,
+          );
+          continue;
+        }
+        if (!opts.cliCommands.has(cmd)) {
+          failures.push(
+            `${rel}:${run.start + 1} callout references unknown CLI command "${bin} ${cmd}" (known: ${[...opts.cliCommands].sort().join(", ")})`,
+          );
         }
       }
+
       for (const im of run.text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
         for (const raw of im[1].split(",")) {
           // Strip TS import modifiers so `import { type Foo }` / `import {
           // Foo as Bar }` resolve to the exported name `Foo`.
           const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
-          if (name && !engineExports.has(name)) {
-            fail(`${rel}:${run.start + 1} callout imports unknown engine export "${name}"`);
+          if (name && !opts.engineExports.has(name)) {
+            failures.push(`${rel}:${run.start + 1} callout imports unknown engine export "${name}"`);
           }
         }
       }
     }
+  }
 
-    // Import statements anywhere in a skill file must reference real exports.
+  return { calloutsChecked, cliCitationsChecked, failures };
+}
+
+if (import.meta.main) {
+  /* ------------------------------------------------------------------ */
+  /* Engine export inventory (packages/engine/src/index.ts)               */
+  /* ------------------------------------------------------------------ */
+
+  const engineIndex = readFileSync(join(root, "packages/engine/src/index.ts"), "utf8");
+  const engineExports = buildEngineExportNames(engineIndex);
+  if (engineExports.size === 0) {
+    console.error("drift: could not parse any exports from packages/engine/src/index.ts");
+    process.exit(1);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* CLI command inventory (packages/cli/src/index.ts `.command(...)`)    */
+  /* ------------------------------------------------------------------ */
+
+  const cliSrc = readFileSync(join(root, "packages/cli/src/index.ts"), "utf8");
+  const { cliCommands, failures: cliInventoryFailures } = buildCliCommandInventory(cliSrc);
+  for (const row of cliInventoryFailures) fail(row);
+
+  /* ------------------------------------------------------------------ */
+  /* Forward: skill callouts → engine exports + CLI commands + bins      */
+  /* ------------------------------------------------------------------ */
+
+  const skillFiles = collectFiles("skills", ".md");
+
+  // Declared CLI bin names — the manifest is SSOT, never a hardcoded list.
+  // A missing / corrupt / bin-less manifest is a loud failure row; with no
+  // declared bins the prefix check would flood every citation, so the
+  // callout scan is skipped (guard-or-clear-error) — the separate
+  // import-statement loop below still runs for engine exports.
+  const { binNames, failures: manifestFailures } = readDeclaredBins(
+    join(root, "packages/cli/package.json"),
+  );
+  for (const row of manifestFailures) fail(row);
+
+  const forward =
+    manifestFailures.length === 0
+      ? checkEngineCallouts(
+          skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
+          { cliCommands, engineExports, binNames },
+        )
+      : { calloutsChecked: 0, cliCitationsChecked: 0, failures: [] as string[] };
+  calloutsChecked += forward.calloutsChecked;
+  cliCitationsChecked += forward.cliCitationsChecked;
+  for (const row of forward.failures) fail(row);
+
+  // Import statements anywhere in a skill file must reference real exports.
+  for (const file of skillFiles) {
+    const rel = relative(root, file);
+    const text = readFileSync(file, "utf8");
     for (const im of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*"@mstar-harness\/engine"/g)) {
       for (const raw of im[1].split(",")) {
         const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
@@ -642,12 +779,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations)`,
   );
 }
