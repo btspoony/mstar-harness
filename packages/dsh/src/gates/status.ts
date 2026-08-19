@@ -19,7 +19,7 @@
  * verbatim by the entry.
  */
 import { existsSync, readdirSync } from 'node:fs'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { basename, join, relative, resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
