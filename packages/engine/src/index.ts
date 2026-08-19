@@ -89,6 +89,21 @@ export {
   withStatusWriteLock,
 } from "./lease.js";
 export type {
+  WorkflowBranchAnchors,
+  WorkflowExecutionPolicy,
+  WorkflowLifecycleStatus,
+  WorkflowLifecycleType,
+  WorkflowSnapshot,
+} from "./workflow.js";
+export {
+  WORKFLOW_LIFECYCLE_STATUSES,
+  WORKFLOW_LIFECYCLE_TYPES,
+  WORKFLOW_SNAPSHOT_FILE,
+  WORKFLOW_TERMINAL_STATUSES,
+  validateWorkflowSnapshot,
+  writeWorkflowSnapshot,
+} from "./workflow.js";
+export type {
   AssignmentBranchForms,
   AssignmentFields,
   ComposeDispatchGateOptions,
