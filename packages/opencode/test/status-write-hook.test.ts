@@ -128,7 +128,6 @@ describe("validateStatusWrite (exported hook module)", () => {
       expect(result).not.toBeNull();
       expect(result!.ok).toBe(false);
       expect(warnings.some((w) => w.includes("status.workflow.invalid-type"))).toBe(true);
-      expect(warnings.some((w) => w.includes("status.workflow.invalid-type"))).toBe(true);
     } finally {
       rmSync(statusPath, { recursive: true, force: true });
     }
