@@ -224,6 +224,21 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     }
   });
 
+  test("hostile workflow id (path traversal) is rejected before any read, exit 1 (qc2 S-2)", () => {
+    const root = tmpRoot("mstar-wt-l1-traversal-");
+    try {
+      writeSnapshot(root, snapshotDoc([]));
+      for (const bad of ["../../etc", "a/b", "..", "."]) {
+        const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", bad, "--harness", root]);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("invalid workflow id");
+        expect(result.stderr).not.toContain("workflow snapshot not found");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("positional plan-id: worktree check <plan-id> --workflow <id> → OK, exit 0", () => {
     const root = tmpRoot("mstar-wt-l1-pos-");
     try {

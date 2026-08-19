@@ -450,6 +450,17 @@ plans: ["ok"]
       expect(result.stderr).toContain("no YAML frontmatter fence");
     });
   });
+
+  test("hostile workflow id (path traversal) is rejected before any read, exit 1 (qc2 S-2)", () => {
+    withFixtures((dir, _statusPath, compassPath) => {
+      for (const bad of ["../../etc", "a/b", "..", "."]) {
+        const result = runCli(["iteration", "gate", "--workflow", bad, "--harness", dir, "--compass", compassPath]);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("invalid workflow id");
+        expect(result.stderr).not.toContain("workflow snapshot not found");
+      }
+    });
+  });
 });
 
 describe("mstar iteration push-cadence — §5.1a push gate", () => {

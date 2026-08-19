@@ -19,9 +19,11 @@ import { describe, expect, test } from "bun:test";
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -120,6 +122,72 @@ describe("mstar migrate — dry-run", () => {
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain("dry-run");
       expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("defaults --path to the resolved {HARNESS_DIR} when cwd is the repo root (S-a)", () => {
+    // Repo root with the v1 tree under `.mstar/` — every other command
+    // auto-discovers the harness; migrate must too (qc1 S-4 / qc2 S-3).
+    const repoRoot = mkdtempSync(join(tmpdir(), "migrate-cli-discovery-"));
+    try {
+      const harness = join(repoRoot, ".mstar");
+      mkdirSync(harness, { recursive: true });
+      cpSync(V1_FIXTURE, harness, { recursive: true });
+      const r = runCli(["migrate", "--dry-run", "--json"], { cwd: repoRoot });
+      expect(r.exitCode).toBe(0);
+      const doc = JSON.parse(r.stdout) as { ok: boolean; root: string; dryRun: boolean };
+      expect(doc.ok).toBe(true);
+      expect(doc.dryRun).toBe(true);
+      // The CLI subprocess sees the realpath'd cwd (macOS /var -> /private/var).
+      expect(doc.root).toBe(realpathSync(harness));
+      expect(existsSync(join(harness, "archived", "status.v1.json"))).toBe(false);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("mstar migrate --dry-run — planned-document validation (qc3 S-1 / fix-wave S-f)", () => {
+  test("valid v1 tree → dry-run emits zero validation warnings", () => {
+    const root = fixtureTree();
+    try {
+      const r = runCli(["migrate", "--dry-run", "--path", root]);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("dry-run");
+      expect(r.stdout).not.toContain("warning:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("poisoned v1 row (missing plan-row title) → dry-run warns with the apply-time validator code", () => {
+    const root = fixtureTree();
+    try {
+      // The planner preserves rows verbatim; a row without `title` fails
+      // validatePlanRow inside validateWorkflowSnapshot — the same check
+      // writeWorkflowSnapshot applies fail-closed at apply time. Dry-run
+      // must surface it as a warning instead of printing a clean plan.
+      const statusPath = join(root, "status.json");
+      const doc = readJsonFile(statusPath);
+      const plans = doc.plans as Array<Record<string, unknown>>;
+      delete plans[0]!.title;
+      writeFileSync(statusPath, JSON.stringify(doc, null, 2));
+
+      const r = runCli(["migrate", "--dry-run", "--path", root]);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain("warning:");
+      expect(r.stdout).toContain("status.plan-row.missing-title");
+      // zero writes even when warnings are present
+      expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(false);
+
+      const j = runCli(["migrate", "--dry-run", "--path", root, "--json"]);
+      expect(j.exitCode).toBe(0);
+      const docJson = JSON.parse(j.stdout) as { validationWarnings?: string[] };
+      expect(Array.isArray(docJson.validationWarnings)).toBe(true);
+      expect(docJson.validationWarnings!.length).toBeGreaterThan(0);
+      expect(docJson.validationWarnings![0]).toContain("status.plan-row.missing-title");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -237,6 +305,47 @@ describe("mstar migrate — exit codes", () => {
       // rolled back: root status.json is still v1; the v1 archive landed
       expect(readJsonFile(join(root, "status.json")).version).toBe(1);
       expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("mid-snapshot apply failure then re-run converges (qc3 S-6 / fix-wave S-h)", () => {
+    const root = fixtureTree();
+    try {
+      // Fail AFTER ≥1 snapshot write: a FILE at a late-sorted workflow id
+      // makes mkdir of that snapshot's dir throw (EEXIST), after the
+      // earlier snapshots already landed — the existing test only covers
+      // the pre-snapshot partial state (workflows as a file).
+      const workflowsDir = join(root, "workflows");
+      mkdirSync(workflowsDir, { recursive: true });
+      const blocker = join(workflowsDir, "iter-20260817-dsh-cli-roles");
+      writeFileSync(blocker, "not a directory");
+
+      const r = runCli(["migrate", "--path", root]);
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain("apply");
+      // Partial state: v1 root intact + archive landed + the FIRST sorted
+      // snapshot written; the blocked snapshot and later ones absent.
+      expect(readJsonFile(join(root, "status.json")).version).toBe(1);
+      expect(existsSync(join(root, "archived", "status.v1.json"))).toBe(true);
+      expect(existsSync(join(workflowsDir, "20260717-kimi-host", "snapshot.json"))).toBe(true);
+      expect(existsSync(join(workflowsDir, "iter-20260817-dsh-cli-roles", "snapshot.json"))).toBe(false);
+      expect(existsSync(join(workflowsDir, "v3.0.0", "snapshot.json"))).toBe(false);
+
+      // Remove the blocker and re-run: the deterministic plan converges by
+      // overwrite (additive-first, same destinations).
+      rmSync(blocker);
+      const second = runCli(["migrate", "--path", root]);
+      expect(second.exitCode).toBe(0);
+      expect(readJsonFile(join(root, "status.json")).version).toBe(2);
+      expect(readdirSync(workflowsDir)).toHaveLength(29);
+      expect(existsSync(join(workflowsDir, "iter-20260817-dsh-cli-roles", "snapshot.json"))).toBe(true);
+      expect(existsSync(join(workflowsDir, "v3.0.0", "snapshot.json"))).toBe(true);
+      // Converged re-run is idempotent.
+      const third = runCli(["migrate", "--path", root]);
+      expect(third.exitCode).toBe(0);
+      expect(third.stdout).toContain("no-op");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
