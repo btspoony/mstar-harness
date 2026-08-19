@@ -186,6 +186,10 @@ describe("migrateHarnessTree — planner on the real-tree fixture", () => {
       });
       expect(typeof data.legacy_metadata!.harness_root_note).toBe("string");
       expect(data.legacy_metadata!.harness_root_note).toContain("dropped as redundant");
+      // harness_root is note-only: the raw value is NOT copied verbatim and
+      // there is no first-class harness_root field (declaration == behavior).
+      expect(data.legacy_metadata!.harness_root).toBeUndefined();
+      expect((data as Record<string, unknown>).harness_root).toBeUndefined();
 
       // 4 registered plans, rows sorted by id, statuses + lease verbatim.
       expect(data.plans.map((row) => row.id)).toEqual([
@@ -386,6 +390,20 @@ describe("migrateHarnessTree — planner on the real-tree fixture", () => {
       expect(files).not.toContain("workflows/20260816-inspect-redteam-consolidation/notes.jsonl");
       const inspect = plan.snapshots.find((s) => s.id === "iter-20260816-dsh-inspect-adoption")!;
       expect(typeof inspect.data.plans[2]!.notes).toBe("string");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("roadmap seed preserves program_roadmap.no_intermediate_releases and deferred_beyond (nothing dropped silently)", () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      const content = plan.roadmap!.content;
+      expect(content).toContain("no_intermediate_releases: true");
+      expect(content).toContain("### Deferred beyond");
+      expect(content).toContain("- pi/dsh adapters (host APIs unknown)");
+      expect(content).toContain("- omp in-process binding (no TS plugin surface as of 2026-08-07)");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

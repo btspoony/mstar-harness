@@ -11,9 +11,11 @@
  *   (`iterations/<id>/delivery-compass.md` files only; the
  *   `delivery-compass.<role>.md` review-chain variants are NOT grouping
  *   sources). Row id is read from `id` OR the legacy `plan_id` key. A
- *   registered id with NO status row (compacted away — 23 observed in this
- *   repo) is recorded on the owning snapshot's
- *   `legacy_metadata.compact_missing[]` — never fabricated as a row.
+ *   registered id with NO status row (compacted away — 23 observed at
+ *   fixture freeze 2026-08-19; the canonical frozen count lives in
+ *   `test/fixtures/migrate-real/status.json`) is recorded on the owning
+ *   snapshot's `legacy_metadata.compact_missing[]` — never fabricated as a
+ *   row.
  *   Unregistered rows become standalone plan-type snapshots.
  * - **Snapshot status mapping:** iteration snapshot status = compass
  *   frontmatter (`active|locked` -> `running`; `completed` -> `completed`);
@@ -29,8 +31,10 @@
  *   `control_worktree_path` -> `control_worktree_path`;
  *   `integration_merge_lease` -> top-level `integration_merge_lease`; all of
  *   these land on the ACTIVE iteration snapshot (status `running`; v3.0.0
- *   today). `program_roadmap` seeds `projects/<id>/roadmap.md`;
- *   `harness_root` is dropped as redundant with a `legacy_metadata` note;
+ *   today). `program_roadmap` seeds `projects/<id>/roadmap.md` (its
+ *   `no_intermediate_releases` / `deferred_beyond` fields are preserved in
+ *   the seed body — nothing dropped silently); `harness_root` is dropped as
+ *   redundant with a `legacy_metadata` note;
  *   `metadata.updated_at` folds into the v2 root `updated_at`; ALL other/
  *   unknown root-metadata keys land in the active snapshot
  *   `legacy_metadata` — nothing dropped silently.
@@ -179,6 +183,12 @@ type CompassInfo = {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * Root-metadata keys lifted to FIRST-CLASS fields on the active iteration
+ * snapshot. `harness_root` is deliberately NOT here: it is note-only
+ * (`legacy_metadata.harness_root_note`, value dropped as redundant) — see
+ * `applyRootMetadataLift`.
+ */
 const ROOT_METADATA_LIFT_KEYS: Record<string, true> = {
   plan_parallelism: true,
   worktree_mode: true,
@@ -189,7 +199,6 @@ const ROOT_METADATA_LIFT_KEYS: Record<string, true> = {
   control_worktree_path: true,
   integration_merge_lease: true,
   program_roadmap: true,
-  harness_root: true,
   updated_at: true,
 };
 
@@ -419,6 +428,7 @@ function applyRootMetadataLift(
     ? { ...data.legacy_metadata }
     : {};
   for (const [key, value] of Object.entries(metadata)) {
+    if (key === "harness_root") continue; // note-only handling below — not a lift
     if (ROOT_METADATA_LIFT_KEYS[key] === true) continue;
     legacyMetadata[key] = value;
   }
@@ -434,7 +444,13 @@ function applyRootMetadataLift(
   }
 }
 
-/** Build `projects/<id>/roadmap.md` seeds from `metadata.program_roadmap`. */
+/**
+ * Build `projects/<id>/roadmap.md` seeds from `metadata.program_roadmap`.
+ * Decision (fix round 1, M-1): the roadmap's internal fields
+ * `no_intermediate_releases` / `deferred_beyond` are preserved in the seed
+ * BODY (Direction section) — not in `legacy_metadata` — because they are
+ * roadmap content the user reads in `roadmap.md`; nothing dropped silently.
+ */
 function buildRoadmap(programRoadmap: Record<string, unknown>, projectId: string, migratedAt: string): string {
   const title = typeof programRoadmap.title === "string" && programRoadmap.title !== "" ? programRoadmap.title : "Program roadmap";
   const doc = typeof programRoadmap.doc === "string" ? programRoadmap.doc : "";
@@ -442,6 +458,9 @@ function buildRoadmap(programRoadmap: Record<string, unknown>, projectId: string
   const branch = typeof programRoadmap.branch === "string" ? programRoadmap.branch : "";
   const milestones = Array.isArray(programRoadmap.slices)
     ? programRoadmap.slices.map((slice) => String(slice)).filter((slice) => slice !== "")
+    : [];
+  const deferred = Array.isArray(programRoadmap.deferred_beyond)
+    ? programRoadmap.deferred_beyond.map((item) => String(item)).filter((item) => item !== "")
     : [];
 
   const lines: string[] = [
@@ -460,6 +479,12 @@ function buildRoadmap(programRoadmap: Record<string, unknown>, projectId: string
     .filter((part) => part !== "")
     .join(", ");
   lines.push(`Migrated from legacy status.json \`metadata.program_roadmap\`${provenance !== "" ? ` (${provenance})` : ""}.`);
+  if (programRoadmap.no_intermediate_releases !== undefined) {
+    lines.push(`no_intermediate_releases: ${String(programRoadmap.no_intermediate_releases)}`);
+  }
+  if (deferred.length > 0) {
+    lines.push("", "### Deferred beyond", ...deferred.map((item) => `- ${item}`));
+  }
   lines.push("");
   return lines.join("\n");
 }
