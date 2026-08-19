@@ -10,10 +10,14 @@
  * intends to run and is echoed into the text/details, never passed to the
  * engine.
  *
- * `workflowSnapshotPath` is read as JSON (engine `readJson`);
- * `compassPath` is a delivery-compass.md whose YAML frontmatter is parsed
- * by the engine `parseCompassFrontmatter` (same parser the CLI uses — no
- * fork). Both paths are resolved against `pi.cwd`.
+ * `workflowId` is a single safe path component (parity with the CLI
+ * `--workflow <id>` and the sibling snapshot-consuming tools, fix-wave
+ * S-b / W-A): it is resolved to
+ * `{HARNESS_DIR}/workflows/<workflowId>/snapshot.json` from the session
+ * cwd with the traversal guard — a full path is NOT accepted. `compassPath`
+ * is a delivery-compass.md whose YAML frontmatter is parsed by the engine
+ * `parseCompassFrontmatter` (same parser the CLI uses — no fork), resolved
+ * against `pi.cwd`.
  *
  * Missing files are explicit isError results — the engine `readJson` would
  * otherwise read a missing snapshot as `{}` and the gate would report a
@@ -24,12 +28,12 @@
  * tool (qc3 F-001).
  */
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { evaluatePhaseGate, readJson } from "@mstar-harness/engine";
+import { join, resolve } from "node:path";
+import { evaluatePhaseGate, readJson, resolveHarnessDir } from "@mstar-harness/engine";
 import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
-type Params = { phase: string; workflowSnapshotPath: string; compassPath: string };
+type Params = { phase: string; workflowId: string; compassPath: string };
 
 function violationLines(violations: readonly ValidationResult[]): string {
   return violations
@@ -43,29 +47,47 @@ function result(text: string, details: unknown, isError: boolean): AgentToolResu
   return out;
 }
 
+/** Workflow-id guard (fix-wave S-b / W-A parity): reject "", ".", "..", separators. */
+function assertSafeWorkflowId(workflowId: string): string | null {
+  if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
+    return `mstar_iteration_gate: invalid workflowId ${JSON.stringify(workflowId)}`;
+  }
+  return null;
+}
+
 export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
   return {
     name: "mstar_iteration_gate",
     label: "Evaluate iteration phase gate",
     description:
-      "Evaluate the Morning Star iteration Phase transition gates (mstar-iteration): reads the given workflow snapshot (workflows/<id>/snapshot.json) and delivery-compass.md frontmatter and runs the engine evaluatePhaseGate (all compass-registered plans Done, close entry checklist, PR-delivery exit checklist). " +
-      "`phase` labels the intended transition (phase-2-execute / phase-3-close / phase-4-pr-delivery) for the report; `workflowSnapshotPath` and `compassPath` are file paths resolved against the session cwd. " +
+      "Evaluate the Morning Star iteration Phase transition gates (mstar-iteration): reads the workflow snapshot (workflows/<id>/snapshot.json, resolved from the session cwd) and delivery-compass.md frontmatter and runs the engine evaluatePhaseGate (all compass-registered plans Done, close entry checklist, PR-delivery exit checklist). " +
+      "`phase` labels the intended transition (phase-2-execute / phase-3-close / phase-4-pr-delivery) for the report; `workflowId` is the workflow id (CLI parity, single safe path component) and `compassPath` is a file path resolved against the session cwd. " +
       "Use before iteration-close or PR delivery to confirm the gate state. Returns one line per violation as [severity] code: message (fix: …).",
     parameters: pi.zod
       .object({
         phase: pi.zod.string(),
-        workflowSnapshotPath: pi.zod.string(),
+        workflowId: pi.zod.string(),
         compassPath: pi.zod.string(),
       }),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
-        if (!params?.phase || !params?.workflowSnapshotPath || !params?.compassPath) {
-          return result("mstar_iteration_gate: phase, workflowSnapshotPath and compassPath are required", { ok: false }, true);
+        if (!params?.phase || !params?.workflowId || !params?.compassPath) {
+          return result("mstar_iteration_gate: phase, workflowId and compassPath are required", { ok: false }, true);
         }
-        const snapshotPath = resolve(pi.cwd, params.workflowSnapshotPath);
+        const guardError = assertSafeWorkflowId(params.workflowId);
+        if (guardError !== null) return result(guardError, { ok: false }, true);
+        const harnessDir = resolveHarnessDir(pi.cwd);
+        if (harnessDir === null) {
+          return result(
+            `no harness directory found from "${pi.cwd}" (looked for .mstar/ / .agents/ / .plans/ / plans/ walking up)`,
+            { cwd: pi.cwd },
+            true,
+          );
+        }
+        const snapshotPath = join(harnessDir, "workflows", params.workflowId, "snapshot.json");
         const compassPath = resolve(pi.cwd, params.compassPath);
         if (!existsSync(snapshotPath)) {
-          return result(`workflow snapshot not found: ${snapshotPath}`, { phase: params.phase, workflow_snapshot_path: snapshotPath }, true);
+          return result(`workflow snapshot not found: ${snapshotPath}`, { phase: params.phase, workflow_id: params.workflowId, workflow_snapshot_path: snapshotPath }, true);
         }
         if (!existsSync(compassPath)) {
           return result(
@@ -83,7 +105,7 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
         if (typeof parseCompassFrontmatter !== "function") {
           return result(
             "installed @mstar-harness/engine lacks parseCompassFrontmatter — upgrade the engine (next release); CLI fallback: mstar iteration gate",
-            { phase: params.phase, workflow_snapshot_path: snapshotPath, compass_path: compassPath },
+            { phase: params.phase, workflow_id: params.workflowId, workflow_snapshot_path: snapshotPath, compass_path: compassPath },
             true,
           );
         }
@@ -96,6 +118,7 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
             : `phase "${params.phase}" gate violations:\n${violationLines(gate.violations)}`,
           {
             phase: params.phase,
+            workflow_id: params.workflowId,
             transition: gate.transition,
             all_plans_done: gate.allPlansDone,
             ok: gate.ok,

@@ -12,6 +12,14 @@
  * kind=l2 takes the parallel writable `tracks` (absolute worktreePath +
  * Working branch per track); the zod shape guards the L2PreDispatchInput
  * contract at the parameter boundary. No local rule logic.
+ *
+ * `workflowId` is a single safe path component — reject separators and
+ * `..` before joining (parity with the CLI `resolveSnapshotPath` and
+ * `mstar_lease_verify`, fix-wave W-A). `WORKFLOW_SNAPSHOT_FILE` is a
+ * P1-only engine export absent from the published floor `^2.0.2`, read
+ * from a DYNAMIC engine import so a stale engine yields an explicit
+ * upgrade error instead of a module-link failure that silently drops the
+ * tool (qc3 F-001 / fix-wave W-B).
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -20,7 +28,6 @@ import {
   l2PreDispatchCheck,
   readJson,
   resolveHarnessDir,
-  WORKFLOW_SNAPSHOT_FILE,
 } from "@mstar-harness/engine";
 import type { L1PreDispatchInput, ValidationResult, WorktreeTrack } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
@@ -47,6 +54,34 @@ function result(text: string, details: unknown, isError: boolean): AgentToolResu
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Workflow-id guard (fix-wave W-A): reject "", ".", "..", separators. */
+function assertSafeWorkflowId(workflowId: string): string | null {
+  if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
+    return `mstar_worktree_check: invalid workflowId ${JSON.stringify(workflowId)}`;
+  }
+  return null;
+}
+
+/** Dynamic engine import guard for the P1-only `WORKFLOW_SNAPSHOT_FILE`
+ * export (qc3 F-001 / fix-wave W-B): missing → explicit upgrade error. */
+async function loadSnapshotFile(): Promise<{ snapshotFile: string } | { error: AgentToolResult }> {
+  // Dynamic import (fix-wave W-B): a static named import of
+  // WORKFLOW_SNAPSHOT_FILE would fail at module link on published engines
+  // (^2.0.2 floor) and silently drop the tool from /extensions.
+  const engine = await import("@mstar-harness/engine");
+  const snapshotFile = engine.WORKFLOW_SNAPSHOT_FILE;
+  if (typeof snapshotFile !== "string") {
+    return {
+      error: result(
+        "installed @mstar-harness/engine lacks WORKFLOW_SNAPSHOT_FILE — upgrade the engine (next release); CLI fallback: mstar worktree check",
+        { ok: false },
+        true,
+      ),
+    };
+  }
+  return { snapshotFile };
 }
 
 export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
@@ -82,6 +117,8 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
         if (!params?.workflowId) {
           return result("mstar_worktree_check: kind=l1 requires workflowId (the snapshot supplies the L1 inputs)", { ok: false }, true);
         }
+        const guardError = assertSafeWorkflowId(params.workflowId);
+        if (guardError !== null) return result(guardError, { ok: false }, true);
         const harnessDir = resolveHarnessDir(pi.cwd);
         if (harnessDir === null) {
           return result(
@@ -90,7 +127,9 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
             true,
           );
         }
-        const snapshotPath = join(harnessDir, "workflows", params.workflowId, WORKFLOW_SNAPSHOT_FILE);
+        const snapshotFileLoad = await loadSnapshotFile();
+        if ("error" in snapshotFileLoad) return snapshotFileLoad.error;
+        const snapshotPath = join(harnessDir, "workflows", params.workflowId, snapshotFileLoad.snapshotFile);
         if (!existsSync(snapshotPath)) {
           return result(`workflow snapshot not found: ${snapshotPath}`, { workflow_id: params.workflowId, snapshot_path: snapshotPath }, true);
         }

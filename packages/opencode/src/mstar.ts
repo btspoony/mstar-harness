@@ -22,6 +22,12 @@
  *   (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
  *   `Promise<void>` with no refusal channel, so hard mode is surfaced as the
  *   error logs + structured result (see `validateStatusWrite`).
+ *   Engine-version compat (qc3 F-001 / fix-wave W-B): the snapshot/register
+ *   validators (`validateWorkflowSnapshot` / `validateProjectRegister`) are
+ *   P1-only exports absent from the published engine floor `^2.0.2` — they
+ *   are lazy-loaded (`newValidatorsLoader`); on a stale engine those write
+ *   lints are skipped with a one-time warning while the root status.json
+ *   lint keeps working, and the plugin module itself always links.
  *   Hook coverage follows `resolveHarnessDir` — a repo `.mstarc`
  *   `[config] harness_dir`, else probing (`.mstar/` → `.agents/` →
  *   `.plans/`|`plans/`); repos with a non-probed harness root
@@ -51,9 +57,7 @@ import {
   readJson,
   resolveHarnessDir,
   resolveRepoEnforcement,
-  validateProjectRegister,
   validateStatus,
-  validateWorkflowSnapshot,
 } from "@mstar-harness/engine";
 import type { EnforcementFlag, GateResult, StatusV2Doc } from "@mstar-harness/engine";
 import fs from "node:fs";
@@ -251,6 +255,75 @@ const STATUS_FILE = "status.json";
 const SNAPSHOT_FILE = "snapshot.json";
 const REGISTER_FILE = "residuals.json";
 
+/**
+ * Engine-version compat (qc3 F-001 / fix-wave W-B): `validateWorkflowSnapshot`
+ * and `validateProjectRegister` postdate the published engine floor
+ * (`^2.0.2` lacks them) — a static named import would fail at module link
+ * on older engines and drop the whole plugin. They are loaded LAZILY
+ * (module-level cached dynamic import, same pattern as the omp hook's
+ * `newValidatorsLoader`). When either export is missing, snapshot/register
+ * writes are skipped (warn once, `null` result) while the root
+ * `status.json` lint (static `validateStatus`) keeps working.
+ */
+type NewValidators = {
+  validateWorkflowSnapshot: (doc: unknown) => GateResult;
+  validateProjectRegister: (doc: unknown) => GateResult;
+};
+
+type NewValidatorsLoad =
+  | { status: "ok"; validators: NewValidators }
+  | { status: "missing" }
+  | { status: "error"; error: unknown };
+
+let cachedNewValidators: Promise<NewValidatorsLoad> | null = null;
+
+export function loadNewValidators(): Promise<NewValidatorsLoad> {
+  cachedNewValidators ??= import("@mstar-harness/engine")
+    .then((mod) =>
+      typeof mod.validateWorkflowSnapshot === "function" && typeof mod.validateProjectRegister === "function"
+        ? ({
+            status: "ok",
+            validators: {
+              validateWorkflowSnapshot: mod.validateWorkflowSnapshot,
+              validateProjectRegister: mod.validateProjectRegister,
+            },
+          } as const)
+        : ({ status: "missing" } as const),
+    )
+    .catch((error: unknown) => ({ status: "error", error } as const));
+  return cachedNewValidators;
+}
+
+/** Test seam (smoke scripts): replace `load` to simulate an engine build
+ * without the P1 validators (missing) or a broken engine import (error). */
+export const newValidatorsLoader: { load: () => Promise<NewValidatorsLoad> } = {
+  load: loadNewValidators,
+};
+
+/** One-time degradation warnings (module-level flags; degrade path must
+ * never throw — optional chaining + local try/catch). */
+let newValidatorsWarned = false;
+let newValidatorsImportErrorWarned = false;
+
+function warnNewValidatorsDegraded(log: StatusLogger, reason: "missing" | "error", error?: unknown): void {
+  if (reason === "missing") {
+    if (newValidatorsWarned) return;
+    newValidatorsWarned = true;
+  } else {
+    if (newValidatorsImportErrorWarned) return;
+    newValidatorsImportErrorWarned = true;
+  }
+  const message =
+    reason === "missing"
+      ? "mstar: installed engine lacks validateWorkflowSnapshot/validateProjectRegister — snapshot/register write lint skipped; status.json lint unaffected; upgrade the engine (next release)"
+      : `mstar: snapshot/register write lint skipped: engine import failed — ${error instanceof Error ? error.message : String(error)}; status.json lint unaffected`;
+  try {
+    log("warn", message);
+  } catch {
+    // degrade path must never throw
+  }
+}
+
 /** Gated harness coordination documents in v3 (compass ruling 7 — hard
  * cutover): the root `status.json` (v2), workflow snapshots and project
  * registers. Each kind maps to its engine validator. */
@@ -315,10 +388,10 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
  * coordination document and something could be validated; `null` otherwise
  * (not a harness write, file does not exist yet, or validation aborted).
  */
-export function validateStatusWrite(
+export async function validateStatusWrite(
   targetPath: string,
   opts: { doc?: unknown; log?: StatusLogger; enforcement?: EnforcementFlag } = {},
-): GateResult | null {
+): Promise<GateResult | null> {
   const log = opts.log ?? defaultStatusLogger;
   try {
     // Host tool args are `any` — refuse non-string paths before path.resolve
@@ -331,7 +404,19 @@ export function validateStatusWrite(
 
     let result: GateResult | null;
     if (opts.doc !== undefined) {
-      result = validateDocByKind(opts.doc, target.kind);
+      if (target.kind === "status") {
+        result = validateDocByKind(opts.doc, target.kind, null);
+      } else {
+        // Snapshot/register validators are P1-only engine exports — lazy
+        // load; a stale engine skips this write with a one-time warning
+        // (never a module-link crash, never a throw).
+        const load = await newValidatorsLoader.load();
+        if (load.status !== "ok") {
+          warnNewValidatorsDegraded(log, load.status, load.status === "error" ? load.error : undefined);
+          return null;
+        }
+        result = validateDocByKind(opts.doc, target.kind, load.validators);
+      }
     } else if (!fs.existsSync(resolved)) {
       result = null;
     } else if (target.kind === "status") {
@@ -340,8 +425,13 @@ export function validateStatusWrite(
     } else {
       // Snapshot/register validators take a doc — mirror the engine's
       // unparseable-file violation instead of degrading to an abort.
+      const load = await newValidatorsLoader.load();
+      if (load.status !== "ok") {
+        warnNewValidatorsDegraded(log, load.status, load.status === "error" ? load.error : undefined);
+        return null;
+      }
       try {
-        result = validateDocByKind(readJson(resolved), target.kind);
+        result = validateDocByKind(readJson(resolved), target.kind, load.validators);
       } catch (error) {
         result = {
           ok: false,
@@ -380,10 +470,13 @@ export function validateStatusWrite(
   }
 }
 
-/** Run the validator matching the gated doc kind (v3 hard cutover). */
-function validateDocByKind(doc: unknown, kind: HarnessDocKind): GateResult {
-  if (kind === "snapshot") return validateWorkflowSnapshot(doc);
-  if (kind === "register") return validateProjectRegister(doc);
+/** Run the validator matching the gated doc kind (v3 hard cutover). The
+ * snapshot/register validators are P1-only engine exports — callers pass
+ * the lazily-loaded set; `null` (stale engine) can never be reached for
+ * those kinds because `validateStatusWrite` skips them first. */
+function validateDocByKind(doc: unknown, kind: HarnessDocKind, newValidators: NewValidators | null): GateResult {
+  if (kind === "snapshot") return newValidators!.validateWorkflowSnapshot(doc);
+  if (kind === "register") return newValidators!.validateProjectRegister(doc);
   return validateStatus(doc as StatusV2Doc);
 }
 
@@ -590,7 +683,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
         } else if (rawContent !== null && typeof rawContent === "object") {
           doc = rawContent;
         }
-        const gate = validateStatusWrite(filePath, { doc });
+        const gate = await validateStatusWrite(filePath, { doc });
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",
@@ -603,7 +696,7 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
         // invalid is caught by the subsequent write, and editing an already
         // invalid file re-warns about the state being replaced. Computing the
         // patched doc for `edit` is a later-slice improvement.
-        const gate = validateStatusWrite(filePath);
+        const gate = await validateStatusWrite(filePath);
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",

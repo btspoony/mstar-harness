@@ -10,6 +10,11 @@
  * location remains). The plan row is looked up by `plan_id` (falling back
  * to `id`); when `planId` is omitted, the snapshot's sole plan row is
  * used. The lease checks themselves are pure engine calls.
+ *
+ * `WORKFLOW_SNAPSHOT_FILE` is a P1-only engine export absent from the
+ * published floor `^2.0.2` — it is read from a DYNAMIC engine import so a
+ * stale engine yields an explicit upgrade error instead of a module-link
+ * failure that silently drops the tool (qc3 F-001 / fix-wave W-B).
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +23,6 @@ import {
   resolveHarnessDir,
   validateIntegrationMergeLease,
   verifyPlanExecutionLease,
-  WORKFLOW_SNAPSHOT_FILE,
 } from "@mstar-harness/engine";
 import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
@@ -45,11 +49,29 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function resolveSnapshot(
   harnessDir: string,
   workflowId: string,
+  snapshotFile: string,
 ): { snapshotPath: string } | { error: AgentToolResult } {
   if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
     return { error: result(`mstar_lease_verify: invalid workflowId ${JSON.stringify(workflowId)}`, { ok: false }, true) };
   }
-  return { snapshotPath: join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE) };
+  return { snapshotPath: join(harnessDir, "workflows", workflowId, snapshotFile) };
+}
+
+/** Dynamic engine import guard for the P1-only `WORKFLOW_SNAPSHOT_FILE`
+ * export (qc3 F-001 / fix-wave W-B): missing → explicit upgrade error. */
+async function loadSnapshotFile(): Promise<{ snapshotFile: string } | { error: AgentToolResult }> {
+  const engine = await import("@mstar-harness/engine");
+  const snapshotFile = engine.WORKFLOW_SNAPSHOT_FILE;
+  if (typeof snapshotFile !== "string") {
+    return {
+      error: result(
+        "installed @mstar-harness/engine lacks WORKFLOW_SNAPSHOT_FILE — upgrade the engine (next release); CLI fallback: mstar lease verify",
+        { ok: false },
+        true,
+      ),
+    };
+  }
+  return { snapshotFile };
 }
 
 export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
@@ -79,7 +101,12 @@ export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
             true,
           );
         }
-        const resolved = resolveSnapshot(harnessDir, params.workflowId);
+        // Dynamic engine import (fix-wave W-B): see the module header —
+        // WORKFLOW_SNAPSHOT_FILE is P1-only, a static named import would
+        // fail at module link on published engines (^2.0.2 floor).
+        const snapshotFileLoad = await loadSnapshotFile();
+        if ("error" in snapshotFileLoad) return snapshotFileLoad.error;
+        const resolved = resolveSnapshot(harnessDir, params.workflowId, snapshotFileLoad.snapshotFile);
         if ("error" in resolved) return resolved.error;
         const snapshotPath = resolved.snapshotPath;
         if (!existsSync(snapshotPath)) {

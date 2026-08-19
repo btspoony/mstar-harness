@@ -373,7 +373,7 @@ pathCommand
 
 const statusCommand = program
   .command("status")
-  .description("status.json schema + residual lifecycle checks (engine-backed)");
+  .description("v2 status.json root / workflow snapshot / project-register checks (engine-backed)");
 
 /** Resolve the status.json path: explicit arg wins, else the resolved {HARNESS_DIR}. */
 function resolveStatusFilePath(pathArg?: string): string {
@@ -502,8 +502,8 @@ const migrateCommand = program
   .description(
     "Migrate a v1 {HARNESS_DIR} status.json tree to v2 (engine-backed; exit 0 ok/idempotent no-op, 1 plan-invalid, 2 apply-failure)",
   )
-  .option("--dry-run", "Print the migration step plan (source \u2192 destination) without writing anything")
-  .option("--path <root>", "Harness root to migrate (default: cwd)")
+  .option("--dry-run", "Print the migration step plan (source \u2192 destination) + planned-document validation warnings without writing anything")
+  .option("--path <root>", "Harness root to migrate (default: resolved {HARNESS_DIR}, else cwd)")
   .option("--json", "Machine-readable JSON output")
   .action(async (options: MigrateCliOptions) => {
     await runMigrateCommand(options);

@@ -10,11 +10,25 @@
  * - 2 = apply-failure (executor threw mid-apply; the root v2 replacement
  *   is the commit point, so the v1 root stays intact for a re-run)
  *
- * `--dry-run` prints the ordered step plan (source -> destination) and
- * writes nothing; `--json` emits the machine-readable shape on stdout for
- * both success and failure paths.
+ * `--path` defaults to the resolved `{HARNESS_DIR}` (auto-discovery, same
+ * as every other command — fix-wave S-a; falls back to the cwd so a bare
+ * harness-root directory without a `.mstar/` marker still migrates);
+ * an explicit `--path` always wins. `--dry-run` prints the ordered step
+ * plan (source -> destination), runs the apply-time validators
+ * (validateWorkflowSnapshot / validateProjectRegister) READ-ONLY on the
+ * planned documents and surfaces violations as warnings (fix-wave S-f —
+ * apply-time rejections are visible before any write), and writes nothing;
+ * `--json` emits the machine-readable shape on stdout for both success
+ * and failure paths.
  */
-import { applyMigratePlan, migrateHarnessTree, type MigratePlan } from "@mstar-harness/engine";
+import {
+  applyMigratePlan,
+  migrateHarnessTree,
+  resolveHarnessDir,
+  validateProjectRegister,
+  validateWorkflowSnapshot,
+  type MigratePlan,
+} from "@mstar-harness/engine";
 import { resolve } from "node:path";
 import pc from "picocolors";
 
@@ -24,8 +38,39 @@ export type MigrateCliOptions = {
   json?: boolean;
 };
 
+/**
+ * Dry-run-only validation of the planned documents (fix-wave S-f): the
+ * apply loop validates fail-closed inside `writeWorkflowSnapshot` /
+ * `validateProjectRegister` — dry-run mirrors that pass read-only and
+ * returns one warning line per violation, so a plan that would be rejected
+ * at step N is visible before any write. Warnings never change the exit
+ * code (a warning is exactly what apply would reject with exit 2).
+ */
+function validatePlannedDocs(plan: MigratePlan): string[] {
+  const warnings: string[] = [];
+  for (const snapshot of plan.snapshots) {
+    const gate = validateWorkflowSnapshot(snapshot.data);
+    if (!gate.ok) {
+      for (const violation of gate.violations) {
+        warnings.push(`[${violation.severity}] ${violation.code}: ${violation.message} (planned snapshot ${snapshot.file})`);
+      }
+    }
+  }
+  if (plan.register !== null) {
+    const gate = validateProjectRegister(plan.register.data);
+    if (!gate.ok) {
+      for (const violation of gate.violations) {
+        warnings.push(`[${violation.severity}] ${violation.code}: ${violation.message} (planned register ${plan.register.file})`);
+      }
+    }
+  }
+  return warnings;
+}
+
 export async function runMigrateCommand(options: MigrateCliOptions): Promise<void> {
-  const root = options.path ? resolve(options.path) : process.cwd();
+  // Fix-wave S-a: default to harness-dir discovery (like every other
+  // command), keep the cwd fallback for a bare harness-root directory.
+  const root = options.path ? resolve(options.path) : resolveHarnessDir() ?? process.cwd();
 
   let plan: MigratePlan;
   try {
@@ -66,6 +111,7 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
 
   if (plan.dryRun) {
     const header = `dry-run: ${plan.steps.length} steps planned (source \u2192 destination), zero writes`;
+    const validationWarnings = validatePlannedDocs(plan);
     if (options.json) {
       console.log(
         JSON.stringify({
@@ -77,6 +123,7 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
           message: header,
           steps: plan.steps,
           migrationNotes: plan.migrationNotes,
+          validationWarnings,
         }),
       );
     } else {
@@ -86,6 +133,9 @@ export async function runMigrateCommand(options: MigrateCliOptions): Promise<voi
       }
       for (const note of plan.migrationNotes) {
         console.log(pc.yellow(`  note: ${note}`));
+      }
+      for (const warning of validationWarnings) {
+        console.log(pc.yellow(`  warning: ${warning}`));
       }
     }
     return;

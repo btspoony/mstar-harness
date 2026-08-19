@@ -40,10 +40,21 @@
  * violation), which can block under a hard compass. A content-less write to
  * a gated document that does not exist yet (fresh scaffold/init) passes
  * silently, mirroring opencode `validateStatusWrite`'s existsSync guard.
- * Size guard (qc3 F-005): content strings beyond ~2MB are skipped without
- * parsing — a pathologically large write must not approach omp's 30s
- * handler timeout (fail-CLOSED in soft mode); the oversized write passes
- * silently (documented degradation, same as other content-glue limits).
+ * Size guard (qc3 F-005, extended per fix-wave S-d): content strings beyond
+ * ~2MB AND on-disk gated documents beyond ~2MB (the edit path, which carries
+ * no content string) are skipped without parsing — a pathologically large
+ * write must not approach omp's 30s handler timeout (fail-CLOSED in soft
+ * mode); the oversized write/edit passes silently (documented degradation,
+ * same as other content-glue limits).
+ *
+ * Engine-version compatibility (qc3 F-001, fix-wave W-B): besides
+ * `composeDispatchGate` (Gate 2, lazy-loaded below), the snapshot/register
+ * validators (`validateWorkflowSnapshot` / `validateProjectRegister`) are
+ * P1-only exports absent from the published engine floor `^2.0.2` — they
+ * are lazy-loaded via `newValidatorsLoader`. On a stale engine, Gate 1
+ * skips snapshot/register targets (silent pass, one-time warning) while
+ * the root `status.json` gate keeps working; the hook module itself always
+ * links.
  *
  * No semantic fork: every rule check is an engine call (status.validateStatus,
  * workflow.validateWorkflowSnapshot, project.validateProjectRegister,
@@ -55,7 +66,7 @@
  * `validateStatusWrite` / `validateDispatchAssignment` uses, with omp's
  * `{ block, reason }` refusal channel instead of the log channel.
  */
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   isReadOnlyAssignmentRole,
@@ -63,9 +74,7 @@ import {
   readJson,
   resolveRepoEnforcement,
   resolveHarnessDir,
-  validateProjectRegister,
   validateStatus,
-  validateWorkflowSnapshot,
 } from "@mstar-harness/engine";
 import type { StatusV2Doc, ValidationResult } from "@mstar-harness/engine";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -75,6 +84,80 @@ const SNAPSHOT_FILE = "snapshot.json";
 const REGISTER_FILE = "residuals.json";
 const STATUS_SKILL_POINTER = "skill: mstar-plan-artifacts/references/status-and-residuals.md";
 const DISPATCH_SKILL_POINTER = "skill: mstar-dispatch-gates";
+
+/**
+ * Engine-version compat (qc3 F-001 / fix-wave W-B): `validateWorkflowSnapshot`
+ * and `validateProjectRegister` postdate the published engine floor
+ * (`^2.0.2` lacks them) — a static named import would fail at module link
+ * on older engines and drop the WHOLE hook (both gates). They are loaded
+ * LAZILY (module-level cached dynamic import, same pattern as
+ * `loadComposeDispatchGate`). When either export is missing, Gate 1 skips
+ * snapshot/register targets entirely (silent pass) with a one-time warning;
+ * the root `status.json` gate (static `validateStatus`, present in every
+ * published engine) keeps working.
+ */
+type NewValidators = {
+  validateWorkflowSnapshot: (doc: unknown) => { ok: boolean; violations: ValidationResult[] };
+  validateProjectRegister: (doc: unknown) => { ok: boolean; violations: ValidationResult[] };
+};
+
+type NewValidatorsLoad =
+  | { status: "ok"; validators: NewValidators }
+  | { status: "missing" }
+  | { status: "error"; error: unknown };
+
+let cachedNewValidators: Promise<NewValidatorsLoad> | null = null;
+
+export function loadNewValidators(): Promise<NewValidatorsLoad> {
+  cachedNewValidators ??= import("@mstar-harness/engine")
+    .then((mod) =>
+      typeof mod.validateWorkflowSnapshot === "function" && typeof mod.validateProjectRegister === "function"
+        ? ({
+            status: "ok",
+            validators: {
+              validateWorkflowSnapshot: mod.validateWorkflowSnapshot,
+              validateProjectRegister: mod.validateProjectRegister,
+            },
+          } as const)
+        : ({ status: "missing" } as const),
+    )
+    .catch((error: unknown) => ({ status: "error", error } as const));
+  return cachedNewValidators;
+}
+
+/** Test seam (smoke scripts): replace `load` to simulate an engine build
+ * without the P1 validators (missing) or a broken engine import (error). */
+export const newValidatorsLoader: { load: () => Promise<NewValidatorsLoad> } = {
+  load: loadNewValidators,
+};
+
+/** One-time degradation warnings for the P1 validators (module-level flags;
+ * degrade path must never throw — optional chaining + local try/catch). */
+let newValidatorsWarned = false;
+let newValidatorsImportErrorWarned = false;
+
+function warnNewValidatorsDegraded(logger: unknown, reason: "missing" | "error", error?: unknown): void {
+  if (reason === "missing") {
+    if (newValidatorsWarned) return;
+    newValidatorsWarned = true;
+  } else {
+    if (newValidatorsImportErrorWarned) return;
+    newValidatorsImportErrorWarned = true;
+  }
+  const message =
+    reason === "missing"
+      ? "mstar-gates: installed engine lacks validateWorkflowSnapshot/validateProjectRegister — snapshot/register write gate skipped; status.json gate unaffected; upgrade the engine (next release)"
+      : `mstar-gates: snapshot/register write gate disabled: engine import failed — ${error instanceof Error ? error.message : String(error)}; status.json gate unaffected`;
+  try {
+    (
+      logger as
+        | { warn?: (message: string, context?: Record<string, unknown>) => void }
+        | undefined
+    )?.warn?.(message);
+  } catch {
+    // degrade path must never throw
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Shape guards (glue only — field parsing/semantics live in the engine)
@@ -188,7 +271,12 @@ const MAX_STATUS_CONTENT_LENGTH = 2 * 1024 * 1024;
  * not exist yet (fresh scaffold/init write): nothing to validate, silent
  * pass. Never throws (the validators catch their own read errors).
  */
-function validateStatusWriteDoc(content: unknown, filePath: string, kind: HarnessDocKind): ValidationResult[] {
+function validateStatusWriteDoc(
+  content: unknown,
+  filePath: string,
+  kind: HarnessDocKind,
+  newValidators: NewValidators | null,
+): ValidationResult[] {
   if (typeof content === "string") {
     if (content.length > MAX_STATUS_CONTENT_LENGTH) return []; // size guard — silent pass
     let doc: unknown;
@@ -214,9 +302,19 @@ function validateStatusWriteDoc(content: unknown, filePath: string, kind: Harnes
         },
       ];
     }
-    return validateDocByKind(doc, kind);
+    return validateDocByKind(doc, kind, newValidators);
   }
   if (!existsSync(filePath)) return []; // fresh scaffold/init write — nothing to validate
+  // Size guard on the ON-DISK edit path (qc2 S-1 / qc3 S-5 / fix-wave S-d):
+  // edit events carry no content string, so the guard above never ran —
+  // stat the target and apply the same 2MB skip before read+parse+validate
+  // (a pathologically large gated doc must not approach omp's 30s handler
+  // timeout; oversized edits pass silently, same documented degradation).
+  try {
+    if (statSync(filePath).size > MAX_STATUS_CONTENT_LENGTH) return [];
+  } catch {
+    return []; // unreadable target — silent pass (degrade path must never throw)
+  }
   if (kind === "status") return validateStatus(filePath).violations; // path form handles invalid JSON itself
   let doc: unknown;
   try {
@@ -233,13 +331,16 @@ function validateStatusWriteDoc(content: unknown, filePath: string, kind: Harnes
       },
     ];
   }
-  return validateDocByKind(doc, kind);
+  return validateDocByKind(doc, kind, newValidators);
 }
 
-/** Run the validator matching the gated doc kind (v3 hard cutover). */
-function validateDocByKind(doc: unknown, kind: HarnessDocKind): ValidationResult[] {
-  if (kind === "snapshot") return validateWorkflowSnapshot(doc).violations;
-  if (kind === "register") return validateProjectRegister(doc).violations;
+/** Run the validator matching the gated doc kind (v3 hard cutover). The
+ * snapshot/register validators are P1-only engine exports — callers pass
+ * the lazily-loaded set; `null` (stale engine) can never be reached for
+ * those kinds because `gateStatusWrite` skips them before calling. */
+function validateDocByKind(doc: unknown, kind: HarnessDocKind, newValidators: NewValidators | null): ValidationResult[] {
+  if (kind === "snapshot") return newValidators!.validateWorkflowSnapshot(doc).violations;
+  if (kind === "register") return newValidators!.validateProjectRegister(doc).violations;
   return validateStatus(doc as StatusV2Doc).violations;
 }
 
@@ -252,13 +353,31 @@ function validateDocByKind(doc: unknown, kind: HarnessDocKind): ValidationResult
  * `{HARNESS_DIR}` coordination document (v2 root status.json / workflow
  * snapshot / project register) with violations and the harness compass
  * declares `enforcement: hard`. Soft (or no compass) → silent pass.
+ *
+ * Snapshot/register targets need the lazily-loaded P1 validators
+ * (engine-version compat, fix-wave W-B): on a stale engine the loader
+ * reports missing/error and those targets are SKIPPED (silent pass) with
+ * a one-time warning — the root status.json gate keeps working.
  */
-function gateStatusWrite(eventInput: unknown): { block: true; reason: string } | undefined {
+async function gateStatusWrite(
+  eventInput: unknown,
+  warnDegraded: (reason: "missing" | "error", error?: unknown) => void,
+): Promise<{ block: true; reason: string } | undefined> {
   const input = eventInput as Record<string, unknown>;
+  let newValidators: NewValidatorsLoad | null = null;
   for (const rawPath of eventTargetPaths(input)) {
     const target = harnessDocKindOfTarget(rawPath);
     if (target === null) continue; // not a gated coordination write — silent pass
-    const violations = validateStatusWriteDoc(input.content, resolve(rawPath), target.kind);
+    let validatorsForKind: NewValidators | null = null;
+    if (target.kind !== "status") {
+      newValidators ??= await newValidatorsLoader.load();
+      if (newValidators.status !== "ok") {
+        warnDegraded(newValidators.status, newValidators.status === "error" ? newValidators.error : undefined);
+        continue; // stale engine — skip snapshot/register validation (silent pass)
+      }
+      validatorsForKind = newValidators.validators;
+    }
+    const violations = validateStatusWriteDoc(input.content, resolve(rawPath), target.kind, validatorsForKind);
     if (violations.length === 0) continue;
     const enforcement = resolveRepoEnforcement(target.harnessDir);
     if (!enforcement.hard) continue; // soft mode — silent pass
@@ -273,11 +392,11 @@ function gateStatusWrite(eventInput: unknown): { block: true; reason: string } |
 // ---------------------------------------------------------------------------
 
 /**
- * Engine-version compat: `composeDispatchGate` is the ONLY engine export the
- * hook needs that postdates the engine release containing it — everything
- * else is statically imported above. A static named import would fail at
- * module link on older engines and drop the WHOLE hook (both gates), so it
- * is loaded lazily and cached. The loader returns a DISCRIMINATED result so
+ * Engine-version compat: `composeDispatchGate` postdates the engine release
+ * containing it (published floor `^2.0.2` lacks it) — a static named import
+ * would fail at module link on older engines and drop the WHOLE hook (both
+ * gates), so it is loaded lazily and cached (same pattern as
+ * `newValidatorsLoader` above). The loader returns a DISCRIMINATED result so
  * a missing export (`missing`) is never conflated with a real import
  * failure (`error`): Gate 2 skips itself either way (see `gateTaskDispatch`),
  * but the two produce different one-time warnings.
@@ -412,12 +531,14 @@ async function gateTaskDispatch(
 export default function mstarGates(pi: ExtensionAPI): void {
   const warnDegraded = (reason: "missing" | "error", error?: unknown): void =>
     warnDispatchGateDegraded(pi.logger, reason, error);
+  const warnValidatorsDegraded = (reason: "missing" | "error", error?: unknown): void =>
+    warnNewValidatorsDegraded(pi.logger, reason, error);
   pi.on("tool_call", async (event) => {
     try {
       const toolName = event?.toolName ?? "";
       let block: { block: true; reason: string } | undefined;
       if (toolName === "write" || toolName === "edit") {
-        block = gateStatusWrite(event?.input);
+        block = await gateStatusWrite(event?.input, warnValidatorsDegraded);
       } else if (toolName === "task") {
         block = await gateTaskDispatch(event?.input, warnDegraded);
       }
