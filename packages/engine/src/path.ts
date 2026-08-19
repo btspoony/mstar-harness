@@ -329,7 +329,7 @@ const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+# .mstarc \u2014 repo-local harness config (may declare [config] harness_dir=<name>)
 .mstarc
 `;
 
