@@ -24,6 +24,8 @@ describe("parseMstarc — minimal INI subset ([config] harness_dir)", () => {
       "iteration_dir=process/iterations",
       "knowledge_dir=knowledge",
       "specs_dir=specs/custom",
+      "workflow_dir=process/workflows",
+      "project_dir=projects/archive",
     ].join("\n");
     expect(parseMstarc(text)).toEqual({
       harnessDir: ".custom_dir",
@@ -32,7 +34,17 @@ describe("parseMstarc — minimal INI subset ([config] harness_dir)", () => {
       iterationDir: "process/iterations",
       knowledgeDir: "knowledge",
       specsDir: "specs/custom",
+      workflowDir: "process/workflows",
+      projectDir: "projects/archive",
     });
+  });
+
+  test("parses the workflow_dir / project_dir keys (v3 workflow layout)", () => {
+    expect(parseMstarc("[config]\nworkflow_dir=workflows\nproject_dir=projects\n")).toEqual({
+      workflowDir: "workflows",
+      projectDir: "projects",
+    });
+    expect(parseMstarc("[config]\nworkflow_dir=\nproject_dir=\n")).toEqual({});
   });
 
   test("parses the enforcement policy key (hard / soft; invalid ignored)", () => {

@@ -27,7 +27,9 @@ export type { MstarcConfig } from "./mstarc.js";
 export {
   MSTARC_FILE,
   MSTARC_HARNESS_DIR_KEY,
+  MSTARC_PROJECT_DIR_KEY,
   MSTARC_SECTION,
+  MSTARC_WORKFLOW_DIR_KEY,
   findMstarc,
   parseMstarc,
 } from "./mstarc.js";
@@ -38,8 +40,10 @@ export {
   resolveIterationDir,
   resolveKnowledgeDir,
   resolvePlanDir,
+  resolveProjectDir,
   resolveSddDir,
   resolveSpecsDir,
+  resolveWorkflowDir,
   scaffoldHarness,
   validateGitignore,
 } from "./path.js";
