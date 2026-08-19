@@ -1,0 +1,16 @@
+{
+  "plan_id": "20260811-gitignore-default-ignore",
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "R1",
+      "severity": "low",
+      "title": "No automated git check-ignore semantic test for the default-ignore snippet",
+      "finding": "QC Suggestion F-001: whitelist vs process-path semantics relies on byte-parity tests + manual /tmp fixture; no engine/CLI test spawns `git check-ignore -q` on a fixture repo.",
+      "decision": "defer",
+      "roadmap": "next iteration (compound-refresh round or test-hardening pass); trigger: PM picks up roadmap carry-forward",
+      "opened_at": "2026-08-11",
+      "archived_at": "2026-08-19"
+    }
+  ]
+}

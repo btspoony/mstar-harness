@@ -197,6 +197,24 @@ export {
   validateRoadmap,
 } from "./project.js";
 export type {
+  MigrateNotesFile,
+  MigrateOptions,
+  MigratePlan,
+  MigrateRegister,
+  MigrateResult,
+  MigrateRoadmap,
+  MigrateRootV2,
+  MigrateSnapshot,
+  MigrateStep,
+} from "./migrate.js";
+export {
+  ARCHIVED_STATUS_V1_FILE,
+  MIGRATE_STATUS_FILE,
+  NOTES_LEDGER_FILE,
+  applyMigratePlan,
+  migrateHarnessTree,
+} from "./migrate.js";
+export type {
   CompletenessItem,
   CompletenessLevel,
   CompletenessPlaceholder,
