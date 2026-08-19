@@ -16,7 +16,7 @@
  *   `lease.verify.non-ssot-location`: the metadata location is a
  *   legacy/hand-written read-compat fallback, NOT equivalent to SSOT
  *   success. No documented compat mode exists (the real control
- *   `.harness/status.json` stores the lease at the row level), so this is
+ *   control status.json stores the lease at the row level), so this is
  *   always a FAIL (non-zero exit) with the lease shape still validated and
  *   reported.
  * - Both locations present → `lease.verify.dual-write`: the row-level lease

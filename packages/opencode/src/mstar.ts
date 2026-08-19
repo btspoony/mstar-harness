@@ -17,9 +17,11 @@
  *   (`@opencode-ai/plugin` 1.4.8) `tool.execute.before` returns
  *   `Promise<void>` with no refusal channel, so hard mode is surfaced as the
  *   error logs + structured result (see `validateStatusWrite`).
- *   Hook coverage follows `resolveHarnessDir` probing (`.mstar/` → `.agents/` →
- *   `.plans/`|`plans/`); repos with a non-probed harness root (e.g. `.harness/`)
- *   MUST set `MSTAR_HARNESS_DIR` in the OpenCode server env — see package README
+ *   Hook coverage follows `resolveHarnessDir` — a repo `.mstarc`
+ *   `[config] harness_dir`, else probing (`.mstar/` → `.agents/` →
+ *   `.plans/`|`plans/`); repos with a non-probed harness root
+ *   MUST set `MSTAR_HARNESS_DIR` in the OpenCode server env or declare
+ *   `.mstarc` — see package README
  *   "Status write lint (hook coverage)" (qc2 F-006).
  * - Dual-mode `beforeDispatch` dispatch lint (roadmap §8.5): on `task`-tool
  *   executions (subagent dispatch), validates the Assignment header — field

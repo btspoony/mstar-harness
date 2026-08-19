@@ -16,12 +16,12 @@
  *   Codex plugin-mounted `skills/<name>/`, OpenCode package-internal
  *   `harness-skills/<name>/` (never `process.cwd()/skills/`), Kimi/ZCode
  *   plugin mount `./skills/<name>/` from the installed plugin root.
- * - dsh row: `.harness/references/dsh-adapter-roadmap.md` §4 D5 (this
+ * - dsh row: dsh-adapter roadmap §4 D5 (this
  *   iteration) — dsh detection via its model-facing `subagent` delegation
  *   tool; skill root resolves via the skill-local bundled root
  *   `$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]` (dsh-skill-local
  *   `bundledSkillDir` default; single canonical mount per roadmap D6).
- * - HostAdapter: `.harness/references/skill-programmatic-roadmap.md` §8.4 —
+ * - HostAdapter: roadmap §8.4 —
  *   `{ host, beforeStatusWrite?, beforeDispatch?, beforeMerge?, log }`,
  *   all hooks optional, no concrete adapters in the engine, pi deferred
  *   (dsh's adapter ships in the dsh plugin).

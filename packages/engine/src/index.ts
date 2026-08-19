@@ -23,6 +23,14 @@
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, applyEnforcement, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type { HarnessKind, ResolveHarnessDirOptions, ResolveSpecsDirOptions } from "./path.js";
+export type { MstarcConfig } from "./mstarc.js";
+export {
+  MSTARC_FILE,
+  MSTARC_HARNESS_DIR_KEY,
+  MSTARC_SECTION,
+  findMstarc,
+  parseMstarc,
+} from "./mstarc.js";
 export {
   assertPlanWritingPath,
   emitGitignoreSnippet,

@@ -9,10 +9,10 @@
  *   cursor → opencode → omp → kimi → zcode → codex ("Order matters").
  * - `mstar-host` SKILL.md § Resolve loaded skill root — per-host skill-root
  *   resolution.
- * - `.harness/references/skill-programmatic-roadmap.md` §8.4 — the
+ * - roadmap §8.4 — the
  *   `HostAdapter` shared contract (all hooks optional; no concrete adapters
  *   in the engine; pi deferred).
- * - `.harness/references/dsh-adapter-roadmap.md` §4 D5 (this iteration) —
+ * - dsh-adapter roadmap §4 D5 (this iteration) —
  *   the dsh detection row + skill-root form; mirror text lands in the
  *   mstar-host skill when this module is upstreamed.
  *

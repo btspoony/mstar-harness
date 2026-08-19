@@ -45,7 +45,7 @@ The **two-command install is the contract** — folding a `dsh-llm-fallbacks` ro
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `harnessDir` | `string` | per-session workspace probe (`.mstar/` → `.agents/` → `.plans/` → `plans/`, from the session workspace root — **never the launch cwd**) | Explicit harness root; wins over engine probing. **Required for repos whose harness root is not a probed name** — e.g. this mstar-workflow repo itself uses `.harness/` (maintenance root, deliberately NOT probed); the probe starts from the session workspace root (never the launch cwd) and STOPS there — it never walks above the session workspace, so a harness dir above it (e.g. a global `~/.mstar`) is never adopted. |
+| `harnessDir` | `string` | repo `.mstarc` `[config] harness_dir`, else per-session workspace probe (`.mstar/` → `.agents/` → `.plans/` → `plans/`, from the session workspace root — **never the launch cwd**) | Explicit harness root; wins over engine probing. **Required for repos whose harness root is not a probed name**; the probe starts from the session workspace root (never the launch cwd) and STOPS there — it never walks above the session workspace, so a harness dir above it (e.g. a global `~/.mstar`) is never adopted. |
 | `enforcement` | `'hard' \| 'soft'` | compass, else warn-only | Per-deployment override. Precedence: Config wins; else the Assignment's own `**Enforcement**: hard` header flag (dispatch gate only); else the iteration compass frontmatter; else warn-only. Config `soft` is the ONLY local rollback — an Assignment-level `soft` does NOT override a hard compass. |
 | `dispatchTools` | `string[]` | `['subagent', 'subagent_fork']` | Delegation tool names the dispatch gate matches — the dsh preset's TWO delegation tools, `subagent` and its fork sibling `subagent_fork` (both carry Assignment-shaped `{ description, prompt }` args; a `toolName` config may rename instances). |
 | `dispatchBinding` | `string` | unset (precheck skipped) | The dispatching agent's own harness role; an Assignment whose `Execute as` equals it is self-recursion. |
@@ -470,8 +470,8 @@ Verified locally (install-verification guide): the boot graph contains the
 client entry (`@mstar-harness/dsh` with the declared inject faces), the
 `/plugins/<id>/client.js` route serves the exact built bundle (rev = content
 sha1), and the browser handoff materializes the plugin entry (`inject` +
-`apply` + CSS injection under classic-script semantics) — see
-`.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
+`apply` + CSS injection under classic-script semantics) — see the
+`install-verification.md` guide of the panel-beautify iteration (local harness root).
 
 **Known Limitations** (this iteration): the iteration stepper's Step 1
 (iteration-start) IS the current step while the steering compass is

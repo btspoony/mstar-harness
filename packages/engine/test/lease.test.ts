@@ -7,8 +7,8 @@
  *   working_branch; integration_merge_lease adds plan_id / source_branch /
  *   target_branch; optional session_label is display-only): `mstar-plan-artifacts`
  *   `references/status-and-residuals.md` § `plans[].execution_lease` +
- *   § Root `metadata.integration_merge_lease` (v1) + maintenance ADR
- *   `.harness/docs/2026-07-22-iteration-worktree-plan-lease.md` (normative
+ *   § Root `metadata.integration_merge_lease` (v1) + the
+ *   iteration-worktree-plan-lease maintenance ADR (normative
  *   field names; `claimed_at` RFC 3339 UTC with explicit `Z`).
  * - `null` / tombstone lease objects are invalid — writers delete the key on
  *   release, never write `null`: status-and-residuals.md § "Hold, release,
@@ -101,7 +101,7 @@ describe("validateExecutionLease", () => {
   test("valid lease with repo date-only claimed_at passes (real control data)", () => {
     // Spec: ADR field table claims RFC 3339 UTC with Z; the repo's local
     // `YYYY-MM-DD` date convention is accepted too — the real control
-    // `.harness/status.json` execution_lease for
+    // control status.json execution_lease for
     // 20260808-slice1-engine-foundation uses `"claimed_at": "2026-08-08"`
     // and `mstar lease verify` must pass on it.
     const gate = validateExecutionLease(validExecutionLease({ claimed_at: "2026-08-08" }));

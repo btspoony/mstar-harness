@@ -24,9 +24,9 @@
  *   § Plan-Writing Path Gate — plans live under `{PLAN_DIR}`, no external
  *   default plan directories.
  * - Explicit harness-root override (`MSTAR_HARNESS_DIR` env / option):
- *   plan 20260808-slice2-sdd-iteration Finding (2026-08-08) — default probe
- *   stays per mstar-plan-conventions; `.harness` is NOT added to the probe
- *   (consumer convention stays `.mstar` → `.agents` → `.plans`/`plans`).
+ *   plan 20260808-slice2-sdd-iteration Finding (2026-08-08) — the probe
+ *   list stays per mstar-plan-conventions (`.mstar` → `.agents` →
+ *   `.plans`/`plans`); ad-hoc names are never probed.
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -57,6 +57,8 @@ const CANONICAL_SNIPPET = `# Morning Star harness (.mstar/)
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
 `;
 
 /** Legacy snippet text — verbatim from plan-conventions § Git 跟踪策略 ("Legacy `.agents/` 等价"). */
@@ -196,10 +198,10 @@ describe("resolveHarnessDir — resolution order (plan-conventions § {HARNESS_D
     }
   });
 
-  test("does not probe `.harness` (consumer convention stays per plan-conventions)", () => {
-    const root = tmpRoot("path-harness-noharness-");
+  test("does not probe non-convention names (probe list fixed per plan-conventions)", () => {
+    const root = tmpRoot("path-harness-noconvention-");
     try {
-      mkdirSync(join(root, ".harness"));
+      mkdirSync(join(root, ".custom-root"));
       expect(resolveHarnessDir(root)).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -272,6 +274,89 @@ describe("resolveHarnessDir — explicit override (slice-2 finding 2026-08-08)",
       mkdirSync(join(root, ".mstar"));
       withEnv(undefined, () => {
         expect(resolveHarnessDir(root)).toBe(resolve(root, ".mstar"));
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveHarnessDir — `.mstarc` [config] harness_dir (plan-conventions § {HARNESS_DIR} 解析顺序 step 2)", () => {
+  test("declares the harness root relative to the .mstarc directory (dir need not exist)", () => {
+    const root = tmpRoot("path-rc-rel-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom_dir\n");
+      expect(resolveHarnessDir(root)).toBe(resolve(root, ".custom_dir"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("found from a nested start dir (find-first-stop walk-up)", () => {
+    const root = tmpRoot("path-rc-walk-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom_dir\n");
+      mkdirSync(join(root, "a", "b"), { recursive: true });
+      expect(resolveHarnessDir(join(root, "a", "b"), { workspaceRoot: root })).toBe(resolve(root, ".custom_dir"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an absolute harness_dir is used as-is", () => {
+    const root = tmpRoot("path-rc-abs-");
+    try {
+      const custom = join(root, "custom-dir");
+      writeFileSync(join(root, ".mstarc"), `[config]\nharness_dir=${custom}\n`);
+      expect(resolveHarnessDir(root)).toBe(custom);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc without [config] harness_dir falls through to probing", () => {
+    const root = tmpRoot("path-rc-empty-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "# no harness_dir declared\n");
+      mkdirSync(join(root, ".mstar"));
+      expect(resolveHarnessDir(root)).toBe(resolve(root, ".mstar"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the nearest .mstarc wins when several exist up the tree", () => {
+    const root = tmpRoot("path-rc-nearest-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.outer_dir\n");
+      mkdirSync(join(root, "inner"));
+      writeFileSync(join(root, "inner", ".mstarc"), "[config]\nharness_dir=.inner_dir\n");
+      expect(resolveHarnessDir(join(root, "inner"), { workspaceRoot: root })).toBe(resolve(root, "inner", ".inner_dir"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc above the workspace boundary is never adopted", () => {
+    const root = tmpRoot("path-rc-boundary-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.above_dir\n");
+      mkdirSync(join(root, "proj"), { recursive: true });
+      expect(resolveHarnessDir(join(root, "proj"), { workspaceRoot: join(root, "proj") })).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("MSTAR_HARNESS_DIR env beats .mstarc; opts.harnessDir beats env", () => {
+    const root = tmpRoot("path-rc-precedence-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.rc_dir\n");
+      const envDir = join(root, "env-harness");
+      const optDir = join(root, "opt-harness");
+      withEnv(envDir, () => {
+        expect(resolveHarnessDir(root)).toBe(envDir);
+        expect(resolveHarnessDir(root, { harnessDir: optDir })).toBe(optDir);
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

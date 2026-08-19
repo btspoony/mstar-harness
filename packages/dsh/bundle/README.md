@@ -76,7 +76,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 
 | Field | Shipped default | Meaning |
 |---|---|---|
-| `harnessDir` | unset (resolved per session workspace) | explicit `{HARNESS_DIR}` root — **required for repos whose harness root is not a probed name** (`.mstar/` → `.agents/` → `.plans/` → `plans/`): e.g. the mstar-workflow maintenance repo itself uses `.harness/` (deliberately not probed), so set `harnessDir: <repo>/.harness` in the profile layer. Without the config the probe starts from the SESSION workspace root (the session cwd — **never the process/launch cwd**) and **stops there** — it never walks above the session workspace, so a global `~/.mstar` is never adopted |
+| `harnessDir` | unset (resolved per session workspace) | explicit `{HARNESS_DIR}` root — **required for repos whose harness root is not a probed name** (`.mstar/` → `.agents/` → `.plans/` → `plans/`); set it to the absolute root in the profile layer (or declare `[config] harness_dir` in a repo `.mstarc` — gitignored local config, honored above probing). Without either, the probe starts from the SESSION workspace root (the session cwd — **never the process/launch cwd**) and **stops there** — it never walks above the session workspace, so a global `~/.mstar` is never adopted |
 | `enforcement` | **unset — default OFF** | `hard` / `soft` override; absent → the iteration compass decides, warn-only when no compass hardens (never a global always-on hard gate) |
 | `dispatchTools` | unset (plugin default `['subagent', 'subagent_fork']`) | delegation tool names the dispatch gate matches — the dsh preset's TWO delegation tools (`subagent` + its fork sibling `subagent_fork`, both Assignment-shaped); a custom list overrides the default wholesale, so it must include `subagent_fork` to keep fork dispatches gated |
 | `dispatchBinding` | unset | the dispatching agent's role for the anti-recursion precheck |
@@ -268,8 +268,8 @@ web loader executes plugin bundles as classic `<script>`s); the full `bun run
 build` runs it after the node half. Verified locally: boot graph entry, the
 `/plugins/<id>/client.js` route serving the exact built bundle, and the
 browser-handoff materialization (`inject`/`apply`/CSS injection under
-classic-script semantics) — see
-`.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`.
+classic-script semantics) — see the
+`install-verification.md` guide of the panel-beautify iteration (local harness root).
 
 Known limitations (this iteration): the iteration stepper's Step 1
 (iteration-start) IS the current step while the steering compass is

@@ -5,11 +5,12 @@
  *
  * Spec source: `skills/mstar-plan-conventions/SKILL.md` § 路径符号 (SSOT),
  * § {HARNESS_DIR} 解析顺序（找到即停）, § {SPECS_DIR} 解析（找到非空目录即停）
- * and § Git 跟踪策略 / § Plan-Writing Path Gate. The default probe stays
- * `.mstar/` → `.agents/` → `.plans/`/`plans/` per consumer convention; the
- * explicit harness-root override (`MSTAR_HARNESS_DIR` env / `opts.harnessDir`)
- * covers repos whose harness root is not one of the probed names (slice-2
- * plan finding 2026-08-08) — `.harness` is intentionally NOT probed.
+ * and § Git 跟踪策略 / § Plan-Writing Path Gate. Resolution order stays
+ * `.mstarc` `[config] harness_dir` → `.mstar/` → `.agents/` → `.plans/`/
+ * `plans/` per consumer convention; the explicit harness-root override
+ * (`MSTAR_HARNESS_DIR` env / `opts.harnessDir`) covers repos whose harness
+ * root is not one of the probed names (slice-2 plan finding 2026-08-08) and
+ * stays the highest authority (above `.mstarc`).
  *
  * Workspace-root stop boundary (roadmap §7c, plan
  * 20260810-harness-root-boundary): `resolveHarnessDir` NEVER walks above the
@@ -30,6 +31,7 @@ import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readJson, writeJson, type ValidationResult } from "./core.js";
+import { findMstarc, parseMstarc } from "./mstarc.js";
 
 /**
  * Options for `resolveHarnessDir`.
@@ -60,12 +62,17 @@ export type ResolveHarnessDirOptions = {
 
 /**
  * Resolve `{HARNESS_DIR}` per plan-conventions § {HARNESS_DIR} 解析顺序
- * (find-first-stop): `.mstar/` → `.agents/` → `.plans/`/`plans/`, walking up
- * from `startDir` but NEVER above the workspace root (`opts.workspaceRoot`,
- * default = git top-level of `startDir`). Harness candidates are
- * dir-existence (the empty-dir rule applies to `{SPECS_DIR}` only). An
- * explicit override via `opts.harnessDir` or `MSTAR_HARNESS_DIR` wins over
- * probing and short-circuits before any boundary logic.
+ * (find-first-stop): `.mstarc` `[config] harness_dir` → `.mstar/` →
+ * `.agents/` → `.plans/`/`plans/`, walking up from `startDir` but NEVER
+ * above the workspace root (`opts.workspaceRoot`, default = git top-level
+ * of `startDir`). The `.mstarc` layer: the nearest config file at or below
+ * the boundary declares `harness_dir`, resolved against the config file's
+ * own directory — no dir-existence requirement (callers may scaffold) and
+ * no boundary check on the result (explicit layers keep authority; only
+ * the config discovery walk is bounded). Harness candidates from probing
+ * are dir-existence checks (the empty-dir rule applies to `{SPECS_DIR}`
+ * only). An explicit override via `opts.harnessDir` or `MSTAR_HARNESS_DIR`
+ * wins over both and short-circuits before any boundary logic.
  *
  * Returns the absolute harness dir, or `null` when no candidate exists
  * within the workspace boundary.
@@ -78,6 +85,11 @@ export function resolveHarnessDir(
   const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
   if (explicit) return resolve(start, explicit);
   const boundary = resolve(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
+  const rc = findMstarc(start, boundary);
+  if (rc !== null) {
+    const { harnessDir } = parseMstarc(readFileSync(rc, "utf8"));
+    if (harnessDir) return resolve(dirname(rc), harnessDir);
+  }
   let dir = start;
   for (;;) {
     // Stop boundary: never probe a harness dir above the workspace root.
@@ -274,6 +286,8 @@ const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
 `;
 
 /**

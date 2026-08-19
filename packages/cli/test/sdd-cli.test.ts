@@ -127,7 +127,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
   test("MSTAR_HARNESS_DIR override from a plain dir → exit 0, prints + creates SDD dir", () => {
     const root = tmpRoot("mstar-sdd-ws-");
     try {
-      const harnessDir = join(root, ".harness");
+      const harnessDir = join(root, ".custom-root");
       const result = runCli(["sdd", "workspace", "plan-1"], {
         cwd: root,
         env: { MSTAR_HARNESS_DIR: harnessDir },
@@ -162,7 +162,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     const root = tmpRoot("mstar-sdd-ws-ctrl-");
     try {
       const linked = linkedWorktreeFixture(root);
-      const harnessDir = join(root, ".harness");
+      const harnessDir = join(root, ".custom-root");
       const result = runCli(["sdd", "workspace", "plan-1", root], {
         cwd: linked,
         env: { MSTAR_HARNESS_DIR: harnessDir },

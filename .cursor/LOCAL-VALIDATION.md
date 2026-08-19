@@ -38,7 +38,7 @@ From **this harness repo root** (not a consumer project) with a fixture plan, af
 
 ```bash
 bun run cli:dev -- sdd workspace test-plan-id
-bun run cli:dev -- sdd task-brief .harness/plans/10-sdd-1-0-0-release.md 1
+bun run cli:dev -- sdd task-brief {HARNESS_DIR}/plans/10-sdd-1-0-0-release.md 1
 git rev-parse HEAD | xargs -I{} bun run cli:dev -- sdd review-package {} {}
 ```
 

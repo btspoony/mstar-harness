@@ -327,7 +327,7 @@ describe("validateStatus", () => {
     expect(result.violations).toEqual([]);
   });
 
-  test("real repo .harness/status.json shape validates clean (legacy plan_id rows, mixed metadata, detail_doc null)", () => {
+  test("real repo status.json shape validates clean (legacy plan_id rows, mixed metadata, detail_doc null)", () => {
     const result = validateStatus(REAL_SHAPE);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);

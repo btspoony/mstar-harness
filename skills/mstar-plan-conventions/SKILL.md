@@ -33,12 +33,25 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 ### `{HARNESS_DIR}` 解析顺序（找到即停；探测**永不越过工作区根**——CLI=start 的 git top-level（非 git→start 自身）；dsh=会话工作区）
 
-1. `.mstar/` → `{HARNESS_DIR}=.mstar/`, `{PLAN_DIR}=.mstar/plans/`
-2. 否则 `.agents/` → legacy `{HARNESS_DIR}=.agents/`, `{PLAN_DIR}=.agents/plans/`
-3. 否则 `.plans/` 或 `plans/` → 遗留同目录 `{HARNESS_DIR}={PLAN_DIR}`
-4. 皆无 → 未启用 plan；进度走对话与 Completion Report
+1. 显式 override：`opts.harnessDir` / `MSTAR_HARNESS_DIR`（全权优先，短路一切探测与配置文件）
+2. 否则 **`.mstarc`** `[config] harness_dir=<dir>`（仓库本地声明，见下「`.mstarc` 格式」；find-first-stop 向上找最近文件，**不越过工作区根**）
+3. 否则 `.mstar/` → `{HARNESS_DIR}=.mstar/`, `{PLAN_DIR}=.mstar/plans/`
+4. 否则 `.agents/` → legacy `{HARNESS_DIR}=.agents/`, `{PLAN_DIR}=.agents/plans/`
+5. 否则 `.plans/` 或 `plans/` → 遗留同目录 `{HARNESS_DIR}={PLAN_DIR}`
+6. 皆无 → 未启用 plan；进度走对话与 Completion Report
 
 并存时 **`.mstar/` 优先**；仅当项目已有 `.agents/` 且无 `.mstar/` 时继续沿用 `.agents/`。
+
+#### `.mstarc` 格式（INI 子集；默认 gitignored，见下「Git 跟踪策略」）
+
+```ini
+[config]
+harness_dir=.custom_dir
+```
+
+- `#` / `;` 注释；`[section]` 头；`key=value`（去空白）。仅读 `[config]` 段的 `harness_dir`，未知键忽略（向前兼容）。
+- `harness_dir` 相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold）。
+- 优先级：显式 override > `.mstarc` > 探测。非默认 harness 根的仓库写一个 `.mstarc` 即可程序化解目录问题，无需逐宿主设置 env / config。
 
 ### `{SPECS_DIR}` 解析（找到非空目录即停）
 
@@ -114,6 +127,8 @@ Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
 ```
 
 Legacy `.agents/` 等价：

@@ -200,7 +200,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-host` | Host adapters (dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex) |
 | `pm` | `/pm` / `/skill:pm` / host PM entry |
 
-Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Details → `mstar-plan-conventions`.
+Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Repos with a non-default harness root can declare it in a gitignored **`.mstarc`** (`[config] harness_dir=<dir>` — honored above probing). Details → `mstar-plan-conventions`.
 
 Maintainers: [`AGENTS.md`](AGENTS.md).
 

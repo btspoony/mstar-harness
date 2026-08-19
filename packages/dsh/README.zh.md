@@ -45,7 +45,7 @@ dsh plugin --profile web add dsh-llm-fallbacks
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `harnessDir` | `string` | 按会话工作区探测（`.mstar/` → `.agents/` → `.plans/` → `plans/`，从会话工作区根目录开始——**绝不从启动 cwd**） | 显式 harness 根目录；优先于 engine 探测。**harness 根不在探测名列表中的仓库必须配置**——例如本 mstar-workflow 仓库自身用 `.harness/`（维护根，刻意不探测）；探测从会话工作区根开始（绝不从启动 cwd）并在那里**停止**——永不越过会话工作区向上，因此其上方的 harness 目录（如全局 `~/.mstar`）永远不会被采纳。 |
+| `harnessDir` | `string` | 仓库 `.mstarc` `[config] harness_dir`，否则按会话工作区探测（`.mstar/` → `.agents/` → `.plans/` → `plans/`，从会话工作区根目录开始——**绝不从启动 cwd**） | 显式 harness 根目录；优先于 engine 探测。**harness 根不在探测名列表中的仓库必须配置**；探测从会话工作区根开始（绝不从启动 cwd）并在那里**停止**——永不越过会话工作区向上，因此其上方的 harness 目录（如全局 `~/.mstar`）永远不会被采纳。 |
 | `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖。优先级：Config 优先；否则取 Assignment 自身的 `**Enforcement**: hard` 头字段（仅派发闸门）；否则取迭代 compass frontmatter；否则仅告警。Config `soft` 是唯一的本地回滚——Assignment 级 `soft` 不能覆盖 hard compass。 |
 | `dispatchTools` | `string[]` | `['subagent', 'subagent_fork']` | 派发闸门匹配的委派工具名——dsh preset 的**两个**委派工具：`subagent` 及其 fork 兄弟 `subagent_fork`（两者都携带 Assignment 形态的 `{ description, prompt }` 参数；`toolName` 配置可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
@@ -272,7 +272,7 @@ dsh plugin --profile web add <abs packages/dsh path>   # 同一 profile bundle �
 dsh web                     # 启动 → 服务 /plugins/@mstar-harness/dsh/client.js
 ```
 
-本地已验证（install-verification guide）：boot 图包含客户端 entry（`@mstar-harness/dsh` 携声明的 inject 面）、`/plugins/<id>/client.js` 路由服务的正是构建产物（rev = 内容 sha1）、浏览器握手 materialize 出插件入口（`inject` + `apply` + CSS 注入，经典脚本语义）——见 `.mstar/iterations/iter-20260809-mstar-panel-beautify/guides/install-verification.md`。
+本地已验证（install-verification guide）：boot 图包含客户端 entry（`@mstar-harness/dsh` 携声明的 inject 面）、`/plugins/<id>/client.js` 路由服务的正是构建产物（rev = 内容 sha1）、浏览器握手 materialize 出插件入口（`inject` + `apply` + CSS 注入，经典脚本语义）——见 panel-beautify 迭代的 `install-verification.md` guide（本地 harness root）。
 
 **Known Limitations**（本迭代）：迭代 stepper 的 Step 1（iteration-start）在 steering compass `status: active`（Phase 1 进行中——catalog `compassStatus` 字段）时为**当前步**，且不携带 PASS/FAIL 徽标（Phase 1 无 gate 判定）；Step 5（merge-ready）**永远不会是当前步**——engine 相位门只评估 Phase 2→3→4（merge-ready 从不是 gate transition）；仅当 Step 4（pr-delivery）为当前步时渲染 `next`，其余为 idle；当前步跟随 TTL 刷新的 `compassStatus`——会话中途 `active`→`locked` 翻转后最多落后一个 catalog 间隔（60 秒）（有界、已记录的陈旧；绝不给出错误判定）；代理实体状态按**精确配对**派生（paired settle 携带的 `(agent, role, planId, taskId)` 标识精确配对到对应派发——QC tri N=3 并发下各卡各自结算；未配对派发保持 running，绝不捏造）；无 steering compass 时的「当前迭代」过滤按 plan id（8 位日期前缀）+ doneAt 推导迭代——确定性、已记录的启发式，且只丢弃可证明跨迭代的事件）；不回溯 resumed 长日志的历史行（服务端每 turn 首步必重发，digest 门控）；无自定义顶层槽位（不改 dsh-private 布局的前提下，`conversation.view` tab 是唯一的会话级面板位——spec §1）。面板验收为双轨：in-loop 浏览器 harness 验证（对重建 bundle，见迭代 guides `iter-20260810-panel-zones/guides/`）+ 用户重启后 GUI 终验——重跑步骤见 install-verification guide §8。R1（浏览器观察）已于 2026-08-10 关闭归档。
 

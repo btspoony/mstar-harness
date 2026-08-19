@@ -4,7 +4,6 @@ node_modules
 /.pnpm-store/
 secrets.env
 .secrets/
-.harness/
 .mstar/
 .gitnexus/
 

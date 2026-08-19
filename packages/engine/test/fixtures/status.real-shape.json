@@ -4,14 +4,14 @@
   "plans": [
     {
       "plan_id": "20260717-kimi-host",
-      "file": ".harness/plans/20260717-kimi-host-support.md",
+      "file": ".mstar/plans/20260717-kimi-host-support.md",
       "title": "Kimi Code host full support",
       "status": "Done"
     },
     {
       "id": "20260728-zero-residual",
       "plan_id": "20260728-zero-residual",
-      "file": ".harness/plans/20260728-findings-cleanup-zero-residual.md",
+      "file": ".mstar/plans/20260728-findings-cleanup-zero-residual.md",
       "title": "Findings cleanup: zero-residual mode",
       "status": "Done",
       "owner": "@project-manager",
@@ -39,7 +39,7 @@
     },
     {
       "plan_id": "20260807-agent-plugins-v1",
-      "file": ".harness/plans/20260807-agent-plugins-v1.md",
+      "file": ".mstar/plans/20260807-agent-plugins-v1.md",
       "title": "Agent Plugins v1.0.0 portable package support",
       "status": "Done",
       "owner": "@project-manager",
@@ -67,9 +67,9 @@
           "release_validate": "pass v1.8.8",
           "ci": "success (validate run 31184961541, release-prep run 31185014808)"
         },
-        "review_bundle": ".harness/sdd/20260807-agent-plugins-v1/review/",
-        "sdd_dir": ".harness/sdd/20260807-agent-plugins-v1/",
-        "sdd_progress": ".harness/sdd/20260807-agent-plugins-v1/progress.md",
+        "review_bundle": ".mstar/sdd/20260807-agent-plugins-v1/review/",
+        "sdd_dir": ".mstar/sdd/20260807-agent-plugins-v1/",
+        "sdd_progress": ".mstar/sdd/20260807-agent-plugins-v1/progress.md",
         "pr": {
           "number": 68,
           "url": "https://github.com/btspoony/mstar-harness/pull/68",
@@ -102,13 +102,13 @@
     },
     {
       "plan_id": "20260808-slice1-engine-foundation",
-      "file": ".harness/plans/20260808-slice1-engine-foundation.md",
+      "file": ".mstar/plans/20260808-slice1-engine-foundation.md",
       "title": "Slice 1: engine scaffold + core/path/status/lease + CLI + opencode beforeStatusWrite",
       "status": "InProgress",
       "owner": "@project-manager",
       "created_at": "2026-08-08",
       "metadata": {
-        "primary_spec": ".harness/references/skill-programmatic-roadmap.md",
+        "primary_spec": ".mstar/references/skill-programmatic-roadmap.md",
         "task_category": "logic",
         "execution_mode": "sdd",
         "iteration_refs": [
@@ -118,8 +118,8 @@
         "merge_target": "feature/skill-programmatic-split",
         "worktree_path": "/Users/bibi/workspace/ai/worktrees/mstar-harness-skill-engine",
         "working_branch": "feature/skill-programmatic-split",
-        "plan_path": "/Users/bibi/workspace/ai/mstar-harness/.harness/plans/20260808-slice1-engine-foundation.md",
-        "sdd_dir": "/Users/bibi/workspace/ai/mstar-harness/.harness/sdd/20260808-slice1-engine-foundation",
+        "plan_path": "/Users/bibi/workspace/ai/mstar-harness/.mstar/plans/20260808-slice1-engine-foundation.md",
+        "sdd_dir": "/Users/bibi/workspace/ai/mstar-harness/.mstar/sdd/20260808-slice1-engine-foundation",
         "execution_lease": {
           "holder": "omp-pm-session-20260808",
           "claimed_at": "2026-08-08",
@@ -184,7 +184,7 @@
   },
   "metadata": {
     "primary_spec": null,
-    "harness_root": ".harness",
+    "harness_root": ".mstar",
     "iteration_base_branch": "main",
     "target_branch": "main",
     "control_worktree_path": "/Users/bibi/workspace/ai/mstar-harness",

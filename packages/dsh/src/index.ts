@@ -369,9 +369,9 @@ export function apply(ctx: Context, config: Config): void {
   // session yet, so the boot value is the explicit config or null; every
   // event path (fs intents, tools/pre-execute, agent/pre-step, tool
   // executes) resolves per its own session workspace, memoized per
-  // workspace root. Repos whose harness root is not a probed name
-  // (`.mstar/` → `.agents/` → `.plans/`/`plans/` — e.g. this repo's
-  // `.harness/`) declare `config.harnessDir`, which wins outright.
+  // workspace root. Repos whose harness root is not one of the probed
+  // names (`.mstar/` → `.agents/` → `.plans/`/`plans/`) declare
+  // `config.harnessDir`, which wins outright.
   const resolver = new HarnessResolver(config.harnessDir)
   const bootHarnessDir = resolver.forWorkspace(undefined)
   // The Service constructor registers itself on the fiber via reflect.provide,

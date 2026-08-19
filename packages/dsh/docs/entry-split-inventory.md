@@ -2,7 +2,7 @@
 
 - **范围**：`packages/dsh/src/index.ts`（3184 行）→ `src/gates/*` 纯重构拆分的模块盘点与 move plan。
 - **冻结基线**：worktree branch `feature/dsh-entry-split` @ `76bbad4`（含 Plan A 全部代码：engine workspaceRoot 边界 + 2.0.5 版本对齐）。
-- **配套**：导出面快照断言测试 `packages/dsh/tests/export-surface.spec.ts`（导出集恒等）；本方案节已回写主 plan Task 1（`.mstar/plans/20260810-dsh-entry-split.md`）。
+- **配套**：导出面快照断言测试 `packages/dsh/tests/export-surface.spec.ts`（导出集恒等）；本方案节已回写主 plan Task 1（entry-split 主 plan，本地 harness root）。
 - **硬约束**：零逻辑改动（机械搬移 + 最小 import 编辑）；导出面不变；入口瘦身为模块索引（仅 import/export + 启动接线）；全量 suite ≥394 且不回退；禁止 barrel / 运行时循环依赖。
 
 ---

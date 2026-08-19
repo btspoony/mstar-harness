@@ -5,8 +5,8 @@
  * Spec sources (each export cites the skill/reference section it enforces):
  * - Lease objects + required fields: `mstar-plan-artifacts`
  *   `references/status-and-residuals.md` § `plans[].execution_lease` +
- *   § Root `metadata.integration_merge_lease` (v1), and the maintenance ADR
- *   `.harness/docs/2026-07-22-iteration-worktree-plan-lease.md` (normative
+ *   § Root `metadata.integration_merge_lease` (v1), and the
+ *   iteration-worktree-plan-lease maintenance ADR (normative
  *   field names — `holder`, `claimed_at` RFC 3339 UTC with explicit `Z`,
  *   `worktree_path`, `working_branch`; merge lease adds `plan_id`,
  *   `source_branch`, `target_branch`; `session_label` display-only).
@@ -112,7 +112,7 @@ const DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
 
 /**
  * A `claimed_at` is valid as RFC 3339 UTC with explicit `Z` (normative) or as
- * a `YYYY-MM-DD` date (repo convention — the real control `.harness/status.json`
+ * a `YYYY-MM-DD` date (repo convention — the real control status.json
  * execution_lease for 20260808-slice1-engine-foundation uses
  * `"claimed_at": "2026-08-08"` and `mstar lease verify` must pass on it).
  */

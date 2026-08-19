@@ -30,8 +30,7 @@ export interface Config {
    * `{HARNESS_DIR}` resolution order); when absent the plugin probes from
    * the SESSION workspace root (`agent.session.header.cwd`) — never the
    * process cwd — walking `.mstar/` → `.agents/` → `.plans/`/`plans/`.
-   * Required for repos whose harness root is not a probed name (e.g. a
-   * `.harness/` maintenance root).
+   * Required for repos whose harness root is not a probed name.
    */
   harnessDir?: string
   /**
