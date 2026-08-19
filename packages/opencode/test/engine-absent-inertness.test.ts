@@ -37,9 +37,12 @@ export const applyEnforcement = unavailable;
 export const composeDispatchGate = unavailable;
 export const isReadOnlyAssignmentRole = unavailable;
 export const parseAssignmentFields = unavailable;
+export const readJson = unavailable;
 export const resolveHarnessDir = unavailable;
 export const resolveRepoEnforcement = unavailable;
+export const validateProjectRegister = unavailable;
 export const validateStatus = unavailable;
+export const validateWorkflowSnapshot = unavailable;
 `;
 
 /** Probe: load the real plugin source, drive the hook, report no-throw + abort logs. */

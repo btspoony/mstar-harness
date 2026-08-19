@@ -207,36 +207,37 @@ Engine-backed harness checks for maintainers (thin wrappers — business logic l
 
 ### `mstar-harness status tech-debt`
 
-Print the residual tech-debt rollup (`total_open` / `by_severity` / `by_target` / `by_plan` over open root `residual_findings`) and compare it field-by-field against the stored `metadata.tech_debt_summary` — a thin mirror of the engine `techDebtRollup` check cited in `mstar-plan-artifacts` (`references/status-and-residuals.md`).
+Print the residual tech-debt rollup (`total_open` / `by_severity` / `by_target` / `by_plan`) aggregated over every `{PROJECT_DIR}/<id>/residuals.json` project register — a thin mirror of the engine `techDebtRollup` check cited in `mstar-plan-artifacts` (`references/status-and-residuals.md`). v3 hard cutover: the project register is the source of truth — there is no stored-summary drift check, the output is informational (exit 0).
 
 - `npx @mstar-harness/cli status tech-debt`
-- `npx @mstar-harness/cli status tech-debt path/to/status.json`
+- `npx @mstar-harness/cli status tech-debt path/to/projects`
 
-Without a path argument the command uses `{HARNESS_DIR}/status.json` (resolved like `status validate`).
+Without a path argument the command uses the resolved `{PROJECT_DIR}`.
 
 Exit codes:
 
-- `0` — PASS: prints the computed rollup then `tech_debt_summary: PASS`
-- `1` — DRIFT: computed fields differ from the stored summary (or no summary is stored); prints `tech_debt_summary: DRIFT (N/4 fields: …)`. The engine does not write `status.json` — copy the computed values into `metadata.tech_debt_summary` to clear.
+- `0` — prints the computed rollup + the informational note (registers empty → zero rollup)
+- `1` — project dir not found or resolution failed
 
 ### `mstar-harness status findings-cleanup`
 
-Enforce a plan's `Findings cleanup` mode on its open residuals — a thin mirror of the engine `findingsCleanupGate` check cited in `mstar-plan-artifacts`. Mode resolution follows the engine: explicit Assignment/metadata `zero-residual`, else the `allow-residual` default (plans without open residuals pass trivially).
+Enforce a plan's `Findings cleanup` mode on its project-register residuals — a thin mirror of the engine `findingsCleanupGate` check cited in `mstar-plan-artifacts`. The register (`projects/<id>/residuals.json`) entries are keyed by plan id — the snapshot plan linkage. Mode resolution: explicit `--mode zero-residual|allow-residual`, else the `allow-residual` default (plans without register entries pass trivially).
 
 - `npx @mstar-harness/cli status findings-cleanup <plan-id> --harness <path>`
+- `npx @mstar-harness/cli status findings-cleanup <plan-id> --project acme --mode zero-residual`
 
-`--harness` defaults to the resolved `{HARNESS_DIR}` (its `status.json` is used).
+`--harness` defaults to the resolved `{HARNESS_DIR}`; `--project` defaults to `_default`.
 
 Exit codes:
 
 - `0` — OK: no open-residual violations under the resolved mode
-- `1` — violations: prints one `findings.*` row per open residual on stderr
+- `1` — violations: prints one `findings.*` row per violating open residual on stderr
 
 ### `mstar-harness lease verify-integration`
 
-Verify the root `metadata.integration_merge_lease` object when present — a thin mirror of the engine `validateIntegrationMergeLease` check cited in `mstar-plan-artifacts` / `mstar-iteration`. Distinct from `mstar-harness lease verify` (the plan-level `execution_lease`): this is the serial integration-merge lease.
+Verify the workflow snapshot's top-level `integration_merge_lease` object when present — a thin mirror of the engine `validateIntegrationMergeLease` check cited in `mstar-plan-artifacts` / `mstar-iteration`. Distinct from `mstar-harness lease verify` (the plan-level `execution_lease` on a snapshot plan row): this is the serial integration-merge lease.
 
-- `npx @mstar-harness/cli lease verify-integration --harness <path>`
+- `npx @mstar-harness/cli lease verify-integration --workflow <id> --harness <path>`
 
 `--harness` defaults to the resolved `{HARNESS_DIR}`.
 
@@ -244,6 +245,7 @@ Exit codes:
 
 - `0` — OK: no `integration_merge_lease` (unclaimed) or a valid lease (prints the holder)
 - `1` — invalid lease: missing/invalid `holder` / `claimed_at` / `plan_id` / `source_branch` / `target_branch`, or a `null`/tombstone object
+- `2` — usage: missing `--workflow`
 
 ### `mstar-harness worktree qc-alignment`
 

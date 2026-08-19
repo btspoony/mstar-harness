@@ -5,9 +5,14 @@
  * - Registers skill paths only inside this package: `harness-skills/` (synced at build / repo postinstall; includes `mstar-host`).
  * - Loads agents from `harness-agents/` only (same sync). Does not use `process.cwd()` so OpenCode project cwd does not matter.
  * - Loads custom commands from `harness-commands/` only (same sync).
- * - Dual-mode `status.json` write lint (roadmap §8.5 `beforeStatusWrite`):
- *   on structured file-write tools targeting `{HARNESS_DIR}/status.json`, runs
- *   the engine `status.validateStatus`. Default (no `Enforcement: hard`):
+ * - Dual-mode harness coordination-document write lint (roadmap §8.5
+ *   `beforeStatusWrite`, v3 hard cutover): on structured file-write tools
+ *   targeting the v2 root `{HARNESS_DIR}/status.json`, workflow snapshots
+ *   (`{HARNESS_DIR}/workflows/<id>/snapshot.json`) or project registers
+ *   (`{HARNESS_DIR}/projects/<id>/residuals.json`), runs the matching
+ *   engine validator (`status.validateStatus` /
+ *   `workflow.validateWorkflowSnapshot` / `project.validateProjectRegister`).
+ *   Default (no `Enforcement: hard`):
  *   `warn` lines on violations, never blocks. Hard mode (repo iteration
  *   compass frontmatter `enforcement: hard`, engine
  *   `status.resolveCompassEnforcement`): error-level lines with a skill-text
@@ -43,11 +48,14 @@ import {
   composeDispatchGate,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
+  readJson,
   resolveHarnessDir,
   resolveRepoEnforcement,
+  validateProjectRegister,
   validateStatus,
+  validateWorkflowSnapshot,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, StatusDoc } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, StatusV2Doc } from "@mstar-harness/engine";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -240,19 +248,51 @@ const defaultStatusLogger: StatusLogger = (level, message) => {
 };
 
 const STATUS_FILE = "status.json";
+const SNAPSHOT_FILE = "snapshot.json";
+const REGISTER_FILE = "residuals.json";
+
+/** Gated harness coordination documents in v3 (compass ruling 7 — hard
+ * cutover): the root `status.json` (v2), workflow snapshots and project
+ * registers. Each kind maps to its engine validator. */
+type HarnessDocKind = "status" | "snapshot" | "register";
 
 /**
- * `status.json` write lint (roadmap §8.5 `beforeStatusWrite`).
+ * Classify `targetPath` as a canonical `{HARNESS_DIR}` coordination
+ * document: basename is `status.json` at the harness root, `snapshot.json`
+ * under `workflows/<id>/`, or `residuals.json` under `projects/<id>/`
+ * (harness-relative, one path component each), AND
+ * `resolveHarnessDir(dirname(path))` resolves. Returns the harness dir +
+ * doc kind when gated, `null` otherwise.
+ */
+function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind: HarnessDocKind } | null {
+  const resolved = path.resolve(targetPath);
+  const name = path.basename(resolved);
+  if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE) return null;
+  const harnessDir = resolveHarnessDir(path.dirname(resolved));
+  if (!harnessDir) return null;
+  const rel = path.relative(harnessDir, resolved);
+  if (name === STATUS_FILE && rel === STATUS_FILE) return { harnessDir, kind: "status" };
+  if (name === SNAPSHOT_FILE && /^workflows\/[^/]+\/snapshot\.json$/.test(rel)) return { harnessDir, kind: "snapshot" };
+  if (name === REGISTER_FILE && /^projects\/[^/]+\/residuals\.json$/.test(rel)) return { harnessDir, kind: "register" };
+  return null;
+}
+
+/**
+ * `status.json` / workflow snapshot / project register write lint (roadmap
+ * §8.5 `beforeStatusWrite`, v3 hard cutover).
  *
  * Given the target path of a file write, resolves `{HARNESS_DIR}` from the
  * target via the engine (`path.resolveHarnessDir` find-first-stop) and runs
- * `status.validateStatus` on the document about to be written (`opts.doc`) or
- * on the current file.
+ * the matching engine validator on the document about to be written
+ * (`opts.doc`) or on the current file: `status.validateStatus` for the v2
+ * root, `workflow.validateWorkflowSnapshot` for
+ * `workflows/<id>/snapshot.json`, `project.validateProjectRegister` for
+ * `projects/<id>/residuals.json` (the v1 root `residual_findings` surface
+ * is gone — the residual write gate moved to the register path).
  *
  * Enforcement (roadmap §8.5 C4/D2, Slice 5):
  * - **Warn mode (default)** — flag absent: violations are surfaced as `warn`
- *   through the plugin log channel; `hardBlocked` is false. Unchanged v1
- *   behavior.
+ *   through the plugin log channel; `hardBlocked` is false.
  * - **Hard mode** — the write context carries `Enforcement: hard` via
  *   `opts.enforcement`, or (when omitted) the repo's iteration compass
  *   frontmatter declares `enforcement: hard` (engine
@@ -271,9 +311,9 @@ const STATUS_FILE = "status.json";
  * with a refusal channel (pi/dsh when their APIs land) must refuse the write
  * when `hardBlocked === true`.
  *
- * Returns the engine gate result when the target is the canonical harness
- * `status.json` and something could be validated; `null` otherwise (not a
- * harness status write, file does not exist yet, or validation aborted).
+ * Returns the engine gate result when the target is a canonical harness
+ * coordination document and something could be validated; `null` otherwise
+ * (not a harness write, file does not exist yet, or validation aborted).
  */
 export function validateStatusWrite(
   targetPath: string,
@@ -286,32 +326,46 @@ export function validateStatusWrite(
     if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
 
     const resolved = path.resolve(targetPath);
-    if (path.basename(resolved) !== STATUS_FILE) return null;
+    const target = harnessDocKindOfTarget(resolved);
+    if (!target) return null;
 
-    const harnessDir = resolveHarnessDir(path.dirname(resolved));
-    if (!harnessDir || path.join(harnessDir, STATUS_FILE) !== resolved) return null;
-
-    const result: GateResult | null =
-      opts.doc !== undefined
-        ? validateStatus(opts.doc as StatusDoc)
-        : fs.existsSync(resolved)
-          ? validateStatus(resolved)
-          : null;
+    let result: GateResult | null;
+    if (opts.doc !== undefined) {
+      result = validateDocByKind(opts.doc, target.kind);
+    } else if (!fs.existsSync(resolved)) {
+      result = null;
+    } else if (target.kind === "status") {
+      // The path form handles unparseable files itself (invalid-json result).
+      result = validateStatus(resolved);
+    } else {
+      // Snapshot/register validators take a doc — mirror the engine's
+      // unparseable-file violation instead of degrading to an abort.
+      try {
+        result = validateDocByKind(readJson(resolved), target.kind);
+      } catch (error) {
+        result = {
+          ok: false,
+          violations: [
+            { ok: false, severity: "high", code: "status.invalid-json", message: (error as Error).message },
+          ],
+        };
+      }
+    }
     if (!result) return null;
 
-    const enforcement: EnforcementFlag = opts.enforcement ?? resolveRepoEnforcement(harnessDir);
+    const enforcement: EnforcementFlag = opts.enforcement ?? resolveRepoEnforcement(target.harnessDir);
     if (!result.ok) {
       for (const violation of result.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
         if (enforcement.hard) {
           log(
             "error",
-            `status.json validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-plan-artifacts/references/status-and-residuals.md)`,
+            `${path.basename(resolved)} validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-plan-artifacts/references/status-and-residuals.md)`,
           );
         } else {
           log(
             "warn",
-            `status.json validation: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
+            `${path.basename(resolved)} validation: [${violation.severity}] ${violation.code}: ${violation.message}${fix}`,
           );
         }
       }
@@ -324,6 +378,13 @@ export function validateStatusWrite(
     log("error", `status.json validation aborted: ${(error as Error).message}`);
     return null;
   }
+}
+
+/** Run the validator matching the gated doc kind (v3 hard cutover). */
+function validateDocByKind(doc: unknown, kind: HarnessDocKind): GateResult {
+  if (kind === "snapshot") return validateWorkflowSnapshot(doc);
+  if (kind === "register") return validateProjectRegister(doc);
+  return validateStatus(doc as StatusV2Doc);
 }
 
 /**
@@ -506,13 +567,13 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
         return;
       }
 
-      // status.json write lint (Slice 5, dual-mode): warn-only by default;
-      // hard mode (repo compass `enforcement: hard`) logs error-level lines
-      // + a `hardBlocked` result. Never modifies args and never throws in
-      // either mode. Structured file-write tools (`write`/`edit`) carry the
-      // target path in `args.filePath` (fallback `args.path`); bash-heredoc
-      // writes are out of scope. Tool implementations may call
-      // `validateStatusWrite` directly.
+      // Harness coordination-document write lint (Slice 5, dual-mode):
+      // warn-only by default; hard mode (repo compass `enforcement: hard`)
+      // logs error-level lines + a `hardBlocked` result. Never modifies
+      // args and never throws in either mode. Structured file-write tools
+      // (`write`/`edit`) carry the target path in `args.filePath` (fallback
+      // `args.path`); bash-heredoc writes are out of scope. Tool
+      // implementations may call `validateStatusWrite` directly.
       if (typeof filePath !== "string") return;
 
       if (input.tool === "write") {

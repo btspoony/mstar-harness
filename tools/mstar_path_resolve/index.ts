@@ -1,13 +1,14 @@
 /**
- * mstar_path_resolve — resolve the six Morning Star harness directory
+ * mstar_path_resolve — resolve the eight Morning Star harness directory
  * symbols from the session cwd via engine resolvers
  * (`resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` /
- * `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir`).
+ * `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` /
+ * `resolveWorkflowDir` / `resolveProjectDir`).
  *
  * `resolveSddDir` composes `{HARNESS_DIR}/sdd/<plan-id>/` and requires a
  * plan id (single safe path component), so `planId` is an optional param:
  * pass it to resolve the per-plan SDD dir; omit it to resolve only the
- * other five symbols. No local rule logic — path composition is engine
+ * other seven symbols. No local rule logic — path composition is engine
  * code.
  */
 import {
@@ -15,8 +16,10 @@ import {
   resolveIterationDir,
   resolveKnowledgeDir,
   resolvePlanDir,
+  resolveProjectDir,
   resolveSddDir,
   resolveSpecsDir,
+  resolveWorkflowDir,
 } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -33,9 +36,9 @@ export default function mstarPathResolve(pi: CustomToolAPI): CustomTool {
     name: "mstar_path_resolve",
     label: "Resolve harness directories",
     description:
-      "Resolve the Morning Star harness directory symbols ({HARNESS_DIR}, {PLAN_DIR}, {SDD_DIR}, {ITERATION_DIR}, {KNOWLEDGE_DIR}, {SPECS_DIR}) from the session cwd using the engine resolvers. " +
+      "Resolve the Morning Star harness directory symbols ({HARNESS_DIR}, {PLAN_DIR}, {SDD_DIR}, {ITERATION_DIR}, {KNOWLEDGE_DIR}, {SPECS_DIR}, {WORKFLOW_DIR}, {PROJECT_DIR}) from the session cwd using the engine resolvers. " +
       "Pass `planId` to also resolve the per-plan SDD dir ({HARNESS_DIR}/sdd/<plan-id>/). " +
-      "Use when a tool needs the exact harness, plans, sdd, iterations, knowledge, or specs path (e.g. before reading status.json, plan files, or review bundles).",
+      "Use when a tool needs the exact harness, plans, sdd, iterations, knowledge, specs, workflows, or projects path (e.g. before reading status.json, workflow snapshots, project registers, plan files, or review bundles).",
     parameters: pi.zod.object({ planId: pi.zod.string().optional() }).optional(),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
@@ -51,6 +54,8 @@ export default function mstarPathResolve(pi: CustomToolAPI): CustomTool {
         const iterationDir = resolveIterationDir(harnessDir);
         const knowledgeDir = resolveKnowledgeDir(harnessDir);
         const specsDir = resolveSpecsDir(harnessDir);
+        const workflowDir = resolveWorkflowDir(pi.cwd);
+        const projectDir = resolveProjectDir(pi.cwd);
         let sddDir: string | undefined;
         if (params?.planId) {
           sddDir = resolveSddDir(harnessDir, params.planId);
@@ -62,6 +67,8 @@ export default function mstarPathResolve(pi: CustomToolAPI): CustomTool {
           `iteration: ${iterationDir}`,
           `knowledge: ${knowledgeDir}`,
           `specs: ${specsDir}`,
+          `workflow: ${workflowDir}`,
+          `project: ${projectDir}`,
         ];
         return result(lines.join("\n"), {
           cwd: pi.cwd,
@@ -71,6 +78,8 @@ export default function mstarPathResolve(pi: CustomToolAPI): CustomTool {
           iteration_dir: iterationDir,
           knowledge_dir: knowledgeDir,
           specs_dir: specsDir,
+          workflow_dir: workflowDir,
+          project_dir: projectDir,
         }, false);
       } catch (error) {
         return result(`mstar_path_resolve failed: ${(error as Error).message}`, {}, true);

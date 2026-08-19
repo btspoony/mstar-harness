@@ -1,14 +1,23 @@
 /**
  * mstar-gates — omp `tool_call` pre-hook: blocking enforcement gate for
- * status.json writes and task dispatches.
+ * harness coordination-document writes and task dispatches.
  *
  * Loaded by omp as a plugin extension module at session startup (one module,
  * one handler — registration order within a module is stable). The factory
  * registers exactly ONE `tool_call` handler; the handler returns
  * `{ block: true, reason }` ONLY when `Enforcement: hard` governs the event
- * (compass `enforcement: hard` for status.json writes, Assignment-header
+ * (compass `enforcement: hard` for coordination writes, Assignment-header
  * `Enforcement: hard` per dispatch entry) AND engine validation produced
  * violations. Everything else returns `undefined` — silent pass.
+ *
+ * Gate 1 (writes) targets the three v3 coordination documents (compass
+ * ruling 7 — hard cutover): the v2 root `{HARNESS_DIR}/status.json`
+ * (engine `status.validateStatus`), workflow snapshots
+ * `{HARNESS_DIR}/workflows/<id>/snapshot.json`
+ * (`workflow.validateWorkflowSnapshot`) and project registers
+ * `{HARNESS_DIR}/projects/<id>/residuals.json`
+ * (`project.validateProjectRegister` — the v1 root `residual_findings`
+ * surface is gone, so the residual write gate moved to the register path).
  *
  * Engine-version compatibility (hotfix): `composeDispatchGate` is loaded
  * LAZILY (module-level cached dynamic import, `loadComposeDispatchGate`) —
@@ -16,7 +25,7 @@
  * named import would fail at module link on older engines and drop the
  * WHOLE hook (both gates). When the export is missing, Gate 2 (task
  * dispatch) is skipped entirely — no blocking, no violations — with a
- * one-time `pi.logger.warn`; Gate 1 (status) keeps working.
+ * one-time `pi.logger.warn`; Gate 1 (writes) keeps working.
  * `dispatchGateLoader` is the exported test seam: smoke scripts replace
  * its `load` to simulate an old engine build (or an import failure).
  *
@@ -29,7 +38,7 @@
  * in write content is NOT a silent pass: Gate 1 reports it as
  * `status.invalid-json` (same shape as the engine's own unparseable-file
  * violation), which can block under a hard compass. A content-less write to
- * a status.json that does not exist yet (fresh scaffold/init) passes
+ * a gated document that does not exist yet (fresh scaffold/init) passes
  * silently, mirroring opencode `validateStatusWrite`'s existsSync guard.
  * Size guard (qc3 F-005): content strings beyond ~2MB are skipped without
  * parsing — a pathologically large write must not approach omp's 30s
@@ -37,27 +46,33 @@
  * silently (documented degradation, same as other content-glue limits).
  *
  * No semantic fork: every rule check is an engine call (status.validateStatus,
+ * workflow.validateWorkflowSnapshot, project.validateProjectRegister,
  * dispatch.composeDispatchGate — the single shared host dispatch-gate
  * composition, qc1 F-001/F-006 — status.resolveCompassEnforcement …). Local
  * code is shape-guards (path/basename filtering, task wire-shape
  * extraction), the JSON.parse glue for `input.content`, and reason
  * formatting — the same composition `packages/opencode/src/mstar.ts`
- * `validateStatusWrite` / `validateDispatchAssignment` use, with omp's
+ * `validateStatusWrite` / `validateDispatchAssignment` uses, with omp's
  * `{ block, reason }` refusal channel instead of the log channel.
  */
 import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import {
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
+  readJson,
   resolveRepoEnforcement,
   resolveHarnessDir,
+  validateProjectRegister,
   validateStatus,
+  validateWorkflowSnapshot,
 } from "@mstar-harness/engine";
-import type { StatusDoc, ValidationResult } from "@mstar-harness/engine";
+import type { StatusV2Doc, ValidationResult } from "@mstar-harness/engine";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const STATUS_FILE = "status.json";
+const SNAPSHOT_FILE = "snapshot.json";
+const REGISTER_FILE = "residuals.json";
 const STATUS_SKILL_POINTER = "skill: mstar-plan-artifacts/references/status-and-residuals.md";
 const DISPATCH_SKILL_POINTER = "skill: mstar-dispatch-gates";
 
@@ -80,20 +95,33 @@ function eventTargetPaths(input: unknown): string[] {
   return paths;
 }
 
+/** Gated harness coordination documents in v3 (compass ruling 7 — hard
+ * cutover): the root `status.json` (v2), workflow snapshots
+ * (`workflows/<id>/snapshot.json`) and project registers
+ * (`projects/<id>/residuals.json`). Each kind maps to its engine
+ * validator; everything else is not a gated coordination write. */
+type HarnessDocKind = "status" | "snapshot" | "register";
+
 /**
- * True when `targetPath` is the canonical `{HARNESS_DIR}/status.json`:
- * basename is `status.json` AND `resolveHarnessDir(dirname(path))` resolves
- * AND `join(harnessDir, "status.json")` equals the resolved path. Everything
- * else is not a gated status write. Returns the harness dir when gated.
+ * Classify `targetPath` as a canonical `{HARNESS_DIR}` coordination
+ * document: basename is `status.json` at the harness root, `snapshot.json`
+ * under `workflows/<id>/`, or `residuals.json` under `projects/<id>/`
+ * (harness-relative, one path component each), AND
+ * `resolveHarnessDir(dirname(path))` resolves. Everything else is not a
+ * gated write. Returns the harness dir + doc kind when gated.
  */
-function harnessDirOfStatusPath(targetPath: unknown): string | null {
+function harnessDocKindOfTarget(targetPath: unknown): { harnessDir: string; kind: HarnessDocKind } | null {
   if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
   const resolved = resolve(targetPath);
-  if (basename(resolved) !== STATUS_FILE) return null;
+  const name = basename(resolved);
+  if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE) return null;
   const harnessDir = resolveHarnessDir(dirname(resolved));
   if (harnessDir === null) return null;
-  if (join(harnessDir, STATUS_FILE) !== resolved) return null;
-  return harnessDir;
+  const rel = relative(harnessDir, resolved);
+  if (name === STATUS_FILE && rel === STATUS_FILE) return { harnessDir, kind: "status" };
+  if (name === SNAPSHOT_FILE && /^workflows\/[^/]+\/snapshot\.json$/.test(rel)) return { harnessDir, kind: "snapshot" };
+  if (name === REGISTER_FILE && /^projects\/[^/]+\/residuals\.json$/.test(rel)) return { harnessDir, kind: "register" };
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,20 +176,19 @@ function violationLine(violation: ValidationResult): string {
 const MAX_STATUS_CONTENT_LENGTH = 2 * 1024 * 1024;
 
 /**
- * Validate the document being written to a gated status.json. `input.content`
- * as a string is the new document: JSON.parse it and run the engine validator
- * on the parsed doc — a parse failure is a violation (`status.invalid-json`,
- * the same code/message shape the engine emits for an unparseable file).
- * Parsed `null` / non-object / array content is a `status.invalid-json`
- * violation too (qc3 F-004 — the JSON literal `null` would otherwise slip
- * through `validateStatus`'s destructuring into the outer catch's silent
- * pass). Without a content string (edit-style events) the on-disk file is
- * validated — unless it does not exist yet (fresh scaffold/init write):
- * nothing to validate, silent pass (mirrors opencode `validateStatusWrite`'s
- * existsSync guard → null). Never throws (validateStatus catches its own
- * read errors).
+ * Validate the document being written to a gated harness coordination
+ * document. `input.content` as a string is the new document: JSON.parse it
+ * and run the matching engine validator on the parsed doc — a parse failure
+ * is a violation (`status.invalid-json`, the same code/message shape the
+ * engine emits for an unparseable file). Parsed `null` / non-object / array
+ * content is a `status.invalid-json` violation too (qc3 F-004 — the JSON
+ * literal `null` would otherwise slip through `validateStatus`'s
+ * destructuring into the outer catch's silent pass). Without a content
+ * string (edit-style events) the on-disk file is validated — unless it does
+ * not exist yet (fresh scaffold/init write): nothing to validate, silent
+ * pass. Never throws (the validators catch their own read errors).
  */
-function validateStatusWriteDoc(content: unknown, filePath: string): ValidationResult[] {
+function validateStatusWriteDoc(content: unknown, filePath: string, kind: HarnessDocKind): ValidationResult[] {
   if (typeof content === "string") {
     if (content.length > MAX_STATUS_CONTENT_LENGTH) return []; // size guard — silent pass
     let doc: unknown;
@@ -183,14 +210,37 @@ function validateStatusWriteDoc(content: unknown, filePath: string): ValidationR
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: "status.json content must be a JSON object",
+          message: `${basename(filePath)} content must be a JSON object`,
         },
       ];
     }
-    return validateStatus(doc as StatusDoc).violations;
+    return validateDocByKind(doc, kind);
   }
   if (!existsSync(filePath)) return []; // fresh scaffold/init write — nothing to validate
-  return validateStatus(filePath).violations;
+  if (kind === "status") return validateStatus(filePath).violations; // path form handles invalid JSON itself
+  let doc: unknown;
+  try {
+    doc = readJson(filePath);
+  } catch (error) {
+    // Mirror the engine's unparseable-file violation for snapshot/register
+    // targets (their validators take a doc, not a path).
+    return [
+      {
+        ok: false,
+        severity: "high",
+        code: "status.invalid-json",
+        message: (error as Error).message,
+      },
+    ];
+  }
+  return validateDocByKind(doc, kind);
+}
+
+/** Run the validator matching the gated doc kind (v3 hard cutover). */
+function validateDocByKind(doc: unknown, kind: HarnessDocKind): ValidationResult[] {
+  if (kind === "snapshot") return validateWorkflowSnapshot(doc).violations;
+  if (kind === "register") return validateProjectRegister(doc).violations;
+  return validateStatus(doc as StatusV2Doc).violations;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,17 +249,18 @@ function validateStatusWriteDoc(content: unknown, filePath: string): ValidationR
 
 /**
  * Block a `write`/`edit` tool_call when it targets a canonical
- * `{HARNESS_DIR}/status.json` with violations and the harness compass
+ * `{HARNESS_DIR}` coordination document (v2 root status.json / workflow
+ * snapshot / project register) with violations and the harness compass
  * declares `enforcement: hard`. Soft (or no compass) → silent pass.
  */
 function gateStatusWrite(eventInput: unknown): { block: true; reason: string } | undefined {
   const input = eventInput as Record<string, unknown>;
   for (const rawPath of eventTargetPaths(input)) {
-    const harnessDir = harnessDirOfStatusPath(rawPath);
-    if (harnessDir === null) continue; // not a gated status write — silent pass
-    const violations = validateStatusWriteDoc(input.content, resolve(rawPath));
+    const target = harnessDocKindOfTarget(rawPath);
+    if (target === null) continue; // not a gated coordination write — silent pass
+    const violations = validateStatusWriteDoc(input.content, resolve(rawPath), target.kind);
     if (violations.length === 0) continue;
-    const enforcement = resolveRepoEnforcement(harnessDir);
+    const enforcement = resolveRepoEnforcement(target.harnessDir);
     if (!enforcement.hard) continue; // soft mode — silent pass
     const reason = violations.map((v) => `${violationLine(v)} (${STATUS_SKILL_POINTER})`).join("\n");
     return { block: true, reason };

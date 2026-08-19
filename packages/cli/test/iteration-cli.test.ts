@@ -1,7 +1,8 @@
 /**
  * CLI `mstar iteration gate|push-cadence` — engine-backed wrappers.
  *
- * `gate` parses status.json + delivery-compass.md frontmatter, evaluates
+ * `gate` resolves `--workflow <id>` to `{HARNESS_DIR}/workflows/<id>/snapshot.json`,
+ * parses delivery-compass.md frontmatter, evaluates
  * `iteration.evaluatePhaseGate`, prints the transition and both checklists,
  * and exits 1 when the engine gate verdict fails (`result.ok === false`).
  * `push-cadence` wraps `iteration.pushCadenceProbe` (§5.1a) — exit 1 when
@@ -10,12 +11,13 @@
  * Each case runs the real CLI as a subprocess against temp fixtures.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+const WORKFLOW_ID = "v9-9-9";
 
 /** Compass frontmatter: active iteration (no end_date) with two plans. */
 const COMPASS_ACTIVE = `---
@@ -48,13 +50,16 @@ plans:
 # v9.9.9 Delivery Compass
 `;
 
-function statusFixture(planStatuses: Array<[string, string]>): string {
+function snapshotFixture(planStatuses: Array<[string, string]>): string {
   return JSON.stringify(
     {
-      version: 1,
+      schema_version: 1,
+      id: WORKFLOW_ID,
+      type: "iteration",
+      status: "running",
+      started_at: "2026-08-01",
       updated_at: "2026-08-08",
       plans: planStatuses.map(([id, status]) => ({ id, status })),
-      residual_findings: {},
     },
     null,
     2,
@@ -92,24 +97,31 @@ function runCli(args: string[]): RunResult {
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
-/** Temp root with status.json + delivery-compass.md fixtures written in. */
-function withFixtures(fn: (dir: string, statusPath: string, compassPath: string) => void): void {
+/** Temp root with workflows/<id>/snapshot.json + delivery-compass.md fixtures written in. */
+function withFixtures(fn: (dir: string, snapshotPath: string, compassPath: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "mstar-iteration-cli-"));
   try {
-    const statusPath = join(dir, "status.json");
+    const workflowDir = join(dir, "workflows", WORKFLOW_ID);
+    mkdirSync(workflowDir, { recursive: true });
+    const snapshotPath = join(workflowDir, "snapshot.json");
     const compassPath = join(dir, "delivery-compass.md");
-    writeFileSync(statusPath, statusFixture([["plan-a", "Todo"], ["plan-b", "Todo"]]));
+    writeFileSync(snapshotPath, snapshotFixture([["plan-a", "Todo"], ["plan-b", "Todo"]]));
     writeFileSync(compassPath, COMPASS_ACTIVE);
-    fn(dir, statusPath, compassPath);
+    fn(dir, snapshotPath, compassPath);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
+/** The `--workflow` flag form used by every gate invocation. */
+function gateArgs(dir: string, compassPath: string, extra: string[] = []): string[] {
+  return ["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath, ...extra];
+}
+
 describe("mstar iteration gate — phase-transition evaluation", () => {
   test("plans not all Done → phase-2-execute, exit 0 (gate passes, keep executing)", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+    withFixtures((dir, statusPath, compassPath) => {
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("transition: phase-2-execute");
       // Entry checklist reports the still-executing plans (expected mid-run);
@@ -120,8 +132,8 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
 
   test("all plans Done + active compass → phase-3-close required, exit 1 with exit-checklist violations", () => {
     withFixtures((dir, statusPath, compassPath) => {
-      writeFileSync(statusPath, statusFixture([["plan-a", "Done"], ["plan-b", "Done"]]));
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      writeFileSync(statusPath, snapshotFixture([["plan-a", "Done"], ["plan-b", "Done"]]));
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain("transition: phase-3-close");
       expect(result.stderr).toContain("EXIT_STATUS_NOT_COMPLETED");
@@ -131,11 +143,12 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
 
   test("all plans Done + completed compass + full probes → phase-4-pr-delivery, exit 0", () => {
     withFixtures((dir, statusPath, compassPath) => {
-      writeFileSync(statusPath, statusFixture([["plan-a", "Done"], ["plan-b", "Done"]]));
+      writeFileSync(statusPath, snapshotFixture([["plan-a", "Done"], ["plan-b", "Done"]]));
       writeFileSync(compassPath, COMPASS_COMPLETED);
       const result = runCli([
         "iteration", "gate",
-        "--status", statusPath,
+        "--workflow", WORKFLOW_ID,
+        "--harness", dir,
         "--compass", compassPath,
         "--branch", "iteration/v9.9.9",
         "--integration", "iteration/v9.9.9",
@@ -150,9 +163,9 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
   });
 
   test("compass-registered plan missing from status.json → phase-2-execute with entry violation printed", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
-      writeFileSync(statusPath, statusFixture([["plan-a", "Todo"]]));
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+    withFixtures((dir, statusPath, compassPath) => {
+      writeFileSync(statusPath, snapshotFixture([["plan-a", "Todo"]]));
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("transition: phase-2-execute");
       expect(result.stderr).toContain("PLAN_NOT_IN_STATUS");
@@ -161,7 +174,7 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
   });
 
   test("plans: [] flow-style empty array → gate runs without PLAN_NOT_IN_STATUS noise", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -174,7 +187,7 @@ plans: []
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("transition: phase-2-execute");
       // Parsed as an empty array: the frontmatter schema accepts it, and the
@@ -187,7 +200,7 @@ plans: []
   });
 
   test("plans: [a, b] flow-style array → gate checks those plan ids", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -200,7 +213,7 @@ plans: [plan-a, plan-b]
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("transition: phase-2-execute");
       // Parsed as ["plan-a", "plan-b"]: both ids are looked up in status.json
@@ -216,7 +229,7 @@ plans: [plan-a, plan-b]
   });
 
   test("plans: [\"hello, world\"] → exit 1: comma inside quotes is ambiguous, not split", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -229,7 +242,7 @@ plans: ["hello, world"]
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("ambiguous flow-style array");
       expect(result.stderr).toContain("quoted item containing comma");
@@ -241,7 +254,7 @@ plans: ["hello, world"]
   });
 
   test("plans: [\"a, b\", \"c\"] → exit 1: first quoted item's comma is ambiguous", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -254,7 +267,7 @@ plans: ["a, b", "c"]
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("ambiguous flow-style array");
       expect(result.stderr).toContain("quoted item containing comma");
@@ -263,7 +276,7 @@ plans: ["a, b", "c"]
   });
 
   test("plans: ['a, b'] → exit 1: comma inside single quotes is ambiguous, not split (qc2 F-001)", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -276,7 +289,7 @@ plans: ['a, b']
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("ambiguous flow-style array");
       expect(result.stderr).toContain("quoted item containing comma");
@@ -288,7 +301,7 @@ plans: ['a, b']
   });
 
   test("plans: ['a, b', 'c'] → exit 1: first single-quoted item's comma is ambiguous", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -301,7 +314,7 @@ plans: ['a, b', 'c']
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("ambiguous flow-style array");
       expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
@@ -309,7 +322,7 @@ plans: ['a, b', 'c']
   });
 
   test("plans: ['a\", b'] → exit 1: a foreign quote inside the quoted item must not toggle the scan", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -322,7 +335,7 @@ plans: ['a", b']
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("ambiguous flow-style array");
       expect(result.stderr).not.toContain("PLAN_NOT_IN_STATUS");
@@ -330,7 +343,7 @@ plans: ['a", b']
   });
 
   test("plans: ['ok'] → single-quoted item without comma parses to ['ok']", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -343,7 +356,7 @@ plans: ['ok']
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("transition: phase-2-execute");
       // Parsed as ["ok"]: the plan id is looked up in status.json and
@@ -356,7 +369,7 @@ plans: ['ok']
   });
 
   test("plans: ['unterminated] → exit 1: unterminated single quote rejected", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -369,14 +382,14 @@ plans: ['unterminated]
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("unterminated ' quote in flow-style array");
     });
   });
 
   test("plans: [[a]] → exit 1: nested flow-style array rejected", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -389,14 +402,14 @@ plans: [[a]]
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("nested flow-style array");
     });
   });
 
   test("plans: [\"ok\"] → quoted item without comma parses to [\"ok\"]", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -409,7 +422,7 @@ plans: ["ok"]
 ---
 `,
       );
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("transition: phase-2-execute");
       // Parsed as ["ok"]: the plan id is looked up in status.json and
@@ -421,18 +434,18 @@ plans: ["ok"]
     });
   });
 
-  test("missing status file → exit 1 with precise message", () => {
+  test("missing workflow snapshot → exit 1 with precise message", () => {
     withFixtures((dir, _statusPath, compassPath) => {
-      const result = runCli(["iteration", "gate", "--status", join(dir, "nope.json"), "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", "no-such-wf", "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("status file not found");
+      expect(result.stderr).toContain("workflow snapshot not found");
     });
   });
 
   test("compass without frontmatter fence → exit 1 with precise message", () => {
-    withFixtures((_dir, statusPath, compassPath) => {
+    withFixtures((dir, statusPath, compassPath) => {
       writeFileSync(compassPath, "# no frontmatter here\n");
-      const result = runCli(["iteration", "gate", "--status", statusPath, "--compass", compassPath]);
+      const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("no YAML frontmatter fence");
     });

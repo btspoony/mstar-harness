@@ -1,9 +1,12 @@
 /**
- * CLI `mstar path resolve` — {HARNESS_DIR} + {SPECS_DIR} resolution wrapper.
+ * CLI `mstar path resolve` — {HARNESS_DIR} + {SPECS_DIR} + {WORKFLOW_DIR} +
+ * {PROJECT_DIR} resolution wrapper.
  *
  * Thin wrapper over engine `path.resolveHarnessDir` + `path.resolveSpecsDir`
- * (plan-conventions § 路径符号 / § {HARNESS_DIR} 解析顺序 / § {SPECS_DIR} 解析):
- * - Exit 0 prints the resolved harness + specs dirs (human or `--json`).
+ * + `path.resolveWorkflowDir` + `path.resolveProjectDir`
+ * (plan-conventions § 路径符号 / § {HARNESS_DIR} 解析顺序 / § {SPECS_DIR} 解析;
+ * compass ruling 4 — the v3 workflow/project dirs join the path-symbol SSOT):
+ * - Exit 0 prints the resolved dirs (human or `--json`).
  * - Exit 1 with guidance when no harness dir resolves from the start dir.
  * - Specs resolution is read-only: `mstar path resolve` never creates
  *   `{HARNESS_DIR}/specs/` as a side effect.
@@ -166,10 +169,26 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
         ok: boolean;
         harnessDir: string;
         specsDir: string;
+        workflowDir: string;
+        projectDir: string;
       };
       expect(doc.ok).toBe(true);
       expect(doc.harnessDir).toBe(join(root, ".mstar"));
       expect(doc.specsDir).toBe(join(root, ".mstar", "specs"));
+      expect(doc.workflowDir).toBe(join(root, ".mstar", "workflows"));
+      expect(doc.projectDir).toBe(join(root, ".mstar", "projects"));
+    });
+  });
+
+  test("workflow + project dirs resolve under the harness dir (compass ruling 4)", () => {
+    withRoot((root) => {
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
+      const result = runResolve([root]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`workflow dir: ${join(root, ".mstar", "workflows")}`);
+      expect(result.stdout).toContain(`project dir:  ${join(root, ".mstar", "projects")}`);
+      expect(result.stderr).toBe("");
     });
   });
 
