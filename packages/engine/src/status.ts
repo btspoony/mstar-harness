@@ -32,8 +32,8 @@
  * - Rollup aggregates: canonical compute is `techDebtRollup` in `project.ts`
  *   (CLI form: `mstar status tech-debt [path]`).
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { readJson, writeJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
@@ -455,7 +455,10 @@ export function validateWorkflowEntry(entry: unknown): GateResult {
  * `opts.harnessDir` for doc input), every listed entry's snapshot at
  * `{HARNESS_DIR}/<dir>/snapshot.json` must exist and be non-terminal — the
  * root holds active lifecycles only, and terminal writers unregister AFTER
- * the snapshot write. Doc input without a harness dir is structure-only.
+ * the snapshot write. The snapshot must also PHYSICALLY live under the
+ * harness: a symlinked `workflows/<id>/` (or snapshot file) resolving
+ * outside the harness dir is rejected fail-closed (QC wave-1 S-f). Doc
+ * input without a harness dir is structure-only.
  */
 export function validateStatusV2(
   docOrPath: StatusV2Doc | string,
@@ -561,17 +564,46 @@ export function validateStatusV2(
   // lifecycles only — no listed id may resolve to a terminal or missing
   // snapshot. Skipped when no harness dir is known (structure-only input).
   if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
+    // QC wave-1 S-f (qc2 F-005): symlink hardening — the invariant must
+    // read a snapshot that PHYSICALLY lives under the harness. The lexical
+    // path is harness-relative, but a symlinked `workflows/<id>/` (or
+    // snapshot file) can point outside; `realpathSync` resolves the chain
+    // and the resolved path must stay under the resolved harness root.
+    // Resolving the harness root once also normalizes the comparison when
+    // the harness dir itself is reached through a symlink (e.g. /tmp).
+    let realHarnessDir: string | null = null;
+    try {
+      realHarnessDir = realpathSync(harnessDir);
+    } catch {
+      // Harness dir missing — every snapshot check below reports missing;
+      // the physical-location check is moot.
+    }
     for (const entry of doc.workflows) {
       if (!isPlainObject(entry) || typeof entry.dir !== "string") continue;
       const relSnapshot = join(entry.dir, WORKFLOW_SNAPSHOT_FILE);
       const snapshotPath = join(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
-      if (!existsSync(snapshotPath)) {
+      // realpathSync doubles as the existence probe (a missing file or a
+      // dangling symlink throws) and the physical-location probe.
+      let physical: string;
+      try {
+        physical = realpathSync(snapshotPath);
+      } catch {
         violations.push(
           violation(
             "high",
             "status.workflow.snapshot-missing",
             `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} \u2014 the root holds active lifecycles only; unregister the id when its snapshot is removed`,
+          ),
+        );
+        continue;
+      }
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep}`)) {
+        violations.push(
+          violation(
+            "high",
+            "status.workflow.snapshot-outside-harness",
+            `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) \u2014 symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`,
           ),
         );
         continue;

@@ -506,7 +506,8 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
       // Poison one snapshot (invalid id) so the apply fails mid-loop (the
       // writer's own validation fails closed — no apply-loop gate).
       const poisoned = structuredClone(plan) as MigratePlan;
-      poisoned.snapshots[3]!.data.id = "";
+      const failureIndex = 3;
+      poisoned.snapshots[failureIndex]!.data.id = "";
 
       await expect(applyMigratePlan(poisoned)).rejects.toThrow(/invalid workflow snapshot/);
 
@@ -514,10 +515,28 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
       expect(readJson(join(root, "status.json"))).toEqual(v1Before);
       expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(true);
 
-      // Re-run with the valid plan completes the migration.
+      // Additive contract (qc2 F-004): snapshots BEFORE the failure point
+      // may exist on disk (additive-first apply, no rollback)…
+      for (let i = 0; i < failureIndex; i++) {
+        expect(existsSync(join(root, poisoned.snapshots[i]!.file))).toBe(true);
+      }
+      // …while the failure point and everything after it were never written.
+      for (let i = failureIndex; i < poisoned.snapshots.length; i++) {
+        expect(existsSync(join(root, poisoned.snapshots[i]!.file))).toBe(false);
+      }
+
+      // Re-run with the valid plan (poison fixed) converges to the full v2
+      // tree: every planned snapshot exists, the root is v2, and a further
+      // re-run is a no-op (re-run idempotency contract).
       const retry = await applyMigratePlan(plan);
       expect(retry.applied).toBe(true);
       expect(readJson(join(root, "status.json")).version).toBe(2);
+      for (const snapshot of plan.snapshots) {
+        expect(existsSync(join(root, snapshot.file))).toBe(true);
+      }
+      const third = await applyMigratePlan(plan);
+      expect(third.applied).toBe(false);
+      expect(third.message).toContain("no-op");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

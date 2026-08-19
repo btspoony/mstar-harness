@@ -31,7 +31,7 @@
  *   `packages/engine/src/core.ts` (roadmap §8.5 C2/C4).
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -501,6 +501,45 @@ describe("validateStatusV2", () => {
       try {
         const result = validateStatusV2(v2doc({ workflows: [wfEntry()] }), { harnessDir: dir });
         expect(violationsOf(result)).toContain("status.workflow.snapshot-missing");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("path input: listed entry whose snapshot is a symlink escaping the harness is a violation (QC wave-1 S-f)", async () => {
+      const dir = tmpRoot("status-v2-symlink-escape-");
+      const outside = tmpRoot("status-v2-symlink-outside-");
+      try {
+        // Real snapshot physically OUTSIDE the harness; `workflows/wf-1` is
+        // a symlink to it. The lexical path is harness-relative and exists,
+        // but the resolved path escapes the harness — fail closed.
+        await writeRunningSnapshot(outside, "wf-1");
+        mkdirSync(join(dir, "workflows"));
+        symlinkSync(join(outside, "workflows", "wf-1"), join(dir, "workflows", "wf-1"), "dir");
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(violationsOf(result)).toContain("status.workflow.snapshot-outside-harness");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    test("path input: a symlink resolving INSIDE the harness still validates clean (location, not symlink presence, is the invariant)", async () => {
+      const dir = tmpRoot("status-v2-symlink-inside-");
+      try {
+        // `workflows/wf-1` is a symlink to `workflows/real-wf-1` — the
+        // resolved snapshot still physically lives under the harness, so
+        // the invariant holds (the check is location-based, not
+        // symlink-presence-based).
+        await writeRunningSnapshot(dir, "real-wf-1");
+        symlinkSync(join(dir, "workflows", "real-wf-1"), join(dir, "workflows", "wf-1"), "dir");
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(result.ok).toBe(true);
+        expect(result.violations).toEqual([]);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
