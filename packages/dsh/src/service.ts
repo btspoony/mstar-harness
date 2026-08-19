@@ -21,9 +21,10 @@ import type {
   EnforcementFlag,
   FindingsCleanupMode,
   GateResult,
+  ProjectRegisterDoc,
   ResolveHarnessDirOptions,
   ResidualEntry,
-  StatusDoc,
+  StatusV2Doc,
 } from '@mstar-harness/engine'
 
 declare module '@deepseek-ai/cordis' {
@@ -70,16 +71,18 @@ export class DshMstar extends Service {
   }
 
   /**
-   * Validate a status.json document or file path.
-   * @param docOrPath - parsed status document or path to a status.json file.
+   * Validate a status.json document or file path (the v2 root schema —
+   * engine `validateStatus` = `validateStatusV2`; a v1 document fails with
+   * `status.migration-required` carrying the `mstar migrate` hint).
+   * @param docOrPath - parsed v2 status document or path to a status.json file.
    */
-  validateStatus(docOrPath: StatusDoc | string): GateResult {
+  validateStatus(docOrPath: StatusV2Doc | string): GateResult {
     return engineValidateStatus(docOrPath)
   }
 
   /**
    * Validate one residual entry (status-and-residuals.md § Basic structure).
-   * @param entry - the residual entry as parsed from status.json.
+   * @param entry - the residual entry as parsed from a project register.
    */
   validateResidual(entry: ResidualEntry | unknown): GateResult {
     return engineValidateResidual(entry)
@@ -87,14 +90,17 @@ export class DshMstar extends Service {
 
   /**
    * Findings cleanup gate for one plan (status-and-residuals.md § Findings
-   * cleanup modes). Mode resolution: explicit `opts.mode` → `plans[].metadata.
-   * findings_cleanup` → `allow-residual`.
-   * @param doc - the parsed status document.
+   * cleanup modes; v3 relocation — the input is the project register
+   * `projects/<id>/residuals.json`, entries keyed by plan id; the v1
+   * `plans[].metadata.findings_cleanup` mirror is deleted — explicit
+   * `opts.mode` or `allow-residual`). Every OPEN register entry of the plan
+   * is checked.
+   * @param register - the parsed project register document.
    * @param planId - the plan whose open residuals are checked.
    * @param opts - explicit cleanup-mode override.
    */
-  findingsCleanupGate(doc: StatusDoc, planId: string, opts?: { mode?: FindingsCleanupMode }): GateResult {
-    return engineFindingsCleanupGate(doc, planId, opts)
+  findingsCleanupGate(register: ProjectRegisterDoc, planId: string, opts?: { mode?: FindingsCleanupMode }): GateResult {
+    return engineFindingsCleanupGate(register, planId, opts)
   }
 
   /**

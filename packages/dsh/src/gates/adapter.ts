@@ -16,8 +16,15 @@
  * verbatim by the entry.
  */
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
-import { applyEnforcement, assignmentHeaderRegion, validateIntegrationMergeLease } from '@mstar-harness/engine'
+import {
+  applyEnforcement,
+  assignmentHeaderRegion,
+  readJson,
+  validateIntegrationMergeLease,
+  WORKFLOW_SNAPSHOT_FILE,
+} from '@mstar-harness/engine'
 import type {
   AssignmentFields,
   GateResult,
@@ -27,7 +34,8 @@ import type {
 } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { HarnessResolver, Config } from './_shared.ts'
-import { validateStatusDoc, validateStatusValue } from './status.ts'
+import { harnessDocKindOfTarget, validateStatusDoc, validateStatusValue, type HarnessDocKind } from './status.ts'
+import { resolveActiveWorkflow } from './workflow-selection.ts'
 import {
   dispatchGateCore,
   leaseGateViolations,
@@ -44,6 +52,18 @@ import type { AgentFlowPairing, WorkflowVerdictInput } from './agent-flow.ts'
 import { WorkflowAskCache } from './workflow-policy.ts'
 /** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
 const HOST_LOGGER = 'mstar/host-adapter'
+
+/**
+ * No-steal comparison for the integration merge lease: the passed lease and
+ * the snapshot-stored lease must agree on every identity field (holder,
+ * claimed_at, plan_id, source_branch, target_branch). `session_label` is
+ * descriptive only and never part of the identity.
+ */
+function mergeLeasesMatch(left: unknown, right: unknown): boolean {
+  const a = (left as Record<string, unknown> | null | undefined) ?? {}
+  const b = (right as Record<string, unknown> | null | undefined) ?? {}
+  return ['holder', 'claimed_at', 'plan_id', 'source_branch', 'target_branch'].every((key) => a[key] === b[key])
+}
 /** Options for {@link DshHostAdapter}. */
 export interface DshHostAdapterOptions {
   /**
@@ -91,7 +111,10 @@ export interface DshHostAdapterOptions {
  *   the host provides it (the write's content — the opencode consumer
  *   convention for this engine hook), else the current on-disk document at
  *   `path` via the gate's single-read `validateStatusDoc` semantics (missing
- *   file = first create = pass). Both inputs flow through
+ *   file = first create = pass). The path is classified against the resolved
+ *   harness dir (v2 root / workflow snapshot / project register — the
+ *   P2-fixed `harnessDocKindOfTarget` shape) and validated with the MATCHING
+ *   engine validator; non-coordination paths pass. Both inputs flow through
  *   `validateStatusValue` — the same pipeline the fs-intent gate runs, so
  *   codes match by construction. Returns the FIRST violation: the engine
  *   hook shape is one `ValidationResult`; the gate's full violation list
@@ -156,14 +179,20 @@ export class DshHostAdapter extends Service implements HostAdapter {
   /**
    * Shared status-gate core (plugin-internal): the fs-intent listeners and
    * the `beforeStatusWrite` on-disk fallback route through this method —
-   * ONE validation code path. Missing file = first create = pass (the
+   * ONE validation code path, kind-dispatched (v2 root / workflow snapshot
+   * / project register — the matching engine validator per
+   * {@link validateStatusValue}). Missing file = first create = pass (the
    * intent waterfall carries no incoming content, so the vetoable signal is
    * the pre-write on-disk state).
-   * @param statusPath - the canonical `{HARNESS_DIR}/status.json` path.
+   * @param path - the canonical coordination-document path (the caller
+   * classifies it against the resolved harness dir).
+   * @param kind - the target's {@link HarnessDocKind}.
+   * @param harnessDir - the resolved `{HARNESS_DIR}` (the snapshot kind's
+   * cleanup extension needs it to locate the project registers).
    */
-  statusGate(statusPath: string): GateResult {
-    if (!existsSync(statusPath)) return { ok: true, violations: [] }
-    return validateStatusDoc(statusPath)
+  statusGate(path: string, kind: HarnessDocKind, harnessDir: string | null): GateResult {
+    if (!existsSync(path)) return { ok: true, violations: [] }
+    return validateStatusDoc(path, kind, harnessDir)
   }
 
   /**
@@ -240,16 +269,28 @@ export class DshHostAdapter extends Service implements HostAdapter {
 
   /**
    * `HostAdapter.beforeStatusWrite` — see the class doc for the doc-first /
-   * on-disk-fallback semantics. Never throws; a failing gate maps to its
-   * FIRST violation (severity/code/message/fix/aliases preserved — failing
-   * gates always carry ≥1 violation), a passing gate to
+   * on-disk-fallback semantics, now KIND-DISPATCHED: the path is classified
+   * against the resolved harness dir (`harnessDocKindOfTarget` — root
+   * status.json / workflow snapshot / project register, the P2-fixed shape)
+   * and validated with the matching engine validator
+   * (`validateStatusValue`). Non-coordination paths (unclassifiable) pass —
+   * the hook's business is harness coordination documents only. Never
+   * throws; a failing gate maps to its FIRST violation
+   * (severity/code/message/fix/aliases preserved — failing gates always
+   * carry ≥1 violation), a passing gate to
    * `host.beforeStatusWrite.ok` (the engine test convention for this hook).
-   * @param path - the status.json target path.
+   * @param path - the coordination-document target path.
    * @param doc - the document about to be written (undefined → validate the
    * on-disk document at `path`).
    */
   async beforeStatusWrite(path: string, doc: unknown): Promise<ValidationResult> {
-    const gate = doc !== undefined ? validateStatusValue(doc) : this.statusGate(path)
+    const harnessDir = this.resolver.forWorkspace(undefined)
+    const kind = harnessDir === null ? null : harnessDocKindOfTarget(harnessDir, path)
+    if (kind === null) {
+      // Not a canonical harness coordination document — nothing to gate.
+      return { ok: true, severity: 'low', code: 'host.beforeStatusWrite.ok', message: `status write to ${path} validated` }
+    }
+    const gate = doc !== undefined ? validateStatusValue(doc, kind, harnessDir) : this.statusGate(path, kind, harnessDir)
     if (!gate.ok) {
       const first = gate.violations[0]!
       return { ok: false, severity: first.severity, code: first.code, message: first.message, fix: first.fix, aliases: first.aliases }
@@ -283,13 +324,57 @@ export class DshHostAdapter extends Service implements HostAdapter {
 
   /**
    * `HostAdapter.beforeMerge` — reserve/validate the integration merge
-   * lease. Thin wrapper over the engine `validateIntegrationMergeLease`
-   * (the engine owns the lease shape; the reservation write into
-   * `{HARNESS_DIR}/status.json` is a P3 seam).
-   * @param lease - the `metadata.integration_merge_lease` object.
+   * lease. v3 relocation (plan `20260819-workflow-dsh-viz` Task 3): the
+   * `integration_merge_lease` home is the ACTIVE workflow snapshot
+   * (`workflows/<id>/snapshot.json` top-level — the v1 root-metadata home
+   * is gone), so the hook READS the snapshot's current lease and validates
+   * it (CLI `lease verify-integration` parity) plus a no-steal comparison
+   * against the passed lease. The passed lease object is still
+   * shape-validated (the hook contract). Degrade edges (never false
+   * positives): no harness dir (exec-less hook — the explicit config
+   * resolves or nothing), no active workflow, an unreadable/missing
+   * snapshot, or a snapshot WITHOUT an `integration_merge_lease`
+   * (unclaimed) all skip the snapshot read — the passed-lease shape gate
+   * stands alone.
+   * @param lease - the `metadata.integration_merge_lease` object being
+   * reserved/validated.
    */
   async beforeMerge(lease: IntegrationMergeLease): Promise<GateResult> {
-    return validateIntegrationMergeLease(lease)
+    const violations = [...validateIntegrationMergeLease(lease).violations]
+    const harnessDir = this.resolver.forWorkspace(undefined)
+    if (harnessDir !== null) {
+      const selection = resolveActiveWorkflow(harnessDir)
+      if (selection.kind === 'active') {
+        const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
+        try {
+          const snapshot = readJson(snapshotPath) as Record<string, unknown> | null | undefined
+          const stored = snapshot?.integration_merge_lease
+          if (stored !== undefined) {
+            // The durable lease validates (CLI parity), and the passed lease
+            // must be the SAME reservation (no-steal — a different holder /
+            // plan / branch pair is not the active merge).
+            violations.push(...validateIntegrationMergeLease(stored).violations)
+            if (!mergeLeasesMatch(lease, stored)) {
+              violations.push({
+                ok: false,
+                severity: 'high',
+                code: 'lease.merge.snapshot-mismatch',
+                message: `snapshot integration_merge_lease (${snapshotPath}) differs from the lease being reserved — the active merge belongs to another holder/plan`,
+                fix: 'merge only under the snapshot-recorded integration_merge_lease (or release the lease with user authorization + audit note)',
+              })
+            }
+          }
+        } catch (error) {
+          // Contained: an unreadable snapshot cannot harden the shape gate
+          // (the passed-lease violations above still stand). The snapshot
+          // write gate owns the document's validity.
+          this.ctx.logger(HOST_LOGGER).warn(
+            `beforeMerge snapshot lease read failed (contained — the passed-lease shape gate stands): ${(error as Error).message}`,
+          )
+        }
+      }
+    }
+    return { ok: violations.length === 0, violations }
   }
 }
 

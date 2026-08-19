@@ -70,11 +70,14 @@
  * steps + `degraded.iteration` (the old `degraded.transition` is merged into
  * `iteration.active === false` — `degraded.iteration ⟺ !active`); `state`
  * null → 5-column skeleton (count 0) + `degraded.state`; `state.plans`
- * missing → same skeleton + `degraded.plans`; `state.agentFlow`
+ * `state.plans` missing → same skeleton + `degraded.plans`; `state.agentFlow`
  * missing/unreadable → agents roster + `degraded` (full KNOWN_AGENTS idle
  * cards, no executing/pending claims); 0 events → `empty` (idle roster +
- * pending skeleton). `iteration.compassStatus` missing, non-union (old
- * catalog rows / fixtures — the field is OPTIONAL, spec D5), or `'active'`
+ * pending skeleton). `state.project` missing/malformed → the additive
+ * project rollup zone (compass AC-4) degrades to empty aggregates — the
+ * four existing ZoneView shapes are unaffected. `iteration.compassStatus`
+ * missing, non-union (old catalog rows / fixtures — the field is OPTIONAL,
+ * spec D5), or `'active'`
  * with a transition past Phase 2 (an inconsistent harness state — QC wave
  * F-001) degrades to the existing transition-driven current-step logic
  * (Step 2→4) — backward compatible, `active` semantics unchanged.
@@ -446,6 +449,25 @@ export interface AgentZoneView {
   activePlanCount: number
 }
 
+/* ---------------------------------- project rollup zone (compass AC-4) ---------------------------------- */
+
+/**
+ * The additive project rollup zone (plan `20260819-workflow-dsh-viz`
+ * Task 3 — compass v3.0.0 AC-4: "Additive project rollup (roadmap +
+ * residuals) renders without changing the four existing ZoneView shapes"):
+ * roadmap milestones + open-residual severity counts from the project layer
+ * (`state.project` — produced by the catalog from `projects/<id>/roadmap.md`
+ * frontmatter `milestones[]` + `projects/<id>/residuals.json` registers).
+ * Total function: `state.project` missing/malformed → empty aggregates,
+ * never a throw and never a fabricated value.
+ */
+export interface ProjectRollupZoneView {
+  /** Roadmap milestones (non-empty strings, roadmap order). */
+  milestones: string[]
+  /** Open residual severity counts (non-zero severities only). */
+  openResiduals: { severity: string; count: number }[]
+}
+
 /* ---------------------------------- ZoneView (spec §3) ---------------------------------- */
 
 export interface ZoneView {
@@ -473,6 +495,10 @@ export interface ZoneView {
     truncated: boolean
   }
   agents: AgentZoneView
+  /** The additive project rollup zone (compass AC-4 — roadmap milestones +
+   * open residual severity counts from `state.project`; additive, the four
+   * existing ZoneView shapes stay byte-compatible). */
+  project: ProjectRollupZoneView
   /** Current-step gate verdict — footer gate-summary seat (spec §3). */
   verdict: PhaseVerdict
   /** Gate violations (str()-guarded), for the footer list. */
@@ -540,11 +566,23 @@ function violationRow(raw: unknown): GraphViolation {
   }
 }
 
-/** Guarded state section: the workspace-state digest (plans + branch anchors), null when missing. */
-function stateRow(source: MstarEngineStatusSource | null): { plans?: unknown; iterationBaseBranch?: unknown; targetBranch?: unknown; specIntegrationBranch?: unknown } | null {
+/** Guarded state section: the workspace-state digest (plans + branch anchors + project rollup), null when missing. */
+function stateRow(source: MstarEngineStatusSource | null): {
+  plans?: unknown
+  iterationBaseBranch?: unknown
+  targetBranch?: unknown
+  specIntegrationBranch?: unknown
+  project?: unknown
+} | null {
   const state = source == null ? null : (source as { state?: unknown }).state
   if (state === null || typeof state !== 'object') return null
-  return state as { plans?: unknown; iterationBaseBranch?: unknown; targetBranch?: unknown; specIntegrationBranch?: unknown }
+  return state as {
+    plans?: unknown
+    iterationBaseBranch?: unknown
+    targetBranch?: unknown
+    specIntegrationBranch?: unknown
+    project?: unknown
+  }
 }
 
 export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
@@ -690,6 +728,7 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
   // doc §3.3: null → no override, every entity `emphasis: null`).
   const agents = projectAgents(source, currentStep)
   const flow = projectFlowEvents(source)
+  const project = projectRollup(source)
 
   return {
     iteration: {
@@ -703,12 +742,36 @@ export function projectGraph(source: MstarEngineStatusSource | null): ZoneView {
     },
     tasks: { columns, total, truncated },
     agents,
+    project,
     verdict,
     violations,
     events: flow.events,
     unexpected: flow.unexpected,
     degraded,
   }
+}
+
+/* ------------------------------ project rollup projection (compass AC-4) ------------------------------ */
+
+/**
+ * The additive project rollup projection: `state.project` → guarded
+ * milestones + open-residual severity counts. Total function — a missing /
+ * malformed `state.project` (or no state at all) degrades to empty
+ * aggregates (`[]`), never a throw and never a guessed value.
+ */
+function projectRollup(source: MstarEngineStatusSource | null): ProjectRollupZoneView {
+  const state = stateRow(source)
+  const project = state?.project as { milestones?: unknown; openResiduals?: unknown } | null | undefined
+  const milestones = Array.isArray(project?.milestones)
+    ? project.milestones.filter((milestone): milestone is string => typeof milestone === 'string' && milestone !== '')
+    : []
+  const openResiduals = Array.isArray(project?.openResiduals)
+    ? project.openResiduals.map((row) => {
+      const r = row as { severity?: unknown; count?: unknown } | null | undefined
+      return { severity: str(r?.severity) ?? '', count: count(r?.count) ?? 0 }
+    })
+    : []
+  return { milestones, openResiduals }
 }
 
 /* ---------------------------------- agents zone projection (spec §4) ---------------------------------- */

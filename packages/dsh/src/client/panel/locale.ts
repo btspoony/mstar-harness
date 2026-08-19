@@ -194,6 +194,10 @@ export type PanelKey =
   | 'zone.tasks.no-plans'
   | 'zone.tasks.more'
   | 'zone.tasks.collapse'
+  | 'zone.project.title'
+  | 'zone.project.milestones'
+  | 'zone.project.residuals'
+  | 'zone.project.none'
   | 'zone.state.Todo'
   | 'zone.state.InProgress'
   | 'zone.state.InReview'
@@ -221,6 +225,8 @@ export type PanelKey =
   | 'flow.advisory'
   | 'flow.denied'
   | 'state.title'
+  | 'state.selection'
+  | 'state.selection.history'
   | 'state.plans'
   | 'state.residuals'
   | 'state.policy'
@@ -316,6 +322,10 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.tasks.no-plans': '暂无计划',
   'zone.tasks.more': '+{count} 更多',
   'zone.tasks.collapse': '收起',
+  'zone.project.title': '项目汇总',
+  'zone.project.milestones': '里程碑',
+  'zone.project.residuals': '未结残留',
+  'zone.project.none': '无',
   'zone.state.Todo': '待办',
   'zone.state.InProgress': '进行中',
   'zone.state.InReview': '审查中',
@@ -343,6 +353,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'flow.advisory': '提示',
   'flow.denied': '拒绝',
   'state.title': '工作区状态',
+  'state.selection': '所选工作流',
+  'state.selection.history': '历史视图（终端快照）',
   'state.plans': '计划',
   'state.residuals': '未决残留',
   'state.policy': '策略',
@@ -433,6 +445,10 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.tasks.no-plans': 'no plans',
   'zone.tasks.more': '+{count} more',
   'zone.tasks.collapse': 'collapse',
+  'zone.project.title': 'Project Rollup',
+  'zone.project.milestones': 'Milestones',
+  'zone.project.residuals': 'Open Residuals',
+  'zone.project.none': 'none',
   'zone.state.Todo': 'Todo',
   'zone.state.InProgress': 'InProgress',
   'zone.state.InReview': 'InReview',
@@ -460,6 +476,8 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'flow.advisory': 'advisory',
   'flow.denied': 'denied',
   'state.title': 'Workspace state',
+  'state.selection': 'Selected workflow',
+  'state.selection.history': 'history view (terminal snapshot)',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
   'state.policy': 'Policy',

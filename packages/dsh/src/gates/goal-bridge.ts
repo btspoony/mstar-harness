@@ -35,7 +35,8 @@
  * `version === 1` (unknown versions → silent skip), and when the goal is
  * blocked (`operation: 'block'` OR `goal.phase === 'blocked'`) logs ONE
  * `mstar/goal-bridge` warn — the `blockedReason.code`, a bounded objective
- * summary, and the `{HARNESS_DIR}/status.json` residual pointer — so the
+ * summary, and the project-register residual pointer
+ * (`projects/<id>/residuals.json` — the v3 residual home) — so the
  * operator acts without reverse-engineering the host. Advisory-only: ZERO
  * harness writes (the mirror stays one-way; status.json remains SSOT).
  *
@@ -48,8 +49,8 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { resolveIterationDir } from '@mstar-harness/engine'
-import { asRecord, STATUS_FILE } from './_shared.ts'
+import { resolveIterationDir, resolveProjectDir, _DEFAULT_PROJECT, PROJECT_REGISTER_FILE } from '@mstar-harness/engine'
+import { asRecord } from './_shared.ts'
 import type { Config, HarnessResolver } from './_shared.ts'
 // The shared display-field bounds (`truncateLedgerField`) and control-char
 // strip (`normalizeWorkflowName`) — the same sanitization the workflow-ledger
@@ -119,6 +120,30 @@ function log(level: GoalBridgeLogLevel, message: string): void {
 /** Best-effort human-readable message from an arbitrary thrown value. */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * The concrete project-register pointer for the blocked-goal advisory (v3
+ * relocation — plan `20260819-workflow-dsh-viz` Task 3): residuals live in
+ * `projects/<id>/residuals.json` (entries keyed by plan id), NOT the root
+ * `status.json` `residual_findings` home (gone after migrate). Resolves the
+ * FIRST project register present (the operator's named project when one
+ * exists), else the default project register (`projects/_default/
+ * residuals.json` — compass AC-3's documented fallback). Never throws: an
+ * unreadable/missing projects dir falls back to the default path.
+ */
+function projectRegisterPointer(harnessDir: string): string {
+  const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
+  try {
+    for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const registerPath = join(projectsDir, entry.name, PROJECT_REGISTER_FILE)
+      if (existsSync(registerPath)) return registerPath
+    }
+  } catch {
+    // missing/unreadable projects dir — fall through to the default path
+  }
+  return join(projectsDir, _DEFAULT_PROJECT, PROJECT_REGISTER_FILE)
 }
 
 /* ---------------------------------- structural views ---------------------------------- */
@@ -434,7 +459,8 @@ function blockedAdvisoryOf(envelope: unknown): BlockedGoalAdvisory | undefined {
  * Log ONE blocked-advisory warn: the stable `blockedReason.code`, the
  * sanitized (ASCII control chars stripped) + bounded reason message, a
  * bounded objective summary, and the `{HARNESS_DIR}/status.json` residual
- * pointer (`residual_findings` — mstar-plan-artifacts SSOT) — the operator
+ * pointer (the project register `projects/<id>/residuals.json` —
+ * mstar-plan-artifacts SSOT; entries keyed by plan id) — the operator
  * acts without reverse-engineering the host. Advisory-only: ZERO harness
  * writes (the one-way mirror; status.json stays SSOT). Never throws (the
  * sink is a no-op before bind; `log` itself is a plain call).
@@ -443,7 +469,7 @@ function warnBlockedGoal(harnessDir: string, advisory: BlockedGoalAdvisory): voi
   const code = truncateLedgerField(advisory.code, GOAL_ADVISORY_CODE_CAP)
   const reason = truncateLedgerField(normalizeWorkflowName(advisory.message), GOAL_ADVISORY_MESSAGE_CAP)
   const objective = truncateLedgerField(normalizeWorkflowName(advisory.objective), GOAL_ADVISORY_OBJECTIVE_CAP)
-  log('warn', `goal blocked [${code}] — ${reason}; objective: ${objective}; residuals: see ${harnessDir}/${STATUS_FILE} (residual_findings) — advisory only, zero harness writes`)
+  log('warn', `goal blocked [${code}] — ${reason}; objective: ${objective}; residuals: see ${projectRegisterPointer(harnessDir)} — advisory only, zero harness writes`)
 }
 
 /* ---------------------------------- apply wiring ---------------------------------- */
@@ -489,7 +515,7 @@ export function rootAgentOf(agent: unknown, agents: AgentsView): unknown | undef
  * compare when the mirror is in place — no churn) — plus a THIRD, advisory
  * listener on the `session/event` firehose (Task 3): a `goal/change`
  * envelope whose goal is blocked logs ONE warn (code + objective summary +
- * `{HARNESS_DIR}/status.json` residual pointer) with ZERO harness writes
+ * project-register residual pointer) with ZERO harness writes
  * (the one-way mirror; see {@link warnBlockedGoal}). The goals service is an
  * OPTIONAL seam (`ctx.get('goals')` structural read): absent → ONE debug log
  * + the mirror stays inert, never a boot failure — the blocked advisory is
@@ -543,14 +569,14 @@ export function registerGoalBridge(ctx: Context, resolver: HarnessResolver, conf
     if (root !== undefined) mirror(root)
   })
   // Task 3 — blocked sync advisory (plan Global Constraints: one-way mirror;
-  // `blocked.code` → warn with the status.json residual pointer, zero writes):
+  // `blocked.code` → warn with the project-register residual pointer, zero writes):
   // a `session/event` firehose listener (workflow-ledger consumer precedent)
   // structurally filters the durable `goal/change` envelopes (upstream
   // `GoalChangeMeta`), gates on `version === 1` (unknown versions → silent
   // skip, forward-compat defensive), and when the goal is blocked
   // (`operation: 'block'` OR `goal.phase === 'blocked'`) logs ONE warn —
   // `blockedReason.code` + a bounded objective summary + the
-  // `{HARNESS_DIR}/status.json` residual pointer — and writes NOTHING.
+  // `{HARNESS_DIR}/projects/<id>/residuals.json` residual pointer — and writes NOTHING.
   // Workspace attribution from the goal-owning session's `header.cwd`
   // (workflow-ledger precedent); unresolvable harness → silent skip. Every
   // envelope is try/catch-contained.

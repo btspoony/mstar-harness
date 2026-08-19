@@ -34,7 +34,7 @@ import SystemPromptPlugin from '@deepseek-ai/dsh-system-prompt'
 import { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
-import { bootApp, fakeChild, FakeLoaderRegistry, seedHarness, VALID_STATUS, type BootResult } from './harness.ts'
+import { bootApp, fakeChild, FakeLoaderRegistry, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { PERSONA_INTERPOLATION_HAZARD, stripInterpolationHazard } from '../src/gates/_shared.ts'
 import { HarnessResolver } from '../src/index.ts'
 import { PERSONA_SECTION_NAME } from '../src/gates/fallbacks-decoration.ts'
@@ -58,10 +58,11 @@ afterEach(async () => {
 /** The plugin's own manifest version (the provider watermark's `version` field). */
 const PLUGIN_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
 
-/** A status.json exercising every state-section feature (plans, residuals, metadata, lease). */
-const RICH_STATUS = JSON.stringify({
-  version: 1,
-  updated_at: '2026-08-08',
+/** A v2 tree exercising every state-section feature (plans, residuals, metadata, lease). */
+const RICH_WORKFLOW = 'v2.2.0'
+const RICH_ROOT = v2Root([v2WorkflowEntry(RICH_WORKFLOW, 'iteration')])
+const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
+  type: 'iteration',
   plans: [
     {
       plan_id: 'plan-a',
@@ -76,19 +77,17 @@ const RICH_STATUS = JSON.stringify({
     },
     { id: 'plan-b', title: 'Plan B', status: 'Done', done_at: '2026-08-08' },
   ],
-  residual_findings: {
+  branch: { base: 'dev-dsh', integration: 'iteration/v2.2.0', target: 'dev-dsh' },
+  execution_policy: { push_policy: 'no-push', worktree_mode: 'feature-worktree' },
+  control_worktree_path: '/control/worktree',
+})
+/** The project register (the v1 `residual_findings` home after migrate). */
+const RICH_REGISTER = JSON.stringify({
+  entries: {
     'plan-b': [
-      { id: 'R1', title: 'deferred blocker', severity: 'high', lifecycle: 'open' },
-      { id: 'R2', title: 'style nit', severity: 'nit' },
+      { id: 'R1', title: 'deferred blocker', severity: 'high', lifecycle: 'open', source_plan: 'plan-b', registered_at: '2026-08-08' },
+      { id: 'R2', title: 'style nit', severity: 'nit', source_plan: 'plan-b', registered_at: '2026-08-08' },
     ],
-  },
-  metadata: {
-    iteration_base_branch: 'dev-dsh',
-    target_branch: 'dev-dsh',
-    spec_integration_branch: 'iteration/v2.2.0',
-    push_policy: 'no-push',
-    worktree_mode: 'feature-worktree',
-    control_worktree_path: '/control/worktree',
   },
 })
 
@@ -167,7 +166,9 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': RICH_STATUS,
+      'status.json': RICH_ROOT,
+      [`workflows/${RICH_WORKFLOW}/snapshot.json`]: RICH_SNAPSHOT,
+      'projects/_default/residuals.json': RICH_REGISTER,
       'iterations/v2.2.0/delivery-compass.md': RICH_COMPASS,
     })
     booted = await bootApp({ root })
@@ -349,7 +350,10 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     const workspace = join(root, 'workspace')
     const wsHarnessDir = join(workspace, '.mstar')
     await mkdir(wsHarnessDir, { recursive: true })
-    await seedHarness(wsHarnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    await seedHarness(wsHarnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
+      'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', { type: 'iteration' }),
+    })
     // `harnessDir: null` omits the config key — the plugin resolves per
     // session workspace at event/assembly time, never from the process cwd.
     booted = await bootApp({ root, harnessDir: null })
@@ -388,9 +392,9 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     await mkdir(harnessDir, { recursive: true })
     // Operator-controlled fields carrying COMPLETE `{{...}}` groups: a plan
     // id, a lease holder, an iteration dir name and the direction prose.
-    const HOSTILE_STATUS = JSON.stringify({
-      version: 1,
-      updated_at: '2026-08-08',
+    const HOSTILE_ROOT = v2Root([v2WorkflowEntry('{{iter}}', 'iteration')])
+    const HOSTILE_SNAPSHOT = v2Snapshot('{{iter}}', {
+      type: 'iteration',
       plans: [
         {
           plan_id: '{{plan}}',
@@ -399,8 +403,6 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
           execution_lease: { holder: '{{leaser}}', claimed_at: '2026-08-08' },
         },
       ],
-      residual_findings: {},
-      metadata: {},
     })
     const HOSTILE_COMPASS = [
       '---',
@@ -422,7 +424,8 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
       'body',
     ].join('\n')
     await seedHarness(harnessDir, {
-      'status.json': HOSTILE_STATUS,
+      'status.json': HOSTILE_ROOT,
+      'workflows/{{iter}}/snapshot.json': HOSTILE_SNAPSHOT,
       'iterations/{{iter}}/delivery-compass.md': HOSTILE_COMPASS,
     })
     booted = await bootApp({ root })
@@ -464,7 +467,8 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
       'body',
     ].join('\n')
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify(VALID_STATUS),
+      'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
+      'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', { type: 'iteration' }),
       'iterations/v2.2.0/delivery-compass.md': LONE_COMPASS,
     })
     booted = await bootApp({ root })

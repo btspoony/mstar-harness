@@ -54,9 +54,30 @@ export function StateSection({ t, state, enforcement }: StateSectionProps) {
   const hiddenFindings = findings === null ? 0 : Math.max(0, findings.length - FINDINGS_CAP)
   const leases = Array.isArray(state?.leases) ? state.leases : []
   const knowledge = state?.knowledge ?? null
+  const selection = state?.selection
   return (
     <section className={css.section} data-mstar-section="state">
       <h2 className={css.sectionTitle}>{t('state.title')}</h2>
+
+      <h3 className={css.subTitle}>{t('state.selection')}</h3>
+      {selection?.kind === 'active' ? (
+        <p className={css.selection} data-selection-kind="active" data-selection-workflow={selection.workflowId}>
+          <span className={css.selectionId}>{selection.workflowId}</span>
+          {selection.warning !== undefined
+            ? <span className={css.selectionWarning} data-selection-warning>{selection.warning.message}</span>
+            : null}
+        </p>
+      ) : selection?.kind === 'terminal' ? (
+        <p className={css.selection} data-selection-kind="terminal" data-selection-workflow={selection.workflowId}>
+          <span className={css.selectionId}>{selection.workflowId}</span>
+          <span className={css.selectionMeta} data-selection-history>{t('state.selection.history')}</span>
+        </p>
+      ) : (
+        <p className={css.selection} data-selection-kind="error" data-selection-code={selection?.code ?? t('panel.unknown')}>
+          <span className={css.selectionCode}>{selection?.code ?? t('panel.unknown')}</span>
+          <span className={css.selectionMeta}>{selection?.message ?? t('state.none')}</span>
+        </p>
+      )}
 
       <h3 className={css.subTitle}>{t('state.plans')}</h3>
       {visiblePlans.length === 0

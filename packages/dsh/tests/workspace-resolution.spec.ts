@@ -259,7 +259,7 @@ describe('agent/pre-step — the watermark harness dir resolves from the session
 describe('fs/write-intent — the status gate follows the session workspace (no config)', () => {
   it('actor carrying the session agent → invalid workspace status.json is flagged', async () => {
     const ws = await makeWorkspace('dsh-ws-gate-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': '{ "version": 1, "plans": "not-an-array" }' })
+    await seedHarness(join(ws, '.agents'), { 'status.json': '{ "version": 2, "updated_at": "2026-08-19", "workflows": "not-an-array" }' })
     booted = await bootApp({ harnessDir: null })
     const advisories = captureStatusAdvisories(booted.ctx)
 
@@ -272,12 +272,12 @@ describe('fs/write-intent — the status gate follows the session workspace (no 
 
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(1)
-    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('status.invalid-plans')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('status.invalid-workflows')
   })
 
   it('agent-less actor → inert (no workspace, no harness dir — nothing to gate)', async () => {
     const ws = await makeWorkspace('dsh-ws-gate-inert-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': '{ "version": 1, "plans": "not-an-array" }' })
+    await seedHarness(join(ws, '.agents'), { 'status.json': '{ "version": 2, "updated_at": "2026-08-19", "workflows": "not-an-array" }' })
     booted = await bootApp({ harnessDir: null })
     const advisories = captureStatusAdvisories(booted.ctx)
 

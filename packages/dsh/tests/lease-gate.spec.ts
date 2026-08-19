@@ -25,7 +25,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2RootWithWorkflow, v2SnapshotWithPlans, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -166,14 +166,13 @@ const VALID_LEASE = {
   working_branch: BRANCH,
 }
 
-const statusDoc = (plan: Record<string, unknown>): string =>
-  JSON.stringify({
-    version: 1,
-    updated_at: '2026-08-08',
-    plans: [plan],
-    residual_findings: {},
-    metadata: {},
+/** Seed the v2 lease tree: v2 root + active workflow snapshot carrying one plan row (the v3 lease home). */
+async function seedLeaseDoc(harnessDir: string, plan: Record<string, unknown>): Promise<void> {
+  await seedHarness(harnessDir, {
+    'status.json': v2RootWithWorkflow(),
+    'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [plan]),
   })
+}
 
 /** InProgress plan row with a valid lease. */
 const IN_PROGRESS_WITH_LEASE: Record<string, unknown> = {
@@ -235,7 +234,7 @@ const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
 describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
   it('SDD dispatch + InProgress plan + valid lease (holder/worktree/branch match) → allow, silent pass', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall(
@@ -250,7 +249,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('SDD assignment with no lease (plan Todo) → advisory lease.verify.missing, dispatch allowed (warn default)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(TODO_NO_LEASE) })
+    await seedLeaseDoc(app.harnessDir, TODO_NO_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_ASSIGNMENT), defaultAllow)
@@ -262,7 +261,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('InProgress plan without lease (no Execution mode on the Assignment) → advisory lease.verify.orphan', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(NO_MODE_ASSIGNMENT), defaultAllow)
@@ -273,7 +272,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('lease holder differs from the dispatching session → advisory lease.dispatch.holder-mismatch', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall(
@@ -288,7 +287,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('Assignment Worktree path differs from the lease → advisory lease.dispatch.worktree-mismatch', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_WRONG_WORKTREE), defaultAllow)
@@ -298,7 +297,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('Assignment Working branch differs from the lease → advisory lease.dispatch.branch-mismatch', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_WRONG_BRANCH), defaultAllow)
@@ -308,7 +307,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('plan id resolves from the SDD dir fallback (no Plan Path) → lease check runs against it', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall(
@@ -323,7 +322,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('SDD dir with an empty basename → unresolvable plan id, silent pass', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_VIA_SDD_DIR_ROOT), defaultAllow)
@@ -334,7 +333,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('SDD assignment without a Worktree path + valid lease → advisory lease.dispatch.worktree-mismatch', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_NO_WORKTREE, { id: HOLDER }), defaultAllow)
@@ -344,7 +343,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('non-SDD assignment (inline) + plan not InProgress → no lease check, silent pass even with a lease present', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc({ ...TODO_NO_LEASE, execution_lease: VALID_LEASE }) })
+    await seedLeaseDoc(app.harnessDir, { ...TODO_NO_LEASE, execution_lease: VALID_LEASE })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(INLINE_ASSIGNMENT), defaultAllow)
@@ -355,7 +354,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('non-SDD assignment (inline) + InProgress plan → lease check still fires (plan-status trigger)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(INLINE_ASSIGNMENT), defaultAllow)
@@ -365,7 +364,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('read-only role (scout) → lease gate skipped even for sdd + InProgress orphan', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SCOUT_SDD), defaultAllow)
@@ -376,7 +375,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
 
   it('sdd Assignment without a resolvable plan id → no lease check, silent pass', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_NO_PLAN), defaultAllow)
@@ -402,7 +401,7 @@ describe('dispatch gate — lease hostile inputs', () => {
 
   it('sdd Assignment with the plan row missing from status.json → advisory lease.dispatch.plan-not-found', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc({ id: 'some-other-plan', title: 'x', status: 'Todo' }) })
+    await seedLeaseDoc(app.harnessDir, { id: 'some-other-plan', title: 'x', status: 'Todo' })
     const advisories = captureAdvisories(app.ctx)
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_ASSIGNMENT), defaultAllow)
@@ -509,7 +508,7 @@ Do the thing. Quoted example must not resolve a plan id:
 
   it('body-quoted Worktree path / Plan Path / Working branch do not leak into the lease comparisons', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall(
@@ -526,7 +525,7 @@ Do the thing. Quoted example must not resolve a plan id:
 
   it('body-quoted Execution mode: sdd does not trigger the lease gate (header mode only)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(TODO_NO_LEASE) })
+    await seedLeaseDoc(app.harnessDir, TODO_NO_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_MODE), defaultAllow)
@@ -540,7 +539,7 @@ Do the thing. Quoted example must not resolve a plan id:
 
   it('body-quoted Plan Path does not resolve a plan id (unresolvable plan stays silent)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(BODY_QUOTED_PLAN), defaultAllow)
@@ -557,7 +556,7 @@ Do the thing. Quoted example must not resolve a plan id:
 describe('dispatch gate — custom dispatchTools (Task 4 reviewer carry-over)', () => {
   it('renamed delegation tool in Config.dispatchTools is matched by the lease gate', async () => {
     const app = booted = await bootApp({ dispatchTools: ['delegate'] })
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(TODO_NO_LEASE) })
+    await seedLeaseDoc(app.harnessDir, TODO_NO_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     await app.ctx.waterfall(
@@ -571,7 +570,7 @@ describe('dispatch gate — custom dispatchTools (Task 4 reviewer carry-over)', 
 
   it('default-tool exec is inert when the deployment renamed the tool', async () => {
     const app = booted = await bootApp({ dispatchTools: ['delegate'] })
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(TODO_NO_LEASE) })
+    await seedLeaseDoc(app.harnessDir, TODO_NO_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_ASSIGNMENT), defaultAllow)
@@ -586,7 +585,7 @@ describe('dispatch gate — custom dispatchTools (Task 4 reviewer carry-over)', 
 describe('dispatch gate — lease hard mode', () => {
   it('sdd + missing lease + Enforcement: hard → deny without next() (short-circuit)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': statusDoc(TODO_NO_LEASE) })
+    await seedLeaseDoc(app.harnessDir, TODO_NO_LEASE)
     let secondRan = false
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_HARD), async () => {

@@ -83,7 +83,7 @@ export interface IterationGateView {
 export interface MstarIterationGateView {
   /** Iteration id whose steering compass was evaluated. */
   readonly iterationId: string
-  /** Control-path `{HARNESS_DIR}/status.json` evaluated. */
+  /** The evaluated workflow snapshot path (`workflows/<id>/snapshot.json` — v3, the gate's first doc). */
   readonly statusPath: string
   /** The steering `{ITERATION_DIR}/<id>/delivery-compass.md` evaluated. */
   readonly compassPath: string
@@ -147,6 +147,54 @@ export interface HarnessLeaseView {
 }
 
 /**
+ * The additive project rollup section of the workspace-state digest (compass
+ * v3.0.0 AC-4 / AC-P3 — the panel's fifth zone surface; additive, the four
+ * existing ZoneView shapes stay byte-compatible): roadmap milestones +
+ * open-residual severity counts from the PROJECT layer
+ * (`projects/<id>/roadmap.md` frontmatter `milestones[]` and
+ * `projects/<id>/residuals.json` registers — the v1 root
+ * `residual_findings` home is gone). Always-present (lossless JSON): no
+ * roadmaps → `milestones: []`; no registers / no open entries →
+ * `openResiduals: []` — same advisory pattern as `residuals`.
+ */
+export interface MstarHarnessProject {
+  /** Roadmap milestones across ALL project registers (frontmatter `milestones[]`, roadmap order, projects dir order). */
+  readonly milestones: readonly string[]
+  /** Open residual counts by severity across ALL project registers (non-zero severities only — same vocabulary as `state.residuals`). */
+  readonly openResiduals: readonly HarnessResidualView[]
+}
+
+/**
+ * The catalog's workflow selection result (compass v3.0.0 § Catalog
+ * selection rule): the lifecycle the state section aggregates.
+ * `active` = the root v2 `workflows[]` first entry (with a structured
+ * warning when multiple active lifecycles — no silent pick); `terminal` =
+ * the latest terminal snapshot by mtime (history view); `error` = a clear
+ * selection failure (v1/unmigrated root, no snapshots) — never a root v1
+ * read. Structured and panel-renderable (not only a log line).
+ */
+export type WorkflowSelectionView =
+  | {
+      readonly kind: 'active'
+      /** The selected active lifecycle id (root v2 `workflows[]` first entry). */
+      readonly workflowId: string
+      /** Harness-relative workflow dir (e.g. `workflows/<id>`). */
+      readonly dir: string
+      /** Present when multiple active lifecycles — the first was picked (no silent pick). */
+      readonly warning?: { readonly code: string; readonly message: string }
+    }
+  | {
+      readonly kind: 'terminal'
+      readonly workflowId: string
+      readonly dir: string
+    }
+  | {
+      readonly kind: 'error'
+      readonly code: string
+      readonly message: string
+    }
+
+/**
  * The workspace-state digest section of the unified engine-status row: the
  * plan registry, open residual counts, branch/policy anchors, active
  * leases, knowledge index digest and the steering compass direction
@@ -156,10 +204,26 @@ export interface HarnessLeaseView {
  * `buildCatalogSources`).
  */
 export interface MstarHarnessState {
-  /** Registered plan rows (`plan_id`/`id` + `status`), status.json order. */
+  /**
+   * The selected workflow lifecycle (compass v3.0.0 § Catalog selection
+   * rule): active `workflows[]` first → latest terminal snapshot by mtime →
+   * clear error. The state section aggregates the SELECTED lifecycle only;
+   * a selection error carries the operator-visible reason (never a root v1
+   * read).
+   */
+  readonly selection: WorkflowSelectionView
+  /** Registered plan rows (`plan_id`/`id` + `status`), snapshot plans[] order. */
   readonly plans: readonly HarnessPlanView[]
   /** Open `residual_findings` counts by severity (non-zero only). */
   readonly residuals: readonly HarnessResidualView[]
+  /**
+   * The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth
+   * zone): roadmap milestones + open-residual severity counts from the
+   * project layer (`projects/<id>/roadmap.md` / `projects/<id>/residuals.json`).
+   * Always-present (lossless) — empty arrays when the project layer is
+   * absent.
+   */
+  readonly project: MstarHarnessProject
   /**
    * Open residual findings detail (planId + R# + severity + title), severity
    * ordered (critical→nit) and capped at 10. Null when the

@@ -14,7 +14,7 @@ import { describe, expect, it, afterEach } from 'bun:test'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readHarnessVersion } from '@mstar-harness/engine'
-import { bootApp, INVALID_STATUS, VALID_STATUS, type BootResult } from './harness.ts'
+import { bootApp, INVALID_STATUS_V2, VALID_STATUS_V2, type BootResult } from './harness.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -30,8 +30,8 @@ describe('@mstar-harness/dsh REAL-composition boot (direct ctx.plugin rows)', ()
     const { ctx, harnessDir } = app
     const statusPath = join(harnessDir, 'status.json')
     const badStatusPath = join(harnessDir, 'bad-status.json')
-    await writeFile(statusPath, JSON.stringify(VALID_STATUS))
-    await writeFile(badStatusPath, JSON.stringify(INVALID_STATUS))
+    await writeFile(statusPath, JSON.stringify(VALID_STATUS_V2))
+    await writeFile(badStatusPath, JSON.stringify(INVALID_STATUS_V2))
 
     // resolveHarnessDir returns the configured dir (engine fn through the service).
     expect(ctx.dshMstar.resolveHarnessDir(process.cwd(), { harnessDir })).toBe(harnessDir)
@@ -40,14 +40,14 @@ describe('@mstar-harness/dsh REAL-composition boot (direct ctx.plugin rows)', ()
     expect(ctx.dshMstar.validateStatus(statusPath).ok).toBe(true)
     const rejected = ctx.dshMstar.validateStatus(badStatusPath)
     expect(rejected.ok).toBe(false)
-    expect(rejected.violations.map((v) => v.code)).toContain('status.invalid-plans')
+    expect(rejected.violations.map((v) => v.code)).toContain('status.invalid-workflows')
   })
 
   it('exposes the engine version through the service and the direct import surface', async () => {
     const app = booted = await bootApp()
     const { ctx, harnessDir } = app
     const badStatusPath = join(harnessDir, 'bad-status.json')
-    await writeFile(badStatusPath, JSON.stringify(INVALID_STATUS))
+    await writeFile(badStatusPath, JSON.stringify(INVALID_STATUS_V2))
     expect(ctx.dshMstar.readHarnessVersion()).toBe(ENGINE_VERSION)
     expect(readHarnessVersion()).toBe(ENGINE_VERSION)
 
@@ -67,15 +67,15 @@ describe('@mstar-harness/dsh REAL-composition boot (direct ctx.plugin rows)', ()
     expect(badResidual.ok).toBe(false)
     expect(badResidual.violations.map((v) => v.code)).toContain('status.residual.invalid-id')
 
-    // findingsCleanupGate with zero-residual flags an open nit.
-    const doc = {
-      ...VALID_STATUS,
-      plans: [{ id: 'p1', title: 't', file: 'plans/p1.md', status: 'InProgress' }],
-      residual_findings: {
-        p1: [{ id: 'R1', title: 't', severity: 'nit', source: 'qc', scope: 'plan', decision: 'defer', target: 'n', tracking: null }],
+    // findingsCleanupGate with zero-residual flags an open nit (v3 input:
+    // the project register `projects/<id>/residuals.json`, entries keyed by
+    // plan id — the v1 residual_findings root home is gone).
+    const register = {
+      entries: {
+        p1: [{ id: 'R1', title: 't', severity: 'nit', source: 'qc', scope: 'plan', decision: 'defer', target: 'n', tracking: null, source_plan: 'p1', registered_at: '2026-08-19' }],
       },
     }
-    const cleanup = ctx.dshMstar.findingsCleanupGate(doc, 'p1', { mode: 'zero-residual' })
+    const cleanup = ctx.dshMstar.findingsCleanupGate(register as Parameters<typeof ctx.dshMstar.findingsCleanupGate>[0], 'p1', { mode: 'zero-residual' })
     expect(cleanup.ok).toBe(false)
     expect(cleanup.violations.map((v) => v.code)).toContain('findings.zero-residual-nit')
 

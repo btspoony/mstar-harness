@@ -167,15 +167,15 @@ export function registerSddIterationTools(ctx: Context, resolver: HarnessResolve
     toolsCtx.tools.register(defineTool({
       name: 'mstar_iteration_gate',
       description:
-        'Evaluate the iteration phase-transition gate against a status.json and a delivery-compass.md ' +
-        '(engine evaluatePhaseGate, mirror of `mstar iteration gate`): returns the transition ' +
+        'Evaluate the iteration phase-transition gate against a workflow snapshot and a delivery-compass.md ' +
+        '(engine evaluatePhaseGate, mirror of `mstar iteration gate --workflow <id>`): returns the transition ' +
         '(phase-2-execute / phase-3-close / phase-4-pr-delivery), the pass/fail verdict, and the ' +
         '§3.1 entry / §3.5 exit checklists with violation codes.',
       parameters: {
-        status_path: {
+        snapshot_path: {
           type: 'string',
           required: true,
-          description: 'Path to {HARNESS_DIR}/status.json.',
+          description: 'Path to {HARNESS_DIR}/workflows/<id>/snapshot.json (the selected workflow snapshot — v3 input, mirrors the CLI `iteration gate --workflow <id>`).',
         },
         compass_path: {
           type: 'string',
@@ -241,11 +241,11 @@ export function registerSddIterationTools(ctx: Context, resolver: HarnessResolve
       // Read-only evaluation — exclusive anyway (the engine result is a pure function of the docs).
       isConcurrencySafe: () => false,
       async execute(args) {
-        if (!existsSync(args.status_path)) throw new Error(`status file not found: ${args.status_path}`)
+        if (!existsSync(args.snapshot_path)) throw new Error(`workflow snapshot not found: ${args.snapshot_path}`)
         if (!existsSync(args.compass_path)) throw new Error(`compass file not found: ${args.compass_path}`)
-        const statusDoc = readJson(args.status_path)
+        const snapshotDoc = readJson(args.snapshot_path)
         const compassDoc = parseCompassFrontmatter(args.compass_path)
-        const result = evaluatePhaseGate(statusDoc, compassDoc, {
+        const result = evaluatePhaseGate(snapshotDoc, compassDoc, {
           currentBranch: args.branch,
           specIntegrationBranch: args.integration,
           prBaseBranch: args.target,

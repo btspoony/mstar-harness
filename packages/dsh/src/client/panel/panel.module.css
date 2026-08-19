@@ -762,6 +762,31 @@
   overflow-wrap: anywhere;
 }
 
+/* Selection seat (qc1 S-1 fix-wave): the selected workflow lifecycle —
+   active id (+ multi-active warning) / terminal history view / selection
+   error code + reason. Additive to the state section; never a crash. */
+.selection {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.selectionId {
+  font-weight: 600;
+}
+
+.selectionMeta,
+.selectionWarning {
+  display: block;
+  color: var(--dsw-alias-label-caption);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.selectionCode {
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+}
+
 .empty {
   margin: 0;
   color: var(--dsw-alias-label-caption);

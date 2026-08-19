@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "wf-1",
+  "type": "plan",
+  "status": "running",
+  "started_at": "2026-08-08",
+  "updated_at": "2026-08-19",
+  "plans": [
+    {
+      "id": "fixture-plan-1",
+      "title": "Fixture plan",
+      "status": "Todo",
+      "file": "plans/fixture.md"
+    }
+  ]
+}
