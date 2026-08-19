@@ -37,9 +37,9 @@
  * Map is the durable file's mirror (module-level cache keyed by WORKFLOW
  * DIR, bounded by the session cap AND by a workflow-dir count cap — qc3
  * S-4 — so a long-lived process across many workflow ids never grows the
- * cache unbounded); any watermark read/write failure degrades to
- * in-memory-only with one warn — a ledger row is never lost and the
- * workflow run is never affected.
+ * cache unbounded); a failed durable write keeps the in-memory mirror
+ * advanced (in-process dedupe — qc3 S-6) with one warn — a ledger row is
+ * never lost and the workflow run is never affected.
  *
  * INTER-PROCESS SERIALIZATION (qc3 W-1 fix-wave): the watermark
  * read-modify-write (load fresh → mutate → whole-map save) runs inside the
@@ -378,38 +378,80 @@ function saveWatermark(workflowDir: string, watermark: Watermark): void {
  * next re-apply would re-record its rows); fall back to the oldest entry
  * when every entry is live. The residual of eviction (a later restore of an
  * evicted session re-records) is bounded by the cap and documented in the
- * README. A lock timeout (another writer stuck for the full timeout) or a
- * throwing critical section degrades to in-memory-only with one warn — the
- * ledger row above is already appended; only the durable cursor is delayed
- * (a later re-apply re-records the row — the R-401 retry discipline).
+ * README.
+ *
+ * DEGRADED PATH (qc3 S-6 fix-wave): a lock timeout (another writer stuck
+ * for the full timeout — a crashed/stuck peer), a reentrancy error, or a
+ * throwing critical section leaves the durable file untouched, but the
+ * in-memory mirror is STILL advanced (the same monotonic `Math.max`;
+ * eviction skipped — the cap bounds the durable sidecar only), so
+ * re-applies in THIS process stay deduped. The durable file lags: the next
+ * successful locked advance re-reads it fresh and catches up; a restart
+ * reloads the stale file and re-records the outage rows ONCE (the accepted
+ * bounded-duplicate mode — the ledger row above was already appended). One
+ * warn names the actual state (durable cursor NOT advanced).
+ *
+ * Exported as the degraded-path test seam: {@link withWorkflowDirLock}'s
+ * `lockOpts` (`timeoutMs`) lets a test shorten the otherwise-30 s wait —
+ * the consumer itself cannot reach the catch (the ledger append takes the
+ * SAME lock and would fail first), so the post-append window is driven
+ * directly.
+ *
  * @param isEvictable - `true` for a candidate session that is safe to evict
  *   (not live in the sessions store).
+ * @param lockOpts - pass-through to {@link withWorkflowDirLock}
+ *   (`timeoutMs` / `pollMs` overrides; production callers never set them).
  */
-function advanceWatermark(workflowDir: string, sid: string, nextSeq: number, isEvictable: (candidate: string) => boolean): void {
+export function advanceWatermark(
+  workflowDir: string,
+  sid: string,
+  nextSeq: number,
+  isEvictable: (candidate: string) => boolean,
+  lockOpts: { timeoutMs?: number; pollMs?: number } = {},
+): void {
   try {
-    withWorkflowDirLock(workflowDir, () => {
-      const watermark = loadWatermark(workflowDir, true)
-      if (!watermark.has(sid) && watermark.size >= WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS) {
-        let victim: string | undefined
-        for (const key of watermark.keys()) {
-          if (isEvictable(key)) {
-            victim = key
-            break
+    withWorkflowDirLock(
+      workflowDir,
+      () => {
+        const watermark = loadWatermark(workflowDir, true)
+        if (!watermark.has(sid) && watermark.size >= WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS) {
+          let victim: string | undefined
+          for (const key of watermark.keys()) {
+            if (isEvictable(key)) {
+              victim = key
+              break
+            }
+          }
+          victim ??= watermark.keys().next().value as string | undefined
+          if (victim !== undefined) {
+            watermark.delete(victim)
+            log('warn', `workflow-ledger watermark capped at ${WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS} sessions — evicted ${victim} (a restored evicted session re-records; bounded by the cap)`)
           }
         }
-        victim ??= watermark.keys().next().value as string | undefined
-        if (victim !== undefined) {
-          watermark.delete(victim)
-          log('warn', `workflow-ledger watermark capped at ${WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS} sessions — evicted ${victim} (a restored evicted session re-records; bounded by the cap)`)
-        }
-      }
-      // Monotonic advance: a concurrent process that already pushed this
-      // session's cursor past `nextSeq` must never be regressed (qc3 W-1).
-      watermark.set(sid, Math.max(watermark.get(sid) ?? 0, nextSeq))
-      saveWatermark(workflowDir, watermark)
-    })
+        // Monotonic advance: a concurrent process that already pushed this
+        // session's cursor past `nextSeq` must never be regressed (qc3 W-1).
+        watermark.set(sid, Math.max(watermark.get(sid) ?? 0, nextSeq))
+        saveWatermark(workflowDir, watermark)
+      },
+      lockOpts,
+    )
   } catch (error) {
-    log('warn', `workflow-ledger watermark advance failed for ${workflowDir} — in-memory only (restart re-records): ${errorMessage(error)}`)
+    // qc3 S-6: the durable write did NOT happen (lock timeout / reentrancy
+    // / throwing critical section). The ledger row above is already
+    // appended — keep the IN-MEMORY mirror advanced (the same monotonic
+    // `Math.max`, idempotent with the locked path) so re-applies in this
+    // process stay deduped, and name the real state in the warn: durable
+    // cursor NOT advanced, in-memory advanced. Recovery: the next
+    // successful locked advance re-reads the file fresh (catches up); a
+    // restart reloads the stale file and re-records outage rows once — the
+    // accepted bounded-duplicate mode.
+    // simplify: degraded-path advance skips the session-cap eviction — the
+    // cap bounds the durable sidecar only; a transient in-memory over-cap
+    // entry is dropped by the next locked fresh load (bounded by the
+    // outage window).
+    const watermark = loadWatermark(workflowDir)
+    watermark.set(sid, Math.max(watermark.get(sid) ?? 0, nextSeq))
+    log('warn', `workflow-ledger watermark durable advance failed for ${workflowDir} — in-memory cursor advanced, durable cursor NOT (restart reloads the file; outage rows re-record once — bounded duplicate): ${errorMessage(error)}`)
   }
 }
 

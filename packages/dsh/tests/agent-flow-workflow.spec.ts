@@ -25,6 +25,7 @@ import {
   AGENT_FLOW_SIZE_GATE_BYTES,
   recordWorkflowEvent,
   setAgentFlowLogger,
+  WORKFLOW_LEDGER_LOCKDIR,
   WORKFLOW_LEDGER_MAX_ID_LENGTH,
   WORKFLOW_LEDGER_MAX_LABEL_LENGTH,
   WORKFLOW_LEDGER_MAX_NAME_LENGTH,
@@ -32,7 +33,14 @@ import {
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from '../src/gates/agent-flow.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
-import { registerWorkflowLedger, setWorkflowLedgerLogger, workflowLedgerWatermarkCacheSize, WORKFLOW_LEDGER_WATERMARK_FILE, WORKFLOW_LEDGER_WATERMARK_MAX_DIRS } from '../src/gates/workflow-ledger.ts'
+import {
+  advanceWatermark,
+  registerWorkflowLedger,
+  setWorkflowLedgerLogger,
+  workflowLedgerWatermarkCacheSize,
+  WORKFLOW_LEDGER_WATERMARK_FILE,
+  WORKFLOW_LEDGER_WATERMARK_MAX_DIRS,
+} from '../src/gates/workflow-ledger.ts'
 import { seedHarness, seedV2Tree, v2Root, v2Snapshot, v2WorkflowEntry } from './harness.ts'
 import {
   agentEnd,
@@ -1086,6 +1094,129 @@ describe('workflow-ledger consumer — cold scan over session event snapshots (p
     } finally {
       setWorkflowLedgerLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('lock-timeout degrade (qc3 S-6): the durable cursor is NOT advanced, the in-memory mirror IS, the warn says so, and a re-apply stays deduped', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-locktimeout-')
+    const ctx = new Context()
+    const sessions = new FakeSessionRegistry(ctx)
+    // The session log carries TWO run-starts: seq 0 (recorded + durably
+    // advanced BEFORE the outage — simulated by the pre-seeded cursor file)
+    // and seq 1 (the outage row — appended, then its advance is blocked).
+    sessions.register(fakeSession([
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-1' }) },
+      { type: 'tool-workflow/run-start', data: runStart({ runId: 'run-2' }) },
+    ], { id: 'parent-1', header: { cwd: root } }))
+    const captured: string[] = []
+    const priorSink = setWorkflowLedgerLogger((level, message) => { if (level === 'warn') captured.push(message) })
+    try {
+      // Pre-seed the durable watermark at cursor 1 (row seq 0 was recorded
+      // by an earlier apply) and append row seq 1 directly — the exact
+      // state left by the crash window: the row is in the ledger, its
+      // advance is still pending.
+      await writeFile(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), JSON.stringify({ v: 1, cursors: { 'parent-1': 1 } }))
+      recordWorkflowEvent({ harnessDir, workflowDir, event: { v: 1, ts: SESSION_T0 + 1, kind: 'workflow-run', runId: 'run-2', name: 'audit', agent: 'parent-1' } })
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+
+      // A foreign lockdir = a peer that crashed/stuck mid-write; the
+      // pending advance waits its (short) timeout and never runs.
+      const lockDir = join(workflowDir, WORKFLOW_LEDGER_LOCKDIR)
+      await mkdir(lockDir, { recursive: true })
+      advanceWatermark(workflowDir, 'parent-1', 2, () => false, { timeoutMs: 120 })
+
+      // The durable cursor was NOT advanced (the file is untouched)...
+      expect(JSON.parse(readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8'))).toEqual({ v: 1, cursors: { 'parent-1': 1 } })
+      // ...and the warn names the real state + recovery (no more
+      // "in-memory only" overstatement: the in-memory cursor IS advanced).
+      expect(captured.some((m) => m.includes('watermark durable advance failed') && m.includes('durable cursor NOT') && m.includes('in-memory cursor advanced'))).toBe(true)
+
+      // The in-memory mirror DID advance: the peer recovers, and a re-apply
+      // re-walks the same session WITHOUT re-recording row seq 1.
+      await rm(lockDir, { recursive: true, force: true })
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+
+      // The next locked advance re-reads the file fresh and catches the
+      // durable cursor up to the in-memory one.
+      advanceWatermark(workflowDir, 'parent-1', 2, () => false)
+      expect(JSON.parse(readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8'))).toEqual({ v: 1, cursors: { 'parent-1': 2 } })
+    } finally {
+      setWorkflowLedgerLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('restart after the timeout re-records the outage row ONCE from the stale durable file, then catches the cursor up (qc3 S-6 recovery)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-workflow-consumer-lockrestart-')
+    let script = ''
+    try {
+      // Build the degraded state exactly as the timeout leaves it: durable
+      // cursor 1 (row seq 0 recorded earlier), row seq 1 appended, and the
+      // in-memory advance for seq 1 lost when the process dies.
+      await writeFile(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), JSON.stringify({ v: 1, cursors: { 'parent-1': 1 } }))
+      recordWorkflowEvent({ harnessDir, workflowDir, event: { v: 1, ts: SESSION_T0 + 1, kind: 'workflow-run', runId: 'run-2', name: 'audit', agent: 'parent-1' } })
+      const lockDir = join(workflowDir, WORKFLOW_LEDGER_LOCKDIR)
+      await mkdir(lockDir, { recursive: true })
+      advanceWatermark(workflowDir, 'parent-1', 2, () => false, { timeoutMs: 120 })
+      await rm(lockDir, { recursive: true, force: true })
+      expect(readAgentFlow(workflowDir)!.events).toHaveLength(1)
+
+      // "Restart": a FRESH process (empty module cache) re-reads the stale
+      // durable file and re-walks the same session log — seq 0 is skipped
+      // (cursor 1), seq 1 is re-recorded exactly ONCE (the accepted bounded
+      // duplicate), and the cursor catches up durably.
+      const pkgRoot = join(import.meta.dir, '..')
+      script = join(pkgRoot, `.tmp-restart-recovery-${process.pid}-${Date.now()}.ts`)
+      await writeFile(script, [
+        "import { Context, Service } from '@deepseek-ai/cordis'",
+        "import { registerWorkflowLedger } from './src/gates/workflow-ledger.ts'",
+        "import { HarnessResolver } from './src/gates/_shared.ts'",
+        "import { readAgentFlow } from './src/gates/agent-flow.ts'",
+        "import { readFileSync } from 'node:fs'",
+        "import { join } from 'node:path'",
+        'interface SessionView {',
+        '  id: string',
+        '  header: { cwd: string }',
+        '  events: Array<{ type: string; seq: number; time: number; data: object }>',
+        '}',
+        'class Registry extends Service {',
+        "  constructor(ctx: Context) { super(ctx, 'sessions') }",
+        '  sessions = new Map<string, SessionView>()',
+        '  list(): SessionView[] { return [...this.sessions.values()] }',
+        '  get(id: string): SessionView | undefined { return this.sessions.get(id) }',
+        '}',
+        'const harnessDir = process.argv[2]',
+        'const workflowDir = process.argv[3]',
+        'const ctx = new Context()',
+        'const reg = new Registry(ctx)',
+        'const session: SessionView = {',
+        "  id: 'parent-1', header: { cwd: harnessDir },",
+        '  events: [',
+        "    { type: 'tool-workflow/run-start', seq: 0, time: 1700000000000, data: { runId: 'run-1', name: 'audit' } },",
+        "    { type: 'tool-workflow/run-start', seq: 1, time: 1700000000001, data: { runId: 'run-2', name: 'audit' } },",
+        '  ],',
+        '}',
+        'reg.sessions.set(session.id, session)',
+        'registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))',
+        "const view = readAgentFlow(workflowDir)",
+        "const watermark = JSON.parse(readFileSync(join(workflowDir, 'workflow-ledger-cursors.json'), 'utf8'))",
+        'console.log(JSON.stringify({ rows: view?.events.length ?? 0, watermark }))',
+      ].join('\n'))
+      const proc = Bun.spawn(['bun', script, harnessDir, workflowDir], { cwd: pkgRoot, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
+      const exit = await proc.exited
+      const stderr = await new Response(proc.stderr).text()
+      expect(stderr).toBe('')
+      expect(exit).toBe(0)
+      const result = JSON.parse(await new Response(proc.stdout).text()) as { rows: number; watermark: { v: number; cursors: Record<string, number> } }
+      // seq 1 re-recorded exactly once (2 ledger rows) and the durable
+      // cursor caught up to 2 — restart recovery without permanent loss.
+      expect(result.rows).toBe(2)
+      expect(result.watermark).toEqual({ v: 1, cursors: { 'parent-1': 2 } })
+    } finally {
+      await rm(script, { force: true }).catch(() => {})
       await rm(root, { recursive: true, force: true })
     }
   })

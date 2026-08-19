@@ -610,16 +610,25 @@ function sleepSync(ms: number): void {
  *   critical section touches.
  * @param fn - the critical section (sync; the lock is sync by design — the
  *   ledger record paths are called from sync gate hooks).
+ * @param opts - `timeoutMs` / `pollMs` overrides (defaults 30 s / 10 ms) —
+ *   the same testable options as the engine's `withStatusWriteLock`
+ *   (`lease.ts`); production callers never set them.
  * @returns the critical section's return value.
  */
-export function withWorkflowDirLock<T>(workflowDir: string, fn: () => T): T {
+export function withWorkflowDirLock<T>(
+  workflowDir: string,
+  fn: () => T,
+  opts: { timeoutMs?: number; pollMs?: number } = {},
+): T {
   const lockDir = join(workflowDir, WORKFLOW_LEDGER_LOCKDIR)
   if (heldWorkflowLocks.has(lockDir)) {
     throw new Error(
       `${lockDir} is already held by this process — withWorkflowDirLock is not reentrant; a nested acquisition on the same workflow dir is a bug`,
     )
   }
-  const deadline = Date.now() + WORKFLOW_LOCKER_TIMEOUT_MS
+  const timeoutMs = opts.timeoutMs ?? WORKFLOW_LOCKER_TIMEOUT_MS
+  const pollMs = opts.pollMs ?? WORKFLOW_LOCKER_POLL_MS
+  const deadline = Date.now() + timeoutMs
   let acquired: { dev: number; ino: number } | null = null
   for (;;) {
     try {
@@ -635,7 +644,7 @@ export function withWorkflowDirLock<T>(workflowDir: string, fn: () => T): T {
             `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
         )
       }
-      sleepSync(WORKFLOW_LOCKER_POLL_MS)
+      sleepSync(pollMs)
     }
   }
   heldWorkflowLocks.add(lockDir)
