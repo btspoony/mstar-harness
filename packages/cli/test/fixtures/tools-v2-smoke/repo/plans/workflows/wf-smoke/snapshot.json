@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "id": "wf-smoke",
+  "type": "iteration",
+  "status": "running",
+  "started_at": "2026-08-01",
+  "updated_at": "2026-08-19",
+  "plans": [
+    {
+      "id": "plan-a",
+      "title": "Plan A",
+      "file": "plans/plan-a.md",
+      "status": "InProgress",
+      "execution_lease": {
+        "holder": "omp-pm-smoke",
+        "claimed_at": "2026-08-19",
+        "worktree_path": "__LEASE_WORKTREE__",
+        "working_branch": "feature/plan-a"
+      }
+    }
+  ],
+  "control_worktree_path": "__CONTROL_WORKTREE__",
+  "integration_merge_lease": {
+    "holder": "omp-pm-smoke",
+    "claimed_at": "2026-08-19",
+    "plan_id": "plan-a",
+    "source_branch": "feature/plan-a",
+    "target_branch": "main"
+  },
+  "compass_ref": "iterations/iter-smoke/delivery-compass.md"
+}

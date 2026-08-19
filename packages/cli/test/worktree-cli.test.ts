@@ -7,18 +7,26 @@
  * Exit codes: 0 = OK, 1 = violations / status errors, 2 = usage (missing
  * plan-id/--plan in L1, missing/invalid --tracks JSON in L2; slice-2
  * in-handler convention).
+/**
+ * CLI `mstar worktree check` — thin engine-backed wrapper over
+ * `worktree.l1PreDispatchCheck` / `worktree.l2PreDispatchCheck`.
  *
- * Each case runs the real CLI as a subprocess against temp fixtures: a
- * real git repo + linked worktree for branch probes, plain dirs otherwise.
+ * L1 input in v3 comes from the workflow snapshot
+ * (`{HARNESS_DIR}/workflows/<id>/snapshot.json`): plan rows (with
+ * `plans[].execution_lease`) + the snapshot-level `control_worktree_path`
+ * (replaces the v1 root `metadata.control_worktree_path` source; the
+ * `--status` flag re-pointed to `--workflow <id>`, no compat alias).
+ * `--control` still overrides the snapshot value. L2 is unchanged.
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+const WORKFLOW_ID = "wf-1";
 
 /**
  * Spawn env with ambient harness env vars pinned out (qc3 F-4): the CLI
@@ -78,11 +86,27 @@ function worktreeFixture(root: string): string {
   return linked;
 }
 
-/** Write status.json into `dir`; returns the status file path. */
-function writeStatus(dir: string, doc: Record<string, unknown>): string {
-  const statusPath = join(dir, "status.json");
-  writeFileSync(statusPath, JSON.stringify(doc, null, 2));
-  return statusPath;
+/** Write `workflows/<id>/snapshot.json` into `dir`; returns the snapshot path. */
+function writeSnapshot(dir: string, doc: Record<string, unknown>): string {
+  const workflowDir = join(dir, "workflows", WORKFLOW_ID);
+  mkdirSync(workflowDir, { recursive: true });
+  const snapshotPath = join(workflowDir, "snapshot.json");
+  writeFileSync(snapshotPath, JSON.stringify(doc, null, 2));
+  return snapshotPath;
+}
+
+/** Base snapshot doc: single running workflow with the given plans. */
+function snapshotDoc(plans: unknown[], extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "iteration",
+    status: "running",
+    started_at: "2026-08-08",
+    updated_at: "2026-08-08",
+    plans,
+    ...extra,
+  };
 }
 
 const LEASE = (worktreePath: string, workingBranch = "feature/plan-a") => ({
@@ -97,11 +121,13 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     const root = tmpRoot("mstar-wt-l1-ok-");
     try {
       const linked = worktreeFixture(root);
-      const statusPath = writeStatus(root, {
-        metadata: { control_worktree_path: root },
-        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked) }],
-      });
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      const snapshotPath = writeSnapshot(
+        root,
+        snapshotDoc([{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked) }], {
+          control_worktree_path: root,
+        }),
+      );
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("worktree L1 check: OK");
       expect(result.stderr).toBe("");
@@ -113,11 +139,13 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
   test("lease worktree equals control path → worktree.l1.lease-equals-control, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-eq-");
     try {
-      const statusPath = writeStatus(root, {
-        metadata: { control_worktree_path: root },
-        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(root) }],
-      });
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      writeSnapshot(
+        root,
+        snapshotDoc([{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(root) }], {
+          control_worktree_path: root,
+        }),
+      );
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree.l1.lease-equals-control");
     } finally {
@@ -129,11 +157,13 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     const root = tmpRoot("mstar-wt-l1-miss-");
     try {
       const missing = join(root, "no-such-worktree");
-      const statusPath = writeStatus(root, {
-        metadata: { control_worktree_path: root },
-        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(missing) }],
-      });
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      writeSnapshot(
+        root,
+        snapshotDoc([{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(missing) }], {
+          control_worktree_path: root,
+        }),
+      );
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree.l1.feature-missing");
     } finally {
@@ -145,11 +175,13 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     const root = tmpRoot("mstar-wt-l1-br-");
     try {
       const linked = worktreeFixture(root);
-      const statusPath = writeStatus(root, {
-        metadata: { control_worktree_path: root },
-        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked, "feature/wrong") }],
-      });
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      writeSnapshot(
+        root,
+        snapshotDoc([{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked, "feature/wrong") }], {
+          control_worktree_path: root,
+        }),
+      );
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree.l1.branch-mismatch");
       expect(result.stderr).toContain("feature/plan-a");
@@ -162,8 +194,8 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
   test("no plan row → worktree.l1.plan-not-found, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-noplan-");
     try {
-      const statusPath = writeStatus(root, { plans: [] });
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      writeSnapshot(root, snapshotDoc([]));
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree.l1.plan-not-found");
     } finally {
@@ -171,16 +203,20 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     }
   });
 
-  test("--control override wins over status.json metadata", () => {
+  test("--control override wins over the snapshot control_worktree_path", () => {
     const root = tmpRoot("mstar-wt-l1-ctrl-");
     try {
       const linked = worktreeFixture(root);
-      // metadata records a bogus control path; --control pins the real one.
-      const statusPath = writeStatus(root, {
-        metadata: { control_worktree_path: join(root, "bogus-control") },
-        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked) }],
-      });
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath, "--control", root]);
+      // Snapshot records a bogus control path; --control pins the real one.
+      writeSnapshot(
+        root,
+        snapshotDoc([{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked) }], {
+          control_worktree_path: join(root, "bogus-control"),
+        }),
+      );
+      const result = runCli([
+        "worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--control", root,
+      ]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("worktree L1 check: OK");
     } finally {
@@ -188,15 +224,32 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     }
   });
 
-  test("positional plan-id: worktree check <plan-id> --status <path> → OK, exit 0", () => {
+  test("hostile workflow id (path traversal) is rejected before any read, exit 1 (qc2 S-2)", () => {
+    const root = tmpRoot("mstar-wt-l1-traversal-");
+    try {
+      writeSnapshot(root, snapshotDoc([]));
+      for (const bad of ["../../etc", "a/b", "..", "."]) {
+        const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", bad, "--harness", root]);
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("invalid workflow id");
+        expect(result.stderr).not.toContain("workflow snapshot not found");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("positional plan-id: worktree check <plan-id> --workflow <id> → OK, exit 0", () => {
     const root = tmpRoot("mstar-wt-l1-pos-");
     try {
       const linked = worktreeFixture(root);
-      const statusPath = writeStatus(root, {
-        metadata: { control_worktree_path: root },
-        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked) }],
-      });
-      const result = runCli(["worktree", "check", "plan-a", "--status", statusPath]);
+      writeSnapshot(
+        root,
+        snapshotDoc([{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(linked) }], {
+          control_worktree_path: root,
+        }),
+      );
+      const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("worktree L1 check: OK");
       expect(result.stderr).toBe("");
@@ -208,14 +261,17 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
   test("two matching plan rows (id + plan_id) → worktree.l1.ambiguous, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-amb-");
     try {
-      const statusPath = writeStatus(root, {
-        metadata: { control_worktree_path: root },
-        plans: [
-          { id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(root) },
-          { plan_id: "plan-a", title: "Plan A (legacy)", status: "InProgress", execution_lease: LEASE(root) },
-        ],
-      });
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      writeSnapshot(
+        root,
+        snapshotDoc(
+          [
+            { id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(root) },
+            { plan_id: "plan-a", title: "Plan A (legacy)", status: "InProgress", execution_lease: LEASE(root) },
+          ],
+          { control_worktree_path: root },
+        ),
+      );
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree.l1.ambiguous");
     } finally {
@@ -223,13 +279,11 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     }
   });
 
-  test("no --control and no metadata.control_worktree_path → worktree.l1.control-missing, exit 1", () => {
+  test("no --control and no snapshot control_worktree_path → worktree.l1.control-missing, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-ctrlmiss-");
     try {
-      const statusPath = writeStatus(root, {
-        plans: [{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(root) }],
-      });
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--status", statusPath]);
+      writeSnapshot(root, snapshotDoc([{ id: "plan-a", title: "Plan A", status: "InProgress", execution_lease: LEASE(root) }]));
+      const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("worktree.l1.control-missing");
     } finally {
@@ -241,6 +295,12 @@ describe("mstar worktree check — L1 (control/feature isolation + branch alignm
     const result = runCli(["worktree", "check"]);
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("usage: worktree check <plan-id>");
+  });
+
+  test("missing --workflow with a plan id → usage, exit 2", () => {
+    const result = runCli(["worktree", "check", "plan-a"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--workflow");
   });
 });
 

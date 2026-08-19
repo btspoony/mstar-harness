@@ -1147,66 +1147,106 @@ A topic skill body without a Load Order heading.
 });
 
 // ---------------------------------------------------------------------------
-// mstar status tech-debt — rollup + PASS/DRIFT (audit-004)
+// mstar status validate — v2 root + workflow snapshot (audit-004 cutover)
 // ---------------------------------------------------------------------------
 
-/** status.json whose stored metadata.tech_debt_summary matches the computed
- * rollup of its one open residual (by_severity in SEVERITY_ORDER: critical,
- * high, medium, low, nit — key order matters for the stringify comparison). */
-const STATUS_TECH_DEBT_PASS = `{
-  "plans": [{ "id": "p1", "status": "InReview" }],
-  "residual_findings": {
-    "demo-plan": [
-      { "id": "R1", "title": "Fix ordering bug", "severity": "high", "lifecycle": "open", "decision": "accept", "target": "next-iteration", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
-    ]
-  },
-  "metadata": {
-    "tech_debt_summary": {
-      "total_open": 1,
-      "by_severity": { "critical": 0, "high": 1, "medium": 0, "low": 0, "nit": 0 },
-      "by_target": { "next-iteration": 1 },
-      "by_plan": { "demo-plan": 1 }
-    }
-  }
+/** Valid v2 root status.json (structure-only: no active workflows listed). */
+const STATUS_V2_ROOT_OK = `{
+  "version": 2,
+  "updated_at": "2026-08-08",
+  "workflows": []
 }`;
 
-describe("mstar status tech-debt — rollup + PASS/DRIFT vs stored summary (audit-004)", () => {
-  test("matching stored summary prints the rollup and PASS (exit 0)", () => {
+/** v2 root listing a workflow whose snapshot is missing → fail-closed. */
+const STATUS_V2_ROOT_MISSING_SNAPSHOT = `{
+  "version": 2,
+  "updated_at": "2026-08-08",
+  "workflows": [{ "id": "wf-1", "type": "plan", "started_at": "2026-08-08", "dir": "workflows/wf-1" }]
+}`;
+
+/** v1-shaped root — hard cutover rejects it with the migrate hint. */
+const STATUS_V1_ROOT = `{
+  "version": 1,
+  "updated_at": "2026-08-08",
+  "plans": [],
+  "residual_findings": {},
+  "metadata": {}
+}`;
+
+/** Valid workflow snapshot (single plan row, no leases). */
+function snapshotDoc(planRows: unknown[]): string {
+  return JSON.stringify(
+    {
+      schema_version: 1,
+      id: "wf-1",
+      type: "plan",
+      status: "running",
+      started_at: "2026-08-08",
+      updated_at: "2026-08-08",
+      plans: planRows,
+    },
+    null,
+    2,
+  );
+}
+
+describe("mstar status validate — v2 root + workflow snapshot (hard cutover)", () => {
+  test("valid v2 root → OK, exit 0", () => {
     withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS);
-      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      writeFileSync(join(dir, "status.json"), STATUS_V2_ROOT_OK);
+      const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("total_open: 1");
-      expect(result.stdout).toContain('by_severity: {"critical":0,"high":1,"medium":0,"low":0,"nit":0}');
-      expect(result.stdout).toContain('by_target: {"next-iteration":1}');
-      expect(result.stdout).toContain('by_plan: {"demo-plan":1}');
-      expect(result.stdout).toContain("tech_debt_summary: PASS");
+      expect(result.stdout).toContain(`${join(dir, "status.json")}: OK`);
       expect(result.stderr).toBe("");
     });
   });
 
-  test("drifted stored summary prints DRIFT with the failing fields (exit 1)", () => {
+  test("v2 root listing a workflow whose snapshot is missing → snapshot-missing, exit 1", () => {
     withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS.replace('"total_open": 1,', '"total_open": 0,'));
-      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      writeFileSync(join(dir, "status.json"), STATUS_V2_ROOT_MISSING_SNAPSHOT);
+      const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("tech_debt_summary: DRIFT (1/4 fields: total_open)");
+      expect(result.stderr).toContain("status.workflow.snapshot-missing");
     });
   });
 
-  test("no stored summary is DRIFT with a note (exit 1)", () => {
+  test("v1 root fails closed with the migrate hint, exit 1", () => {
     withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), STATUS_TECH_DEBT_PASS.replace(/"tech_debt_summary": \{[\s\S]*?\n    \}/, '"bogus": {}'));
-      const result = runCli(["status", "tech-debt", join(dir, "status.json")]);
+      writeFileSync(join(dir, "status.json"), STATUS_V1_ROOT);
+      const result = runCli(["status", "validate", join(dir, "status.json")]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("DRIFT (4/4 fields: total_open, by_severity, by_target, by_plan)");
-      expect(result.stderr).toContain("no stored metadata.tech_debt_summary");
+      expect(result.stderr).toContain("status.migration-required");
+      expect(result.stderr).toContain("mstar migrate");
+    });
+  });
+
+  test("workflow snapshot path validates with the snapshot validator, exit 0", () => {
+    withTempDir((dir) => {
+      const workflowDir = join(dir, "workflows", "wf-1");
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(join(workflowDir, "snapshot.json"), snapshotDoc([]));
+      const result = runCli(["status", "validate", join(workflowDir, "snapshot.json")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`${join(workflowDir, "snapshot.json")}: OK`);
+    });
+  });
+
+  test("invalid snapshot (bad lifecycle type) → workflow.snapshot.invalid-type, exit 1", () => {
+    withTempDir((dir) => {
+      const workflowDir = join(dir, "workflows", "wf-1");
+      mkdirSync(workflowDir, { recursive: true });
+      const doc = JSON.parse(snapshotDoc([])) as Record<string, unknown>;
+      doc.type = "sprint";
+      writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify(doc, null, 2));
+      const result = runCli(["status", "validate", join(workflowDir, "snapshot.json")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("workflow.snapshot.invalid-type");
     });
   });
 
   test("missing status file fails with exit 1", () => {
     withTempDir((dir) => {
-      const result = runCli(["status", "tech-debt", join(dir, "nope.json")]);
+      const result = runCli(["status", "validate", join(dir, "nope.json")]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("status file not found");
     });
@@ -1214,36 +1254,116 @@ describe("mstar status tech-debt — rollup + PASS/DRIFT vs stored summary (audi
 });
 
 // ---------------------------------------------------------------------------
-// mstar status findings-cleanup — cleanup mode gate (audit-004)
+// mstar status tech-debt — project-register rollup (audit-004 cutover)
 // ---------------------------------------------------------------------------
 
-/** One open non-critical residual under plan p1 — allow-residual passes. */
-const STATUS_CLEANUP_ALLOW_PASS = `{
-  "plans": [{ "id": "p1", "status": "InReview" }],
-  "residual_findings": {
-    "p1": [
-      { "id": "R1", "title": "Style nit follow-up", "severity": "low", "lifecycle": "open", "decision": "accept", "target": "next-iteration", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
-    ]
-  }
-}`;
+/** Project register whose one open residual rolls up to total_open 1. */
+const REGISTER_ONE_OPEN = JSON.stringify(
+  {
+    entries: {
+      "demo-plan": [
+        {
+          id: "R1",
+          title: "Fix ordering bug",
+          severity: "high",
+          lifecycle: "open",
+          decision: "accept",
+          target: "next-iteration",
+          source: "qc",
+          scope: "plan",
+          owner: "dev",
+          tracking: "ticket",
+        },
+      ],
+    },
+  },
+  null,
+  2,
+);
 
-/** Same doc but the residual is critical — allow-residual blocks Approve. */
-const STATUS_CLEANUP_ALLOW_FAIL = STATUS_CLEANUP_ALLOW_PASS.replace('"severity": "low"', '"severity": "critical"');
+/** Write `projects/<id>/residuals.json` under `dir`; returns the project dir. */
+function writeRegister(dir: string, projectId: string, content: string): string {
+  const projectDir = join(dir, "projects", projectId);
+  mkdirSync(projectDir, { recursive: true });
+  writeFileSync(join(projectDir, "residuals.json"), content);
+  return dir;
+}
 
-/** zero-residual via plans[].metadata.findings_cleanup with a fixable open residual. */
-const STATUS_CLEANUP_ZERO_FAIL = `{
-  "plans": [{ "id": "p1", "status": "InProgress", "metadata": { "findings_cleanup": "zero-residual" } }],
-  "residual_findings": {
-    "p1": [
-      { "id": "R1", "title": "Fixable finding", "severity": "medium", "lifecycle": "open", "decision": "accept", "target": "", "source": "qc", "scope": "plan", "owner": "dev", "tracking": "ticket" }
-    ]
-  }
-}`;
+describe("mstar status tech-debt — project-register rollup (v3 relocation)", () => {
+  test("prints the rollup over the project registers and exits 0 (informational)", () => {
+    withTempDir((dir) => {
+      writeRegister(dir, "_default", REGISTER_ONE_OPEN);
+      const result = runCli(["status", "tech-debt", join(dir, "projects")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("total_open: 1");
+      expect(result.stdout).toContain('by_severity: {"critical":0,"high":1,"medium":0,"low":0,"nit":0}');
+      expect(result.stdout).toContain('by_target: {"next-iteration":1}');
+      expect(result.stdout).toContain('by_plan: {"demo-plan":1}');
+      expect(result.stdout).toContain("source of truth");
+      expect(result.stderr).toBe("");
+    });
+  });
 
-describe("mstar status findings-cleanup — cleanup-mode gate over open residuals (audit-004)", () => {
+  test("no open entries → empty rollup, informational exit 0 (never DRIFT)", () => {
+    withTempDir((dir) => {
+      writeRegister(dir, "_default", JSON.stringify({ entries: {} }));
+      const result = runCli(["status", "tech-debt", join(dir, "projects")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("total_open: 0");
+      expect(result.stdout).toContain("source of truth");
+    });
+  });
+
+  test("missing project dir fails with exit 1", () => {
+    withTempDir((dir) => {
+      const result = runCli(["status", "tech-debt", join(dir, "nope")]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("project dir not found");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mstar status findings-cleanup — project-register gate (audit-004 cutover)
+// ---------------------------------------------------------------------------
+
+/** Register with one open non-critical residual under plan p1 — allow-residual passes. */
+const REGISTER_CLEANUP_ALLOW_PASS = JSON.stringify(
+  {
+    entries: {
+      p1: [
+        {
+          id: "R1",
+          title: "Style nit follow-up",
+          severity: "low",
+          lifecycle: "open",
+          decision: "accept",
+          target: "next-iteration",
+          source: "qc",
+          scope: "plan",
+          owner: "dev",
+          tracking: "ticket",
+        },
+      ],
+    },
+  },
+  null,
+  2,
+);
+
+/** Same register but the residual is critical — allow-residual blocks Approve. */
+const REGISTER_CLEANUP_ALLOW_FAIL = REGISTER_CLEANUP_ALLOW_PASS.replace('"severity": "low"', '"severity": "critical"');
+
+/** Register with a fixable open residual — zero-residual blocks it. */
+const REGISTER_CLEANUP_ZERO_FAIL = REGISTER_CLEANUP_ALLOW_PASS.replace('"severity": "low"', '"severity": "medium"').replace(
+  '"target": "next-iteration"',
+  '"target": ""',
+);
+
+describe("mstar status findings-cleanup — project-register cleanup-mode gate (v3 relocation)", () => {
   test("allow-residual with non-critical open residual passes (exit 0)", () => {
     withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ALLOW_PASS);
+      writeRegister(dir, "_default", REGISTER_CLEANUP_ALLOW_PASS);
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("findings-cleanup p1: OK");
@@ -1252,7 +1372,7 @@ describe("mstar status findings-cleanup — cleanup-mode gate over open residual
 
   test("allow-residual with an unresolved critical fails (exit 1)", () => {
     withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ALLOW_FAIL);
+      writeRegister(dir, "_default", REGISTER_CLEANUP_ALLOW_FAIL);
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("findings-cleanup p1: FAIL (1 violation)");
@@ -1260,74 +1380,117 @@ describe("mstar status findings-cleanup — cleanup-mode gate over open residual
     });
   });
 
-  test("zero-residual via plan metadata blocks a fixable open residual (exit 1)", () => {
+  test("zero-residual mode blocks a fixable open residual (exit 1)", () => {
     withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), STATUS_CLEANUP_ZERO_FAIL);
-      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      writeRegister(dir, "_default", REGISTER_CLEANUP_ZERO_FAIL);
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "zero-residual"]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("findings.zero-residual-open-fixable");
     });
   });
 
-  test("missing status file fails with exit 1", () => {
+  test("no register entries for the plan → gate passes (exit 0)", () => {
+    withTempDir((dir) => {
+      writeRegister(dir, "_default", JSON.stringify({ entries: {} }));
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("findings-cleanup p1: OK");
+    });
+  });
+
+  test("missing project register fails with exit 1", () => {
     withTempDir((dir) => {
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("status file not found");
+      expect(result.stderr).toContain("project register not found");
+    });
+  });
+
+  test("invalid --mode is a usage error (exit 1)", () => {
+    withTempDir((dir) => {
+      writeRegister(dir, "_default", REGISTER_CLEANUP_ALLOW_PASS);
+      const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "bogus"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("invalid --mode bogus");
     });
   });
 });
 
 // ---------------------------------------------------------------------------
-// mstar lease verify-integration — integration merge lease (audit-004)
+// mstar status archive-residuals — removed in v3 (audit-004 cutover)
 // ---------------------------------------------------------------------------
 
-const LEASE_VALID = `{
-  "metadata": {
-    "integration_merge_lease": {
-      "holder": "Main",
-      "claimed_at": "2026-08-16",
-      "plan_id": "20260816-audit-004",
-      "source_branch": "feature/20260816-audit-004-validator-cli",
-      "target_branch": "spec_integration_branch"
-    }
-  }
-}`;
+describe("mstar status archive-residuals — removed command names the replacement", () => {
+  test("invocation errors and names the project-register replacement (exit 1)", () => {
+    const result = runCli(["status", "archive-residuals"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("status archive-residuals: removed in v3");
+    expect(result.stderr).toContain("projects/<id>/residuals.json");
+  });
+});
 
-const LEASE_MISSING_HOLDER = LEASE_VALID.replace('"holder": "Main",\n      ', "");
+// ---------------------------------------------------------------------------
+// mstar lease verify-integration — snapshot top-level merge lease (audit-004)
+// ---------------------------------------------------------------------------
 
-const LEASE_UNCLAIMED = `{
-  "metadata": { "iteration_base_branch": "main" }
-}`;
+const LEASE_VALID = {
+  holder: "Main",
+  claimed_at: "2026-08-16",
+  plan_id: "20260816-audit-004",
+  source_branch: "feature/20260816-audit-004-validator-cli",
+  target_branch: "spec_integration_branch",
+};
 
-/** Tombstone lease: `null` is invalid — writers delete the key on release. */
-const LEASE_NULL = `{
-  "metadata": { "integration_merge_lease": null, "iteration_base_branch": "main" }
-}`;
+const LEASE_MISSING_HOLDER = { ...LEASE_VALID } as Record<string, unknown>;
+delete LEASE_MISSING_HOLDER.holder;
 
-describe("mstar lease verify-integration — root metadata.integration_merge_lease (audit-004)", () => {
+/** Snapshot with a top-level integration_merge_lease (or none). */
+function leaseSnapshot(lease: unknown): string {
+  return JSON.stringify(
+    {
+      schema_version: 1,
+      id: "wf-1",
+      type: "iteration",
+      status: "running",
+      started_at: "2026-08-08",
+      updated_at: "2026-08-16",
+      plans: [],
+      ...(lease === undefined ? {} : { integration_merge_lease: lease }),
+    },
+    null,
+    2,
+  );
+}
+
+function withMergeLeaseSnapshot(lease: unknown, fn: (dir: string) => void): void {
+  withTempDir((dir) => {
+    const workflowDir = join(dir, "workflows", "wf-1");
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(workflowDir, "snapshot.json"), leaseSnapshot(lease));
+    fn(dir);
+  });
+}
+
+describe("mstar lease verify-integration — snapshot top-level integration_merge_lease (audit-004)", () => {
   test("valid lease prints holder and passes (exit 0)", () => {
-    withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), LEASE_VALID);
-      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+    withMergeLeaseSnapshot(LEASE_VALID, (dir) => {
+      const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("integration_merge_lease valid (holder Main)");
     });
   });
 
   test("absent lease is the valid unclaimed state (exit 0)", () => {
-    withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), LEASE_UNCLAIMED);
-      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+    withMergeLeaseSnapshot(undefined, (dir) => {
+      const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("no integration_merge_lease (unclaimed)");
     });
   });
 
   test("null lease is a tombstone and fails with the engine code (exit 1)", () => {
-    withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), LEASE_NULL);
-      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+    withMergeLeaseSnapshot(null, (dir) => {
+      const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("lease verify-integration: FAIL (1 violation)");
       expect(result.stderr).toContain("lease.merge-lease.invalid");
@@ -1335,13 +1498,18 @@ describe("mstar lease verify-integration — root metadata.integration_merge_lea
   });
 
   test("lease missing a required field fails with the engine code (exit 1)", () => {
-    withTempDir((dir) => {
-      writeFileSync(join(dir, "status.json"), LEASE_MISSING_HOLDER);
-      const result = runCli(["lease", "verify-integration", "--harness", dir]);
+    withMergeLeaseSnapshot(LEASE_MISSING_HOLDER, (dir) => {
+      const result = runCli(["lease", "verify-integration", "--workflow", "wf-1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("lease verify-integration: FAIL (1 violation)");
       expect(result.stderr).toContain("lease.merge-lease.missing-holder");
     });
+  });
+
+  test("missing --workflow is a usage error (exit 2)", () => {
+    const result = runCli(["lease", "verify-integration"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("usage: lease verify-integration --workflow <id>");
   });
 });
 
