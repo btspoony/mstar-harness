@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 25,
-  "updated_at": "2026-07-28",
+  "version": 26,
+  "updated_at": "2026-08-20",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -408,14 +408,14 @@
         "Context Loaded declaration",
         "Cursor Build resume contract acknowledged",
         "SSOT plan path in Context Loaded",
-        "status.json plan_id registration",
+        "workflow snapshot plans[] row + root status.json workflows[] entry registration",
         "PM Assignment before implementation",
         "matching host Task invoke for implementation"
       ],
       "hard_fail_if": [
         "Build treated as replay of /pm",
         "parent session edits product code before PM Assignment and Task dispatch",
-        "implementation starts before SSOT plan and status.json registration",
+        "implementation starts before SSOT plan and workflow snapshot registration",
         "implement todo lacks Execute as or Delegation or Working branch or Branch policy or SSOT Plan Path",
         "assignment uses non-English field keys",
         "report is non-English without user override"
@@ -519,7 +519,7 @@
         "{SDD_DIR}/review/qc1.md qc2.md qc3.md",
         "{SDD_DIR}/review/qc-consolidated.md",
         "durable main-plan Review Gate Summary",
-        "status.json residual_findings for open R#",
+        "project register residuals.json entries[<plan-id>] for open R#",
         "branch review-package path"
       ],
       "hard_fail_if": [
@@ -933,7 +933,7 @@
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
-        "registers open residual_findings for fixable Warning/Suggestion under zero-residual",
+        "registers open residual entries for fixable Warning/Suggestion under zero-residual",
         "Approve with residuals used to park fixable findings under zero-residual",
         "marks plan Done with open fixable residuals under zero-residual",
         "assignment uses non-English field keys"

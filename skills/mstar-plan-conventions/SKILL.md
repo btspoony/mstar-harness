@@ -10,6 +10,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 | 你还可能要 Read | 何时 |
 |-----------------|------|
 | `mstar-plan-artifacts` | 主 plan、review bundle 摘要、`status.json`、residual、InReview/QC 波次、knowledge |
+| `mstar-project-governance` | `projects/<id>/roadmap.md` 编写约定 + `residuals.json` register 生命周期、`_default` 回退 |
 | `mstar-branch-worktree` | Assignment 写分支 / worktree / QC 检出 |
 | `mstar-review-qc` | 派 QC（PM 同轮必读；SDD 强制 tri） |
 | `mstar-sdd` | PM 执行 `Execution mode: sdd` 的 implement 波次 |

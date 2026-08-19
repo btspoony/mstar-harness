@@ -96,6 +96,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
 | `mstar-plan-artifacts` | 主 plan、review bundle / durable summaries、`status.json`（v2 根）+ workflow snapshots + project register、residual、knowledge |
+| `mstar-project-governance` | 项目治理层：`projects/<id>/roadmap.md` 编写约定 + `residuals.json` register 生命周期（open → verified close in place）、`_default` 回退、provenance；schema 与 engine `project.ts` 逐字一致 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Think / Simplicity / Surgical / Debugging / Review Feedback / Goal-Driven / Communication |
