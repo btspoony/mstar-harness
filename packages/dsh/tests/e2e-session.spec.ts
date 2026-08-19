@@ -582,6 +582,13 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
 describe('agent-flow — real settle pairing (real call through the composed registry)', () => {
   it('a real subagent call through the composed registry records a dispatch AND a paired settle (post-execute foreground completion)', async () => {
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
+    // v3 write-path precondition: the agent-flow writer appends only to an
+    // ACTIVE workflow — seed the v2 tree (root status.json + one active
+    // workflow) before the call.
+    await seedHarness(booted.harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
+    })
     // Dev-time reality: the real dsh-tools registry ships no delegation
     // tool, so the test registers the `subagent` tool it would have mounted —
     // the composed pipeline (pre-execute waterfall → validation → body →
@@ -614,8 +621,9 @@ describe('agent-flow — real settle pairing (real call through the composed reg
     // Dispatch recorded with the session's agent id AND a paired settle: the
     // registry's post-execute waterfall fired for the same callId — the
     // pairing store hit → the foreground result ('subagent result') settles
-    // `ok` carrying the dispatch identity (role from the Assignment).
-    const view = readAgentFlow(booted.harnessDir)
+    // `ok` carrying the dispatch identity (role from the Assignment). v3
+    // layout: the ledger lives in the ACTIVE workflow dir.
+    const view = readAgentFlow(join(booted.harnessDir, 'workflows/wf-1'))
     expect(view).not.toBeNull()
     expect(view!.events).toHaveLength(2)
     expect(view!.events[0]).toMatchObject({

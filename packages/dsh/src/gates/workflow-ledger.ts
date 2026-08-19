@@ -23,17 +23,19 @@
  *
  * DEDUPE (qc2 W-1 / qc3 F-301 fix-wave): ONE DURABLE per-session watermark —
  * the next expected envelope `seq` (session-log position) — persisted to
- * `{HARNESS_DIR}/workflow-ledger-cursors.json` (a small bounded sidecar next
- * to `agent-flow.jsonl`, written atomically temp-file + rename through the
- * same containment discipline). The watermark is consulted AND advanced by
- * every scan (cold / created-backfill / live): envelopes with `seq` below it
- * were already recorded — across cold+live overlap AND across plugin
- * re-applies (a re-registration no longer re-records the same live
- * sessions). The watermark advances only AFTER the ledger row appended
- * successfully (qc3 R-401 — a failing append leaves the cursor behind, so
- * the row is re-attempted at the next scan, never permanently lost). The
- * in-memory Map is the durable file's mirror (module-level
- * cache, bounded by the session cap); any watermark read/write failure
+ * `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json` (a small
+ * bounded sidecar next to the workflow-dir `agent-flow.jsonl`, written
+ * atomically temp-file + rename through the same containment discipline; the
+ * root cursor file is NOT read after migration — no read fallback). The
+ * watermark is consulted AND advanced by every scan (cold /
+ * created-backfill / live): envelopes with `seq` below it were already
+ * recorded — across cold+live overlap AND across plugin re-applies (a
+ * re-registration no longer re-records the same live sessions). The
+ * watermark advances only AFTER the ledger row appended successfully (qc3
+ * R-401 — a failing append leaves the cursor behind, so the row is
+ * re-attempted at the next scan, never permanently lost). The in-memory
+ * Map is the durable file's mirror (module-level cache keyed by WORKFLOW
+ * DIR, bounded by the session cap); any watermark read/write failure
  * degrades to in-memory-only with one warn — a ledger row is never lost and
  * the workflow run is never affected.
  *
@@ -91,6 +93,7 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   recordWorkflowEvent,
+  resolveAgentFlowWriteDir,
   truncateLedgerField,
   WORKFLOW_LEDGER_MAX_ID_LENGTH,
   WORKFLOW_LEDGER_MAX_LABEL_LENGTH,
@@ -128,12 +131,15 @@ const TOOL_WORKFLOW_RUN_END = 'tool-workflow/run-end'
 const DEPTH_ADVISORY_THRESHOLD = 2
 
 /**
- * The durable watermark file name under `{HARNESS_DIR}` (qc2 W-1 / qc3
+ * The durable watermark file name under the WORKFLOW dir (qc2 W-1 / qc3
  * F-301 fix-wave): `{ "v": 1, "cursors": { "<sessionId>": <nextSeq> } }` —
  * the next expected envelope seq per session id. Written atomically
  * (temp-file + rename) after every recorded workflow row; read lazily per
- * harness dir (module-level cache). Absent on first run (silent); a
- * present-but-corrupt file degrades to in-memory-only with one warn.
+ * workflow dir (module-level cache). v3 layout: the sidecar lives in the
+ * ACTIVE workflow dir (`workflows/<id>/workflow-ledger-cursors.json`) next
+ * to the ledger — the root cursor file is NOT read after migration (no read
+ * fallback). Absent on first run (silent); a present-but-corrupt file
+ * degrades to in-memory-only with one warn.
  */
 export const WORKFLOW_LEDGER_WATERMARK_FILE = 'workflow-ledger-cursors.json'
 /**
@@ -228,13 +234,15 @@ function sessionIdOf(session: unknown): string | undefined {
 
 /* ---------------------------------- durable watermark ---------------------------------- */
 
-/** One loaded watermark: session id → next expected envelope seq (per harness dir). */
+/** One loaded watermark: session id → next expected envelope seq (per workflow dir). */
 type Watermark = Map<string, number>
 
 /**
  * Module-level watermark cache — the durable file's in-memory mirror, keyed
- * by harness dir. Persists across registrations IN one process (a re-apply
- * sees the same advanced Map); the file provides the cross-restart
+ * by WORKFLOW DIR (the file's actual location — a new active workflow id
+ * means a different sidecar, so the cache must not leak the previous
+ * workflow's cursors). Persists across registrations IN one process (a
+ * re-apply sees the same advanced Map); the file provides the cross-restart
  * durability. Bounded: the per-dir Map is capped at
  * `WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS`; the number of dirs is bounded
  * by the resolver's per-workspace cache (a process serves a handful of
@@ -243,19 +251,19 @@ type Watermark = Map<string, number>
 const watermarkCache = new Map<string, Watermark>()
 
 /**
- * Load (or return the cached) watermark for one harness dir. A missing file
+ * Load (or return the cached) watermark for one workflow dir. A missing file
  * is the normal first run — silent, empty map. A present-but-corrupt file
  * warns once and degrades to in-memory-only (contained — never throws):
  * in-process re-applies stay deduped, a restart re-records (the file was
  * never durable). Persisted values are validated (integer `nextSeq` in
  * [1, 2^31)) and invalid entries dropped.
  */
-function loadWatermark(harnessDir: string): Watermark {
-  const cached = watermarkCache.get(harnessDir)
+function loadWatermark(workflowDir: string): Watermark {
+  const cached = watermarkCache.get(workflowDir)
   if (cached !== undefined) return cached
   const watermark: Watermark = new Map()
   try {
-    const raw = readFileSync(join(harnessDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8')
+    const raw = readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8')
     const record = asRecord(JSON.parse(raw))
     const cursors = asRecord(record?.cursors)
     if (cursors !== undefined) {
@@ -276,10 +284,10 @@ function loadWatermark(harnessDir: string): Watermark {
   } catch (error) {
     const err = error as NodeJS.ErrnoException
     if (err?.code !== 'ENOENT') {
-      log('warn', `workflow-ledger watermark unreadable for ${harnessDir} — degrading to in-memory-only (restart re-records): ${errorMessage(error)}`)
+      log('warn', `workflow-ledger watermark unreadable for ${workflowDir} — degrading to in-memory-only (restart re-records): ${errorMessage(error)}`)
     }
   }
-  watermarkCache.set(harnessDir, watermark)
+  watermarkCache.set(workflowDir, watermark)
   return watermark
 }
 
@@ -290,14 +298,14 @@ function loadWatermark(harnessDir: string): Watermark {
  * warn: the ledger rows are already appended (never lost); only
  * cross-restart dedupe is lost. Contained — never throws.
  */
-function saveWatermark(harnessDir: string, watermark: Watermark): void {
+function saveWatermark(workflowDir: string, watermark: Watermark): void {
   try {
-    const file = join(harnessDir, WORKFLOW_LEDGER_WATERMARK_FILE)
+    const file = join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE)
     const tmp = `${file}.tmp`
     writeFileSync(tmp, JSON.stringify({ v: 1, cursors: Object.fromEntries(watermark) }))
     renameSync(tmp, file)
   } catch (error) {
-    log('warn', `workflow-ledger watermark write failed for ${harnessDir} — in-memory only (restart re-records): ${errorMessage(error)}`)
+    log('warn', `workflow-ledger watermark write failed for ${workflowDir} — in-memory only (restart re-records): ${errorMessage(error)}`)
   }
 }
 
@@ -312,8 +320,8 @@ function saveWatermark(harnessDir: string, watermark: Watermark): void {
  * @param isEvictable - `true` for a candidate session that is safe to evict
  *   (not live in the sessions store).
  */
-function advanceWatermark(harnessDir: string, sid: string, nextSeq: number, isEvictable: (candidate: string) => boolean): void {
-  const watermark = loadWatermark(harnessDir)
+function advanceWatermark(workflowDir: string, sid: string, nextSeq: number, isEvictable: (candidate: string) => boolean): void {
+  const watermark = loadWatermark(workflowDir)
   if (!watermark.has(sid) && watermark.size >= WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS) {
     let victim: string | undefined
     for (const key of watermark.keys()) {
@@ -329,7 +337,7 @@ function advanceWatermark(harnessDir: string, sid: string, nextSeq: number, isEv
     }
   }
   watermark.set(sid, nextSeq)
-  saveWatermark(harnessDir, watermark)
+  saveWatermark(workflowDir, watermark)
 }
 
 /* ---------------------------------- mapping ---------------------------------- */
@@ -468,7 +476,8 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
  * events never hit the firehose, `firstLiveSeq`); (3) a live
  * `ctx.events.on('session/event', …)` listener filtering the four types.
  * One DURABLE watermark per session id (session-log `seq` position,
- * persisted to `{HARNESS_DIR}/workflow-ledger-cursors.json`) — re-applies
+ * persisted to `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json` —
+ * the ACTIVE workflow dir, never the root) — re-applies
  * never duplicate; no other cache. The watermark advances only AFTER a
  * successful ledger append (qc3 R-401 — a failing append leaves the cursor
  * behind so the row is re-attempted at the next scan, never lost). Every
@@ -515,9 +524,17 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     const cwd = (session as SessionView | null | undefined)?.header?.cwd
     const harnessDir = resolver.forWorkspace(typeof cwd === 'string' && cwd.trim() !== '' ? cwd : undefined)
     if (harnessDir === null) return
+    // v3 write path: the ledger rows AND the durable watermark live in the
+    // ACTIVE workflow dir (`workflows/<id>/` — the shared active-set
+    // resolver; never the root file, never a terminal snapshot dir). No
+    // active lifecycle → the row is SKIPPED (one-time warn) and the
+    // watermark is NOT advanced — a later re-apply re-attempts it (R-401
+    // discipline: advance only after a successful append).
+    const workflowDir = resolveAgentFlowWriteDir(harnessDir)
+    if (workflowDir === null) return
     // Durable watermark: consult + advance (the in-memory Map is the
     // persisted file's mirror — re-applies and restarts stay deduped).
-    const watermark = loadWatermark(harnessDir)
+    const watermark = loadWatermark(workflowDir)
     let next = watermark.get(sid) ?? 0
     // Log-rebuild guard: a snapshot SHORTER than the recorded watermark can
     // only be a re-created session with a fresh log (id reuse after
@@ -533,8 +550,8 @@ export function registerWorkflowLedger(ctx: Context, resolver: HarnessResolver, 
     // (re-apply / restart), never permanently lost. The only residual is one
     // bounded, visible duplicate row if the process dies between the two fs
     // calls — the duplicate mode the design already accepts and documents.
-    if (recordWorkflowEvent({ harnessDir, event: row.event })) {
-      advanceWatermark(harnessDir, sid, row.seq + 1, (candidate) => sessions.get(candidate) === undefined)
+    if (recordWorkflowEvent({ harnessDir, workflowDir, event: row.event })) {
+      advanceWatermark(workflowDir, sid, row.seq + 1, (candidate) => sessions.get(candidate) === undefined)
       // P-c answer observation (plan `20260815-dsh-workflow-gate` Task 4
       // fold-in — the Task-2 Important handoff; see the module doc): a
       // run-start that produced a ledger row means the call RAN — the

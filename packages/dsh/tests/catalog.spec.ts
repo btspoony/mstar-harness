@@ -398,15 +398,11 @@ Implement the invalidation.
     expect(firstSource.state!.agentFlow).toEqual({ events: [], summary: [] })
 
     // One successful ledger record — the apply-bound invalidator deletes the
-    // workspace's catalog cache entry (the TTL itself is untouched). The
-    // record still lands in the ROOT ledger (the writer cutover is Task 2);
-    // the catalog reads the SELECTED workflow dir, so the observable of the
-    // invalidation is a workflow-dir ledger line written after the record.
+    // workspace's catalog cache entry (the TTL itself is untouched).
+    // Final-state (Task 2 writer cutover): the record itself lands in the
+    // ACTIVE workflow dir — the catalog reads the SAME file, so the
+    // invalidation observable is the record's own line (no out-of-band write).
     plugin.recordDispatch({ harnessDir, prompt: ASSIGNMENT, violations: [], hard: false })
-    await writeFile(
-      join(harnessDir, 'workflows/wf-1', plugin.AGENT_FLOW_FILE),
-      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
-    )
 
     // Pre-step 2 — SAME turn (step 2): the digest gate suppresses an
     // UNCHANGED row, so this re-injection can only be the digest text change
@@ -470,15 +466,11 @@ Implement the invalidation.
     )
 
     // A ledger record for workspace A ONLY — the apply-bound invalidator
-    // fires with A's harness dir → deletes exactly A's cache entry. The
-    // record lands in A's ROOT ledger (writer cutover is Task 2); the
-    // catalog reads A's workflow dir, so the rebuild observable is a
-    // workflow-dir line written after the record.
+    // fires with A's harness dir → deletes exactly A's cache entry.
+    // Final-state (Task 2 writer cutover): the record itself lands in A's
+    // ACTIVE workflow dir — the catalog reads the SAME file, so the rebuild
+    // observable is the record's own line (no out-of-band write).
     plugin.recordDispatch({ harnessDir: join(wsA, '.mstar'), prompt: ASSIGNMENT, violations: [], hard: false })
-    await writeFile(
-      join(wsA, '.mstar', 'workflows/wf-1', plugin.AGENT_FLOW_FILE),
-      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
-    )
 
     // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
     // fresh source carrying the new workflow-dir dispatch event).

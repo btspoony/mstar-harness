@@ -33,7 +33,7 @@
  *   the view carries no undefined-valued keys (Session.append lossless JSON).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -64,7 +64,7 @@ import {
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
-import { bootApp, seedHarness, FakeJobRegistry, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, seedV2Tree, FakeJobRegistry, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -165,17 +165,25 @@ function emitUndeclared(ctx: Context, name: string, ...args: unknown[]): void {
 
 /** Read the ledger view for a booted app (or fail loudly when absent). */
 function flowOf(app: BootResult): AgentFlowView {
-  const view = readAgentFlow(app.harnessDir)
+  // v3 layout: the ledger lives in the ACTIVE workflow dir (the boot's
+  // seeded v2 tree — `seedV2` — has one active workflow `wf-1`).
+  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))
   expect(view).not.toBeNull()
   return view!
 }
 
-/** Create a temp harness dir (bare-context tests — no Loader boot). */
-async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string }> {
+/**
+ * Create a temp harness dir seeded with a minimal v2 tree (root status.json
+ * + one active workflow `wf-1` + its snapshot) — the v3 write-path
+ * precondition: the agent-flow writer / ledger append only to an ACTIVE
+ * workflow (plan `20260819-workflow-dsh-viz` Task 2).
+ */
+async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string; workflowDir: string }> {
   const root = await mkdtemp(join(tmpdir(), prefix))
   const harnessDir = join(root, 'harness')
   await mkdir(harnessDir, { recursive: true })
-  return { root, harnessDir }
+  await seedV2Tree(harnessDir)
+  return { root, harnessDir, workflowDir: join(harnessDir, 'workflows/wf-1') }
 }
 
 /* ===========================================================================
@@ -184,11 +192,11 @@ async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: 
 
 describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   it('records a v1 dispatch event; readAgentFlow returns the catalog view (verdict ok)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-record-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-record-')
     try {
       recordDispatch({ harnessDir, exec: { agent: { id: 'sess-1' } }, prompt: VALID_PLANNED, violations: [], hard: false })
 
-      const view = readAgentFlow(harnessDir)
+      const view = readAgentFlow(workflowDir)
       expect(view).not.toBeNull()
       expect(view!.events).toHaveLength(1)
       expect(view!.events[0]).toMatchObject({
@@ -202,27 +210,31 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
         hard: false,
       })
       // The serialized line is the v1 schema (optional fields omitted — no undefined keys).
-      const line = readFileSync(join(harnessDir, AGENT_FLOW_FILE), 'utf8').trim()
+      // v3 layout: the ledger lives in the ACTIVE workflow dir, never the root.
+      const line = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim()
       const parsed = JSON.parse(line) as Record<string, unknown>
       expect(parsed).toMatchObject({ v: 1, kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })
       expect(Object.values(parsed).every((v) => v !== undefined)).toBe(true)
       // Regression (qc2 F-7): the serialized line must NEVER carry prompt
       // body text — the record persists only derived fields.
       expect(line).not.toContain('Implement the ledger')
+      // The ROOT ledger is never written (the writer appends only to the
+      // active workflow dir).
+      expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
   it('verdict derivation: no violations → ok; hard + violations → denied; else advisory', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-verdict-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-verdict-')
     try {
       const violation = { ok: false, severity: 'high', code: 'assignment.field.branch-missing', message: 'x' }
       recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
       recordDispatch({ harnessDir, prompt: MISSING_BRANCH, violations: [violation], hard: false })
       recordDispatch({ harnessDir, prompt: MISSING_EXECUTE_AS, violations: [violation], hard: true })
 
-      const view = readAgentFlow(harnessDir)
+      const view = readAgentFlow(workflowDir)
       expect(view!.events.map((e) => e.verdict)).toEqual(['denied', 'advisory', 'ok']) // latest first
       expect(view!.events.map((e) => e.hard)).toEqual([true, false, false])
     } finally {
@@ -231,15 +243,15 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 
   it('agent is omitted when the exec carries none (host-hook shape) and when role is missing', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-agent-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-agent-')
     try {
       recordDispatch({ harnessDir, exec: undefined, prompt: VALID_PLANNED, violations: [], hard: false })
       recordDispatch({ harnessDir, exec: { agent: { id: '' } }, prompt: VALID_PLANNED, violations: [], hard: false })
 
-      const view = readAgentFlow(harnessDir)
+      const view = readAgentFlow(workflowDir)
       expect(view!.events.every((e) => e.agent === null)).toBe(true)
       // The JSONL lines carry NO agent key (omit discipline at the record).
-      const lines = readFileSync(join(harnessDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')
+      const lines = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n')
       for (const line of lines) {
         expect((JSON.parse(line) as Record<string, unknown>).agent).toBeUndefined()
       }
@@ -249,10 +261,10 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 
   it('planId derives from Plan Path basename; body-quoted Plan Path never resolves (header-region scoping)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-planid-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-planid-')
     try {
       recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
-      const view = readAgentFlow(harnessDir)
+      const view = readAgentFlow(workflowDir)
       expect(view!.events[0]!.planId).toBe('20260810-agent-flow')
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -260,12 +272,12 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 
   it('recordSettle writes outcome + durationMs (omitted when absent)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-')
     try {
       recordSettle({ harnessDir, agent: 'sess-1', outcome: 'ok', durationMs: 1234 })
       recordSettle({ harnessDir, outcome: 'error' })
 
-      const view = readAgentFlow(harnessDir)
+      const view = readAgentFlow(workflowDir)
       expect(view!.events.map((e) => e.kind)).toEqual(['settle', 'settle'])
       expect(view!.events[0]).toMatchObject({ kind: 'settle', outcome: 'error', agent: null })
       expect(view!.events[1]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-1', durationMs: 1234 })
@@ -275,38 +287,38 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 
   it('readAgentFlow is latest-first and bounded by the limit (default 50); limit 0 → the empty window (qc2 F-6)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-limit-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-limit-')
     try {
       for (let i = 0; i < 60; i += 1) {
         recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
       }
-      const defaultView = readAgentFlow(harnessDir)
+      const defaultView = readAgentFlow(workflowDir)
       expect(defaultView!.events).toHaveLength(50)
       expect(defaultView!.events[0]!.ts).toBeGreaterThanOrEqual(defaultView!.events[49]!.ts)
-      const small = readAgentFlow(harnessDir, 10)
+      const small = readAgentFlow(workflowDir, 10)
       expect(small!.events).toHaveLength(10)
       // Explicit semantics: 0 requests the EMPTY window (not a silent
       // fallback to the default).
-      expect(readAgentFlow(harnessDir, 0)).toEqual({ events: [], summary: [] })
+      expect(readAgentFlow(workflowDir, 0)).toEqual({ events: [], summary: [] })
       // Negative/NaN-like values floor to 0 → the empty window too.
-      expect(readAgentFlow(harnessDir, -3)).toEqual({ events: [], summary: [] })
+      expect(readAgentFlow(workflowDir, -3)).toEqual({ events: [], summary: [] })
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
   it('truncates the file to the most recent AGENT_FLOW_MAX_EVENTS lines after many appends', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-truncate-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-truncate-')
     try {
       const total = AGENT_FLOW_MAX_EVENTS + 25
       for (let i = 0; i < total; i += 1) {
         recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
       }
-      const file = join(harnessDir, AGENT_FLOW_FILE)
+      const file = join(workflowDir, AGENT_FLOW_FILE)
       const lines = readFileSync(file, 'utf8').replace(/\n$/, '').split('\n')
       expect(lines.length).toBe(AGENT_FLOW_MAX_EVENTS)
       // The view reflects the truncated tail (the first recorded event is gone).
-      const view = readAgentFlow(harnessDir, 500)
+      const view = readAgentFlow(workflowDir, 500)
       expect(view!.events).toHaveLength(AGENT_FLOW_MAX_EVENTS)
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -314,9 +326,9 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 
   it('size gate (qc2 F-1 / qc3 F-001/003): a tiny-line ledger below the threshold keeps >500 lines (append-only fast path); the truncating read-modify-write still runs once the file crosses the gate', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-sizegate-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-sizegate-')
     try {
-      const file = join(harnessDir, AGENT_FLOW_FILE)
+      const file = join(workflowDir, AGENT_FLOW_FILE)
       // ~60 B settle lines: 600 of them ≈ 36 KiB stay BELOW the 64 KiB gate,
       // so the append path must NOT read-modify-write — all 600 lines persist
       // even though they exceed AGENT_FLOW_MAX_EVENTS (the documented
@@ -325,7 +337,7 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       expect(statSync(file).size).toBeLessThan(AGENT_FLOW_SIZE_GATE_BYTES)
       let lines = readFileSync(file, 'utf8').replace(/\n$/, '').split('\n')
       expect(lines.length).toBe(600)
-      expect(readAgentFlow(harnessDir, 700)!.events).toHaveLength(600)
+      expect(readAgentFlow(workflowDir, 700)!.events).toHaveLength(600)
       // Now push the file past the gate with normal-size dispatch lines
       // (~163 B × 525 ≈ 86 KiB > 64 KiB): the read-modify-write resumes and
       // truncates back to the most recent 500 events.
@@ -340,9 +352,9 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 
   it('skips malformed lines — never fatal; empty/malformed-only files yield an empty view', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-malformed-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-malformed-')
     try {
-      const file = join(harnessDir, AGENT_FLOW_FILE)
+      const file = join(workflowDir, AGENT_FLOW_FILE)
       await writeFile(file, [
         'not json at all {{{',
         dispatchLine(),
@@ -351,12 +363,12 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
         '',
       ].join('\n') + '\n')
 
-      const view = readAgentFlow(harnessDir)
+      const view = readAgentFlow(workflowDir)
       expect(view!.events).toHaveLength(2)
       expect(view!.events.map((e) => e.kind)).toEqual(['settle', 'dispatch']) // latest first
 
       await writeFile(file, 'garbage\nalso garbage\n')
-      const empty = readAgentFlow(harnessDir)
+      const empty = readAgentFlow(workflowDir)
       expect(empty).toEqual({ events: [], summary: [] })
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -364,24 +376,24 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 
   it('missing file → EMPTY view (the panel empty state); ONLY an unreadable ledger → null (qc1 F-001 fix-wave)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-missing-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-missing-')
     try {
       // Missing ledger = recording hasn't started (it begins at plan merge) —
       // the empty view, never an evidence-missing degrade.
-      expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] })
+      expect(readAgentFlow(workflowDir)).toEqual({ events: [], summary: [] })
       expect(readAgentFlow(join(root, 'does-not-exist'))).toEqual({ events: [], summary: [] })
       // Unreadable (a DIRECTORY at the ledger path — readFileSync throws
       // EISDIR while existsSync reports presence) → null: only genuine
       // unreadability degrades.
-      await mkdir(join(harnessDir, AGENT_FLOW_FILE))
-      expect(readAgentFlow(harnessDir)).toBeNull()
+      await mkdir(join(workflowDir, AGENT_FLOW_FILE))
+      expect(readAgentFlow(workflowDir)).toBeNull()
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
   it('summary: role × outcome counts over the same window, count desc', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-summary-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-summary-')
     try {
       const violation = { ok: false, severity: 'high', code: 'x', message: 'x' }
       recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
@@ -390,7 +402,7 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       recordDispatch({ harnessDir, prompt: MISSING_EXECUTE_AS, violations: [violation], hard: true })
       recordSettle({ harnessDir, outcome: 'ok' })
 
-      const view = readAgentFlow(harnessDir)
+      const view = readAgentFlow(workflowDir)
       expect(view!.summary).toEqual([
         { role: 'fullstack-dev', outcome: 'ok', count: 2 },
         { role: '', outcome: 'denied', count: 1 },
@@ -403,18 +415,71 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
   })
 
   it('recordDispatch / recordSettle never throw — a failing record logs and is contained (advisory)', async () => {
-    const { root } = await tempHarness('dsh-agentflow-nothrow-')
-    const blocked = join(root, 'blocked') // a regular FILE — appending under it must fail
-    await writeFile(blocked, 'i am a file, not a directory')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-nothrow-')
+    // Make the ledger append fail: a DIRECTORY at the workflow-dir ledger
+    // slot (EISDIR) while the active-workflow resolution succeeds — the
+    // failing-record containment path (the record itself never throws).
+    await mkdir(join(workflowDir, AGENT_FLOW_FILE), { recursive: true })
     const captured: string[] = []
     const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
     try {
-      expect(() => recordDispatch({ harnessDir: blocked, prompt: VALID_PLANNED, violations: [], hard: false })).not.toThrow()
-      expect(() => recordSettle({ harnessDir: blocked, outcome: 'ok' })).not.toThrow()
+      expect(() => recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })).not.toThrow()
+      expect(() => recordSettle({ harnessDir, outcome: 'ok' })).not.toThrow()
       expect(captured.length).toBe(2)
       expect(captured[0]).toContain('dispatch record failed')
     } finally {
       setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('no active lifecycle → the record is SKIPPED with a one-time warn — never a root v1 write (Task 2 writer contract)', async () => {
+    // A bare harness dir WITHOUT a v2 root (no status.json at all): the
+    // active-set resolver returns a clear error → the record is skipped.
+    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-noactive-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    const captured: string[] = []
+    const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
+    try {
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+      recordSettle({ harnessDir, outcome: 'ok' })
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+      // Nothing was written — no root ledger, no workflow dir.
+      expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
+      expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] })
+      // Exactly ONE warn for the whole binding (the skip is not re-logged
+      // per record — same once-per-apply discipline as the settle trace).
+      expect(captured).toHaveLength(1)
+      expect(captured[0]).toContain('agent-flow record skipped')
+      expect(captured[0]).toContain('root v2 document is required')
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a PAUSED lifecycle stays in the active set — the writer appends to its workflow dir (active = workflows[] membership, running|paused)', async () => {
+    // Explicit decision (plan `20260819-workflow-dsh-viz` Task 2): the
+    // active set is defined by root `workflows[]` MEMBERSHIP — the engine
+    // lifecycle enum's non-terminal states are `running` AND `paused`
+    // (terminal lifecycles are removed at terminal). A paused lifecycle is
+    // still the operator's current lifecycle — its ledger keeps recording.
+    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-paused-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-paused')]),
+      'workflows/wf-paused/snapshot.json': v2Snapshot('wf-paused', { status: 'paused' }),
+    })
+    try {
+      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
+      recordSettle({ harnessDir, outcome: 'ok' })
+      const view = readAgentFlow(join(harnessDir, 'workflows/wf-paused'))
+      expect(view!.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
+      // The root ledger is never written.
+      expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
+    } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -504,7 +569,7 @@ Do the thing.
 
 describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
   it('a valid Assignment lands one dispatch event (verdict ok, plan/task derived)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
 
@@ -523,7 +588,7 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
   })
 
   it('a warn-mode advisory (missing branch form) lands a verdict-advisory event', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_BRANCH), defaultAllow)
 
@@ -533,7 +598,7 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
   })
 
   it('a hard deny lands a verdict-denied event (spec: hard deny samples record too)', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
+    const app = booted = await bootApp({ enforcement: 'hard', seedV2: true })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
 
@@ -544,7 +609,7 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
   })
 
   it('the host-hook path (beforeDispatch, exec-less) records too — agent omitted', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
 
     const result = await app.ctx.dshHostAdapter.beforeDispatch(VALID_PLANNED)
 
@@ -555,7 +620,7 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
   })
 
   it('non-Assignment prompts and non-subagent tools record nothing', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
+    const app = booted = await bootApp({ enforcement: 'hard', seedV2: true })
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(GARBAGE_PROMPT), defaultAllow)
     await app.ctx.waterfall(
@@ -566,11 +631,11 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
 
     // No ledger file was ever created — the missing file now reads as the
     // EMPTY view (qc1 F-001), still proving "nothing recorded".
-    expect(readAgentFlow(app.harnessDir)).toEqual({ events: [], summary: [] })
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))).toEqual({ events: [], summary: [] })
   })
 
   it('the host-hook path stays silent for non-Assignment text (qc2 F-2: shape guard at the shared core)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
 
     const result = await app.ctx.dshHostAdapter.beforeDispatch(GARBAGE_PROMPT)
 
@@ -578,7 +643,7 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
     // but no phantom dispatch event lands — same semantics as the listener
     // path (spec §2.1.1 "非 Assignment 不记录" now holds for BOTH surfaces).
     expect(result.ok).toBe(true)
-    expect(readAgentFlow(app.harnessDir)).toEqual({ events: [], summary: [] })
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))).toEqual({ events: [], summary: [] })
   })
 
   it('no harness dir → no record, gate unchanged (degrade is silent)', async () => {
@@ -640,7 +705,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('recordDispatch with an exec registers the agent-namespaced call key → dispatchRef (qc1 F-101 fix-wave)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-pairing-register-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-pairing-register-')
     try {
       const pairing = pairingOf()
       pairedDispatch(harnessDir, pairing, 'c-1', VALID_PLANNED, 'sess-1')
@@ -649,6 +714,9 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       const ref = pairing.dispatchByCallId.get('sess-1\u0000c-1')
       expect(ref).toMatchObject({
         harnessDir,
+        // The ref carries the ACTIVE workflow dir the dispatch landed in —
+        // the later settle appends to the SAME file (Task 2 writer contract).
+        workflowDir,
         agent: 'sess-1',
         role: 'fullstack-dev',
         planId: '20260810-agent-flow',
@@ -664,7 +732,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('a foreground dispatch result settles immediately with the PAIRED identity (schema + view + JSONL)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-foreground-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-foreground-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -678,7 +746,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
         { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } },
       )
 
-      const view = readAgentFlow(harnessDir)!
+      const view = readAgentFlow(workflowDir)!
       expect(view.events).toHaveLength(2) // dispatch + settle
       expect(view.events[0]).toMatchObject({
         kind: 'settle',
@@ -691,7 +759,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       // The view carries the paired-identity presence marker.
       expect(view.events[0].paired).toBe(true)
       // The serialized JSONL line carries the identity fields (no undefined keys).
-      const line = readFileSync(join(harnessDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n').at(-1)!
+      const line = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').trim().split('\n').at(-1)!
       const parsed = JSON.parse(line) as Record<string, unknown>
       expect(parsed).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev', planId: '20260810-agent-flow', taskId: 'T2' })
       expect(Object.values(parsed).every((v) => v !== undefined)).toBe(true)
@@ -699,7 +767,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       pairing.dispatchByCallId.clear()
       pairedDispatch(harnessDir, pairing, 'c-fg2', VALID_PLANNED, 'sess-2')
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-fg2', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: 'plain result' })
-      const after = readAgentFlow(harnessDir)!
+      const after = readAgentFlow(workflowDir)!
       expect(after.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-2', role: 'fullstack-dev' })
     } finally {
       setAgentFlowLogger(priorSink)
@@ -709,7 +777,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('a FAILED dispatch result settles error with the paired identity', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-error-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-error-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -721,7 +789,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
         { callId: 'c-err', name: 'subagent', agent: { id: 'sess-1' } },
         { isError: true, error: { message: 'boom' } },
       )
-      const view = readAgentFlow(harnessDir)!
+      const view = readAgentFlow(workflowDir)!
       expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error', agent: 'sess-1', role: 'fullstack-dev' })
     } finally {
       setAgentFlowLogger(priorSink)
@@ -731,7 +799,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('two agents sharing the same callId never cross-pair — each settle lands on its own dispatch (qc1 F-101 fix-wave)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-pairing-namespace-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-pairing-namespace-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -745,14 +813,14 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
 
       // Session A's completion pairs to A's dispatch only.
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-shared', name: 'subagent', agent: { id: 'sess-A' } }, { isError: false, value: { kind: 'foreground', runId: 'rA', output: [] } })
-      let view = readAgentFlow(harnessDir)!
+      let view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch', 'dispatch'])
       expect(view.events[0]).toMatchObject({ kind: 'settle', agent: 'sess-A', role: 'fullstack-dev', planId: '20260810-agent-flow', taskId: 'T2' })
 
       // Session B's completion pairs to B's dispatch — the settle identities
       // never crossed (no mis-pair into the other session's dispatchRef).
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-shared', name: 'subagent', agent: { id: 'sess-B' } }, { isError: false, value: { kind: 'foreground', runId: 'rB', output: [] } })
-      view = readAgentFlow(harnessDir)!
+      view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['settle', 'settle', 'dispatch', 'dispatch'])
       expect(view.events[0]).toMatchObject({ kind: 'settle', agent: 'sess-B', role: 'fullstack-dev' })
       expect(view.events[1]).toMatchObject({ kind: 'settle', agent: 'sess-A', role: 'fullstack-dev' })
@@ -766,7 +834,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('a result carrying `error` WITHOUT `isError: true` settles error — never a fabricated ok (qc2 F-001 / qc3 F-003a fix-wave)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-error-key-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-error-key-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -775,13 +843,13 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       pairedDispatch(harnessDir, pairing, 'c-err2', VALID_PLANNED, 'sess-1')
       // Failed envelope WITHOUT the canonical `isError` flag: `error` present.
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-err2', name: 'subagent', agent: { id: 'sess-1' } }, { error: { message: 'boom without the flag' } })
-      let view = readAgentFlow(harnessDir)!
+      let view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
       expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error', agent: 'sess-1', role: 'fullstack-dev' })
       // `error` + `value` (both present, no isError) is still a failure.
       pairedDispatch(harnessDir, pairing, 'c-err3', VALID_PLANNED, 'sess-1')
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-err3', name: 'subagent', agent: { id: 'sess-1' } }, { error: { message: 'x' }, value: 'partial' })
-      view = readAgentFlow(harnessDir)!
+      view = readAgentFlow(workflowDir)!
       expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'error' })
     } finally {
       setAgentFlowLogger(priorSink)
@@ -791,7 +859,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('a background result WITHOUT a valid taskId records nothing — never a fabricated ok (qc3 F-003b fix-wave)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-background-notask-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-background-notask-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -800,13 +868,13 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       pairedDispatch(harnessDir, pairing, 'c-bg0', VALID_PLANNED)
       // `kind: 'background'` with a MISSING taskId → nothing mappable.
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-bg0', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'background' } })
-      let view = readAgentFlow(harnessDir)!
+      let view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch']) // no settle
       expect(pairing.dispatchByTaskId.size).toBe(0)
       // `kind: 'background'` with an EMPTY taskId → nothing mappable too.
       pairedDispatch(harnessDir, pairing, 'c-bg0b', VALID_PLANNED, 'sess-2')
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-bg0b', name: 'subagent', agent: { id: 'sess-2' } }, { isError: false, value: { kind: 'background', taskId: '' } })
-      view = readAgentFlow(harnessDir)!
+      view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch', 'dispatch']) // still no settle
       expect(pairing.dispatchByTaskId.size).toBe(0)
     } finally {
@@ -817,7 +885,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('the dispatchByCallId entry is pruned once the post-execute branch resolves the call (qc1 F-102 / qc2 F-002 / qc3 F-002 fix-wave)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-prune-callid-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-prune-callid-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -832,7 +900,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       // A SECOND post-execute for the same call is not a real event — it
       // finds no pairing (honest no-settle; the warn fires at most once).
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-prune', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } })
-      const view = readAgentFlow(harnessDir)!
+      const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
     } finally {
       setAgentFlowLogger(priorSink)
@@ -842,7 +910,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('a background result stores taskId → dispatchRef and records NO settle until the onJobDone terminal', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-background-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-background-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -858,12 +926,12 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       // The pairing store now maps the registry task id → the dispatch.
       expect(pairing.dispatchByTaskId.get('subagent-7')).toMatchObject({ role: 'fullstack-dev', planId: '20260810-agent-flow' })
       // No settle yet — the ledger stays dispatch-only (honest).
-      let view = readAgentFlow(harnessDir)!
+      let view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
 
       // The terminal arrives → recordTaskSettle pairs and settles.
       recordTaskSettle({ id: 'subagent-7', status: 'completed', startedAt: 1_000, finishedAt: 4_000 }, pairing)
-      view = readAgentFlow(harnessDir)!
+      view = readAgentFlow(workflowDir)!
       expect(view.events).toHaveLength(2)
       expect(view.events[0]).toMatchObject({
         kind: 'settle',
@@ -885,7 +953,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('a continuable result records nothing (no terminal signal this round — documented limit)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-continuable-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-continuable-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -897,7 +965,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
         { callId: 'c-cont', name: 'subagent', agent: { id: 'sess-1' } },
         { isError: false, value: { kind: 'continuable', subagentId: 'child-1' } },
       )
-      const view = readAgentFlow(harnessDir)!
+      const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch']) // dispatch only
       expect(pairing.dispatchByTaskId.size).toBe(0)
     } finally {
@@ -908,7 +976,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('non-dispatch tool calls record nothing (even with a paired callId)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-nondispatch-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-nondispatch-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -917,7 +985,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       // A callId that IS paired, but the tool name is not a dispatch tool.
       pairedDispatch(harnessDir, pairing, 'c-read', VALID_PLANNED)
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-read', name: 'read_file', agent: { id: 'sess-1' } }, { isError: false, value: 'file content' })
-      const view = readAgentFlow(harnessDir)!
+      const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
     } finally {
       setAgentFlowLogger(priorSink)
@@ -927,7 +995,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
   })
 
   it('an UNPAIRED dispatch-tool post-execute records nothing and warns once (honest degrade)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-settle-unpaired-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-unpaired-')
     const ctx = new Context()
     const captured: string[] = []
     const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
@@ -936,7 +1004,7 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-nope', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: 'x' })
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-nope-2', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: 'y' })
 
-      expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] }) // no record
+      expect(readAgentFlow(workflowDir)).toEqual({ events: [], summary: [] }) // no record
       expect(captured).toHaveLength(2) // registration note + ONE unpaired warning
       expect(captured[1]).toContain('had no paired call key')
     } finally {
@@ -969,20 +1037,20 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
 
 describe('agent-flow settle — recordTaskSettle terminal mapping (onJobDone)', () => {
   /** Seed one taskId → dispatchRef pairing directly. */
-  function seededPairing(harnessDir: string, taskId: string, role = 'fullstack-dev'): AgentFlowPairing {
+  function seededPairing(harnessDir: string, workflowDir: string, taskId: string, role = 'fullstack-dev'): AgentFlowPairing {
     const pairing = pairingOf()
-    pairing.dispatchByTaskId.set(taskId, { harnessDir, agent: 'sess-1', role, planId: 'plan-x', taskId: 'T2' })
+    pairing.dispatchByTaskId.set(taskId, { harnessDir, workflowDir, agent: 'sess-1', role, planId: 'plan-x', taskId: 'T2' })
     return pairing
   }
 
   it('completed → ok, killed → denied, failed → error; durationMs = finishedAt − startedAt when available', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-taskdone-map-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-taskdone-map-')
     try {
-      recordTaskSettle({ id: 'subagent-1', status: 'completed', startedAt: 100, finishedAt: 700 }, seededPairing(harnessDir, 'subagent-1'))
-      recordTaskSettle({ id: 'subagent-2', status: 'killed' }, seededPairing(harnessDir, 'subagent-2'))
-      recordTaskSettle({ id: 'subagent-3', status: 'failed', startedAt: 10, finishedAt: 20 }, seededPairing(harnessDir, 'subagent-3'))
+      recordTaskSettle({ id: 'subagent-1', status: 'completed', startedAt: 100, finishedAt: 700 }, seededPairing(harnessDir, workflowDir, 'subagent-1'))
+      recordTaskSettle({ id: 'subagent-2', status: 'killed' }, seededPairing(harnessDir, workflowDir, 'subagent-2'))
+      recordTaskSettle({ id: 'subagent-3', status: 'failed', startedAt: 10, finishedAt: 20 }, seededPairing(harnessDir, workflowDir, 'subagent-3'))
 
-      const view = readAgentFlow(harnessDir)!
+      const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.outcome)).toEqual(['error', 'denied', 'ok']) // latest first
       expect(view.events[2]).toMatchObject({ outcome: 'ok', durationMs: 600 })
       expect(view.events[1]).toMatchObject({ outcome: 'denied' })
@@ -997,10 +1065,10 @@ describe('agent-flow settle — recordTaskSettle terminal mapping (onJobDone)', 
   })
 
   it('an UNPAIRED task id records nothing (honest — no fabricated settlement)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-agentflow-taskdone-unpaired-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-taskdone-unpaired-')
     try {
       recordTaskSettle({ id: 'subagent-99', status: 'completed' }, pairingOf())
-      expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] })
+      expect(readAgentFlow(workflowDir)).toEqual({ events: [], summary: [] })
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -1027,7 +1095,7 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
     }
   })
 
-  it('a dispatch through the real composition invalidates the catalog cache — a workflow-dir ledger change is visible at the next pre-step within the REAL TTL (apply-bound wiring, Task 2)', async () => {
+  it('a dispatch through the real composition invalidates the catalog cache — the workflow-dir ledger change is visible at the next pre-step within the REAL TTL (apply-bound wiring, Task 2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-invalidator-wiring-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -1045,14 +1113,9 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })
 
-    // The record lands in the ROOT ledger (the writer cutover is Task 2);
-    // the catalog reads the SELECTED workflow dir, so the invalidation
-    // observable is a workflow-dir line written after the record.
-    await writeFile(
-      join(harnessDir, 'workflows/wf-1', AGENT_FLOW_FILE),
-      `${dispatchLine()}\n`,
-    )
-
+    // Final-state (Task 2 writer cutover): the dispatch record itself lands
+    // in the ACTIVE workflow dir — the catalog reads the SAME file, so the
+    // invalidation observable is the record's own line (no out-of-band write).
     const step = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     const { source } = catalogRowOf(step)
     expect(source.state!.agentFlow!.events).toHaveLength(1)
@@ -1108,7 +1171,7 @@ describe('upstream seam probe — real dsh-tools registry emits tools/post-execu
 
 describe('upstream seam probe — ctx.inject([\'jobs\']) onJobDone wiring (T1 Step 1)', () => {
   it('registers against a provided jobs service and receives a terminal snapshot — full chain dispatch → background → terminal → settle', async () => {
-    const app = booted = await bootApp({ jobsService: 'fake' })
+    const app = booted = await bootApp({ jobsService: 'fake', seedV2: true })
     // A dispatch tool returning the VERIFIED background shape (canonical
     // `{ kind: 'background', taskId }` — the upstream dsh-tool-subagent
     // output schema) so the post-execute branch stores taskId → dispatchRef.
@@ -1144,7 +1207,7 @@ describe('upstream seam probe — ctx.inject([\'jobs\']) onJobDone wiring (T1 St
     expect(result.isError).toBe(false)
 
     // Dispatch recorded; background → NO settle yet (the terminal is pending).
-    let view = readAgentFlow(app.harnessDir)!
+    let view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))!
     expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
 
     // Fire the terminal through the onJobDone listener the plugin's
@@ -1160,7 +1223,7 @@ describe('upstream seam probe — ctx.inject([\'jobs\']) onJobDone wiring (T1 St
       reported: true,
     })
 
-    view = readAgentFlow(app.harnessDir)!
+    view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))!
     expect(view.events).toHaveLength(2)
     expect(view.events[0]).toMatchObject({
       kind: 'settle',
@@ -1177,10 +1240,10 @@ describe('upstream seam probe — ctx.inject([\'jobs\']) onJobDone wiring (T1 St
     // bootApp WITHOUT jobsService: the deferred `ctx.inject(['jobs'])` child
     // fiber simply never activates — the plugin apply and the dispatch gate
     // work normally (no top-level `'jobs'` inject blocking boot).
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })
-    const view = readAgentFlow(app.harnessDir)!
+    const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))!
     expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
   })
 })
@@ -1345,11 +1408,9 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     catalogRowOf(first)
     // Dispatch one event through the real composition (the record path fires
-    // the apply-bound invalidator; the record itself lands in the ROOT
-    // ledger — the writer cutover is Task 2). The catalog reads the SELECTED
-    // workflow dir, so the ledger line is written there.
+    // the apply-bound invalidator AND lands the event in the ACTIVE workflow
+    // dir — the catalog reads the SAME file, final-state Task 2 writer).
     await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
-    await writeFile(join(harnessDir, 'workflows/wf-1', AGENT_FLOW_FILE), `${dispatchLine()}\n`)
     // Second pre-step: TTL 0 forces a rebuild → the event is visible.
     const second = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     const { row, source } = catalogRowOf(second)

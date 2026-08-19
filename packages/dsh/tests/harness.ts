@@ -330,6 +330,15 @@ export interface BootOptions {
   workflowGate?: 'off' | 'warn' | 'ask' | 'hard'
   /** Workflow name allowlist (Config `workflowNames`; empty/absent ⇒ every name unknown). */
   workflowNames?: string[]
+  /**
+   * Seed a minimal v2 tree (root status.json + one active workflow snapshot)
+   * under the boot harness dir BEFORE the plugin applies — the v3
+   * write-path precondition for the agent-flow writer / workflow-ledger
+   * consumer (plan `20260819-workflow-dsh-viz` Task 2). Opt-in: tests that
+   * assert the bare-harness degrade (no status.json → state null) must NOT
+   * set it.
+   */
+  seedV2?: boolean
   /** App root override (default: a fresh temp dir). */
   root?: string
   /**
@@ -427,6 +436,21 @@ export function v2Snapshot(id: string, overrides: Record<string, unknown> = {}):
   })
 }
 
+/**
+ * Seed a minimal v2 tree under the harness dir: a v2 root status.json with
+ * ONE active workflow entry + that workflow's snapshot. The agent-flow
+ * writer / ledger resolve the ACTIVE workflow from this tree and append to
+ * `workflows/<id>/` — the v3 write-path precondition.
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param workflowId - the active workflow id (default `wf-1`).
+ */
+export async function seedV2Tree(harnessDir: string, workflowId = 'wf-1'): Promise<void> {
+  await seedHarness(harnessDir, {
+    'status.json': v2Root([v2WorkflowEntry(workflowId)]),
+    [`workflows/${workflowId}/snapshot.json`]: v2Snapshot(workflowId),
+  })
+}
+
 /** Well-formed JSON that fails the status schema (plans must be an array). */
 export const INVALID_STATUS = {
   version: 1,
@@ -462,6 +486,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
   const harnessDir = join(root, 'harness')
   await mkdir(harnessDir, { recursive: true })
+  // v3 write-path precondition (plan `20260819-workflow-dsh-viz` Task 2):
+  // the agent-flow writer / workflow-ledger consumer append only to an
+  // ACTIVE workflow — tests that exercise the ledger opt in to the seeded
+  // v2 tree (root status.json + one active workflow snapshot).
+  if (options.seedV2 === true) await seedV2Tree(harnessDir)
 
   // The dsh skill registry row mounts first (real dsh app layout): the
   // `@mstar-harness/dsh` plugin mounts skill-filesystem as a child, which injects

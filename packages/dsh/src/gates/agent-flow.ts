@@ -21,20 +21,24 @@
  * contained and logs only (`mstar/agent-flow`) — a failing ledger never
  * blocks a dispatch (documented degrade).
  *
- * File / bounds (spec §2.1.3): `{HARNESS_DIR}/agent-flow.jsonl` (JSON Lines;
- * harness dirs are gitignored by convention). One event per line. SINGLE
- * WRITER ASSUMPTION (qc2 F-1 / qc3 F-001 — documented, advisory): each
- * harness dir is written by ONE dsh process (a single plugin instance /
- * app). Concurrent writers (e.g. two dsh sessions on the same repo) can lose
- * events: `appendFileSync` is a near-atomic O_APPEND write, but the
- * size-gated truncation below is a read-modify-write. The loss is bounded to
- * the panel under-reporting actual flow — NEVER a gate impact (recording is
- * advisory). After every append the file is truncated to the most recent
- * `AGENT_FLOW_MAX_EVENTS` (500) lines; to keep the common small-file path
- * append-only, truncation is gated by a SIZE threshold (≈500 lines' typical
- * size, `AGENT_FLOW_SIZE_GATE_BYTES`) and the truncating overwrite is an
- * ATOMIC temp-file + `renameSync` replace (narrows the read-modify-write
- * window to the single append step).
+ * File / bounds (spec §2.1.3): the ledger lives in the ACTIVE workflow dir
+ * — `{HARNESS_DIR}/workflows/<id>/agent-flow.jsonl` (JSON Lines; harness
+ * dirs are gitignored by convention) — never the harness root and never a
+ * terminal snapshot dir (compass v3.0.0 § Catalog selection rule: the
+ * writer appends only to an active lifecycle; no active entry → the record
+ * is skipped with a one-time warn, never a silent root v1 write). One event
+ * per line. SINGLE WRITER ASSUMPTION (qc2 F-1 / qc3 F-001 — documented,
+ * advisory): each workflow dir is written by ONE dsh process (a single
+ * plugin instance / app). Concurrent writers (e.g. two dsh sessions on the
+ * same repo) can lose events: `appendFileSync` is a near-atomic O_APPEND
+ * write, but the size-gated truncation below is a read-modify-write. The
+ * loss is bounded to the panel under-reporting actual flow — NEVER a gate
+ * impact (recording is advisory). After every append the file is truncated
+ * to the most recent `AGENT_FLOW_MAX_EVENTS` (500) lines; to keep the
+ * common small-file path append-only, truncation is gated by a SIZE
+ * threshold (≈500 lines' typical size, `AGENT_FLOW_SIZE_GATE_BYTES`) and
+ * the truncating overwrite is an ATOMIC temp-file + `renameSync` replace
+ * (narrows the read-modify-write window to the single append step).
  * `readAgentFlow` returns the latest-first view (default limit 50) with a
  * role × outcome summary. Semantics (fix-wave qc1 F-001): a MISSING ledger
  * file → empty view `{ events: [], summary: [] }` (recording hasn't started
@@ -92,6 +96,12 @@ import type { AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../
 import { asRecord } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS } from './dispatch.ts'
+// The SHARED ACTIVE-SET resolver (plan `20260819-workflow-dsh-viz` Task 1):
+// the agent-flow WRITER targets the ACTIVE workflow dir only — the
+// terminal-mtime fallback (`resolveReadWorkflow`) is catalog-read-only and
+// MUST NOT enter the writer's module graph (compass v3.0.0 § Catalog
+// selection rule — write path = active `workflows[]` only).
+import { resolveActiveWorkflow } from './workflow-selection.ts'
 // The SHARED ASCII-control-char strip (qc2 W-2 fix-wave): the ralph
 // `objective` — model-controlled display text, like the workflow name —
 // is routed through the same normalization at the verdict-row WRITE
@@ -332,8 +342,15 @@ export type AgentFlowEvent =
  * settle carrying the SAME identity fields as its dispatch event.
  */
 export interface AgentFlowDispatchRef {
-  /** The resolved `{HARNESS_DIR}` the dispatch recorded into (settles record into the same ledger). */
+  /** The resolved `{HARNESS_DIR}` the dispatch was attributed to. */
   harnessDir: string
+  /**
+   * The ACTIVE workflow dir the dispatch event was appended to
+   * (`<harnessDir>/workflows/<id>` — v3 layout). The settle records into
+   * the SAME file (settle pairing reads/writes the same ledger), even if
+   * the active set changed between dispatch and settle.
+   */
+  workflowDir: string
   /** The dispatching session's stable id ('' when the exec carried none). */
   agent?: string
   /** Assignment `Execute as` ('' when missing — the dispatch event's grammar). */
@@ -379,6 +396,12 @@ let logSink: AgentFlowLogSink | undefined
  */
 let settleNoteLogged = false
 /**
+ * Whether the no-active-lifecycle trace has been logged for the CURRENT
+ * sink binding (the writer skips with ONE warn per apply, not per record —
+ * same once-per-binding discipline as `settleNoteLogged`).
+ */
+let noActiveWarned = false
+/**
  * Module-scoped catalog-invalidation hook (plan `20260811-panel-f4-timeliness`
  * Task 1 — the `invalidateCatalog` 挂钩 that Task 2 consumes): called with
  * the affected `{HARNESS_DIR}` after every SUCCESSFUL ledger record
@@ -418,6 +441,7 @@ export function setAgentFlowLogger(sink: AgentFlowLogSink | undefined): AgentFlo
   const prior = logSink
   logSink = sink
   settleNoteLogged = false
+  noActiveWarned = false
   return prior
 }
 
@@ -491,7 +515,41 @@ function callPairingKey(exec: unknown): string | undefined {
 }
 
 /**
- * Append one event to `{HARNESS_DIR}/agent-flow.jsonl` and keep the file
+ * Resolve the agent-flow WRITE target dir for one harness dir: the ACTIVE
+ * workflow's dir (root v2 `workflows[]` first entry — the shared active-set
+ * resolver; the terminal-mtime fallback is catalog-read-only and MUST NOT
+ * enter the writer's module graph). The active set is defined by root
+ * `workflows[]` MEMBERSHIP — non-terminal lifecycles (`running` AND
+ * `paused`; terminal lifecycles are removed at terminal) — so a paused
+ * lifecycle stays a valid append target (explicit decision, plan
+ * `20260819-workflow-dsh-viz` Task 2).
+ *
+ * No active entry → `null`: the record is SKIPPED with a one-time warn
+ * (per sink binding) — never a silent write into the root v1 file, never a
+ * write into a terminal snapshot dir (compass v3.0.0 § Catalog selection
+ * rule — the writer appends only to an active lifecycle).
+ * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @returns the absolute workflow dir (`<harnessDir>/workflows/<id>`), or
+ *   `null` when no active lifecycle resolves.
+ */
+export function resolveAgentFlowWriteDir(harnessDir: string): string | null {
+  const selection = resolveActiveWorkflow(harnessDir)
+  if (selection.kind === 'active') return join(harnessDir, selection.dir)
+  // `resolveActiveWorkflow` never returns `terminal` (the active-set resolver
+  // has no history view — the shared `WorkflowSelectionView` union includes
+  // it for the read resolver); both non-active branches are a clear skip.
+  const message = selection.kind === 'error'
+    ? selection.message
+    : 'no active lifecycle (unexpected terminal selection — the active-set resolver has no history view)'
+  if (!noActiveWarned) {
+    noActiveWarned = true
+    log('warn', `agent-flow record skipped — ${message}`)
+  }
+  return null
+}
+
+/**
+ * Append one event to `<workflowDir>/agent-flow.jsonl` and keep the file
  * bounded (spec §2.1.3 — fix-wave qc2 F-1 / qc3 F-001/003). Common path is
  * append-ONLY: after the single `appendFileSync` (a near-atomic O_APPEND
  * write), the file is `stat`-gated — below `AGENT_FLOW_SIZE_GATE_BYTES`
@@ -503,11 +561,12 @@ function callPairingKey(exec: unknown): string | undefined {
  * torn file and the cross-process loss window is narrowed to the single
  * append step (see the module doc single-writer note). May throw (fs) —
  * callers contain.
- * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ * @param workflowDir - the ACTIVE workflow dir (`<harnessDir>/workflows/<id>`)
+ *   — the ledger lives there, never in the harness root (v3 layout).
  * @param event - the v1 event to record.
  */
-function appendEvent(harnessDir: string, event: AgentFlowEvent): void {
-  const file = join(harnessDir, AGENT_FLOW_FILE)
+function appendEvent(workflowDir: string, event: AgentFlowEvent): void {
+  const file = join(workflowDir, AGENT_FLOW_FILE)
   appendFileSync(file, `${JSON.stringify(event)}\n`)
   if (statSync(file).size <= AGENT_FLOW_SIZE_GATE_BYTES) return
   // Truncate: keep only the most recent MAX lines (JSON Lines; a trailing
@@ -553,6 +612,12 @@ export function recordDispatch(input: {
   pairing?: AgentFlowPairing
 }): void {
   try {
+    // v3 write path: the ACTIVE workflow dir only (root v2 `workflows[]`
+    // first entry). No active lifecycle → the record is SKIPPED with a
+    // one-time warn — never a root v1 write, never a terminal snapshot
+    // write (compass v3.0.0 § Catalog selection rule).
+    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir)
+    if (workflowDir === null) return
     const header = assignmentHeaderRegion(input.prompt)
     const fields = parseAssignmentFields(header)
     const planId = planIdOf(header)
@@ -571,7 +636,7 @@ export function recordDispatch(input: {
       verdict: verdictOf(input.violations, input.hard),
       hard: input.hard,
     }
-    appendEvent(input.harnessDir, event)
+    appendEvent(workflowDir, event)
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -581,13 +646,17 @@ export function recordDispatch(input: {
     // Registered whenever the call id is present (the dispatchRef may carry no
     // agent for agent-less calls — the settle then records what it knows and
     // the client pairing honestly stays unpaired without an agent). Keyed by
-    // the agent-namespaced call key (qc1 F-101 fix-wave).
+    // the agent-namespaced call key (qc1 F-101 fix-wave). The dispatchRef
+    // carries the WORKFLOW DIR the event landed in, so the later settle
+    // appends to the SAME file even if the active set changed in between
+    // (settle pairing reads/writes the same ledger — plan Task 2).
     try {
       if (input.pairing !== undefined && input.exec !== undefined) {
         const key = callPairingKey(input.exec)
         if (key !== undefined) {
           input.pairing.dispatchByCallId.set(key, {
             harnessDir: input.harnessDir,
+            workflowDir,
             ...(agent !== undefined ? { agent } : {}),
             role: fields.executeAs ?? '',
             ...(planId !== undefined && !isNaValue(planId) ? { planId } : {}),
@@ -609,14 +678,21 @@ export function recordDispatch(input: {
 /**
  * Record one settle event (spec §2.1.3). Fully try/catch-contained; a failing
  * record logs only. Callers resolve the harness dir from the PAIRED dispatch
- * (the pairing store's dispatchRef — never a payload probe).
- * @param input - harness dir + agent id + outcome + optional duration + the
- * PAIRED dispatch's identity (`role`/`planId`/`taskId` — same field names +
- * semantics as the dispatch event; written for every paired settle, so the
- * client can exactly pair the settle back to its dispatch).
+ * (the pairing store's dispatchRef — never a payload probe). The settle
+ * appends to the ACTIVE workflow dir (v3 layout); a PAIRED settle carries
+ * the dispatchRef's `workflowDir` so it lands in the SAME file as its
+ * dispatch even if the active set changed in between. An unpaired direct
+ * call resolves the active workflow from `harnessDir`; no active lifecycle
+ * → skipped with a one-time warn (never a root v1 write).
+ * @param input - harness dir + optional paired workflow dir + agent id +
+ * outcome + optional duration + the PAIRED dispatch's identity
+ * (`role`/`planId`/`taskId` — same field names + semantics as the dispatch
+ * event; written for every paired settle, so the client can exactly pair
+ * the settle back to its dispatch).
  */
 export function recordSettle(input: {
   harnessDir: string
+  workflowDir?: string
   agent?: string
   outcome: SettleOutcome
   durationMs?: number
@@ -625,6 +701,8 @@ export function recordSettle(input: {
   taskId?: string
 }): void {
   try {
+    const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir)
+    if (workflowDir === null) return
     const event: AgentFlowEvent = {
       v: 1,
       ts: Date.now(),
@@ -636,7 +714,7 @@ export function recordSettle(input: {
       ...(input.planId !== undefined && input.planId !== '' ? { planId: input.planId } : {}),
       ...(input.taskId !== undefined && input.taskId !== '' ? { taskId: input.taskId } : {}),
     }
-    appendEvent(input.harnessDir, event)
+    appendEvent(workflowDir, event)
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -658,15 +736,30 @@ export function recordSettle(input: {
  * from the durable `tool-workflow/*` session event (`ts` takes the envelope's
  * `time`). Malformed input is a caller bug — the strict narrowing applies on
  * READ (`eventFromUnknown`), never here.
- * @param input - harness dir + the fully-shaped v1 workflow event.
+ *
+ * v3 write path: the event appends to the ACTIVE workflow dir (root v2
+ * `workflows[]` first entry). The consumer passes the already-resolved
+ * `workflowDir` (it needs it for the durable watermark anyway — one
+ * resolution per row); a direct caller without it resolves from
+ * `harnessDir`. No active lifecycle → `false` (skipped with a one-time warn
+ * — never a root v1 write, never a terminal snapshot write).
+ * @param input - harness dir + optional pre-resolved active workflow dir +
+ * the fully-shaped v1 workflow event.
  * @returns `true` when the row was appended (the caller may durably advance
- *   its watermark); `false` on a contained append failure — the caller must
- *   leave the cursor behind so the row is re-attempted at the next scan
- *   (qc3 R-401: advance-then-record made a failed append permanent loss).
+ *   its watermark); `false` on a contained append failure OR when no active
+ *   lifecycle resolves — the caller must leave the cursor behind so the row
+ *   is re-attempted at the next scan (qc3 R-401: advance-then-record made a
+ *   failed append permanent loss).
  */
-export function recordWorkflowEvent(input: { harnessDir: string; event: AgentFlowWorkflowEvent }): boolean {
+export function recordWorkflowEvent(input: {
+  harnessDir: string
+  workflowDir?: string
+  event: AgentFlowWorkflowEvent
+}): boolean {
   try {
-    appendEvent(input.harnessDir, input.event)
+    const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir)
+    if (workflowDir === null) return false
+    appendEvent(workflowDir, input.event)
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -725,6 +818,11 @@ export interface WorkflowVerdictInput {
  */
 export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
   try {
+    // v3 write path: the ACTIVE workflow dir only. No active lifecycle →
+    // skipped with a one-time warn (never a root v1 write, never a terminal
+    // snapshot write).
+    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir)
+    if (workflowDir === null) return
     const agent = input.exec !== undefined ? agentOfExec(input.exec) : undefined
     const event: AgentFlowEvent = {
       v: 1,
@@ -742,7 +840,7 @@ export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
       verdict: input.verdict,
       ...(input.code !== undefined && input.code !== '' ? { code: input.code } : {}),
     }
-    appendEvent(input.harnessDir, event)
+    appendEvent(workflowDir, event)
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -1037,12 +1135,17 @@ function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
  * state instead of an evidence-missing degrade; only an UNREADABLE file
  * returns null (advisory degrade — the catalog renders no agent-flow line).
  * Malformed lines are skipped, never fatal.
- * @param harnessDir - the resolved `{HARNESS_DIR}`.
+ *
+ * v3 layout: the ledger lives in the WORKFLOW dir (`<harnessDir>/workflows/
+ * <id>`), never the harness root — the dir parameter IS the workflow dir
+ * (the catalog passes `join(harnessDir, selection.dir)`; the writer appends
+ * there via `resolveAgentFlowWriteDir`).
+ * @param workflowDir - the workflow dir whose `agent-flow.jsonl` is read.
  * @param limit - explicit window bound: `undefined` → `AGENT_FLOW_DEFAULT_LIMIT`;
  * otherwise `Math.max(0, Math.floor(limit))` — `0` requests the EMPTY window.
  */
-export function readAgentFlow(harnessDir: string, limit?: number): AgentFlowView | null {
-  const file = join(harnessDir, AGENT_FLOW_FILE)
+export function readAgentFlow(workflowDir: string, limit?: number): AgentFlowView | null {
+  const file = join(workflowDir, AGENT_FLOW_FILE)
   if (!existsSync(file)) {
     // Missing ledger = no records yet — the empty view, never a degrade.
     return { events: [], summary: [] }
@@ -1087,6 +1190,10 @@ export function readAgentFlow(harnessDir: string, limit?: number): AgentFlowView
 function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, durationMs: number | undefined): void {
   recordSettle({
     harnessDir: ref.harnessDir,
+    // The settle lands in the SAME workflow dir as its dispatch (the ref
+    // carries the dir resolved at dispatch time — the active set may have
+    // changed in between; pairing must never split across files).
+    workflowDir: ref.workflowDir,
     ...(ref.agent !== undefined && ref.agent.trim() !== '' ? { agent: ref.agent } : {}),
     outcome,
     ...(durationMs !== undefined && Number.isFinite(durationMs) ? { durationMs } : {}),

@@ -31,6 +31,15 @@ export type ActiveWorkflowSelection = WorkflowSelectionView
  * is the ONLY resolver the agent-flow writer / ledger may use: no active
  * entry → a clear error, never a terminal snapshot and never the root v1
  * file.
+ *
+ * Active-set definition (explicit decision, plan `20260819-workflow-dsh-viz`
+ * Task 2): membership in `workflows[]` — the engine lifecycle enum's
+ * non-terminal states are `running` AND `paused` (terminal lifecycles are
+ * removed from the list at terminal). A PAUSED lifecycle therefore stays in
+ * the active set and the agent-flow writer / ledger append to its workflow
+ * dir (a paused lifecycle is still the operator's current lifecycle — its
+ * ledger must keep recording; only a TERMINAL lifecycle is never a write
+ * target).
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  */
 export function resolveActiveWorkflow(harnessDir: string): ActiveWorkflowSelection {
