@@ -233,6 +233,21 @@ Exit codes:
 - `0` — OK: no open-residual violations under the resolved mode
 - `1` — violations: prints one `findings.*` row per violating open residual on stderr
 
+### `mstar-harness migrate`
+
+Migrate a v1 `{HARNESS_DIR}` status.json tree to the v2 schema — a thin wrapper over the engine `migrateHarnessTree` / `applyMigratePlan` (P1 Task 6). One-shot hard cutover: v1 root is **archived** to `archived/status.v1.json` (never deleted without that copy), each lifecycle (iteration compass + standalone plan row) becomes `workflows/<id>/snapshot.json` (+ `notes.jsonl` ledgers), residuals become the `projects/<id>/residuals.json` register, `metadata.program_roadmap` seeds `projects/<id>/roadmap.md`, and the root `status.json` is replaced by the v2 root (the commit point, last step). Re-run on a v2 tree is an idempotent no-op.
+
+- `npx @mstar-harness/cli migrate`
+- `npx @mstar-harness/cli migrate --dry-run [--path <root>] [--json]`
+
+`--path` is the **harness root** (the dir containing `status.json`); it defaults to the resolved `{HARNESS_DIR}` (auto-discovery from the cwd, like every other command; falls back to the cwd for a bare harness-root directory without a `.mstar/` marker). `--dry-run` prints the ordered step plan (source → destination), runs the apply-time validators (`validateWorkflowSnapshot` / `validateProjectRegister`) **read-only** on the planned documents and surfaces any violations as `warning:` lines — an apply-time rejection is visible before any write — and writes nothing. `--json` emits the machine-readable shape on stdout.
+
+Exit codes:
+
+- `0` — OK, or idempotent no-op (`status.json` already at schema version 2)
+- `1` — plan-invalid: no/unrecognized v1 `status.json`, unliftable or duplicate `plans[]` rows, unsafe ids
+- `2` — apply-failure: the executor threw mid-apply; the v1 root stays intact for a re-run (fix the blocker and re-run — the deterministic plan converges)
+
 ### `mstar-harness lease verify-integration`
 
 Verify the workflow snapshot's top-level `integration_merge_lease` object when present — a thin mirror of the engine `validateIntegrationMergeLease` check cited in `mstar-plan-artifacts` / `mstar-iteration`. Distinct from `mstar-harness lease verify` (the plan-level `execution_lease` on a snapshot plan row): this is the serial integration-merge lease.
