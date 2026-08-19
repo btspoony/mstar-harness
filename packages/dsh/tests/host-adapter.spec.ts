@@ -38,7 +38,7 @@ import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { DshHostAdapter, HarnessResolver, type Config } from '../src/index.ts'
 import type { DispatchGateAdvisory, StatusGateAdvisory } from '../src/index.ts'
-import { bootApp, INVALID_STATUS, VALID_STATUS, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, INVALID_STATUS_V2, VALID_STATUS_V2, seedHarness, v2SnapshotWithPlans, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -242,7 +242,7 @@ describe('DshHostAdapter — host identity and log channel', () => {
 describe('beforeStatusWrite — status gate validation path (same codes as the fs-intent gate)', () => {
   it('bad doc → failing ValidationResult whose code matches the gate advisory for the same document', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     const adapter = makeAdapter()
     const statusPath = join(app.harnessDir, 'status.json')
 
@@ -252,15 +252,15 @@ describe('beforeStatusWrite — status gate validation path (same codes as the f
     await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
     const gateCodes = statusCodes(advisories[0])
 
-    const result = await adapter.beforeStatusWrite(statusPath, INVALID_STATUS)
+    const result = await adapter.beforeStatusWrite(statusPath, INVALID_STATUS_V2)
 
     expect(result.ok).toBe(false)
-    expect(result.code).toBe('status.invalid-plans')
+    expect(result.code).toBe('status.invalid-workflows')
     expect(gateCodes).toContain(result.code)
-    expect(gateCodes).toContain('status.invalid-plans')
+    expect(gateCodes).toContain('status.invalid-workflows')
     // The first violation's shape is preserved verbatim (severity + message).
     expect(result.severity).toBe('high')
-    expect(result.message).toContain('plans')
+    expect(result.message).toContain('workflows')
   })
 
   it('doc === undefined → on-disk fallback; malformed JSON yields the gate status.invalid-json code', async () => {
@@ -294,12 +294,12 @@ describe('beforeStatusWrite — status gate validation path (same codes as the f
 
   it('valid incoming doc passes even when the on-disk document is bad (doc-first semantics)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     const adapter = makeAdapter()
 
     // The host provides the write's content: the hook validates THAT doc
     // (the opencode consumer convention) — the write may BE the repair.
-    const result = await adapter.beforeStatusWrite(join(app.harnessDir, 'status.json'), VALID_STATUS)
+    const result = await adapter.beforeStatusWrite(join(app.harnessDir, 'status.json'), VALID_STATUS_V2)
     expect(result.ok).toBe(true)
     expect(result.code).toBe('host.beforeStatusWrite.ok')
   })
@@ -474,5 +474,83 @@ describe('beforeMerge — integration merge lease (thin engine validateIntegrati
     const result = await adapter.beforeMerge(null as never)
     expect(result.ok).toBe(false)
     expect(result.violations.map((v) => v.code)).toEqual(['lease.merge-lease.invalid'])
+  })
+})
+
+/* ---------------------------------- v3 kind dispatch (Task 3) ---------------------------------- */
+
+describe('beforeStatusWrite — v3 kind dispatch (snapshot / register targets)', () => {
+  it('a workflow snapshot target validates with the SNAPSHOT validator (invalid snapshot doc → workflow.snapshot.* code)', async () => {
+    const app = booted = await bootApp()
+    const adapter = makeAdapter()
+    const snapshotPath = join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json')
+
+    // A malformed snapshot doc (missing schema_version) is rejected by the
+    // snapshot validator — NOT the root status validator.
+    const result = await adapter.beforeStatusWrite(snapshotPath, { id: 'wf-1' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('workflow.snapshot.missing-schema-version')
+  })
+
+  it('a project register target validates with the register validator (invalid entries shape → project.register.* code)', async () => {
+    const app = booted = await bootApp()
+    const adapter = makeAdapter()
+    const registerPath = join(app.harnessDir, 'projects', '_default', 'residuals.json')
+
+    const result = await adapter.beforeStatusWrite(registerPath, { entries: 'not-an-object' })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('project.register.invalid-entries')
+  })
+
+  it('a non-coordination path passes (the hook is inert outside the harness coordination documents)', async () => {
+    const app = booted = await bootApp()
+    const adapter = makeAdapter()
+
+    const result = await adapter.beforeStatusWrite(join(app.harnessDir, 'notes.json'), { version: 1 })
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('host.beforeStatusWrite.ok')
+  })
+})
+
+describe('beforeMerge — snapshot integration_merge_lease read (v3 lease home)', () => {
+  /** A structurally valid integration merge lease (engine lease shape). */
+  const validMergeLease = (overrides: Record<string, unknown> = {}): IntegrationMergeLease => ({
+    holder: 'merge-agent',
+    claimed_at: '2026-08-19',
+    plan_id: 'plan-a',
+    source_branch: 'feature/a',
+    target_branch: 'dev-dsh',
+    ...overrides,
+  })
+
+  it('the snapshot-recorded lease MATCHES the passed lease → pass (no-steal satisfied)', async () => {
+    const app = booted = await bootApp({ seedV2: true })
+    await seedHarness(app.harnessDir, {
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [], { integration_merge_lease: validMergeLease() }),
+    })
+    const adapter = makeAdapter()
+
+    const result = await adapter.beforeMerge(validMergeLease())
+    expect(result.ok).toBe(true)
+  })
+
+  it('the snapshot-recorded lease DIFFERS from the passed lease → lease.merge.snapshot-mismatch (no-steal)', async () => {
+    const app = booted = await bootApp({ seedV2: true })
+    await seedHarness(app.harnessDir, {
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [], { integration_merge_lease: validMergeLease({ holder: 'other-agent' }) }),
+    })
+    const adapter = makeAdapter()
+
+    const result = await adapter.beforeMerge(validMergeLease())
+    expect(result.ok).toBe(false)
+    expect(result.violations.map((v) => v.code)).toContain('lease.merge.snapshot-mismatch')
+  })
+
+  it('no snapshot / no active workflow → the passed-lease shape gate stands alone (degrade edge, never a false positive)', async () => {
+    const app = booted = await bootApp()
+    const adapter = makeAdapter()
+
+    const result = await adapter.beforeMerge(validMergeLease())
+    expect(result.ok).toBe(true)
   })
 })

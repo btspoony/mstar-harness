@@ -43,7 +43,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
-import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -166,24 +166,26 @@ const stepPayload = (messages: UserMessage[]) => ({
 const lastMessage = (decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined =>
   decision.messages.at(-1)
 
-/** status.json with an InProgress plan carrying a valid execution_lease. */
-const LEASE_STATUS = JSON.stringify({
-  version: 1,
-  updated_at: '2026-08-08',
-  plans: [{
-    id: 'e2e-lease-plan',
-    title: 'E2E lease plan',
-    status: 'InProgress',
-    execution_lease: {
-      holder: 'e2e-agent',
-      claimed_at: '2026-08-08',
-      worktree_path: '/dsh-e2e/lease-worktree',
-      working_branch: 'feature/e2e-lease',
-    },
-  }],
-  residual_findings: {},
-  metadata: {},
-})
+/** The snapshot plan row with a valid execution_lease (v3 lease home). */
+const LEASE_PLAN = {
+  id: 'e2e-lease-plan',
+  title: 'E2E lease plan',
+  status: 'InProgress',
+  execution_lease: {
+    holder: 'e2e-agent',
+    claimed_at: '2026-08-08',
+    worktree_path: '/dsh-e2e/lease-worktree',
+    working_branch: 'feature/e2e-lease',
+  },
+}
+
+/** Seed the v2 lease tree: v2 root + active workflow snapshot carrying the leased plan row. */
+async function seedLeaseTree(harnessDir: string): Promise<void> {
+  await seedHarness(harnessDir, {
+    'status.json': v2RootWithWorkflow(),
+    'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [LEASE_PLAN]),
+  })
+}
 
 /* ===========================================================================
  * 1. Full dsh app boot — fixture cordis.yml composition
@@ -235,7 +237,7 @@ describe('status gate — invalid status.json write (hard refusal evidence)', ()
     expect(advisories[0]!.hard).toBe(true)
     expect(advisories[0]!.repair).toBe(true)
     expect(advisories[0]!.result.hardBlocked).toBe(true)
-    expect(violationCodes(advisories[0])).toContain('status.invalid-plans')
+    expect(violationCodes(advisories[0])).toContain('status.invalid-workflows')
   })
 
   it('host-hook refusal channel: beforeStatusWrite rejects the invalid fixture document', async () => {
@@ -245,7 +247,7 @@ describe('status gate — invalid status.json write (hard refusal evidence)', ()
       JSON.parse(fixture('status/invalid.json')),
     )
     expect(result.ok).toBe(false)
-    expect(result.code).toBe('status.invalid-plans')
+    expect(result.code).toBe('status.invalid-workflows')
   })
 
   it('valid status.json → silent pass (no advisory)', async () => {
@@ -301,7 +303,7 @@ describe('dispatch gate — full session dispatch decisions', () => {
 
   it('SDD assignment with a MATCHING lease → silent allow (the lease gate positive control)', async () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': LEASE_STATUS })
+    await seedLeaseTree(app.harnessDir)
     const advisories = captureDispatchAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-valid.md')), defaultAllow)
@@ -318,7 +320,7 @@ describe('dispatch gate — full session dispatch decisions', () => {
 describe('lease gate — SDD dispatch lease violation', () => {
   it('mismatched Worktree path → advisory lease.dispatch.worktree-mismatch, dispatch allowed (warn default)', async () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
-    await seedHarness(app.harnessDir, { 'status.json': LEASE_STATUS })
+    await seedLeaseTree(app.harnessDir)
     const advisories = captureDispatchAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-mismatch.md')), defaultAllow)
@@ -330,7 +332,7 @@ describe('lease gate — SDD dispatch lease violation', () => {
 
   it('mismatched Worktree path under hard → deny with lease.dispatch.worktree-mismatch', async () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': LEASE_STATUS })
+    await seedLeaseTree(app.harnessDir)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-mismatch.md')), defaultAllow)
 
@@ -501,7 +503,7 @@ describe('v2 seam tools — callable in-app over the committed fixtures', () => 
   it('mstar_iteration_gate evaluates the committed fixtures (PASS, phase-2-execute)', async () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(FIXTURES, 'status', 'valid.json'),
+      snapshot_path: join(FIXTURES, 'workflow', 'wf-1', 'snapshot.json'),
       compass_path: join(FIXTURES, 'iteration', 'delivery-compass.md'),
     })
 

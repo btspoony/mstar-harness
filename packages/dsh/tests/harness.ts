@@ -412,6 +412,20 @@ export const VALID_STATUS = {
   metadata: {},
 }
 
+/** A schema-valid v2 root status.json (the v2 fixture for the status gate). */
+export const VALID_STATUS_V2 = {
+  version: 2,
+  updated_at: '2026-08-19',
+  workflows: [],
+}
+
+/** A v2-shaped status.json that fails the v2 schema (`workflows` non-array). */
+export const INVALID_STATUS_V2 = {
+  version: 2,
+  updated_at: '2026-08-19',
+  workflows: 'not-an-array',
+}
+
 /** A minimal v2 root status.json (version 2 + active `workflows[]` only). */
 export function v2Root(workflows: unknown[]): string {
   return JSON.stringify({ version: 2, updated_at: '2026-08-19', workflows })
@@ -436,6 +450,39 @@ export function v2Snapshot(id: string, overrides: Record<string, unknown> = {}):
   })
 }
 
+/** A v2 workflow snapshot carrying plan rows (the Task 3 snapshot-read fixture shape). */
+export function v2SnapshotWithPlans(id: string, plans: unknown[], overrides: Record<string, unknown> = {}): string {
+  return v2Snapshot(id, { plans, ...overrides })
+}
+
+/** A minimal v2 root status.json with one ACTIVE workflow entry. */
+export function v2RootWithWorkflow(workflowId = 'wf-1'): string {
+  return v2Root([v2WorkflowEntry(workflowId)])
+}
+
+/** A minimal project register doc (`projects/<id>/residuals.json` — entries keyed by plan id). */
+export function v2Register(entries: Record<string, unknown[]>): string {
+  return JSON.stringify({ entries })
+}
+
+/** One register residual entry (the v1 residual entry verbatim + register provenance). */
+export function v2ResidualEntry(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id,
+    title: 't',
+    severity: 'medium',
+    source: 'qc',
+    scope: 'plan',
+    decision: 'defer',
+    owner: 'qa',
+    target: 'n',
+    tracking: null,
+    source_plan: 'p1',
+    registered_at: '2026-08-19',
+    ...overrides,
+  }
+}
+
 /**
  * Seed a minimal v2 tree under the harness dir: a v2 root status.json with
  * ONE active workflow entry + that workflow's snapshot. The agent-flow
@@ -443,11 +490,13 @@ export function v2Snapshot(id: string, overrides: Record<string, unknown> = {}):
  * `workflows/<id>/` — the v3 write-path precondition.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param workflowId - the active workflow id (default `wf-1`).
+ * @param plans - snapshot `plans[]` rows (default [] — the snapshot-read
+ * fixture shape).
  */
-export async function seedV2Tree(harnessDir: string, workflowId = 'wf-1'): Promise<void> {
+export async function seedV2Tree(harnessDir: string, workflowId = 'wf-1', plans: unknown[] = []): Promise<void> {
   await seedHarness(harnessDir, {
     'status.json': v2Root([v2WorkflowEntry(workflowId)]),
-    [`workflows/${workflowId}/snapshot.json`]: v2Snapshot(workflowId),
+    [`workflows/${workflowId}/snapshot.json`]: v2SnapshotWithPlans(workflowId, plans),
   })
 }
 

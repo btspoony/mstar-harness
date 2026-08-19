@@ -74,11 +74,11 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 ### What the plugin does when mounted
 
-- **状态闸门**——`fs/write-intent` + `fs/edit-intent` 监听器校验 `{HARNESS_DIR}/status.json` 写入（对写入前文档运行 engine `validateStatus` + 按 plan 的 `findingsCleanupGate`）。
+- **状态闸门**——`fs/write-intent` + `fs/edit-intent` 监听器校验 v3 协调文档目标集——v2 根 `{HARNESS_DIR}/status.json`、`workflows/<id>/snapshot.json` 与 `projects/<id>/residuals.json`——各自使用匹配的 engine 校验器（`validateStatus` = v2 根 / `validateWorkflowSnapshot` / `validateProjectRegister`，即 P2 修复的 `harnessDocKindOfTarget` 形态），外加快照目标的 `findingsCleanupGate` 扩展（按配置模式的计划行，从项目注册表读取残留）。
 - **派发闸门**——`tools/pre-execute` 监听器作用于委派工具，通过 engine 的单一 `composeDispatchGate` 组合（字段闸门、反递归预检、默认分支闸门——与 opencode/omp/CLI 对齐，违规码按构造即相同）校验 subagent Assignment 文本，外加 dsh 租约闸门与 worktree L1/L2 检查。
 - **技能撰写 lint**——已配置技能根下的 `SKILL.md` 写入运行 engine 技能撰写 lint（`lintFrontmatter` + `lintFiveQuestion`）。
 - **seam lint**——harness 下 `DESIGN.md` / audit plan / 知识文档 / roles 目录的写入运行各自的 artifact 级 engine lint。
-- **模型可见工具**——`mstar_sdd_workspace`、`mstar_sdd_task_brief`、`mstar_iteration_gate`、`mstar_design_md_validate`、`mstar_audit_validate`、`mstar_compound_validate`、`mstar_roles_validate` 注册到 `ctx.tools`。
+- **模型可见工具**——`mstar_sdd_workspace`、`mstar_sdd_task_brief`、`mstar_iteration_gate`、`mstar_design_md_validate`、`mstar_audit_validate`、`mstar_compound_validate`、`mstar_roles_validate` 注册到 `ctx.tools`。`mstar_iteration_gate` 镜像改用 v3 输入 `snapshot_path`（`{HARNESS_DIR}/workflows/<id>/snapshot.json`——镜像 `mstar iteration gate --workflow <id>`；旧的根 `status_path` 输入随 v1 读取路径移除）。
 - **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；每条声明 frontmatter `input` hint，使 web 客户端 claim `/name ` 并等待用户后续输入而非立即执行；handler 把命令正文 + 用户输入 steer 进接收 agent）。
 - **pre-step catalog 行**——每个组合后的 agent 步骤都会追加**一条**统一的 `mstar-engine-status` catalog 消息：水印（统一 mstar 版本、harness 目录、enforcement）、迭代相位闸门段（解析到 steering compass 时）与工作区状态摘要段（工作区有 `status.json` 时：plan 注册表、open residual、分支/政策锚点、活跃 lease、知识摘要、compass 方向）。该行是 digest 门控的（每 turn 注入一次、变化时才重发），并共享一次按工作区 TTL 缓存的构建（`catalogTtlMs`，默认 60 秒）。
 

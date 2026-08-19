@@ -555,6 +555,25 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation (plan 202
       ],
     },
   }
+  /** The golden fixture's project roadmap (frontmatter milestones — the project rollup source). */
+  const GOLDEN_ROADMAP = [
+    '---',
+    'project_id: _default',
+    'title: Golden project',
+    'status: active',
+    'created_at: 2026-08-19',
+    'milestones:',
+    '  - P1 foundation',
+    '  - P2 migrate + dogfood',
+    '  - P3 dsh viz',
+    '---',
+    '',
+    '## Direction',
+    '',
+    '- [x] P1 foundation',
+    '- [ ] P2 migrate + dogfood',
+    '',
+  ].join('\n')
   /** The golden fixture's workflow-dir agent-flow ledger (two events). */
   const GOLDEN_FLOW_LINES = [
     { v: 1, ts: 1_700_000_000_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-a', taskId: 'T1', verdict: 'ok', hard: false },
@@ -601,6 +620,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation (plan 202
         control_worktree_path: '/control/worktree',
       }),
       'projects/_default/residuals.json': JSON.stringify(GOLDEN_REGISTER),
+      'projects/_default/roadmap.md': GOLDEN_ROADMAP,
       [`workflows/${GOLDEN_WORKFLOW}/agent-flow.jsonl`]: `${GOLDEN_FLOW_LINES.map((line) => JSON.stringify(line)).join('\n')}\n`,
       'iterations/v2.2.0/delivery-compass.md': GOLDEN_COMPASS,
       'knowledge/README.md': GOLDEN_KNOWLEDGE,
@@ -626,6 +646,13 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation (plan 202
         { planId: 'plan-b', id: 'R1', severity: 'high', title: 'deferred blocker' },
         { planId: 'plan-b', id: 'R2', severity: 'nit', title: 'style nit' },
       ],
+      project: {
+        milestones: ['P1 foundation', 'P2 migrate + dogfood', 'P3 dsh viz'],
+        openResiduals: [
+          { severity: 'high', count: 1 },
+          { severity: 'nit', count: 1 },
+        ],
+      },
       iterationBaseBranch: 'dev-dsh',
       targetBranch: 'dev-dsh',
       specIntegrationBranch: 'iteration/v2.2.0',

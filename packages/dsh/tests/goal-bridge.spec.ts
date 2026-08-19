@@ -684,7 +684,11 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         expect(warn).toContain('goal blocked [rounds-exhausted]')
         expect(warn).toContain('max autonomous rounds reached')
         expect(warn).toContain('objective: Run iteration iter-20260816-advisory')
-        expect(warn).toContain(`${harnessDir}/status.json`)
+        // v3 residual pointer: the project register, never the root status.json
+        // (entries keyed by plan id; no register exists in this bare harness →
+        // the default project path).
+        expect(warn).toContain(`${harnessDir}/projects/_default/residuals.json`)
+        expect(warn).not.toContain(`${harnessDir}/status.json`)
         expect(warn).toMatch(/residual/i)
 
         // Zero status.json writes: byte-identical fixture + no file created/removed.
@@ -715,7 +719,7 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         const warns = captured.filter((m) => m.startsWith('warn:'))
         expect(warns).toHaveLength(1)
         expect(warns[0]).toContain('goal blocked [iteration-closed]')
-        expect(warns[0]).toContain(`${harnessDir}/status.json`)
+        expect(warns[0]).toContain(`${harnessDir}/projects/_default/residuals.json`)
       } finally {
         setGoalBridgeLogger(prior)
       }
@@ -808,7 +812,7 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         }))
         const warns = captured.filter((m) => m.startsWith('warn:'))
         expect(warns).toHaveLength(1)
-        expect(warns[0]).toContain(`${wsHarness}/status.json`)
+        expect(warns[0]).toContain(`${wsHarness}/projects/_default/residuals.json`)
       } finally {
         setGoalBridgeLogger(prior)
       }

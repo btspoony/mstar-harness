@@ -447,6 +447,35 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).not.toContain('data-agent-event-dock')
   })
 
+  it('renders the additive project rollup zone (roadmap milestones + open residual severity counts) on the tasks page', () => {
+    const rollupSource: MstarEngineStatusSource = {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        project: {
+          milestones: ['P1 foundation', 'P2 migrate + dogfood'],
+          openResiduals: [
+            { severity: 'critical', count: 1 },
+            { severity: 'medium', count: 2 },
+          ],
+        },
+      },
+    }
+    const html = panelHtml(rollupSource)
+    expect(html).toContain('data-zone="project"')
+    expect(html).toContain('data-project-milestones-title')
+    expect(html).toContain('data-project-milestone')
+    expect(html).toContain('P1 foundation')
+    expect(html).toContain('P2 migrate + dogfood')
+    expect(html).toContain('data-project-residuals-title')
+    expect(html).toContain('data-project-residual')
+    expect(html).toContain('data-project-residual-count="1"')
+    expect(html).toContain('data-project-residual-count="2"')
+    // The four existing zones still render (additive-only, compass AC-4).
+    expect(html).toContain('data-zone="tasks"')
+    expect(html).toContain('data-iteration-head')
+  })
+
   it('renders the state section: plans board, residual findings, policy (enforcement first), leases, knowledge, direction', () => {
     expect(html).toContain('data-mstar-section="state"')
     // Plan status board: id(status) rows.

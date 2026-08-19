@@ -147,6 +147,24 @@ export interface HarnessLeaseView {
 }
 
 /**
+ * The additive project rollup section of the workspace-state digest (compass
+ * v3.0.0 AC-4 / AC-P3 — the panel's fifth zone surface; additive, the four
+ * existing ZoneView shapes stay byte-compatible): roadmap milestones +
+ * open-residual severity counts from the PROJECT layer
+ * (`projects/<id>/roadmap.md` frontmatter `milestones[]` and
+ * `projects/<id>/residuals.json` registers — the v1 root
+ * `residual_findings` home is gone). Always-present (lossless JSON): no
+ * roadmaps → `milestones: []`; no registers / no open entries →
+ * `openResiduals: []` — same advisory pattern as `residuals`.
+ */
+export interface MstarHarnessProject {
+  /** Roadmap milestones across ALL project registers (frontmatter `milestones[]`, roadmap order, projects dir order). */
+  readonly milestones: readonly string[]
+  /** Open residual counts by severity across ALL project registers (non-zero severities only — same vocabulary as `state.residuals`). */
+  readonly openResiduals: readonly HarnessResidualView[]
+}
+
+/**
  * The catalog's workflow selection result (compass v3.0.0 § Catalog
  * selection rule): the lifecycle the state section aggregates.
  * `active` = the root v2 `workflows[]` first entry (with a structured
@@ -198,6 +216,14 @@ export interface MstarHarnessState {
   readonly plans: readonly HarnessPlanView[]
   /** Open `residual_findings` counts by severity (non-zero only). */
   readonly residuals: readonly HarnessResidualView[]
+  /**
+   * The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth
+   * zone): roadmap milestones + open-residual severity counts from the
+   * project layer (`projects/<id>/roadmap.md` / `projects/<id>/residuals.json`).
+   * Always-present (lossless) — empty arrays when the project layer is
+   * absent.
+   */
+  readonly project: MstarHarnessProject
   /**
    * Open residual findings detail (planId + R# + severity + title), severity
    * ordered (critical→nit) and capped at 10. Null when the

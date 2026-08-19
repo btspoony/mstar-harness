@@ -26,17 +26,19 @@
  * `TurnDigest`, `createCatalogInvalidation` / `CatalogInvalidation`) are
  * entry-internal.
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
   evaluatePhaseGate,
   parseCompassFrontmatter,
+  parseCompassFrontmatterText,
   readJson,
   resolveProjectDir,
   resolveRepoEnforcement,
   resolveIterationDir,
   PROJECT_REGISTER_FILE,
+  PROJECT_ROADMAP_FILE,
   WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
@@ -48,6 +50,7 @@ import type {
   HarnessResidualView,
   IterationGateView,
   MstarEngineStatusSource,
+  MstarHarnessProject,
   MstarHarnessState,
   MstarIterationGateView,
   ResidualFindingView,
@@ -396,6 +399,7 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
         plans: [],
         residuals: [],
         residualFindings: null,
+        project: projectRollupSource(harnessDir),
         iterationBaseBranch: null,
         targetBranch: null,
         specIntegrationBranch: null,
@@ -453,6 +457,7 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
       plans,
       residuals,
       residualFindings,
+      project: projectRollupSource(harnessDir),
       iterationBaseBranch: str(branch?.base) ?? str(compassFields?.iteration_base_branch) ?? null,
       targetBranch: str(branch?.target) ?? str(compassFields?.target_branch) ?? null,
       specIntegrationBranch: str(branch?.integration),
@@ -477,6 +482,49 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
   } catch {
     return null // advisory degrade — the state section is absent, never hardening
   }
+}
+
+/**
+ * The additive project rollup (compass v3.0.0 AC-4 / AC-P3 — the panel's
+ * fifth zone): roadmap milestones + open-residual severity counts from the
+ * PROJECT layer (`projects/<id>/roadmap.md` frontmatter `milestones[]` +
+ * `projects/<id>/residuals.json` registers — the v1 root
+ * `residual_findings` home after migrate). Aggregates across ALL project
+ * registers (workspace-level, same semantics as {@link residualRollup}).
+ * Always-present (lossless): no roadmap files → `milestones: []`; no
+ * registers / no open entries → `openResiduals: []`. Unreadable roadmaps
+ * are skipped (advisory).
+ */
+function projectRollupSource(harnessDir: string): MstarHarnessProject {
+  const milestones: string[] = []
+  const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
+  if (existsSync(projectsDir)) {
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(projectsDir, { withFileTypes: true })
+    } catch {
+      entries = []
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const roadmapPath = join(projectsDir, entry.name, PROJECT_ROADMAP_FILE)
+      if (!existsSync(roadmapPath)) continue
+      try {
+        // The roadmap frontmatter shares the compass flat-subset grammar
+        // (engine `parseCompassFrontmatterText` — the same parser
+        // `validateRoadmap` uses).
+        const doc = parseCompassFrontmatterText(readFileSync(roadmapPath, 'utf8'), roadmapPath)
+        if (Array.isArray(doc.milestones)) {
+          for (const milestone of doc.milestones) {
+            if (typeof milestone === 'string' && milestone.trim() !== '') milestones.push(milestone)
+          }
+        }
+      } catch {
+        continue // unreadable roadmap — skip (advisory)
+      }
+    }
+  }
+  return { milestones, openResiduals: residualRollup(harnessDir).residuals }
 }
 
 /**

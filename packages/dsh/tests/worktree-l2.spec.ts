@@ -41,7 +41,7 @@ import { join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -561,14 +561,14 @@ describe('dispatch gate — worktree L1 control-vs-feature (when metadata presen
     execution_lease: { holder: 'test-agent', claimed_at: '2026-08-08', worktree_path: worktree, working_branch: branch },
   })
 
-  const statusWithControl = (control: string, plan: Record<string, unknown>): string =>
-    JSON.stringify({
-      version: 1,
-      updated_at: '2026-08-08',
-      plans: [plan],
-      residual_findings: {},
-      metadata: { control_worktree_path: control },
+  // v3 L1 fixture (Task 3): the control worktree path is the snapshot's
+  // FIRST-CLASS field and the plan row + lease live on the snapshot rows.
+  async function seedL1Tree(harnessDir: string, control: string | undefined, plan: Record<string, unknown>): Promise<void> {
+    await seedHarness(harnessDir, {
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [plan], control === undefined ? {} : { control_worktree_path: control }),
     })
+  }
 
   const l1Assignment = (worktree: string): string => `## Assignment
 
@@ -589,7 +589,7 @@ Do the thing, evidence-first.
     mkdirSync(control, { recursive: true })
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
-    await seedHarness(app.harnessDir, { 'status.json': statusWithControl(control, planWithLease(control, 'feature/a')) })
+    await seedL1Tree(app.harnessDir, control, planWithLease(control, 'feature/a'))
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(control)), defaultAllow)
 
@@ -606,7 +606,7 @@ Do the thing, evidence-first.
     const control = join(root, 'control')
     mkdirSync(control, { recursive: true })
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': statusWithControl(control, planWithLease(control, 'feature/a')) })
+    await seedL1Tree(app.harnessDir, control, planWithLease(control, 'feature/a'))
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(control)), defaultAllow)
 
@@ -620,17 +620,9 @@ Do the thing, evidence-first.
     mkdirSync(worktree, { recursive: true })
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
-    // metadata: {} — no control_worktree_path; the lease matches the assignment
-    // exactly, so even the lease gate is silent.
-    await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify({
-        version: 1,
-        updated_at: '2026-08-08',
-        plans: [planWithLease(worktree, 'feature/a')],
-        residual_findings: {},
-        metadata: {},
-      }),
-    })
+    // No `control_worktree_path` on the snapshot; the lease matches the
+    // assignment exactly, so even the lease gate is silent.
+    await seedL1Tree(app.harnessDir, undefined, planWithLease(worktree, 'feature/a'))
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(worktree)), defaultAllow)
 

@@ -2693,3 +2693,53 @@ describe('eventLogEntries — workflow rows (plan 20260815-dsh-workflow-ledger T
     expect(events[1]).toMatchObject({ eventKind: 'workflow-agent', runId: 'run-x', name: '' })
   })
 })
+
+/* ---------------------------------------------------------------------------
+ * Project rollup zone (plan 20260819-workflow-dsh-viz Task 3 — compass
+ * AC-4): the ADDITIVE fifth zone — roadmap milestones + open-residual
+ * severity counts projected from `state.project`; the four existing
+ * ZoneView shapes stay byte-compatible (the fullSource golden is
+ * unchanged).
+ * ------------------------------------------------------------------------- */
+
+describe('projectGraph — project rollup zone (compass AC-4)', () => {
+  it('projects roadmap milestones + open-residual severity counts from state.project', () => {
+    const source: MstarEngineStatusSource = {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        project: {
+          milestones: ['P1 foundation', 'P2 migrate + dogfood'],
+          openResiduals: [
+            { severity: 'critical', count: 1 },
+            { severity: 'medium', count: 3 },
+          ],
+        },
+      },
+    }
+    const view = projectGraph(source)
+    expect(view.project).toEqual({
+      milestones: ['P1 foundation', 'P2 migrate + dogfood'],
+      openResiduals: [
+        { severity: 'critical', count: 1 },
+        { severity: 'medium', count: 3 },
+      ],
+    })
+    // Additive-only: the four existing ZoneView shapes are unchanged.
+    expect(view.tasks.total).toBe(fullSource.state!.plans.length)
+    expect(view.iteration.active).toBe(true)
+  })
+
+  it('degrades to empty aggregates on a missing / malformed state.project (never a throw)', () => {
+    // Missing field (the pre-Task-3 fixtures shape).
+    expect(projectGraph(fullSource).project).toEqual({ milestones: [], openResiduals: [] })
+    // Malformed shapes.
+    const garbage = projectGraph({
+      ...fullSource,
+      state: { ...fullSource.state!, project: { milestones: 'nope', openResiduals: [{ severity: 'nit' }] } },
+    } as unknown as MstarEngineStatusSource)
+    expect(garbage.project).toEqual({ milestones: [], openResiduals: [{ severity: 'nit', count: 0 }] })
+    // state null → empty rollup, never a throw.
+    expect(projectGraph(noHarnessSource).project).toEqual({ milestones: [], openResiduals: [] })
+  })
+})

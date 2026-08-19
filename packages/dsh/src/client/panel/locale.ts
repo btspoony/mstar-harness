@@ -194,6 +194,10 @@ export type PanelKey =
   | 'zone.tasks.no-plans'
   | 'zone.tasks.more'
   | 'zone.tasks.collapse'
+  | 'zone.project.title'
+  | 'zone.project.milestones'
+  | 'zone.project.residuals'
+  | 'zone.project.none'
   | 'zone.state.Todo'
   | 'zone.state.InProgress'
   | 'zone.state.InReview'
@@ -316,6 +320,10 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.tasks.no-plans': '暂无计划',
   'zone.tasks.more': '+{count} 更多',
   'zone.tasks.collapse': '收起',
+  'zone.project.title': '项目汇总',
+  'zone.project.milestones': '里程碑',
+  'zone.project.residuals': '未结残留',
+  'zone.project.none': '无',
   'zone.state.Todo': '待办',
   'zone.state.InProgress': '进行中',
   'zone.state.InReview': '审查中',
@@ -433,6 +441,10 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.tasks.no-plans': 'no plans',
   'zone.tasks.more': '+{count} more',
   'zone.tasks.collapse': 'collapse',
+  'zone.project.title': 'Project Rollup',
+  'zone.project.milestones': 'Milestones',
+  'zone.project.residuals': 'Open Residuals',
+  'zone.project.none': 'none',
   'zone.state.Todo': 'Todo',
   'zone.state.InProgress': 'InProgress',
   'zone.state.InReview': 'InReview',
