@@ -188,6 +188,7 @@ export const HARNESS_PROCESS_GITIGNORE = [
   "!.agents/knowledge/**",
   "!.agents/specs/",
   "!.agents/specs/**",
+  ".mstarc",
 ];
 
 export function missingHarnessProcessGitignoreEntries(gitignoreContent: string): string[] {

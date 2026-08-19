@@ -262,7 +262,7 @@ Lease mutations on the **control** copy of `{HARNESS_DIR}/status.json` — execu
 
 ```bash
 CONTROL_ROOT="<metadata.control_worktree_path>"
-HARNESS=".harness"   # or resolved {HARNESS_DIR}
+HARNESS=".mstar"   # or resolved {HARNESS_DIR}
 STATUS="$CONTROL_ROOT/$HARNESS/status.json"
 LOCK="$CONTROL_ROOT/$HARNESS/.status-write.lock"
 (

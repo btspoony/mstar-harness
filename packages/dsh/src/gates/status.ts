@@ -20,7 +20,7 @@ import {
   applyEnforcement,
   findingsCleanupGate,
   readJson,
-  resolveCompassEnforcement,
+  resolveRepoEnforcement,
   validateStatus,
 } from '@mstar-harness/engine'
 import type {
@@ -82,13 +82,14 @@ function isStatusTarget(harnessDir: string, target: FsTarget): boolean {
 }
 
 /**
- * Resolve the hard-enforcement flag: explicit Config override wins, else the
- * iteration compass frontmatter (`resolveCompassEnforcement`), else warn-only.
+ * Resolve the hard-enforcement flag: explicit Config override wins, else
+ * the repo `.mstarc` `[config] enforcement`, else the iteration compass
+ * frontmatter (`resolveRepoEnforcement`), else warn-only.
  */
 function resolveHard(harnessDir: string, config: Config): boolean {
   if (config.enforcement === 'hard') return true
   if (config.enforcement === 'soft') return false
-  return resolveCompassEnforcement(harnessDir).hard
+  return resolveRepoEnforcement(harnessDir).hard
 }
 
 /**

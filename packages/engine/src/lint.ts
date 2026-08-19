@@ -1,8 +1,7 @@
 /**
  * Engine lint module — deterministic lint checks ported from skill prose.
  *
- * Roadmap: `.harness/references/skill-programmatic-roadmap.md` §8.2 `lint`
- * row + §4.5 Lint layer (`simplify:` / `temporary` marker presence; SDD TDD
+ * Roadmap §8.2 `lint` row + §4.5 Lint layer (`simplify:` / `temporary` marker presence; SDD TDD
  * triple in completion reports; plan-quality-bar checks; skill frontmatter
  * contract; STRATEGY.md required sections). Skill text stays the semantic
  * SSOT (roadmap D5) — this module implements the deterministic subset and
@@ -104,7 +103,7 @@ export type TemporaryMarkerResult = GateResult & { markers: TemporaryMarker[] };
  * 1. `status.json` (the plan-harness status artifact)
  * 2. `R#<n>` (residual entry)
  * 3. the word `residual` (residual tracker / notes)
- * 4. a `plans/<file>` path (e.g. `.harness/plans/20260808-x.md`)
+ * 4. a `plans/<file>` path (e.g. `plans/20260808-x.md`)
  * 5. a dated plan id ("plan 20260808-slice2")
  * 6. "tracked/recorded/logged/scheduled/listed/noted in <artifact>"
  * 7. an explicit "removal path: <artifact>" label

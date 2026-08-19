@@ -4,7 +4,7 @@
  *
  * Spec sources:
  * - `beforeStatusWrite` host hook + v1 non-blocking warn / never-block
- *   contract: `.harness/references/skill-programmatic-roadmap.md` §8.5 +
+ *   contract: roadmap §8.5 +
  *   D2 (v1 = non-blocking lints; hard gates are v2 opt-in).
  * - status.json schema + root-only `residual_findings` (reject dual-write)
  *   + severity enum: engine `status.validateStatus` (spec-cited in

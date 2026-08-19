@@ -7,7 +7,7 @@
  *   `critical|high|medium|low|nit` (lowercase English), total order
  *   `critical > high > medium > low > nit`, `nit` always lighter than `low`,
  *   `warning`/`Major`/non-English values forbidden.
- * - `ValidationResult` / `GateResult` shapes: `.harness/references/skill-programmatic-roadmap.md`
+ * - `ValidationResult` / `GateResult` shapes: roadmap
  *   §8.5 C4 — engine returns `{ ok: boolean, severity, code, message, fix? }`;
  *   §8.5 C2 — engine unit tests cite the source section as spec.
  * - `readJson`/`writeJson`/`resolveProjectRoot`/`readHarnessVersion`: plan

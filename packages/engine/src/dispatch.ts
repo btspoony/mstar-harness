@@ -23,8 +23,7 @@
  * - Anti-recursion NEVER red line (role binding == `Execute as`): `mstar-dispatch-gates`
  *   SKILL.md § "承接方反递归红线（NEVER / DO NOT；leaf executor 必读）".
  * - Hard-gate enforcement (`Enforcement: hard` flag — per Assignment/compass,
- *   never global; rollback = unset flag): `.harness/references/skill-programmatic-roadmap.md`
- *   §8.5 C4 + decision D2.
+ *   never global; rollback = unset flag): roadmap §8.5 C4 + decision D2.
  */
 import { applyEnforcement } from "./core.js";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
@@ -113,7 +112,7 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
 }
 
 /** Where the `Enforcement` flag was declared (roadmap §8.5 C4/D2). */
-export type EnforcementSource = "assignment" | "compass" | "none";
+export type EnforcementSource = "assignment" | "compass" | "mstarc" | "none";
 
 /** Parsed hard-enforcement flag. `hard: false` + `source: none` = flag absent. */
 export type EnforcementFlag = {

@@ -29,7 +29,7 @@ import {
   parseAssignmentFields,
   parseEnforcementFlag,
   readJson,
-  resolveCompassEnforcement,
+  resolveRepoEnforcement,
   validateExecutionLease,
   verifyPlanExecutionLease,
 } from '@mstar-harness/engine'
@@ -136,13 +136,14 @@ export function isAssignmentShaped(assignmentText: string): boolean {
  * Resolve the hard-enforcement flag for one dispatch: explicit Config override
  * wins, else the Assignment's OWN `Enforcement: hard` header flag (opencode
  * parity — header region only, a body-quoted example never hardens), else the
- * iteration compass frontmatter, else warn-only.
+ * repo `.mstarc` `[config] enforcement`, else the iteration compass
+ * frontmatter, else warn-only.
  */
 export function resolveDispatchHard(harnessDir: string | null, config: Config, assignmentText: string): boolean {
   if (config.enforcement === 'hard') return true
   if (config.enforcement === 'soft') return false
   if (parseEnforcementFlag(assignmentHeaderRegion(assignmentText)).hard) return true
-  return harnessDir !== null && resolveCompassEnforcement(harnessDir).hard
+  return harnessDir !== null && resolveRepoEnforcement(harnessDir).hard
 }
 
 /** The hard-mode veto reason: one line per violation + the refusal channel. */

@@ -24,9 +24,9 @@
  *   § Plan-Writing Path Gate — plans live under `{PLAN_DIR}`, no external
  *   default plan directories.
  * - Explicit harness-root override (`MSTAR_HARNESS_DIR` env / option):
- *   plan 20260808-slice2-sdd-iteration Finding (2026-08-08) — default probe
- *   stays per mstar-plan-conventions; `.harness` is NOT added to the probe
- *   (consumer convention stays `.mstar` → `.agents` → `.plans`/`plans`).
+ *   plan 20260808-slice2-sdd-iteration Finding (2026-08-08) — the probe
+ *   list stays per mstar-plan-conventions (`.mstar` → `.agents` →
+ *   `.plans`/`plans`); ad-hoc names are never probed.
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -38,6 +38,7 @@ import {
   emitGitignoreSnippet,
   resolveHarnessDir,
   resolveIterationDir,
+  resolveKnowledgeDir,
   resolvePlanDir,
   resolveSddDir,
   resolveSpecsDir,
@@ -57,6 +58,8 @@ const CANONICAL_SNIPPET = `# Morning Star harness (.mstar/)
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
 `;
 
 /** Legacy snippet text — verbatim from plan-conventions § Git 跟踪策略 ("Legacy `.agents/` 等价"). */
@@ -196,10 +199,10 @@ describe("resolveHarnessDir — resolution order (plan-conventions § {HARNESS_D
     }
   });
 
-  test("does not probe `.harness` (consumer convention stays per plan-conventions)", () => {
-    const root = tmpRoot("path-harness-noharness-");
+  test("does not probe non-convention names (probe list fixed per plan-conventions)", () => {
+    const root = tmpRoot("path-harness-noconvention-");
     try {
-      mkdirSync(join(root, ".harness"));
+      mkdirSync(join(root, ".custom-root"));
       expect(resolveHarnessDir(root)).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -272,6 +275,89 @@ describe("resolveHarnessDir — explicit override (slice-2 finding 2026-08-08)",
       mkdirSync(join(root, ".mstar"));
       withEnv(undefined, () => {
         expect(resolveHarnessDir(root)).toBe(resolve(root, ".mstar"));
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveHarnessDir — `.mstarc` [config] harness_dir (plan-conventions § {HARNESS_DIR} 解析顺序 step 2)", () => {
+  test("declares the harness root relative to the .mstarc directory (dir need not exist)", () => {
+    const root = tmpRoot("path-rc-rel-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom_dir\n");
+      expect(resolveHarnessDir(root)).toBe(resolve(root, ".custom_dir"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("found from a nested start dir (find-first-stop walk-up)", () => {
+    const root = tmpRoot("path-rc-walk-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom_dir\n");
+      mkdirSync(join(root, "a", "b"), { recursive: true });
+      expect(resolveHarnessDir(join(root, "a", "b"), { workspaceRoot: root })).toBe(resolve(root, ".custom_dir"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an absolute harness_dir is used as-is", () => {
+    const root = tmpRoot("path-rc-abs-");
+    try {
+      const custom = join(root, "custom-dir");
+      writeFileSync(join(root, ".mstarc"), `[config]\nharness_dir=${custom}\n`);
+      expect(resolveHarnessDir(root)).toBe(custom);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc without [config] harness_dir falls through to probing", () => {
+    const root = tmpRoot("path-rc-empty-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "# no harness_dir declared\n");
+      mkdirSync(join(root, ".mstar"));
+      expect(resolveHarnessDir(root)).toBe(resolve(root, ".mstar"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the nearest .mstarc wins when several exist up the tree", () => {
+    const root = tmpRoot("path-rc-nearest-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.outer_dir\n");
+      mkdirSync(join(root, "inner"));
+      writeFileSync(join(root, "inner", ".mstarc"), "[config]\nharness_dir=.inner_dir\n");
+      expect(resolveHarnessDir(join(root, "inner"), { workspaceRoot: root })).toBe(resolve(root, "inner", ".inner_dir"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc above the workspace boundary is never adopted", () => {
+    const root = tmpRoot("path-rc-boundary-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.above_dir\n");
+      mkdirSync(join(root, "proj"), { recursive: true });
+      expect(resolveHarnessDir(join(root, "proj"), { workspaceRoot: join(root, "proj") })).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("MSTAR_HARNESS_DIR env beats .mstarc; opts.harnessDir beats env", () => {
+    const root = tmpRoot("path-rc-precedence-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.rc_dir\n");
+      const envDir = join(root, "env-harness");
+      const optDir = join(root, "opt-harness");
+      withEnv(envDir, () => {
+        expect(resolveHarnessDir(root)).toBe(envDir);
+        expect(resolveHarnessDir(root, { harnessDir: optDir })).toBe(optDir);
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -414,6 +500,88 @@ describe("resolvePlanDir / resolveSddDir / resolveIterationDir (plan-conventions
 
   test("resolveIterationDir composes {HARNESS_DIR}/iterations", () => {
     expect(resolveIterationDir(join("/r", ".mstar"))).toBe(join("/r", ".mstar", "iterations"));
+  });
+});
+
+describe("resolveXDir — `.mstarc` [config] sub-directory keys (plan-conventions § 路径符号 / `.mstarc` 格式)", () => {
+  test("plan_dir / sdd_dir / iteration_dir / knowledge_dir overrides from a repo-root .mstarc", () => {
+    const root = tmpRoot("path-rc-dirs-");
+    try {
+      writeFileSync(
+        join(root, ".mstarc"),
+        "[config]\nplan_dir=planning\nsdd_dir=process/sdd\niteration_dir=process/iterations\nknowledge_dir=knowledge\n",
+      );
+      expect(resolvePlanDir(join(root, ".mstar"))).toBe(join(root, "planning"));
+      expect(resolveSddDir(join(root, ".mstar"), "20260808-p1")).toBe(join(root, "process", "sdd", "20260808-p1"));
+      expect(resolveIterationDir(join(root, ".mstar"))).toBe(join(root, "process", "iterations"));
+      expect(resolveKnowledgeDir(join(root, ".mstar"))).toBe(join(root, "knowledge"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an absolute sub-dir declaration is used as-is", () => {
+    const root = tmpRoot("path-rc-dirs-abs-");
+    try {
+      const custom = join(root, "absolute-plans");
+      writeFileSync(join(root, ".mstarc"), `[config]\nplan_dir=${custom}\n`);
+      expect(resolvePlanDir(join(root, ".mstar"))).toBe(custom);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("specs_dir declaration is authoritative — skips the candidate chain and create-on-miss", () => {
+    const root = tmpRoot("path-rc-dirs-specs-");
+    try {
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      mkdirSync(join(root, "docs", "specs"), { recursive: true });
+      writeFileSync(join(root, "docs", "specs", "spec.md"), "# spec\n");
+      writeFileSync(join(root, ".mstarc"), "[config]\nspecs_dir=specs/custom\n");
+      // The declared dir wins even though other candidates are non-empty.
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, "specs", "custom"));
+      // create: false still returns the declared dir (no candidate fallback).
+      expect(resolveSpecsDir(join(root, ".mstar"), { create: false })).toBe(join(root, "specs", "custom"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc inside the harness dir also applies (find from harness dir)", () => {
+    const root = tmpRoot("path-rc-dirs-inner-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      writeFileSync(join(root, ".mstar", ".mstarc"), "[config]\nplan_dir=inner-plans\n");
+      expect(resolvePlanDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "inner-plans"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("no declaration → default composition (no .mstarc, or [config] without keys)", () => {
+    const root = tmpRoot("path-rc-dirs-none-");
+    try {
+      expect(resolvePlanDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "plans"));
+      writeFileSync(join(root, ".mstarc"), "# no dirs\n");
+      expect(resolveIterationDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "iterations"));
+      expect(resolveKnowledgeDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "knowledge"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc above the repo root is never adopted for sub-directory keys", () => {
+    const root = tmpRoot("path-rc-dirs-above-");
+    try {
+      mkdirSync(join(root, "proj"), { recursive: true });
+      writeFileSync(join(root, ".mstarc"), "[config]\nplan_dir=outer-plans\n");
+      // Harness under proj/.mstar — the walk from proj/.mstar stops at the
+      // repo root (proj), so the outer config does not apply.
+      expect(resolvePlanDir(join(root, "proj", ".mstar"))).toBe(join(root, "proj", ".mstar", "plans"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

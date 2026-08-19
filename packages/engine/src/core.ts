@@ -23,7 +23,7 @@ export const SEVERITY_ORDER: readonly Severity[] = ["critical", "high", "medium"
 /**
  * Result of one harness validation check.
  *
- * Shape per `.harness/references/skill-programmatic-roadmap.md` §8.5 C4:
+ * Shape per roadmap §8.5 C4:
  * `{ ok: boolean, severity, code, message, fix? }`. v1 enforcement is
  * non-blocking: callers (CLI output readers, host hooks) surface it as a
  * warning, never a hard stop.

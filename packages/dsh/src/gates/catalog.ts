@@ -23,7 +23,7 @@ import {
   evaluatePhaseGate,
   parseCompassFrontmatter,
   readJson,
-  resolveCompassEnforcement,
+  resolveRepoEnforcement,
   resolveIterationDir,
 } from '@mstar-harness/engine'
 import type { StatusDoc } from '@mstar-harness/engine'
@@ -114,7 +114,7 @@ function engineStatusSource(harnessDir: string | null): MstarEngineStatusSource 
     form: 'catalog',
     version: pluginVersion(),
     harnessDir,
-    enforcement: harnessDir !== null ? resolveCompassEnforcement(harnessDir) : { hard: false, source: 'none' },
+    enforcement: harnessDir !== null ? resolveRepoEnforcement(harnessDir) : { hard: false, source: 'none' },
     // The iteration section is OPTIONAL: when the row cannot be built (no
     // status.json / no steering compass / unreadable docs) the key must be
     // ABSENT, never `iteration: undefined` — the agent loop appends the

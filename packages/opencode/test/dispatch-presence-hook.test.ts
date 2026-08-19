@@ -4,7 +4,7 @@
  *
  * Spec sources:
  * - `beforeDispatch` host hook + v1 non-blocking warn / never-block
- *   contract: `.harness/references/skill-programmatic-roadmap.md` §8.5 +
+ *   contract: roadmap §8.5 +
  *   D2 (v1 = non-blocking lints; hard gates are v2 opt-in).
  * - Assignment core fields (`Execute as` / `Delegation` / `Task category`
  *   presence): roadmap §4.3 dispatch/gates layer + Slice 2 Global
@@ -71,7 +71,7 @@ Ship the module.
 const missingAllFields = `## Assignment
 
 **Working branch**: feature/example
-**Plan Path**: .harness/plans/20260808-slice2-sdd-iteration.md
+**Plan Path**: .mstar/plans/20260808-example.md
 `;
 
 /** Core fields but no branch form — engine `branch-missing` (writable default). */

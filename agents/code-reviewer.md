@@ -29,14 +29,6 @@ permission:
     ".worktrees/**/.mstar/plans/**/*.md": allow
     ".worktrees/**/.agents/plans/*.md": allow
     ".worktrees/**/.agents/plans/**/*.md": allow
-    ".harness/sdd/*.md": allow
-    ".harness/sdd/**/*.md": allow
-    ".harness/plans/*.md": allow
-    ".harness/plans/**/*.md": allow
-    ".worktrees/**/.harness/sdd/*.md": allow
-    ".worktrees/**/.harness/sdd/**/*.md": allow
-    ".worktrees/**/.harness/plans/*.md": allow
-    ".worktrees/**/.harness/plans/**/*.md": allow
   bash:
     "*": deny
     # Git inspection (read-only) — L2 diff review + audit recon; no test/build/lint CLIs

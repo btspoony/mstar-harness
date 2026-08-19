@@ -173,17 +173,17 @@ If one of these checks fails, stop and report why.
 - 临时文件（一次性探针、日志、浏览器 profile、验证脚本等）→ 仓库根 **`.tmp/*`**，用完即清，不跨轮次残留
 - Git feature worktrees → **`.worktrees/*`**（每 plan 一个子目录，如 `.worktrees/<plan-id>-<slug>`，`git worktree add .worktrees/<slug> -b feature/<plan-slug>`）；合并后 `git worktree remove` 并 `git worktree prune`
 
-## Local maintenance workspace (`.harness/`, gitignored)
+## Local maintenance workspace (`.mstar/`, gitignored)
 
-Use **`.harness/`** only for **in-progress maint docs** on this repo (not published runtime skills):
+The repo's harness root is **`.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `plans/`, `iterations/`, `knowledge/`, `sdd/`, `references/`, `archived/` and in-progress maint docs all live under `.mstar/`.
 
 | Path | Purpose |
 |------|---------|
-| `.harness/docs/` | Design specs, decomposition notes, ADRs, reports for harness changes |
+| `.mstar/docs/` | Design specs, decomposition notes, ADRs, reports for harness changes |
 
-**This repository's harness root is `.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `plans/`, `iterations/`, `knowledge/`, `sdd/`, `references/`, `archived/` all live under `.mstar/`. `.harness/` is NOT a harness root — it holds maintenance docs only; do not create plan/status artifacts there.
+**No tracked references to gitignored harness artifacts.** Tracked `*.ts` / `*.md` files must not cite paths under `.mstar/` (e.g. `.mstar/status.json`, `.mstar/plans/<id>.md`, `.mstar/references/*.md`, `.mstar/iterations/…`, `.mstar/sdd/…`, `.mstar/docs/…`, `.mstar/knowledge/…`): those files exist only in the local checkout, so references break fresh clones and CI. Refer to `{HARNESS_DIR}` / the consumer default (`.mstar/` → `.agents/` → `.plans/`/`plans/`) or a repo `.mstarc` declaration instead. This section is the maintenance contract that documents the local layout; the rule applies to all other tracked files.
 
-**Runtime SSOT** for `mstar-*` skills stays in repo-root **`skills/`** (bundled via `packages/opencode` `bundle-assets`). Do not treat `.harness/skills/` as the publish path.
+**Runtime SSOT** for `mstar-*` skills stays in repo-root **`skills/`** (bundled via `packages/opencode` `bundle-assets`).
 
 ## Where To Edit (Minimal Routing)
 

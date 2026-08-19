@@ -55,7 +55,7 @@ const fullSource: MstarEngineStatusSource = {
   iteration: {
     iterationId: 'iter-20260810-panel-zones',
     statusPath: '/proj/.mstar/status.json',
-    compassPath: '/proj/.mstar/iterations/iter-20260810-panel-zones/delivery-compass.md',
+    compassPath: '/proj/.mstar/iterations/iter-20260810-example/delivery-compass.md',
     gate: {
       transition: 'phase-2-execute',
       all_plans_done: false,

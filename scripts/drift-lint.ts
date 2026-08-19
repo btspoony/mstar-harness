@@ -199,21 +199,15 @@ export function extractCategoryRowTokens(row: string): string[] {
     .filter((t) => /^[a-z][a-z-]*$/.test(t));
 }
 
-/** True when the citation at `index` is prefixed by a `.harness/` path
- * (gitignored roadmap / ADR — not part of the skills tree). */
-export function citesHarnessPath(text: string, index: number): boolean {
-  return text.slice(Math.max(0, index - 40), index).includes(".harness/");
-}
-
 /** True when the bare token at `index` is itself the file name of a
  * knowledge-conventions citation — the citation path starts with
  * `conventions/` ("conventions/<file>" / "knowledge \`conventions/<file>\`").
- * Such docs resolve under `{KNOWLEDGE_DIR}/conventions/` (`.mstar/knowledge/`,
- * gitignored), so existence is not verifiable in CI. The exemption is
+ * Such docs resolve under `{KNOWLEDGE_DIR}/conventions/` (gitignored), so
+ * existence is not verifiable in CI. The exemption is
  * anchored to the cited token itself: `conventions/` must immediately
  * precede it and start a path segment (`x-conventions/<file>` and
  * `sub/conventions/<file>` are NOT exempt), so nearby unrelated citations
- * are still existence-checked. Mirrors the `.harness/` exemption. */
+ * are still existence-checked. */
 export function citesKnowledgeConventions(text: string, index: number): boolean {
   return /(?:^|[^\w./-])conventions\/$/.test(text.slice(Math.max(0, index - 200), index));
 }
@@ -630,23 +624,20 @@ if (import.meta.main) {
       if (!exists(p)) fail(`${rel}: spec citation "${p}" does not exist`);
     }
     // Bare "references/<file>" citations (no skill token): must exist under
-    // some skill — unless they are `.harness/` roadmap citations.
+    // some skill.
     for (const rm of headerText.matchAll(/references\/([\w.-]+)/g)) {
-      if (citesHarnessPath(headerText, rm.index)) continue;
       const candidates = [...allSkillFiles].filter((f) => f.endsWith(`/references/${rm[1]}`));
       if (candidates.length === 0) {
         fail(`${rel}: spec citation "references/${rm[1]}" does not exist under any skill`);
       }
     }
     // Bare "<file>.md"/"<file>.yaml" next to a spec marker ("spec:" / "§"):
-    // must resolve under skills/, be a `.harness/` doc, or be a known
-    // artifact-type spec source.
+    // must resolve under skills/, or be a known artifact-type spec source.
     for (const bm of headerText.matchAll(/(?<![-\w])([a-zA-Z0-9][\w-]*\.(?:md|yaml))/g)) {
       const name = bm[1];
       if (name === "SKILL.md") continue;
       const nearSpec = headerText.slice(Math.max(0, bm.index - 60), (bm.index ?? 0) + name.length + 60);
       if (!/spec|§/.test(nearSpec)) continue;
-      if (citesHarnessPath(headerText, bm.index)) continue;
       if (citesKnowledgeConventions(headerText, bm.index)) continue;
       if ([...allSkillFiles].some((f) => f.endsWith(`/${name}`))) continue;
       if (ARTIFACT_SPEC_SOURCES.has(name)) continue;

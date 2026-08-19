@@ -295,11 +295,12 @@ The plugin wires the engine gates on dsh seams (all in-process):
 
 **Enforcement semantics**: warn-only by default. `Enforcement: hard` —
 resolved from the plugin Config (`enforcement: hard`), the Assignment header
-flag, or the iteration compass frontmatter — escalates dispatch violations to
+flag, the repo `.mstarc` `[config] enforcement`, or the iteration compass
+frontmatter — escalates dispatch violations to
 a real veto; status/skill-lint writes are never hard-vetoed because the intent
 waterfall is content-blind (an already-invalid document is allowed as a
-repair escape). Config `soft` is the only local rollback. Hard gates are never
-a global default.
+repair escape). Config / `.mstarc` `soft` are the local rollbacks. Hard gates
+are never a global default.
 
 Every composed agent step carries ONE **`<mstar_engine_status>`** catalog
 message: the watermark (unified mstar version, harness dir, enforcement),
@@ -458,14 +459,16 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
 
 ## Harness dir and environment
 
-- `{HARNESS_DIR}` resolves via the engine `resolveHarnessDir` (`.mstar/` →
-  `.agents/` → `.plans/`/`plans/`), with the plugin Config `harnessDir`
+- `{HARNESS_DIR}` resolves via the engine `resolveHarnessDir` (`.mstarc`
+  `[config] harness_dir` → `.mstar/` → `.agents/` → `.plans/`/`plans/`),
+  with the plugin Config `harnessDir`
   override winning. The probe starts from the SESSION workspace root (the
   session cwd — **never the dsh launch/process cwd**) and **STOPS there** — it
   never walks above the session workspace, so the watermark and gates follow
   the workspace the session actually works in. Repos using a
-  non-standard harness root (e.g. `.harness/`) MUST set Config `harnessDir`
-  (absolute path) — the gates are inert without a resolvable harness dir.
+  non-standard harness root MUST set Config `harnessDir`
+  (absolute path) or declare it in a repo `.mstarc` — the gates are inert
+  without a resolvable harness dir.
 - The dispatch gate needs the dispatching agent's own role for the
   anti-recursion precheck: declare it via Config **`dispatchBinding`** (dsh
   exposes no per-agent role on the tool-execution context). Under hard

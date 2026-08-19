@@ -495,7 +495,7 @@ describe("findEphemeralCitations", () => {
 
   test("flags concrete sdd-deeplinks under both .mstar/sdd/ and .agents/sdd/", () => {
     const citations = findEphemeralCitations(
-      "- .agents/sdd/20260815-x/\n- .mstar/sdd/20260816-mechanical-verification/task-3-report.md\n",
+      "- .agents/sdd/20260815-x/\n- .mstar/sdd/20260816-example/task-3-report.md\n",
     );
     expect(citations).toHaveLength(3);
     expect(citations[0].kind).toBe("sdd-deeplink");
@@ -503,7 +503,7 @@ describe("findEphemeralCitations", () => {
     // concrete first segment → deeplink, plus the concrete task artifact inside
     expect(citations[1]).toEqual({
       line: 2,
-      match: ".mstar/sdd/20260816-mechanical-verification",
+      match: ".mstar/sdd/20260816-example",
       kind: "sdd-deeplink",
     });
     expect(citations[2]).toEqual({

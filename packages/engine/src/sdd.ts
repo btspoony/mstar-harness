@@ -12,14 +12,15 @@
  * scripts were removed in slice 5.
  *
  * Harness-root override: `MSTAR_HARNESS_DIR` env / `opts.harnessDir` (plan
- * finding 2026-08-08) — the status.json probe only knows `.mstar`/`.agents`
- * and picks the wrong root in `.harness`-rooted repos; the engine honors
- * the explicit override in addition to CONTROL_ROOT.
+ * finding 2026-08-08) — the status.json probe only knows the probed names
+ * (`.mstar`/`.agents`) and picks the wrong root in repos with another root;
+ * the engine honors the explicit override in addition to CONTROL_ROOT.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { resolveSddDir } from "./path.js";
+import { findMstarc, parseMstarc } from "./mstarc.js";
 
 /**
  * Error carrying the ported script exit code so the CLI can map validation
@@ -145,10 +146,12 @@ function isLinkedWorktree(root: string): boolean {
  *    resolves or creates any SDD tree under the feature checkout (refuses a
  *    second SDD tree; no override or probe may bypass this guard);
  * 2. explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`)
- *    — plan finding 2026-08-08: covers `.harness`-rooted repos the
- *    status.json probe misses; resolved relative to the established root;
- * 3. `status.json` probe at root (`.mstar` → `.agents`);
- * 4. fallback: existing `.mstar`/`.agents` dir, else `.mstar`.
+ *    — plan finding 2026-08-08: covers repos the status.json probe misses;
+ *    resolved relative to the established root;
+ * 3. `.mstarc` `[config] harness_dir` at `root` (repo-declared root;
+ *    resolved against the config file's directory);
+ * 4. `status.json` probe at root (`.mstar` → `.agents`);
+ * 5. fallback: existing `.mstar`/`.agents` dir, else `.mstar`.
  *
  * `controlRoot` (CLI 2nd arg / `MSTAR_CONTROL_ROOT`) pins `root` to the
  * control worktree instead of the cwd's git top-level.
@@ -204,15 +207,23 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
   if (harnessOverride) {
     harnessDir = resolve(root, harnessOverride);
   } else {
-    const probed = probeHarnessWithStatus(root);
-    if (probed) {
-      harnessDir = probed;
-    } else if (isDirectory(join(root, ".mstar"))) {
-      harnessDir = join(root, ".mstar");
-    } else if (isDirectory(join(root, ".agents"))) {
-      harnessDir = join(root, ".agents");
+    // `.mstarc` [config] harness_dir — repo-declared harness root (root is
+    // the workspace boundary; a config above it never applies).
+    const rc = findMstarc(root, root);
+    const rcHarnessDir = rc !== null ? parseMstarc(readFileSync(rc, "utf8")).harnessDir : undefined;
+    if (rcHarnessDir) {
+      harnessDir = resolve(rc !== null ? dirname(rc) : root, rcHarnessDir);
     } else {
-      harnessDir = join(root, ".mstar");
+      const probed = probeHarnessWithStatus(root);
+      if (probed) {
+        harnessDir = probed;
+      } else if (isDirectory(join(root, ".mstar"))) {
+        harnessDir = join(root, ".mstar");
+      } else if (isDirectory(join(root, ".agents"))) {
+        harnessDir = join(root, ".agents");
+      } else {
+        harnessDir = join(root, ".mstar");
+      }
     }
   }
 

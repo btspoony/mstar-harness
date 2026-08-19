@@ -203,7 +203,7 @@ describe('lintSkillDoc — ephemeral citation wiring (plan 20260816-dsh-surface-
   })
 
   it('concrete sdd-deeplink citation → skill.ephemeral.sdd-deeplink (medium); hard veto inherited', () => {
-    const doc = EPHEMERAL_SKILL('.mstar/sdd/20260816-surface-sync')
+    const doc = EPHEMERAL_SKILL('.mstar/sdd/20260816-example')
     const gate = lintSkillDoc(doc)
     expect(gate.ok).toBe(false)
     const hit = gate.violations.find((v) => v.code === 'skill.ephemeral.sdd-deeplink')
@@ -213,7 +213,7 @@ describe('lintSkillDoc — ephemeral citation wiring (plan 20260816-dsh-surface-
   })
 
   it('both kinds on one line → both violations in source order, all medium', () => {
-    const doc = EPHEMERAL_SKILL('.mstar/sdd/20260816-surface-sync/review/ cites task-3-report.md')
+    const doc = EPHEMERAL_SKILL('.mstar/sdd/20260816-example/review/ cites task-3-report.md')
     const gate = lintSkillDoc(doc)
     const ephemeral = gate.violations.filter((v) => v.code.startsWith('skill.ephemeral.'))
     expect(ephemeral.map((v) => v.code)).toEqual([

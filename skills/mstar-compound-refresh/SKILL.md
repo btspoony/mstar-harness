@@ -51,7 +51,7 @@ For each candidate document, classify into one of five outcomes:
 | **Delete** | No longer useful, applicable, or distinct | Delete — git history preserves it |
 
 > **Guardrail — rejected approaches:** a captured rejected approach stays only while the losing idea remains a tempting, meaningful mistake; delete it once obsolete or no longer plausible.
-> **Calibration:** first real run of this axis — 9 size-divergent knowledge docs (36–78 lines) under `{KNOWLEDGE_DIR}/architecture-patterns/` classified at fold time, all kept by future value (evidence: `.mstar/plans/20260815-mstar-knowledge-prose-folds.md` `## Review Gate Summary` → Task evidence); length proved not to be a criterion.
+> **Calibration:** first real run of this axis — 9 size-divergent knowledge docs (36–78 lines) under `{KNOWLEDGE_DIR}/architecture-patterns/` classified at fold time, all kept by future value (evidence: the knowledge-prose-folds plan `## Review Gate Summary` → Task evidence); length proved not to be a criterion.
 
 ## Core rules
 

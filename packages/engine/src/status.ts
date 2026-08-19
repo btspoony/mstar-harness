@@ -31,11 +31,12 @@
  *   `techDebtRollup` (CLI form: `mstar status tech-debt [path]`).
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { readJson, writeJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveHarnessDir, resolveIterationDir, assertSafePathComponent } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
+import { loadMstarc } from "./mstarc.js";
 
 /**
  * Loose shape of a parsed status.json document. All fields are `unknown`
@@ -663,6 +664,38 @@ export function resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
     if (flag.hard) return flag;
   }
   return { hard: false, source: "none" };
+}
+
+/**
+ * Resolve the repo-declared hard-enforcement flag from `.mstarc`
+ * `[config] enforcement` (plan-conventions § `.mstarc` 格式): the nearest
+ * config at the harness dir or its parent (the repo root) wins —
+ * `hard` → hard, `soft` → soft, absent/invalid value → `none`. Same
+ * discovery scope as the sub-directory keys; a config above the repo
+ * root is never adopted.
+ */
+export function resolveMstarcEnforcement(harnessDir: string): EnforcementFlag {
+  const dir = resolve(harnessDir);
+  const rc = loadMstarc(dir, dirname(dir));
+  const value = rc?.config.enforcement;
+  if (value === "hard") return { hard: true, source: "mstarc" };
+  if (value === "soft") return { hard: false, source: "mstarc" };
+  return { hard: false, source: "none" };
+}
+
+/**
+ * Repo-level hard-enforcement flag: `.mstarc` `[config] enforcement` wins,
+ * else the iteration compass frontmatter (`resolveCompassEnforcement`),
+ * else warn-only. Hosts compose this BELOW their explicit Config override
+ * and the per-dispatch Assignment flag (precedence: Config > Assignment
+ * flag > repo `.mstarc` > compass > warn-only) — `.mstarc` `soft` is a
+ * local rollback against a hard compass, `.mstarc` `hard` hardens
+ * flag-less dispatches and gates.
+ */
+export function resolveRepoEnforcement(harnessDir: string): EnforcementFlag {
+  const rc = resolveMstarcEnforcement(harnessDir);
+  if (rc.source !== "none") return rc;
+  return resolveCompassEnforcement(harnessDir);
 }
 
 /** Count values into a string-keyed map, keys sorted ascending (jq group_by order for strings). */

@@ -98,7 +98,7 @@ function captureStatusAdvisories(ctx: BootResult['ctx']): Array<{ result: { viol
 describe('HarnessResolver — explicit config wins; the probe starts from the workspace root, never the process cwd', () => {
   it('returns the explicit config outright (even for a nonexistent root — authoritative)', async () => {
     const ws = await makeWorkspace('dsh-ws-explicit-')
-    const explicit = join(ws, '.harness')
+    const explicit = join(ws, '.custom-root')
     const resolver = new HarnessResolver(explicit)
     // Any workspace (or none) resolves to the explicit root.
     expect(resolver.forWorkspace(undefined)).toBe(explicit)

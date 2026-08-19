@@ -37,8 +37,8 @@ export const applyEnforcement = unavailable;
 export const composeDispatchGate = unavailable;
 export const isReadOnlyAssignmentRole = unavailable;
 export const parseAssignmentFields = unavailable;
-export const resolveCompassEnforcement = unavailable;
 export const resolveHarnessDir = unavailable;
+export const resolveRepoEnforcement = unavailable;
 export const validateStatus = unavailable;
 `;
 

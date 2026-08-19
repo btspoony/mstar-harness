@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import z from 'schemastery'
-import { resolveCompassEnforcement, resolveHarnessDir } from '@mstar-harness/engine'
+import { resolveHarnessDir, resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { GateResult, ValidationResult } from '@mstar-harness/engine'
 import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-filesystem'
 import type { IterationGateListView, IterationGateViolationView } from '../types.ts'
@@ -30,8 +30,7 @@ export interface Config {
    * `{HARNESS_DIR}` resolution order); when absent the plugin probes from
    * the SESSION workspace root (`agent.session.header.cwd`) — never the
    * process cwd — walking `.mstar/` → `.agents/` → `.plans/`/`plans/`.
-   * Required for repos whose harness root is not a probed name (e.g. a
-   * `.harness/` maintenance root).
+   * Required for repos whose harness root is not a probed name.
    */
   harnessDir?: string
   /**
@@ -245,8 +244,9 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 /**
  * Resolve the hard-enforcement flag for the artifact gates: explicit
- * Config override wins, else the iteration compass frontmatter (when a
- * harness dir resolves), else warn-only. {@link resolveHard} parity with a
+ * Config override wins, else the repo `.mstarc` `[config] enforcement`,
+ * else the iteration compass frontmatter (when a harness dir resolves),
+ * else warn-only. {@link resolveHard} parity with a
  * null-tolerant harness dir — the skill roots and the artifact
  * seams (design-md / audit / compound / roles) do not require
  * `{HARNESS_DIR}` (compound scoping is the only seam that does, and only
@@ -255,7 +255,7 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 export function resolveSeamHard(harnessDir: string | null, config: Config): boolean {
   if (config.enforcement === 'hard') return true
   if (config.enforcement === 'soft') return false
-  return harnessDir !== null && resolveCompassEnforcement(harnessDir).hard
+  return harnessDir !== null && resolveRepoEnforcement(harnessDir).hard
 }
 /**
  * Resolve the plugin package's own `harness-skills/` mirror (synced from the
