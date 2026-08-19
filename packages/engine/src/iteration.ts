@@ -13,10 +13,12 @@
  *   required; §3.5 exit checklist all `[x]` + frontmatter `completed` +
  *   `end_date` → Phase 4): `mstar-iteration` SKILL.md Phase transition
  *   gates table.
- * - §3.1 close entry checklist (checkable subset — plans all Done, no
- *   residual_findings open beyond zero-residual blocker-defers for the
- *   iteration's plans, compass frontmatter complete):
- *   `mstar-iteration/references/phase-3-iteration-close.md` §3.1.
+ * - §3.1 close entry checklist (checkable subset — plans all Done, compass
+ *   frontmatter complete): `mstar-iteration/references/
+ *   phase-3-iteration-close.md` §3.1. The residual item relocated to the
+ *   project-layer `findingsCleanupGate(register, planId)` in the v3 cutover
+ *   (the workflow snapshot carries no residuals; residual close is a
+ *   project-register state change).
  *   Un-checkable items (Acceptance Criteria waiver reasoning,
  *   `## Plans` table prose sync) stay judgment and are NOT asserted here.
  * - §3.5 close exit checklist (checkable subset — frontmatter `status:
@@ -36,7 +38,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
-import { isOpenResidual, type StatusDoc } from "./status.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -44,6 +45,17 @@ const PLAN_STATUS_DONE = "Done";
 const COMPASS_FILE = "delivery-compass.md";
 const INDEX_README = "README.md";
 const INDEX_HEADER = "| Iteration | Path | Description | Status |";
+
+/**
+ * Loose shape of a parsed workflow snapshot (`workflows/<id>/snapshot.json`).
+ * All fields are `unknown` because documents come from JSON at runtime;
+ * validators narrow them. `plans[]` rows are the legacy PlanRow shape
+ * verbatim (plan Task 2) — `findPlanRow` accepts `id` or `plan_id`.
+ */
+export type SnapshotDoc = {
+  plans?: unknown;
+  [key: string]: unknown;
+};
 
 /**
  * Loose shape of a parsed delivery-compass.md frontmatter. All fields are
@@ -282,13 +294,13 @@ function registeredPlanIds(compassDoc: CompassDoc): string[] {
 }
 
 /**
- * Locate the status.json plans[] row for a plan id. Reads accept `id` or
+ * Locate the snapshot plans[] row for a plan id. Reads accept `id` or
  * `plan_id` (status-and-residuals.md § Compatibility: read accepts both,
  * write prefers `id`).
  */
-function findPlanRow(statusDoc: StatusDoc, planId: string): Record<string, unknown> | null {
-  if (!Array.isArray(statusDoc.plans)) return null;
-  for (const row of statusDoc.plans) {
+function findPlanRow(snapshotDoc: SnapshotDoc, planId: string): Record<string, unknown> | null {
+  if (!Array.isArray(snapshotDoc.plans)) return null;
+  for (const row of snapshotDoc.plans) {
     if (!isPlainObject(row)) continue;
     const rowId = typeof row.id === "string" ? row.id : typeof row.plan_id === "string" ? row.plan_id : null;
     if (rowId === planId) return row;
@@ -296,8 +308,8 @@ function findPlanRow(statusDoc: StatusDoc, planId: string): Record<string, unkno
   return null;
 }
 
-/** §3.1 entry item 1 — every compass-registered plan is `Done` in status.json. */
-function entryPlansAllDone(statusDoc: StatusDoc, registered: string[]): ValidationResult[] {
+/** §3.1 entry item 1 — every compass-registered plan is `Done` in the snapshot plans[]. */
+function entryPlansAllDone(snapshotDoc: SnapshotDoc, registered: string[]): ValidationResult[] {
   const violations: ValidationResult[] = [];
   if (registered.length === 0) {
     violations.push(
@@ -311,14 +323,14 @@ function entryPlansAllDone(statusDoc: StatusDoc, registered: string[]): Validati
     return violations;
   }
   for (const planId of registered) {
-    const row = findPlanRow(statusDoc, planId);
+    const row = findPlanRow(snapshotDoc, planId);
     if (row === null) {
       violations.push(
         violation(
           "high",
           "PLAN_NOT_IN_STATUS",
-          `Plan '${planId}' is registered in the compass frontmatter but has no row in status.json plans[] (mstar-iteration \u00a73.1 entry item 1)`,
-          "Add the plan row to {HARNESS_DIR}/status.json",
+          `Plan '${planId}' is registered in the compass frontmatter but has no row in the workflow snapshot plans[] (mstar-iteration \u00a73.1 entry item 1)`,
+          "Add the plan row to {HARNESS_DIR}/workflows/<id>/snapshot.json",
         ),
       );
       continue;
@@ -328,70 +340,10 @@ function entryPlansAllDone(statusDoc: StatusDoc, registered: string[]): Validati
         violation(
           "high",
           "PLAN_NOT_DONE",
-          `Plan '${planId}' status is ${JSON.stringify(row.status)} in status.json \u2014 all compass-registered plans must be 'Done' before iteration-close (mstar-iteration \u00a73.1 entry item 1)`,
+          `Plan '${planId}' status is ${JSON.stringify(row.status)} in the workflow snapshot \u2014 all compass-registered plans must be 'Done' before iteration-close (mstar-iteration \u00a73.1 entry item 1)`,
         ),
       );
     }
-  }
-  return violations;
-}
-
-/**
- * §3.1 entry item 2 (checkable subset) — residual findings of the
- * iteration's plans must be closed or archived. Openness reuses status.ts
- * `isOpenResidual` (jq `//` parity: missing / null / false lifecycle all
- * count as open — closed/waived/resolved entries are not open). Exception
- * per mstar-plan-artifacts Findings cleanup modes (`zero-residual`):
- * blocker-defers (`decision: "defer"` + non-empty `target`) may stay open;
- * the Durable Roadmap prose itself remains human judgment.
- */
-function entryResidualsOpen(statusDoc: StatusDoc, planId: string): ValidationResult[] {
-  const violations: ValidationResult[] = [];
-  const residualRoot = statusDoc.residual_findings;
-  if (residualRoot === undefined || residualRoot === null) return violations;
-  if (!isPlainObject(residualRoot)) {
-    violations.push(
-      violation(
-        "medium",
-        "RESIDUAL_MALFORMED",
-        "status.json residual_findings must be a plan-id \u2192 entries object (mstar-iteration \u00a73.1 entry item 2)",
-      ),
-    );
-    return violations;
-  }
-  const entries = residualRoot[planId];
-  if (entries === undefined) return violations;
-  if (!Array.isArray(entries)) {
-    violations.push(
-      violation(
-        "medium",
-        "RESIDUAL_MALFORMED",
-        `status.json residual_findings['${planId}'] must be an array of residual entries (mstar-iteration \u00a73.1 entry item 2)`,
-      ),
-    );
-    return violations;
-  }
-  const openIds: string[] = [];
-  for (const entry of entries) {
-    if (!isPlainObject(entry) || !isOpenResidual(entry)) continue;
-    // zero-residual exception: blocker-defer (`decision: defer` + non-empty
-    // `target`) may stay open at entry; every other open residual blocks.
-    const isBlockerDefer =
-      entry.decision === "defer" &&
-      typeof entry.target === "string" &&
-      entry.target.trim() !== "";
-    if (isBlockerDefer) continue;
-    openIds.push(typeof entry.id === "string" ? entry.id : "<unnamed>");
-  }
-  if (openIds.length > 0) {
-    violations.push(
-      violation(
-        "high",
-        "OPEN_RESIDUALS",
-        `Plan '${planId}' has ${openIds.length} open residual finding(s) not exempted as blocker-defers (${openIds.join(", ")}) \u2014 residuals must be closed/archived before iteration-close; only zero-residual blocker-defers (decision: defer + target) may stay open (mstar-iteration \u00a73.1 entry item 2)`,
-        "Close or archive the open residuals, or convert them into blocker-defers (decision: defer + non-empty target) per mstar-plan-artifacts Findings cleanup modes",
-      ),
-    );
   }
   return violations;
 }
@@ -477,22 +429,27 @@ function exitPrBaseCheck(compassDoc: CompassDoc, opts: PhaseGateOptions): Valida
 
 /**
  * Evaluate the Phase transition gates (mstar-iteration Phase transition
- * gates table): all compass-registered plans `Done` (per statusDoc plans[]
- * status) → Phase 3 required, with the checkable subsets of the §3.1 entry
- * and §3.5 exit checklists as missing-item violations.
+ * gates table): all compass-registered plans `Done` (per the workflow
+ * snapshot plans[] status) → Phase 3 required, with the checkable subsets
+ * of the §3.1 entry and §3.5 exit checklists as missing-item violations.
+ *
+ * v3 relocation: the first doc is the workflow snapshot
+ * (`workflows/<id>/snapshot.json`); the compass stays the second input.
+ * The §3.1 residual item relocated to the project-layer
+ * `findingsCleanupGate(register, planId)` — the snapshot carries no
+ * residuals (residual close is a project-register state change).
  *
  * Pure function — git probes (`currentBranch`, `specIntegrationBranch`,
  * `prBaseBranch`) come from the caller via `opts`.
  */
 export function evaluatePhaseGate(
-  statusDoc: StatusDoc,
+  snapshotDoc: SnapshotDoc,
   compassDoc: CompassDoc,
   opts: PhaseGateOptions = {},
 ): PhaseGateResult {
   const registered = registeredPlanIds(compassDoc);
   const entryViolations: ValidationResult[] = [
-    ...entryPlansAllDone(statusDoc, registered),
-    ...registered.flatMap((planId) => entryResidualsOpen(statusDoc, planId)),
+    ...entryPlansAllDone(snapshotDoc, registered),
     ...entryFrontmatterComplete(compassDoc),
   ];
   const exitViolations: ValidationResult[] = [
@@ -503,7 +460,7 @@ export function evaluatePhaseGate(
   const allPlansDone =
     registered.length > 0 &&
     registered.every((planId) => {
-      const row = findPlanRow(statusDoc, planId);
+      const row = findPlanRow(snapshotDoc, planId);
       return row !== null && row.status === PLAN_STATUS_DONE;
     });
   const entry: GateResult = { ok: entryViolations.length === 0, violations: entryViolations };

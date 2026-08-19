@@ -48,7 +48,6 @@ export {
   validateGitignore,
 } from "./path.js";
 export type {
-  ArchiveResult,
   FindingsCleanupMode,
   PlanRow,
   ResidualEntry,
@@ -60,7 +59,6 @@ export type {
   WorkflowEntry,
 } from "./status.js";
 export {
-  archiveResiduals,
   findingsCleanupGate,
   normalizeSeverity,
   registerWorkflow,

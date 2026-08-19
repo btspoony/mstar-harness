@@ -278,6 +278,26 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     }
   });
 
+  test("probes an active workflow via snapshot presence when status.json is absent (v3 probe)", () => {
+    // Task 5: probe semantics unchanged (root status.json existence) PLUS
+    // workflow-snapshot presence detects an active lifecycle — a harness
+    // whose root status.json does not exist yet still resolves.
+    const root = tmpRoot("sdd-ws-snapshot-");
+    try {
+      git(["init", "-q"], root);
+      mkdirSync(join(root, ".mstar", "workflows", "wf-1"), { recursive: true });
+      writeFileSync(
+        join(root, ".mstar", "workflows", "wf-1", "snapshot.json"),
+        JSON.stringify({ schema_version: 1, id: "wf-1", type: "plan", status: "running", started_at: "2026-08-19T08:00:00Z", updated_at: "2026-08-19", plans: [] }),
+        "utf8",
+      );
+      const dir = sddWorkspace("plan-1", { cwd: root });
+      expect(dir).toBe(realpathSync(join(root, ".mstar", "sdd", "plan-1")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("honors the CONTROL_ROOT option (CLI 2nd arg) and MSTAR_CONTROL_ROOT env", () => {
     const control = tmpRoot("sdd-ws-control-");
     const elsewhere = tmpRoot("sdd-ws-elsewhere-");

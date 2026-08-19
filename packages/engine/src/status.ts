@@ -30,13 +30,14 @@
  *   § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
  *   `techDebtRollup` (CLI form: `mstar status tech-debt [path]`).
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readJson, writeJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
-import { resolveHarnessDir, resolveIterationDir, assertSafePathComponent } from "./path.js";
+import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
+import { PROJECT_REGISTER_FILE, type ProjectRegisterDoc } from "./project.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
 // from this module): neither module dereferences the other's bindings during
 // module evaluation, so the ESM live-binding cycle is safe.
@@ -129,18 +130,18 @@ export type TechDebtCheck = {
   status: "PASS" | "DRIFT";
 };
 
-/** Result of the rollup + drift check vs stored `metadata.tech_debt_summary`. */
+/**
+ * Result of the project-register rollup. `stored`/`checks`/`overall` are
+ * retained for export-surface compatibility (the P2 CLI cutover): the v1
+ * stored-summary drift check (`metadata.tech_debt_summary`) is deleted in
+ * the v3 cutover — the project register is the source of truth, so `stored`
+ * is always null and every check reports DRIFT.
+ */
 export type TechDebtRollup = {
   computed: TechDebtSummary;
   stored: Record<string, unknown> | null;
   checks: TechDebtCheck[];
   overall: "PASS" | "DRIFT";
-};
-
-export type ArchiveResult = {
-  planId: string;
-  archived: number;
-  archivePath: string;
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -715,160 +716,76 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
 }
 
 /**
- * Archive the open residuals of a plan (status-and-residuals.md
- * § Residual findings lifecycle): append every entry of
- * `residual_findings[<plan-id>]` to `{HARNESS_DIR}/archived/residuals/
- * <plan-id>.json` (stamped `archived_at`), delete the key from the open list,
- * and bump root `updated_at`. No-op (archived 0) when the plan has no open
- * residuals. `harnessDir` defaults to the resolved `{HARNESS_DIR}` from cwd.
- *
- * `planId` is validated as a single safe path component before it is used to
- * build the archive path (path traversal guard — see
- * `assertSafePathComponent`). The status.json read-modify-write runs under
- * `withStatusWriteLock` so concurrent coordination writers serialize.
- *
- * simplify: archive append + status.json update are two separate writes —
- * a crash between them leaves entries both archived and open; re-running is
- * safe because appends dedup on `entries[].id` (F-10). Not transactional by
- * design (v1); the write lock from F-004 keeps concurrent writers safe.
- */
-export async function archiveResiduals(planId: string, harnessDir?: string): Promise<ArchiveResult> {
-  const dir = harnessDir !== undefined ? resolve(harnessDir) : resolveHarnessDir();
-  if (dir === null) {
-    throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass harnessDir or set MSTAR_HARNESS_DIR`);
-  }
-  assertSafePathComponent(planId, "planId");
-  const statusPath = join(dir, "status.json");
-  if (!existsSync(statusPath)) {
-    throw new Error(`status file not found: ${statusPath}`);
-  }
-  return withStatusWriteLock(statusPath, () => {
-    const doc = readJson(statusPath) as StatusDoc;
-    if (!isPlainObject(doc.residual_findings)) {
-      throw new Error(`status.json residual_findings must be an object: ${statusPath}`);
-    }
-    const open = doc.residual_findings[planId];
-    const archivePath = join(dir, "archived", "residuals", `${planId}.json`);
-    if (!Array.isArray(open) || open.length === 0) {
-      return { planId, archived: 0, archivePath };
-    }
-
-    const archive = readJson(archivePath) as { entries?: unknown };
-    const existing = Array.isArray(archive.entries) ? archive.entries : [];
-    const existingIds = new Set(
-      existing
-        .map((e) => (isPlainObject(e) && typeof e.id === "string" ? e.id : undefined))
-        .filter((id): id is string => id !== undefined),
-    );
-    const today = todayString();
-    // Dedup on append: ids already present in the archive file are skipped
-    // (re-running an interrupted archive must not duplicate entries).
-    const moved = open
-      .filter((entry) => {
-        if (!isPlainObject(entry) || typeof entry.id !== "string") return true;
-        return !existingIds.has(entry.id);
-      })
-      .map((entry) => ({ ...(entry as Record<string, unknown>), archived_at: today }));
-    if (moved.length > 0) {
-      writeJson(archivePath, { plan_id: planId, schema_version: 1, entries: [...existing, ...moved] });
-    }
-
-    delete doc.residual_findings[planId];
-    doc.updated_at = today;
-    writeJson(statusPath, doc);
-
-    return { planId, archived: moved.length, archivePath };
-  });
-}
-
-/** Read `plans[].metadata.findings_cleanup` for a plan (mirror; Assignment wins). */
-function planFindingsCleanup(doc: StatusDoc, planId: string): FindingsCleanupMode | undefined {
-  if (!Array.isArray(doc.plans)) return undefined;
-  for (const row of doc.plans) {
-    if (!isPlainObject(row)) continue;
-    const rowId = row.id ?? row.plan_id;
-    if (rowId !== planId) continue;
-    if (!isPlainObject(row.metadata)) return undefined;
-    const mode = row.metadata.findings_cleanup;
-    if (mode === "zero-residual" || mode === "allow-residual") return mode;
-    return undefined;
-  }
-  return undefined;
-}
-
-/** Open residuals of one plan (empty list when absent or malformed). */
-function openResidualsOf(doc: StatusDoc, planId: string): Array<Record<string, unknown>> {
-  if (!isPlainObject(doc.residual_findings)) return [];
-  const list = doc.residual_findings[planId];
-  if (!Array.isArray(list)) return [];
-  return list.filter((entry): entry is Record<string, unknown> => isPlainObject(entry) && isOpenResidual(entry));
-}
-
-/**
- * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes).
+ * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
+ * v3 relocation — the input is the project register
+ * `projects/<id>/residuals.json`, one entry per plan-id key, and the plan id
+ * links the register entry to the snapshot's plan row).
  * `zero-residual`: only true blocker-defers (`decision: defer` + non-empty
  * `target`) may stay open — fixable findings, `nit`s, and waived/
  * risk-accepted entries are violations. `allow-residual` (default): open
  * residuals are fine unless an unresolved Critical remains. Mode resolution:
- * explicit `opts.mode` → `plans[].metadata.findings_cleanup` → `allow-residual`.
+ * explicit `opts.mode` → `allow-residual` (the v1
+ * `plans[].metadata.findings_cleanup` mirror is deleted — no dual-track).
  */
 export function findingsCleanupGate(
-  doc: StatusDoc,
+  register: ProjectRegisterDoc,
   planId: string,
   opts?: { mode?: FindingsCleanupMode },
 ): GateResult {
-  const mode = opts?.mode ?? planFindingsCleanup(doc, planId) ?? "allow-residual";
+  const mode = opts?.mode ?? "allow-residual";
   const violations: ValidationResult[] = [];
-  const residuals = openResidualsOf(doc, planId);
+  const entry = isPlainObject(register.entries) ? register.entries[planId] : undefined;
+  if (entry === undefined) {
+    // No register entry for this plan → no open residuals; the gate passes.
+    return { ok: true, violations };
+  }
 
-  for (const entry of residuals) {
-    const id = typeof entry.id === "string" ? entry.id : "<unnamed>";
-    const label = `R#${id}`;
-    if (mode === "zero-residual") {
-      if (entry.severity === "nit") {
+  const id = typeof entry.id === "string" ? entry.id : "<unnamed>";
+  const label = `R#${id}`;
+  if (mode === "zero-residual") {
+    if (entry.severity === "nit") {
+      violations.push(
+        violation(
+          "medium",
+          "findings.zero-residual-nit",
+          `${label}: style-only nits must be fixed in-session or dropped \u2014 never left open under zero-residual`,
+        ),
+      );
+    } else if (entry.decision === "risk-accepted" || entry.lifecycle === "waived") {
+      violations.push(
+        violation(
+          "medium",
+          "findings.zero-residual-risk-accepted",
+          `${label}: waived/risk-accepted findings must be closed/archived, not left open under zero-residual`,
+        ),
+      );
+    } else if (entry.decision === "defer") {
+      if (typeof entry.target !== "string" || entry.target.trim() === "") {
         violations.push(
           violation(
             "medium",
-            "findings.zero-residual-nit",
-            `${label}: style-only nits must be fixed in-session or dropped \u2014 never left open under zero-residual`,
-          ),
-        );
-      } else if (entry.decision === "risk-accepted" || entry.lifecycle === "waived") {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-risk-accepted",
-            `${label}: waived/risk-accepted findings must be closed/archived, not left open under zero-residual`,
-          ),
-        );
-      } else if (entry.decision === "defer") {
-        if (typeof entry.target !== "string" || entry.target.trim() === "") {
-          violations.push(
-            violation(
-              "medium",
-              "findings.zero-residual-defer-no-target",
-              `${label}: blocker-defer requires a target (next iteration/milestone) under zero-residual`,
-            ),
-          );
-        }
-      } else {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-open-fixable",
-            `${label}: fixable finding must not remain open under zero-residual \u2014 fix now or convert to a blocker-defer`,
+            "findings.zero-residual-defer-no-target",
+            `${label}: blocker-defer requires a target (next iteration/milestone) under zero-residual`,
           ),
         );
       }
-    } else if (normalizeSeverity(entry.severity) === "critical") {
+    } else {
       violations.push(
         violation(
-          "high",
-          "findings.allow-residual-critical",
-          `${label}: unresolved critical blocks Approve with residuals`,
+          "medium",
+          "findings.zero-residual-open-fixable",
+          `${label}: fixable finding must not remain open under zero-residual \u2014 fix now or convert to a blocker-defer`,
         ),
       );
     }
+  } else if (normalizeSeverity(entry.severity) === "critical") {
+    violations.push(
+      violation(
+        "high",
+        "findings.allow-residual-critical",
+        `${label}: unresolved critical blocks Approve with residuals`,
+      ),
+    );
   }
 
   return { ok: violations.length === 0, violations };
@@ -967,34 +884,42 @@ function groupCount(values: unknown[]): Record<string, number> {
 }
 
 /**
- * Compute the `metadata.tech_debt_summary` rollup (status-and-residuals.md
- * § `metadata.tech_debt_summary`): `total_open` / `by_severity` /
- * `by_target` / `by_plan` over open entries of root `residual_findings`
- * merged with the legacy `metadata.residual_findings` read path (canonical
- * keys win; legacy `"warning"` → `low`, `null`/`""` → `medium`; closed
- * entries skipped; missing `target` groups under `"unspecified"`), then
- * compare field-by-field against stored `metadata.tech_debt_summary`.
- * Accepts a parsed document or a file path. Does not write status.json.
+ * Compute the tech-debt rollup over the project registers (v3 relocation —
+ * status-and-residuals.md § `metadata.tech_debt_summary` semantics preserved
+ * at the project layer): `total_open` / `by_severity` / `by_target` /
+ * `by_plan` over open entries of every `projects/<id>/residuals.json`
+ * register under `projectDir` (legacy `"warning"` → `low`, `null`/`""` →
+ * `medium`; closed entries skipped; missing `target` groups under
+ * `"unspecified"`; `by_plan` keyed by plan id — the snapshot plan linkage).
+ *
+ * The v1 stored-summary drift check (`metadata.tech_debt_summary`) is a v1
+ * dead path — the register is the source of truth, so `stored` is always
+ * null and the retained `checks`/`overall` fields report DRIFT
+ * (export-surface compatibility until the P2 CLI cutover). Does not write
+ * anything.
  */
-export function techDebtRollup(docOrPath: StatusDoc | string): TechDebtRollup {
-  const doc = typeof docOrPath === "string" ? (readJson(docOrPath) as StatusDoc) : docOrPath;
-  const canonical = isPlainObject(doc.residual_findings) ? doc.residual_findings : {};
-  const metadata = isPlainObject(doc.metadata) ? doc.metadata : {};
-  const legacy = isPlainObject(metadata.residual_findings) ? metadata.residual_findings : {};
-  // jq `($canon + $legacy)`: object `+` keeps the RIGHT operand's value for
-  // duplicate keys — so on a conflicting plan key the legacy map wins. The
-  // reference says "canonical keys win", but the expression behaves
-  // otherwise; the port mirrors the actual jq output (dual-write is forbidden
-  // in practice, so conflicts should not occur — `status.dual-write-residuals`).
-  const merged = { ...canonical, ...legacy };
-
+export function techDebtRollup(projectDir: string): TechDebtRollup {
   const items: Array<{ plan: string; entry: Record<string, unknown> }> = [];
-  for (const [plan, list] of Object.entries(merged)) {
-    // simplify: jq `.value[]` would iterate non-array values; fixtures are well-formed arrays
-    if (!Array.isArray(list)) continue;
-    for (const value of list) {
-      if (!isPlainObject(value) || !isOpenResidual(value)) continue;
-      items.push({ plan, entry: value });
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(projectDir, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  for (const project of entries) {
+    if (!project.isDirectory()) continue;
+    const registerPath = join(projectDir, project.name, PROJECT_REGISTER_FILE);
+    if (!existsSync(registerPath)) continue;
+    let register: unknown;
+    try {
+      register = readJson(registerPath);
+    } catch {
+      continue; // malformed register files are skipped — the register validator is the schema gate
+    }
+    if (!isPlainObject(register) || !isPlainObject(register.entries)) continue;
+    for (const [plan, entry] of Object.entries(register.entries)) {
+      if (!isPlainObject(entry) || !isOpenResidual(entry)) continue;
+      items.push({ plan, entry });
     }
   }
 
@@ -1010,25 +935,9 @@ export function techDebtRollup(docOrPath: StatusDoc | string): TechDebtRollup {
     by_plan: groupCount(items.map(({ plan }) => plan)),
   };
 
-  const storedRaw = metadata.tech_debt_summary ?? null;
-  const stored = storedRaw === null ? null : (storedRaw as Record<string, unknown>);
-  const checks: TechDebtCheck[] = ROLLUP_FIELDS.map((field) => {
-    const computedField = computed[field];
-    if (stored === null) return { field, status: "DRIFT" as const };
-    // Bash oracle parity: `compare_field` string-compares `jq -c ".$field // null"`,
-    // so key ORDER matters (`{"a":1,"b":2}` != `{"b":2,"a":1}`). JSON.stringify
-    // preserves insertion order like `jq -c` — the computed side is built in
-    // jq construction order (SEVERITY_ORDER for by_severity, sorted group
-    // keys for by_target/by_plan) — so stringify, not deep equality, mirrors
-    // the oracle. jq's alternative operator `//` yields the default for
-    // `false` AND `null` (0 stays 0 — it is truthy in jq); mirror exactly.
-    const storedField = stored[field];
-    const storedCompared = storedField === false ? null : (storedField ?? null);
-    const status =
-      JSON.stringify(computedField) === JSON.stringify(storedCompared) ? ("PASS" as const) : ("DRIFT" as const);
-    return { field, status };
-  });
-  const overall = checks.every((check) => check.status === "PASS") ? ("PASS" as const) : ("DRIFT" as const);
+  const stored = null;
+  const checks: TechDebtCheck[] = ROLLUP_FIELDS.map((field) => ({ field, status: "DRIFT" as const }));
+  const overall = "DRIFT" as const;
 
   return { computed, stored, checks, overall };
 }

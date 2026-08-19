@@ -13,10 +13,11 @@
  *   required; §3.5 exit checklist all `[x]` + frontmatter `completed` +
  *   `end_date` → Phase 4): `skills/mstar-iteration/SKILL.md` Phase
  *   transition gates table.
- * - §3.1 close entry checklist (checkable subset: plans all Done, no open
- *   residual_findings for the iteration's plans, compass frontmatter
- *   complete): `skills/mstar-iteration/references/phase-3-iteration-close.md`
- *   §3.1.
+ * - §3.1 close entry checklist (checkable subset: plans all Done, compass
+ *   frontmatter complete — the residual item relocated to the project-layer
+ *   `findingsCleanupGate(register, planId)` in the v3 cutover; the workflow
+ *   snapshot carries no residuals): `skills/mstar-iteration/references/
+ *   phase-3-iteration-close.md` §3.1.
  * - §3.5 close exit checklist (checkable subset: frontmatter `status:
  *   completed` + `end_date` present, current branch is
  *   `spec_integration_branch`, PR base = `target_branch`):
@@ -41,7 +42,7 @@ import {
   validateCompassFrontmatter,
   type CompassDoc,
 } from "../src/iteration.js";
-import { isOpenResidual, type StatusDoc } from "../src/status.js";
+import type { SnapshotDoc } from "../src/iteration.js";
 import { readJson } from "../src/core.js";
 
 const REAL_STATUS_PATH = join(import.meta.dir, "fixtures", "status.real-shape.json");
@@ -67,16 +68,17 @@ function compass(overrides: Record<string, unknown> = {}): CompassDoc {
   };
 }
 
-function statusDoc(planStates: Record<string, string>): StatusDoc {
+/** Minimal workflow snapshot doc (`workflows/<id>/snapshot.json`) with plan rows. */
+function snapshotDoc(planStates: Record<string, string>): SnapshotDoc {
   return {
-    version: 1,
+    schema_version: 1,
+    id: "wf-1",
+    type: "iteration",
+    status: "running",
+    started_at: "2026-08-19T08:00:00Z",
     updated_at: "2026-08-08",
     plans: Object.entries(planStates).map(([plan_id, status]) => ({ plan_id, status })),
   };
-}
-
-function withResiduals(base: StatusDoc, residuals: Record<string, unknown[]>): StatusDoc {
-  return { ...base, residual_findings: residuals };
 }
 
 describe("validateCompassFrontmatter — compass schema (mstar-iteration §1.3 + iteration-compass-template.md Fields guide)", () => {
@@ -183,9 +185,9 @@ describe("validateCompassFrontmatter — compass schema (mstar-iteration §1.3 +
   });
 });
 
-describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transition gates table)", () => {
+describe("evaluatePhaseGate — phase transitions on workflow snapshot input (mstar-iteration Phase transition gates table)", () => {
   test("all compass plans Todo → phase-2-execute, gate passes (continue executing)", () => {
-    const result = evaluatePhaseGate(statusDoc({ "plan-a": "Todo", "plan-b": "Todo" }), compass());
+    const result = evaluatePhaseGate(snapshotDoc({ "plan-a": "Todo", "plan-b": "Todo" }), compass());
     expect(result.allPlansDone).toBe(false);
     expect(result.transition).toBe("phase-2-execute");
     expect(result.ok).toBe(true);
@@ -193,22 +195,26 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
   });
 
   test("mixed Done/Todo → phase-2-execute", () => {
-    const result = evaluatePhaseGate(statusDoc({ "plan-a": "Done", "plan-b": "InProgress" }), compass());
+    const result = evaluatePhaseGate(snapshotDoc({ "plan-a": "Done", "plan-b": "InProgress" }), compass());
     expect(result.allPlansDone).toBe(false);
     expect(result.transition).toBe("phase-2-execute");
     expect(result.ok).toBe(true);
   });
 
-  test("compass-registered plan missing from status.json plans[] is not Done (entry §3.1 item 1)", () => {
-    const result = evaluatePhaseGate(statusDoc({ "plan-a": "Done" }), compass());
+  test("compass-registered plan missing from snapshot plans[] is not Done (entry §3.1 item 1)", () => {
+    const result = evaluatePhaseGate(snapshotDoc({ "plan-a": "Done" }), compass());
     expect(result.allPlansDone).toBe(false);
     expect(result.transition).toBe("phase-2-execute");
     expect(result.entry.violations.some((v) => v.code === "PLAN_NOT_IN_STATUS" && v.message.includes("plan-b"))).toBe(true);
   });
 
   test("id-only plan rows (no plan_id) are found — status-and-residuals.md § Compatibility read accepts id or plan_id", () => {
-    const doc: StatusDoc = {
-      version: 1,
+    const doc: SnapshotDoc = {
+      schema_version: 1,
+      id: "wf-1",
+      type: "iteration",
+      status: "running",
+      started_at: "2026-08-19T08:00:00Z",
       updated_at: "2026-08-08",
       plans: [
         { id: "plan-a", status: "Done" },
@@ -222,8 +228,8 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
     expect(result.transition).toBe("phase-3-close");
   });
 
-  test("all plans Done + clean residuals + complete frontmatter → phase-3-close required, entry gate clean", () => {
-    const result = evaluatePhaseGate(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), compass());
+  test("all plans Done + complete frontmatter → phase-3-close required, entry gate clean", () => {
+    const result = evaluatePhaseGate(snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }), compass());
     expect(result.allPlansDone).toBe(true);
     expect(result.transition).toBe("phase-3-close");
     expect(result.entry.ok).toBe(true);
@@ -232,88 +238,9 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
     expect(result.ok).toBe(false);
   });
 
-  test("all plans Done but open residuals for an iteration plan → entry violation (entry §3.1 item 2)", () => {
-    const doc = withResiduals(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), {
-      "plan-a": [
-        { id: "R1", title: "leak", severity: "high", lifecycle: "open" },
-        { id: "R2", title: "lint", severity: "low" },
-      ],
-    });
-    const result = evaluatePhaseGate(doc, compass());
-    expect(result.allPlansDone).toBe(true);
-    const violation = result.entry.violations.find((v) => v.code === "OPEN_RESIDUALS");
-    expect(violation).toBeDefined();
-    expect(violation!.message).toContain("plan-a");
-    expect(violation!.message).toContain("R1");
-    expect(violation!.message).toContain("R2");
-  });
-
-  test("resolved/waived residuals do not block entry", () => {
-    const doc = withResiduals(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), {
-      "plan-a": [
-        { id: "R1", title: "done", severity: "high", lifecycle: "resolved" },
-        { id: "R2", title: "waived", severity: "medium", lifecycle: "waived" },
-      ],
-    });
-    const result = evaluatePhaseGate(doc, compass());
-    expect(result.entry.ok).toBe(true);
-  });
-
-  test("lifecycle null/false count as open — jq `//` parity with status.ts isOpenResidual (entry §3.1 item 2)", () => {
-    // status.ts isOpenResidual mirrors `.lifecycle // "open"`: undefined,
-    // null AND false all default to "open" (jq `//` treats false as falsy).
-    for (const lifecycle of [undefined, null, false, "open"]) {
-      expect(isOpenResidual({ lifecycle })).toBe(true);
-    }
-    for (const lifecycle of ["resolved", "waived", "superseded", "duplicate", "closed"]) {
-      expect(isOpenResidual({ lifecycle })).toBe(false);
-    }
-    const doc = withResiduals(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), {
-      "plan-a": [
-        { id: "R-null", title: "null lifecycle", severity: "low", lifecycle: null },
-        { id: "R-false", title: "false lifecycle", severity: "low", lifecycle: false },
-      ],
-    });
-    const result = evaluatePhaseGate(doc, compass());
-    expect(result.entry.ok).toBe(false);
-    const violation = result.entry.violations.find((v) => v.code === "OPEN_RESIDUALS");
-    expect(violation).toBeDefined();
-    expect(violation!.message).toContain("R-null");
-    expect(violation!.message).toContain("R-false");
-  });
-
-  test("zero-residual blocker-defers (decision: defer + non-empty target) are allowed at entry", () => {
-    const doc = withResiduals(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), {
-      "plan-a": [
-        { id: "R1", title: "external dependency", severity: "medium", decision: "defer", target: "v2.1.0", lifecycle: "open" },
-        { id: "R2", title: "roadmap slice", severity: "low", decision: "defer", target: "Next iteration" },
-      ],
-    });
-    const result = evaluatePhaseGate(doc, compass());
-    expect(result.entry.ok).toBe(true);
-    expect(result.entry.violations.some((v) => v.code === "OPEN_RESIDUALS")).toBe(false);
-  });
-
-  test("defer without roadmap target / risk-accepted / fixable opens still block entry (zero-residual rules)", () => {
-    const doc = withResiduals(statusDoc({ "plan-a": "Done", "plan-b": "Done" }), {
-      "plan-a": [
-        { id: "R1", title: "defer without target", severity: "medium", decision: "defer" },
-        { id: "R2", title: "risk accepted", severity: "medium", decision: "risk-accepted" },
-        { id: "R3", title: "fixable open", severity: "high" },
-      ],
-    });
-    const result = evaluatePhaseGate(doc, compass());
-    expect(result.entry.ok).toBe(false);
-    const violation = result.entry.violations.find((v) => v.code === "OPEN_RESIDUALS");
-    expect(violation).toBeDefined();
-    expect(violation!.message).toContain("R1");
-    expect(violation!.message).toContain("R2");
-    expect(violation!.message).toContain("R3");
-  });
-
   test("incomplete compass frontmatter fails entry (entry §3.1 item 5 checkable subset)", () => {
     const result = evaluatePhaseGate(
-      statusDoc({ "plan-a": "Done", "plan-b": "Done" }),
+      snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ target_branch: "" }),
     );
     expect(result.entry.ok).toBe(false);
@@ -321,7 +248,7 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
   });
 
   test("compass frontmatter with no plans cannot verify the transition (COMPASS_NO_PLANS)", () => {
-    const result = evaluatePhaseGate(statusDoc({}), compass({ plans: [] }));
+    const result = evaluatePhaseGate(snapshotDoc({}), compass({ plans: [] }));
     expect(result.allPlansDone).toBe(false);
     expect(result.transition).toBe("phase-2-execute");
     expect(result.entry.violations.some((v) => v.code === "COMPASS_NO_PLANS")).toBe(true);
@@ -329,7 +256,7 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
 
   test("exit checklist: frontmatter must be completed + end_date (exit §3.5 item 4)", () => {
     const result = evaluatePhaseGate(
-      statusDoc({ "plan-a": "Done", "plan-b": "Done" }),
+      snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "active" }),
     );
     expect(result.exit.violations.some((v) => v.code === "EXIT_STATUS_NOT_COMPLETED")).toBe(true);
@@ -338,13 +265,13 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
 
   test("exit checklist: current branch must be spec_integration_branch (exit §3.5 item 5)", () => {
     const result = evaluatePhaseGate(
-      statusDoc({ "plan-a": "Done", "plan-b": "Done" }),
+      snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "completed", end_date: "2026-08-10" }),
       { currentBranch: "feature/oops", specIntegrationBranch: "iteration/v9.9.9" },
     );
     expect(result.exit.violations.some((v) => v.code === "EXIT_BRANCH_MISMATCH")).toBe(true);
     const okBranch = evaluatePhaseGate(
-      statusDoc({ "plan-a": "Done", "plan-b": "Done" }),
+      snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "completed", end_date: "2026-08-10" }),
       { currentBranch: "iteration/v9.9.9", specIntegrationBranch: "iteration/v9.9.9" },
     );
@@ -353,14 +280,14 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
 
   test("exit checklist: PR base must equal compass target_branch, not an undocumented main (exit §3.5 item 6)", () => {
     const result = evaluatePhaseGate(
-      statusDoc({ "plan-a": "Done", "plan-b": "Done" }),
+      snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "completed", end_date: "2026-08-10", target_branch: "main" }),
       { prBaseBranch: "develop" },
     );
     expect(result.exit.violations.some((v) => v.code === "EXIT_PR_BASE_MISMATCH")).toBe(true);
     // documented main target: PR base main == target_branch main passes
     const okBase = evaluatePhaseGate(
-      statusDoc({ "plan-a": "Done", "plan-b": "Done" }),
+      snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "completed", end_date: "2026-08-10", target_branch: "main" }),
       { prBaseBranch: "main" },
     );
@@ -369,7 +296,7 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
 
   test("missing git probe inputs make the exit branch/PR-base checks unverifiable", () => {
     const result = evaluatePhaseGate(
-      statusDoc({ "plan-a": "Done", "plan-b": "Done" }),
+      snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "completed", end_date: "2026-08-10" }),
     );
     expect(result.exit.violations.some((v) => v.code === "EXIT_BRANCH_UNVERIFIABLE")).toBe(true);
@@ -378,7 +305,7 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
 
   test("entry + exit checkable subsets all green → phase-4-pr-delivery (transition table → Phase 4)", () => {
     const result = evaluatePhaseGate(
-      statusDoc({ "plan-a": "Done", "plan-b": "Done" }),
+      snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "completed", end_date: "2026-08-10" }),
       {
         currentBranch: "iteration/v9.9.9",
@@ -396,7 +323,7 @@ describe("evaluatePhaseGate — phase transitions (mstar-iteration Phase transit
   test("compass frontmatter + status shape fixtures → phase-2-execute (registered slice plans not Done)", () => {
     const compassFixture = readJson(join(import.meta.dir, "fixtures", "compass.real-frontmatter.json"));
     const statusFixture = readJson(REAL_STATUS_PATH);
-    const result = evaluatePhaseGate(statusFixture as StatusDoc, compassFixture as CompassDoc);
+    const result = evaluatePhaseGate(statusFixture as SnapshotDoc, compassFixture as CompassDoc);
     expect(result.allPlansDone).toBe(false);
     expect(result.transition).toBe("phase-2-execute");
     const missing = result.entry.violations.filter((v) => v.code === "PLAN_NOT_IN_STATUS");
