@@ -112,6 +112,7 @@ export type {
   AgentFlowEventView,
   AgentFlowSummaryRow,
   AgentFlowView,
+  WorkflowSelectionView,
 } from './types.ts'
 export {
   AGENT_FLOW_FILE,

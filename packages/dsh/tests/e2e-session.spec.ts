@@ -43,7 +43,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -408,9 +408,15 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-e2e-prestep-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
-    // Seeded BEFORE boot: the gate row is boot-cached (qc3 W-002).
+    // Seeded BEFORE boot: the gate row is boot-cached (qc3 W-002). v3: the
+    // catalog aggregates the selected workflow lifecycle (root v2
+    // `workflows[]` → the workflow snapshot).
     await seedHarness(harnessDir, {
-      'status.json': fixture('status/valid.json'),
+      'status.json': v2Root([v2WorkflowEntry('e2e-iter', 'iteration')]),
+      'workflows/e2e-iter/snapshot.json': v2Snapshot('e2e-iter', {
+        type: 'iteration',
+        plans: [{ id: 'fixture-plan-1', title: 'Fixture plan', status: 'Todo', file: 'plans/fixture.md' }],
+      }),
       'iterations/e2e-iter/delivery-compass.md': fixture('iteration/delivery-compass.md'),
     })
     const app = booted = await bootApp({ root, cordisYml: FIXTURE_CORDIS_YML })
@@ -436,10 +442,11 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     expect(source.enforcement).toEqual({ hard: false, source: 'none' })
 
     // Iteration phase-gate section: the boot-evaluated gate in the Task 1
-    // tool result shape (transition / all_plans_done / ok / codes).
+    // tool result shape (transition / all_plans_done / ok / codes) over the
+    // SELECTED workflow snapshot.
     expect(source.iteration).toMatchObject({
       iterationId: 'e2e-iter',
-      statusPath: join(harnessDir, 'status.json'),
+      statusPath: join(harnessDir, 'workflows/e2e-iter/snapshot.json'),
       gate: {
         transition: 'phase-2-execute',
         all_plans_done: false,
@@ -449,8 +456,10 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     })
 
     // Workspace-state section: plan registry, residuals, branch anchors
-    // (the fixture metadata is empty, so the compass fills base/target).
+    // (the snapshot carries no branch anchors, so the compass fills
+    // base/target).
     expect(source.state).toMatchObject({
+      selection: { kind: 'active', workflowId: 'e2e-iter', dir: 'workflows/e2e-iter' },
       plans: [{ id: 'fixture-plan-1', status: 'Todo' }],
       residuals: [],
       iterationBaseBranch: 'dev-dsh',

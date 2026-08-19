@@ -64,7 +64,7 @@ import {
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
-import { bootApp, seedHarness, FakeJobRegistry, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, FakeJobRegistry, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -1027,12 +1027,13 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
     }
   })
 
-  it('a dispatch through the real composition invalidates the catalog cache — the event is visible at the next pre-step within the REAL TTL (apply-bound wiring, Task 2)', async () => {
+  it('a dispatch through the real composition invalidates the catalog cache — a workflow-dir ledger change is visible at the next pre-step within the REAL TTL (apply-bound wiring, Task 2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-invalidator-wiring-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
     })
     // REAL TTL (default 60000): the event can only be visible at the first
     // pre-step if the record invalidated the boot-seeded cache entry.
@@ -1043,6 +1044,14 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
     // pre-registration would leave the stale boot build visible within the TTL.
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })
+
+    // The record lands in the ROOT ledger (the writer cutover is Task 2);
+    // the catalog reads the SELECTED workflow dir, so the invalidation
+    // observable is a workflow-dir line written after the record.
+    await writeFile(
+      join(harnessDir, 'workflows/wf-1', AGENT_FLOW_FILE),
+      `${dispatchLine()}\n`,
+    )
 
     const step = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     const { source } = catalogRowOf(step)
@@ -1215,15 +1224,25 @@ function textOf(row: UserMessage): string {
  * ========================================================================== */
 
 describe('agent-flow catalog — state.agentFlow evidence + render', () => {
-  it('ledger events surface as state.agentFlow; the model text gains ONE compact line', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-'))
+  /** Seed a v2 tree with one active workflow (`wf-1`) and return the harness dir. */
+  async function seedV2Tree(root: string): Promise<string> {
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
-    // Seeded BEFORE boot: the explicit-config catalog cache is pre-built at
-    // apply(), so the boot-time source carries the ledger (spec §2.2 TTL cycle).
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
-      [AGENT_FLOW_FILE]: `${dispatchLine()}\n${settleLine()}\n`,
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
+    })
+    return harnessDir
+  }
+
+  it('ledger events surface as state.agentFlow; the model text gains ONE compact line', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-'))
+    const harnessDir = await seedV2Tree(root)
+    // Seeded BEFORE boot: the explicit-config catalog cache is pre-built at
+    // apply(), so the boot-time source carries the ledger (spec §2.2 TTL
+    // cycle). v3: the ledger lives in the SELECTED workflow dir.
+    await seedHarness(harnessDir, {
+      'workflows/wf-1/agent-flow.jsonl': `${dispatchLine()}\n${settleLine()}\n`,
     })
     const app = booted = await bootApp({ root })
     const inbox = [inboxMessage()]
@@ -1255,13 +1274,10 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('no ledger → state.agentFlow is the EMPTY view and NO agent-flow line (qc1 F-001 fix-wave: missing file reads as empty, not null)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-none-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
+    const harnessDir = await seedV2Tree(root)
     // state is gated on status.json — seed it so the state section exists
-    // with an absent ledger (the missing-file empty view under test).
-    await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
-    })
+    // with an absent workflow-dir ledger (the missing-file empty view under
+    // test).
     const app = booted = await bootApp({ root })
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
@@ -1273,13 +1289,11 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('a full 50-event window renders the model-line window marker (qc3 F-004: "N events (latest 50)")', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-window-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
+    const harnessDir = await seedV2Tree(root)
     const lines: string[] = []
     for (let i = 0; i < 55; i += 1) lines.push(dispatchLine({ ts: 1_700_000_000_000 + i }))
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
-      [AGENT_FLOW_FILE]: `${lines.join('\n')}\n`,
+      'workflows/wf-1/agent-flow.jsonl': `${lines.join('\n')}\n`,
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
@@ -1291,11 +1305,9 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('zero events (malformed-only ledger) → no agent-flow line, state stays present', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-empty-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
+    const harnessDir = await seedV2Tree(root)
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
-      [AGENT_FLOW_FILE]: 'not json\n{{{ broken\n',
+      'workflows/wf-1/agent-flow.jsonl': 'not json\n{{{ broken\n',
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
@@ -1307,11 +1319,9 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('the agentFlow view carries no undefined-valued keys (Session.append lossless JSON)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-omit-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
+    const harnessDir = await seedV2Tree(root)
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
-      [AGENT_FLOW_FILE]: `${dispatchLine()}\n${settleLine({ durationMs: undefined })}\n`,
+      'workflows/wf-1/agent-flow.jsonl': `${dispatchLine()}\n${settleLine({ durationMs: undefined })}\n`,
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
@@ -1329,17 +1339,17 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('a mid-session dispatch lands in the catalog within one TTL (catalogTtlMs: 0 → immediate refresh)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-ttl-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
-    })
+    const harnessDir = await seedV2Tree(root)
     const app = booted = await bootApp({ root, catalogTtlMs: 0 })
     // First pre-step: no events yet.
     const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     catalogRowOf(first)
-    // Dispatch one event.
+    // Dispatch one event through the real composition (the record path fires
+    // the apply-bound invalidator; the record itself lands in the ROOT
+    // ledger — the writer cutover is Task 2). The catalog reads the SELECTED
+    // workflow dir, so the ledger line is written there.
     await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
+    await writeFile(join(harnessDir, 'workflows/wf-1', AGENT_FLOW_FILE), `${dispatchLine()}\n`)
     // Second pre-step: TTL 0 forces a rebuild → the event is visible.
     const second = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     const { row, source } = catalogRowOf(second)

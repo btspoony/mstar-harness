@@ -83,7 +83,7 @@ export interface IterationGateView {
 export interface MstarIterationGateView {
   /** Iteration id whose steering compass was evaluated. */
   readonly iterationId: string
-  /** Control-path `{HARNESS_DIR}/status.json` evaluated. */
+  /** The evaluated workflow snapshot path (`workflows/<id>/snapshot.json` — v3, the gate's first doc). */
   readonly statusPath: string
   /** The steering `{ITERATION_DIR}/<id>/delivery-compass.md` evaluated. */
   readonly compassPath: string
@@ -147,6 +147,36 @@ export interface HarnessLeaseView {
 }
 
 /**
+ * The catalog's workflow selection result (compass v3.0.0 § Catalog
+ * selection rule): the lifecycle the state section aggregates.
+ * `active` = the root v2 `workflows[]` first entry (with a structured
+ * warning when multiple active lifecycles — no silent pick); `terminal` =
+ * the latest terminal snapshot by mtime (history view); `error` = a clear
+ * selection failure (v1/unmigrated root, no snapshots) — never a root v1
+ * read. Structured and panel-renderable (not only a log line).
+ */
+export type WorkflowSelectionView =
+  | {
+      readonly kind: 'active'
+      /** The selected active lifecycle id (root v2 `workflows[]` first entry). */
+      readonly workflowId: string
+      /** Harness-relative workflow dir (e.g. `workflows/<id>`). */
+      readonly dir: string
+      /** Present when multiple active lifecycles — the first was picked (no silent pick). */
+      readonly warning?: { readonly code: string; readonly message: string }
+    }
+  | {
+      readonly kind: 'terminal'
+      readonly workflowId: string
+      readonly dir: string
+    }
+  | {
+      readonly kind: 'error'
+      readonly code: string
+      readonly message: string
+    }
+
+/**
  * The workspace-state digest section of the unified engine-status row: the
  * plan registry, open residual counts, branch/policy anchors, active
  * leases, knowledge index digest and the steering compass direction
@@ -156,7 +186,15 @@ export interface HarnessLeaseView {
  * `buildCatalogSources`).
  */
 export interface MstarHarnessState {
-  /** Registered plan rows (`plan_id`/`id` + `status`), status.json order. */
+  /**
+   * The selected workflow lifecycle (compass v3.0.0 § Catalog selection
+   * rule): active `workflows[]` first → latest terminal snapshot by mtime →
+   * clear error. The state section aggregates the SELECTED lifecycle only;
+   * a selection error carries the operator-visible reason (never a root v1
+   * read).
+   */
+  readonly selection: WorkflowSelectionView
+  /** Registered plan rows (`plan_id`/`id` + `status`), snapshot plans[] order. */
   readonly plans: readonly HarnessPlanView[]
   /** Open `residual_findings` counts by severity (non-zero only). */
   readonly residuals: readonly HarnessResidualView[]

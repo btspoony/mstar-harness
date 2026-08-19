@@ -403,6 +403,30 @@ export const VALID_STATUS = {
   metadata: {},
 }
 
+/** A minimal v2 root status.json (version 2 + active `workflows[]` only). */
+export function v2Root(workflows: unknown[]): string {
+  return JSON.stringify({ version: 2, updated_at: '2026-08-19', workflows })
+}
+
+/** One active v2 root `workflows[]` entry (harness-relative `dir`). */
+export function v2WorkflowEntry(id: string, type: 'plan' | 'iteration' = 'plan'): Record<string, unknown> {
+  return { id, type, started_at: '2026-08-19', dir: `workflows/${id}` }
+}
+
+/** A minimal workflow snapshot (schema_version 1) for the given workflow id. */
+export function v2Snapshot(id: string, overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    schema_version: 1,
+    id,
+    type: 'plan',
+    status: 'running',
+    started_at: '2026-08-19',
+    updated_at: '2026-08-19',
+    plans: [],
+    ...overrides,
+  })
+}
+
 /** Well-formed JSON that fails the status schema (plans must be an array). */
 export const INVALID_STATUS = {
   version: 1,

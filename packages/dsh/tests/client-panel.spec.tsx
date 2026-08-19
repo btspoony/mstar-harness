@@ -174,6 +174,7 @@ const fullSource: MstarEngineStatusSource = {
     },
   },
   state: {
+    selection: { kind: 'active', workflowId: 'iter-20260809-dsh-workflow-viz', dir: 'workflows/iter-20260809-dsh-workflow-viz' },
     plans: [
       { id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null, iterationRefs: [] },
       { id: '20260808-dsh-package-core', status: 'Done', doneAt: '2026-08-08', iterationRefs: [] },
@@ -226,6 +227,7 @@ const noGateSource: MstarEngineStatusSource = {
   harnessDir: '/proj/.mstar',
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: {
+    selection: { kind: 'active', workflowId: 'wf-1', dir: 'workflows/wf-1' },
     plans: [{ id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null, iterationRefs: [] }],
     residuals: [],
     residualFindings: null,

@@ -41,7 +41,7 @@ import { join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -72,11 +72,6 @@ const COMPASS_ACTIVE = [
   '# Fixture Delivery Compass',
   '',
 ].join('\n')
-
-/** status.json built from a plans[] array (harness VALID_STATUS base). */
-function statusWithPlans(plans: unknown[], residuals: Record<string, unknown> = {}): Record<string, unknown> {
-  return { version: 1, updated_at: '2026-08-08', plans, residual_findings: residuals, metadata: {} }
-}
 
 const PLAN_DONE = { id: 'fixture-plan-1', title: 'Fixture plan', status: 'Done', file: 'plans/fixture.md' }
 const PLAN_TODO = { ...PLAN_DONE, status: 'Todo' }
@@ -110,12 +105,13 @@ const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>
 const secondLastMessage = (decision: PreStepDecision): UserMessage | undefined =>
   decision.kind === 'enter' ? decision.messages.at(-2) : undefined
 
-/** Seed a boot-time iteration state (status.json + steering compass) under root/harness. */
+/** Seed a boot-time iteration state (v2 root + workflow snapshot + steering compass) under root/harness. */
 async function seedIteration(root: string, plans: unknown[], compass: string): Promise<void> {
   const harnessDir = join(root, 'harness')
   await mkdir(harnessDir, { recursive: true })
   await seedHarness(harnessDir, {
-    'status.json': JSON.stringify(statusWithPlans(plans)),
+    'status.json': v2Root([v2WorkflowEntry('iter-20260808-wt', 'iteration')]),
+    'workflows/iter-20260808-wt/snapshot.json': v2Snapshot('iter-20260808-wt', { type: 'iteration', plans }),
     'iterations/iter-20260808-wt/delivery-compass.md': compass,
   })
 }
@@ -227,7 +223,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     if (source === undefined || source.kind !== 'mstar-engine-status') return
     expect(source.iteration).toMatchObject({
       iterationId: 'iter-20260808-wt',
-      statusPath: join(app.harnessDir, 'status.json'),
+      statusPath: join(app.harnessDir, 'workflows/iter-20260808-wt/snapshot.json'),
       compassPath: join(app.harnessDir, 'iterations/iter-20260808-wt/delivery-compass.md'),
     })
     // The cached view reuses the Task 1 tool result shape (transition /
@@ -331,7 +327,8 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     // the agent-loop hot path between refreshes; a change lands after
     // `catalogTtlMs` expires — Config `catalogTtlMs`, default 60000).
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([PLAN_TODO])),
+      'status.json': v2Root([v2WorkflowEntry('iter-20260808-wt', 'iteration')]),
+      'workflows/iter-20260808-wt/snapshot.json': v2Snapshot('iter-20260808-wt', { type: 'iteration', plans: [PLAN_TODO] }),
       'iterations/iter-20260808-wt/delivery-compass.md': COMPASS_ACTIVE,
     })
     const after = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, 2), defaultEnter(inbox))
