@@ -762,7 +762,10 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
  * commit point. A failure before it leaves the v1 tree intact (re-run
  * applies the same deterministic plan). Re-running on a v2 root, or with a
  * `dryRun` plan, is a no-op. Every destination stays inside the harness
- * dir; every snapshot passes `validateWorkflowSnapshot` before the write.
+ * dir; every snapshot is validated fail-closed inside `writeWorkflowSnapshot`
+ * — the writer is the authoritative validator, so the apply loop does not
+ * pre-validate (qc wave-1 S-h: a gate here would run the same O(rows) pass
+ * twice per snapshot).
  */
 export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult> {
   if (plan.dryRun) {

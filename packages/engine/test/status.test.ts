@@ -704,6 +704,18 @@ describe("findingsCleanupGate — project register input (v3 relocation, QC wave
     expect(result.violations).toEqual([]);
   });
 
+  test("a non-array entry value fails closed with a violation — never a TypeError (QC wave-1 S-006)", () => {
+    // Malformed register (pre-wave schema holdover / hand-edited doc): the
+    // plan-id key maps to an object instead of an array. The gate must
+    // return the same invalid-entry-list violation as the register
+    // validator — not throw `entries is not iterable` (`.length` on an
+    // object is undefined, so the old length-0 guard did not intercept).
+    const reg = { entries: { "plan-a": { id: "RAN-1", decision: "accept" } } };
+    const result = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a");
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("project.register.invalid-entry-list");
+  });
+
   test("every open entry of a plan is checked (array schema — one bad entry fails the plan)", () => {
     // W-E array semantics: a plan can hold 2+ residuals; each open entry is
     // evaluated, so a single fixable finding blocks zero-residual even when

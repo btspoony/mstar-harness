@@ -365,8 +365,25 @@ export function findingsCleanupGate(
   const mode = opts?.mode ?? "allow-residual";
   const violations: ValidationResult[] = [];
   const entries = isPlainObject(register.entries) ? register.entries[planId] : undefined;
-  if (entries === undefined || entries.length === 0) {
+  if (entries === undefined) {
     // No register entries for this plan → no open residuals; the gate passes.
+    return { ok: true, violations };
+  }
+  if (!Array.isArray(entries)) {
+    // QC wave-1 S-006: a non-array entry value fails closed — same violation
+    // code as validateProjectRegister. `.length` on an object is undefined,
+    // so the old length-0 guard did not intercept and `for…of` threw a
+    // TypeError; a malformed register must never crash nor pass silently.
+    violations.push(
+      violation(
+        "high",
+        "project.register.invalid-entry-list",
+        `entries[${JSON.stringify(planId)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`,
+      ),
+    );
+    return { ok: false, violations };
+  }
+  if (entries.length === 0) {
     return { ok: true, violations };
   }
 
