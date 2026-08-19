@@ -249,6 +249,55 @@ describe("validateStatusWrite (exported hook module)", () => {
     }
   });
 
+  test("default layout with plans/ inside .mstar: all three docs stay gated (W-REV-2)", async () => {
+    // Regression: classification resolved the root via `resolveHarnessDir`'s
+    // rung-3 `plans/` probe, which matched the NESTED `.mstar/plans` subdir
+    // of the default layout and returned it as the harness root — making
+    // every canonical doc fall outside the rel and silently UNGATED.
+    const project = makeProject();
+    const harness = join(project, ".mstar");
+    mkdirSync(join(harness, "plans"), { recursive: true });
+    mkdirSync(join(harness, "workflows", "wf-1"), { recursive: true });
+    mkdirSync(join(harness, "projects", "_default"), { recursive: true });
+    const statusPath = join(harness, "status.json");
+    const snapshotPath = join(harness, "workflows", "wf-1", "snapshot.json");
+    const registerPath = join(harness, "projects", "_default", "residuals.json");
+    writeFileSync(statusPath, JSON.stringify(validDoc, null, 2));
+    writeFileSync(snapshotPath, JSON.stringify(validSnapshotDoc, null, 2));
+    writeFileSync(registerPath, JSON.stringify(validRegisterDoc, null, 2));
+    try {
+      const warnings: string[] = [];
+      const log: StatusLogger = (level, message) => {
+        if (level === "warn") warnings.push(message);
+      };
+      // Root status.json lint still runs (file form).
+      const statusResult = await validateStatusWrite(statusPath, { log });
+      expect(statusResult).not.toBeNull();
+      expect(statusResult!.ok).toBe(true);
+      // Snapshot kind still reaches the snapshot validator.
+      const snapResult = await validateStatusWrite(snapshotPath, { doc: invalidSnapshotDoc, log });
+      expect(snapResult).not.toBeNull();
+      expect(snapResult!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("workflow.snapshot.invalid-type"))).toBe(true);
+      warnings.length = 0;
+      const snapOk = await validateStatusWrite(snapshotPath, { doc: validSnapshotDoc, log });
+      expect(snapOk!.ok).toBe(true);
+      // Register kind still reaches the register validator.
+      const regResult = await validateStatusWrite(registerPath, { doc: invalidRegisterDoc, log });
+      expect(regResult).not.toBeNull();
+      expect(regResult!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("project.register.invalid-entry-list"))).toBe(true);
+      // Non-canonical snapshot (not under workflows/<id>/) stays ungated.
+      const stray = join(harness, "workflows", "snapshot.json");
+      writeFileSync(stray, JSON.stringify(invalidSnapshotDoc));
+      warnings.length = 0;
+      expect(await validateStatusWrite(stray, { log })).toBeNull();
+      expect(warnings).toEqual([]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   test("non-string targetPath stays silent (no paths[0] abort)", async () => {
     // Bun path.resolve(object) → `The "paths[0]" property must be of type string, got object`.
     const entries: Array<[string, string]> = [];

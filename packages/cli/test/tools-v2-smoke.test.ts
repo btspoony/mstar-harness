@@ -22,7 +22,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
@@ -37,12 +37,18 @@ import mstarGates, { loadNewValidators, newValidatorsLoader } from "../../../hoo
 
 const FIXTURE = join(import.meta.dir, "fixtures", "tools-v2-smoke", "repo");
 const SNAPSHOT_REL = join("plans", "workflows", "wf-smoke", "snapshot.json");
+// Default-layout fixture is committed under a non-ignored name
+// (`.mstar/` is gitignored at the harness repo root) and renamed to
+// `.mstar` inside the temp repo (W-REV-2).
+const MSTAR_FIXTURE_DIR = ".mstar-dot";
+const MSTAR_REL = ".mstar";
 
 interface SmokeRepo {
   root: string;
   linked: string;
   harness: string;
   snapshotPath: string;
+  mstar: string;
 }
 
 /** A worktree with the fixture copied in; patched lease paths. */
@@ -76,7 +82,27 @@ function setupRepo(): SmokeRepo {
   snapshotDoc.control_worktree_path = root;
   writeFileSync(snapshotPath, JSON.stringify(snapshotDoc, null, 2));
 
-  return { root, linked, harness: join(root, "plans"), snapshotPath };
+  return { root, linked, harness: join(root, "plans"), snapshotPath, mstar: "" };
+}
+
+/**
+ * A SEPARATE temp repo holding only the default `.mstar` layout (W-REV-2):
+ * the fixture is committed under the non-ignored alias `.mstar-dot` —
+ * `.mstar/` is gitignored at the harness repo root — and renamed here.
+ * Isolation from the plans-rooted repo matters: `resolveHarnessDir`'s rung
+ * order (`.mstar` first) would otherwise redirect the plans-rooted smoke
+ * targets to the `.mstar` root once both layouts exist in one repo.
+ */
+function setupMstarRepo(): SmokeRepo {
+  const root = mkdtempSync(join(tmpdir(), "tools-smoke-mstar-"));
+  cpSync(FIXTURE, root, { recursive: true });
+  renameSync(join(root, MSTAR_FIXTURE_DIR), join(root, MSTAR_REL));
+  git(["init", "-q"], root);
+  git(["config", "user.email", "tools-smoke@example.com"], root);
+  git(["config", "user.name", "Tools Smoke"], root);
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base"], root);
+  return { root, linked: "", harness: join(root, MSTAR_REL), snapshotPath: "", mstar: join(root, MSTAR_REL) };
 }
 
 function git(args: string[], cwd: string): string {
@@ -347,5 +373,99 @@ describe("omp hook Gate 1 (W-B / S-d)", () => {
     } finally {
       writeFileSync(rootPath, original);
     }
+  });
+});
+
+describe("default .mstar root layout (W-REV-2)", () => {
+  // Regression: `harnessDocKindOfTarget` resolved the harness root via
+  // `resolveHarnessDir`'s rung-3 `plans/` probe — inside a default `.mstar`
+  // root the probe matched the NESTED `.mstar/plans` subdir and returned it
+  // as the root, so `status.json`, `workflows/<id>/snapshot.json` and
+  // `projects/<id>/residuals.json` all fell outside the canonical rel and
+  // were NOT gated (fail-open). The fixture `.mstar/` mirrors the default
+  // layout: `plans/` lives INSIDE the root.
+  let mstarRepo: SmokeRepo | undefined;
+
+  beforeAll(() => {
+    mstarRepo = setupMstarRepo();
+  });
+
+  afterAll(() => {
+    if (mstarRepo) rmSync(mstarRepo.root, { recursive: true, force: true });
+  });
+
+  test("mstar_status_validate: all three coordination docs gated on the .mstar root", async () => {
+    const root = mstarRepo!.root;
+    // Explicit-path form for each canonical kind.
+    const statusRes = await runTool(mstarStatusValidate, root, { path: join(".mstar", "status.json") });
+    expect(statusRes.isError).not.toBe(true);
+    expect(statusRes.content[0]!.text).toContain("status.json valid");
+
+    const snapRes = await runTool(mstarStatusValidate, root, {
+      path: join(".mstar", "workflows", "wf-default", "snapshot.json"),
+    });
+    expect(snapRes.isError).not.toBe(true);
+    expect(snapRes.content[0]!.text).toContain("snapshot valid");
+
+    const regRes = await runTool(mstarStatusValidate, root, {
+      path: join(".mstar", "projects", "_default", "residuals.json"),
+    });
+    expect(regRes.isError).not.toBe(true);
+    expect(regRes.content[0]!.text).toContain("register valid");
+
+    // Default (cwd discovery) lands on the .mstar root — never the nested
+    // plans/ rung.
+    const rootRes = await runTool(mstarStatusValidate, root, {});
+    expect(rootRes.isError).not.toBe(true);
+    expect(rootRes.content[0]!.text).toContain("status.json valid");
+
+    expect(existsSync(join(mstarRepo!.mstar, "plans", "plan-a.md"))).toBe(true);
+  });
+
+  test("omp hook Gate 1: invalid .mstar workflow snapshot hard-rejected, valid passes", async () => {
+    const root = mstarRepo!.root;
+    let handler: ((event: unknown) => Promise<unknown>) | undefined;
+    mstarGates({
+      on: (_event: string, fn: (event: unknown) => Promise<unknown>) => {
+        handler = fn;
+      },
+      logger: { warn: () => undefined, error: () => undefined },
+    } as never);
+    expect(handler).toBeDefined();
+
+    const snapshotPath = join(root, ".mstar", "workflows", "wf-default", "snapshot.json");
+    const validDoc = JSON.parse(readFile(snapshotPath)) as Record<string, unknown>;
+
+    // The .mstar iteration compass hardens the repo — an invalid snapshot
+    // write must be blocked (the classification must reach the gate).
+    const blocked = await handler!({
+      toolName: "write",
+      input: { path: snapshotPath, content: JSON.stringify({ schema_version: 99 }) },
+    });
+    const blockedResult = blocked as { block: boolean; reason: string } | undefined;
+    expect(blockedResult?.block).toBe(true);
+    expect(blockedResult?.reason).toContain("workflow.snapshot");
+
+    const passed = await handler!({
+      toolName: "write",
+      input: { path: snapshotPath, content: JSON.stringify(validDoc) },
+    });
+    expect(passed).toBeUndefined();
+
+    // Root status.json kind still gated through the .mstar root.
+    const rootPath = join(root, ".mstar", "status.json");
+    const rootBlocked = await handler!({
+      toolName: "write",
+      input: { path: rootPath, content: JSON.stringify({ version: 1, plans: [] }) },
+    });
+    const rootBlockedResult = rootBlocked as { reason: string } | undefined;
+    expect(rootBlockedResult?.reason).toContain("status.migration-required");
+
+    // Non-canonical snapshot layout stays ungated (silent pass) even on the
+    // .mstar root — the fix must not over-gate.
+    const stray = join(root, ".mstar", "workflows", "snapshot.json");
+    writeFileSync(stray, JSON.stringify({ schema_version: 99 }));
+    const strayRes = await handler!({ toolName: "write", input: { path: stray, content: "{}" } });
+    expect(strayRes).toBeUndefined();
   });
 });
