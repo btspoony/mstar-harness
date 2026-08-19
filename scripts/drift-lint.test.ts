@@ -28,7 +28,7 @@
  *   missing / corrupt / bin-less manifests each return one explicit
  *   failure row (never a silent skip that would flood every citation).
  * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
- *   yields exactly 35 Engine-check callouts / 34 CLI citations against the
+ *   yields exactly 38 Engine-check callouts / 38 CLI citations against the
  *   live CLI inventory + declared bins; corpus drift goes red.
  */
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -39,6 +39,7 @@ import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
   buildCliCommandInventory,
   buildEngineExportNames,
+  checkBilingualContentParity,
   checkBilingualPairing,
   checkEngineCallouts,
   checkFiveQuestionCorpus,
@@ -74,6 +75,52 @@ describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
     const failures = checkBilingualPairing(["README_CN.md"]);
     expect(failures.length).toBe(1);
     expect(failures[0]).toContain("README_CN.md changed but README.md did not");
+  });
+});
+
+describe("checkBilingualContentParity — README changed-set mirroring (S-f)", () => {
+  test("matching added/deleted counts on both READMEs passes", () => {
+    expect(
+      checkBilingualContentParity([
+        { file: "README.md", added: 9, deleted: 5 },
+        { file: "README_CN.md", added: 9, deleted: 5 },
+        { file: "scripts/drift-lint.ts", added: 40, deleted: 10 },
+      ]),
+    ).toEqual([]);
+  });
+
+  test("mismatched added counts fail naming both numbers", () => {
+    const failures = checkBilingualContentParity([
+      { file: "README.md", added: 9, deleted: 5 },
+      { file: "README_CN.md", added: 2, deleted: 5 },
+    ]);
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("README.md +9/-5 vs README_CN.md +2/-5");
+  });
+
+  test("mismatched deleted counts fail naming both numbers", () => {
+    const failures = checkBilingualContentParity([
+      { file: "README.md", added: 9, deleted: 5 },
+      { file: "README_CN.md", added: 9, deleted: 1 },
+    ]);
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("README.md +9/-5 vs README_CN.md +9/-1");
+  });
+
+  test("either README absent from the change set passes (presence guard owns that case)", () => {
+    expect(
+      checkBilingualContentParity([{ file: "README.md", added: 9, deleted: 5 }]),
+    ).toEqual([]);
+    expect(
+      checkBilingualContentParity([
+        { file: "README.md", added: 0, deleted: 0 },
+        { file: "README_CN.md", added: 0, deleted: 0 },
+      ]),
+    ).toEqual([]);
+  });
+
+  test("empty change set passes", () => {
+    expect(checkBilingualContentParity([])).toEqual([]);
   });
 });
 
@@ -214,12 +261,12 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(failures).toEqual([]);
   });
 
-  test("real corpus pins 37 Engine-check callouts / 35 CLI citations (F-S3, drift goes red)", () => {
+  test("real corpus pins 38 Engine-check callouts / 38 CLI citations (F-S3, drift goes red)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
     /** Every `.md` file under skills/ with the repo-relative `rel` Guard 1
-     * sees in main — the 37/35 counts are a regression pin: adding or
+     * sees in main — the 38/38 counts are a regression pin: adding or
      * removing a backticked CLI citation inside an Engine-check callout
      * (or adding a callout) fails this test loudly. */
     const realCorpus = () => {
@@ -255,8 +302,8 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       engineExports,
       binNames,
     });
-    expect(calloutsChecked).toBe(37);
-    expect(cliCitationsChecked).toBe(35);
+    expect(calloutsChecked).toBe(38);
+    expect(cliCitationsChecked).toBe(38);
     expect(failures).toEqual([]);
   });
 });
@@ -377,12 +424,16 @@ describe("checkFiveQuestionCorpus — Guard 5 five-question runtime smoke", () =
         : entry,
     );
 
-  test("real corpus passes runtime-mode five-question lint (18 runtime skills)", () => {
+  test("real corpus passes runtime-mode five-question lint (count derived from readdir)", () => {
     const { checked, failures } = checkFiveQuestionCorpus(realCorpus());
     // 20 mstar-* skill dirs minus the two exempt (mstar-harness-core,
-    // mstar-skill-authoring) — a new runtime skill must be aligned or
-    // fail the guard (and this pin) loudly.
-    expect(checked).toBe(18);
+    // mstar-skill-authoring) — count derived from readdir so adding a
+    // properly-aligned skill never forces a multi-site pin update; a new
+    // unaligned skill still fails this test via the failures array.
+    const mstarSkillCount = readdirSync(SKILLS_ROOT, { withFileTypes: true }).filter(
+      (entry) => entry.isDirectory() && entry.name.startsWith("mstar-"),
+    ).length;
+    expect(checked).toBe(mstarSkillCount - 2);
     expect(failures).toEqual([]);
   });
 
@@ -464,15 +515,19 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
       return { ...entry, text: [...lines.slice(0, start), ...replacement, ...lines.slice(end)].join("\n") };
     });
 
-  test("real corpus passes load-order lint and role mapping (19 skills)", () => {
+  test("real corpus passes load-order lint and role mapping (count derived from readdir)", () => {
     const { skillsChecked, loadOrderViolations, mappingViolations, failures } = checkRolesCorpus(
       realCorpus(),
       ROLES_DIR,
     );
-    // 20 mstar-* skill dirs minus mstar-harness-core (exempt inside the
-    // engine's lintLoadOrder) — a new mstar-* skill must declare its load
-    // order or fail the guard (and this pin) loudly.
-    expect(skillsChecked).toBe(19);
+    // Count derived from readdir: mstar-* skill dirs minus mstar-harness-core
+    // (exempt inside the engine's lintLoadOrder) — a new mstar-* skill must
+    // declare its load order or fail the guard loudly (no multi-site pin to
+    // sync when a properly-declared skill is added).
+    const mstarSkillCount = readdirSync(SKILLS_ROOT, { withFileTypes: true }).filter(
+      (entry) => entry.isDirectory() && entry.name.startsWith("mstar-"),
+    ).length;
+    expect(skillsChecked).toBe(mstarSkillCount - 1);
     expect(loadOrderViolations).toBe(0);
     expect(mappingViolations).toBe(0);
     expect(failures).toEqual([]);

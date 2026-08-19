@@ -202,7 +202,7 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 ## Evidence
 
-正确结果 = 落盘产物可复核：`{HARNESS_DIR}/status.json` 含对应 plan 行（状态 + `metadata` 分支字段），plan 文件存在于 `{PLAN_DIR}`，`{HARNESS_DIR}/AGENTS.md` 分层与 gitignore 与本文约定一致（进程本地 / 结果共享），`mstar path resolve` 输出与路径符号表一致。
+正确结果 = 落盘产物可复核：`{WORKFLOW_DIR}/<id>/snapshot.json` 含对应 plan 行（状态 + `metadata` 分支字段；根 `status.json` v2 仅 workflows 注册表，无 plan 行），plan 文件存在于 `{PLAN_DIR}`，`{HARNESS_DIR}/AGENTS.md` 分层与 gitignore 与本文约定一致（进程本地 / 结果共享），`mstar path resolve` 输出与路径符号表一致。
 
 ## References
 

@@ -1,9 +1,11 @@
 # Phase 2 control worktree + execution lease
 
-Normative field names and claim/release/merge semantics → runtime SSOT
-`mstar-plan-artifacts/references/status-and-residuals.md`. This reference is
-the **iteration-command execution checklist**; do not invent alternate lease
-field names.
+Normative field names → field SSOT
+`mstar-plan-artifacts/references/status-and-residuals.md`; the **full lease
+protocol prose** (single canonical copy) → `mstar-engine-legacy/references/lease-protocol.md`
+(engine-absent fallback). This reference is the **iteration-command execution
+checklist** — do not invent alternate lease field names; do not re-state the
+full protocol here.
 
 ## When it applies
 
@@ -27,8 +29,8 @@ starts at **Phase 2 entry**.
    PM-designated path) checked out to that `spec_integration_branch`.
 3. Verify `git branch --show-current` equals `spec_integration_branch`; working
    tree clean before merge operations.
-4. Record canonical absolute repository-root path in
-   `metadata.control_worktree_path` (not `{HARNESS_DIR}`; canonicalize symlinks).
+4. Record canonical absolute repository-root path in the workflow
+   snapshot top-level `control_worktree_path` (not `{HARNESS_DIR}`; canonicalize symlinks).
 5. Resolve coordination paths from that root (default-gitignored process artifacts live on the **control filesystem**, not as Git blobs):
    - status register: `<control_worktree_path>/{HARNESS_DIR}/status.json` (v2 root — active workflow entries)
    - snapshot SSOT: `<control_worktree_path>/{WORKFLOW_DIR}/<id>/snapshot.json` (plan rows + leases + branch anchors)
@@ -76,6 +78,8 @@ sets serial scheduling or the user gives current-turn override
 Immediately before **any** writable implement dispatch, re-read the control
 snapshot and re-verify `execution_lease` holder + paths match this session;
 mismatch → **STOP**.
+
+> **Engine check (when available):** run `mstar lease verify --workflow <id> [--plan <plan-id>]` or `mstar lease verify-integration --workflow <id>` (or import `validateExecutionLease` / `validateIntegrationMergeLease` from `@mstar-harness/engine` in a host hook) to validate the leases on the control copy of the workflow snapshot. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Feature worktree (per plan)
 

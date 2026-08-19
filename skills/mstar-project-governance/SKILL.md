@@ -62,53 +62,20 @@ residuals_ref: residuals.json  # optional
 
 ## Register 生命周期（`projects/<id>/residuals.json`）
 
-### 文档形状
+### 文档形状、必填字段与枚举（单址 → `mstar-plan-artifacts`）
 
-```json
-{
-  "entries": {
-    "plan-id": [
-      {
-        "id": "R1",
-        "title": "Finding title",
-        "severity": "critical | high | medium | low | nit",
-        "source": "QC-#1 qc1.md F-001 @ <review-range>, QA qa.md, review, …",
-        "scope": "Affected file or component",
-        "decision": "defer | accept | risk-accepted",
-        "owner": "@fullstack-dev",
-        "target": "Before plan 02 / YYYY-MM-DD / milestone",
-        "tracking": "Issue URL or null",
-        "detail_doc": "{PLAN_DIR}/residuals/plan-id/R1-short-label.md",
-        "source_plan": "plan-id",
-        "registered_at": "YYYY-MM-DD",
-        "lifecycle_id": "<workflow id when owned by an iteration>"
-      }
-    ]
-  }
-}
-```
+Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字段**（`id`/`title`/`severity`/`source`/`scope`/`decision`/`owner`/`target`/`tracking`，engine `RESIDUAL_REQUIRED_FIELDS`）与 **severity / decision / lifecycle 枚举**的逐字 schema → **`mstar-plan-artifacts`** `references/status-and-residuals.md`（「Basic structure · project register」+「Residual findings: severity」）。本 skill 只承载编写约定与生命周期规则，**不重复字段全文**。
 
 - `entries[<plan-id>]` 值是**数组** —— v1 `residual_findings[plan-id]` 多 finding 语义逐字保留（一个 plan 可持 2+ open residual）。
 - 每条 = v1 residual entry **逐字** + provenance 字段。
 
-### 必填字段（9 个；engine `RESIDUAL_REQUIRED_FIELDS`）
-
-`id`、`title`、`severity`、`source`、`scope`、`decision`、`owner`、`target`、`tracking` —— 缺任一 → 拒绝（fail-loud），不得静默通过或「先写后补」。
-
-### 枚举（逐字；与 engine 一致）
-
-| 字段 | 枚举 |
-|------|------|
-| `severity` | `critical | high | medium | low | nit`（`"warning"` 是 legacy —— 新条目禁止，读路径归一为 `low`） |
-| `decision` | `defer | accept | risk-accepted` |
-| `lifecycle` | `open | resolved | waived | superseded | duplicate`（缺省 = `open`） |
-
 ### 生命周期：open → verified close（in place）
 
-- **open**：缺省状态；`isOpenResidual` 判定（`lifecycle` 缺省/`false`/`null` = `open`）。
+- **open**：缺省状态；`lifecycle` 缺省/`false`/`null` = `open`。
 - **close（唯一关闭路径）**：在 register **in place** 置 `lifecycle`（≠ `open`）+ `closed_at`（`YYYY-MM-DD`）+ `closure_note`；推荐 `closure_evidence`。v1 的 `archived/residuals/` 归档路径与 `status archive-residuals` 已移除（该命令现为报错桩，指向 register 状态变更）。
 - **closed 完整性**：`lifecycle` ≠ `open` 时缺 `closed_at` / `closure_note` = violation。
 - **谁更新**：PM 在 consolidated 决策后分配 R# 并登记；`QA gate: mandatory` 时 `qa-engineer` 验证后关闭；`pm-acceptance` 时 PM 验收清单完成后关闭。
+- close 协议全文 → **`mstar-plan-artifacts`** `references/status-and-residuals.md`（「Residual findings lifecycle」）。
 
 ### Provenance（register 专属字段）
 
@@ -123,8 +90,7 @@ residuals_ref: residuals.json  # optional
 - Assignment **`Findings cleanup: zero-residual | allow-residual`** 是唯一 mode 来源（`metadata.findings_cleanup` mirror 已删）；迭代 Phase 2 默认 `zero-residual`。
 - `zero-residual`：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap + `target`；`nit` 必须当场修或删；waived/risk-accepted 必须关闭，不得留 open。
 - `allow-residual`：仅 unresolved **critical** 阻止 Approve。
-
-> **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--project <id>] [--mode zero-residual|allow-residual]`（或 import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook）以对 plan 的 register entries 执行 cleanup mode。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+- mode 全文与 enforcement → **`mstar-plan-artifacts`** `references/status-and-residuals.md`（「Findings cleanup modes」+ 其 engine check）。
 
 ## Workflow
 

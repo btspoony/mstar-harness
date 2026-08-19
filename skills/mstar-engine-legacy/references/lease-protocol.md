@@ -8,23 +8,24 @@
 
 ## Coordination SSOT and lock discipline
 
-Lease mutations happen on the **control copy** of the coordination file (v1: `{HARNESS_DIR}/status.json`; v2: `{WORKFLOW_DIR}/<id>/snapshot.json`). This is cooperative, not a distributed lock service — non-cooperating processes are out of scope.
+Lease mutations happen on the **control copy** of the coordination file — the v2 workflow snapshot `{WORKFLOW_DIR}/<id>/snapshot.json` (v1: `{HARNESS_DIR}/status.json`, migrated). This is cooperative, not a distributed lock service — non-cooperating processes are out of scope.
 
-**Same-host exclusive write lock** — all control-path lease mutations (claim, release, transfer, plan-status transitions that touch leases, merge-lease claim/release) MUST run inside a same-host exclusive write lock for the full **read-check-replace-verify** sequence. Hold from first read through post-write verify; release on all exit paths.
+**Same-host exclusive write lock** — all control-path lease mutations (claim, release, transfer, plan-status transitions that touch the lease, merge-lease claim/release) MUST run inside a same-host exclusive write lock for the full **read-check-replace-verify** sequence. Hold from first read through post-write verify; release on all exit paths.
 
-- Preferred (same machine, shared filesystem): advisory lock via `flock` (or equivalent) on `{HARNESS_DIR}/.status-write.lock`.
-- Alternative when `flock` unavailable: atomic `mkdir` on `{HARNESS_DIR}/.status-write.lockdir/` — success acquires; existing dir → **Blocked** (another writer holds the lock); remove the directory only after successful verify or explicit rollback.
-- Engine writers handle this automatically (`writeWorkflowSnapshot` / `registerWorkflow` acquire `<status-file dir>/.status-write.lockdir/` next to the file). Do **not** invent a distributed CAS CLI.
+- Engine writers acquire the lock automatically: `writeWorkflowSnapshot` / `registerWorkflow` atomic-`mkdir` the lockdir at `<status-file dir>/.status-write.lockdir/` — for the snapshot the lockdir lands **inside `workflows/<id>/`** (next to `snapshot.json`).
+- Manual fallback when no engine writer exists: atomic `mkdir` on `{WORKFLOW_DIR}/<id>/.status-write.lockdir/` — success acquires; existing dir → **Blocked** (another writer holds the lock); `rmdir` the directory only after successful verify or explicit rollback. The dsh notes-ledger writer uses the same lockdir pattern (`{WORKFLOW_DIR}/<id>/.ledger-write.lockdir`). Do **not** invent a distributed CAS CLI.
 
 ```bash
-CONTROL_ROOT="<metadata.control_worktree_path>"
+CONTROL_ROOT="<snapshot top-level control_worktree_path>"
 HARNESS=".mstar"   # or resolved {HARNESS_DIR}
-STATUS="$CONTROL_ROOT/$HARNESS/status.json"
-LOCK="$CONTROL_ROOT/$HARNESS/.status-write.lock"
+WORKFLOW_ID="<plan-or-iteration-id>"
+SNAPSHOT="$CONTROL_ROOT/$HARNESS/workflows/$WORKFLOW_ID/snapshot.json"
+LOCKDIR="$CONTROL_ROOT/$HARNESS/workflows/$WORKFLOW_ID/.status-write.lockdir"
 (
-  flock -x 9 || exit 1
+  mkdir "$LOCKDIR" || exit 1
+  trap 'rmdir "$LOCKDIR"' EXIT
   # read → mutate → temp file + atomic replace → re-read verify
-) 9>"$LOCK"
+)
 ```
 
 **Pre-dispatch re-verify:** immediately before **any** writable implement dispatch, re-read the coordination file and confirm this session still passes verify-held-lease (`holder`, `worktree_path`, `working_branch` match Assignment). Mismatch or absent lease ⇒ **STOP** — do not dispatch.

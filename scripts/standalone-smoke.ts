@@ -7,9 +7,12 @@
  * skill loads without depending on the runtime:
  *
  *   1. Every `skills/<name>/SKILL.md` parses a frontmatter `name:` (it loads
- *      as a skill). Expected: the 21 harness skills (20 `mstar-*` + `pm`);
- *      optional bundled skills (e.g. `grill-me`) are load-checked too but
- *      reported separately from the harness set.
+ *      as a skill). Expected set is DERIVED from readdir in both directions
+ *      (S-d): every `mstar-*` dir + `pm` must load — an unlisted new
+ *      mstar-* skill fails loudly instead of becoming "optional"; optional
+ *      bundled skills (e.g. `grill-me`) are load-checked too but reported
+ *      separately from the harness set. The `mstar-engine-legacy`
+ *      conditional-load gate is pinned here as well (S-b).
  *   2. No skill markdown references `@mstar-harness/engine` or
  *      `@mstar-harness/cli` outside an advisory `**Engine check (when
  *      available):**` blockquote. Fenced code blocks are allowed only when
@@ -32,30 +35,15 @@ const ENGINE_REF = /@mstar-harness\/(?:engine|cli)/;
 const CALLOUT_MARKER = "**Engine check (when available):**";
 const STANDALONE_GUARANTEE = "Skill text below remains authoritative when the runtime is absent";
 
-/** The 21 harness skills that must load standalone (20 mstar-* + pm). */
-const EXPECTED_SKILLS = [
-  "mstar-audit",
-  "mstar-branch-worktree",
-  "mstar-coding-behavior",
-  "mstar-compound",
-  "mstar-compound-refresh",
-  "mstar-design-md",
-  "mstar-dispatch-gates",
-  "mstar-engine-legacy",
-  "mstar-harness-core",
-  "mstar-host",
-  "mstar-iteration",
-  "mstar-phase-gates",
-  "mstar-plan-artifacts",
-  "mstar-plan-conventions",
-  "mstar-project-governance",
-  "mstar-review-qc",
-  "mstar-roles",
-  "mstar-sdd",
-  "mstar-skill-authoring",
-  "mstar-strategy",
-  "pm",
-];
+/**
+ * Harness skills that must load standalone BEYOND the `mstar-*` corpus.
+ * The expected set itself is DERIVED from readdir (S-d): every
+ * `skills/mstar-*` dir is by definition a harness skill that must load, so
+ * adding a new mstar-* skill without a loadable SKILL.md fails loudly
+ * instead of silently becoming "optional". `pm` is the only non-mstar-*
+ * harness skill.
+ */
+const EXTRA_EXPECTED = ["pm"];
 
 /** Fenced code block ranges: [[startLine, endLine], …] plus block text. */
 type Fence = { start: number; end: number; text: string };
@@ -101,17 +89,27 @@ const skillDirs = readdirSync(join(root, "skills"), { withFileTypes: true })
   .map((e) => e.name)
   .sort();
 
-/* 1. Every SKILL.md must load (frontmatter `name:`), expected set present. */
+/* 1. Every SKILL.md must load (frontmatter `name:`). The expected set is
+ * derived from readdir in BOTH directions: every mstar-* dir (plus `pm`)
+ * must load — a new mstar-* skill that is not loadable fails instead of
+ * being silently classified optional; and every expected entry must have
+ * actually loaded. */
 let loaded = 0;
 const harnessNames: string[] = [];
 const optionalNames: string[] = [];
+const expectedDirs = skillDirs.filter((dir) => dir.startsWith("mstar-") || EXTRA_EXPECTED.includes(dir));
+for (const extra of EXTRA_EXPECTED) {
+  if (!skillDirs.includes(extra)) {
+    failures.push(`expected harness skill dir "${extra}" does not exist`);
+  }
+}
 for (const dir of skillDirs) {
   const skillFile = join(root, "skills", dir, "SKILL.md");
   let text: string;
   try {
     text = readFileSync(skillFile, "utf8");
   } catch {
-    if (EXPECTED_SKILLS.includes(dir)) {
+    if (expectedDirs.includes(dir)) {
       failures.push(`skills/${dir}/SKILL.md missing — expected harness skill does not load`);
     }
     continue;
@@ -123,12 +121,33 @@ for (const dir of skillDirs) {
     continue;
   }
   loaded++;
-  if (EXPECTED_SKILLS.includes(dir)) harnessNames.push(name);
+  if (expectedDirs.includes(dir)) harnessNames.push(name);
   else optionalNames.push(name);
 }
-for (const expected of EXPECTED_SKILLS) {
+for (const expected of expectedDirs) {
   if (!harnessNames.includes(expected)) {
     failures.push(`expected harness skill "${expected}" did not load`);
+  }
+}
+const mstarSkillCount = expectedDirs.filter((dir) => dir.startsWith("mstar-")).length;
+
+/* 1b. mstar-engine-legacy conditional-load gate (S-b): engine-present hosts
+ * must NOT load the sink; the negative load condition is pinned in BOTH the
+ * core load-condition note and the legacy description, so a rewrite that
+ * silently drops the gate fails here (engine-absent hosts are exactly what
+ * this smoke simulates). */
+{
+  const coreText = readFileSync(join(root, "skills", "mstar-harness-core", "SKILL.md"), "utf8");
+  const legacyText = readFileSync(join(root, "skills", "mstar-engine-legacy", "SKILL.md"), "utf8");
+  if (!coreText.includes("engine 约束激活（或宿主含 engine 能力）时不加载")) {
+    failures.push(
+      `mstar-harness-core/SKILL.md lost the mstar-engine-legacy load-condition note (engine-present hosts must not load the archive)`,
+    );
+  }
+  if (!legacyText.includes("engine 约束激活（或宿主含 engine 能力）时不加载")) {
+    failures.push(
+      `mstar-engine-legacy/SKILL.md lost the engine-absent-only load condition (engine 约束激活时不加载)`,
+    );
   }
 }
 
@@ -203,7 +222,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `standalone-smoke: OK — ${harnessNames.length} harness skills load standalone (${EXPECTED_SKILLS.length}: 20 mstar-* + pm — ${harnessNames.join(", ")})` +
+  `standalone-smoke: OK — ${harnessNames.length} harness skills load standalone (${mstarSkillCount} mstar-* + pm — ${harnessNames.join(", ")})` +
     (optionalNames.length > 0
       ? `; ${optionalNames.length} optional bundled skill${optionalNames.length === 1 ? "" : "s"} (${optionalNames.join(", ")})`
       : ""),
