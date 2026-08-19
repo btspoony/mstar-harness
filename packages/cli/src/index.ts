@@ -7,7 +7,6 @@ import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
 import {
-  archiveResiduals,
   assertDefaultBranchProtected,
   assertIndexRows,
   assertLightDarkParity,
@@ -72,6 +71,7 @@ import {
   type WorktreeTrack,
 } from "@mstar-harness/engine";
 import { verifyPlanExecutionLease } from "./lease-verify";
+import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
@@ -403,29 +403,6 @@ statusCommand
   });
 
 statusCommand
-  .command("archive-residuals")
-  .description("Archive a plan's open residuals to archived/residuals/<plan-id>.json")
-  .argument("<plan-id>", "Plan id whose open residuals are archived")
-  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action(async (planId: string, options: { harness?: string }) => {
-    try {
-      const harnessDir = options.harness ?? resolveHarnessDir();
-      if (!harnessDir) {
-        throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness or set MSTAR_HARNESS_DIR`);
-      }
-      const result = await archiveResiduals(planId, harnessDir);
-      if (result.archived === 0) {
-        console.log(pc.yellow(`No open residuals for plan ${planId}`));
-      } else {
-        console.log(pc.green(`Archived ${result.archived} residual(s) for ${planId} -> ${result.archivePath}`));
-      }
-    } catch (error) {
-      console.error(pc.red(`archive-residuals failed: ${(error as Error).message}`));
-      process.exitCode = 1;
-    }
-  });
-
-statusCommand
   .command("tech-debt")
   .description(
     "Print the residual tech-debt rollup (total_open / by_severity / by_target / by_plan) and PASS/DRIFT vs stored " +
@@ -484,6 +461,18 @@ statusCommand
       console.error(pc.red(`status findings-cleanup failed: ${(error as Error).message}`));
       process.exitCode = 1;
     }
+  });
+
+const migrateCommand = program
+  .command("migrate")
+  .description(
+    "Migrate a v1 {HARNESS_DIR} status.json tree to v2 (engine-backed; exit 0 ok/idempotent no-op, 1 plan-invalid, 2 apply-failure)",
+  )
+  .option("--dry-run", "Print the migration step plan (source \u2192 destination) without writing anything")
+  .option("--path <root>", "Harness root to migrate (default: cwd)")
+  .option("--json", "Machine-readable JSON output")
+  .action(async (options: MigrateCliOptions) => {
+    await runMigrateCommand(options);
   });
 
 const leaseCommand = program
