@@ -77,7 +77,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 | Field | Shipped default | Meaning |
 |---|---|---|
 | `harnessDir` | unset (resolved per session workspace) | explicit `{HARNESS_DIR}` root — **required for repos whose harness root is not a probed name** (`.mstar/` → `.agents/` → `.plans/` → `plans/`); set it to the absolute root in the profile layer (or declare `[config] harness_dir` in a repo `.mstarc` — gitignored local config, honored above probing). Without either, the probe starts from the SESSION workspace root (the session cwd — **never the process/launch cwd**) and **stops there** — it never walks above the session workspace, so a global `~/.mstar` is never adopted |
-| `enforcement` | **unset — default OFF** | `hard` / `soft` override; absent → the iteration compass decides, warn-only when no compass hardens (never a global always-on hard gate) |
+| `enforcement` | **unset — default OFF** | `hard` / `soft` override; absent → the repo `.mstarc` `[config] enforcement`, else the iteration compass decides, warn-only when no compass hardens (never a global always-on hard gate) |
 | `dispatchTools` | unset (plugin default `['subagent', 'subagent_fork']`) | delegation tool names the dispatch gate matches — the dsh preset's TWO delegation tools (`subagent` + its fork sibling `subagent_fork`, both Assignment-shaped); a custom list overrides the default wholesale, so it must include `subagent_fork` to keep fork dispatches gated |
 | `dispatchBinding` | unset | the dispatching agent's role for the anti-recursion precheck |
 | `skillRoots` | unset | additional skill roots (custom mirrors) |

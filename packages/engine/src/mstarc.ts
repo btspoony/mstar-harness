@@ -19,12 +19,16 @@
  * | `iteration_dir`| `{ITERATION_DIR}` | `resolveIterationDir`            |
  * | `knowledge_dir`| `{KNOWLEDGE_DIR}` | `resolveKnowledgeDir`            |
  * | `specs_dir`    | `{SPECS_DIR}`     | `resolveSpecsDir` (authoritative)|
+ * | `enforcement`  | hard-gate policy  | `resolveRepoEnforcement`        |
  *
  * Resolution precedence (plan-conventions § {HARNESS_DIR} 解析顺序):
  * explicit `opts.harnessDir` / `MSTAR_HARNESS_DIR` wins, then `.mstarc`,
  * then the probe. Sub-directory keys are honored by the engine resolvers
  * when the nearest `.mstarc` sits at the harness dir or its parent (the
- * repo root — the documented `.mstarc` home).
+ * repo root — the documented `.mstarc` home). `enforcement` follows the
+ * same discovery: `hard` / `soft` (anything else is ignored) — the
+ * repo-declared hard-gate policy, composed below the explicit Config /
+ * Assignment flag and above the iteration compass.
  */
 import { readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -45,6 +49,8 @@ export const MSTARC_ITERATION_DIR_KEY = "iteration_dir";
 export const MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir";
 /** `[config]` key declaring `{SPECS_DIR}`. */
 export const MSTARC_SPECS_DIR_KEY = "specs_dir";
+/** `[config]` key declaring the repo hard-gate policy (`hard` / `soft`). */
+export const MSTARC_ENFORCEMENT_KEY = "enforcement";
 
 /** Parsed `.mstarc` harness config (unknown sections/keys are ignored). */
 export type MstarcConfig = {
@@ -60,16 +66,19 @@ export type MstarcConfig = {
   knowledgeDir?: string;
   /** Declared `{SPECS_DIR}` (authoritative — skips the candidate chain). */
   specsDir?: string;
+  /** Declared hard-gate policy — `hard` or `soft` (anything else ignored). */
+  enforcement?: "hard" | "soft";
 };
 
 /** `[config]` key → config field mapping (unknown keys ignored). */
-const DIR_KEYS: Record<string, keyof MstarcConfig> = {
+const CONFIG_KEYS: Record<string, keyof MstarcConfig> = {
   [MSTARC_HARNESS_DIR_KEY]: "harnessDir",
   [MSTARC_PLAN_DIR_KEY]: "planDir",
   [MSTARC_SDD_DIR_KEY]: "sddDir",
   [MSTARC_ITERATION_DIR_KEY]: "iterationDir",
   [MSTARC_KNOWLEDGE_DIR_KEY]: "knowledgeDir",
   [MSTARC_SPECS_DIR_KEY]: "specsDir",
+  [MSTARC_ENFORCEMENT_KEY]: "enforcement",
 };
 
 /**
@@ -92,10 +101,14 @@ export function parseMstarc(text: string): MstarcConfig {
     if (section !== MSTARC_SECTION) continue;
     const eq = line.indexOf("=");
     if (eq === -1) continue;
-    const field = DIR_KEYS[line.slice(0, eq).trim()];
+    const field = CONFIG_KEYS[line.slice(0, eq).trim()];
     if (field === undefined) continue;
     const value = line.slice(eq + 1).trim();
-    if (value !== "") out[field] = value;
+    if (value === "") continue;
+    // `enforcement` accepts only `hard` / `soft` — anything else is ignored
+    // (the resolver treats it as unset; documented in plan-conventions).
+    if (field === "enforcement" && value !== "hard" && value !== "soft") continue;
+    (out as Record<string, string>)[field] = value;
   }
   return out;
 }

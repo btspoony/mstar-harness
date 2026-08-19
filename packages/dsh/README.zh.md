@@ -46,7 +46,7 @@ dsh plugin --profile web add dsh-llm-fallbacks
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `harnessDir` | `string` | 仓库 `.mstarc` `[config] harness_dir`，否则按会话工作区探测（`.mstar/` → `.agents/` → `.plans/` → `plans/`，从会话工作区根目录开始——**绝不从启动 cwd**） | 显式 harness 根目录；优先于 engine 探测。**harness 根不在探测名列表中的仓库必须配置**；探测从会话工作区根开始（绝不从启动 cwd）并在那里**停止**——永不越过会话工作区向上，因此其上方的 harness 目录（如全局 `~/.mstar`）永远不会被采纳。 |
-| `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖。优先级：Config 优先；否则取 Assignment 自身的 `**Enforcement**: hard` 头字段（仅派发闸门）；否则取迭代 compass frontmatter；否则仅告警。Config `soft` 是唯一的本地回滚——Assignment 级 `soft` 不能覆盖 hard compass。 |
+| `enforcement` | `'hard' \| 'soft'` | compass，否则仅告警 | 按部署覆盖。优先级：Config 优先；否则取 Assignment 自身的 `**Enforcement**: hard` 头字段（仅派发闸门）；否则取仓库 `.mstarc` `[config] enforcement`；否则取迭代 compass frontmatter；否则仅告警。Config / `.mstarc` `soft` 是仅有的本地回滚——Assignment 级 `soft` 不能覆盖 hard compass。 |
 | `dispatchTools` | `string[]` | `['subagent', 'subagent_fork']` | 派发闸门匹配的委派工具名——dsh preset 的**两个**委派工具：`subagent` 及其 fork 兄弟 `subagent_fork`（两者都携带 Assignment 形态的 `{ description, prompt }` 参数；`toolName` 配置可重命名实例）。 |
 | `dispatchBinding` | `string` | 未设置（跳过预检） | 派发方 agent 自身的 harness 角色；Assignment 的 `Execute as` 等于它即自我递归。 |
 | `roleMap` | `Record<string, string>` | 未设置 | mstar 角色 id（`Execute as`）→ dsh-llm-fallbacks 角色 id。**仅**作日志与未来规则驱动互操作的分类桥——装饰从不读取它（见 LLM fallbacks integration）。 |

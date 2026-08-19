@@ -295,11 +295,12 @@ The plugin wires the engine gates on dsh seams (all in-process):
 
 **Enforcement semantics**: warn-only by default. `Enforcement: hard` —
 resolved from the plugin Config (`enforcement: hard`), the Assignment header
-flag, or the iteration compass frontmatter — escalates dispatch violations to
+flag, the repo `.mstarc` `[config] enforcement`, or the iteration compass
+frontmatter — escalates dispatch violations to
 a real veto; status/skill-lint writes are never hard-vetoed because the intent
 waterfall is content-blind (an already-invalid document is allowed as a
-repair escape). Config `soft` is the only local rollback. Hard gates are never
-a global default.
+repair escape). Config / `.mstarc` `soft` are the local rollbacks. Hard gates
+are never a global default.
 
 Every composed agent step carries ONE **`<mstar_engine_status>`** catalog
 message: the watermark (unified mstar version, harness dir, enforcement),

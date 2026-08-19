@@ -40,6 +40,8 @@ import {
   findingsCleanupGate,
   normalizeSeverity,
   resolveCompassEnforcement,
+  resolveMstarcEnforcement,
+  resolveRepoEnforcement,
   techDebtRollup,
   validatePlanRow,
   validateResidual,
@@ -926,6 +928,75 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
         "utf8",
       );
       expect(resolveCompassEnforcement(harness)).toEqual({ hard: false, source: "none" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveMstarcEnforcement / resolveRepoEnforcement — `.mstarc` [config] enforcement (plan-conventions § `.mstarc` 格式)", () => {
+  test("enforcement=hard → { hard: true, source: mstarc } from a repo-root .mstarc", () => {
+    const root = tmpRoot("mstar-rc-enf-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=hard\n");
+      expect(resolveMstarcEnforcement(join(root, ".mstar"))).toEqual({ hard: true, source: "mstarc" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("enforcement=soft → { hard: false, source: mstarc } (local rollback)", () => {
+    const root = tmpRoot("mstar-rc-enf-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=soft\n");
+      expect(resolveMstarcEnforcement(join(root, ".mstar"))).toEqual({ hard: false, source: "mstarc" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("no .mstarc / no enforcement key → none", () => {
+    const root = tmpRoot("mstar-rc-enf-");
+    try {
+      expect(resolveMstarcEnforcement(join(root, ".mstar"))).toEqual({ hard: false, source: "none" });
+      writeFileSync(join(root, ".mstarc"), "[config]\nplan_dir=plans\n");
+      expect(resolveMstarcEnforcement(join(root, ".mstar"))).toEqual({ hard: false, source: "none" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc above the repo root is never adopted", () => {
+    const root = tmpRoot("mstar-rc-enf-");
+    try {
+      mkdirSync(join(root, "proj"), { recursive: true });
+      writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=hard\n");
+      expect(resolveMstarcEnforcement(join(root, "proj", ".mstar"))).toEqual({ hard: false, source: "none" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveRepoEnforcement: .mstarc beats a hard compass; compass applies when no .mstarc", () => {
+    const root = tmpRoot("mstar-rc-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      const compassDir = join(harness, "iterations", "20260808-demo");
+      mkdirSync(compassDir, { recursive: true });
+      writeFileSync(
+        join(compassDir, "delivery-compass.md"),
+        "---\niteration_id: 20260808-demo\nstatus: active\nenforcement: hard\n---\n",
+        "utf8",
+      );
+      // No .mstarc → the hard compass hardens.
+      expect(resolveRepoEnforcement(harness)).toEqual({ hard: true, source: "compass" });
+      // .mstarc soft rolls the hard compass back.
+      writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=soft\n");
+      expect(resolveRepoEnforcement(harness)).toEqual({ hard: false, source: "mstarc" });
+      // .mstarc hard hardens without any compass.
+      writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=hard\n");
+      expect(resolveRepoEnforcement(harness)).toEqual({ hard: true, source: "mstarc" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

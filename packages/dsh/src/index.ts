@@ -18,7 +18,7 @@ import {
   inject as skillLocalInject,
   name as skillLocalName,
 } from '@deepseek-ai/dsh-skill-filesystem'
-import { resolveCompassEnforcement } from '@mstar-harness/engine'
+import { resolveRepoEnforcement } from '@mstar-harness/engine'
 // Type-only: loads the `ctx.commands` cordis augmentation + the command
 // handler invocation shape from the (peer-stub / real) dsh-commands seam —
 // the runtime registration goes through `ctx.inject(['commands'], …)`.
@@ -661,7 +661,7 @@ export function apply(ctx: Context, config: Config): void {
   // construction — surface the absence instead of only documenting it.
   // (Boot-time the only known enforcement source is the explicit Config
   // override — compass hard is per-workspace and resolves at event time.)
-  const effectiveHard = config.enforcement === 'hard' || (bootHarnessDir !== null && resolveCompassEnforcement(bootHarnessDir).hard)
+  const effectiveHard = config.enforcement === 'hard' || (bootHarnessDir !== null && resolveRepoEnforcement(bootHarnessDir).hard)
   if (effectiveHard && (config.dispatchBinding ?? '').trim() === '') {
     ctx.logger(DISPATCH_LOGGER).warn(
       'Enforcement: hard is active but dispatchBinding is unset — the anti-recursion precheck is skipped (an Assignment whose Execute as equals the dispatching agent cannot be detected)',

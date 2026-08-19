@@ -58,6 +58,8 @@ export {
   findingsCleanupGate,
   normalizeSeverity,
   resolveCompassEnforcement,
+  resolveMstarcEnforcement,
+  resolveRepoEnforcement,
   techDebtRollup,
   validatePlanRow,
   validateResidual,

@@ -73,7 +73,7 @@
  * tests import from this module directly.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { resolveCompassEnforcement } from '@mstar-harness/engine'
+import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusSource } from '../types.ts'
 import { DEFAULT_CATALOG_TTL_MS, buildCatalogSources } from './catalog.ts'
@@ -260,7 +260,7 @@ export function registerHarnessPrompt(ctx: Context, options: { resolver: Harness
  * diverges from the actual gate state and the provider never throws.
  */
 function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
-  return harnessDir === null ? { hard: false, source: 'none' } : resolveCompassEnforcement(harnessDir)
+  return harnessDir === null ? { hard: false, source: 'none' } : resolveRepoEnforcement(harnessDir)
 }
 
 /**

@@ -112,7 +112,7 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
 }
 
 /** Where the `Enforcement` flag was declared (roadmap §8.5 C4/D2). */
-export type EnforcementSource = "assignment" | "compass" | "none";
+export type EnforcementSource = "assignment" | "compass" | "mstarc" | "none";
 
 /** Parsed hard-enforcement flag. `hard: false` + `source: none` = flag absent. */
 export type EnforcementFlag = {

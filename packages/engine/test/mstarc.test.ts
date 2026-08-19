@@ -35,6 +35,13 @@ describe("parseMstarc — minimal INI subset ([config] harness_dir)", () => {
     });
   });
 
+  test("parses the enforcement policy key (hard / soft; invalid ignored)", () => {
+    expect(parseMstarc("[config]\nenforcement=hard\n")).toEqual({ enforcement: "hard" });
+    expect(parseMstarc("[config]\nenforcement=soft\n")).toEqual({ enforcement: "soft" });
+    expect(parseMstarc("[config]\nenforcement=aggressive\n")).toEqual({});
+    expect(parseMstarc("[config]\nenforcement=\n")).toEqual({});
+  });
+
   test("parses the canonical [config] harness_dir form", () => {
     expect(parseMstarc("[config]\nharness_dir=.custom_dir\n")).toEqual({ harnessDir: ".custom_dir" });
   });

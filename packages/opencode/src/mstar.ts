@@ -43,8 +43,8 @@ import {
   composeDispatchGate,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
-  resolveCompassEnforcement,
   resolveHarnessDir,
+  resolveRepoEnforcement,
   validateStatus,
 } from "@mstar-harness/engine";
 import type { EnforcementFlag, GateResult, StatusDoc } from "@mstar-harness/engine";
@@ -299,7 +299,7 @@ export function validateStatusWrite(
           : null;
     if (!result) return null;
 
-    const enforcement: EnforcementFlag = opts.enforcement ?? resolveCompassEnforcement(harnessDir);
+    const enforcement: EnforcementFlag = opts.enforcement ?? resolveRepoEnforcement(harnessDir);
     if (!result.ok) {
       for (const violation of result.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";

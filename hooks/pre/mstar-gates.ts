@@ -50,7 +50,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import {
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
-  resolveCompassEnforcement,
+  resolveRepoEnforcement,
   resolveHarnessDir,
   validateStatus,
 } from "@mstar-harness/engine";
@@ -209,7 +209,7 @@ function gateStatusWrite(eventInput: unknown): { block: true; reason: string } |
     if (harnessDir === null) continue; // not a gated status write — silent pass
     const violations = validateStatusWriteDoc(input.content, resolve(rawPath));
     if (violations.length === 0) continue;
-    const enforcement = resolveCompassEnforcement(harnessDir);
+    const enforcement = resolveRepoEnforcement(harnessDir);
     if (!enforcement.hard) continue; // soft mode — silent pass
     const reason = violations.map((v) => `${violationLine(v)} (${STATUS_SKILL_POINTER})`).join("\n");
     return { block: true, reason };
