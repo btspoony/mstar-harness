@@ -377,12 +377,12 @@ describe("checkFiveQuestionCorpus — Guard 5 five-question runtime smoke", () =
         : entry,
     );
 
-  test("real corpus passes runtime-mode five-question lint (16 runtime skills)", () => {
+  test("real corpus passes runtime-mode five-question lint (17 runtime skills)", () => {
     const { checked, failures } = checkFiveQuestionCorpus(realCorpus());
-    // 18 mstar-* skill dirs minus the two exempt (mstar-harness-core,
+    // 19 mstar-* skill dirs minus the two exempt (mstar-harness-core,
     // mstar-skill-authoring) — a new runtime skill must be aligned or
     // fail the guard (and this pin) loudly.
-    expect(checked).toBe(16);
+    expect(checked).toBe(17);
     expect(failures).toEqual([]);
   });
 
@@ -464,15 +464,15 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
       return { ...entry, text: [...lines.slice(0, start), ...replacement, ...lines.slice(end)].join("\n") };
     });
 
-  test("real corpus passes load-order lint and role mapping (17 skills)", () => {
+  test("real corpus passes load-order lint and role mapping (18 skills)", () => {
     const { skillsChecked, loadOrderViolations, mappingViolations, failures } = checkRolesCorpus(
       realCorpus(),
       ROLES_DIR,
     );
-    // 18 mstar-* skill dirs minus mstar-harness-core (exempt inside the
+    // 19 mstar-* skill dirs minus mstar-harness-core (exempt inside the
     // engine's lintLoadOrder) — a new mstar-* skill must declare its load
     // order or fail the guard (and this pin) loudly.
-    expect(skillsChecked).toBe(17);
+    expect(skillsChecked).toBe(18);
     expect(loadOrderViolations).toBe(0);
     expect(mappingViolations).toBe(0);
     expect(failures).toEqual([]);

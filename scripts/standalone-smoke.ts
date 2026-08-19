@@ -7,7 +7,7 @@
  * skill loads without depending on the runtime:
  *
  *   1. Every `skills/<name>/SKILL.md` parses a frontmatter `name:` (it loads
- *      as a skill). Expected: the 19 harness skills (18 `mstar-*` + `pm`);
+ *      as a skill). Expected: the 20 harness skills (19 `mstar-*` + `pm`);
  *      optional bundled skills (e.g. `grill-me`) are load-checked too but
  *      reported separately from the harness set.
  *   2. No skill markdown references `@mstar-harness/engine` or
@@ -32,7 +32,7 @@ const ENGINE_REF = /@mstar-harness\/(?:engine|cli)/;
 const CALLOUT_MARKER = "**Engine check (when available):**";
 const STANDALONE_GUARANTEE = "Skill text below remains authoritative when the runtime is absent";
 
-/** The 19 harness skills that must load standalone (18 mstar-* + pm). */
+/** The 20 harness skills that must load standalone (19 mstar-* + pm). */
 const EXPECTED_SKILLS = [
   "mstar-audit",
   "mstar-branch-worktree",
@@ -41,6 +41,7 @@ const EXPECTED_SKILLS = [
   "mstar-compound-refresh",
   "mstar-design-md",
   "mstar-dispatch-gates",
+  "mstar-engine-legacy",
   "mstar-harness-core",
   "mstar-host",
   "mstar-iteration",
@@ -201,7 +202,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `standalone-smoke: OK — ${harnessNames.length} harness skills load standalone (${EXPECTED_SKILLS.length}: 18 mstar-* + pm — ${harnessNames.join(", ")})` +
+  `standalone-smoke: OK — ${harnessNames.length} harness skills load standalone (${EXPECTED_SKILLS.length}: 19 mstar-* + pm — ${harnessNames.join(", ")})` +
     (optionalNames.length > 0
       ? `; ${optionalNames.length} optional bundled skill${optionalNames.length === 1 ? "" : "s"} (${optionalNames.join(", ")})`
       : ""),
