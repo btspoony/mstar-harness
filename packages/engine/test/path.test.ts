@@ -40,11 +40,14 @@ import {
   resolveIterationDir,
   resolveKnowledgeDir,
   resolvePlanDir,
+  resolveProjectDir,
   resolveSddDir,
   resolveSpecsDir,
+  resolveWorkflowDir,
   scaffoldHarness,
   validateGitignore,
 } from "../src/path.js";
+import { validateStatusV2 } from "../src/status.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -585,6 +588,99 @@ describe("resolveXDir — `.mstarc` [config] sub-directory keys (plan-convention
   });
 });
 
+describe("resolveWorkflowDir / resolveProjectDir (v3 workflow lifecycle layout)", () => {
+  test("default composition: {HARNESS_DIR}/workflows and {HARNESS_DIR}/projects", () => {
+    const root = tmpRoot("path-wf-default-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      expect(resolveWorkflowDir(root)).toBe(join(root, ".mstar", "workflows"));
+      expect(resolveProjectDir(root)).toBe(join(root, ".mstar", "projects"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("workflow_dir / project_dir overrides from a repo-root .mstarc, resolved against the config dir", () => {
+    const root = tmpRoot("path-wf-rc-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      writeFileSync(
+        join(root, ".mstarc"),
+        "[config]\nworkflow_dir=process/workflows\nproject_dir=runtime/projects\n",
+      );
+      expect(resolveWorkflowDir(root)).toBe(join(root, "process", "workflows"));
+      expect(resolveProjectDir(root)).toBe(join(root, "runtime", "projects"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an absolute workflow_dir declaration is used as-is", () => {
+    const root = tmpRoot("path-wf-abs-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      const custom = join(root, "absolute-workflows");
+      writeFileSync(join(root, ".mstarc"), `[config]\nworkflow_dir=${custom}\n`);
+      expect(resolveWorkflowDir(root)).toBe(custom);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc inside the harness dir also applies", () => {
+    const root = tmpRoot("path-wf-inner-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      writeFileSync(join(root, ".mstar", ".mstarc"), "[config]\nworkflow_dir=inner-wf\nproject_dir=inner-proj\n");
+      expect(resolveWorkflowDir(root)).toBe(join(root, ".mstar", "inner-wf"));
+      expect(resolveProjectDir(root)).toBe(join(root, ".mstar", "inner-proj"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc above the repo root is never adopted", () => {
+    const root = tmpRoot("path-wf-above-");
+    try {
+      mkdirSync(join(root, "proj", ".mstar"), { recursive: true });
+      writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=outer-wf\n");
+      // Harness under proj/.mstar — the override walk stops at the repo
+      // root (proj), so the outer config does not apply.
+      expect(resolveWorkflowDir(join(root, "proj"))).toBe(join(root, "proj", ".mstar", "workflows"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("MSTAR_HARNESS_DIR interplay: explicit harness root wins, overrides resolve against the config", () => {
+    const root = tmpRoot("path-wf-env-");
+    try {
+      mkdirSync(join(root, "custom-harness"), { recursive: true });
+      writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=runtime/wf\nproject_dir=store/projects\n");
+      withEnv(join(root, "custom-harness"), () => {
+        expect(resolveWorkflowDir(root)).toBe(join(root, "runtime", "wf"));
+        expect(resolveProjectDir(root)).toBe(join(root, "store", "projects"));
+        // No declaration: defaults compose under the explicit harness dir.
+        writeFileSync(join(root, ".mstarc"), "[config]\n");
+        expect(resolveWorkflowDir(root)).toBe(join(root, "custom-harness", "workflows"));
+        expect(resolveProjectDir(root)).toBe(join(root, "custom-harness", "projects"));
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("no harness dir → throws (fail closed, no silent default)", () => {
+    const root = tmpRoot("path-wf-none-");
+    try {
+      expect(() => resolveWorkflowDir(root)).toThrow(/harness dir not found/);
+      expect(() => resolveProjectDir(root)).toThrow(/harness dir not found/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
   test("first non-empty candidate wins: {HARNESS_DIR}/specs", () => {
     const root = tmpRoot("path-specs-first-");
@@ -711,7 +807,7 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
 });
 
 describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates/status.empty.json)", () => {
-  test("creates .mstar/{plans,iterations,knowledge,specs,sdd} and status.json from the empty template", () => {
+  test("creates .mstar/{plans,iterations,knowledge,specs,sdd} and a v2 status.json from the empty template", () => {
     const root = tmpRoot("path-scaffold-");
     try {
       const harnessDir = scaffoldHarness(root);
@@ -726,9 +822,14 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       ]);
       // Byte-identical to skills/mstar-plan-artifacts/templates/status.empty.json
       // (embedded constant — engine never reads skill files at runtime).
-      expect(readFileSync(join(harnessDir, "status.json"), "utf8")).toBe(
-        '{\n  "version": 1,\n  "updated_at": "1970-01-01",\n  "plans": [],\n  "residual_findings": {},\n  "metadata": {}\n}\n',
+      // Plan Task 3 ruling: the template is the v2 shape so a scaffolded
+      // harness is never an un-migrated (v1) tree.
+      const statusPath = join(harnessDir, "status.json");
+      expect(readFileSync(statusPath, "utf8")).toBe(
+        '{\n  "version": 2,\n  "updated_at": "1970-01-01",\n  "workflows": []\n}\n',
       );
+      // The scaffolded root validates clean under the v2 validator.
+      expect(validateStatusV2(statusPath).ok).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

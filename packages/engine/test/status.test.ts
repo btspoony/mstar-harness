@@ -1,7 +1,7 @@
 /**
  * Engine status module — status.json schema validation, residual severity
- * normalization, residual lifecycle (open → archived), findings-cleanup gate,
- * and the `metadata.tech_debt_summary` rollup.
+ * normalization, project-register findings-cleanup gate, and the
+ * project-register tech-debt rollup.
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`
@@ -14,55 +14,48 @@
  *   `critical|high|medium|low|nit`; `warning`/`Major`/non-English forbidden in
  *   JSON; legacy `"severity": "warning"` is read and rolled up as `low`.
  *   `null`/`""` → `medium` (rollup `norm_sev` semantics).
- * - Residual lifecycle + archive shape (plan_id, schema_version, entries[],
- *   `archived_at`; remove from open list; update root `updated_at`; delete
- *   empty plan-id keys):
- *   § Residual findings lifecycle (close, archive, remove) — "Recommended:
- *   archive to `archived/residuals/<plan-id>.json`" + § General constraints
- *   ("Empty `plan-id` key: … delete the key … no `"plan-id": []`").
  * - Findings cleanup modes (zero-residual vs allow-residual; blocker-defer
- *   definition; nit/waived rules): § Findings cleanup modes.
- * - Rollup aggregates + drift check (total_open / by_severity / by_target /
- *   by_plan; PASS/DRIFT vs stored `metadata.tech_debt_summary`):
+ *   definition; nit/waived rules): § Findings cleanup modes. v3 relocation:
+ *   the gate reads the project register (`projects/<id>/residuals.json`,
+ *   one entry per plan-id key) instead of the v1 root `residual_findings`;
+ *   the plan-metadata `findings_cleanup` mirror is deleted (no dual-track).
+ * - Rollup aggregates (total_open / by_severity / by_target / by_plan):
  *   § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
- *   `techDebtRollup` (engine; no CLI form). Golden-fixture parity: outputs
- *   captured from the former bash rollup oracle (byte-proven in slice 2)
- *   are stored under `fixtures/rollup.*.golden.txt`.
+ *   `techDebtRollup` (engine; no CLI form). v3 relocation: the rollup
+ *   aggregates project registers under `{PROJECT_DIR}`; the v1 stored-summary
+ *   drift check (`metadata.tech_debt_summary`) is deleted — the register is
+ *   the source of truth, so `stored` is always null and the retained
+ *   `checks`/`overall` fields report DRIFT (export-surface compatibility
+ *   until the P2 CLI cutover).
  * - `ValidationResult`/`GateResult` shapes + severity machine SSOT:
  *   `packages/engine/src/core.ts` (roadmap §8.5 C2/C4).
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  archiveResiduals,
-  findingsCleanupGate,
   normalizeSeverity,
+  registerWorkflow,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
-  techDebtRollup,
+  unregisterWorkflow,
   validatePlanRow,
   validateResidual,
   validateStatus,
+  validateStatusV2,
 } from "../src/status.js";
+import { findingsCleanupGate, techDebtRollup } from "../src/project.js";
+import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
-import type { FindingsCleanupMode, TechDebtRollup } from "../src/status.js";
+import type { WorkflowEntry } from "../src/status.js";
+import type { FindingsCleanupMode, TechDebtRollup } from "../src/project.js";
+import { writeWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const EMPTY_TEMPLATE = join(FIXTURES, "status.empty.json");
 const REAL_SHAPE = join(FIXTURES, "status.real-shape.json");
-const ROLLUP_FIXTURE = join(FIXTURES, "status.rollup-multiplans.json");
-const SCRAMBLED_FIXTURE = join(FIXTURES, "status.rollup-scrambled.json");
-
-// Golden fixtures: outputs captured from the former bash rollup oracle
-// (byte-proven in slice 2, scripts removed in slice 5).
-const ROLLUP_MULTIPLANS_GOLDEN = join(FIXTURES, "rollup.multiplans.golden.txt");
-const ROLLUP_CONFLICT_GOLDEN = join(FIXTURES, "rollup.conflict.golden.txt");
-const ROLLUP_DRIFT_GOLDEN = join(FIXTURES, "rollup.drift.golden.txt");
-const ROLLUP_ZERO_GOLDEN = join(FIXTURES, "rollup.zero.golden.txt");
-const ROLLUP_FALSE_LIFECYCLE_GOLDEN = join(FIXTURES, "rollup.false-lifecycle.golden.txt");
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -115,39 +108,58 @@ function doc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-/** Rendered rollup output format (matches the former bash script's echo formatting). */
-function renderRollupOutput(rollup: TechDebtRollup): string {
-  const lines: string[] = [];
-  lines.push("=== tech_debt_summary (computed from open residual_findings) ===");
-  lines.push(JSON.stringify(rollup.computed, null, 2));
-  lines.push("");
-  lines.push("=== stored metadata.tech_debt_summary ===");
-  lines.push(rollup.stored === null ? "(none)" : JSON.stringify(rollup.stored, null, 2));
-  lines.push("");
-  lines.push("=== consistency check ===");
-  for (const check of rollup.checks) {
-    const computed = JSON.stringify(rollup.computed[check.field]);
-    if (rollup.stored === null) {
-      lines.push(`DRIFT: no stored tech_debt_summary (computed ${check.field} = ${computed})`);
-    } else if (check.status === "PASS") {
-      lines.push(`PASS: ${check.field}`);
-    } else {
-      // Mirrors the jq `-c ".$field // null"` comparison: `false` renders as
-      // null (jq alternative operator), 0 stays 0 (truthy in jq).
-      const storedField = rollup.stored[check.field];
-      const storedCompared = storedField === false ? null : (storedField ?? null);
-      lines.push(`DRIFT: ${check.field}`);
-      lines.push(`  computed: ${computed}`);
-      lines.push(`  stored:   ${JSON.stringify(storedCompared)}`);
-    }
-  }
-  lines.push("");
-  lines.push(
-    rollup.overall === "PASS"
-      ? "OVERALL: PASS"
-      : "OVERALL: DRIFT — refresh metadata.tech_debt_summary in status.json",
+/** Valid v2 status document (plan Task 3 — `{ version: 2, updated_at, workflows[] }`). */
+function v2doc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 2,
+    updated_at: "2026-08-19",
+    workflows: [],
+    ...overrides,
+  };
+}
+
+/** Valid active workflow entry (`{ id, type, started_at, dir }`, dir harness-relative). */
+function wfEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "wf-1",
+    type: "plan",
+    started_at: "2026-08-19T08:00:00Z",
+    dir: "workflows/wf-1",
+    ...overrides,
+  };
+}
+
+/** Write a minimal active (running) snapshot at `harnessDir/workflows/<id>/snapshot.json`. */
+async function writeRunningSnapshot(harnessDir: string, id: string): Promise<void> {
+  await writeWorkflowSnapshot(
+    {
+      schema_version: 1,
+      id,
+      type: "plan",
+      status: "running",
+      started_at: "2026-08-19T08:00:00Z",
+      updated_at: "2026-08-19",
+      plans: [],
+    },
+    join(harnessDir, "workflows", id),
   );
-  return `${lines.join("\n")}\n`;
+}
+
+/** Write a minimal terminal (completed) snapshot at `harnessDir/workflows/<id>/snapshot.json`. */
+async function writeTerminalSnapshot(harnessDir: string, id: string): Promise<void> {
+  await writeWorkflowSnapshot(
+    {
+      schema_version: 1,
+      id,
+      type: "plan",
+      status: "completed",
+      started_at: "2026-08-19T08:00:00Z",
+      ended_at: "2026-08-19T09:00:00Z",
+      updated_at: "2026-08-19",
+      plans: [],
+    },
+    join(harnessDir, "workflows", id),
+  );
 }
 
 describe("normalizeSeverity (legacy read path)", () => {
@@ -322,454 +334,566 @@ describe("validateResidual", () => {
   });
 });
 
-describe("validateStatus", () => {
-  test("status.empty.json template validates clean (templates/status.empty.json)", () => {
-    const result = validateStatus(EMPTY_TEMPLATE);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("real repo status.json shape validates clean (legacy plan_id rows, mixed metadata, detail_doc null)", () => {
-    const result = validateStatus(REAL_SHAPE);
+describe("validateStatusV2", () => {
+  test("v2 empty template validates clean (fixtures/status.empty.json)", () => {
+    const result = validateStatusV2(EMPTY_TEMPLATE);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
 
   test("accepts a parsed object or a file path", () => {
-    expect(validateStatus(doc()).ok).toBe(true);
-    expect(validateStatus(EMPTY_TEMPLATE).ok).toBe(true);
+    expect(validateStatusV2(v2doc()).ok).toBe(true);
+    expect(validateStatusV2(EMPTY_TEMPLATE).ok).toBe(true);
   });
 
-  test("required top-level fields: version / updated_at / plans / residual_findings / metadata", () => {
-    violationCodes("status.missing-version")(validateStatus(doc({ version: undefined })));
-    violationCodes("status.missing-updated-at")(validateStatus(doc({ updated_at: undefined })));
-    violationCodes("status.missing-plans")(validateStatus(doc({ plans: undefined })));
-    violationCodes("status.missing-residual-findings")(validateStatus(doc({ residual_findings: undefined })));
-    violationCodes("status.missing-metadata")(validateStatus(doc({ metadata: undefined })));
+  test("v2 fixture with active workflow entries validates clean (incl. nested relative dir)", () => {
+    const result = validateStatusV2(
+      v2doc({
+        workflows: [wfEntry(), wfEntry({ id: "iter-1", type: "iteration", dir: "custom/workflows/iter-1" })],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
   });
 
-  test("wrong types for top-level fields are violations", () => {
-    violationCodes("status.invalid-plans")(validateStatus(doc({ plans: {} })));
-    violationCodes("status.invalid-residual-findings")(validateStatus(doc({ residual_findings: [] })));
-    violationCodes("status.invalid-metadata")(validateStatus(doc({ metadata: [] })));
+  test("v1 input (version: 1) errors MIGRATION_REQUIRED carrying the mstar migrate hint", () => {
+    const result = validateStatusV2(doc());
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("status.migration-required");
+    expect(result.violations.map((v) => v.message + (v.fix ?? "")).join(" ")).toContain("mstar migrate");
   });
 
-  test("unsupported schema version is a violation (current schema is v1)", () => {
-    violationCodes("status.unsupported-version")(validateStatus(doc({ version: 2 })));
-    violationCodes("status.invalid-version")(validateStatus(doc({ version: "1" })));
+  test("v1-shaped input (root plans[]) errors MIGRATION_REQUIRED even with version: 2", () => {
+    const result = validateStatusV2(v2doc({ plans: [] }));
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("status.migration-required");
+  });
+
+  test("v1-shaped input (root residual_findings) errors MIGRATION_REQUIRED even with version: 2 (QC wave-1 W-C)", () => {
+    // The v1-disguise hole: a v2 doc carrying the other v1 root surface —
+    // residual_findings (keyed by plan id, arrays of entries) — must fail
+    // closed like root plans[], not pass as "migrated".
+    const withEntries = validateStatusV2(v2doc({ residual_findings: { "plan-a": [{ id: "R1" }] } }));
+    expect(withEntries.ok).toBe(false);
+    expect(violationsOf(withEntries)).toContain("status.migration-required");
+    expect(withEntries.violations.map((v) => v.message).join(" ")).toContain("mstar migrate");
+    // Presence of the key at all is v1-shaped (v1 init template carries
+    // `residual_findings: {}`), even when empty.
+    const empty = validateStatusV2(v2doc({ residual_findings: {} }));
+    expect(empty.ok).toBe(false);
+    expect(violationsOf(empty)).toContain("status.migration-required");
+  });
+
+  test("real v1 repo status.json shape errors MIGRATION_REQUIRED with the hint", () => {
+    const result = validateStatusV2(REAL_SHAPE);
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("status.migration-required");
+    expect(result.violations.map((v) => v.message).join(" ")).toContain("mstar migrate");
+  });
+
+  test("missing or non-integer version fails closed as migration-required", () => {
+    violationCodes("status.migration-required")(validateStatusV2(v2doc({ version: undefined })));
+    violationCodes("status.migration-required")(validateStatusV2(v2doc({ version: "2" })));
+    violationCodes("status.migration-required")(validateStatusV2(v2doc({ version: 3 })));
+  });
+
+  test("non-object document is a violation, not a throw", () => {
+    violationCodes("status.invalid-doc")(validateStatusV2(null));
+    violationCodes("status.invalid-doc")(validateStatusV2([]));
+  });
+
+  test("required top-level fields: updated_at / workflows", () => {
+    violationCodes("status.missing-updated-at")(validateStatusV2(v2doc({ updated_at: undefined })));
+    violationCodes("status.missing-workflows")(validateStatusV2(v2doc({ workflows: undefined })));
+    violationCodes("status.invalid-workflows")(validateStatusV2(v2doc({ workflows: {} })));
   });
 
   test("updated_at must be YYYY-MM-DD", () => {
-    violationCodes("status.invalid-updated-at")(validateStatus(doc({ updated_at: "2026-08-08T00:00:00Z" })));
+    violationCodes("status.invalid-updated-at")(validateStatusV2(v2doc({ updated_at: "2026-08-08T00:00:00Z" })));
   });
 
-  test("dual-write: metadata.residual_findings is rejected (root-only canonical)", () => {
-    violationCodes("status.dual-write-residuals")(
-      validateStatus(doc({ residual_findings: { "plan-a": [entry()] }, metadata: { residual_findings: { "plan-a": [entry()] } } })),
-    );
-  });
-
-  test("empty plan-id key is flagged (delete the key, no 'plan-id': [])", () => {
-    violationCodes("status.residual.empty-key")(
-      validateStatus(doc({ residual_findings: { "plan-a": [] } })),
-    );
+  test("running entry shape violations are red", () => {
+    violationCodes("status.workflow.missing-id")(validateStatusV2(v2doc({ workflows: [wfEntry({ id: undefined })] })));
+    violationCodes("status.workflow.missing-type")(validateStatusV2(v2doc({ workflows: [wfEntry({ type: undefined })] })));
+    violationCodes("status.workflow.invalid-type")(validateStatusV2(v2doc({ workflows: [wfEntry({ type: "sprint" })] })));
+    violationCodes("status.workflow.missing-started-at")(validateStatusV2(v2doc({ workflows: [wfEntry({ started_at: undefined })] })));
+    violationCodes("status.workflow.missing-dir")(validateStatusV2(v2doc({ workflows: [wfEntry({ dir: undefined })] })));
+    violationCodes("status.workflow.invalid-dir")(validateStatusV2(v2doc({ workflows: [wfEntry({ dir: "/abs/path" })] })));
+    violationCodes("status.workflow.invalid-dir")(validateStatusV2(v2doc({ workflows: [wfEntry({ dir: "workflows/../escape" })] })));
+    violationCodes("status.workflow.invalid-dir")(validateStatusV2(v2doc({ workflows: [wfEntry({ dir: "C:\\abs\\path" })] })));
+    violationCodes("status.workflow.duplicate-id")(validateStatusV2(v2doc({ workflows: [wfEntry(), wfEntry()] })));
   });
 
   test("malformed JSON file yields a violation, not a throw", () => {
-    const dir = tmpRoot("status-invalid-json-");
+    const dir = tmpRoot("status-v2-invalid-json-");
     const file = join(dir, "status.json");
     writeFileSync(file, "{ not json", "utf8");
-    const result = validateStatus(file);
+    const result = validateStatusV2(file);
     expect(result.ok).toBe(false);
     expect(violationsOf(result)).toContain("status.invalid-json");
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("plan-row and residual violations aggregate into the gate result", () => {
-    const result = validateStatus(
-      doc({
-        plans: [row({ status: "Finished" })],
-        residual_findings: { "plan-a": [entry({ severity: "Major" })] },
-      }),
-    );
-    expect(violationsOf(result)).toContain("status.plan-row.invalid-status");
-    expect(violationsOf(result)).toContain("status.residual.invalid-severity");
-  });
-
-  test("non-object residual entry inside residual_findings aggregates into the gate result", () => {
-    // Full-path gate: every list entry routes through validateResidual
-    // (status.ts:435-437), so a non-object entry is rejected at doc level too.
-    const result = validateStatus(doc({ residual_findings: { "plan-a": ["oops"] } }));
-    expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toContain("status.residual.invalid");
-  });
-});
-
-describe("archiveResiduals", () => {
-  test("moves open residuals to archived/residuals/<plan-id>.json and removes them from the open list", async () => {
-    const dir = tmpRoot("status-archive-");
-    const statusPath = join(dir, "status.json");
-    const before = doc({
-      updated_at: "2026-08-01",
-      residual_findings: {
-        "plan-a": [entry({ id: "R1" }), entry({ id: "R2", severity: "nit", decision: "accept" })],
-      },
+  describe("removal-at-terminal invariant (no listed id resolves to a terminal/missing snapshot)", () => {
+    test("path input: listed entry whose snapshot is missing is a violation", () => {
+      const dir = tmpRoot("status-v2-snapshot-missing-");
+      try {
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(violationsOf(result)).toContain("status.workflow.snapshot-missing");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
-    writeFileSync(statusPath, JSON.stringify(before, null, 2), "utf8");
 
-    const result = await archiveResiduals("plan-a", dir);
-    expect(result.archived).toBe(2);
-    expect(result.archivePath).toBe(join(dir, "archived", "residuals", "plan-a.json"));
+    test("path input: listed entry resolving to a terminal snapshot is a violation", async () => {
+      const dir = tmpRoot("status-v2-terminal-");
+      try {
+        await writeTerminalSnapshot(dir, "wf-1");
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(violationsOf(result)).toContain("status.workflow.terminal-listed");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
 
-    const archive = JSON.parse(readFileSync(result.archivePath, "utf8")) as Record<string, unknown>;
-    expect(archive.plan_id).toBe("plan-a");
-    expect(archive.schema_version).toBe(1);
-    const entries = archive.entries as Array<Record<string, unknown>>;
-    expect(entries).toHaveLength(2);
-    // NOTE: read values before toMatchObject — bun replaces matched properties
-    // with the asymmetric matcher object, polluting later reads of the same ref.
-    const archivedAt = entries[0].archived_at;
-    expect(typeof archivedAt).toBe("string");
-    expect(entries[0]).toMatchObject({ id: "R1" });
-    expect(entries[1]).toMatchObject({ id: "R2" });
+    test("path input: listed entry resolving to an active (running) snapshot validates clean", async () => {
+      const dir = tmpRoot("status-v2-active-");
+      try {
+        await writeRunningSnapshot(dir, "wf-1");
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(result.ok).toBe(true);
+        expect(result.violations).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
 
-    const after = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
-    expect(after.residual_findings).not.toHaveProperty("plan-a");
-    expect(after.updated_at).toBe(archivedAt);
-    rmSync(dir, { recursive: true, force: true });
-  });
+    test("root entry type/started_at are cross-checked against the snapshot (QC wave-1 S-c)", async () => {
+      const dir = tmpRoot("status-v2-mismatch-");
+      try {
+        await writeRunningSnapshot(dir, "wf-1"); // snapshot type plan, started_at 2026-08-19T08:00:00Z
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry({ type: "iteration" })] }));
+        const typeMismatch = validateStatusV2(statusPath);
+        expect(violationsOf(typeMismatch)).toContain("status.workflow.mismatched-type");
 
-  test("appends to an existing archive file", async () => {
-    const dir = tmpRoot("status-archive-append-");
-    const statusPath = join(dir, "status.json");
-    writeFileSync(
-      statusPath,
-      JSON.stringify(doc({ residual_findings: { "plan-a": [entry({ id: "R9" })] } }), null, 2),
-      "utf8",
-    );
-    const archiveDir = join(dir, "archived", "residuals");
-    mkdirSync(archiveDir, { recursive: true });
-    const archivePath = join(archiveDir, "plan-a.json");
-    const existing = { plan_id: "plan-a", schema_version: 1, entries: [entry({ id: "R1", archived_at: "2026-07-01" })] };
-    writeFileSync(archivePath, JSON.stringify(existing, null, 2), "utf8");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry({ started_at: "2026-08-19T00:00:00Z" })] }));
+        const startedMismatch = validateStatusV2(statusPath);
+        expect(violationsOf(startedMismatch)).toContain("status.workflow.mismatched-started-at");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
 
-    await archiveResiduals("plan-a", dir);
-    const archive = JSON.parse(readFileSync(archivePath, "utf8")) as { entries: unknown[] };
-    expect(archive.entries).toHaveLength(2);
-    rmSync(dir, { recursive: true, force: true });
-  });
+    test("doc input without harnessDir skips the on-disk invariant check (structure only)", () => {
+      const result = validateStatusV2(v2doc({ workflows: [wfEntry()] }));
+      expect(result.ok).toBe(true);
+    });
 
-  test("no-op when the plan has no open residuals (no archive file created)", async () => {
-    const dir = tmpRoot("status-archive-empty-");
-    writeFileSync(join(dir, "status.json"), JSON.stringify(doc(), null, 2), "utf8");
-    const result = await archiveResiduals("plan-a", dir);
-    expect(result.archived).toBe(0);
-    expect(existsSync(result.archivePath)).toBe(false);
-    rmSync(dir, { recursive: true, force: true });
-  });
+    test("explicit harnessDir opts enable the invariant check for doc input", () => {
+      const dir = tmpRoot("status-v2-doc-harness-");
+      try {
+        const result = validateStatusV2(v2doc({ workflows: [wfEntry()] }), { harnessDir: dir });
+        expect(violationsOf(result)).toContain("status.workflow.snapshot-missing");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
 
-  test("throws when status.json is missing", async () => {
-    const dir = tmpRoot("status-archive-missing-");
-    await expect(archiveResiduals("plan-a", dir)).rejects.toThrow(/status file not found/);
-    rmSync(dir, { recursive: true, force: true });
-  });
+    test("path input: listed entry whose snapshot is a symlink escaping the harness is a violation (QC wave-1 S-f)", async () => {
+      const dir = tmpRoot("status-v2-symlink-escape-");
+      const outside = tmpRoot("status-v2-symlink-outside-");
+      try {
+        // Real snapshot physically OUTSIDE the harness; `workflows/wf-1` is
+        // a symlink to it. The lexical path is harness-relative and exists,
+        // but the resolved path escapes the harness — fail closed.
+        await writeRunningSnapshot(outside, "wf-1");
+        mkdirSync(join(dir, "workflows"));
+        symlinkSync(join(outside, "workflows", "wf-1"), join(dir, "workflows", "wf-1"), "dir");
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(violationsOf(result)).toContain("status.workflow.snapshot-outside-harness");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
 
-  test("rejects plan ids that are not a single safe path component (traversal guard)", async () => {
-    const dir = tmpRoot("status-archive-traversal-");
-    writeFileSync(join(dir, "status.json"), JSON.stringify(doc(), null, 2), "utf8");
-    for (const bad of ["", ".", "..", "../escape", "a/b", "a\\b", "a/../../tmp/pwn", "..%2f"]) {
-      await expect(archiveResiduals(bad, dir)).rejects.toThrow(/single safe path component/);
-    }
-    // Nothing escaped the harness dir: no archived/ tree with traversal names.
-    expect(existsSync(join(dir, "archived"))).toBe(false);
-    expect(existsSync(join(dir, "..", "escape.json"))).toBe(false);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  test("two concurrent archive runs serialize (no lost update, no duplicate entries)", async () => {
-    // Spec: qc2 F-004 / qc3 F-2 — the status.json read-modify-write runs under
-    // withStatusWriteLock; two writers serialize and the second is a no-op.
-    const dir = tmpRoot("status-archive-race-");
-    const statusPath = join(dir, "status.json");
-    writeFileSync(
-      statusPath,
-      JSON.stringify(doc({ residual_findings: { "plan-a": [entry({ id: "R1" }), entry({ id: "R2" })] } }), null, 2),
-      "utf8",
-    );
-
-    const [a, b] = await Promise.all([archiveResiduals("plan-a", dir), archiveResiduals("plan-a", dir)]);
-    expect(a.archived + b.archived).toBe(2);
-    const archive = JSON.parse(readFileSync(join(dir, "archived", "residuals", "plan-a.json"), "utf8")) as {
-      entries: unknown[];
-    };
-    expect(archive.entries).toHaveLength(2);
-    const after = JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>;
-    expect(after.residual_findings).not.toHaveProperty("plan-a");
-    expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(false);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  test("dedups on append: ids already in the archive file are skipped", async () => {
-    const dir = tmpRoot("status-archive-dedup-");
-    const statusPath = join(dir, "status.json");
-    writeFileSync(
-      statusPath,
-      JSON.stringify(
-        doc({ residual_findings: { "plan-a": [entry({ id: "R1" }), entry({ id: "R2" })] } }),
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    const archiveDir = join(dir, "archived", "residuals");
-    mkdirSync(archiveDir, { recursive: true });
-    const archivePath = join(archiveDir, "plan-a.json");
-    const existing = { plan_id: "plan-a", schema_version: 1, entries: [entry({ id: "R1", archived_at: "2026-07-01" })] };
-    writeFileSync(archivePath, JSON.stringify(existing, null, 2), "utf8");
-
-    const result = await archiveResiduals("plan-a", dir);
-    expect(result.archived).toBe(1); // only R2 is new — R1 already archived
-    const archive = JSON.parse(readFileSync(archivePath, "utf8")) as { entries: Array<{ id: string }> };
-    expect(archive.entries.map((e) => e.id)).toEqual(["R1", "R2"]);
-    rmSync(dir, { recursive: true, force: true });
+    test("path input: a symlink resolving INSIDE the harness still validates clean (location, not symlink presence, is the invariant)", async () => {
+      const dir = tmpRoot("status-v2-symlink-inside-");
+      try {
+        // `workflows/wf-1` is a symlink to `workflows/real-wf-1` — the
+        // resolved snapshot still physically lives under the harness, so
+        // the invariant holds (the check is location-based, not
+        // symlink-presence-based).
+        await writeRunningSnapshot(dir, "real-wf-1");
+        symlinkSync(join(dir, "workflows", "real-wf-1"), join(dir, "workflows", "wf-1"), "dir");
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(result.ok).toBe(true);
+        expect(result.violations).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });
 
-describe("findingsCleanupGate", () => {
-  function gated(
-    entries: Array<Record<string, unknown>>,
-    opts?: { mode?: FindingsCleanupMode; planMetadata?: Record<string, unknown> },
-  ): GateResult {
-    const plan = row(
-      opts?.planMetadata === undefined ? {} : { metadata: opts.planMetadata },
-    ) as Record<string, unknown>;
-    return findingsCleanupGate(
-      doc({ plans: [plan], residual_findings: { "plan-a": entries } }) as Parameters<typeof findingsCleanupGate>[0],
-      "plan-a",
-      opts,
-    );
+describe("validateStatus (relocated v2 validator — v1 handling deleted in Task 3, hard cutover)", () => {
+  test("the public name is the v2 validator (relocation, not a dual path)", () => {
+    expect(validateStatus).toBe(validateStatusV2);
+  });
+
+  test("v2 documents validate clean through the relocated name", () => {
+    expect(validateStatus(v2doc()).ok).toBe(true);
+  });
+
+  test("v1 input fails closed through the relocated name with the migrate hint", () => {
+    const result = validateStatus(doc());
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("status.migration-required");
+  });
+});
+
+describe("registerWorkflow / unregisterWorkflow (root writers under the root-file write lock)", () => {
+  const entry: WorkflowEntry = { id: "wf-1", type: "plan", started_at: "2026-08-19T08:00:00Z", dir: "workflows/wf-1" };
+
+  async function harnessWithRunningSnapshot(prefix: string): Promise<string> {
+    const dir = tmpRoot(prefix);
+    await writeRunningSnapshot(dir, "wf-1");
+    return dir;
   }
 
-  test("allow-residual (default): open low/medium residuals are fine", () => {
-    const result = gated([entry({ decision: "accept" }), entry({ id: "R2", severity: "medium" })]);
-    expect(result.ok).toBe(true);
-  });
-
-  test("allow-residual: unresolved critical blocks Approve with residuals", () => {
-    violationCodes("findings.allow-residual-critical")(gated([entry({ severity: "critical" })]));
-  });
-
-  test("zero-residual: true blocker-defer (decision defer + target) passes", () => {
-    const result = gated([entry({ decision: "defer", target: "next iteration" })], { mode: "zero-residual" });
-    expect(result.ok).toBe(true);
-  });
-
-  test("zero-residual: fixable open findings (accept) are blocked", () => {
-    violationCodes("findings.zero-residual-open-fixable")(gated([entry({ decision: "accept" })], { mode: "zero-residual" }));
-  });
-
-  test("zero-residual: risk-accepted must be closed/archived, not left open", () => {
-    violationCodes("findings.zero-residual-risk-accepted")(
-      gated([entry({ decision: "risk-accepted" })], { mode: "zero-residual" }),
-    );
-  });
-
-  test("zero-residual: defer without a target is not a true blocker-defer", () => {
-    violationCodes("findings.zero-residual-defer-no-target")(
-      gated([entry({ decision: "defer", target: null })], { mode: "zero-residual" }),
-    );
-  });
-
-  test("zero-residual: style-only nits never stay open", () => {
-    violationCodes("findings.zero-residual-nit")(gated([entry({ severity: "nit" })], { mode: "zero-residual" }));
-  });
-
-  test("zero-residual: closed entries are ignored", () => {
-    const result = gated(
-      [entry({ lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed" })],
-      { mode: "zero-residual" },
-    );
-    expect(result.ok).toBe(true);
-  });
-
-  test("mode resolves from plans[].metadata.findings_cleanup when not passed explicitly", () => {
-    const result = gated([entry({ decision: "accept" })], { planMetadata: { findings_cleanup: "zero-residual" } });
-    expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
-  });
-
-  test("explicit mode wins over plan metadata", () => {
-    const result = gated([entry({ decision: "accept" })], {
-      mode: "allow-residual",
-      planMetadata: { findings_cleanup: "zero-residual" },
-    });
-    expect(result.ok).toBe(true);
-  });
-});
-
-describe("techDebtRollup", () => {
-  test("computed aggregates match jq semantics (warning→low, null/''→medium, closed excluded, unspecified target)", () => {
-    const rollup = techDebtRollup(ROLLUP_FIXTURE);
-    expect(rollup.computed).toEqual({
-      total_open: 5,
-      by_severity: { critical: 0, high: 0, medium: 3, low: 2, nit: 0 },
-      by_target: { "V1.0": 2, "V1.1": 2, unspecified: 1 },
-      by_plan: { "plan-a": 3, "plan-b": 2 },
-    });
-  });
-
-  test("legacy metadata.residual_findings merge follows jq `$canon + $legacy` precedence (legacy wins per plan key)", () => {
-    const rollup = techDebtRollup(
-      doc({
-        residual_findings: { "plan-a": [entry({ id: "R1", severity: "low" })] },
-        metadata: {
-          residual_findings: {
-            // conflicting key: jq object `+` keeps the right operand (legacy) value
-            "plan-a": [entry({ id: "R1", severity: "high" }), entry({ id: "R2", severity: "high" })],
-            "plan-b": [entry({ id: "R1", severity: "nit" })],
-          },
-        },
-      }),
-    );
-    expect(rollup.computed.total_open).toBe(3);
-    expect(rollup.computed.by_severity).toEqual({ critical: 0, high: 2, medium: 0, low: 0, nit: 1 });
-    expect(rollup.computed.by_plan).toEqual({ "plan-a": 2, "plan-b": 1 });
-  });
-
-  test("stored summary matching computed → all PASS, OVERALL PASS", () => {
-    const rollup = techDebtRollup(ROLLUP_FIXTURE);
-    expect(rollup.checks.map((c) => c.status)).toEqual(["PASS", "PASS", "PASS", "PASS"]);
-    expect(rollup.overall).toBe("PASS");
-  });
-
-  test("no stored summary → every field DRIFT, OVERALL DRIFT", () => {
-    const rollup = techDebtRollup(doc({ residual_findings: { "plan-a": [entry()] } }));
-    expect(rollup.stored).toBeNull();
-    expect(rollup.checks.map((c) => c.status)).toEqual(["DRIFT", "DRIFT", "DRIFT", "DRIFT"]);
-    expect(rollup.overall).toBe("DRIFT");
-  });
-
-  test("field-level DRIFT when stored summary disagrees", () => {
-    const withStored = doc({
-      residual_findings: { "plan-a": [entry()] },
-      metadata: {
-        tech_debt_summary: {
-          total_open: 1,
-          by_severity: { critical: 0, high: 0, medium: 0, low: 1, nit: 0 },
-          // stored by_target disagrees: computed is { "Before plan 02": 1 }
-          by_target: { unspecified: 1 },
-          by_plan: { "plan-a": 1 },
-        },
-      },
-    });
-    const rollup = techDebtRollup(withStored);
-    expect(rollup.checks.map((c) => `${c.field}:${c.status}`)).toEqual([
-      "total_open:PASS",
-      "by_severity:PASS",
-      "by_target:DRIFT",
-      "by_plan:PASS",
-    ]);
-    expect(rollup.overall).toBe("DRIFT");
-  });
-
-  test("stored summary with scrambled key order → DRIFT (bash compare_field string-compares jq -c output, key order matters)", () => {
-    // Same values as ROLLUP_FIXTURE, but every stored object's keys are in a
-    // different order than jq -c emits — deep equality would PASS; the string
-    // compare (like bash compare_field) must DRIFT on by_severity/by_target/by_plan.
-    const rollup = techDebtRollup(SCRAMBLED_FIXTURE);
-    expect(rollup.checks.map((c) => `${c.field}:${c.status}`)).toEqual([
-      "total_open:PASS",
-      "by_severity:DRIFT",
-      "by_target:DRIFT",
-      "by_plan:DRIFT",
-    ]);
-    expect(rollup.overall).toBe("DRIFT");
-  });
-
-  test("GOLDEN: TS rollup output matches the stored bash-oracle fixture on the multi-plan fixture", () => {
-    const golden = readFileSync(ROLLUP_MULTIPLANS_GOLDEN, "utf8");
-    const ts = renderRollupOutput(techDebtRollup(ROLLUP_FIXTURE));
-    expect(ts).toBe(golden);
-  });
-
-  test("GOLDEN: DRIFT output matches the stored bash-oracle fixture on a drifted fixture", () => {
-    const dir = tmpRoot("status-rollup-drift-");
-    const drifted = JSON.parse(readFileSync(ROLLUP_FIXTURE, "utf8")) as {
-      metadata: { tech_debt_summary: { by_severity: Record<string, number> } };
-    };
-    drifted.metadata.tech_debt_summary.by_severity.medium = 99;
-    const driftPath = join(dir, "status.json");
-    writeFileSync(driftPath, JSON.stringify(drifted, null, 2), "utf8");
-
-    const ts = techDebtRollup(driftPath);
-    expect(ts.overall).toBe("DRIFT");
-    expect(ts.checks.find((c) => c.field === "by_severity")?.status).toBe("DRIFT");
-    expect(renderRollupOutput(ts)).toBe(readFileSync(ROLLUP_DRIFT_GOLDEN, "utf8"));
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  test(
-    "GOLDEN: canonical+legacy merge precedence matches the stored bash-oracle fixture on a conflict fixture",
-    () => {
-      const conflictFixture = join(FIXTURES, "status.rollup-conflict.json");
-      const ts = techDebtRollup(conflictFixture);
-      // jq `$canon + $legacy` keeps the legacy value on conflicting plan keys
-      expect(ts.computed.total_open).toBe(3);
-      expect(ts.overall).toBe("PASS");
-      expect(renderRollupOutput(ts)).toBe(readFileSync(ROLLUP_CONFLICT_GOLDEN, "utf8"));
-    },
-  );
-
-  test("GOLDEN: stored total_open: 0 (correct empty state) matches the stored bash-oracle fixture (jq `//` keeps 0)", () => {
-    // qc2 F-008 — jq's alternative operator maps only `false`/`null` to the
-    // default; `0` is truthy in jq, so a stored total_open of 0 must compare
-    // equal to the computed 0 (the golden was captured from the bash oracle).
-    const dir = tmpRoot("status-rollup-zero-");
+  test("registerWorkflow creates the v2 root when status.json is missing and appends the entry", async () => {
+    const dir = await harnessWithRunningSnapshot("status-register-create-");
     try {
-      const zeroSummary = {
-        total_open: 0,
-        by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
-        by_target: {},
-        by_plan: {},
-      };
-      const zeroFixture = doc({ metadata: { tech_debt_summary: zeroSummary } });
       const statusPath = join(dir, "status.json");
-      writeFileSync(statusPath, JSON.stringify(zeroFixture, null, 2), "utf8");
-
-      const ts = techDebtRollup(statusPath);
-      expect(ts.checks.every((c) => c.status === "PASS")).toBe(true);
-      expect(ts.overall).toBe("PASS");
-      expect(renderRollupOutput(ts)).toBe(readFileSync(ROLLUP_ZERO_GOLDEN, "utf8"));
+      const doc = await registerWorkflow(statusPath, entry);
+      expect(doc.version).toBe(2);
+      expect(doc.workflows).toEqual([entry]);
+      expect(doc.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      const onDisk = readJson(statusPath);
+      expect(onDisk.version).toBe(2);
+      expect((onDisk.workflows as unknown[]).length).toBe(1);
+      expect(validateStatusV2(statusPath).ok).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("GOLDEN: entry lifecycle: false counts as OPEN and DRIFTs like the stored bash-oracle fixture (jq `//` defaults false)", () => {
-    // qc2 F-008 — `.lifecycle // "open"` yields "open" for `false` (jq maps
-    // false AND null to the default), so an entry with `lifecycle: false`
-    // contributes to total_open; the stored summary omitting it DRIFTs
-    // identically (golden captured from the bash oracle).
+  test("registerWorkflow upserts the same id (idempotent, no duplicate entries)", async () => {
+    const dir = await harnessWithRunningSnapshot("status-register-upsert-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await registerWorkflow(statusPath, entry);
+      // Re-registering the same id must not duplicate. Fields that mirror
+      // the snapshot (type/started_at — QC wave-1 S-c cross-check) cannot
+      // drift in a root update, so the upsert carries the identical entry.
+      await registerWorkflow(statusPath, { ...entry });
+      const onDisk = readJson(statusPath);
+      expect((onDisk.workflows as unknown[]).length).toBe(1);
+      expect((onDisk.workflows as Array<Record<string, unknown>>)[0]).toEqual(entry);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("registerWorkflow refuses an entry whose snapshot is missing (invariant at write time, nothing written)", async () => {
+    const dir = tmpRoot("status-register-no-snapshot-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/snapshot/);
+      expect(existsSync(statusPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("registerWorkflow refuses to modify a v1 root (migration hint, root untouched)", async () => {
+    const dir = tmpRoot("status-register-v1-");
+    try {
+      const statusPath = join(dir, "status.json");
+      const v1 = '{\n  "version": 1,\n  "updated_at": "2026-08-08",\n  "plans": [],\n  "residual_findings": {},\n  "metadata": {}\n}\n';
+      writeFileSync(statusPath, v1);
+      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/mstar migrate/);
+      expect(readFileSync(statusPath, "utf8")).toBe(v1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("registerWorkflow refuses an invalid entry", async () => {
+    const dir = await harnessWithRunningSnapshot("status-register-invalid-entry-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await expect(registerWorkflow(statusPath, { ...entry, type: "sprint" })).rejects.toThrow(/invalid workflow entry/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unregisterWorkflow removes the entry and bumps updated_at", async () => {
+    const dir = await harnessWithRunningSnapshot("status-unregister-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await registerWorkflow(statusPath, entry);
+      const after = await unregisterWorkflow(statusPath, "wf-1");
+      expect(after.workflows).toEqual([]);
+      const onDisk = readJson(statusPath);
+      expect((onDisk.workflows as unknown[]).length).toBe(0);
+      expect(validateStatusV2(statusPath).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unregisterWorkflow is idempotent: removing an absent id is a no-op with no write", async () => {
+    const dir = await harnessWithRunningSnapshot("status-unregister-idem-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await registerWorkflow(statusPath, entry);
+      const before = readFileSync(statusPath, "utf8");
+      const after = await unregisterWorkflow(statusPath, "no-such-id");
+      expect((after.workflows as unknown[]).length).toBe(1);
+      expect(readFileSync(statusPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unregisterWorkflow on a missing root is a no-op that never creates the file", async () => {
+    const dir = tmpRoot("status-unregister-missing-");
+    try {
+      const statusPath = join(dir, "status.json");
+      const after = await unregisterWorkflow(statusPath, "wf-1");
+      expect(after.workflows).toEqual([]);
+      expect(existsSync(statusPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("findingsCleanupGate — project register input (v3 relocation, QC wave-1 W-E array schema)", () => {
+  function register(entries: Record<string, unknown[]>): Record<string, unknown> {
+    return { entries };
+  }
+
+  function gated(
+    residual: Record<string, unknown> | undefined,
+    opts?: { mode?: FindingsCleanupMode },
+  ): GateResult {
+    const reg = register(residual === undefined ? {} : { "plan-a": [residual] });
+    return findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", opts);
+  }
+
+  test("allow-residual (default): open low/medium residuals are fine", () => {
+    const result = gated(entry({ decision: "accept" }));
+    expect(result.ok).toBe(true);
+  });
+
+  test("allow-residual: unresolved critical blocks Approve with residuals", () => {
+    violationCodes("findings.allow-residual-critical")(gated(entry({ severity: "critical" })));
+  });
+
+  test("zero-residual: true blocker-defer (decision defer + target) passes", () => {
+    const result = gated(entry({ decision: "defer", target: "next iteration" }), { mode: "zero-residual" });
+    expect(result.ok).toBe(true);
+  });
+
+  test("zero-residual: fixable open findings (accept) are blocked", () => {
+    violationCodes("findings.zero-residual-open-fixable")(gated(entry({ decision: "accept" }), { mode: "zero-residual" }));
+  });
+
+  test("zero-residual: risk-accepted must be closed/archived, not left open", () => {
+    violationCodes("findings.zero-residual-risk-accepted")(
+      gated(entry({ decision: "risk-accepted" }), { mode: "zero-residual" }),
+    );
+  });
+
+  test("zero-residual: defer without a target is not a true blocker-defer", () => {
+    violationCodes("findings.zero-residual-defer-no-target")(
+      gated(entry({ decision: "defer", target: null }), { mode: "zero-residual" }),
+    );
+  });
+
+  test("zero-residual: style-only nits never stay open", () => {
+    violationCodes("findings.zero-residual-nit")(gated(entry({ severity: "nit" }), { mode: "zero-residual" }));
+  });
+
+  test("zero-residual: closed entries are ignored", () => {
+    const result = gated(
+      entry({ lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed" }),
+      { mode: "zero-residual" },
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  test("no register entry for the plan → no residuals, gate passes (snapshot plan linkage via plan-id key)", () => {
+    const result = gated(undefined, { mode: "zero-residual" });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("a non-array entry value fails closed with a violation — never a TypeError (QC wave-1 S-006)", () => {
+    // Malformed register (pre-wave schema holdover / hand-edited doc): the
+    // plan-id key maps to an object instead of an array. The gate must
+    // return the same invalid-entry-list violation as the register
+    // validator — not throw `entries is not iterable` (`.length` on an
+    // object is undefined, so the old length-0 guard did not intercept).
+    const reg = { entries: { "plan-a": { id: "RAN-1", decision: "accept" } } };
+    const result = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a");
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("project.register.invalid-entry-list");
+  });
+
+  test("every open entry of a plan is checked (array schema — one bad entry fails the plan)", () => {
+    // W-E array semantics: a plan can hold 2+ residuals; each open entry is
+    // evaluated, so a single fixable finding blocks zero-residual even when
+    // a sibling is a true blocker-defer.
+    const reg = register({
+      "plan-a": [
+        entry({ id: "R1", decision: "defer", target: "next iteration" }),
+        entry({ id: "R2", decision: "accept" }),
+        entry({ id: "R3", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed" }),
+      ],
+    });
+    const result = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", {
+      mode: "zero-residual",
+    });
+    expect(result.ok).toBe(false);
+    // The fixable R2 is flagged; the true blocker-defer R1 and the closed
+    // R3 contribute no violation.
+    expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
+    expect(result.violations.map((v) => v.message).join(" ")).toContain("R#R2");
+    expect(result.violations.map((v) => v.message).join(" ")).not.toContain("R#R1");
+
+    const allow = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", {
+      mode: "allow-residual",
+    });
+    expect(allow.ok).toBe(true);
+  });
+
+  test("explicit mode is the only mode source (plan-metadata findings_cleanup mirror deleted)", () => {
+    const result = gated(entry({ decision: "accept" }), { mode: "zero-residual" });
+    expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
+    const allow = gated(entry({ decision: "accept" }), { mode: "allow-residual" });
+    expect(allow.ok).toBe(true);
+  });
+});
+
+describe("techDebtRollup — project register aggregation (v3 relocation, QC wave-1 W-E array schema)", () => {
+  /** Write `projects/<id>/residuals.json` with an ARRAY of entries per plan-id key. */
+  function writeRegister(projectDir: string, projectId: string, entries: Record<string, unknown[]>): void {
+    const dir = join(projectDir, projectId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "residuals.json"), JSON.stringify({ entries }, null, 2), "utf8");
+  }
+
+  test("computed aggregates match jq semantics (warning→low, null/''→medium, closed excluded, unspecified target)", () => {
+    const dir = tmpRoot("status-rollup-register-");
+    try {
+      writeRegister(dir, "_default", {
+        "plan-a": [entry({ id: "R1", severity: "warning", target: "V1.0" })],
+        "plan-b": [entry({ id: "R2", severity: null, target: "V1.1" })],
+        "plan-c": [entry({ id: "R3", severity: "", target: "V1.0" })],
+        "plan-d": [entry({ id: "R4", severity: "low", target: null })],
+        "plan-e": [entry({ id: "R5", severity: "medium", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" })],
+      });
+      const rollup = techDebtRollup(dir);
+      expect(rollup.computed).toEqual({
+        total_open: 4,
+        by_severity: { critical: 0, high: 0, medium: 2, low: 2, nit: 0 },
+        by_target: { "V1.0": 2, "V1.1": 1, unspecified: 1 },
+        by_plan: { "plan-a": 1, "plan-b": 1, "plan-c": 1, "plan-d": 1 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("every open entry of a plan counts (array schema — multi-residual plans aggregate per plan)", () => {
+    const dir = tmpRoot("status-rollup-multi-");
+    try {
+      writeRegister(dir, "_default", {
+        "plan-a": [
+          entry({ id: "R1", severity: "low", target: "V1.0" }),
+          entry({ id: "R2", severity: "high", target: "V1.0" }),
+          entry({ id: "R3", severity: "low", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" }),
+        ],
+      });
+      const rollup = techDebtRollup(dir);
+      expect(rollup.computed).toEqual({
+        total_open: 2,
+        by_severity: { critical: 0, high: 1, medium: 0, low: 1, nit: 0 },
+        by_target: { "V1.0": 2 },
+        by_plan: { "plan-a": 2 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("aggregates across multiple project registers (by_plan keyed by plan id)", () => {
+    const dir = tmpRoot("status-rollup-multiproj-");
+    try {
+      writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low" })] });
+      writeRegister(dir, "acme", { "plan-b": [entry({ id: "R2", severity: "high" })] });
+      const rollup = techDebtRollup(dir);
+      expect(rollup.computed.total_open).toBe(2);
+      expect(rollup.computed.by_plan).toEqual({ "plan-a": 1, "plan-b": 1 });
+      expect(rollup.computed.by_severity).toEqual({ critical: 0, high: 1, medium: 0, low: 1, nit: 0 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("no registers / missing project dir → empty rollup", () => {
+    const dir = tmpRoot("status-rollup-empty-");
+    try {
+      const rollup = techDebtRollup(join(dir, "does-not-exist"));
+      expect(rollup.computed).toEqual({
+        total_open: 0,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
+        by_target: {},
+        by_plan: {},
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("v1 stored-summary drift check deleted: stored is always null, checks all DRIFT, overall DRIFT", () => {
+    // The v1 `metadata.tech_debt_summary` cache is a v1 dead path — the
+    // project register is the source of truth. The retained
+    // stored/checks/overall fields keep the exported TechDebtRollup shape
+    // (compile-compat for the P2 CLI cutover) and always report DRIFT.
+    const dir = tmpRoot("status-rollup-drift-");
+    try {
+      writeRegister(dir, "_default", { "plan-a": [entry()] });
+      const rollup = techDebtRollup(dir);
+      expect(rollup.stored).toBeNull();
+      expect(rollup.checks.map((c) => c.status)).toEqual(["DRIFT", "DRIFT", "DRIFT", "DRIFT"]);
+      expect(rollup.overall).toBe("DRIFT");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("entry lifecycle: false counts as OPEN (jq `//` defaults false)", () => {
     const dir = tmpRoot("status-rollup-false-");
     try {
-      const falseLifecycle = doc({
-        residual_findings: { "plan-a": [entry({ id: "R1", severity: "low", target: "V1", lifecycle: false })] },
-        metadata: {
-          tech_debt_summary: {
-            total_open: 0,
-            by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
-            by_target: {},
-            by_plan: {},
-          },
-        },
-      });
-      const statusPath = join(dir, "status.json");
-      writeFileSync(statusPath, JSON.stringify(falseLifecycle, null, 2), "utf8");
-
-      const ts = techDebtRollup(statusPath);
-      expect(ts.computed.total_open).toBe(1); // lifecycle: false is open, like jq
-      expect(ts.overall).toBe("DRIFT");
-      expect(ts.checks.find((c) => c.field === "total_open")?.status).toBe("DRIFT");
-      expect(renderRollupOutput(ts)).toBe(readFileSync(ROLLUP_FALSE_LIFECYCLE_GOLDEN, "utf8"));
+      writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low", target: "V1", lifecycle: false })] });
+      const rollup = techDebtRollup(dir);
+      expect(rollup.computed.total_open).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

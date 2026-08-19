@@ -27,7 +27,9 @@ export type { MstarcConfig } from "./mstarc.js";
 export {
   MSTARC_FILE,
   MSTARC_HARNESS_DIR_KEY,
+  MSTARC_PROJECT_DIR_KEY,
   MSTARC_SECTION,
+  MSTARC_WORKFLOW_DIR_KEY,
   findMstarc,
   parseMstarc,
 } from "./mstarc.js";
@@ -38,32 +40,32 @@ export {
   resolveIterationDir,
   resolveKnowledgeDir,
   resolvePlanDir,
+  resolveProjectDir,
   resolveSddDir,
   resolveSpecsDir,
+  resolveWorkflowDir,
   scaffoldHarness,
   validateGitignore,
 } from "./path.js";
 export type {
-  ArchiveResult,
-  FindingsCleanupMode,
   PlanRow,
   ResidualEntry,
   StatusDoc,
-  TechDebtCheck,
-  TechDebtRollup,
-  TechDebtSummary,
+  StatusV2Doc,
+  WorkflowEntry,
 } from "./status.js";
 export {
-  archiveResiduals,
-  findingsCleanupGate,
   normalizeSeverity,
+  registerWorkflow,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
-  techDebtRollup,
+  unregisterWorkflow,
   validatePlanRow,
   validateResidual,
   validateStatus,
+  validateStatusV2,
+  validateWorkflowEntry,
 } from "./status.js";
 export type {
   ClaimLeaseFields,
@@ -84,6 +86,21 @@ export {
   verifyPlanExecutionLease,
   withStatusWriteLock,
 } from "./lease.js";
+export type {
+  WorkflowBranchAnchors,
+  WorkflowExecutionPolicy,
+  WorkflowLifecycleStatus,
+  WorkflowLifecycleType,
+  WorkflowSnapshot,
+} from "./workflow.js";
+export {
+  WORKFLOW_LIFECYCLE_STATUSES,
+  WORKFLOW_LIFECYCLE_TYPES,
+  WORKFLOW_SNAPSHOT_FILE,
+  WORKFLOW_TERMINAL_STATUSES,
+  validateWorkflowSnapshot,
+  writeWorkflowSnapshot,
+} from "./workflow.js";
 export type {
   AssignmentBranchForms,
   AssignmentFields,
@@ -154,9 +171,49 @@ export {
   assertIndexRowObligations,
   evaluatePhaseGate,
   parseCompassFrontmatter,
+  parseCompassFrontmatterText,
   pushCadenceProbe,
   validateCompassFrontmatter,
 } from "./iteration.js";
+export type {
+  FindingsCleanupMode,
+  ProjectRegisterDoc,
+  ProjectRegisterEntry,
+  RoadmapFrontmatter,
+  RoadmapStatus,
+  RoadmapValidation,
+  TechDebtCheck,
+  TechDebtRollup,
+  TechDebtSummary,
+} from "./project.js";
+export {
+  PROJECT_REGISTER_FILE,
+  PROJECT_ROADMAP_FILE,
+  ROADMAP_STATUSES,
+  _DEFAULT_PROJECT,
+  findingsCleanupGate,
+  techDebtRollup,
+  validateProjectRegister,
+  validateRoadmap,
+} from "./project.js";
+export type {
+  MigrateNotesFile,
+  MigrateOptions,
+  MigratePlan,
+  MigrateRegister,
+  MigrateResult,
+  MigrateRoadmap,
+  MigrateRootV2,
+  MigrateSnapshot,
+  MigrateStep,
+} from "./migrate.js";
+export {
+  ARCHIVED_STATUS_V1_FILE,
+  MIGRATE_STATUS_FILE,
+  NOTES_LEDGER_FILE,
+  applyMigratePlan,
+  migrateHarnessTree,
+} from "./migrate.js";
 export type {
   CompletenessItem,
   CompletenessLevel,

@@ -1,7 +1,13 @@
 /**
  * Engine status module — status.json schema validation, residual severity
- * normalization, residual lifecycle (open → archived), findings-cleanup gate,
- * and the `metadata.tech_debt_summary` rollup.
+ * normalization, residual lifecycle (open → archived), and the root-file
+ * v2 writers.
+ *
+ * QC wave-1 W-D relocation: `findingsCleanupGate` and `techDebtRollup`
+ * moved to `project.ts` (they operate on project-register artifacts) —
+ * this module no longer imports `./project.js`, breaking the former
+ * `status.ts ↔ project.ts` module cycle. Public names remain exported via
+ * the package index (`index.ts`).
  *
  * Spec sources (each export cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`:
@@ -20,23 +26,28 @@
  *   `plan_id`/`schema_version`/`entries[]` with `archived_at`, remove from
  *   open list, update root `updated_at`), § General constraints ("Empty
  *   `plan-id` key: … delete the key … no `"plan-id": []`").
- * - Findings cleanup modes: § Findings cleanup modes — `zero-residual`
- *   (fixable findings must not be open R#; `nit` never open; `waived`/
- *   `risk-accepted` close/archive; only blocker-defers — `decision: defer` +
- *   `target` — may stay open) vs `allow-residual` (open ok when no unresolved
- *   Critical remains); mode mirror `plans[].metadata.findings_cleanup`.
- * - Rollup aggregates + drift check (total_open / by_severity / by_target /
- *   by_plan; PASS/DRIFT vs stored `metadata.tech_debt_summary`):
- *   § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
- *   `techDebtRollup` (CLI form: `mstar status tech-debt [path]`).
+ * - v2 root + migration detection: v1-shaped documents — root `plans[]` OR
+ *   root `residual_findings` (QC wave-1 W-C: v1-disguise hole) — fail
+ *   closed with `status.migration-required` even when `version: 2`.
+ * - Rollup aggregates: canonical compute is `techDebtRollup` in `project.ts`
+ *   (CLI form: `mstar status tech-debt [path]`).
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { readJson, writeJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
-import { resolveHarnessDir, resolveIterationDir, assertSafePathComponent } from "./path.js";
+import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
+// Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
+// from this module): neither module dereferences the other's bindings during
+// module evaluation, so the ESM live-binding cycle is safe.
+import {
+  WORKFLOW_LIFECYCLE_TYPES,
+  WORKFLOW_SNAPSHOT_FILE,
+  WORKFLOW_TERMINAL_STATUSES,
+  type WorkflowLifecycleType,
+} from "./workflow.js";
 
 /**
  * Loose shape of a parsed status.json document. All fields are `unknown`
@@ -49,6 +60,27 @@ export type StatusDoc = {
   residual_findings?: unknown;
   metadata?: unknown;
   [key: string]: unknown;
+};
+
+/**
+ * v2 root status document (`{HARNESS_DIR}/status.json`, plan Task 3 — hard
+ * cutover): `version`, `updated_at`, `workflows[]` only. The list holds
+ * ACTIVE (non-terminal) lifecycles; terminal writers unregister AFTER the
+ * snapshot write (removal-at-terminal).
+ */
+export type StatusV2Doc = {
+  version: 2;
+  updated_at: string;
+  workflows: WorkflowEntry[];
+};
+
+/** One active lifecycle entry of the v2 root `workflows[]` list. */
+export type WorkflowEntry = {
+  id: string;
+  type: WorkflowLifecycleType;
+  started_at: string;
+  /** Harness-relative snapshot dir (e.g. `workflows/<id>`), never absolute. */
+  dir: string;
 };
 
 /** Residual entry as parsed from status.json (loose — validated by `validateResidual`). */
@@ -83,43 +115,12 @@ export type PlanRow = {
   [key: string]: unknown;
 };
 
-/** Findings cleanup policy mirror of Assignment `Findings cleanup`. */
-export type FindingsCleanupMode = "zero-residual" | "allow-residual";
-
-/** Computed rollup aggregates (jq semantics). */
-export type TechDebtSummary = {
-  total_open: number;
-  by_severity: Record<string, number>;
-  by_target: Record<string, number>;
-  by_plan: Record<string, number>;
-};
-
-export type TechDebtCheck = {
-  field: "total_open" | "by_severity" | "by_target" | "by_plan";
-  status: "PASS" | "DRIFT";
-};
-
-/** Result of the rollup + drift check vs stored `metadata.tech_debt_summary`. */
-export type TechDebtRollup = {
-  computed: TechDebtSummary;
-  stored: Record<string, unknown> | null;
-  checks: TechDebtCheck[];
-  overall: "PASS" | "DRIFT";
-};
-
-export type ArchiveResult = {
-  planId: string;
-  archived: number;
-  archivePath: string;
-};
-
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"] as const;
 const RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"] as const;
 const RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"] as const;
 const RESIDUAL_REQUIRED_FIELDS = ["id", "title", "severity", "source", "scope", "decision", "owner", "target", "tracking"] as const;
-const ROLLUP_FIELDS = ["total_open", "by_severity", "by_target", "by_plan"] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -371,18 +372,104 @@ export function validateResidual(entry: unknown): GateResult {
 }
 
 /**
- * Validate a status.json document (schema: status-and-residuals.md
- * § Basic structure + § General constraints). Accepts a parsed document or a
- * file path (malformed JSON yields a `status.invalid-json` violation, never a
- * throw). Required top-level fields: `version`, `updated_at`, `plans[]`,
- * root-only `residual_findings`, `metadata`. Root-only canonical: any
- * `metadata.residual_findings` key is flagged as dual-write.
+ * True when `dir` is a harness-relative path: not absolute (POSIX `/`,
+ * Windows `C:\`), and no `..` segment can escape the harness dir. The v2
+ * root `workflows[].dir` is resolved against `{HARNESS_DIR}` by
+ * `validateStatusV2` and the root writers, so traversal must fail closed.
  */
-export function validateStatus(docOrPath: StatusDoc | string): GateResult {
-  let doc: StatusDoc;
+function isHarnessRelativePath(dir: string): boolean {
+  if (dir.startsWith("/") || dir.startsWith("\\")) return false;
+  if (/^[A-Za-z]:[\\/]/.test(dir)) return false;
+  return !dir.split(/[\\/]+/).includes("..");
+}
+
+/**
+ * Validate one v2 root `workflows[]` entry (plan Task 3): required `id`,
+ * `type` (plan | iteration), `started_at`, `dir` — harness-relative, never
+ * absolute and never containing `..`. The removal-at-terminal invariant
+ * (snapshot exists and is non-terminal) is checked at document level by
+ * `validateStatusV2` when a harness dir is known.
+ */
+export function validateWorkflowEntry(entry: unknown): GateResult {
+  const violations: ValidationResult[] = [];
+  if (!isPlainObject(entry)) {
+    return {
+      ok: false,
+      violations: [violation("high", "status.workflow.invalid", "workflow entry must be an object")],
+    };
+  }
+
+  validateNonEmptyString(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
+
+  if (entry.type === undefined) {
+    violations.push(violation("high", "status.workflow.missing-type", "missing required field: type"));
+  } else if (typeof entry.type !== "string" || !(WORKFLOW_LIFECYCLE_TYPES as readonly string[]).includes(entry.type)) {
+    violations.push(
+      violation(
+        "medium",
+        "status.workflow.invalid-type",
+        `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} \u2014 got ${JSON.stringify(entry.type)}`,
+      ),
+    );
+  }
+
+  validateNonEmptyString(
+    violations,
+    entry.started_at,
+    "started_at",
+    "status.workflow.missing-started-at",
+    "status.workflow.invalid-started-at",
+  );
+
+  if (entry.dir === undefined) {
+    violations.push(violation("high", "status.workflow.missing-dir", "missing required field: dir"));
+  } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
+    violations.push(violation("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+  } else if (!isHarnessRelativePath(entry.dir)) {
+    violations.push(
+      violation(
+        "medium",
+        "status.workflow.invalid-dir",
+        `dir must be a harness-relative path (no absolute paths, no ".." segments) \u2014 got ${JSON.stringify(entry.dir)}`,
+      ),
+    );
+  }
+
+  return { ok: violations.length === 0, violations };
+}
+
+/**
+ * Validate a v2 status.json document (plan Task 3 — hard cutover). Accepts a
+ * parsed document or a file path (malformed JSON yields a
+ * `status.invalid-json` violation, never a throw). v1 or unknown-version
+ * inputs — including v1-shaped documents carrying a root `plans[]` — fail
+ * closed with an explicit `status.migration-required` violation carrying the
+ * `mstar migrate` hint; there is no v1 read path anymore (v1 `validateStatus`
+ * was deleted in the same task).
+ *
+ * Required: `version: 2`, `updated_at` (YYYY-MM-DD, same convention as the
+ * v1 root), `workflows[]` of active entries (each validated by
+ * `validateWorkflowEntry`, duplicate ids rejected).
+ *
+ * Removal-at-terminal invariant: when a harness dir is known (path input, or
+ * `opts.harnessDir` for doc input), every listed entry's snapshot at
+ * `{HARNESS_DIR}/<dir>/snapshot.json` must exist and be non-terminal — the
+ * root holds active lifecycles only, and terminal writers unregister AFTER
+ * the snapshot write. The snapshot must also PHYSICALLY live under the
+ * harness: a symlinked `workflows/<id>/` (or snapshot file) resolving
+ * outside the harness dir is rejected fail-closed (QC wave-1 S-f). Doc
+ * input without a harness dir is structure-only.
+ */
+export function validateStatusV2(
+  docOrPath: StatusV2Doc | string,
+  opts: { harnessDir?: string } = {},
+): GateResult {
+  let doc: unknown;
+  let harnessDir: string | undefined = opts.harnessDir;
   if (typeof docOrPath === "string") {
     try {
-      doc = readJson(docOrPath) as StatusDoc;
+      doc = readJson(docOrPath);
+      harnessDir = dirname(resolve(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -393,229 +480,285 @@ export function validateStatus(docOrPath: StatusDoc | string): GateResult {
     doc = docOrPath;
   }
 
-  const violations: ValidationResult[] = [];
-  const { version, updated_at, plans, residual_findings, metadata } = doc;
-
-  if (version === undefined) {
-    violations.push(violation("high", "status.missing-version", "missing required field: version"));
-  } else if (typeof version !== "number" || !Number.isInteger(version)) {
-    violations.push(violation("high", "status.invalid-version", "version must be an integer"));
-  } else if (version !== 1) {
-    violations.push(violation("medium", "status.unsupported-version", `unsupported status.json schema version ${version} \u2014 expected 1`));
+  if (!isPlainObject(doc)) {
+    return { ok: false, violations: [violation("high", "status.invalid-doc", "status document must be an object")] };
   }
 
-  if (updated_at === undefined) {
+  // Hard cutover (plan Task 3): a root file with `version !== 2` is the
+  // migration-detection input — fail closed, never a silent pass or a dual
+  // read. v1-shaped documents (root `plans[]`) are rejected the same way
+  // even when the version field is missing or already says 2.
+  if (doc.version !== 2) {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "status.migration-required",
+          `status.json schema version 2 required \u2014 got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`,
+          "run `mstar migrate`",
+        ),
+      ],
+    };
+  }
+  if (Array.isArray(doc.plans)) {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "status.migration-required",
+          "v1-shaped status.json (root plans[]) is not a v2 document \u2014 run `mstar migrate` to convert the tree",
+          "run `mstar migrate`",
+        ),
+      ],
+    };
+  }
+  // QC wave-1 W-C: the v1-disguise check covers `plans[]` AND the other v1
+  // root surface — `residual_findings` (keyed by plan id, arrays of
+  // entries). A `version: 2` doc carrying it is stale v1 data masquerading
+  // as migrated (the v2 root holds `workflows[]` only); presence of the key
+  // at all — even `{}` — is v1-shaped (v1 init template), so fail closed.
+  if (doc.residual_findings !== undefined) {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "status.migration-required",
+          "v1-shaped status.json (root residual_findings) is not a v2 document \u2014 run `mstar migrate` to convert the tree",
+          "run `mstar migrate`",
+        ),
+      ],
+    };
+  }
+
+  const violations: ValidationResult[] = [];
+
+  if (doc.updated_at === undefined) {
     violations.push(violation("high", "status.missing-updated-at", "missing required field: updated_at"));
-  } else if (typeof updated_at !== "string" || !DATE_RE.test(updated_at)) {
+  } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
     violations.push(violation("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
   }
 
-  if (plans === undefined) {
-    violations.push(violation("high", "status.missing-plans", "missing required field: plans"));
-  } else if (!Array.isArray(plans)) {
-    violations.push(violation("high", "status.invalid-plans", "plans must be an array"));
+  if (doc.workflows === undefined) {
+    violations.push(violation("high", "status.missing-workflows", "missing required field: workflows"));
+  } else if (!Array.isArray(doc.workflows)) {
+    violations.push(violation("high", "status.invalid-workflows", "workflows must be an array"));
   } else {
-    for (const row of plans) {
-      violations.push(...validatePlanRow(row).violations);
-    }
-  }
-
-  if (residual_findings === undefined) {
-    violations.push(violation("high", "status.missing-residual-findings", "missing required field: residual_findings (root-only canonical)"));
-  } else if (!isPlainObject(residual_findings)) {
-    violations.push(violation("high", "status.invalid-residual-findings", "residual_findings must be an object at root"));
-  } else {
-    for (const [planId, list] of Object.entries(residual_findings)) {
-      if (!Array.isArray(list)) {
-        violations.push(violation("high", "status.residual.invalid-list", `residual_findings["${planId}"] must be an array`));
-      } else if (list.length === 0) {
-        violations.push(
-          violation("low", "status.residual.empty-key", `residual_findings["${planId}"] is empty \u2014 delete the key (no "plan-id": [])`),
-        );
-      } else {
-        for (const entry of list) {
-          violations.push(...validateResidual(entry).violations);
+    const seen = new Set<string>();
+    for (const entry of doc.workflows) {
+      violations.push(...validateWorkflowEntry(entry).violations);
+      if (isPlainObject(entry) && typeof entry.id === "string") {
+        if (seen.has(entry.id)) {
+          violations.push(
+            violation("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`),
+          );
         }
+        seen.add(entry.id);
       }
     }
   }
 
-  if (metadata === undefined) {
-    violations.push(violation("high", "status.missing-metadata", "missing required field: metadata"));
-  } else if (!isPlainObject(metadata)) {
-    violations.push(violation("high", "status.invalid-metadata", "metadata must be an object"));
-  } else if (Object.prototype.hasOwnProperty.call(metadata, "residual_findings")) {
-    violations.push(
-      violation(
-        "medium",
-        "status.dual-write-residuals",
-        "residual_findings must be root-only \u2014 metadata.residual_findings is legacy read-only; remove it (no dual-write)",
-        "move entries to root residual_findings and delete metadata.residual_findings",
-      ),
-    );
+  // Removal-at-terminal invariant (plan Task 3): the list holds active
+  // lifecycles only — no listed id may resolve to a terminal or missing
+  // snapshot. Skipped when no harness dir is known (structure-only input).
+  if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
+    // QC wave-1 S-f (qc2 F-005): symlink hardening — the invariant must
+    // read a snapshot that PHYSICALLY lives under the harness. The lexical
+    // path is harness-relative, but a symlinked `workflows/<id>/` (or
+    // snapshot file) can point outside; `realpathSync` resolves the chain
+    // and the resolved path must stay under the resolved harness root.
+    // Resolving the harness root once also normalizes the comparison when
+    // the harness dir itself is reached through a symlink (e.g. /tmp).
+    let realHarnessDir: string | null = null;
+    try {
+      realHarnessDir = realpathSync(harnessDir);
+    } catch {
+      // Harness dir missing — every snapshot check below reports missing;
+      // the physical-location check is moot.
+    }
+    for (const entry of doc.workflows) {
+      if (!isPlainObject(entry) || typeof entry.dir !== "string") continue;
+      const relSnapshot = join(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join(harnessDir, relSnapshot);
+      const label = typeof entry.id === "string" ? entry.id : relSnapshot;
+      // realpathSync doubles as the existence probe (a missing file or a
+      // dangling symlink throws) and the physical-location probe.
+      let physical: string;
+      try {
+        physical = realpathSync(snapshotPath);
+      } catch {
+        violations.push(
+          violation(
+            "high",
+            "status.workflow.snapshot-missing",
+            `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} \u2014 the root holds active lifecycles only; unregister the id when its snapshot is removed`,
+          ),
+        );
+        continue;
+      }
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep}`)) {
+        violations.push(
+          violation(
+            "high",
+            "status.workflow.snapshot-outside-harness",
+            `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) \u2014 symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`,
+          ),
+        );
+        continue;
+      }
+      let snapshot: Record<string, unknown>;
+      try {
+        snapshot = readJson(snapshotPath);
+      } catch (error) {
+        violations.push(
+          violation(
+            "high",
+            "status.workflow.snapshot-invalid",
+            `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${(error as Error).message}`,
+          ),
+        );
+        continue;
+      }
+      if (typeof snapshot.status === "string" && (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot.status)) {
+        violations.push(
+          violation(
+            "high",
+            "status.workflow.terminal-listed",
+            `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) \u2014 removal-at-terminal: terminal writers unregister AFTER the snapshot write`,
+          ),
+        );
+      }
+      // QC wave-1 S-c: the root entry denormalizes `type`/`started_at` from
+      // the snapshot — cross-check them when the harness dir is known so a
+      // stale root copy cannot drift silently from its snapshot.
+      if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
+        violations.push(
+          violation(
+            "medium",
+            "status.workflow.mismatched-type",
+            `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} \u2014 the root entry mirrors the snapshot; align them`,
+          ),
+        );
+      }
+      if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
+        violations.push(
+          violation(
+            "medium",
+            "status.workflow.mismatched-started-at",
+            `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} \u2014 the root entry mirrors the snapshot; align them`,
+          ),
+        );
+      }
+    }
   }
 
   return { ok: violations.length === 0, violations };
 }
 
 /**
- * Archive the open residuals of a plan (status-and-residuals.md
- * § Residual findings lifecycle): append every entry of
- * `residual_findings[<plan-id>]` to `{HARNESS_DIR}/archived/residuals/
- * <plan-id>.json` (stamped `archived_at`), delete the key from the open list,
- * and bump root `updated_at`. No-op (archived 0) when the plan has no open
- * residuals. `harnessDir` defaults to the resolved `{HARNESS_DIR}` from cwd.
- *
- * `planId` is validated as a single safe path component before it is used to
- * build the archive path (path traversal guard — see
- * `assertSafePathComponent`). The status.json read-modify-write runs under
- * `withStatusWriteLock` so concurrent coordination writers serialize.
- *
- * simplify: archive append + status.json update are two separate writes —
- * a crash between them leaves entries both archived and open; re-running is
- * safe because appends dedup on `entries[].id` (F-10). Not transactional by
- * design (v1); the write lock from F-004 keeps concurrent writers safe.
+ * Relocated v2 root validator (plan Task 3 — hard cutover, no dual path):
+ * the v1 `validateStatus` implementation was deleted in the same task that
+ * introduced the v2 surface; the public export name survives so external
+ * consumers (CLI, host hooks — cut over in P2) keep compiling and now fail
+ * closed on v1 input with the `mstar migrate` hint.
  */
-export async function archiveResiduals(planId: string, harnessDir?: string): Promise<ArchiveResult> {
-  const dir = harnessDir !== undefined ? resolve(harnessDir) : resolveHarnessDir();
-  if (dir === null) {
-    throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass harnessDir or set MSTAR_HARNESS_DIR`);
-  }
-  assertSafePathComponent(planId, "planId");
-  const statusPath = join(dir, "status.json");
-  if (!existsSync(statusPath)) {
-    throw new Error(`status file not found: ${statusPath}`);
-  }
-  return withStatusWriteLock(statusPath, () => {
-    const doc = readJson(statusPath) as StatusDoc;
-    if (!isPlainObject(doc.residual_findings)) {
-      throw new Error(`status.json residual_findings must be an object: ${statusPath}`);
-    }
-    const open = doc.residual_findings[planId];
-    const archivePath = join(dir, "archived", "residuals", `${planId}.json`);
-    if (!Array.isArray(open) || open.length === 0) {
-      return { planId, archived: 0, archivePath };
-    }
+export const validateStatus = validateStatusV2;
 
-    const archive = readJson(archivePath) as { entries?: unknown };
-    const existing = Array.isArray(archive.entries) ? archive.entries : [];
-    const existingIds = new Set(
-      existing
-        .map((e) => (isPlainObject(e) && typeof e.id === "string" ? e.id : undefined))
-        .filter((id): id is string => id !== undefined),
+/**
+ * Register one active workflow entry in the v2 root file (plan Task 3).
+ * Idempotent upsert by entry `id` under the root-file `withStatusWriteLock`,
+ * bumping root `updated_at`. A missing/empty root file is initialized from
+ * the v2 template (never a v1 tree); a v1 root is refused with the
+ * `mstar migrate` hint (no silent mutation of an un-migrated tree).
+ *
+ * The final document is validated with `validateStatusV2` (including the
+ * removal-at-terminal snapshot invariant against `dirname(root)`) before the
+ * write — an entry whose snapshot is missing or terminal is refused and
+ * nothing is written.
+ */
+export async function registerWorkflow(root: string, entry: WorkflowEntry): Promise<StatusV2Doc> {
+  const entryGate = validateWorkflowEntry(entry);
+  if (!entryGate.ok) {
+    throw new Error(
+      `refusing to register invalid workflow entry: ${entryGate.violations.map((v) => v.message).join("; ")}`,
     );
-    const today = todayString();
-    // Dedup on append: ids already present in the archive file are skipped
-    // (re-running an interrupted archive must not duplicate entries).
-    const moved = open
-      .filter((entry) => {
-        if (!isPlainObject(entry) || typeof entry.id !== "string") return true;
-        return !existingIds.has(entry.id);
-      })
-      .map((entry) => ({ ...(entry as Record<string, unknown>), archived_at: today }));
-    if (moved.length > 0) {
-      writeJson(archivePath, { plan_id: planId, schema_version: 1, entries: [...existing, ...moved] });
+  }
+  const statusPath = resolve(root);
+  const harnessDir = dirname(statusPath);
+  return withStatusWriteLock(statusPath, () => {
+    // simplify: full-doc validation (incl. per-snapshot reads of the whole
+    // active set) under the root lock is O(active workflows) per root write.
+    // Realistic active-set size is 1–3 (microseconds); correctness-preserving.
+    // Upgrade path: scope the on-disk invariant to the touched entry (qc3 S-002).
+    const current = readJson(statusPath) as Record<string, unknown>;
+    const fresh = Object.keys(current).length === 0;
+    const doc: StatusV2Doc = fresh
+      ? { version: 2, updated_at: todayString(), workflows: [] }
+      : (current as StatusV2Doc);
+    if (!fresh && !Array.isArray(doc.workflows)) {
+      throw new Error(
+        "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
+      );
     }
-
-    delete doc.residual_findings[planId];
-    doc.updated_at = today;
-    writeJson(statusPath, doc);
-
-    return { planId, archived: moved.length, archivePath };
+    const existing = doc.workflows.findIndex((wf) => wf.id === entry.id);
+    if (existing >= 0) {
+      doc.workflows[existing] = entry;
+    } else {
+      doc.workflows.push(entry);
+    }
+    doc.updated_at = todayString();
+    const gate = validateStatusV2(doc, { harnessDir });
+    if (!gate.ok) {
+      throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+    }
+    writeJson(statusPath, doc as unknown as Record<string, unknown>);
+    return doc;
   });
 }
 
-/** Read `plans[].metadata.findings_cleanup` for a plan (mirror; Assignment wins). */
-function planFindingsCleanup(doc: StatusDoc, planId: string): FindingsCleanupMode | undefined {
-  if (!Array.isArray(doc.plans)) return undefined;
-  for (const row of doc.plans) {
-    if (!isPlainObject(row)) continue;
-    const rowId = row.id ?? row.plan_id;
-    if (rowId !== planId) continue;
-    if (!isPlainObject(row.metadata)) return undefined;
-    const mode = row.metadata.findings_cleanup;
-    if (mode === "zero-residual" || mode === "allow-residual") return mode;
-    return undefined;
-  }
-  return undefined;
-}
-
-/** Open residuals of one plan (empty list when absent or malformed). */
-function openResidualsOf(doc: StatusDoc, planId: string): Array<Record<string, unknown>> {
-  if (!isPlainObject(doc.residual_findings)) return [];
-  const list = doc.residual_findings[planId];
-  if (!Array.isArray(list)) return [];
-  return list.filter((entry): entry is Record<string, unknown> => isPlainObject(entry) && isOpenResidual(entry));
-}
-
 /**
- * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes).
- * `zero-residual`: only true blocker-defers (`decision: defer` + non-empty
- * `target`) may stay open — fixable findings, `nit`s, and waived/
- * risk-accepted entries are violations. `allow-residual` (default): open
- * residuals are fine unless an unresolved Critical remains. Mode resolution:
- * explicit `opts.mode` → `plans[].metadata.findings_cleanup` → `allow-residual`.
+ * Remove one workflow entry from the v2 root file (plan Task 3). Idempotent:
+ * removing an absent id is a no-op with no write; a missing/empty root file
+ * is a no-op that never creates the file. Runs under the root-file
+ * `withStatusWriteLock`, bumping root `updated_at` only when an entry was
+ * actually removed. The final document is validated (removal-at-terminal
+ * invariant included) before the write — a v1 root is refused with the
+ * `mstar migrate` hint.
  */
-export function findingsCleanupGate(
-  doc: StatusDoc,
-  planId: string,
-  opts?: { mode?: FindingsCleanupMode },
-): GateResult {
-  const mode = opts?.mode ?? planFindingsCleanup(doc, planId) ?? "allow-residual";
-  const violations: ValidationResult[] = [];
-  const residuals = openResidualsOf(doc, planId);
-
-  for (const entry of residuals) {
-    const id = typeof entry.id === "string" ? entry.id : "<unnamed>";
-    const label = `R#${id}`;
-    if (mode === "zero-residual") {
-      if (entry.severity === "nit") {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-nit",
-            `${label}: style-only nits must be fixed in-session or dropped \u2014 never left open under zero-residual`,
-          ),
-        );
-      } else if (entry.decision === "risk-accepted" || entry.lifecycle === "waived") {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-risk-accepted",
-            `${label}: waived/risk-accepted findings must be closed/archived, not left open under zero-residual`,
-          ),
-        );
-      } else if (entry.decision === "defer") {
-        if (typeof entry.target !== "string" || entry.target.trim() === "") {
-          violations.push(
-            violation(
-              "medium",
-              "findings.zero-residual-defer-no-target",
-              `${label}: blocker-defer requires a target (next iteration/milestone) under zero-residual`,
-            ),
-          );
-        }
-      } else {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-open-fixable",
-            `${label}: fixable finding must not remain open under zero-residual \u2014 fix now or convert to a blocker-defer`,
-          ),
-        );
-      }
-    } else if (normalizeSeverity(entry.severity) === "critical") {
-      violations.push(
-        violation(
-          "high",
-          "findings.allow-residual-critical",
-          `${label}: unresolved critical blocks Approve with residuals`,
-        ),
+export async function unregisterWorkflow(root: string, id: string): Promise<StatusV2Doc> {
+  if (typeof id !== "string" || id.trim() === "") {
+    throw new Error("refusing to unregister workflow: id must be a non-empty string");
+  }
+  const statusPath = resolve(root);
+  const harnessDir = dirname(statusPath);
+  return withStatusWriteLock(statusPath, () => {
+    // simplify: same O(active) full-doc validation as registerWorkflow (qc3 S-002).
+    const current = readJson(statusPath) as Record<string, unknown>;
+    if (Object.keys(current).length === 0) {
+      // Nothing to remove — return the empty v2 shape without touching the file.
+      return { version: 2, updated_at: todayString(), workflows: [] };
+    }
+    const doc = current as StatusV2Doc;
+    if (!Array.isArray(doc.workflows)) {
+      throw new Error(
+        "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
       );
     }
-  }
-
-  return { ok: violations.length === 0, violations };
+    const remaining = doc.workflows.filter((wf) => wf.id !== id);
+    if (remaining.length === doc.workflows.length) {
+      return doc; // idempotent no-op — nothing removed, no write
+    }
+    doc.workflows = remaining;
+    doc.updated_at = todayString();
+    const gate = validateStatusV2(doc, { harnessDir });
+    if (!gate.ok) {
+      throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+    }
+    writeJson(statusPath, doc as unknown as Record<string, unknown>);
+    return doc;
+  });
 }
 
 /**
@@ -696,83 +839,4 @@ export function resolveRepoEnforcement(harnessDir: string): EnforcementFlag {
   const rc = resolveMstarcEnforcement(harnessDir);
   if (rc.source !== "none") return rc;
   return resolveCompassEnforcement(harnessDir);
-}
-
-/** Count values into a string-keyed map, keys sorted ascending (jq group_by order for strings). */
-function groupCount(values: unknown[]): Record<string, number> {
-  const counts = new Map<string, number>();
-  for (const value of values) {
-    // jq group_by sorts by element value; TS map keys are strings — equivalent
-    // for string targets (the fixture contract); mixed numbers would differ.
-    const key = typeof value === "string" ? value : String(value);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return Object.fromEntries([...counts.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-}
-
-/**
- * Compute the `metadata.tech_debt_summary` rollup (status-and-residuals.md
- * § `metadata.tech_debt_summary`): `total_open` / `by_severity` /
- * `by_target` / `by_plan` over open entries of root `residual_findings`
- * merged with the legacy `metadata.residual_findings` read path (canonical
- * keys win; legacy `"warning"` → `low`, `null`/`""` → `medium`; closed
- * entries skipped; missing `target` groups under `"unspecified"`), then
- * compare field-by-field against stored `metadata.tech_debt_summary`.
- * Accepts a parsed document or a file path. Does not write status.json.
- */
-export function techDebtRollup(docOrPath: StatusDoc | string): TechDebtRollup {
-  const doc = typeof docOrPath === "string" ? (readJson(docOrPath) as StatusDoc) : docOrPath;
-  const canonical = isPlainObject(doc.residual_findings) ? doc.residual_findings : {};
-  const metadata = isPlainObject(doc.metadata) ? doc.metadata : {};
-  const legacy = isPlainObject(metadata.residual_findings) ? metadata.residual_findings : {};
-  // jq `($canon + $legacy)`: object `+` keeps the RIGHT operand's value for
-  // duplicate keys — so on a conflicting plan key the legacy map wins. The
-  // reference says "canonical keys win", but the expression behaves
-  // otherwise; the port mirrors the actual jq output (dual-write is forbidden
-  // in practice, so conflicts should not occur — `status.dual-write-residuals`).
-  const merged = { ...canonical, ...legacy };
-
-  const items: Array<{ plan: string; entry: Record<string, unknown> }> = [];
-  for (const [plan, list] of Object.entries(merged)) {
-    // simplify: jq `.value[]` would iterate non-array values; fixtures are well-formed arrays
-    if (!Array.isArray(list)) continue;
-    for (const value of list) {
-      if (!isPlainObject(value) || !isOpenResidual(value)) continue;
-      items.push({ plan, entry: value });
-    }
-  }
-
-  const bySeverity: Record<string, number> = {};
-  for (const severity of SEVERITY_ORDER) {
-    bySeverity[severity] = items.filter(({ entry }) => normalizeSeverity(entry.severity) === severity).length;
-  }
-
-  const computed: TechDebtSummary = {
-    total_open: items.length,
-    by_severity: bySeverity,
-    by_target: groupCount(items.map(({ entry }) => entry.target ?? "unspecified")),
-    by_plan: groupCount(items.map(({ plan }) => plan)),
-  };
-
-  const storedRaw = metadata.tech_debt_summary ?? null;
-  const stored = storedRaw === null ? null : (storedRaw as Record<string, unknown>);
-  const checks: TechDebtCheck[] = ROLLUP_FIELDS.map((field) => {
-    const computedField = computed[field];
-    if (stored === null) return { field, status: "DRIFT" as const };
-    // Bash oracle parity: `compare_field` string-compares `jq -c ".$field // null"`,
-    // so key ORDER matters (`{"a":1,"b":2}` != `{"b":2,"a":1}`). JSON.stringify
-    // preserves insertion order like `jq -c` — the computed side is built in
-    // jq construction order (SEVERITY_ORDER for by_severity, sorted group
-    // keys for by_target/by_plan) — so stringify, not deep equality, mirrors
-    // the oracle. jq's alternative operator `//` yields the default for
-    // `false` AND `null` (0 stays 0 — it is truthy in jq); mirror exactly.
-    const storedField = stored[field];
-    const storedCompared = storedField === false ? null : (storedField ?? null);
-    const status =
-      JSON.stringify(computedField) === JSON.stringify(storedCompared) ? ("PASS" as const) : ("DRIFT" as const);
-    return { field, status };
-  });
-  const overall = checks.every((check) => check.status === "PASS") ? ("PASS" as const) : ("DRIFT" as const);
-
-  return { computed, stored, checks, overall };
 }

@@ -1,0 +1,90 @@
+{
+  "plan_id": "20260722-iter-wt-lease",
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "R1",
+      "title": "Tighten ADR vs status-and-residuals SSOT phrasing",
+      "severity": "low",
+      "source": "QC-#1 qc1.md Suggestion",
+      "scope": "ADR / mstar-plan-artifacts status-and-residuals",
+      "decision": "defer",
+      "owner": "prompt-engineer",
+      "target": "next polish / follow-up plan",
+      "tracking": null,
+      "archived_at": "2026-08-19"
+    },
+    {
+      "id": "R2",
+      "title": "Glossary: worktree L1/L2 vs review L1–L4",
+      "severity": "nit",
+      "source": "QC-#1 qc1.md Suggestion",
+      "scope": "mstar-branch-worktree / core glossary",
+      "decision": "defer",
+      "owner": "prompt-engineer",
+      "target": "next polish",
+      "tracking": null,
+      "archived_at": "2026-08-19"
+    },
+    {
+      "id": "R3",
+      "title": "ADR list or link clarify decisions A1–A6",
+      "severity": "low",
+      "source": "QC-#1 qc1.md Suggestion",
+      "scope": ".mstar/docs ADR",
+      "decision": "defer",
+      "owner": "architect",
+      "target": "next polish",
+      "tracking": null,
+      "archived_at": "2026-08-19"
+    },
+    {
+      "id": "R4",
+      "title": "Guidance when primary checkout is busy (separate control worktree)",
+      "severity": "low",
+      "source": "QC-#1 qc1.md Suggestion",
+      "scope": "mstar-iteration phase-2-worktree-lease",
+      "decision": "defer",
+      "owner": "prompt-engineer",
+      "target": "next polish",
+      "tracking": null,
+      "archived_at": "2026-08-19"
+    },
+    {
+      "id": "R5",
+      "title": "Control-worktree-loss recovery line",
+      "severity": "low",
+      "source": "QC-#1 qc1.md Suggestion",
+      "scope": "mstar-plan-artifacts / iteration lease refs",
+      "decision": "defer",
+      "owner": "prompt-engineer",
+      "target": "next polish",
+      "tracking": null,
+      "archived_at": "2026-08-19"
+    },
+    {
+      "id": "R6",
+      "title": "Optional routing-eval: control-vs-feature HARNESS_DIR path confusion",
+      "severity": "nit",
+      "source": "QC-#3 qc3.md Revalidation residual",
+      "scope": ".cursor/skills/mstar-routing-eval",
+      "decision": "defer",
+      "owner": "prompt-engineer",
+      "target": "routing-eval v25+",
+      "tracking": null,
+      "archived_at": "2026-08-19"
+    },
+    {
+      "id": "R7",
+      "title": "Ops runbook for stale holders / override audit template",
+      "severity": "low",
+      "source": "QC-#3 qc3.md Suggestion S1",
+      "scope": "phase-2-worktree-lease / status-and-residuals",
+      "decision": "defer",
+      "owner": "prompt-engineer",
+      "target": "next polish",
+      "tracking": null,
+      "archived_at": "2026-08-19"
+    }
+  ]
+}
