@@ -26,6 +26,65 @@ import { STATUS_FILE, asRecord } from './_shared.ts'
 export type ActiveWorkflowSelection = WorkflowSelectionView
 
 /**
+ * Cache-entry cap for the terminal-status cache (qc3 S-2 fix-wave) — a
+ * long-lived process across many workflow ids never grows it unbounded.
+ */
+const TERMINAL_STATUS_CACHE_MAX = 64
+
+/**
+ * Module-level terminal-status cache (qc3 S-2 fix-wave — the mtime-first
+ * fast path): snapshot path → `{ mtimeMs, terminal }` — the parsed
+ * terminal-status verdict for that file's mtime. The terminal fallback
+ * re-walks every workflow dir per catalog refresh; when a snapshot's mtime
+ * is unchanged since the last scan, the cached verdict is reused and the
+ * full JSON parse is SKIPPED (the steady state: terminal snapshots never
+ * change, so the per-TTL reparse is pure waste). The stat is the cheap
+ * read; the parse only happens on a real change. Unreadable snapshots are
+ * never cached (skipped advisory, as before). A same-mtime in-place
+ * rewrite would be served stale until the file is touched — the
+ * documented mtime-first tradeoff the finding asks for; terminal
+ * snapshots are written once via temp-file + rename (mtime always
+ * changes).
+ */
+const terminalStatusCache = new Map<string, { mtimeMs: number; terminal: boolean }>()
+
+/**
+ * One snapshot's terminal-status verdict, mtime-first (qc3 S-2 fix-wave):
+ * stat the file, reuse the cached verdict when the mtime is unchanged,
+ * else parse `status` and cache the verdict for the new mtime. Unreadable
+ * snapshots → `undefined` (skipped — advisory, same as the caller's old
+ * try/catch skip) and never cached.
+ * @returns `{ terminal, mtimeMs }` on a readable snapshot, `undefined` when
+ *   the file vanished or its JSON is unreadable.
+ */
+function terminalStatusOf(snapshotPath: string): { terminal: boolean; mtimeMs: number } | undefined {
+  let mtimeMs: number
+  try {
+    mtimeMs = statSync(snapshotPath).mtimeMs
+  } catch {
+    return undefined
+  }
+  const cached = terminalStatusCache.get(snapshotPath)
+  if (cached !== undefined && cached.mtimeMs === mtimeMs) return cached
+  let terminal = false
+  try {
+    const snapshot = readJson(snapshotPath)
+    const status = snapshot.status
+    terminal = typeof status === 'string' && (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)
+  } catch {
+    return undefined // unreadable snapshot — skip (advisory), never cached
+  }
+  const verdict = { mtimeMs, terminal }
+  terminalStatusCache.set(snapshotPath, verdict)
+  while (terminalStatusCache.size > TERMINAL_STATUS_CACHE_MAX) {
+    const oldest = terminalStatusCache.keys().next().value
+    if (oldest === undefined) break
+    terminalStatusCache.delete(oldest)
+  }
+  return verdict
+}
+
+/**
  * Resolve the ACTIVE lifecycle set (root v2 `status.json` `workflows[]` —
  * the list holds non-terminal lifecycles only, removal-at-terminal). This
  * is the ONLY resolver the agent-flow writer / ledger may use: no active
@@ -136,22 +195,13 @@ export function resolveReadWorkflow(harnessDir: string): WorkflowSelectionView {
     if (!entry.isDirectory()) continue
     const snapshotPath = join(workflowsDir, entry.name, WORKFLOW_SNAPSHOT_FILE)
     if (!existsSync(snapshotPath)) continue
-    let snapshot: Record<string, unknown>
-    try {
-      snapshot = readJson(snapshotPath)
-    } catch {
-      continue // unreadable snapshot — skip (advisory)
-    }
-    const status = snapshot.status
-    if (typeof status !== 'string' || !(WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(status)) continue
-    let mtimeMs: number
-    try {
-      mtimeMs = statSync(snapshotPath).mtimeMs
-    } catch {
-      continue
-    }
-    if (best === undefined || mtimeMs > best.mtimeMs) {
-      best = { workflowId: entry.name, dir: join(relative(harnessDir, workflowsDir), entry.name), mtimeMs }
+    // mtime-first fast path (qc3 S-2 fix-wave): stat + cache-hit reuse the
+    // terminal verdict without parsing the snapshot JSON (the steady state
+    // for terminal snapshots — the per-TTL reparse was pure waste).
+    const verdict = terminalStatusOf(snapshotPath)
+    if (verdict === undefined || !verdict.terminal) continue
+    if (best === undefined || verdict.mtimeMs > best.mtimeMs) {
+      best = { workflowId: entry.name, dir: join(relative(harnessDir, workflowsDir), entry.name), mtimeMs: verdict.mtimeMs }
     }
   }
   if (best === undefined) {

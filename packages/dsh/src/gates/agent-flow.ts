@@ -27,13 +27,20 @@
  * terminal snapshot dir (compass v3.0.0 § Catalog selection rule: the
  * writer appends only to an active lifecycle; no active entry → the record
  * is skipped with a one-time warn, never a silent root v1 write). One event
- * per line. SINGLE WRITER ASSUMPTION (qc2 F-1 / qc3 F-001 — documented,
- * advisory): each workflow dir is written by ONE dsh process (a single
- * plugin instance / app). Concurrent writers (e.g. two dsh sessions on the
- * same repo) can lose events: `appendFileSync` is a near-atomic O_APPEND
- * write, but the size-gated truncation below is a read-modify-write. The
- * loss is bounded to the panel under-reporting actual flow — NEVER a gate
- * impact (recording is advisory). After every append the file is truncated
+ * one line. WRITER SERIALIZATION (qc3 W-1 fix-wave): the append + the
+ * size-gated truncating read-modify-write form ONE critical section behind
+ * a per-workflow inter-process lock — an atomic `mkdir` lockdir inside the
+ * workflow dir (`<workflowDir>/.ledger-write.lockdir`, the SAME lockdir
+ * pattern as the engine's `withStatusWriteLock`; Bun 1.2 exposes no
+ * `node:fs` flock). Steady state remains a single writer per workflow dir
+ * (one dsh process per lifecycle); the lock matters when two dsh sessions
+ * share one active lifecycle (multi-session shared lifecycle, compass
+ * ruling 3): without it the truncation read-modify-write could silently
+ * drop the other writer's just-appended lines. The workflow-ledger cursor
+ * sidecar read-modify-write takes the SAME lock (`withWorkflowDirLock`), so
+ * ledger lines and cursors never interleave across processes. The loss is
+ * bounded to the panel under-reporting actual flow — NEVER a gate impact
+ * (recording is advisory). After every append the file is truncated
  * to the most recent `AGENT_FLOW_MAX_EVENTS` (500) lines; to keep the
  * common small-file path append-only, truncation is gated by a SIZE
  * threshold (≈500 lines' typical size, `AGENT_FLOW_SIZE_GATE_BYTES`) and
@@ -87,7 +94,7 @@
  * relative path; the public exports (`recordDispatch` / `recordSettle` /
  * `readAgentFlow` + constants + types) are re-exported verbatim by the entry.
  */
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
@@ -549,6 +556,117 @@ export function resolveAgentFlowWriteDir(harnessDir: string): string | null {
 }
 
 /**
+ * Lock-directory name for the per-workflow write lock (qc3 W-1 fix-wave):
+ * guards the ledger append + size-gated truncating read-modify-write AND
+ * the workflow-ledger cursor sidecar read-modify-write against concurrent
+ * dsh processes sharing one active lifecycle (compass ruling 3). The
+ * lockdir lands INSIDE the workflow dir — dirname of the ledger — so it
+ * never pollutes the harness root (same placement rule as the engine's
+ * `withStatusWriteLock` lockdir).
+ */
+export const WORKFLOW_LEDGER_LOCKDIR = '.ledger-write.lockdir'
+/** Lock acquisition timeout (ms) — mirrors the engine's `withStatusWriteLock` default. */
+const WORKFLOW_LOCKER_TIMEOUT_MS = 30_000
+/** Lock poll interval (ms) while another writer holds the lock. */
+const WORKFLOW_LOCKER_POLL_MS = 10
+/** Holder pid-file name inside the lockdir (crash diagnosis — same as the engine lock). */
+const WORKFLOW_LOCKER_HOLDER_PID = 'holder.pid'
+
+/** Lockdirs held by THIS process (sync reentrancy detection — a nested acquisition is a bug). */
+const heldWorkflowLocks = new Set<string>()
+
+/** Block the current thread for `ms` (the lock poll interval; Atomics.wait is the portable sync sleep). */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * Run `fn` under the per-workflow inter-process write lock (qc3 W-1
+ * fix-wave): atomic `mkdir` on `<workflowDir>/.ledger-write.lockdir/`
+ * acquires (success acquires; existing dir → another writer holds the
+ * lock); while another writer holds it, wait up to
+ * {@link WORKFLOW_LOCKER_TIMEOUT_MS} and then THROW (Blocked — the
+ * lockdir is never removed for another holder). Ownership guard
+ * (double-unlock safety): the lockdir's `(dev, ino)` is captured at
+ * acquisition; `finally` re-stats the path and removes the directory ONLY
+ * when the identity is unchanged. Sync reentrancy detection: a nested
+ * acquisition on the same lockdir within this process throws immediately
+ * (sync code cannot interleave — a held dir is a bug, not contention).
+ * Crash diagnosis: a `holder.pid` file (acquiring process id) is written
+ * inside the lockdir on acquisition and removed on release; a hard crash
+ * leaks the lockdir and the timeout error names the recovery step.
+ *
+ * SAME PATTERN as the engine's `withStatusWriteLock` (packages/engine/src/
+ * lease.ts) — atomic-mkdir lockdir, the SSOT-documented alternative to
+ * `flock` on Bun (no `node:fs` flock); unlike flock, a hard crash leaks
+ * the lockdir (documented residual, recovery = remove when no writer is
+ * alive).
+ *
+ * Steady state: ONE writer per workflow dir (one dsh process per
+ * lifecycle). The lock serializes the multi-session shared-lifecycle case
+ * (compass ruling 3) and is held ONLY around the bounded critical section
+ * (append+truncate, or the cursor read-modify-write) — never across scans.
+ * @param workflowDir - the workflow dir whose ledger/cursor files the
+ *   critical section touches.
+ * @param fn - the critical section (sync; the lock is sync by design — the
+ *   ledger record paths are called from sync gate hooks).
+ * @returns the critical section's return value.
+ */
+export function withWorkflowDirLock<T>(workflowDir: string, fn: () => T): T {
+  const lockDir = join(workflowDir, WORKFLOW_LEDGER_LOCKDIR)
+  if (heldWorkflowLocks.has(lockDir)) {
+    throw new Error(
+      `${lockDir} is already held by this process — withWorkflowDirLock is not reentrant; a nested acquisition on the same workflow dir is a bug`,
+    )
+  }
+  const deadline = Date.now() + WORKFLOW_LOCKER_TIMEOUT_MS
+  let acquired: { dev: number; ino: number } | null = null
+  for (;;) {
+    try {
+      mkdirSync(lockDir)
+      const st = statSync(lockDir)
+      acquired = { dev: st.dev, ino: st.ino }
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `${lockDir} already exists — another writer holds the workflow write lock; Blocked (same-host exclusive lock; same pattern as the engine's withStatusWriteLock). ` +
+            `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
+        )
+      }
+      sleepSync(WORKFLOW_LOCKER_POLL_MS)
+    }
+  }
+  heldWorkflowLocks.add(lockDir)
+  try {
+    try {
+      writeFileSync(join(lockDir, WORKFLOW_LOCKER_HOLDER_PID), String(process.pid), 'utf8')
+    } catch {
+      // pid file is best-effort diagnosis only — a failed write must not abort the lock
+    }
+    return fn()
+  } finally {
+    heldWorkflowLocks.delete(lockDir)
+    try {
+      const current = statSync(lockDir)
+      // Remove only our own lockdir: absent (fn rolled back) or a different
+      // (dev, ino) (another writer acquired after fn removed ours) ⇒ skip.
+      if (acquired !== null && current.dev === acquired.dev && current.ino === acquired.ino) {
+        try {
+          unlinkSync(join(lockDir, WORKFLOW_LOCKER_HOLDER_PID))
+        } catch {
+          // pid file already removed by fn — proceed to remove the directory
+        }
+        rmdirSync(lockDir)
+      }
+    } catch {
+      // lockdir already removed (e.g. explicit rollback) — nothing to clean
+    }
+  }
+}
+
+/**
  * Append one event to `<workflowDir>/agent-flow.jsonl` and keep the file
  * bounded (spec §2.1.3 — fix-wave qc2 F-1 / qc3 F-001/003). Common path is
  * append-ONLY: after the single `appendFileSync` (a near-atomic O_APPEND
@@ -558,26 +676,30 @@ export function resolveAgentFlowWriteDir(harnessDir: string): string | null {
  * if it holds more than `AGENT_FLOW_MAX_EVENTS` lines, truncated — and the
  * truncating overwrite is an ATOMIC temp-file + `renameSync` replace (write
  * `agent-flow.jsonl.tmp` → rename), so concurrent readers never observe a
- * torn file and the cross-process loss window is narrowed to the single
- * append step (see the module doc single-writer note). May throw (fs) —
- * callers contain.
+ * torn file. The WHOLE append + stat + truncate sequence runs inside the
+ * per-workflow inter-process lock (`withWorkflowDirLock`, qc3 W-1 fix-wave):
+ * two processes sharing one active lifecycle serialize here — a concurrent
+ * truncating read-modify-write can no longer drop the other writer's just-
+ * appended lines. May throw (fs / lock timeout) — callers contain.
  * @param workflowDir - the ACTIVE workflow dir (`<harnessDir>/workflows/<id>`)
  *   — the ledger lives there, never in the harness root (v3 layout).
  * @param event - the v1 event to record.
  */
 function appendEvent(workflowDir: string, event: AgentFlowEvent): void {
   const file = join(workflowDir, AGENT_FLOW_FILE)
-  appendFileSync(file, `${JSON.stringify(event)}\n`)
-  if (statSync(file).size <= AGENT_FLOW_SIZE_GATE_BYTES) return
-  // Truncate: keep only the most recent MAX lines (JSON Lines; a trailing
-  // newline produces one empty tail element that must not count as a line).
-  const content = readFileSync(file, 'utf8')
-  const lines = content.replace(/\n$/, '').split('\n')
-  if (lines.length > AGENT_FLOW_MAX_EVENTS) {
-    const tmp = `${file}.tmp`
-    writeFileSync(tmp, `${lines.slice(-AGENT_FLOW_MAX_EVENTS).join('\n')}\n`)
-    renameSync(tmp, file)
-  }
+  withWorkflowDirLock(workflowDir, () => {
+    appendFileSync(file, `${JSON.stringify(event)}\n`)
+    if (statSync(file).size <= AGENT_FLOW_SIZE_GATE_BYTES) return
+    // Truncate: keep only the most recent MAX lines (JSON Lines; a trailing
+    // newline produces one empty tail element that must not count as a line).
+    const content = readFileSync(file, 'utf8')
+    const lines = content.replace(/\n$/, '').split('\n')
+    if (lines.length > AGENT_FLOW_MAX_EVENTS) {
+      const tmp = `${file}.tmp`
+      writeFileSync(tmp, `${lines.slice(-AGENT_FLOW_MAX_EVENTS).join('\n')}\n`)
+      renameSync(tmp, file)
+    }
+  })
 }
 
 /**

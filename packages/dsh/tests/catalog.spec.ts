@@ -726,6 +726,35 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation (plan 202
     expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.no-snapshot)')
   })
 
+  it('active selection whose snapshot is missing/unreadable → structured snapshot-unreadable error, never a silent null state (S-d)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-snapmissing-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    // An ACTIVE workflow entry whose snapshot.json is MISSING: the selection
+    // itself resolves, but the snapshot read cannot — the state section must
+    // stay PRESENT with the operator-visible reason (not degrade to null).
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-ghost')]),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+
+    const state = source.state
+    expect(state).not.toBeNull()
+    if (state === null) return
+    expect(state.selection).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.snapshot-unreadable',
+      message: expect.stringContaining('cannot read the selected workflow snapshot'),
+    })
+    // Empty aggregates by construction — never a root v1 read.
+    expect(state.plans).toEqual([])
+    expect(state.agentFlow).toBeNull()
+    // The model text carries the clear error too.
+    expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.snapshot-unreadable)')
+  })
+
   it('a v1 (unmigrated) root → migration-required error — the v1 plans[] are never read (no dual-read)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-v1root-'))
     const harnessDir = join(root, 'harness')

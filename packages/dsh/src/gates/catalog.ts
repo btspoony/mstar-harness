@@ -54,6 +54,7 @@ import type {
   MstarHarnessState,
   MstarIterationGateView,
   ResidualFindingView,
+  WorkflowSelectionView,
 } from '../types.ts'
 import { STATUS_FILE, asRecord, sessionCwdOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
@@ -376,6 +377,10 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
   if (!existsSync(statusPath)) return null
   try {
     const selection = resolveReadWorkflow(harnessDir)
+    // ONE residual rollup per catalog build (qc3 S-1 fix-wave): the state
+    // section AND the project rollup zone consume the same register parse —
+    // never two independent `residualRollup` walks per refresh.
+    const rollup = residualRollup(harnessDir)
     const str = (value: unknown): string | null =>
       typeof value === 'string' && value.trim() !== '' ? value.trim() : null
     /** `plans[].metadata.iteration_refs` → non-empty string[]; missing/non-array → [] (lossless). */
@@ -394,26 +399,43 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
       // Clear selection error (v1/unmigrated root, no snapshots): the state
       // section stays PRESENT with the operator-visible reason and empty
       // aggregates — never a root v1 read, never a silent empty row.
-      return {
-        selection,
-        plans: [],
-        residuals: [],
-        residualFindings: null,
-        project: projectRollupSource(harnessDir),
-        iterationBaseBranch: null,
-        targetBranch: null,
-        specIntegrationBranch: null,
-        pushPolicy: null,
-        worktreeMode: null,
-        controlWorktreePath: null,
-        leases: [],
-        knowledge: knowledgeDigest(harnessDir),
-        direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
-        agentFlow: null,
-      }
+      return selectionErrorState(selection, rollup, harnessDir, compass)
     }
     const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
-    const snapshot = readJson(snapshotPath)
+    let snapshot: Record<string, unknown>
+    if (!existsSync(snapshotPath)) {
+      // S-d fix-wave: an active/terminal selection whose snapshot is
+      // MISSING degrades to a STRUCTURED selection error (the state section
+      // stays PRESENT with the operator-visible reason and empty
+      // aggregates) — never a silent null state section. (`readJson` would
+      // return `{}` for a missing file — an empty aggregate with a lying
+      // `active` selection; the engine helper's ENOENT-lossless contract.)
+      return selectionErrorState(
+        {
+          kind: 'error',
+          code: 'workflow.selection.snapshot-unreadable',
+          message: `cannot read the selected workflow snapshot ${snapshotPath}`,
+        },
+        rollup,
+        harnessDir,
+        compass,
+      )
+    }
+    try {
+      snapshot = readJson(snapshotPath)
+    } catch {
+      // Same structured degrade for an unreadable/corrupt snapshot file.
+      return selectionErrorState(
+        {
+          kind: 'error',
+          code: 'workflow.selection.snapshot-unreadable',
+          message: `cannot read the selected workflow snapshot ${snapshotPath}`,
+        },
+        rollup,
+        harnessDir,
+        compass,
+      )
+    }
     const plans: HarnessPlanView[] = []
     const leases: HarnessLeaseView[] = []
     if (Array.isArray(snapshot.plans)) {
@@ -445,7 +467,7 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
         }
       }
     }
-    const { residuals, residualFindings } = residualRollup(harnessDir)
+    const { residuals, residualFindings } = rollup
     // v3 branch/policy anchors: the snapshot's first-class fields (migrate
     // lifts the v1 root metadata into `branch` / `execution_policy` /
     // `control_worktree_path`); the compass frontmatter stays the fallback
@@ -457,7 +479,7 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
       plans,
       residuals,
       residualFindings,
-      project: projectRollupSource(harnessDir),
+      project: projectRollupSource(harnessDir, residuals),
       iterationBaseBranch: str(branch?.base) ?? str(compassFields?.iteration_base_branch) ?? null,
       targetBranch: str(branch?.target) ?? str(compassFields?.target_branch) ?? null,
       specIntegrationBranch: str(branch?.integration),
@@ -485,6 +507,38 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
 }
 
 /**
+ * The shared empty-aggregate state for a selection failure (S-d fix-wave):
+ * the state section stays PRESENT with the operator-visible reason and
+ * empty aggregates — never a root v1 read, never a silent null state. The
+ * project rollup zone still shows the workspace-level residual counts (the
+ * rollup is computed once per build — qc3 S-1 — and passed in).
+ */
+function selectionErrorState(
+  selection: WorkflowSelectionView,
+  rollup: { residuals: HarnessResidualView[]; residualFindings: ResidualFindingView[] | null },
+  harnessDir: string,
+  compass: { iterationId: string; compassPath: string } | undefined,
+): MstarHarnessState {
+  return {
+    selection,
+    plans: [],
+    residuals: [],
+    residualFindings: null,
+    project: projectRollupSource(harnessDir, rollup.residuals),
+    iterationBaseBranch: null,
+    targetBranch: null,
+    specIntegrationBranch: null,
+    pushPolicy: null,
+    worktreeMode: null,
+    controlWorktreePath: null,
+    leases: [],
+    knowledge: knowledgeDigest(harnessDir),
+    direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
+    agentFlow: null,
+  }
+}
+
+/**
  * The additive project rollup (compass v3.0.0 AC-4 / AC-P3 — the panel's
  * fifth zone): roadmap milestones + open-residual severity counts from the
  * PROJECT layer (`projects/<id>/roadmap.md` frontmatter `milestones[]` +
@@ -494,8 +548,12 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
  * Always-present (lossless): no roadmap files → `milestones: []`; no
  * registers / no open entries → `openResiduals: []`. Unreadable roadmaps
  * are skipped (advisory).
+ *
+ * qc3 S-1 (fix-wave): the open-residual rollup is computed ONCE per catalog
+ * build by the caller and passed in — this zone never re-walks the project
+ * registers itself.
  */
-function projectRollupSource(harnessDir: string): MstarHarnessProject {
+function projectRollupSource(harnessDir: string, residuals: HarnessResidualView[]): MstarHarnessProject {
   const milestones: string[] = []
   const projectsDir = resolveProjectDir(harnessDir, { harnessDir })
   if (existsSync(projectsDir)) {
@@ -524,7 +582,7 @@ function projectRollupSource(harnessDir: string): MstarHarnessProject {
       }
     }
   }
-  return { milestones, openResiduals: residualRollup(harnessDir).residuals }
+  return { milestones, openResiduals: residuals }
 }
 
 /**
@@ -551,17 +609,23 @@ function residualRollup(harnessDir: string): { residuals: HarnessResidualView[];
         for (const finding of findings) {
           const entry = asRecord(finding)
           if (entry === undefined) continue
+          // Open-parity FIRST (W-A fix-wave): a closed register entry
+          // (resolved / waived / closed lifecycle) is NOT an open residual
+          // — the engine's `isOpenResidual` parity — so it must never
+          // count toward the severity rollup NOR the detail view. The
+          // register is open-by-construction after migrate, but a stale or
+          // already-closed entry must not inflate the workspace counts or
+          // the fifth-zone chips (engine treats closed entries as closed).
+          if (!isOpenResidualParity(entry)) continue
           const severity = entry.severity
-          // Rollup: register entries are open by construction (migrate
-          // lifts open residuals only) — every valid-severity entry counts.
+          // Rollup: every valid-severity OPEN entry counts.
           if (typeof severity === 'string' && (RESIDUAL_SEVERITIES as readonly string[]).includes(severity)) {
             counts.set(severity, (counts.get(severity) ?? 0) + 1)
           }
-          // Detail: open-lifecycle filtered with engine `isOpenResidual`
-          // parity (defensive — the register is open-only); unknown
-          // severities skipped; severity ordered critical→nit (stable sort
-          // keeps the source order within one severity); capped at 10.
-          if (!isOpenResidualParity(entry)) continue
+          // Detail: open-lifecycle filtered (same parity as the count —
+          // one filter drives both); unknown severities skipped; severity
+          // ordered critical→nit (stable sort keeps the source order
+          // within one severity); capped at 10.
           if (typeof severity !== 'string' || residualSeverityIndex(severity) === -1) continue
           residualFindings.push({
             planId,

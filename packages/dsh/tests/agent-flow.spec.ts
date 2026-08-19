@@ -351,6 +351,59 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
     }
   })
 
+  it('concurrent process appends serialize behind the per-workflow write lock — the truncating read-modify-write never drops the other process rows (qc3 W-1)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-concurrent-')
+    let script = ''
+    try {
+      // Seed the ledger PAST the size gate with ~500 lines so EVERY append
+      // takes the truncating read-modify-write path — the exact window
+      // W-1 closes (interleaved truncate reads would drop the other
+      // process's just-appended lines without the lock).
+      const seedLines: string[] = []
+      for (let i = 0; i < AGENT_FLOW_MAX_EVENTS + 20; i += 1) {
+        seedLines.push(dispatchLine({ ts: 1_700_000_000_000 + i }))
+      }
+      await writeFile(join(workflowDir, AGENT_FLOW_FILE), seedLines.join('\n') + '\n')
+      expect(statSync(join(workflowDir, AGENT_FLOW_FILE)).size).toBeGreaterThan(AGENT_FLOW_SIZE_GATE_BYTES)
+
+      // The child script drives the REAL record path in a separate process.
+      // It lives INSIDE the package root (tmp-named, removed in finally) so
+      // bare + relative imports resolve exactly like the package's own code.
+      const pkgRoot = join(import.meta.dir, '..')
+      script = join(pkgRoot, `.tmp-concurrent-append-${process.pid}-${Date.now()}.ts`)
+      await writeFile(script, [
+        `import { recordWorkflowEvent } from './src/gates/agent-flow.ts'`,
+        'const harnessDir = process.argv[2]',
+        'const tag = process.argv[3]',
+        'for (let i = 0; i < 10; i += 1) {',
+        "  recordWorkflowEvent({ harnessDir, event: { v: 1, ts: Date.now(), kind: 'workflow-run', runId: `${tag}-${i}`, name: 'concurrent-append' } })",
+        '}',
+      ].join('\n'))
+
+      const spawnChild = (tag: string) =>
+        Bun.spawn(['bun', script, harnessDir, tag], { cwd: pkgRoot, stdin: 'ignore', stderr: 'pipe' })
+      const a = spawnChild('proc-a')
+      const b = spawnChild('proc-b')
+      const [aExit, bExit] = [await a.exited, await b.exited]
+      expect(aExit).toBe(0)
+      expect(bExit).toBe(0)
+
+      // Serialized appends: the ledger stays at the truncation bound and
+      // ALL 20 concurrent runs survived — none lost to a racing truncate.
+      const lines = readFileSync(join(workflowDir, AGENT_FLOW_FILE), 'utf8').replace(/\n$/, '').split('\n')
+      expect(lines).toHaveLength(AGENT_FLOW_MAX_EVENTS)
+      for (let i = 0; i < 10; i += 1) {
+        expect(lines.some((line) => line.includes(`proc-a-${i}`))).toBe(true)
+        expect(lines.some((line) => line.includes(`proc-b-${i}`))).toBe(true)
+      }
+      // The lockdir is transient — nothing leaks after the critical sections.
+      expect(existsSync(join(workflowDir, '.ledger-write.lockdir'))).toBe(false)
+    } finally {
+      await rm(script, { force: true }).catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('skips malformed lines — never fatal; empty/malformed-only files yield an empty view', async () => {
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-malformed-')
     try {
@@ -825,6 +878,37 @@ describe('agent-flow settle — real completion pairing (plan 20260811-panel-f4-
       expect(view.events[0]).toMatchObject({ kind: 'settle', agent: 'sess-B', role: 'fullstack-dev' })
       expect(view.events[1]).toMatchObject({ kind: 'settle', agent: 'sess-A', role: 'fullstack-dev' })
       // Both calls were consumed (map pruning) — nothing stays paired.
+      expect(pairing.dispatchByCallId.size).toBe(0)
+    } finally {
+      setAgentFlowLogger(priorSink)
+      await ctx.fiber.dispose().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('the active set moves between dispatch and settle — the paired settle lands in the DISPATCH workflow dir, never the new one (T2 M4)', async () => {
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-agentflow-settle-move-')
+    const ctx = new Context()
+    const pairing = pairingOf()
+    const priorSink = setAgentFlowLogger(() => {})
+    try {
+      registerSettleListener(ctx, {}, pairing)
+      // Dispatch while wf-1 is active — the pairing ref captures wf-1's dir.
+      pairedDispatch(harnessDir, pairing, 'c-move', VALID_PLANNED)
+      expect(pairing.dispatchByCallId.get('sess-1\u0000c-move')).toMatchObject({ workflowDir })
+      // The active set moves to wf-2 BEFORE the completion arrives.
+      await seedHarness(harnessDir, {
+        'status.json': v2Root([v2WorkflowEntry('wf-2')]),
+        'workflows/wf-2/snapshot.json': v2Snapshot('wf-2'),
+      })
+      emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-move', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'foreground', runId: 'r-move', output: [] } })
+      // The settle landed in wf-1 (the dispatch's file) with the paired
+      // identity — wf-2 (the NEW active dir) holds NO rows.
+      const wf1 = readAgentFlow(workflowDir)!
+      expect(wf1.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
+      expect(wf1.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', agent: 'sess-1', role: 'fullstack-dev', planId: '20260810-agent-flow', taskId: 'T2' })
+      expect(readAgentFlow(join(harnessDir, 'workflows/wf-2'))!.events).toEqual([])
+      // The call was consumed (map pruning).
       expect(pairing.dispatchByCallId.size).toBe(0)
     } finally {
       setAgentFlowLogger(priorSink)

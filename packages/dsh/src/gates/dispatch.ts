@@ -762,8 +762,10 @@ export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | un
  * under `off` stays silent).
  *
  * Every other mode composes the {@link WorkflowGateInput} (plus the Task 3
- * P-b lease attribution: {@link writableFanOutUncovered} over the calling
- * workspace's status.json — resolved through the contained resolver path)
+ * P-b lease attribution: {@link writableFanOutUncovered} over the ACTIVE
+ * workflow snapshot (`workflows/<id>/snapshot.json` — the v3 status.json
+ * consumer; never the root v1 `plans[]`), resolved through the contained
+ * resolver path)
  * and runs the policy ({@link workflowPolicy} — the SINGLE four-tier
  * decision point: P-b lease attribution + P-a name allowlist + P-c
  * first-seen ask). EVERY policy decision records ONE durable

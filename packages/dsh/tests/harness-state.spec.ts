@@ -281,7 +281,9 @@ describe('mstar-engine-status — residualFindings register semantics (spec §6)
     const row = lastMessage(decision)
     const source = row?.source
     if (source === undefined || source.kind !== 'mstar-engine-status') return
-    expect(source.state).toMatchObject({ residualFindings: [] })
+    // W-A fix-wave: closed entries must NOT count toward the severity
+    // rollup either — the workspace shows no open residuals at all.
+    expect(source.state).toMatchObject({ residualFindings: [], residuals: [] })
   })
 })
 
@@ -334,6 +336,15 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
       { planId: 'plan-a', id: 'R-null', severity: 'high', title: 'null lifecycle' },
       { planId: 'plan-a', id: 'R-false', severity: 'medium', title: 'false lifecycle' },
       { planId: 'plan-a', id: 'R-open', severity: 'low', title: 'string open' },
+    ])
+    // W-A fix-wave: the severity ROLLUP applies the same open parity — the
+    // closed entries (R-true critical, R-resolved high, R-superseded nit)
+    // never count; only the four open entries do.
+    expect(state.residuals).toEqual([
+      { severity: 'critical', count: 1 },
+      { severity: 'high', count: 1 },
+      { severity: 'medium', count: 1 },
+      { severity: 'low', count: 1 },
     ])
   })
 

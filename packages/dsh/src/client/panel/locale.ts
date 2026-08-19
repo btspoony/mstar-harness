@@ -225,6 +225,8 @@ export type PanelKey =
   | 'flow.advisory'
   | 'flow.denied'
   | 'state.title'
+  | 'state.selection'
+  | 'state.selection.history'
   | 'state.plans'
   | 'state.residuals'
   | 'state.policy'
@@ -351,6 +353,8 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'flow.advisory': '提示',
   'flow.denied': '拒绝',
   'state.title': '工作区状态',
+  'state.selection': '所选工作流',
+  'state.selection.history': '历史视图（终端快照）',
   'state.plans': '计划',
   'state.residuals': '未决残留',
   'state.policy': '策略',
@@ -472,6 +476,8 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'flow.advisory': 'advisory',
   'flow.denied': 'denied',
   'state.title': 'Workspace state',
+  'state.selection': 'Selected workflow',
+  'state.selection.history': 'history view (terminal snapshot)',
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
   'state.policy': 'Policy',

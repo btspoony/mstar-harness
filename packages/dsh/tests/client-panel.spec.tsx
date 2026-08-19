@@ -801,6 +801,50 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-watermark'))
   })
 
+  it('the selection seat renders the aggregated workflow — active / multi-active warning / terminal history / selection error (qc1 S-1)', () => {
+    // Active without warning (the full fixture).
+    expect(html).toContain('data-selection-kind="active"')
+    expect(html).toContain('data-selection-workflow="iter-20260809-dsh-workflow-viz"')
+    expect(html).not.toContain('data-selection-warning')
+
+    // Multi-active → the structured warning is surfaced (no silent pick).
+    const warned = panelHtml({
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        selection: {
+          kind: 'active',
+          workflowId: 'wf-a',
+          dir: 'workflows/wf-a',
+          warning: { code: 'workflow.selection.multi-active', message: '2 active lifecycles in status.json workflows[] — selected the first (wf-a); no silent pick' },
+        },
+      },
+    })
+    expect(warned).toContain('data-selection-warning')
+    expect(warned).toContain('2 active lifecycles')
+
+    // Terminal history view → the history marker renders beside the id.
+    const terminal = panelHtml({
+      ...fullSource,
+      state: { ...fullSource.state!, selection: { kind: 'terminal', workflowId: 'wf-old', dir: 'workflows/wf-old' } },
+    })
+    expect(terminal).toContain('data-selection-kind="terminal"')
+    expect(terminal).toContain('data-selection-workflow="wf-old"')
+    expect(terminal).toContain('data-selection-history')
+
+    // Selection error → code + reason rendered, never a crash.
+    const errored = panelHtml({
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        selection: { kind: 'error', code: 'workflow.selection.snapshot-unreadable', message: 'cannot read the selected workflow snapshot /proj/.mstar/workflows/wf-ghost/snapshot.json' },
+      },
+    })
+    expect(errored).toContain('data-selection-kind="error"')
+    expect(errored).toContain('data-selection-code="workflow.selection.snapshot-unreadable"')
+    expect(errored).toContain('cannot read the selected workflow snapshot')
+  })
+
   it('main area renders the IterationTaskPage inside the content region (T7 fills the tasks tab)', () => {
     expect(html).toContain('data-mstar-graph')
     expect(html).toContain('data-mstar-page="tasks"')

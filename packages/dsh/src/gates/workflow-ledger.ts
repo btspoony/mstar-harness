@@ -35,9 +35,22 @@
  * R-401 — a failing append leaves the cursor behind, so the row is
  * re-attempted at the next scan, never permanently lost). The in-memory
  * Map is the durable file's mirror (module-level cache keyed by WORKFLOW
- * DIR, bounded by the session cap); any watermark read/write failure
- * degrades to in-memory-only with one warn — a ledger row is never lost and
- * the workflow run is never affected.
+ * DIR, bounded by the session cap AND by a workflow-dir count cap — qc3
+ * S-4 — so a long-lived process across many workflow ids never grows the
+ * cache unbounded); any watermark read/write failure degrades to
+ * in-memory-only with one warn — a ledger row is never lost and the
+ * workflow run is never affected.
+ *
+ * INTER-PROCESS SERIALIZATION (qc3 W-1 fix-wave): the watermark
+ * read-modify-write (load fresh → mutate → whole-map save) runs inside the
+ * per-workflow write lock shared with the ledger append
+ * (`withWorkflowDirLock` from agent-flow.ts — the same lockdir pattern as
+ * the engine's `withStatusWriteLock`). Steady state is ONE writer per
+ * workflow dir; under multi-session shared lifecycle (compass ruling 3)
+ * the lock makes the cursor save read-modify-write atomic across
+ * processes — a whole-map save can no longer silently clobber another
+ * process's just-advanced cursor (the duplicate-row regression mode). The
+ * lock is held only around the bounded cursor update, never across scans.
  *
  * Mapping (Task 2 schema): `tool-workflow/run-start` → `workflow-run`
  * (`agent` = the carrying parent session id), `tool-workflow/agent-start` →
@@ -95,6 +108,7 @@ import {
   recordWorkflowEvent,
   resolveAgentFlowWriteDir,
   truncateLedgerField,
+  withWorkflowDirLock,
   WORKFLOW_LEDGER_MAX_ID_LENGTH,
   WORKFLOW_LEDGER_MAX_LABEL_LENGTH,
   WORKFLOW_LEDGER_MAX_NAME_LENGTH,
@@ -149,6 +163,15 @@ export const WORKFLOW_LEDGER_WATERMARK_FILE = 'workflow-ledger-cursors.json'
  * evicted session re-records its rows; bounded by the cap).
  */
 export const WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS = 256
+/**
+ * Workflow-dir count cap for the module-level watermark cache (qc3 S-4
+ * fix-wave): a long-lived process can touch many workflow ids over its
+ * lifetime (each iteration lifecycle creates a new workflow dir) — the
+ * cache evicts the OLDEST cached dir when it exceeds this cap. The file is
+ * the durable store; the cache is only a mirror, so an evicted dir is
+ * re-read (and re-cached) on its next visit — no correctness impact.
+ */
+export const WORKFLOW_LEDGER_WATERMARK_MAX_DIRS = 64
 
 /** Consumer log levels the module sink understands. */
 export type WorkflowLedgerLogLevel = 'debug' | 'warn'
@@ -251,16 +274,45 @@ type Watermark = Map<string, number>
 const watermarkCache = new Map<string, Watermark>()
 
 /**
+ * Cache one workflow dir's watermark with a bounded cache (qc3 S-4
+ * fix-wave): when the cache exceeds {@link WORKFLOW_LEDGER_WATERMARK_MAX_DIRS}
+ * the OLDEST cached dir (Map insertion order) is evicted. The file is the
+ * durable store — an evicted dir is re-read on its next visit, so eviction
+ * never loses a cursor.
+ */
+function cacheWatermark(workflowDir: string, watermark: Watermark): void {
+  watermarkCache.set(workflowDir, watermark)
+  while (watermarkCache.size > WORKFLOW_LEDGER_WATERMARK_MAX_DIRS) {
+    const oldest = watermarkCache.keys().next().value
+    if (oldest === undefined) break
+    watermarkCache.delete(oldest)
+  }
+}
+
+/** The number of workflow dirs currently mirrored in the module-level watermark cache (qc3 S-4 observability). */
+export function workflowLedgerWatermarkCacheSize(): number {
+  return watermarkCache.size
+}
+
+/**
  * Load (or return the cached) watermark for one workflow dir. A missing file
  * is the normal first run — silent, empty map. A present-but-corrupt file
  * warns once and degrades to in-memory-only (contained — never throws):
  * in-process re-applies stay deduped, a restart re-records (the file was
  * never durable). Persisted values are validated (integer `nextSeq` in
  * [1, 2^31)) and invalid entries dropped.
+ *
+ * `fresh` (qc3 W-1 fix-wave): re-read the FILE and replace the in-memory
+ * map — used ONLY under the per-workflow write lock in `advanceWatermark`,
+ * so the read-modify-write starts from the other process's last save, not
+ * from a stale in-memory view (a whole-map save can no longer clobber a
+ * concurrently advanced cursor). A fresh read that cannot reach the file
+ * (missing/corrupt) falls back to the in-memory map — the process's own
+ * view is never discarded by a degraded read.
  */
-function loadWatermark(workflowDir: string): Watermark {
+function loadWatermark(workflowDir: string, fresh = false): Watermark {
   const cached = watermarkCache.get(workflowDir)
-  if (cached !== undefined) return cached
+  if (cached !== undefined && !fresh) return cached
   const watermark: Watermark = new Map()
   try {
     const raw = readFileSync(join(workflowDir, WORKFLOW_LEDGER_WATERMARK_FILE), 'utf8')
@@ -286,17 +338,21 @@ function loadWatermark(workflowDir: string): Watermark {
     if (err?.code !== 'ENOENT') {
       log('warn', `workflow-ledger watermark unreadable for ${workflowDir} — degrading to in-memory-only (restart re-records): ${errorMessage(error)}`)
     }
+    if (fresh && cached !== undefined) return cached
   }
-  watermarkCache.set(workflowDir, watermark)
+  cacheWatermark(workflowDir, watermark)
   return watermark
 }
 
 /**
  * Persist one watermark atomically (write `*.json.tmp` → rename — the same
  * pattern as the ledger's truncating replace, so concurrent readers never
- * observe a torn file). A failing write degrades to in-memory-only with one
- * warn: the ledger rows are already appended (never lost); only
- * cross-restart dedupe is lost. Contained — never throws.
+ * observe a torn file). ALWAYS called under the per-workflow write lock
+ * (`advanceWatermark` holds it across the fresh load → mutate → save
+ * sequence — qc3 W-1: the whole-map save is serialized against other
+ * processes sharing the lifecycle). A failing write degrades to
+ * in-memory-only with one warn: the ledger rows are already appended (never
+ * lost); only cross-restart dedupe is lost. Contained — never throws.
  */
 function saveWatermark(workflowDir: string, watermark: Watermark): void {
   try {
@@ -310,34 +366,51 @@ function saveWatermark(workflowDir: string, watermark: Watermark): void {
 }
 
 /**
- * Advance one session's watermark entry to `nextSeq` and persist. When a NEW
- * session would push the map past the cap, evict first: prefer an entry
- * whose session is no longer live (`isEvictable` — a live session's cursor
- * must never be dropped, or the next re-apply would re-record its rows);
- * fall back to the oldest entry when every entry is live. The residual of
- * eviction (a later restore of an evicted session re-records) is bounded by
- * the cap and documented in the README.
+ * Advance one session's watermark entry to `nextSeq` and persist. Runs the
+ * whole read-modify-write under the per-workflow inter-process lock
+ * (qc3 W-1 fix-wave — same lock as the ledger append): the fresh load
+ * starts from the latest durable cursors, so two processes sharing one
+ * lifecycle never clobber each other's advances; the session entry is
+ * monotonic (`Math.max` — a stale concurrent advance never regresses an
+ * already-higher cursor). When a NEW session would push the map past the
+ * cap, evict first: prefer an entry whose session is no longer live
+ * (`isEvictable` — a live session's cursor must never be dropped, or the
+ * next re-apply would re-record its rows); fall back to the oldest entry
+ * when every entry is live. The residual of eviction (a later restore of an
+ * evicted session re-records) is bounded by the cap and documented in the
+ * README. A lock timeout (another writer stuck for the full timeout) or a
+ * throwing critical section degrades to in-memory-only with one warn — the
+ * ledger row above is already appended; only the durable cursor is delayed
+ * (a later re-apply re-records the row — the R-401 retry discipline).
  * @param isEvictable - `true` for a candidate session that is safe to evict
  *   (not live in the sessions store).
  */
 function advanceWatermark(workflowDir: string, sid: string, nextSeq: number, isEvictable: (candidate: string) => boolean): void {
-  const watermark = loadWatermark(workflowDir)
-  if (!watermark.has(sid) && watermark.size >= WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS) {
-    let victim: string | undefined
-    for (const key of watermark.keys()) {
-      if (isEvictable(key)) {
-        victim = key
-        break
+  try {
+    withWorkflowDirLock(workflowDir, () => {
+      const watermark = loadWatermark(workflowDir, true)
+      if (!watermark.has(sid) && watermark.size >= WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS) {
+        let victim: string | undefined
+        for (const key of watermark.keys()) {
+          if (isEvictable(key)) {
+            victim = key
+            break
+          }
+        }
+        victim ??= watermark.keys().next().value as string | undefined
+        if (victim !== undefined) {
+          watermark.delete(victim)
+          log('warn', `workflow-ledger watermark capped at ${WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS} sessions — evicted ${victim} (a restored evicted session re-records; bounded by the cap)`)
+        }
       }
-    }
-    victim ??= watermark.keys().next().value as string | undefined
-    if (victim !== undefined) {
-      watermark.delete(victim)
-      log('warn', `workflow-ledger watermark capped at ${WORKFLOW_LEDGER_WATERMARK_MAX_SESSIONS} sessions — evicted ${victim} (a restored evicted session re-records; bounded by the cap)`)
-    }
+      // Monotonic advance: a concurrent process that already pushed this
+      // session's cursor past `nextSeq` must never be regressed (qc3 W-1).
+      watermark.set(sid, Math.max(watermark.get(sid) ?? 0, nextSeq))
+      saveWatermark(workflowDir, watermark)
+    })
+  } catch (error) {
+    log('warn', `workflow-ledger watermark advance failed for ${workflowDir} — in-memory only (restart re-records): ${errorMessage(error)}`)
   }
-  watermark.set(sid, nextSeq)
-  saveWatermark(workflowDir, watermark)
 }
 
 /* ---------------------------------- mapping ---------------------------------- */

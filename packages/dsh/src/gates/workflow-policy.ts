@@ -217,7 +217,8 @@ export type WorkflowPolicyVerdict =
  * before returning; `markAsked` never throws. NEVER throws.
  *
  * P-b: `input.uncoveredPlanId` (the dispatch gate computes it from the
- * calling workspace's status.json — see dispatch.ts `writableFanOutUncovered`)
+ * ACTIVE workflow snapshot — `workflows/<id>/snapshot.json`, the v3
+ * status.json consumer; see dispatch.ts `writableFanOutUncovered`)
  * → hard denies (reason cites the plan id), warn/ask emit the advisory
  * verdict; `off` always allows. Preempts P-a/P-c: an orphan InProgress plan
  * is a workspace red line independent of the workflow name.
