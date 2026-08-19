@@ -64,7 +64,7 @@
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新 README 中 **Status** 或 Description；版本迭代优先新文件名 `v<N+1>` 或保留旧版并标明 Superseded。
 4. **归档**：
    - **iteration-start（强制）**：`writing-specialist` §1.6 以 **`{SPECS_DIR}/` 全库卫生为主**；对**既有** `{KNOWLEDGE_DIR}/` 仅归档/错放纠正，**不**新增 knowledge。细则 → **`mstar-iteration/references/iteration-corpus-hygiene.md`**。
-   - **其它时机**：当文档内容已完全反映到已合并代码中、且非 iteration-start 扫库时：可将索引 **Status** 标为 `Superseded by implementation (...)` 或 `Archived`；可保留原位或迁入 `archived/knowledge/`。**不要**把知识库产物搬进 `{HARNESS_DIR}/archived/plans/`（该处用于**计划行**冷快照）。
+   - **其它时机**：当文档内容已完全反映到已合并代码中、且非 iteration-start 扫库时：可将索引 **Status** 标为 `Superseded by implementation (...)` 或 `Archived`；可保留原位或迁入 `archived/knowledge/`。
 5. **结晶（Compound）**：PM 在 **iteration-close** 触发 **`mstar-compound`**：plan 素材 + **`{ITERATION_DIR}/<iteration-id>/` package 提升** → `{KNOWLEDGE_DIR}/`。不在 per-plan Done 后单独执行。维护 → **`mstar-compound-refresh`**。
 
 ## 与 review bundle、`{PLAN_DIR}/residuals/` 的区分

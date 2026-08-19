@@ -21,8 +21,7 @@ Legacy fallbacks:
 2. Initialize `{HARNESS_DIR}/status.json` from template if available.
 3. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json` (legacy `.agents/` equivalents when applicable). Per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
 4. Initialize residual archive path: `{HARNESS_DIR}/archived/residuals/`.
-5. **Profile B** only: `{HARNESS_DIR}/archived/plans/` and `archived/plans-done.json` from `mstar-plan-artifacts/templates/plans-done.empty.json` (`{ "plans": [] }` only; see `done-compaction.md`).
-6. Optional: `{HARNESS_DIR}/notes.json`, `{HARNESS_DIR}/knowledge/README.md`.
+5. Optional: `{HARNESS_DIR}/notes.json`, `{HARNESS_DIR}/knowledge/README.md`.
 
 If legacy plan directories already exist, reuse them; avoid dual-structure duplication.
 

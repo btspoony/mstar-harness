@@ -53,7 +53,7 @@ Canonical vs legacy residual definitions → **`mstar-plan-artifacts` SKILL.md**
 }
 ```
 
-**Empty-repo templates:** **`templates/status.empty.json`**; optional **`templates/notes.empty.json`** → `{HARNESS_DIR}/notes.json`. See **`templates/README.md`**.
+**Empty-repo template:** **`templates/status.empty.json`**. See **`templates/README.md`**.
 
 **Closed entries** add: `lifecycle`, `closed_at`, `closure_note`; optional `closure_evidence`, `superseded_by`. See “Residual findings lifecycle”.
 
@@ -400,7 +400,7 @@ Preservation: writers **MUST** preserve unrelated plan rows, root metadata, and 
 - Each `plans[]` row may include optional **`metadata`** (`{}` or omit).
 - Init with `"residual_findings": {}`; **no dual-write** with legacy side (see SKILL.md). Program timeline → **`notes.json`**, not long `metadata.notes` in `status.json`.
 - **`plans[].id`** keys must align with root **`residual_findings`** keys and `{SDD_DIR}` plan-id segments. Do not store `residual_findings_plan_id`.
-- **Empty `plan-id` key:** when no open items remain, **delete** the key from root **`residual_findings`** (and legacy side if present) — no `"plan-id": []`. Whether **`plans[]`** keeps the row is separate (`done-compaction.md`).
+- **Empty `plan-id` key:** when no open items remain, **delete** the key from root **`residual_findings`** (and legacy side if present) — no `"plan-id": []`.
 - **`residual_summary` (optional):** one-line human summary of **open** items only.
 
 ---
