@@ -68,6 +68,12 @@ export type WorkflowBranchAnchors = {
  * (plan Task 2). `plans[]` rows are the legacy PlanRow shape verbatim;
  * per-row `execution_lease` stays on the row, `integration_merge_lease` is
  * top-level.
+ *
+ * Notes dual-home SSOT (qc wave-1 S-e): a plan row's `notes` array is the
+ * LEGACY VERBATIM copy preserved at migrate time — the RUNTIME ledger is
+ * `notes.jsonl` in the workflow dir (`migrate.ts` NOTES_LEDGER_FILE). New
+ * notes append to the ledger only; row `notes` is read-only legacy and is
+ * never a dual-write target, so the two never diverge by construction.
  */
 export type WorkflowSnapshot = {
   schema_version: 1;
@@ -137,6 +143,21 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
         "high",
         "workflow.snapshot.invalid-schema-version",
         `schema_version must be 1 \u2014 got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`,
+      ),
+    );
+  }
+
+  // QC wave-1 S-a: a top-level `version` key is reserved for the root
+  // status.json discriminator and must never appear on a snapshot — reject
+  // it outright (defense-in-depth: the plan reserves `version`; snapshots
+  // use `schema_version`).
+  if (doc.version !== undefined) {
+    violations.push(
+      violation(
+        "medium",
+        "workflow.snapshot.reserved-version",
+        `top-level version is reserved for the root status.json discriminator \u2014 snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`,
+        "remove the version key from the snapshot",
       ),
     );
   }
@@ -292,6 +313,11 @@ export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: str
     throw new Error(`refusing to write invalid workflow snapshot: ${detail}`);
   }
   const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
+  // simplify: whole-rewrite snapshot on every state change (temp+rename via
+  // writeJson under the workflow lockdir) — the ceiling is O(plans[] × row
+  // payload) per write; unbounded inputs already divert to notes.jsonl at
+  // migrate time. Upgrade path: append-only delta file or per-row files +
+  // compaction when a lifecycle exceeds ~N plans / large per-row payloads.
   // The lockdir mkdir is non-recursive — the snapshot dir must exist before
   // acquisition (the lockdir lands inside `dir`, dirname of the snapshot).
   mkdirSync(dir, { recursive: true });

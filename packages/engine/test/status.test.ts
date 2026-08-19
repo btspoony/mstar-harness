@@ -35,22 +35,22 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  findingsCleanupGate,
   normalizeSeverity,
   registerWorkflow,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
-  techDebtRollup,
   unregisterWorkflow,
   validatePlanRow,
   validateResidual,
   validateStatus,
   validateStatusV2,
 } from "../src/status.js";
+import { findingsCleanupGate, techDebtRollup } from "../src/project.js";
 import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
-import type { FindingsCleanupMode, TechDebtRollup, WorkflowEntry } from "../src/status.js";
+import type { WorkflowEntry } from "../src/status.js";
+import type { FindingsCleanupMode, TechDebtRollup } from "../src/project.js";
 import { writeWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
@@ -369,6 +369,21 @@ describe("validateStatusV2", () => {
     expect(violationsOf(result)).toContain("status.migration-required");
   });
 
+  test("v1-shaped input (root residual_findings) errors MIGRATION_REQUIRED even with version: 2 (QC wave-1 W-C)", () => {
+    // The v1-disguise hole: a v2 doc carrying the other v1 root surface —
+    // residual_findings (keyed by plan id, arrays of entries) — must fail
+    // closed like root plans[], not pass as "migrated".
+    const withEntries = validateStatusV2(v2doc({ residual_findings: { "plan-a": [{ id: "R1" }] } }));
+    expect(withEntries.ok).toBe(false);
+    expect(violationsOf(withEntries)).toContain("status.migration-required");
+    expect(withEntries.violations.map((v) => v.message).join(" ")).toContain("mstar migrate");
+    // Presence of the key at all is v1-shaped (v1 init template carries
+    // `residual_findings: {}`), even when empty.
+    const empty = validateStatusV2(v2doc({ residual_findings: {} }));
+    expect(empty.ok).toBe(false);
+    expect(violationsOf(empty)).toContain("status.migration-required");
+  });
+
   test("real v1 repo status.json shape errors MIGRATION_REQUIRED with the hint", () => {
     const result = validateStatusV2(REAL_SHAPE);
     expect(result.ok).toBe(false);
@@ -459,6 +474,23 @@ describe("validateStatusV2", () => {
       }
     });
 
+    test("root entry type/started_at are cross-checked against the snapshot (QC wave-1 S-c)", async () => {
+      const dir = tmpRoot("status-v2-mismatch-");
+      try {
+        await writeRunningSnapshot(dir, "wf-1"); // snapshot type plan, started_at 2026-08-19T08:00:00Z
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry({ type: "iteration" })] }));
+        const typeMismatch = validateStatusV2(statusPath);
+        expect(violationsOf(typeMismatch)).toContain("status.workflow.mismatched-type");
+
+        writeJson(statusPath, v2doc({ workflows: [wfEntry({ started_at: "2026-08-19T00:00:00Z" })] }));
+        const startedMismatch = validateStatusV2(statusPath);
+        expect(violationsOf(startedMismatch)).toContain("status.workflow.mismatched-started-at");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     test("doc input without harnessDir skips the on-disk invariant check (structure only)", () => {
       const result = validateStatusV2(v2doc({ workflows: [wfEntry()] }));
       expect(result.ok).toBe(true);
@@ -523,10 +555,13 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
     try {
       const statusPath = join(dir, "status.json");
       await registerWorkflow(statusPath, entry);
-      await registerWorkflow(statusPath, { ...entry, started_at: "2026-08-19T10:00:00Z" });
+      // Re-registering the same id must not duplicate. Fields that mirror
+      // the snapshot (type/started_at — QC wave-1 S-c cross-check) cannot
+      // drift in a root update, so the upsert carries the identical entry.
+      await registerWorkflow(statusPath, { ...entry });
       const onDisk = readJson(statusPath);
       expect((onDisk.workflows as unknown[]).length).toBe(1);
-      expect((onDisk.workflows as Array<Record<string, unknown>>)[0]).toMatchObject({ started_at: "2026-08-19T10:00:00Z" });
+      expect((onDisk.workflows as Array<Record<string, unknown>>)[0]).toEqual(entry);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -608,8 +643,8 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
   });
 });
 
-describe("findingsCleanupGate — project register input (v3 relocation)", () => {
-  function register(entries: Record<string, unknown>): Record<string, unknown> {
+describe("findingsCleanupGate — project register input (v3 relocation, QC wave-1 W-E array schema)", () => {
+  function register(entries: Record<string, unknown[]>): Record<string, unknown> {
     return { entries };
   }
 
@@ -617,7 +652,7 @@ describe("findingsCleanupGate — project register input (v3 relocation)", () =>
     residual: Record<string, unknown> | undefined,
     opts?: { mode?: FindingsCleanupMode },
   ): GateResult {
-    const reg = register(residual === undefined ? {} : { "plan-a": residual });
+    const reg = register(residual === undefined ? {} : { "plan-a": [residual] });
     return findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", opts);
   }
 
@@ -669,6 +704,33 @@ describe("findingsCleanupGate — project register input (v3 relocation)", () =>
     expect(result.violations).toEqual([]);
   });
 
+  test("every open entry of a plan is checked (array schema — one bad entry fails the plan)", () => {
+    // W-E array semantics: a plan can hold 2+ residuals; each open entry is
+    // evaluated, so a single fixable finding blocks zero-residual even when
+    // a sibling is a true blocker-defer.
+    const reg = register({
+      "plan-a": [
+        entry({ id: "R1", decision: "defer", target: "next iteration" }),
+        entry({ id: "R2", decision: "accept" }),
+        entry({ id: "R3", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "fixed" }),
+      ],
+    });
+    const result = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", {
+      mode: "zero-residual",
+    });
+    expect(result.ok).toBe(false);
+    // The fixable R2 is flagged; the true blocker-defer R1 and the closed
+    // R3 contribute no violation.
+    expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
+    expect(result.violations.map((v) => v.message).join(" ")).toContain("R#R2");
+    expect(result.violations.map((v) => v.message).join(" ")).not.toContain("R#R1");
+
+    const allow = findingsCleanupGate(reg as Parameters<typeof findingsCleanupGate>[0], "plan-a", {
+      mode: "allow-residual",
+    });
+    expect(allow.ok).toBe(true);
+  });
+
   test("explicit mode is the only mode source (plan-metadata findings_cleanup mirror deleted)", () => {
     const result = gated(entry({ decision: "accept" }), { mode: "zero-residual" });
     expect(violationsOf(result)).toContain("findings.zero-residual-open-fixable");
@@ -677,9 +739,9 @@ describe("findingsCleanupGate — project register input (v3 relocation)", () =>
   });
 });
 
-describe("techDebtRollup — project register aggregation (v3 relocation)", () => {
-  /** Write `projects/<id>/residuals.json` with one entry per plan-id key. */
-  function writeRegister(projectDir: string, projectId: string, entries: Record<string, unknown>): void {
+describe("techDebtRollup — project register aggregation (v3 relocation, QC wave-1 W-E array schema)", () => {
+  /** Write `projects/<id>/residuals.json` with an ARRAY of entries per plan-id key. */
+  function writeRegister(projectDir: string, projectId: string, entries: Record<string, unknown[]>): void {
     const dir = join(projectDir, projectId);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "residuals.json"), JSON.stringify({ entries }, null, 2), "utf8");
@@ -689,11 +751,11 @@ describe("techDebtRollup — project register aggregation (v3 relocation)", () =
     const dir = tmpRoot("status-rollup-register-");
     try {
       writeRegister(dir, "_default", {
-        "plan-a": entry({ id: "R1", severity: "warning", target: "V1.0" }),
-        "plan-b": entry({ id: "R2", severity: null, target: "V1.1" }),
-        "plan-c": entry({ id: "R3", severity: "", target: "V1.0" }),
-        "plan-d": entry({ id: "R4", severity: "low", target: null }),
-        "plan-e": entry({ id: "R5", severity: "medium", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" }),
+        "plan-a": [entry({ id: "R1", severity: "warning", target: "V1.0" })],
+        "plan-b": [entry({ id: "R2", severity: null, target: "V1.1" })],
+        "plan-c": [entry({ id: "R3", severity: "", target: "V1.0" })],
+        "plan-d": [entry({ id: "R4", severity: "low", target: null })],
+        "plan-e": [entry({ id: "R5", severity: "medium", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" })],
       });
       const rollup = techDebtRollup(dir);
       expect(rollup.computed).toEqual({
@@ -707,11 +769,33 @@ describe("techDebtRollup — project register aggregation (v3 relocation)", () =
     }
   });
 
+  test("every open entry of a plan counts (array schema — multi-residual plans aggregate per plan)", () => {
+    const dir = tmpRoot("status-rollup-multi-");
+    try {
+      writeRegister(dir, "_default", {
+        "plan-a": [
+          entry({ id: "R1", severity: "low", target: "V1.0" }),
+          entry({ id: "R2", severity: "high", target: "V1.0" }),
+          entry({ id: "R3", severity: "low", lifecycle: "resolved", closed_at: "2026-08-07", closure_note: "x" }),
+        ],
+      });
+      const rollup = techDebtRollup(dir);
+      expect(rollup.computed).toEqual({
+        total_open: 2,
+        by_severity: { critical: 0, high: 1, medium: 0, low: 1, nit: 0 },
+        by_target: { "V1.0": 2 },
+        by_plan: { "plan-a": 2 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("aggregates across multiple project registers (by_plan keyed by plan id)", () => {
     const dir = tmpRoot("status-rollup-multiproj-");
     try {
-      writeRegister(dir, "_default", { "plan-a": entry({ id: "R1", severity: "low" }) });
-      writeRegister(dir, "acme", { "plan-b": entry({ id: "R2", severity: "high" }) });
+      writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low" })] });
+      writeRegister(dir, "acme", { "plan-b": [entry({ id: "R2", severity: "high" })] });
       const rollup = techDebtRollup(dir);
       expect(rollup.computed.total_open).toBe(2);
       expect(rollup.computed.by_plan).toEqual({ "plan-a": 1, "plan-b": 1 });
@@ -743,7 +827,7 @@ describe("techDebtRollup — project register aggregation (v3 relocation)", () =
     // (compile-compat for the P2 CLI cutover) and always report DRIFT.
     const dir = tmpRoot("status-rollup-drift-");
     try {
-      writeRegister(dir, "_default", { "plan-a": entry() });
+      writeRegister(dir, "_default", { "plan-a": [entry()] });
       const rollup = techDebtRollup(dir);
       expect(rollup.stored).toBeNull();
       expect(rollup.checks.map((c) => c.status)).toEqual(["DRIFT", "DRIFT", "DRIFT", "DRIFT"]);
@@ -756,7 +840,7 @@ describe("techDebtRollup — project register aggregation (v3 relocation)", () =
   test("entry lifecycle: false counts as OPEN (jq `//` defaults false)", () => {
     const dir = tmpRoot("status-rollup-false-");
     try {
-      writeRegister(dir, "_default", { "plan-a": entry({ id: "R1", severity: "low", target: "V1", lifecycle: false }) });
+      writeRegister(dir, "_default", { "plan-a": [entry({ id: "R1", severity: "low", target: "V1", lifecycle: false })] });
       const rollup = techDebtRollup(dir);
       expect(rollup.computed.total_open).toBe(1);
     } finally {

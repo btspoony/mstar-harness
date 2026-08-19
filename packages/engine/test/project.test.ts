@@ -97,19 +97,21 @@ function residualEntry(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
-/** Valid project register fixture — entries keyed by plan id. */
+/** Valid project register fixture — entries keyed by plan id, each value an ARRAY (QC wave-1 W-E). */
 function registerDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     entries: {
-      "20260819-workflow-engine-core": residualEntry(),
-      "20260808-slice1-engine-foundation": residualEntry({
-        id: "R-2",
-        severity: "low",
-        source_plan: "20260808-slice1-engine-foundation",
-        lifecycle: "resolved",
-        closed_at: "2026-08-08",
-        closure_note: "resolved by the v3 engine core slice",
-      }),
+      "20260819-workflow-engine-core": [residualEntry()],
+      "20260808-slice1-engine-foundation": [
+        residualEntry({
+          id: "R-2",
+          severity: "low",
+          source_plan: "20260808-slice1-engine-foundation",
+          lifecycle: "resolved",
+          closed_at: "2026-08-08",
+          closure_note: "resolved by the v3 engine core slice",
+        }),
+      ],
     },
     ...overrides,
   };
@@ -377,25 +379,25 @@ describe("validateProjectRegister — register entries keyed by plan-id (plan Ta
 
   test("an empty plan-id key is rejected", () => {
     expectViolations(
-      validateProjectRegister({ entries: { "": residualEntry() } }),
+      validateProjectRegister({ entries: { "": [residualEntry()] } }),
       "project.register.invalid-key",
     );
   });
 
   test("entry severity enum is preserved verbatim via validateResidual (no copy)", () => {
     const bad = registerDoc({
-      entries: { "20260819-workflow-engine-core": residualEntry({ severity: "warning" }) },
+      entries: { "20260819-workflow-engine-core": [residualEntry({ severity: "warning" })] },
     });
     expectViolations(validateProjectRegister(bad), "status.residual.legacy-warning");
 
     const unknown = registerDoc({
-      entries: { "20260819-workflow-engine-core": residualEntry({ severity: "blocker" }) },
+      entries: { "20260819-workflow-engine-core": [residualEntry({ severity: "blocker" })] },
     });
     expectViolations(validateProjectRegister(unknown), "status.residual.invalid-severity");
 
     const missing = registerDoc({
       entries: {
-        "20260819-workflow-engine-core": residualEntry({ severity: undefined }),
+        "20260819-workflow-engine-core": [residualEntry({ severity: undefined })],
       },
     });
     expectViolations(validateProjectRegister(missing), "status.residual.missing-severity");
@@ -404,25 +406,27 @@ describe("validateProjectRegister — register entries keyed by plan-id (plan Ta
   test("entry lifecycle semantics are preserved verbatim (closed requires closed_at + closure_note)", () => {
     const closedMissingNote = registerDoc({
       entries: {
-        "20260819-workflow-engine-core": residualEntry({
-          lifecycle: "resolved",
-          closed_at: "2026-08-19",
-          closure_note: undefined,
-        }),
+        "20260819-workflow-engine-core": [
+          residualEntry({
+            lifecycle: "resolved",
+            closed_at: "2026-08-19",
+            closure_note: undefined,
+          }),
+        ],
       },
     });
     expectViolations(validateProjectRegister(closedMissingNote), "status.residual.closed-missing-closure-note");
 
     const closedMissingDate = registerDoc({
       entries: {
-        "20260819-workflow-engine-core": residualEntry({ lifecycle: "resolved" }),
+        "20260819-workflow-engine-core": [residualEntry({ lifecycle: "resolved" })],
       },
     });
     expectViolations(validateProjectRegister(closedMissingDate), "status.residual.closed-missing-closed-at");
 
     const badLifecycle = registerDoc({
       entries: {
-        "20260819-workflow-engine-core": residualEntry({ lifecycle: "archived" }),
+        "20260819-workflow-engine-core": [residualEntry({ lifecycle: "archived" })],
       },
     });
     expectViolations(validateProjectRegister(badLifecycle), "status.residual.invalid-lifecycle");
@@ -431,13 +435,13 @@ describe("validateProjectRegister — register entries keyed by plan-id (plan Ta
   test("source_plan is required and must be a non-empty string", () => {
     const noSource = registerDoc({
       entries: {
-        "20260819-workflow-engine-core": residualEntry({ source_plan: undefined }),
+        "20260819-workflow-engine-core": [residualEntry({ source_plan: undefined })],
       },
     });
     expectViolations(validateProjectRegister(noSource), "project.register.missing-source-plan");
 
     const badSource = registerDoc({
-      entries: { "20260819-workflow-engine-core": residualEntry({ source_plan: "" }) },
+      entries: { "20260819-workflow-engine-core": [residualEntry({ source_plan: "" })] },
     });
     expectViolations(validateProjectRegister(badSource), "project.register.invalid-source-plan");
   });
@@ -445,20 +449,20 @@ describe("validateProjectRegister — register entries keyed by plan-id (plan Ta
   test("registered_at is required and must be YYYY-MM-DD", () => {
     const noDate = registerDoc({
       entries: {
-        "20260819-workflow-engine-core": residualEntry({ registered_at: undefined }),
+        "20260819-workflow-engine-core": [residualEntry({ registered_at: undefined })],
       },
     });
     expectViolations(validateProjectRegister(noDate), "project.register.missing-registered-at");
 
     const badDate = registerDoc({
-      entries: { "20260819-workflow-engine-core": residualEntry({ registered_at: "2026-08" }) },
+      entries: { "20260819-workflow-engine-core": [residualEntry({ registered_at: "2026-08" })] },
     });
     expectViolations(validateProjectRegister(badDate), "project.register.invalid-registered-at");
   });
 
   test("source_plan must match its entries key (register keyed by plan id)", () => {
     const mismatched = registerDoc({
-      entries: { "20260819-workflow-engine-core": residualEntry({ source_plan: "20260808-slice1-engine-foundation" }) },
+      entries: { "20260819-workflow-engine-core": [residualEntry({ source_plan: "20260808-slice1-engine-foundation" })] },
     });
     expectViolations(validateProjectRegister(mismatched), "project.register.mismatched-source-plan");
   });
@@ -466,22 +470,56 @@ describe("validateProjectRegister — register entries keyed by plan-id (plan Ta
   test("lifecycle_id is optional and must be a non-empty string", () => {
     const withLifecycle = registerDoc({
       entries: {
-        "20260819-workflow-engine-core": residualEntry({ lifecycle_id: "20260819-workflow-engine-core" }),
+        "20260819-workflow-engine-core": [residualEntry({ lifecycle_id: "20260819-workflow-engine-core" })],
       },
     });
     expect(validateProjectRegister(withLifecycle).ok).toBe(true);
 
     const badLifecycleId = registerDoc({
-      entries: { "20260819-workflow-engine-core": residualEntry({ lifecycle_id: 7 }) },
+      entries: { "20260819-workflow-engine-core": [residualEntry({ lifecycle_id: 7 })] },
     });
     expectViolations(validateProjectRegister(badLifecycleId), "project.register.invalid-lifecycle-id");
   });
 
-  test("a register entry that is not an object is rejected", () => {
+  test("entries values must be arrays (QC wave-1 W-E array schema)", () => {
+    const single = registerDoc({
+      entries: { "20260819-workflow-engine-core": residualEntry() },
+    });
+    expectViolations(validateProjectRegister(single), "project.register.invalid-entry-list");
+
+    const nonArray = registerDoc({
+      entries: { "20260819-workflow-engine-core": "nope" },
+    });
+    expectViolations(validateProjectRegister(nonArray), "project.register.invalid-entry-list");
+  });
+
+  test("a register entry that is not an object is rejected (inside the array)", () => {
     expectViolations(
-      validateProjectRegister({ entries: { "20260819-workflow-engine-core": "nope" } }),
+      validateProjectRegister({ entries: { "20260819-workflow-engine-core": ["nope"] } }),
       "status.residual.invalid",
     );
+  });
+
+  test("a plan key may hold multiple entries (v1 multi-finding semantics preserved)", () => {
+    const multi = registerDoc({
+      entries: {
+        "20260819-workflow-engine-core": [
+          residualEntry({ id: "R-1" }),
+          residualEntry({ id: "R-2", severity: "high", decision: "risk-accepted" }),
+        ],
+      },
+    });
+    expect(validateProjectRegister(multi).ok).toBe(true);
+    // A bad entry anywhere in the array is caught.
+    const badSecond = registerDoc({
+      entries: {
+        "20260819-workflow-engine-core": [
+          residualEntry({ id: "R-1" }),
+          residualEntry({ id: "R-2", severity: "blocker" }),
+        ],
+      },
+    });
+    expectViolations(validateProjectRegister(badSecond), "status.residual.invalid-severity");
   });
 });
 

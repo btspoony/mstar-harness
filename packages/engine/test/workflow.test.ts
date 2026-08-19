@@ -136,6 +136,13 @@ describe("validateWorkflowSnapshot — schema basics", () => {
     );
   });
 
+  test("top-level version is rejected — reserved for the root-file discriminator (QC wave-1 S-a)", () => {
+    expectViolations(
+      validateWorkflowSnapshot(validSnapshot({ version: 2 })),
+      "workflow.snapshot.reserved-version",
+    );
+  });
+
   test("id is required and must be a non-empty string", () => {
     const { id: _dropped, ...noId } = validSnapshot();
     expectViolations(validateWorkflowSnapshot(noId), "workflow.snapshot.missing-id");

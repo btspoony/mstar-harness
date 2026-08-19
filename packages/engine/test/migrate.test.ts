@@ -26,10 +26,10 @@
  *   project roadmap; `harness_root` dropped with a legacy note; all other
  *   root-metadata keys -> `legacy_metadata` (nothing dropped silently).
  * - Residuals: open `residual_findings` -> `projects/_default/residuals.json`
- *   (keyed by plan id, `source_plan`/`registered_at` provenance); the
- *   register holds ONE entry per plan key — multi-entry plans keep the
- *   first (by residual id) and record the skip in `migration_notes[]`.
- *   Archived residuals are never lifted.
+ *   (keyed by plan id, each value an ARRAY of ALL open entries with
+ *   `source_plan`/`registered_at` provenance — QC wave-1 W-E: v1
+ *   multi-finding semantics preserved verbatim, nothing collapsed or
+ *   skipped). Archived residuals are never lifted.
  * - Notes: per-plan `notes` ARRAYS -> `workflows/<id>/notes.jsonl` initial
  *   entries; string `notes` stay on the row (not lifted).
  * - Ordering/idempotence: additive-first steps; root v2 replacement LAST
@@ -37,11 +37,12 @@
  *   dry-run -> steps only, zero writes.
  */
 import { describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readJson, writeJson } from "../src/core.js";
 import { parseCompassFrontmatterText } from "../src/iteration.js";
+import { withStatusWriteLock } from "../src/lease.js";
 import {
   ARCHIVED_STATUS_V1_FILE,
   applyMigratePlan,
@@ -49,8 +50,8 @@ import {
   type MigratePlan,
 } from "../src/migrate.js";
 import { validateProjectRegister } from "../src/project.js";
-import { validateStatusV2 } from "../src/status.js";
-import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "../src/workflow.js";
+import { registerWorkflow, validateStatusV2 } from "../src/status.js";
+import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot, writeWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures", "migrate-real");
 
@@ -502,11 +503,12 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
       const plan = migrateHarnessTree(root);
       const v1Before = readJson(join(root, "status.json"));
 
-      // Poison one snapshot (invalid id) so the apply fails mid-loop.
+      // Poison one snapshot (invalid id) so the apply fails mid-loop (the
+      // writer's own validation fails closed — no apply-loop gate).
       const poisoned = structuredClone(plan) as MigratePlan;
       poisoned.snapshots[3]!.data.id = "";
 
-      await expect(applyMigratePlan(poisoned)).rejects.toThrow(/invalid snapshot/);
+      await expect(applyMigratePlan(poisoned)).rejects.toThrow(/invalid workflow snapshot/);
 
       // Root still v1 — the failed run is recoverable by re-running.
       expect(readJson(join(root, "status.json"))).toEqual(v1Before);
@@ -563,8 +565,9 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
 describe("residual lift + status-mapping fixture (derived from the real tree)", () => {
   /** Real fixture + synthetic standalone rows (Todo/InProgress/Blocked) + a
    * non-empty residual_findings map covering: single-entry plan (iteration-
-   * grouped -> lifecycle_id), multi-entry plan (collapse -> migration_notes),
-   * closed entries (never lifted), and empty arrays (skipped). */
+   * grouped -> lifecycle_id), multi-entry plan (ALL open residuals kept,
+   * sorted by id — QC wave-1 W-E array schema), closed entries (never
+   * lifted), and empty arrays (skipped). */
   function mappedTree(): string {
     const root = fixtureTree();
     const statusPath = join(root, "status.json");
@@ -636,7 +639,7 @@ describe("residual lift + status-mapping fixture (derived from the real tree)", 
     }
   });
 
-  test("open residuals lift into projects/_default/residuals.json keyed by plan id with provenance", async () => {
+  test("open residuals lift into projects/_default/residuals.json keyed by plan id with provenance (QC wave-1 W-E: arrays)", async () => {
     const root = mappedTree();
     try {
       const plan = migrateHarnessTree(root);
@@ -646,19 +649,24 @@ describe("residual lift + status-mapping fixture (derived from the real tree)", 
       expect(Object.keys(register.data.entries)).toEqual(["20260728-zero-residual", "20260814-dsh-fallbacks-integration"]);
 
       const grouped = register.data.entries["20260814-dsh-fallbacks-integration"]!;
-      expect(grouped.source_plan).toBe("20260814-dsh-fallbacks-integration");
-      expect(grouped.registered_at).toBe("2026-08-19");
-      expect(grouped.lifecycle_id).toBe("iter-20260814-fallbacks-integration");
-      expect(grouped.id).toBe("R1");
+      expect(grouped).toHaveLength(1);
+      expect(grouped[0]!.source_plan).toBe("20260814-dsh-fallbacks-integration");
+      expect(grouped[0]!.registered_at).toBe("2026-08-19");
+      expect(grouped[0]!.lifecycle_id).toBe("iter-20260814-fallbacks-integration");
+      expect(grouped[0]!.id).toBe("R1");
 
-      // Multi-entry plan: first by residual id kept, skip recorded, closed entries never lifted.
-      const collapsed = register.data.entries["20260728-zero-residual"]!;
-      expect(collapsed.id).toBe("R1");
-      expect(register.data.migration_notes).toEqual([
-        "20260728-zero-residual: 2 open residuals share one register key (register is keyed by plan id); kept R1, skipped R2",
-      ]);
-      expect(plan.migrationNotes).toContain(register.data.migration_notes[0]!);
-      expect(collapsed.lifecycle_id).toBeUndefined(); // standalone plan
+      // Multi-entry plan: ALL open residuals are kept (v1 multi-finding
+      // semantics preserved verbatim — sorted by residual id, closed entries
+      // never lifted, nothing skipped, no collapse migration_notes).
+      const multi = register.data.entries["20260728-zero-residual"]!;
+      expect(multi.map((e) => e.id)).toEqual(["R1", "R2"]);
+      for (const entry of multi) {
+        expect(entry.source_plan).toBe("20260728-zero-residual");
+        expect(entry.registered_at).toBe("2026-08-19");
+        expect(entry.lifecycle_id).toBeUndefined(); // standalone plan
+      }
+      expect(register.data.migration_notes).toBeUndefined();
+      expect(plan.migrationNotes).not.toContain("share one register key");
 
       expect(validateProjectRegister(register.data).ok).toBe(true);
 
@@ -666,6 +674,7 @@ describe("residual lift + status-mapping fixture (derived from the real tree)", 
       expect(result.applied).toBe(true);
       const onDisk = readJson(join(root, "projects", "_default", "residuals.json"));
       expect(onDisk).toEqual(register.data);
+      expect(validateProjectRegister(onDisk).ok).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -709,6 +718,204 @@ describe("residual lift + status-mapping fixture (derived from the real tree)", 
         "20260728-zero-residual",
         "20260814-dsh-fallbacks-integration",
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("QC wave-1 — migrate path-safety and duplicate-id guards (W-B / S-b)", () => {
+  test("a plans[] row id that traverses out of the harness dir refuses to migrate", () => {
+    const root = fixtureTree();
+    try {
+      const doc = readJson(join(root, "status.json"));
+      (doc.plans as Record<string, unknown>[]).push({
+        id: "../../../tmp/evil",
+        title: "evil",
+        file: ".mstar/plans/evil.md",
+        status: "Done",
+      });
+      writeJson(join(root, "status.json"), doc);
+      expect(() => migrateHarnessTree(root)).toThrow(/safe path component/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a compass iteration_id that traverses refuses to migrate", () => {
+    const root = fixtureTree();
+    try {
+      mkdirSync(join(root, "iterations", "evil"), { recursive: true });
+      writeFileSync(
+        join(root, "iterations", "evil", "delivery-compass.md"),
+        "---\niteration_id: ../../evil\nstatus: active\nplans: []\n---\n# Delivery Compass\n",
+        "utf8",
+      );
+      expect(() => migrateHarnessTree(root)).toThrow(/safe path component/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unsafe projectId option refuses to migrate (register/roadmap stay inside the harness)", () => {
+    const root = fixtureTree();
+    try {
+      expect(() => migrateHarnessTree(root, { projectId: "../evil" })).toThrow(/safe path component/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("duplicate v1 plan ids refuse to migrate (fail-loud, no silent drop/overwrite)", () => {
+    const root = fixtureTree();
+    try {
+      const doc = readJson(join(root, "status.json"));
+      const plans = doc.plans as Record<string, unknown>[];
+      plans.push({ ...plans[0]! });
+      writeJson(join(root, "status.json"), doc);
+      expect(() => migrateHarnessTree(root)).toThrow(/duplicate plan id/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("apply refuses a hand-built plan whose destination escapes the harness dir (boundary enforcement)", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      const escaped = structuredClone(plan) as MigratePlan;
+      escaped.notesFiles = [{ file: "../../../tmp/evil-notes.jsonl", source: "crafted", lines: [] }];
+      await expect(applyMigratePlan(escaped)).rejects.toThrow(/escapes the harness dir/);
+      // No partial writes happened before the guard.
+      expect(existsSync(join(root, "../../../tmp/evil-notes.jsonl"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("QC wave-1 — roadmap frontmatter safety (S-d)", () => {
+  test("a title with line breaks is sanitized for the flat-subset frontmatter parse", () => {
+    const root = fixtureTree();
+    try {
+      const doc = readJson(join(root, "status.json"));
+      (doc.metadata as Record<string, unknown>).program_roadmap = {
+        title: "line one\nline two: colon",
+        slices: ["s1"],
+      };
+      writeJson(join(root, "status.json"), doc);
+      const plan = migrateHarnessTree(root);
+      expect(plan.roadmap).not.toBeNull();
+      const content = plan.roadmap!.content;
+      const frontmatter = parseCompassFrontmatterText(content, "roadmap.md");
+      expect(frontmatter.title).toBe("line one line two: colon");
+      expect(plan.migrationNotes.join(" ")).toContain("sanitized");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("QC wave-1 — migration commit point under the root write lock (W-A)", () => {
+  test("the root v2 replacement is serialized by withStatusWriteLock (never a bare writeJson)", async () => {
+    const root = fixtureTree();
+    try {
+      const statusPath = join(root, "status.json");
+      const plan = migrateHarnessTree(root);
+      const applyPromise = applyMigratePlan(plan);
+      let applySettledWhileLockHeld = false;
+      void applyPromise.then(
+        () => {
+          applySettledWhileLockHeld = true;
+        },
+        () => {
+          applySettledWhileLockHeld = true;
+        },
+      );
+      await withStatusWriteLock(statusPath, async () => {
+        // Genuine delay required (integration test): the engine's
+        // cross-process lockdir polling cannot be driven with deterministic
+        // timers, and the apply must get a chance to reach its commit point.
+        await Bun.sleep(250);
+        // Root must NOT be replaced while a third party holds the root lock,
+        // and the apply must still be pending at its commit point: the fixed
+        // code waits; the pre-fix bare writeJson settles and clobbers here.
+        const statusDoc = readJson(statusPath) as { version?: unknown };
+        expect(statusDoc.version).toBe(1);
+        expect(applySettledWhileLockHeld).toBe(false);
+      });
+      const result = await applyPromise;
+      expect(result.applied).toBe(true);
+      const statusDoc = readJson(statusPath) as { version?: unknown };
+      expect(statusDoc.version).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a concurrent registerWorkflow is never lost to the migration commit point", async () => {
+    const root = fixtureTree();
+    try {
+      const statusPath = join(root, "status.json");
+      // A registerable entry needs its snapshot present and non-terminal
+      // (removal-at-terminal invariant).
+      await writeWorkflowSnapshot(
+        {
+          schema_version: 1,
+          id: "plan-race",
+          type: "plan",
+          status: "running",
+          started_at: "2026-08-19T08:00:00Z",
+          updated_at: "2026-08-19",
+          plans: [],
+        },
+        join(root, "workflows", "plan-race"),
+      );
+      const plan = migrateHarnessTree(root);
+      const applyPromise = applyMigratePlan(plan);
+      // The first register races the in-flight apply: while the root is
+      // still v1 it is refused (migration hint) — that is expected. The
+      // register then completes against the committed v2 root, and must
+      // survive (the commit point is serialized with it).
+      const entry = {
+        id: "plan-race",
+        type: "plan" as const,
+        started_at: "2026-08-19T08:00:00Z",
+        dir: "workflows/plan-race",
+      };
+      const first = await registerWorkflow(statusPath, entry).catch((error: unknown) => error);
+      const applyResult = await applyPromise;
+      expect(applyResult.applied).toBe(true);
+      let registeredDoc;
+      if (first instanceof Error) {
+        expect(first.message).toContain("workflows must be an array");
+        registeredDoc = await registerWorkflow(statusPath, entry);
+      } else {
+        registeredDoc = first;
+      }
+      expect(registeredDoc.version).toBe(2);
+      const finalDoc = readJson(statusPath) as { version: number; workflows?: Array<{ id: string }> };
+      expect(finalDoc.version).toBe(2);
+      expect(finalDoc.workflows?.map((w) => w.id)).toContain("plan-race");
+      expect(validateStatusV2(statusPath).ok).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a stale apply re-checks version under the lock and no-ops instead of clobbering", async () => {
+    const root = fixtureTree();
+    try {
+      const statusPath = join(root, "status.json");
+      const plan = migrateHarnessTree(root);
+      await applyMigratePlan(plan); // first migrate commits
+      // The same plan object re-applied after a concurrent commit: the
+      // pre-check is stale, but the locked re-check turns it into a no-op.
+      const second = await applyMigratePlan(plan);
+      expect(second.applied).toBe(false);
+      expect(second.message).toContain("no-op");
+      const statusDoc = readJson(statusPath) as { version?: unknown };
+      expect(statusDoc.version).toBe(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

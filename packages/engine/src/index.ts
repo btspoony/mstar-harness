@@ -48,24 +48,18 @@ export {
   validateGitignore,
 } from "./path.js";
 export type {
-  FindingsCleanupMode,
   PlanRow,
   ResidualEntry,
   StatusDoc,
   StatusV2Doc,
-  TechDebtCheck,
-  TechDebtRollup,
-  TechDebtSummary,
   WorkflowEntry,
 } from "./status.js";
 export {
-  findingsCleanupGate,
   normalizeSeverity,
   registerWorkflow,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
-  techDebtRollup,
   unregisterWorkflow,
   validatePlanRow,
   validateResidual,
@@ -182,17 +176,23 @@ export {
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
+  FindingsCleanupMode,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
   RoadmapFrontmatter,
   RoadmapStatus,
   RoadmapValidation,
+  TechDebtCheck,
+  TechDebtRollup,
+  TechDebtSummary,
 } from "./project.js";
 export {
   PROJECT_REGISTER_FILE,
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
+  findingsCleanupGate,
+  techDebtRollup,
   validateProjectRegister,
   validateRoadmap,
 } from "./project.js";

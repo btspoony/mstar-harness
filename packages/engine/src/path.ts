@@ -313,6 +313,11 @@ function resolveHarnessSubdir(
  * A `.mstarc` `[config] workflow_dir` declaration wins (resolved against
  * the config file's directory). The dir need not exist — writers
  * (`writeWorkflowSnapshot` / register paths) create it on demand.
+ *
+ * Deferred-by-design (qc1 S-3): the startDir-first signature is asymmetric
+ * with the harnessDir-first sibling resolvers — brief-mandated for the CLI
+ * consumer (it probes from the cwd). Revisit with a harness-dir-first
+ * variant when a third v3 subdir resolver appears.
  */
 export function resolveWorkflowDir(
   startDir: string = process.cwd(),
@@ -325,7 +330,8 @@ export function resolveWorkflowDir(
  * Resolve `{PROJECT_DIR}` — default `{HARNESS_DIR}/projects/` (v3 project
  * layer: roadmap.md + residuals register per project id). A `.mstarc`
  * `[config] project_dir` declaration wins (resolved against the config
- * file's directory).
+ * file's directory). Same deferred-by-design signature asymmetry as
+ * `resolveWorkflowDir` (qc1 S-3).
  */
 export function resolveProjectDir(
   startDir: string = process.cwd(),

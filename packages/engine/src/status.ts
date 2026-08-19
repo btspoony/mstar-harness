@@ -1,7 +1,13 @@
 /**
  * Engine status module — status.json schema validation, residual severity
- * normalization, residual lifecycle (open → archived), findings-cleanup gate,
- * and the `metadata.tech_debt_summary` rollup.
+ * normalization, residual lifecycle (open → archived), and the root-file
+ * v2 writers.
+ *
+ * QC wave-1 W-D relocation: `findingsCleanupGate` and `techDebtRollup`
+ * moved to `project.ts` (they operate on project-register artifacts) —
+ * this module no longer imports `./project.js`, breaking the former
+ * `status.ts ↔ project.ts` module cycle. Public names remain exported via
+ * the package index (`index.ts`).
  *
  * Spec sources (each export cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`:
@@ -20,24 +26,19 @@
  *   `plan_id`/`schema_version`/`entries[]` with `archived_at`, remove from
  *   open list, update root `updated_at`), § General constraints ("Empty
  *   `plan-id` key: … delete the key … no `"plan-id": []`").
- * - Findings cleanup modes: § Findings cleanup modes — `zero-residual`
- *   (fixable findings must not be open R#; `nit` never open; `waived`/
- *   `risk-accepted` close/archive; only blocker-defers — `decision: defer` +
- *   `target` — may stay open) vs `allow-residual` (open ok when no unresolved
- *   Critical remains); mode mirror `plans[].metadata.findings_cleanup`.
- * - Rollup aggregates + drift check (total_open / by_severity / by_target /
- *   by_plan; PASS/DRIFT vs stored `metadata.tech_debt_summary`):
- *   § `metadata.tech_debt_summary` (optional rollup) — canonical compute is
- *   `techDebtRollup` (CLI form: `mstar status tech-debt [path]`).
+ * - v2 root + migration detection: v1-shaped documents — root `plans[]` OR
+ *   root `residual_findings` (QC wave-1 W-C: v1-disguise hole) — fail
+ *   closed with `status.migration-required` even when `version: 2`.
+ * - Rollup aggregates: canonical compute is `techDebtRollup` in `project.ts`
+ *   (CLI form: `mstar status tech-debt [path]`).
  */
-import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readJson, writeJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
-import { PROJECT_REGISTER_FILE, type ProjectRegisterDoc } from "./project.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
 // from this module): neither module dereferences the other's bindings during
 // module evaluation, so the ESM live-binding cycle is safe.
@@ -114,43 +115,12 @@ export type PlanRow = {
   [key: string]: unknown;
 };
 
-/** Findings cleanup policy mirror of Assignment `Findings cleanup`. */
-export type FindingsCleanupMode = "zero-residual" | "allow-residual";
-
-/** Computed rollup aggregates (jq semantics). */
-export type TechDebtSummary = {
-  total_open: number;
-  by_severity: Record<string, number>;
-  by_target: Record<string, number>;
-  by_plan: Record<string, number>;
-};
-
-export type TechDebtCheck = {
-  field: "total_open" | "by_severity" | "by_target" | "by_plan";
-  status: "PASS" | "DRIFT";
-};
-
-/**
- * Result of the project-register rollup. `stored`/`checks`/`overall` are
- * retained for export-surface compatibility (the P2 CLI cutover): the v1
- * stored-summary drift check (`metadata.tech_debt_summary`) is deleted in
- * the v3 cutover — the project register is the source of truth, so `stored`
- * is always null and every check reports DRIFT.
- */
-export type TechDebtRollup = {
-  computed: TechDebtSummary;
-  stored: Record<string, unknown> | null;
-  checks: TechDebtCheck[];
-  overall: "PASS" | "DRIFT";
-};
-
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"] as const;
 const RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"] as const;
 const RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"] as const;
 const RESIDUAL_REQUIRED_FIELDS = ["id", "title", "severity", "source", "scope", "decision", "owner", "target", "tracking"] as const;
-const ROLLUP_FIELDS = ["total_open", "by_severity", "by_target", "by_plan"] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -541,6 +511,24 @@ export function validateStatusV2(
       ],
     };
   }
+  // QC wave-1 W-C: the v1-disguise check covers `plans[]` AND the other v1
+  // root surface — `residual_findings` (keyed by plan id, arrays of
+  // entries). A `version: 2` doc carrying it is stale v1 data masquerading
+  // as migrated (the v2 root holds `workflows[]` only); presence of the key
+  // at all — even `{}` — is v1-shaped (v1 init template), so fail closed.
+  if (doc.residual_findings !== undefined) {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "status.migration-required",
+          "v1-shaped status.json (root residual_findings) is not a v2 document \u2014 run `mstar migrate` to convert the tree",
+          "run `mstar migrate`",
+        ),
+      ],
+    };
+  }
 
   const violations: ValidationResult[] = [];
 
@@ -610,6 +598,27 @@ export function validateStatusV2(
           ),
         );
       }
+      // QC wave-1 S-c: the root entry denormalizes `type`/`started_at` from
+      // the snapshot — cross-check them when the harness dir is known so a
+      // stale root copy cannot drift silently from its snapshot.
+      if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
+        violations.push(
+          violation(
+            "medium",
+            "status.workflow.mismatched-type",
+            `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} \u2014 the root entry mirrors the snapshot; align them`,
+          ),
+        );
+      }
+      if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
+        violations.push(
+          violation(
+            "medium",
+            "status.workflow.mismatched-started-at",
+            `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} \u2014 the root entry mirrors the snapshot; align them`,
+          ),
+        );
+      }
     }
   }
 
@@ -647,6 +656,10 @@ export async function registerWorkflow(root: string, entry: WorkflowEntry): Prom
   const statusPath = resolve(root);
   const harnessDir = dirname(statusPath);
   return withStatusWriteLock(statusPath, () => {
+    // simplify: full-doc validation (incl. per-snapshot reads of the whole
+    // active set) under the root lock is O(active workflows) per root write.
+    // Realistic active-set size is 1–3 (microseconds); correctness-preserving.
+    // Upgrade path: scope the on-disk invariant to the touched entry (qc3 S-002).
     const current = readJson(statusPath) as Record<string, unknown>;
     const fresh = Object.keys(current).length === 0;
     const doc: StatusV2Doc = fresh
@@ -689,6 +702,7 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
   const statusPath = resolve(root);
   const harnessDir = dirname(statusPath);
   return withStatusWriteLock(statusPath, () => {
+    // simplify: same O(active) full-doc validation as registerWorkflow (qc3 S-002).
     const current = readJson(statusPath) as Record<string, unknown>;
     if (Object.keys(current).length === 0) {
       // Nothing to remove — return the empty v2 shape without touching the file.
@@ -713,82 +727,6 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
     writeJson(statusPath, doc as unknown as Record<string, unknown>);
     return doc;
   });
-}
-
-/**
- * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
- * v3 relocation — the input is the project register
- * `projects/<id>/residuals.json`, one entry per plan-id key, and the plan id
- * links the register entry to the snapshot's plan row).
- * `zero-residual`: only true blocker-defers (`decision: defer` + non-empty
- * `target`) may stay open — fixable findings, `nit`s, and waived/
- * risk-accepted entries are violations. `allow-residual` (default): open
- * residuals are fine unless an unresolved Critical remains. Mode resolution:
- * explicit `opts.mode` → `allow-residual` (the v1
- * `plans[].metadata.findings_cleanup` mirror is deleted — no dual-track).
- */
-export function findingsCleanupGate(
-  register: ProjectRegisterDoc,
-  planId: string,
-  opts?: { mode?: FindingsCleanupMode },
-): GateResult {
-  const mode = opts?.mode ?? "allow-residual";
-  const violations: ValidationResult[] = [];
-  const entry = isPlainObject(register.entries) ? register.entries[planId] : undefined;
-  if (entry === undefined) {
-    // No register entry for this plan → no open residuals; the gate passes.
-    return { ok: true, violations };
-  }
-
-  const id = typeof entry.id === "string" ? entry.id : "<unnamed>";
-  const label = `R#${id}`;
-  if (mode === "zero-residual") {
-    if (entry.severity === "nit") {
-      violations.push(
-        violation(
-          "medium",
-          "findings.zero-residual-nit",
-          `${label}: style-only nits must be fixed in-session or dropped \u2014 never left open under zero-residual`,
-        ),
-      );
-    } else if (entry.decision === "risk-accepted" || entry.lifecycle === "waived") {
-      violations.push(
-        violation(
-          "medium",
-          "findings.zero-residual-risk-accepted",
-          `${label}: waived/risk-accepted findings must be closed/archived, not left open under zero-residual`,
-        ),
-      );
-    } else if (entry.decision === "defer") {
-      if (typeof entry.target !== "string" || entry.target.trim() === "") {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-defer-no-target",
-            `${label}: blocker-defer requires a target (next iteration/milestone) under zero-residual`,
-          ),
-        );
-      }
-    } else {
-      violations.push(
-        violation(
-          "medium",
-          "findings.zero-residual-open-fixable",
-          `${label}: fixable finding must not remain open under zero-residual \u2014 fix now or convert to a blocker-defer`,
-        ),
-      );
-    }
-  } else if (normalizeSeverity(entry.severity) === "critical") {
-    violations.push(
-      violation(
-        "high",
-        "findings.allow-residual-critical",
-        `${label}: unresolved critical blocks Approve with residuals`,
-      ),
-    );
-  }
-
-  return { ok: violations.length === 0, violations };
 }
 
 /**
@@ -869,75 +807,4 @@ export function resolveRepoEnforcement(harnessDir: string): EnforcementFlag {
   const rc = resolveMstarcEnforcement(harnessDir);
   if (rc.source !== "none") return rc;
   return resolveCompassEnforcement(harnessDir);
-}
-
-/** Count values into a string-keyed map, keys sorted ascending (jq group_by order for strings). */
-function groupCount(values: unknown[]): Record<string, number> {
-  const counts = new Map<string, number>();
-  for (const value of values) {
-    // jq group_by sorts by element value; TS map keys are strings — equivalent
-    // for string targets (the fixture contract); mixed numbers would differ.
-    const key = typeof value === "string" ? value : String(value);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return Object.fromEntries([...counts.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-}
-
-/**
- * Compute the tech-debt rollup over the project registers (v3 relocation —
- * status-and-residuals.md § `metadata.tech_debt_summary` semantics preserved
- * at the project layer): `total_open` / `by_severity` / `by_target` /
- * `by_plan` over open entries of every `projects/<id>/residuals.json`
- * register under `projectDir` (legacy `"warning"` → `low`, `null`/`""` →
- * `medium`; closed entries skipped; missing `target` groups under
- * `"unspecified"`; `by_plan` keyed by plan id — the snapshot plan linkage).
- *
- * The v1 stored-summary drift check (`metadata.tech_debt_summary`) is a v1
- * dead path — the register is the source of truth, so `stored` is always
- * null and the retained `checks`/`overall` fields report DRIFT
- * (export-surface compatibility until the P2 CLI cutover). Does not write
- * anything.
- */
-export function techDebtRollup(projectDir: string): TechDebtRollup {
-  const items: Array<{ plan: string; entry: Record<string, unknown> }> = [];
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(projectDir, { withFileTypes: true });
-  } catch {
-    entries = [];
-  }
-  for (const project of entries) {
-    if (!project.isDirectory()) continue;
-    const registerPath = join(projectDir, project.name, PROJECT_REGISTER_FILE);
-    if (!existsSync(registerPath)) continue;
-    let register: unknown;
-    try {
-      register = readJson(registerPath);
-    } catch {
-      continue; // malformed register files are skipped — the register validator is the schema gate
-    }
-    if (!isPlainObject(register) || !isPlainObject(register.entries)) continue;
-    for (const [plan, entry] of Object.entries(register.entries)) {
-      if (!isPlainObject(entry) || !isOpenResidual(entry)) continue;
-      items.push({ plan, entry });
-    }
-  }
-
-  const bySeverity: Record<string, number> = {};
-  for (const severity of SEVERITY_ORDER) {
-    bySeverity[severity] = items.filter(({ entry }) => normalizeSeverity(entry.severity) === severity).length;
-  }
-
-  const computed: TechDebtSummary = {
-    total_open: items.length,
-    by_severity: bySeverity,
-    by_target: groupCount(items.map(({ entry }) => entry.target ?? "unspecified")),
-    by_plan: groupCount(items.map(({ plan }) => plan)),
-  };
-
-  const stored = null;
-  const checks: TechDebtCheck[] = ROLLUP_FIELDS.map((field) => ({ field, status: "DRIFT" as const }));
-  const overall = "DRIFT" as const;
-
-  return { computed, stored, checks, overall };
 }

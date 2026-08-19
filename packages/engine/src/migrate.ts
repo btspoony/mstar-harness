@@ -39,17 +39,17 @@
  *   unknown root-metadata keys land in the active snapshot
  *   `legacy_metadata` — nothing dropped silently.
  * - **Residuals:** open `residual_findings` entries ->
- *   `projects/<id>/residuals.json` (entries keyed by plan id,
- *   `source_plan`/`registered_at` provenance added). The register holds ONE
- *   entry per plan id (the `findingsCleanupGate` contract); a plan with
- *   multiple open residuals keeps the first (sorted by residual id) and the
- *   skipped ids are recorded in the register doc `migration_notes[]` —
- *   never a silent drop. `archived/residuals/*.json` are legacy history —
- *   NOT lifted.
+ *   `projects/<id>/residuals.json` (entries keyed by plan id, each value an
+ *   ARRAY — v1 `residual_findings[plan-id]` multi-finding semantics
+ *   preserved verbatim; `source_plan`/`registered_at` provenance added per
+ *   entry; `lifecycle_id` added when the plan groups into an iteration).
+ *   No entry is ever collapsed or skipped (QC wave-1 W-E).
+ *   `archived/residuals/*.json` are legacy history — NOT lifted.
  * - **Notes:** per-plan `notes` ARRAYS -> `workflows/<id>/notes.jsonl`
  *   initial entries (one JSON line per note; string-typed `notes` stay on
  *   the row verbatim and are not lifted). Standalone Todo rows add a
- *   generated not-started note line.
+ *   generated not-started note line. SSOT: the ledger is the runtime log;
+ *   row `notes` is the legacy verbatim copy (see workflow.ts snapshot docs).
  * - **Ordering & idempotence:** apply steps are additive-first (archive
  *   copy, workflow dirs, project register, roadmap); the root v2
  *   replacement (`version: 2`, `updated_at`, empty `workflows[]` until
@@ -59,13 +59,20 @@
  *   step list (source -> destination) and apply zero writes.
  *
  * No fs writes happen outside the harness dir: every destination is
- * harness-relative. All timestamps derive from legacy data (deterministic,
- * no clock reads).
+ * harness-relative — enforced at the planner boundary (QC wave-1 W-B):
+ * every lifecycle id that becomes a path segment (v1 row `id`/`plan_id`,
+ * compass `iteration_id`, `opts.projectId`) must pass
+ * `assertSafePathComponent` or the plan is refused BEFORE any step list is
+ * produced. Duplicate v1 plan ids are likewise refused fail-loud (qc3
+ * S-001) — every row must land in exactly one snapshot. All timestamps
+ * derive from legacy data (deterministic, no clock reads).
  */
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { readJson, writeJson, type GateResult } from "./core.js";
+import { dirname, join, resolve, sep } from "node:path";
+import { readJson, writeJson } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
+import { withStatusWriteLock } from "./lease.js";
+import { assertSafePathComponent } from "./path.js";
 import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister, type ProjectRegisterDoc, type ProjectRegisterEntry } from "./project.js";
 import {
   isOpenResidual,
@@ -75,7 +82,6 @@ import {
 } from "./status.js";
 import {
   WORKFLOW_SNAPSHOT_FILE,
-  validateWorkflowSnapshot,
   writeWorkflowSnapshot,
   type WorkflowLifecycleStatus,
   type WorkflowLifecycleType,
@@ -489,16 +495,20 @@ function buildRoadmap(programRoadmap: Record<string, unknown>, projectId: string
   return lines.join("\n");
 }
 
-/** Build the project register from v1 `residual_findings` (open entries only). */
+/**
+ * Build the project register from v1 `residual_findings` (open entries
+ * only). QC wave-1 W-E: entries are keyed by plan id, each value an ARRAY
+ * of ALL open residuals of that plan (v1 `residual_findings[plan-id]`
+ * multi-finding semantics preserved verbatim — no collapse, no skip, no
+ * `migration_notes`).
+ */
 function buildRegister(
   residualFindings: Record<string, unknown>,
   byPlan: Map<string, CompassInfo>,
   projectId: string,
   migratedAt: string,
-  migrationNotes: string[],
 ): MigrateRegister | null {
-  const entries: Record<string, ProjectRegisterEntry> = {};
-  const collapseNotes: string[] = [];
+  const entries: Record<string, ProjectRegisterEntry[]> = {};
   const planKeys = Object.keys(residualFindings).sort();
   for (const planId of planKeys) {
     const raw = residualFindings[planId];
@@ -512,24 +522,15 @@ function buildRegister(
       });
     if (open.length === 0) continue;
     const owner = byPlan.get(planId);
-    entries[planId] = {
-      ...open[0],
+    entries[planId] = open.map((entry) => ({
+      ...entry,
       source_plan: planId,
       registered_at: migratedAt,
       ...(owner !== undefined ? { lifecycle_id: owner.id } : {}),
-    };
-    if (open.length > 1) {
-      const kept = typeof open[0].id === "string" ? open[0].id : "<unnamed>";
-      const skipped = open.slice(1).map((entry) => (typeof entry.id === "string" ? entry.id : "<unnamed>")).join(", ");
-      collapseNotes.push(
-        `${planId}: ${open.length} open residuals share one register key (register is keyed by plan id); kept ${kept}, skipped ${skipped}`,
-      );
-    }
+    }));
   }
   if (Object.keys(entries).length === 0) return null;
-  migrationNotes.push(...collapseNotes);
   const doc: ProjectRegisterDoc = { entries };
-  if (collapseNotes.length > 0) doc.migration_notes = collapseNotes;
   return {
     file: join("projects", projectId, PROJECT_REGISTER_FILE),
     source: "status.json residual_findings",
@@ -617,10 +618,31 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 
   const rows = Array.isArray(legacy.plans) ? legacy.plans.filter(isPlainObject) : [];
   if (Array.isArray(legacy.plans)) {
-    const unLiftable = legacy.plans.filter((row) => !isPlainObject(row) || rowIdOf(row) === null);
+    // Fail-loud lift guards (QC wave-1 W-B / qc3 S-001): every row must
+    // land in exactly one snapshot — a row without id/plan_id is
+    // unliftable, an id that is not a single safe path component could
+    // traverse out of the harness dir (it becomes `workflows/<id>/…`),
+    // and duplicate ids would silently drop/overwrite a sibling row.
+    const unLiftable: unknown[] = [];
+    const idCounts = new Map<string, number>();
+    for (const row of legacy.plans) {
+      if (!isPlainObject(row) || rowIdOf(row) === null) {
+        unLiftable.push(row);
+        continue;
+      }
+      const id = rowIdOf(row)!;
+      assertSafePathComponent(id, "plan id");
+      idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
+    }
     if (unLiftable.length > 0) {
       throw new Error(
         `refusing to migrate: ${unLiftable.length} plans[] row(s) cannot be lifted (missing id/plan_id or not an object) \u2014 every v1 row must land in exactly one snapshot`,
+      );
+    }
+    const duplicates = [...idCounts.entries()].filter(([, count]) => count > 1).map(([id]) => id);
+    if (duplicates.length > 0) {
+      throw new Error(
+        `refusing to migrate: ${duplicates.length} duplicate plan id(s) (${duplicates.join(", ")}) \u2014 every v1 row must land in exactly one snapshot`,
       );
     }
   }
@@ -631,6 +653,13 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 
   const migrationNotes: string[] = [];
   const compasses = scanCompasses(harnessDir);
+  // QC wave-1 W-B: compass iteration ids become `workflows/<id>/…` path
+  // segments (and `compass_ref` values) — refuse unsafe ids fail-loud.
+  for (const compass of compasses) {
+    assertSafePathComponent(compass.id, "iteration id");
+  }
+  // QC wave-1 W-B: the project id becomes `projects/<id>/…` segments.
+  assertSafePathComponent(projectId, "projectId");
   const { byPlan, rowById } = groupRows(rows, compasses);
 
   // 1. Iteration snapshots (every canonical compass; zero-plan compasses
@@ -645,6 +674,10 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
   snapshots.sort((a, b) => compareIds(a.id, b.id));
 
   // 3. Root-metadata lift -> the active iteration snapshot (v3.0.0 today).
+  // Lift-target rule (qc wave-1 S-g, documented): sorted-first by snapshot
+  // id — deterministic, but arbitrary when 2+ iterations run concurrently;
+  // revisit with a locked-compass preference when the multi-active case
+  // becomes real.
   const activeIterations = snapshots.filter((snapshot) => snapshot.status === "running" && snapshot.type === "iteration");
   if (activeIterations.length > 0) {
     applyRootMetadataLift(activeIterations[0]!, metadata, migrationNotes, activeIterations.length);
@@ -657,19 +690,29 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
   // 4. Notes ledgers (row notes arrays + not-started notes).
   const notesFiles = collectNotesFiles(snapshots);
 
-  // 5. Project register (open residual_findings only).
+  // 5. Project register (open residual_findings only; all open entries per
+  // plan — v1 multi-finding semantics, no collapse).
   const residualFindings = isPlainObject(legacy.residual_findings) ? legacy.residual_findings : {};
-  const register = buildRegister(residualFindings, byPlan, projectId, migratedAt, migrationNotes);
+  const register = buildRegister(residualFindings, byPlan, projectId, migratedAt);
 
-  // 6. Roadmap seeds.
+  // 6. Roadmap seeds (QC wave-1 S-d: the frontmatter title is sanitized —
+  //    line breaks would break the flat-subset YAML parse).
   const programRoadmap = isPlainObject(metadata.program_roadmap) ? metadata.program_roadmap : null;
-  const roadmap: MigrateRoadmap | null = programRoadmap
-    ? {
-        file: join("projects", projectId, PROJECT_ROADMAP_FILE),
-        source: "status.json metadata.program_roadmap",
-        content: buildRoadmap(programRoadmap, projectId, migratedAt),
-      }
-    : null;
+  let roadmap: MigrateRoadmap | null = null;
+  if (programRoadmap) {
+    const rawTitle = typeof programRoadmap.title === "string" && programRoadmap.title !== "" ? programRoadmap.title : "Program roadmap";
+    const sanitizedTitle = rawTitle.replace(/[\r\n]+/g, " ").trim();
+    if (sanitizedTitle !== rawTitle) {
+      migrationNotes.push(
+        `roadmap title sanitized for frontmatter (line breaks replaced with spaces): ${JSON.stringify(rawTitle)}`,
+      );
+    }
+    roadmap = {
+      file: join("projects", projectId, PROJECT_ROADMAP_FILE),
+      source: "status.json metadata.program_roadmap",
+      content: buildRoadmap({ ...programRoadmap, title: sanitizedTitle }, projectId, migratedAt),
+    };
+  }
 
   // 7. Root v2 replacement (commit point; workflows[] empty until re-registered).
   const rootV2: MigrateRootV2 = {
@@ -731,19 +774,39 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
     return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
   }
 
+  // QC wave-1 W-B (defense-in-depth at the write boundary): the planner
+  // already refuses unsafe ids via assertSafePathComponent, but apply is a
+  // public API — re-enforce the module invariant ("no fs writes outside the
+  // harness dir") on every planned destination so a hand-built plan can
+  // never escape `plan.root`.
+  const harnessRoot = resolve(plan.root);
+  const allDestinations = [
+    plan.archive.file,
+    ...plan.snapshots.map((snapshot) => snapshot.file),
+    ...plan.notesFiles.map((notes) => notes.file),
+    ...(plan.register !== null ? [plan.register.file] : []),
+    ...(plan.roadmap !== null ? [plan.roadmap.file] : []),
+  ];
+  for (const destination of allDestinations) {
+    const resolvedDest = resolve(join(plan.root, destination));
+    if (resolvedDest !== harnessRoot && !resolvedDest.startsWith(`${harnessRoot}${sep}`)) {
+      throw new Error(
+        `refusing to apply migration: destination escapes the harness dir (${JSON.stringify(destination)}) \u2014 every write must stay under ${JSON.stringify(plan.root)}`,
+      );
+    }
+  }
+
   // 1. Archive the v1 root BEFORE anything else touches it (never deleted
   //    without that copy).
   mkdirSync(join(plan.root, dirname(plan.archive.file)), { recursive: true });
   copyFileSync(statusPath, join(plan.root, plan.archive.file));
 
-  // 2. Workflow snapshots (validated whole-rewrite writer; additive).
+  // 2. Workflow snapshots (additive). Validation happens inside
+  // writeWorkflowSnapshot — the writer fails closed before any write, so
+  // there is no apply-loop gate (qc wave-1 S-h: writer validation is
+  // authoritative; a pre-write gate here would run the same O(rows) pass
+  // twice per snapshot).
   for (const snapshot of plan.snapshots) {
-    const gate: GateResult = validateWorkflowSnapshot(snapshot.data);
-    if (!gate.ok) {
-      throw new Error(
-        `refusing to apply migration: invalid snapshot ${JSON.stringify(snapshot.id)}: ${gate.violations.map((v) => v.message).join("; ")}`,
-      );
-    }
     await writeWorkflowSnapshot(snapshot.data, join(plan.root, dirname(snapshot.file)));
   }
 
@@ -775,15 +838,29 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
     writeFileSync(filePath, plan.roadmap.content, "utf8");
   }
 
-  // 6. Root v2 replacement — the COMMIT POINT (last step).
+  // 6. Root v2 replacement — the COMMIT POINT (last step), serialized with
+  // the root writers (`registerWorkflow`/`unregisterWorkflow`) under the
+  // root-file `withStatusWriteLock` (qc wave-1 W-A: a bare writeJson here
+  // could clobber a concurrent register that landed after the pre-check
+  // below). The version re-check INSIDE the lock turns a stale plan (a
+  // concurrent migrate committed first) into a no-op instead of an
+  // overwrite of a root that may already hold registered workflows.
   const rootGate = validateStatusV2(plan.rootV2.data, { harnessDir: plan.root });
   if (!rootGate.ok) {
     throw new Error(`refusing to apply migration: invalid v2 root: ${rootGate.violations.map((v) => v.message).join("; ")}`);
   }
-  writeJson(statusPath, plan.rootV2.data as unknown as Record<string, unknown>);
-
-  return {
-    applied: true,
-    message: `migrated ${plan.snapshots.length} lifecycles into workflows/, project layer seeded, root status.json replaced (v1 archived to ${plan.archive.file})`,
-  };
+  return withStatusWriteLock(statusPath, () => {
+    const latest = readJson(statusPath) as { version?: unknown };
+    if (latest.version === 2) {
+      return {
+        applied: false,
+        message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do",
+      };
+    }
+    writeJson(statusPath, plan.rootV2.data as unknown as Record<string, unknown>);
+    return {
+      applied: true,
+      message: `migrated ${plan.snapshots.length} lifecycles into workflows/, project layer seeded, root status.json replaced (v1 archived to ${plan.archive.file})`,
+    };
+  });
 }

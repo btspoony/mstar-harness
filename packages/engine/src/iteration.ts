@@ -51,6 +51,13 @@ const INDEX_HEADER = "| Iteration | Path | Description | Status |";
  * All fields are `unknown` because documents come from JSON at runtime;
  * validators narrow them. `plans[]` rows are the legacy PlanRow shape
  * verbatim (plan Task 2) — `findPlanRow` accepts `id` or `plan_id`.
+ *
+ * Deliberate decoupling (qc wave-1 S-f): this is a loose LOCAL re-declaration,
+ * NOT an import of `WorkflowSnapshot` from workflow.ts. This module only
+ * reads `plans[].status`; importing the full schema would add a module edge
+ * to workflow.ts (which imports status.ts, which workflow.ts cycles back
+ * through — the call-time-safe loop family stays static-edge-free this
+ * way). Keep this shape in sync manually when the snapshot schema changes.
  */
 export type SnapshotDoc = {
   plans?: unknown;
