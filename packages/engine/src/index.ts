@@ -179,9 +179,25 @@ export {
   assertIndexRowObligations,
   evaluatePhaseGate,
   parseCompassFrontmatter,
+  parseCompassFrontmatterText,
   pushCadenceProbe,
   validateCompassFrontmatter,
 } from "./iteration.js";
+export type {
+  ProjectRegisterDoc,
+  ProjectRegisterEntry,
+  RoadmapFrontmatter,
+  RoadmapStatus,
+  RoadmapValidation,
+} from "./project.js";
+export {
+  PROJECT_REGISTER_FILE,
+  PROJECT_ROADMAP_FILE,
+  ROADMAP_STATUSES,
+  _DEFAULT_PROJECT,
+  validateProjectRegister,
+  validateRoadmap,
+} from "./project.js";
 export type {
   CompletenessItem,
   CompletenessLevel,

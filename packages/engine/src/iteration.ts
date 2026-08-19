@@ -634,13 +634,24 @@ export function assertIndexRowObligations(iterationsDir: string): GateResult {
  * iteration-compass-template.md` Fields guide); `validateCompassFrontmatter`
  * validates the parsed doc. The engine deliberately has no YAML dependency,
  * so this hand-rolled flat-subset parser lives here — the single shared
- * parser used by the CLI and the omp `mstar_iteration_gate` tool (no fork).
+ * parser used by the CLI, the omp `mstar_iteration_gate` tool, and the
+ * roadmap validator (no fork). Path wrapper over
+ * `parseCompassFrontmatterText`.
  *
  * Throws with the file path on structural errors (no fence / unterminated
  * fence / unsupported line) so callers can fail with a precise message.
  */
 export function parseCompassFrontmatter(filePath: string): Record<string, unknown> {
-  const content = readFileSync(filePath, "utf8");
+  return parseCompassFrontmatterText(readFileSync(filePath, "utf8"), filePath);
+}
+
+/**
+ * Parse flat-subset YAML frontmatter from raw file content — the single
+ * shared parser core behind `parseCompassFrontmatter` (path wrapper) and
+ * the roadmap validator (plan `20260819-workflow-engine-core.md` Task 4 —
+ * extract/reuse the same parsing, no fork).
+ */
+export function parseCompassFrontmatterText(content: string, filePath: string): Record<string, unknown> {
   const lines = content.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") {
     throw new Error(`no YAML frontmatter fence in ${filePath} (expected first line "---")`);
