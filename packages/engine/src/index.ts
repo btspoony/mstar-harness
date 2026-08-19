@@ -36,6 +36,7 @@ export {
   emitGitignoreSnippet,
   resolveHarnessDir,
   resolveIterationDir,
+  resolveKnowledgeDir,
   resolvePlanDir,
   resolveSddDir,
   resolveSpecsDir,

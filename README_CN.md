@@ -201,7 +201,7 @@ flowchart TD
 | `mstar-host` | 宿主适配（dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex） |
 | `pm` | `/pm` / `/skill:pm` / 宿主 PM 入口 |
 
-消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。harness 根非默认名的仓库可在 gitignored 的 **`.mstarc`** 中声明（`[config] harness_dir=<dir>`，优先于探测）。细则 → `mstar-plan-conventions`。
+消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。布局非默认的仓库可在 gitignored 的 **`.mstarc`** 中声明全部 harness 目录符号（`[config]` 键 `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir`，优先于探测）。细则 → `mstar-plan-conventions`。
 
 维护者：[`AGENTS.md`](AGENTS.md)。
 

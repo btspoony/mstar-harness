@@ -47,11 +47,17 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 ```ini
 [config]
 harness_dir=.custom_dir
+plan_dir=planning
+sdd_dir=process/sdd
+iteration_dir=process/iterations
+knowledge_dir=knowledge
+specs_dir=specs/custom
 ```
 
-- `#` / `;` 注释；`[section]` 头；`key=value`（去空白）。仅读 `[config]` 段的 `harness_dir`，未知键忽略（向前兼容）。
-- `harness_dir` 相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold）。
-- 优先级：显式 override > `.mstarc` > 探测。非默认 harness 根的仓库写一个 `.mstarc` 即可程序化解目录问题，无需逐宿主设置 env / config。
+- `#` / `;` 注释；`[section]` 头；`key=value`（去空白）。仅读 `[config]` 段，未知键忽略（向前兼容）。
+- 目录键：`harness_dir`（`{HARNESS_DIR}`）、`plan_dir`（`{PLAN_DIR}`）、`sdd_dir`（`{SDD_DIR}` 的 per-plan 基目录，`<plan-id>` 仍会追加）、`iteration_dir`（`{ITERATION_DIR}`）、`knowledge_dir`（`{KNOWLEDGE_DIR}`）、`specs_dir`（`{SPECS_DIR}`，**权威**——声明后不再走候选链）。全部相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold）。
+- 子目录键由 engine `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` 读取：从 harness 目录与其父目录（仓库根，`.mstarc` 的文档化位置）向上找最近配置文件。
+- 优先级：显式 override > `.mstarc` > 探测。非默认布局的仓库写一个 `.mstarc` 即可程序化解目录问题，无需逐宿主设置 env / config。
 
 ### `{SPECS_DIR}` 解析（找到非空目录即停）
 

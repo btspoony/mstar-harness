@@ -15,6 +15,26 @@ function tmpRoot(prefix: string): string {
 }
 
 describe("parseMstarc — minimal INI subset ([config] harness_dir)", () => {
+  test("parses every harness directory symbol key", () => {
+    const text = [
+      "[config]",
+      "harness_dir=.custom_dir",
+      "plan_dir=planning",
+      "sdd_dir=process/sdd",
+      "iteration_dir=process/iterations",
+      "knowledge_dir=knowledge",
+      "specs_dir=specs/custom",
+    ].join("\n");
+    expect(parseMstarc(text)).toEqual({
+      harnessDir: ".custom_dir",
+      planDir: "planning",
+      sddDir: "process/sdd",
+      iterationDir: "process/iterations",
+      knowledgeDir: "knowledge",
+      specsDir: "specs/custom",
+    });
+  });
+
   test("parses the canonical [config] harness_dir form", () => {
     expect(parseMstarc("[config]\nharness_dir=.custom_dir\n")).toEqual({ harnessDir: ".custom_dir" });
   });

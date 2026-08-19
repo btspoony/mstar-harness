@@ -31,7 +31,7 @@ import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readJson, writeJson, type ValidationResult } from "./core.js";
-import { findMstarc, parseMstarc } from "./mstarc.js";
+import { loadMstarc, type MstarcConfig } from "./mstarc.js";
 
 /**
  * Options for `resolveHarnessDir`.
@@ -85,11 +85,8 @@ export function resolveHarnessDir(
   const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
   if (explicit) return resolve(start, explicit);
   const boundary = resolve(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
-  const rc = findMstarc(start, boundary);
-  if (rc !== null) {
-    const { harnessDir } = parseMstarc(readFileSync(rc, "utf8"));
-    if (harnessDir) return resolve(dirname(rc), harnessDir);
-  }
+  const rc = loadMstarc(start, boundary);
+  if (rc !== null && rc.config.harnessDir) return resolve(rc.dir, rc.config.harnessDir);
   let dir = start;
   for (;;) {
     // Stop boundary: never probe a harness dir above the workspace root.
@@ -147,6 +144,21 @@ function isAtOrBelow(dir: string, root: string): boolean {
 }
 
 /**
+ * `.mstarc` sub-directory override for the `{X}_DIR` resolvers: the
+ * nearest config at the harness dir or its parent (the repo root — the
+ * documented `.mstarc` home) wins; the walk never goes above the harness
+ * dir's parent, so an unrelated config further up is never adopted.
+ * Returns the declared value resolved against the config file's directory,
+ * or `null` when no config / no declaration exists.
+ */
+function mstarcDirOverride(harnessDir: string, key: keyof MstarcConfig): string | null {
+  const dir = resolve(harnessDir);
+  const rc = loadMstarc(dir, dirname(dir));
+  const declared = rc?.config[key];
+  return declared ? resolve(rc.dir, declared) : null;
+}
+
+/**
  * Options for `resolveSpecsDir`.
  */
 export type ResolveSpecsDirOptions = {
@@ -159,16 +171,25 @@ export type ResolveSpecsDirOptions = {
 };
 
 /**
- * Resolve `{SPECS_DIR}` per plan-conventions § {SPECS_DIR} 解析: first
- * non-empty candidate wins — `{HARNESS_DIR}/specs/` → `docs/specs/` →
- * repo-root `specs/` (repo root = parent of the harness dir), then the
- * legacy read-only `designs/` candidates (`{HARNESS_DIR}/designs/` →
- * repo-root `designs/`, § {SPECS_DIR} 解析 Legacy — 兼容读 only, never
- * created by init). A candidate that exists but holds no files is treated
- * as absent (empty-dir rule, recursive). When all candidates are absent,
- * `{HARNESS_DIR}/specs/` is created and returned (unless `create: false`).
+ * Resolve `{SPECS_DIR}` per plan-conventions § {SPECS_DIR} 解析: a
+ * `.mstarc` `[config] specs_dir` declaration is authoritative — returned
+ * directly (resolved against the config file's directory; created when
+ * `create` is not false; no candidate chain, no empty-dir rule). Otherwise
+ * the first non-empty candidate wins — `{HARNESS_DIR}/specs/` →
+ * `docs/specs/` → repo-root `specs/` (repo root = parent of the harness
+ * dir), then the legacy read-only `designs/` candidates
+ * (`{HARNESS_DIR}/designs/` → repo-root `designs/`, § {SPECS_DIR} 解析
+ * Legacy — 兼容读 only, never created by init). A candidate that exists
+ * but holds no files is treated as absent (empty-dir rule, recursive).
+ * When all candidates are absent, `{HARNESS_DIR}/specs/` is created and
+ * returned (unless `create: false`).
  */
 export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions = {}): string {
+  const declared = mstarcDirOverride(harnessDir, "specsDir");
+  if (declared !== null) {
+    if (opts.create !== false) mkdirSync(declared, { recursive: true });
+    return declared;
+  }
   const harness = resolve(harnessDir);
   const repoRoot = dirname(harness);
   const candidates = [
@@ -190,11 +211,14 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
 
 /**
  * Compose `{PLAN_DIR}` from the harness dir (plan-conventions § 路径符号).
- * Legacy layout: when the harness root is a plans dir itself (`.plans/` or
- * `plans/`, resolution rung 3), `{HARNESS_DIR}={PLAN_DIR}` — the same
- * directory is returned.
+ * A `.mstarc` `[config] plan_dir` declaration wins (resolved against the
+ * config file's directory). Legacy layout: when the harness root is a plans
+ * dir itself (`.plans/` or `plans/`, resolution rung 3),
+ * `{HARNESS_DIR}={PLAN_DIR}` — the same directory is returned.
  */
 export function resolvePlanDir(harnessDir: string): string {
+  const declared = mstarcDirOverride(harnessDir, "planDir");
+  if (declared !== null) return declared;
   const dir = resolve(harnessDir);
   const name = basename(dir);
   if (name === ".plans" || name === "plans") return dir;
@@ -218,21 +242,40 @@ export function assertSafePathComponent(value: string, what: string): void {
 
 /**
  * Compose `{SDD_DIR}` = `{HARNESS_DIR}/sdd/<plan-id>/` (plan-conventions
- * § 路径符号). The per-plan directory is created by the sdd workspace flow,
- * not here. `planId` must be a single safe path component (traversal
- * guard) — see `assertSafePathComponent`.
+ * § 路径符号). A `.mstarc` `[config] sdd_dir` declaration replaces the
+ * `sdd` base (the `<plan-id>` segment is still appended). The per-plan
+ * directory is created by the sdd workspace flow, not here. `planId` must
+ * be a single safe path component (traversal guard) — see
+ * `assertSafePathComponent`.
  */
 export function resolveSddDir(harnessDir: string, planId: string): string {
   assertSafePathComponent(planId, "planId");
-  return join(resolve(harnessDir), "sdd", planId);
+  const base = resolve(harnessDir);
+  const declared = mstarcDirOverride(base, "sddDir");
+  const sddBase = declared !== null ? declared : join(base, "sdd");
+  return join(sddBase, planId);
 }
 
 /**
  * Compose `{ITERATION_DIR}` = `{HARNESS_DIR}/iterations/` (plan-conventions
- * § 路径符号).
+ * § 路径符号). A `.mstarc` `[config] iteration_dir` declaration wins
+ * (resolved against the config file's directory).
  */
 export function resolveIterationDir(harnessDir: string): string {
+  const declared = mstarcDirOverride(harnessDir, "iterationDir");
+  if (declared !== null) return declared;
   return join(resolve(harnessDir), "iterations");
+}
+
+/**
+ * Compose `{KNOWLEDGE_DIR}` = `{HARNESS_DIR}/knowledge/` (plan-conventions
+ * § 路径符号). A `.mstarc` `[config] knowledge_dir` declaration wins
+ * (resolved against the config file's directory).
+ */
+export function resolveKnowledgeDir(harnessDir: string): string {
+  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
+  if (declared !== null) return declared;
+  return join(resolve(harnessDir), "knowledge");
 }
 
 /**
