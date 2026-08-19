@@ -57,7 +57,7 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 ## Delivery Branch Policy
 
-> Mirror of frontmatter; keep in sync with `{HARNESS_DIR}/status.json` `metadata`.
+> Mirror of frontmatter; keep in sync with workflow snapshot `{WORKFLOW_DIR}/<id>/snapshot.json` `branch` anchors.
 
 | Field | Value |
 |-------|-------|
@@ -83,7 +83,7 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 ## Quality Gate Summary
 
-> Filled at iteration-close. Human summary only; per-plan gate details stay in each main plan, and open residual SSOT stays in `{HARNESS_DIR}/status.json`.
+> Filled at iteration-close. Human summary only; per-plan gate details stay in each main plan, and open residual SSOT stays in `{PROJECT_DIR}/<id>/residuals.json`.
 
 | plan_id | QC decision | QA gate | Residuals | Durable summary |
 |---------|-------------|---------|-----------|-----------------|
@@ -92,7 +92,7 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 Notes:
 
 - Raw review bundle: `{SDD_DIR}/review/` (ephemeral; do not rely on it after Done).
-- Open residual SSOT: `{HARNESS_DIR}/status.json` root `residual_findings[<plan-id>]`.
+- Open residual SSOT: `{PROJECT_DIR}/<id>/residuals.json` `entries[<plan-id>]` (default `{HARNESS_DIR}/projects/<id>/`).
 
 ## Compound Round Summary
 

@@ -15,13 +15,13 @@ Kimi **Plan mode** (`EnterPlanMode` / `ExitPlanMode`, `/plan`, or `Shift-Tab`) u
 
 | Step | Kimi session | Harness SSOT |
 |------|--------------|--------------|
-| Enter | `EnterPlanMode` or `/plan on` — explore read-only | Ensure `{HARNESS_DIR}` exists; register `plan_id` in `status.json` when known |
+| Enter | `EnterPlanMode` or `/plan on` — explore read-only | Ensure `{HARNESS_DIR}` exists; register the root `workflows[]` entry + snapshot plan row when known |
 | Design | Edit Kimi plan file with `Write` / `Edit` (when Plan mode allows writes) | Mirror main plan to `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes |
 | Clarify | `AskUserQuestion` for blocking ambiguity only | Record decisions in plan / spec when durable |
-| Exit | `ExitPlanMode` — user approves plan to implement | SSOT plan locked; `status.json` row updated |
+| Exit | `ExitPlanMode` — user approves plan to implement | SSOT plan locked; snapshot plan row updated |
 | Implement | Agent mode resumes | Per-task commits, Working branch, dispatch per `mstar-dispatch-gates` |
 
-`TodoList` and Kimi UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and `status.json` when coordination requires it.
+`TodoList` and Kimi UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and the workflow snapshot (`{WORKFLOW_DIR}/<id>/snapshot.json` → `plans[]`) when coordination requires it.
 
 ## ExitPlanMode gate
 

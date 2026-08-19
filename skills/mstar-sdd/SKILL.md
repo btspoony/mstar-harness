@@ -41,7 +41,7 @@ Batch all findings for the human in one message. If clean, proceed silently.
 ## Per-task loop (PM only · Workflow)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
-2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<control_worktree_path>` 或 `mstar sdd workspace <plan-id> <control_worktree_path>`；缺 status.json 的 linked worktree 会 fail closed）
+2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<control_worktree_path>` 或 `mstar sdd workspace <plan-id> <control_worktree_path>`；probe 以 v2 根 `status.json`（`workflows[]`）或 workflow snapshot 存在为准，linked worktree 缺文件会 fail closed）
 3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
     - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
@@ -49,7 +49,7 @@ Batch all findings for the human in one message. If clean, proceed silently.
 5. On `DONE`: `mstar sdd review-package BASE HEAD` → diff file
 6. Dispatch **fresh** task reviewer — role **`code-reviewer`** (L2; **not** `qc-specialist*`; host fallback generic + C5b → `mstar-host` C5) — brief, report, diff, Global Constraints — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
 7. Fix loop for Critical/Important; re-review until approved
-8. Append `progress.md`; update `status.json` `task_commits[]` and `implementer-session.json` `last_task` if sticky
+8. Append `progress.md`; update the workflow snapshot plan row (`workflows/<id>/snapshot.json` → `plans[]`) `task_commits[]` and `implementer-session.json` `last_task` if sticky
 9. Next task
 
 **Never** dispatch multiple implementers in parallel (write conflicts).

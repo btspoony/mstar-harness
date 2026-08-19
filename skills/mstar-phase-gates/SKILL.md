@@ -74,12 +74,12 @@ per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 
 
 per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。
 
-> **Engine check (when available):** run `mstar iteration gate --status <status.json> --compass <delivery-compass.md>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` in a host hook) to evaluate the iteration phase-transition gate (Phase 2 → 3 → 4) when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` in a host hook) to evaluate the iteration phase-transition gate (Phase 2 → 3 → 4) against the workflow snapshot when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Plan 目录与审查证据（启用 `{PLAN_DIR}` 时）
 
-- 进入 `InReview` 后，QC/QA 原始过程报告默认落入 `{SDD_DIR}/review/`（**SDD 默认 tri** `qc1`…`qc-consolidated`；**inline** 单席 `qc.md`）。**fix 后默认 targeted re-review**。SDD per-task review 在 implement 波次内完成（`mstar-sdd` task reviewer）。PM 将 durable gate summary 回写主 plan / `status.json`，而不是把 raw reports 作为默认 git 产物。
-- 非阻断项与后续技术债：PM 汇总后写入 `{HARNESS_DIR}/status.json` 根级 `residual_findings[<plan-id>]`（**open**，与 `plans` 平级；canonical 见 **`mstar-plan-artifacts` SKILL.md**）；关闭后迁入 `{HARNESS_DIR}/archived/residuals/<plan-id>.json`，与 `mstar-review-qc` 一致。每条 **`severity`** 遵守 **`mstar-plan-artifacts/references/status-and-residuals.md`**「Residual findings：severity（SSOT，机器字段）」。
+- 进入 `InReview` 后，QC/QA 原始过程报告默认落入 `{SDD_DIR}/review/`（**SDD 默认 tri** `qc1`…`qc-consolidated`；**inline** 单席 `qc.md`）。**fix 后默认 targeted re-review**。SDD per-task review 在 implement 波次内完成（`mstar-sdd` task reviewer）。PM 将 durable gate summary 回写主 plan / workflow snapshot，而不是把 raw reports 作为默认 git 产物。
+- 非阻断项与后续技术债：PM 汇总后写入 project register `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan-id>]`（**open**，默认 `{HARNESS_DIR}/projects/<id>/`；canonical 见 **`mstar-plan-artifacts` SKILL.md**）；关闭时在 register 内 **in place** 置 `lifecycle` / `closed_at` / `closure_note`，与 `mstar-review-qc` 一致。每条 **`severity`** 遵守 **`mstar-plan-artifacts/references/status-and-residuals.md`**「Residual findings：severity（SSOT，机器字段）」。
 
 ## 快速判定（PM）
 

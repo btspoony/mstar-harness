@@ -79,7 +79,7 @@ When blocking issues are fixed but non-blocking warnings/suggestions remain:
 
 - Must register residual findings (do not leave as chat-only).
 - Severity enum must follow `mstar-plan-artifacts` SSOT.
-- Canonical store: `{HARNESS_DIR}/status.json` -> root `residual_findings[<plan-id>]`.
+- Canonical store: `{PROJECT_DIR}/<id>/residuals.json` (default `{HARNESS_DIR}/projects/<id>/`; project-less flows `_default`) -> `entries[<plan-id>]`.
 - Required durable gate summary in main plan should list R# ids and decisions, but never replace canonical entries.
 
 Each residual record should include:
@@ -88,12 +88,12 @@ Each residual record should include:
 
 `Approve with residuals` is only valid when no unresolved blocking items remain (and under `zero-residual`, only when leftovers are blocker-defers).
 
-## Residual Closure & Archive
+## Residual Closure
 
 After a residual is fixed/accepted/replaced:
 
-- Update closure fields
-- Archive to `{HARNESS_DIR}/archived/residuals/<plan-id>.json`
-- Remove closed record from open `residual_findings` list in `status.json`
+- Update closure fields (`lifecycle` / `closed_at` / `closure_note`; optional `closure_evidence`)
+- Close **in place** in the register `entries[<plan-id>]` (v1 `archived/residuals/<plan-id>.json` archive path + `archive-residuals` are retired)
+- Or remove the closed entry from the register when the team prefers an empty open list
 
-Do not hard-delete open records without archival semantics.
+Do not hard-delete open records without closure semantics.

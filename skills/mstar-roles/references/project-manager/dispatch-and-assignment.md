@@ -130,7 +130,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 
 ## L1 path fields (iteration Phase 2, lease gate not waived)
 
-When `metadata.control_worktree_path` is set and worktree mode is **not** waived:
+When the workflow snapshot top-level `control_worktree_path` is set and worktree mode is **not** waived:
 
 | Field | Must be |
 |-------|---------|

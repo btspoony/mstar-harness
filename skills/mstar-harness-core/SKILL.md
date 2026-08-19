@@ -12,6 +12,7 @@ description: Morning Star (启明星) harness **强制全局入口** —— 信�
 - 凡 **`mstar-*`**（`name` ≠ `mstar-harness-core`）假定读者**已 Read 本 skill**。
 - **仅读专题、未读核心** → 未完成 harness 加载。
 - 各专题 SKILL.md 含 **Load order**；按 **`mstar-harness-core`** 专题 skill 索引 + 角色 load contract 按需加载，**禁止**为「保险」通读全部专题。
+- **加载条件（`mstar-engine-legacy`）**：`mstar-engine-legacy` 是**条件契约档案**（engine-absent fallback）。**engine 约束激活（或宿主含 engine 能力）时不加载**——engine-present 宿主以运行时 skills 的 engine-check 指针 + engine 校验为权威；仅 engine-absent 宿主（无 `mstar` CLI / engine import）为找回被 engine 校验接管的 contract 全文而读取（触发契约见其 description）。
 
 ## Standalone harness（`mstar-*` 自洽）
 
@@ -52,7 +53,7 @@ Routing eval（Cursor 插件内回归用，**非**运行时必读）→ `.cursor
 - **`Done`**：仅 `@project-manager` 或 `@qa-engineer`。
 - 实现类可设 **`InReview`**，不可设 **`Done`**。
 
-`status.json` 字段与 residual → **`mstar-plan-artifacts`**。
+`status.json`（v2 根）/ workflow snapshot / project register 字段与 residual → **`mstar-plan-artifacts`**。
 
 ## Task category（路由摘要）
 
@@ -90,10 +91,12 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
 | `mstar-iteration` | 迭代管理：Phase 1–5（start / Autonomous Execute / iteration-close / PR delivery / PR merge-ready loop） |
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、SDD 串行、SDD 路径 plan QC 强制 tri |
+| `mstar-engine-legacy` | 条件契约档案（engine-absent fallback）：status v1→v2 字段历史、lease 协议全文、各宿主 N=3/N=1 重述、反递归全清单、Engine-check 样板；engine 激活时不加载 |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
-| `mstar-plan-artifacts` | 主 plan、review bundle / durable summaries、`status.json`、residual、knowledge、Done 归档 |
+| `mstar-plan-artifacts` | 主 plan、review bundle / durable summaries、`status.json`（v2 根）+ workflow snapshots + project register、residual、knowledge |
+| `mstar-project-governance` | 项目治理层：`projects/<id>/roadmap.md` 编写约定 + `residuals.json` register 生命周期（open → verified close in place）、`_default` 回退、provenance；schema 与 engine `project.ts` 逐字一致 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Think / Simplicity / Surgical / Debugging / Review Feedback / Goal-Driven / Communication |
@@ -148,7 +151,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 因默认 gitignore 致 feature 缺 plans 而 `Worktree mode: waived`（应保留 feature worktree + control 绝对 Plan Path / SDD dir；无 flock 仅 → `Plan parallelism: serial`） | `mstar-branch-worktree` · `mstar-iteration` §2.0 #5 · `phase-2-worktree-lease` |
 | 并行 writable implement 无隔离（L2 同 plan 多轨：N invoke ≠ worktree；L1 跨 plan：无 verified `execution_lease` + feature worktree） | `mstar-branch-worktree` L1/L2 · `mstar-iteration` §2.6 · `references/parallel-writable-pre-dispatch.md` |
 | 跨 plan 可写派发无 verified `execution_lease` / steal 活跃 lease / 并行 merge 入 `spec_integration_branch` | `mstar-iteration` · `mstar-plan-artifacts`（leases）· `mstar-branch-worktree` L1 |
-| `InProgress` 无 `execution_lease` 未恢复即可写派发 | `mstar-plan-artifacts` — orphan recovery |
+| `InProgress` 无 `execution_lease`（snapshot 行）未恢复即可写派发 | `mstar-plan-artifacts` — orphan recovery |
 | 混淆跨 plan lease 门控并行与单 plan 内 SDD 并行 implementer | `mstar-dispatch-gates` · `mstar-sdd` |
 | residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
 | `zero-residual` 下把可修 findings 登记为 open R# / 草草 `Approve with residuals` | `mstar-plan-artifacts` Findings cleanup modes · `mstar-review-qc` |

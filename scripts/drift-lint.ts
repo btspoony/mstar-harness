@@ -123,6 +123,40 @@ function changedFilesSinceMergeBase(): string[] | null {
 }
 
 /**
+ * Per-file diff sizes (added/deleted line counts) over the same
+ * merge-base(origin/main, HEAD)..HEAD range, or null when git cannot
+ * produce the range. Drives the bilingual content-parity check (S-f):
+ * README.md and README_CN.md must mirror not only presence but the size of
+ * the change set (`--numstat`; binary entries report "-" and count as 0).
+ */
+function changedFileStatsSinceMergeBase(): Array<{ file: string; added: number; deleted: number }> | null {
+  let base: string;
+  try {
+    base = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+  if (!base) return null;
+  try {
+    const out = execFileSync("git", ["diff", "--numstat", base, "HEAD"], { encoding: "utf8" });
+    return out
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [added, deleted, file] = line.split("\t");
+        return {
+          file,
+          added: added === "-" ? 0 : Number(added) || 0,
+          deleted: deleted === "-" ? 0 : Number(deleted) || 0,
+        };
+      });
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Pure pairing check — AGENTS.md ("README = developer consumer docs"):
  * README.md and README_CN.md must change together. Both changed or both
  * unchanged passes; exactly one changed fails. Returns failure lines
@@ -138,6 +172,25 @@ export function checkBilingualPairing(changedFiles: string[]): string[] {
   const missing = enChanged ? "README_CN.md" : "README.md";
   return [
     `${updated} changed but ${missing} did not — update the paired README in the same change set (AGENTS.md bilingual rule)`,
+  ];
+}
+
+/**
+ * Bilingual content-parity check (S-f): when both READMEs changed, the
+ * change sets must mirror each other — same added/deleted line counts
+ * (per-file `--numstat` over the push range). Presence-only pairing passed
+ * a change touching both files while updating only one semantically; a
+ * mismatched change-set size fails loudly with the observed numbers.
+ */
+export function checkBilingualContentParity(
+  stats: Array<{ file: string; added: number; deleted: number }>,
+): string[] {
+  const en = stats.find((s) => s.file === "README.md");
+  const cn = stats.find((s) => s.file === "README_CN.md");
+  if (!en || !cn) return [];
+  if (en.added === cn.added && en.deleted === cn.deleted) return [];
+  return [
+    `README.md/README_CN.md changed-set size mismatch — README.md +${en.added}/-${en.deleted} vs README_CN.md +${cn.added}/-${cn.deleted}; mirror the same change set in both files (AGENTS.md bilingual rule)`,
   ];
 }
 
@@ -712,6 +765,12 @@ if (import.meta.main) {
   if (outcome.status === "checked") {
     bilingualStatus = "checked";
     for (const line of outcome.failures) fail(line);
+    // Content parity (S-f): the pairing check is presence-only; when both
+    // READMEs changed, their change-set sizes must mirror each other.
+    const changeStats = changedFileStatsSinceMergeBase();
+    if (changeStats) {
+      for (const line of checkBilingualContentParity(changeStats)) fail(line);
+    }
   } else if (outcome.status === "failed") {
     bilingualStatus = "failed (no git range in CI)";
     for (const line of outcome.failures) fail(line);

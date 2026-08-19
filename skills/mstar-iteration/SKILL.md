@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: Morning Star 迭代管理 —— Phase 1（默认 interactive direction lock；opt-in autonomous；specs + `<iteration-id>/` package；禁止直写 knowledge）、Autonomous Execute、iteration-close（compound 提升 package → knowledge）、PR 交付、PR merge-ready loop。分支 SSOT：`status.json` + compass frontmatter。
+description: Morning Star 迭代管理 —— Phase 1（默认 interactive direction lock；opt-in autonomous；specs + `<iteration-id>/` package；禁止直写 knowledge）、Autonomous Execute、iteration-close（compound 提升 package → knowledge）、PR 交付、PR merge-ready loop。分支 SSOT：workflow snapshot（`workflows/<id>/snapshot.json`）+ compass frontmatter。
 ---
 
 # mstar-iteration（迭代管理）
@@ -33,25 +33,25 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 
 - **Phase 3** 在 integration 分支收口 compound / roadmap；**开 PR（Phase 4）≠ 迭代交付完成**。
 - **Phase 5** 是 **merge-ready loop**：修复 →（等 CI/review 波次结束再）push → 再验证，直至 §5.5 exit。**Loop 理念与 push cadence SSOT 在本 skill**（§5.1a）；宿主 command 可叠加额外 **non-`mstar-*`** helper（**优先** `babysit` / `*-babysit`；**`greploop` 可选** — 仅当仓库具备 Greptile/`greploop` 时采用），但不写入 `mstar-*` load order。
-- 一次迭代 = 一个 PR；compound 产物随 PR 合入 `metadata.target_branch`。
+- 一次迭代 = 一个 PR；compound 产物随 PR 合入 snapshot `branch.target`。
 
 ## Phase transition gates（HARD — 防跳步）
 
 | 边界 | 触发 | 必须 | 禁止 |
 |------|------|------|------|
-| **→ Phase 3** | `status.json` 中 compass 登记的全部 plan 均为 `Done` | 打印 `## Phase 3: iteration-close`；执行 §3.0→§3.5；host todo `phase-3-iteration-close` 保持 open 直至 §3.5 | 开 PR；宣称迭代交付完成；仅依赖 final plan closure |
-| **→ Phase 4** | §3.5 exit checklist 全 `[x]`；frontmatter `status: completed` + `end_date` | 打印 `## Phase 4: PR delivery`；开 PR 到 `metadata.target_branch`（§4） | 跳过 §3.1 entry checklist 或 compound Phase 6 |
+| **→ Phase 3** | workflow snapshot（`workflows/<id>/snapshot.json`）中 compass 登记的全部 plan 均为 `Done` | 打印 `## Phase 3: iteration-close`；执行 §3.0→§3.5；host todo `phase-3-iteration-close` 保持 open 直至 §3.5 | 开 PR；宣称迭代交付完成；仅依赖 final plan closure |
+| **→ Phase 4** | §3.5 exit checklist 全 `[x]`；frontmatter `status: completed` + `end_date` | 打印 `## Phase 4: PR delivery`；开 PR 到 snapshot `branch.target`（§4） | 跳过 §3.1 entry checklist 或 compound Phase 6 |
 | **→ Phase 5** | Phase 4 PR 已创建 | 打印 `## Phase 5: PR merge-ready`；执行 §5 loop 至 §5.5 exit（含 §5.1a push cadence） | 开 PR 后停止；跳过 review resolve / CI loop；**CI/AI review 仍在跑时 push** |
 | **→ 迭代交付完成** | §5.5 exit checklist 全 `[x]` | PR mergeable；required CI 全绿；reviews resolved | Phase 4 开 PR 即宣称完成 |
 | **iteration-start → integration branch** | §1.6 Review & Edit chain | 三角色按序 invoke；**specs** 为主产出；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene + compass `status: locked` | PM 代做专业编辑；并行三角色；product/architect 写 knowledge；临时笔记进 specs |
 
-> **Engine check (when available):** run `mstar iteration gate --status <status.json> --compass <delivery-compass.md>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` in a host hook) to evaluate the transition gate above. On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Note: during the Phase-3 window (`transition: phase-3-close`) the gate exits 1 until the §3.4 close items (`status: completed` + `end_date`) are written — that exit-1 is the expected "close work pending" signal (the exit checklist gates Phase 4, not the Phase-3 entry), so proceed with Phase 3 per the table below. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` in a host hook) to evaluate the transition gate above against the workflow snapshot. On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Note: during the Phase-3 window (`transition: phase-3-close`) the gate exits 1 until the §3.4 close items (`status: completed` + `end_date`) are written — that exit-1 is the expected "close work pending" signal (the exit checklist gates Phase 4, not the Phase-3 entry), so proceed with Phase 3 per the table below. Skill text below remains authoritative when the runtime is absent.
 
 **误判信号**：对话里出现 compound 摘要、roadmap 更新、或「所有 plan 已完成」但 **未** 打印 §3.1 / §3.5 checklist → 视为 **Phase 3 未执行**，回到 §3.0。
 
-**per-plan 状态 SSOT**：`{HARNESS_DIR}/status.json`（per-plan Todo/InProgress/InReview/Done）。
+**per-plan 状态 SSOT**：`{WORKFLOW_DIR}/<id>/snapshot.json` 的 `plans[]` 行（per-plan Todo/InProgress/InReview/Done）；根 `{HARNESS_DIR}/status.json` `workflows[]` 登记活跃 lifecycle。
 **迭代状态 SSOT**：`{ITERATION_DIR}/<id>/delivery-compass.md` frontmatter `status` + `{ITERATION_DIR}/README.md` 索引（一行 = 一次迭代）。
-**迭代分支 SSOT**：root `metadata.iteration_base_branch` + `metadata.target_branch`（`status.json`）；compass frontmatter 镜像同名字段。解析顺序见 §2.3。**禁止**因仓库存在 `main`/`master` 就假定 base 或 PR 目标。
+**迭代分支 SSOT**：snapshot `branch.base`（= `iteration_base_branch`）+ `branch.target`（= `target_branch`）与 `branch.integration`（= `spec_integration_branch`）（`workflows/<id>/snapshot.json`）；compass frontmatter 镜像同名字段。解析顺序见 §2.3。**禁止**因仓库存在 `main`/`master` 就假定 base 或 PR 目标。
 
 ## 产物存储位置
 
@@ -170,15 +170,15 @@ plans: []
 
 > **Engine check (when available):** import `assertIndexRowObligations` from `@mstar-harness/engine` in a host hook to assert the index-row obligations above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
-### 1.5 登记到 status.json（formal iteration 必填）
+### 1.5 登记到 v2 状态面（formal iteration 必填）
 
-iteration 正式全流程**必须**写入 `{HARNESS_DIR}/status.json`：
+iteration 正式全流程**必须**登记 `{HARNESS_DIR}/status.json`（v2 根）+ `{WORKFLOW_DIR}/<id>/snapshot.json`：
 
-- root `metadata.iteration_base_branch` — 创建 `spec_integration_branch` 的祖先 ref（**不是**隐式 `main`）
-- root `metadata.target_branch` — iteration-close 后 PR 的目标分支
-- 各 plan `metadata.iteration_refs`、`spec_integration_branch`、`merge_target`（`merge_target` 通常为 `spec_integration_branch`）
+- 根 `status.json` `workflows[]` 增一条 active entry：`{ "id": "<iteration-id>", "type": "iteration", "started_at", "dir": "workflows/<iteration-id>" }`（engine `registerWorkflow`）。
+- snapshot 顶层 `branch` anchors：`base`（= `iteration_base_branch`，创建 `spec_integration_branch` 的祖先 ref——**不是**隐式 `main`）、`integration`（= `spec_integration_branch`）、`target`（= iteration-close 后 PR 的目标分支）。
+- 各 plan 行 `metadata.iteration_refs`、`spec_integration_branch`、`merge_target`（`merge_target` 通常为 `spec_integration_branch`）。
 
-compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** `status.json` 一致；若仅写在 compass 而 status 缺失，§2.3 同轮 backfill。
+compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** snapshot `branch` 一致；若仅写在 compass 而 snapshot 缺失，§2.3 同轮 backfill。
 
 ### 1.5.5 产物边界（specs · iterations · knowledge）
 
@@ -220,13 +220,13 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 进入 Autonomous Execute 前必须满足：
 
-1. `{HARNESS_DIR}/status.json` 中至少一条 plan `status` ≠ `Done`
+1. workflow snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）中至少一条 plan `status` ≠ `Done`；根 `status.json` `workflows[]` 含该 iteration entry
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
-4. **Branch metadata gate**：root `metadata.iteration_base_branch`、`metadata.target_branch` 已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
-5. **Control-worktree + lease defaults**（iteration 命令；可被 `Worktree mode: waived` 豁免）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写默认 gitignored 的 harness 进程产物（`status.json`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{SDD_DIR}` 等），并在可写派发前 claim `plans[].execution_lease` / `integration_merge_lease`。可写 Assignment 须含绝对 feature **`Worktree path`** + 绝对 control 系 **`Plan Path`** / **`SDD dir`**（见 **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」）。**禁止**因 feature worktree 在默认 gitignore 下看不到 plans 而推断 `Worktree mode: waived`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；control worktree + lease 仍须满足。**跨 plan 并行安全闸**（**不可**被 `Worktree mode: waived` 豁免）：跨 plan **并行可写 implement** 须满足下列之一——(a) coordination 路径（control 或 waived 时主 checkout `{HARNESS_DIR}/status.json`）上 **same-host 独占写锁可用且每次 status/协调变更持锁**；(b) 默认 **`Plan parallelism: serial`**（**waived 时尤其优先默认串行**；**无 flock / 无共享锁时只触发本条，不豁免 worktree**）；(c) 用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。**禁止**将 `Worktree mode: waived` 当作跨主机无锁并行的授权。细则 → **`references/phase-2-worktree-lease.md`**。
+4. **Branch metadata gate**：snapshot `branch.base`（`iteration_base_branch`）、`branch.target`（`target_branch`）已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
+5. **Control-worktree + lease defaults**（iteration 命令；可被 `Worktree mode: waived` 豁免）：除非本轮 Assignment 显式 `Worktree mode: waived`（或等价用户指令），Phase 2 **必须**在入口建立 control worktree、经 control 路径读写默认 gitignored 的 harness 进程产物（根 `status.json`、`workflows/`、`projects/`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{SDD_DIR}` 等），并在可写派发前 claim workflow snapshot 的 `plans[].execution_lease` / 顶层 `integration_merge_lease`。可写 Assignment 须含绝对 feature **`Worktree path`** + 绝对 control 系 **`Plan Path`** / **`SDD dir`**（见 **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」）。**禁止**因 feature worktree 在默认 gitignore 下看不到 plans 而推断 `Worktree mode: waived`。`Plan parallelism: serial` **不** waive 本闸——仅强制跨 plan **implement** 串行调度；control worktree + lease 仍须满足。**跨 plan 并行安全闸**（**不可**被 `Worktree mode: waived` 豁免）：跨 plan **并行可写 implement** 须满足下列之一——(a) coordination 路径（control snapshot 或 waived 时主 checkout `{HARNESS_DIR}/status.json`）上 **same-host 独占写锁可用且每次 status/协调变更持锁**；(b) 默认 **`Plan parallelism: serial`**（**waived 时尤其优先默认串行**；**无 flock / 无共享锁时只触发本条，不豁免 worktree**）；(c) 用户本轮显式 `Cross-host lease race: accepted`（或等价）+ `plans[].notes` 审计。**禁止**将 `Worktree mode: waived` 当作跨主机无锁并行的授权。细则 → **`references/phase-2-worktree-lease.md`**。
 
-> **Engine check (when available):** run `mstar lease verify <plan-id>` 或 `mstar lease verify-integration`（或 import `validateExecutionLease` / `validateIntegrationMergeLease` from `@mstar-harness/engine` in a host hook）以校验上述迭代 lease（execution_lease / integration_merge_lease）。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar lease verify --workflow <id> [--plan <plan-id>]` 或 `mstar lease verify-integration --workflow <id>`（或 import `validateExecutionLease` / `validateIntegrationMergeLease` from `@mstar-harness/engine` in a host hook）以校验上述迭代 lease（snapshot 的 execution_lease / integration_merge_lease）。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 任一 false → **stop**。Phase 1 / Prepare 未完成 → 先完成 Phase 1 或 per-plan Prepare，再进入本 Phase。
 
@@ -240,21 +240,21 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 | **Codex** | `update_plan` / Goal UI | 同上 |
 | **OpenCode** | host todo/plan UI（如有） | 同上 |
 
-SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一步。
+SSOT = `{WORKFLOW_DIR}/<id>/snapshot.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一步。
 
 ### 2.2 Read backlog
 
-1. 读 `mstar-plan-artifacts` + `{HARNESS_DIR}/status.json`
-2. 列出 `status` ∈ `{Todo, InProgress, InReview, Blocked}` 的 plan（优先级：`InProgress` → `InReview` → `Todo` → unblock `Blocked`）
-3. 读 root `metadata.iteration_base_branch` / `metadata.target_branch`，以及 plan `metadata.spec_integration_branch` / `merge_target` / `primary_spec` 链接
+1. 读 `mstar-plan-artifacts` + workflow snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）与根 `status.json`
+2. 列出 snapshot 中 `status` ∈ `{Todo, InProgress, InReview, Blocked}` 的 plan（优先级：`InProgress` → `InReview` → `Todo` → unblock `Blocked`）
+3. 读 snapshot `branch.base` / `branch.target`，以及 plan `metadata.spec_integration_branch` / `merge_target` / `primary_spec` 链接
 
 ### 2.3 Integration branch + control worktree（Phase 2 入口）
 
-**Metadata 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`）：
+**Branch anchors 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`）：
 
-1. `{HARNESS_DIR}/status.json` → `metadata.iteration_base_branch`、`metadata.target_branch`；plan → `metadata.spec_integration_branch`
+1. workflow snapshot → `branch.base`（`iteration_base_branch`）、`branch.target`（`target_branch`）、`branch.integration`（`spec_integration_branch`）；plan 行 → `metadata.spec_integration_branch`
 2. 若 (1) 缺字段 → 读当前迭代 compass frontmatter 同名键：优先 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`；若无则 legacy `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`
-3. 若 compass 有值而 `status.json` 无 → **同轮 backfill** `status.json`
+3. 若 compass 有值而 snapshot 无 → **同轮 backfill** snapshot `branch`
 4. 仍缺 → 向用户确认 base / PR target；**不得**因 `git symbolic-ref refs/remotes/origin/HEAD` 指向 `main` 就自动采用
 5. 所有参与本轮迭代的 active plan **必须**解析到**同一** `spec_integration_branch`；不一致 → **STOP**
 
@@ -262,13 +262,14 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 
 1. 解析或创建 **control worktree**（通常 primary checkout 或 PM 指定路径），检出到上一步的 `spec_integration_branch`
 2. `git fetch`（按需）；`git branch --show-current` 确认在 `spec_integration_branch`
-3. 将规范绝对仓库根路径写入 control 副本 `metadata.control_worktree_path`（仓库根，非 `{HARNESS_DIR}` 子路径）
+3. 将规范绝对仓库根路径写入 control 副本 snapshot 顶层 `control_worktree_path`（仓库根，非 `{HARNESS_DIR}` 子路径）
 4. 此后 **harness 进程产物 SSOT**（默认 gitignored）均经 control 绝对路径解析：
-   - `<control_worktree_path>/{HARNESS_DIR}/status.json`
+   - `<control_worktree_path>/{HARNESS_DIR}/status.json`（v2 根 register）
+   - `<control_worktree_path>/{WORKFLOW_DIR}/<id>/snapshot.json`（per-lifecycle 运行态 + leases）
+   - `<control_worktree_path>/{PROJECT_DIR}/<id>/`（roadmap.md + residuals.json）
    - `<control_worktree_path>/{PLAN_DIR}/`（主 plan）
    - `<control_worktree_path>/{ITERATION_DIR}/`（compass / iteration package）
    - `<control_worktree_path>/{HARNESS_DIR}/sdd/<plan-id>/`
-   - 同树：`notes.json`、`archived/`（若使用）
    Feature worktree 只承载产品/源码编辑；其同名 `{HARNESS_DIR}` **不是** SSOT。Assignment **`Plan Path`** / **`SDD dir`** 须写 control 绝对路径。
 5. 若 integration 分支尚不存在：在 control worktree 内 `git checkout -b <spec_integration_branch> <iteration_base_branch>`（**必须**从记录的 base 创建）
 
@@ -278,22 +279,22 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
 2. **checkout 或创建** `spec_integration_branch`（同上）
 3. `git branch --show-current` 确认在 `spec_integration_branch`
 
-`spec_integration_branch` 是本迭代内所有 plan feature branch 的 merge target。QC **`Review range` / `Diff basis`** 的 merge-base 参照优先用 `metadata.target_branch`（或 PM 书面指定的 base ref），**禁止**无 Assignment 依据写死 `origin/main`。
+`spec_integration_branch` 是本迭代内所有 plan feature branch 的 merge target。QC **`Review range` / `Diff basis`** 的 merge-base 参照优先用 snapshot `branch.target`（或 PM 书面指定的 base ref），**禁止**无 Assignment 依据写死 `origin/main`。
 
 ### 2.4 Per-plan loop（直到全部 Done）
 
-**跨 plan 默认**（**无论** `Worktree mode: waived`）：**不同 `plan_id` 可并行 implement** 须满足 §2.0 #5 跨 plan 并行安全闸——(a) coordination 路径 same-host 独占写锁可用且每次 status/协调变更持锁，或 (b) **`Plan parallelism: serial`**（waived 时默认），或 (c) 用户本轮 `Cross-host lease race: accepted` + audit `notes`；否则 Assignment 仍写并行 → **Blocked**。**merge 入 `spec_integration_branch` 仍串行**（`metadata.integration_merge_lease`；waived 时无 merge lease 仍须串行 merge）。未 waive 时 **禁止**无 verified `execution_lease` 的跨 plan 可写派发。
+**跨 plan 默认**（**无论** `Worktree mode: waived`）：**不同 `plan_id` 可并行 implement** 须满足 §2.0 #5 跨 plan 并行安全闸——(a) coordination 路径 same-host 独占写锁可用且每次 status/协调变更持锁，或 (b) **`Plan parallelism: serial`**（waived 时默认），或 (c) 用户本轮 `Cross-host lease race: accepted` + audit `notes`；否则 Assignment 仍写并行 → **Blocked**。**merge 入 `spec_integration_branch` 仍串行**（snapshot 顶层 `integration_merge_lease`；waived 时无 merge lease 仍须串行 merge）。未 waive 时 **禁止**无 verified `execution_lease` 的跨 plan 可写派发。
 
 对每个本轮要推进的 active `plan_id`（可交错/并行，非强制 plan A 全 Done 再 plan B）：
 
 1. **Claim / resume — execution lease**（§2.0 #5 未 waive）：
-   - 自 control 路径 **重读** `status.json` 定位 plan 行
+   - 自 control 路径 **重读** workflow snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）定位 plan 行
    - 若已有 `execution_lease` 且 `holder` **等于本 session** → **resume**：校验 `worktree_path` / `working_branch` 与 Assignment 一致后继续（**不是** steal / Blocked）
    - 若 `execution_lease` 存在且 `holder` **不同** → **Blocked**
    - 若 `status: InProgress` 但 **无** `execution_lease` → **STOP** 升级（孤儿状态恢复 → **`mstar-plan-artifacts`**；本 skill 不自行补 lease）
    - 否则按 **`references/phase-2-worktree-lease.md`** claim：`Todo`/`Blocked` → `InProgress` + 写入完整 `execution_lease`；verify 通过前 **禁止**可写派发
 2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**
-3. **Implement → InReview**（`§ 2.5`；产品编辑在 feature worktree；plans / status / iterations / SDD 经 control 绝对路径）：
+3. **Implement → InReview**（`§ 2.5`；产品编辑在 feature worktree；plans / snapshot / iterations / SDD 经 control 绝对路径）：
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
    - PM 载入 **`mstar-sdd`** 后，按 plan task 顺序 **串行** per-task 循环（**不是**一次派发 dev 做全部 tasks）：
      1. `mstar sdd workspace <plan-id>` → `{SDD_DIR}`
@@ -301,11 +302,11 @@ SSOT = `{HARNESS_DIR}/status.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一
      3. Dispatch **one** implementer subagent（`references/implementer-prompt.md`：brief 路径 + report 路径 + `Model tier`；**禁止**贴整份 plan）
      4. Implementer `DONE` → `mstar sdd review-package BASE HEAD` → task diff 文件
      5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
-     6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；更新 `status.json` / plan checkbox
+     6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；更新 snapshot plan 行 / plan checkbox
      7. Next task
-   - 每次 Completion Report 后更新 `status.json` + 主 plan
-4. **QC → QA gate**（plan 保持 **`InReview`**；**保留** `execution_lease`）：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席；raw reports in `{SDD_DIR}/review/`，durable summary in main plan/status）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。**禁止**在 integration merge 成功前设 `Done` 或删除 `execution_lease`。
-5. **Plan complete — serial merge back**（§2.0 #5 未 waive）：自 **control worktree** claim/resume `metadata.integration_merge_lease` → 将 plan feature branch 合并入 `spec_integration_branch`（仅 merge-lease holder；细则 → **`references/phase-2-worktree-lease.md`**）→ 记录 merge commit 证据 → 释放 merge lease；**同轮**设 `Done` 并删除 `execution_lease`。merge 失败：保持 `InReview` + 保留 lease，不得标 `Done`。
+   - 每次 Completion Report 后更新 snapshot（`workflows/<id>/snapshot.json`）+ 主 plan
+4. **QC → QA gate**（plan 保持 **`InReview`**；**保留** `execution_lease`）：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席；raw reports in `{SDD_DIR}/review/`，durable summary in main plan/snapshot）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。**禁止**在 integration merge 成功前设 `Done` 或删除 `execution_lease`。
+5. **Plan complete — serial merge back**（§2.0 #5 未 waive）：自 **control worktree** claim/resume snapshot 顶层 `integration_merge_lease` → 将 plan feature branch 合并入 `spec_integration_branch`（仅 merge-lease holder；细则 → **`references/phase-2-worktree-lease.md`**）→ 记录 merge commit 证据 → 释放 merge lease；**同轮**设 `Done` 并删除 `execution_lease`。merge 失败：保持 `InReview` + 保留 lease，不得标 `Done`。
 6. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
 7. **Next plan / parallel wave** 从步骤 1 继续（可并行推进其他已 claim 的 plan；merge 仍排队串行）
 
@@ -344,14 +345,14 @@ Iteration Phase 2 附加：
 - 不因 harness 流程问题常问「是否继续」「要不要现在启动」—— **决策、记录、dispatch**
 - 进度汇报 / subagent Completion Report 后，下一条必须是 **dispatch 或下一 gate 动作**，不得以确认问句收束 turn
 - 未知 → 读 `mstar-*`；仅 **`Blocked`**、secrets、不可逆范围缺口、branch metadata 缺失、或 Phase 5 多轮仍 blocked 时升级用户
-- 实际 Git ≠ `working_branch` → **同轮**更新 plan + status + `execution_lease.working_branch`（如适用）
+- 实际 Git ≠ `working_branch` → **同轮**更新 plan + snapshot + `execution_lease.working_branch`（如适用）
 - **跨 plan implement**（**无论** `Worktree mode: waived`）：并行可写 implement 须满足 §2.0 #5 跨 plan 并行安全闸——same-host 独占写锁 + 每次协调变更持锁，或默认 **`Plan parallelism: serial`**（waived 时尤其优先），或用户本轮 `Cross-host lease race: accepted` + audit `notes`；**禁止**将 waived 当作无锁跨主机并行授权；未 waive 时另须 verified `execution_lease` + feature worktree。**integration merge 串行**（`integration_merge_lease` 或 waived 下无 lease 仍须串行 merge）
 - plan 内 SDD task **串行** — 见 §2.4、§2.5、`mstar-sdd` Continuous execution
 - **zero-residual（默认）**：单 plan QC findings 尽量在当轮清干净；仅真 blocker 才 defer 到后续迭代（须 Durable Roadmap）— 见 **`mstar-plan-artifacts`** Findings cleanup modes
 
 ## Phase 3: iteration-close（收口迭代）
 
-**入口**：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。本 Phase 在 **integration 分支**上运行；产出物 commit 到该分支，随迭代 PR 合入 `metadata.target_branch`。
+**入口**：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。本 Phase 在 **integration 分支**上运行；产出物 commit 到该分支，随迭代 PR 合入 snapshot `branch.target`。
 
 完整流程（§3.0 phase boundary、§3.0.5 compass 规范化、§3.1 entry checklist **HARD GATE**、§3.2 compound、§3.3 roadmap、§3.4 标记完成、§3.5 exit checklist + commit、§3.6 可选 compound-refresh）→ **`references/phase-3-iteration-close.md`**。
 

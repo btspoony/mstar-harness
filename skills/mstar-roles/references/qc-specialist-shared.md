@@ -55,9 +55,9 @@ If any item below matches, **stop** and return `Blocked` to `project-manager`:
 
 - **NEVER** invoke another QC seat or `{role_id}` again, nor `qa-engineer` / dev / `architect` / `project-manager`, unless `Delegation: allowed (...)` lists them.
 - **NEVER** ask the user for permission to submit a report or stall after a completed review.
-- **NEVER** modify business implementation/tests, `status.json` residual fields, or paths outside the Assignment-specified QC report path.
+- **NEVER** modify business implementation/tests, project-register residual fields, or paths outside the Assignment-specified QC report path.
 - **NEVER** `git add .` or commit raw bundle reports by default.
-- **NEVER** close or archive residual entries in `status.json` from QC.
+- **NEVER** close or remove residual entries in the project register (`projects/<id>/residuals.json`) from QC.
 - **NEVER** treat `Handoff` or routing prose as invoke instructions.
 - **NEVER** infer tool exposure implies authorization.
 - **NEVER** run parallel-agent dispatch yourself.
