@@ -37,6 +37,15 @@ import { resolveHarnessDir, resolveIterationDir, assertSafePathComponent } from 
 import { withStatusWriteLock } from "./lease.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
+// Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
+// from this module): neither module dereferences the other's bindings during
+// module evaluation, so the ESM live-binding cycle is safe.
+import {
+  WORKFLOW_LIFECYCLE_TYPES,
+  WORKFLOW_SNAPSHOT_FILE,
+  WORKFLOW_TERMINAL_STATUSES,
+  type WorkflowLifecycleType,
+} from "./workflow.js";
 
 /**
  * Loose shape of a parsed status.json document. All fields are `unknown`
@@ -49,6 +58,27 @@ export type StatusDoc = {
   residual_findings?: unknown;
   metadata?: unknown;
   [key: string]: unknown;
+};
+
+/**
+ * v2 root status document (`{HARNESS_DIR}/status.json`, plan Task 3 — hard
+ * cutover): `version`, `updated_at`, `workflows[]` only. The list holds
+ * ACTIVE (non-terminal) lifecycles; terminal writers unregister AFTER the
+ * snapshot write (removal-at-terminal).
+ */
+export type StatusV2Doc = {
+  version: 2;
+  updated_at: string;
+  workflows: WorkflowEntry[];
+};
+
+/** One active lifecycle entry of the v2 root `workflows[]` list. */
+export type WorkflowEntry = {
+  id: string;
+  type: WorkflowLifecycleType;
+  started_at: string;
+  /** Harness-relative snapshot dir (e.g. `workflows/<id>`), never absolute. */
+  dir: string;
 };
 
 /** Residual entry as parsed from status.json (loose — validated by `validateResidual`). */
@@ -371,18 +401,101 @@ export function validateResidual(entry: unknown): GateResult {
 }
 
 /**
- * Validate a status.json document (schema: status-and-residuals.md
- * § Basic structure + § General constraints). Accepts a parsed document or a
- * file path (malformed JSON yields a `status.invalid-json` violation, never a
- * throw). Required top-level fields: `version`, `updated_at`, `plans[]`,
- * root-only `residual_findings`, `metadata`. Root-only canonical: any
- * `metadata.residual_findings` key is flagged as dual-write.
+ * True when `dir` is a harness-relative path: not absolute (POSIX `/`,
+ * Windows `C:\`), and no `..` segment can escape the harness dir. The v2
+ * root `workflows[].dir` is resolved against `{HARNESS_DIR}` by
+ * `validateStatusV2` and the root writers, so traversal must fail closed.
  */
-export function validateStatus(docOrPath: StatusDoc | string): GateResult {
-  let doc: StatusDoc;
+function isHarnessRelativePath(dir: string): boolean {
+  if (dir.startsWith("/") || dir.startsWith("\\")) return false;
+  if (/^[A-Za-z]:[\\/]/.test(dir)) return false;
+  return !dir.split(/[\\/]+/).includes("..");
+}
+
+/**
+ * Validate one v2 root `workflows[]` entry (plan Task 3): required `id`,
+ * `type` (plan | iteration), `started_at`, `dir` — harness-relative, never
+ * absolute and never containing `..`. The removal-at-terminal invariant
+ * (snapshot exists and is non-terminal) is checked at document level by
+ * `validateStatusV2` when a harness dir is known.
+ */
+export function validateWorkflowEntry(entry: unknown): GateResult {
+  const violations: ValidationResult[] = [];
+  if (!isPlainObject(entry)) {
+    return {
+      ok: false,
+      violations: [violation("high", "status.workflow.invalid", "workflow entry must be an object")],
+    };
+  }
+
+  validateNonEmptyString(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
+
+  if (entry.type === undefined) {
+    violations.push(violation("high", "status.workflow.missing-type", "missing required field: type"));
+  } else if (typeof entry.type !== "string" || !(WORKFLOW_LIFECYCLE_TYPES as readonly string[]).includes(entry.type)) {
+    violations.push(
+      violation(
+        "medium",
+        "status.workflow.invalid-type",
+        `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} \u2014 got ${JSON.stringify(entry.type)}`,
+      ),
+    );
+  }
+
+  validateNonEmptyString(
+    violations,
+    entry.started_at,
+    "started_at",
+    "status.workflow.missing-started-at",
+    "status.workflow.invalid-started-at",
+  );
+
+  if (entry.dir === undefined) {
+    violations.push(violation("high", "status.workflow.missing-dir", "missing required field: dir"));
+  } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
+    violations.push(violation("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+  } else if (!isHarnessRelativePath(entry.dir)) {
+    violations.push(
+      violation(
+        "medium",
+        "status.workflow.invalid-dir",
+        `dir must be a harness-relative path (no absolute paths, no ".." segments) \u2014 got ${JSON.stringify(entry.dir)}`,
+      ),
+    );
+  }
+
+  return { ok: violations.length === 0, violations };
+}
+
+/**
+ * Validate a v2 status.json document (plan Task 3 — hard cutover). Accepts a
+ * parsed document or a file path (malformed JSON yields a
+ * `status.invalid-json` violation, never a throw). v1 or unknown-version
+ * inputs — including v1-shaped documents carrying a root `plans[]` — fail
+ * closed with an explicit `status.migration-required` violation carrying the
+ * `mstar migrate` hint; there is no v1 read path anymore (v1 `validateStatus`
+ * was deleted in the same task).
+ *
+ * Required: `version: 2`, `updated_at` (YYYY-MM-DD, same convention as the
+ * v1 root), `workflows[]` of active entries (each validated by
+ * `validateWorkflowEntry`, duplicate ids rejected).
+ *
+ * Removal-at-terminal invariant: when a harness dir is known (path input, or
+ * `opts.harnessDir` for doc input), every listed entry's snapshot at
+ * `{HARNESS_DIR}/<dir>/snapshot.json` must exist and be non-terminal — the
+ * root holds active lifecycles only, and terminal writers unregister AFTER
+ * the snapshot write. Doc input without a harness dir is structure-only.
+ */
+export function validateStatusV2(
+  docOrPath: StatusV2Doc | string,
+  opts: { harnessDir?: string } = {},
+): GateResult {
+  let doc: unknown;
+  let harnessDir: string | undefined = opts.harnessDir;
   if (typeof docOrPath === "string") {
     try {
-      doc = readJson(docOrPath) as StatusDoc;
+      doc = readJson(docOrPath);
+      harnessDir = dirname(resolve(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -393,69 +506,212 @@ export function validateStatus(docOrPath: StatusDoc | string): GateResult {
     doc = docOrPath;
   }
 
-  const violations: ValidationResult[] = [];
-  const { version, updated_at, plans, residual_findings, metadata } = doc;
-
-  if (version === undefined) {
-    violations.push(violation("high", "status.missing-version", "missing required field: version"));
-  } else if (typeof version !== "number" || !Number.isInteger(version)) {
-    violations.push(violation("high", "status.invalid-version", "version must be an integer"));
-  } else if (version !== 1) {
-    violations.push(violation("medium", "status.unsupported-version", `unsupported status.json schema version ${version} \u2014 expected 1`));
+  if (!isPlainObject(doc)) {
+    return { ok: false, violations: [violation("high", "status.invalid-doc", "status document must be an object")] };
   }
 
-  if (updated_at === undefined) {
+  // Hard cutover (plan Task 3): a root file with `version !== 2` is the
+  // migration-detection input — fail closed, never a silent pass or a dual
+  // read. v1-shaped documents (root `plans[]`) are rejected the same way
+  // even when the version field is missing or already says 2.
+  if (doc.version !== 2) {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "status.migration-required",
+          `status.json schema version 2 required \u2014 got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`,
+          "run `mstar migrate`",
+        ),
+      ],
+    };
+  }
+  if (Array.isArray(doc.plans)) {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "status.migration-required",
+          "v1-shaped status.json (root plans[]) is not a v2 document \u2014 run `mstar migrate` to convert the tree",
+          "run `mstar migrate`",
+        ),
+      ],
+    };
+  }
+
+  const violations: ValidationResult[] = [];
+
+  if (doc.updated_at === undefined) {
     violations.push(violation("high", "status.missing-updated-at", "missing required field: updated_at"));
-  } else if (typeof updated_at !== "string" || !DATE_RE.test(updated_at)) {
+  } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
     violations.push(violation("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
   }
 
-  if (plans === undefined) {
-    violations.push(violation("high", "status.missing-plans", "missing required field: plans"));
-  } else if (!Array.isArray(plans)) {
-    violations.push(violation("high", "status.invalid-plans", "plans must be an array"));
+  if (doc.workflows === undefined) {
+    violations.push(violation("high", "status.missing-workflows", "missing required field: workflows"));
+  } else if (!Array.isArray(doc.workflows)) {
+    violations.push(violation("high", "status.invalid-workflows", "workflows must be an array"));
   } else {
-    for (const row of plans) {
-      violations.push(...validatePlanRow(row).violations);
-    }
-  }
-
-  if (residual_findings === undefined) {
-    violations.push(violation("high", "status.missing-residual-findings", "missing required field: residual_findings (root-only canonical)"));
-  } else if (!isPlainObject(residual_findings)) {
-    violations.push(violation("high", "status.invalid-residual-findings", "residual_findings must be an object at root"));
-  } else {
-    for (const [planId, list] of Object.entries(residual_findings)) {
-      if (!Array.isArray(list)) {
-        violations.push(violation("high", "status.residual.invalid-list", `residual_findings["${planId}"] must be an array`));
-      } else if (list.length === 0) {
-        violations.push(
-          violation("low", "status.residual.empty-key", `residual_findings["${planId}"] is empty \u2014 delete the key (no "plan-id": [])`),
-        );
-      } else {
-        for (const entry of list) {
-          violations.push(...validateResidual(entry).violations);
+    const seen = new Set<string>();
+    for (const entry of doc.workflows) {
+      violations.push(...validateWorkflowEntry(entry).violations);
+      if (isPlainObject(entry) && typeof entry.id === "string") {
+        if (seen.has(entry.id)) {
+          violations.push(
+            violation("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`),
+          );
         }
+        seen.add(entry.id);
       }
     }
   }
 
-  if (metadata === undefined) {
-    violations.push(violation("high", "status.missing-metadata", "missing required field: metadata"));
-  } else if (!isPlainObject(metadata)) {
-    violations.push(violation("high", "status.invalid-metadata", "metadata must be an object"));
-  } else if (Object.prototype.hasOwnProperty.call(metadata, "residual_findings")) {
-    violations.push(
-      violation(
-        "medium",
-        "status.dual-write-residuals",
-        "residual_findings must be root-only \u2014 metadata.residual_findings is legacy read-only; remove it (no dual-write)",
-        "move entries to root residual_findings and delete metadata.residual_findings",
-      ),
-    );
+  // Removal-at-terminal invariant (plan Task 3): the list holds active
+  // lifecycles only — no listed id may resolve to a terminal or missing
+  // snapshot. Skipped when no harness dir is known (structure-only input).
+  if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
+    for (const entry of doc.workflows) {
+      if (!isPlainObject(entry) || typeof entry.dir !== "string") continue;
+      const relSnapshot = join(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join(harnessDir, relSnapshot);
+      const label = typeof entry.id === "string" ? entry.id : relSnapshot;
+      if (!existsSync(snapshotPath)) {
+        violations.push(
+          violation(
+            "high",
+            "status.workflow.snapshot-missing",
+            `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} \u2014 the root holds active lifecycles only; unregister the id when its snapshot is removed`,
+          ),
+        );
+        continue;
+      }
+      let snapshot: Record<string, unknown>;
+      try {
+        snapshot = readJson(snapshotPath);
+      } catch (error) {
+        violations.push(
+          violation(
+            "high",
+            "status.workflow.snapshot-invalid",
+            `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${(error as Error).message}`,
+          ),
+        );
+        continue;
+      }
+      if (typeof snapshot.status === "string" && (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot.status)) {
+        violations.push(
+          violation(
+            "high",
+            "status.workflow.terminal-listed",
+            `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) \u2014 removal-at-terminal: terminal writers unregister AFTER the snapshot write`,
+          ),
+        );
+      }
+    }
   }
 
   return { ok: violations.length === 0, violations };
+}
+
+/**
+ * Relocated v2 root validator (plan Task 3 — hard cutover, no dual path):
+ * the v1 `validateStatus` implementation was deleted in the same task that
+ * introduced the v2 surface; the public export name survives so external
+ * consumers (CLI, host hooks — cut over in P2) keep compiling and now fail
+ * closed on v1 input with the `mstar migrate` hint.
+ */
+export const validateStatus = validateStatusV2;
+
+/**
+ * Register one active workflow entry in the v2 root file (plan Task 3).
+ * Idempotent upsert by entry `id` under the root-file `withStatusWriteLock`,
+ * bumping root `updated_at`. A missing/empty root file is initialized from
+ * the v2 template (never a v1 tree); a v1 root is refused with the
+ * `mstar migrate` hint (no silent mutation of an un-migrated tree).
+ *
+ * The final document is validated with `validateStatusV2` (including the
+ * removal-at-terminal snapshot invariant against `dirname(root)`) before the
+ * write — an entry whose snapshot is missing or terminal is refused and
+ * nothing is written.
+ */
+export async function registerWorkflow(root: string, entry: WorkflowEntry): Promise<StatusV2Doc> {
+  const entryGate = validateWorkflowEntry(entry);
+  if (!entryGate.ok) {
+    throw new Error(
+      `refusing to register invalid workflow entry: ${entryGate.violations.map((v) => v.message).join("; ")}`,
+    );
+  }
+  const statusPath = resolve(root);
+  const harnessDir = dirname(statusPath);
+  return withStatusWriteLock(statusPath, () => {
+    const current = readJson(statusPath) as Record<string, unknown>;
+    const fresh = Object.keys(current).length === 0;
+    const doc: StatusV2Doc = fresh
+      ? { version: 2, updated_at: todayString(), workflows: [] }
+      : (current as StatusV2Doc);
+    if (!fresh && !Array.isArray(doc.workflows)) {
+      throw new Error(
+        "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
+      );
+    }
+    const existing = doc.workflows.findIndex((wf) => wf.id === entry.id);
+    if (existing >= 0) {
+      doc.workflows[existing] = entry;
+    } else {
+      doc.workflows.push(entry);
+    }
+    doc.updated_at = todayString();
+    const gate = validateStatusV2(doc, { harnessDir });
+    if (!gate.ok) {
+      throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+    }
+    writeJson(statusPath, doc as unknown as Record<string, unknown>);
+    return doc;
+  });
+}
+
+/**
+ * Remove one workflow entry from the v2 root file (plan Task 3). Idempotent:
+ * removing an absent id is a no-op with no write; a missing/empty root file
+ * is a no-op that never creates the file. Runs under the root-file
+ * `withStatusWriteLock`, bumping root `updated_at` only when an entry was
+ * actually removed. The final document is validated (removal-at-terminal
+ * invariant included) before the write — a v1 root is refused with the
+ * `mstar migrate` hint.
+ */
+export async function unregisterWorkflow(root: string, id: string): Promise<StatusV2Doc> {
+  if (typeof id !== "string" || id.trim() === "") {
+    throw new Error("refusing to unregister workflow: id must be a non-empty string");
+  }
+  const statusPath = resolve(root);
+  const harnessDir = dirname(statusPath);
+  return withStatusWriteLock(statusPath, () => {
+    const current = readJson(statusPath) as Record<string, unknown>;
+    if (Object.keys(current).length === 0) {
+      // Nothing to remove — return the empty v2 shape without touching the file.
+      return { version: 2, updated_at: todayString(), workflows: [] };
+    }
+    const doc = current as StatusV2Doc;
+    if (!Array.isArray(doc.workflows)) {
+      throw new Error(
+        "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
+      );
+    }
+    const remaining = doc.workflows.filter((wf) => wf.id !== id);
+    if (remaining.length === doc.workflows.length) {
+      return doc; // idempotent no-op — nothing removed, no write
+    }
+    doc.workflows = remaining;
+    doc.updated_at = todayString();
+    const gate = validateStatusV2(doc, { harnessDir });
+    if (!gate.ok) {
+      throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+    }
+    writeJson(statusPath, doc as unknown as Record<string, unknown>);
+    return doc;
+  });
 }
 
 /**

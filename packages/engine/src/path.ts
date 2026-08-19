@@ -337,15 +337,15 @@ export function resolveProjectDir(
 /**
  * Empty status.json template — embedded copy of
  * `skills/mstar-plan-artifacts/templates/status.empty.json`
- * (plan-conventions § 初始化 Plan 目录). Kept as a constant so the engine
- * has no runtime dependency on skill files.
+ * (plan-conventions § 初始化 Plan 目录). Plan Task 3 ruling: the template is
+ * the **v2 shape** (`version: 2`, `updated_at`, `workflows: []`) so
+ * `scaffoldHarness` never emits an un-migrated (v1) tree. Kept as a constant
+ * so the engine has no runtime dependency on skill files.
  */
 const EMPTY_STATUS_TEMPLATE: Record<string, unknown> = {
-  version: 1,
+  version: 2,
   updated_at: "1970-01-01",
-  plans: [],
-  residual_findings: {},
-  metadata: {},
+  workflows: [],
 };
 
 /** Subdirectories created under `.mstar/` by `scaffoldHarness`. */

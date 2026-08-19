@@ -39,16 +39,21 @@ import {
   archiveResiduals,
   findingsCleanupGate,
   normalizeSeverity,
+  registerWorkflow,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
   techDebtRollup,
+  unregisterWorkflow,
   validatePlanRow,
   validateResidual,
   validateStatus,
+  validateStatusV2,
 } from "../src/status.js";
+import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
-import type { FindingsCleanupMode, TechDebtRollup } from "../src/status.js";
+import type { FindingsCleanupMode, TechDebtRollup, WorkflowEntry } from "../src/status.js";
+import { writeWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const EMPTY_TEMPLATE = join(FIXTURES, "status.empty.json");
@@ -113,6 +118,60 @@ function doc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     metadata: {},
     ...overrides,
   };
+}
+
+/** Valid v2 status document (plan Task 3 — `{ version: 2, updated_at, workflows[] }`). */
+function v2doc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 2,
+    updated_at: "2026-08-19",
+    workflows: [],
+    ...overrides,
+  };
+}
+
+/** Valid active workflow entry (`{ id, type, started_at, dir }`, dir harness-relative). */
+function wfEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "wf-1",
+    type: "plan",
+    started_at: "2026-08-19T08:00:00Z",
+    dir: "workflows/wf-1",
+    ...overrides,
+  };
+}
+
+/** Write a minimal active (running) snapshot at `harnessDir/workflows/<id>/snapshot.json`. */
+async function writeRunningSnapshot(harnessDir: string, id: string): Promise<void> {
+  await writeWorkflowSnapshot(
+    {
+      schema_version: 1,
+      id,
+      type: "plan",
+      status: "running",
+      started_at: "2026-08-19T08:00:00Z",
+      updated_at: "2026-08-19",
+      plans: [],
+    },
+    join(harnessDir, "workflows", id),
+  );
+}
+
+/** Write a minimal terminal (completed) snapshot at `harnessDir/workflows/<id>/snapshot.json`. */
+async function writeTerminalSnapshot(harnessDir: string, id: string): Promise<void> {
+  await writeWorkflowSnapshot(
+    {
+      schema_version: 1,
+      id,
+      type: "plan",
+      status: "completed",
+      started_at: "2026-08-19T08:00:00Z",
+      ended_at: "2026-08-19T09:00:00Z",
+      updated_at: "2026-08-19",
+      plans: [],
+    },
+    join(harnessDir, "workflows", id),
+  );
 }
 
 /** Rendered rollup output format (matches the former bash script's echo formatting). */
@@ -322,86 +381,277 @@ describe("validateResidual", () => {
   });
 });
 
-describe("validateStatus", () => {
-  test("status.empty.json template validates clean (templates/status.empty.json)", () => {
-    const result = validateStatus(EMPTY_TEMPLATE);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("real repo status.json shape validates clean (legacy plan_id rows, mixed metadata, detail_doc null)", () => {
-    const result = validateStatus(REAL_SHAPE);
+describe("validateStatusV2", () => {
+  test("v2 empty template validates clean (fixtures/status.empty.json)", () => {
+    const result = validateStatusV2(EMPTY_TEMPLATE);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
 
   test("accepts a parsed object or a file path", () => {
-    expect(validateStatus(doc()).ok).toBe(true);
-    expect(validateStatus(EMPTY_TEMPLATE).ok).toBe(true);
+    expect(validateStatusV2(v2doc()).ok).toBe(true);
+    expect(validateStatusV2(EMPTY_TEMPLATE).ok).toBe(true);
   });
 
-  test("required top-level fields: version / updated_at / plans / residual_findings / metadata", () => {
-    violationCodes("status.missing-version")(validateStatus(doc({ version: undefined })));
-    violationCodes("status.missing-updated-at")(validateStatus(doc({ updated_at: undefined })));
-    violationCodes("status.missing-plans")(validateStatus(doc({ plans: undefined })));
-    violationCodes("status.missing-residual-findings")(validateStatus(doc({ residual_findings: undefined })));
-    violationCodes("status.missing-metadata")(validateStatus(doc({ metadata: undefined })));
+  test("v2 fixture with active workflow entries validates clean (incl. nested relative dir)", () => {
+    const result = validateStatusV2(
+      v2doc({
+        workflows: [wfEntry(), wfEntry({ id: "iter-1", type: "iteration", dir: "custom/workflows/iter-1" })],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
   });
 
-  test("wrong types for top-level fields are violations", () => {
-    violationCodes("status.invalid-plans")(validateStatus(doc({ plans: {} })));
-    violationCodes("status.invalid-residual-findings")(validateStatus(doc({ residual_findings: [] })));
-    violationCodes("status.invalid-metadata")(validateStatus(doc({ metadata: [] })));
+  test("v1 input (version: 1) errors MIGRATION_REQUIRED carrying the mstar migrate hint", () => {
+    const result = validateStatusV2(doc());
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("status.migration-required");
+    expect(result.violations.map((v) => v.message + (v.fix ?? "")).join(" ")).toContain("mstar migrate");
   });
 
-  test("unsupported schema version is a violation (current schema is v1)", () => {
-    violationCodes("status.unsupported-version")(validateStatus(doc({ version: 2 })));
-    violationCodes("status.invalid-version")(validateStatus(doc({ version: "1" })));
+  test("v1-shaped input (root plans[]) errors MIGRATION_REQUIRED even with version: 2", () => {
+    const result = validateStatusV2(v2doc({ plans: [] }));
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("status.migration-required");
+  });
+
+  test("real v1 repo status.json shape errors MIGRATION_REQUIRED with the hint", () => {
+    const result = validateStatusV2(REAL_SHAPE);
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toContain("status.migration-required");
+    expect(result.violations.map((v) => v.message).join(" ")).toContain("mstar migrate");
+  });
+
+  test("missing or non-integer version fails closed as migration-required", () => {
+    violationCodes("status.migration-required")(validateStatusV2(v2doc({ version: undefined })));
+    violationCodes("status.migration-required")(validateStatusV2(v2doc({ version: "2" })));
+    violationCodes("status.migration-required")(validateStatusV2(v2doc({ version: 3 })));
+  });
+
+  test("non-object document is a violation, not a throw", () => {
+    violationCodes("status.invalid-doc")(validateStatusV2(null));
+    violationCodes("status.invalid-doc")(validateStatusV2([]));
+  });
+
+  test("required top-level fields: updated_at / workflows", () => {
+    violationCodes("status.missing-updated-at")(validateStatusV2(v2doc({ updated_at: undefined })));
+    violationCodes("status.missing-workflows")(validateStatusV2(v2doc({ workflows: undefined })));
+    violationCodes("status.invalid-workflows")(validateStatusV2(v2doc({ workflows: {} })));
   });
 
   test("updated_at must be YYYY-MM-DD", () => {
-    violationCodes("status.invalid-updated-at")(validateStatus(doc({ updated_at: "2026-08-08T00:00:00Z" })));
+    violationCodes("status.invalid-updated-at")(validateStatusV2(v2doc({ updated_at: "2026-08-08T00:00:00Z" })));
   });
 
-  test("dual-write: metadata.residual_findings is rejected (root-only canonical)", () => {
-    violationCodes("status.dual-write-residuals")(
-      validateStatus(doc({ residual_findings: { "plan-a": [entry()] }, metadata: { residual_findings: { "plan-a": [entry()] } } })),
-    );
-  });
-
-  test("empty plan-id key is flagged (delete the key, no 'plan-id': [])", () => {
-    violationCodes("status.residual.empty-key")(
-      validateStatus(doc({ residual_findings: { "plan-a": [] } })),
-    );
+  test("running entry shape violations are red", () => {
+    violationCodes("status.workflow.missing-id")(validateStatusV2(v2doc({ workflows: [wfEntry({ id: undefined })] })));
+    violationCodes("status.workflow.missing-type")(validateStatusV2(v2doc({ workflows: [wfEntry({ type: undefined })] })));
+    violationCodes("status.workflow.invalid-type")(validateStatusV2(v2doc({ workflows: [wfEntry({ type: "sprint" })] })));
+    violationCodes("status.workflow.missing-started-at")(validateStatusV2(v2doc({ workflows: [wfEntry({ started_at: undefined })] })));
+    violationCodes("status.workflow.missing-dir")(validateStatusV2(v2doc({ workflows: [wfEntry({ dir: undefined })] })));
+    violationCodes("status.workflow.invalid-dir")(validateStatusV2(v2doc({ workflows: [wfEntry({ dir: "/abs/path" })] })));
+    violationCodes("status.workflow.invalid-dir")(validateStatusV2(v2doc({ workflows: [wfEntry({ dir: "workflows/../escape" })] })));
+    violationCodes("status.workflow.invalid-dir")(validateStatusV2(v2doc({ workflows: [wfEntry({ dir: "C:\\abs\\path" })] })));
+    violationCodes("status.workflow.duplicate-id")(validateStatusV2(v2doc({ workflows: [wfEntry(), wfEntry()] })));
   });
 
   test("malformed JSON file yields a violation, not a throw", () => {
-    const dir = tmpRoot("status-invalid-json-");
+    const dir = tmpRoot("status-v2-invalid-json-");
     const file = join(dir, "status.json");
     writeFileSync(file, "{ not json", "utf8");
-    const result = validateStatus(file);
+    const result = validateStatusV2(file);
     expect(result.ok).toBe(false);
     expect(violationsOf(result)).toContain("status.invalid-json");
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("plan-row and residual violations aggregate into the gate result", () => {
-    const result = validateStatus(
-      doc({
-        plans: [row({ status: "Finished" })],
-        residual_findings: { "plan-a": [entry({ severity: "Major" })] },
-      }),
-    );
-    expect(violationsOf(result)).toContain("status.plan-row.invalid-status");
-    expect(violationsOf(result)).toContain("status.residual.invalid-severity");
+  describe("removal-at-terminal invariant (no listed id resolves to a terminal/missing snapshot)", () => {
+    test("path input: listed entry whose snapshot is missing is a violation", () => {
+      const dir = tmpRoot("status-v2-snapshot-missing-");
+      try {
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(violationsOf(result)).toContain("status.workflow.snapshot-missing");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("path input: listed entry resolving to a terminal snapshot is a violation", async () => {
+      const dir = tmpRoot("status-v2-terminal-");
+      try {
+        await writeTerminalSnapshot(dir, "wf-1");
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(violationsOf(result)).toContain("status.workflow.terminal-listed");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("path input: listed entry resolving to an active (running) snapshot validates clean", async () => {
+      const dir = tmpRoot("status-v2-active-");
+      try {
+        await writeRunningSnapshot(dir, "wf-1");
+        const statusPath = join(dir, "status.json");
+        writeJson(statusPath, v2doc({ workflows: [wfEntry()] }));
+        const result = validateStatusV2(statusPath);
+        expect(result.ok).toBe(true);
+        expect(result.violations).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("doc input without harnessDir skips the on-disk invariant check (structure only)", () => {
+      const result = validateStatusV2(v2doc({ workflows: [wfEntry()] }));
+      expect(result.ok).toBe(true);
+    });
+
+    test("explicit harnessDir opts enable the invariant check for doc input", () => {
+      const dir = tmpRoot("status-v2-doc-harness-");
+      try {
+        const result = validateStatusV2(v2doc({ workflows: [wfEntry()] }), { harnessDir: dir });
+        expect(violationsOf(result)).toContain("status.workflow.snapshot-missing");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+describe("validateStatus (relocated v2 validator — v1 handling deleted in Task 3, hard cutover)", () => {
+  test("the public name is the v2 validator (relocation, not a dual path)", () => {
+    expect(validateStatus).toBe(validateStatusV2);
   });
 
-  test("non-object residual entry inside residual_findings aggregates into the gate result", () => {
-    // Full-path gate: every list entry routes through validateResidual
-    // (status.ts:435-437), so a non-object entry is rejected at doc level too.
-    const result = validateStatus(doc({ residual_findings: { "plan-a": ["oops"] } }));
+  test("v2 documents validate clean through the relocated name", () => {
+    expect(validateStatus(v2doc()).ok).toBe(true);
+  });
+
+  test("v1 input fails closed through the relocated name with the migrate hint", () => {
+    const result = validateStatus(doc());
     expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toContain("status.residual.invalid");
+    expect(violationsOf(result)).toContain("status.migration-required");
+  });
+});
+
+describe("registerWorkflow / unregisterWorkflow (root writers under the root-file write lock)", () => {
+  const entry: WorkflowEntry = { id: "wf-1", type: "plan", started_at: "2026-08-19T08:00:00Z", dir: "workflows/wf-1" };
+
+  async function harnessWithRunningSnapshot(prefix: string): Promise<string> {
+    const dir = tmpRoot(prefix);
+    await writeRunningSnapshot(dir, "wf-1");
+    return dir;
+  }
+
+  test("registerWorkflow creates the v2 root when status.json is missing and appends the entry", async () => {
+    const dir = await harnessWithRunningSnapshot("status-register-create-");
+    try {
+      const statusPath = join(dir, "status.json");
+      const doc = await registerWorkflow(statusPath, entry);
+      expect(doc.version).toBe(2);
+      expect(doc.workflows).toEqual([entry]);
+      expect(doc.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      const onDisk = readJson(statusPath);
+      expect(onDisk.version).toBe(2);
+      expect((onDisk.workflows as unknown[]).length).toBe(1);
+      expect(validateStatusV2(statusPath).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("registerWorkflow upserts the same id (idempotent, no duplicate entries)", async () => {
+    const dir = await harnessWithRunningSnapshot("status-register-upsert-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await registerWorkflow(statusPath, entry);
+      await registerWorkflow(statusPath, { ...entry, started_at: "2026-08-19T10:00:00Z" });
+      const onDisk = readJson(statusPath);
+      expect((onDisk.workflows as unknown[]).length).toBe(1);
+      expect((onDisk.workflows as Array<Record<string, unknown>>)[0]).toMatchObject({ started_at: "2026-08-19T10:00:00Z" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("registerWorkflow refuses an entry whose snapshot is missing (invariant at write time, nothing written)", async () => {
+    const dir = tmpRoot("status-register-no-snapshot-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/snapshot/);
+      expect(existsSync(statusPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("registerWorkflow refuses to modify a v1 root (migration hint, root untouched)", async () => {
+    const dir = tmpRoot("status-register-v1-");
+    try {
+      const statusPath = join(dir, "status.json");
+      const v1 = '{\n  "version": 1,\n  "updated_at": "2026-08-08",\n  "plans": [],\n  "residual_findings": {},\n  "metadata": {}\n}\n';
+      writeFileSync(statusPath, v1);
+      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/mstar migrate/);
+      expect(readFileSync(statusPath, "utf8")).toBe(v1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("registerWorkflow refuses an invalid entry", async () => {
+    const dir = await harnessWithRunningSnapshot("status-register-invalid-entry-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await expect(registerWorkflow(statusPath, { ...entry, type: "sprint" })).rejects.toThrow(/invalid workflow entry/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unregisterWorkflow removes the entry and bumps updated_at", async () => {
+    const dir = await harnessWithRunningSnapshot("status-unregister-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await registerWorkflow(statusPath, entry);
+      const after = await unregisterWorkflow(statusPath, "wf-1");
+      expect(after.workflows).toEqual([]);
+      const onDisk = readJson(statusPath);
+      expect((onDisk.workflows as unknown[]).length).toBe(0);
+      expect(validateStatusV2(statusPath).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unregisterWorkflow is idempotent: removing an absent id is a no-op with no write", async () => {
+    const dir = await harnessWithRunningSnapshot("status-unregister-idem-");
+    try {
+      const statusPath = join(dir, "status.json");
+      await registerWorkflow(statusPath, entry);
+      const before = readFileSync(statusPath, "utf8");
+      const after = await unregisterWorkflow(statusPath, "no-such-id");
+      expect((after.workflows as unknown[]).length).toBe(1);
+      expect(readFileSync(statusPath, "utf8")).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unregisterWorkflow on a missing root is a no-op that never creates the file", async () => {
+    const dir = tmpRoot("status-unregister-missing-");
+    try {
+      const statusPath = join(dir, "status.json");
+      const after = await unregisterWorkflow(statusPath, "wf-1");
+      expect(after.workflows).toEqual([]);
+      expect(existsSync(statusPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

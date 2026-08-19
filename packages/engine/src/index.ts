@@ -53,21 +53,27 @@ export type {
   PlanRow,
   ResidualEntry,
   StatusDoc,
+  StatusV2Doc,
   TechDebtCheck,
   TechDebtRollup,
   TechDebtSummary,
+  WorkflowEntry,
 } from "./status.js";
 export {
   archiveResiduals,
   findingsCleanupGate,
   normalizeSeverity,
+  registerWorkflow,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
   techDebtRollup,
+  unregisterWorkflow,
   validatePlanRow,
   validateResidual,
   validateStatus,
+  validateStatusV2,
+  validateWorkflowEntry,
 } from "./status.js";
 export type {
   ClaimLeaseFields,

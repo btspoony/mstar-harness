@@ -47,6 +47,7 @@ import {
   scaffoldHarness,
   validateGitignore,
 } from "../src/path.js";
+import { validateStatusV2 } from "../src/status.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -806,7 +807,7 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
 });
 
 describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates/status.empty.json)", () => {
-  test("creates .mstar/{plans,iterations,knowledge,specs,sdd} and status.json from the empty template", () => {
+  test("creates .mstar/{plans,iterations,knowledge,specs,sdd} and a v2 status.json from the empty template", () => {
     const root = tmpRoot("path-scaffold-");
     try {
       const harnessDir = scaffoldHarness(root);
@@ -821,9 +822,14 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       ]);
       // Byte-identical to skills/mstar-plan-artifacts/templates/status.empty.json
       // (embedded constant — engine never reads skill files at runtime).
-      expect(readFileSync(join(harnessDir, "status.json"), "utf8")).toBe(
-        '{\n  "version": 1,\n  "updated_at": "1970-01-01",\n  "plans": [],\n  "residual_findings": {},\n  "metadata": {}\n}\n',
+      // Plan Task 3 ruling: the template is the v2 shape so a scaffolded
+      // harness is never an un-migrated (v1) tree.
+      const statusPath = join(harnessDir, "status.json");
+      expect(readFileSync(statusPath, "utf8")).toBe(
+        '{\n  "version": 2,\n  "updated_at": "1970-01-01",\n  "workflows": []\n}\n',
       );
+      // The scaffolded root validates clean under the v2 validator.
+      expect(validateStatusV2(statusPath).ok).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
