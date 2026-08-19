@@ -186,19 +186,56 @@ function eventTargetPaths(input: unknown): string[] {
 type HarnessDocKind = "status" | "snapshot" | "register";
 
 /**
+ * Directory/entry check (never throws — a missing or unreadable path is
+ * simply not a marker).
+ */
+function hasEntry(dir: string, name: string): boolean {
+  try {
+    statSync(join(dir, name));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the harness root containing `startDir` by marker probe (fix-wave
+ * W-REV-1): the nearest ancestor holding the v2 coordination-document
+ * markers — a `status.json` root file plus `workflows/` and `projects/`
+ * directories — IS the harness root. Unlike `resolveHarnessDir`'s rung-3
+ * `plans/` probe, this never mistakes the NESTED `{HARNESS_DIR}/plans`
+ * subdir of the default `.mstar` layout for the root, so coordination docs
+ * inside a default-layout root stay gated. Returns `null` when no ancestor
+ * carries the markers — callers fall back to `resolveHarnessDir` for
+ * declared roots (`.mstarc` `harness_dir` / `MSTAR_HARNESS_DIR`) that are
+ * not yet populated with all three markers.
+ */
+function resolveHarnessRootOf(target: string): string | null {
+  let dir = resolve(target);
+  for (;;) {
+    if (hasEntry(dir, STATUS_FILE) && hasEntry(dir, "workflows") && hasEntry(dir, "projects")) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
  * Classify `targetPath` as a canonical `{HARNESS_DIR}` coordination
  * document: basename is `status.json` at the harness root, `snapshot.json`
  * under `workflows/<id>/`, or `residuals.json` under `projects/<id>/`
- * (harness-relative, one path component each), AND
- * `resolveHarnessDir(dirname(path))` resolves. Everything else is not a
- * gated write. Returns the harness dir + doc kind when gated.
+ * (harness-relative, one path component each), AND the harness root
+ * resolves — marker probe first (`status.json` + `workflows/` + `projects/`
+ * ancestors, fix-wave W-REV-1), `resolveHarnessDir` as the declared-root
+ * fallback. Everything else is not a gated write. Returns the harness dir +
+ * doc kind when gated.
  */
 function harnessDocKindOfTarget(targetPath: unknown): { harnessDir: string; kind: HarnessDocKind } | null {
   if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
   const resolved = resolve(targetPath);
   const name = basename(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE) return null;
-  const harnessDir = resolveHarnessDir(dirname(resolved));
+  const harnessDir = resolveHarnessRootOf(dirname(resolved)) ?? resolveHarnessDir(dirname(resolved));
   if (harnessDir === null) return null;
   const rel = relative(harnessDir, resolved);
   if (name === STATUS_FILE && rel === STATUS_FILE) return { harnessDir, kind: "status" };

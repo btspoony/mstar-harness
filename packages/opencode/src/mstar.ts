@@ -28,11 +28,14 @@
  *   are lazy-loaded (`newValidatorsLoader`); on a stale engine those write
  *   lints are skipped with a one-time warning while the root status.json
  *   lint keeps working, and the plugin module itself always links.
- *   Hook coverage follows `resolveHarnessDir` — a repo `.mstarc`
- *   `[config] harness_dir`, else probing (`.mstar/` → `.agents/` →
- *   `.plans/`|`plans/`); repos with a non-probed harness root
- *   MUST set `MSTAR_HARNESS_DIR` in the OpenCode server env or declare
- *   `.mstarc` — see package README
+ *   Hook coverage resolves the harness root from the target itself
+ *   (fix-wave W-REV-1): the marker probe (`status.json` + `workflows/` +
+ *   `projects/` ancestor, correct for the default `.mstar` layout whose
+ *   nested `plans/` rung used to shadow the root), falling back to
+ *   `resolveHarnessDir` — a repo `.mstarc` `[config] harness_dir`, else
+ *   probing (`.mstar/` → `.agents/` → `.plans/`|`plans/`); repos with a
+ *   non-probed harness root MUST set `MSTAR_HARNESS_DIR` in the OpenCode
+ *   server env or declare `.mstarc` — see package README
  *   "Status write lint (hook coverage)" (qc2 F-006).
  * - Dual-mode `beforeDispatch` dispatch lint (roadmap §8.5): on `task`-tool
  *   executions (subagent dispatch), validates the Assignment header — field
@@ -329,19 +332,54 @@ function warnNewValidatorsDegraded(log: StatusLogger, reason: "missing" | "error
  * registers. Each kind maps to its engine validator. */
 type HarnessDocKind = "status" | "snapshot" | "register";
 
+/** Directory/entry check (never throws — a missing or unreadable path is
+ * simply not a marker). */
+function hasEntry(dir: string, name: string): boolean {
+  try {
+    fs.statSync(path.join(dir, name));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the harness root containing `startDir` by marker probe (fix-wave
+ * W-REV-1): the nearest ancestor holding the v2 coordination-document
+ * markers — a `status.json` root file plus `workflows/` and `projects/`
+ * directories — IS the harness root. Unlike `resolveHarnessDir`'s rung-3
+ * `plans/` probe, this never mistakes the NESTED `{HARNESS_DIR}/plans`
+ * subdir of the default `.mstar` layout for the root, so coordination docs
+ * inside a default-layout root stay gated. Returns `null` when no ancestor
+ * carries the markers — callers fall back to `resolveHarnessDir` for
+ * declared roots (`.mstarc` `harness_dir` / `MSTAR_HARNESS_DIR`) that are
+ * not yet populated with all three markers.
+ */
+function resolveHarnessRootOf(target: string): string | null {
+  let dir = path.resolve(target);
+  for (;;) {
+    if (hasEntry(dir, STATUS_FILE) && hasEntry(dir, "workflows") && hasEntry(dir, "projects")) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 /**
  * Classify `targetPath` as a canonical `{HARNESS_DIR}` coordination
  * document: basename is `status.json` at the harness root, `snapshot.json`
  * under `workflows/<id>/`, or `residuals.json` under `projects/<id>/`
- * (harness-relative, one path component each), AND
- * `resolveHarnessDir(dirname(path))` resolves. Returns the harness dir +
- * doc kind when gated, `null` otherwise.
+ * (harness-relative, one path component each), AND the harness root
+ * resolves — marker probe first (`status.json` + `workflows/` + `projects/`
+ * ancestors, fix-wave W-REV-1), `resolveHarnessDir` as the declared-root
+ * fallback. Returns the harness dir + doc kind when gated, `null`
+ * otherwise.
  */
 function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind: HarnessDocKind } | null {
   const resolved = path.resolve(targetPath);
   const name = path.basename(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE) return null;
-  const harnessDir = resolveHarnessDir(path.dirname(resolved));
+  const harnessDir = resolveHarnessRootOf(path.dirname(resolved)) ?? resolveHarnessDir(path.dirname(resolved));
   if (!harnessDir) return null;
   const rel = path.relative(harnessDir, resolved);
   if (name === STATUS_FILE && rel === STATUS_FILE) return { harnessDir, kind: "status" };
@@ -355,7 +393,8 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
  * §8.5 `beforeStatusWrite`, v3 hard cutover).
  *
  * Given the target path of a file write, resolves `{HARNESS_DIR}` from the
- * target via the engine (`path.resolveHarnessDir` find-first-stop) and runs
+ * target (marker probe first — fix-wave W-REV-1 — with the engine
+ * `path.resolveHarnessDir` declared-root fallback) and runs
  * the matching engine validator on the document about to be written
  * (`opts.doc`) or on the current file: `status.validateStatus` for the v2
  * root, `workflow.validateWorkflowSnapshot` for
