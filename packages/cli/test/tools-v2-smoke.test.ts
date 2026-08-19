@@ -105,6 +105,72 @@ function setupMstarRepo(): SmokeRepo {
   return { root, linked: "", harness: join(root, MSTAR_REL), snapshotPath: "", mstar: join(root, MSTAR_REL) };
 }
 
+/**
+ * Pathological double-harness repo (W-REV-3): an outer FULL-marker root
+ * (`status.json` + `workflows/` + `projects/` at the repo root) with a
+ * nested SPARSE harness (`inner/.mstar/` — `workflows/` + `projects/` but
+ * NO `status.json` and NO `plans/`, so the marker probe skips it while the
+ * name probe still finds it). Coordination docs live only in the inner
+ * harness; the outer root carries the markers that make the probe return
+ * the WRONG root.
+ */
+function setupDoubleHarnessRepo(): SmokeRepo {
+  const root = mkdtempSync(join(tmpdir(), "tools-smoke-double-"));
+  // Outer full-marker root.
+  writeFileSync(
+    join(root, "status.json"),
+    JSON.stringify({ version: 2, updated_at: "2026-08-19", workflows: [] }, null, 2),
+  );
+  mkdirSync(join(root, "workflows"));
+  mkdirSync(join(root, "projects"));
+  // Inner sparse harness (hard compass so the hook gate can block).
+  const inner = join(root, "inner", ".mstar");
+  mkdirSync(join(inner, "workflows", "wf-inner"), { recursive: true });
+  mkdirSync(join(inner, "projects", "_inner"), { recursive: true });
+  mkdirSync(join(inner, "iterations", "iter-inner"), { recursive: true });
+  writeFileSync(
+    join(inner, "iterations", "iter-inner", "delivery-compass.md"),
+    [
+      "---",
+      "iteration_id: iter-inner",
+      "start_date: 2026-08-01",
+      "status: active",
+      "enforcement: hard",
+      "iteration_base_branch: main",
+      "target_branch: main",
+      "plans:",
+      "  - plan-a",
+      "---",
+      "",
+      "# iter-inner Delivery Compass",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(inner, "workflows", "wf-inner", "snapshot.json"),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        id: "wf-inner",
+        type: "plan",
+        status: "running",
+        started_at: "2026-08-01",
+        updated_at: "2026-08-19",
+        plans: [],
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(join(inner, "projects", "_inner", "residuals.json"), JSON.stringify({ entries: {} }, null, 2));
+  git(["init", "-q"], root);
+  git(["config", "user.email", "tools-smoke@example.com"], root);
+  git(["config", "user.name", "Tools Smoke"], root);
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base"], root);
+  return { root, linked: "", harness: join(root, "inner", ".mstar"), snapshotPath: "", mstar: "" };
+}
+
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
@@ -464,6 +530,101 @@ describe("default .mstar root layout (W-REV-2)", () => {
     // Non-canonical snapshot layout stays ungated (silent pass) even on the
     // .mstar root — the fix must not over-gate.
     const stray = join(root, ".mstar", "workflows", "snapshot.json");
+    writeFileSync(stray, JSON.stringify({ schema_version: 99 }));
+    const strayRes = await handler!({ toolName: "write", input: { path: stray, content: "{}" } });
+    expect(strayRes).toBeUndefined();
+  });
+});
+
+describe("pathological double harness (W-REV-3)", () => {
+  // Regression: `harnessDocKindOfTarget` resolves the root by marker probe
+  // (`resolveHarnessRootOf`) FIRST — when a nested SPARSE harness (a
+  // `.mstar/` root missing one of the three full markers) sits below an
+  // outer FULL-marker root, the probe returns the OUTER root, the inner
+  // doc's rel falls outside the canonical set, and the doc is silently
+  // UNGATED. The fix retries `resolveHarnessDir` (name probe) when the
+  // probe root hit but rel is non-canonical, so inner docs stay gated.
+  let doubleRepo: SmokeRepo | undefined;
+
+  beforeAll(() => {
+    doubleRepo = setupDoubleHarnessRepo();
+  });
+
+  afterAll(() => {
+    if (doubleRepo) rmSync(doubleRepo.root, { recursive: true, force: true });
+  });
+
+  test("mstar_status_validate: inner sparse-harness docs gated under an outer full-marker root", async () => {
+    const root = doubleRepo!.root;
+    const snapRes = await runTool(mstarStatusValidate, root, {
+      path: join("inner", ".mstar", "workflows", "wf-inner", "snapshot.json"),
+    });
+    expect(snapRes.isError).not.toBe(true);
+    expect(snapRes.content[0]!.text).toContain("snapshot valid");
+
+    const regRes = await runTool(mstarStatusValidate, root, {
+      path: join("inner", ".mstar", "projects", "_inner", "residuals.json"),
+    });
+    expect(regRes.isError).not.toBe(true);
+    expect(regRes.content[0]!.text).toContain("register valid");
+
+    // The outer full-marker root still gates its own docs.
+    const outerRes = await runTool(mstarStatusValidate, root, { path: "status.json" });
+    expect(outerRes.isError).not.toBe(true);
+    expect(outerRes.content[0]!.text).toContain("status.json valid");
+
+    // Non-canonical layout inside the inner harness stays rejected — the
+    // fix must not over-gate.
+    const stray = join(root, "inner", ".mstar", "workflows", "snapshot.json");
+    writeFileSync(stray, "{}");
+    const strayRes = await runTool(mstarStatusValidate, root, { path: stray });
+    expect(strayRes.isError).toBe(true);
+    expect(strayRes.content[0]!.text).toContain("not a canonical");
+  });
+
+  test("omp hook Gate 1: inner sparse-harness docs hard-blocked under an outer full-marker root", async () => {
+    const root = doubleRepo!.root;
+    let handler: ((event: unknown) => Promise<unknown>) | undefined;
+    mstarGates({
+      on: (_event: string, fn: (event: unknown) => Promise<unknown>) => {
+        handler = fn;
+      },
+      logger: { warn: () => undefined, error: () => undefined },
+    } as never);
+    expect(handler).toBeDefined();
+
+    const snapshotPath = join(root, "inner", ".mstar", "workflows", "wf-inner", "snapshot.json");
+    const validSnapshot = JSON.parse(readFile(snapshotPath)) as Record<string, unknown>;
+
+    // The inner harness compass hardens the repo — an invalid snapshot
+    // write must be blocked (the classification must reach the gate).
+    const blocked = await handler!({
+      toolName: "write",
+      input: { path: snapshotPath, content: JSON.stringify({ schema_version: 99 }) },
+    });
+    const blockedResult = blocked as { block: boolean; reason: string } | undefined;
+    expect(blockedResult?.block).toBe(true);
+    expect(blockedResult?.reason).toContain("workflow.snapshot");
+
+    const passed = await handler!({
+      toolName: "write",
+      input: { path: snapshotPath, content: JSON.stringify(validSnapshot) },
+    });
+    expect(passed).toBeUndefined();
+
+    // Root status.json kind still gated through the inner sparse root
+    // (file absent at classification time — the write-gate scenario).
+    const rootPath = join(root, "inner", ".mstar", "status.json");
+    const rootBlocked = await handler!({
+      toolName: "write",
+      input: { path: rootPath, content: JSON.stringify({ version: 1, plans: [] }) },
+    });
+    const rootBlockedResult = rootBlocked as { reason: string } | undefined;
+    expect(rootBlockedResult?.reason).toContain("status.migration-required");
+
+    // Non-canonical snapshot layout stays ungated (silent pass) — the fix
+    // must not over-gate.
+    const stray = join(root, "inner", ".mstar", "workflows", "snapshot.json");
     writeFileSync(stray, JSON.stringify({ schema_version: 99 }));
     const strayRes = await handler!({ toolName: "write", input: { path: stray, content: "{}" } });
     expect(strayRes).toBeUndefined();

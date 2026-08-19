@@ -235,13 +235,25 @@ function harnessDocKindOfTarget(targetPath: unknown): { harnessDir: string; kind
   const resolved = resolve(targetPath);
   const name = basename(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE) return null;
-  const harnessDir = resolveHarnessRootOf(dirname(resolved)) ?? resolveHarnessDir(dirname(resolved));
+  const classify = (harnessDir: string): { harnessDir: string; kind: HarnessDocKind } | null => {
+    const rel = relative(harnessDir, resolved);
+    if (name === STATUS_FILE && rel === STATUS_FILE) return { harnessDir, kind: "status" };
+    if (name === SNAPSHOT_FILE && /^workflows\/[^/]+\/snapshot\.json$/.test(rel)) return { harnessDir, kind: "snapshot" };
+    if (name === REGISTER_FILE && /^projects\/[^/]+\/residuals\.json$/.test(rel)) return { harnessDir, kind: "register" };
+    return null;
+  };
+  const probeRoot = resolveHarnessRootOf(dirname(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname(resolved));
   if (harnessDir === null) return null;
-  const rel = relative(harnessDir, resolved);
-  if (name === STATUS_FILE && rel === STATUS_FILE) return { harnessDir, kind: "status" };
-  if (name === SNAPSHOT_FILE && /^workflows\/[^/]+\/snapshot\.json$/.test(rel)) return { harnessDir, kind: "snapshot" };
-  if (name === REGISTER_FILE && /^projects\/[^/]+\/residuals\.json$/.test(rel)) return { harnessDir, kind: "register" };
-  return null;
+  const classified = classify(harnessDir);
+  if (classified !== null) return classified;
+  // W-REV-3: probe root hit but rel non-canonical — pathological double
+  // harness (a nested sparse harness below a full-marker ancestor). Rebuild
+  // rel against the declared-root resolution before giving up.
+  if (probeRoot === null) return null;
+  const fallbackDir = resolveHarnessDir(dirname(resolved));
+  if (fallbackDir === null || fallbackDir === probeRoot) return null;
+  return classify(fallbackDir);
 }
 
 // ---------------------------------------------------------------------------

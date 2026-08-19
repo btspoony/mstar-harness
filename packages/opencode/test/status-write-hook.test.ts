@@ -298,6 +298,64 @@ describe("validateStatusWrite (exported hook module)", () => {
     }
   });
 
+  test("pathological double harness: inner sparse-harness docs stay gated under an outer full-marker root (W-REV-3)", async () => {
+    // Regression: classification resolves the root by marker probe FIRST —
+    // when a nested SPARSE harness (a `.mstar/` root missing one of the
+    // three full markers) sits below an outer FULL-marker root, the probe
+    // returns the OUTER root, the inner doc's rel falls outside the
+    // canonical set, and the doc is silently UNGATED. The fix retries
+    // `resolveHarnessDir` (name probe) when the probe root hit but rel is
+    // non-canonical, so inner docs stay gated.
+    const project = makeProject();
+    // Outer full-marker root at the repo root.
+    writeFileSync(join(project, "status.json"), JSON.stringify(validDoc, null, 2));
+    mkdirSync(join(project, "workflows"));
+    mkdirSync(join(project, "projects"));
+    // Inner sparse harness: `.mstar/` with workflows/ + projects/ but NO
+    // status.json and NO plans/ — the marker probe skips it, the name probe
+    // still finds it.
+    const harness = join(project, "inner", ".mstar");
+    mkdirSync(join(harness, "workflows", "wf-inner"), { recursive: true });
+    mkdirSync(join(harness, "projects", "_inner"), { recursive: true });
+    const snapshotPath = join(harness, "workflows", "wf-inner", "snapshot.json");
+    const registerPath = join(harness, "projects", "_inner", "residuals.json");
+    const statusPath = join(harness, "status.json");
+    try {
+      const warnings: string[] = [];
+      const log: StatusLogger = (level, message) => {
+        if (level === "warn") warnings.push(message);
+      };
+      // Snapshot kind still reaches the snapshot validator.
+      const snapResult = await validateStatusWrite(snapshotPath, { doc: invalidSnapshotDoc, log });
+      expect(snapResult).not.toBeNull();
+      expect(snapResult!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("workflow.snapshot.invalid-type"))).toBe(true);
+      warnings.length = 0;
+      const snapOk = await validateStatusWrite(snapshotPath, { doc: validSnapshotDoc, log });
+      expect(snapOk!.ok).toBe(true);
+      // Register kind still reaches the register validator.
+      const regResult = await validateStatusWrite(registerPath, { doc: invalidRegisterDoc, log });
+      expect(regResult).not.toBeNull();
+      expect(regResult!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("project.register.invalid-entry-list"))).toBe(true);
+      // Root status.json kind still reaches the status validator (file absent
+      // at classification time — the write-gate scenario).
+      warnings.length = 0;
+      const statusResult = await validateStatusWrite(statusPath, { doc: invalidDoc, log });
+      expect(statusResult).not.toBeNull();
+      expect(statusResult!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("status.workflow.invalid-type"))).toBe(true);
+      // Non-canonical snapshot (not under workflows/<id>/) stays ungated.
+      const stray = join(harness, "workflows", "snapshot.json");
+      writeFileSync(stray, JSON.stringify(invalidSnapshotDoc));
+      warnings.length = 0;
+      expect(await validateStatusWrite(stray, { log })).toBeNull();
+      expect(warnings).toEqual([]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   test("non-string targetPath stays silent (no paths[0] abort)", async () => {
     // Bun path.resolve(object) → `The "paths[0]" property must be of type string, got object`.
     const entries: Array<[string, string]> = [];
