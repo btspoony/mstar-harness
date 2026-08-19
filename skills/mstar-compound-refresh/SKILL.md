@@ -15,7 +15,7 @@ Knowledge documents in `{KNOWLEDGE_DIR}` age. Code changes, conventions evolve, 
 
 ## 产物与操作路径
 
-**SSOT**: `mstar-plan-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md` + `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`（引用更新）。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
+**SSOT**: `mstar-plan-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md` + `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`（引用更新；v2 中知识引用挂在 workflow snapshot plan 行 `metadata.knowledge_refs`，见下）。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
 
 > **Engine check (when available):** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (or `import { scopeGuard, compoundRefreshScope } from "@mstar-harness/engine"` in a host hook) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`, `{HARNESS_DIR}/status.json`) and guard every write against it. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -105,7 +105,7 @@ Classify each doc → Keep / Update / Consolidate / Replace / Delete. Apply chan
 ### Phase 4: Update indexes
 
 1. Update `{KNOWLEDGE_DIR}/README.md` index table — update Status column, add/remove rows.
-2. If doc was linked from `status.json` metadata, update references.
+2. If a doc was linked from knowledge refs (workflow snapshot plan row `metadata.knowledge_refs` / v1 root `status.json` metadata), update the references.
 
 ### Phase 5: Report
 
@@ -146,7 +146,7 @@ Read that file from the mstar-compound skill directory before Phase 6.
 
 ## Evidence
 
-正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + `{KNOWLEDGE_DIR}/README.md` 索引更新（Phase 4）+ `status.json` 引用同步 + 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）。
+正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + `{KNOWLEDGE_DIR}/README.md` 索引更新（Phase 4）+ 知识引用同步（workflow snapshot plan 行 `knowledge_refs`；v1 根 `status.json` legacy 引用） + 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）。
 
 ## References
 

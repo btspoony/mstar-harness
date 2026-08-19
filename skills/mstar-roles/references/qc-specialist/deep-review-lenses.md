@@ -19,7 +19,7 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 | S2 | **触及敏感模块** | diff 中包含 `auth/`、`payment/`、`security/`、`permission/`、`login/`、`migration/`、`db/migrate/`、`schema/` 路径 |
 | S3 | **首次涉足新领域** | `{KNOWLEDGE_DIR}` 中不存在 diff 触及的模块名；或 plan metadata 标记为首次实现 |
 | S4 | **数据结构变更** | diff 中包含 DDL（`CREATE TABLE`、`ALTER TABLE`、`ADD COLUMN`、schema 文件、migration 文件） |
-| S5 | **plan 显式声明高风险** | plan 正文或 `status.json` 的 plan metadata 中包含 `high-risk`、`critical-path`、`breaking-change` 标记 |
+| S5 | **plan 显式声明高风险** | plan 正文或 workflow snapshot plan 行的 metadata 中包含 `high-risk`、`critical-path`、`breaking-change` 标记 |
 | S6 | **多模块耦合** | diff 跨越 ≥3 个不同模块/包/目录边界 |
 
 **判定**：满足 ≥2 条 → 启用 deep review。QC reviewer 在报告 `## Scope` 节中写明判定依据（例：`Deep review: triggered (S1: 350 lines / 12 files, S2: auth/ + payment/)`）。

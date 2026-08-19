@@ -51,7 +51,7 @@ Understand:
 - What the working solution was
 - Why the solution works (root cause)
 - Which files/modules were involved
-- The plan_id if applicable (link to `status.json`)
+- The plan_id if applicable (link to the workflow snapshot plan row)
 
 If `{KNOWLEDGE_DIR}/README.md` exists, scan its index for related existing documents.
 
@@ -92,7 +92,7 @@ date: YYYY-MM-DD
 problem_type: <enum value>
 category: <directory name>
 severity: critical|high|medium|low
-plan_id: <optional, link to status.json>
+plan_id: <optional, link to the workflow snapshot plan row>
 tags: [<keywords>]
 ---
 ```
@@ -156,7 +156,7 @@ If `CONCEPTS.md` doesn't exist yet, ask whether to seed it. A seed populates the
 1. Add a row to `{KNOWLEDGE_DIR}/README.md` index table (create if missing):
    - Document (link), Source Plan (`plan_id`), Description, Status (`Active`)
 
-2. If `plan_id` was provided, optionally update `status.json` metadata to reference this doc under `knowledge_refs`.
+2. If `plan_id` was provided, optionally update the workflow snapshot plan row (`workflows/<id>/snapshot.json` → `plans[].metadata`) to reference this doc under `knowledge_refs`.
 
 **iteration-close gate**: `mstar-iteration` §3.2 #5 — **each** new doc in the compound round must complete this phase; do not skip for lightweight captures.
 

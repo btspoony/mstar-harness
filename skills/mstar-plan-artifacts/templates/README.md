@@ -4,4 +4,4 @@ Copy these into `{HARNESS_DIR}` when bootstrapping a project. Path symbols (`{HA
 
 | File | Copy to | Notes |
 |------|---------|--------|
-| `status.empty.json` | `{HARNESS_DIR}/status.json` | Root `residual_findings` only (see **`mstar-plan-artifacts` SKILL.md**). Replace `updated_at` with the real date. Iteration Phase 2 lease fields (`control_worktree_path`, `execution_lease`, `integration_merge_lease`) are added at runtime — not in the empty template. |
+| `status.empty.json` | `{HARNESS_DIR}/status.json` | The **v2 root register** shape (`version: 2`, `updated_at`, `workflows: []`) — see **`mstar-plan-artifacts` SKILL.md** + `references/status-and-residuals.md`. Replace `updated_at` with the real date. Per-lifecycle snapshot / register / lease fields are created at runtime by engine writers (`workflows/<id>/snapshot.json`, `projects/<id>/residuals.json`) — not in the empty template. |

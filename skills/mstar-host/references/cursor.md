@@ -12,7 +12,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (Task tool uses same turn model
 
 ## Plan mode × harness dual-write
 
-When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json`.
+When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json` (v2 root `workflows[]`) + `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[]` rows).
 
 Before first **CreatePlan**: Read `mstar-plan-conventions`, `mstar-plan-artifacts`, Prepare gates from `mstar-phase-gates` when not hotfix. Full procedure: **`cursor-plan-mode-bridge.md`**.
 
@@ -20,13 +20,13 @@ Before first **CreatePlan**: Read `mstar-plan-conventions`, `mstar-plan-artifact
 
 | Todo ID | Purpose |
 |---------|---------|
-| `harness-init` | Init `{HARNESS_DIR}`, `{PLAN_DIR}`, process-artifact gitignore set (`plans/`, `iterations/`, `sdd/`, `status.json`, …), `archived/residuals/`, `status.json` |
-| `spec-register` | Register `plan_id` in `status.json.plans[]` + spec stub if applicable |
+| `harness-init` | Init `{HARNESS_DIR}`, `{PLAN_DIR}`, process-artifact gitignore set (`plans/`, `iterations/`, `sdd/`, `status.json`, `workflows/`, `projects/`, …), `status.json` (v2 template) |
+| `spec-register` | Register the root `workflows[]` entry + snapshot plan row (`{WORKFLOW_DIR}/<id>/snapshot.json` → `plans[]`) + spec stub if applicable |
 | `mirror-plan` | Write SSOT main plan under `{PLAN_DIR}/` |
 
-Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT `- [x]` → optional `status.json` sync → `git log -1 --oneline` evidence.
+Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT `- [x]` → optional snapshot sync → `git log -1 --oneline` evidence.
 
-Before **SwitchMode → Agent**: mirror plan exists; `status.json` lists `plan_id`; bootstrap todos done. **Never** use only the Cursor plan URI as **Plan Path**.
+Before **SwitchMode → Agent**: mirror plan exists; snapshot lists `plan_id` + root `workflows[]` entry; bootstrap todos done. **Never** use only the Cursor plan URI as **Plan Path**.
 
 After **Build**: treat the run as plan resume, not `/pm` replay. Reload `mstar-harness-core` + this Cursor reference, resume Morning Star plans as `project-manager` orchestration, and dispatch implementation through Task unless the user explicitly overrides the harness.
 

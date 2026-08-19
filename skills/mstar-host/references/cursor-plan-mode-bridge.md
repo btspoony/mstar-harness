@@ -21,13 +21,24 @@ Bootstrap todos `harness-init` / `spec-register` / `mirror-plan` (emit first, in
 
 ### `spec-register` minimum fields
 
-Add one object to `status.json` → `plans[]`:
+Add a root `workflows[]` entry to `status.json` (v2) + one `plans[]` object to the workflow snapshot:
 
 ```json
+// {HARNESS_DIR}/status.json (v2 root) — active lifecycle entry
+{
+  "id": "<plan-id>",
+  "type": "plan",
+  "started_at": "YYYY-MM-DD",
+  "dir": "workflows/<plan-id>"
+}
+```
+
+```json
+// {WORKFLOW_DIR}/<plan-id>/snapshot.json — plan row (schema_version 1)
 {
   "id": "<plan-id>",
   "status": "Todo",
-        "file": ".mstar/plans/<plan-id>-<short-name>.md",
+  "file": ".mstar/plans/<plan-id>-<short-name>.md",
   "metadata": {
     "primary_spec": "<spec-id or path if known>",
     "description": "<one-line summary>"
@@ -35,14 +46,14 @@ Add one object to `status.json` → `plans[]`:
 }
 ```
 
-Set `updated_at` on `status.json` to today (`YYYY-MM-DD`). Commit **tracked results** in the business repo when applicable: `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/`, `{SPECS_DIR}/` (default git policy — see `mstar-plan-conventions`). Do **not** default `git add` for `status.json`, `plans/`, or `iterations/`.
+Set `updated_at` on `status.json` / the snapshot to today (`YYYY-MM-DD`). Commit **tracked results** in the business repo when applicable: `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/`, `{SPECS_DIR}/` (default git policy — see `mstar-plan-conventions`). Do **not** default `git add` for `status.json`, `workflows/`, `projects/`, `plans/`, or `iterations/`.
 
 ### `mirror-plan` minimum content
 
 - YAML or markdown frontmatter with `plan_id`, title, status (`Todo` / `InProgress` — not `Done` unless PM/QA authority).
 - **Task list** as markdown checkboxes (`- [ ]` / `- [x]`) matching CreatePlan implement todos.
 - **Roadmap / deferred scope** section when delivery is staged, partial, or uses a temporary workaround.
-- Link: “SSOT status: `{HARNESS_DIR}/status.json` → `plans[]` / `residual_findings`.”
+- Link: “SSOT status: `{HARNESS_DIR}/status.json` (v2 `workflows[]`) → `{WORKFLOW_DIR}/<id>/snapshot.json` `plans[]`; open residuals → `{PROJECT_DIR}/<id>/residuals.json`.”
 
 After **CreatePlan**, keep CreatePlan body and mirror file **in sync** when scope changes (update both in the same coordination round).
 
@@ -76,8 +87,8 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 ### Bootstrap (fixed prefix — complete before implement)
 
-1. harness-init — init .mstar/, status.json, process-artifact gitignore set, archived/residuals/
-2. spec-register — register plan_id in status.json; spec stub if applicable
+1. harness-init — init .mstar/, status.json (v2), process-artifact gitignore set
+2. spec-register — register the root `workflows[]` entry + snapshot plan row; spec stub if applicable
 3. mirror-plan — write .mstar/plans/<plan-id>-<short-name>.md
 
 ### Implement
@@ -104,7 +115,7 @@ Commit → SSOT checkbox → `status.json` sync → `git log -1 --oneline` evide
 Before switching from Plan to Agent for implementation (or declaring Plan phase complete):
 
 - [ ] `{PLAN_DIR}/<plan-id>-<name>.md` exists on disk
-- [ ] `status.json` contains `plans[]` entry with matching `id` and `file`
+- [ ] Root `status.json` `workflows[]` contains the entry and `{WORKFLOW_DIR}/<id>/snapshot.json` contains the `plans[]` row with matching `id` and `file`
 - [ ] Bootstrap todos `harness-init`, `spec-register`, `mirror-plan` are **done**
 - [ ] CreatePlan implement todos reference **task ids** traceable to SSOT plan checkboxes
 - [ ] If staged/partial/temporary, CreatePlan and SSOT plan both contain `Roadmap / deferred scope`
@@ -139,7 +150,7 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 
 **Single CreatePlan URI (HARD)**: one CreatePlan per Phase 1 Plan session. Updates use file edit tools on that path. If a duplicate plan file was created by mistake: merge into the original, delete the duplicate, keep View Plan on the original.
 
-**Bootstrap relationship**: ordinary per-plan work still uses `harness-init` / `spec-register` / `mirror-plan`. Phase 1 CreatePlan uses Phase 1 todos (`harness-init` → `finalize-compass-plans` → review-edit seats → `pm-lock` → `integration-branch`). Business `plans[]` rows should exist as drafts before Build when direction has converged.
+**Bootstrap relationship**: ordinary per-plan work still uses `harness-init` / `spec-register` / `mirror-plan`. Phase 1 CreatePlan uses Phase 1 todos (`harness-init` → `finalize-compass-plans` → review-edit seats → `pm-lock` → `integration-branch`). Snapshot `plans[]` rows should exist as drafts before Build when direction has converged.
 
 **Helpers**: third-party interview helpers are **not** named here; host **command** layer may use them only after feedback-close when gaps remain.
 

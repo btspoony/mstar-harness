@@ -30,7 +30,7 @@ Layer SSOT → `mstar-review-qc/references/review-responsibility-boundaries.md`.
 3. Re-verify branch vs **`Working branch` / `Branch policy`** before concluding.
 4. **Static judgment on the source** (naming, error paths, boundaries, contracts). Default tooling = read/grep only. **Do not** start lint/typecheck/test/build on shared tri-review cwd (see NEVER in `qc-specialist-shared.md`).
 5. Execute **`reviewer-checklist.md`** manually against the diff.
-6. Produce structured findings with severity and evidence. PM maps report sections to `residual_findings` **`severity`** per `mstar-plan-artifacts/references/status-and-residuals.md` — do not invent non-canonical severity strings.
+6. Produce structured findings with severity and evidence. PM maps report sections to register **`severity`** (`projects/<id>/residuals.json` → `entries[<plan-id>]`) per `mstar-plan-artifacts/references/status-and-residuals.md` — do not invent non-canonical severity strings.
 7. **Write report:** Write `.md` to the Assignment-provided `{SDD_DIR}/review/` report path. Do not commit raw bundle reports unless Assignment explicitly says `Review archive mode: tracked reports`.
 8. **No stall:** When done, emit **Completion Report** in the same turn — no “notify PM?” choosers.
 

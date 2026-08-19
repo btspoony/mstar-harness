@@ -52,7 +52,7 @@ Routing eval（Cursor 插件内回归用，**非**运行时必读）→ `.cursor
 - **`Done`**：仅 `@project-manager` 或 `@qa-engineer`。
 - 实现类可设 **`InReview`**，不可设 **`Done`**。
 
-`status.json` 字段与 residual → **`mstar-plan-artifacts`**。
+`status.json`（v2 根）/ workflow snapshot / project register 字段与 residual → **`mstar-plan-artifacts`**。
 
 ## Task category（路由摘要）
 
@@ -93,7 +93,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
-| `mstar-plan-artifacts` | 主 plan、review bundle / durable summaries、`status.json`、residual、knowledge、Done 归档 |
+| `mstar-plan-artifacts` | 主 plan、review bundle / durable summaries、`status.json`（v2 根）+ workflow snapshots + project register、residual、knowledge |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
 | `mstar-coding-behavior` | Think / Simplicity / Surgical / Debugging / Review Feedback / Goal-Driven / Communication |
@@ -148,7 +148,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 因默认 gitignore 致 feature 缺 plans 而 `Worktree mode: waived`（应保留 feature worktree + control 绝对 Plan Path / SDD dir；无 flock 仅 → `Plan parallelism: serial`） | `mstar-branch-worktree` · `mstar-iteration` §2.0 #5 · `phase-2-worktree-lease` |
 | 并行 writable implement 无隔离（L2 同 plan 多轨：N invoke ≠ worktree；L1 跨 plan：无 verified `execution_lease` + feature worktree） | `mstar-branch-worktree` L1/L2 · `mstar-iteration` §2.6 · `references/parallel-writable-pre-dispatch.md` |
 | 跨 plan 可写派发无 verified `execution_lease` / steal 活跃 lease / 并行 merge 入 `spec_integration_branch` | `mstar-iteration` · `mstar-plan-artifacts`（leases）· `mstar-branch-worktree` L1 |
-| `InProgress` 无 `execution_lease` 未恢复即可写派发 | `mstar-plan-artifacts` — orphan recovery |
+| `InProgress` 无 `execution_lease`（snapshot 行）未恢复即可写派发 | `mstar-plan-artifacts` — orphan recovery |
 | 混淆跨 plan lease 门控并行与单 plan 内 SDD 并行 implementer | `mstar-dispatch-gates` · `mstar-sdd` |
 | residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
 | `zero-residual` 下把可修 findings 登记为 open R# / 草草 `Approve with residuals` | `mstar-plan-artifacts` Findings cleanup modes · `mstar-review-qc` |

@@ -7,7 +7,7 @@
 **Precondition**: Phase 3 §3.5 exit 全 `[x]`；close commit 已 push 到 `spec_integration_branch`。
 
 1. 打印 **`## Phase 4: PR delivery`**
-2. Resolve target：`metadata.target_branch`（compass frontmatter 镜像）；缺失 → **STOP**，问用户
+2. Resolve target：snapshot `branch.target`（`target_branch`；compass frontmatter 镜像）；缺失 → **STOP**，问用户
 3. 创建 PR：`spec_integration_branch` → `target_branch`
 4. 记录 PR URL / number（Phase 5 会话 SSOT）
 5. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
@@ -24,7 +24,7 @@
 
 - Phase 5 在 PR head（`spec_integration_branch`）上 push 修复；**禁止**另开替代分支
 - **Checkout / worktree（HARD）**：Phase 5 是 PR 级 **hotfix** loop，**不是** Phase 2 plan 实现。修复直接在 **control worktree**（已检出 `spec_integration_branch` 的 checkout）上编辑、commit、再按 §5.1a push。**禁止**为 Phase 5 另开 feature / fix worktree；**禁止**把 Phase 2「control 禁止产品编辑 / 须 feature worktree」套用到 Phase 5。另开 worktree 浪费时间、磁盘与计算，与 Phase 5 快速收敛 CI/review 的目标相悖。
-- 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；Assignment **`Worktree path`** / cwd = control（`metadata.control_worktree_path` 或当前已在集成分支上的 checkout）；PM 线程不代写实现
+- 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；Assignment **`Worktree path`** / cwd = control（snapshot `control_worktree_path` 或当前已在集成分支上的 checkout）；PM 线程不代写实现
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
 - **Push cadence** → **§5.1a**（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）
 

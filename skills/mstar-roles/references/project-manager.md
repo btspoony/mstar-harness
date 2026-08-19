@@ -8,7 +8,7 @@ Before any non-trivial PM action, read in order:
 4. `mstar-plan-conventions` (path discovery, init, Spec branch summary)
 5. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 6. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
-7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json`, R#); `mstar-plan-artifacts` (InReview waves, review bundle naming)
+7. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-plan-artifacts` (`status.json` v2 root, workflow snapshots, R#); `mstar-plan-artifacts` (InReview waves, review bundle naming)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 
@@ -113,7 +113,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 
 - **NEVER** finish a dispatch turn with Assignment Markdown visible but **without** the matching host invokes when assignments were meant to start work (`dispatch incomplete` / paste-only failure).
 - **NEVER** split a required **parallel batch** of `N >= 2` invokes across multiple assistant messages when the host requires a single dispatch turn with all `N` calls.
-- **NEVER** register residuals only inside the plan narrative while skipping root `{HARNESS_DIR}/status.json` `residual_findings[<plan_id>]` when plan conventions require the SSOT field.
+- **NEVER** register residuals only inside the plan narrative while skipping the project register `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan_id>]` when plan conventions require the SSOT field.
 - **NEVER** write non-canonical residual `severity` strings—use only the machine enum from `mstar-plan-artifacts`.
 - **NEVER** under `Findings cleanup: zero-residual`, park fixable Critical/Warning/Suggestion as open R# or use `Approve with residuals` for them — fix-now + re-review; open residual only for true blocker-defer + Durable Roadmap (`mstar-plan-artifacts` Findings cleanup modes).
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
@@ -128,10 +128,10 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration` §1.6).
 - **NEVER** mark the last plan `Done` and then create a PR or declare the iteration complete without **`## Phase 3: iteration-close`** and `mstar-iteration` §3.1–§3.5 checklists.
 - **NEVER** treat final plan closure prose as iteration-close — compound, roadmap `delivered`, and compass `status: completed` require Phase 3.
-- **NEVER** steal or overwrite an active `execution_lease` or `integration_merge_lease` (no TTL, age, or inactivity authority); override only on explicit current-turn user instruction + audit `plans[].notes` (`mstar-plan-artifacts/references/status-and-residuals.md` — “Iteration execution leases”).
+- **NEVER** steal or overwrite an active `execution_lease` or `integration_merge_lease` (no TTL, age, or inactivity authority); override only on explicit current-turn user instruction + audit snapshot plan `notes` / `notes.jsonl` (`mstar-plan-artifacts/references/status-and-residuals.md` — "Iteration execution leases").
 - **NEVER** writable-dispatch for a plan without a **verified** `execution_lease` for that plan (resume only when same `holder` passes verify-held-lease against Assignment `Worktree path` / `Working branch`).
 - **NEVER** writable-dispatch when a plan is `InProgress` but has **no** `execution_lease` — complete orphan recovery first (`mstar-plan-artifacts` — “Orphan recovery”).
-- **NEVER** run or dispatch **parallel** integration merges into `spec_integration_branch` — merge is **serial** via `metadata.integration_merge_lease` from the control worktree (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
+- **NEVER** run or dispatch **parallel** integration merges into `spec_integration_branch` — merge is **serial** via the snapshot top-level `integration_merge_lease` from the control worktree (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
 - **NEVER** cross-plan writable implement without distinct per-plan verified `execution_lease` + feature worktree; `Plan parallelism: serial` forces serial **scheduling** only — it does **not** waive control worktree or lease gates (`mstar-iteration` §2.0 #5).
 - **NEVER** dispatch **cross-plan parallel** writable implement when same-host exclusive write lock is **not** available on the coordination `status.json` path (cross-host / no shared flock) — default **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel; exception only on current-turn user `Cross-host lease race: accepted` (or equivalent) + audit `plans[].notes` — **including when `Worktree mode: waived`** (`mstar-plan-artifacts` — “Hard gate — cross-plan parallel writable implement”).
 - **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree — keep feature worktrees; put absolute control **`Plan Path`** / **`SDD dir`** / **`Control harness root`** on Assignments (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」). No flock → serial scheduling only, not worktree waiver.
@@ -214,7 +214,7 @@ Pre-implement Gate Check:
 - PM_Task_Board_published: yes|no
 - batch_strategy_defined: yes|no
 - roadmap_written: yes|no|n/a
-- roadmap_location: <Plan section / PM Task Board / status.json / residual id / n/a>
+- roadmap_location: <Plan section / PM Task Board / workflow snapshot / project register / residual id / n/a>
 - assignment_batch_index: <e.g. 1/3>
 - coverage_ids: <e.g. T1,T2>
 - reason_if_single_assignment: <required when only one batch>
