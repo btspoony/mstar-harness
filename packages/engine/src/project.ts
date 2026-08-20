@@ -24,6 +24,12 @@
  *   validation delegates verbatim to `validateResidual` (status.ts), so the
  *   severity enum + lifecycle semantics are preserved at the new address.
  * - `_DEFAULT_PROJECT` fallback for project-less flows (compass ruling 2).
+ * - Theme-scoped research corpus `projects/<id>/references/` (plan
+ *   20260820-project-research-corpus Task 1; compass ruling 1): engine owns
+ *   `PROJECT_REFERENCES_DIR` + `listProjectReferenceFiles` — directory
+ *   metadata only (`readdirSync` with `withFileTypes`), never file bodies,
+ *   never a markdown schema; placement semantics are skills prose, not
+ *   engine validation.
  * - Project-register consumers (QC wave-1 W-D relocation): `findingsCleanupGate`
  *   (findings-cleanup modes; status-and-residuals.md § Findings cleanup
  *   modes) and `techDebtRollup` (the `metadata.tech_debt_summary` rollup
@@ -40,6 +46,9 @@ import { isOpenResidual, normalizeSeverity, validateResidual, type ResidualEntry
 
 /** Roadmap file name inside `projects/<id>/` (plan Task 4 — writer contract). */
 export const PROJECT_ROADMAP_FILE = "roadmap.md";
+
+/** Theme-scoped research directory name inside `projects/<id>/` (plan 20260820-project-research-corpus Task 1 — compass ruling 1). */
+export const PROJECT_REFERENCES_DIR = "references";
 
 /** Project register file name inside `projects/<id>/` (plan Task 4). */
 export const PROJECT_REGISTER_FILE = "residuals.json";
@@ -518,4 +527,45 @@ export function techDebtRollup(projectDir: string): TechDebtRollup {
   const overall = "DRIFT" as const;
 
   return { computed, stored, checks, overall };
+}
+
+/**
+ * List theme-scoped research files under `<projectDir>/references/` (plan
+ * 20260820-project-research-corpus Task 1 — compass ruling 1): top-level
+ * files plus files exactly one subdirectory deep; deeper nesting ignored;
+ * directories never listed; regular files only (`Dirent.isFile()`). Returns
+ * paths relative to the references root with `/` separators, sorted by code
+ * unit. Strays named exactly `roadmap.md` / `residuals.json` at the
+ * references **root** are excluded — project-layer filenames are never
+ * research rows. `projectDir` is the **per-project** directory (the caller
+ * resolves `join(resolveProjectDir(startDir), projectId)`; `_DEFAULT_PROJECT`
+ * is the fallback id), never the projects root. Missing or unreadable
+ * `references/` → `[]`; never throws; never opens a file body.
+ */
+export function listProjectReferenceFiles(projectDir: string): string[] {
+  const root = join(projectDir, PROJECT_REFERENCES_DIR);
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.name === PROJECT_ROADMAP_FILE || entry.name === PROJECT_REGISTER_FILE) continue;
+    if (entry.isFile()) {
+      files.push(entry.name);
+    } else if (entry.isDirectory()) {
+      let nested: Dirent[];
+      try {
+        nested = readdirSync(join(root, entry.name), { withFileTypes: true });
+      } catch {
+        continue; // unreadable subdirectory contributes nothing
+      }
+      for (const child of nested) {
+        if (child.isFile()) files.push(`${entry.name}/${child.name}`);
+      }
+    }
+  }
+  return files.sort();
 }

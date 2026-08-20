@@ -187,11 +187,13 @@ export type {
   TechDebtSummary,
 } from "./project.js";
 export {
+  PROJECT_REFERENCES_DIR,
   PROJECT_REGISTER_FILE,
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
   findingsCleanupGate,
+  listProjectReferenceFiles,
   techDebtRollup,
   validateProjectRegister,
   validateRoadmap,

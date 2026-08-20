@@ -15,6 +15,7 @@
 | **`{SPECS_DIR}`**（可选） | 冻结 v1-spec、ADR、program roadmap — **跨迭代长期权威** | 产品/API 规范性最高权威；**iteration-start** 由 product/architect 主写 |
 | **`{ITERATION_DIR}`**（可选） | **`<iteration-id>/` package**（`delivery-compass.md` + `guides/`、`specs/`） | Agent handoff；迭代级草稿；close 时 compound **提升** → knowledge |
 | **`{KNOWLEDGE_DIR}`**（可选） | 实现细节 SSOT、架构细则、契约说明、跨版本 tracker — **经 `mstar-compound` 结晶** | Agent handoff；**不**在 iteration-start 由 product/architect 新增 |
+| **`{PROJECT_DIR}/<id>/references/`**（可选） | 主题化研究：surveys、epic roadmaps、第三方 notes — **与项目绑定**，非跨迭代 corpora | 项目所有者 / operator；engine 只列文件名，**无 markdown schema** |
 | **`{PLAN_DIR}/`** | 单 plan 主文件、durable gate summary、可选 `residuals/` | 计划执行与长期决策留档 |
 
 
@@ -42,6 +43,14 @@
 - **必须**维护 `**{KNOWLEDGE_DIR}/README.md**` 作为**目录索引**：至少包含表格列 **Document（链接）**、**Source Plan（`plans[].id`）**、**Description**、**Status**（如 `Active` / `Superseded by implementation (<plan-id>)` / `Archived`）。
 - 可选：目录级 `**{KNOWLEDGE_DIR}/AGENTS.md**` 承载命名、维护节奏、与 `{SPECS_DIR}` 的权威边界（Nexus 模式）；harness 宽规则仍以 `mstar-plan-conventions` 与本 reference 为准。
 - 初始化启用知识库时：创建空表头的 `README.md`，随文档递增行。
+
+## `{PROJECT_DIR}/<id>/references/`（可选·主题化研究语料）
+
+- **物理路径**：`**{PROJECT_DIR}/<id>/references/**`（默认 `{HARNESS_DIR}/projects/<id>/references/`；`.mstarc` `project_dir` 声明时用声明值）。
+- **放什么**：**主题化研究** — surveys、epic roadmaps、第三方 notes，与拥有它的项目（`<id>`）绑定（compass ruling 1）。项目缺失用 `_default`（`{PROJECT_DIR}/_default/references/`）。
+- **不放什么**：冻结规格 / ADR（→ `{SPECS_DIR}/`）；compound 结晶的实现 SSOT（→ `{KNOWLEDGE_DIR}/`）；迭代内 ranking notes 与草稿 spec（→ `{ITERATION_DIR}/<id>/guides|specs/`）。研究**不**迁入这三处 corpora，三处内容也**不**迁入 `references/`。
+- **engine 职责边界**：`listProjectReferenceFiles(projectDir)` 只返回**文件名**（相对路径、`/` 分隔、code-unit 排序；跳过根级 `roadmap.md` / `residuals.json`；缺失目录 → `[]`）；**不**读文件正文，**不**做 markdown schema 校验 — 归属语义是本 reference（技能散文）契约，不是 engine 校验。
+- **历史 dump**：harness 根 `.mstar/references/` 已退役（dogfood 后缺省或仅一行 redirect）；当前路径由 `mstar-project-governance` Scope 表与 `mstar-plan-conventions` `references/artifact-storage-paths.md` 命名。
 
 ## 文件命名
 
@@ -74,6 +83,7 @@
 - `**{PLAN_DIR}/residuals/<plan-id>/`**：偏 **仍 open 的 R# 长文补充**（与 project register `entries[<plan-id>]` 配套，canonical 见 `mstar-plan-conventions` **SKILL.md** 开篇）；见下文「open residual 散文详情」。
 - `**{KNOWLEDGE_DIR}/**`：偏 **可复用的实现向设计上下文**（架构细则、决策、分析），可被后续 plan 或多会话反复引用。
 - `**{ITERATION_DIR}/**`：偏 **某一迭代/版本** 的 package（compass + guides/specs），通常按版本索引而非按单 plan 长期复用。
+- `**{PROJECT_DIR}/<id>/references/**`：偏 **主题化研究**（surveys、epic 备注、第三方 notes），随项目绑定；与 specs / knowledge / iteration guides 职责不混写。
 - review bundle、gate summary、residuals、knowledge、iterations 可互链，但职责不混写。
 
 ---

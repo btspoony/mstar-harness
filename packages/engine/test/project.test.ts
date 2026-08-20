@@ -19,15 +19,17 @@
  *   flows).
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
+  PROJECT_REFERENCES_DIR,
   PROJECT_REGISTER_FILE,
   PROJECT_ROADMAP_FILE,
   ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
+  listProjectReferenceFiles,
   validateProjectRegister,
   validateRoadmap,
 } from "../src/project.js";
@@ -531,5 +533,66 @@ describe("project file names + _default fallback constants (plan Task 4)", () =>
 
   test("_DEFAULT_PROJECT is the project-less fallback id", () => {
     expect(_DEFAULT_PROJECT).toBe("_default");
+  });
+});
+
+describe("listProjectReferenceFiles — theme-scoped research listing (plan 20260820-project-research-corpus Task 1)", () => {
+  test("PROJECT_REFERENCES_DIR names the references subdirectory", () => {
+    expect(PROJECT_REFERENCES_DIR).toBe("references");
+  });
+
+  test("missing or non-directory references/ -> [] and never throws", () => {
+    const empty = tmpRoot("mstar-refs-empty-");
+    try {
+      expect(listProjectReferenceFiles(empty)).toEqual([]);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+    const asFile = tmpRoot("mstar-refs-file-");
+    writeFileSync(join(asFile, "references"), "not a directory");
+    try {
+      expect(listProjectReferenceFiles(asFile)).toEqual([]);
+    } finally {
+      rmSync(asFile, { recursive: true, force: true });
+    }
+  });
+
+  test("lists root files + one-level subdirectory files, sorted by code unit", () => {
+    const root = tmpRoot("mstar-refs-tree-");
+    const refs = join(root, "references");
+    mkdirSync(join(refs, "dsh-skills-survey"), { recursive: true });
+    mkdirSync(join(refs, "deep", "nested"), { recursive: true });
+    writeFileSync(join(refs, "z-last.md"), "x");
+    writeFileSync(join(refs, "a-first.md"), "x");
+    writeFileSync(join(refs, "dsh-skills-survey", "README.md"), "x");
+    writeFileSync(join(refs, "dsh-skills-survey", "inventory.md"), "x");
+    writeFileSync(join(refs, "deep", "level2.md"), "x");
+    writeFileSync(join(refs, "deep", "nested", "ignored.md"), "x"); // two levels deep — ignored
+    try {
+      expect(listProjectReferenceFiles(root)).toEqual([
+        "a-first.md",
+        "deep/level2.md",
+        "dsh-skills-survey/README.md",
+        "dsh-skills-survey/inventory.md",
+        "z-last.md",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("skips roadmap.md / residuals.json strays at the references root, keeps same names one level deep", () => {
+    const root = tmpRoot("mstar-refs-strays-");
+    const refs = join(root, "references");
+    mkdirSync(join(refs, "notes"), { recursive: true });
+    writeFileSync(join(refs, "roadmap.md"), "x");
+    writeFileSync(join(refs, "residuals.json"), "x");
+    writeFileSync(join(refs, "survey.md"), "x");
+    writeFileSync(join(refs, "notes", "roadmap.md"), "x");
+    try {
+      expect(listProjectReferenceFiles(root)).toEqual(["notes/roadmap.md", "survey.md"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

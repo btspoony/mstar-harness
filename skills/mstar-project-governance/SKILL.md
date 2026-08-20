@@ -19,6 +19,7 @@ description: Morning Star 项目治理层约定 —— `projects/<id>/roadmap.md
 |------|------|
 | `roadmap.md` | 项目方向与目标（frontmatter machine-checkable + body 约定） |
 | `residuals.json` | 项目 register：open residual 的 **SSOT**（`entries[<plan-id>]` 数组） |
+| `references/` | 主题化研究语料（surveys / epic 备注 / 第三方 notes）。与 `{SPECS_DIR}`（冻结规格/ADR）、`{KNOWLEDGE_DIR}`（compound 结晶实现 SSOT）、`{ITERATION_DIR}`（迭代 package）**不同**；engine 只列文件名（`listProjectReferenceFiles`），**不做** markdown schema 校验 |
 
 - **`_default` 回退**：无项目流程（未指定 project id 的 plan / 单 plan / hotfix）落到 **`projects/_default/`**（engine `_DEFAULT_PROJECT`）。项目归属由 plan 的 project id 决定；未归属即 `_default`。
 - 本 skill 的 schema 事实与 **`packages/engine/src/project.ts`** 逐字一致（`validateRoadmap` / `validateProjectRegister` / `findingsCleanupGate` / `techDebtRollup`）；技能文本是语义 SSOT，engine 是确定性校验。
