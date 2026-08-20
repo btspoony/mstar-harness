@@ -1,23 +1,29 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.1.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.1.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **3.1.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.1.0** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.1.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.1.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.1.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **3.1.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.1.0** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.1.0** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.0** |
-| Agent Plugins 清单 | `plugin.json` | **3.1.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **3.1.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.1.1** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.1.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.1.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.1.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **3.1.1** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.1.1** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.1.1** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.1** |
+| Agent Plugins 清单 | `plugin.json` | **3.1.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [3.1.1] - 2026-08-20
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.1.1**。
 
 ## [3.1.0] - 2026-08-20
 

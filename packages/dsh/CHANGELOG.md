@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-08-20
+
+### Harness
+
+- **Slim `mstar:engine-status` digest**: the GLOBAL runtime-context digest (`engineStatusSummary` in `packages/dsh/src/gates/system-prompt.ts`) now injects the version watermark alone — `mstar engine status: v<version>` — plus, only when the session's workspace has an **active** workflow (`state.selection.kind === 'active'`), one compact `workflow <id> (<type>) <status> | plans: <id>(<status>) …` line. Idle sessions (no harness dir, empty/absent `workflows[]`, or a terminal/error selection) render the version line exactly; the catalog's terminal-mtime history fallback is structurally unreachable from this surface. The plans join is the selected snapshot's non-`Done` rows in catalog order, capped at 8 with a `+N more` overflow marker (`plans: none` when empty). Harness dir / enforcement / residuals / leases / direction / iteration-gate detail are dropped from this context — harness dir and enforcement remain in `mstar:harness-rules`, the rest in the pre-step catalog row.
+- **`workflowType` / `workflowStatus` state fields**: `MstarHarnessState` gains two ALWAYS-present nullable fields carrying the selected snapshot's top-level `type` / `status` (populated from the snapshot the engine-status source already reads; `null` on selection error). The digest trusts `workflows[]` membership and renders the snapshot's **own** status word — a stale-but-registered terminal entry honestly shows e.g. `completed` — and a missing/unreadable snapshot degrades to the version-only line without throwing.
+- **Lease-cap retirement**: `DIGEST_LEASE_CAP` and the leases join are removed from the digest (the leases `→` glyph leaves with them); `DIGEST_PLAN_CAP` is retained. The sibling `<mstar_engine_status>` pre-step catalog row (`renderEngineStatusCatalog`) is unchanged and stays uncapped.
+
+- Version alignment with harness **3.1.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.1**.
+
 ## [3.1.0] - 2026-08-20
 
 ### Harness
