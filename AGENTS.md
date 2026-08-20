@@ -175,7 +175,7 @@ If one of these checks fails, stop and report why.
 
 ## Local maintenance workspace (`.mstar/`, gitignored)
 
-The repo's harness root is **`.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `plans/`, `iterations/`, `knowledge/`, `sdd/`, `references/`, `archived/` and in-progress maint docs all live under `.mstar/`.
+The repo's harness root is **`.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `plans/`, `iterations/`, `knowledge/`, `sdd/`, `projects/`, `archived/` and in-progress maint docs all live under `.mstar/`.
 
 | Path | Purpose |
 |------|---------|
