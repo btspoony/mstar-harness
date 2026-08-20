@@ -303,6 +303,45 @@ export const newValidatorsLoader: { load: () => Promise<NewValidatorsLoad> } = {
   load: loadNewValidators,
 };
 
+/**
+ * The P1-only v3 layout-dir resolvers (custom `.mstarc` `workflow_dir` /
+ * `project_dir` support, Phase-5 F1). Same stale-engine rationale as
+ * `newValidatorsLoader`: the exports postdate the published engine floor
+ * (`^2.0.2` lacks them) — a static named import would fail at module link
+ * on older engines and drop the WHOLE plugin, so they are loaded lazily
+ * and cached. `null` (missing exports / import failure) means the
+ * classification falls back to the DEFAULT layout names (the pre-F1
+ * behavior) — a stale engine keeps working, only custom layouts stay
+ * unclassified.
+ */
+type DirResolvers = {
+  resolveWorkflowDir: (startDir: string, opts?: { harnessDir?: string }) => string;
+  resolveProjectDir: (startDir: string, opts?: { harnessDir?: string }) => string;
+};
+
+let cachedDirResolvers: Promise<DirResolvers | null> | null = null;
+
+export function loadDirResolvers(): Promise<DirResolvers | null> {
+  cachedDirResolvers ??= import("@mstar-harness/engine")
+    .then((mod) =>
+      typeof mod.resolveWorkflowDir === "function" && typeof mod.resolveProjectDir === "function"
+        ? { resolveWorkflowDir: mod.resolveWorkflowDir, resolveProjectDir: mod.resolveProjectDir }
+        : null,
+    )
+    .catch(() => null);
+  return cachedDirResolvers;
+}
+
+/** Test seam: replace `load` to simulate an engine build without the P1
+ * dir resolvers (null — default-layout classification). */
+export const dirResolversLoader: { load: () => Promise<DirResolvers | null> } = {
+  load: loadDirResolvers,
+};
+
+/** Sync slot for the loaded resolvers; `validateStatusWrite` awaits the
+ * loader before classifying, so the slot is populated on that path. */
+let classifyDirResolvers: DirResolvers | null = null;
+
 /** One-time degradation warnings (module-level flags; degrade path must
  * never throw — optional chaining + local try/catch). */
 let newValidatorsWarned = false;
@@ -344,21 +383,45 @@ function hasEntry(dir: string, name: string): boolean {
 }
 
 /**
+ * True when `dir` carries the v2 coordination-document markers that make
+ * it a harness root: a `status.json` root file plus BOTH layout dirs.
+ * Default-layout fast path: the `workflows/` + `projects/` names (fix-wave
+ * W-REV-1). Phase-5 F1: with the lazily-loaded engine dir resolvers, a
+ * `.mstarc` custom `workflow_dir` / `project_dir` layout is recognized via
+ * the resolved absolute dirs (stale engine -> resolvers null -> default
+ * names only). Never throws — a missing/unreadable path is not a marker.
+ */
+function hasHarnessRootMarkers(dir: string): boolean {
+  if (!hasEntry(dir, STATUS_FILE)) return false;
+  if (hasEntry(dir, "workflows") && hasEntry(dir, "projects")) return true;
+  const resolvers = classifyDirResolvers;
+  if (resolvers === null) return false;
+  try {
+    return (
+      hasEntry(resolvers.resolveWorkflowDir(dir, { harnessDir: dir }), "") &&
+      hasEntry(resolvers.resolveProjectDir(dir, { harnessDir: dir }), "")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the harness root containing `startDir` by marker probe (fix-wave
  * W-REV-1): the nearest ancestor holding the v2 coordination-document
- * markers — a `status.json` root file plus `workflows/` and `projects/`
- * directories — IS the harness root. Unlike `resolveHarnessDir`'s rung-3
- * `plans/` probe, this never mistakes the NESTED `{HARNESS_DIR}/plans`
- * subdir of the default `.mstar` layout for the root, so coordination docs
- * inside a default-layout root stay gated. Returns `null` when no ancestor
- * carries the markers — callers fall back to `resolveHarnessDir` for
- * declared roots (`.mstarc` `harness_dir` / `MSTAR_HARNESS_DIR`) that are
- * not yet populated with all three markers.
+ * markers — a `status.json` root file plus the layout directories — IS the
+ * harness root. Unlike `resolveHarnessDir`'s rung-3 `plans/` probe, this
+ * never mistakes the NESTED `{HARNESS_DIR}/plans` subdir of the default
+ * `.mstar` layout for the root, so coordination docs inside a
+ * default-layout root stay gated. Returns `null` when no ancestor carries
+ * the markers — callers fall back to `resolveHarnessDir` for declared
+ * roots (`.mstarc` `harness_dir` / `MSTAR_HARNESS_DIR`) that are not yet
+ * populated with all three markers.
  */
 function resolveHarnessRootOf(target: string): string | null {
   let dir = path.resolve(target);
   for (;;) {
-    if (hasEntry(dir, STATUS_FILE) && hasEntry(dir, "workflows") && hasEntry(dir, "projects")) return dir;
+    if (hasHarnessRootMarkers(dir)) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -368,12 +431,16 @@ function resolveHarnessRootOf(target: string): string | null {
 /**
  * Classify `targetPath` as a canonical `{HARNESS_DIR}` coordination
  * document: basename is `status.json` at the harness root, `snapshot.json`
- * under `workflows/<id>/`, or `residuals.json` under `projects/<id>/`
- * (harness-relative, one path component each), AND the harness root
- * resolves — marker probe first (`status.json` + `workflows/` + `projects/`
- * ancestors, fix-wave W-REV-1), `resolveHarnessDir` as the declared-root
- * fallback. Returns the harness dir + doc kind when gated, `null`
- * otherwise.
+ * under `{WORKFLOW_DIR}/<id>/`, or `residuals.json` under
+ * `{PROJECT_DIR}/<id>/` (harness-relative, one path component each), AND
+ * the harness root resolves — marker probe first (fix-wave W-REV-1,
+ * custom-layout-aware Phase-5 F1), `resolveHarnessDir` as the declared-root
+ * fallback. The snapshot/register rel is computed against the RESOLVED
+ * layout dirs (`.mstarc` `workflow_dir`/`project_dir` honored, defaults
+ * `workflows`/`projects`), so a custom layout classifies at the same
+ * location the runtime writes; on a stale engine (no dir resolvers) the
+ * default names apply. Returns the harness dir + doc kind when gated,
+ * `null` otherwise.
  */
 function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind: HarnessDocKind } | null {
   const resolved = path.resolve(targetPath);
@@ -382,8 +449,27 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
   const classify = (harnessDir: string): { harnessDir: string; kind: HarnessDocKind } | null => {
     const rel = path.relative(harnessDir, resolved);
     if (name === STATUS_FILE && rel === STATUS_FILE) return { harnessDir, kind: "status" };
-    if (name === SNAPSHOT_FILE && /^workflows\/[^/]+\/snapshot\.json$/.test(rel)) return { harnessDir, kind: "snapshot" };
-    if (name === REGISTER_FILE && /^projects\/[^/]+\/residuals\.json$/.test(rel)) return { harnessDir, kind: "register" };
+    let workflowDir: string;
+    let projectDir: string;
+    const resolvers = classifyDirResolvers;
+    if (resolvers !== null) {
+      try {
+        workflowDir = resolvers.resolveWorkflowDir(harnessDir, { harnessDir });
+        projectDir = resolvers.resolveProjectDir(harnessDir, { harnessDir });
+      } catch {
+        workflowDir = path.join(harnessDir, "workflows");
+        projectDir = path.join(harnessDir, "projects");
+      }
+    } else {
+      workflowDir = path.join(harnessDir, "workflows");
+      projectDir = path.join(harnessDir, "projects");
+    }
+    if (name === SNAPSHOT_FILE && /^[^/]+\/snapshot\.json$/.test(path.relative(workflowDir, resolved))) {
+      return { harnessDir, kind: "snapshot" };
+    }
+    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(path.relative(projectDir, resolved))) {
+      return { harnessDir, kind: "register" };
+    }
     return null;
   };
   const probeRoot = resolveHarnessRootOf(path.dirname(resolved));
@@ -450,6 +536,10 @@ export async function validateStatusWrite(
     if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
 
     const resolved = path.resolve(targetPath);
+    // Phase-5 F1: ensure the custom-layout dir resolvers are loaded before
+    // classifying — the sync slot feeds `harnessDocKindOfTarget` (stale
+    // engine -> null -> default-layout names, the pre-F1 behavior).
+    classifyDirResolvers = await dirResolversLoader.load();
     const target = harnessDocKindOfTarget(resolved);
     if (!target) return null;
 

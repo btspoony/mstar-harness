@@ -27,6 +27,7 @@ import {
   readJson,
   resolveProjectDir,
   resolveRepoEnforcement,
+  resolveWorkflowDir,
   validateProjectRegister,
   validateStatus,
   validateWorkflowSnapshot,
@@ -89,9 +90,17 @@ export type HarnessDocKind = 'status' | 'snapshot' | 'register'
  * Classify one fs target as a canonical `{HARNESS_DIR}` coordination
  * document: basename ∈ {status.json, snapshot.json, residuals.json} AND the
  * harness-relative path matches the canonical home (root `status.json`,
- * `workflows/<id>/snapshot.json`, `projects/<id>/residuals.json` — one path
- * component each, mirroring the P2-fixed opencode
+ * `{WORKFLOW_DIR}/<id>/snapshot.json`, `{PROJECT_DIR}/<id>/residuals.json`
+ * — one path component each, mirroring the P2-fixed opencode
  * `harnessDocKindOfTarget`).
+ *
+ * Phase-5 F1: the snapshot/register rel is computed against the RESOLVED
+ * layout dirs (`resolveWorkflowDir` / `resolveProjectDir` — a `.mstarc`
+ * `[config] workflow_dir` / `project_dir` declaration wins, defaults
+ * `workflows` / `projects` under the harness dir), so a custom layout
+ * classifies at the same location the runtime writes; resolver failure
+ * (never expected with the explicit harness dir) falls back to the default
+ * names.
  *
  * dsh divergence from the opencode probe (documented): opencode resolves
  * the harness root by marker probe (W-REV-1) with a declared-root fallback;
@@ -108,8 +117,17 @@ export function harnessDocKindOfTarget(harnessDir: string, targetPath: string): 
   if (name !== STATUS_FILE && name !== WORKFLOW_SNAPSHOT_FILE && name !== PROJECT_REGISTER_FILE) return null
   const rel = relative(harnessDir, resolved)
   if (name === STATUS_FILE && rel === STATUS_FILE) return 'status'
-  if (name === WORKFLOW_SNAPSHOT_FILE && /^workflows\/[^/]+\/snapshot\.json$/.test(rel)) return 'snapshot'
-  if (name === PROJECT_REGISTER_FILE && /^projects\/[^/]+\/residuals\.json$/.test(rel)) return 'register'
+  let workflowDir: string
+  let projectDir: string
+  try {
+    workflowDir = resolveWorkflowDir(harnessDir, { harnessDir })
+    projectDir = resolveProjectDir(harnessDir, { harnessDir })
+  } catch {
+    workflowDir = join(harnessDir, 'workflows')
+    projectDir = join(harnessDir, 'projects')
+  }
+  if (name === WORKFLOW_SNAPSHOT_FILE && /^[^/]+\/snapshot\.json$/.test(relative(workflowDir, resolved))) return 'snapshot'
+  if (name === PROJECT_REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative(projectDir, resolved))) return 'register'
   return null
 }
 

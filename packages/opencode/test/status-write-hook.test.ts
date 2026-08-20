@@ -356,6 +356,55 @@ describe("validateStatusWrite (exported hook module)", () => {
     }
   });
 
+  test("custom `.mstarc` workflow_dir/project_dir: coordination docs at the DECLARED locations classify (Phase-5 F1)", async () => {
+    // Regression: classification used the hardcoded `workflows/` /
+    // `projects/` rel prefixes (and the marker probe checked the default
+    // names) — under a `.mstarc` custom layout every coordination doc fell
+    // outside the canonical set and was silently UNGATED. The fix resolves
+    // the layout dirs through the engine resolvers.
+    const project = makeProject();
+    const harness = join(project, ".mstar");
+    mkdirSync(join(harness, "cw-wf", "wf-1"), { recursive: true });
+    mkdirSync(join(harness, "cw-pj", "_default"), { recursive: true });
+    writeFileSync(join(harness, ".mstarc"), "[config]\nworkflow_dir=cw-wf\nproject_dir=cw-pj\n", "utf8");
+    writeFileSync(join(harness, "status.json"), JSON.stringify(validDoc, null, 2));
+    const snapshotPath = join(harness, "cw-wf", "wf-1", "snapshot.json");
+    writeFileSync(snapshotPath, JSON.stringify(validSnapshotDoc, null, 2));
+    const registerPath = join(harness, "cw-pj", "_default", "residuals.json");
+    writeFileSync(registerPath, JSON.stringify(validRegisterDoc, null, 2));
+    try {
+      const warnings: string[] = [];
+      const log: StatusLogger = (level, message) => {
+        if (level === "warn") warnings.push(message);
+      };
+      // Valid snapshot at the custom location → ok, no warnings.
+      const okResult = await validateStatusWrite(snapshotPath, { log });
+      expect(okResult).not.toBeNull();
+      expect(okResult!.ok).toBe(true);
+      expect(warnings).toEqual([]);
+      // Invalid doc at the custom location reaches the snapshot validator.
+      warnings.length = 0;
+      const bad = await validateStatusWrite(snapshotPath, { doc: invalidSnapshotDoc, log });
+      expect(bad).not.toBeNull();
+      expect(bad!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("workflow.snapshot.invalid-type"))).toBe(true);
+      // Register at the custom project dir classifies too.
+      warnings.length = 0;
+      const reg = await validateStatusWrite(registerPath, { doc: invalidRegisterDoc, log });
+      expect(reg).not.toBeNull();
+      expect(reg!.ok).toBe(false);
+      expect(warnings.some((w) => w.includes("project.register.invalid-entry-list"))).toBe(true);
+      // Non-canonical custom-layout path (no <id> component) stays ungated.
+      const stray = join(harness, "cw-wf", "snapshot.json");
+      writeFileSync(stray, JSON.stringify(invalidSnapshotDoc));
+      warnings.length = 0;
+      expect(await validateStatusWrite(stray, { log })).toBeNull();
+      expect(warnings).toEqual([]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   test("non-string targetPath stays silent (no paths[0] abort)", async () => {
     // Bun path.resolve(object) → `The "paths[0]" property must be of type string, got object`.
     const entries: Array<[string, string]> = [];

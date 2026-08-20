@@ -33,7 +33,7 @@ import mstarLeaseVerify from "../../../tools/mstar_lease_verify/index";
 import mstarPathResolve from "../../../tools/mstar_path_resolve/index";
 import mstarStatusValidate from "../../../tools/mstar_status_validate/index";
 import mstarWorktreeCheck from "../../../tools/mstar_worktree_check/index";
-import mstarGates, { loadNewValidators, newValidatorsLoader } from "../../../hooks/pre/mstar-gates";
+import mstarGates, { dirResolversLoader, loadNewValidators, newValidatorsLoader } from "../../../hooks/pre/mstar-gates";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "tools-v2-smoke", "repo");
 const SNAPSHOT_REL = join("plans", "workflows", "wf-smoke", "snapshot.json");
@@ -169,6 +169,66 @@ function setupDoubleHarnessRepo(): SmokeRepo {
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base"], root);
   return { root, linked: "", harness: join(root, "inner", ".mstar"), snapshotPath: "", mstar: "" };
+}
+
+/**
+ * Custom `.mstarc` layout repo (Phase-5 F1): a default `.mstar/` harness
+ * root whose `.mstarc` declares `workflow_dir` / `project_dir` — the
+ * coordination docs live under the DECLARED names, never `workflows/` /
+ * `projects/`. Hard iteration compass so the hook gate can block.
+ */
+function setupCustomLayoutRepo(): SmokeRepo {
+  const root = mkdtempSync(join(tmpdir(), "tools-smoke-custom-"));
+  const harness = join(root, ".mstar");
+  mkdirSync(join(harness, "cw-wf", "wf-custom"), { recursive: true });
+  mkdirSync(join(harness, "cw-pj", "_custom"), { recursive: true });
+  mkdirSync(join(harness, "iterations", "iter-custom"), { recursive: true });
+  writeFileSync(
+    join(harness, "status.json"),
+    JSON.stringify({ version: 2, updated_at: "2026-08-19", workflows: [] }, null, 2),
+  );
+  writeFileSync(join(harness, ".mstarc"), "[config]\nworkflow_dir=cw-wf\nproject_dir=cw-pj\n", "utf8");
+  writeFileSync(
+    join(harness, "iterations", "iter-custom", "delivery-compass.md"),
+    [
+      "---",
+      "iteration_id: iter-custom",
+      "start_date: 2026-08-01",
+      "status: active",
+      "enforcement: hard",
+      "iteration_base_branch: main",
+      "target_branch: main",
+      "plans:",
+      "  - plan-a",
+      "---",
+      "",
+      "# iter-custom Delivery Compass",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(harness, "cw-wf", "wf-custom", "snapshot.json"),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        id: "wf-custom",
+        type: "plan",
+        status: "running",
+        started_at: "2026-08-01",
+        updated_at: "2026-08-19",
+        plans: [],
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(join(harness, "cw-pj", "_custom", "residuals.json"), JSON.stringify({ entries: {} }, null, 2));
+  git(["init", "-q"], root);
+  git(["config", "user.email", "tools-smoke@example.com"], root);
+  git(["config", "user.name", "Tools Smoke"], root);
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base"], root);
+  return { root, linked: "", harness, snapshotPath: "", mstar: harness };
 }
 
 function git(args: string[], cwd: string): string {
@@ -628,5 +688,113 @@ describe("pathological double harness (W-REV-3)", () => {
     writeFileSync(stray, JSON.stringify({ schema_version: 99 }));
     const strayRes = await handler!({ toolName: "write", input: { path: stray, content: "{}" } });
     expect(strayRes).toBeUndefined();
+  });
+});
+
+describe("custom workflow_dir/project_dir layout (Phase-5 F1)", () => {
+  // Regression: `harnessDocKindOfTarget` classified snapshot/register by
+  // the hardcoded `workflows/` / `projects/` rel prefixes and the marker
+  // probe checked the default names only — under a `.mstarc` custom layout
+  // every coordination doc fell outside the canonical set and was silently
+  // UNGATED (and the CLI/tools read/wrote different locations). The fix
+  // resolves `{WORKFLOW_DIR}` / `{PROJECT_DIR}` through the engine
+  // resolvers in BOTH the probe and the classify.
+  let customRepo: SmokeRepo | undefined;
+
+  beforeAll(async () => {
+    customRepo = setupCustomLayoutRepo();
+    // Deterministic classification: the hook's async gate awaits the
+    // loader itself, but pinning it here makes the sync-slot state
+    // explicit for the degrade test below.
+    await dirResolversLoader.load();
+  });
+
+  afterAll(() => {
+    if (customRepo) rmSync(customRepo.root, { recursive: true, force: true });
+  });
+
+  test("mstar_status_validate: snapshot + register at the DECLARED custom locations validate", async () => {
+    const root = customRepo!.root;
+    const snapRes = await runTool(mstarStatusValidate, root, {
+      path: join(".mstar", "cw-wf", "wf-custom", "snapshot.json"),
+    });
+    expect(snapRes.isError).not.toBe(true);
+    expect(snapRes.content[0]!.text).toContain("snapshot valid");
+
+    const regRes = await runTool(mstarStatusValidate, root, {
+      path: join(".mstar", "cw-pj", "_custom", "residuals.json"),
+    });
+    expect(regRes.isError).not.toBe(true);
+    expect(regRes.content[0]!.text).toContain("register valid");
+
+    // The default-named locations are NOT canonical under the custom
+    // layout (the fix must not over-gate either).
+    const wrong = join(".mstar", "workflows", "wf-custom", "snapshot.json");
+    expect(existsSync(join(root, wrong))).toBe(false);
+  });
+
+  test("omp hook Gate 1: invalid custom-layout snapshot hard-blocked, valid passes", async () => {
+    const root = customRepo!.root;
+    let handler: ((event: unknown) => Promise<unknown>) | undefined;
+    mstarGates({
+      on: (_event: string, fn: (event: unknown) => Promise<unknown>) => {
+        handler = fn;
+      },
+      logger: { warn: () => undefined, error: () => undefined },
+    } as never);
+    expect(handler).toBeDefined();
+
+    const snapshotPath = join(root, ".mstar", "cw-wf", "wf-custom", "snapshot.json");
+    const validSnapshot = JSON.parse(readFile(snapshotPath)) as Record<string, unknown>;
+
+    // The custom-layout snapshot IS a gated coordination doc — an invalid
+    // write must be blocked (the classification must reach the gate).
+    const blocked = await handler!({
+      toolName: "write",
+      input: { path: snapshotPath, content: JSON.stringify({ schema_version: 99 }) },
+    });
+    const blockedResult = blocked as { block: boolean; reason: string } | undefined;
+    expect(blockedResult?.block).toBe(true);
+    expect(blockedResult?.reason).toContain("workflow.snapshot");
+
+    const passed = await handler!({
+      toolName: "write",
+      input: { path: snapshotPath, content: JSON.stringify(validSnapshot) },
+    });
+    expect(passed).toBeUndefined();
+
+    // Non-canonical custom-layout path (no <id> component) stays ungated —
+    // the fix must not over-gate.
+    const stray = join(root, ".mstar", "cw-wf", "snapshot.json");
+    writeFileSync(stray, JSON.stringify({ schema_version: 99 }));
+    const strayRes = await handler!({ toolName: "write", input: { path: stray, content: "{}" } });
+    expect(strayRes).toBeUndefined();
+  });
+
+  test("stale engine (no P1 dir resolvers) degrades to default-layout classification: custom docs pass silently", async () => {
+    const root = customRepo!.root;
+    let handler: ((event: unknown) => Promise<unknown>) | undefined;
+    mstarGates({
+      on: (_event: string, fn: (event: unknown) => Promise<unknown>) => {
+        handler = fn;
+      },
+      logger: { warn: () => undefined, error: () => undefined },
+    } as never);
+    expect(handler).toBeDefined();
+
+    const snapshotPath = join(root, ".mstar", "cw-wf", "wf-custom", "snapshot.json");
+    const originalLoad = dirResolversLoader.load;
+    try {
+      dirResolversLoader.load = async () => null;
+      // Without the resolvers the custom layout is unclassifiable — the
+      // write passes silently (the pre-F1 behavior), never a crash.
+      const res = await handler!({
+        toolName: "write",
+        input: { path: snapshotPath, content: JSON.stringify({ schema_version: 99 }) },
+      });
+      expect(res).toBeUndefined();
+    } finally {
+      dirResolversLoader.load = originalLoad;
+    }
   });
 });

@@ -23,8 +23,11 @@
  *   `mstar/status-gate` event instead.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
+import { harnessDocKindOfTarget } from '../src/gates/status.ts'
 import {
   bootApp,
   INVALID_STATUS,
@@ -386,5 +389,41 @@ describe('status gate — single-slot waterfall composition', () => {
     const other = await warn.ctx.waterfall('fs/write-intent', otherTarget(warn.harnessDir), {}, () => undefined)
     expect(other).toEqual({ kind: 'createIfAbsent' })
     expect(secondRan).toBe(true)
+  })
+})
+
+describe('harnessDocKindOfTarget — custom workflow_dir/project_dir (Phase-5 F1)', () => {
+  it('classifies snapshot/register under `.mstarc`-declared custom dirs; default names are not canonical there', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-status-custom-'))
+    try {
+      const harness = join(root, '.mstar')
+      mkdirSync(join(harness, 'cw-wf', 'wf-1'), { recursive: true })
+      mkdirSync(join(harness, 'cw-pj', '_default'), { recursive: true })
+      writeFileSync(join(harness, '.mstarc'), '[config]\nworkflow_dir=cw-wf\nproject_dir=cw-pj\n', 'utf8')
+
+      expect(harnessDocKindOfTarget(harness, join(harness, 'cw-wf', 'wf-1', 'snapshot.json'))).toBe('snapshot')
+      expect(harnessDocKindOfTarget(harness, join(harness, 'cw-pj', '_default', 'residuals.json'))).toBe('register')
+      // The default-named locations are NOT the canonical homes under the
+      // custom layout (the gate must not classify what the runtime never
+      // writes).
+      expect(harnessDocKindOfTarget(harness, join(harness, 'workflows', 'wf-1', 'snapshot.json'))).toBeNull()
+      expect(harnessDocKindOfTarget(harness, join(harness, 'projects', '_default', 'residuals.json'))).toBeNull()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('default layout (no `.mstarc`) keeps the canonical names', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-status-default-'))
+    try {
+      const harness = join(root, '.mstar')
+      mkdirSync(join(harness, 'workflows', 'wf-1'), { recursive: true })
+      mkdirSync(join(harness, 'projects', '_default'), { recursive: true })
+      expect(harnessDocKindOfTarget(harness, join(harness, 'workflows', 'wf-1', 'snapshot.json'))).toBe('snapshot')
+      expect(harnessDocKindOfTarget(harness, join(harness, 'projects', '_default', 'residuals.json'))).toBe('register')
+      expect(harnessDocKindOfTarget(harness, join(harness, 'workflows', 'snapshot.json'))).toBeNull()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
