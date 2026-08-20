@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-08-20
+
+### Harness
+
+- **CI runs dsh test + typecheck again**: the link-farm era `dsh:link` call and the source-tree availability gate (`DSH_SOURCE_DIR` / `~/.dsh/source/current`) are gone — the rc.8 seam packages resolve from the public npm registry, so the dsh suite runs unconditionally in CI. The install e2e specs keep their self-skip when no `dsh` bin is on PATH. Test fixtures updated for the v3.0.0 `MstarHarnessState.project` field (5 sites across 4 specs), which had left `typecheck:tests` red on main.
+
+- Version alignment with harness **3.0.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.0.1**.
+
 ## [3.0.0] - 2026-08-20
 
 ### Harness

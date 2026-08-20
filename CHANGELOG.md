@@ -2,24 +2,34 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **3.0.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **3.0.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **3.0.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.0.0** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.0.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.0.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **3.0.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **3.0.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **3.0.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **3.0.0** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.0.0** |
-| Agent Plugins manifest | `plugin.json` | **3.0.0** |
+| Monorepo root | `morning-star` (`package.json`) | **3.0.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.0.1** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.0.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.0.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **3.0.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **3.0.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **3.0.1** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **3.0.1** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.0.1** |
+| Agent Plugins manifest | `plugin.json` | **3.0.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [3.0.1] - 2026-08-20
+
+### Harness
+
+- **CI runs dsh test + typecheck again**: the link-farm era `dsh:link` call and the source-tree availability gate (`DSH_SOURCE_DIR` / `~/.dsh/source/current`) are gone — the rc.8 seam packages resolve from the public npm registry, so the dsh suite runs unconditionally in CI. The install e2e specs keep their self-skip when no `dsh` bin is on PATH. Test fixtures updated for the v3.0.0 `MstarHarnessState.project` field (5 sites across 4 specs), which had left `typecheck:tests` red on main.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.0.1**.
 
 ## [3.0.0] - 2026-08-20
 
