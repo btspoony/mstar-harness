@@ -66,13 +66,26 @@
  * produced. Duplicate v1 plan ids are likewise refused fail-loud (qc3
  * S-001) — every row must land in exactly one snapshot. All timestamps
  * derive from legacy data (deterministic, no clock reads).
+ *
+ * Phase-5 review fixes:
+ * - F1 (custom layout): the planner resolves `{WORKFLOW_DIR}` /
+ *   `{PROJECT_DIR}` from the harness root (`.mstarc` `workflow_dir` /
+ *   `project_dir` win, defaults compose under the harness dir) and records
+ *   them on the plan; `file` fields keep the canonical default-layout rel
+ *   names, the executor writes through the resolved dirs — a custom layout
+ *   migrates to the same location the v3 runtime reads.
+ * - F2 (cross-class id collision): iteration snapshot ids, standalone plan
+ *   ids and the project id must all be unique — an iteration id equal to a
+ *   standalone plan id would plan the same `workflows/<id>/snapshot.json`
+ *   twice (silent overwrite at apply); the plan is refused fail-loud with
+ *   the conflict list.
  */
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
-import { assertSafePathComponent } from "./path.js";
+import { assertSafePathComponent, resolveProjectDir, resolveWorkflowDir } from "./path.js";
 import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister, type ProjectRegisterDoc, type ProjectRegisterEntry } from "./project.js";
 import {
   isOpenResidual,
@@ -109,7 +122,13 @@ export type MigrateSnapshot = {
   id: string;
   type: WorkflowLifecycleType;
   status: WorkflowLifecycleStatus;
-  /** Harness-relative snapshot path, e.g. `workflows/<id>/snapshot.json`. */
+  /**
+   * Canonical (default-layout) harness-relative snapshot path, e.g.
+   * `workflows/<id>/snapshot.json`. The actual write target derives from
+   * `MigratePlan.workflowDir` (Phase-5 F1 — a `.mstarc` custom
+   * `workflow_dir` is honored by the executor); this field keeps the
+   * default-layout rel name for display/provenance.
+   */
   file: string;
   /** Provenance label (compass file / status.json row). */
   source: string;
@@ -118,6 +137,7 @@ export type MigrateSnapshot = {
 
 /** One planned notes ledger (`workflows/<id>/notes.jsonl`). */
 export type MigrateNotesFile = {
+  /** Canonical (default-layout) rel path; actual target = `plan.workflowDir` + the suffix. */
   file: string;
   source: string;
   /** Serialized JSON lines (each ends with `\n` when joined). */
@@ -126,6 +146,7 @@ export type MigrateNotesFile = {
 
 /** One planned project register document (`projects/<id>/residuals.json`). */
 export type MigrateRegister = {
+  /** Canonical (default-layout) rel path; actual target = `plan.projectDir` + the suffix. */
   file: string;
   source: string;
   data: ProjectRegisterDoc;
@@ -133,6 +154,7 @@ export type MigrateRegister = {
 
 /** One planned roadmap seed (`projects/<id>/roadmap.md`). */
 export type MigrateRoadmap = {
+  /** Canonical (default-layout) rel path; actual target = `plan.projectDir` + the suffix. */
   file: string;
   source: string;
   content: string;
@@ -155,6 +177,22 @@ export type MigrateOptions = {
 export type MigratePlan = {
   /** Resolved harness dir. */
   root: string;
+  /**
+   * Resolved `{WORKFLOW_DIR}` (Phase-5 F1): the `.mstarc` `[config]
+   * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows`. The
+   * snapshot/notes `file` fields below keep the canonical default-layout
+   * rel names for display/provenance; the executor derives the actual
+   * write targets from this dir so a custom layout lands where the v3
+   * runtime reads.
+   */
+  workflowDir: string;
+  /**
+   * Resolved `{PROJECT_DIR}` (Phase-5 F1): the `.mstarc` `[config]
+   * project_dir` declaration wins, else `{HARNESS_DIR}/projects`. Same
+   * canonical-`file`-vs-actual-target split as `workflowDir` for the
+   * register/roadmap writes.
+   */
+  projectDir: string;
   dryRun: boolean;
   /** Root status.json already at `version: 2` -> nothing to plan/apply. */
   alreadyMigrated: boolean;
@@ -586,6 +624,16 @@ function collectNotesFiles(snapshots: MigrateSnapshot[]): MigrateNotesFile[] {
  */
 export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): MigratePlan {
   const harnessDir = resolve(root);
+  // Phase-5 F1: resolve the v3 layout dirs from the harness root once — a
+  // `.mstarc` `[config] workflow_dir` / `project_dir` declaration wins
+  // (relative values resolve against the config file's directory, absolute
+  // allowed; discovery never passes the harness dir's parent), otherwise
+  // the defaults compose under the harness dir. Every planned write target
+  // derives from these, so a custom layout migrates to the SAME location
+  // the v3 runtime readers/writers resolve (cli `resolveSnapshotPath`,
+  // hooks, tools).
+  const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
+  const projectDir = resolveProjectDir(harnessDir, { harnessDir });
   const projectId = opts.projectId ?? _DEFAULT_PROJECT;
   const statusPath = join(harnessDir, MIGRATE_STATUS_FILE);
   const legacy = readJson(statusPath) as StatusDoc;
@@ -594,6 +642,8 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     const updatedAt = typeof legacy.updated_at === "string" && legacy.updated_at !== "" ? legacy.updated_at : "1970-01-01";
     return {
       root: harnessDir,
+      workflowDir,
+      projectDir,
       dryRun: opts.dryRun === true,
       alreadyMigrated: true,
       message: `no-op: ${statusPath} is already at schema version 2 (migrated) \u2014 nothing to do`,
@@ -671,6 +721,33 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     const id = rowIdOf(row);
     if (id !== null && !byPlan.has(id)) snapshots.push(buildStandaloneSnapshot(row, rootUpdatedAt, migrationNotes));
   }
+
+  // 2b. Cross-class lifecycle-id uniqueness (Phase-5 F2, Greptile P1):
+  // plan rows are unique within plans[] (guard above) and compass ids are
+  // unique by directory, but an iteration id may still equal a STANDALONE
+  // plan id (a row registered in no compass) — both would plan the same
+  // `workflows/<id>/snapshot.json` and the apply loop would silently
+  // overwrite the earlier snapshot. The project id joins the same set
+  // (register/roadmap live under `projects/<projectId>/`; under a custom
+  // `.mstarc` layout the workflow and project dirs may even coincide).
+  // Refuse fail-loud with the conflict list — never a silent double-write.
+  const lifecycleSources = new Map<string, string[]>();
+  for (const snapshot of snapshots) {
+    const sources = lifecycleSources.get(snapshot.id) ?? [];
+    sources.push(snapshot.type === "iteration" ? "iteration" : "standalone plan");
+    lifecycleSources.set(snapshot.id, sources);
+  }
+  const projectSources = lifecycleSources.get(projectId) ?? [];
+  projectSources.push("project");
+  lifecycleSources.set(projectId, projectSources);
+  const collisions = [...lifecycleSources.entries()].filter(([, sources]) => sources.length > 1);
+  if (collisions.length > 0) {
+    throw new Error(
+      `refusing to migrate: ${collisions.length} lifecycle id collision(s) (${collisions
+        .map(([id, sources]) => `${JSON.stringify(id)} shared by ${sources.join(" + ")}`)
+        .join("; ")}) \u2014 every id must be unique across iterations, standalone plans and the project id (each id becomes a workflow/project dir segment)`,
+    );
+  }
   snapshots.sort((a, b) => compareIds(a.id, b.id));
 
   // 3. Root-metadata lift -> the active iteration snapshot (v3.0.0 today).
@@ -741,6 +818,8 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 
   return {
     root: harnessDir,
+    workflowDir,
+    projectDir,
     dryRun: opts.dryRun === true,
     alreadyMigrated: false,
     message: `planned migration of ${snapshots.length} lifecycles (${steps.length} steps)`,
@@ -777,12 +856,29 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
     return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
   }
 
-  // QC wave-1 W-B (defense-in-depth at the write boundary): the planner
-  // already refuses unsafe ids via assertSafePathComponent, but apply is a
-  // public API — re-enforce the module invariant ("no fs writes outside the
-  // harness dir") on every planned destination so a hand-built plan can
-  // never escape `plan.root`.
+  // Phase-5 F1: actual write targets derive from the RESOLVED layout dirs
+  // recorded on the plan (`.mstarc` `workflow_dir` / `project_dir`, else
+  // defaults under the harness dir) — the canonical `file` fields stay the
+  // default-layout rel names (display/provenance), the resolved dirs are
+  // where a custom layout must land. `relative("workflows"|"projects", …)`
+  // strips the canonical prefix and re-joins under the resolved dir.
   const harnessRoot = resolve(plan.root);
+  const workflowRoot = resolve(plan.workflowDir);
+  const projectRoot = resolve(plan.projectDir);
+  if (!isAbsolute(plan.workflowDir) || !isAbsolute(plan.projectDir)) {
+    throw new Error(
+      `refusing to apply migration: plan workflowDir/projectDir must be absolute (got ${JSON.stringify(plan.workflowDir)} / ${JSON.stringify(plan.projectDir)})`,
+    );
+  }
+  const workflowTargetOf = (canonicalFile: string): string => join(workflowRoot, relative("workflows", canonicalFile));
+  const projectTargetOf = (canonicalFile: string): string => join(projectRoot, relative("projects", canonicalFile));
+
+  // QC wave-1 W-B (defense-in-depth at the write boundary, Phase-5 F1
+  // extended): the planner already refuses unsafe ids via
+  // assertSafePathComponent, but apply is a public API — re-enforce the
+  // module invariant ("no fs writes outside the harness dir or the
+  // resolved workflow/project dirs") on every planned destination so a
+  // hand-built plan can never escape `plan.root` via a relative path.
   const allDestinations = [
     plan.archive.file,
     ...plan.snapshots.map((snapshot) => snapshot.file),
@@ -792,9 +888,10 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
   ];
   for (const destination of allDestinations) {
     const resolvedDest = resolve(join(plan.root, destination));
-    if (resolvedDest !== harnessRoot && !resolvedDest.startsWith(`${harnessRoot}${sep}`)) {
+    const inside = (dir: string): boolean => resolvedDest === dir || resolvedDest.startsWith(`${dir}${sep}`);
+    if (!inside(harnessRoot) && !inside(workflowRoot) && !inside(projectRoot)) {
       throw new Error(
-        `refusing to apply migration: destination escapes the harness dir (${JSON.stringify(destination)}) \u2014 every write must stay under ${JSON.stringify(plan.root)}`,
+        `refusing to apply migration: destination escapes the harness dir (${JSON.stringify(destination)}) \u2014 every write must stay under ${JSON.stringify(plan.root)}, the workflow dir (${JSON.stringify(plan.workflowDir)}) or the project dir (${JSON.stringify(plan.projectDir)})`,
       );
     }
   }
@@ -810,12 +907,12 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
   // authoritative; a pre-write gate here would run the same O(rows) pass
   // twice per snapshot).
   for (const snapshot of plan.snapshots) {
-    await writeWorkflowSnapshot(snapshot.data, join(plan.root, dirname(snapshot.file)));
+    await writeWorkflowSnapshot(snapshot.data, dirname(workflowTargetOf(snapshot.file)));
   }
 
   // 3. Notes ledgers (additive).
   for (const notes of plan.notesFiles) {
-    const filePath = join(plan.root, notes.file);
+    const filePath = workflowTargetOf(notes.file);
     mkdirSync(dirname(filePath), { recursive: true });
     const content = notes.lines.length > 0 ? `${notes.lines.join("\n")}\n` : "";
     writeFileSync(filePath, content, "utf8");
@@ -829,14 +926,14 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
         `refusing to apply migration: invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
-    const filePath = join(plan.root, plan.register.file);
+    const filePath = projectTargetOf(plan.register.file);
     mkdirSync(dirname(filePath), { recursive: true });
     writeJson(filePath, plan.register.data as unknown as Record<string, unknown>);
   }
 
   // 5. Roadmap seeds (additive).
   if (plan.roadmap !== null) {
-    const filePath = join(plan.root, plan.roadmap.file);
+    const filePath = projectTargetOf(plan.roadmap.file);
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, plan.roadmap.content, "utf8");
   }

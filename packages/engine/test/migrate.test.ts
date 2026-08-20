@@ -49,7 +49,7 @@ import {
   migrateHarnessTree,
   type MigratePlan,
 } from "../src/migrate.js";
-import { validateProjectRegister } from "../src/project.js";
+import { validateProjectRegister, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE } from "../src/project.js";
 import { registerWorkflow, validateStatusV2 } from "../src/status.js";
 import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot, writeWorkflowSnapshot } from "../src/workflow.js";
 
@@ -935,6 +935,129 @@ describe("QC wave-1 — migration commit point under the root write lock (W-A)",
       expect(second.message).toContain("no-op");
       const statusDoc = readJson(statusPath) as { version?: unknown };
       expect(statusDoc.version).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Phase-5 F1 — custom workflow_dir/project_dir layout (Bugbot b1f402ec)", () => {
+  /** Write a `.mstarc` at the harness root declaring a custom v3 layout. */
+  function withCustomLayout(root: string, workflowDir = "wf", projectDir = "pj"): void {
+    writeFileSync(join(root, ".mstarc"), `[config]\nworkflow_dir=${workflowDir}\nproject_dir=${projectDir}\n`, "utf8");
+  }
+
+  test("planner records the resolved layout dirs; apply writes through them (never the hardcoded names)", async () => {
+    const root = fixtureTree();
+    try {
+      withCustomLayout(root);
+      const plan = migrateHarnessTree(root);
+      expect(plan.workflowDir).toBe(join(root, "wf"));
+      expect(plan.projectDir).toBe(join(root, "pj"));
+      // Canonical default-layout rel names are KEPT on the plan fields.
+      expect(plan.snapshots.every((s) => s.file.startsWith("workflows/"))).toBe(true);
+
+      const result = await applyMigratePlan(plan);
+      expect(result.applied).toBe(true);
+
+      // Snapshots land under the CUSTOM workflow dir…
+      for (const snapshot of plan.snapshots) {
+        expect(existsSync(join(root, "wf", snapshot.file.slice("workflows/".length)))).toBe(true);
+      }
+      // …notes too…
+      for (const notes of plan.notesFiles) {
+        expect(existsSync(join(root, "wf", notes.file.slice("workflows/".length)))).toBe(true);
+      }
+      // …and the roadmap under the CUSTOM project dir (the real fixture
+      // carries metadata.program_roadmap).
+      expect(existsSync(join(root, "pj", "_default", PROJECT_ROADMAP_FILE))).toBe(true);
+      // The hardcoded default-layout dirs are NEVER created.
+      expect(existsSync(join(root, "workflows"))).toBe(false);
+      expect(existsSync(join(root, "projects"))).toBe(false);
+
+      // Idempotence holds across layouts: re-plan on the migrated tree is a no-op.
+      const second = migrateHarnessTree(root);
+      expect(second.alreadyMigrated).toBe(true);
+      expect(second.workflowDir).toBe(join(root, "wf"));
+      expect(second.projectDir).toBe(join(root, "pj"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("project register + roadmap seed under a custom project_dir on a residual-bearing tree", async () => {
+    const root = fixtureTree();
+    try {
+      withCustomLayout(root, "wf", "pj");
+      const doc = readJson(join(root, "status.json"));
+      (doc as Record<string, unknown>).residual_findings = { "20260728-zero-residual": [residual()] };
+      writeJson(join(root, "status.json"), doc);
+
+      const plan = migrateHarnessTree(root);
+      expect(plan.register).not.toBeNull();
+      await applyMigratePlan(plan);
+
+      const registerPath = join(root, "pj", "_default", PROJECT_REGISTER_FILE);
+      expect(existsSync(registerPath)).toBe(true);
+      expect(validateProjectRegister(readJson(registerPath)).ok).toBe(true);
+      expect(existsSync(join(root, "projects"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a custom layout declared at the PARENT (repo root) is honored too", async () => {
+    // `.mstarc` documented home: the harness dir OR its parent (repo root).
+    const outer = tmpRoot("migrate-custom-parent-");
+    const root = join(outer, "harness");
+    try {
+      cpSync(FIXTURES, root, { recursive: true });
+      writeFileSync(join(outer, ".mstarc"), "[config]\nworkflow_dir=repo-wf\nproject_dir=repo-pj\n", "utf8");
+      const plan = migrateHarnessTree(root);
+      expect(plan.workflowDir).toBe(join(outer, "repo-wf"));
+      expect(plan.projectDir).toBe(join(outer, "repo-pj"));
+      await applyMigratePlan(plan);
+      expect(existsSync(join(outer, "repo-wf", "v3.0.0", WORKFLOW_SNAPSHOT_FILE))).toBe(true);
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Phase-5 F2 — cross-class lifecycle-id collisions (Greptile P1)", () => {
+  test("an iteration id equal to a standalone plan id refuses to migrate with the conflict list", () => {
+    const root = fixtureTree();
+    try {
+      // Compass `collide-id` (iteration snapshot) + a plans[] row with the
+      // same id registered in NO compass (standalone snapshot): both would
+      // plan `workflows/collide-id/snapshot.json` and the apply would
+      // silently overwrite the first write. Refuse fail-loud.
+      mkdirSync(join(root, "iterations", "collide-id"), { recursive: true });
+      writeFileSync(
+        join(root, "iterations", "collide-id", "delivery-compass.md"),
+        "---\niteration_id: collide-id\nstatus: completed\nplans: []\n---\n# Delivery Compass\n",
+        "utf8",
+      );
+      const doc = readJson(join(root, "status.json"));
+      (doc.plans as Record<string, unknown>[]).push({
+        id: "collide-id",
+        title: "colliding standalone row",
+        status: "Done",
+      });
+      writeJson(join(root, "status.json"), doc);
+      expect(() => migrateHarnessTree(root)).toThrow(/lifecycle id collision/);
+      expect(() => migrateHarnessTree(root)).toThrow(/collide-id/);
+      expect(() => migrateHarnessTree(root)).toThrow(/iteration \+ standalone plan/);
+      // No step list is produced (the plan is refused before any write).
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the project id joins the uniqueness set (projectId == iteration id refuses)", () => {
+    const root = fixtureTree();
+    try {
+      expect(() => migrateHarnessTree(root, { projectId: "v3.0.0" })).toThrow(/lifecycle id collision/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
