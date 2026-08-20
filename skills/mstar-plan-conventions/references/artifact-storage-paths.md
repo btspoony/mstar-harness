@@ -20,6 +20,7 @@
 | **workflow notes ledger** | `{HARNESS_DIR}/workflows/<id>/notes.jsonl`（gitignored；append-only 运行时笔记） | `mstar-plan-artifacts`、`mstar-iteration` |
 | **project roadmap** | `.mstar/projects/<id>/roadmap.md`（gitignored；frontmatter `{project_id, title, status, created_at, milestones[]?, residuals_ref?}` + 正文约定） | `mstar-plan-artifacts`、`mstar-iteration` |
 | **project register** | `.mstar/projects/<id>/residuals.json`（gitignored；open residual SSOT：`entries[<plan-id>]` 数组；项目缺失用 `_default`） | `mstar-plan-artifacts`、`mstar-review-qc` |
+| **project references（研究语料）** | `.mstar/projects/<id>/references/`（gitignored；主题化 surveys / epic 备注 / 第三方 notes，与项目绑定；与 `{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` 不同） | `mstar-project-governance`、`mstar-plan-artifacts` |
 | **迭代 package** | `.mstar/iterations/<iteration-id>/`（gitignored；`delivery-compass.md`、`guides/`、`specs/`、可选 `README.md`） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读；默认排除 compass） |
 | **迭代索引** | `.mstar/iterations/README.md`（gitignored；一行 = 一次迭代） | `mstar-iteration`（读写） |
 | **规格** | `{HARNESS_DIR}/specs/`（默认 tracked；解析见 `mstar-plan-conventions`） | `mstar-plan-artifacts` |

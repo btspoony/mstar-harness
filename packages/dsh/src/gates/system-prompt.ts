@@ -314,18 +314,59 @@ function engineStatusProvider(ctx: Context, resolver: HarnessResolver, bootHarne
 }
 
 /**
+ * Cap on plan rows joined into the `mstar:engine-status` digest (plan
+ * `20260820-dsh-digest-bounds` Task 1). Module-level and intentionally NOT
+ * re-exported — `catalog.ts` must not import it (a reverse import would
+ * close a `system-prompt.ts ↔ catalog.ts` cycle); `renderEngineStatusCatalog`
+ * stays uncapped (sibling surface, documented in the fragment).
+ */
+const DIGEST_PLAN_CAP = 8
+
+/**
+ * Cap on lease rows joined into the `mstar:engine-status` digest (plan
+ * `20260820-dsh-digest-bounds` Task 1). Same module-local scope and
+ * non-export rule as {@link DIGEST_PLAN_CAP}.
+ */
+const DIGEST_LEASE_CAP = 4
+
+/**
+ * Join the screened projection of `items` in catalog-array order, capped at
+ * `cap`: when `items.length > cap` the FIRST `cap` items render followed by
+ * a final `+N more` overflow marker (`N = items.length - cap`) as the last
+ * join element; at or under the cap the full join renders with no marker.
+ * The `render` callback owns the per-item `stripInterpolationHazard`
+ * screening (before the join, same as the uncapped code); the marker is an
+ * engine-derived literal and stays unscreened. Callers guard the empty case
+ * (`length === 0` → `none` / `none active`) — this helper is never reached
+ * for empty arrays.
+ */
+function joinCapped<T>(items: readonly T[], cap: number, separator: string, render: (item: T) => string): string {
+  const visible = items.slice(0, cap).map(render)
+  if (items.length > cap) visible.push(`+${items.length - cap} more`)
+  return visible.join(separator)
+}
+
+/**
  * The bounded machine summary: watermark + iteration gate + one compact
  * state line (+ the compass direction one-liner when present). Deliberately
  * EXCLUDES the full status.json surface — residual finding detail,
  * agent-flow events, knowledge digest and branch/policy anchors stay out.
+ *
+ * The plan/lease joins are capped (plan `20260820-dsh-digest-bounds` Task
+ * 1): at most {@link DIGEST_PLAN_CAP} plan rows and {@link DIGEST_LEASE_CAP}
+ * lease rows render, in catalog-array order, with a final `+N more` overflow
+ * marker when the array is longer — the digest stays a bounded snapshot and
+ * overflow stays visible. At-or-under-cap arrays render exactly as before
+ * (no marker); empty arrays keep the `none` / `none active` copy (the
+ * caller's `length === 0` branch — the capped join is never reached).
  *
  * STRICT-interpolation safety (plan QC fix wave W-1): every operator-
  * controlled value (harness dir, plan ids, plan statuses, iteration id,
  * lease planId/holder, direction prose) is screened through
  * `stripInterpolationHazard` before embedding — a hostile `{{…}}` in any of
  * them can never throw the renderer. Engine-derived literals (version,
- * enforcement word, violation codes, transition, severities) are constants,
- * not operator text, and stay unscreened.
+ * enforcement word, violation codes, transition, severities, the `+N more`
+ * overflow marker) are constants, not operator text, and stay unscreened.
  */
 function engineStatusSummary(source: MstarEngineStatusSource): string {
   const lines = [
@@ -339,9 +380,9 @@ function engineStatusSummary(source: MstarEngineStatusSource): string {
   }
   const state = source.state
   if (state !== null) {
-    const plans = state.plans.length === 0 ? 'none' : state.plans.map((p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`).join(' ')
+    const plans = state.plans.length === 0 ? 'none' : joinCapped(state.plans, DIGEST_PLAN_CAP, ' ', (p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`)
     const residuals = state.residuals.length === 0 ? 'none' : state.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')
-    const leases = state.leases.length === 0 ? 'none active' : state.leases.map((l) => `${stripInterpolationHazard(l.planId)} → ${stripInterpolationHazard(l.holder)}`).join('; ')
+    const leases = state.leases.length === 0 ? 'none active' : joinCapped(state.leases, DIGEST_LEASE_CAP, '; ', (l) => `${stripInterpolationHazard(l.planId)} → ${stripInterpolationHazard(l.holder)}`)
     lines.push(`plans: ${plans} | residuals: ${residuals} | leases: ${leases}`)
     if (state.direction !== null) lines.push(`direction: ${stripInterpolationHazard(state.direction)}`)
   }

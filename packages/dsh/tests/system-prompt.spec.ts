@@ -502,3 +502,54 @@ describe('stripInterpolationHazard (STRICT {{variable}} screening — plan QC fi
     for (const out of outputs) expect(PERSONA_INTERPOLATION_HAZARD.test(out)).toBe(false)
   })
 })
+
+describe('mstar:engine-status digest join caps (plan 20260820-dsh-digest-bounds Task 1)', () => {
+  /** A snapshot carrying `planCount` plan rows; the first `leaseCount` rows hold execution leases. */
+  function boundedSnapshot(planCount: number, leaseCount: number): string {
+    const plans = Array.from({ length: planCount }, (_, i) => ({
+      plan_id: `p-${i}`,
+      title: `Plan ${i}`,
+      status: 'InProgress',
+      ...(i < leaseCount ? { execution_lease: { holder: `holder-${i}`, claimed_at: '2026-08-19' } } : {}),
+    }))
+    return v2Snapshot('v2.2.0', { type: 'iteration', plans })
+  }
+
+  /** Boot a fresh app seeded with a snapshot of `planCount` plans / `leaseCount` leases. */
+  async function bootBounded(planCount: number, leaseCount: number) {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-bounds-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
+      'workflows/v2.2.0/snapshot.json': boundedSnapshot(planCount, leaseCount),
+    })
+    return bootApp({ root })
+  }
+
+  it('(caps-1) 20 plans + 10 leases render the first 8/4 in catalog order with `+N more` markers, never all 20 plan ids', async () => {
+    const app = booted = await bootBounded(20, 10)
+    const text = (await app.ctx.systemPrompt.assemble()).contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+    // First 8 plan ids space-joined + the final `+12 more` marker; first 4
+    // leases `; `-joined + the final `+6 more` marker (residuals stay `none`).
+    expect(text).toContain('plans: p-0(InProgress) p-1(InProgress) p-2(InProgress) p-3(InProgress) p-4(InProgress) p-5(InProgress) p-6(InProgress) p-7(InProgress) +12 more | residuals: none | leases: p-0 → holder-0; p-1 → holder-1; p-2 → holder-2; p-3 → holder-3; +6 more')
+    // The 9th plan id and the last plan id never reach the digest.
+    expect(text).not.toContain('p-8(InProgress)')
+    expect(text).not.toContain('p-19(')
+    // The 5th lease holder never reaches the digest.
+    expect(text).not.toContain('holder-4')
+  })
+
+  it('(caps-2) at-cap length (8 plans + 4 leases) renders the full join with NO overflow marker', async () => {
+    const app = booted = await bootBounded(8, 4)
+    const text = (await app.ctx.systemPrompt.assemble()).contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+    expect(text).toContain('plans: p-0(InProgress) p-1(InProgress) p-2(InProgress) p-3(InProgress) p-4(InProgress) p-5(InProgress) p-6(InProgress) p-7(InProgress) | residuals: none | leases: p-0 → holder-0; p-1 → holder-1; p-2 → holder-2; p-3 → holder-3')
+    expect(text).not.toContain('+0 more')
+  })
+
+  it('(caps-3) empty arrays still render the existing `none` / `none active` copy (helper never reached)', async () => {
+    const app = booted = await bootBounded(0, 0)
+    const text = (await app.ctx.systemPrompt.assemble()).contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+    expect(text).toContain('plans: none | residuals: none | leases: none active')
+  })
+})
