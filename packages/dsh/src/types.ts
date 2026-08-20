@@ -212,6 +212,20 @@ export interface MstarHarnessState {
    * read).
    */
   readonly selection: WorkflowSelectionView
+  /**
+   * The selected workflow snapshot's top-level `type` (`plan` / `iteration`),
+   * projected loose (`string`) like `HarnessPlanView.status`. ALWAYS-present
+   * nullable scalar (lossless JSON, never omitted): missing/empty → `null`;
+   * `null` on selection error (no snapshot read). Added for the slim
+   * `mstar:engine-status` digest (plan `20260820-dsh-engine-status-slim`).
+   */
+  readonly workflowType: string | null
+  /**
+   * The selected workflow snapshot's top-level lifecycle `status`
+   * (`running` / `paused`; a terminal word for a stale-but-registered entry,
+   * decision D3). Same ALWAYS-present nullable discipline as `workflowType`.
+   */
+  readonly workflowStatus: string | null
   /** Registered plan rows (`plan_id`/`id` + `status`), snapshot plans[] order. */
   readonly plans: readonly HarnessPlanView[]
   /** Open `residual_findings` counts by severity (non-zero only). */

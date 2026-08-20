@@ -634,6 +634,8 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation (plan 202
     // register; `selection` is the additive v3 field.
     expect(source.state).toEqual({
       selection: { kind: 'active', workflowId: GOLDEN_WORKFLOW, dir: `workflows/${GOLDEN_WORKFLOW}` },
+      workflowType: 'iteration',
+      workflowStatus: 'running',
       plans: [
         { id: 'plan-a', status: 'InProgress', doneAt: null, iterationRefs: [] },
         { id: 'plan-b', status: 'Done', doneAt: '2026-08-19', iterationRefs: [] },

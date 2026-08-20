@@ -476,6 +476,8 @@ function harnessStateSource(harnessDir: string | null): MstarHarnessState | null
     const executionPolicy = asRecord(snapshot.execution_policy)
     return {
       selection,
+      workflowType: str(snapshot.type),
+      workflowStatus: str(snapshot.status),
       plans,
       residuals,
       residualFindings,
@@ -521,6 +523,8 @@ function selectionErrorState(
 ): MstarHarnessState {
   return {
     selection,
+    workflowType: null,
+    workflowStatus: null,
     plans: [],
     residuals: [],
     residualFindings: null,

@@ -89,6 +89,8 @@ const baseSource: MstarEngineStatusSource = {
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: {
     selection: { kind: 'active', workflowId: 'wf-1', dir: 'workflows/wf-1' },
+    workflowType: 'plan',
+    workflowStatus: 'running',
     plans: [],
     residuals: [],
     residualFindings: null,

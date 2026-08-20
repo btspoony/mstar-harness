@@ -70,6 +70,8 @@ const fullSource: MstarEngineStatusSource = {
   },
   state: {
     selection: { kind: 'active', workflowId: 'wf-1', dir: 'workflows/wf-1' },
+    workflowType: 'plan',
+    workflowStatus: 'running',
     plans: [
       { id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] },
       { id: 'plan-b', status: 'InProgress', doneAt: null, iterationRefs: [] },
