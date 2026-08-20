@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-08-20
+
+### Harness
+
+- **Project-scoped research corpus**: theme research (surveys, epic roadmaps, third-party notes) now lives under `{PROJECT_DIR}/<id>/references/` — named as current by `mstar-project-governance` (Scope table), `artifact-storage-paths.md` (new path-SSOT row), and `knowledge-and-designs.md` (boundary: research ≠ specs ≠ knowledge ≠ iteration guides).
+- **Engine filename listing**: `PROJECT_REFERENCES_DIR` + `listProjectReferenceFiles(projectDir)` in `packages/engine/src/project.ts` — sorted relative paths (root files + one-level subdirectory files; skips `roadmap.md` / `residuals.json` strays; missing dir → `[]`); directory metadata only, never file bodies, never a markdown schema.
+
+- Version alignment with harness **3.1.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.0**.
+
 ## [3.0.1] - 2026-08-20
 
 ### Changed
