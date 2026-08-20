@@ -20,7 +20,7 @@
  * violation codes.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { planExecutionLeaseLocations, verifyPlanExecutionLease } from "@mstar-harness/engine";
@@ -209,6 +209,29 @@ describe("mstar lease verify — workflow snapshot plan-row execution_lease", ()
       );
       expect(proc.exitCode).toBe(1);
       expect(proc.stderr.toString()).toContain("invalid workflow id");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("custom `.mstarc` workflow_dir: the snapshot is read at the DECLARED location (Phase-5 F1)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mstar-lease-custom-"));
+    try {
+      writeFileSync(join(dir, ".mstarc"), "[config]\nworkflow_dir=custom-wf\n", "utf8");
+      const workflowDir = join(dir, "custom-wf", "wf-1");
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(
+        join(workflowDir, "snapshot.json"),
+        JSON.stringify(snapshot([planRow({ execution_lease: VALID_LEASE })]), null, 2),
+      );
+      const proc = Bun.spawnSync(
+        [process.execPath, "run", "src/index.ts", "lease", "verify", "--workflow", "wf-1", "--harness", dir],
+        { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" },
+      );
+      expect(proc.exitCode).toBe(0);
+      expect(proc.stdout.toString()).toContain("OK plan plan-a");
+      // The hardcoded default-layout dir is NEVER consulted.
+      expect(existsSync(join(dir, "workflows"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

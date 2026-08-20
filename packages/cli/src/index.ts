@@ -524,16 +524,21 @@ function resolveLeaseHarnessDir(harnessArg?: string): string {
 }
 
 /**
- * Resolve `{HARNESS_DIR}/workflows/<id>/snapshot.json` for the v2
- * `--workflow <id>` inputs (lease verify / verify-integration / iteration
- * gate / worktree check). The id is a single path component — reject
- * separators and `..` so a hostile id cannot escape the workflows dir.
+ * Resolve `{WORKFLOW_DIR}/<id>/snapshot.json` for the v2 `--workflow <id>`
+ * inputs (lease verify / verify-integration / iteration gate / worktree
+ * check). The id is a single path component — reject separators and `..`
+ * so a hostile id cannot escape the workflows dir. The workflow dir comes
+ * from the engine resolver (Phase-5 F1): a `.mstarc` `[config]
+ * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows` — so a
+ * custom layout is READ at the same location it is written.
  */
 function resolveSnapshotPath(workflowId: string, harnessArg?: string): string {
   if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
     throw new Error(`invalid workflow id ${JSON.stringify(workflowId)}`);
   }
-  return path.join(resolveLeaseHarnessDir(harnessArg), "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+  const harnessDir = resolveLeaseHarnessDir(harnessArg);
+  const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
+  return path.join(workflowDir, workflowId, WORKFLOW_SNAPSHOT_FILE);
 }
 
 /** The sole plan row of a workflow snapshot, or null when ambiguous/absent. */

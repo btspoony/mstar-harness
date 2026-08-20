@@ -11,7 +11,7 @@
  * Each case runs the real CLI as a subprocess against temp fixtures.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -117,6 +117,29 @@ function withFixtures(fn: (dir: string, snapshotPath: string, compassPath: strin
 function gateArgs(dir: string, compassPath: string, extra: string[] = []): string[] {
   return ["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath, ...extra];
 }
+
+describe("Phase-5 F1 — custom `.mstarc` workflow_dir (Bugbot b1f402ec)", () => {
+  test("iteration gate reads the snapshot at the DECLARED layout location", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mstar-iteration-cli-custom-"));
+    try {
+      writeFileSync(join(dir, ".mstarc"), "[config]\nworkflow_dir=custom-wf\n", "utf8");
+      const workflowDir = join(dir, "custom-wf", WORKFLOW_ID);
+      mkdirSync(workflowDir, { recursive: true });
+      const snapshotPath = join(workflowDir, "snapshot.json");
+      const compassPath = join(dir, "delivery-compass.md");
+      writeFileSync(snapshotPath, snapshotFixture([["plan-a", "Todo"], ["plan-b", "Todo"]]));
+      writeFileSync(compassPath, COMPASS_ACTIVE);
+
+      const result = runCli(gateArgs(dir, compassPath));
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("transition: phase-2-execute");
+      // The hardcoded default-layout dir is NEVER consulted.
+      expect(existsSync(join(dir, "workflows"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("mstar iteration gate — phase-transition evaluation", () => {
   test("plans not all Done → phase-2-execute, exit 0 (gate passes, keep executing)", () => {
