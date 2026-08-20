@@ -6,6 +6,14 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-08-20
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- Version alignment with harness **3.0.1** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.0.1**.
+
 ## [3.0.0] - 2026-08-20
 
 ### Harness
