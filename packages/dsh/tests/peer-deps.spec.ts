@@ -1,5 +1,5 @@
 /**
- * Registry peer contract (rc.7 from npm, no link farm): the private
+ * Registry peer contract (rc.8 from npm, no link farm): the private
  * `@deepseek-ai/*` packages are peerDependencies ONLY (never
  * devDependencies / dependencies), resolved from the npm registry at dev
  * time via bun's default peer auto-install — no local link farm, no
@@ -10,7 +10,7 @@
  *
  * Bun installs peer dependencies by default (unlike pnpm, which needs the
  * `autoInstallPeers: true` workspace flag), so the registry switch is wired
- * solely by the pinned `^0.1.0-rc.7` peer ranges resolving against the
+ * solely by the pinned `^0.1.0-rc.8` peer ranges resolving against the
  * default registry.
  */
 import { describe, expect, it } from 'bun:test'
@@ -36,7 +36,7 @@ const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
 const deepseekKeys = (field: Record<string, string> | undefined): string[] =>
   Object.keys(field ?? {}).filter((name) => name.startsWith('@deepseek-ai/')).sort()
 
-describe('registry peer contract (rc.7 from npm, no link farm)', () => {
+describe('registry peer contract (rc.8 from npm, no link farm)', () => {
   it('every @deepseek-ai/* entry is a peerDependency and appears in no other dependency field', () => {
     const peers = deepseekKeys(pkg.peerDependencies)
     expect(peers.length).toBeGreaterThan(0)
@@ -47,10 +47,10 @@ describe('registry peer contract (rc.7 from npm, no link farm)', () => {
     }
   })
 
-  it('every @deepseek-ai/dsh-* peer is pinned to ^0.1.0-rc.7', () => {
+  it('every @deepseek-ai/dsh-* peer is pinned to ^0.1.0-rc.8', () => {
     for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
       if (name.startsWith('@deepseek-ai/dsh-')) {
-        expect(range, name).toBe('^0.1.0-rc.7')
+        expect(range, name).toBe('^0.1.0-rc.8')
       }
     }
   })
@@ -78,7 +78,7 @@ describe('registry peer contract (rc.7 from npm, no link farm)', () => {
     const llm = JSON.parse(
       readFileSync(require.resolve('@deepseek-ai/dsh-llm/package.json'), 'utf8'),
     ) as { version: string }
-    expect(llm.version).toBe('0.1.0-rc.7')
+    expect(llm.version).toBe('0.1.0-rc.8')
   })
 
   it('no install-time side effects; prepare, dsh:link scripts and the link-farm script are gone', () => {

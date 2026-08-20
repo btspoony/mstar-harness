@@ -113,7 +113,7 @@ describe('bundled mstar commands (omp parity)', () => {
     booted = await bootApp()
     const { agent, steered } = fakeAgent()
     for (const name of MSTAR_COMMANDS) {
-      const result = await booted.ctx.commands.execute(agent, `/${name}`, new AbortController().signal)
+      const result = await booted.ctx.commands.execute(agent, `/${name}`, [], new AbortController().signal)
       expect(result?.result.kind).toBe('success')
       // The steered message is a USER-source message (the dsh-plan-mode
       // /permission precedent — `source: { kind: 'user' }`), so the model
@@ -153,7 +153,7 @@ describe('bundled mstar commands (omp parity)', () => {
     const { agent, steered } = fakeAgent()
     // The claimed path submits `/iteration-start ` + args; the rawInput
     // must reach the model with the command body, not vanish.
-    const result = await booted.ctx.commands.execute(agent, '/iteration-start pause', new AbortController().signal)
+    const result = await booted.ctx.commands.execute(agent, '/iteration-start pause', [], new AbortController().signal)
     expect(result?.result.kind).toBe('success')
     expect(steered).toHaveLength(1)
     const message = steered[0]!
