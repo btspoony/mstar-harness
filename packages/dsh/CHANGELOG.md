@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-08-20
+
+### Harness
+
+- **Engine-status digest join caps**: the `mstar:engine-status` runtime-context digest (`engineStatusSummary` in `packages/dsh/src/gates/system-prompt.ts`) now renders at most 8 plan rows and 4 lease rows in catalog-array order, appending a final `+N more` overflow marker when the list is longer — the digest stays a bounded snapshot and truncation stays visible. At-or-under-cap output and the empty `none` / `none active` copy are unchanged; per-item `stripInterpolationHazard` screening and the compact residuals counts are untouched. The caps are module-level constants, deliberately not re-exported. The sibling `<mstar_engine_status>` pre-step catalog row (`renderEngineStatusCatalog`, `packages/dsh/src/gates/catalog.ts:288` plans join / `:300` leases join) stays uncapped by design: sharing the constants would close a `system-prompt.ts ↔ catalog.ts` import cycle, and duplicating them would fork the values — the sibling follow-up is registered on the v3.1.0 roadmap.
+- **Agent-flow ledger tail read**: `readAgentFlow` now reads large ledgers (above the 64 KiB read gate) as a bounded latest-first tail — seek from EOF, align the window start to a line boundary, and double the window backward until it holds `limit` complete lines — so the catalog pays O(window) at the byte layer instead of parsing every historical line. Small ledgers keep the existing full-read path verbatim; both paths feed the same parse funnel, so tail/full parity is structural. Write path (append + 500-line truncation under the per-workflow lock) is untouched.
+
+- Version alignment with harness **3.1.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.0**.
+
 ## [3.0.1] - 2026-08-20
 
 ### Harness

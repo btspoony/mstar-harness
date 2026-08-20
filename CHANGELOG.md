@@ -2,24 +2,36 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **3.0.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **3.1.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **3.0.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.0.1** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.0.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.0.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **3.0.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **3.0.1** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **3.0.1** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **3.0.1** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.0.1** |
-| Agent Plugins manifest | `plugin.json` | **3.0.1** |
+| Monorepo root | `morning-star` (`package.json`) | **3.1.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.1.0** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.1.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.1.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **3.1.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **3.1.0** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **3.1.0** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **3.1.0** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.0** |
+| Agent Plugins manifest | `plugin.json` | **3.1.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [3.1.0] - 2026-08-20
+
+### Harness
+
+- **Agent-flow ledger tail read**: `readAgentFlow` now reads large ledgers (above the 64 KiB read gate) as a bounded latest-first tail — seek from EOF, align the window start to a line boundary, and double the window backward until it holds `limit` complete lines — so the catalog pays O(window) at the byte layer instead of parsing every historical line. Small ledgers keep the existing full-read path verbatim; both paths feed the same parse funnel, so tail/full parity is structural. Write path (append + 500-line truncation under the per-workflow lock) is untouched.
+- **Project-scoped research corpus**: theme research (surveys, epic roadmaps, third-party notes) now lives under `{PROJECT_DIR}/<id>/references/` — named as current by `mstar-project-governance` (Scope table), `artifact-storage-paths.md` (new path-SSOT row), and `knowledge-and-designs.md` (boundary: research ≠ specs ≠ knowledge ≠ iteration guides).
+- **Engine filename listing**: `PROJECT_REFERENCES_DIR` + `listProjectReferenceFiles(projectDir)` in `packages/engine/src/project.ts` — sorted relative paths (root files + one-level subdirectory files; skips `roadmap.md` / `residuals.json` strays; missing dir → `[]`); directory metadata only, never file bodies, never a markdown schema.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.1.0**.
 
 ## [3.0.1] - 2026-08-20
 
