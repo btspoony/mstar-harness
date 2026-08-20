@@ -30,7 +30,7 @@
   },
   "packageManager": "bun@1.2.17",
   "dependencies": {
-    "@mstar-harness/engine": "^2.0.2"
+    "@mstar-harness/engine": "workspace:*"
   },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": "^17.2.11",
