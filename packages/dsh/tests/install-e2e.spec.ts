@@ -46,7 +46,8 @@
  *      list — and pin the plan's 13-role closure claim as a lower bound.
  *
  * AC-3 evidence: a NON-skip PASS of this spec (recorded in the SDD
- * report); CI does not run dsh (`ci.yml` link-farm gate).
+ * report); CI runs dsh tests, but this spec SKIPS there — no `dsh` bin
+ * on the runner PATH (skip-guard below; the registry probe would pass).
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
@@ -71,7 +72,14 @@ const DSH_PROFILE = 'web'
  * `dsh plugin add` flow forwards to pnpm over the network). Module scope —
  * the describe is skipped when either fails, with the reason printed. */
 const skipReason = await (async (): Promise<string | undefined> => {
-  const dshProbe = Bun.spawnSync(['dsh', '--version'], { stdout: 'pipe', stderr: 'pipe' })
+  // Bun.spawnSync throws ENOENT when the executable is missing — must be
+  // caught, or the skip-guard itself crashes the suite (CI has no dsh bin).
+  let dshProbe: { exitCode: number } | undefined
+  try {
+    dshProbe = Bun.spawnSync(['dsh', '--version'], { stdout: 'pipe', stderr: 'pipe' })
+  } catch {
+    return 'dsh CLI not found on PATH (install @deepseek-ai/dsh first)'
+  }
   if (dshProbe.exitCode !== 0) return 'dsh CLI not found on PATH (install @deepseek-ai/dsh first)'
   try {
     const response = await fetch('https://registry.npmjs.org/@mstar-harness%2Fdsh/latest', {

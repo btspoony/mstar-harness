@@ -55,7 +55,14 @@ const FALLBACKS_SPEC = 'dsh-llm-fallbacks'
  * reachability. A missing prerequisite SKIPS with the reason printed —
  * never a silent green; a skip is not three-state evidence. */
 const skipReason = await (async (): Promise<string | undefined> => {
-  const dshProbe = Bun.spawnSync(['dsh', '--version'], { stdout: 'pipe', stderr: 'pipe' })
+  // Bun.spawnSync throws ENOENT when the executable is missing — must be
+  // caught, or the skip-guard itself crashes the suite (CI has no dsh bin).
+  let dshProbe: { exitCode: number } | undefined
+  try {
+    dshProbe = Bun.spawnSync(['dsh', '--version'], { stdout: 'pipe', stderr: 'pipe' })
+  } catch {
+    return 'dsh CLI not found on PATH (install @deepseek-ai/dsh first)'
+  }
   if (dshProbe.exitCode !== 0) return 'dsh CLI not found on PATH (install @deepseek-ai/dsh first)'
   try {
     const response = await fetch('https://registry.npmjs.org/@mstar-harness%2Fdsh/latest', {

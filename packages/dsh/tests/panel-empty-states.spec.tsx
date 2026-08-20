@@ -70,6 +70,7 @@ const harnessSource: MstarEngineStatusSource = {
     plans: [],
     residuals: [],
     residualFindings: null,
+    project: { milestones: [], openResiduals: [] },
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,
