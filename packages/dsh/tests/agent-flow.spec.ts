@@ -141,6 +141,31 @@ const settleLine = (overrides: Record<string, unknown> = {}): string => JSON.str
   ...overrides,
 })
 
+/**
+ * A v1 dispatch line padded to ~2 KiB via an ignored display field — the
+ * LARGE-ledger fixture line (plan `20260820-dsh-ledger-tail-read`): 200 of
+ * these ≈ 400 KiB, deterministically above the 64 KiB read byte gate, and
+ * each line is large enough that the FIRST 64 KiB tail window holds fewer
+ * than `AGENT_FLOW_DEFAULT_LIMIT` complete lines — forcing the tail window
+ * to double backward (the growth step is exercised too). The `pad` field is
+ * ignored by the parse funnel (structural narrowing), so a padded line
+ * carries the SAME logical event as its unpadded sibling.
+ */
+const paddedDispatchLine = (ts: number): string =>
+  JSON.stringify({
+    v: 1,
+    ts,
+    kind: 'dispatch',
+    agent: 'a1',
+    role: 'fullstack-dev',
+    planId: '20260810-x',
+    taskId: 'T2',
+    taskCategory: 'logic',
+    verdict: 'ok',
+    hard: false,
+    pad: 'x'.repeat(2048),
+  })
+
 /* ---------------------------------- helpers ---------------------------------- */
 
 /** One pending subagent tool call in the registry pipeline shape. */
@@ -532,6 +557,89 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       expect(view!.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
       // The root ledger is never written.
       expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('agent-flow tail read — bounded latest-first window (plan `20260820-dsh-ledger-tail-read`)', () => {
+  it('P2-AC-1: a large padded ledger (200 × ~2 KiB lines) reads its latest 50 events latest-first via the bounded tail', async () => {
+    const { root, workflowDir } = await tempHarness('dsh-agentflow-tail-large-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const lines: string[] = []
+      for (let i = 0; i < 200; i += 1) lines.push(paddedDispatchLine(1_700_000_000_000 + i))
+      await writeFile(file, lines.join('\n') + '\n')
+      // Fixture regime: ~2 KiB/line × 200 ≈ 400 KiB — deterministically above
+      // the 64 KiB read gate (the test never depends on the gate's exact value).
+      expect(statSync(file).size).toBeGreaterThan(256 * 1024)
+
+      const view = readAgentFlow(workflowDir, 50)
+      expect(view).not.toBeNull()
+      // Latest 50 events, latest-first (the newest line is the first event).
+      expect(view!.events).toHaveLength(50)
+      expect(view!.events[0]!.ts).toBe(1_700_000_000_199)
+      expect(view!.events[49]!.ts).toBe(1_700_000_000_150)
+      for (let i = 1; i < view!.events.length; i += 1) {
+        expect(view!.events[i]!.ts).toBeLessThanOrEqual(view!.events[i - 1]!.ts)
+      }
+      // The summary covers the SAME 50-event window (role × verdict counts).
+      expect(view!.summary).toEqual([{ role: 'fullstack-dev', outcome: 'ok', count: 50 }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('P2-AC-3 parity: the padded-large tail window equals the unpadded-small full window (same logical events)', async () => {
+    const { root, workflowDir } = await tempHarness('dsh-agentflow-tail-parity-large-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const padded: string[] = []
+      for (let i = 0; i < 200; i += 1) padded.push(paddedDispatchLine(1_700_000_000_000 + i))
+      await writeFile(file, padded.join('\n') + '\n')
+      const largeView = readAgentFlow(workflowDir, 50)
+      expect(largeView).not.toBeNull()
+      expect(statSync(file).size).toBeGreaterThan(256 * 1024)
+
+      const { root: rootSmall, workflowDir: workflowDirSmall } = await tempHarness('dsh-agentflow-tail-parity-small-')
+      try {
+        const fileSmall = join(workflowDirSmall, AGENT_FLOW_FILE)
+        const small: string[] = []
+        for (let i = 0; i < 200; i += 1) small.push(dispatchLine({ ts: 1_700_000_000_000 + i }))
+        await writeFile(fileSmall, small.join('\n') + '\n')
+        const smallView = readAgentFlow(workflowDirSmall, 50)
+        expect(smallView).not.toBeNull()
+        // Fixture regime: ~160 B/line × 200 ≈ 32 KiB — below the 64 KiB gate.
+        expect(statSync(fileSmall).size).toBeLessThan(64 * 1024)
+
+        // The two read paths yield the SAME latest-first window + summary
+        // (single parse funnel — parity is structural).
+        expect(largeView!.events).toEqual(smallView!.events)
+        expect(largeView!.summary).toEqual(smallView!.summary)
+      } finally {
+        await rm(rootSmall, { recursive: true, force: true })
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('P2-AC-2: an incomplete trailing line on the large path does not throw — the partial line is skipped at the newline boundary', async () => {
+    const { root, workflowDir } = await tempHarness('dsh-agentflow-tail-trunc-')
+    try {
+      const file = join(workflowDir, AGENT_FLOW_FILE)
+      const lines: string[] = []
+      for (let i = 0; i < 200; i += 1) lines.push(paddedDispatchLine(1_700_000_000_000 + i))
+      // Append a TORN final line: a valid JSON prefix cut off mid-write, with
+      // NO trailing newline — the tail window ends at EOF on the partial line.
+      await writeFile(file, lines.join('\n') + '\n' + '{"v":1,"ts":1700000000200,"kind":"dis')
+      const view = readAgentFlow(workflowDir)
+      expect(view).not.toBeNull()
+      // No throw: the incomplete line is skipped (malformed → funnel skip);
+      // the latest COMPLETE events still come back latest-first.
+      expect(view!.events).toHaveLength(50)
+      expect(view!.events[0]!.ts).toBe(1_700_000_000_199)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

@@ -94,7 +94,7 @@
  * relative path; the public exports (`recordDispatch` / `recordSettle` /
  * `readAgentFlow` + constants + types) are re-exported verbatim by the entry.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
@@ -133,6 +133,17 @@ export const AGENT_FLOW_DEFAULT_LIMIT = 50
  * small-file append path free of a full read per dispatch).
  */
 export const AGENT_FLOW_SIZE_GATE_BYTES = 64 * 1024
+/**
+ * The READ-path byte gate (plan `20260820-dsh-ledger-tail-read`): ledgers at
+ * or below this size take the existing full-read path verbatim; larger files
+ * are read as a bounded latest-first TAIL so the catalog pays O(window) at
+ * the byte layer instead of parsing every historical line. Private by design
+ * (plan: "no new exports; public surface stays `readAgentFlow` + the
+ * existing constants") — tests never depend on its exact value. This is the
+ * read-side sibling of the write-side `AGENT_FLOW_SIZE_GATE_BYTES` (same
+ * 64 KiB magnitude, different purpose: bounded tail vs truncation gate).
+ */
+const AGENT_FLOW_TAIL_READ_THRESHOLD_BYTES = 64 * 1024
 /**
  * WORKFLOW field length caps (qc2 W-3 fix-wave) — ONE constant family at
  * the ledger boundary, enforced on BOTH the consumer (workflow-ledger
@@ -1257,6 +1268,65 @@ function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
 }
 
 /**
+ * Acquire the ledger's decoded content for the parse funnel (plan
+ * `20260820-dsh-ledger-tail-read`): files at or below
+ * `AGENT_FLOW_TAIL_READ_THRESHOLD_BYTES` take the existing full read
+ * verbatim; LARGER files are read as a bounded latest-first TAIL — seek
+ * from EOF, align the window start to a line boundary, and double the
+ * window backward until it holds at least `n` complete lines or reaches
+ * BOF. Both paths yield a decoded `content` string consumed by the SINGLE
+ * parse funnel in `readAgentFlow` — there is no second parse loop, so
+ * tail/full parity is structural (a trailing partial line is handled by
+ * that shared funnel exactly as today: malformed → skipped).
+ *
+ * May throw (stat / open / read errors, EISDIR) — `readAgentFlow` catches
+ * and maps to `null`, preserving today's degrade contract (every tail-path
+ * fs failure degrades exactly like the old `readFileSync` throw).
+ * @param file - the ledger file path (already known to exist).
+ * @param n - the requested window bound: the tail window must hold at least
+ *   this many complete lines before it stops doubling (default 50).
+ */
+function ledgerContent(file: string, n: number): string {
+  const size = statSync(file).size
+  if (size <= AGENT_FLOW_TAIL_READ_THRESHOLD_BYTES) {
+    return readFileSync(file, 'utf8')
+  }
+  // Tail read: read the last `threshold` bytes, align to a line boundary
+  // (the leading segment may be a partial line — drop through the first
+  // newline when the window starts above BOF), and double the window
+  // backward until it holds `n` complete lines or reaches BOF. The window
+  // end is ALWAYS EOF, so the last segment matches the full read exactly.
+  let windowBytes = AGENT_FLOW_TAIL_READ_THRESHOLD_BYTES
+  const fd = openSync(file, 'r')
+  try {
+    for (;;) {
+      const start = Math.max(0, size - windowBytes)
+      const buffer = Buffer.alloc(size - start)
+      let read = 0
+      while (read < buffer.length) {
+        const got = readSync(fd, buffer, read, buffer.length - read, start + read)
+        if (got === 0) break // EOF — the file shrank mid-read (concurrent truncate)
+        read += got
+      }
+      let content = buffer.toString('utf8')
+      if (start > 0) {
+        // Align the window start to a line boundary: drop the leading
+        // partial line (the window start may cut a line in half — the
+        // leading segment is not a complete line).
+        const firstNewline = content.indexOf('\n')
+        content = firstNewline >= 0 ? content.slice(firstNewline + 1) : ''
+      }
+      // Number of complete (newline-terminated) lines in the aligned window.
+      const completeLines = content.split('\n').length - 1
+      if (start === 0 || completeLines >= n) return content
+      windowBytes *= 2
+    }
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
  * Read the agent-flow ledger as the catalog view (spec §2.1.3 — fix-wave
  * qc1 F-001 / qc2 F-6): the latest events first (bounded by `limit`) plus
  * the role × outcome summary over the SAME window (so `by role` counts sum
@@ -1271,6 +1341,14 @@ function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
  * <id>`), never the harness root — the dir parameter IS the workflow dir
  * (the catalog passes `join(harnessDir, selection.dir)`; the writer appends
  * there via `resolveAgentFlowWriteDir`).
+ *
+ * Large-file reads (plan `20260820-dsh-ledger-tail-read`): ledgers above
+ * `AGENT_FLOW_TAIL_READ_THRESHOLD_BYTES` are read as a bounded latest-first
+ * tail — seek from EOF, aligned to a line boundary, doubling backward until
+ * the window holds `limit` complete lines — so the catalog pays O(window) at
+ * the byte layer instead of parsing every historical line. Both paths feed
+ * the SAME parse funnel below (`ledgerContent` yields a `content` string),
+ * so tail/full parity is structural.
  * @param workflowDir - the workflow dir whose `agent-flow.jsonl` is read.
  * @param limit - explicit window bound: `undefined` → `AGENT_FLOW_DEFAULT_LIMIT`;
  * otherwise `Math.max(0, Math.floor(limit))` — `0` requests the EMPTY window.
@@ -1281,11 +1359,15 @@ export function readAgentFlow(workflowDir: string, limit?: number): AgentFlowVie
     // Missing ledger = no records yet — the empty view, never a degrade.
     return { events: [], summary: [] }
   }
+  // Explicit limit semantics (qc2 F-6): undefined → default; otherwise a
+  // non-negative floor — `0` → the empty window. Computed BEFORE the read so
+  // the tail path knows how many complete lines the window must hold.
+  const n = limit === undefined ? AGENT_FLOW_DEFAULT_LIMIT : Math.max(0, Math.floor(limit))
   let content: string
   try {
-    content = readFileSync(file, 'utf8')
+    content = ledgerContent(file, n)
   } catch {
-    return null // unreadable (EACCES / io error) — advisory degrade only
+    return null // unreadable (EACCES / io error / EISDIR) — advisory degrade only
   }
   const events: AgentFlowEvent[] = []
   for (const line of content.split(/\r?\n/)) {
@@ -1298,9 +1380,6 @@ export function readAgentFlow(workflowDir: string, limit?: number): AgentFlowVie
       continue // malformed line — skip, never crash the catalog
     }
   }
-  // Explicit limit semantics (qc2 F-6): undefined → default; otherwise a
-  // non-negative floor — `0` → the empty window.
-  const n = limit === undefined ? AGENT_FLOW_DEFAULT_LIMIT : Math.max(0, Math.floor(limit))
   const latestFirst = events.reverse().slice(0, n)
   return {
     events: latestFirst.map(eventView),
