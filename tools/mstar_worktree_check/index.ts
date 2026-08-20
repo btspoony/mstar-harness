@@ -3,11 +3,14 @@
  * checklists (`l1PreDispatchCheck` / `l2PreDispatchCheck`).
  *
  * kind=l1 in v3 reads its inputs from the workflow snapshot
- * (`{HARNESS_DIR}/workflows/<workflowId>/snapshot.json`, resolved from the
+ * (`{WORKFLOW_DIR}/<workflowId>/snapshot.json`, resolved from the
  * session cwd): the plan row's `execution_lease` (worktree_path +
  * working_branch) and the snapshot-level `control_worktree_path` (the
  * v1 root-`metadata` source is gone) — `controlWorktreePath` may still be
- * passed as an explicit override. Missing values are passed as "" so the
+ * passed as an explicit override. The workflow dir comes from the engine
+ * resolver (Phase-5 F1): a `.mstarc` `[config] workflow_dir` declaration
+ * wins, else `{HARNESS_DIR}/workflows` — a custom layout is READ at the
+ * same location it is written. Missing values are passed as "" so the
  * engine emits its structured violations instead of throwing.
  * kind=l2 takes the parallel writable `tracks` (absolute worktreePath +
  * Working branch per track); the zod shape guards the L2PreDispatchInput
@@ -19,7 +22,10 @@
  * P1-only engine export absent from the published floor `^2.0.2`, read
  * from a DYNAMIC engine import so a stale engine yields an explicit
  * upgrade error instead of a module-link failure that silently drops the
- * tool (qc3 F-001 / fix-wave W-B).
+ * tool (qc3 F-001 / fix-wave W-B). `resolveWorkflowDir` is likewise
+ * P1-only: it is loaded dynamically and a stale engine (or a resolver
+ * failure) falls back to the DEFAULT `workflows` name (same degrade as
+ * `mstar_status_validate`).
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -62,6 +68,43 @@ function assertSafeWorkflowId(workflowId: string): string | null {
     return `mstar_worktree_check: invalid workflowId ${JSON.stringify(workflowId)}`;
   }
   return null;
+}
+
+/** The P1-only v3 workflow-dir resolver (custom `.mstarc` `workflow_dir`
+ * support, Phase-5 F1) — same stale-engine rationale as the dynamic
+ * snapshot-file import: dynamic import, `null` on missing export / import
+ * failure (snapshot resolution falls back to the DEFAULT `workflows`
+ * name). */
+type WorkflowDirResolver = (startDir: string, opts?: { harnessDir?: string }) => string;
+
+let cachedWorkflowDirResolver: Promise<WorkflowDirResolver | null> | null = null;
+
+async function loadWorkflowDirResolver(): Promise<WorkflowDirResolver | null> {
+  cachedWorkflowDirResolver ??= import("@mstar-harness/engine")
+    .then((mod) => (typeof mod.resolveWorkflowDir === "function" ? mod.resolveWorkflowDir : null))
+    .catch(() => null);
+  return cachedWorkflowDirResolver;
+}
+
+/** Test seam (smoke scripts): replace `load` to simulate an engine build
+ * without the P1 dir resolver (null — default-layout resolution). */
+export const workflowDirResolverLoader: { load: () => Promise<WorkflowDirResolver | null> } = {
+  load: loadWorkflowDirResolver,
+};
+
+/** Resolve `{WORKFLOW_DIR}` for the snapshot (Phase-5 F1): the engine
+ * resolver honors a `.mstarc` `[config] workflow_dir` declaration; on a
+ * stale engine (no resolver) or a resolver failure the DEFAULT
+ * `{HARNESS_DIR}/workflows` name applies (same degrade as
+ * `mstar_status_validate`). */
+async function resolveWorkflowDirOf(harnessDir: string): Promise<string> {
+  const resolver = await workflowDirResolverLoader.load();
+  if (resolver === null) return join(harnessDir, "workflows");
+  try {
+    return resolver(harnessDir, { harnessDir });
+  } catch {
+    return join(harnessDir, "workflows");
+  }
 }
 
 /** Dynamic engine import guard for the P1-only `WORKFLOW_SNAPSHOT_FILE`
@@ -129,7 +172,8 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
         }
         const snapshotFileLoad = await loadSnapshotFile();
         if ("error" in snapshotFileLoad) return snapshotFileLoad.error;
-        const snapshotPath = join(harnessDir, "workflows", params.workflowId, snapshotFileLoad.snapshotFile);
+        const workflowDir = await resolveWorkflowDirOf(harnessDir);
+        const snapshotPath = join(workflowDir, params.workflowId, snapshotFileLoad.snapshotFile);
         if (!existsSync(snapshotPath)) {
           return result(`workflow snapshot not found: ${snapshotPath}`, { workflow_id: params.workflowId, snapshot_path: snapshotPath }, true);
         }

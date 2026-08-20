@@ -298,6 +298,35 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     }
   });
 
+  test("probes a custom `.mstarc` workflow_dir via the engine resolver (Phase-5 F1)", () => {
+    // The v3 snapshot probe must look under the DECLARED workflow_dir
+    // (`.mstarc` `[config] workflow_dir`) — the hardcoded `workflows`
+    // name would miss the active lifecycle and the probe would fall
+    // through to the decoy default-layout `.mstar/` root (wrong root
+    // for a custom layout). Assert the declared dir is consulted.
+    const root = tmpRoot("sdd-ws-custom-wf-");
+    try {
+      git(["init", "-q"], root);
+      // Decoy default-layout root: exists, but carries no status.json
+      // and no workflows/ — it must NOT win over the active lifecycle.
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      mkdirSync(join(root, ".agents", "cw-wf", "wf-1"), { recursive: true });
+      writeFileSync(join(root, ".agents", ".mstarc"), "[config]\nworkflow_dir=cw-wf\n", "utf8");
+      writeFileSync(
+        join(root, ".agents", "cw-wf", "wf-1", "snapshot.json"),
+        JSON.stringify({ schema_version: 1, id: "wf-1", type: "plan", status: "running", started_at: "2026-08-19T08:00:00Z", updated_at: "2026-08-19", plans: [] }),
+        "utf8",
+      );
+      const dir = sddWorkspace("plan-1", { cwd: root });
+      expect(dir).toBe(realpathSync(join(root, ".agents", "sdd", "plan-1")));
+      // The default-layout dirs are never consulted.
+      expect(existsSync(join(root, ".mstar", "sdd"))).toBe(false);
+      expect(existsSync(join(root, ".agents", "workflows"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("honors the CONTROL_ROOT option (CLI 2nd arg) and MSTAR_CONTROL_ROOT env", () => {
     const control = tmpRoot("sdd-ws-control-");
     const elsewhere = tmpRoot("sdd-ws-elsewhere-");

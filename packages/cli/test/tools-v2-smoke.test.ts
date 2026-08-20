@@ -28,11 +28,17 @@ import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
 import type { CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 import mstarDispatchValidate from "../../../tools/mstar_dispatch_validate/index";
-import mstarIterationGate from "../../../tools/mstar_iteration_gate/index";
-import mstarLeaseVerify from "../../../tools/mstar_lease_verify/index";
+import mstarIterationGate, {
+  workflowDirResolverLoader as iterationGateDirResolverLoader,
+} from "../../../tools/mstar_iteration_gate/index";
+import mstarLeaseVerify, {
+  workflowDirResolverLoader as leaseVerifyDirResolverLoader,
+} from "../../../tools/mstar_lease_verify/index";
 import mstarPathResolve from "../../../tools/mstar_path_resolve/index";
 import mstarStatusValidate from "../../../tools/mstar_status_validate/index";
-import mstarWorktreeCheck from "../../../tools/mstar_worktree_check/index";
+import mstarWorktreeCheck, {
+  workflowDirResolverLoader as worktreeCheckDirResolverLoader,
+} from "../../../tools/mstar_worktree_check/index";
 import mstarGates, { dirResolversLoader, loadNewValidators, newValidatorsLoader } from "../../../hooks/pre/mstar-gates";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "tools-v2-smoke", "repo");
@@ -175,7 +181,11 @@ function setupDoubleHarnessRepo(): SmokeRepo {
  * Custom `.mstarc` layout repo (Phase-5 F1): a default `.mstar/` harness
  * root whose `.mstarc` declares `workflow_dir` / `project_dir` — the
  * coordination docs live under the DECLARED names, never `workflows/` /
- * `projects/`. Hard iteration compass so the hook gate can block.
+ * `projects/`. Hard iteration compass so the hook gate can block. The
+ * snapshot carries a plan row + integration lease (placeholder paths,
+ * patched after the linked worktree exists) so the snapshot-consuming
+ * tools (lease verify / iteration gate / worktree check) can assert the
+ * DECLARED location is read.
  */
 function setupCustomLayoutRepo(): SmokeRepo {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-custom-"));
@@ -206,17 +216,40 @@ function setupCustomLayoutRepo(): SmokeRepo {
       "",
     ].join("\n"),
   );
+  const snapshotPath = join(harness, "cw-wf", "wf-custom", "snapshot.json");
   writeFileSync(
-    join(harness, "cw-wf", "wf-custom", "snapshot.json"),
+    snapshotPath,
     JSON.stringify(
       {
         schema_version: 1,
         id: "wf-custom",
-        type: "plan",
+        type: "iteration",
         status: "running",
         started_at: "2026-08-01",
         updated_at: "2026-08-19",
-        plans: [],
+        plans: [
+          {
+            id: "plan-a",
+            title: "Plan A",
+            file: "plans/plan-a.md",
+            status: "InProgress",
+            execution_lease: {
+              holder: "omp-pm-custom",
+              claimed_at: "2026-08-19",
+              worktree_path: "__LEASE_WORKTREE__",
+              working_branch: "feature/plan-a",
+            },
+          },
+        ],
+        control_worktree_path: "__CONTROL_WORKTREE__",
+        integration_merge_lease: {
+          holder: "omp-pm-custom",
+          claimed_at: "2026-08-19",
+          plan_id: "plan-a",
+          source_branch: "feature/plan-a",
+          target_branch: "main",
+        },
+        compass_ref: "iterations/iter-custom/delivery-compass.md",
       },
       null,
       2,
@@ -228,7 +261,25 @@ function setupCustomLayoutRepo(): SmokeRepo {
   git(["config", "user.name", "Tools Smoke"], root);
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base"], root);
-  return { root, linked: "", harness, snapshotPath: "", mstar: harness };
+  // Real linked worktree so the L1 lease probes pass (mirrors setupRepo).
+  const linked = join(root, "linked");
+  git(["worktree", "add", "-q", linked, "-b", "feature/plan-a"], root);
+  // Patch the committed snapshot's placeholder lease paths with real ones.
+  const snapshotDoc = JSON.parse(readFile(snapshotPath)) as Record<string, unknown>;
+  const plans = snapshotDoc.plans;
+  if (!Array.isArray(plans) || plans.length === 0) {
+    throw new Error("custom fixture snapshot must have exactly one plan row");
+  }
+  const row = plans[0] as Record<string, unknown>;
+  row.execution_lease = {
+    holder: "omp-pm-custom",
+    claimed_at: "2026-08-19",
+    worktree_path: linked,
+    working_branch: "feature/plan-a",
+  };
+  snapshotDoc.control_worktree_path = root;
+  writeFileSync(snapshotPath, JSON.stringify(snapshotDoc, null, 2));
+  return { root, linked, harness, snapshotPath: "", mstar: harness };
 }
 
 function git(args: string[], cwd: string): string {
@@ -731,6 +782,68 @@ describe("custom workflow_dir/project_dir layout (Phase-5 F1)", () => {
     // layout (the fix must not over-gate either).
     const wrong = join(".mstar", "workflows", "wf-custom", "snapshot.json");
     expect(existsSync(join(root, wrong))).toBe(false);
+  });
+
+  test("mstar_lease_verify: snapshot resolved at the DECLARED custom workflow_dir", async () => {
+    const root = customRepo!.root;
+    const execRes = await runTool(mstarLeaseVerify, root, { workflowId: "wf-custom", kind: "execution", planId: "plan-a" });
+    expect(execRes.isError).not.toBe(true);
+    expect(execRes.content[0]!.text).toContain("execution lease OK");
+
+    const intRes = await runTool(mstarLeaseVerify, root, { workflowId: "wf-custom", kind: "integration" });
+    expect(intRes.isError).not.toBe(true);
+    expect(intRes.content[0]!.text).toContain("integration merge lease OK");
+
+    // The hardcoded default-layout dir is NEVER consulted.
+    expect(existsSync(join(root, ".mstar", "workflows"))).toBe(false);
+  });
+
+  test("mstar_iteration_gate: snapshot + compass resolved at the DECLARED custom locations", async () => {
+    const root = customRepo!.root;
+    const res = await runTool(mstarIterationGate, root, {
+      phase: "phase-2-execute",
+      workflowId: "wf-custom",
+      compassPath: join(".mstar", "iterations", "iter-custom", "delivery-compass.md"),
+    });
+    expect(res.isError).not.toBe(true);
+    expect(res.content[0]!.text).toContain("gate ok");
+    expect(res.content[0]!.text).toContain("phase-2-execute");
+    expect(existsSync(join(root, ".mstar", "workflows"))).toBe(false);
+  });
+
+  test("mstar_worktree_check: L1 snapshot inputs resolved at the DECLARED custom workflow_dir", async () => {
+    const root = customRepo!.root;
+    const l1 = await runTool(mstarWorktreeCheck, root, { kind: "l1", workflowId: "wf-custom", planId: "plan-a" });
+    expect(l1.isError).not.toBe(true);
+    expect(l1.content[0]!.text).toContain("l1 pre-dispatch check OK");
+    expect(existsSync(join(root, ".mstar", "workflows"))).toBe(false);
+  });
+
+  test("stale engine (no P1 dir resolver) degrades to the default workflows name in the tools", async () => {
+    const root = customRepo!.root;
+    const seams = [
+      { loader: leaseVerifyDirResolverLoader, tool: mstarLeaseVerify, params: { workflowId: "wf-custom", kind: "execution", planId: "plan-a" } },
+      {
+        loader: iterationGateDirResolverLoader,
+        tool: mstarIterationGate,
+        params: { phase: "phase-2-execute", workflowId: "wf-custom", compassPath: join(".mstar", "iterations", "iter-custom", "delivery-compass.md") },
+      },
+      { loader: worktreeCheckDirResolverLoader, tool: mstarWorktreeCheck, params: { kind: "l1", workflowId: "wf-custom", planId: "plan-a" } },
+    ];
+    const originals = seams.map((s) => s.loader.load);
+    try {
+      for (const s of seams) s.loader.load = async () => null;
+      for (const s of seams) {
+        const res = await runTool(s.tool, root, s.params);
+        expect(res.isError).toBe(true);
+        expect(res.content[0]!.text).toContain("workflow snapshot not found");
+        expect(res.content[0]!.text).toContain(join(".mstar", "workflows", "wf-custom"));
+      }
+    } finally {
+      seams.forEach((s, i) => {
+        s.loader.load = originals[i]!;
+      });
+    }
   });
 
   test("omp hook Gate 1: invalid custom-layout snapshot hard-blocked, valid passes", async () => {

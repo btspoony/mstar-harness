@@ -19,7 +19,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { resolveSddDir } from "./path.js";
+import { resolveSddDir, resolveWorkflowDir } from "./path.js";
 import { findMstarc, parseMstarc } from "./mstarc.js";
 
 /**
@@ -113,9 +113,19 @@ function probeHarnessWithStatus(root: string): string | null {
   return null;
 }
 
-/** True when `harnessDir/workflows/<id>/snapshot.json` exists for any id. */
+/** True when `{WORKFLOW_DIR}/<id>/snapshot.json` exists for any id. The
+ * workflow dir comes from the engine resolver (Phase-5 F1): a `.mstarc`
+ * `[config] workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows`
+ * — a custom layout is probed at the same location the runtime writes.
+ * Probe semantics: never throws (a resolver failure falls back to the
+ * default name). */
 function hasWorkflowSnapshot(harnessDir: string): boolean {
-  const workflowsDir = join(harnessDir, "workflows");
+  let workflowsDir: string;
+  try {
+    workflowsDir = resolveWorkflowDir(harnessDir, { harnessDir });
+  } catch {
+    workflowsDir = join(harnessDir, "workflows");
+  }
   if (!isDirectory(workflowsDir)) return false;
   try {
     for (const entry of readdirSync(workflowsDir, { withFileTypes: true })) {

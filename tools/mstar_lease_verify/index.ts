@@ -4,17 +4,23 @@
  * (`verifyPlanExecutionLease` / `validateIntegrationMergeLease`).
  *
  * v3 hard cutover: the lease data home is the workflow snapshot
- * `{HARNESS_DIR}/workflows/<workflowId>/snapshot.json` (row-level
+ * `{WORKFLOW_DIR}/<workflowId>/snapshot.json` (row-level
  * `plans[].execution_lease` for kind=execution; snapshot top-level
  * `integration_merge_lease` for kind=integration — no root-`metadata`
- * location remains). The plan row is looked up by `plan_id` (falling back
- * to `id`); when `planId` is omitted, the snapshot's sole plan row is
- * used. The lease checks themselves are pure engine calls.
+ * location remains). The workflow dir comes from the engine resolver
+ * (Phase-5 F1): a `.mstarc` `[config] workflow_dir` declaration wins,
+ * else `{HARNESS_DIR}/workflows` — a custom layout is READ at the same
+ * location it is written. The plan row is looked up by `plan_id`
+ * (falling back to `id`); when `planId` is omitted, the snapshot's sole
+ * plan row is used. The lease checks themselves are pure engine calls.
  *
  * `WORKFLOW_SNAPSHOT_FILE` is a P1-only engine export absent from the
  * published floor `^2.0.2` — it is read from a DYNAMIC engine import so a
  * stale engine yields an explicit upgrade error instead of a module-link
  * failure that silently drops the tool (qc3 F-001 / fix-wave W-B).
+ * `resolveWorkflowDir` is likewise P1-only: it is loaded dynamically and
+ * a stale engine (or a resolver failure) falls back to the DEFAULT
+ * `workflows` name (same degrade as `mstar_status_validate`).
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -45,16 +51,53 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Resolve the snapshot path from the harness dir; error result when absent. */
+/** Resolve the snapshot path from the workflow dir; error result when absent. */
 function resolveSnapshot(
-  harnessDir: string,
+  workflowDir: string,
   workflowId: string,
   snapshotFile: string,
 ): { snapshotPath: string } | { error: AgentToolResult } {
   if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
     return { error: result(`mstar_lease_verify: invalid workflowId ${JSON.stringify(workflowId)}`, { ok: false }, true) };
   }
-  return { snapshotPath: join(harnessDir, "workflows", workflowId, snapshotFile) };
+  return { snapshotPath: join(workflowDir, workflowId, snapshotFile) };
+}
+
+/** The P1-only v3 workflow-dir resolver (custom `.mstarc` `workflow_dir`
+ * support, Phase-5 F1) — same stale-engine rationale as the dynamic
+ * snapshot-file import: dynamic import, `null` on missing export / import
+ * failure (snapshot resolution falls back to the DEFAULT `workflows`
+ * name). */
+type WorkflowDirResolver = (startDir: string, opts?: { harnessDir?: string }) => string;
+
+let cachedWorkflowDirResolver: Promise<WorkflowDirResolver | null> | null = null;
+
+async function loadWorkflowDirResolver(): Promise<WorkflowDirResolver | null> {
+  cachedWorkflowDirResolver ??= import("@mstar-harness/engine")
+    .then((mod) => (typeof mod.resolveWorkflowDir === "function" ? mod.resolveWorkflowDir : null))
+    .catch(() => null);
+  return cachedWorkflowDirResolver;
+}
+
+/** Test seam (smoke scripts): replace `load` to simulate an engine build
+ * without the P1 dir resolver (null — default-layout resolution). */
+export const workflowDirResolverLoader: { load: () => Promise<WorkflowDirResolver | null> } = {
+  load: loadWorkflowDirResolver,
+};
+
+/** Resolve `{WORKFLOW_DIR}` for the snapshot (Phase-5 F1): the engine
+ * resolver honors a `.mstarc` `[config] workflow_dir` declaration; on a
+ * stale engine (no resolver) or a resolver failure the DEFAULT
+ * `{HARNESS_DIR}/workflows` name applies (same degrade as
+ * `mstar_status_validate`). */
+async function resolveWorkflowDirOf(harnessDir: string): Promise<string> {
+  const resolver = await workflowDirResolverLoader.load();
+  if (resolver === null) return join(harnessDir, "workflows");
+  try {
+    return resolver(harnessDir, { harnessDir });
+  } catch {
+    return join(harnessDir, "workflows");
+  }
 }
 
 /** Dynamic engine import guard for the P1-only `WORKFLOW_SNAPSHOT_FILE`
@@ -79,7 +122,7 @@ export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
     name: "mstar_lease_verify",
     label: "Verify plan lease",
     description:
-      "Verify the lease state of a Morning Star workflow from its snapshot ({harness}/workflows/<workflowId>/snapshot.json, resolved from the session cwd): kind=execution runs the engine verifyPlanExecutionLease gate on the snapshot plan row (SSOT plans[].execution_lease — the v1 metadata location is deleted; missing/orphan detection), kind=integration runs validateIntegrationMergeLease on the snapshot top-level integration_merge_lease (absent = unclaimed). " +
+      "Verify the lease state of a Morning Star workflow from its snapshot ({WORKFLOW_DIR}/<workflowId>/snapshot.json — .mstarc workflow_dir honored, default {harness}/workflows; resolved from the session cwd): kind=execution runs the engine verifyPlanExecutionLease gate on the snapshot plan row (SSOT plans[].execution_lease — the v1 metadata location is deleted; missing/orphan detection), kind=integration runs validateIntegrationMergeLease on the snapshot top-level integration_merge_lease (absent = unclaimed). " +
       "`planId` picks the row (default: the snapshot's sole plan row). " +
       "Use before writable dispatch, before InProgress claims, or when reviewing lease/merge state. Returns one line per violation as [severity] code: message (fix: …).",
     parameters: pi.zod
@@ -106,7 +149,8 @@ export default function mstarLeaseVerify(pi: CustomToolAPI): CustomTool {
         // fail at module link on published engines (^2.0.2 floor).
         const snapshotFileLoad = await loadSnapshotFile();
         if ("error" in snapshotFileLoad) return snapshotFileLoad.error;
-        const resolved = resolveSnapshot(harnessDir, params.workflowId, snapshotFileLoad.snapshotFile);
+        const workflowDir = await resolveWorkflowDirOf(harnessDir);
+        const resolved = resolveSnapshot(workflowDir, params.workflowId, snapshotFileLoad.snapshotFile);
         if ("error" in resolved) return resolved.error;
         const snapshotPath = resolved.snapshotPath;
         if (!existsSync(snapshotPath)) {
