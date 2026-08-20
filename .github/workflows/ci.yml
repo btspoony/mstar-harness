@@ -112,34 +112,18 @@ jobs:
 
       # The dsh test imports @mstar-harness/engine dist (built above) and
       # needs the harness-skills/harness-commands mirrors (synced by
-      # postinstall's dsh:bundle-assets) — use the package script. Dev-time
-      # the dsh seam packages come from a local dsh source tree via the link
-      # farm (packages/dsh/scripts/setup-dsh-links.ts); CI has no dsh tree
-      # (dsh is not run in CI — user-confirmed), so the dsh steps are gated on
-      # availability by the marker step below.
-      - name: Detect dsh source tree (link-farm availability)
-        id: dsh-tree
-        run: |
-          if [ -n "${DSH_SOURCE_DIR:-}" ] && [ -d "$DSH_SOURCE_DIR" ]; then
-            echo "dsh_available=true"
-          elif [ -d "${HOME}/.dsh/source/current" ]; then
-            echo "dsh_available=true"
-          else
-            echo "dsh_available=false"
-            echo "::warning::no dsh source tree (\$DSH_SOURCE_DIR / ~/.dsh/source/current) — skipping dsh test/typecheck steps (dsh is not run in CI)"
-          fi
-
+      # postinstall's dsh:bundle-assets) — use the package script. The
+      # @deepseek-ai/dsh-* seam packages are peers resolved from the public
+      # npm registry (bun auto-installs peers) — no local dsh source tree
+      # needed (the rc.7 link farm is gone). The install e2e specs skip
+      # themselves when no `dsh` bin is on PATH.
       - name: Test dsh
-        if: steps.dsh-tree.outputs.dsh_available == 'true'
-        run: |
-          bun run --cwd packages/dsh dsh:link
-          bun run --cwd packages/dsh test
+        run: bun run --cwd packages/dsh test
 
       # The export-surface type layer (value-namespace identity + type-only
       # probes + cordis augmentation) is enforced by tsc over the tests —
       # bun test alone never typechecks the spec.
       - name: Typecheck dsh tests
-        if: steps.dsh-tree.outputs.dsh_available == 'true'
         run: bun run --cwd packages/dsh typecheck:tests
 
       - name: Test scripts

@@ -79,6 +79,7 @@ const fullSource: MstarEngineStatusSource = {
     ],
     residuals: [],
     residualFindings: null,
+    project: { milestones: [], openResiduals: [] },
     iterationBaseBranch: 'dev-dsh',
     targetBranch: 'dev-dsh',
     specIntegrationBranch: 'iteration/iter-20260810-panel-zones',

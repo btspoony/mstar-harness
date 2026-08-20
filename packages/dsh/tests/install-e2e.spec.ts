@@ -46,7 +46,8 @@
  *      list — and pin the plan's 13-role closure claim as a lower bound.
  *
  * AC-3 evidence: a NON-skip PASS of this spec (recorded in the SDD
- * report); CI does not run dsh (`ci.yml` link-farm gate).
+ * report); CI runs dsh tests, but this spec SKIPS there — no `dsh` bin
+ * on the runner PATH (skip-guard below; the registry probe would pass).
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
