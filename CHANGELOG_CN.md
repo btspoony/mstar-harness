@@ -1,23 +1,46 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**2.4.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.0.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **2.4.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **2.4.1** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **2.4.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **2.4.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **2.4.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **2.4.1** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **2.4.1** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **2.4.1** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.4.1** |
-| Agent Plugins 清单 | `plugin.json` | **2.4.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **3.0.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.0.0** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.0.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.0.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.0.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **3.0.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.0.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.0.0** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.0.0** |
+| Agent Plugins 清单 | `plugin.json` | **3.0.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [3.0.0] - 2026-08-20
+
+### Harness
+
+- **dsh 插件**：`@deepseek-ai/dsh-*` peer 升级到 `0.1.0-rc.8` 线（`^0.1.0-rc.8`；`@deepseek-ai/cordis` 保持 `^4.0.1`）。对照本地 rc.7→rc.8 源码，已消费 seam 无需改适配层：唯一涉及的消费面变化是 `dsh-commands` 的 `CommandRuntime.execute` 新增必填 `images` 参数（插件注册不受影响，仅测试调用点更新）以及 `CommandInvocation` 新增 `attachments` 字段（纯增量）。lock 全新解析为单份 rc.8 hoist（`dsh-client-web-react` 保持 rc.7——npm 最新发布版）；`dsh-llm-fallbacks` 由 0.2.0 移至 0.2.2，9 键服务面 drift STOP gate 同步更新。
+- 本仓 harness 目录统一为 `.mstar/`：维护文档并入 `.mstar/docs/`，旧维护根目录移除，探测/override 文档不再提及旧根名。`harnessDir` / `MSTAR_HARNESS_DIR` 语义不变——显式 override 优先；探测顺序保持 `.mstar/` → `.agents/` → `.plans/`/`plans/`。
+- `drift-lint` 的 roadmap 引用豁免现识别 `.mstar/` 前缀（gitignored roadmap/ADR 文档）；engine/dsh/opencode 源码引用已更新到新路径。
+- `.mstarc` 现在支持 `[config]` 下的全部 harness 目录符号：`plan_dir`、`sdd_dir`（per-plan 基目录）、`iteration_dir`、`knowledge_dir`、`specs_dir`（权威——跳过候选链），外加 `harness_dir`。engine 各解析器（`resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir`）从 harness 目录或其父目录的最近 `.mstarc` 读取；`mstar_path_resolve` 同时输出 knowledge 目录。
+- `.mstarc` `[config] enforcement=hard|soft` 声明仓库级硬门禁策略（非法值忽略）。优先级：显式 Config > Assignment `Enforcement: hard` 头标记（仅派发）> `.mstarc` > 迭代 compass > 默认 warn-only——`.mstarc` `soft` 可回滚 hard compass，`hard` 硬化无标记的派发与各闸门。新增 engine `resolveMstarcEnforcement` / `resolveRepoEnforcement`；dsh 各闸门、opencode hook 与 omp hook 现均组合仓库策略。
+- 新增 gitignored 的仓库本地配置 **`.mstarc`**（`[config] harness_dir=<dir>`）：harness 根非默认名的仓库可在其中程序化声明根目录——`resolveHarnessDir` 优先于探测读取它（显式 `opts.harnessDir` / `MSTAR_HARNESS_DIR` 仍最高优先），`sddWorkspace` 同步遵循，canonical `.gitignore` 片段（engine / CLI init fence / plan-conventions）默认忽略 `.mstarc`。解析顺序 SSOT 已更新至 `mstar-plan-conventions` § {HARNESS_DIR} 解析顺序。
+- tracked 的 `*.ts` / `*.md` 文件不再引用 gitignored 的 harness 产物（`.mstar/` 下的 status.json、plans/、sdd/、iterations/、knowledge/、references/、archived/、docs/ 等路径）：engine/host/测试注释与文档改用 `{HARNESS_DIR}` / 消费者默认值或直接去掉本地路径；drift-lint 的 `.mstar/` 引用豁免已移除（该守卫现在直接强制此规则），规则已写入 AGENTS.md。
+- **v3 工作流生命周期 schema（engine）**：生命周期状态从根 `status.json` 的 `plans[]` / `residual_findings` 迁入按工作流的快照（`{HARNESS_DIR}/workflows/<id>/snapshot.json`，`validateWorkflowSnapshot`）与项目 register（`{HARNESS_DIR}/projects/<id>/residuals.json`，`validateProjectRegister`）；v2 根文件只保留 `version` / `updated_at` / 活跃 `workflows[]`。新增目录解析器 `resolveWorkflowDir` / `resolveProjectDir`。
+- **`mstar migrate`（CLI）**：v1→v2 树的一次性迁移（`migrateHarnessTree` / `applyMigratePlan`）——v1 根归档到 `archived/status.v1.json`，每个生命周期提升为 `workflows/<id>/snapshot.json`，播种项目 register 与 roadmap，以 v2 根替换为提交点；重跑为幂等 no-op；`--dry-run` 打印步骤计划并把 apply 期校验违规作为 warning 呈现；退出码 0/1/2；`--path` 默认取解析到的 `{HARNESS_DIR}`。
+- **CLI / tools / hook 硬切到 v2 输入**：`status validate`（v2 根或快照）、`status tech-debt` / `status findings-cleanup`（项目 register）、`lease verify` / `lease verify-integration` / `iteration gate` / `worktree check`（经 `--workflow <id>` 的工作流快照）、`path resolve`（新增 workflow/project 目录）；`status archive-residuals` 移除（报错桩指向 register 关闭流程）；`tools/mstar_*` 与 omp/opencode Gate 1 hook 校验三类 v3 协调文档，P1-only engine 导出改为懒加载，旧版已发布 engine 下降级为警告而非整体丢失 hook/工具。
+- **Skills v2 表面**：退役 `done-compaction` / `plans-done` / `notes.empty` 产物并清除全部引用；将 `mstar-*` skills 的 status/residual/lease/convention 表面改写为 v2 地址（`workflows/<id>/snapshot.json`、`projects/<id>/residuals.json`、`mstar status validate` / `findings-cleanup` / `tech-debt`、`mstar lease verify --workflow <id>`、`mstar iteration gate --workflow <id>`）。
+- **`mstar-engine-legacy`**（新增）：engine-absent 宿主条件契约档案——status v1→v2 字段历史、lease 协议、各宿主 QC 座次 N=3/N=1 重述、反递归清单、Engine-check 样板；engine 约束激活时不加载。
+- **`mstar-project-governance`**（新增）：`projects/<id>/roadmap.md` 编写约定（frontmatter schema + body 约定，warnings-only）与 `residuals.json` register 生命周期（open → verified close in place、severity 枚举、provenance 字段、`_default` 回退）；schema 与 engine `project.ts` 校验器逐字一致。
+- **文档同步**：README.md / README_CN.md 布局描述与工作流图更新为 v2 状态面（workflow snapshot / project register；`.mstarc` 新增 `workflow_dir` / `project_dir` 键）；routing-eval 场景集重指向 v2 产物地址。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.0.0**。
 
 ## [2.4.1] - 2026-08-17
 

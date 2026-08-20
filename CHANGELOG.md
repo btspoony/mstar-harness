@@ -2,24 +2,47 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **2.4.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **3.0.0** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **2.4.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **2.4.1** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **2.4.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **2.4.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **2.4.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **2.4.1** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **2.4.1** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **2.4.1** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **2.4.1** |
-| Agent Plugins manifest | `plugin.json` | **2.4.1** |
+| Monorepo root | `morning-star` (`package.json`) | **3.0.0** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.0.0** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.0.0** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.0.0** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **3.0.0** |
+| Codex plugin | `.codex-plugin/plugin.json` | **3.0.0** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **3.0.0** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **3.0.0** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.0.0** |
+| Agent Plugins manifest | `plugin.json` | **3.0.0** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [3.0.0] - 2026-08-20
+
+### Harness
+
+- **dsh plugin**: `@deepseek-ai/dsh-*` peers upgraded to the `0.1.0-rc.8` line (`^0.1.0-rc.8`; `@deepseek-ai/cordis` stays `^4.0.1`). Local rc.7→rc.8 source review of consumed seams found no adapter-code break: the only consumed-surface change is `dsh-commands` `CommandRuntime.execute` gaining a required `images` argument (plugin registrations unaffected; test call sites updated) and an additive `CommandInvocation.attachments` field. Lock freshly resolved to a single rc.8 hoist (`dsh-client-web-react` stays at rc.7 — the latest published); `dsh-llm-fallbacks` moved 0.2.0 → 0.2.2 with the 9-key service-surface drift STOP gate updated in kind.
+- Harness dir is uniformly `.mstar/` across the repo: maintenance docs moved under `.mstar/docs/`, the legacy maintenance root is gone, and probe/override docs no longer reference a legacy root name. `harnessDir` / `MSTAR_HARNESS_DIR` semantics unchanged — explicit override wins; probe order stays `.mstar/` → `.agents/` → `.plans/`/`plans/`.
+- `drift-lint` roadmap-citation exemption now recognizes `.mstar/`-prefixed citations (gitignored roadmap/ADR docs); engine/dsh/opencode source citations updated to the new path.
+- `.mstarc` now supports every harness directory symbol under `[config]`: `plan_dir`, `sdd_dir` (per-plan base), `iteration_dir`, `knowledge_dir`, `specs_dir` (authoritative — skips the candidate chain) alongside `harness_dir`. The engine resolvers (`resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir`) honor them from the nearest `.mstarc` at the harness dir or its parent; `mstar_path_resolve` reports the knowledge dir too.
+- `.mstarc` `[config] enforcement=hard|soft` declares the repo hard-gate policy (invalid values ignored). Precedence: explicit Config > Assignment `Enforcement: hard` header flag (dispatch only) > `.mstarc` > iteration compass > warn-only — `.mstarc` `soft` is a local rollback against a hard compass, `hard` hardens flag-less dispatches and gates. New engine `resolveMstarcEnforcement` / `resolveRepoEnforcement`; dsh gates, opencode hook and omp hook now compose the repo policy.
+- New gitignored repo-local config **`.mstarc`** (`[config] harness_dir=<dir>`) lets repos with a non-default harness root declare it programmatically — `resolveHarnessDir` honors it above probing (explicit `opts.harnessDir` / `MSTAR_HARNESS_DIR` still win), `sddWorkspace` follows, and the canonical `.gitignore` snippets (engine / CLI init fence / plan-conventions) ignore `.mstarc` by default. Resolution order SSOT updated in `mstar-plan-conventions` § {HARNESS_DIR} 解析顺序.
+- Tracked `*.ts` / `*.md` files no longer cite gitignored harness artifacts (paths under `.mstar/` — status.json, plans/, sdd/, iterations/, knowledge/, references/, archived/, docs/): engine/host/test comments and docs now reference `{HARNESS_DIR}` / the consumer default or drop the local path; the drift-lint `.mstar/`-citation exemption is removed (the guard now enforces the rule), and AGENTS.md codifies it.
+- **v3 workflow lifecycle schema (engine)**: lifecycle state moved from root `status.json` `plans[]`/`residual_findings` into per-workflow snapshots (`{HARNESS_DIR}/workflows/<id>/snapshot.json`, `validateWorkflowSnapshot`) and project registers (`{HARNESS_DIR}/projects/<id>/residuals.json`, `validateProjectRegister`); the v2 root keeps only `version` / `updated_at` / active `workflows[]`. New dir resolvers `resolveWorkflowDir` / `resolveProjectDir`.
+- **`mstar migrate` (CLI)**: one-shot v1→v2 tree migration (`migrateHarnessTree` / `applyMigratePlan`) — archives the v1 root to `archived/status.v1.json`, lifts every lifecycle into `workflows/<id>/snapshot.json`, seeds the project register + roadmap, replaces the root with the v2 commit point; idempotent re-run no-op; `--dry-run` prints the step plan and surfaces apply-time validator violations as warnings; exit codes 0/1/2; `--path` defaults to the resolved `{HARNESS_DIR}`.
+- **CLI/tools/hook hard cutover to v2 inputs**: `status validate` (v2 root or snapshot), `status tech-debt` / `status findings-cleanup` (project register), `lease verify` / `lease verify-integration` / `iteration gate` / `worktree check` (workflow snapshot via `--workflow <id>`), `path resolve` (+ workflow/project dirs); `status archive-residuals` removed (error stub names the register close flow); `tools/mstar_*` and the omp/opencode Gate 1 hooks validate the three v3 coordination documents, with lazy-loaded P1-only engine exports so a stale published engine degrades to a warning instead of dropping the hook/tool.
+- **Skills v2 surfaces**: retired `done-compaction` / `plans-done` / `notes.empty` artifacts and scrubbed all references; rewrote status/residual/lease/convention surfaces across `mstar-*` skills to v2 addresses (`workflows/<id>/snapshot.json`, `projects/<id>/residuals.json`, `mstar status validate` / `findings-cleanup` / `tech-debt`, `mstar lease verify --workflow <id>`, `mstar iteration gate --workflow <id>`).
+- **`mstar-engine-legacy`** (new): conditional contract archive for engine-absent hosts — status v1→v2 field history, lease protocol, per-host QC seat N=3/N=1 restatements, anti-recursion checklists, engine-check boilerplate; not loaded when engine constraints are active.
+- **`mstar-project-governance`** (new): `projects/<id>/roadmap.md` authoring conventions (frontmatter schema + body conventions, warnings-only) and `residuals.json` register lifecycle (open → verified close in place, severity enum, provenance fields, `_default` fallback); schema verbatim with the engine `project.ts` validators.
+- **Docs sync**: README.md / README_CN.md layout description and workflow diagram updated to v2 state surfaces (workflow snapshot / project register; `workflow_dir` / `project_dir` `.mstarc` keys); routing-eval scenario set re-pointed to v2 artifact addresses.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.0.0**.
 
 ## [2.4.1] - 2026-08-17
 
