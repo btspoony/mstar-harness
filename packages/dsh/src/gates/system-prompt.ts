@@ -37,10 +37,13 @@
  *   re-registration, in zero-config and explicit-config deployments alike.
  * - The context provider reuses the catalog's unified machine-summary
  *   source (`buildCatalogSources` — the SAME builder the engine-status
- *   pre-step catalog row uses) and projects a BOUNDED subset: watermark +
- *   iteration gate + compact state line. Full catalog content
- *   (residual detail, agent-flow events, knowledge digest, branch/policy
- *   anchors) stays out. v3 (plan `20260819-workflow-dsh-viz` Task 3): the
+ *   pre-step catalog row uses) and projects the SLIM digest (plan
+ *   `20260820-dsh-engine-status-slim` Task 2): the version watermark
+ *   ALWAYS, plus ONE `workflow … | plans: …` line only when the active set
+ *   selects a lifecycle (`state.selection.kind === 'active'`). Harness dir
+ *   and enforcement live in `mstar:harness-rules`; residuals / leases /
+ *   direction / iteration-gate detail stay exclusive to the pre-step row.
+ *   v3 (plan `20260819-workflow-dsh-viz` Task 3): the
  *   digest reads ONLY the catalog row (`state` — itself aggregated from the
  *   SELECTED workflow snapshot + project registers) — no direct
  *   status.json / snapshot file reads to change. The build is TTL-memoized
@@ -314,20 +317,15 @@ function engineStatusProvider(ctx: Context, resolver: HarnessResolver, bootHarne
 }
 
 /**
- * Cap on plan rows joined into the `mstar:engine-status` digest (plan
- * `20260820-dsh-digest-bounds` Task 1). Module-level and intentionally NOT
+ * Cap on non-Done plan rows joined into the `mstar:engine-status` digest
+ * (plan `20260820-dsh-engine-status-slim` Task 2 — retained from plan
+ * `20260820-dsh-digest-bounds` Task 1, now applied to the non-Done-filtered
+ * join of the active workflow's plans). Module-level and intentionally NOT
  * re-exported — `catalog.ts` must not import it (a reverse import would
  * close a `system-prompt.ts ↔ catalog.ts` cycle); `renderEngineStatusCatalog`
  * stays uncapped (sibling surface, documented in the fragment).
  */
 const DIGEST_PLAN_CAP = 8
-
-/**
- * Cap on lease rows joined into the `mstar:engine-status` digest (plan
- * `20260820-dsh-digest-bounds` Task 1). Same module-local scope and
- * non-export rule as {@link DIGEST_PLAN_CAP}.
- */
-const DIGEST_LEASE_CAP = 4
 
 /**
  * Join the screened projection of `items` in catalog-array order, capped at
@@ -347,44 +345,45 @@ function joinCapped<T>(items: readonly T[], cap: number, separator: string, rend
 }
 
 /**
- * The bounded machine summary: watermark + iteration gate + one compact
- * state line (+ the compass direction one-liner when present). Deliberately
- * EXCLUDES the full status.json surface — residual finding detail,
- * agent-flow events, knowledge digest and branch/policy anchors stay out.
+ * The slim `mstar:engine-status` digest (plan `20260820-dsh-engine-status-slim`
+ * Task 2): the version watermark is ALWAYS injected, plus — only when the
+ * session's workspace has an active workflow
+ * (`source.state.selection.kind === 'active'`) — ONE compact
+ * `workflow <id> (<type>) <status> | plans: <id>(<status>) …` line. Idle
+ * sessions (empty/absent active set — `state === null`, or a `'terminal'` /
+ * `'error'` selection) render the version line alone; the catalog's
+ * terminal-mtime history fallback is therefore structurally unreachable
+ * from this surface without touching `resolveReadWorkflow`.
  *
- * The plan/lease joins are capped (plan `20260820-dsh-digest-bounds` Task
- * 1): at most {@link DIGEST_PLAN_CAP} plan rows and {@link DIGEST_LEASE_CAP}
- * lease rows render, in catalog-array order, with a final `+N more` overflow
- * marker when the array is longer — the digest stays a bounded snapshot and
- * overflow stays visible. At-or-under-cap arrays render exactly as before
- * (no marker); empty arrays keep the `none` / `none active` copy (the
- * caller's `length === 0` branch — the capped join is never reached).
+ * The plans join is the selected snapshot's non-Done rows
+ * (`status !== 'Done'`), in catalog-array order, capped at
+ * {@link DIGEST_PLAN_CAP} with a final `+N more` overflow marker when
+ * longer; empty after the filter renders `plans: none`. Residuals /
+ * leases / direction / harness dir / enforcement / the iteration-gate
+ * detail all stay exclusive to the pre-step catalog row.
  *
  * STRICT-interpolation safety (plan QC fix wave W-1): every operator-
- * controlled value (harness dir, plan ids, plan statuses, iteration id,
- * lease planId/holder, direction prose) is screened through
- * `stripInterpolationHazard` before embedding — a hostile `{{…}}` in any of
- * them can never throw the renderer. Engine-derived literals (version,
- * enforcement word, violation codes, transition, severities, the `+N more`
- * overflow marker) are constants, not operator text, and stay unscreened.
+ * controlled value (workflow id, workflow type/status, plan ids, plan
+ * statuses) is screened through `stripInterpolationHazard` before embedding
+ * — a hostile `{{…}}` in any of them can never throw the renderer.
+ * Engine-derived literals (version, `workflow`, `plans:`, `none`, `unknown`,
+ * the `+N more` overflow marker) are constants, not operator text, and stay
+ * unscreened.
  */
 function engineStatusSummary(source: MstarEngineStatusSource): string {
-  const lines = [
-    `mstar engine status: v${source.version} | harness ${stripInterpolationHazard(source.harnessDir ?? 'none')} | enforcement ${source.enforcement.hard ? 'hard' : 'soft'}`,
-  ]
-  const iteration = source.iteration
-  if (iteration !== undefined) {
-    const gate = iteration.gate
-    const codes = gate.violations.map((v) => v.code).join(', ')
-    lines.push(`iteration ${stripInterpolationHazard(iteration.iterationId)}: gate ${gate.ok ? 'PASS' : `FAIL (${codes})`} | transition ${gate.transition} | all plans done ${gate.all_plans_done}`)
-  }
+  const lines = [`mstar engine status: v${source.version}`]
   const state = source.state
   if (state !== null) {
-    const plans = state.plans.length === 0 ? 'none' : joinCapped(state.plans, DIGEST_PLAN_CAP, ' ', (p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`)
-    const residuals = state.residuals.length === 0 ? 'none' : state.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')
-    const leases = state.leases.length === 0 ? 'none active' : joinCapped(state.leases, DIGEST_LEASE_CAP, '; ', (l) => `${stripInterpolationHazard(l.planId)} → ${stripInterpolationHazard(l.holder)}`)
-    lines.push(`plans: ${plans} | residuals: ${residuals} | leases: ${leases}`)
-    if (state.direction !== null) lines.push(`direction: ${stripInterpolationHazard(state.direction)}`)
+    const selection = state.selection
+    if (selection.kind === 'active') {
+      const pending = state.plans.filter((p) => p.status !== 'Done')
+      const plans = pending.length === 0
+        ? 'none'
+        : joinCapped(pending, DIGEST_PLAN_CAP, ' ', (p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`)
+      const workflowType = stripInterpolationHazard(state.workflowType ?? 'unknown')
+      const workflowStatus = stripInterpolationHazard(state.workflowStatus ?? 'unknown')
+      lines.push(`workflow ${stripInterpolationHazard(selection.workflowId)} (${workflowType}) ${workflowStatus} | plans: ${plans}`)
+    }
   }
   return lines.join('\n')
 }

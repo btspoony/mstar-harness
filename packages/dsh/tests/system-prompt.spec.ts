@@ -151,17 +151,17 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     expect(section!.text).toContain('mstar-harness-core')
   })
 
-  it('(b) engine-status context — the provider returns the bounded machine summary (watermark + state digest)', async () => {
+  it('(b) engine-status context — idle default boot (no status.json seeded) injects exactly the version watermark line (D1)', async () => {
     booted = await bootApp()
     const assembly = await booted.ctx.systemPrompt.assemble()
     const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
     expect(context).toBeDefined()
-    expect(context!.text).toContain(`mstar engine status: v${PLUGIN_VERSION}`)
-    expect(context!.text).toContain(`harness ${booted.harnessDir}`)
-    expect(context!.text).toContain('enforcement soft')
+    expect(context!.text).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
+    expect(context!.text).not.toContain('harness')
+    expect(context!.text).not.toContain('enforcement')
   })
 
-  it('(c) bounded projection — rich status/compass surface renders headline facts, never the full status.json', async () => {
+  it('(c) active contract — the rich tree renders the slim digest: version watermark + ONE workflow line, non-Done plans only (D2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-rich-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -175,13 +175,20 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
 
     const assembly = await booted.ctx.systemPrompt.assemble()
     const text = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text
-    // Headline facts: watermark + iteration gate + compact state line.
-    expect(text).toContain('enforcement hard')
-    expect(text).toContain('iteration v2.2.0: gate PASS')
-    expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
-    expect(text).toContain('residuals: high 1, nit 1')
-    expect(text).toContain('leases: plan-a → dsh-session-1')
-    expect(text).toContain('direction: The dsh host plugin needs richer in-session harness context for operators.')
+    // The slim digest: the version watermark always + the ONE active
+    // workflow line with the non-Done plan join (plan-a stays, plan-b's
+    // Done row is filtered out).
+    expect(text).toContain(`mstar engine status: v${PLUGIN_VERSION}`)
+    expect(text).toContain('workflow v2.2.0 (iteration) running | plans: plan-a(InProgress)')
+    expect(text).not.toContain('plan-b')
+    // Omitted (hard, D2): residuals, leases, direction, the iteration-gate
+    // line, harness dir and enforcement all leave this surface.
+    expect(text).not.toContain('residuals')
+    expect(text).not.toContain('leases')
+    expect(text).not.toContain('direction')
+    expect(text).not.toContain('gate')
+    expect(text).not.toContain('enforcement')
+    expect(text).not.toContain('harness ')
     // Bounded: no residual detail, no agent-flow events, no knowledge
     // digest, no branch/policy anchors — the full status.json never leaks.
     expect(text).not.toContain('deferred blocker')
@@ -295,6 +302,17 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     const harnessDirB = join(root, 'harness-b')
     await mkdir(harnessDirA, { recursive: true })
     await mkdir(harnessDirB, { recursive: true })
+    // Each mounted harness dir carries its own active workflow so the digest
+    // context discriminates the mount (the slim digest renders the selected
+    // active workflow, not the boot dir path).
+    await seedHarness(harnessDirA, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
+    })
+    await seedHarness(harnessDirB, {
+      'status.json': v2Root([v2WorkflowEntry('wf-b')]),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b'),
+    })
     const ctx = new Context()
     // The plugin's top-level `inject: ['loader']` must resolve (hmr-safety
     // spec pattern); the REAL dsh-system-prompt service is composed so the
@@ -321,7 +339,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
       await settleInjectChild()
       let assembly = await ctx.systemPrompt.assemble()
       expect(assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text).toContain(`harness dir: ${harnessDirA}`)
-      expect(assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text).toContain(`harness ${harnessDirA}`)
+      expect(assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text).toContain('workflow wf-a (plan) running')
       expect(warns).toHaveLength(0)
 
       // HMR re-apply with a CHANGED config (the real hot-reload scenario): the
@@ -336,7 +354,9 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
       expect(section).toBeDefined()
       expect(section!.text).toContain(`harness dir: ${harnessDirB}`)
       expect(section!.text).not.toContain(`harness dir: ${harnessDirA}`)
-      expect(assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text).toContain(`harness ${harnessDirB}`)
+      const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!
+      expect(context.text).toContain('workflow wf-b (plan) running')
+      expect(context.text).not.toContain('wf-a')
       expect(warns).toHaveLength(0)
       await reloaded.dispose()
     } finally {
@@ -373,8 +393,8 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     expect(section!.text).toContain('enforcement: soft')
     const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
     expect(context).toBeDefined()
-    expect(context!.text).toContain(`harness ${wsHarnessDir}`)
-    expect(context!.text).toContain('enforcement soft')
+    expect(context!.text).toContain('workflow v2.2.0 (iteration) running | plans: none')
+    expect(context!.text).not.toContain('harness ')
 
     // Live flip under zero-config: the hard compass lands on the next
     // assembly (same boot, same registration — the enforcement word follows
@@ -390,8 +410,10 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-hostile-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
-    // Operator-controlled fields carrying COMPLETE `{{...}}` groups: a plan
-    // id, a lease holder, an iteration dir name and the direction prose.
+    // Operator-controlled fields carrying COMPLETE `{{...}}` groups: the
+    // workflow id (`{{iter}}`), the plan id (`{{plan}}`) and — fixture-only,
+    // never rendered by the slim digest — a lease holder + compass direction
+    // prose.
     const HOSTILE_ROOT = v2Root([v2WorkflowEntry('{{iter}}', 'iteration')])
     const HOSTILE_SNAPSHOT = v2Snapshot('{{iter}}', {
       type: 'iteration',
@@ -441,43 +463,33 @@ describe('mstar:harness-rules global section + mstar:engine-status context (plan
     expect(() => renderPrompt(assembly)).not.toThrow()
     expect(() => renderContextSnapshot(assembly)).not.toThrow()
     // The screened text stays readable — the original content is retained.
-    expect(context!.text).toContain('plans: { {plan} }(InProgress)')
-    expect(context!.text).toContain('leases: { {plan} } → { {leaser} }')
-    expect(context!.text).toContain('iteration { {iter} }: gate')
-    expect(context!.text).toContain('direction: The { {template} } syntax must stay literal.')
+    expect(context!.text).toContain('workflow { {iter} } (iteration) running')
+    expect(context!.text).toContain('{ {plan} }(InProgress)')
+    // The omitted surfaces (leases / direction / iteration gate) never
+    // render — even their screened literals stay out.
+    expect(context!.text).not.toContain('leases:')
+    expect(context!.text).not.toContain('direction:')
+    expect(context!.text).not.toContain(': gate')
   })
 
-  it('(m) interpolation-hazard screening — a lone `{{` without a later `}}` stays literal (upstream renders it as prose; the helper must not mangle it)', async () => {
+  it('(m) interpolation-hazard screening — a lone `{{` in a plan id stays literal (upstream renders it as prose; the helper must not mangle it)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-lone-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
-    const LONE_COMPASS = [
-      '---',
-      'iteration_id: v2.2.0',
-      'status: active',
-      'enforcement: hard',
-      '---',
-      '',
-      '## Direction lock (autonomous)',
-      '',
-      '- **Problem statement:** Use `{{` to open a variable group.',
-      '',
-      '## Scope',
-      '',
-      'body',
-    ].join('\n')
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
-      'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', { type: 'iteration' }),
-      'iterations/v2.2.0/delivery-compass.md': LONE_COMPASS,
+      'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', {
+        type: 'iteration',
+        plans: [{ plan_id: 'plan-{{open', title: 'Lone', status: 'InProgress' }],
+      }),
     })
     booted = await bootApp({ root })
     const assembly = await booted.ctx.systemPrompt.assemble()
     const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
     expect(context).toBeDefined()
-    // The lone `{{` survives verbatim in the embedded text and renders as
-    // literal prose — no throw, no mangling.
-    expect(context!.text).toContain('direction: Use `{{` to open a variable group.')
+    // The lone `{{` (no later `}}`) survives verbatim in the embedded plan
+    // id and renders as literal prose — no throw, no mangling.
+    expect(context!.text).toContain('plan-{{open(InProgress)')
     expect(() => renderContextSnapshot(assembly)).not.toThrow()
     expect(() => renderPrompt(assembly)).not.toThrow()
   })
@@ -503,53 +515,97 @@ describe('stripInterpolationHazard (STRICT {{variable}} screening — plan QC fi
   })
 })
 
-describe('mstar:engine-status digest join caps (plan 20260820-dsh-digest-bounds Task 1)', () => {
-  /** A snapshot carrying `planCount` plan rows; the first `leaseCount` rows hold execution leases. */
-  function boundedSnapshot(planCount: number, leaseCount: number): string {
-    const plans = Array.from({ length: planCount }, (_, i) => ({
-      plan_id: `p-${i}`,
-      title: `Plan ${i}`,
-      status: 'InProgress',
-      ...(i < leaseCount ? { execution_lease: { holder: `holder-${i}`, claimed_at: '2026-08-19' } } : {}),
-    }))
-    return v2Snapshot('v2.2.0', { type: 'iteration', plans })
-  }
-
-  /** Boot a fresh app seeded with a snapshot of `planCount` plans / `leaseCount` leases. */
-  async function bootBounded(planCount: number, leaseCount: number) {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-bounds-'))
+describe('mstar:engine-status slim digest (plan 20260820-dsh-engine-status-slim)', () => {
+  /** Boot an app seeded with the given harness files and return its context digest text + assembly. */
+  async function bootSlim(seed: Record<string, string>) {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-slim-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
-      'workflows/v2.2.0/snapshot.json': boundedSnapshot(planCount, leaseCount),
-    })
-    return bootApp({ root })
+    await seedHarness(harnessDir, seed)
+    const app = await bootApp({ root })
+    booted = app
+    const assembly = await app.ctx.systemPrompt.assemble()
+    const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!
+    return { assembly, text: context.text }
   }
 
-  it('(caps-1) 20 plans + 10 leases render the first 8/4 in catalog order with `+N more` markers, never all 20 plan ids', async () => {
-    const app = booted = await bootBounded(20, 10)
-    const text = (await app.ctx.systemPrompt.assemble()).contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text
-    // First 8 plan ids space-joined + the final `+12 more` marker; first 4
-    // leases `; `-joined + the final `+6 more` marker (residuals stay `none`).
-    expect(text).toContain('plans: p-0(InProgress) p-1(InProgress) p-2(InProgress) p-3(InProgress) p-4(InProgress) p-5(InProgress) p-6(InProgress) p-7(InProgress) +12 more | residuals: none | leases: p-0 → holder-0; p-1 → holder-1; p-2 → holder-2; p-3 → holder-3; +6 more')
-    // The 9th plan id and the last plan id never reach the digest.
+  it('(slim-1) idle beats terminal fallback — an empty active set renders the version line alone even with a terminal snapshot on disk (D1)', async () => {
+    const { text } = await bootSlim({
+      'status.json': v2Root([]),
+      'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', { status: 'completed', ended_at: '2026-08-19' }),
+    })
+    expect(text).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
+    expect(text).not.toContain('wf-old')
+    expect(text).not.toContain('workflow')
+  })
+
+  it('(slim-2) mixed plan statuses — Done plans are filtered out of the non-Done join (D2)', async () => {
+    const { text } = await bootSlim({
+      'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
+      'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', {
+        type: 'iteration',
+        plans: [
+          { plan_id: 'p-todo', title: 'Todo', status: 'Todo' },
+          { plan_id: 'p-prog', title: 'Progress', status: 'InProgress' },
+          { plan_id: 'p-done', title: 'Done', status: 'Done', done_at: '2026-08-19' },
+          { plan_id: 'p-blocked', title: 'Blocked', status: 'Blocked' },
+        ],
+      }),
+    })
+    expect(text).toBe(
+      `mstar engine status: v${PLUGIN_VERSION}\nworkflow v2.2.0 (iteration) running | plans: p-todo(Todo) p-prog(InProgress) p-blocked(Blocked)`,
+    )
+    expect(text).not.toContain('p-done')
+  })
+
+  it('(slim-3) all plans Done (workflow still running) renders `plans: none` — the empty-after-filter copy (D2)', async () => {
+    const { text } = await bootSlim({
+      'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
+      'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', {
+        type: 'iteration',
+        plans: [{ plan_id: 'p-done', title: 'Done', status: 'Done', done_at: '2026-08-19' }],
+      }),
+    })
+    expect(text).toBe(`mstar engine status: v${PLUGIN_VERSION}\nworkflow v2.2.0 (iteration) running | plans: none`)
+  })
+
+  it('(slim-4) stale trust (D3) — a still-registered workflow renders its snapshot\'s OWN status word (completed), never a re-derivation', async () => {
+    const { text } = await bootSlim({
+      'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
+      'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', { type: 'iteration', status: 'completed', ended_at: '2026-08-19' }),
+    })
+    expect(text).toContain('workflow v2.2.0 (iteration) completed')
+  })
+
+  it('(slim-5) missing snapshot — an active entry with no workflows/ dir degrades to the version line and never throws (S-d fix-wave)', async () => {
+    const { text, assembly } = await bootSlim({
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+    })
+    expect(text).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
+    expect(() => renderContextSnapshot(assembly)).not.toThrow()
+  })
+
+  it('(slim-6) cap after filter — 10 non-Done plans render the first 8 + `+2 more`; the 9th non-Done id and both Done ids stay out (D5)', async () => {
+    const plans = [
+      ...Array.from({ length: 10 }, (_, i) => ({ plan_id: `p-${i}`, title: `Plan ${i}`, status: 'InProgress' })),
+      { plan_id: 'p-done-1', title: 'Done 1', status: 'Done', done_at: '2026-08-19' },
+      { plan_id: 'p-done-2', title: 'Done 2', status: 'Done', done_at: '2026-08-19' },
+    ]
+    const { text } = await bootSlim({
+      'status.json': v2Root([v2WorkflowEntry('v2.2.0', 'iteration')]),
+      'workflows/v2.2.0/snapshot.json': v2Snapshot('v2.2.0', { type: 'iteration', plans }),
+    })
+    expect(text).toContain('plans: p-0(InProgress) p-1(InProgress) p-2(InProgress) p-3(InProgress) p-4(InProgress) p-5(InProgress) p-6(InProgress) p-7(InProgress) +2 more')
     expect(text).not.toContain('p-8(InProgress)')
-    expect(text).not.toContain('p-19(')
-    // The 5th lease holder never reaches the digest.
-    expect(text).not.toContain('holder-4')
+    expect(text).not.toContain('p-done-1')
+    expect(text).not.toContain('p-done-2')
   })
 
-  it('(caps-2) at-cap length (8 plans + 4 leases) renders the full join with NO overflow marker', async () => {
-    const app = booted = await bootBounded(8, 4)
-    const text = (await app.ctx.systemPrompt.assemble()).contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text
-    expect(text).toContain('plans: p-0(InProgress) p-1(InProgress) p-2(InProgress) p-3(InProgress) p-4(InProgress) p-5(InProgress) p-6(InProgress) p-7(InProgress) | residuals: none | leases: p-0 → holder-0; p-1 → holder-1; p-2 → holder-2; p-3 → holder-3')
-    expect(text).not.toContain('+0 more')
-  })
-
-  it('(caps-3) empty arrays still render the existing `none` / `none active` copy (helper never reached)', async () => {
-    const app = booted = await bootBounded(0, 0)
-    const text = (await app.ctx.systemPrompt.assemble()).contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text
-    expect(text).toContain('plans: none | residuals: none | leases: none active')
+  it('(slim-7) the status word is the snapshot\'s — a paused snapshot renders `paused`, not a hardcoded `active` (D2)', async () => {
+    const { text } = await bootSlim({
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { status: 'paused' }),
+    })
+    expect(text).toContain('workflow wf-1 (plan) paused')
   })
 })
