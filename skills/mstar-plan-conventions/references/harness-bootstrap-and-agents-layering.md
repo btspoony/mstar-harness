@@ -13,14 +13,13 @@
 ## Bootstrap 最小步骤
 
 1. 创建 `{HARNESS_DIR}`（推荐 `.mstar/`）与 `{PLAN_DIR}`（推荐 `.mstar/plans/`）。
-2. 初始化 `status.json`：从 **`mstar-plan-artifacts/templates/status.empty.json`** 复制；residual canonical 见 **`mstar-plan-artifacts` SKILL.md**；字段与生命周期见 **`mstar-plan-artifacts/references/status-and-residuals.md`**。
-3. 初始化可选 `notes.json`（**`mstar-plan-artifacts/templates/notes.empty.json`**）；`sdd/` 空目录占位（per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建）。
+2. 初始化 `status.json`：从 **`mstar-plan-artifacts/templates/status.empty.json`** 复制（**v2 形状**：`version: 2` + `workflows: []`）；residual canonical 见 **`mstar-plan-artifacts` SKILL.md**；字段与生命周期见 **`mstar-plan-artifacts/references/status-and-residuals.md`**。`workflows/` 与 `projects/` 子目录由 engine writers 按需创建（**不**在 bootstrap 预建）。
+3. 初始化可选 `notes.json`（legacy）；`sdd/` 空目录占位（per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建）。
 4. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」；legacy `.agents/` 有等价表）。
-5. **Profile B**（统一 Done 压缩）时另建 `{HARNESS_DIR}/archived/plans/` 与 `archived/plans-done.json`（自 **`mstar-plan-artifacts/templates/plans-done.empty.json`** 复制；schema 仅 `{ "plans": [] }`，见 **`mstar-plan-artifacts/references/done-compaction.md`**）。
-6. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；`{HARNESS_DIR}/specs/`（解析后的 `{SPECS_DIR}` 默认落点）；内容边界见 `mstar-plan-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
-7. 创建 `{HARNESS_DIR}/AGENTS.md`（harness 子树规则；**tracked**）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 与 `docs/` 分工；新项目推荐 `.mstar/AGENTS.md`，已有项目可继续使用 `.agents/AGENTS.md`。
-8. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `{HARNESS_DIR}/AGENTS.md` 作为 harness SSOT。
-9. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。
+5. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；`{HARNESS_DIR}/specs/`（解析后的 `{SPECS_DIR}` 默认落点）；内容边界见 `mstar-plan-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
+6. 创建 `{HARNESS_DIR}/AGENTS.md`（harness 子树规则；**tracked**）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 与 `docs/` 分工；新项目推荐 `.mstar/AGENTS.md`，已有项目可继续使用 `.agents/AGENTS.md`。
+7. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `{HARNESS_DIR}/AGENTS.md` 作为 harness SSOT。
+8. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。
 
 ## Git 跟踪策略（进程 vs 结果）
 
@@ -29,7 +28,7 @@
 | 类别 | 默认 tracked | 默认 gitignored |
 |------|--------------|-----------------|
 | 结果（跨 clone handoff） | `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**` | — |
-| 进程（本地会话 SSOT） | — | `plans/`、`iterations/`、`status.json`、`notes.json`、`sdd/`、`archived/` |
+| 进程（本地会话 SSOT） | — | `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`notes.json`、`sdd/`、`archived/` |
 
 跨 clone 须持久的 residual 或决策：经 **`mstar-compound`** 提升入 `{KNOWLEDGE_DIR}/`、写入 `{SPECS_DIR}/`，或记入 tracked `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` `status.json` / `plans/`。
 
@@ -42,7 +41,7 @@
 
 ### `{HARNESS_DIR}/AGENTS.md`（harness 层）
 
-- 放：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}` 契约、`docs/` 与 harness 子树内容边界、状态推进门禁、QC/QA 对齐规则、residual 生命周期、Done compaction profile（Profile B 时声明 `archived/plans-done.json` 仅为 `{ "plans": [<plan-id>, ...] }`，细则见 **`mstar-plan-artifacts/references/done-compaction.md`**）。
+- 放：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}` 契约、`docs/` 与 harness 子树内容边界、状态推进门禁、QC/QA 对齐规则、residual 生命周期。
 - 不放：语言/框架编码细节、业务模块实现约束。
 
 ### `<subdir>/AGENTS.md`（边界层）
@@ -84,7 +83,7 @@
 ## 反模式与修正
 
 - 反模式：在根 `AGENTS.md` 维护当前计划进展与 commit 列表。  
-  修正：迁移到 `status.json` 的 `plans[].metadata` 与 `notes.json`。
+  修正：迁移到 workflow snapshot 的 `plans[].metadata` 与 `workflows/<id>/notes.jsonl`。
 
 - 反模式：每个子目录复制一份完整 harness 规则。  
   修正：保留一行引用 `{HARNESS_DIR}/AGENTS.md`，仅写本目录增量约束。

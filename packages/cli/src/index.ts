@@ -7,7 +7,6 @@ import { select } from "@inquirer/prompts";
 import pc from "picocolors";
 import { Command } from "commander";
 import {
-  archiveResiduals,
   assertDefaultBranchProtected,
   assertIndexRows,
   assertLightDarkParity,
@@ -38,10 +37,13 @@ import {
   parseBranchPolicyDirectOnBranch,
   parseCompassFrontmatter,
   planQualityBar,
+  PROJECT_REGISTER_FILE,
   pushCadenceProbe,
   resolveHarnessDir,
+  resolveProjectDir,
   resolveSkillRoot,
   resolveSpecsDir,
+  resolveWorkflowDir,
   reviewPackage,
   scaffoldAuditPlan,
   scopeGuard,
@@ -56,6 +58,9 @@ import {
   validateRoleMapping,
   validateSchemaYaml,
   validateStatus,
+  validateWorkflowSnapshot,
+  WORKFLOW_SNAPSHOT_FILE,
+  _DEFAULT_PROJECT,
   type AuditCategory,
   type AuditEffort,
   type AuditFinding,
@@ -65,13 +70,14 @@ import {
   type GateResult,
   type HostId,
   type L1PreDispatchInput,
+  type ProjectRegisterDoc,
   type QcAlignmentAssignment,
-  type StatusDoc,
   type ToolSignal,
   type ValidationResult,
   type WorktreeTrack,
 } from "@mstar-harness/engine";
 import { verifyPlanExecutionLease } from "./lease-verify";
+import { runMigrateCommand, type MigrateCliOptions } from "./commands/migrate";
 import { validateAgentPlugin } from "./agent-plugins";
 import { buildModelAssignments } from "./assignment";
 import { getAdapter } from "./adapters";
@@ -327,9 +333,11 @@ const pathCommand = program
 
 pathCommand
   .command("resolve")
-  .description("Resolve {HARNESS_DIR} + {SPECS_DIR} from a start dir (exit 1 when no harness dir resolves)")
+  .description(
+    "Resolve {HARNESS_DIR} + {SPECS_DIR} + {WORKFLOW_DIR} + {PROJECT_DIR} from a start dir (exit 1 when no harness dir resolves)",
+  )
   .argument("[path]", "Start dir to resolve from (default: cwd)")
-  .option("--json", "Machine-readable JSON output (ok, harnessDir, specsDir, guidance on failure)")
+  .option("--json", "Machine-readable JSON output (ok, harnessDir, specsDir, workflowDir, projectDir, guidance on failure)")
   .action((pathArg: string | undefined, options: { json?: boolean }) => {
     const startDir = pathArg ? path.resolve(pathArg) : process.cwd();
     const harnessDir = resolveHarnessDir(startDir);
@@ -340,7 +348,7 @@ pathCommand
         "no harness dir found \u2014 the bounded probe (.mstar/, .agents/, .plans/, plans/) walked up from " +
         `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) \u2014 run \`mstar init\` to bootstrap, or pass a start dir inside a harness-enabled project`;
       if (options.json) {
-        console.log(JSON.stringify({ ok: false, startDir, harnessDir: null, specsDir: null, guidance }));
+        console.log(JSON.stringify({ ok: false, startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, guidance }));
       } else {
         console.error(pc.red(`path resolve: no harness dir from ${startDir}`));
         console.error(`  guidance: ${guidance}`);
@@ -351,17 +359,21 @@ pathCommand
     // Read-only resolution: never create {HARNESS_DIR}/specs/ as a side
     // effect (engine resolveSpecsDir opts.create defaults to true).
     const specsDir = resolveSpecsDir(harnessDir, { create: false });
+    const workflowDir = resolveWorkflowDir(startDir);
+    const projectDir = resolveProjectDir(startDir);
     if (options.json) {
-      console.log(JSON.stringify({ ok: true, startDir, harnessDir, specsDir }));
+      console.log(JSON.stringify({ ok: true, startDir, harnessDir, specsDir, workflowDir, projectDir }));
     } else {
       console.log(pc.green(`harness dir: ${harnessDir}`));
       console.log(pc.green(`specs dir:   ${specsDir}`));
+      console.log(pc.green(`workflow dir: ${workflowDir}`));
+      console.log(pc.green(`project dir:  ${projectDir}`));
     }
   });
 
 const statusCommand = program
   .command("status")
-  .description("status.json schema + residual lifecycle checks (engine-backed)");
+  .description("v2 status.json root / workflow snapshot / project-register checks (engine-backed)");
 
 /** Resolve the status.json path: explicit arg wins, else the resolved {HARNESS_DIR}. */
 function resolveStatusFilePath(pathArg?: string): string {
@@ -375,8 +387,10 @@ function resolveStatusFilePath(pathArg?: string): string {
 
 statusCommand
   .command("validate")
-  .description("Validate status.json (schema, severity enum, root-only residual_findings)")
-  .argument("[path]", "status.json path (default: {HARNESS_DIR}/status.json)")
+  .description(
+    "Validate a v2 status.json root or workflow snapshot (root: version 2 + updated_at + active workflows[] with per-entry snapshot invariants; snapshot: schema_version 1 + plan rows + lease shapes; v1 input fails closed with the mstar migrate hint)",
+  )
+  .argument("[path]", "status.json or workflows/<id>/snapshot.json path (default: {HARNESS_DIR}/status.json)")
   .action((pathArg?: string) => {
     let statusPath: string;
     try {
@@ -384,7 +398,10 @@ statusCommand
       if (!fs.existsSync(statusPath)) {
         throw new Error(`status file not found: ${statusPath}`);
       }
-      const gate = validateStatus(statusPath);
+      const gate =
+        path.basename(statusPath) === WORKFLOW_SNAPSHOT_FILE
+          ? validateWorkflowSnapshot(readJson(statusPath))
+          : validateStatus(statusPath);
       if (gate.ok) {
         console.log(pc.green(`${statusPath}: OK`));
         return;
@@ -403,55 +420,26 @@ statusCommand
   });
 
 statusCommand
-  .command("archive-residuals")
-  .description("Archive a plan's open residuals to archived/residuals/<plan-id>.json")
-  .argument("<plan-id>", "Plan id whose open residuals are archived")
-  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action(async (planId: string, options: { harness?: string }) => {
-    try {
-      const harnessDir = options.harness ?? resolveHarnessDir();
-      if (!harnessDir) {
-        throw new Error(`harness dir not found from ${process.cwd()} \u2014 pass --harness or set MSTAR_HARNESS_DIR`);
-      }
-      const result = await archiveResiduals(planId, harnessDir);
-      if (result.archived === 0) {
-        console.log(pc.yellow(`No open residuals for plan ${planId}`));
-      } else {
-        console.log(pc.green(`Archived ${result.archived} residual(s) for ${planId} -> ${result.archivePath}`));
-      }
-    } catch (error) {
-      console.error(pc.red(`archive-residuals failed: ${(error as Error).message}`));
-      process.exitCode = 1;
-    }
-  });
-
-statusCommand
   .command("tech-debt")
   .description(
-    "Print the residual tech-debt rollup (total_open / by_severity / by_target / by_plan) and PASS/DRIFT vs stored " +
-      "metadata.tech_debt_summary (exit 1 on DRIFT \u2014 refresh the stored summary to clear)",
+    "Print the residual tech-debt rollup aggregated over every {PROJECT_DIR}/<id>/residuals.json register " +
+      "(total_open / by_severity / by_target / by_plan; the project register is the source of truth \u2014 " +
+      "no stored-summary drift check, informational exit 0)",
   )
-  .argument("[path]", "status.json path (default: {HARNESS_DIR}/status.json)")
+  .argument("[path]", "Project dir (default: resolved {PROJECT_DIR})")
   .action((pathArg?: string) => {
     try {
-      const statusPath = resolveStatusFilePath(pathArg);
-      if (!fs.existsSync(statusPath)) {
-        throw new Error(`status file not found: ${statusPath}`);
+      const projectDir = pathArg ? path.resolve(pathArg) : resolveProjectDir();
+      if (!fs.existsSync(projectDir)) {
+        throw new Error(`project dir not found: ${projectDir}`);
       }
-      const rollup = techDebtRollup(statusPath);
-      console.log(`status tech-debt: ${statusPath}`);
+      const rollup = techDebtRollup(projectDir);
+      console.log(`status tech-debt: ${projectDir}`);
       console.log(`total_open: ${rollup.computed.total_open}`);
       console.log(`by_severity: ${JSON.stringify(rollup.computed.by_severity)}`);
       console.log(`by_target: ${JSON.stringify(rollup.computed.by_target)}`);
       console.log(`by_plan: ${JSON.stringify(rollup.computed.by_plan)}`);
-      if (rollup.overall === "PASS") {
-        console.log(pc.green("tech_debt_summary: PASS (all 4 fields match stored)"));
-        return;
-      }
-      const drifts = rollup.checks.filter((check) => check.status === "DRIFT").map((check) => check.field);
-      const note = rollup.stored === null ? " (no stored metadata.tech_debt_summary)" : "";
-      console.error(pc.red(`tech_debt_summary: DRIFT (${drifts.length}/4 fields: ${drifts.join(", ")})${note}`));
-      process.exitCode = 1;
+      console.log(pc.green("project register is the source of truth \u2014 no stored summary to drift (informational)"));
     } catch (error) {
       console.error(pc.red(`status tech-debt failed: ${(error as Error).message}`));
       process.exitCode = 1;
@@ -461,19 +449,27 @@ statusCommand
 statusCommand
   .command("findings-cleanup")
   .description(
-    "Enforce a plan's findings-cleanup mode on its open residuals (zero-residual via Assignment/metadata, else " +
-      "allow-residual; exit 1 on violations)",
+    "Enforce a plan's findings-cleanup mode on its project-register residuals (projects/<id>/residuals.json " +
+      "entries keyed by plan id \u2014 the snapshot plan linkage; zero-residual via Assignment, else allow-residual; exit 1 on violations)",
   )
-  .argument("<plan-id>", "Plan id whose open residuals are checked against the cleanup mode")
+  .argument("<plan-id>", "Plan id whose register entries are checked against the cleanup mode")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action((planId: string, options: { harness?: string }) => {
+  .option("--project <id>", "Project id whose register is read (default: _default)")
+  .option("--mode <mode>", "Cleanup mode override: zero-residual | allow-residual (default: allow-residual)")
+  .action((planId: string, options: { harness?: string; project?: string; mode?: string }) => {
     try {
-      const statusPath = options.harness ? path.join(path.resolve(options.harness), "status.json") : resolveStatusFilePath();
-      if (!fs.existsSync(statusPath)) {
-        throw new Error(`status file not found: ${statusPath}`);
+      const projectDir = resolveProjectDir(process.cwd(), options.harness ? { harnessDir: options.harness } : {});
+      const registerPath = path.join(projectDir, options.project ?? _DEFAULT_PROJECT, PROJECT_REGISTER_FILE);
+      if (!fs.existsSync(registerPath)) {
+        throw new Error(`project register not found: ${registerPath}`);
       }
-      const doc = readJson(statusPath) as StatusDoc;
-      const gate = findingsCleanupGate(doc, planId);
+      const mode =
+        options.mode === "zero-residual" || options.mode === "allow-residual" ? options.mode : undefined;
+      if (options.mode !== undefined && mode === undefined) {
+        throw new Error(`invalid --mode ${options.mode} (zero-residual | allow-residual)`);
+      }
+      const register = readJson(registerPath) as ProjectRegisterDoc;
+      const gate = findingsCleanupGate(register, planId, mode ? { mode } : undefined);
       if (gate.ok) {
         console.log(pc.green(`findings-cleanup ${planId}: OK`));
         return;
@@ -484,6 +480,33 @@ statusCommand
       console.error(pc.red(`status findings-cleanup failed: ${(error as Error).message}`));
       process.exitCode = 1;
     }
+  });
+
+statusCommand
+  .command("archive-residuals")
+  .description(
+    "Removed in v3 \u2014 residual close is a project-register state change; this command exits 1 and names the replacement",
+  )
+  .action(() => {
+    console.error(
+      pc.red(
+        "status archive-residuals: removed in v3 \u2014 residuals live in project registers; close entries in " +
+          "projects/<id>/residuals.json (set lifecycle to resolved/waived/superseded with closure fields) instead",
+      ),
+    );
+    process.exitCode = 1;
+  });
+
+const migrateCommand = program
+  .command("migrate")
+  .description(
+    "Migrate a v1 {HARNESS_DIR} status.json tree to v2 (engine-backed; exit 0 ok/idempotent no-op, 1 plan-invalid, 2 apply-failure)",
+  )
+  .option("--dry-run", "Print the migration step plan (source \u2192 destination) + planned-document validation warnings without writing anything")
+  .option("--path <root>", "Harness root to migrate (default: resolved {HARNESS_DIR}, else cwd)")
+  .option("--json", "Machine-readable JSON output")
+  .action(async (options: MigrateCliOptions) => {
+    await runMigrateCommand(options);
   });
 
 const leaseCommand = program
@@ -500,85 +523,135 @@ function resolveLeaseHarnessDir(harnessArg?: string): string {
   return harnessDir;
 }
 
+/**
+ * Resolve `{WORKFLOW_DIR}/<id>/snapshot.json` for the v2 `--workflow <id>`
+ * inputs (lease verify / verify-integration / iteration gate / worktree
+ * check). The id is a single path component — reject separators and `..`
+ * so a hostile id cannot escape the workflows dir. The workflow dir comes
+ * from the engine resolver (Phase-5 F1): a `.mstarc` `[config]
+ * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows` — so a
+ * custom layout is READ at the same location it is written.
+ */
+function resolveSnapshotPath(workflowId: string, harnessArg?: string): string {
+  if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
+    throw new Error(`invalid workflow id ${JSON.stringify(workflowId)}`);
+  }
+  const harnessDir = resolveLeaseHarnessDir(harnessArg);
+  const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
+  return path.join(workflowDir, workflowId, WORKFLOW_SNAPSHOT_FILE);
+}
+
+/** The sole plan row of a workflow snapshot, or null when ambiguous/absent. */
+function solePlanRow(
+  plans: Array<Record<string, unknown>>,
+  label: string,
+): { row: Record<string, unknown> } | { error: Error } {
+  if (plans.length === 0) {
+    return { error: new Error(`${label}: workflow snapshot has no plan rows \u2014 pass --plan <plan-id>`) };
+  }
+  if (plans.length > 1) {
+    return { error: new Error(`${label}: workflow snapshot has ${plans.length} plan rows \u2014 pass --plan <plan-id> to pick one`) };
+  }
+  return { row: plans[0]! };
+}
+
+/**
+ * Run the engine execution-lease gate on one snapshot plan row and print the
+ * verdict (SSOT rules live in lease-verify.ts / the engine — row-level
+ * `plans[].execution_lease` is the only location in v3; metadata-only and
+ * dual-write were deleted with the v1 read path).
+ */
+function verifyLeaseRow(row: Record<string, unknown>, planId: string, snapshotPath: string): void {
+  const result = verifyPlanExecutionLease(row, planId);
+  if (result.ok) {
+    const holder = String((result.lease as Record<string, unknown>).holder ?? "");
+    console.log(pc.green(`${snapshotPath}: OK plan ${planId} \u2014 execution_lease valid (holder ${holder})`));
+    return;
+  }
+  const count = result.violations.length;
+  console.error(pc.red(`${snapshotPath}: FAIL plan ${planId} (${count} violation${count === 1 ? "" : "s"})`));
+  for (const violation of result.violations) {
+    console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
+    if (violation.fix) console.error(`    fix: ${violation.fix}`);
+  }
+  process.exitCode = 1;
+}
+
 leaseCommand
   .command("verify")
-  .description("Verify a plan's execution_lease (missing/invalid/non-SSOT location \u2192 exit 1 with violations)")
-  .argument("<plan-id>", "Plan id whose execution_lease is verified")
+  .description("Verify a plan's execution_lease on the workflow snapshot's plan row (missing/invalid \u2192 exit 1 with violations)")
+  .option("--workflow <id>", "Workflow id whose snapshot plan row is verified")
+  .option("--plan <plan-id>", "Plan id whose execution_lease is verified (default: the snapshot's sole plan row)")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action((planId: string, options: { harness?: string }) => {
+  .action((options: { workflow?: string; plan?: string; harness?: string }) => {
     try {
-      const harnessDir = resolveLeaseHarnessDir(options.harness);
-      const statusPath = path.join(harnessDir, "status.json");
-      if (!fs.existsSync(statusPath)) {
-        throw new Error(`status file not found: ${statusPath}`);
+      if (!options.workflow) {
+        throw new SddScriptError("usage: lease verify --workflow <id> [--plan <plan-id>] [--harness <path>]", 2);
       }
-      const doc = readJson(statusPath);
+      const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
+      if (!fs.existsSync(snapshotPath)) {
+        throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+      }
+      const doc = readJson(snapshotPath);
       const plans = Array.isArray(doc.plans) ? (doc.plans as Array<Record<string, unknown>>) : [];
+      const planId = options.plan;
+      if (planId === undefined) {
+        const sole = solePlanRow(plans, `lease verify ${options.workflow}`);
+        if ("error" in sole) throw sole.error;
+        const row = sole.row;
+        verifyLeaseRow(row, String(row.plan_id ?? row.id ?? ""), snapshotPath);
+        return;
+      }
       const matches = plans.filter((row) => row?.id === planId || row?.plan_id === planId);
       if (matches.length === 0) {
-        console.error(pc.red(`${statusPath}: FAIL plan ${planId}`));
+        console.error(pc.red(`${snapshotPath}: FAIL plan ${planId}`));
         console.error(`  - [high] lease.verify.plan-not-found: no plan row with id/plan_id ${planId}`);
         process.exitCode = 1;
         return;
       }
       if (matches.length > 1) {
-        console.error(pc.red(`${statusPath}: FAIL plan ${planId}`));
+        console.error(pc.red(`${snapshotPath}: FAIL plan ${planId}`));
         console.error("  - [high] lease.verify.ambiguous: multiple plan rows match (id and plan_id both present)");
         process.exitCode = 1;
         return;
       }
-      // SSOT-location rules live in lease-verify.ts (pure, tested): row-level
-      // plans[].execution_lease is SSOT; metadata-only / dual-write are
-      // violations, never equivalent to SSOT success.
-      const result = verifyPlanExecutionLease(matches[0], planId);
-      if (result.ok) {
-        const holder = String((result.lease as Record<string, unknown>).holder ?? "");
-        console.log(pc.green(`${statusPath}: OK plan ${planId} \u2014 execution_lease valid (holder ${holder})`));
-        return;
-      }
-      const count = result.violations.length;
-      console.error(pc.red(`${statusPath}: FAIL plan ${planId} (${count} violation${count === 1 ? "" : "s"})`));
-      for (const violation of result.violations) {
-        console.error(`  - [${violation.severity}] ${violation.code}: ${violation.message}`);
-        if (violation.fix) console.error(`    fix: ${violation.fix}`);
-      }
-      process.exitCode = 1;
+      verifyLeaseRow(matches[0]!, planId, snapshotPath);
     } catch (error) {
-      console.error(pc.red(`lease verify failed: ${(error as Error).message}`));
-      process.exitCode = 1;
+      failScript(error, "lease verify");
     }
   });
 
 leaseCommand
   .command("verify-integration")
   .description(
-    "Verify the root metadata.integration_merge_lease when present (absent/unclaimed \u2192 OK; invalid lease \u2192 exit 1)",
+    "Verify the workflow snapshot's top-level integration_merge_lease when present (absent/unclaimed \u2192 OK; invalid lease \u2192 exit 1)",
   )
+  .option("--workflow <id>", "Workflow id whose snapshot top-level lease is verified")
   .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
-  .action((options: { harness?: string }) => {
+  .action((options: { workflow?: string; harness?: string }) => {
     try {
-      const harnessDir = resolveLeaseHarnessDir(options.harness);
-      const statusPath = path.join(harnessDir, "status.json");
-      if (!fs.existsSync(statusPath)) {
-        throw new Error(`status file not found: ${statusPath}`);
+      if (!options.workflow) {
+        throw new SddScriptError("usage: lease verify-integration --workflow <id> [--harness <path>]", 2);
       }
-      const doc = readJson(statusPath);
-      const metadata = (doc.metadata ?? {}) as Record<string, unknown>;
-      if (metadata.integration_merge_lease === undefined) {
-        console.log(pc.green(`${statusPath}: OK \u2014 no integration_merge_lease (unclaimed)`));
+      const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
+      if (!fs.existsSync(snapshotPath)) {
+        throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+      }
+      const doc = readJson(snapshotPath);
+      const lease = doc.integration_merge_lease;
+      if (lease === undefined) {
+        console.log(pc.green(`${snapshotPath}: OK \u2014 no integration_merge_lease (unclaimed)`));
         return;
       }
-      const gate = validateIntegrationMergeLease(metadata.integration_merge_lease);
+      const gate = validateIntegrationMergeLease(lease);
       if (gate.ok) {
-        const lease = metadata.integration_merge_lease as Record<string, unknown>;
-        console.log(pc.green(`${statusPath}: OK \u2014 integration_merge_lease valid (holder ${String(lease.holder ?? "")})`));
+        console.log(pc.green(`${snapshotPath}: OK \u2014 integration_merge_lease valid (holder ${String((lease as Record<string, unknown>).holder ?? "")})`));
         return;
       }
       printChecklist("lease verify-integration", gate);
       process.exitCode = 1;
     } catch (error) {
-      console.error(pc.red(`lease verify-integration failed: ${(error as Error).message}`));
-      process.exitCode = 1;
+      failScript(error, "lease verify-integration");
     }
   });
 
@@ -690,18 +763,20 @@ iterationCommand
       "(transition: phase-3-close) exit 1 is EXPECTED until the \u00a73.4 close items (status: completed + end_date) are " +
       "written: the exit checklist gates Phase 4, not the Phase-3 entry (qc2 F-003)",
   )
-  .requiredOption("--status <path>", "status.json path")
+  .requiredOption("--workflow <id>", "Workflow id whose snapshot is evaluated")
   .requiredOption("--compass <path>", "delivery-compass.md path")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
   .option("--branch <branch>", "Current branch probe (exit \u00a73.5 item 5)")
   .option("--integration <branch>", "Spec integration branch probe (exit \u00a73.5 item 5)")
   .option("--target <branch>", "PR base branch probe (exit \u00a73.5 item 6)")
-  .action((options: { status: string; compass: string; branch?: string; integration?: string; target?: string }) => {
+  .action(
+    (options: { workflow: string; compass: string; harness?: string; branch?: string; integration?: string; target?: string }) => {
     try {
-      const statusPath = path.resolve(options.status);
+      const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
       const compassPath = path.resolve(options.compass);
-      if (!fs.existsSync(statusPath)) throw new Error(`status file not found: ${statusPath}`);
+      if (!fs.existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
       if (!fs.existsSync(compassPath)) throw new Error(`compass file not found: ${compassPath}`);
-      const result = evaluatePhaseGate(readJson(statusPath), parseCompassFrontmatter(compassPath), {
+      const result = evaluatePhaseGate(readJson(snapshotPath), parseCompassFrontmatter(compassPath), {
         currentBranch: options.branch,
         specIntegrationBranch: options.integration,
         prBaseBranch: options.target,
@@ -831,13 +906,14 @@ function parseTracksArg(tracksJson: string): WorktreeTrack[] {
 worktreeCommand
   .command("check")
   .description(
-    "L1: verify the plan's execution_lease worktree vs control path (isolation, existence, branch alignment) from " +
-      "status.json; --l2: verify parallel writable tracks (exit 1 on violations, 2 on usage)",
+    "L1: verify the plan's execution_lease worktree vs control path (isolation, existence, branch alignment) from the " +
+      "workflow snapshot rows + snapshot control_worktree_path; --l2: verify parallel writable tracks (exit 1 on violations, 2 on usage)",
   )
   .argument("[plan-id]", "Plan id whose execution_lease drives the L1 input (alternative to --plan)")
+  .option("--workflow <id>", "Workflow id whose snapshot supplies the L1 plan rows + control_worktree_path")
   .option("--plan <plan-id>", "Plan id whose execution_lease drives the L1 input")
-  .option("--status <path>", "status.json path override (default: {HARNESS_DIR}/status.json)")
-  .option("--control <path>", "Control worktree path override (default: status.json metadata.control_worktree_path)")
+  .option("--harness <path>", "Harness dir override (default: resolved {HARNESS_DIR})")
+  .option("--control <path>", "Control worktree path override (default: snapshot control_worktree_path)")
   .option("--l2", "Run the L2 within-plan check (parallel writable tracks) instead of L1")
   .option(
     "--tracks <json>",
@@ -846,7 +922,7 @@ worktreeCommand
   .action(
     (
       planId: string | undefined,
-      options: { plan?: string; status?: string; control?: string; l2?: boolean; tracks?: string },
+      options: { workflow?: string; plan?: string; harness?: string; control?: string; l2?: boolean; tracks?: string },
     ) => {
       try {
         if (options.l2) {
@@ -861,32 +937,37 @@ worktreeCommand
         // plan-id positional or --plan (option wins when both are given).
         const plan = options.plan ?? planId;
         if (!plan) {
-          throw new SddScriptError("usage: worktree check <plan-id> [--status <path>] [--control <path>] (or --plan <plan-id>)", 2);
+          throw new SddScriptError(
+            "usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--control <path>] (or --plan <plan-id>)",
+            2,
+          );
         }
-        const statusPath = options.status ? path.resolve(options.status) : resolveStatusFilePath();
-        if (!fs.existsSync(statusPath)) {
-          throw new Error(`status file not found: ${statusPath}`);
+        if (!options.workflow) {
+          throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--control <path>] (or --plan <plan-id>)", 2);
         }
-        const doc = readJson(statusPath);
+        const snapshotPath = resolveSnapshotPath(options.workflow, options.harness);
+        if (!fs.existsSync(snapshotPath)) {
+          throw new Error(`workflow snapshot not found: ${snapshotPath}`);
+        }
+        const doc = readJson(snapshotPath);
         const plans = Array.isArray(doc.plans) ? (doc.plans as Array<Record<string, unknown>>) : [];
         const matches = plans.filter((row) => row?.id === plan || row?.plan_id === plan);
         if (matches.length === 0) {
-          console.error(pc.red(`${statusPath}: FAIL plan ${plan}`));
+          console.error(pc.red(`${snapshotPath}: FAIL plan ${plan}`));
           console.error(`  - [high] worktree.l1.plan-not-found: no plan row with id/plan_id ${plan}`);
           process.exitCode = 1;
           return;
         }
         if (matches.length > 1) {
-          console.error(pc.red(`${statusPath}: FAIL plan ${plan}`));
+          console.error(pc.red(`${snapshotPath}: FAIL plan ${plan}`));
           console.error("  - [high] worktree.l1.ambiguous: multiple plan rows match (id and plan_id both present)");
           process.exitCode = 1;
           return;
         }
         const row = matches[0]!;
         const lease = (row.execution_lease ?? {}) as Record<string, unknown>;
-        const metadata = (doc.metadata ?? {}) as Record<string, unknown>;
         const input: L1PreDispatchInput = {
-          controlWorktreePath: options.control ? path.resolve(options.control) : String(metadata.control_worktree_path ?? ""),
+          controlWorktreePath: options.control ? path.resolve(options.control) : String(doc.control_worktree_path ?? ""),
           leaseWorktreePath: String(lease.worktree_path ?? ""),
           leaseWorkingBranch: String(lease.working_branch ?? ""),
           planId: plan,

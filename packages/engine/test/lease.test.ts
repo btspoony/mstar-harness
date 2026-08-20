@@ -7,9 +7,10 @@
  *   working_branch; integration_merge_lease adds plan_id / source_branch /
  *   target_branch; optional session_label is display-only): `mstar-plan-artifacts`
  *   `references/status-and-residuals.md` § `plans[].execution_lease` +
- *   § Root `metadata.integration_merge_lease` (v1) + the
- *   iteration-worktree-plan-lease maintenance ADR (normative
- *   field names; `claimed_at` RFC 3339 UTC with explicit `Z`).
+ *   § Snapshot top-level `integration_merge_lease` (v3 — relocated from the
+ *   v1 root `metadata.integration_merge_lease` in the workflow-engine-core
+ *   hard cutover) + the iteration-worktree-plan-lease maintenance ADR
+ *   (normative field names; `claimed_at` RFC 3339 UTC with explicit `Z`).
  * - `null` / tombstone lease objects are invalid — writers delete the key on
  *   release, never write `null`: status-and-residuals.md § "Hold, release,
  *   and override" + § Agent prohibitions ("MUST NOT write `null` or tombstone
@@ -34,7 +35,9 @@
  *   lock; remove the directory only after success/rollback):
  *   status-and-residuals.md § "Same-host exclusive write lock (control
  *   status.json)" + phase-2-worktree-lease.md § "Same-host exclusive write
- *   lock".
+ *   lock". The lock guards all coordination writes — the root `status.json`
+ *   AND `workflows/<id>/snapshot.json` (v3 lease claim/verify read-write
+ *   the snapshot).
  *
  * `claimed_at` acceptance: normative form is RFC 3339 UTC with explicit `Z`
  * (ADR field table); the repo's local `YYYY-MM-DD` date convention is also
@@ -178,9 +181,10 @@ describe("validateExecutionLease", () => {
 
 describe("validateIntegrationMergeLease", () => {
   test("valid serial merge lease passes", () => {
-    // Spec: status-and-residuals.md § Root metadata.integration_merge_lease
-    // (v1) — required holder / claimed_at / plan_id / source_branch /
-    // target_branch (resolved spec_integration_branch); optional session_label.
+    // Spec: status-and-residuals.md § Snapshot top-level
+    // integration_merge_lease (v3) — required holder / claimed_at / plan_id /
+    // source_branch / target_branch (resolved spec_integration_branch);
+    // optional session_label.
     const gate = validateIntegrationMergeLease(validMergeLease());
     expect(gate.ok).toBe(true);
     expect(gate.violations).toEqual([]);
@@ -201,8 +205,9 @@ describe("validateIntegrationMergeLease", () => {
   });
 
   test("null and tombstone objects are rejected (absent = unclaimed; never null)", () => {
-    // Spec: § Root metadata.integration_merge_lease — absent means unclaimed;
-    // writers delete the key on release, never write null or tombstone.
+    // Spec: § Snapshot top-level integration_merge_lease — absent means
+    // unclaimed; writers delete the key on release, never write null or
+    // tombstone.
     for (const tombstone of [null, [], "stale"]) {
       const gate = validateIntegrationMergeLease(tombstone);
       expect(gate.ok).toBe(false);
@@ -497,7 +502,7 @@ describe("canSteal", () => {
   });
 });
 
-describe("planExecutionLeaseLocations / verifyPlanExecutionLease (SSOT-location matrix, moved from CLI)", () => {
+describe("planExecutionLeaseLocations / verifyPlanExecutionLease (snapshot plan-row SSOT, moved from CLI)", () => {
   const VALID = validExecutionLease({ claimed_at: "2026-08-08" });
 
   function planRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -508,24 +513,6 @@ describe("planExecutionLeaseLocations / verifyPlanExecutionLease (SSOT-location 
     const result = verifyPlanExecutionLease(planRow({ execution_lease: VALID }), "plan-a");
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
-    expect(result.lease).toBe(VALID);
-  });
-
-  test("metadata-only lease → lease.verify.non-ssot-location, not ok (legacy read-compat ≠ SSOT success)", () => {
-    const result = verifyPlanExecutionLease(planRow({ metadata: { execution_lease: VALID } }), "plan-a");
-    expect(result.ok).toBe(false);
-    expect(violationCodes(result)).toContain("lease.verify.non-ssot-location");
-    // The lease shape is still validated and reported.
-    expect(result.lease).toBe(VALID);
-  });
-
-  test("both locations → lease.verify.dual-write, not ok (row-level wins)", () => {
-    const result = verifyPlanExecutionLease(
-      planRow({ execution_lease: VALID, metadata: { execution_lease: { ...VALID, holder: "stale" } } }),
-      "plan-a",
-    );
-    expect(result.ok).toBe(false);
-    expect(violationCodes(result)).toContain("lease.verify.dual-write");
     expect(result.lease).toBe(VALID);
   });
 
@@ -550,15 +537,43 @@ describe("planExecutionLeaseLocations / verifyPlanExecutionLease (SSOT-location 
     expect(violationCodes(result)).toContain("lease.execution-lease.invalid-worktree-path");
   });
 
-  test("planExecutionLeaseLocations extracts row + metadata locations", () => {
+  test("planExecutionLeaseLocations extracts the row location only (v1 metadata read-compat deleted)", () => {
     const lease = { holder: "h", claimed_at: "2026-08-08", worktree_path: "/wt", working_branch: "b" };
     const locations = planExecutionLeaseLocations(planRow({ execution_lease: lease, metadata: { execution_lease: "x" } }));
     expect(locations.row).toBe(lease);
-    expect(locations.metadata).toBe("x");
     expect(planExecutionLeaseLocations(planRow()).row).toBeUndefined();
-    expect(planExecutionLeaseLocations(planRow()).metadata).toBeUndefined();
-    // metadata non-object rows yield no metadata location.
-    expect(planExecutionLeaseLocations(planRow({ metadata: "nope" })).metadata).toBeUndefined();
+  });
+
+  test("claim/verify operate on a workflow snapshot's plan row (v3 data home)", () => {
+    // Task 5 relocation: lease claim/verify read-write
+    // `workflows/<id>/snapshot.json` — the snapshot's `plans[]` rows are the
+    // legacy PlanRow shape verbatim, and the lease functions are pure row
+    // transitions on that row.
+    const snapshot = {
+      schema_version: 1,
+      id: "wf-1",
+      type: "plan",
+      status: "running",
+      started_at: "2026-08-19T08:00:00Z",
+      updated_at: "2026-08-19",
+      plans: [{ id: "plan-a", title: "Plan A", file: ".mstar/plans/plan-a.md", status: "Todo" }],
+    };
+    const row = (snapshot.plans as Array<Record<string, unknown>>)[0];
+    const claimed = claimLease(row as PlanRow, "cursor:bc-1234", {
+      worktree_path: "/repo-worktrees/plan-a",
+      working_branch: "feature/plan-a",
+    });
+    expect(claimed.ok).toBe(true);
+    expect(claimed.outcome).toBe("claimed");
+    expect(claimed.row.status).toBe("InProgress");
+    // The caller persists the claimed row back into the snapshot's plans[]
+    // (whole-snapshot write under the status write lock).
+    const persisted = snapshot.plans as Array<Record<string, unknown>>;
+    persisted[0] = claimed.row as unknown as Record<string, unknown>;
+    expect(persisted[0].execution_lease).toEqual(claimed.row.execution_lease);
+    const verified = verifyPlanExecutionLease(persisted[0], "plan-a");
+    expect(verified.ok).toBe(true);
+    expect(verified.lease).toEqual(claimed.row.execution_lease);
   });
 });
 
@@ -571,7 +586,8 @@ describe("withStatusWriteLock", () => {
     // Spec: § Same-host exclusive write lock — lease/status mutations run
     // inside a same-host exclusive write lock for the full
     // read-check-replace-verify sequence; the lock serializes concurrent
-    // writers on the same coordination status.json.
+    // writers on the same coordination file (root status.json or a workflow
+    // snapshot).
     const dir = makeDir();
     try {
       const statusPath = join(dir, "status.json");

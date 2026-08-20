@@ -1,7 +1,5 @@
 {
-  "version": 1,
-  "updated_at": "2026-08-08",
-  "plans": "not-an-array",
-  "residual_findings": {},
-  "metadata": {}
+  "version": 2,
+  "updated_at": "2026-08-19",
+  "workflows": "not-an-array"
 }

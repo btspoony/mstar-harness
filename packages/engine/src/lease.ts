@@ -5,11 +5,13 @@
  * Spec sources (each export cites the skill/reference section it enforces):
  * - Lease objects + required fields: `mstar-plan-artifacts`
  *   `references/status-and-residuals.md` § `plans[].execution_lease` +
- *   § Root `metadata.integration_merge_lease` (v1), and the
- *   iteration-worktree-plan-lease maintenance ADR (normative
- *   field names — `holder`, `claimed_at` RFC 3339 UTC with explicit `Z`,
- *   `worktree_path`, `working_branch`; merge lease adds `plan_id`,
- *   `source_branch`, `target_branch`; `session_label` display-only).
+ *   § Snapshot top-level `integration_merge_lease` (v3 — relocated from the
+ *   v1 root `metadata.integration_merge_lease` in the workflow-engine-core
+ *   hard cutover), and the iteration-worktree-plan-lease maintenance ADR
+ *   (normative field names — `holder`, `claimed_at` RFC 3339 UTC with
+ *   explicit `Z`, `worktree_path`, `working_branch`; merge lease adds
+ *   `plan_id`, `source_branch`, `target_branch`; `session_label`
+ *   display-only).
  * - `null` / tombstone lease objects are invalid; writers delete the key on
  *   release, never write `null`: § "Hold, release, and override" + § Agent
  *   prohibitions.
@@ -37,8 +39,10 @@ import type { GateResult, Severity, ValidationResult } from "./core.js";
 import type { PlanRow } from "./status.js";
 
 /**
- * `plans[].execution_lease` (v1) — see spec header. Extra fields (e.g. the
- * real control data's `base_sha`) are allowed and preserved.
+ * `plans[].execution_lease` on a workflow snapshot's plan row (v3 data
+ * home — the snapshot's `plans[]` rows are the legacy PlanRow shape
+ * verbatim) — see spec header. Extra fields (e.g. the real control data's
+ * `base_sha`) are allowed and preserved.
  */
 export type ExecutionLease = {
   holder: string;
@@ -50,7 +54,8 @@ export type ExecutionLease = {
 };
 
 /**
- * Root `metadata.integration_merge_lease` (v1) — see spec header. Absent =
+ * Snapshot top-level `integration_merge_lease` (v3 — relocated from the v1
+ * root `metadata.integration_merge_lease`) — see spec header. Absent =
  * unclaimed; writers delete the key on release (never `null`/tombstone).
  */
 export type IntegrationMergeLease = {
@@ -197,9 +202,9 @@ export function validateExecutionLease(lease: unknown): GateResult {
 }
 
 /**
- * Validate one root `metadata.integration_merge_lease` object
- * (status-and-residuals.md § Root `metadata.integration_merge_lease` (v1)):
- * required `holder` / `claimed_at` / `plan_id` / `source_branch` /
+ * Validate one snapshot top-level `integration_merge_lease` object
+ * (status-and-residuals.md § Snapshot top-level `integration_merge_lease`
+ * (v3)): required `holder` / `claimed_at` / `plan_id` / `source_branch` /
  * `target_branch`; optional `session_label`. Absent = unclaimed; `null` and
  * tombstone objects are invalid (writers delete the key on release).
  * Integration merges into `spec_integration_branch` are serial — one holder
@@ -286,7 +291,8 @@ export function validateIntegrationMergeLease(lease: unknown): GateResult {
  *   (the written lease must itself pass the validator).
  *
  * Pure: returns the resulting row; the caller performs the locked
- * read-check-replace-verify around `status.json` and persists it.
+ * read-check-replace-verify around `workflows/<id>/snapshot.json` (v3 data
+ * home) and persists the whole snapshot.
  */
 export function claimLease(row: PlanRow, holder: string, fields: ClaimLeaseFields): LeaseTransition {
   const lease = row.execution_lease;
@@ -444,52 +450,43 @@ export function canSteal(lease: unknown, holder: string, opts: { userOverride?: 
   return opts.userOverride === true;
 }
 
-/** Execution lease locations found on one plan row (SSOT + legacy read-compat). */
+/** Execution lease location found on one plan row (SSOT). */
 export type ExecutionLeaseLocations = {
   /** SSOT location: `plans[].execution_lease`. */
   row: unknown;
-  /** Legacy/hand-written read-compat location: `plans[].metadata.execution_lease`. */
-  metadata: unknown;
 };
 
 export function planExecutionLeaseLocations(row: Record<string, unknown>): ExecutionLeaseLocations {
-  const meta = row.metadata;
-  const metadataLease =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as Record<string, unknown>).execution_lease
-      : undefined;
-  return { row: row.execution_lease, metadata: metadataLease };
+  return { row: row.execution_lease };
 }
 
 export type LeaseVerifyResult = {
   ok: boolean;
   violations: ValidationResult[];
-  /** The lease chosen for validation (row-level wins) — absent when neither location has one. */
+  /** The lease chosen for validation (row-level) — absent when the row has none. */
   lease?: unknown;
 };
 
 /**
- * Verify a plan's `execution_lease` across its two possible locations
+ * Verify a plan's `execution_lease` at its SSOT location
  * (status-and-residuals.md § `plans[].execution_lease`; ADR
  * 2026-07-22-iteration-worktree-plan-lease.md A3 — the plan row is the
  * claim/hold/release SSOT):
- * - Row-level `plans[].execution_lease` only, valid → OK.
- * - Metadata-only (`plans[].metadata.execution_lease`) → high-severity
- *   `lease.verify.non-ssot-location`: the metadata location is a
- *   legacy/hand-written read-compat fallback, NOT equivalent to SSOT
- *   success. Always a FAIL (non-zero exit) with the lease shape still
- *   validated and reported.
- * - Both locations present → `lease.verify.dual-write`: the row-level lease
- *   wins and is validated; the metadata copy must be deleted.
+ * - Row-level `plans[].execution_lease` present, valid → OK.
  * - Neither present → `lease.verify.missing` (non-InProgress) /
  *   `lease.verify.orphan` (InProgress).
+ *
+ * The v1-era legacy read-compat location (`plans[].metadata.execution_lease`)
+ * is deleted in the v3 cutover: the workflow snapshot is machine-written
+ * (whole-rewrite), so the hand-written fallback is a v1 dead path — no
+ * dual-track.
  *
  * Kept in the engine so every host hook / CLI entry / Slice-2+ consumer
  * imports ONE gate (CLI `mstar lease verify` is a thin wrapper).
  */
 export function verifyPlanExecutionLease(row: Record<string, unknown>, planId: string): LeaseVerifyResult {
-  const { row: rowLease, metadata: metadataLease } = planExecutionLeaseLocations(row);
-  const lease = rowLease !== undefined ? rowLease : metadataLease;
+  const { row: rowLease } = planExecutionLeaseLocations(row);
+  const lease = rowLease;
   if (lease === undefined) {
     if (row.status === "InProgress") {
       return {
@@ -509,29 +506,12 @@ export function verifyPlanExecutionLease(row: Record<string, unknown>, planId: s
         violation(
           "high",
           "lease.verify.missing",
-          `plan ${planId} has no execution_lease (neither plans[].execution_lease nor legacy plans[].metadata.execution_lease)`,
+          `plan ${planId} has no execution_lease at the SSOT location plans[].execution_lease`,
         ),
       ],
     };
   }
   const violations: ValidationResult[] = [];
-  if (rowLease !== undefined && metadataLease !== undefined) {
-    violations.push(
-      violation(
-        "high",
-        "lease.verify.dual-write",
-        "execution_lease present in BOTH plans[].execution_lease (SSOT) and plans[].metadata.execution_lease \u2014 the row-level lease wins; delete the metadata copy to remove the dual write",
-      ),
-    );
-  } else if (rowLease === undefined) {
-    violations.push(
-      violation(
-        "high",
-        "lease.verify.non-ssot-location",
-        "execution_lease found only under plans[].metadata.execution_lease \u2014 the SSOT location is plans[].execution_lease; the metadata location is a legacy/hand-written read-compat fallback, not equivalent to SSOT success (migrate the lease to the plan row)",
-      ),
-    );
-  }
   violations.push(...validateExecutionLease(lease).violations);
   return { ok: violations.length === 0, violations, lease };
 }
@@ -551,11 +531,12 @@ const LOCKDIR_HOLDER_PID = "holder.pid";
 const heldLockDirs = new AsyncLocalStorage<Set<string>>();
 
 /**
- * Same-host exclusive write lock around `status.json` coordination writes
- * (status-and-residuals.md § "Same-host exclusive write lock (control
- * status.json)"; phase-2-worktree-lease.md § "Same-host exclusive write
- * lock"). Lease mutations and plan-status transitions that touch leases MUST
- * run inside this lock for the full read-check-replace-verify sequence.
+ * Same-host exclusive write lock around coordination writes — the root
+ * `status.json` AND `workflows/<id>/snapshot.json` (status-and-residuals.md
+ * § "Same-host exclusive write lock (control status.json)";
+ * phase-2-worktree-lease.md § "Same-host exclusive write lock"). Lease
+ * mutations and plan-status transitions that touch leases MUST run inside
+ * this lock for the full read-check-replace-verify sequence.
  *
  * Acquires by atomic `mkdir` on `<status dir>/.status-write.lockdir/`
  * (success acquires; existing dir → another writer holds the lock). While

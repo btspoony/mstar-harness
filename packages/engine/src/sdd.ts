@@ -17,9 +17,9 @@
  * the engine honors the explicit override in addition to CONTROL_ROOT.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { resolveSddDir } from "./path.js";
+import { resolveSddDir, resolveWorkflowDir } from "./path.js";
 import { findMstarc, parseMstarc } from "./mstarc.js";
 
 /**
@@ -101,12 +101,40 @@ function gitOut(cwd: string, args: string[]): string | null {
 /**
  * Harness probe: a harness dir only counts when it carries `status.json`
  * (that is what distinguishes a real control harness from a linked feature
- * checkout under default gitignore).
+ * checkout under default gitignore) — or, in the v3 workflow-engine world,
+ * an active workflow lifecycle: `workflows/<id>/snapshot.json` presence
+ * proves a live harness even before/without the root `status.json`.
  */
 function probeHarnessWithStatus(root: string): string | null {
   if (isFile(join(root, ".mstar", "status.json"))) return join(root, ".mstar");
   if (isFile(join(root, ".agents", "status.json"))) return join(root, ".agents");
+  if (hasWorkflowSnapshot(join(root, ".mstar"))) return join(root, ".mstar");
+  if (hasWorkflowSnapshot(join(root, ".agents"))) return join(root, ".agents");
   return null;
+}
+
+/** True when `{WORKFLOW_DIR}/<id>/snapshot.json` exists for any id. The
+ * workflow dir comes from the engine resolver (Phase-5 F1): a `.mstarc`
+ * `[config] workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows`
+ * — a custom layout is probed at the same location the runtime writes.
+ * Probe semantics: never throws (a resolver failure falls back to the
+ * default name). */
+function hasWorkflowSnapshot(harnessDir: string): boolean {
+  let workflowsDir: string;
+  try {
+    workflowsDir = resolveWorkflowDir(harnessDir, { harnessDir });
+  } catch {
+    workflowsDir = join(harnessDir, "workflows");
+  }
+  if (!isDirectory(workflowsDir)) return false;
+  try {
+    for (const entry of readdirSync(workflowsDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && isFile(join(workflowsDir, entry.name, "snapshot.json"))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /**

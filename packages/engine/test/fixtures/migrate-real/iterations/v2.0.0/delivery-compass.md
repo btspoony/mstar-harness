@@ -1,0 +1,16 @@
+---
+iteration_id: v2.0.0
+start_date: 2026-08-08
+end_date: 2026-08-08
+status: completed
+iteration_base_branch: main
+target_branch: main
+plans:
+  - 20260808-slice1-engine-foundation
+  - 20260808-slice2-sdd-iteration
+  - 20260808-slice3-dispatch-git-gates
+  - 20260808-slice4-lints-scaffolds
+  - 20260808-slice5-hardgates-close
+---
+
+# v2.0.0 Delivery Compass (fixture: real frontmatter, trimmed body)

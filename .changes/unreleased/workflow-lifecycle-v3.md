@@ -1,0 +1,13 @@
+---
+category: Harness
+packages: root, engine, cli, opencode
+---
+
+- **v3 workflow lifecycle schema (engine)**: lifecycle state moved from root `status.json` `plans[]`/`residual_findings` into per-workflow snapshots (`{HARNESS_DIR}/workflows/<id>/snapshot.json`, `validateWorkflowSnapshot`) and project registers (`{HARNESS_DIR}/projects/<id>/residuals.json`, `validateProjectRegister`); the v2 root keeps only `version` / `updated_at` / active `workflows[]`. New dir resolvers `resolveWorkflowDir` / `resolveProjectDir`.
+- **`mstar migrate` (CLI)**: one-shot v1→v2 tree migration (`migrateHarnessTree` / `applyMigratePlan`) — archives the v1 root to `archived/status.v1.json`, lifts every lifecycle into `workflows/<id>/snapshot.json`, seeds the project register + roadmap, replaces the root with the v2 commit point; idempotent re-run no-op; `--dry-run` prints the step plan and surfaces apply-time validator violations as warnings; exit codes 0/1/2; `--path` defaults to the resolved `{HARNESS_DIR}`.
+- **CLI/tools/hook hard cutover to v2 inputs**: `status validate` (v2 root or snapshot), `status tech-debt` / `status findings-cleanup` (project register), `lease verify` / `lease verify-integration` / `iteration gate` / `worktree check` (workflow snapshot via `--workflow <id>`), `path resolve` (+ workflow/project dirs); `status archive-residuals` removed (error stub names the register close flow); `tools/mstar_*` and the omp/opencode Gate 1 hooks validate the three v3 coordination documents, with lazy-loaded P1-only engine exports so a stale published engine degrades to a warning instead of dropping the hook/tool.
+
+<!-- CN -->
+- **v3 工作流生命周期 schema（engine）**：生命周期状态从根 `status.json` 的 `plans[]` / `residual_findings` 迁入按工作流的快照（`{HARNESS_DIR}/workflows/<id>/snapshot.json`，`validateWorkflowSnapshot`）与项目 register（`{HARNESS_DIR}/projects/<id>/residuals.json`，`validateProjectRegister`）；v2 根文件只保留 `version` / `updated_at` / 活跃 `workflows[]`。新增目录解析器 `resolveWorkflowDir` / `resolveProjectDir`。
+- **`mstar migrate`（CLI）**：v1→v2 树的一次性迁移（`migrateHarnessTree` / `applyMigratePlan`）——v1 根归档到 `archived/status.v1.json`，每个生命周期提升为 `workflows/<id>/snapshot.json`，播种项目 register 与 roadmap，以 v2 根替换为提交点；重跑为幂等 no-op；`--dry-run` 打印步骤计划并把 apply 期校验违规作为 warning 呈现；退出码 0/1/2；`--path` 默认取解析到的 `{HARNESS_DIR}`。
+- **CLI / tools / hook 硬切到 v2 输入**：`status validate`（v2 根或快照）、`status tech-debt` / `status findings-cleanup`（项目 register）、`lease verify` / `lease verify-integration` / `iteration gate` / `worktree check`（经 `--workflow <id>` 的工作流快照）、`path resolve`（新增 workflow/project 目录）；`status archive-residuals` 移除（报错桩指向 register 关闭流程）；`tools/mstar_*` 与 omp/opencode Gate 1 hook 校验三类 v3 协调文档，P1-only engine 导出改为懒加载，旧版已发布 engine 下降级为警告而非整体丢失 hook/工具。

@@ -80,7 +80,7 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 3. **Write** — path + frontmatter（SSOT `references/schema.yaml`）+ body（`assets/resolution-template.md`）+ YAML validate
 4. **Discoverability** — 若 root `AGENTS.md`/`CLAUDE.md` 未提 `{KNOWLEDGE_DIR}`，提议最小补充（需用户同意；拒绝则仅跳过该编辑，doc 仍写）
 5. **CONCEPTS.md** — 项目特定领域词满足 qualifying bar 时提议入 `CONCEPTS.md`（规则见 `references/concepts-vocabulary.md`）；全仓 bootstrap 归 `mstar-compound-refresh`
-6. **Indexes** — `{KNOWLEDGE_DIR}/README.md` 加行（Document / Source Plan / Description / Status）；可选 `status.json` `knowledge_refs`。**iteration-close gate**：每篇新 doc 必须 Phase 6
+6. **Indexes** — `{KNOWLEDGE_DIR}/README.md` 加行（Document / Source Plan / Description / Status）；可选 workflow snapshot plan 行 `metadata.knowledge_refs`（`{WORKFLOW_DIR}/<id>/snapshot.json`）。**iteration-close gate**：每篇新 doc 必须 Phase 6
 7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐 `/pm compound-refresh <scope>`（不自动跑，仅 flag）
 
 > **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertIndexRows } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert every doc has its `{KNOWLEDGE_DIR}/README.md` index row (Phase 6 Indexes). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
@@ -92,7 +92,7 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 ## Skill dependencies
 
 - **`mstar-plan-conventions`** — path symbols（`{KNOWLEDGE_DIR}`、`{HARNESS_DIR}`）
-- **`mstar-plan-artifacts`** — `status.json` linking、index maintenance
+- **`mstar-plan-artifacts`** — workflow snapshot / project register linking、index maintenance
 - **`mstar-compound-refresh`** — capture 后知识维护；CONCEPTS.md 全仓 bootstrap
 
 ## NOT to do

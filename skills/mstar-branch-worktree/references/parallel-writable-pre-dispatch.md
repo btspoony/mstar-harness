@@ -6,8 +6,8 @@ This reference is **L2** worktree isolation: **same `plan_id`**, **same business
 
 **L1 (cross-plan)** is separate and stacks on top when iteration Phase 2 defaults apply:
 
-- A **control worktree** on `spec_integration_branch` (`metadata.control_worktree_path`) holds status/SDD SSOT and serial integration merge.
-- Each concurrently active plan uses a **distinct feature worktree** (`execution_lease.worktree_path` **≠** `control_worktree_path`) with verified `plans[].execution_lease` before writable dispatch.
+- A **control worktree** on `spec_integration_branch` (snapshot `control_worktree_path`) holds status/SDD SSOT and serial integration merge.
+- Each concurrently active plan uses a **distinct feature worktree** (`execution_lease.worktree_path` **≠** `control_worktree_path`) with a verified snapshot `plans[].execution_lease` before writable dispatch.
 - Claim/hold/release/merge rules → **`mstar-iteration`** `references/phase-2-worktree-lease.md` (not repeated here).
 
 When **one plan** runs **≥2** concurrent writable tracks, **L2 still applies** inside that plan even if L1 leases already isolate plans from each other. Run this checklist **per plan** that has multiple parallel implement tracks.

@@ -2,7 +2,7 @@
 
 > Loaded by `mstar-iteration` SKILL.md when entering Phase 3. **Read `mstar-harness-core` first.** Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入本 Phase。
 
-PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 root `metadata.target_branch`。入口：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。
+PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支上运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 snapshot `branch.target`（`target_branch`）。入口：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。
 
 **Close Done 定义**：§3.1→§3.5 全部完成；compass frontmatter 写入 `status: completed` + `end_date`；每篇新增 knowledge doc 已登记 `{KNOWLEDGE_DIR}/README.md`。只在 final plan 中写了 compound / roadmap / PR 说明，不算 iteration-close 完成。
 
@@ -30,9 +30,9 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支�
 
 **STOP**: 打印下方 checklist，且全部为 `[x]` 后，才可进入 §3.2 Compound。
 
-- [ ] 所有 compass 中登记的 plan 在 `{HARNESS_DIR}/status.json` 均为 `Done`
-- [ ] 所有 plan 的 residual findings 已收口：优先 empty open 列表；若仍有 open R#，须均为 Phase 2 `zero-residual` 允许的 blocker-defer + roadmap，或已 closed/accepted/waived 归档（见 `mstar-plan-artifacts` Findings cleanup modes）
-- [ ] compass `## Plans` 表状态列已与 `status.json` 同步
+- [ ] 所有 compass 中登记的 plan 在 workflow snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）均为 `Done`
+- [ ] 所有 plan 的 residual findings 已收口：优先 empty register 条目（`projects/<id>/residuals.json` → `entries[<plan-id>]`）；若仍有 open R#，须均为 Phase 2 `zero-residual` 允许的 blocker-defer + roadmap，或已 closed（`lifecycle` / `closed_at` / `closure_note`，见 `mstar-plan-artifacts` Findings cleanup modes）
+- [ ] compass `## Plans` 表状态列已与 snapshot 同步
 - [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
 - [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + close 占位节）
 
@@ -57,7 +57,7 @@ PM 批量触发后须：
 1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：
    - current iteration 行标记为 **`delivered`**（或等价明确措辞）
    - next iteration 更新为即将开始的内容、触发条件、owner
-2. 若 `status.json` 中有 `plans[].metadata.roadmap` 字段，同步更新
+2. 若项目层 roadmap（`{PROJECT_DIR}/<id>/roadmap.md`）存在，同步更新（frontmatter `status` / goal-item checkboxes）；若 snapshot plan 行含 `metadata.roadmap` 字段，同步更新
 3. 若存在 deferred-features / roadmap tracker 类文档，按项目惯例刷新
 4. 若 `STRATEGY.md` 存在，可更新 `## Decision Log`（重大架构决策时）
 
@@ -78,7 +78,7 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 - [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；tracker / STRATEGY 已按需更新
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary + Compound Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
-- [ ] PR base = `metadata.target_branch`（与 compass frontmatter 一致）；**不是**未记录的 `main`
+- [ ] PR base = snapshot `branch.target`（`target_branch`，与 compass frontmatter 一致）；**不是**未记录的 `main`
 
 **Commit 到 integration 分支**：
 
@@ -88,7 +88,7 @@ git commit -m "chore(iteration): close <iteration-id> — compound round, roadma
 git push origin <spec_integration_branch>
 ```
 
-PR 目标使用 root `metadata.target_branch`；缺失时停止并补齐，不得默认 `main`。
+PR 目标使用 snapshot `branch.target`；缺失时停止并补齐，不得默认 `main`。
 
 ## 3.6 可选：触发 compound-refresh
 

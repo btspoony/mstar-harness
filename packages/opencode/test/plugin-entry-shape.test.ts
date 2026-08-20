@@ -22,7 +22,7 @@ describe("OpenCode plugin module entry", () => {
     expect(pluginModule.server).toBe(MorningStarHarnessPlugin);
   });
 
-  test("helpers stay callable but must not be treated as the plugin entry", () => {
+  test("helpers stay callable but must not be treated as the plugin entry", async () => {
     // Simulates what OpenCode would observe if it fell through to getLegacyPlugins:
     // calling validators with a PluginInput-shaped object must not throw, and
     // validateStatusWrite must return null (not a Hooks object).
@@ -32,7 +32,7 @@ describe("OpenCode plugin module entry", () => {
       worktree: "/tmp",
       project: {},
     };
-    expect(validateStatusWrite(fakePluginInput as unknown as string)).toBeNull();
+    expect(await validateStatusWrite(fakePluginInput as unknown as string)).toBeNull();
     expect(validateDispatchAssignment(fakePluginInput as unknown as string)).toEqual({
       ok: true,
       violations: [],

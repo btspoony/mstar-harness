@@ -2,23 +2,47 @@
  * mstar_worktree_check — run the engine L1 / L2 pre-dispatch worktree
  * checklists (`l1PreDispatchCheck` / `l2PreDispatchCheck`).
  *
- * kind=l1 mirrors the status.json L1 fields (metadata.control_worktree_path
- * + plans[].execution_lease) as optional params — missing values are passed
- * as "" so the engine emits its structured violations instead of throwing.
+ * kind=l1 in v3 reads its inputs from the workflow snapshot
+ * (`{WORKFLOW_DIR}/<workflowId>/snapshot.json`, resolved from the
+ * session cwd): the plan row's `execution_lease` (worktree_path +
+ * working_branch) and the snapshot-level `control_worktree_path` (the
+ * v1 root-`metadata` source is gone) — `controlWorktreePath` may still be
+ * passed as an explicit override. The workflow dir comes from the engine
+ * resolver (Phase-5 F1): a `.mstarc` `[config] workflow_dir` declaration
+ * wins, else `{HARNESS_DIR}/workflows` — a custom layout is READ at the
+ * same location it is written. Missing values are passed as "" so the
+ * engine emits its structured violations instead of throwing.
  * kind=l2 takes the parallel writable `tracks` (absolute worktreePath +
  * Working branch per track); the zod shape guards the L2PreDispatchInput
  * contract at the parameter boundary. No local rule logic.
+ *
+ * `workflowId` is a single safe path component — reject separators and
+ * `..` before joining (parity with the CLI `resolveSnapshotPath` and
+ * `mstar_lease_verify`, fix-wave W-A). `WORKFLOW_SNAPSHOT_FILE` is a
+ * P1-only engine export absent from the published floor `^2.0.2`, read
+ * from a DYNAMIC engine import so a stale engine yields an explicit
+ * upgrade error instead of a module-link failure that silently drops the
+ * tool (qc3 F-001 / fix-wave W-B). `resolveWorkflowDir` is likewise
+ * P1-only: it is loaded dynamically and a stale engine (or a resolver
+ * failure) falls back to the DEFAULT `workflows` name (same degrade as
+ * `mstar_status_validate`).
  */
-import { l1PreDispatchCheck, l2PreDispatchCheck } from "@mstar-harness/engine";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import {
+  l1PreDispatchCheck,
+  l2PreDispatchCheck,
+  readJson,
+  resolveHarnessDir,
+} from "@mstar-harness/engine";
 import type { L1PreDispatchInput, ValidationResult, WorktreeTrack } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
 type Params = {
   kind: "l1" | "l2";
-  controlWorktreePath?: string;
-  leaseWorktreePath?: string;
-  leaseWorkingBranch?: string;
+  workflowId?: string;
   planId?: string;
+  controlWorktreePath?: string;
   tracks?: WorktreeTrack[];
 };
 
@@ -34,20 +58,88 @@ function result(text: string, details: unknown, isError: boolean): AgentToolResu
   return out;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Workflow-id guard (fix-wave W-A): reject "", ".", "..", separators. */
+function assertSafeWorkflowId(workflowId: string): string | null {
+  if (workflowId === "" || workflowId === "." || workflowId === ".." || workflowId.includes("/") || workflowId.includes("\\")) {
+    return `mstar_worktree_check: invalid workflowId ${JSON.stringify(workflowId)}`;
+  }
+  return null;
+}
+
+/** The P1-only v3 workflow-dir resolver (custom `.mstarc` `workflow_dir`
+ * support, Phase-5 F1) — same stale-engine rationale as the dynamic
+ * snapshot-file import: dynamic import, `null` on missing export / import
+ * failure (snapshot resolution falls back to the DEFAULT `workflows`
+ * name). */
+type WorkflowDirResolver = (startDir: string, opts?: { harnessDir?: string }) => string;
+
+let cachedWorkflowDirResolver: Promise<WorkflowDirResolver | null> | null = null;
+
+async function loadWorkflowDirResolver(): Promise<WorkflowDirResolver | null> {
+  cachedWorkflowDirResolver ??= import("@mstar-harness/engine")
+    .then((mod) => (typeof mod.resolveWorkflowDir === "function" ? mod.resolveWorkflowDir : null))
+    .catch(() => null);
+  return cachedWorkflowDirResolver;
+}
+
+/** Test seam (smoke scripts): replace `load` to simulate an engine build
+ * without the P1 dir resolver (null — default-layout resolution). */
+export const workflowDirResolverLoader: { load: () => Promise<WorkflowDirResolver | null> } = {
+  load: loadWorkflowDirResolver,
+};
+
+/** Resolve `{WORKFLOW_DIR}` for the snapshot (Phase-5 F1): the engine
+ * resolver honors a `.mstarc` `[config] workflow_dir` declaration; on a
+ * stale engine (no resolver) or a resolver failure the DEFAULT
+ * `{HARNESS_DIR}/workflows` name applies (same degrade as
+ * `mstar_status_validate`). */
+async function resolveWorkflowDirOf(harnessDir: string): Promise<string> {
+  const resolver = await workflowDirResolverLoader.load();
+  if (resolver === null) return join(harnessDir, "workflows");
+  try {
+    return resolver(harnessDir, { harnessDir });
+  } catch {
+    return join(harnessDir, "workflows");
+  }
+}
+
+/** Dynamic engine import guard for the P1-only `WORKFLOW_SNAPSHOT_FILE`
+ * export (qc3 F-001 / fix-wave W-B): missing → explicit upgrade error. */
+async function loadSnapshotFile(): Promise<{ snapshotFile: string } | { error: AgentToolResult }> {
+  // Dynamic import (fix-wave W-B): a static named import of
+  // WORKFLOW_SNAPSHOT_FILE would fail at module link on published engines
+  // (^2.0.2 floor) and silently drop the tool from /extensions.
+  const engine = await import("@mstar-harness/engine");
+  const snapshotFile = engine.WORKFLOW_SNAPSHOT_FILE;
+  if (typeof snapshotFile !== "string") {
+    return {
+      error: result(
+        "installed @mstar-harness/engine lacks WORKFLOW_SNAPSHOT_FILE — upgrade the engine (next release); CLI fallback: mstar worktree check",
+        { ok: false },
+        true,
+      ),
+    };
+  }
+  return { snapshotFile };
+}
+
 export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
   return {
     name: "mstar_worktree_check",
     label: "Check worktree dispatch readiness",
     description:
-      "Run the engine pre-dispatch worktree checklists: kind=l1 verifies the cross-plan L1 gate (control worktree recorded, feature worktree exists, lease worktree != control, checked-out branch matches the lease working branch); kind=l2 verifies the within-plan L2 gate (each parallel writable track has a distinct absolute worktree path and matching checked-out branch). " +
+      "Run the engine pre-dispatch worktree checklists: kind=l1 verifies the cross-plan L1 gate from the workflow snapshot (control worktree path from snapshot control_worktree_path, feature worktree from the plan row execution_lease, lease worktree != control, checked-out branch matches the lease working branch); kind=l2 verifies the within-plan L2 gate (each parallel writable track has a distinct absolute worktree path and matching checked-out branch). " +
       "Use before any writable dispatch, especially parallel multi-track dispatch. Returns one line per violation as [severity] code: message (fix: …).",
     parameters: pi.zod
       .object({
         kind: pi.zod.enum(["l1", "l2"]),
-        controlWorktreePath: pi.zod.string().optional(),
-        leaseWorktreePath: pi.zod.string().optional(),
-        leaseWorkingBranch: pi.zod.string().optional(),
+        workflowId: pi.zod.string().optional(),
         planId: pi.zod.string().optional(),
+        controlWorktreePath: pi.zod.string().optional(),
         tracks: pi.zod
           .array(pi.zod.object({ worktreePath: pi.zod.string(), workingBranch: pi.zod.string() }))
           .optional(),
@@ -65,18 +157,59 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
             !gate.ok,
           );
         }
+        if (!params?.workflowId) {
+          return result("mstar_worktree_check: kind=l1 requires workflowId (the snapshot supplies the L1 inputs)", { ok: false }, true);
+        }
+        const guardError = assertSafeWorkflowId(params.workflowId);
+        if (guardError !== null) return result(guardError, { ok: false }, true);
+        const harnessDir = resolveHarnessDir(pi.cwd);
+        if (harnessDir === null) {
+          return result(
+            `no harness directory found from "${pi.cwd}" (looked for .mstar/ / .agents/ / .plans/ / plans/ walking up)`,
+            { cwd: pi.cwd },
+            true,
+          );
+        }
+        const snapshotFileLoad = await loadSnapshotFile();
+        if ("error" in snapshotFileLoad) return snapshotFileLoad.error;
+        const workflowDir = await resolveWorkflowDirOf(harnessDir);
+        const snapshotPath = join(workflowDir, params.workflowId, snapshotFileLoad.snapshotFile);
+        if (!existsSync(snapshotPath)) {
+          return result(`workflow snapshot not found: ${snapshotPath}`, { workflow_id: params.workflowId, snapshot_path: snapshotPath }, true);
+        }
+        const doc = readJson(snapshotPath);
+        const rows = Array.isArray(doc.plans) ? (doc.plans as unknown[]) : [];
+        let row: Record<string, unknown> | undefined;
+        if (params?.planId !== undefined) {
+          row = rows.find(
+            (r): r is Record<string, unknown> =>
+              isPlainObject(r) && (r.plan_id === params.planId || r.id === params.planId),
+          );
+        } else if (rows.length === 1 && isPlainObject(rows[0])) {
+          row = rows[0];
+        }
+        if (row === undefined) {
+          const planLabel = params?.planId ?? "(sole row)";
+          return result(
+            `plan "${planLabel}" not found in ${snapshotPath}`,
+            { kind: "l1", workflow_id: params.workflowId, plan_id: params?.planId ?? null, snapshot_path: snapshotPath },
+            true,
+          );
+        }
+        const lease = isPlainObject(row.execution_lease) ? row.execution_lease : {};
+        const planId = String(row.plan_id ?? row.id ?? params?.planId ?? "");
         const input: L1PreDispatchInput = {
-          controlWorktreePath: params?.controlWorktreePath ?? "",
-          leaseWorktreePath: params?.leaseWorktreePath ?? "",
-          leaseWorkingBranch: params?.leaseWorkingBranch ?? "",
-          planId: params?.planId ?? "",
+          controlWorktreePath: params?.controlWorktreePath ?? String(doc.control_worktree_path ?? ""),
+          leaseWorktreePath: String(lease.worktree_path ?? ""),
+          leaseWorkingBranch: String(lease.working_branch ?? ""),
+          planId,
         };
         const gate = l1PreDispatchCheck(input);
         return result(
           gate.ok
-            ? `l1 pre-dispatch check OK${input.planId ? ` (plan "${input.planId}")` : ""}`
+            ? `l1 pre-dispatch check OK (plan "${planId}", workflow "${params.workflowId}")`
             : violationLines(gate.violations),
-          { kind: "l1", plan_id: input.planId || null, ok: gate.ok, violations: gate.violations, input },
+          { kind: "l1", workflow_id: params.workflowId, plan_id: planId, ok: gate.ok, violations: gate.violations, input },
           !gate.ok,
         );
       } catch (error) {

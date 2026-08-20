@@ -6,7 +6,7 @@
 
 每个 plan 的详细内容（任务清单、决策、Sign-off）。
 
-**命名（推荐）**：`<plan-id>-<plan-name>.md`（例：`01-data-infrastructure.md`）。`status.json` 中 `file` 字段填相对仓库根或 `{PLAN_DIR}` 下的实际路径。
+**命名（推荐）**：`<plan-id>-<plan-name>.md`（例：`01-data-infrastructure.md`）。snapshot plan 行的 `file` 字段填相对仓库根或 `{PLAN_DIR}` 下的实际路径。
 
 ## Review bundle（`{SDD_DIR}/review/`）
 
@@ -48,18 +48,18 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `QA gate` / `QA mode`
   - evidence reused vs newly run checks
   - related R# closure recommendations
-- `{HARNESS_DIR}/status.json` root `residual_findings[<plan-id>]`: open R# machine SSOT.
+- `{PROJECT_DIR}/<id>/residuals.json` (default `{HARNESS_DIR}/projects/<id>/`): open R# machine SSOT — `entries[<plan-id>]`.
 
 The durable summary is not a paste of raw reports. It is a small gate record sufficient for handoff after `{SDD_DIR}` is unavailable.
 
 ## Residual findings（R#）：权威在哪、和主 plan 谁先谁后？
 
-- **Open 条目的单一事实来源（SSOT）**是 **`{HARNESS_DIR}/status.json`** 根级 **`residual_findings[<plan-id>]`**（与 `plans` 平级；canonical 见 `mstar-plan-artifacts` **SKILL.md** 开篇；字段见 `mstar-plan-artifacts/references/status-and-residuals.md`）。**同一工作副本内**的会话 handoff、关闭与归档流程**以该数组为准**（本地 SSOT，默认 gitignored）；**跨 clone** 须持久的 residual 须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 等（见 `mstar-plan-conventions`「Git 跟踪策略」）。
+- **Open 条目的单一事实来源（SSOT）**是 **`{PROJECT_DIR}/<id>/residuals.json`**（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程用 `_default`）的 **`entries[<plan-id>]`**（canonical 见 `mstar-plan-artifacts` **SKILL.md** 开篇；字段见 `mstar-plan-artifacts/references/status-and-residuals.md`）。**同一工作副本内**的会话 handoff、关闭流程**以该数组为准**（本地 SSOT，默认 gitignored）；**跨 clone** 须持久的 residual 须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 等（见 `mstar-plan-conventions`「Git 跟踪策略」）。
 - **推荐操作顺序**（避免 plan 与 JSON 两套 ID 漂移）：
   1. `project-manager` 读完 review bundle 并完成「QC 三审轻量汇总」：对 finding **去重合并**，为每条待跟踪项分配**稳定 `id`**（如 `R1`、`R2`，全 plan 内唯一）。
-  2. **立即**将上述条目写入根级 **`residual_findings[<plan-id>]`**（含 `source` 指向 reviewer seat + bundle basename + finding id + review range，便于回溯）；**勿**与 legacy 侧双写（见 `mstar-plan-conventions` **SKILL.md** 开篇）。
-  3. **可选**：在主 plan 中增加 **「Residual findings（索引）」** 小节，**仅复述** `id` + 短标题 + 决策摘要，并写明「**权威列表见** `status.json` 根级 `residual_findings[<plan-id>]`（见 `mstar-plan-conventions` **SKILL.md** 开篇）」。**不要**只在主 plan 里「发明」R# 而不写回 SSOT。
-- **不要**反过来把主 plan 当作唯一登记处：若仅更新 plan、`status.json` 未同步，下一任 agent **无法**依赖 SSOT 继承债务状态。
+  2. **立即**将上述条目写入 register **`entries[<plan-id>]`**（含 `source` 指向 reviewer seat + bundle basename + finding id + review range，便于回溯；`source_plan` = plan id，`registered_at` = 当日）；v1 根级 `residual_findings` 仅 legacy 只读，**勿**双写。
+  3. **可选**：在主 plan 中增加 **「Residual findings（索引）」** 小节，**仅复述** `id` + 短标题 + 决策摘要，并写明「**权威列表见** `projects/<id>/residuals.json` `entries[<plan-id>]`（见 `mstar-plan-conventions` **SKILL.md** 开篇）」。**不要**只在主 plan 里「发明」R# 而不写回 SSOT。
+- **不要**反过来把主 plan 当作唯一登记处：若仅更新 plan、register 未同步，下一任 agent **无法**依赖 SSOT 继承债务状态。
 
 ## QC 三审触发时机（单 plan · 多 batch）
 
@@ -79,21 +79,21 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 
 **QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），默认 **仅可** Write/Edit Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。全局 agent 提示词应允许 `.mstar/sdd/**`、`.agents/sdd/**` 及 worktree 下对应路径。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
 
-**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（本地会话 SSOT；默认 gitignored）并在当轮更新 `{HARNESS_DIR}/status.json` 的 open residuals（本地 SSOT，默认 gitignored）。**跨 clone 须持久的** residual 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md`（见 `mstar-plan-conventions`「Git 跟踪策略」）— **勿**默认 `git add` `status.json` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
+**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（本地会话 SSOT；默认 gitignored）并在当轮更新 project register 的 open residuals（本地 SSOT，默认 gitignored）。**跨 clone 须持久的** residual 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md`（见 `mstar-plan-conventions`「Git 跟踪策略」）— **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
 
 ## 主 plan 内任务清单（Markdown checkbox）
 
 - **谁应更新**：`fullstack-dev` / `frontend-dev` / `fullstack-dev-2`、`qa-engineer`、`ops-engineer`、`architect`、`product-manager` 在**完成本人 Assignment 范围内的工作后**，须在主 plan（`<plan-id>-<plan-name>.md`）中把**对应条目**的 Markdown 任务标记为已完成（常见：`- [ ]` → `- [x]`；若项目用其它清单记号，保持同文件内一致）。与 Completion Report **并列**，作为跨会话可核对的**落盘痕迹**。
 - **范围**：**只勾选与当前任务直接对应、且已由本角色交付证据支撑的条目**；不得代为勾选他人负责或未完工项。若正文用分段、Owner 或角色标签区分任务，以 Assignment 与文内约定为准。
-- **与 `status.json` / frontmatter 的关系**：勾选任务**不**等于整条计划收口。`plans[].status` 及主 plan frontmatter 的 **`Done`** 仍**仅** `project-manager` / `qa-engineer`（见「状态更新权限」）。`architect` / `product-manager` **不得**擅自将整条计划标为 `Done`；是否将 `status.json` 推进为 `InReview` 等仍按下文「状态更新权限」与 Assignment。
+- **与 snapshot / frontmatter 的关系**：勾选任务**不**等于整条计划收口。snapshot `plans[].status` 及主 plan frontmatter 的 **`Done`** 仍**仅** `project-manager` / `qa-engineer`（见「状态更新权限」）。`architect` / `product-manager` **不得**擅自将整条计划标为 `Done`；是否将 snapshot 推进为 `InReview` 等仍按下文「状态更新权限」与 Assignment。
 - **`qc-specialist*`**：**不得**修改主 plan（宿主仅允许 Assignment 指定的 review bundle `.md`）；审查结论落在 `{SDD_DIR}/review/` 内。若主 plan 需新增或勾选与审查相关的条目，由 `project-manager` 或 Assignment 明确授权的角色据报告回写。
 - **只读角色**：不直接改主 plan；将建议交给 `project-manager` 代为更新清单。
 
-Plan 正文与 `status.json` 必须保持一致；不一致时以 `status.json` 的条目状态为准并尽快纠正正文或登记 notes。
+Plan 正文与 snapshot 行必须保持一致；不一致时以 snapshot `plans[].status` 为准并尽快纠正正文或登记 notes（`workflows/<id>/notes.jsonl`）。
 
 ## Done 标记方式
 
 1. **Frontmatter**（首选）：添加 `status: Done` 和可选的 `done_at: YYYY-MM-DD`。
 2. **文件名**（备选）：重命名为 `DONE__<name>.md` 或 `<name>.done.md`。
 
-同时更新 `status.json` 对应条目。
+同时更新 snapshot 对应 plan 行（`workflows/<id>/snapshot.json` → `plans[]`）与根 `status.json` `workflows[]` 登记。

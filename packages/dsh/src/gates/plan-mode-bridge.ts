@@ -14,10 +14,12 @@
  *
  * Policy (Task 1 definition, T1-verified): plan mode is ON iff an active
  * iteration steers (compass `status: active|locked` — {@link
- * steeringCompass}, goal-bridge parity) AND status.json carries ≥1 plan row
- * in the `Todo` state (the Prepare window — a plan registered, not yet
- * started; the engine plan-status vocabulary, `status.ts:117`). Otherwise
- * the target is OFF.
+ * steeringCompass}, goal-bridge parity) AND the SELECTED workflow snapshot
+ * carries ≥1 plan row in the `Todo` state (the Prepare window — a plan
+ * registered, not yet started; the engine plan-status vocabulary,
+ * `status.ts:117` — v3 relocation: the root v1 `plans[]` home is gone, the
+ * probe reads `workflows/<id>/snapshot.json` rows). Otherwise the target
+ * is OFF.
  *
  * The bridge mirrors the ROOT session only ({@link isRootLikeAgent} —
  * `session.header.parentSession === undefined`; conversation forks
@@ -38,13 +40,18 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { readJson } from '@mstar-harness/engine'
+import { readJson, WORKFLOW_SNAPSHOT_FILE } from '@mstar-harness/engine'
 import { asRecord, STATUS_FILE } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 // The shared root discriminator, the active-iteration compass scan and the
 // `subagent/start` root walk (explicit no-barrel imports — plan Task 4b;
 // goal-bridge.ts does not import this module, so there is no cycle).
 import { isRootLikeAgent, rootAgentOf, steeringCompass } from './goal-bridge.ts'
+// v3 relocation (plan `20260819-workflow-dsh-viz` Task 3): the Todo probe
+// reads the SELECTED workflow snapshot's plan rows — the root v1 `plans[]`
+// home is gone. The bridge is a READ-only mirror, so the read resolver
+// (active → terminal → error) applies.
+import { resolveReadWorkflow } from './workflow-selection.ts'
 
 /** Logger label for the planMode bridge (dsh logger naming: `<scope>/<subject>`). */
 export const PLAN_MODE_BRIDGE_LOGGER = 'mstar/plan-mode-bridge'
@@ -107,19 +114,25 @@ interface AgentsView {
 /* ---------------------------------- the policy ---------------------------------- */
 
 /**
- * Whether status.json carries a Prepare window: ≥1 plan row with
- * `status: 'Todo'` (a plan registered, not yet started). Missing or empty
- * status.json, a missing `plans` array, or an unreadable document → `false`
- * (advisory degrade — the status gate already refuses invalid writes, and a
- * broken read must never force the flag on).
+ * Whether the SELECTED workflow snapshot carries a Prepare window: ≥1 plan
+ * row with `status: 'Todo'` (a plan registered, not yet started). The root
+ * v1 `plans[]` home is gone — the probe reads the selected workflow's
+ * snapshot (`workflows/<id>/snapshot.json`, compass Catalog selection rule
+ * via `resolveReadWorkflow`). Missing status.json / selection error /
+ * unreadable snapshot / a missing `plans` array → `false` (advisory degrade
+ * — the status gate already refuses invalid writes, and a broken read must
+ * never force the flag on).
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  */
 function hasPrepareWindow(harnessDir: string): boolean {
   const statusPath = join(harnessDir, STATUS_FILE)
   if (!existsSync(statusPath)) return false
+  const selection = resolveReadWorkflow(harnessDir)
+  if (selection.kind === 'error') return false
+  const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
   let doc: Record<string, unknown>
   try {
-    doc = readJson(statusPath)
+    doc = readJson(snapshotPath)
   } catch {
     return false
   }

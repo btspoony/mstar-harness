@@ -33,7 +33,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -41,7 +41,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusSource } from '../src/index.ts'
-import { bootApp, FakeLoaderRegistry, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -258,8 +258,10 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
 })
 
 describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4 §5 D5, plan 20260811-panel-f4-iteration-zone Task 1)', () => {
-  /** Minimal status.json the iteration-gate row needs (empty plans → engine emits phase-2-execute + ok:true). */
-  const VALID_STATUS_JSON = JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} })
+  /** The iteration workflow id the steering compass registers. */
+  const ITERATION_WORKFLOW = 'iter-20260811-catalog-compass'
+  /** Minimal v2 root status.json (one active iteration workflow). */
+  const VALID_STATUS_JSON = v2Root([v2WorkflowEntry(ITERATION_WORKFLOW, 'iteration')])
 
   /** A minimal engine-shape-VALID delivery-compass frontmatter (spec D5 — the steering status value is the signal). */
   function compassDoc(status: 'active' | 'locked' | 'completed'): string {
@@ -284,6 +286,7 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': VALID_STATUS_JSON,
+      [`workflows/${ITERATION_WORKFLOW}/snapshot.json`]: v2Snapshot(ITERATION_WORKFLOW, { type: 'iteration' }),
       'iterations/iter-20260811-catalog-compass/delivery-compass.md': compassDoc(status),
     })
     const app = booted = await bootApp({ root })
@@ -319,13 +322,14 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
 })
 
 describe('mstar-engine-status catalog — plan iterationRefs (plan 20260813-panel-quick-fixes Task 2)', () => {
-  /** Boot with a status.json whose plans carry (or omit) `metadata.iteration_refs`, then return the state section. */
+  /** Boot with a v2 tree whose selected snapshot plans carry (or omit) `metadata.iteration_refs`, then return the state section. */
   async function stateWithPlans(plans: unknown[]): Promise<NonNullable<MstarEngineStatusSource['state']>> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-iterationrefs-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-13', plans, residual_findings: {}, metadata: {} }),
+      'status.json': v2Root([v2WorkflowEntry('wf-iterrefs')]),
+      'workflows/wf-iterrefs/snapshot.json': v2Snapshot('wf-iterrefs', { plans }),
     })
     const app = booted = await bootApp({ root })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
@@ -370,13 +374,20 @@ describe('catalog TTL invalidation — ledger change refreshes within the TTL (p
 Implement the invalidation.
 `
 
-  it('a ledger change within the TTL invalidates the cache — the next pre-step rebuilds fresh sources and the digest re-emits the changed row (AC-2)', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-invalidate-'))
+  /** A v2 tree with one active workflow (`wf-1`) and an empty workflow ledger. */
+  async function seedV2Tree(root: string): Promise<string> {
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
     })
+    return harnessDir
+  }
+
+  it('a ledger change within the TTL invalidates the cache — the next pre-step rebuilds fresh sources and the digest re-emits the changed row (AC-2)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-invalidate-'))
+    const harnessDir = await seedV2Tree(root)
     // REAL TTL (default 60000): a refresh at the second pre-step can only
     // come from the ledger-change invalidation — never from a TTL expiry.
     const app = booted = await bootApp({ root })
@@ -388,12 +399,15 @@ Implement the invalidation.
 
     // One successful ledger record — the apply-bound invalidator deletes the
     // workspace's catalog cache entry (the TTL itself is untouched).
-    plugin.recordDispatch({ harnessDir: app.harnessDir, prompt: ASSIGNMENT, violations: [], hard: false })
+    // Final-state (Task 2 writer cutover): the record itself lands in the
+    // ACTIVE workflow dir — the catalog reads the SAME file, so the
+    // invalidation observable is the record's own line (no out-of-band write).
+    plugin.recordDispatch({ harnessDir, prompt: ASSIGNMENT, violations: [], hard: false })
 
     // Pre-step 2 — SAME turn (step 2): the digest gate suppresses an
     // UNCHANGED row, so this re-injection can only be the digest text change
     // from the invalidation-triggered rebuild (the sources now carry the new
-    // dispatch event).
+    // workflow-dir dispatch event).
     const second = await app.ctx.waterfall('agent/pre-step', {
       agent: {},
       messages: [],
@@ -418,7 +432,8 @@ Implement the invalidation.
     const wsB = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-b-'))
     for (const ws of [wsA, wsB]) {
       await seedHarness(join(ws, '.mstar'), {
-        'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+        'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+        'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
       })
     }
     const stepFor = (cwd: string, turn: number) => ({
@@ -437,25 +452,28 @@ Implement the invalidation.
     expect(sourceA1.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(sourceB1.state!.agentFlow).toEqual({ events: [], summary: [] })
 
-    // An OUT-OF-BAND ledger line in B (direct write, bypassing recordDispatch
-    // → NO invalidation fires for B): if B's cache entry survives, the line
-    // stays INVISIBLE within the REAL TTL (cache hit — no rebuild). This is
-    // the observable for "B's cached entry survives": the dsh-llm message
-    // envelope deep-clones its source (`createMessage` → `freezeMessage` →
-    // `structuredClone`), so cache-hit identity cannot be asserted by
-    // reference equality through the message — the direct-write invisibility
-    // is the equivalent (and stronger) cache-hit proof.
+    // An OUT-OF-BAND ledger line in B (direct write to the workflow dir,
+    // bypassing recordDispatch → NO invalidation fires for B): if B's cache
+    // entry survives, the line stays INVISIBLE within the REAL TTL (cache hit
+    // — no rebuild). This is the observable for "B's cached entry survives":
+    // the dsh-llm message envelope deep-clones its source (`createMessage` →
+    // `freezeMessage` → `structuredClone`), so cache-hit identity cannot be
+    // asserted by reference equality through the message — the direct-write
+    // invisibility is the equivalent (and stronger) cache-hit proof.
     await writeFile(
-      join(wsB, '.mstar', plugin.AGENT_FLOW_FILE),
+      join(wsB, '.mstar', 'workflows/wf-1', plugin.AGENT_FLOW_FILE),
       `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
     )
 
     // A ledger record for workspace A ONLY — the apply-bound invalidator
     // fires with A's harness dir → deletes exactly A's cache entry.
+    // Final-state (Task 2 writer cutover): the record itself lands in A's
+    // ACTIVE workflow dir — the catalog reads the SAME file, so the rebuild
+    // observable is the record's own line (no out-of-band write).
     plugin.recordDispatch({ harnessDir: join(wsA, '.mstar'), prompt: ASSIGNMENT, violations: [], hard: false })
 
     // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
-    // fresh source carrying the new dispatch event).
+    // fresh source carrying the new workflow-dir dispatch event).
     const sourceA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 2), defaultEnter([]))).source
     expect(sourceA2.state!.agentFlow!.events).toHaveLength(1)
     expect(sourceA2.state!.agentFlow!.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', role: 'fullstack-dev' })
@@ -470,21 +488,18 @@ Implement the invalidation.
 
   it('without a ledger change the cache-hit behavior is unchanged — a directly-written ledger line stays invisible within the TTL (only the record path invalidates)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cachehit-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
-    })
+    const harnessDir = await seedV2Tree(root)
     const app = booted = await bootApp({ root })
 
     // Pre-step 1 (turn 1): no events → no agent-flow line.
     const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     expect(textOf(lastMessage(first)!)).not.toContain('agent flow:')
 
-    // Write a ledger line DIRECTLY (bypassing recordDispatch → NO
-    // invalidation fires): the disk now differs from the cached build.
+    // Write a ledger line DIRECTLY into the workflow dir (bypassing
+    // recordDispatch → NO invalidation fires): the disk now differs from the
+    // cached build.
     await writeFile(
-      join(app.harnessDir, plugin.AGENT_FLOW_FILE),
+      join(harnessDir, 'workflows/wf-1', plugin.AGENT_FLOW_FILE),
       `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
     )
 
@@ -501,6 +516,339 @@ Implement the invalidation.
     const { row, source } = catalogRowOf(second)
     expect(source.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(textOf(row)).not.toContain('agent flow:')
+  })
+})
+
+/* ===========================================================================
+ * v3 per-lifecycle aggregation (plan 20260819-workflow-dsh-viz Task 1) —
+ * the catalog row aggregates the SELECTED workflow lifecycle (compass
+ * v3.0.0 § Catalog selection rule): active `workflows[]` first (multi-active
+ * → first + a structured warning), else the latest terminal snapshot by
+ * mtime, else a clear error. ZoneView field shapes stay byte-compatible
+ * (the golden test pins the legacy-row shape).
+ * ========================================================================== */
+
+describe('mstar-engine-status catalog — v3 per-lifecycle aggregation (plan 20260819-workflow-dsh-viz Task 1)', () => {
+  /** The selected workflow id of the golden fixture. */
+  const GOLDEN_WORKFLOW = 'wf-golden'
+  /** The golden fixture's snapshot plans[] (legacy PlanRow shape verbatim). */
+  const GOLDEN_PLANS = [
+    {
+      plan_id: 'plan-a',
+      title: 'Plan A',
+      status: 'InProgress',
+      execution_lease: {
+        holder: 'dsh-session-1',
+        claimed_at: '2026-08-19',
+        worktree_path: '/worktrees/plan-a',
+        working_branch: 'feature/plan-a',
+      },
+    },
+    { id: 'plan-b', title: 'Plan B', status: 'Done', done_at: '2026-08-19' },
+  ]
+  /** The golden fixture's project register (the v1 `residual_findings` home). */
+  const GOLDEN_REGISTER = {
+    entries: {
+      'plan-b': [
+        { id: 'R1', title: 'deferred blocker', severity: 'high', lifecycle: 'open', source_plan: 'plan-b', registered_at: '2026-08-19' },
+        { id: 'R2', title: 'style nit', severity: 'nit', source_plan: 'plan-b', registered_at: '2026-08-19' },
+      ],
+    },
+  }
+  /** The golden fixture's project roadmap (frontmatter milestones — the project rollup source). */
+  const GOLDEN_ROADMAP = [
+    '---',
+    'project_id: _default',
+    'title: Golden project',
+    'status: active',
+    'created_at: 2026-08-19',
+    'milestones:',
+    '  - P1 foundation',
+    '  - P2 migrate + dogfood',
+    '  - P3 dsh viz',
+    '---',
+    '',
+    '## Direction',
+    '',
+    '- [x] P1 foundation',
+    '- [ ] P2 migrate + dogfood',
+    '',
+  ].join('\n')
+  /** The golden fixture's workflow-dir agent-flow ledger (two events). */
+  const GOLDEN_FLOW_LINES = [
+    { v: 1, ts: 1_700_000_000_000, kind: 'dispatch', role: 'fullstack-dev', planId: 'plan-a', taskId: 'T1', verdict: 'ok', hard: false },
+    { v: 1, ts: 1_700_000_000_001, kind: 'settle', role: 'fullstack-dev', planId: 'plan-a', taskId: 'T1', outcome: 'ok' },
+  ]
+  /** A steering compass with a `## Direction lock` problem statement. */
+  const GOLDEN_COMPASS = [
+    '---',
+    'iteration_id: v2.2.0',
+    'start_date: 2026-08-19',
+    'status: active',
+    'iteration_base_branch: dev-dsh',
+    'target_branch: dev-dsh',
+    'plans:',
+    '  - plan-a',
+    '---',
+    '',
+    '## Direction lock',
+    '',
+    '- **Problem statement:** Golden direction.',
+    '',
+  ].join('\n')
+  /** A knowledge index with one doc. */
+  const GOLDEN_KNOWLEDGE = [
+    '# Knowledge Index',
+    '',
+    '| Document | Source | Description | Status |',
+    '|----------|--------|-------------|--------|',
+    '| `conventions/harness-context.md` | iteration:v2.2.0 | context digest | active |',
+    '',
+  ].join('\n')
+
+  it('v2 fixture tree → catalog row equal-shape vs the legacy-row golden (ZoneView shapes byte-compatible)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-golden-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry(GOLDEN_WORKFLOW, 'iteration')]),
+      [`workflows/${GOLDEN_WORKFLOW}/snapshot.json`]: v2Snapshot(GOLDEN_WORKFLOW, {
+        type: 'iteration',
+        plans: GOLDEN_PLANS,
+        branch: { base: 'dev-dsh', integration: 'iteration/v2.2.0', target: 'dev-dsh' },
+        execution_policy: { push_policy: 'no-push', worktree_mode: 'feature-worktree' },
+        control_worktree_path: '/control/worktree',
+      }),
+      'projects/_default/residuals.json': JSON.stringify(GOLDEN_REGISTER),
+      'projects/_default/roadmap.md': GOLDEN_ROADMAP,
+      [`workflows/${GOLDEN_WORKFLOW}/agent-flow.jsonl`]: `${GOLDEN_FLOW_LINES.map((line) => JSON.stringify(line)).join('\n')}\n`,
+      'iterations/v2.2.0/delivery-compass.md': GOLDEN_COMPASS,
+      'knowledge/README.md': GOLDEN_KNOWLEDGE,
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+
+    // The state section: every field is the legacy-row golden shape, sourced
+    // from the selected workflow snapshot + workflow agent-flow + project
+    // register; `selection` is the additive v3 field.
+    expect(source.state).toEqual({
+      selection: { kind: 'active', workflowId: GOLDEN_WORKFLOW, dir: `workflows/${GOLDEN_WORKFLOW}` },
+      plans: [
+        { id: 'plan-a', status: 'InProgress', doneAt: null, iterationRefs: [] },
+        { id: 'plan-b', status: 'Done', doneAt: '2026-08-19', iterationRefs: [] },
+      ],
+      residuals: [
+        { severity: 'high', count: 1 },
+        { severity: 'nit', count: 1 },
+      ],
+      residualFindings: [
+        { planId: 'plan-b', id: 'R1', severity: 'high', title: 'deferred blocker' },
+        { planId: 'plan-b', id: 'R2', severity: 'nit', title: 'style nit' },
+      ],
+      project: {
+        milestones: ['P1 foundation', 'P2 migrate + dogfood', 'P3 dsh viz'],
+        openResiduals: [
+          { severity: 'high', count: 1 },
+          { severity: 'nit', count: 1 },
+        ],
+      },
+      iterationBaseBranch: 'dev-dsh',
+      targetBranch: 'dev-dsh',
+      specIntegrationBranch: 'iteration/v2.2.0',
+      pushPolicy: 'no-push',
+      worktreeMode: 'feature-worktree',
+      controlWorktreePath: '/control/worktree',
+      leases: [{ planId: 'plan-a', holder: 'dsh-session-1', worktreePath: '/worktrees/plan-a' }],
+      knowledge: { docCount: 1, categories: ['conventions'] },
+      direction: 'Golden direction.',
+      agentFlow: {
+        events: [
+          { ts: 1_700_000_000_001, kind: 'settle', agent: null, role: 'fullstack-dev', planId: 'plan-a', taskId: 'T1', taskCategory: null, paired: true, outcome: 'ok' },
+          { ts: 1_700_000_000_000, kind: 'dispatch', agent: null, role: 'fullstack-dev', planId: 'plan-a', taskId: 'T1', taskCategory: null, verdict: 'ok', hard: false },
+        ],
+        // Settle rows count under the '' pseudo-role (the summary's
+        // dispatch-role bucket only); the dispatch counts under its role.
+        summary: [
+          { role: '', outcome: 'ok', count: 1 },
+          { role: 'fullstack-dev', outcome: 'ok', count: 1 },
+        ],
+      },
+    })
+
+    // The iteration section: the gate evaluates the SELECTED snapshot (the
+    // evaluated-doc path is the snapshot, not the root status.json).
+    expect(source.iteration).toMatchObject({
+      iterationId: 'v2.2.0',
+      statusPath: join(harnessDir, `workflows/${GOLDEN_WORKFLOW}/snapshot.json`),
+      compassPath: join(harnessDir, 'iterations/v2.2.0/delivery-compass.md'),
+      gate: { transition: 'phase-2-execute', all_plans_done: false, ok: true },
+      compassStatus: 'active',
+    })
+
+    // The model text renders the selected workflow + the legacy data lines.
+    const text = textOf(row)
+    expect(text).toContain(`workflow: ${GOLDEN_WORKFLOW} (active)`)
+    expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
+    expect(text).toContain('residuals: high 1, nit 1')
+    expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
+    expect(text).toContain('policy: push no-push; worktree feature-worktree; control /control/worktree')
+    expect(text).toContain('leases: plan-a → dsh-session-1 (/worktrees/plan-a)')
+    expect(text).toContain('agent flow: 2 events; by role: fullstack-dev 1')
+  })
+
+  it('no snapshots → clear error (never a root v1 read)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-nosnapshot-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    // v2 root with an EMPTY active set and no workflows/ dir at all.
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([]),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+
+    const state = source.state
+    expect(state).not.toBeNull()
+    if (state === null) return
+    expect(state.selection).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.no-snapshot',
+      message: expect.stringContaining('no workflow snapshot'),
+    })
+    // The aggregates are empty by construction — never a root v1 read.
+    expect(state.plans).toEqual([])
+    expect(state.agentFlow).toBeNull()
+    // No snapshot → no iteration gate row either.
+    expect(source.iteration).toBeUndefined()
+    // The model text carries the clear error.
+    expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.no-snapshot)')
+  })
+
+  it('active selection whose snapshot is missing/unreadable → structured snapshot-unreadable error, never a silent null state (S-d)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-snapmissing-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    // An ACTIVE workflow entry whose snapshot.json is MISSING: the selection
+    // itself resolves, but the snapshot read cannot — the state section must
+    // stay PRESENT with the operator-visible reason (not degrade to null).
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-ghost')]),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+
+    const state = source.state
+    expect(state).not.toBeNull()
+    if (state === null) return
+    expect(state.selection).toEqual({
+      kind: 'error',
+      code: 'workflow.selection.snapshot-unreadable',
+      message: expect.stringContaining('cannot read the selected workflow snapshot'),
+    })
+    // Empty aggregates by construction — never a root v1 read.
+    expect(state.plans).toEqual([])
+    expect(state.agentFlow).toBeNull()
+    // The model text carries the clear error too.
+    expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.snapshot-unreadable)')
+  })
+
+  it('a v1 (unmigrated) root → migration-required error — the v1 plans[] are never read (no dual-read)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-v1root-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    // A v1 root carrying plans — the catalog must NOT fall back to them.
+    await seedHarness(harnessDir, {
+      'status.json': JSON.stringify({
+        version: 1,
+        updated_at: '2026-08-08',
+        plans: [{ id: 'plan-a', status: 'Todo' }],
+        residual_findings: {},
+        metadata: {},
+      }),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+
+    const state = source.state
+    expect(state).not.toBeNull()
+    if (state === null) return
+    expect(state.selection).toEqual({
+      kind: 'error',
+      code: 'status.migration-required',
+      message: expect.stringContaining('mstar migrate'),
+    })
+    // The v1 plans are NOT projected (no dual-read).
+    expect(state.plans).toEqual([])
+    expect(textOf(row)).toContain('workflow selection: ERROR (status.migration-required)')
+  })
+
+  it('multiple active workflows → first entry selected + operator-visible warning field (no silent pick)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-multiactive-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', status: 'Done' }] }),
+    })
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+
+    const state = source.state
+    expect(state).not.toBeNull()
+    if (state === null) return
+    // The FIRST active entry is selected, with a structured warning.
+    expect(state.selection).toEqual({
+      kind: 'active',
+      workflowId: 'wf-a',
+      dir: 'workflows/wf-a',
+      warning: {
+        code: 'workflow.selection.multi-active',
+        message: expect.stringContaining('2 active lifecycles'),
+      },
+    })
+    // The state aggregates the FIRST workflow only.
+    expect(state.plans).toEqual([{ id: 'plan-a', status: 'Todo', doneAt: null, iterationRefs: [] }])
+    // The warning is operator-visible in the model text too.
+    expect(textOf(row)).toContain('workflow warning: workflow.selection.multi-active')
+  })
+
+  it('no active workflows → the latest terminal snapshot by mtime (history view); non-terminal snapshots are skipped', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-terminal-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([]),
+      'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', { status: 'completed', ended_at: '2026-08-18', plans: [{ id: 'plan-old', status: 'Done' }] }),
+      'workflows/wf-new/snapshot.json': v2Snapshot('wf-new', { status: 'completed', ended_at: '2026-08-19', plans: [{ id: 'plan-new', status: 'Done' }] }),
+      // A non-terminal snapshot NOT in the root active set is inconsistent —
+      // the terminal filter must skip it (never selected).
+      'workflows/wf-running/snapshot.json': v2Snapshot('wf-running', { plans: [{ id: 'plan-running', status: 'InProgress' }] }),
+    })
+    // Deterministic mtimes: wf-old older, wf-new newer (the selection is by
+    // file mtime, not by the snapshot's updated_at).
+    const oldPath = join(harnessDir, 'workflows/wf-old/snapshot.json')
+    const newPath = join(harnessDir, 'workflows/wf-new/snapshot.json')
+    const runningPath = join(harnessDir, 'workflows/wf-running/snapshot.json')
+    const base = Date.now() / 1000
+    await utimes(oldPath, base - 200, base - 200)
+    await utimes(newPath, base - 100, base - 100)
+    await utimes(runningPath, base - 50, base - 50)
+    const app = booted = await bootApp({ root })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const { row, source } = catalogRowOf(decision)
+
+    const state = source.state
+    expect(state).not.toBeNull()
+    if (state === null) return
+    expect(state.selection).toEqual({ kind: 'terminal', workflowId: 'wf-new', dir: 'workflows/wf-new' })
+    expect(state.plans).toEqual([{ id: 'plan-new', status: 'Done', doneAt: null, iterationRefs: [] }])
+    expect(textOf(row)).toContain('workflow: wf-new (terminal)')
   })
 })
 

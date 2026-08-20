@@ -174,6 +174,7 @@ const fullSource: MstarEngineStatusSource = {
     },
   },
   state: {
+    selection: { kind: 'active', workflowId: 'iter-20260809-dsh-workflow-viz', dir: 'workflows/iter-20260809-dsh-workflow-viz' },
     plans: [
       { id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null, iterationRefs: [] },
       { id: '20260808-dsh-package-core', status: 'Done', doneAt: '2026-08-08', iterationRefs: [] },
@@ -226,6 +227,7 @@ const noGateSource: MstarEngineStatusSource = {
   harnessDir: '/proj/.mstar',
   enforcement: { hard: false, source: 'iteration compass' as EnforcementSource },
   state: {
+    selection: { kind: 'active', workflowId: 'wf-1', dir: 'workflows/wf-1' },
     plans: [{ id: '20260809-dsh-workflow-viz-panel', status: 'InProgress', doneAt: null, iterationRefs: [] }],
     residuals: [],
     residualFindings: null,
@@ -443,6 +445,35 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).not.toContain('data-mstar-graph-footer')
     expect(html).not.toContain('data-graph-violations-count')
     expect(html).not.toContain('data-agent-event-dock')
+  })
+
+  it('renders the additive project rollup zone (roadmap milestones + open residual severity counts) on the tasks page', () => {
+    const rollupSource: MstarEngineStatusSource = {
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        project: {
+          milestones: ['P1 foundation', 'P2 migrate + dogfood'],
+          openResiduals: [
+            { severity: 'critical', count: 1 },
+            { severity: 'medium', count: 2 },
+          ],
+        },
+      },
+    }
+    const html = panelHtml(rollupSource)
+    expect(html).toContain('data-zone="project"')
+    expect(html).toContain('data-project-milestones-title')
+    expect(html).toContain('data-project-milestone')
+    expect(html).toContain('P1 foundation')
+    expect(html).toContain('P2 migrate + dogfood')
+    expect(html).toContain('data-project-residuals-title')
+    expect(html).toContain('data-project-residual')
+    expect(html).toContain('data-project-residual-count="1"')
+    expect(html).toContain('data-project-residual-count="2"')
+    // The four existing zones still render (additive-only, compass AC-4).
+    expect(html).toContain('data-zone="tasks"')
+    expect(html).toContain('data-iteration-head')
   })
 
   it('renders the state section: plans board, residual findings, policy (enforcement first), leases, knowledge, direction', () => {
@@ -768,6 +799,50 @@ describe('workflow panel — T1 layout: sidebar meta dock / main grid / full-tab
     expect(html.indexOf('data-mstar-section="state"')).toBeLessThan(html.indexOf('data-mstar-meta'))
     // The meta dock renders inside the sidebar (watermark lineage preserved).
     expect(html.indexOf('data-mstar-sidebar')).toBeLessThan(html.indexOf('data-mstar-watermark'))
+  })
+
+  it('the selection seat renders the aggregated workflow — active / multi-active warning / terminal history / selection error (qc1 S-1)', () => {
+    // Active without warning (the full fixture).
+    expect(html).toContain('data-selection-kind="active"')
+    expect(html).toContain('data-selection-workflow="iter-20260809-dsh-workflow-viz"')
+    expect(html).not.toContain('data-selection-warning')
+
+    // Multi-active → the structured warning is surfaced (no silent pick).
+    const warned = panelHtml({
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        selection: {
+          kind: 'active',
+          workflowId: 'wf-a',
+          dir: 'workflows/wf-a',
+          warning: { code: 'workflow.selection.multi-active', message: '2 active lifecycles in status.json workflows[] — selected the first (wf-a); no silent pick' },
+        },
+      },
+    })
+    expect(warned).toContain('data-selection-warning')
+    expect(warned).toContain('2 active lifecycles')
+
+    // Terminal history view → the history marker renders beside the id.
+    const terminal = panelHtml({
+      ...fullSource,
+      state: { ...fullSource.state!, selection: { kind: 'terminal', workflowId: 'wf-old', dir: 'workflows/wf-old' } },
+    })
+    expect(terminal).toContain('data-selection-kind="terminal"')
+    expect(terminal).toContain('data-selection-workflow="wf-old"')
+    expect(terminal).toContain('data-selection-history')
+
+    // Selection error → code + reason rendered, never a crash.
+    const errored = panelHtml({
+      ...fullSource,
+      state: {
+        ...fullSource.state!,
+        selection: { kind: 'error', code: 'workflow.selection.snapshot-unreadable', message: 'cannot read the selected workflow snapshot /proj/.mstar/workflows/wf-ghost/snapshot.json' },
+      },
+    })
+    expect(errored).toContain('data-selection-kind="error"')
+    expect(errored).toContain('data-selection-code="workflow.selection.snapshot-unreadable"')
+    expect(errored).toContain('cannot read the selected workflow snapshot')
   })
 
   it('main area renders the IterationTaskPage inside the content region (T7 fills the tasks tab)', () => {

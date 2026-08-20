@@ -32,17 +32,23 @@ import {
   resolveRepoEnforcement,
   validateExecutionLease,
   verifyPlanExecutionLease,
+  WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
 import type {
   AssignmentFields,
   GateResult,
-  StatusDoc,
   ValidationResult,
   WorktreeTrack,
 } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { STATUS_FILE, asRecord, formatViolation, HarnessResolver } from './_shared.ts'
 import type { Config } from './_shared.ts'
+// v3 read: the plan rows + leases live on the ACTIVE workflow snapshot
+// (`workflows/<id>/snapshot.json` — the v1 root `plans[]` home is gone).
+// The dispatch gates are WRITE-path-adjacent (lease re-verify, worktree
+// L1, P-b attribution), so they use the ACTIVE-SET resolver only — the
+// terminal-mtime fallback stays catalog-read-only.
+import { resolveActiveWorkflow } from './workflow-selection.ts'
 // The P-a/P-c policy + cache + the SHARED name normalization (plan
 // `20260815-dsh-workflow-gate` Task 2 — the SINGLE four-tier decision point;
 // this module maps the verdict to the PreToolDecision refusal vocabulary).
@@ -274,8 +280,11 @@ export function sessionIdOf(exec: ToolExecution): string | undefined {
  * `dispatch.execution-mode.*` codes stay out of the parity field set) OR
  * whose plan row is `InProgress`.
  *
- * Contract (status-and-residuals.md § Pre-dispatch re-verify): before any
- * writable implement dispatch, reread `{HARNESS_DIR}/status.json` and confirm
+ * Contract (status-and-residuals.md § Pre-dispatch re-verify; v3
+ * relocation — plan `20260819-workflow-dsh-viz` Task 3): before any
+ * writable implement dispatch, reread the ACTIVE workflow snapshot
+ * (`workflows/<id>/snapshot.json` — the v1 root `plans[]` home is gone; the
+ * root v2 `status.json` supplies the active `workflows[]`) and confirm
  * the session still passes verify-held-lease — `holder`, `worktree_path` and
  * `working_branch` must match the Assignment; mismatch or absent lease →
  * STOP. Engine `verifyPlanExecutionLease` + `validateExecutionLease` carry
@@ -285,13 +294,15 @@ export function sessionIdOf(exec: ToolExecution): string | undefined {
  *
  * Degrade-allow cases (no false positives): no harness dir, unresolvable plan
  * id, and non-SDD assignments whose plan row is absent or not InProgress.
- * Unverifiable lease states (malformed status.json, MISSING status.json, plan
- * row not registered) are violations ONLY for sdd dispatches (the lease state
- * cannot be confirmed — the status gate already guards the next write);
- * unreadable docs never harden a soft workflow. Missing status.json is NOT a
- * silent fail-open for sdd: the claim-before-InProgress red line
- * needs the plan's execution_lease, and a missing status file cannot confirm
- * it — `lease.dispatch.unverifiable` fires (advisory in warn, deny under hard).
+ * Unverifiable lease states (unreadable/missing root status.json, a
+ * selection failure — v1/migration-required root, no active workflow — an
+ * unreadable/missing snapshot, plan row not registered) are violations ONLY
+ * for sdd dispatches (the lease state cannot be confirmed — the status gate
+ * already guards the next write); unreadable docs never harden a soft
+ * workflow. A missing status.json is NOT a silent fail-open for sdd: the
+ * claim-before-InProgress red line needs the plan's execution_lease, and a
+ * missing root/snapshot cannot confirm it — `lease.dispatch.unverifiable`
+ * fires (advisory in warn, deny under hard).
  */
 export function leaseGateViolations(
   harnessDir: string | null,
@@ -305,37 +316,61 @@ export function leaseGateViolations(
   const sdd = executionModeToN(mode ?? '').n === 3
   const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
-  const statusPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(statusPath)) {
+  // v3 lease home: the plan row + its execution_lease live on the ACTIVE
+  // workflow snapshot (`workflows/<id>/snapshot.json`). The root v2
+  // `status.json` still gates the read: it holds the active `workflows[]`
+  // the selection resolves from.
+  const selection = resolveActiveWorkflow(harnessDir)
+  if (selection.kind !== 'active') {
+    if (!sdd) return []
+    // `resolveActiveWorkflow` never returns `terminal` (the active-set
+    // resolver's result is active | error) — the union guard keeps the
+    // narrow below; treat the unreachable terminal branch like the
+    // unverifiable case.
+    if (selection.kind === 'error' && selection.code === 'status.unreadable') {
+      return [leaseViolation(
+        'lease.dispatch.unreadable',
+        `cannot read ${join(harnessDir, STATUS_FILE)}: the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+        'restore a valid status.json (the status gate refuses invalid writes)',
+      )]
+    }
+    return [leaseViolation(
+      'lease.dispatch.unverifiable',
+      `${join(harnessDir, STATUS_FILE)}: ${selection.kind === 'error' ? selection.message : 'no active workflow'} — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+      'create a valid v2 status.json registering an active workflow (first implement dispatch requires a plan row + lease)',
+    )]
+  }
+  const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
+  if (!existsSync(snapshotPath)) {
     if (!sdd) return []
     return [leaseViolation(
       'lease.dispatch.unverifiable',
-      `${statusPath} is missing — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
-      'create a valid status.json registering the plan row (first implement dispatch requires a plan row)',
+      `${snapshotPath} is missing — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+      'create a valid workflow snapshot registering the plan row (first implement dispatch requires a plan row)',
     )]
   }
 
-  let doc: StatusDoc
+  let snapshot: Record<string, unknown>
   try {
-    doc = readJson(statusPath) as StatusDoc
+    snapshot = readJson(snapshotPath) as Record<string, unknown>
   } catch (error) {
     if (!sdd) return []
     return [leaseViolation(
       'lease.dispatch.unreadable',
-      `cannot read ${statusPath}: ${(error as Error).message} — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
-      'restore a valid status.json (the status gate refuses invalid writes)',
+      `cannot read ${snapshotPath}: ${(error as Error).message} — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+      'restore a valid workflow snapshot (the status gate refuses invalid writes)',
     )]
   }
 
-  const row = Array.isArray(doc.plans)
-    ? doc.plans.map(asRecord).find((r) => r?.id === planId || r?.plan_id === planId)
+  const row = Array.isArray(snapshot.plans)
+    ? snapshot.plans.map(asRecord).find((r) => r?.id === planId || r?.plan_id === planId)
     : undefined
   if (row === undefined) {
     if (!sdd) return []
     return [leaseViolation(
       'lease.dispatch.plan-not-found',
-      `plan ${planId} is not registered in ${STATUS_FILE} — cannot verify its execution_lease before writable dispatch`,
-      'register the plan row in status.json (first implement dispatch requires a plan row)',
+      `plan ${planId} is not registered in ${snapshotPath} — cannot verify its execution_lease before writable dispatch`,
+      'register the plan row in the workflow snapshot (first implement dispatch requires a plan row)',
     )]
   }
   if (!sdd && row.status !== 'InProgress') return []
@@ -459,9 +494,65 @@ function worktreeL2Violations(header: string): ValidationResult[] {
 }
 
 /**
+ * One active-workflow snapshot read (the v3 status.json consumer — plan
+ * `20260819-workflow-dsh-viz` Task 3 re-points every dispatch-side read
+ * from the root `plans[]` to the ACTIVE workflow snapshot rows): the plan
+ * rows + the snapshot's first-class `control_worktree_path`. The active-set
+ * resolver (`resolveActiveWorkflow`) is the ONLY selection this module
+ * imports — dispatch gates are write-path-adjacent, the terminal-mtime
+ * fallback stays catalog-read-only.
+ *
+ * Degrade semantics per consumer are kept by the flags: `unreadable` true
+ * means the lifecycle cannot be attributed (selection failure — a
+ * v1/migration-required root, an invalid workflow entry — or an
+ * unreadable/shape-invalid snapshot) and the caller decides its loudness
+ * (lease gate: sdd violation; P-b: ONE warn fail-open). `unreadable` false
+ * with `rows` null means there is simply nothing to attribute (missing
+ * status.json, no active lifecycle) — silent.
+ */
+interface ActiveSnapshotRead {
+  /** The snapshot's plan rows ([] when the doc has no plans array); null when the read did not reach the rows. */
+  rows: Record<string, unknown>[] | null
+  /** The snapshot's first-class `control_worktree_path`, when carried. */
+  controlWorktreePath: string | undefined
+  /** True when the lifecycle cannot be attributed (selection failure / unreadable / shape-invalid snapshot). */
+  unreadable: boolean
+}
+
+function activeSnapshotRows(harnessDir: string): ActiveSnapshotRead {
+  if (!existsSync(join(harnessDir, STATUS_FILE))) return { rows: null, controlWorktreePath: undefined, unreadable: false }
+  const selection = resolveActiveWorkflow(harnessDir)
+  if (selection.kind !== 'active') {
+    // A no-active lifecycle is a valid migrated state — nothing to attribute
+    // (no plans exist anywhere); every other selection failure (v1 root,
+    // unreadable root, invalid entry) is unreadable.
+    return {
+      rows: null,
+      controlWorktreePath: undefined,
+      unreadable: selection.kind === 'error' && selection.code !== 'workflow.selection.no-active',
+    }
+  }
+  const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
+  if (!existsSync(snapshotPath)) return { rows: null, controlWorktreePath: undefined, unreadable: true }
+  let doc: Record<string, unknown>
+  try {
+    doc = readJson(snapshotPath) as Record<string, unknown>
+  } catch {
+    return { rows: null, controlWorktreePath: undefined, unreadable: true }
+  }
+  if (!Array.isArray(doc.plans)) return { rows: null, controlWorktreePath: undefined, unreadable: true }
+  const controlWorktreePath = typeof doc.control_worktree_path === 'string' ? doc.control_worktree_path : undefined
+  const rows = doc.plans
+    .map((row): Record<string, unknown> | undefined => asRecord(row))
+    .filter((row): row is Record<string, unknown> => row !== undefined)
+  return { rows, controlWorktreePath, unreadable: false }
+}
+
+/**
  * L1 cross-plan isolation (engine `l1PreDispatchCheck`): when the
- * Assignment resolves a plan id AND status.json carries the L1 metadata —
- * `metadata.control_worktree_path` plus the plan row's `execution_lease`
+ * Assignment resolves a plan id AND the ACTIVE workflow snapshot carries the
+ * L1 metadata — `control_worktree_path` (the snapshot's first-class field;
+ * the v1 root-metadata home is gone) plus the plan row's `execution_lease`
  * (worktree_path + working_branch) — verify the control-vs-feature
  * topology: control path recorded, lease worktree exists, lease worktree
  * MUST differ from the control worktree, and the checked-out branch matches
@@ -469,11 +560,11 @@ function worktreeL2Violations(header: string): ValidationResult[] {
  *
  * Fires ONLY when the metadata is present (the brief's "L1 checks (control
  * vs feature path) when metadata present"): no harness dir, unresolvable
- * plan id, missing status.json, absent control path, or a lease without the
- * two path/branch fields all degrade to silence — the exec-bound lease gate
- * owns lease SHAPE errors (sdd unverifiable/unreadable/plan-not-found) on
- * the same verdict. The engine probe of the lease worktree is subprocess-
- * based and fails closed.
+ * plan id, missing/unattributable snapshot (selection failure, unreadable),
+ * absent control path, or a lease without the two path/branch fields all
+ * degrade to silence — the exec-bound lease gate owns lease SHAPE errors
+ * (sdd unverifiable/unreadable/plan-not-found) on the same verdict. The
+ * engine probe of the lease worktree is subprocess-based and fails closed.
  * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when none).
  * @param header - `assignmentHeaderRegion(assignmentText)`.
  */
@@ -481,20 +572,11 @@ function worktreeL1Violations(harnessDir: string | null, header: string): Valida
   if (harnessDir === null) return []
   const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
-  const statusPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(statusPath)) return []
-  let doc: StatusDoc
-  try {
-    doc = readJson(statusPath) as StatusDoc
-  } catch {
-    return [] // unreadable status is the lease gate's report (sdd dispatches)
-  }
-  const metadata = asRecord(doc.metadata)
-  const controlWorktreePath = typeof metadata?.control_worktree_path === 'string' ? metadata.control_worktree_path : undefined
+  const read = activeSnapshotRows(harnessDir)
+  if (read.rows === null) return [] // unattributable status is the lease gate's report (sdd dispatches)
+  const controlWorktreePath = read.controlWorktreePath
   if (controlWorktreePath === undefined || controlWorktreePath.trim() === '') return []
-  const row = Array.isArray(doc.plans)
-    ? doc.plans.map(asRecord).find((r) => r?.id === planId || r?.plan_id === planId)
-    : undefined
+  const row = read.rows.find((r) => r?.id === planId || r?.plan_id === planId)
   const lease = asRecord(row?.execution_lease)
   const leaseWorktreePath = typeof lease?.worktree_path === 'string' ? lease.worktree_path : undefined
   const leaseWorkingBranch = typeof lease?.working_branch === 'string' ? lease.working_branch : undefined
@@ -509,45 +591,40 @@ function worktreeL1Violations(harnessDir: string | null, header: string): Valida
 
 /**
  * P-b lease attribution for the workflow/ralph gate (plan
- * `20260815-dsh-workflow-gate` Task 3): the calling workspace's status.json
- * has any plan `InProgress` LACKING matching `execution_lease` coverage.
- * Iterates ALL plan rows (no Assignment header exists on the workflow/ralph
- * branch — unlike {@link leaseGateViolations} / {@link worktreeL1Violations},
- * which are Assignment-keyed) and REUSES the named plumbing: the
- * `worktreeL1Violations` status-doc read pattern (`STATUS_FILE` + `readJson`
- * + `asRecord`, `_shared.ts`) and the engine coverage primitive
- * `verifyPlanExecutionLease` (already consumed at {@link leaseGateViolations}
- * — the same SSOT semantics: an InProgress row without a lease is an orphan;
- * a metadata-only lease is a non-SSOT fail).
+ * `20260815-dsh-workflow-gate` Task 3; v3 relocation — plan
+ * `20260819-workflow-dsh-viz` Task 3): the calling workspace's ACTIVE
+ * workflow snapshot has any plan `InProgress` LACKING matching
+ * `execution_lease` coverage. Iterates ALL snapshot plan rows (no
+ * Assignment header exists on the workflow/ralph branch — unlike
+ * {@link leaseGateViolations} / {@link worktreeL1Violations}, which are
+ * Assignment-keyed) and REUSES the named plumbing: the
+ * {@link activeSnapshotRows} read (the v3 root `plans[]` → active snapshot
+ * relocation) and the engine coverage primitive `verifyPlanExecutionLease`
+ * (already consumed at {@link leaseGateViolations} — the same SSOT
+ * semantics: an InProgress row without a lease is an orphan; a
+ * metadata-only lease is a non-SSOT fail).
  *
  * Fail-open edges (the workflow branch never bricks fan-out): no harness dir
- * → nothing to attribute; missing status.json → no plans to attribute; a
+ * → nothing to attribute; missing status.json / no active lifecycle → no
+ * plans to attribute; a SELECTION failure (v1/migration-required root) or a
  * THROWING read → `unreadable` (the caller emits ONE warn — a broken status
  * read must not brick fan-out, plan Clarify; P-a/P-c still run on the name
- * axis, which has no status dependency). A PARSEABLE-but-shape-invalid doc
- * (`plans` missing / non-array — e.g. a hand-edited `{}` or `{"plans": {}}`)
- * is `unreadable` TOO (qc3 F-301): the caller's ONE warn gives it the same
- * loudness as the throwing read, so a corrupt-but-parseable status cannot
- * silently disable the P-b red line while looking like a healthy
- * read-only workspace. Fail-open is preserved in every case — P-b degrades
- * for the call, never bricks fan-out.
+ * axis, which has no status dependency). A PARSEABLE-but-shape-invalid
+ * snapshot (`plans` missing / non-array — e.g. a hand-edited `{}` or
+ * `{"plans": {}}`) is `unreadable` TOO (qc3 F-301): the caller's ONE warn
+ * gives it the same loudness as the throwing read, so a corrupt-but-parseable
+ * snapshot cannot silently disable the P-b red line while looking like a
+ * healthy read-only workspace. Fail-open is preserved in every case — P-b
+ * degrades for the call, never bricks fan-out.
  *
  * @returns the first uncovered plan id (undefined = covered / nothing to
  * attribute) + the unreadable flag.
  */
 function writableFanOutUncovered(harnessDir: string | null): { uncoveredPlanId?: string; unreadable: boolean } {
   if (harnessDir === null) return { unreadable: false }
-  const statusPath = join(harnessDir, STATUS_FILE)
-  if (!existsSync(statusPath)) return { unreadable: false } // no harness state — nothing to attribute
-  let doc: StatusDoc
-  try {
-    doc = readJson(statusPath) as StatusDoc
-  } catch {
-    return { unreadable: true } // fail-open (plan Clarify): broken status must not brick fan-out
-  }
-  if (!Array.isArray(doc.plans)) return { unreadable: true } // shape-invalid (qc3 F-301): same one-warn degrade as the throwing read
-  for (const raw of doc.plans) {
-    const row = asRecord(raw)
+  const read = activeSnapshotRows(harnessDir)
+  if (read.rows === null) return { unreadable: read.unreadable } // missing/no-active → silent; selection failure/unreadable → one-warn degrade
+  for (const row of read.rows) {
     if (row === undefined || row.status !== 'InProgress') continue
     const planId = typeof row.id === 'string' && row.id !== '' ? row.id
       : typeof row.plan_id === 'string' && row.plan_id !== '' ? row.plan_id
@@ -685,8 +762,10 @@ export function workflowGateInputOf(exec: ToolExecution): WorkflowGateInput | un
  * under `off` stays silent).
  *
  * Every other mode composes the {@link WorkflowGateInput} (plus the Task 3
- * P-b lease attribution: {@link writableFanOutUncovered} over the calling
- * workspace's status.json — resolved through the contained resolver path)
+ * P-b lease attribution: {@link writableFanOutUncovered} over the ACTIVE
+ * workflow snapshot (`workflows/<id>/snapshot.json` — the v3 status.json
+ * consumer; never the root v1 `plans[]`), resolved through the contained
+ * resolver path)
  * and runs the policy ({@link workflowPolicy} — the SINGLE four-tier
  * decision point: P-b lease attribution + P-a name allowlist + P-c
  * first-seen ask). EVERY policy decision records ONE durable

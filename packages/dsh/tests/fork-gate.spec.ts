@@ -46,7 +46,7 @@ import type { AgentFlowView } from '../src/index.ts'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import { PERSONA_SECTION_NAME } from '../src/gates/fallbacks-decoration.ts'
-import { bootApp, FakeJobRegistry, type BootResult } from './harness.ts'
+import { bootApp, FakeJobRegistry, seedV2Tree, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -120,17 +120,25 @@ const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDeci
 
 /** Read the ledger view for a booted app (or fail loudly when absent). */
 function flowOf(app: BootResult): AgentFlowView {
-  const view = readAgentFlow(app.harnessDir)
+  // v3 layout: the ledger lives in the ACTIVE workflow dir (the boot's
+  // seeded v2 tree — `seedV2` — has one active workflow `wf-1`).
+  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))
   expect(view).not.toBeNull()
   return view!
 }
 
-/** Create a temp harness dir (bare-context tests — no Loader boot). */
-async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string }> {
+/**
+ * Create a temp harness dir seeded with a minimal v2 tree (root status.json
+ * + one active workflow `wf-1` + its snapshot) — the v3 write-path
+ * precondition: the agent-flow writer / ledger append only to an ACTIVE
+ * workflow (plan `20260819-workflow-dsh-viz` Task 2).
+ */
+async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string; workflowDir: string }> {
   const root = await mkdtemp(join(tmpdir(), prefix))
   const harnessDir = join(root, 'harness')
   await mkdir(harnessDir, { recursive: true })
-  return { root, harnessDir }
+  await seedV2Tree(harnessDir)
+  return { root, harnessDir, workflowDir: join(harnessDir, 'workflows/wf-1') }
 }
 
 /** Emit an event NOT declared on the typed Events surface (runtime-valid). */
@@ -203,7 +211,7 @@ async function fakeForkChild(ctx: Context, prompt: string): Promise<{ agent: Age
 
 describe('fork gate — subagent_fork under Enforcement: hard', () => {
   it('(a) invalid Assignment → PreToolDecision { kind: deny }, downstream never runs', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
+    const app = booted = await bootApp({ enforcement: 'hard', seedV2: true })
     let secondRan = false
     app.ctx.on('tools/pre-execute', () => {
       secondRan = true
@@ -223,7 +231,7 @@ describe('fork gate — subagent_fork under Enforcement: hard', () => {
   })
 
   it('(b) valid Assignment → allow, silent, fork dispatch ledger-recorded with verdict ok', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
+    const app = booted = await bootApp({ enforcement: 'hard', seedV2: true })
     let advisories = 0
     app.ctx.on('mstar/dispatch-gate', () => { advisories += 1 })
 
@@ -249,7 +257,7 @@ describe('fork gate — subagent_fork under Enforcement: hard', () => {
 
 describe('fork settle — ledger records fork dispatch + settle (dispatchTools-driven pairing)', () => {
   it('(c1) a REAL fork dispatch through the composed registry pairs through tools/post-execute + onJobDone', async () => {
-    const app = booted = await bootApp({ jobsService: 'fake' })
+    const app = booted = await bootApp({ jobsService: 'fake', seedV2: true })
     // The fork tool — the same canonical background shape as the upstream
     // dsh-tool-subagent (the seam-probe fixture), so the post-execute branch
     // stores `taskId → dispatchRef` and the onJobDone terminal settles.
@@ -321,7 +329,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
     // settle listener with an EMPTY config and confirm a fork-tool exec is
     // matched by the DEFAULT tool set — the listener must pick up fork
     // without any deployment Config change.
-    const { root, harnessDir } = await tempHarness('dsh-fork-settle-default-')
+    const { root, harnessDir, workflowDir } = await tempHarness('dsh-fork-settle-default-')
     const ctx = new Context()
     const pairing = pairingOf()
     const priorSink = setAgentFlowLogger(() => {})
@@ -348,7 +356,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
         { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } },
       )
 
-      const view = readAgentFlow(harnessDir)!
+      const view = readAgentFlow(workflowDir)!
       expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
       expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev' })
     } finally {

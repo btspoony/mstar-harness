@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -59,10 +59,11 @@ const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>
 const textOf = (row: UserMessage | undefined): string =>
   row?.content[0]?.type === 'text' ? row.content[0].text : ''
 
-/** A status.json exercising every state-section feature (plans, residuals, metadata, lease). */
-const RICH_STATUS = JSON.stringify({
-  version: 1,
-  updated_at: '2026-08-08',
+/** A v2 tree exercising every state-section feature (plans, residuals, metadata, lease). */
+const RICH_WORKFLOW = 'v2.2.0'
+const RICH_ROOT = v2Root([v2WorkflowEntry(RICH_WORKFLOW, 'iteration')])
+const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
+  type: 'iteration',
   plans: [
     {
       plan_id: 'plan-a',
@@ -78,19 +79,24 @@ const RICH_STATUS = JSON.stringify({
     },
     { id: 'plan-b', title: 'Plan B', status: 'Done', done_at: '2026-08-08' },
   ],
-  residual_findings: {
-    'plan-b': [
-      { id: 'R1', title: 'deferred blocker', severity: 'high', lifecycle: 'open' },
-      { id: 'R2', title: 'style nit', severity: 'nit' },
-    ],
+  branch: {
+    base: 'dev-dsh',
+    integration: 'iteration/v2.2.0',
+    target: 'dev-dsh',
   },
-  metadata: {
-    iteration_base_branch: 'dev-dsh',
-    target_branch: 'dev-dsh',
-    spec_integration_branch: 'iteration/v2.2.0',
+  execution_policy: {
     push_policy: 'no-push',
     worktree_mode: 'feature-worktree',
-    control_worktree_path: '/control/worktree',
+  },
+  control_worktree_path: '/control/worktree',
+})
+/** The project register (the v1 `residual_findings` home after migrate). */
+const RICH_REGISTER = JSON.stringify({
+  entries: {
+    'plan-b': [
+      { id: 'R1', title: 'deferred blocker', severity: 'high', lifecycle: 'open', source_plan: 'plan-b', registered_at: '2026-08-08' },
+      { id: 'R2', title: 'style nit', severity: 'nit', source_plan: 'plan-b', registered_at: '2026-08-08' },
+    ],
   },
 })
 
@@ -137,7 +143,9 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': RICH_STATUS,
+      'status.json': RICH_ROOT,
+      [`workflows/${RICH_WORKFLOW}/snapshot.json`]: RICH_SNAPSHOT,
+      'projects/_default/residuals.json': RICH_REGISTER,
       'iterations/v2.2.0/delivery-compass.md': RICH_COMPASS,
       'knowledge/README.md': KNOWLEDGE_README,
     })
@@ -156,15 +164,16 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     const source = row?.source
     if (source === undefined || source.kind !== 'mstar-engine-status') return
 
-    // Iteration gate section (steering compass + status.json resolve).
+    // Iteration gate section (steering compass + selected workflow snapshot resolve).
     expect(source.iteration).toMatchObject({
       iterationId: 'v2.2.0',
-      statusPath: join(harnessDir, 'status.json'),
+      statusPath: join(harnessDir, `workflows/${RICH_WORKFLOW}/snapshot.json`),
       gate: { transition: 'phase-2-execute', all_plans_done: false },
     })
 
     // Workspace-state section.
     expect(source.state).toMatchObject({
+      selection: { kind: 'active', workflowId: RICH_WORKFLOW, dir: `workflows/${RICH_WORKFLOW}` },
       plans: [
         { id: 'plan-a', status: 'InProgress', doneAt: null },
         { id: 'plan-b', status: 'Done', doneAt: '2026-08-08' },
@@ -192,6 +201,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     expect(text).toContain('harness dir:')
     expect(text).toContain('iteration: v2.2.0')
     expect(text).toContain('gate: PASS')
+    expect(text).toContain(`workflow: ${RICH_WORKFLOW} (active)`)
     expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
     expect(text).toContain('residuals: high 1, nit 1')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
@@ -202,12 +212,13 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     expect(text).toContain('</mstar_engine_status>')
   })
 
-  it('falls back to compass frontmatter for base/target branches when metadata is empty', async () => {
+  it('falls back to compass frontmatter for base/target branches when the snapshot carries no branch anchors', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-branch-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], residual_findings: {}, metadata: {} }),
+      'status.json': v2Root([v2WorkflowEntry('wf-branch')]),
+      'workflows/wf-branch/snapshot.json': v2Snapshot('wf-branch'),
       'iterations/v2.2.0/delivery-compass.md': '---\niteration_id: v2.2.0\nstatus: active\niteration_base_branch: dev-dsh\ntarget_branch: dev-dsh\n---\n',
     })
     booted = await bootApp({ root })
@@ -223,18 +234,19 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
 })
 
 /* ===========================================================================
- * 1b. residualFindings root-key semantics (spec §6): missing root key → null
- *     (advisory — same pattern as `knowledge`); key present, no open entries
- *     → []
+ * 1b. residualFindings register semantics (spec §6, v3 home): no project
+ *     register files → null (advisory — same pattern as `knowledge`);
+ *     register(s) present, no open entries → []
  * ========================================================================== */
 
-describe('mstar-engine-status — residualFindings root-key semantics (spec §6)', () => {
-  it('missing residual_findings root key → residualFindings null (residuals rollup stays [])', async () => {
+describe('mstar-engine-status — residualFindings register semantics (spec §6)', () => {
+  it('no project register files → residualFindings null (residuals rollup stays [])', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-noroot-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [], metadata: {} }),
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
     })
     booted = await bootApp({ root })
 
@@ -246,22 +258,20 @@ describe('mstar-engine-status — residualFindings root-key semantics (spec §6)
     expect(source.state).toMatchObject({ residuals: [], residualFindings: null })
   })
 
-  it('root key present with no open entries → residualFindings [] (closed lifecycles only)', async () => {
+  it('register present with no open entries → residualFindings [] (closed lifecycles only)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-noopen-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({
-        version: 1,
-        updated_at: '2026-08-08',
-        plans: [],
-        residual_findings: {
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
+      'projects/_default/residuals.json': JSON.stringify({
+        entries: {
           'plan-a': [
-            { id: 'R1', title: 'already fixed', severity: 'high', lifecycle: 'resolved' },
-            { id: 'R2', title: 'wontfix', severity: 'low', lifecycle: 'waived' },
+            { id: 'R1', title: 'already fixed', severity: 'high', lifecycle: 'resolved', source_plan: 'plan-a', registered_at: '2026-08-08' },
+            { id: 'R2', title: 'wontfix', severity: 'low', lifecycle: 'waived', source_plan: 'plan-a', registered_at: '2026-08-08' },
           ],
         },
-        metadata: {},
       }),
     })
     booted = await bootApp({ root })
@@ -271,7 +281,9 @@ describe('mstar-engine-status — residualFindings root-key semantics (spec §6)
     const row = lastMessage(decision)
     const source = row?.source
     if (source === undefined || source.kind !== 'mstar-engine-status') return
-    expect(source.state).toMatchObject({ residualFindings: [] })
+    // W-A fix-wave: closed entries must NOT count toward the severity
+    // rollup either — the workspace shows no open residuals at all.
+    expect(source.state).toMatchObject({ residualFindings: [], residuals: [] })
   })
 })
 
@@ -285,32 +297,33 @@ describe('mstar-engine-status — residualFindings root-key semantics (spec §6)
  * ========================================================================== */
 
 describe('mstar-engine-status — residualFindings open-filter branches + severity order + cap (spec §6)', () => {
-  it('open filter parity: missing / null / false lifecycle → open; strict "open" string → open; true and non-"open" strings → closed', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-openfilter-'))
+  /** Seed a v2 tree whose project register carries the given entries. */
+  async function seedWithRegister(entries: Record<string, unknown[]>): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-register-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({
-        version: 1,
-        updated_at: '2026-08-08',
-        plans: [],
-        residual_findings: {
-          'plan-a': [
-            { id: 'R-missing', title: 'no lifecycle key', severity: 'critical' },
-            { id: 'R-null', title: 'null lifecycle', severity: 'high', lifecycle: null },
-            { id: 'R-false', title: 'false lifecycle', severity: 'medium', lifecycle: false },
-            { id: 'R-open', title: 'string open', severity: 'low', lifecycle: 'open' },
-            { id: 'R-true', title: 'truthy non-string lifecycle', severity: 'critical', lifecycle: true },
-            { id: 'R-resolved', title: 'resolved', severity: 'high', lifecycle: 'resolved' },
-            { id: 'R-superseded', title: 'superseded', severity: 'nit', lifecycle: 'superseded' },
-          ],
-        },
-        metadata: {},
-      }),
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
+      'projects/_default/residuals.json': JSON.stringify({ entries }),
     })
     booted = await bootApp({ root })
+  }
 
-    const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+  it('open filter parity: missing / null / false lifecycle → open; strict "open" string → open; true and non-"open" strings → closed', async () => {
+    await seedWithRegister({
+      'plan-a': [
+        { id: 'R-missing', title: 'no lifecycle key', severity: 'critical', source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-null', title: 'null lifecycle', severity: 'high', lifecycle: null, source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-false', title: 'false lifecycle', severity: 'medium', lifecycle: false, source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-open', title: 'string open', severity: 'low', lifecycle: 'open', source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-true', title: 'truthy non-string lifecycle', severity: 'critical', lifecycle: true, source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-resolved', title: 'resolved', severity: 'high', lifecycle: 'resolved', source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-superseded', title: 'superseded', severity: 'nit', lifecycle: 'superseded', source_plan: 'plan-a', registered_at: '2026-08-08' },
+      ],
+    })
+
+    const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
     const source = row?.source
@@ -324,34 +337,31 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
       { planId: 'plan-a', id: 'R-false', severity: 'medium', title: 'false lifecycle' },
       { planId: 'plan-a', id: 'R-open', severity: 'low', title: 'string open' },
     ])
+    // W-A fix-wave: the severity ROLLUP applies the same open parity — the
+    // closed entries (R-true critical, R-resolved high, R-superseded nit)
+    // never count; only the four open entries do.
+    expect(state.residuals).toEqual([
+      { severity: 'critical', count: 1 },
+      { severity: 'high', count: 1 },
+      { severity: 'medium', count: 1 },
+      { severity: 'low', count: 1 },
+    ])
   })
 
   it('severity order critical→nit regardless of source order; unknown severities skipped; missing id/title → ""', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-sevorder-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({
-        version: 1,
-        updated_at: '2026-08-08',
-        plans: [],
-        residual_findings: {
-          'plan-a': [
-            { id: 'R-nit', title: 'nit first in source', severity: 'nit' },
-            { id: 'R-unknown', title: 'unknown severity must be skipped', severity: 'urgent' },
-            { severity: 'critical', title: '' }, // no id → '' (never thrown)
-            { id: 'R-medium', title: 'medium', severity: 'medium' },
-            { id: 'R-low', title: 'low', severity: 'low' },
-            { id: 'R-high', title: 'high', severity: 'high' },
-            { id: 'R-no-title', severity: 'nit' }, // no title → ''
-          ],
-        },
-        metadata: {},
-      }),
+    await seedWithRegister({
+      'plan-a': [
+        { id: 'R-nit', title: 'nit first in source', severity: 'nit', source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-unknown', title: 'unknown severity must be skipped', severity: 'urgent', source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { severity: 'critical', title: '', source_plan: 'plan-a', registered_at: '2026-08-08' }, // no id → '' (never thrown)
+        { id: 'R-medium', title: 'medium', severity: 'medium', source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-low', title: 'low', severity: 'low', source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-high', title: 'high', severity: 'high', source_plan: 'plan-a', registered_at: '2026-08-08' },
+        { id: 'R-no-title', severity: 'nit', source_plan: 'plan-a', registered_at: '2026-08-08' }, // no title → ''
+      ],
     })
-    booted = await bootApp({ root })
 
-    const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
     const source = row?.source
@@ -370,26 +380,14 @@ describe('mstar-engine-status — residualFindings open-filter branches + severi
   })
 
   it('cap 10: more than 10 open findings (across plans) → the first 10 by severity order, planId preserved', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-cap10-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    const criticals = Array.from({ length: 4 }, (_, i) => ({ id: `C${i + 1}`, title: `critical ${i + 1}`, severity: 'critical' }))
-    const nits = Array.from({ length: 8 }, (_, i) => ({ id: `N${i + 1}`, title: `nit ${i + 1}`, severity: 'nit' }))
-    await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({
-        version: 1,
-        updated_at: '2026-08-08',
-        plans: [],
-        residual_findings: {
-          'plan-a': criticals.slice(0, 2),
-          'plan-b': [...criticals.slice(2), ...nits],
-        },
-        metadata: {},
-      }),
+    const criticals = Array.from({ length: 4 }, (_, i) => ({ id: `C${i + 1}`, title: `critical ${i + 1}`, severity: 'critical', source_plan: 'plan-a', registered_at: '2026-08-08' }))
+    const nits = Array.from({ length: 8 }, (_, i) => ({ id: `N${i + 1}`, title: `nit ${i + 1}`, severity: 'nit', source_plan: 'plan-b', registered_at: '2026-08-08' }))
+    await seedWithRegister({
+      'plan-a': criticals.slice(0, 2),
+      'plan-b': [...criticals.slice(2), ...nits],
     })
-    booted = await bootApp({ root })
 
-    const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const decision = await booted!.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
     const source = row?.source
@@ -422,9 +420,8 @@ describe('mstar-engine-status — doneAt passthrough (spec §6)', () => {
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({
-        version: 1,
-        updated_at: '2026-08-08',
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', {
         plans: [
           { id: 'plan-a', status: 'Done', done_at: '  2026-08-09  ' },
           { id: 'plan-b', status: 'Done', done_at: '   ' },
@@ -432,7 +429,6 @@ describe('mstar-engine-status — doneAt passthrough (spec §6)', () => {
           { id: 'plan-d', status: 'Done', done_at: 20260810 },
           { id: 'plan-e', status: 'Done' },
         ],
-        metadata: {},
       }),
     })
     booted = await bootApp({ root })
@@ -508,7 +504,8 @@ describe('mstar-engine-status — TTL refresh and digest-gated re-emission', () 
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({ version: 1, updated_at: '2026-08-08', plans: [{ id: 'plan-a', status: 'Todo' }], residual_findings: {}, metadata: {} }),
+      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
     })
     // 50ms refresh interval: proves both the cache hit (immediate reuse)
     // and the bounded re-read (after the interval).
@@ -526,15 +523,12 @@ describe('mstar-engine-status — TTL refresh and digest-gated re-emission', () 
     if (sameTurn.kind !== 'enter') return
     expect(sameTurn.messages).toHaveLength(0)
 
-    // Same turn, TTL-refreshed change (status + residual changed): the row
-    // re-appears with the new state.
+    // Same turn, TTL-refreshed change (snapshot plan status + register
+    // residual changed): the row re-appears with the new state.
     await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({
-        version: 1,
-        updated_at: '2026-08-08',
-        plans: [{ id: 'plan-a', status: 'Done' }],
-        residual_findings: { 'plan-a': [{ severity: 'critical', description: 'new finding' }] },
-        metadata: {},
+      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: [{ id: 'plan-a', status: 'Done' }] }),
+      'projects/_default/residuals.json': JSON.stringify({
+        entries: { 'plan-a': [{ severity: 'critical', description: 'new finding', source_plan: 'plan-a', registered_at: '2026-08-08' }] },
       }),
     })
     await new Promise((resolve) => setTimeout(resolve, 80))

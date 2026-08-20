@@ -133,12 +133,12 @@ flowchart TD
     F --> G["PM: lock compass and create integration branch"]
     F2 --> G
     G --> H["Phase 2→5: execute → close → PR → merge-ready"]
-    E -->|No| I["PM: select active plan from status.json"]
+    E -->|No| I["PM: select active plan from workflow snapshot"]
     H --> I
     I --> J{"Any plan not Done"}
     J -->|Yes| K["PM: dispatch one plan on a feature branch"]
     K --> L["Dev roles: implement and report"]
-    L --> M["PM: update plan and status.json"]
+    L --> M["PM: update plan and workflow snapshot"]
     M --> N["QC trio: review gate"]
     N --> O{"QC decision"}
     O -->|Request Changes| K
@@ -147,7 +147,7 @@ flowchart TD
     P -->|pm-acceptance| P2["PM: acceptance checklist"]
     P1 --> Q{"Residual findings remain"}
     P2 --> Q
-    Q -->|Yes| R["PM/QA: register or accept residuals in status.json"]
+    Q -->|Yes| R["PM/QA: register or accept residuals in project register"]
     R --> S["PM: mark plan Done and merge to integration branch"]
     Q -->|No| S
     S --> T["PM: sync compass plan status"]
@@ -190,6 +190,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-branch-worktree` | Branches, worktrees, QC/QA checkout |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` discovery / init |
 | `mstar-plan-artifacts` | Plans, `status.json`, residuals, Findings cleanup |
+| `mstar-project-governance` | Roadmap authoring + residual register lifecycle, `_default` fallback |
 | `mstar-design-md` | DESIGN.md gate for UI plans |
 | `mstar-review-qc` | PM QC tri orchestration |
 | `mstar-coding-behavior` | RCA, test-first, review feedback, evidence |
@@ -201,7 +202,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-host` | Host adapters (dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex) |
 | `pm` | `/pm` / `/skill:pm` / host PM entry |
 
-Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Repos with a non-default layout can declare every harness directory symbol in a gitignored **`.mstarc`** (`[config]` keys `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` — honored above probing). Details → `mstar-plan-conventions`.
+Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`, `projects/`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Repos with a non-default layout can declare every harness directory symbol in a gitignored **`.mstarc`** (`[config]` keys `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `workflow_dir` / `project_dir` — honored above probing). Details → `mstar-plan-conventions`.
 
 Maintainers: [`AGENTS.md`](AGENTS.md).
 

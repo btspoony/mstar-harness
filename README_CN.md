@@ -134,12 +134,12 @@ flowchart TD
     F --> G["PM: 锁定 compass 并创建 integration branch"]
     F2 --> G
     G --> H["Phase 2→5: execute → close → PR → merge-ready"]
-    E -->|否| I["PM: 从 status.json 选择 active plan"]
+    E -->|否| I["PM: 从 workflow snapshot 选择 active plan"]
     H --> I
     I --> J{"是否仍有 plan 未 Done"}
     J -->|是| K["PM: 在 feature branch 分派一个 plan"]
     K --> L["开发角色: 实现并回报"]
-    L --> M["PM: 更新 plan 与 status.json"]
+    L --> M["PM: 更新 plan 与 workflow snapshot"]
     M --> N["QC 三审: review gate"]
     N --> O{"QC 结论"}
     O -->|Request Changes| K
@@ -148,7 +148,7 @@ flowchart TD
     P -->|pm-acceptance| P2["PM: acceptance 清单"]
     P1 --> Q{"是否仍有 residual findings"}
     P2 --> Q
-    Q -->|是| R["PM/QA: 在 status.json 登记或接受 residuals"]
+    Q -->|是| R["PM/QA: 在 project register 登记或接受 residuals"]
     R --> S["PM: 标记 plan Done 并合并到 integration branch"]
     Q -->|否| S
     S --> T["PM: 同步 compass plan 状态"]
@@ -191,6 +191,7 @@ flowchart TD
 | `mstar-branch-worktree` | 分支、worktree、QC/QA 检出 |
 | `mstar-plan-conventions` | `{HARNESS_DIR}` 发现 / 初始化 |
 | `mstar-plan-artifacts` | plan、`status.json`、residual、Findings cleanup |
+| `mstar-project-governance` | roadmap 编写约定 + residual register 生命周期、`_default` 回退 |
 | `mstar-design-md` | UI plan 的 DESIGN.md 门禁 |
 | `mstar-review-qc` | PM QC tri 编排 |
 | `mstar-coding-behavior` | RCA、测试优先、审查反馈、证据 |
@@ -202,7 +203,7 @@ flowchart TD
 | `mstar-host` | 宿主适配（dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex） |
 | `pm` | `/pm` / `/skill:pm` / 宿主 PM 入口 |
 
-消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。布局非默认的仓库可在 gitignored 的 **`.mstarc`** 中声明全部 harness 目录符号（`[config]` 键 `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir`，优先于探测）。细则 → `mstar-plan-conventions`。
+消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。布局非默认的仓库可在 gitignored 的 **`.mstarc`** 中声明全部 harness 目录符号（`[config]` 键 `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `workflow_dir` / `project_dir`，优先于探测）。细则 → `mstar-plan-conventions`。
 
 维护者：[`AGENTS.md`](AGENTS.md)。
 

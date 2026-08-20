@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "wf-default",
+  "type": "iteration",
+  "status": "running",
+  "started_at": "2026-08-01",
+  "updated_at": "2026-08-19",
+  "plans": []
+}

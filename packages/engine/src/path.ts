@@ -1,7 +1,8 @@
 /**
  * Engine path module — harness directory discovery, spec/plan/sdd/iteration
- * path composition, scaffold generation, canonical `.gitignore` snippet and
- * the plan-writing path gate.
+ * path composition, v3 workflow/project dir resolution, scaffold
+ * generation, canonical `.gitignore` snippet and the plan-writing path
+ * gate.
  *
  * Spec source: `skills/mstar-plan-conventions/SKILL.md` § 路径符号 (SSOT),
  * § {HARNESS_DIR} 解析顺序（找到即停）, § {SPECS_DIR} 解析（找到非空目录即停）
@@ -279,17 +280,78 @@ export function resolveKnowledgeDir(harnessDir: string): string {
 }
 
 /**
+ * Shared resolution for the v3 workflow-layout dirs (`{WORKFLOW_DIR}` /
+ * `{PROJECT_DIR}`): resolve the harness dir from `startDir` first
+ * (`resolveHarnessDir` — explicit `opts.harnessDir` / `MSTAR_HARNESS_DIR`
+ * override, `.mstarc` `harness_dir`, then the bounded probe), apply the
+ * `.mstarc` sub-dir declaration for `key` (same semantics as the other
+ * `{X}_DIR` keys: relative values resolve against the config file's
+ * directory, absolute allowed, dir need not exist, discovery never passes
+ * the harness dir's parent), else compose `{HARNESS_DIR}/<fallback>`.
+ * Throws when no harness dir resolves — a silent default would point at a
+ * non-harness location.
+ */
+function resolveHarnessSubdir(
+  startDir: string,
+  opts: ResolveHarnessDirOptions,
+  key: keyof MstarcConfig,
+  fallback: string,
+): string {
+  const harness = resolveHarnessDir(startDir, opts);
+  if (harness === null) {
+    throw new Error(
+      `harness dir not found from ${resolve(startDir)} \u2014 cannot resolve the ${fallback} dir (run \`mstar init\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`,
+    );
+  }
+  const declared = mstarcDirOverride(harness, key);
+  return declared !== null ? declared : join(resolve(harness), fallback);
+}
+
+/**
+ * Resolve `{WORKFLOW_DIR}` — default `{HARNESS_DIR}/workflows/`
+ * (v3 workflow lifecycle layout: snapshot.json + notes per workflow id).
+ * A `.mstarc` `[config] workflow_dir` declaration wins (resolved against
+ * the config file's directory). The dir need not exist — writers
+ * (`writeWorkflowSnapshot` / register paths) create it on demand.
+ *
+ * Deferred-by-design (qc1 S-3): the startDir-first signature is asymmetric
+ * with the harnessDir-first sibling resolvers — brief-mandated for the CLI
+ * consumer (it probes from the cwd). Revisit with a harness-dir-first
+ * variant when a third v3 subdir resolver appears.
+ */
+export function resolveWorkflowDir(
+  startDir: string = process.cwd(),
+  opts: ResolveHarnessDirOptions = {},
+): string {
+  return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
+}
+
+/**
+ * Resolve `{PROJECT_DIR}` — default `{HARNESS_DIR}/projects/` (v3 project
+ * layer: roadmap.md + residuals register per project id). A `.mstarc`
+ * `[config] project_dir` declaration wins (resolved against the config
+ * file's directory). Same deferred-by-design signature asymmetry as
+ * `resolveWorkflowDir` (qc1 S-3).
+ */
+export function resolveProjectDir(
+  startDir: string = process.cwd(),
+  opts: ResolveHarnessDirOptions = {},
+): string {
+  return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
+}
+
+/**
  * Empty status.json template — embedded copy of
  * `skills/mstar-plan-artifacts/templates/status.empty.json`
- * (plan-conventions § 初始化 Plan 目录). Kept as a constant so the engine
- * has no runtime dependency on skill files.
+ * (plan-conventions § 初始化 Plan 目录). Plan Task 3 ruling: the template is
+ * the **v2 shape** (`version: 2`, `updated_at`, `workflows: []`) so
+ * `scaffoldHarness` never emits an un-migrated (v1) tree. Kept as a constant
+ * so the engine has no runtime dependency on skill files.
  */
 const EMPTY_STATUS_TEMPLATE: Record<string, unknown> = {
-  version: 1,
+  version: 2,
   updated_at: "1970-01-01",
-  plans: [],
-  residual_findings: {},
-  metadata: {},
+  workflows: [],
 };
 
 /** Subdirectories created under `.mstar/` by `scaffoldHarness`. */

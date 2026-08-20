@@ -6,13 +6,13 @@ Each per-host bridge (`cursor-plan-mode-bridge.md`, `kimi-plan-mode-bridge.md`, 
 
 ## Dual-write SSOT rule
 
-The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**. Morning Star **SSOT** lives on disk under **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`): the main plan in `{PLAN_DIR}/<plan-id>-<name>.md`, the plan registry in `{HARNESS_DIR}/status.json`, the iteration compass under `{ITERATION_DIR}/…` when in a formal iteration. Mirror every durable plan artifact to the repo; never treat the host plan file/URI/UI alone as the handoff surface.
+The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**. Morning Star **SSOT** lives on disk under **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`): the main plan in `{PLAN_DIR}/<plan-id>-<name>.md`, the plan registry in `{HARNESS_DIR}/status.json` (v2 root `workflows[]`) + per-lifecycle `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[]` rows + leases), the iteration compass under `{ITERATION_DIR}/…` when in a formal iteration. Mirror every durable plan artifact to the repo; never treat the host plan file/URI/UI alone as the handoff surface.
 
 ### Priority (hard)
 
 1. User explicit instructions (this turn)
 2. Project `AGENTS.md` / `CLAUDE.md`
-3. **`{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json`** (harness SSOT)
+3. **`{HARNESS_DIR}` / `{PLAN_DIR}` / `status.json` (v2) + workflow snapshot** (harness SSOT)
 4. Host session plan / todos / UI (session UX mirror) — the host bridge names its surfaces
 
 **NEVER** cite only a host plan path / session todo list / chat summary in Assignment **Plan Path**, **Context Loaded**, or Completion Report when `{PLAN_DIR}/<plan-id>-<name>.md` should exist.
@@ -21,7 +21,7 @@ The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**
 
 1. **Read** (minimum): `mstar-plan-conventions`, `mstar-plan-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
 2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
-3. **Initialize** if absent: `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `status.json` from `mstar-plan-artifacts/templates/status.empty.json`, `archived/residuals/`, Morning Star process-artifact gitignore set (canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」). Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
+3. **Initialize** if absent: `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `status.json` from `mstar-plan-artifacts/templates/status.empty.json` (v2 shape), Morning Star process-artifact gitignore set (canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」; `workflows/` / `projects/` subdirs are created on demand by engine writers, not pre-created). Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
 
 ## Build resume contract
 
@@ -45,8 +45,8 @@ Not allowed in the parent Build session by default: product implementation, test
 
 | Todo ID (use in title) | Goal | On-disk outcome |
 |------------------------|------|-----------------|
-| **`harness-init`** | Bootstrap harness tree | `{HARNESS_DIR}/`, `{PLAN_DIR}/`, process-artifact gitignore set, `archived/residuals/`, `status.json` initialized |
-| **`spec-register`** | Register plan in SSOT | New `plans[]` row in `status.json` (`id`, `status`, `file`, `metadata`); spec stub in `{SPECS_DIR}` or plan frontmatter |
+| **`harness-init`** | Bootstrap harness tree | `{HARNESS_DIR}/`, `{PLAN_DIR}/`, process-artifact gitignore set, `status.json` (v2) initialized (`workflows/` / `projects/` created on demand by engine writers) |
+| **`spec-register`** | Register plan in SSOT | New root `workflows[]` entry (`{HARNESS_DIR}/status.json` v2) + `plans[]` row in `{WORKFLOW_DIR}/<id>/snapshot.json` (`id`, `status`, `file`, `metadata`); spec stub in `{SPECS_DIR}` or plan frontmatter |
 | **`mirror-plan`** | SSOT main plan file | `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes aligned to the host plan body |
 
 After the host plan is created, keep the host plan body and mirror file **in sync** when scope changes (update both in the same coordination round).
@@ -57,7 +57,7 @@ After the host plan is created, keep the host plan body and mirror file **in syn
 
 1. **Commit**: `git add` + `git commit` on the authorized **Working branch** for this **task id** (one commit per task unless PM explicitly allowed batched commits in Assignment).
 2. **Plan checkbox**: Set `- [x]` on the matching line in `{PLAN_DIR}/<plan-id>-<name>.md`.
-3. **status.json** (when PM round requires): bump `plans[].status` (e.g. `InProgress`) or append coordination notes per `mstar-plan-artifacts`.
+3. **status.json / snapshot** (when PM round requires): bump the snapshot plan row `plans[].status` (e.g. `InProgress`) or append coordination notes to `{WORKFLOW_DIR}/<id>/notes.jsonl` per `mstar-plan-artifacts`.
 4. **Evidence**: Record real `git log -1 --oneline` in Completion Report **Git** (or the plan-mode status note if executing as PM in Plan mode).
 
 **NEVER**
@@ -80,11 +80,11 @@ Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/refe
 
 | Anti-pattern | Fix |
 |--------------|-----|
-| Host plan only, no `{HARNESS_DIR}` files | Run bootstrap todos; write mirror plan + status.json |
+| Host plan only, no `{HARNESS_DIR}` files | Run bootstrap todos; write mirror plan + status.json/snapshot |
 | Todo done, no commit | Commit per task; paste `git log -1` evidence |
 | Drift between host plan and SSOT plan | Update both in same round |
 | Host plan URI as Plan Path | Use `{PLAN_DIR}/...` path |
-| Skip `spec-register` | Add `plans[]` row before implement |
+| Skip `spec-register` | Add the snapshot `plans[]` row + root `workflows[]` entry before implement |
 | Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
 | Host plan approval treated as Done authority | Check harness plan/status/QC/QA gates first |
 | Resume starts coding from host chat summary | Reload harness context and SSOT plan/status first |

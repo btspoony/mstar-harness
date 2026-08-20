@@ -30,7 +30,7 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 - Codex does not imply an OpenCode-style `question` tool.
 - If a structured user-input tool is available in the active mode, use it for concise 1-3 choice decisions.
 - Otherwise ask one concise Markdown question only after codebase exploration cannot answer it.
-- `update_plan` / local todo UI is session progress only; it does not replace `{PLAN_DIR}` plans or `{HARNESS_DIR}/status.json`.
+- `update_plan` / local todo UI is session progress only; it does not replace `{PLAN_DIR}` plans or `{HARNESS_DIR}/status.json` (v2 root `workflows[]`) + `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[]` rows).
 - Codex Goal Mode objective is completion criteria for the host thread, not Morning Star Done authority; mirror it into the SSOT plan when the work is implementation-sized.
 
 ## Dispatch and role execution

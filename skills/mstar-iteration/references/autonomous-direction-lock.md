@@ -42,7 +42,7 @@ Write into compass (and plan Scope as needed):
 
 ### What counts toward the budget（HARD）
 
-Count only **business delivery plans** registered in compass / `status.json` whose primary outcome is product, feature, bugfix, user-facing docs, API/contract, or architecture work for the locked direction.
+Count only **business delivery plans** registered in compass / workflow snapshot (`workflows/<id>/snapshot.json`) whose primary outcome is product, feature, bugfix, user-facing docs, API/contract, or architecture work for the locked direction.
 
 **Do not count** harness / process work as plans (and do not invent plans whose sole job is process):
 
@@ -71,7 +71,7 @@ When a free-text direction / feedback constraint is supplied by the caller:
 
 Resolve `iteration_base_branch` and `target_branch` in order（first hit wins per field）:
 
-1. `{HARNESS_DIR}/status.json` root `metadata`
+1. Workflow snapshot `branch` anchors（`{WORKFLOW_DIR}/<id>/snapshot.json` → `branch.base` / `branch.target`；缺失则根 `status.json` `workflows[]` 无该 entry 时先登记）
 2. Existing / prior iteration compass frontmatter
 3. Current git branch **only if** it is already a documented delivery, integration, or project-policy branch（not merely “whatever HEAD is”）
 4. Still missing → **STOP** — escalate; **never** substitute `main` / `master` because those names exist

@@ -18,6 +18,12 @@ An opt-in declaration that escalates engine validators from warn-only to blockin
 ### Review seat layers (L1–L4)
 The four verification layers of a plan's review chain: **L1** implementer (writes code + runs evidence), **L2** task reviewer (named role `code-reviewer` by default — spec + quality for one task, diff-first, fresh per task), **L3** plan QC (named `qc-specialist` / `-2` / `-3` tri seats — whole-branch diff/logic/risk lenses, never runs suites), **L4** QA (`qa-engineer` — acceptance + residual verification). Layers are roles, not people: a seat never executes another layer's work, and L2/L3 reviewer seats are structurally read-only via their agent-shell permission profiles.
 
+### Workflow lifecycle
+An orchestrated flow (single-plan or iteration) treated as a first-class runtime entity: running state, phase machine, leases/execution policy and logs are contained in one lifecycle directory (`workflows/<id>/snapshot.json` + per-workflow jsonl); the global status table keeps only active lifecycle entries and removes them at terminal state. One lifecycle may be shared by multiple concurrent sessions; terminal state is the natural archive (no compaction ceremony). Not a *session*: a session is one agent conversation and is shorter than a lifecycle.
+
+### Project register
+The durable home for cross-lifecycle debt and direction: open residuals (with severity and lifecycle provenance) and roadmap live under a project; flows without an explicit project fall back to `_default`. Closing a residual is a register state change, not a status-key shuffle. The v1 root `residual_findings` array was retired in v3.0.0.
+
 ## Agent canvas (dsh panel)
 
 ### Emphasis

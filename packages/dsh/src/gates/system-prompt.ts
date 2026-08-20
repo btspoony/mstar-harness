@@ -38,9 +38,13 @@
  * - The context provider reuses the catalog's unified machine-summary
  *   source (`buildCatalogSources` — the SAME builder the engine-status
  *   pre-step catalog row uses) and projects a BOUNDED subset: watermark +
- *   iteration gate + compact state line. Full status.json content
+ *   iteration gate + compact state line. Full catalog content
  *   (residual detail, agent-flow events, knowledge digest, branch/policy
- *   anchors) stays out. The build is TTL-memoized PER RESOLVED HARNESS DIR
+ *   anchors) stays out. v3 (plan `20260819-workflow-dsh-viz` Task 3): the
+ *   digest reads ONLY the catalog row (`state` — itself aggregated from the
+ *   SELECTED workflow snapshot + project registers) — no direct
+ *   status.json / snapshot file reads to change. The build is TTL-memoized
+ *   PER RESOLVED HARNESS DIR
  *   (`DEFAULT_CATALOG_TTL_MS`) so the per-assembly hot path does not
  *   re-read status.json / the compass / the ledger on every prompt
  *   assembly (the catalog's documented staleness tradeoff).

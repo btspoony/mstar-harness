@@ -17,7 +17,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CallId } from '@deepseek-ai/dsh-llm'
 import type { ToolCallView, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, valueOf, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, valueOf, v2RootWithWorkflow, v2SnapshotWithPlans, v2Register, v2ResidualEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -122,7 +122,7 @@ describe('sdd/iteration tool registration — real composition', () => {
     expectGenericCall(app.ctx.tools.get('mstar_sdd_workspace')!.presentCall?.({ plan_id: 'plan-a' }), 'plan-a')
     expectGenericCall(app.ctx.tools.get('mstar_sdd_task_brief')!.presentCall?.({ plan_file: 'plan.md', task_number: 1 }), 'plan.md')
     expectGenericCall(
-      app.ctx.tools.get('mstar_iteration_gate')!.presentCall?.({ status_path: 's.json', compass_path: 'c.md' }),
+      app.ctx.tools.get('mstar_iteration_gate')!.presentCall?.({ snapshot_path: 's.json', compass_path: 'c.md' }),
       'c.md',
     )
   })
@@ -130,7 +130,7 @@ describe('sdd/iteration tool registration — real composition', () => {
   it('presentCall falls back softly on hostile args (no throw, undefined = generic card)', async () => {
     const app = booted = await bootApp()
     expect(app.ctx.tools.get('mstar_sdd_workspace')!.presentCall?.({})).toBeUndefined()
-    expect(app.ctx.tools.get('mstar_iteration_gate')!.presentCall?.({ status_path: 42 })).toBeUndefined()
+    expect(app.ctx.tools.get('mstar_iteration_gate')!.presentCall?.({ snapshot_path: 42 })).toBeUndefined()
   })
 })
 
@@ -346,12 +346,13 @@ describe('mstar_iteration_gate', () => {
   it('passes on a valid in-progress fixture (transition phase-2-execute)', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([PLAN_TODO])),
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [PLAN_TODO]),
       'delivery-compass.md': COMPASS_ACTIVE,
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
     })
 
@@ -372,12 +373,13 @@ describe('mstar_iteration_gate', () => {
   it('passes on an all-done fixture (transition phase-4-pr-delivery)', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([PLAN_DONE])),
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [PLAN_DONE]),
       'delivery-compass.md': COMPASS_COMPLETED,
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
       ...MATCHING_PROBES,
     })
@@ -398,12 +400,13 @@ describe('mstar_iteration_gate', () => {
     const app = booted = await bootApp()
     const brokenCompass = COMPASS_COMPLETED.replace('\nend_date: 2026-08-10', '')
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([PLAN_DONE])),
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [PLAN_DONE]),
       'delivery-compass.md': brokenCompass,
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
       ...MATCHING_PROBES,
     })
@@ -423,33 +426,39 @@ describe('mstar_iteration_gate', () => {
   it('fails with OPEN_RESIDUALS on open plan residuals', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([PLAN_DONE], {
-        'fixture-plan-1': [{ id: 'R1', title: 'open finding', severity: 'medium', lifecycle: 'open' }],
-      })),
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [PLAN_DONE]),
+      'projects/_default/residuals.json': v2Register({ 'fixture-plan-1': [v2ResidualEntry('R1', { severity: 'medium' })] }),
       'delivery-compass.md': COMPASS_COMPLETED,
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
       ...MATCHING_PROBES,
     })
 
     expect(result.isError).toBe(false)
     if (result.isError) return
-    expect(valueOf(result).ok).toBe(false)
-    expect(valueOf(result).violations.map((v) => v.code)).toContain('OPEN_RESIDUALS')
+    // v3 relocation: the §3.1 residual item moved to the project-layer
+    // findingsCleanupGate(register, planId) — the snapshot gate itself no
+    // longer reports OPEN_RESIDUALS (residual close is a project-register
+    // state change; the open register entry does not fail the iteration
+    // gate).
+    expect(valueOf(result).ok).toBe(true)
+    expect(valueOf(result).violations.map((v) => v.code)).not.toContain('OPEN_RESIDUALS')
   })
 
   it('fails with EXIT_BRANCH_MISMATCH when the working branch probe disagrees', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([PLAN_DONE])),
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [PLAN_DONE]),
       'delivery-compass.md': COMPASS_COMPLETED,
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
       branch: 'feature/rogue',
       integration: 'iteration/v2.1.0',
@@ -465,12 +474,13 @@ describe('mstar_iteration_gate', () => {
   it('reports PLAN_NOT_IN_STATUS on entry while the running gate still passes', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([])),
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', []),
       'delivery-compass.md': COMPASS_ACTIVE,
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
     })
 
@@ -485,16 +495,16 @@ describe('mstar_iteration_gate', () => {
     await seedHarness(app.harnessDir, { 'delivery-compass.md': COMPASS_ACTIVE })
 
     const missingStatus = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
     })
     expect(missingStatus.isError).toBe(true)
     if (!missingStatus.isError) return
-    expect(missingStatus.error.message).toContain('status file not found')
+    expect(missingStatus.error.message).toContain('workflow snapshot not found')
 
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(statusWithPlans([])) })
+    await seedHarness(app.harnessDir, { 'status.json': v2RootWithWorkflow(), 'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', []) })
     const missingCompass = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'no-compass.md'),
     })
     expect(missingCompass.isError).toBe(true)
@@ -505,12 +515,12 @@ describe('mstar_iteration_gate', () => {
   it('hostile: invalid JSON status → failure result', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': 'not json {{{',
+      'workflows/wf-1/snapshot.json': 'not json {{{',
       'delivery-compass.md': COMPASS_ACTIVE,
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
     })
 
@@ -522,12 +532,12 @@ describe('mstar_iteration_gate', () => {
   it('hostile: compass without a frontmatter fence → failure result', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([])),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', []),
       'delivery-compass.md': '# no frontmatter here\n',
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
     })
 
@@ -539,12 +549,12 @@ describe('mstar_iteration_gate', () => {
   it('hostile: unsupported compass frontmatter line → failure result', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(statusWithPlans([])),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', []),
       'delivery-compass.md': '---\n- orphan item before any key\n---\n',
     })
 
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      status_path: join(app.harnessDir, 'status.json'),
+      snapshot_path: join(app.harnessDir, 'workflows', 'wf-1', 'snapshot.json'),
       compass_path: join(app.harnessDir, 'delivery-compass.md'),
     })
 
@@ -553,24 +563,24 @@ describe('mstar_iteration_gate', () => {
     expect(result.error.message).toContain('unsupported frontmatter line')
   })
 
-  it('hostile: missing required status_path → INVALID_ARGS', async () => {
+  it('hostile: missing required snapshot_path → INVALID_ARGS', async () => {
     const app = booted = await bootApp()
     const result = await run(app.ctx, 'mstar_iteration_gate', { compass_path: 'c.md' })
 
     expect(result.isError).toBe(true)
     if (!result.isError) return
     expect(result.error.info?.code).toBe('INVALID_ARGS')
-    expect(result.error.message).toContain('missing required property \"status_path\"')
+    expect(result.error.message).toContain('missing required property \"snapshot_path\"')
   })
 
-  it('hostile: non-string status_path → INVALID_ARGS', async () => {
+  it('hostile: non-string snapshot_path → INVALID_ARGS', async () => {
     const app = booted = await bootApp()
-    const result = await run(app.ctx, 'mstar_iteration_gate', { status_path: 42, compass_path: 'c.md' })
+    const result = await run(app.ctx, 'mstar_iteration_gate', { snapshot_path: 42, compass_path: 'c.md' })
 
     expect(result.isError).toBe(true)
     if (!result.isError) return
     expect(result.error.info?.code).toBe('INVALID_ARGS')
-    expect(result.error.message).toContain('\"status_path\" must be a string')
+    expect(result.error.message).toContain('\"snapshot_path\" must be a string')
   })
 })
 

@@ -32,6 +32,7 @@ import * as React from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ZoneView } from '../graph/project-graph.ts'
 import { TaskBoard } from '../zones/TaskBoard.tsx'
+import { ProjectRollup } from '../zones/ProjectRollup.tsx'
 import { IterationInfoSection } from './IterationInfoSection.tsx'
 import css from '../panel.module.css'
 
@@ -52,6 +53,12 @@ export function IterationTaskPage({ view, t }: IterationTaskPageProps) {
           independent scroll body (never compressed by a canvas height). */}
       <div className={css.iterationTasks} data-mstar-tasks-scroll>
         <TaskBoard view={view.tasks} t={t} />
+
+        {/* The ADDITIVE project rollup zone (plan 20260819-workflow-dsh-viz
+            Task 3 — compass AC-4): roadmap milestones + open residuals from
+            the project layer, below the kanban in the same scroll body. The
+            four existing ZoneView shapes are untouched. */}
+        <ProjectRollup view={view.project} t={t} />
       </div>
     </div>
   )

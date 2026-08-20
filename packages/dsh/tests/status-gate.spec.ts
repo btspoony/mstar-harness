@@ -23,9 +23,24 @@
  *   `mstar/status-gate` event instead.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
-import { bootApp, INVALID_STATUS, VALID_STATUS, seedHarness, type BootResult } from './harness.ts'
+import { harnessDocKindOfTarget } from '../src/gates/status.ts'
+import {
+  bootApp,
+  INVALID_STATUS,
+  INVALID_STATUS_V2,
+  VALID_STATUS,
+  VALID_STATUS_V2,
+  seedHarness,
+  v2RootWithWorkflow,
+  v2SnapshotWithPlans,
+  v2Register,
+  v2ResidualEntry,
+  type BootResult,
+} from './harness.ts'
 import type { StatusGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -39,6 +54,12 @@ afterEach(async () => {
 const statusTarget = (harnessDir: string): FsTarget => ({
   targetKey: join(harnessDir, 'status.json') as FsTarget['targetKey'],
   displayPath: join(harnessDir, 'status.json'),
+})
+
+/** FsTarget for `{HARNESS_DIR}/workflows/wf-1/snapshot.json` (the v3 snapshot target). */
+const snapshotTarget = (harnessDir: string, workflowId = 'wf-1'): FsTarget => ({
+  targetKey: join(harnessDir, 'workflows', workflowId, 'snapshot.json') as FsTarget['targetKey'],
+  displayPath: join(harnessDir, 'workflows', workflowId, 'snapshot.json'),
 })
 
 /** FsTarget for a non-harness file. */
@@ -57,7 +78,7 @@ function captureAdvisories(ctx: BootResult['ctx']): StatusGateAdvisory[] {
 describe('status gate — warn (default) mode', () => {
   it('invalid status.json write-intent → advisory emit, intent resolves undefined (write proceeds)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
@@ -68,12 +89,12 @@ describe('status gate — warn (default) mode', () => {
     expect(advisories[0]!.target).toBe(join(app.harnessDir, 'status.json'))
     expect(advisories[0]!.hard).toBe(false)
     expect(advisories[0]!.result.hardBlocked).toBe(false)
-    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('status.invalid-plans')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('status.invalid-workflows')
   })
 
   it('invalid status.json edit-intent → advisory emit with operation edit, edit proceeds', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/edit-intent', statusTarget(app.harnessDir), {}, () => undefined)
@@ -97,7 +118,7 @@ describe('status gate — warn (default) mode', () => {
 
   it('clean document → silent pass (no advisory, no veto)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
@@ -120,7 +141,7 @@ describe('status gate — warn (default) mode', () => {
 describe('status gate — hard mode (Config enforcement: hard)', () => {
   it('invalid status.json write-intent → repair-escape advisory (hard+repair), waterfall resolves (write proceeds)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
@@ -133,12 +154,12 @@ describe('status gate — hard mode (Config enforcement: hard)', () => {
     expect(advisories[0]!.repair).toBe(true)
     expect(advisories[0]!.degraded).toBeUndefined()
     expect(advisories[0]!.result.hardBlocked).toBe(true) // GateResult.hardBlocked still honored
-    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('status.invalid-plans')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('status.invalid-workflows')
   })
 
   it('invalid status.json edit-intent → repair-escape advisory (operation edit)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/edit-intent', statusTarget(app.harnessDir), {}, () => undefined)
@@ -153,11 +174,15 @@ describe('status gate — hard mode (Config enforcement: hard)', () => {
   it('hostile inputs surface their violation codes in the repair advisory', async () => {
     const cases: Array<{ name: string; content: string; code: string }> = [
       { name: 'non-JSON', content: 'not json {{{', code: 'status.invalid-json' },
-      { name: 'wrong schema version', content: JSON.stringify({ ...VALID_STATUS, version: 2 }), code: 'status.unsupported-version' },
+      { name: 'v2 root without workflows', content: JSON.stringify({ ...VALID_STATUS_V2, workflows: undefined }), code: 'status.missing-workflows' },
+      { name: 'v2 root with non-array workflows', content: JSON.stringify(INVALID_STATUS_V2), code: 'status.invalid-workflows' },
+      // v1-shaped (root plans[]) fails closed with the migrate hint even when
+      // the version field claims 2 (the v1-disguise hole, engine W-C).
+      { name: 'v1-shaped doc with version 2', content: JSON.stringify({ ...VALID_STATUS, version: 2 }), code: 'status.migration-required' },
       {
-        name: 'dual residual write (root + metadata)',
-        content: JSON.stringify({ ...VALID_STATUS, metadata: { residual_findings: { p1: [] } } }),
-        code: 'status.dual-write-residuals',
+        name: 'v1 residual_findings home',
+        content: JSON.stringify({ ...VALID_STATUS, residual_findings: { p1: [] } }),
+        code: 'status.migration-required',
       },
     ]
     for (const fixture of cases) {
@@ -180,7 +205,7 @@ describe('status gate — hard mode (Config enforcement: hard)', () => {
   it('hard via compass frontmatter (no Config override) → repair-escape advisory with hard=true', async () => {
     const app = booted = await bootApp()
     await seedHarness(app.harnessDir, {
-      'status.json': JSON.stringify(INVALID_STATUS),
+      'status.json': JSON.stringify(INVALID_STATUS_V2),
       'iterations/v2.1.0/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
     })
     const advisories = captureAdvisories(app.ctx)
@@ -195,7 +220,7 @@ describe('status gate — hard mode (Config enforcement: hard)', () => {
 
   it('clean document under hard → passes silently (no violations → no advisory)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
@@ -206,7 +231,7 @@ describe('status gate — hard mode (Config enforcement: hard)', () => {
 
   it('non-status targets are not gated (gate scope is the harness status file only)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/write-intent', otherTarget(app.harnessDir), {}, () => undefined)
@@ -225,7 +250,7 @@ describe('status gate — error-containment envelope (qc3 F-1)', () => {
 
   it('unexpected error inside the gate → degrade to allow with a degraded advisory (warn mode)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/write-intent', brokenTarget(app.harnessDir), {}, () => undefined)
@@ -240,7 +265,7 @@ describe('status gate — error-containment envelope (qc3 F-1)', () => {
 
   it('unexpected error inside the gate → degrade to allow in hard mode too (never hardens a soft workflow)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS_V2) })
     const advisories = captureAdvisories(app.ctx)
 
     const intent = await app.ctx.waterfall('fs/write-intent', brokenTarget(app.harnessDir), {}, () => undefined)
@@ -253,7 +278,7 @@ describe('status gate — error-containment envelope (qc3 F-1)', () => {
 
   it('a throwing advisory consumer is contained by the envelope (emit failure cannot block the write)', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(VALID_STATUS_V2) })
     app.ctx.on('mstar/status-gate', () => { throw new Error('consumer boom') })
 
     const intent = await app.ctx.waterfall('fs/write-intent', brokenTarget(app.harnessDir), {}, () => undefined)
@@ -263,23 +288,30 @@ describe('status gate — error-containment envelope (qc3 F-1)', () => {
 })
 
 describe('status gate — findingsCleanupGate when configured', () => {
-  /** Schema-valid doc whose plan declares zero-residual and carries an open nit. */
-  const CLEANUP_DOC = {
-    ...VALID_STATUS,
-    plans: [{ id: 'p1', title: 't', file: 'plans/p1.md', status: 'InProgress', metadata: { findings_cleanup: 'zero-residual' } }],
-    residual_findings: {
-      p1: [{ id: 'R1', title: 't', severity: 'nit', source: 'qc', scope: 'plan', decision: 'defer', owner: 'qa', target: 'n', tracking: null }],
-    },
+  /**
+   * Seed the v3 cleanup fixture: a v2 tree whose snapshot plan row declares
+   * zero-residual AND a project register holding an open nit for that plan
+   * (the v1 `residual_findings` home is gone — residuals live in
+   * `projects/<id>/residuals.json`, entries keyed by plan id; the snapshot
+   * write gate runs the cleanup extension against them).
+   */
+  async function seedCleanupSnapshot(harnessDir: string, mode = 'zero-residual'): Promise<void> {
+    const configured = { id: 'p1', title: 't', file: 'plans/p1.md', status: 'InProgress', metadata: { findings_cleanup: mode } }
+    await seedHarness(harnessDir, {
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [configured]),
+      'projects/_default/residuals.json': v2Register({ p1: [v2ResidualEntry('R1', { severity: 'nit' })] }),
+    })
   }
 
   it('zero-residual mode configured → open nit surfaces as a repair-escape advisory under hard', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(CLEANUP_DOC) })
+    await seedCleanupSnapshot(app.harnessDir)
     const advisories = captureAdvisories(app.ctx)
 
-    const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
+    const intent = await app.ctx.waterfall('fs/write-intent', snapshotTarget(app.harnessDir), {}, () => undefined)
 
-    // The document already violates the cleanup gate; the write may BE the
+    // The snapshot already violates the cleanup gate; the write may BE the
     // cleanup — hard mode allows it as a repair escape (content-blind seam).
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(1)
@@ -290,10 +322,10 @@ describe('status gate — findingsCleanupGate when configured', () => {
 
   it('zero-residual mode configured → advisory under warn', async () => {
     const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(CLEANUP_DOC) })
+    await seedCleanupSnapshot(app.harnessDir)
     const advisories = captureAdvisories(app.ctx)
 
-    const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
+    const intent = await app.ctx.waterfall('fs/write-intent', snapshotTarget(app.harnessDir), {}, () => undefined)
 
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(1)
@@ -301,16 +333,21 @@ describe('status gate — findingsCleanupGate when configured', () => {
   })
 
   it('no findings_cleanup mode declared → cleanup gate not configured, doc passes', async () => {
-    const unconfigured = {
-      ...CLEANUP_DOC,
-      plans: [{ id: 'p1', title: 't', file: 'plans/p1.md', status: 'InProgress' }],
-    }
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(unconfigured) })
+    // A snapshot plan row WITHOUT `metadata.findings_cleanup`: the cleanup
+    // extension is not configured — the open register nit is not a gate
+    // violation (the mode is the opt-in).
+    await seedHarness(app.harnessDir, {
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [{ id: 'p1', title: 't', file: 'plans/p1.md', status: 'InProgress' }]),
+      'projects/_default/residuals.json': v2Register({ p1: [v2ResidualEntry('R1', { severity: 'nit' })] }),
+    })
+    const advisories = captureAdvisories(app.ctx)
 
-    const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
+    const intent = await app.ctx.waterfall('fs/write-intent', snapshotTarget(app.harnessDir), {}, () => undefined)
 
     expect(intent).toBeUndefined()
+    expect(advisories).toHaveLength(0)
   })
 })
 
@@ -320,7 +357,7 @@ describe('status gate — single-slot waterfall composition', () => {
     // chain — the write proceeds, so a later decider (fs-policy's observed-
     // state slot) still owns the intent decision.
     const app = booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(app.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     let secondRan = false
     app.ctx.on('fs/write-intent', () => {
       secondRan = true
@@ -336,7 +373,7 @@ describe('status gate — single-slot waterfall composition', () => {
     await booted?.dispose()
     booted = undefined
     const warn = booted = await bootApp()
-    await seedHarness(warn.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
+    await seedHarness(warn.harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS_V2) })
     secondRan = false
     warn.ctx.on('fs/write-intent', () => {
       secondRan = true
@@ -352,5 +389,41 @@ describe('status gate — single-slot waterfall composition', () => {
     const other = await warn.ctx.waterfall('fs/write-intent', otherTarget(warn.harnessDir), {}, () => undefined)
     expect(other).toEqual({ kind: 'createIfAbsent' })
     expect(secondRan).toBe(true)
+  })
+})
+
+describe('harnessDocKindOfTarget — custom workflow_dir/project_dir (Phase-5 F1)', () => {
+  it('classifies snapshot/register under `.mstarc`-declared custom dirs; default names are not canonical there', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-status-custom-'))
+    try {
+      const harness = join(root, '.mstar')
+      mkdirSync(join(harness, 'cw-wf', 'wf-1'), { recursive: true })
+      mkdirSync(join(harness, 'cw-pj', '_default'), { recursive: true })
+      writeFileSync(join(harness, '.mstarc'), '[config]\nworkflow_dir=cw-wf\nproject_dir=cw-pj\n', 'utf8')
+
+      expect(harnessDocKindOfTarget(harness, join(harness, 'cw-wf', 'wf-1', 'snapshot.json'))).toBe('snapshot')
+      expect(harnessDocKindOfTarget(harness, join(harness, 'cw-pj', '_default', 'residuals.json'))).toBe('register')
+      // The default-named locations are NOT the canonical homes under the
+      // custom layout (the gate must not classify what the runtime never
+      // writes).
+      expect(harnessDocKindOfTarget(harness, join(harness, 'workflows', 'wf-1', 'snapshot.json'))).toBeNull()
+      expect(harnessDocKindOfTarget(harness, join(harness, 'projects', '_default', 'residuals.json'))).toBeNull()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('default layout (no `.mstarc`) keeps the canonical names', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-status-default-'))
+    try {
+      const harness = join(root, '.mstar')
+      mkdirSync(join(harness, 'workflows', 'wf-1'), { recursive: true })
+      mkdirSync(join(harness, 'projects', '_default'), { recursive: true })
+      expect(harnessDocKindOfTarget(harness, join(harness, 'workflows', 'wf-1', 'snapshot.json'))).toBe('snapshot')
+      expect(harnessDocKindOfTarget(harness, join(harness, 'projects', '_default', 'residuals.json'))).toBe('register')
+      expect(harnessDocKindOfTarget(harness, join(harness, 'workflows', 'snapshot.json'))).toBeNull()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

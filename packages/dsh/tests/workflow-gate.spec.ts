@@ -56,7 +56,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, FakeSessionsRegistry, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, seedV2Tree, FakeSessionsRegistry, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
@@ -148,7 +148,7 @@ async function makeHarnessWorkspace(prefix: string): Promise<string> {
   return ws
 }
 
-/** status.json wrapping one plan row (lease-gate fixture shape). */
+/** status.json wrapping one plan row (lease-gate fixture shape — kept for the v1→migration-required P-b degrade case). */
 const statusDoc = (plan: Record<string, unknown>): string =>
   JSON.stringify({
     version: 1,
@@ -157,6 +157,22 @@ const statusDoc = (plan: Record<string, unknown>): string =>
     residual_findings: {},
     metadata: {},
   })
+
+/** Seed the v2 P-b tree: v2 root + ACTIVE workflow snapshot carrying one plan row (Task 3 — the snapshot read). */
+async function seedPbTree(harnessDir: string, plan: Record<string, unknown>): Promise<void> {
+  await seedHarness(harnessDir, {
+    'status.json': v2RootWithWorkflow(),
+    'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [plan]),
+  })
+}
+
+/** Seed the v2 tree with a SNAPSHOT that is parseable-but-shape-invalid (`plans` non-array) — the P-b one-warn degrade (F-301). */
+async function seedPbShapeInvalid(harnessDir: string): Promise<void> {
+  await seedHarness(harnessDir, {
+    'status.json': v2RootWithWorkflow(),
+    'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: {} }),
+  })
+}
 
 /** InProgress plan row WITHOUT a lease — orphan (uncovered). */
 const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
@@ -489,7 +505,7 @@ describe('workflow gate — ask mode (P-c first-seen ask)', () => {
 describe('workflow gate — P-b lease attribution', () => {
   it('(a) uncovered InProgress plan (no lease) + hard → deny, reason cites the plan id', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-a-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedPbTree(join(ws, '.agents'), IN_PROGRESS_ORPHAN)
     const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
 
@@ -504,7 +520,7 @@ describe('workflow gate — P-b lease attribution', () => {
 
   it('(b) uncovered InProgress plan under warn → allowed + advisory (workflow.lease.uncovered) + warn', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-b1-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedPbTree(join(ws, '.agents'), IN_PROGRESS_ORPHAN)
     const app = booted = await bootApp({ workflowGate: 'warn', harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
     const warns = captureDispatchWarns(app.ctx)
@@ -525,7 +541,7 @@ describe('workflow gate — P-b lease attribution', () => {
 
   it('(b) uncovered InProgress plan under ask → allowed + advisory + warn (P-b never asks — workspace red line, advisory only)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-b2-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedPbTree(join(ws, '.agents'), IN_PROGRESS_ORPHAN)
     const app = booted = await bootApp({ workflowGate: 'ask', harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
     const warns = captureDispatchWarns(app.ctx)
@@ -541,7 +557,7 @@ describe('workflow gate — P-b lease attribution', () => {
 
   it('(c) lease-covered InProgress plan → allow, no advisory (P-b passes; P-a allowlist still honored under hard)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-c-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_WITH_LEASE) })
+    await seedPbTree(join(ws, '.agents'), IN_PROGRESS_WITH_LEASE)
     const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x'], harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
 
@@ -564,7 +580,7 @@ describe('workflow gate — P-b lease attribution', () => {
 
   it('(d) harness dir with no active plans → allow (read-only workspace; non-InProgress rows never uncovered)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-d2-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(DONE_NO_LEASE) })
+    await seedPbTree(join(ws, '.agents'), DONE_NO_LEASE)
     const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
 
@@ -576,7 +592,7 @@ describe('workflow gate — P-b lease attribution', () => {
 
   it('(e) ralph call in an uncovered writable workspace + hard → deny (P-b applies to ralph; P-a/P-c do not)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-e-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    await seedPbTree(join(ws, '.agents'), IN_PROGRESS_ORPHAN)
     const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
 
@@ -590,7 +606,10 @@ describe('workflow gate — P-b lease attribution', () => {
 
   it('(f) status read failure → fail-open + ONE warn (broken status must not brick fan-out; P-a/P-c still run)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-f-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': UNREADABLE_STATUS })
+    await seedHarness(join(ws, '.agents'), {
+      'status.json': v2RootWithWorkflow(),
+      'workflows/wf-1/snapshot.json': UNREADABLE_STATUS,
+    })
     const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
     const warns = captureDispatchWarns(app.ctx)
@@ -607,7 +626,7 @@ describe('workflow gate — P-b lease attribution', () => {
 
   it('(g) parseable-but-shape-invalid status.json → fail-open + ONE warn (P-b degraded with parity to the unreadable read); P-a still runs (F-301)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-g-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': SHAPE_INVALID_STATUS })
+    await seedPbShapeInvalid(join(ws, '.agents'))
     const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x'], harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
     const warns = captureDispatchWarns(app.ctx)
@@ -623,9 +642,14 @@ describe('workflow gate — P-b lease attribution', () => {
     expect(warns.length - warnSnapshot).toBe(1)
   })
 
-  it('(h) unreadable status + workflow + hard + unknown name → P-a deny survives the degraded P-b (workflow.name.unknown, exactly ONE warn) (F-304)', async () => {
+  it('(h) v2 root + shape-invalid SNAPSHOT (no readable plans[]) + workflow + hard + unknown name → P-a deny survives the degraded P-b (workflow.name.unknown, exactly ONE warn) (F-304)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-h-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': UNREADABLE_STATUS })
+    // The v2 root (active workflow) is valid; the SNAPSHOT's `plans` is
+    // non-array — the P-b read (Task 3 re-points it to the snapshot rows)
+    // treats it as shape-invalid → the same fail-open + ONE warn degrade as
+    // the unreadable read. The active v2 workflow ALSO satisfies the
+    // agent-flow writer's precondition, so the verdict row records.
+    await seedPbShapeInvalid(join(ws, '.agents'))
     const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
     const warns = captureDispatchWarns(app.ctx)
@@ -642,8 +666,9 @@ describe('workflow gate — P-b lease attribution', () => {
     expect(advisories).toHaveLength(0)
     // Exactly ONE warn: the P-b degrade warn (the deny logs at error level).
     expect(warns.length - warnSnapshot).toBe(1)
-    // The verdict row carries the P-a code.
-    const events = readAgentFlow(join(ws, '.agents'))!.events
+    // The verdict row records into the ACTIVE workflow dir of the calling
+    // workspace's harness (`.agents/workflows/wf-1/agent-flow.jsonl`).
+    const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))!.events
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({
       kind: 'workflow-verdict',
@@ -659,8 +684,10 @@ describe('workflow gate — P-b lease attribution', () => {
 
 /** The booted app's agent-flow ledger events, latest first (the verdict-row read). */
 function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
-  const view = readAgentFlow(app.harnessDir)
-  if (view === null) throw new Error(`ledger unreadable at ${app.harnessDir}`)
+  // v3 layout: the ledger lives in the ACTIVE workflow dir (the boot's
+  // seeded v2 tree — `seedV2` — has one active workflow `wf-1`).
+  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))
+  if (view === null) throw new Error(`ledger unreadable at ${join(app.harnessDir, 'workflows/wf-1')}`)
   return view.events
 }
 
@@ -670,7 +697,7 @@ const parentSession = (id: string, cwd: string): { id: string; events: unknown[]
 
 describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observation)', () => {
   it('(1) warn + unknown name → ONE advisory verdict row (workflow-verdict, mode + name carried)', async () => {
-    const app = booted = await bootApp({ workflowGate: 'warn' })
+    const app = booted = await bootApp({ workflowGate: 'warn', seedV2: true })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
@@ -690,7 +717,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(2) warn + allowlisted name → ONE ok verdict row (P-a passes; the durable row still lands)', async () => {
-    const app = booted = await bootApp({ workflowGate: 'warn', workflowNames: ['deploy-x'] })
+    const app = booted = await bootApp({ workflowGate: 'warn', workflowNames: ['deploy-x'], seedV2: true })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
 
@@ -701,7 +728,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(3) hard + unknown name → denied verdict row + NO child rows (veto precedes start)', async () => {
-    const app = booted = await bootApp({ workflowGate: 'hard' })
+    const app = booted = await bootApp({ workflowGate: 'hard', seedV2: true })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
 
@@ -720,7 +747,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(4) ask first-seen → ask verdict row; allow answer observed via run-start → cache records allow; second same-name call allowed without re-ask', async () => {
-    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake' })
+    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-ask-e2e', app.root)
     sessions.register(parent)
@@ -749,7 +776,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(5) ask cached deny → denied + verdict row; no re-ask', async () => {
-    const app = booted = await bootApp({ workflowGate: 'ask' })
+    const app = booted = await bootApp({ workflowGate: 'ask', seedV2: true })
 
     const first = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
     expect(first.kind).toBe('ask')
@@ -763,18 +790,25 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     expect(events[1]).toMatchObject({ kind: 'workflow-verdict', verdict: 'ask', workflow: 'deploy-x', mode: 'ask' })
   })
 
-  it('(6) P-b uncovered + hard → denied verdict row with workflow.lease.uncovered', async () => {
+  it('(6) P-b uncovered + hard → denied (workflow.lease.uncovered in the reason) + the verdict row records into the ACTIVE workflow dir', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-t4-pb-hard-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    // v3 P-b read: the ACTIVE workflow snapshot's plans[] (Task 3) — the v2
+    // fixture satisfies BOTH the snapshot read AND the agent-flow writer's
+    // active-workflow precondition, so the verdict row records.
+    await seedPbTree(join(ws, '.agents'), IN_PROGRESS_ORPHAN)
     const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
 
     expect(decision.kind).toBe('deny')
-    // The row records into the CALLING workspace's resolved harness dir
-    // (`.agents/` — the boot has no explicit harness dir, so the resolver
-    // attributes the call to the agent's session workspace).
-    const events = readAgentFlow(join(ws, '.agents'))!.events
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    // The deny reason cites the uncovered plan (the P-b red line) — the
+    // same reason shape the P-b describe-block tests (a)/(e) pin.
+    expect(decision.reason).toContain('plan-orphan')
+    expect(decision.reason).toContain('without execution_lease coverage')
+    // The verdict row records into the ACTIVE workflow dir of the calling
+    // workspace's harness (`.agents/workflows/wf-1/agent-flow.jsonl`).
+    const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))!.events
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({
       kind: 'workflow-verdict',
@@ -785,15 +819,20 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     })
   })
 
-  it('(7) P-b uncovered + warn → advisory verdict row with workflow.lease.uncovered', async () => {
+  it('(7) P-b uncovered + warn → allowed + advisory with workflow.lease.uncovered + the verdict row records', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-t4-pb-warn-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    // Same v2 fixture as (6): the snapshot read + the writer's active-workflow
+    // precondition both hold — the verdict row records (Task 3).
+    await seedPbTree(join(ws, '.agents'), IN_PROGRESS_ORPHAN)
     const app = booted = await bootApp({ workflowGate: 'warn', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
-    const events = readAgentFlow(join(ws, '.agents'))!.events
+    expect(advisories).toHaveLength(1)
+    expect(violationCodes(advisories[0])).toContain('workflow.lease.uncovered')
+    const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))!.events
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({
       kind: 'workflow-verdict',
@@ -805,7 +844,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(8) ralph (objective present) → ok verdict row carrying the objective (no workflow name)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', ralphExec('probe the codebase'), defaultAllow)
 
@@ -823,7 +862,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(9) compliant workflow run produces the W-B2 run rows alongside the verdict row (consumer integration)', async () => {
-    const app = booted = await bootApp({ workflowGate: 'warn', sessionsService: 'fake' })
+    const app = booted = await bootApp({ workflowGate: 'warn', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-warn-e2e', app.root)
     sessions.register(parent)
@@ -848,7 +887,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(10) off → NO verdict row (the short-circuit precedes the policy)', async () => {
-    const app = booted = await bootApp({ workflowGate: 'off' })
+    const app = booted = await bootApp({ workflowGate: 'off', seedV2: true })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
 
@@ -857,7 +896,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(11) malformed args → pass-through + NO verdict row (fail-open has no policy verdict)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('workflow', { script: 'probe' }), defaultAllow)
 
@@ -869,6 +908,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const root = await mkdtemp(join(tmpdir(), 'dsh-ws-t4-contain-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
+    await seedV2Tree(harnessDir)
     const ctx = new Context()
     const sessions = new FakeSessionsRegistry(ctx)
     const parent = parentSession('parent-throw-e2e', root)
@@ -888,7 +928,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     try {
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), throwingCache)
       sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-throw-e2e', name: 'deploy-x' })
-      const view = readAgentFlow(harnessDir)
+      const view = readAgentFlow(join(harnessDir, 'workflows/wf-1'))
       expect(view).not.toBeNull()
       // The ledger append succeeded despite the throwing cache hook.
       expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run'])
@@ -906,7 +946,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(13) P-c cache-key congruence (Task-5 fold-in): a control-char name gates and observes under ONE normalized key — second call no re-ask', async () => {
-    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake' })
+    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-ctrl-e2e', app.root)
     sessions.register(parent)
@@ -943,7 +983,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(14) ask answered deny → call denied, NO run rows, next call re-asks (fail-closed — no grant evidence, never an invented allow)', async () => {
-    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake' })
+    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-deny-e2e', app.root)
     sessions.register(parent)
@@ -969,7 +1009,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(15) name exceeding MAX_NAME still gate-keys consistently: the cache key is the UNCAPPED full name on both seams (the ledger ROW display name is capped separately)', async () => {
-    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake' })
+    const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-long-e2e', app.root)
     sessions.register(parent)
@@ -1003,7 +1043,8 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
 
   it('(16) W-1: a run observed before any ask is never cached — the ask channel survives a P-b-uncovered window (ask mode still asks after recovery)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-w1-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(IN_PROGRESS_ORPHAN) })
+    // v3 P-b read: the ACTIVE workflow snapshot rows (Task 3).
+    await seedPbTree(join(ws, '.agents'), IN_PROGRESS_ORPHAN)
     const app = booted = await bootApp({ workflowGate: 'ask', harnessDir: null, sessionsService: 'fake' })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
     const parent = parentSession('parent-w1-e2e', ws)
@@ -1020,8 +1061,9 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // run to allow (a P-b advisory run is not an approval resolution).
     expect(app.ctx.dshHostAdapter.workflowAskCache.get('deploy-x')).toBeUndefined()
 
-    // The workspace is recovered (the orphan plan is resolved): P-b passes.
-    await seedHarness(join(ws, '.agents'), { 'status.json': statusDoc(DONE_NO_LEASE) })
+    // The workspace is recovered (the orphan plan is resolved — the snapshot
+    // now carries the Done row): P-b passes.
+    await seedPbTree(join(ws, '.agents'), DONE_NO_LEASE)
 
     // Ask mode keeps its promise for the never-resolved name: ASK again —
     // the pre-ask run did not pre-authorize it.
@@ -1030,7 +1072,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(17) WorkflowAskCache record + markAsked normalize keys internally (F-302 doc contract; wasAsked matches raw spellings)', async () => {
-    const app = booted = await bootApp({ workflowGate: 'ask' })
+    const app = booted = await bootApp({ workflowGate: 'ask', seedV2: true })
     const cache = app.ctx.dshHostAdapter.workflowAskCache
 
     // F-302: the explicit record() seam stores under the STRIPPED key — a
@@ -1049,7 +1091,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   })
 
   it('(18) W-2: ralph objective with control chars is stripped at the verdict-row write boundary (hostile objective never reaches the ledger view)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
 
     // A hostile objective: NUL + BEL embedded in the model-controlled text.
     // The JSONL line is line-safe (JSON.stringify escapes), but the panel

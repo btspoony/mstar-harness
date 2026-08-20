@@ -326,3 +326,71 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+
+/* --- project rollup zone (plan 20260819-workflow-dsh-viz Task 3, compass
+   AC-4): the ADDITIVE fifth zone — roadmap milestones + open-residual
+   severity counts from the project layer. Same token/spacing discipline as
+   the kanban: --dsw-* aliases only, --mstar-space-* ramp, muted neutral
+   empty states (never warn). --- */
+
+.zoneTitle {
+  margin: var(--mstar-space-1) 0 0;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.rollupList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mstar-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rollupItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mstar-space-2);
+  min-width: 0;
+}
+
+.rollupMilestone {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.rollupCount {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Severity chip — the sidebar `data-severity` coloring convention (critical
+   = danger, high = danger-tinted, others neutral). */
+.severityChip {
+  align-self: flex-start;
+  padding: 0 var(--mstar-space-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.severityChip[data-severity='critical'] {
+  border-color: var(--dsw-alias-state-danger-primary);
+  color: var(--dsw-alias-state-danger-primary);
+}
+
+.severityChip[data-severity='high'] {
+  border-color: var(--dsw-alias-state-warning-primary);
+  color: var(--dsw-alias-state-warning-primary);
+}

@@ -36,7 +36,7 @@ Check what already exists and note its condition:
 | `{ITERATION_DIR}/README.md` | Exists? Any past iteration artifacts? | `absent` / `present` |
 | `{SPECS_DIR}/` or `designs/` | Any specs or ADRs? | `absent` / `present` |
 | `docs/` | Any architecture docs, design notes? | Count and note relevance |
-| `{HARNESS_DIR}/status.json` | Exists? Any historical plans? | `absent` / `present` |
+| `{HARNESS_DIR}/status.json` | Exists? Any historical plans / workflows (`workflows[]`, snapshots)? | `absent` / `present` |
 
 Report findings to the user: what exists, what's missing, what's stale.
 

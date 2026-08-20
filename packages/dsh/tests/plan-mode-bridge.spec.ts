@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { HarnessResolver } from '../src/gates/_shared.ts'
+import { seedHarness, v2RootWithWorkflow, v2SnapshotWithPlans } from './harness.ts'
 import {
   planModeTarget,
   registerPlanModeBridge,
@@ -38,12 +39,12 @@ async function seedCompass(harnessDir: string, iterationId: string, status: 'act
   await writeFile(compassPath, `---\nstatus: ${status}\n---\n`)
 }
 
-/** Seed `{HARNESS_DIR}/status.json` with plan rows (the Prepare-window read). */
+/** Seed the v2 tree with snapshot plan rows (the v3 Prepare-window read — Task 3 re-points the Todo probe to the SELECTED workflow snapshot). */
 async function seedStatus(harnessDir: string, plans: Array<{ id: string; status: string }>): Promise<void> {
-  await writeFile(
-    join(harnessDir, 'status.json'),
-    JSON.stringify({ version: 1, updated_at: '2026-08-16', plans }, null, 2),
-  )
+  await seedHarness(harnessDir, {
+    'status.json': v2RootWithWorkflow(),
+    'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', plans),
+  })
 }
 
 /** A root-like agent (no `header.parentSession` — the T1-verified discriminator). */
@@ -165,8 +166,10 @@ describe('planMode bridge — planModeTarget (Prepare-window policy)', () => {
       await seedCompass(harnessDir, 'iter-20260816-pm-nostatus', 'active')
       // No status.json at all.
       expect(planModeTarget(harnessDir)).toBe(false)
-      // status.json without a `plans` array.
-      await writeFile(join(harnessDir, 'status.json'), JSON.stringify({ version: 1 }, null, 2))
+      // A snapshot without a `plans` array (selection still resolves — the
+      // snapshot read degrades to false).
+      await mkdir(join(harnessDir, 'workflows', 'wf-1'), { recursive: true })
+      await writeFile(join(harnessDir, 'workflows', 'wf-1', 'snapshot.json'), JSON.stringify({ schema_version: 1, id: 'wf-1' }, null, 2))
       expect(planModeTarget(harnessDir)).toBe(false)
       // An empty plans array.
       await seedStatus(harnessDir, [])
