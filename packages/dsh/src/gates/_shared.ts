@@ -54,8 +54,10 @@ export interface Config {
    * as the anti-recursion binding: an Assignment whose `Execute as` equals this
    * role is a self-dispatch (critical violation — leaf executors must not
    * re-invoke their own role). dsh exposes no agent role on the tool-execution
-   * context, so the deployment declares it. Absent → the anti-recursion
-   * precheck is skipped (an empty binding is not self-recursion).
+   * context, so the deployment declares it. Absent → the empty binding FAILS
+   * CLOSED: every Assignment-shaped dispatch emits
+   * `dispatch.anti-recursion.empty-binding` (critical) until the binding is
+   * set.
    */
   dispatchBinding?: string
   /**

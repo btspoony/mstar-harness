@@ -343,7 +343,7 @@ describe('workflow gate — non-workflow tools unaffected', () => {
   })
 
   it('(c) valid subagent Assignment → clean pass, silent (no workflow advisory)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)

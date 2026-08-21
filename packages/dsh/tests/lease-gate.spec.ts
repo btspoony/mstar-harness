@@ -233,7 +233,7 @@ const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
 
 describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
   it('SDD dispatch + InProgress plan + valid lease (holder/worktree/branch match) → allow, silent pass', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
@@ -306,7 +306,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
   })
 
   it('plan id resolves from the SDD dir fallback (no Plan Path) → lease check runs against it', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
@@ -321,7 +321,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
   })
 
   it('SDD dir with an empty basename → unresolvable plan id, silent pass', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
@@ -342,7 +342,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
   })
 
   it('non-SDD assignment (inline) + plan not InProgress → no lease check, silent pass even with a lease present', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, { ...TODO_NO_LEASE, execution_lease: VALID_LEASE })
     const advisories = captureAdvisories(app.ctx)
 
@@ -363,7 +363,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
   })
 
   it('read-only role (scout) → lease gate skipped even for sdd + InProgress orphan', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
@@ -374,7 +374,7 @@ describe('dispatch gate — lease matrix (sdd / InProgress)', () => {
   })
 
   it('sdd Assignment without a resolvable plan id → no lease check, silent pass', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 
@@ -423,7 +423,7 @@ describe('dispatch gate — lease hostile inputs', () => {
   })
 
   it('missing status.json + non-SDD writable dispatch → still a silent pass (degrade-allow for inline)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(INLINE_ASSIGNMENT), defaultAllow)
@@ -507,7 +507,7 @@ Do the thing. Quoted example must not resolve a plan id:
 `
 
   it('body-quoted Worktree path / Plan Path / Working branch do not leak into the lease comparisons', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, IN_PROGRESS_WITH_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
@@ -524,7 +524,7 @@ Do the thing. Quoted example must not resolve a plan id:
   })
 
   it('body-quoted Execution mode: sdd does not trigger the lease gate (header mode only)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, TODO_NO_LEASE)
     const advisories = captureAdvisories(app.ctx)
 
@@ -538,7 +538,7 @@ Do the thing. Quoted example must not resolve a plan id:
   })
 
   it('body-quoted Plan Path does not resolve a plan id (unresolvable plan stays silent)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     await seedLeaseDoc(app.harnessDir, IN_PROGRESS_ORPHAN)
     const advisories = captureAdvisories(app.ctx)
 

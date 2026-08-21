@@ -225,14 +225,17 @@ const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
 /* ---------------------------------- warn (default) mode ---------------------------------- */
 
 describe('dispatch gate — warn (default) mode', () => {
-  it('valid writable Assignment → allow, silent pass (no advisory)', async () => {
+  it('valid writable Assignment → allow, advisory with dispatch.anti-recursion.empty-binding (unset binding fails closed)', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
+    expect(advisories).toHaveLength(1)
+    const anti = advisories[0]!.result.violations.find((v) => v.code === 'dispatch.anti-recursion.empty-binding')
+    expect(anti).toBeDefined()
+    expect(anti!.severity).toBe('critical')
   })
 
   it('missing Execute as → advisory with assignment.field.missing-execute-as, dispatch allowed', async () => {
@@ -279,14 +282,17 @@ describe('dispatch gate — warn (default) mode', () => {
     expect(violationCodes(advisories[0])).toContain('assignment.field.branch-missing-base')
   })
 
-  it('read-only role (scout) without branch form → pass, silent (branch gates skipped)', async () => {
+  it('read-only role (scout) without branch form → allow, advisory with dispatch.anti-recursion.empty-binding (no read-only carve-out)', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SCOUT_NO_BRANCH), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
+    expect(advisories).toHaveLength(1)
+    expect(violationCodes(advisories[0])).toContain('dispatch.anti-recursion.empty-binding')
+    // Read-only roles still skip the branch gates — no branch-missing.
+    expect(violationCodes(advisories[0])).not.toContain('assignment.field.branch-missing')
   })
 
   it('Working branch on main without exception → advisory with dispatch.default-branch.protected', async () => {
@@ -299,14 +305,17 @@ describe('dispatch gate — warn (default) mode', () => {
     expect(violationCodes(advisories[0])).toContain('dispatch.default-branch.protected')
   })
 
-  it('well-formed Branch policy direct on main → pass, silent (exception honored)', async () => {
+  it('well-formed Branch policy direct on main → allow, advisory with dispatch.anti-recursion.empty-binding (exception honored)', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(DIRECT_ON_MAIN), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
+    expect(advisories).toHaveLength(1)
+    // The direct-on exception is honored — no default-branch violation.
+    expect(violationCodes(advisories[0])).not.toContain('dispatch.default-branch.protected')
+    expect(violationCodes(advisories[0])).toContain('dispatch.anti-recursion.empty-binding')
   })
 
   it('anti-recursion: Assignment Execute as == configured dispatcher role → critical advisory', async () => {
@@ -322,17 +331,19 @@ describe('dispatch gate — warn (default) mode', () => {
     expect(anti!.severity).toBe('critical')
   })
 
-  it('no configured binding → anti-recursion precheck skipped (empty binding is not self-recursion)', async () => {
+  it('no configured binding → dispatch.anti-recursion.empty-binding fires, self-type does not (fail closed)', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
     // MISSING_BRANCH carries Execute as: fullstack-dev (a self-typed role when a
-    // binding were configured) — without a binding only the field gate fires.
+    // binding were configured) — without a binding the empty-binding violation
+    // fires alongside the field gate; self-type cannot fire (no binding).
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_BRANCH), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(violationCodes(advisories[0])).toContain('assignment.field.branch-missing')
+    expect(violationCodes(advisories[0])).toContain('dispatch.anti-recursion.empty-binding')
     expect(violationCodes(advisories[0])).not.toContain('dispatch.anti-recursion.self-type')
   })
 
@@ -384,13 +395,29 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
   })
 
   it('valid Assignment under hard → allow (no violations → no veto)', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
+  })
+
+  it('unset dispatchBinding under hard → deny with dispatch.anti-recursion.empty-binding (fail closed)', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    let secondRan = false
+    app.ctx.on('tools/pre-execute', () => {
+      secondRan = true
+      return Promise.resolve<PreToolDecision>({ kind: 'allow' })
+    })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+
+    expect(secondRan).toBe(false) // deny without next() short-circuits the waterfall
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.empty-binding')
+    expect(decision.kind === 'deny' && decision.reason).toContain('[critical]')
   })
 
   it("the Assignment's OWN **Enforcement**: hard header flag hardens without Config (opencode parity)", async () => {
@@ -583,24 +610,28 @@ describe('dispatch gate — Task 4 reviewer carry-overs (explore / compass / deg
 Survey the codebase, report only.
 `
 
-  it('explore read-only role without branch form → silent pass (branch + lease gates skipped)', async () => {
+  it('explore read-only role without branch form → allow, advisory with dispatch.anti-recursion.empty-binding (no read-only carve-out)', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(EXPLORE_NO_BRANCH), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
+    expect(advisories).toHaveLength(1)
+    expect(violationCodes(advisories[0])).toContain('dispatch.anti-recursion.empty-binding')
+    // Read-only roles still skip the branch + lease gates.
+    expect(violationCodes(advisories[0])).not.toContain('assignment.field.branch-missing')
   })
 
-  it('explore under Enforcement: hard → allow (read-only assignments carry no vetoable violations)', async () => {
+  it('explore under Enforcement: hard → deny with dispatch.anti-recursion.empty-binding (read-only assignments carry no other vetoable violations)', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(EXPLORE_NO_BRANCH), defaultAllow)
 
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.anti-recursion.empty-binding')
+    expect(advisories).toHaveLength(0) // the veto is the signal; advisory is warn-mode only
   })
 
   it('compass frontmatter Enforcement: hard (no Config/Assignment flag) → deny', async () => {
