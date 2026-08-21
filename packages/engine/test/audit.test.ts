@@ -251,6 +251,63 @@ describe("redactSecrets", () => {
 });
 
 // ---------------------------------------------------------------------------
+// redactSecrets non-leakage invariants — Hard Rule 4 over the WHOLE_MATCH
+// table (specs/sp3-redact-secrets.md). Probes sit on their own bare line so
+// only WHOLE_MATCH fires — a key= prefix would also match VALUE_PATTERNS and
+// double-report.
+// ---------------------------------------------------------------------------
+
+describe("redactSecrets non-leakage invariants", () => {
+  const probes: { type: string; value: string }[] = [
+    { type: "aws-access-key", value: "AKIAIOSFODNN7EXAMPLE" },
+    { type: "github-token", value: "ghp_" + "A".repeat(36) },
+    { type: "slack-token", value: "xoxb-abcdefghijklmnopqrstuvwxyz" },
+    { type: "api-secret-key", value: "sk-abcdefghijklmnopqrstuvwxyz0123456789" },
+    { type: "private-key", value: "-----BEGIN RSA PRIVATE KEY-----" },
+    {
+      type: "jwt",
+      value:
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnopqrstuvwxyz0123456789",
+    },
+  ];
+
+  test("never leaks a locked WHOLE_MATCH probe", () => {
+    for (const { type, value } of probes) {
+      const input = `line one\n${value}\nline three\n`;
+      const result = redactSecrets(input);
+      expect(result.text).not.toContain(value);
+      // The probe must actually have been redacted — not a no-op pass.
+      expect(result.findings.some((f) => f.type === type)).toBe(true);
+    }
+  });
+
+  test("exercises every WHOLE_MATCH type on one corpus", () => {
+    const corpus = probes.map((p) => p.value).join("\n") + "\n";
+    const result = redactSecrets(corpus);
+    const types = new Set(result.findings.map((f) => f.type));
+    for (const { type } of probes) {
+      expect(types.has(type)).toBe(true);
+    }
+  });
+
+  test("preserves the newline count when redaction happens", () => {
+    const input = `before\n${probes[0].value}\nafter\n`;
+    const result = redactSecrets(input);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.text.split(/\n/).length).toBe(input.split(/\n/).length);
+  });
+
+  test("deduplicates findings by (line, type)", () => {
+    const input = "AKIAIOSFODNN7EXAMPLE\nAKIAIOSFODNN7EXAMPLE\n";
+    const result = redactSecrets(input);
+    const keys = result.findings.map((f) => `${f.line}:${f.type}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    // Same type on two distinct lines stays two findings.
+    expect(result.findings.filter((f) => f.type === "aws-access-key")).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // scaffoldAuditPlan — mstar-audit SKILL § Phase 4 (audit-<date>/ layout,
 // monotonic numbering, README index)
 // ---------------------------------------------------------------------------
