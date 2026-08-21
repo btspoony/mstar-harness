@@ -730,7 +730,7 @@ Do the thing.
 
 describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
   it('a valid Assignment lands one dispatch event (verdict ok, plan/task derived)', async () => {
-    const app = booted = await bootApp({ seedV2: true })
+    const app = booted = await bootApp({ seedV2: true, dispatchBinding: 'qc-specialist' })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
 
@@ -770,7 +770,7 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
   })
 
   it('the host-hook path (beforeDispatch, exec-less) records too — agent omitted', async () => {
-    const app = booted = await bootApp({ seedV2: true })
+    const app = booted = await bootApp({ seedV2: true, dispatchBinding: 'qc-specialist' })
 
     const result = await app.ctx.dshHostAdapter.beforeDispatch(VALID_PLANNED)
 
@@ -1297,7 +1297,7 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
     })
     // REAL TTL (default 60000): the event can only be visible at the first
     // pre-step if the record invalidated the boot-seeded cache entry.
-    const app = booted = await bootApp({ root })
+    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
     // Dispatch BEFORE any pre-step: only the apply-time pre-registration of
     // the explicit-config reverse map makes the boot-seeded entry
     // invalidatable here — a no-op binding (Task 1 state) or a missing
@@ -1595,7 +1595,7 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
   it('a mid-session dispatch lands in the catalog within one TTL (catalogTtlMs: 0 → immediate refresh)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-ttl-'))
     const harnessDir = await seedV2Tree(root)
-    const app = booted = await bootApp({ root, catalogTtlMs: 0 })
+    const app = booted = await bootApp({ root, catalogTtlMs: 0, dispatchBinding: 'qc-specialist' })
     // First pre-step: no events yet.
     const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     catalogRowOf(first)

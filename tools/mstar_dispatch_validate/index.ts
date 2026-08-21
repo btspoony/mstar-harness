@@ -4,8 +4,9 @@
  *
  * Composition is the engine's single shared `dispatch.composeDispatchGate`
  * (qc1 F-001/F-006 — the same composition the opencode adapter and the omp
- * blocking hook use): field validation, anti-recursion precheck when `agent`
- * is provided, the default-branch gate (incl. the `$MSTAR_WORKING_BRANCH`
+ * blocking hook use): field validation, anti-recursion precheck (an empty
+ * `agent` fails closed with `dispatch.anti-recursion.empty-binding`), the
+ * default-branch gate (incl. the `$MSTAR_WORKING_BRANCH`
  * env fallback) and the header-region enforcement flag. Read-only roles
  * (scout/explore, or the `readOnlyRole` flag) skip the branch-form and
  * default-branch gates. No local rule logic — every check is an engine call.

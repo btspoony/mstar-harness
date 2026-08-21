@@ -267,7 +267,7 @@ describe('status gate — invalid status.json write (hard refusal evidence)', ()
 
 describe('dispatch gate — full session dispatch decisions', () => {
   it('valid writable Assignment → silent allow under hard', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
+    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     const advisories = captureDispatchAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/valid.md')), defaultAllow)
@@ -277,7 +277,7 @@ describe('dispatch gate — full session dispatch decisions', () => {
   })
 
   it('read-only orientation Assignment → silent allow (no branch form needed)', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
+    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     const advisories = captureDispatchAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/read-only.md')), defaultAllow)
@@ -302,7 +302,7 @@ describe('dispatch gate — full session dispatch decisions', () => {
   })
 
   it('SDD assignment with a MATCHING lease → silent allow (the lease gate positive control)', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
+    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     await seedLeaseTree(app.harnessDir)
     const advisories = captureDispatchAdvisories(app.ctx)
 
@@ -583,7 +583,7 @@ describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () 
 
 describe('agent-flow — real settle pairing (real call through the composed registry)', () => {
   it('a real subagent call through the composed registry records a dispatch AND a paired settle (post-execute foreground completion)', async () => {
-    booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
+    booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, dispatchBinding: 'qc-specialist' })
     // v3 write-path precondition: the agent-flow writer appends only to an
     // ACTIVE workflow — seed the v2 tree (root status.json + one active
     // workflow) before the call.

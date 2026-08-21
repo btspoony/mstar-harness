@@ -231,7 +231,7 @@ describe('fork gate — subagent_fork under Enforcement: hard', () => {
   })
 
   it('(b) valid Assignment → allow, silent, fork dispatch ledger-recorded with verdict ok', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard', seedV2: true })
+    const app = booted = await bootApp({ enforcement: 'hard', seedV2: true, dispatchBinding: 'qc-specialist' })
     let advisories = 0
     app.ctx.on('mstar/dispatch-gate', () => { advisories += 1 })
 
@@ -257,7 +257,7 @@ describe('fork gate — subagent_fork under Enforcement: hard', () => {
 
 describe('fork settle — ledger records fork dispatch + settle (dispatchTools-driven pairing)', () => {
   it('(c1) a REAL fork dispatch through the composed registry pairs through tools/post-execute + onJobDone', async () => {
-    const app = booted = await bootApp({ jobsService: 'fake', seedV2: true })
+    const app = booted = await bootApp({ jobsService: 'fake', seedV2: true, dispatchBinding: 'qc-specialist' })
     // The fork tool — the same canonical background shape as the upstream
     // dsh-tool-subagent (the seam-probe fixture), so the post-execute branch
     // stores `taskId → dispatchRef` and the onJobDone terminal settles.
