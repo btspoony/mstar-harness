@@ -205,7 +205,7 @@ const captureWarnings = (): { warnings: string[]; log: StatusLogger } => {
 describe("validateDispatchAssignment (warn-only wrapper, full validation)", () => {
   test("complete assignment (core fields + branch form) → no warnings, ok result", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(completeAssignment, { log });
+    const result = validateDispatchAssignment(completeAssignment, { log, subagentType: "qc-specialist" });
     expect(result!.ok).toBe(true);
     expect(result.violations).toEqual([]);
     expect(warnings).toEqual([]);
@@ -213,7 +213,7 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
 
   test("missing Execute as → engine field code + branch-missing warn; presence code is an alias on the field violation", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(missingExecuteAs, { log });
+    const result = validateDispatchAssignment(missingExecuteAs, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     // Single parser: NO stacked presence warning — one violation per missing field.
     expect(warnings).toHaveLength(2);
@@ -232,7 +232,7 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
       [missingTaskCategory, "assignment.field.missing-task-category", "assignment.presence.missing-task-category"],
     ] as const) {
       const { warnings, log } = captureWarnings();
-      const result = validateDispatchAssignment(fixture, { log });
+      const result = validateDispatchAssignment(fixture, { log, subagentType: "reviewer" });
       expect(result!.ok).toBe(false);
       expect(warnings.some((w) => w.includes(fieldCode))).toBe(true);
       expect(warnings.some((w) => w.includes(presenceCode))).toBe(false);
@@ -243,7 +243,7 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
 
   test("missing all three → 3 engine field warnings, no stacked presence lines", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(missingAllFields, { log });
+    const result = validateDispatchAssignment(missingAllFields, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     // The fixture still carries a Working branch — no branch-missing.
     expect(warnings).toHaveLength(3);
@@ -297,7 +297,7 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
     // A bare `Execute as:` line is Assignment-shaped — the other two fields
     // still warn (engine field codes only; presence codes are aliases).
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment("Execute as: [unbalanced", { log });
+    const result = validateDispatchAssignment("Execute as: [unbalanced", { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(warnings).toHaveLength(3);
     expect(warnings.some((w) => w.includes("assignment.field.missing-delegation"))).toBe(true);
@@ -310,7 +310,7 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
 describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
   test("branch-missing: core fields without any branch form warn", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(noBranchForm, { log });
+    const result = validateDispatchAssignment(noBranchForm, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
     expect(warnings.some((w) => w.includes("exactly one"))).toBe(true);
@@ -318,7 +318,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
 
   test("create-without-base: create form without <base> warns", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(createWithoutBase, { log });
+    const result = validateDispatchAssignment(createWithoutBase, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("assignment.field.branch-missing-base");
@@ -328,7 +328,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
 
   test("dangling create form ('create feature/x from') → branch-missing-base warn (qc2 S-1 / qc3 F-5)", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(createDanglingFrom, { log });
+    const result = validateDispatchAssignment(createDanglingFrom, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("assignment.field.branch-missing-base");
@@ -336,7 +336,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
 
   test("read-only scout assignment without a branch form → no branch-missing warn (qc3 F-1 / qc2 S-5)", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(scoutAssignment, { log });
+    const result = validateDispatchAssignment(scoutAssignment, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(true);
     expect(result!.violations).toEqual([]);
     expect(warnings).toEqual([]);
@@ -345,7 +345,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
   test("read-only role match is case-insensitive (Execute as: Scout)", () => {
     const { warnings, log } = captureWarnings();
     const text = scoutAssignment.replace("**Execute as**: scout", "**Execute as**: Scout");
-    const result = validateDispatchAssignment(text, { log });
+    const result = validateDispatchAssignment(text, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(true);
     expect(warnings).toEqual([]);
   });
@@ -355,7 +355,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
     try {
       process.env.MSTAR_WORKING_BRANCH = "main";
       const { warnings, log } = captureWarnings();
-      const result = validateDispatchAssignment(noBranchForm, { log });
+      const result = validateDispatchAssignment(noBranchForm, { log, subagentType: "reviewer" });
       expect(result!.ok).toBe(false);
       expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(true);
       expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
@@ -370,7 +370,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
     try {
       process.env.MSTAR_WORKING_BRANCH = "main";
       const { warnings, log } = captureWarnings();
-      const result = validateDispatchAssignment(directOnMainPolicy, { log });
+      const result = validateDispatchAssignment(directOnMainPolicy, { log, subagentType: "reviewer" });
       expect(result!.ok).toBe(true);
       expect(warnings).toEqual([]);
     } finally {
@@ -381,7 +381,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
 
   test("directOnException match: Branch policy direct on main — reason → no gate warn", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(directOnMainPolicy, { log });
+    const result = validateDispatchAssignment(directOnMainPolicy, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(true);
     expect(result!.violations).toEqual([]);
     expect(warnings).toEqual([]);
@@ -389,7 +389,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
 
   test("directOnException mismatch: exception on another branch does not unprotect main", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(exceptionBranchMismatch, { log });
+    const result = validateDispatchAssignment(exceptionBranchMismatch, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     // Branch-policy branch differs from the checked Working branch → protected.
     expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(true);
@@ -399,7 +399,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
 
   test("Working branch: main without an exception → protected warn", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(workingBranchMain, { log });
+    const result = validateDispatchAssignment(workingBranchMain, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("dispatch.default-branch.protected");
@@ -409,7 +409,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
 
   test("Working branch on a feature branch → no protected warn", () => {
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment(completeAssignment, { log });
+    const result = validateDispatchAssignment(completeAssignment, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(true);
     expect(warnings.some((w) => w.includes("dispatch.default-branch.protected"))).toBe(false);
   });
@@ -442,11 +442,13 @@ describe("anti-recursion precheck in validateDispatchAssignment (qc1 F-004 / qc2
     expect(warnings.some((w) => w.includes("assignment.field.missing-execute-as"))).toBe(true);
   });
 
-  test("empty binding → no anti-recursion check (hook default)", () => {
+  test("empty binding → critical dispatch.anti-recursion.empty-binding warn (fail closed)", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(completeAssignment, { log });
-    expect(result!.ok).toBe(true);
-    expect(warnings).toEqual([]);
+    expect(result!.ok).toBe(false);
+    const anti = result!.violations.find((v) => v.code === "dispatch.anti-recursion.empty-binding");
+    expect(anti?.severity).toBe("critical");
+    expect(warnings.some((w) => w.includes("[critical]") && w.includes("dispatch.anti-recursion.empty-binding"))).toBe(true);
   });
 });
 
@@ -550,6 +552,28 @@ describe("plugin wiring (tool.execute.before)", () => {
     expect(warnings.filter((w) => w.includes("[mstar-harness]"))).toEqual([]);
   });
 
+  test("task tool with no subagent/subagent_type key + Assignment-shaped prompt → empty-binding warn (fail closed)", async () => {
+    const plugin = await MorningStarHarnessPlugin();
+    const beforeExecute = plugin["tool.execute.before"];
+
+    const restore = captureConsoleWarn();
+    let warnings: string[];
+    try {
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c1" },
+        // No `subagent` / `subagent_type` key at all — the hook default "".
+        { args: { prompt: completeAssignment } },
+      );
+    } finally {
+      warnings = restore();
+    }
+    expect(
+      warnings.some(
+        (w) => w.includes("[mstar-harness]") && w.includes("dispatch.anti-recursion.empty-binding") && w.includes("[critical]"),
+      ),
+    ).toBe(true);
+  });
+
   test("task tool with read-only scout prompt → silent (no branch-missing warn)", async () => {
     const plugin = await MorningStarHarnessPlugin();
     const beforeExecute = plugin["tool.execute.before"];
@@ -619,7 +643,7 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
     const { entries, log } = capture();
     let result: GateResult | null = null;
     expect(() => {
-      result = validateDispatchAssignment(hardMissingExecuteAs, { log });
+      result = validateDispatchAssignment(hardMissingExecuteAs, { log, subagentType: "reviewer" });
     }).not.toThrow();
     expect(result!.ok).toBe(false);
     expect(result!.hardBlocked).toBe(true);
@@ -633,7 +657,7 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
 
   test("invalid assignment + plain-form Enforcement: hard → hardBlocked true", () => {
     const { entries, log } = capture();
-    const result = validateDispatchAssignment(hardMissingExecuteAs.replace("**Enforcement**: hard", "Enforcement: hard"), { log });
+    const result = validateDispatchAssignment(hardMissingExecuteAs.replace("**Enforcement**: hard", "Enforcement: hard"), { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(result!.hardBlocked).toBe(true);
     expect(entries.some(([level]) => level === "error")).toBe(true);
@@ -641,7 +665,7 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
 
   test("valid assignment + Enforcement: hard → ok, hardBlocked false, silent", () => {
     const { entries, log } = capture();
-    const result = validateDispatchAssignment(hardCompleteAssignment, { log });
+    const result = validateDispatchAssignment(hardCompleteAssignment, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(true);
     expect(result!.hardBlocked).toBe(false);
     expect(entries).toEqual([]);
@@ -649,7 +673,7 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
 
   test("invalid assignment WITHOUT the flag → warn-only, hardBlocked false (unchanged v1 behavior)", () => {
     const { entries, log } = capture();
-    const result = validateDispatchAssignment(missingExecuteAs, { log });
+    const result = validateDispatchAssignment(missingExecuteAs, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(result!.hardBlocked).toBe(false);
     expect(entries.some(([level]) => level === "warn")).toBe(true);
@@ -658,7 +682,7 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
 
   test("Enforcement: soft (explicit non-hard) → warn-only, hardBlocked false", () => {
     const { entries, log } = capture();
-    const result = validateDispatchAssignment(softEnforcementAssignment, { log });
+    const result = validateDispatchAssignment(softEnforcementAssignment, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(result!.hardBlocked).toBe(false);
     expect(entries.some(([level]) => level === "warn")).toBe(true);
@@ -667,7 +691,7 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
 
   test("hard mode never suppresses the violation codes — the structured result stays complete", () => {
     const { log } = capture();
-    const result = validateDispatchAssignment(hardMissingExecuteAs, { log });
+    const result = validateDispatchAssignment(hardMissingExecuteAs, { log, subagentType: "reviewer" });
     expect(result!.violations.some((v) => v.code === "assignment.field.missing-execute-as")).toBe(true);
     expect(result!.violations.some((v) => v.code === "assignment.field.missing-delegation")).toBe(false);
   });
@@ -683,7 +707,7 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
 
 An example Assignment template line: **Enforcement**: hard
 `;
-    const result = validateDispatchAssignment(text, { log });
+    const result = validateDispatchAssignment(text, { log, subagentType: "reviewer" });
     // Missing Execute as is a real violation — but the flag lives in the
     // BODY, so the gate stays warn-only (no hardBlocked, no error lines).
     expect(result!.ok).toBe(false);
@@ -704,7 +728,7 @@ An example Assignment template line: **Enforcement**: hard
 
 **Enforcement**: soft (example only)
 `;
-    const result = validateDispatchAssignment(text, { log });
+    const result = validateDispatchAssignment(text, { log, subagentType: "reviewer" });
     expect(result!.ok).toBe(false);
     expect(result!.hardBlocked).toBe(true);
     expect(entries.some(([level]) => level === "error")).toBe(true);
@@ -730,6 +754,28 @@ An example Assignment template line: **Enforcement**: hard
     expect(errors.some((e) => e.includes("[mstar-harness]") && e.includes("hard gate"))).toBe(true);
     // The GateResult is not silently discarded: the hook surfaces the
     // hardBlocked state explicitly (host has no refusal channel).
+    expect(errors.some((e) => e.includes("hard-gate blocked (hardBlocked=true)"))).toBe(true);
+  });
+
+  test("plugin wiring: hard assignment + empty subagent type → hardBlocked via dispatch.anti-recursion.empty-binding", async () => {
+    const plugin = await MorningStarHarnessPlugin();
+    const beforeExecute = plugin["tool.execute.before"];
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (message?: unknown) => {
+      errors.push(String(message));
+    };
+    try {
+      // No subagent key — the hook default "" binding; the Assignment's own
+      // `**Enforcement**: hard` header hardens the empty-binding violation.
+      await beforeExecute!(
+        { tool: "task", sessionID: "s1", callID: "c1" },
+        { args: { prompt: hardCompleteAssignment.replace("**Working branch**: feature/example", "") } },
+      );
+    } finally {
+      console.error = original;
+    }
+    expect(errors.some((e) => e.includes("dispatch.anti-recursion.empty-binding"))).toBe(true);
     expect(errors.some((e) => e.includes("hard-gate blocked (hardBlocked=true)"))).toBe(true);
   });
 });

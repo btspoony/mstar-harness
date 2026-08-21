@@ -401,7 +401,7 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
   it('valid distinct absolute tracks on their branches → silent pass', async () => {
     const root = tmpRoot('dsh-wt-l2-valid-')
     const wts = worktreeFixture(root, ['feature/track-a', 'feature/track-b'])
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
       `**Worktree path**: ${wts.get('feature/track-a')}`,
@@ -423,7 +423,7 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     // branch in two linked worktrees; the multi-dir topology uses clones).
     const clone = join(root, 'clone-shared')
     git(['clone', '-q', '-b', 'feature/shared', join(root, 'repo'), clone], root)
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     // One `Working branch` line applies to every track (mstar-branch-worktree
     // 同分支多目录例外) — no count-mismatch, both checkouts probe on the branch.
@@ -462,7 +462,7 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
   it('Dispatch mode: parallel independent tracks marker with a single track → L2 runs (valid track passes)', async () => {
     const root = tmpRoot('dsh-wt-l2-marker-')
     const wts = worktreeFixture(root, ['feature/marker-a'])
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
       '**Dispatch mode**: parallel independent tracks',
@@ -491,7 +491,7 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
   })
 
   it('serial single-track with a parallel-CONTAINING Dispatch mode → L2 does NOT run (canonical-marker match, P3 T2 review)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     // Substring "parallel" present, but NOT the canonical
     // `parallel independent tracks` marker — the serial norm must stay inert.
@@ -618,7 +618,7 @@ Do the thing, evidence-first.
     const root = tmpRoot('dsh-wt-l1-nometa-')
     const worktree = join(root, 'wt-a')
     mkdirSync(worktree, { recursive: true })
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     // No `control_worktree_path` on the snapshot; the lease matches the
     // assignment exactly, so even the lease gate is silent.
@@ -636,7 +636,7 @@ describe('dispatch gate — worktree hostile inputs + header-region scoping', ()
     const root = tmpRoot('dsh-wt-l2-body-')
     const a = join(root, 'wt-a')
     mkdirSync(a, { recursive: true })
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     // ONE header track + a second track quoted in the task body — the body
     // entry must not pair into an L2 declaration (the engine header boundary
@@ -666,7 +666,7 @@ Quoted example of a parallel-track header:
     const root = tmpRoot('dsh-wt-l2-empty-')
     const a = join(root, 'wt-a')
     mkdirSync(a, { recursive: true })
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
       '**Worktree path**:',

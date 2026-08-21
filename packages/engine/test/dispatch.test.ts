@@ -579,9 +579,19 @@ describe("antiRecursionPrecheck — self-type NEVER red line", () => {
     expect(r.violations).toEqual([]);
   });
 
-  test("empty binding or role → ok (presence handled by field validation)", () => {
-    expect(antiRecursionPrecheck("", "fullstack-dev").ok).toBe(true);
+  test("empty binding → critical dispatch.anti-recursion.empty-binding (fail closed)", () => {
+    for (const empty of ["", "   "]) {
+      const r = antiRecursionPrecheck(empty, "fullstack-dev");
+      expect(r.ok).toBe(false);
+      expect(r.violations).toHaveLength(1);
+      expect(r.violations[0]!.code).toBe("dispatch.anti-recursion.empty-binding");
+      expect(r.violations[0]!.severity).toBe("critical");
+    }
+  });
+
+  test("set binding + empty Execute as → ok (field presence is validateAssignmentFields' job)", () => {
     expect(antiRecursionPrecheck("fullstack-dev", "").ok).toBe(true);
+    expect(antiRecursionPrecheck("fullstack-dev", "   ").ok).toBe(true);
   });
 });
 
@@ -971,13 +981,29 @@ describe("composeDispatchGate — shared host dispatch-gate composition (qc1 F-0
 **Task category**: logic
 `;
 
-  test("shaped writable assignment → shaped true, ok, no violations", () => {
-    const result = composeDispatchGate(VALID_ASSIGNMENT);
+  test("shaped writable assignment with a non-matching binding → shaped true, ok, no violations", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { agent: "qc-specialist" });
     expect(result.shaped).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
     expect(result.hardBlocked).toBe(false);
     expect(result.enforcement).toEqual({ hard: false, source: "none" });
+  });
+
+  test("omitted agent → critical dispatch.anti-recursion.empty-binding (fail closed)", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT);
+    expect(result.shaped).toBe(true);
+    expect(result.ok).toBe(false);
+    const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.empty-binding");
+    expect(anti?.severity).toBe("critical");
+  });
+
+  test("empty / whitespace agent → critical dispatch.anti-recursion.empty-binding", () => {
+    for (const agent of ["", "   "]) {
+      const result = composeDispatchGate(VALID_ASSIGNMENT, { agent });
+      expect(result.ok).toBe(false);
+      expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.empty-binding")).toBe(true);
+    }
   });
 
   test("non-shaped text → silent shaped false result (no violations, ok)", () => {
@@ -997,11 +1023,18 @@ describe("composeDispatchGate — shared host dispatch-gate composition (qc1 F-0
     expect(result.violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(true);
   });
 
-  test("read-only (writable: false) → no branch-form or default-branch violations", () => {
-    const result = composeDispatchGate(noBranchText, { writable: false });
+  test("read-only (writable: false) with a non-matching binding → no branch-form or default-branch violations", () => {
+    const result = composeDispatchGate(noBranchText, { writable: false, agent: "qc-specialist" });
     expect(result.shaped).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
+  });
+
+  test("read-only (writable: false) with omitted agent → empty-binding fires (no read-only carve-out)", () => {
+    const result = composeDispatchGate(noBranchText, { writable: false });
+    expect(result.shaped).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.empty-binding")).toBe(true);
   });
 
   test("agent == Execute as → critical anti-recursion violation", () => {
@@ -1074,7 +1107,7 @@ An example Assignment template line: **Enforcement**: hard
 **Working branch**: feature/foo
 **Enforcement**: hard
 `;
-    const result = composeDispatchGate(text);
+    const result = composeDispatchGate(text, { agent: "qc-specialist" });
     expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
     expect(result.ok).toBe(true);
     expect(result.hardBlocked).toBe(false);

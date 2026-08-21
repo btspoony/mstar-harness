@@ -658,14 +658,17 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   // Deploy-time observability: when enforcement resolves hard but
-  // no dispatchBinding is declared, the anti-recursion red line is off by
-  // construction — surface the absence instead of only documenting it.
-  // (Boot-time the only known enforcement source is the explicit Config
-  // override — compass hard is per-workspace and resolves at event time.)
+  // no dispatchBinding is declared, the anti-recursion red line FAILS
+  // CLOSED — every Assignment-shaped dispatch emits
+  // `dispatch.anti-recursion.empty-binding` (critical) until
+  // dispatchBinding is set — surface the absence instead of only
+  // documenting it. (Boot-time the only known enforcement source is the
+  // explicit Config override — compass hard is per-workspace and resolves
+  // at event time.)
   const effectiveHard = config.enforcement === 'hard' || (bootHarnessDir !== null && resolveRepoEnforcement(bootHarnessDir).hard)
   if (effectiveHard && (config.dispatchBinding ?? '').trim() === '') {
     ctx.logger(DISPATCH_LOGGER).warn(
-      'Enforcement: hard is active but dispatchBinding is unset — the anti-recursion precheck is skipped (an Assignment whose Execute as equals the dispatching agent cannot be detected)',
+      'Enforcement: hard is active but dispatchBinding is unset — the empty host binding fails closed: every Assignment-shaped dispatch emits dispatch.anti-recursion.empty-binding (critical) until dispatchBinding is set',
     )
   }
   // Deploy-time observability: a renamed dsh subagent tool

@@ -555,8 +555,10 @@ function isAssignmentShaped(assignmentText: string): boolean {
 export type ComposeDispatchGateOptions = {
   /**
    * Host role-binding field (omp task entry `agent` / opencode `subagent` /
-   * cursor `subagent_type`); the anti-recursion precheck runs only when
-   * non-empty.
+   * cursor `subagent_type` / dsh `dispatchBinding`). The anti-recursion
+   * precheck runs for EVERY Assignment-shaped text: an empty or omitted
+   * binding fails closed (`dispatch.anti-recursion.empty-binding`) — the
+   * host cannot prove the dispatching agent is not recursing.
    */
   agent?: string;
   /**
@@ -588,7 +590,10 @@ export type ComposeDispatchGateResult = GateResult & {
  *    Assignment-shaped passes silently (`shaped: false`).
  * 2. `validateAssignmentFields` with `writable: false` when `opts.writable
  *    === false` (read-only roles), else the writable default.
- * 3. Anti-recursion precheck when `opts.agent` is non-empty.
+ * 3. Anti-recursion precheck — runs for every Assignment-shaped text; an
+ *    empty/omitted host binding fails closed (`dispatch.anti-recursion.
+ *    empty-binding`), a binding equal to `Execute as` is the existing
+ *    `dispatch.anti-recursion.self-type` critical.
  * 4. Default-branch gate for writable text: the branch comes from the
  *    Assignment's own branch forms (create-form name / Working branch /
  *    Branch policy branch), else `$MSTAR_WORKING_BRANCH`; a well-formed
@@ -617,10 +622,11 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     violations.push(...validateAssignmentFields(text, { writable }).violations);
 
     // (3) Anti-recursion NEVER red line (engine gate; warn/error in adapters).
-    const agent = (opts.agent ?? "").trim();
-    if (agent !== "") {
-      violations.push(...antiRecursionPrecheck(agent, parseAssignmentFields(text).executeAs ?? "").violations);
-    }
+    // Runs for EVERY Assignment-shaped text — an empty/omitted host binding
+    // is a violation (fail closed), not a skip: the host cannot prove the
+    // dispatching agent is not recursing.
+    const agent = opts.agent ?? "";
+    violations.push(...antiRecursionPrecheck(agent, parseAssignmentFields(text).executeAs ?? "").violations);
 
     // (4) Default-branch gate for writable text — branch from the
     // Assignment's own forms, else $MSTAR_WORKING_BRANCH (env fallback
@@ -649,14 +655,31 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
  * Anti-recursion precheck (NEVER red line, mstar-dispatch-gates § 承接方反递归
  * 红线): a leaf executor MUST NOT invoke a Task/subagent whose role-binding
  * field (`subagent_type` / `agent` / `subagent`) equals its own `Execute as`.
- * Comparison is case-insensitive after trim; an empty binding is not a
- * self-recursion (its presence is the field gate's job, not this precheck).
+ * Comparison is case-insensitive after trim. An EMPTY binding fails closed
+ * (`dispatch.anti-recursion.empty-binding`, critical): the host cannot
+ * report which agent is calling, so anti-recursion cannot be proven — the
+ * dispatch must not proceed as if the NEVER red line held. An empty
+ * `executeAs` with a set binding stays ok (field presence is
+ * `validateAssignmentFields`' job, not this precheck).
  */
 export function antiRecursionPrecheck(subagentType: string, executeAs: string): GateResult {
   const binding = subagentType.trim().toLowerCase();
   const role = executeAs.trim().toLowerCase();
 
-  if (binding !== "" && binding === role) {
+  if (binding === "") {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "critical",
+          "dispatch.anti-recursion.empty-binding",
+          `empty host role binding — the host cannot report which agent is calling, so anti-recursion cannot be proven (a dispatch could silently recurse)`,
+          "set the host role-binding field (omp task entry `agent` / opencode `subagent` / cursor `subagent_type` / dsh `dispatchBinding`) before dispatching",
+        ),
+      ],
+    };
+  }
+  if (binding === role) {
     return {
       ok: false,
       violations: [

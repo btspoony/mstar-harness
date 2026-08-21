@@ -339,8 +339,8 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
   })
 
   it('read-only role (scout) without branch form → pass (branch gate skipped, same as the gate)', async () => {
-    const app = booted = await bootApp()
-    const adapter = makeAdapter()
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    const adapter = makeAdapter({ config: { dispatchBinding: 'qc-specialist' } })
 
     const advisories = captureDispatchAdvisories(app.ctx)
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SCOUT_NO_BRANCH), defaultAllow)
@@ -353,8 +353,8 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
   })
 
   it('valid writable Assignment → pass', async () => {
-    booted = await bootApp()
-    const adapter = makeAdapter()
+    booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    const adapter = makeAdapter({ config: { dispatchBinding: 'qc-specialist' } })
 
     const result = await adapter.beforeDispatch(VALID_WRITABLE)
     expect(result.ok).toBe(true)
