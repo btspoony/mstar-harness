@@ -6,9 +6,9 @@
  * Composition case (b) applies the REAL registry `dsh-llm-fallbacks` through
  * the harness real-composition boot (`bootApp` + `ctx.plugin`): its EXACT
  * service-surface assertion is the executable STOP gate for caret-range
- * drift (`^0.3.0` admits 0.3.1+ — a drifted
- * resolver fails the version/surface check HERE, not silently in
- * production).
+ * drift (a drifted resolver fails the version/surface check HERE, not
+ * silently in production). `RESOLVED_VERSION` is the deliberate pin — bump
+ * it when the caret lands on a new resolved version.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
