@@ -673,7 +673,7 @@ export function antiRecursionPrecheck(subagentType: string, executeAs: string): 
         violation(
           "critical",
           "dispatch.anti-recursion.empty-binding",
-          `empty host role binding — the host cannot report which agent is calling, so anti-recursion cannot be proven (a dispatch could silently recurse)`,
+          `empty host role binding \u2014 the host cannot report which agent is calling, so anti-recursion cannot be proven (a dispatch could silently recurse)`,
           "set the host role-binding field (omp task entry `agent` / opencode `subagent` / cursor `subagent_type` / dsh `dispatchBinding`) before dispatching",
         ),
       ],
