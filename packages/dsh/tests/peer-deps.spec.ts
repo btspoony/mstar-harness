@@ -1,17 +1,13 @@
 /**
- * Registry peer contract (rc.8 from npm, no link farm): the private
- * `@deepseek-ai/*` packages are peerDependencies ONLY (never
- * devDependencies / dependencies), resolved from the npm registry at dev
- * time via bun's default peer auto-install — no local link farm, no
- * scoped-registry `.npmrc` (the 0c884d47 npmrc cleanup dropped the root
- * auth token: `@deepseek-ai` is public on registry.npmjs.org). Data-driven
- * over the ACTUAL package.json, so the peer set can grow without this test
- * silently going stale.
+ * Registry peer contract (npm, no link farm): `@deepseek-ai/*` packages are
+ * peerDependencies ONLY (never devDependencies / dependencies), resolved
+ * from the public registry at dev time via bun's default peer auto-install
+ * — no local link farm, no scoped-registry `.npmrc`. Data-driven over the
+ * ACTUAL package.json so the peer set and the shared caret range can move
+ * without this file hard-coding a version.
  *
  * Bun installs peer dependencies by default (unlike pnpm, which needs the
- * `autoInstallPeers: true` workspace flag), so the registry switch is wired
- * solely by the pinned `^0.1.0-rc.8` peer ranges resolving against the
- * default registry.
+ * `autoInstallPeers: true` workspace flag).
  */
 import { describe, expect, it } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
@@ -36,7 +32,7 @@ const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
 const deepseekKeys = (field: Record<string, string> | undefined): string[] =>
   Object.keys(field ?? {}).filter((name) => name.startsWith('@deepseek-ai/')).sort()
 
-describe('registry peer contract (rc.8 from npm, no link farm)', () => {
+describe('registry peer contract (npm, no link farm)', () => {
   it('every @deepseek-ai/* entry is a peerDependency and appears in no other dependency field', () => {
     const peers = deepseekKeys(pkg.peerDependencies)
     expect(peers.length).toBeGreaterThan(0)
@@ -47,12 +43,38 @@ describe('registry peer contract (rc.8 from npm, no link farm)', () => {
     }
   })
 
-  it('every @deepseek-ai/dsh-* peer is pinned to ^0.1.0-rc.8', () => {
-    for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
+  it('every @deepseek-ai/dsh-* peer shares one caret range from package.json', () => {
+    const dshPeers = Object.entries(pkg.peerDependencies ?? {}).filter(([name]) =>
+      name.startsWith('@deepseek-ai/dsh-'),
+    )
+    expect(dshPeers.length).toBeGreaterThan(0)
+    const canonical = dshPeers[0]![1]
+    expect(canonical.length).toBeGreaterThan(0)
+    for (const [name, range] of dshPeers) {
+      expect(range, name).toBe(canonical)
+    }
+  })
+
+  it('the resolved @deepseek-ai/dsh-* graph is a single line (one version, no dsh-client-web-react)', () => {
+    // Lock-wide complement of the manifest pin: bun.lock is the ground truth
+    // of what actually resolves. Caret peer ranges alone do not guarantee a
+    // single line — a conflicting peer can leave nested prerelease copies
+    // behind while the manifest still reads one range. ANY dsh-* entry off
+    // the unique resolved version fails here.
+    const lock = readFileSync(join(repoRoot, 'bun.lock'), 'utf8')
+    const resolvedNames = new Set<string>()
+    const resolvedVersions = new Set<string>()
+    for (const match of lock.matchAll(/(@deepseek-ai\/dsh-[^@"]+)@([0-9]+\.[0-9]+\.[0-9][^"]*)/g)) {
+      resolvedNames.add(match[1])
+      resolvedVersions.add(match[2])
+    }
+    for (const name of deepseekKeys(pkg.peerDependencies)) {
       if (name.startsWith('@deepseek-ai/dsh-')) {
-        expect(range, name).toBe('^0.1.0-rc.8')
+        expect(resolvedNames.has(name), `${name} missing from bun.lock resolution graph`).toBe(true)
       }
     }
+    expect(resolvedVersions.size, `split dsh-* graph: ${[...resolvedVersions].join(', ')}`).toBe(1)
+    expect(resolvedNames.has('@deepseek-ai/dsh-client-web-react')).toBe(false)
   })
 
   it('peers are NOT marked optional (bun must auto-install them from the registry)', () => {
@@ -74,11 +96,10 @@ describe('registry peer contract (rc.8 from npm, no link farm)', () => {
       const npmrc = readFileSync(npmrcPath, 'utf8')
       expect(npmrc).not.toMatch(/@deepseek-ai\s*:/)
     }
-    // Behavioral half: the dev-time seam must resolve to the pinned line.
-    const llm = JSON.parse(
-      readFileSync(require.resolve('@deepseek-ai/dsh-llm/package.json'), 'utf8'),
-    ) as { version: string }
-    expect(llm.version).toBe('0.1.0-rc.8')
+    // Behavioral half: the dev-time seam must resolve from the registry.
+    expect(
+      JSON.parse(readFileSync(require.resolve('@deepseek-ai/dsh-llm/package.json'), 'utf8')).version,
+    ).toEqual(expect.any(String))
   })
 
   it('no install-time side effects; prepare, dsh:link scripts and the link-farm script are gone', () => {
