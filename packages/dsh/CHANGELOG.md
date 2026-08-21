@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-08-21
+
+### Harness
+
+- **Anti-recursion fails closed on an empty host binding**: `dispatch.antiRecursionPrecheck` now returns a **critical** `dispatch.anti-recursion.empty-binding` violation when the host role-binding field (`omp task entry agent` / opencode `subagent` / cursor `subagent_type` / dsh `dispatchBinding`) is empty, omitted, or whitespace-only — the host cannot prove the dispatching agent is not recursing, so the dispatch must not proceed as if the NEVER red line held. `composeDispatchGate` no longer skips the precheck for empty bindings (the `if (agent !== "")` skip is removed); the precheck is the single decision point and runs for every Assignment-shaped text, including read-only (scout/explore) Assignments (no carve-out). A set binding equal to `Execute as` keeps the existing critical `dispatch.anti-recursion.self-type`; a set binding with an empty `Execute as` stays ok on the anti-recursion leg (field presence remains `validateAssignmentFields`' job).
+- **OpenCode surface**: `validateDispatchAssignment` (via `composeDispatchGate`) now warns `dispatch.anti-recursion.empty-binding` at critical severity when the task tool carries no `subagent` / `subagent_type` key; under the Assignment's own `**Enforcement**: hard` the empty binding hard-blocks (`hardBlocked: true`). No `src` change — the hook already flows the default `""` binding through the engine composition.
+- **dsh surface**: `dispatchGateCore` passes `config.dispatchBinding ?? ''` into the engine composition, so an unset binding now emits `dispatch.anti-recursion.empty-binding` (critical) on every Assignment-shaped dispatch — advisory in warn mode, `PreToolDecision { kind: 'deny' }` under hard. The boot-time warn string no longer claims the precheck is "skipped": an unset `dispatchBinding` under hard enforcement now fails closed until the binding is set. The Zod `dispatchBinding` schema is untouched.
+- **dsh plugin**: `@deepseek-ai/dsh-*` peers upgraded to the `0.1.1-rc.1` line (`^0.1.1-rc.1`; `@deepseek-ai/cordis` stays `^4.0.1`; `dsh-llm-fallbacks` re-aligned `^0.2.0` → `^0.3.0` so its peers land on `^0.1.1-rc.1`). Verified against the `0.1.0-rc.8 → 0.1.1-rc.1` diff (deepseek-harness @ `528c682e06`): every consumed server-side package changed docs/package.json only, client-side consumed surface changed additively, and the `__ModuleLoader__` handoff survives — zero adapter-code changes. No checklist seam (credentials records, pi-ai auth, index-inject, session-projection) is consumed. Lock re-resolved to a single `0.1.1-rc.1` line — zero `0.1.0-rc.8` copies anywhere, and the `dsh-client-web-react` rc.7 holdover is eliminated (fallbacks 0.3.3 dropped that peer); `@oh-my-pi/*` / `@bufbuild/protobuf` resolutions are unchanged from the previous lock. No previously blocked mstar-dsh goals were unblocked by this line.
+
+- Version alignment with harness **3.1.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.2**.
+
 ## [3.1.1] - 2026-08-20
 
 ### Harness
