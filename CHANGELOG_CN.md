@@ -1,23 +1,37 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.1.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.1.2**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **3.1.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.1.1** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.1.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.1.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.1.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **3.1.1** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.1.1** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.1.1** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.1** |
-| Agent Plugins 清单 | `plugin.json` | **3.1.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **3.1.2** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.1.2** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.1.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.1.2** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.1.2** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **3.1.2** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.1.2** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.1.2** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.2** |
+| Agent Plugins 清单 | `plugin.json` | **3.1.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [3.1.2] - 2026-08-21
+
+### Harness
+
+- **空宿主绑定的反递归改为失败关闭**：`dispatch.antiRecursionPrecheck` 在宿主角色绑定字段（omp task 条目 `agent` / opencode `subagent` / cursor `subagent_type` / dsh `dispatchBinding`）为空、缺失或仅空白时，现返回 **critical** 级 `dispatch.anti-recursion.empty-binding` 违规——宿主无法证明派发代理未在递归，派发不得在 NEVER 红线未成立的情况下继续。`composeDispatchGate` 不再对空绑定跳过预检（`if (agent !== "")` 跳过已移除）；预检成为唯一决策点，对所有 Assignment 形态文本（含只读 scout/explore，无豁免）均执行。已设置绑定且等于 `Execute as` 时保留既有 critical `dispatch.anti-recursion.self-type`；已设置绑定但 `Execute as` 为空时反递归支路仍为 ok（字段存在性仍归 `validateAssignmentFields`）。
+- **OpenCode 表面**：`validateDispatchAssignment`（经 `composeDispatchGate`）在 task 工具未携带 `subagent` / `subagent_type` 键时以 critical 级别警告 `dispatch.anti-recursion.empty-binding`；在 Assignment 自身 `**Enforcement**: hard` 下空绑定会硬阻断（`hardBlocked: true`）。无 `src` 改动——hook 已把默认 `""` 绑定流入 engine 组合。
+- **dsh 表面**：`dispatchGateCore` 将 `config.dispatchBinding ?? ''` 传入 engine 组合，未设置绑定时每次 Assignment 形态派发都会发出 `dispatch.anti-recursion.empty-binding`（critical）——warn 模式为 advisory，hard 模式下为 `PreToolDecision { kind: 'deny' }`。启动警告文案不再声称预检被"跳过"：hard 强制下未设置 `dispatchBinding` 现失败关闭，直至绑定被设置。Zod `dispatchBinding` schema 保持不变。
+- **dsh 插件**：`@deepseek-ai/dsh-*` peer 升级到 `0.1.1-rc.1` 线（`^0.1.1-rc.1`；`@deepseek-ai/cordis` 保持 `^4.0.1`；`dsh-llm-fallbacks` 重新对齐 `^0.2.0` → `^0.3.0`，使其 peers 落在 `^0.1.1-rc.1`）。对照 deepseek-harness @ `528c682e06` 的 `0.1.0-rc.8 → 0.1.1-rc.1` diff 验证：所有已消费的服务端包仅变更文档/`package.json`，客户端已消费面为纯增量，`__ModuleLoader__` 握手原样存活——零适配层改动。未消费任何 checklist seam（credentials records、pi-ai auth、index-inject、session-projection）。lock 全新解析为单份 `0.1.1-rc.1` 线——任意位置零 `0.1.0-rc.8` 副本，`dsh-client-web-react` rc.7 holdover 已消除（fallbacks 0.3.3 移除了该 peer）；`@oh-my-pi/*` / `@bufbuild/protobuf` 解析与此前 lock 一致。此线未解锁任何此前被阻塞的 mstar-dsh 目标。
+- **Plan 写入路径门禁补上符号链接逃逸缺口**：`assertPlanWritingPath` 现对**已存在**的 plan 文件做 canonical 路径与 canonical `{PLAN_DIR}` 的对比（plans 目录本身可以是符号链接的合法布局）。词法上位于 `{PLAN_DIR}` 之下、但 `realpath` 指向其外的 plan 路径，现返回 **high** 级 `plan-path.symlink-escape` 违规，不再返回 `plan-path.ok`；内部别名（`plans/alias.md` → `plans/real.md`）与整目录 `plans/` 符号链接布局仍通过。文件不存在（首次写入）仅做词法检查；意外 fs 错误（EACCES 等）降级为词法判定——门禁绝不抛异常。`plan-path.outside-plan-dir` 与 `plan-path.no-harness` 语义保持不变。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.1.2**。
 
 ## [3.1.1] - 2026-08-20
 

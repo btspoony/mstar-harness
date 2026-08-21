@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-08-21
+
+### Harness
+
+- **Anti-recursion fails closed on an empty host binding**: `dispatch.antiRecursionPrecheck` now returns a **critical** `dispatch.anti-recursion.empty-binding` violation when the host role-binding field (`omp task entry agent` / opencode `subagent` / cursor `subagent_type` / dsh `dispatchBinding`) is empty, omitted, or whitespace-only — the host cannot prove the dispatching agent is not recursing, so the dispatch must not proceed as if the NEVER red line held. `composeDispatchGate` no longer skips the precheck for empty bindings (the `if (agent !== "")` skip is removed); the precheck is the single decision point and runs for every Assignment-shaped text, including read-only (scout/explore) Assignments (no carve-out). A set binding equal to `Execute as` keeps the existing critical `dispatch.anti-recursion.self-type`; a set binding with an empty `Execute as` stays ok on the anti-recursion leg (field presence remains `validateAssignmentFields`' job).
+- **OpenCode surface**: `validateDispatchAssignment` (via `composeDispatchGate`) now warns `dispatch.anti-recursion.empty-binding` at critical severity when the task tool carries no `subagent` / `subagent_type` key; under the Assignment's own `**Enforcement**: hard` the empty binding hard-blocks (`hardBlocked: true`). No `src` change — the hook already flows the default `""` binding through the engine composition.
+- **dsh surface**: `dispatchGateCore` passes `config.dispatchBinding ?? ''` into the engine composition, so an unset binding now emits `dispatch.anti-recursion.empty-binding` (critical) on every Assignment-shaped dispatch — advisory in warn mode, `PreToolDecision { kind: 'deny' }` under hard. The boot-time warn string no longer claims the precheck is "skipped": an unset `dispatchBinding` under hard enforcement now fails closed until the binding is set. The Zod `dispatchBinding` schema is untouched.
+- **Plan-Writing Path Gate closes the symlink-escape gap**: `assertPlanWritingPath` now compares the canonical path of an **existing** plan file against the canonical `{PLAN_DIR}` (the plans dir itself may legitimately be a symlink). A plan path that lexically sits under `{PLAN_DIR}` but `realpath`s outside it now returns a **high** `plan-path.symlink-escape` violation instead of `plan-path.ok`; internal aliases (`plans/alias.md` → `plans/real.md`) and whole-dir `plans/` symlink layouts still pass. Missing files (first write) stay lexical-only, and unexpected fs errors (EACCES etc.) degrade to the lexical verdict — the gate never throws. `plan-path.outside-plan-dir` and `plan-path.no-harness` semantics are unchanged.
+
+- Version alignment with harness **3.1.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.2**.
+
 ## [3.1.1] - 2026-08-20
 
 ### Changed
