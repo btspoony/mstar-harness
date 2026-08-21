@@ -6,7 +6,7 @@
  * Composition case (b) applies the REAL registry `dsh-llm-fallbacks` through
  * the harness real-composition boot (`bootApp` + `ctx.plugin`): its EXACT
  * service-surface assertion is the executable STOP gate for caret-range
- * drift (`^0.2.0` admits 0.2.1+ / 0.3.0 — a drifted
+ * drift (`^0.3.0` admits 0.3.1+ — a drifted
  * resolver fails the version/surface check HERE, not silently in
  * production).
  */
@@ -32,7 +32,7 @@ afterEach(async () => {
 const SERVICE_KEYS = ['name', 'version', 'resolveRole', 'resolveChain', 'validateFallbacksConfig', 'detectLegacyKeys', 'declareSeeds', 'getEffectiveRoles', 'revertSeededPersona'] as const
 
 /** The resolved registry version the caret range must land on (drift STOP gate). */
-const RESOLVED_VERSION = '0.2.2'
+const RESOLVED_VERSION = '0.3.3'
 
 /** A live, enabled loader entry for the fallbacks row. */
 const liveEntry = (): LoaderEntryView => ({ options: { name: FALLBACKS_ENTRY_NAME }, disabled: false, fiber: {} })

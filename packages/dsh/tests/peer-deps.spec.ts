@@ -55,6 +55,37 @@ describe('registry peer contract (0.1.1-rc.1 from npm, no link farm)', () => {
     }
   })
 
+  it('the resolved @deepseek-ai/dsh-* graph is a single 0.1.1-rc.1 line (zero 0.1.0-rc.8, no dsh-client-web-react)', () => {
+    // Lock-wide complement of the manifest pin: bun.lock is the ground truth
+    // of what actually resolves. Caret peer ranges alone do not guarantee a
+    // single line — a conflicting peer (e.g. dsh-llm-fallbacks@0.2.x peering
+    // on ^0.1.0-rc.7) can leave an rc.8 hoist or nested prerelease copies
+    // behind while the manifest still reads ^0.1.1-rc.1. This guard would
+    // have caught that dual-line lock: ANY dsh-* entry off the pinned line
+    // fails here.
+    const lock = readFileSync(join(repoRoot, 'bun.lock'), 'utf8')
+    const resolvedNames = new Set<string>()
+    const resolvedVersions = new Set<string>()
+    for (const match of lock.matchAll(/(@deepseek-ai\/dsh-[^@"]+)@([0-9]+\.[0-9]+\.[0-9][^"]*)/g)) {
+      resolvedNames.add(match[1])
+      resolvedVersions.add(match[2])
+    }
+    // Every manifest dsh-* peer must actually be present in the resolution
+    // graph (bun auto-installs peers; a peer skipped by a resolution gap
+    // would fail this presence check).
+    for (const name of deepseekKeys(pkg.peerDependencies)) {
+      if (name.startsWith('@deepseek-ai/dsh-')) {
+        expect(resolvedNames.has(name), `${name} missing from bun.lock resolution graph`).toBe(true)
+      }
+    }
+    // Exactly one distinct version across the ENTIRE dsh-* graph — the
+    // single-line invariant (zero 0.1.0-rc.8 top-level or nested).
+    expect([...resolvedVersions]).toEqual(['0.1.1-rc.1'])
+    // The web-react rc.7 holdover (pulled by dsh-llm-fallbacks@0.2.x peers)
+    // must be gone from the lock entirely.
+    expect(resolvedNames.has('@deepseek-ai/dsh-client-web-react')).toBe(false)
+  })
+
   it('peers are NOT marked optional (bun must auto-install them from the registry)', () => {
     // `peerDependenciesMeta.optional: true` was the old link-farm workaround
     // (skip unpublished peers). With registry resolution it silently skips
