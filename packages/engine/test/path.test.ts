@@ -29,7 +29,7 @@
  *   `.plans`/`plans`); ad-hoc names are never probed.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -986,6 +986,73 @@ describe("assertPlanWritingPath (plan-conventions § Plan-Writing Path Gate)", (
     expect(result.ok).toBe(false);
     expect(result.code).toBe("plan-path.no-harness");
     expect(result.severity).toBe("high");
+  });
+
+  test("rejects an existing plan symlink whose canonical target escapes {PLAN_DIR}", () => {
+    const root = tmpRoot("path-symlink-escape-");
+    try {
+      const harnessDir = join(root, ".mstar");
+      const planDir = join(harnessDir, "plans");
+      mkdirSync(planDir, { recursive: true });
+      const outside = join(root, "outside.txt");
+      writeFileSync(outside, "secret");
+      symlinkSync(outside, join(planDir, "evil.md"));
+      const result = assertPlanWritingPath(join(planDir, "evil.md"), harnessDir);
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe("plan-path.symlink-escape");
+      expect(result.severity).toBe("high");
+      expect(result.message).toContain(resolve(outside));
+      expect(result.message).toContain(resolve(planDir));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts an internal plan symlink whose canonical target stays under {PLAN_DIR}", () => {
+    const root = tmpRoot("path-symlink-internal-");
+    try {
+      const harnessDir = join(root, ".mstar");
+      const planDir = join(harnessDir, "plans");
+      mkdirSync(planDir, { recursive: true });
+      writeFileSync(join(planDir, "real.md"), "plan");
+      symlinkSync(join(planDir, "real.md"), join(planDir, "alias.md"));
+      const result = assertPlanWritingPath(join(planDir, "alias.md"), harnessDir);
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe("plan-path.ok");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts a non-existent plan path (first write) with only the lexical check", () => {
+    const root = tmpRoot("path-symlink-missing-");
+    try {
+      const harnessDir = join(root, ".mstar");
+      const planDir = join(harnessDir, "plans");
+      mkdirSync(planDir, { recursive: true });
+      const result = assertPlanWritingPath(join(planDir, "2024-new.md"), harnessDir);
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe("plan-path.ok");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts a whole-dir plans/ symlink to a directory outside the harness", () => {
+    const root = tmpRoot("path-symlink-dir-");
+    try {
+      const harnessDir = join(root, ".mstar");
+      mkdirSync(harnessDir, { recursive: true });
+      const sharedPlans = join(root, "shared-plans");
+      mkdirSync(sharedPlans, { recursive: true });
+      writeFileSync(join(sharedPlans, "x.md"), "plan");
+      symlinkSync(sharedPlans, join(harnessDir, "plans"));
+      const result = assertPlanWritingPath(join(harnessDir, "plans", "x.md"), harnessDir);
+      expect(result.ok).toBe(true);
+      expect(result.code).toBe("plan-path.ok");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

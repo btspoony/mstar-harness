@@ -28,7 +28,7 @@
  * are embedded constants: the engine never reads skill files at runtime
  * (roadmap §8.5 standalone rule).
  */
-import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readJson, writeJson, type ValidationResult } from "./core.js";
@@ -554,6 +554,33 @@ export function assertPlanWritingPath(planPath: string, harnessDir: string | nul
       message: `plan file ${planAbs} is outside {PLAN_DIR} (${planDir})`,
       fix: `write the plan under ${planDir}`,
     };
+  }
+  // Canonical check for an existing plan file: a symlink whose realpath
+  // leaves {PLAN_DIR} is an escape even though the lexical path is inside.
+  // The plans dir itself may legitimately be a symlink (whole-dir layout),
+  // so compare canonical file against canonical plan dir. Missing file
+  // (first write) stays lexical-only; unexpected fs errors degrade to the
+  // lexical verdict — the gate must never throw.
+  if (existsSync(planAbs)) {
+    try {
+      const canonicalPlan = realpathSync(planAbs);
+      const canonicalPlanDir = existsSync(planDir) ? realpathSync(planDir) : resolve(planDir);
+      const canonicalRel = relative(canonicalPlanDir, canonicalPlan);
+      const canonicalInside =
+        canonicalRel === "" || (!canonicalRel.startsWith("..") && !isAbsolute(canonicalRel));
+      if (!canonicalInside) {
+        return {
+          ok: false,
+          severity: "high",
+          code: "plan-path.symlink-escape",
+          message: `plan file ${planAbs} resolves to ${canonicalPlan}, outside {PLAN_DIR} (${canonicalPlanDir})`,
+          fix: `write the plan under ${planDir}`,
+        };
+      }
+    } catch {
+      // ENOENT raced between existsSync and realpathSync, or an unexpected
+      // fs error (EACCES etc.): keep the lexical verdict, never throw.
+    }
   }
   return {
     ok: true,
