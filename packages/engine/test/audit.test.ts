@@ -502,6 +502,36 @@ describe("promoteAuditPlans", () => {
   const tmp = mkdtempSync(join(tmpdir(), "engine-audit-promote-"));
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
+  /** Scaffold the standard 2-plan audit dir used by the error-path tests. */
+  function mkPlanAudit(outDir: string, date: string): void {
+    scaffoldAuditPlan(
+      outDir,
+      [
+        {
+          title: "Fix N+1 query in order list",
+          category: "perf" as const,
+          impact: "Every order-list render issues 1+N queries.",
+          effort: "M" as const,
+          risk: "MED" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/orders.ts:42"],
+          priority: "P1" as const,
+        },
+        {
+          title: "Rotate leaked AWS keys",
+          category: "security" as const,
+          impact: "Credentials in git history.",
+          effort: "S" as const,
+          risk: "HIGH" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/config.ts:3"],
+          priority: "P1" as const,
+        },
+      ],
+      { date },
+    );
+  }
+
   test("writes a plan workflow snapshot + registers it (type plan, matching started_at)", async () => {
     const harnessDir = join(tmp, "harness");
     const outDir = join(harnessDir, "plans", "audit-2026-08-08");
@@ -631,5 +661,82 @@ describe("promoteAuditPlans", () => {
     const entry = (status.workflows as Array<Record<string, unknown>>).find((w) => w.id === workflowId);
     expect(entry?.started_at).toBe(before.started_at);
     expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+  });
+
+  test("register failure rolls back the snapshot so a retry converges (W-001)", async () => {
+    const harnessDir = join(tmp, "harness-register-failure");
+    const outDir = join(harnessDir, "plans", "audit-2026-08-10");
+    mkPlanAudit(outDir, "2026-08-10");
+
+    // Conflicting root state: a second workflow row whose snapshot is missing
+    // makes validateStatusV2 fail for the WHOLE document, so registerWorkflow
+    // throws only AFTER promoteAuditPlans has already written this workflow's
+    // snapshot. Simulates a concurrent root writer / validation failure that
+    // the promote path cannot predict before its snapshot write.
+    const statusPath = join(harnessDir, "status.json");
+    const staleRoot = {
+      version: 2,
+      updated_at: "2026-08-09",
+      workflows: [
+        { id: "other-wf", type: "plan", started_at: "2026-08-09T00:00:00.000Z", dir: "workflows/other-wf" },
+      ],
+    };
+    mkdirSync(harnessDir, { recursive: true });
+    writeFileSync(statusPath, JSON.stringify(staleRoot, null, 2));
+
+    await expect(promoteAuditPlans(outDir, ["001"], { harnessDir })).rejects.toThrow(/invalid status\.json/);
+
+    // Rollback: the snapshot written before the failed register is removed,
+    // so the fix-1 re-promote guard no longer blocks a retry.
+    const workflowDir = join(harnessDir, "workflows", "audit-2026-08-10");
+    expect(existsSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(workflowDir)).toBe(false);
+
+    // Root untouched: the conflicting root bytes survive the failed promote.
+    const after = readFileSync(statusPath, "utf8");
+    expect(after).toBe(JSON.stringify(staleRoot, null, 2));
+
+    // Retry after the root conflict is resolved converges end-to-end.
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-08-09", workflows: [] }, null, 2));
+    const retry = await promoteAuditPlans(outDir, ["001"], { harnessDir });
+    expect(existsSync(join(harnessDir, "workflows", retry.workflowId, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
+    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+  });
+
+  test("promotes a selected subset only (multi-id, out-of-selection rows absent)", async () => {
+    const harnessDir = join(tmp, "harness-subset");
+    const outDir = join(harnessDir, "plans", "audit-2026-08-11");
+    mkPlanAudit(outDir, "2026-08-11");
+
+    const result = await promoteAuditPlans(outDir, ["002", "001"], { harnessDir });
+    const snapshot = readJson(join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE));
+    const plans = snapshot.plans as Array<Record<string, unknown>>;
+    expect(plans).toHaveLength(2);
+    // Row order follows the selection order, not the directory order.
+    expect(plans[0].id).toBe("002-rotate-leaked-aws-keys");
+    expect(plans[1].id).toBe("001-fix-n-1-query-in-order-list");
+    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+  });
+
+  test("error paths: empty selected / missing harnessDir / unknown plan id / hostile workflow id", async () => {
+    const harnessDir = join(tmp, "harness-errors");
+    const outDir = join(harnessDir, "plans", "audit-2026-08-11");
+    mkPlanAudit(outDir, "2026-08-11");
+
+    // Empty selection is a usage error before any write.
+    await expect(promoteAuditPlans(outDir, [], { harnessDir })).rejects.toThrow(/at least one plan id/);
+    // Missing harnessDir is rejected before any write (no harness, no workflow dir).
+    await expect(promoteAuditPlans(outDir, ["001"], { harnessDir: "" })).rejects.toThrow(/harnessDir is required/);
+    // Unknown plan id names the offending id and does not promote a subset.
+    await expect(promoteAuditPlans(outDir, ["999"], { harnessDir })).rejects.toThrow(/999/);
+    // Hostile workflow id (path traversal) is refused by the path-component
+    // guard, never resolved into a workflow path.
+    await expect(promoteAuditPlans(outDir, ["001"], { harnessDir, workflowId: "../x" })).rejects.toThrow(
+      /safe path component/,
+    );
+    // All failures left the harness untouched (no snapshot, no status.json).
+    expect(existsSync(join(harnessDir, "workflows"))).toBe(false);
+    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
   });
 });

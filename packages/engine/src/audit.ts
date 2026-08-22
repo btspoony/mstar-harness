@@ -11,7 +11,7 @@
  * - mstar-audit/references/finding-format.md: category codes, evidence
  *   requirements.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
 import { assertSafePathComponent } from "./path.js";
@@ -538,6 +538,13 @@ export type PromoteAuditPlansOptions = {
  * before the registration. Plan rows are built from the README index
  * `## Execution order & status` columns (Plan/Title), falling back to the
  * private `readPlanFileSummary` only when the index lacks the row.
+ *
+ * Run-once semantics: a workflow id whose snapshot already exists refuses
+ * the promote (re-promote would drop its registered plan rows); remove
+ * that workflow first. If the snapshot write succeeds but registration
+ * fails (a concurrent root writer, a stale/conflicting root doc, or a
+ * validation error), the partial snapshot + empty workflow dir are rolled
+ * back so a retry converges after the root conflict is resolved.
  */
 export async function promoteAuditPlans(
   outDir: string,
@@ -596,13 +603,37 @@ export async function promoteAuditPlans(
     plans,
   };
 
+  // W-001 (QC wave 2): the snapshot is written FIRST (registerWorkflow
+  // refuses a missing snapshot), but a register failure — a concurrent root
+  // writer, a stale/conflicting root doc, or a validation error — would
+  // leave an orphaned snapshot behind. That orphan then blocks the fix-1
+  // re-promote guard until manual deletion. Roll back the partial write
+  // (snapshot + the now-empty workflow dir) so a retry after resolving the
+  // root conflict converges without manual cleanup.
   await writeWorkflowSnapshot(snapshot, workflowDir);
-  await registerWorkflow(join(options.harnessDir, "status.json"), {
-    id: workflowId,
-    type: "plan",
-    started_at: snapshot.started_at,
-    dir: `workflows/${workflowId}`,
-  });
+  try {
+    await registerWorkflow(join(options.harnessDir, "status.json"), {
+      id: workflowId,
+      type: "plan",
+      started_at: snapshot.started_at,
+      dir: `workflows/${workflowId}`,
+    });
+  } catch (error) {
+    rmSync(snapshotPath, { force: true });
+    try {
+      // Remove the workflow dir only when empty — a concurrent writer's
+      // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if
+      // content appeared between the readdir and the removal, and the
+      // fix-1 guard would refuse the re-promote anyway, keeping this
+      // promote's partial state out of the way.
+      if (readdirSync(workflowDir).length === 0) {
+        rmdirSync(workflowDir);
+      }
+    } catch {
+      // Dir non-empty or already gone — leave it; never force-remove.
+    }
+    throw error;
+  }
 
   return { workflowId, snapshotPath: join(workflowDir, WORKFLOW_SNAPSHOT_FILE) };
 }
