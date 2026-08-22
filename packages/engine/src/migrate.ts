@@ -926,9 +926,16 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
         `refusing to apply migration: invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
       );
     }
-    const filePath = projectTargetOf(plan.register.file);
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeJson(filePath, plan.register.data as unknown as Record<string, unknown>);
+    // Zero entries -> no register file (audit-20260821-f3): the planner
+    // already returns `register: null` when there are no open residuals,
+    // but a hand-built plan may carry a gate-passing empty `{ entries: {} }`
+    // — writing an empty register would orphan an empty file. Validate
+    // FIRST so an invalid doc (e.g. missing `entries`) still throws.
+    if (Object.keys(plan.register.data.entries ?? {}).length > 0) {
+      const filePath = projectTargetOf(plan.register.file);
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeJson(filePath, plan.register.data as unknown as Record<string, unknown>);
+    }
   }
 
   // 5. Roadmap seeds (additive).
