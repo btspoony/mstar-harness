@@ -70,7 +70,7 @@ PM 在新迭代启动时执行。
 3. 读 `{KNOWLEDGE_DIR}/README.md`（若存在），将索引中的 **Active** 行视为 Research 候选（**不**要求阅读全部 knowledge 正文）
 4. 如果有未完成的 roadmap 残余（上一迭代标记为 `next` 的 plan），纳入本次迭代范围候选
 
-**非 command 触发**（如直接 skill 加载）时，Phase 1 Review & Edit 派发前同样运行 assignment preflight（`references/command-shared-invariants.md`），且方向锁定仍须 interactive（grill-me 在 command 层）。
+**非 command 触发**（如直接 skill 加载）时，Phase 1 方向锁定仍须 interactive（grill-me 在 command 层）。
 
 ### 1.2 定义迭代范围
 
@@ -198,6 +198,8 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 ### 1.6 Review & Edit chain（integration 分支前强制）
 
 **Phase 1 在 PM lock 前不算完成**——compass/plans 初稿落盘 ≠ Done。
+
+**Assignment preflight（每次角色 invoke 前，HARD）**：自然语言 / skill 直接触发（非 command 路径）时，本 skill 不依赖 command 层 preflight——**每个** Phase 1 角色派发前，PM 必须运行 assignment preflight（`references/command-shared-invariants.md` 的 warn-only / `enforcement: hard` fail-fast 片段；`enforcement: hard` 时校验失败即阻断派发）。Command 层（`/iteration-start`）走其自身 preflight；本行确保 skill 触发路径门禁不缺失。
 
 派发机制 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch，**顺序链**）。PM **不得**将迭代 harness 文档 commit 到 `spec_integration_branch`，直到：
 
