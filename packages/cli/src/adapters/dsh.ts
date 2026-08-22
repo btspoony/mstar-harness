@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { runCliCommand } from "../exec";
 import os from "node:os";
 import path from "node:path";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
@@ -62,16 +62,7 @@ const DSH_INSTALL_HINT =
  * `timeoutMs` bounds the child so a hung dsh/pnpm surfaces as an error
  * instead of blocking the CLI forever. */
 function runDsh(args: string[], dryRun: boolean, timeoutMs: number): string {
-  if (dryRun) return "";
-  // Explicit `env` snapshot: Bun resolves the command against the env's PATH
-  // only when `env` is passed (otherwise it uses the startup PATH), which is
-  // what lets tests inject a fake dsh via PATH.
-  return execFileSync(DSH_BIN, args, {
-    stdio: "pipe",
-    encoding: "utf8",
-    env: process.env,
-    timeout: timeoutMs,
-  });
+  return runCliCommand([DSH_BIN, ...args], { dryRun, timeoutMs, env: process.env });
 }
 
 function dshAvailable(): boolean {

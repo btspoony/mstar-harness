@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { runCliCommand } from "../exec";
 import type { AgentAdapter, Scope } from "../types";
 import { resolveProjectRoot } from "../utils";
 import {
@@ -29,9 +30,8 @@ function ompAvailable() {
   }
 }
 
-function runOmp(args: string[], dryRun: boolean) {
-  if (dryRun) return;
-  execFileSync("omp", args, { stdio: "pipe", encoding: "utf8" });
+function runOmp(args: string[], dryRun: boolean): void {
+  runCliCommand(["omp", ...args], { dryRun });
 }
 
 function listInstalledPlugins(): Array<Record<string, unknown>> {
