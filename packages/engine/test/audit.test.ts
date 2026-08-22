@@ -839,3 +839,23 @@ describe("promoteAuditPlans", () => {
     expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// f11: redactSecrets must NOT be re-exported from the engine barrel —
+// the deterministic validator surface stays public; the redaction utility
+// stays module-private (import from the audit module directly).
+// ---------------------------------------------------------------------------
+
+describe("engine barrel hides redactSecrets (f11)", () => {
+  test("importing redactSecrets from the barrel resolves to undefined", async () => {
+    // Dynamic import: this test intentionally exercises the module loading
+    // boundary — the assertion is that the barrel's runtime namespace lacks
+    // the removed export, which a static named import could not express.
+    const barrel = await import("../src/index.js");
+    expect((barrel as Record<string, unknown>).redactSecrets).toBeUndefined();
+  });
+
+  test("the audit module still exports redactSecrets directly", () => {
+    expect(typeof redactSecrets).toBe("function");
+  });
+});

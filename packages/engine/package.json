@@ -16,13 +16,17 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/engine.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./src/audit": {
+      "types": "./dist/audit.d.ts",
+      "default": "./dist/audit.js"
+    }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/engine.js && bunx tsc",
+    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/engine.js && bun build src/audit.ts --target node --outfile dist/audit.js && bunx tsc",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },

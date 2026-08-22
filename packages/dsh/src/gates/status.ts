@@ -69,7 +69,13 @@ export interface StatusGateAdvisory {
   target: string
   /** The gate verdict (warn-mode: `hardBlocked` false; hard repair escape: `hardBlocked` true). */
   result: GateResult
-  /** Resolved enforcement flag: false for warn-mode advisories, true for hard-mode repair escapes. */
+  /**
+   * Resolved enforcement flag: true whenever the gate ran under hard
+   * enforcement — for hard-mode repair escapes AND for degraded-hard
+   * advisories (f9: the catch emits `hard` reflecting ACTUAL enforcement,
+   * so a hard deployment can distinguish a dead control from a warn-only
+   * pass). False only for warn-mode advisories.
+   */
   hard: boolean
   /** True when hard mode allowed a write/edit to an ALREADY-invalid document (repair escape). */
   repair?: boolean
@@ -322,7 +328,21 @@ function gateStatusIntent(
   } catch (error) {
     ctx.logger(LOGGER_NAME).error(`status gate degraded to allow: ${(error as Error).message}`)
     try {
-      ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: { ok: true, violations: [] }, hard: false, degraded: true })
+      // f9: the degraded advisory reflects ACTUAL enforcement mode — under
+      // hard the envelope still allows the write (never a veto), but the
+      // advisory carries `hard: true` so hard deployments can tell a dead
+      // control apart from a warn-only pass. `repair` stays unset (this was
+      // NOT a repair-escape allow — the gate errored, the write was never
+      // vetoed).
+      let hard = false
+      try {
+        hard = harnessDir !== null && resolveHard(harnessDir, config)
+      } catch {
+        // `resolveHard` reads `.mstarc`/compass frontmatter from disk — a
+        // throwing resolve must not re-enter the envelope (second-catch
+        // death loop); fall back to a fail-safe warn-mode advisory.
+      }
+      ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: { ok: true, violations: [] }, hard, degraded: true })
     } catch (emitError) {
       // Best-effort observability: a throwing advisory consumer must not take
       // the gate down with it (the error log above is the durable signal).

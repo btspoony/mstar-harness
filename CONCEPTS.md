@@ -24,6 +24,9 @@ An orchestrated flow (single-plan or iteration) treated as a first-class runtime
 ### Project register
 The durable home for cross-lifecycle debt and direction: open residuals (with severity and lifecycle provenance) and roadmap live under a project; flows without an explicit project fall back to `_default`. Closing a residual is a register state change, not a status-key shuffle. The v1 root `residual_findings` array was retired in v3.0.0.
 
+### Closure-verification plan
+A plan whose residual's fix may already have landed — grep the current checkout (CLI surface, docs, skill callouts) before planning a re-implementation; if the work is done, re-scope to verification-only: smoke the real artifact, confirm no stale import-only callouts, fill the changeset gap if missing, close the residual in place. Prevents re-implementing a command that already exists.
+
 ## Agent canvas (dsh panel)
 
 ### Emphasis

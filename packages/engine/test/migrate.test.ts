@@ -559,6 +559,98 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
     }
   });
 
+  test("constructed empty register ({ entries: {} }) applies but writes no register file or parent dir (audit-20260821-f3)", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      // Hand-build the non-null empty register the planner never produces:
+      // `data.entries` is a valid (gate-passing) empty map, so the only
+      // reason to skip the write is the zero-entries rule.
+      plan.register = {
+        file: "projects/_empty-register/residuals.json",
+        source: "constructed",
+        data: { entries: {} },
+      };
+      // Isolate the register step: no roadmap write may create the parent
+      // dir for us.
+      plan.roadmap = null;
+
+      const result = await applyMigratePlan(plan);
+      expect(result.applied).toBe(true);
+      expect(existsSync(join(root, "projects", "_empty-register", "residuals.json"))).toBe(false);
+      expect(existsSync(join(root, "projects", "_empty-register"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("constructed register with >=1 entry writes the doc verbatim (audit-20260821-f3 control)", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      const data = {
+        entries: {
+          "plan-a": [{ ...residual(), source_plan: "plan-a", registered_at: "2026-08-21" }],
+        },
+      };
+      plan.register = {
+        file: "projects/_default/residuals.json",
+        source: "constructed",
+        data,
+      };
+      plan.roadmap = null;
+
+      const result = await applyMigratePlan(plan);
+      expect(result.applied).toBe(true);
+      const registerPath = join(root, "projects", "_default", "residuals.json");
+      expect(existsSync(registerPath)).toBe(true);
+      expect(readJson(registerPath)).toEqual(data);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("constructed register with data {} (missing entries) still throws and writes nothing (audit-20260821-f3)", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      plan.register = {
+        file: "projects/_invalid-register/residuals.json",
+        source: "constructed",
+        data: {},
+      };
+
+      await expect(applyMigratePlan(plan)).rejects.toThrow(/missing required field: entries/);
+      expect(existsSync(join(root, "projects", "_invalid-register", "residuals.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("constructed register with data { entries: null } still throws and writes nothing (audit-20260821-f3)", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      plan.register = {
+        file: "projects/_null-entries-register/residuals.json",
+        source: "constructed",
+        // `entries: null` is NOT a realistic planner shape (buildRegister
+        // emits `entries: {}` or returns null), but it locks the
+        // validate-before-skip ordering: validateProjectRegister rejects
+        // a non-object `entries` ("entries must be an object keyed by plan
+        // id"), so the `?? {}` zero-entries skip must never swallow it.
+        // The gate runs first — invalid docs throw, only gate-passing
+        // empty `{ entries: {} }` registers are skipped.
+        data: { entries: null },
+      };
+
+      await expect(applyMigratePlan(plan)).rejects.toThrow(/entries must be an object/);
+      expect(existsSync(join(root, "projects", "_null-entries-register", "residuals.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a v1 tree with no status.json refuses to migrate", () => {
     const root = tmpRoot("migrate-nov1-");
     try {
