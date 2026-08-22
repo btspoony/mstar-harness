@@ -9,8 +9,8 @@ full protocol here.
 
 ## When it applies
 
-**Iteration commands only** (`iteration-start` ends before this; `iteration-drive`
-/ `iteration-loop` Phase 2+). Defaults are **hard** unless the current turn
+**Phase 2+ command-layer only**（`iteration-start` ends before this; `iteration-drive`
+/ `iteration-loop` are Phase 2+ command layer）. Defaults are **hard** unless the current turn
 explicitly waives via Assignment `Worktree mode: waived` (or equivalent user
 instruction). `Plan parallelism: serial` is **not** a waiver — it only forces
 serial cross-plan **implement** scheduling while control worktree + leases remain
