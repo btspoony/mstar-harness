@@ -21,13 +21,13 @@ import {
   applyEnforcement,
   assertLightDarkParity,
   lintLoadOrder,
-  redactSecrets,
   referenceExists,
   validateAuditStatusBlocks,
   validateDesignTokenFrontmatter,
   validateRoleMapping,
   validateSchemaYaml,
 } from '@mstar-harness/engine'
+import { redactSecrets } from '@mstar-harness/engine/src/audit'
 import type { GateResult, SecretFinding, ValidationResult } from '@mstar-harness/engine'
 import type { FsTarget, FsWriteIntent } from '@deepseek-ai/dsh-fs'
 import { formatViolation, resolveSeamHard, HarnessResolver, actorAgentOf } from './_shared.ts'
