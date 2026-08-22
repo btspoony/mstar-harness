@@ -33,6 +33,12 @@
  *      `lintFiveQuestion` in runtime mode, so the corpus cannot drift out
  *      of five-question alignment without failing CI. Guard numbers are
  *      per-plan locked, not positional.
+ *   6. skills corpus — Engine-check callout dedup (plan
+ *      20260822-skill-pointer-hygiene Task 2): the same normalized
+ *      `**Engine check (when available):**` callout body must not appear
+ *      in more than one file (bilingual variant `或 import` → `or import`
+ *      counts as identical), so a re-vendored canonical callout fails CI
+ *      before it drifts.
  *
  * The forward callout citation check (this plan, 20260817-cli-bin-alias
  * Task 2) also validates the **binary prefix** of every backticked CLI
@@ -544,6 +550,66 @@ export function checkEngineCallouts(
   return { calloutsChecked, cliCitationsChecked, failures };
 }
 
+/**
+ * Guard 6 — Engine-check callout dedup (plan 20260822-skill-pointer-hygiene
+ * Task 2): each contract's `**Engine check (when available):**` callout must
+ * live in exactly one skill file. A normalized body appearing in >1 file is
+ * a violation (one failure row naming every site) — the drift this guard
+ * exists to catch is a copy of a canonical callout landing at a second site
+ * and then drifting bilingual (Chinese `或 import` vs English `or import`).
+ *
+ * Normalization is deliberately light: strip the blockquote prefix, collapse
+ * whitespace, and map the bilingual variant `或 import` → `or import`. The
+ * trailing "On `fail` -> do not proceed" clause is part of the body, so a
+ * pointer that re-runs the canonical sentence with a different tail still
+ * fails; one-line pointers that carry no `**Engine check (when available):**`
+ * marker are naturally exempt (they are not callouts at all).
+ */
+export function checkCalloutDuplication(
+  files: Array<{ rel: string; text: string }>,
+): { failures: string[] } {
+  const failures: string[] = [];
+  const bodies = new Map<string, Array<{ rel: string; line: number }>>();
+
+  const normalize = (runText: string): string =>
+    runText
+      .split(/\r?\n/)
+      .map((line) => line.trimStart().replace(/^>\s?/, ""))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .replace(/或 import/g, "or import")
+      .trim();
+
+  for (const { rel, text } of files) {
+    const lines = text.split(/\r?\n/);
+
+    // Blockquote runs: consecutive lines starting with `>` (same run
+    // splitter as checkEngineCallouts).
+    let runStart = -1;
+    for (let i = 0; i <= lines.length; i++) {
+      const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
+      if (isQuote && runStart === -1) runStart = i;
+      if (!isQuote && runStart !== -1) {
+        const runText = lines.slice(runStart, i).join("\n");
+        const line = runStart + 1;
+        runStart = -1;
+        if (!runText.includes("**Engine check (when available):**")) continue;
+        const body = normalize(runText);
+        if (!bodies.has(body)) bodies.set(body, []);
+        bodies.get(body)!.push({ rel, line });
+      }
+    }
+  }
+
+  for (const [body, sites] of bodies) {
+    if (sites.length < 2) continue;
+    const at = sites.map((s) => `${s.rel}:${s.line}`).join(", ");
+    failures.push(`Engine-check callout body duplicated at ${at}:\n    ${body}`);
+  }
+
+  return { failures };
+}
+
 if (import.meta.main) {
   /* ------------------------------------------------------------------ */
   /* Engine export inventory (packages/engine/src/index.ts)               */
@@ -590,6 +656,15 @@ if (import.meta.main) {
   calloutsChecked += forward.calloutsChecked;
   cliCitationsChecked += forward.cliCitationsChecked;
   for (const row of forward.failures) fail(row);
+
+  // Guard 6: Engine-check callout dedup — the same normalized callout body
+  // must not appear in more than one file (canonical copy + pointers; a
+  // re-vendored copy with a divergent tail drifts bilingual and fails).
+  for (const row of checkCalloutDuplication(
+    skillFiles.map((file) => ({ rel: relative(root, file), text: readFileSync(file, "utf8") })),
+  ).failures) {
+    fail(row);
+  }
 
   // Import statements anywhere in a skill file must reference real exports.
   for (const file of skillFiles) {

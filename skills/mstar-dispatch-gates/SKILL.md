@@ -78,7 +78,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
 - After all tasks: branch `review-package` in `{SDD_DIR}/review/` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
 
-> **Engine check (when available):** run `mstar review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]` (or `import { executionModeToN, assertTriIdentity } from "@mstar-harness/engine"` in a host hook) to map `Execution mode` to its QC seat count N and assert tri identity for the QC tri above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **QC seats Engine-check 唯一规范体：** `mstar-review-qc` `SKILL.md`（Engine-check seats 行）。
 
 ## 并行规则（摘要）
 

@@ -184,7 +184,7 @@ Audit plans are **input candidates** for the normal Prepare → Execute flow. Th
 
 When the user selects plans to pursue:
 
-1. PM creates a plan row in `status.json` (`{PLAN_DIR}` main plan) for each selected audit plan.
+1. PM registers the workflow + plan rows in `{WORKFLOW_DIR}/<id>/snapshot.json` (root `status.json` v2 holds the workflows registry only — see `mstar-plan-artifacts`), with the main plan in `{PLAN_DIR}`.
 2. Each plan enters the normal state machine: `Todo → InProgress → InReview → Done`.
 3. PM may fast-track Prepare since the audit plan already contains spec, current-state excerpts, and verification gates — but the intent gate and clarify discipline still apply (`mstar-phase-gates`).
 4. Execution follows normal SDD or inline dispatch.

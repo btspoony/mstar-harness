@@ -68,15 +68,9 @@ A good strategy document is opinionated and concise. It should fit in one screen
 
 ## Creating STRATEGY.md
 
-### Phase 1: Gather context
+Creating and maintaining `STRATEGY.md` follows the **project knowledge bootstrap**: **`mstar-compound-refresh`** → `references/project-knowledge-bootstrap.md` **Phase 2 (Distill STRATEGY.md)** — survey context → interview → draft/review → stale/partial/current handling. The six-section structure and the engine check above stay authoritative here.
 
-1. Read existing project documentation (README, AGENTS.md, existing specs).
-2. If `{KNOWLEDGE_DIR}` or `{ITERATION_DIR}` exist, scan for architectural decisions and patterns.
-3. If `CONCEPTS.md` exists, use it to understand domain vocabulary.
-
-### Phase 2: Interview
-
-Ask PM these questions (one at a time):
+### Phase 2: Interview (ask PM one at a time)
 
 1. "What is the one-sentence vision for this project?"
 2. "Who are the primary users and what do they need most?"
@@ -84,33 +78,9 @@ Ask PM these questions (one at a time):
 4. "What 2-3 principles should guide every technical decision?"
 5. "What technology bets have you made, and why?"
 
-### Phase 3: Draft
+### Maintenance
 
-Write STRATEGY.md at the repo root. Keep it concise — each section should be 1-3 sentences or a short bullet list.
-
-### Phase 4: Discoverability
-
-Check if AGENTS.md references STRATEGY.md. If not, propose adding:
-
-```markdown
-- `STRATEGY.md` — project vision and guiding principles
-```
-
-Ask for consent before applying.
-
-## Maintaining STRATEGY.md
-
-### Review triggers
-
-- After a major architectural decision
-- When a plan introduces a new technology stack
-- Quarterly review (scheduled by PM)
-
-### Update rules
-
-1. **Be decisive about direction changes.** Don't keep old strategy alongside new — replace it.
-2. **Log decisions with context.** The Decision Log captures *why* a choice was made, not just what.
-3. **Keep it current.** Stale strategy is worse than no strategy — it misdirects plans.
+Review triggers: after a major architectural decision, when a plan introduces a new technology stack, or quarterly (PM-scheduled). Update rules: be decisive about direction changes (replace, don't keep old strategy alongside new); log decisions with context (why, not just what); keep it current — stale strategy is worse than no strategy.
 
 ## STRATEGY.md vs other docs
 
@@ -131,7 +101,7 @@ Ask for consent before applying.
 
 ## Workflow
 
-主链：**创建**（Phase 1 收集上下文 → Phase 2 访谈 PM → Phase 3 落盘 `<repo-root>/STRATEGY.md` → Phase 4 可发现性检查）→ **维护**（方向变更时果断替换旧策略、Decision Log 记决策理由、保持最新）→ **定期评审**（重大架构决策后 / 新技术栈引入时 / 季度评审）。作为 brainstorm / plan 的上游锚点被引用。
+主链：**创建/维护**（survey → 访谈 = § Phase 2 五问 → draft/review → 更新/替换/跳过）细节 → **`mstar-compound-refresh`** `references/project-knowledge-bootstrap.md` **Phase 2**。作为 brainstorm / plan 的上游锚点被引用。
 
 ## Evidence
 

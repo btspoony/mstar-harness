@@ -28,8 +28,10 @@
  *   missing / corrupt / bin-less manifests each return one explicit
  *   failure row (never a silent skip that would flood every citation).
  * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
- *   yields exactly 38 Engine-check callouts / 38 CLI citations against the
- *   live CLI inventory + declared bins; corpus drift goes red.
+ *   yields exactly 34 Engine-check callouts / 31 CLI citations against the
+ *   live CLI inventory + declared bins (4 lease/seats callouts consolidated
+ *   to canonical pointers by plan 20260822-skill-pointer-hygiene Task 2);
+ *   corpus drift goes red.
  */
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,6 +43,7 @@ import {
   buildEngineExportNames,
   checkBilingualContentParity,
   checkBilingualPairing,
+  checkCalloutDuplication,
   checkEngineCallouts,
   checkFiveQuestionCorpus,
   checkRolesCorpus,
@@ -261,12 +264,12 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     expect(failures).toEqual([]);
   });
 
-  test("real corpus pins 38 Engine-check callouts / 38 CLI citations (F-S3, drift goes red)", () => {
+  test("real corpus pins 34 Engine-check callouts / 31 CLI citations (F-S3, drift goes red)", () => {
     const REPO_ROOT = join(import.meta.dir, "..");
     const SKILLS_ROOT = join(REPO_ROOT, "skills");
 
     /** Every `.md` file under skills/ with the repo-relative `rel` Guard 1
-     * sees in main — the 38/38 counts are a regression pin: adding or
+     * sees in main — the 34/31 counts are a regression pin: adding or
      * removing a backticked CLI citation inside an Engine-check callout
      * (or adding a callout) fails this test loudly. */
     const realCorpus = () => {
@@ -302,8 +305,73 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       engineExports,
       binNames,
     });
-    expect(calloutsChecked).toBe(38);
-    expect(cliCitationsChecked).toBe(38);
+    expect(calloutsChecked).toBe(34);
+    expect(cliCitationsChecked).toBe(31);
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup (plan 20260822-skill-pointer-hygiene Task 2)", () => {
+  /** One Engine-check callout blockquote with `body` as its content. */
+  const callout = (body: string) =>
+    `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.`;
+
+  test("identical callout bodies in >1 file fail (load-bearing)", () => {
+    const body = "run `mstar lease verify --workflow <id>`";
+    const { failures } = checkCalloutDuplication([
+      { rel: "skills/mstar-a/SKILL.md", text: callout(body) },
+      { rel: "skills/mstar-b/SKILL.md", text: callout(body) },
+    ]);
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-a/SKILL.md");
+    expect(failures[0]).toContain("skills/mstar-b/SKILL.md");
+  });
+
+  test("bilingual variant (`或 import` vs `or import`) of the same callout fails (load-bearing)", () => {
+    const zh = "run `mstar lease validate` 或 import `validateExecutionLease` from `@mstar-harness/engine`";
+    const en = "run `mstar lease validate` or import `validateExecutionLease` from `@mstar-harness/engine`";
+    const { failures } = checkCalloutDuplication([
+      { rel: "skills/mstar-a/SKILL.md", text: callout(zh) },
+      { rel: "skills/mstar-b/SKILL.md", text: callout(en) },
+    ]);
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-a/SKILL.md");
+    expect(failures[0]).toContain("skills/mstar-b/SKILL.md");
+  });
+
+  test("unique callout passes", () => {
+    const { failures } = checkCalloutDuplication([
+      { rel: "skills/mstar-a/SKILL.md", text: callout("run `mstar lease validate`") },
+      { rel: "skills/mstar-b/SKILL.md", text: callout("run `mstar status validate <path>`") },
+    ]);
+    expect(failures).toEqual([]);
+  });
+
+  test("same file may hold multiple distinct callouts", () => {
+    const { failures } = checkCalloutDuplication([
+      { rel: "skills/mstar-a/SKILL.md", text: `${callout("run `mstar lease validate`")}\n${callout("run `mstar status validate`")}` },
+    ]);
+    expect(failures).toEqual([]);
+  });
+
+  test("non-callout blockquotes and prose are ignored", () => {
+    const text = [
+      "> A plain blockquote, no Engine-check marker.",
+      "run `mstar lease validate` in prose",
+      "> **Engine check (when available):** run `mstar lease validate`",
+    ].join("\n");
+    const { failures } = checkCalloutDuplication([
+      { rel: "skills/mstar-a/SKILL.md", text },
+      { rel: "skills/mstar-b/SKILL.md", text: callout("run `mstar lease validate`") },
+    ]);
+    expect(failures).toEqual([]);
+  });
+
+  test("callouts that differ in substantive tail prose do not collide", () => {
+    const { failures } = checkCalloutDuplication([
+      { rel: "skills/mstar-a/SKILL.md", text: callout("run `mstar lease verify` to validate the leases above") },
+      { rel: "skills/mstar-b/SKILL.md", text: callout("run `mstar lease verify` to validate the other leases") },
+    ]);
     expect(failures).toEqual([]);
   });
 });

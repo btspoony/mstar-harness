@@ -74,7 +74,7 @@ Command-unique 补充（bridge 未枚举）：
 
 ## 1. Research
 
-Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`）+ glob for planning artifacts（`**/roadmap*.md`、`**/deferred*.md`、`**/features*.md`、`**/backlog*.md`、`**/TODO*.md`、`**/*.plan.md`）；read matches with iteration-level / deferred-scope information；read `STRATEGY.md`（if exists）。Prioritize deferred / incomplete items from prior iterations。
+Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`）+ glob for planning artifacts（`**/roadmap*.md`、`**/deferred*.md`、`**/features*.md`、`**/backlog*.md`、`**/TODO*.md`、`**/*.plan.md`）；read matches with iteration-level / deferred-scope information；read `STRATEGY.md`（if exists）and `{KNOWLEDGE_DIR}/README.md`（if exists — Active index rows are Research candidates）。Prioritize deferred / incomplete items from prior iterations。
 
 ## 2. Explore Directions
 

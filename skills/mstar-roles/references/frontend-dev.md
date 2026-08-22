@@ -18,17 +18,15 @@ You are dispatched by `project-manager` and report back with completion evidence
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Complete assigned work in this session.
-- Do not spawn same-role or sibling implementation/review roles unless explicitly authorized by `Delegation: allowed (...)`.
+- Shared anti-recursion NEVER (incl. sibling-role spawn) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - If required inputs are missing, return `Blocked` to PM.
 
 ## Frontend NEVER Rules
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
-- **NEVER** invoke `frontend-dev`, `fullstack-dev`, `fullstack-dev-2`, or other roles to perform **this** assignment unless `Delegation: allowed (...)` explicitly lists them.
+- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** offload UI implementation, tests, or evidence to `explore`; use glob/grep/read first—short read-only `explore` only per `mstar-harness-core` explore boundaries.
-- **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; they are narrative unless `Delegation: allowed` says otherwise.
-- **NEVER** run parallel-agent dispatch as an implementer; this is **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** self-decide branch pivots (including switching to `main`/`master`) beyond PM’s `Working branch` / `Branch policy`; conflicting or missing branch facts => `Blocked` to PM.
 - **NEVER** start UI implementation while the assignment’s Prepare / execute prerequisites (`plan locked`, `tasks`, branch contract) are unmet—return `Blocked` to PM instead of silent partial delivery.
 

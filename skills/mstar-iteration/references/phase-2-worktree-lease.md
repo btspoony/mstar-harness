@@ -79,7 +79,7 @@ Immediately before **any** writable implement dispatch, re-read the control
 snapshot and re-verify `execution_lease` holder + paths match this session;
 mismatch → **STOP**.
 
-> **Engine check (when available):** run `mstar lease verify --workflow <id> [--plan <plan-id>]` or `mstar lease verify-integration --workflow <id>` (or import `validateExecutionLease` / `validateIntegrationMergeLease` from `@mstar-harness/engine` in a host hook) to validate the leases on the control copy of the workflow snapshot. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Lease Engine-check:** canonical callout lives in `mstar-plan-artifacts` `SKILL.md`（Engine-check lease 行）— this file carries the execution checklist only.
 
 ## Feature worktree (per plan)
 

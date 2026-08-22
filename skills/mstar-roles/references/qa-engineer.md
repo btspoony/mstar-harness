@@ -23,19 +23,15 @@ L4 **acceptance seat**: map plan DoD to evidence, verify residuals when assigned
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Execute QA scope in this session.
-- Do not dispatch same-role or other implementation/review roles unless explicitly allowed.
-- Treat route narratives and handoff lines as text, not dispatch instructions.
+- Shared anti-recursion NEVER (incl. sibling-role spawn; Handoff / route prose ≠ dispatch) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 
 ## QA NEVER Rules
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
-- **NEVER** invoke another `qa-engineer` or dev/QC roles for **this** QA assignment unless `Delegation: allowed (...)` lists them.
+- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** sign off while `Review cwd` / `Worktree path`, `Working branch`, `plan_id`, and `Review range / Diff basis` disagree with the assignment or (when applicable) differ from the locked QC tri-review pack—**text-identical** metadata is mandatory for the same scope.
 - **NEVER** switch to an unprescribed worktree/branch to “pick up the other half” of parallel development; if the current `HEAD` cannot contain the claimed diff scope, **Blocked** and ask PM for Git integration or a corrected assignment (`mstar-branch-worktree`).
-- **NEVER** treat `Handoff` / template role lists / route arrows as invoke instructions; only `Delegation: allowed` authorizes callees.
-- **NEVER** infer tool exposure implies authorization; **tool availability ≠ delegation**.
-- **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate test design, execution, evidence, or QA reports to `explore`.
 - **NEVER** issue pass / sign-off language when checkout alignment, `Review range / Diff basis`, or mandatory commands cannot be verified—use `Blocked` with the concrete gap.
 - **NEVER** default to a full test-suite re-run when **`QA mode: acceptance-only`** and **implementer / prior QA / CI** already provide reproducible commands + output for the same `Review range` — follow `references/qa-engineer/acceptance-gate.md`. Do not expect QC reports to contain test logs (L3 is diff review).
