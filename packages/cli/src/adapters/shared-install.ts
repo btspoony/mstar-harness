@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { runCliCommand } from "../exec";
 
 export const REPO_URL = "https://github.com/btspoony/mstar-harness.git";
 export const PLUGIN_NAME = "morning-star-harness";
@@ -35,9 +35,8 @@ export function ensureDir(dirPath: string, dryRun: boolean) {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 }
 
-export function runCommand(command: string[], cwd: string, dryRun: boolean) {
-  if (dryRun) return;
-  execFileSync(command[0], command.slice(1), { cwd, stdio: "pipe", encoding: "utf8" });
+export function runCommand(command: string[], cwd: string, dryRun: boolean): void {
+  runCliCommand(command, { cwd, dryRun });
 }
 
 export function ensureLocalHarnessRepo(dryRun: boolean) {
