@@ -646,7 +646,7 @@ export async function promoteAuditPlans(
     }
     mkdirSync(workflowDir, { recursive: true });
     try {
-      writeJson(snapshotPath, snapshot as unknown as Record<string, unknown>);
+      writeJson(snapshotPath, snapshot);
       registerWorkflowEntryLocked(statusPath, entry);
     } catch (error) {
       rmSync(snapshotPath, { force: true });

@@ -247,7 +247,6 @@ export {
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
   promoteAuditPlans,
-  redactSecrets,
   scaffoldAuditPlan,
   validateAuditStatusBlocks,
 } from "./audit.js";

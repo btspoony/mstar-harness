@@ -103,7 +103,7 @@ export function readJson(filePath: string): Record<string, unknown> {
  * stored state; revisit if the harness moves to a filesystem without
  * rename-atomicity guarantees.
  */
-export function writeJson(filePath: string, value: Record<string, unknown>): void {
+export function writeJson<T>(filePath: string, value: T): void {
   const parent = dirname(filePath);
   mkdirSync(parent, { recursive: true });
   const tmp = join(parent, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
