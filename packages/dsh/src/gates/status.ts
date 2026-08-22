@@ -322,7 +322,21 @@ function gateStatusIntent(
   } catch (error) {
     ctx.logger(LOGGER_NAME).error(`status gate degraded to allow: ${(error as Error).message}`)
     try {
-      ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: { ok: true, violations: [] }, hard: false, degraded: true })
+      // f9: the degraded advisory reflects ACTUAL enforcement mode — under
+      // hard the envelope still allows the write (never a veto), but the
+      // advisory carries `hard: true` so hard deployments can tell a dead
+      // control apart from a warn-only pass. `repair` stays unset (this was
+      // NOT a repair-escape allow — the gate errored, the write was never
+      // vetoed).
+      let hard = false
+      try {
+        hard = harnessDir !== null && resolveHard(harnessDir, config)
+      } catch {
+        // `resolveHard` reads `.mstarc`/compass frontmatter from disk — a
+        // throwing resolve must not re-enter the envelope (second-catch
+        // death loop); fall back to a fail-safe warn-mode advisory.
+      }
+      ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: { ok: true, violations: [] }, hard, degraded: true })
     } catch (emitError) {
       // Best-effort observability: a throwing advisory consumer must not take
       // the gate down with it (the error log above is the durable signal).
