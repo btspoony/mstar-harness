@@ -270,9 +270,17 @@ describe('status gate — error-containment envelope (qc3 F-1)', () => {
 
     const intent = await app.ctx.waterfall('fs/write-intent', brokenTarget(app.harnessDir), {}, () => undefined)
 
+    // f9: the degraded advisory reflects ACTUAL enforcement mode — under
+    // hard the envelope still allows the write (never a veto), but the
+    // advisory carries `hard: true` so hard deployments can tell a dead
+    // control apart from a warn-only pass; `repair` stays unset (this was
+    // NOT a repair-escape allow — the gate errored, the write was never
+    // vetoed).
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.degraded).toBe(true)
+    expect(advisories[0]!.hard).toBe(true)
+    expect(advisories[0]!.repair).toBeUndefined()
     expect(advisories[0]!.result.ok).toBe(true)
   })
 

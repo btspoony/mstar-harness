@@ -832,12 +832,62 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
           );
         }
       } else if (input.tool === "edit") {
-        // v1 limitation (qc2 F-005 / qc3 F-7): validates the PRE-edit on-disk
-        // file, not the patched result — an edit that turns a valid file
-        // invalid is caught by the subsequent write, and editing an already
-        // invalid file re-warns about the state being replaced. Computing the
-        // patched doc for `edit` is a later-slice improvement.
-        const gate = await validateStatusWrite(filePath);
+        // Classify the target FIRST (qc3 S-1): the dir-resolvers loader is
+        // cached, so the kind check is cheap — the synchronous file read +
+        // split/join + parse below only runs for canonical coordination
+        // docs. Non-coordination targets (source files, configs, prose —
+        // the overwhelming majority of edits) skip the read/parse entirely.
+        classifyDirResolvers = await dirResolversLoader.load();
+        if (harnessDocKindOfTarget(filePath) === null) return;
+        // f8 (audit-20260821-f8): when the OpenCode `edit` args carry a
+        // literal `oldString` -> `newString` pair (one pair per tool call —
+        // no replacements array, no regex), synthesize the PATCHED text and
+        // lint the patched coordination doc, so an edit that turns a valid
+        // file invalid is caught at this hook instead of by the next write.
+        // Only literal, uniquely-present replacements are composable here:
+        // the host's fuzzy matchers (LineTrimmed / BlockAnchor /
+        // WhitespaceNormalized) are NOT re-implemented — a fuzzy edit may
+        // patch a different span than a guessed synthesis. Fallback to the
+        // pre-edit lint when the shape is not composable: missing or empty
+        // `oldString`, missing `newString`, `replaceAll` not a boolean,
+        // literal not uniquely present (unless `replaceAll === true`), or
+        // the file cannot be read.
+        const oldString = args.oldString;
+        const newString = args.newString;
+        const replaceAll = args.replaceAll;
+        let patchedDoc: unknown;
+        if (
+          typeof oldString === "string" &&
+          oldString.length > 0 &&
+          typeof newString === "string" &&
+          (replaceAll === undefined || typeof replaceAll === "boolean")
+        ) {
+          try {
+            const text = fs.readFileSync(filePath, "utf8");
+            const hits = text.split(oldString).length - 1;
+            if (replaceAll === true || hits === 1) {
+              const patched = text.split(oldString).join(newString);
+              try {
+                patchedDoc = JSON.parse(patched);
+              } catch {
+                // Patched JSON would not parse — surface the invalid state
+                // with an explicit non-object marker (`null`): the validators
+                // report status.invalid-doc / workflow.snapshot.invalid /
+                // project.register.invalid. Passing the raw string instead
+                // would hit the status validator's STRING-as-PATH overload
+                // and misreport `status.migration-required` (qc3 S-2). The
+                // gate still fires — never a silent pass.
+                patchedDoc = null;
+              }
+            }
+          } catch {
+            // Read failure (missing/unreadable file) -> pre-edit lint below.
+          }
+        }
+        const gate =
+          patchedDoc !== undefined
+            ? await validateStatusWrite(filePath, { doc: patchedDoc })
+            : await validateStatusWrite(filePath);
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",

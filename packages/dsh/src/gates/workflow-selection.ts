@@ -12,7 +12,7 @@
  * Module boundary: no barrel — consumers import by explicit relative path.
  */
 import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import {
   readJson,
   resolveWorkflowDir,
@@ -44,9 +44,20 @@ const TERMINAL_STATUS_CACHE_MAX = 64
  * rewrite would be served stale until the file is touched — the
  * documented mtime-first tradeoff the finding asks for; terminal
  * snapshots are written once via temp-file + rename (mtime always
- * changes).
+ * changes). Deleted snapshots are EVICTED (plan 20260822-gate-fixes
+ * Task 3 / f12): a dead key must not hold the cap.
  */
 const terminalStatusCache = new Map<string, { mtimeMs: number; terminal: boolean }>()
+
+/**
+ * Test-only observability hook (plan 20260822-gate-fixes Task 3 / f12):
+ * whether a snapshot path is still cached. Production code never calls
+ * this — the eviction contract (delete → key gone) is asserted by the
+ * workflow-selection spec.
+ */
+export function _terminalStatusCacheHas(snapshotPath: string): boolean {
+  return terminalStatusCache.has(snapshotPath)
+}
 
 /**
  * One snapshot's terminal-status verdict, mtime-first (qc3 S-2 fix-wave):
@@ -62,6 +73,11 @@ function terminalStatusOf(snapshotPath: string): { terminal: boolean; mtimeMs: n
   try {
     mtimeMs = statSync(snapshotPath).mtimeMs
   } catch {
+    // The target vanished — evict the dead key so the cap is not held by
+    // a workflow that no longer exists (f12; the caller's `existsSync`
+    // short-circuit never reaches this function, so the read loop evicts
+    // there too).
+    terminalStatusCache.delete(snapshotPath)
     return undefined
   }
   const cached = terminalStatusCache.get(snapshotPath)
@@ -194,7 +210,14 @@ export function resolveReadWorkflow(harnessDir: string): WorkflowSelectionView {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     const snapshotPath = join(workflowsDir, entry.name, WORKFLOW_SNAPSHOT_FILE)
-    if (!existsSync(snapshotPath)) continue
+    if (!existsSync(snapshotPath)) {
+      // Deleted snapshot (or the whole workflow dir) — evict the stale
+      // cache key (f12): this short-circuit never reaches `terminalStatusOf`,
+      // so the dead entry would otherwise hold the cache cap forever while
+      // the workflow stays invisible.
+      terminalStatusCache.delete(snapshotPath)
+      continue
+    }
     // mtime-first fast path (qc3 S-2 fix-wave): stat + cache-hit reuse the
     // terminal verdict without parsing the snapshot JSON (the steady state
     // for terminal snapshots — the per-TTL reparse was pure waste).
@@ -202,6 +225,14 @@ export function resolveReadWorkflow(harnessDir: string): WorkflowSelectionView {
     if (verdict === undefined || !verdict.terminal) continue
     if (best === undefined || verdict.mtimeMs > best.mtimeMs) {
       best = { workflowId: entry.name, dir: join(relative(harnessDir, workflowsDir), entry.name), mtimeMs: verdict.mtimeMs }
+    }
+  }
+  // The dir itself can be deleted (not just the snapshot) — the walk above
+  // never sees a vanished dir, so prune any cached key whose parent dir is
+  // gone (f12; cap semantics unchanged).
+  for (const cachedPath of terminalStatusCache.keys()) {
+    if (!existsSync(join(dirname(cachedPath), WORKFLOW_SNAPSHOT_FILE))) {
+      terminalStatusCache.delete(cachedPath)
     }
   }
   if (best === undefined) {
