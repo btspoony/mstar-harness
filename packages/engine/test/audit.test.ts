@@ -793,6 +793,31 @@ describe("promoteAuditPlans", () => {
     expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
   });
 
+  test("duplicate numeric prefix resolves to the FIRST (lowest) filename (S-03)", async () => {
+    // Manual duplicate `001-*.md` files: selecting bare `001` must promote
+    // the lowest filename (`001-a.md`), never the highest — the pre-fix
+    // `byNum.set` loop let later entries overwrite earlier ones.
+    const harnessDir = join(tmp, "harness-dup-prefix");
+    const outDir = join(harnessDir, "plans", "audit-2026-08-22");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "001-a.md"), "# Plan A\n");
+    writeFileSync(join(outDir, "001-b.md"), "# Plan B\n");
+
+    const result = await promoteAuditPlans(outDir, ["001"], { harnessDir });
+    const snapshot = readJson(join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE));
+    const plans = snapshot.plans as Array<Record<string, unknown>>;
+    expect(plans).toHaveLength(1);
+    // S-03: lowest filename wins for the shared numeric prefix.
+    expect(plans[0]).toMatchObject({
+      id: "001-a",
+      title: "Plan A",
+      file: "audit-2026-08-22/001-a.md",
+      status: "Todo",
+    });
+    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
+  });
+
   test("error paths: empty selected / missing harnessDir / unknown plan id / hostile workflow id", async () => {
     const harnessDir = join(tmp, "harness-errors");
     const outDir = join(harnessDir, "plans", "audit-2026-08-11");

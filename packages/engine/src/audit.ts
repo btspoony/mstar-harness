@@ -678,8 +678,9 @@ export async function promoteAuditPlans(
 function resolveSelectedPlanFiles(outDir: string, selected: readonly string[]): string[] {
   // S-03 (QC wave 1): readdirSync order is filesystem-dependent — sort so a
   // duplicate numeric prefix (e.g. manual `001-foo.md` + `001-bar.md`) is
-  // resolved deterministically (lowest filename wins) instead of by
-  // directory order.
+  // resolved deterministically: the FIRST (lowest) filename wins for a bare
+  // numeric prefix (`001`), instead of by directory order. Exact-stem
+  // lookups (`001-foo`) still resolve to their own file via byStem.
   const files = readdirSync(outDir)
     .filter((f) => /^\d{3}-.*\.md$/.test(f))
     .sort();
@@ -687,7 +688,11 @@ function resolveSelectedPlanFiles(outDir: string, selected: readonly string[]): 
   const byStem = new Map<string, string>();
   for (const file of files) {
     const stem = file.replace(/\.md$/, "");
-    byNum.set(stem.slice(0, 3), file);
+    // Keep the first (lowest) file per numeric prefix — a later `set` would
+    // overwrite it and resolve `001` to the highest duplicate instead.
+    if (!byNum.has(stem.slice(0, 3))) {
+      byNum.set(stem.slice(0, 3), file);
+    }
     byStem.set(stem, file);
   }
   const resolved: string[] = [];
