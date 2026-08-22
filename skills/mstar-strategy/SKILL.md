@@ -70,7 +70,7 @@ A good strategy document is opinionated and concise. It should fit in one screen
 
 Creating and maintaining `STRATEGY.md` follows the **project knowledge bootstrap**: **`mstar-compound-refresh`** → `references/project-knowledge-bootstrap.md` **Phase 2 (Distill STRATEGY.md)** — survey context → interview → draft/review → stale/partial/current handling. The six-section structure and the engine check above stay authoritative here.
 
-### Phase 2: Interview (ask PM one at a time)
+### Interview (ask PM the 5 questions one at a time)
 
 1. "What is the one-sentence vision for this project?"
 2. "Who are the primary users and what do they need most?"
@@ -101,7 +101,7 @@ Review triggers: after a major architectural decision, when a plan introduces a 
 
 ## Workflow
 
-主链：**创建/维护**（survey → 访谈 = § Phase 2 五问 → draft/review → 更新/替换/跳过）细节 → **`mstar-compound-refresh`** `references/project-knowledge-bootstrap.md` **Phase 2**。作为 brainstorm / plan 的上游锚点被引用。
+主链：**创建/维护**（survey → 访谈 = 五问 → draft/review → 更新/替换/跳过）细节 → **`mstar-compound-refresh`** `references/project-knowledge-bootstrap.md` **Phase 2**。作为 brainstorm / plan 的上游锚点被引用。
 
 ## Evidence
 
