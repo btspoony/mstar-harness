@@ -1,6 +1,6 @@
 ---
 name: mstar-compound-refresh
-description: Morning Star 知识维护与项目知识 bootstrap —— 审查 `{KNOWLEDGE_DIR}` 文档是否仍准确、去重叠合并、清理过期知识；或从代码库提炼 STRATEGY.md、CONCEPTS.md、基线 knowledge 脚手架（无/残旧/空白 knowledge）。触发：`mstar-compound` 发现可合并文档、定期维护、项目缺 STRATEGY.md/CONCEPTS.md/{KNOWLEDGE_DIR}、stale knowledge scaffolding、显式 bootstrap 请求、或显式 refresh。产出：更新/合并/删除知识文档 + 维护报告；或 bootstrap 产物（STRATEGY.md、CONCEPTS.md、基线 knowledge）。
+description: Morning Star 知识维护与项目知识 bootstrap —— 审查 `{KNOWLEDGE_DIR}` 文档是否仍准确、去重叠合并、清理过期知识；或从代码库提炼 CONCEPTS.md、基线 knowledge 脚手架（无/残旧/空白 knowledge）。STRATEGY.md 创建委托 **`mstar-strategy`**。触发：`mstar-compound` 发现可合并文档、定期维护、项目缺 CONCEPTS.md/{KNOWLEDGE_DIR}、stale knowledge scaffolding、显式 bootstrap 请求、或显式 refresh。产出：更新/合并/删除知识文档 + 维护报告；或 bootstrap 产物（CONCEPTS.md、基线 knowledge）。
 ---
 
 # mstar-compound-refresh（知识维护）

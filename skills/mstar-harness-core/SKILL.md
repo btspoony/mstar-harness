@@ -24,10 +24,11 @@ description: Morning Star (启明星) harness **强制全局入口** —— 信�
 
 1. 当轮用户显式指令  
 2. 项目 `AGENTS.md` / `CLAUDE.md`  
-3. `mstar-*` skills（本 skill + 专题）  
-4. `mstar-roles` 角色正文  
+3. `{KNOWLEDGE_DIR}/README.md` 索引（**若该文件存在**；发现 Active 行并仅跟随与当轮相关的文档）  
+4. `mstar-*` skills（本 skill + 专题）  
+5. `mstar-roles` 角色正文  
 
-冲突且用户未覆盖 → **暂停升级人工**。
+冲突且用户未覆盖 → **暂停升级人工**。Knowledge **永不**高于用户 / `AGENTS.md`。
 
 ## 最小交付循环
 
