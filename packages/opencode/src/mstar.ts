@@ -832,12 +832,51 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
           );
         }
       } else if (input.tool === "edit") {
-        // v1 limitation (qc2 F-005 / qc3 F-7): validates the PRE-edit on-disk
-        // file, not the patched result — an edit that turns a valid file
-        // invalid is caught by the subsequent write, and editing an already
-        // invalid file re-warns about the state being replaced. Computing the
-        // patched doc for `edit` is a later-slice improvement.
-        const gate = await validateStatusWrite(filePath);
+        // f8 (audit-20260821-f8): when the OpenCode `edit` args carry a
+        // literal `oldString` -> `newString` pair (one pair per tool call —
+        // no replacements array, no regex), synthesize the PATCHED text and
+        // lint the patched coordination doc, so an edit that turns a valid
+        // file invalid is caught at this hook instead of by the next write.
+        // Only literal, uniquely-present replacements are composable here:
+        // the host's fuzzy matchers (LineTrimmed / BlockAnchor /
+        // WhitespaceNormalized) are NOT re-implemented — a fuzzy edit may
+        // patch a different span than a guessed synthesis. Fallback to the
+        // pre-edit lint when the shape is not composable: missing or empty
+        // `oldString`, missing `newString`, `replaceAll` not a boolean,
+        // literal not uniquely present (unless `replaceAll === true`), or
+        // the file cannot be read.
+        const oldString = args.oldString;
+        const newString = args.newString;
+        const replaceAll = args.replaceAll;
+        let patchedDoc: unknown;
+        if (
+          typeof oldString === "string" &&
+          oldString.length > 0 &&
+          typeof newString === "string" &&
+          (replaceAll === undefined || typeof replaceAll === "boolean")
+        ) {
+          try {
+            const text = fs.readFileSync(filePath, "utf8");
+            const hits = text.split(oldString).length - 1;
+            if (replaceAll === true || hits === 1) {
+              const patched = text.split(oldString).join(newString);
+              try {
+                patchedDoc = JSON.parse(patched);
+              } catch {
+                // Patched JSON would not parse — surface the invalid state
+                // by passing the raw text as a non-object doc (validators
+                // report invalid-doc instead of silently passing).
+                patchedDoc = patched;
+              }
+            }
+          } catch {
+            // Read failure (missing/unreadable file) -> pre-edit lint below.
+          }
+        }
+        const gate =
+          patchedDoc !== undefined
+            ? await validateStatusWrite(filePath, { doc: patchedDoc })
+            : await validateStatusWrite(filePath);
         if (gate?.hardBlocked) {
           defaultStatusLogger(
             "error",

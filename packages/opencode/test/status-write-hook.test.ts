@@ -639,7 +639,13 @@ describe("hard mode (compass enforcement: hard — Slice 5, roadmap §8.5 C4/D2)
     }
   });
 
-  test("plugin wiring: write tool in a hard repo logs error-level lines, never throws", async () => {
+  test("plugin wiring (f8): edit literal replace that corrupts status.json is caught POST-patch in hard mode", async () => {
+    // Regression (audit-20260821-f8): the edit branch validated only the
+    // PRE-edit on-disk file, so an edit that turns a valid status.json
+    // invalid (version 2 -> 1) passed silently. The hook must synthesize
+    // the patched doc from the literal single `oldString` -> `newString`
+    // pair and lint the patched result. Pre-change this test is red: the
+    // pre-edit file is valid, so no logs are emitted.
     const { project, statusPath } = makeHardRepo(true);
     try {
       const plugin = await MorningStarHarnessPlugin();
@@ -651,18 +657,136 @@ describe("hard mode (compass enforcement: hard — Slice 5, roadmap §8.5 C4/D2)
       };
       try {
         await beforeWrite!(
-          { tool: "write", sessionID: "s1", callID: "c1" },
-          { args: { filePath: statusPath, content: JSON.stringify(invalidDoc) } },
+          { tool: "edit", sessionID: "s1", callID: "c1" },
+          { args: { filePath: statusPath, oldString: '"version": 2', newString: '"version": 1' } },
         );
       } finally {
         console.error = original;
       }
-      expect(errors.some((e) => e.includes("[mstar-harness]") && e.includes("hard gate"))).toBe(true);
-      // The GateResult is not silently discarded: the hook surfaces the
-      // hardBlocked state explicitly (host has no refusal channel).
+      expect(errors.some((e) => e.includes("[mstar-harness]") && e.includes("status.migration-required"))).toBe(true);
       expect(errors.some((e) => e.includes("hard-gate blocked (hardBlocked=true)"))).toBe(true);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
   });
+
+  test("plugin wiring (f8): edit with a benign literal single replace stays silent (patched doc still valid)", async () => {
+    const { project, statusPath } = makeHardRepo(true);
+    try {
+      const plugin = await MorningStarHarnessPlugin();
+      const beforeWrite = plugin["tool.execute.before"];
+      const errors: string[] = [];
+      const original = console.error;
+      console.error = (message?: unknown) => {
+        errors.push(String(message));
+      };
+      try {
+        await beforeWrite!(
+          { tool: "edit", sessionID: "s1", callID: "c1" },
+          {
+            args: {
+              filePath: statusPath,
+              oldString: '"updated_at": "2026-08-08"',
+              newString: '"updated_at": "2026-08-09"',
+            },
+          },
+        );
+      } finally {
+        console.error = original;
+      }
+      expect(errors.filter((e) => e.includes("[mstar-harness]"))).toEqual([]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin wiring (f8): oldString absent from the file falls back to pre-edit lint (no fuzzy synthesis)", async () => {
+    // The host applies fuzzy matchers (LineTrimmed/BlockAnchor/
+    // WhitespaceNormalized) when the literal misses; the hook MUST NOT
+    // re-implement them. `oldString` never occurs in the file, and the
+    // `newString` would corrupt the doc if applied — the correct behavior
+    // is to lint the (valid) pre-edit file and stay silent.
+    const { project, statusPath } = makeHardRepo(true);
+    try {
+      const plugin = await MorningStarHarnessPlugin();
+      const beforeWrite = plugin["tool.execute.before"];
+      const errors: string[] = [];
+      const original = console.error;
+      console.error = (message?: unknown) => {
+        errors.push(String(message));
+      };
+      try {
+        await beforeWrite!(
+          { tool: "edit", sessionID: "s1", callID: "c1" },
+          { args: { filePath: statusPath, oldString: '"workflows": [{', newString: '"version": 1' } },
+        );
+      } finally {
+        console.error = original;
+      }
+      expect(errors.filter((e) => e.includes("[mstar-harness]"))).toEqual([]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin wiring (f8): replaceAll literal edit corrupting every workflow entry is caught post-patch in hard mode", async () => {
+    const { project, statusPath } = makeHardRepo(true);
+    // Two valid workflow entries WITH matching non-terminal snapshots so
+    // the pre-edit file passes the item-level lint; the replaceAll edit
+    // turns every "type": "plan" into "type": "sprint".
+    mkdirSync(join(project, ".mstar", "workflows", "wf-1"), { recursive: true });
+    mkdirSync(join(project, ".mstar", "workflows", "wf-2"), { recursive: true });
+    writeFileSync(
+      join(project, ".mstar", "workflows", "wf-1", "snapshot.json"),
+      JSON.stringify(validSnapshotDoc, null, 2),
+    );
+    writeFileSync(
+      join(project, ".mstar", "workflows", "wf-2", "snapshot.json"),
+      JSON.stringify({ ...validSnapshotDoc, id: "wf-2" }, null, 2),
+    );
+    writeFileSync(
+      statusPath,
+      JSON.stringify(
+        {
+          version: 2,
+          updated_at: "2026-08-08",
+          workflows: [
+            { id: "wf-1", type: "plan", started_at: "2026-08-08", dir: "workflows/wf-1" },
+            { id: "wf-2", type: "plan", started_at: "2026-08-08", dir: "workflows/wf-2" },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    try {
+      const plugin = await MorningStarHarnessPlugin();
+      const beforeWrite = plugin["tool.execute.before"];
+      const errors: string[] = [];
+      const original = console.error;
+      console.error = (message?: unknown) => {
+        errors.push(String(message));
+      };
+      try {
+        await beforeWrite!(
+          { tool: "edit", sessionID: "s1", callID: "c1" },
+          {
+            args: {
+              filePath: statusPath,
+              oldString: '"type": "plan"',
+              newString: '"type": "sprint"',
+              replaceAll: true,
+            },
+          },
+        );
+      } finally {
+        console.error = original;
+      }
+      expect(errors.some((e) => e.includes("[mstar-harness]") && e.includes("status.workflow.invalid-type"))).toBe(true);
+      expect(errors.some((e) => e.includes("hard-gate blocked (hardBlocked=true)"))).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
 });
