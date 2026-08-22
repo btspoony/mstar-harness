@@ -60,7 +60,9 @@ const DSH_INSTALL_HINT =
 
 /** Run dsh with args; dry-run never spawns a subprocess (preview only).
  * `timeoutMs` bounds the child so a hung dsh/pnpm surfaces as an error
- * instead of blocking the CLI forever. */
+ * instead of blocking the CLI forever. `env: process.env` is required —
+ * dsh is resolved from PATH (Bun does not inherit the ambient env into
+ * execFileSync by default); dropping it breaks dsh discovery. */
 function runDsh(args: string[], dryRun: boolean, timeoutMs: number): string {
   return runCliCommand([DSH_BIN, ...args], { dryRun, timeoutMs, env: process.env });
 }
