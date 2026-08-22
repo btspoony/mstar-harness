@@ -11,7 +11,7 @@
  * - mstar-audit/references/finding-format.md: category codes, evidence
  *   requirements.
  */
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
 import { assertSafePathComponent } from "./path.js";
@@ -554,6 +554,22 @@ export async function promoteAuditPlans(
   const workflowId = options.workflowId ?? basename(resolve(outDir));
   assertSafePathComponent(workflowId, "workflow id");
 
+  // W-001 (QC wave 1): refuse re-promote instead of silently whole-rewriting
+  // the snapshot and dropping previously promoted Todo rows. The workflow
+  // dir is the existence probe — `writeWorkflowSnapshot` + `registerWorkflow`
+  // would otherwise overwrite (snapshot) / upsert (status.json) with a fresh
+  // set, losing the prior subset. Recovery: remove the workflow first
+  // (`mstar sdd`/manual `unregisterWorkflow` + snapshot removal).
+  const workflowDir = join(resolve(options.harnessDir), "workflows", workflowId);
+  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  if (existsSync(snapshotPath)) {
+    throw new Error(
+      `refusing to promote audit plans: workflow ${JSON.stringify(workflowId)} already exists ` +
+        `(snapshot at ${snapshotPath}) \u2014 re-promote would drop its registered plan rows; ` +
+        `remove that workflow before promoting again`,
+    );
+  }
+
   const planFiles = resolveSelectedPlanFiles(outDir, selected);
   const indexRows = readExecutionOrderIndex(outDir);
   const plans: PlanRow[] = planFiles.map((planFile) => {
@@ -580,7 +596,6 @@ export async function promoteAuditPlans(
     plans,
   };
 
-  const workflowDir = join(resolve(options.harnessDir), "workflows", workflowId);
   await writeWorkflowSnapshot(snapshot, workflowDir);
   await registerWorkflow(join(options.harnessDir, "status.json"), {
     id: workflowId,
@@ -598,7 +613,13 @@ export async function promoteAuditPlans(
  * a usage error — do not silently promote a subset.
  */
 function resolveSelectedPlanFiles(outDir: string, selected: readonly string[]): string[] {
-  const files = readdirSync(outDir).filter((f) => /^\d{3}-.*\.md$/.test(f));
+  // S-03 (QC wave 1): readdirSync order is filesystem-dependent — sort so a
+  // duplicate numeric prefix (e.g. manual `001-foo.md` + `001-bar.md`) is
+  // resolved deterministically (lowest filename wins) instead of by
+  // directory order.
+  const files = readdirSync(outDir)
+    .filter((f) => /^\d{3}-.*\.md$/.test(f))
+    .sort();
   const byNum = new Map<string, string>();
   const byStem = new Map<string, string>();
   for (const file of files) {

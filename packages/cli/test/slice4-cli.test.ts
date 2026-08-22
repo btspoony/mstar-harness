@@ -740,6 +740,31 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
       ).toBe(true);
     });
   });
+
+  test("re-promote of the same workflow id → exit 1, names the snapshot path, first rows intact", () => {
+    withTempDir((dir) => {
+      const { harnessDir, outDir } = scaffoldFixture(dir);
+      const first = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir]);
+      expect(first.exitCode).toBe(0);
+
+      const snapshotPath = join(harnessDir, "workflows", "audit-2026-08-08", "snapshot.json");
+      const before = readJson(snapshotPath);
+
+      // Second promote (different subset) must refuse with exit 1 and name
+      // the existing snapshot path — no silent whole-rewrite.
+      const second = runCli(["audit", "promote", outDir, "--plans", "002", "--harness", harnessDir]);
+      expect(second.exitCode).toBe(1);
+      expect(second.stderr).toContain("already exists");
+      expect(second.stderr).toContain(snapshotPath);
+
+      // First rows intact.
+      const after = readJson(snapshotPath);
+      expect(after.started_at).toBe(before.started_at);
+      const plans = after.plans as Array<Record<string, unknown>>;
+      expect(plans).toHaveLength(1);
+      expect(plans[0]).toMatchObject({ id: "001-fix-n-1-query-in-order-list", status: "Todo" });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

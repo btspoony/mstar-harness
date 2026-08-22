@@ -575,4 +575,61 @@ describe("promoteAuditPlans", () => {
     // (d) validateWorkflowSnapshot passes on the snapshot
     expect(validateWorkflowSnapshot(readJson(snapshotPath)).ok).toBe(true);
   });
+
+  test("re-promote with the same workflow id refuses and leaves the first rows intact", async () => {
+    const harnessDir = join(tmp, "harness-clobber");
+    const outDir = join(harnessDir, "plans", "audit-2026-08-09");
+    scaffoldAuditPlan(
+      outDir,
+      [
+        {
+          title: "Fix N+1 query in order list",
+          category: "perf" as const,
+          impact: "Every order-list render issues 1+N queries.",
+          effort: "M" as const,
+          risk: "MED" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/orders.ts:42"],
+          priority: "P1" as const,
+        },
+        {
+          title: "Rotate leaked AWS keys",
+          category: "security" as const,
+          impact: "Credentials in git history.",
+          effort: "S" as const,
+          risk: "HIGH" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/config.ts:3"],
+          priority: "P1" as const,
+        },
+      ],
+      { date: "2026-08-09" },
+    );
+
+    const first = await promoteAuditPlans(outDir, ["001"], { harnessDir });
+    const workflowId = first.workflowId;
+    const snapshotPath = join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+    const before = readJson(snapshotPath);
+
+    // A second promote of the same audit dir (different subset) must refuse,
+    // naming the existing snapshot path — not silently whole-rewrite and drop
+    // the previously promoted 001 Todo row.
+    await expect(promoteAuditPlans(outDir, ["002"], { harnessDir })).rejects.toThrow(snapshotPath);
+
+    // First rows intact: same started_at, still exactly the 001 Todo row.
+    const after = readJson(snapshotPath);
+    expect(after.started_at).toBe(before.started_at);
+    expect((after.plans as Array<Record<string, unknown>>)).toHaveLength(1);
+    expect((after.plans as Array<Record<string, unknown>>)[0]).toMatchObject({
+      id: "001-fix-n-1-query-in-order-list",
+      title: "Fix N+1 query in order list",
+      status: "Todo",
+    });
+
+    // Root registration unchanged.
+    const status = readJson(join(harnessDir, "status.json"));
+    const entry = (status.workflows as Array<Record<string, unknown>>).find((w) => w.id === workflowId);
+    expect(entry?.started_at).toBe(before.started_at);
+    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+  });
 });
