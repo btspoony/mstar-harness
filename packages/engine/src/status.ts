@@ -667,6 +667,56 @@ export function validateStatusV2(
 export const validateStatus = validateStatusV2;
 
 /**
+ * Root-file workflow upsert, to be called ONLY while the caller holds the
+ * root `withStatusWriteLock(statusPath)` (see `registerWorkflow` and the
+ * audit promote path, which call this from inside their lock — the root
+ * lock is the serialization point for read-check-replace-verify).
+ *
+ * Idempotent upsert by entry `id`, bumping root `updated_at`. A
+ * missing/empty root file is initialized from the v2 template (never a v1
+ * tree); a v1 root is refused with the `mstar migrate` hint (no silent
+ * mutation of an un-migrated tree). The final document is validated with
+ * `validateStatusV2` (including the removal-at-terminal snapshot invariant
+ * against `dirname(statusPath)`) before the write — an entry whose
+ * snapshot is missing or terminal is refused and nothing is written.
+ *
+ * The caller must validate the entry (`validateWorkflowEntry`) before
+ * acquiring the lock; this helper asserts it as a safety net (cheap —
+ * an invalid entry would fail `validateStatusV2` anyway, but the explicit
+ * gate keeps the pre-lock fail-fast contract of `registerWorkflow`).
+ */
+export function registerWorkflowEntryLocked(statusPath: string, entry: WorkflowEntry): StatusV2Doc {
+  // simplify: full-doc validation (incl. per-snapshot reads of the whole
+  // active set) under the root lock is O(active workflows) per root write.
+  // Realistic active-set size is 1–3 (microseconds); correctness-preserving.
+  // Upgrade path: scope the on-disk invariant to the touched entry (qc3 S-002).
+  const harnessDir = dirname(statusPath);
+  const current = readJson(statusPath) as Record<string, unknown>;
+  const fresh = Object.keys(current).length === 0;
+  const doc: StatusV2Doc = fresh
+    ? { version: 2, updated_at: todayString(), workflows: [] }
+    : (current as StatusV2Doc);
+  if (!fresh && !Array.isArray(doc.workflows)) {
+    throw new Error(
+      "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
+    );
+  }
+  const existing = doc.workflows.findIndex((wf) => wf.id === entry.id);
+  if (existing >= 0) {
+    doc.workflows[existing] = entry;
+  } else {
+    doc.workflows.push(entry);
+  }
+  doc.updated_at = todayString();
+  const gate = validateStatusV2(doc, { harnessDir });
+  if (!gate.ok) {
+    throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+  }
+  writeJson(statusPath, doc as unknown as Record<string, unknown>);
+  return doc;
+}
+
+/**
  * Register one active workflow entry in the v2 root file (plan Task 3).
  * Idempotent upsert by entry `id` under the root-file `withStatusWriteLock`,
  * bumping root `updated_at`. A missing/empty root file is initialized from
@@ -686,36 +736,7 @@ export async function registerWorkflow(root: string, entry: WorkflowEntry): Prom
     );
   }
   const statusPath = resolve(root);
-  const harnessDir = dirname(statusPath);
-  return withStatusWriteLock(statusPath, () => {
-    // simplify: full-doc validation (incl. per-snapshot reads of the whole
-    // active set) under the root lock is O(active workflows) per root write.
-    // Realistic active-set size is 1–3 (microseconds); correctness-preserving.
-    // Upgrade path: scope the on-disk invariant to the touched entry (qc3 S-002).
-    const current = readJson(statusPath) as Record<string, unknown>;
-    const fresh = Object.keys(current).length === 0;
-    const doc: StatusV2Doc = fresh
-      ? { version: 2, updated_at: todayString(), workflows: [] }
-      : (current as StatusV2Doc);
-    if (!fresh && !Array.isArray(doc.workflows)) {
-      throw new Error(
-        "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
-      );
-    }
-    const existing = doc.workflows.findIndex((wf) => wf.id === entry.id);
-    if (existing >= 0) {
-      doc.workflows[existing] = entry;
-    } else {
-      doc.workflows.push(entry);
-    }
-    doc.updated_at = todayString();
-    const gate = validateStatusV2(doc, { harnessDir });
-    if (!gate.ok) {
-      throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
-    }
-    writeJson(statusPath, doc as unknown as Record<string, unknown>);
-    return doc;
-  });
+  return withStatusWriteLock(statusPath, () => registerWorkflowEntryLocked(statusPath, entry));
 }
 
 /**

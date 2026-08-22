@@ -70,6 +70,8 @@ PM 在新迭代启动时执行。
 3. 读 `{KNOWLEDGE_DIR}/README.md`（若存在），将索引中的 **Active** 行视为 Research 候选（**不**要求阅读全部 knowledge 正文）
 4. 如果有未完成的 roadmap 残余（上一迭代标记为 `next` 的 plan），纳入本次迭代范围候选
 
+**非 command 触发**（如直接 skill 加载）时，Phase 1 Review & Edit 派发前同样运行 assignment preflight（`references/command-shared-invariants.md`），且方向锁定仍须 interactive（grill-me 在 command 层）。
+
 ### 1.2 定义迭代范围
 
 与用户/产品对齐后（或按下方 **autonomous** 模式锁定后），确定：

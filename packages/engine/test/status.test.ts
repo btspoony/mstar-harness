@@ -37,6 +37,7 @@ import { dirname, join } from "node:path";
 import {
   normalizeSeverity,
   registerWorkflow,
+  registerWorkflowEntryLocked,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
@@ -47,6 +48,7 @@ import {
   validateStatusV2,
 } from "../src/status.js";
 import { findingsCleanupGate, techDebtRollup } from "../src/project.js";
+import { withStatusWriteLock } from "../src/lease.js";
 import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
 import type { WorkflowEntry } from "../src/status.js";
@@ -583,6 +585,27 @@ describe("registerWorkflow / unregisterWorkflow (root writers under the root-fil
       const onDisk = readJson(statusPath);
       expect(onDisk.version).toBe(2);
       expect((onDisk.workflows as unknown[]).length).toBe(1);
+      expect(validateStatusV2(statusPath).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("registerWorkflowEntryLocked upserts under a held root lock (shared by registerWorkflow and the audit promote path)", async () => {
+    const dir = await harnessWithRunningSnapshot("status-register-locked-");
+    try {
+      const statusPath = join(dir, "status.json");
+      // Locking is the CALLER's duty (registerWorkflow and the audit
+      // promote path hold the root lock); the helper performs the same
+      // idempotent upsert + validation as registerWorkflow — missing root
+      // initialized, entry appended, doc validated, atomic write.
+      const doc = await withStatusWriteLock(statusPath, () => registerWorkflowEntryLocked(statusPath, entry));
+      expect(doc.version).toBe(2);
+      expect(doc.workflows).toEqual([entry]);
+      await withStatusWriteLock(statusPath, () => registerWorkflowEntryLocked(statusPath, { ...entry }));
+      const onDisk = readJson(statusPath);
+      expect((onDisk.workflows as unknown[]).length).toBe(1);
+      expect((onDisk.workflows as Array<Record<string, unknown>>)[0]).toEqual(entry);
       expect(validateStatusV2(statusPath).ok).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });

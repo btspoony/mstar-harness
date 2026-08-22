@@ -14,9 +14,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
+import { writeJson } from "./core.js";
+import { withStatusWriteLock } from "./lease.js";
 import { assertSafePathComponent } from "./path.js";
-import { registerWorkflow, type PlanRow } from "./status.js";
-import { WORKFLOW_SNAPSHOT_FILE, writeWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+import { registerWorkflowEntryLocked, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
+import { WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -533,7 +535,7 @@ export type PromoteAuditPlansOptions = {
  * Promote selected audit plans into the v2 workflow lifecycle as a
  * `type: "plan"` workflow (mstar-audit Handoff): write the workflow
  * snapshot FIRST (with one Todo PlanRow per selected file), then register
- * the workflow entry — `registerWorkflow` validates the full status doc
+ * the workflow entry — `validateStatusV2` validates the full status doc
  * including the per-snapshot existence check, so the snapshot must exist
  * before the registration. Plan rows are built from the README index
  * `## Execution order & status` columns (Plan/Title), falling back to the
@@ -541,10 +543,23 @@ export type PromoteAuditPlansOptions = {
  *
  * Run-once semantics: a workflow id whose snapshot already exists refuses
  * the promote (re-promote would drop its registered plan rows); remove
- * that workflow first. If the snapshot write succeeds but registration
- * fails (a concurrent root writer, a stale/conflicting root doc, or a
- * validation error), the partial snapshot + empty workflow dir are rolled
- * back so a retry converges after the root conflict is resolved.
+ * that workflow first.
+ *
+ * The re-promote guard, the snapshot write, and the root upsert run in ONE
+ * atomic section under the root `withStatusWriteLock(statusPath)` — the
+ * same root lock `registerWorkflow` uses — so the guard is check-then-act
+ * safe: two concurrent same-id promotes cannot both pass it (one writes
+ * and registers; the other re-checks under the lock and refuses). The
+ * snapshot is written directly with `writeJson` under the root lock (never
+ * a nested `writeWorkflowSnapshot` — its own snapshot-dir lock would be a
+ * second serialization point; the root lock must be THE serialization
+ * point). The root upsert replicates `registerWorkflow` semantics inline
+ * via the shared `registerWorkflowEntryLocked` helper (calling
+ * `registerWorkflow` itself would re-enter the non-reentrant root lock).
+ *
+ * On any failure inside the lock, the partial snapshot + now-empty
+ * workflow dir are rolled back so a retry converges after the root
+ * conflict is resolved.
  */
 export async function promoteAuditPlans(
   outDir: string,
@@ -563,19 +578,16 @@ export async function promoteAuditPlans(
 
   // W-001 (QC wave 1): refuse re-promote instead of silently whole-rewriting
   // the snapshot and dropping previously promoted Todo rows. The workflow
-  // dir is the existence probe — `writeWorkflowSnapshot` + `registerWorkflow`
-  // would otherwise overwrite (snapshot) / upsert (status.json) with a fresh
-  // set, losing the prior subset. Recovery: remove the workflow first
-  // (`mstar sdd`/manual `unregisterWorkflow` + snapshot removal).
-  const workflowDir = join(resolve(options.harnessDir), "workflows", workflowId);
+  // dir is the existence probe — a second promote would otherwise overwrite
+  // (snapshot) / upsert (status.json) with a fresh set, losing the prior
+  // subset. Recovery: remove the workflow first (`mstar sdd`/manual
+  // `unregisterWorkflow` + snapshot removal). Greptile (fix-1): this guard
+  // is check-then-act — it must run INSIDE the root write lock, atomically
+  // with the snapshot write + root upsert below.
+  const harnessDir = resolve(options.harnessDir);
+  const statusPath = join(harnessDir, "status.json");
+  const workflowDir = join(harnessDir, "workflows", workflowId);
   const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
-  if (existsSync(snapshotPath)) {
-    throw new Error(
-      `refusing to promote audit plans: workflow ${JSON.stringify(workflowId)} already exists ` +
-        `(snapshot at ${snapshotPath}) \u2014 re-promote would drop its registered plan rows; ` +
-        `remove that workflow before promoting again`,
-    );
-  }
 
   const planFiles = resolveSelectedPlanFiles(outDir, selected);
   const indexRows = readExecutionOrderIndex(outDir);
@@ -602,40 +614,60 @@ export async function promoteAuditPlans(
     updated_at: now.toISOString().slice(0, 10),
     plans,
   };
-
-  // W-001 (QC wave 2): the snapshot is written FIRST (registerWorkflow
-  // refuses a missing snapshot), but a register failure — a concurrent root
-  // writer, a stale/conflicting root doc, or a validation error — would
-  // leave an orphaned snapshot behind. That orphan then blocks the fix-1
-  // re-promote guard until manual deletion. Roll back the partial write
-  // (snapshot + the now-empty workflow dir) so a retry after resolving the
-  // root conflict converges without manual cleanup.
-  await writeWorkflowSnapshot(snapshot, workflowDir);
-  try {
-    await registerWorkflow(join(options.harnessDir, "status.json"), {
-      id: workflowId,
-      type: "plan",
-      started_at: snapshot.started_at,
-      dir: `workflows/${workflowId}`,
-    });
-  } catch (error) {
-    rmSync(snapshotPath, { force: true });
-    try {
-      // Remove the workflow dir only when empty — a concurrent writer's
-      // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if
-      // content appeared between the readdir and the removal, and the
-      // fix-1 guard would refuse the re-promote anyway, keeping this
-      // promote's partial state out of the way.
-      if (readdirSync(workflowDir).length === 0) {
-        rmdirSync(workflowDir);
-      }
-    } catch {
-      // Dir non-empty or already gone — leave it; never force-remove.
-    }
-    throw error;
+  const entry: WorkflowEntry = {
+    id: workflowId,
+    type: "plan",
+    started_at: snapshot.started_at,
+    dir: `workflows/${workflowId}`,
+  };
+  const entryGate = validateWorkflowEntry(entry);
+  if (!entryGate.ok) {
+    throw new Error(
+      `refusing to register invalid workflow entry: ${entryGate.violations.map((v) => v.message).join("; ")}`,
+    );
   }
 
-  return { workflowId, snapshotPath: join(workflowDir, WORKFLOW_SNAPSHOT_FILE) };
+  // Greptile (fix-1): the re-promote guard, the snapshot write, and the root
+  // upsert are ONE atomic section under the root status.json write lock —
+  // the same serialization point `registerWorkflow` uses. The guard is the
+  // lock's first statement, so two concurrent same-id promotes cannot both
+  // pass it (check-then-act closed). The snapshot is written directly with
+  // writeJson (atomic temp+rename) instead of `writeWorkflowSnapshot`, whose
+  // own snapshot-dir lock would split the serialization point; nesting that
+  // second lock is technically safe (different lockdir) but would let the
+  // re-promote guard and the snapshot write serialize separately.
+  await withStatusWriteLock(statusPath, () => {
+    if (existsSync(snapshotPath)) {
+      throw new Error(
+        `refusing to promote audit plans: workflow ${JSON.stringify(workflowId)} already exists ` +
+          `(snapshot at ${snapshotPath}) \u2014 re-promote would drop its registered plan rows; ` +
+          `remove that workflow before promoting again`,
+      );
+    }
+    mkdirSync(workflowDir, { recursive: true });
+    try {
+      writeJson(snapshotPath, snapshot as unknown as Record<string, unknown>);
+      registerWorkflowEntryLocked(statusPath, entry);
+    } catch (error) {
+      rmSync(snapshotPath, { force: true });
+      try {
+        // Remove the workflow dir only when empty — a concurrent writer's
+        // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if
+        // content appeared between the readdir and the removal, and the
+        // re-promote guard would refuse the retry anyway, keeping this
+        // promote's partial state out of the way.
+        if (readdirSync(workflowDir).length === 0) {
+          rmdirSync(workflowDir);
+        }
+      } catch {
+        // Dir non-empty or already gone — leave it; never force-remove.
+      }
+      throw error;
+    }
+    return { workflowId, snapshotPath };
+  });
+
+  return { workflowId, snapshotPath };
 }
 
 /**

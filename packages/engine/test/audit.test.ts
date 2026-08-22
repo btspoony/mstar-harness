@@ -663,6 +663,80 @@ describe("promoteAuditPlans", () => {
     expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
   });
 
+  test("two concurrent promotes of the same audit dir: exactly one wins, the other refuses (TOCTOU)", async () => {
+    const harnessDir = join(tmp, "harness-concurrent");
+    const outDir = join(harnessDir, "plans", "audit-2026-08-12");
+    mkPlanAudit(outDir, "2026-08-12");
+
+    // Reproduce the cross-process TOCTOU window in-process: hold the
+    // SNAPSHOT-dir write lock (`.status-write.lockdir` inside
+    // `workflows/<id>/` — the serialization point of the pre-fix
+    // writeWorkflowSnapshot) BEFORE either promote runs. Both promotes then
+    // pass the re-promote guard (no snapshot exists yet) and queue at the
+    // snapshot lock. Releasing it lets the pre-fix code run BOTH promotes to
+    // completion — the later writer whole-rewrites the snapshot and upserts
+    // the root, silently dropping the earlier rows. The fixed code
+    // serializes guard + snapshot write + root registration on the ROOT
+    // status.json lock instead, so only the first promote may complete and
+    // the second re-checks under the lock and refuses. (Both promotes settle
+    // synchronously up to their first await, so no wall-clock delay is
+    // needed to know they have reached their blocking point.)
+    const workflowId = "audit-2026-08-12";
+    const snapshotLockDir = join(harnessDir, "workflows", workflowId, ".status-write.lockdir");
+    mkdirSync(snapshotLockDir, { recursive: true });
+
+    const promoteA = promoteAuditPlans(outDir, ["001"], { harnessDir });
+    const promoteB = promoteAuditPlans(outDir, ["002"], { harnessDir });
+    // Attach settlement handlers in the SAME tick the promises are created —
+    // a rejected promote must never surface as an unhandled rejection while
+    // the interleaving below runs.
+    const settled = Promise.allSettled([promoteA, promoteB]);
+    // Genuine delay required (integration test): the engine's cross-process
+    // lockdir polling cannot be driven with deterministic timers, and both
+    // promotes must reach their blocking point on the snapshot lockdir the
+    // test holds before it is released — reproducing the cross-process
+    // interleaving where two writers are past the re-promote guard, queued
+    // on the snapshot lock (same rationale as the suite's migrate/lease
+    // concurrency tests).
+    await Bun.sleep(150);
+    // Release the snapshot lock the test held (the fixed code never takes
+    // it; the pre-fix code removes it on release — force/recursive is safe).
+    rmSync(snapshotLockDir, { recursive: true, force: true });
+    const [a, b] = await settled;
+    rmSync(snapshotLockDir, { recursive: true, force: true });
+
+    const fulfilled = [a, b].filter((r) => r.status === "fulfilled");
+    const rejected = [a, b].filter((r) => r.status === "rejected");
+    // The root lock serializes guard+write+register — exactly one promote
+    // may win; the other must refuse. (Pre-fix, BOTH fulfill: the TOCTOU
+    // loser's whole-rewrite silently replaces the winner's rows.)
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
+    const refuseError = (rejected[0] as PromiseRejectedResult).reason as Error;
+    expect(refuseError.message).toContain("refusing to promote");
+    expect(refuseError.message).toContain(join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
+
+    // First rows intact: the winner's snapshot is exactly its single Todo
+    // row, never clobbered by the loser's selection (001 vs 002 — a TOCTOU
+    // loser would have whole-rewritten it with its own selection).
+    const snapshotPath = join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+    const snapshot = readJson(snapshotPath);
+    const plans = snapshot.plans as Array<Record<string, unknown>>;
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.id).toBe("001-fix-n-1-query-in-order-list");
+    expect(plans[0]).toMatchObject({ status: "Todo" });
+
+    // Root registration intact and valid; the entry mirrors the snapshot.
+    const statusPath = join(harnessDir, "status.json");
+    expect(validateStatus(statusPath).ok).toBe(true);
+    const status = readJson(statusPath);
+    const entry = (status.workflows as Array<Record<string, unknown>>).find((w) => w.id === workflowId);
+    expect(entry).toBeDefined();
+    expect(entry?.started_at).toBe(snapshot.started_at);
+    expect((status.workflows as Array<Record<string, unknown>>)).toHaveLength(1);
+  });
+
   test("register failure rolls back the snapshot so a retry converges (W-001)", async () => {
     const harnessDir = join(tmp, "harness-register-failure");
     const outDir = join(harnessDir, "plans", "audit-2026-08-10");
