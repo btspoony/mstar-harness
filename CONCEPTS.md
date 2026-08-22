@@ -21,8 +21,8 @@ The four verification layers of a plan's review chain: **L1** implementer (write
 ### Workflow lifecycle
 An orchestrated flow (single-plan or iteration) treated as a first-class runtime entity: running state, phase machine, leases/execution policy and logs are contained in one lifecycle directory (`workflows/<id>/snapshot.json` + per-workflow jsonl); the global status table keeps only active lifecycle entries and removes them at terminal state. One lifecycle may be shared by multiple concurrent sessions; terminal state is the natural archive (no compaction ceremony). Not a *session*: a session is one agent conversation and is shorter than a lifecycle.
 
-### Project register
-The durable home for cross-lifecycle debt and direction: open residuals (with severity and lifecycle provenance) and roadmap live under a project; flows without an explicit project fall back to `_default`. Closing a residual is a register state change, not a status-key shuffle. The v1 root `residual_findings` array was retired in v3.0.0.
+### Closure-verification plan
+A plan whose residual's fix may already have landed — grep the current checkout (CLI surface, docs, skill callouts) before planning a re-implementation; if the work is done, re-scope to verification-only: smoke the real artifact, confirm no stale import-only callouts, fill the changeset gap if missing, close the residual in place. Prevents re-implementing a command that already exists.
 
 ## Agent canvas (dsh panel)
 
