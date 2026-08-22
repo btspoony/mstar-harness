@@ -789,4 +789,99 @@ describe("hard mode (compass enforcement: hard — Slice 5, roadmap §8.5 C4/D2)
     }
   });
 
+  test("plugin wiring (qc3 S-3 / qc2 S): edit whose literal replace breaks JSON syntax reports invalid-doc, not migration-required", async () => {
+    // Regression (qc3 S-2/S-3 + qc2 f8): when the patched text fails
+    // JSON.parse, the hook used to pass the RAW STRING as `doc`; for the
+    // status kind the string overload of the validator treats it as a FILE
+    // PATH, reads `{}` for the missing path, and misreports
+    // `status.migration-required` instead of the true invalid-doc cause.
+    // The fix passes an explicit non-object marker (`null`) so the gate
+    // fires with `status.invalid-doc` on ALL kinds. The gate must never
+    // pass silently.
+    const { project, statusPath } = makeHardRepo(true);
+    try {
+      const plugin = await MorningStarHarnessPlugin();
+      const beforeWrite = plugin["tool.execute.before"];
+      const errors: string[] = [];
+      const original = console.error;
+      console.error = (message?: unknown) => {
+        errors.push(String(message));
+      };
+      try {
+        await beforeWrite!(
+          { tool: "edit", sessionID: "s1", callID: "c1" },
+          {
+            args: {
+              filePath: statusPath,
+              oldString: '"workflows": []',
+              newString: '"workflows": [',
+            },
+          },
+        );
+      } finally {
+        console.error = original;
+      }
+      // The true cause is surfaced — not the string-as-path fallthrough.
+      expect(errors.some((e) => e.includes("[mstar-harness]") && e.includes("status.invalid-doc"))).toBe(true);
+      expect(errors.some((e) => e.includes("status.migration-required"))).toBe(false);
+      // The gate fires (hard mode: error lines + hardBlocked refusal marker).
+      expect(errors.some((e) => e.includes("hard-gate blocked (hardBlocked=true)"))).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin wiring (qc1 S-004): non-unique literal WITHOUT replaceAll falls back to pre-edit lint", async () => {
+    // The same literal occurs in two workflow entries; without
+    // `replaceAll: true` the replacement is ambiguous (the host could
+    // target either span) so the hook MUST NOT synthesize — it lints the
+    // (valid) pre-edit file and stays silent.
+    const { project, statusPath } = makeHardRepo(true);
+    mkdirSync(join(project, ".mstar", "workflows", "wf-1"), { recursive: true });
+    mkdirSync(join(project, ".mstar", "workflows", "wf-2"), { recursive: true });
+    writeFileSync(
+      join(project, ".mstar", "workflows", "wf-1", "snapshot.json"),
+      JSON.stringify(validSnapshotDoc, null, 2),
+    );
+    writeFileSync(
+      join(project, ".mstar", "workflows", "wf-2", "snapshot.json"),
+      JSON.stringify({ ...validSnapshotDoc, id: "wf-2" }, null, 2),
+    );
+    writeFileSync(
+      statusPath,
+      JSON.stringify(
+        {
+          version: 2,
+          updated_at: "2026-08-08",
+          workflows: [
+            { id: "wf-1", type: "plan", started_at: "2026-08-08", dir: "workflows/wf-1" },
+            { id: "wf-2", type: "plan", started_at: "2026-08-08", dir: "workflows/wf-2" },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    try {
+      const plugin = await MorningStarHarnessPlugin();
+      const beforeWrite = plugin["tool.execute.before"];
+      const errors: string[] = [];
+      const original = console.error;
+      console.error = (message?: unknown) => {
+        errors.push(String(message));
+      };
+      try {
+        await beforeWrite!(
+          { tool: "edit", sessionID: "s1", callID: "c1" },
+          { args: { filePath: statusPath, oldString: '"type": "plan"', newString: '"type": "sprint"' } },
+        );
+      } finally {
+        console.error = original;
+      }
+      expect(errors.filter((e) => e.includes("[mstar-harness]"))).toEqual([]);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
 });

@@ -69,7 +69,13 @@ export interface StatusGateAdvisory {
   target: string
   /** The gate verdict (warn-mode: `hardBlocked` false; hard repair escape: `hardBlocked` true). */
   result: GateResult
-  /** Resolved enforcement flag: false for warn-mode advisories, true for hard-mode repair escapes. */
+  /**
+   * Resolved enforcement flag: true whenever the gate ran under hard
+   * enforcement — for hard-mode repair escapes AND for degraded-hard
+   * advisories (f9: the catch emits `hard` reflecting ACTUAL enforcement,
+   * so a hard deployment can distinguish a dead control from a warn-only
+   * pass). False only for warn-mode advisories.
+   */
   hard: boolean
   /** True when hard mode allowed a write/edit to an ALREADY-invalid document (repair escape). */
   repair?: boolean

@@ -832,6 +832,13 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
           );
         }
       } else if (input.tool === "edit") {
+        // Classify the target FIRST (qc3 S-1): the dir-resolvers loader is
+        // cached, so the kind check is cheap — the synchronous file read +
+        // split/join + parse below only runs for canonical coordination
+        // docs. Non-coordination targets (source files, configs, prose —
+        // the overwhelming majority of edits) skip the read/parse entirely.
+        classifyDirResolvers = await dirResolversLoader.load();
+        if (harnessDocKindOfTarget(filePath) === null) return;
         // f8 (audit-20260821-f8): when the OpenCode `edit` args carry a
         // literal `oldString` -> `newString` pair (one pair per tool call —
         // no replacements array, no regex), synthesize the PATCHED text and
@@ -864,9 +871,13 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
                 patchedDoc = JSON.parse(patched);
               } catch {
                 // Patched JSON would not parse — surface the invalid state
-                // by passing the raw text as a non-object doc (validators
-                // report invalid-doc instead of silently passing).
-                patchedDoc = patched;
+                // with an explicit non-object marker (`null`): the validators
+                // report status.invalid-doc / workflow.snapshot.invalid /
+                // project.register.invalid. Passing the raw string instead
+                // would hit the status validator's STRING-as-PATH overload
+                // and misreport `status.migration-required` (qc3 S-2). The
+                // gate still fires — never a silent pass.
+                patchedDoc = null;
               }
             }
           } catch {
