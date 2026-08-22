@@ -7,7 +7,7 @@ description: "Use when starting, driving, resuming, or closing a Morning Star it
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols → **`mstar-plan-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. **Phase 2 entry**（control worktree + lease）→ **`references/phase-2-worktree-lease.md`** + **`mstar-branch-worktree`**。**Phase 2 implement 波次**（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**。Phase 2 QC 前 → **`mstar-review-qc`**。On conflict, **`mstar-harness-core` wins**.
+**Read `mstar-harness-core` first.** Path symbols → **`mstar-plan-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. **Phase 1 角色派发**（每次 invoke 前的 assignment preflight；`enforcement: hard` fail-fast）→ **`references/command-shared-invariants.md`**（本 skill 直接触发时不依赖 command 层）。**Phase 2 entry**（control worktree + lease）→ **`references/phase-2-worktree-lease.md`** + **`mstar-branch-worktree`**。**Phase 2 implement 波次**（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**。Phase 2 QC 前 → **`mstar-review-qc`**。On conflict, **`mstar-harness-core` wins**.
 
 ## 设计思路
 
