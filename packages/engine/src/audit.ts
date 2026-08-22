@@ -11,9 +11,12 @@
  * - mstar-audit/references/finding-format.md: category codes, evidence
  *   requirements.
  */
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
+import { assertSafePathComponent } from "./path.js";
+import { registerWorkflow, type PlanRow } from "./status.js";
+import { WORKFLOW_SNAPSHOT_FILE, writeWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -510,4 +513,212 @@ export function scaffoldAuditPlan(
   );
 
   return { outDir: resolve(outDir), date, files: written, nextNumber: next };
+}
+
+// ---------------------------------------------------------------------------
+// Plan promotion — v2 workflow registration for selected audit plans
+// (snapshot FIRST, then registerWorkflow; register refuses a missing snapshot)
+// ---------------------------------------------------------------------------
+
+/** Options for `promoteAuditPlans`. `harnessDir` is required — the snapshot
+ * and `status.json` live under the harness, never beside the audit dir. */
+export type PromoteAuditPlansOptions = {
+  /** Absolute harness dir that contains `status.json` + `workflows/`. Required. */
+  harnessDir: string;
+  /** Default: basename of `outDir` (e.g. `audit-2026-08-22`). */
+  workflowId?: string;
+};
+
+/**
+ * Promote selected audit plans into the v2 workflow lifecycle as a
+ * `type: "plan"` workflow (mstar-audit Handoff): write the workflow
+ * snapshot FIRST (with one Todo PlanRow per selected file), then register
+ * the workflow entry — `registerWorkflow` validates the full status doc
+ * including the per-snapshot existence check, so the snapshot must exist
+ * before the registration. Plan rows are built from the README index
+ * `## Execution order & status` columns (Plan/Title), falling back to the
+ * private `readPlanFileSummary` only when the index lacks the row.
+ *
+ * Run-once semantics: a workflow id whose snapshot already exists refuses
+ * the promote (re-promote would drop its registered plan rows); remove
+ * that workflow first. If the snapshot write succeeds but registration
+ * fails (a concurrent root writer, a stale/conflicting root doc, or a
+ * validation error), the partial snapshot + empty workflow dir are rolled
+ * back so a retry converges after the root conflict is resolved.
+ */
+export async function promoteAuditPlans(
+  outDir: string,
+  selected: readonly string[],
+  options: PromoteAuditPlansOptions,
+): Promise<{ workflowId: string; snapshotPath: string }> {
+  if (selected.length === 0) {
+    throw new Error("promoteAuditPlans: at least one plan id must be selected (--plans 001,002,\u2026)");
+  }
+  if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
+    throw new Error("promoteAuditPlans: options.harnessDir is required (must contain status.json + workflows/)");
+  }
+
+  const workflowId = options.workflowId ?? basename(resolve(outDir));
+  assertSafePathComponent(workflowId, "workflow id");
+
+  // W-001 (QC wave 1): refuse re-promote instead of silently whole-rewriting
+  // the snapshot and dropping previously promoted Todo rows. The workflow
+  // dir is the existence probe — `writeWorkflowSnapshot` + `registerWorkflow`
+  // would otherwise overwrite (snapshot) / upsert (status.json) with a fresh
+  // set, losing the prior subset. Recovery: remove the workflow first
+  // (`mstar sdd`/manual `unregisterWorkflow` + snapshot removal).
+  const workflowDir = join(resolve(options.harnessDir), "workflows", workflowId);
+  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  if (existsSync(snapshotPath)) {
+    throw new Error(
+      `refusing to promote audit plans: workflow ${JSON.stringify(workflowId)} already exists ` +
+        `(snapshot at ${snapshotPath}) \u2014 re-promote would drop its registered plan rows; ` +
+        `remove that workflow before promoting again`,
+    );
+  }
+
+  const planFiles = resolveSelectedPlanFiles(outDir, selected);
+  const indexRows = readExecutionOrderIndex(outDir);
+  const plans: PlanRow[] = planFiles.map((planFile) => {
+    const stem = planFile.replace(/\.md$/, "");
+    const num = stem.slice(0, 3);
+    const indexRow = indexRows.get(num);
+    const title = indexRow?.title ?? readPlanFileSummary(join(outDir, planFile)).title;
+    return {
+      id: stem,
+      title,
+      file: planFileRel(outDir, planFile),
+      status: "Todo",
+    };
+  });
+
+  const now = new Date();
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type: "plan",
+    status: "running",
+    started_at: now.toISOString(),
+    updated_at: now.toISOString().slice(0, 10),
+    plans,
+  };
+
+  // W-001 (QC wave 2): the snapshot is written FIRST (registerWorkflow
+  // refuses a missing snapshot), but a register failure — a concurrent root
+  // writer, a stale/conflicting root doc, or a validation error — would
+  // leave an orphaned snapshot behind. That orphan then blocks the fix-1
+  // re-promote guard until manual deletion. Roll back the partial write
+  // (snapshot + the now-empty workflow dir) so a retry after resolving the
+  // root conflict converges without manual cleanup.
+  await writeWorkflowSnapshot(snapshot, workflowDir);
+  try {
+    await registerWorkflow(join(options.harnessDir, "status.json"), {
+      id: workflowId,
+      type: "plan",
+      started_at: snapshot.started_at,
+      dir: `workflows/${workflowId}`,
+    });
+  } catch (error) {
+    rmSync(snapshotPath, { force: true });
+    try {
+      // Remove the workflow dir only when empty — a concurrent writer's
+      // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if
+      // content appeared between the readdir and the removal, and the
+      // fix-1 guard would refuse the re-promote anyway, keeping this
+      // promote's partial state out of the way.
+      if (readdirSync(workflowDir).length === 0) {
+        rmdirSync(workflowDir);
+      }
+    } catch {
+      // Dir non-empty or already gone — leave it; never force-remove.
+    }
+    throw error;
+  }
+
+  return { workflowId, snapshotPath: join(workflowDir, WORKFLOW_SNAPSHOT_FILE) };
+}
+
+/**
+ * Resolve every selected id (`001`, `001-slug`, or `001-slug.md`) to its
+ * plan file in `outDir`. A selected id with no matching `NNN-*.md` file is
+ * a usage error — do not silently promote a subset.
+ */
+function resolveSelectedPlanFiles(outDir: string, selected: readonly string[]): string[] {
+  // S-03 (QC wave 1): readdirSync order is filesystem-dependent — sort so a
+  // duplicate numeric prefix (e.g. manual `001-foo.md` + `001-bar.md`) is
+  // resolved deterministically (lowest filename wins) instead of by
+  // directory order.
+  const files = readdirSync(outDir)
+    .filter((f) => /^\d{3}-.*\.md$/.test(f))
+    .sort();
+  const byNum = new Map<string, string>();
+  const byStem = new Map<string, string>();
+  for (const file of files) {
+    const stem = file.replace(/\.md$/, "");
+    byNum.set(stem.slice(0, 3), file);
+    byStem.set(stem, file);
+  }
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const id of selected) {
+    const file = byNum.get(id) ?? byStem.get(id) ?? byStem.get(id.replace(/\.md$/, ""));
+    if (file === undefined) {
+      throw new Error(
+        `promoteAuditPlans: selected plan ${JSON.stringify(id)} does not match any NNN-*.md file in ${resolve(outDir)}`,
+      );
+    }
+    if (!seen.has(file)) {
+      seen.add(file);
+      resolved.push(file);
+    }
+  }
+  return resolved;
+}
+
+/** Parse the README index `## Execution order & status` table into
+ *  `num -> { title }` rows (Plan column = `001`, Title column adjacent). */
+function readExecutionOrderIndex(outDir: string): Map<string, { title: string }> {
+  const readmePath = join(outDir, "README.md");
+  let text: string;
+  try {
+    text = readFileSync(readmePath, "utf8");
+  } catch {
+    return new Map();
+  }
+  const rows = new Map<string, { title: string }>();
+  const lines = text.split("\n");
+  let inSection = false;
+  for (const line of lines) {
+    if (/^##\s+Execution order & status/.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (inSection && /^#/.test(line)) {
+      break;
+    }
+    if (!inSection) continue;
+    // Split on unescaped `|` (the index escapes literal pipes in titles as
+    // `\|`, matching escapeCell in renderIndex).
+    const cells = line.split(/(?<!\\)\|/).map((c) => c.trim());
+    if (cells.length >= 3 && /^\d{3}$/.test(cells[1])) {
+      rows.set(cells[1], { title: cells[2].replace(/\\\|/g, "|") });
+    }
+  }
+  return rows;
+}
+
+/**
+ * The plan row `file` value: `{PLAN_DIR}`-relative when `outDir` sits under
+ * a `plans/` directory (e.g. `audit-2026-08-22/001-slug.md`), otherwise the
+ * basename. `outDir` may be reached through a `plans/` segment anywhere in
+ * the path (e.g. `.mstar/plans/audit-...`).
+ */
+function planFileRel(outDir: string, planFile: string): string {
+  const resolved = resolve(outDir);
+  const parts = resolved.split(sep);
+  const plansIdx = parts.lastIndexOf("plans");
+  if (plansIdx >= 0) {
+    return `${parts.slice(plansIdx + 1).join(sep)}${sep}${planFile}`;
+  }
+  return planFile;
 }

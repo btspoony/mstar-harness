@@ -647,7 +647,7 @@ export function validateStatusV2(
           violation(
             "medium",
             "status.workflow.mismatched-started-at",
-            `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} \u2014 the root entry mirrors the snapshot; align them`,
+            `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} \u2014 workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot \u2014 align them or remove the colliding workflow`,
           ),
         );
       }
