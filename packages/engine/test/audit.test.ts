@@ -7,15 +7,19 @@
  * format) and mstar-audit/references/finding-format.md (category codes,
  * evidence requirements, secret-value prohibition).
  */
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  promoteAuditPlans,
   redactSecrets,
   scaffoldAuditPlan,
   validateAuditStatusBlocks,
 } from "../src/audit.js";
+import { readJson } from "../src/core.js";
+import { validateStatus } from "../src/status.js";
+import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "../src/workflow.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -485,5 +489,90 @@ describe("scaffoldAuditPlan", () => {
     const readme = readFileSync(join(out, "README.md"), "utf8");
     expect(readme).toContain("## Red-team dispositions");
     expect(readme).toContain("- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// promoteAuditPlans — v2 workflow promotion of selected audit plans
+// (snapshot written BEFORE registerWorkflow; validateStatus + snapshot
+// validators pass on the promoted artifacts)
+// ---------------------------------------------------------------------------
+
+describe("promoteAuditPlans", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "engine-audit-promote-"));
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  test("writes a plan workflow snapshot + registers it (type plan, matching started_at)", async () => {
+    const harnessDir = join(tmp, "harness");
+    const outDir = join(harnessDir, "plans", "audit-2026-08-08");
+    scaffoldAuditPlan(
+      outDir,
+      [
+        {
+          title: "Fix N+1 query in order list",
+          category: "perf" as const,
+          impact: "Every order-list render issues 1+N queries.",
+          effort: "M" as const,
+          risk: "MED" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/orders.ts:42"],
+          priority: "P1" as const,
+        },
+        {
+          title: "Rotate leaked AWS keys",
+          category: "security" as const,
+          impact: "Credentials in git history.",
+          effort: "S" as const,
+          risk: "HIGH" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/config.ts:3"],
+          priority: "P1" as const,
+        },
+      ],
+      { date: "2026-08-08" },
+    );
+
+    const result = await promoteAuditPlans(outDir, ["001"], { harnessDir });
+    const workflowId = result.workflowId;
+    expect(workflowId).toBe("audit-2026-08-08");
+    expect(result.snapshotPath).toBe(join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
+
+    // (a) snapshot exists with exactly the selected plan row (Todo)
+    const snapshotPath = join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+    expect(existsSync(snapshotPath)).toBe(true);
+    const snapshot = readJson(snapshotPath);
+    expect(snapshot.schema_version).toBe(1);
+    expect(snapshot.id).toBe(workflowId);
+    expect(snapshot.type).toBe("plan");
+    expect(snapshot.status).toBe("running");
+    expect(snapshot.started_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    expect(snapshot.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const plans = snapshot.plans as Array<Record<string, unknown>>;
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      id: "001-fix-n-1-query-in-order-list",
+      title: "Fix N+1 query in order list",
+      file: "audit-2026-08-08/001-fix-n-1-query-in-order-list.md",
+      status: "Todo",
+    });
+
+    // (b) root status.json has the workflow entry, type plan, matching started_at
+    const statusPath = join(harnessDir, "status.json");
+    const status = readJson(statusPath);
+    expect(status.version).toBe(2);
+    const entry = (status.workflows as Array<Record<string, unknown>>).find((w) => w.id === workflowId);
+    expect(entry).toBeDefined();
+    expect(entry).toMatchObject({
+      id: workflowId,
+      type: "plan",
+      dir: `workflows/${workflowId}`,
+    });
+    expect(entry?.started_at).toBe(snapshot.started_at);
+
+    // (c) validateStatus passes on the status path
+    expect(validateStatus(statusPath).ok).toBe(true);
+
+    // (d) validateWorkflowSnapshot passes on the snapshot
+    expect(validateWorkflowSnapshot(readJson(snapshotPath)).ok).toBe(true);
   });
 });
