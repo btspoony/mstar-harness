@@ -627,6 +627,30 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
     }
   });
 
+  test("constructed register with data { entries: null } still throws and writes nothing (audit-20260821-f3)", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = migrateHarnessTree(root);
+      plan.register = {
+        file: "projects/_null-entries-register/residuals.json",
+        source: "constructed",
+        // `entries: null` is NOT a realistic planner shape (buildRegister
+        // emits `entries: {}` or returns null), but it locks the
+        // validate-before-skip ordering: validateProjectRegister rejects
+        // a non-object `entries` ("entries must be an object keyed by plan
+        // id"), so the `?? {}` zero-entries skip must never swallow it.
+        // The gate runs first — invalid docs throw, only gate-passing
+        // empty `{ entries: {} }` registers are skipped.
+        data: { entries: null },
+      };
+
+      await expect(applyMigratePlan(plan)).rejects.toThrow(/entries must be an object/);
+      expect(existsSync(join(root, "projects", "_null-entries-register", "residuals.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a v1 tree with no status.json refuses to migrate", () => {
     const root = tmpRoot("migrate-nov1-");
     try {
