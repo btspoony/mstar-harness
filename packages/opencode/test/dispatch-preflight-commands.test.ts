@@ -55,6 +55,14 @@ describe("omp iteration commands optional dispatch preflight (shared reference)"
     }
   });
 
+  test("no command inlines the preflight bash (single-home invariant)", () => {
+    for (const file of iterationCommands) {
+      const content = fs.readFileSync(path.join(commandsDir, file), "utf8");
+      expect(content).not.toContain(PREFLIGHT_SNIPPET);
+      expect(content).not.toContain(FAILFAST_SNIPPET);
+    }
+  });
+
   test("shared reference renders the preflight snippet", () => {
     const content = fs.readFileSync(sharedReference, "utf8");
     expect(content).toContain(PREFLIGHT_SNIPPET);

@@ -54,6 +54,12 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT）+ **`mstar-ite
 
 按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration` § Phase 1–5 + `command-shared-invariants.md` → `mstar-dispatch-gates` → `mstar-phase-gates` → `mstar-plan-conventions` / `mstar-plan-artifacts` → `mstar-host` → `mstar-compound`（Phase 3 前）→ **`mstar-sdd`**（first implement 前）→ `mstar-review-qc`（first QC 前）→ `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
 
+**Session todos（loop 专属；Phase 2–5 共享 rows → `command-shared-invariants.md`）**：
+
+| Todo id | 何时追加 | 何时可勾掉 |
+|---------|----------|------------|
+| `phase-1-autonomous-start` | Boot | compass `locked` + integration committed |
+
 ## Phase 1: Autonomous start
 
 Execute **`mstar-iteration` § Phase 1**（**autonomous** direction lock + scale budget + branch resolve SSOT → `references/autonomous-direction-lock.md`）：
@@ -64,11 +70,21 @@ Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/
 
 ### 5. Review & Edit Chain（HARD GATE）
 
-Execute **`mstar-iteration` §1.6**：`product-manager` → `architect` → `writing-specialist` 顺序 invoke（**禁止** `{KNOWLEDGE_DIR}/` 新增；corpus hygiene）→ PM lock。**Assignment preflight** per **`command-shared-invariants.md`**。**Pre-commit checklist**（all `[x]`）→ commit + push `iteration/<iteration-id>`。
+Execute **`mstar-iteration` §1.6**：`product-manager` → `architect` → `writing-specialist` 顺序 invoke（**禁止** `{KNOWLEDGE_DIR}/` 新增；corpus hygiene）→ PM lock。**Assignment preflight** per **`command-shared-invariants.md`**。
+
+**Pre-commit checklist**（print before §6；all `[x]`）：
+
+- [ ] Autonomous direction lock rationale recorded in compass（**not** grill-me）
+- [ ] Scale budget applied（business plan 按 S/M/L/XL 名额）
+- [ ] compass + plans + `status.json` registered
+- [ ] product-manager / architect / writing-specialist invokes completed（**未**向 `{KNOWLEDGE_DIR}/` 新增）
+- [ ] PM final lock：compass `status: locked` + Prepare gates pass
+- [ ] Branch policy locked：`iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded
+- [ ] **THEN** commit + push `iteration/<iteration-id>`
 
 ### 6. Integration Branch
 
-Per **`mstar-iteration` §2.3**（create from `iteration_base_branch`；register branch fields；commit docs；push）。**STOP** if base/target missing。**Immediately** print `## Phase 2: Autonomous Execute` → continue。
+Per **`mstar-iteration` §2.3**（create from `iteration_base_branch`；register branch fields；commit docs；push）。**STOP** if base/target missing。**Immediately** print `## Phase 2: Autonomous Execute` → continue（勾掉 `phase-1-autonomous-start`）。
 
 ---
 

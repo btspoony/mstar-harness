@@ -4,6 +4,7 @@
 
 - `iteration-start` Phase 1 review-chain 表（§5.1→§5.2→§5.3 顺序 invoke、三角色冒充禁止、`{KNOWLEDGE_DIR}/` 新增禁止）— start 专属
 - `iteration-loop`「Do not Read `skills/grill-me/SKILL.md`」— loop 专属
+- `iteration-loop` session todo `phase-1-autonomous-start`（Boot → compass `locked` + integration committed）— loop 专属
 
 命令正文经一行指针引用本文件，不重复定义以下 invariants / preflight / todos / STOP。
 
