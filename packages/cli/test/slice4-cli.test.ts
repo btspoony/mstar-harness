@@ -713,7 +713,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
   test("missing harness → exit 1 with the --harness / MSTAR_HARNESS_DIR message", () => {
     withTempDir((dir) => {
       const { outDir } = scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001"]);
+      const result = runCli(["audit", "promote", outDir, "--plans", "001"], { cwd: dir });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("pass --harness or set MSTAR_HARNESS_DIR");
     });
