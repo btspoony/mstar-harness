@@ -70,7 +70,7 @@ History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar
 | 2 | `greploop` | **Optional** — only when the **repo** uses Greptile / has `greploop` available; then run for Greptile **5/5** in addition to babysit/`*-babysit` (or fallback) gates |
 | 3 | neither | Command fallback = babysit-equivalent CI + reviews gates |
 
-When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → host `commands/iteration-drive` / `iteration-loop` Phase 5.
+When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**（CI + reviews），then optional greploop for Greptile score. Discovery paths → `mstar-iteration` §5 (iteration command layer).
 
 ### 5.2 Phase 5 exit checklist（迭代交付完成）
 

@@ -61,7 +61,7 @@
 ## 与 `status.json` 的链接
 
 - 某 plan 的**权威设计输入**在规格、迭代 compass 或（已有）知识库中时，在 `**plans[].metadata**` 中登记路径：`**primary_spec**` / `**spec_refs**` → 优先 **`{SPECS_DIR}/`**；`**iteration_compass**` / `**iteration_refs**` → **`{ITERATION_DIR}/`**；已有 **`{KNOWLEDGE_DIR}/`** 链接保留，但 **iteration-start 不得新增** knowledge 路径。
-- 执行方在 **implement 前**须按 metadata 读取这些文件，并与主 plan 核对；不得在未读链接文档的情况下**静默偏离**其中已写明的决策（若需偏离，先回写 knowledge 或 plan 并走 PM/architect 门禁）。
+- 执行方在 **implement 前**：先扫 `{KNOWLEDGE_DIR}/README.md` 索引（若存在），发现并阅读与当轮相关的 **Active** 行（发现式阅读，不要求通读全库）；再按 metadata 读取已登记路径；均与主 plan 核对；不得在未读链接文档的情况下**静默偏离**其中已写明的决策（若需偏离，先回写 knowledge 或 plan 并走 PM/architect 门禁）。
 
 ## 维护规则
 
@@ -69,7 +69,7 @@
    - **Specs（长期）**：`{SPECS_DIR}/` → spec 索引（若有）→ `plans[].metadata` 的 `primary_spec` / `spec_refs`
    - **迭代 package**：`{ITERATION_DIR}/<iteration-id>/guides|specs/` → `{ITERATION_DIR}/README.md`（目录一行）+ package README → `iteration_refs`
    - **Knowledge**：**`mstar-compound`** @ iteration-close（含 package **提升**）→ `{KNOWLEDGE_DIR}/README.md`
-2. **阅读**：开发类 agent 在开始编码前，**必须**阅读当前 plan 在 `metadata` 中指向的 knowledge 文档（若存在）；`@project-manager` 在 Assignment 中可再次点名路径。
+2. **阅读**：开发类 agent 在开始编码前，**先扫** `{KNOWLEDGE_DIR}/README.md` 索引（若存在），发现并阅读与当轮相关的 **Active** 行（不要求通读全库）；随后**必须**阅读当前 plan 在 `metadata` 中指向的 knowledge 文档（若存在）；`@project-manager` 在 Assignment 中可再次点名路径。
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新 README 中 **Status** 或 Description；版本迭代优先新文件名 `v<N+1>` 或保留旧版并标明 Superseded。
 4. **归档**：
    - **iteration-start（强制）**：`writing-specialist` §1.6 以 **`{SPECS_DIR}/` 全库卫生为主**；对**既有** `{KNOWLEDGE_DIR}/` 仅归档/错放纠正，**不**新增 knowledge。细则 → **`mstar-iteration/references/iteration-corpus-hygiene.md`**。

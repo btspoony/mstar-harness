@@ -81,12 +81,9 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** modify product code — report issues, do not fix them. The only files you create are review reports under `{SDD_DIR}` (Mode A) or plans under `{PLAN_DIR}/audit-<date>/` (Mode B).
 - **NEVER** execute tests or builds (no test running, no re-runs) — trust implementer evidence; missing runtime evidence is a ⚠️ (`Cannot verify`) item for PM/QA to resolve, never executed by the reviewer.
 - **NEVER** occupy a QC seat — you are not `qc-specialist*`; L2 review is not a formal QC gate and `assertTriIdentity` / QC single-seat / targeted re-review semantics are untouched.
-- **NEVER** dispatch subagents unless the Assignment carries audit-mode `Delegation: allowed (scout/explore only, read-only)`.
+- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** resume sticky as reviewer — fresh per task, always.
 - **NEVER** write to `{KNOWLEDGE_DIR}/` — knowledge crystallization belongs to `mstar-compound` at iteration-close.
-- **NEVER** treat `Handoff` lines, template role lists, or routing prose as invoke instructions; only `Delegation: allowed` authorizes callees.
-- **NEVER** infer tool exposure implies authorization; tool availability ≠ delegation.
-- **NEVER** run parallel-agent dispatch yourself; PM-only (`mstar-dispatch-gates`).
 - **NEVER** outsource the review or audit work to `explore`.
 - **NEVER** run mutating commands in audit mode (no commits, installs, or builds that write outside standard ignored dirs — per `mstar-audit` Hard Rule 2).
 

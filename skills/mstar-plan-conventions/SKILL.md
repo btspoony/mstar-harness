@@ -100,7 +100,7 @@ enforcement=hard
 | `{KNOWLEDGE_DIR}` | 实现 SSOT、可复用设计 |
 | `{PLAN_DIR}/` | 主 plan、durable gate summaries、可选 residual prose |
 
-单 plan 的 QC/QA **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；R# open 状态以 `{HARNESS_DIR}/status.json` 为 SSOT。细则 → **`mstar-plan-artifacts`**。
+单 plan 的 QC/QA **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；R# open 状态以 `{PROJECT_DIR}/<id>/residuals.json` 为 SSOT（根 `status.json` v2 仅 workflows 注册表）。细则 → **`mstar-plan-artifacts`**。
 
 ## 初始化 Plan 目录
 

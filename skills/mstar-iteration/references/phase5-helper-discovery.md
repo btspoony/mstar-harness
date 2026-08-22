@@ -1,6 +1,6 @@
 # Phase 5 helper skill discovery（babysit / greploop）
 
-> Loaded by host `commands/iteration-drive` / `iteration-loop`（Phase 5 §5.0）before the first merge-ready loop pass. Search for optional **non-`mstar-*`** helper skills；first readable `SKILL.md` wins per name. Does **not** enter `mstar-*` load order.
+> Loaded by `mstar-iteration` §5 (iteration command layer) before the first merge-ready loop pass. Search for optional **non-`mstar-*`** helper skills；first readable `SKILL.md` wins per name. Does **not** enter `mstar-*` load order.
 
 ## Search paths（示例，按宿主扩展）
 

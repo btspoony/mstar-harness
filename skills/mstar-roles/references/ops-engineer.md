@@ -18,18 +18,14 @@ Dispatched by `project-manager`; responsible for execution safety, observability
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Complete assigned ops/deploy work in this session.
-- Do not spawn same-role or unrelated implementation/review roles unless explicitly authorized.
+- Shared anti-recursion NEVER (incl. sibling-role spawn) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - If assignment lacks required high-risk controls, return `Blocked`.
 
 ## Ops NEVER Rules
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
-- **NEVER** re-invoke `ops-engineer` or swap in `fullstack-dev` / `frontend-dev` / `architect` / `qc-specialist*` / `qa-engineer` / `project-manager` to substitute for **this** ops/deploy assignment unless `Delegation: allowed (...)` lists them.
-- **NEVER** read multi-phase / “N rollout tracks” **plan narrative** as “I must invoke N subagents now”; scheduling parallel work is **PM-owned** after your plan exists.
-- **NEVER** treat `Handoff` lines, template role names, or routing tables as **invoke commands**; only `Delegation: allowed` authorizes callees.
-- **NEVER** infer tool exposure (`Task`, subagent menus) implies authorization; **tool availability ≠ delegation**.
-- **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
+- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** delegate deploy/config changes, verification runs, or evidence capture to `explore`.
 
 ## Responsibilities

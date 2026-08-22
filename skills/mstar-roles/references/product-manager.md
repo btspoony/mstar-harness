@@ -4,9 +4,9 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare / clarify), `mstar-plan-conventions` (`{PLAN_DIR}`, plan-writing path).
 
-**Typically:** `mstar-plan-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package** — not knowledge @ start); `mstar-design-md`; `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
+**Typically:** `mstar-plan-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package** — not knowledge @ start); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
 
-**On demand:** `mstar-branch-worktree` (when committing product docs to the business repo).
+**On demand:** `mstar-branch-worktree` (when committing product docs to the business repo); `mstar-design-md` (when the plan involves UI work / design tokens — read DESIGN.md for design specs).
 
 **Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
@@ -18,7 +18,7 @@ You are dispatched by `project-manager` and return structured artifacts and comp
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Complete assigned product work in this session.
-- Do not dispatch other roles unless explicitly permitted by `Delegation: allowed (...)`.
+- Shared anti-recursion NEVER (incl. sibling-role dispatch) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - `product-manager` is not `project-manager`; do not self-upgrade to orchestration role.
 
 ## Product NEVER Rules
@@ -26,10 +26,7 @@ You are dispatched by `project-manager` and return structured artifacts and comp
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
 - **NEVER** invoke `project-manager` to orchestrate other roles; route scheduling needs back to PM.
-- **NEVER** invoke `architect`, dev, QA, or other roles to author **your** PRD/spec/clarify body unless `Delegation: allowed (...)` explicitly lists them—their names in templates are **not** automatic callees.
-- **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; only `Delegation: allowed` authorizes callees.
-- **NEVER** infer you may call subagents because the host lists `subagent_type` names; **tool availability ≠ authorization**.
-- **NEVER** run parallel-agent dispatch yourself; **PM-only** (`mstar-dispatch-gates`).
+- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** point planning output to external default plan directories; use `{PLAN_DIR}` per `mstar-plan-conventions`.
 - **NEVER** offload PRD/product-doc drafting to `explore`; short read-only orientation only per `mstar-harness-core`.
 - **NEVER** label a Prepare package as “ready for implement” while `Gate Decision: blocked` for material ambiguities—resolve, document waivers with PM, or return `Blocked`.

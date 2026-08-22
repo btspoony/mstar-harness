@@ -28,7 +28,7 @@ Dispatched by `project-manager`; returns completion report and evidence.
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Complete assigned work in this session.
-- Do not recursively dispatch sibling dev/review roles unless explicitly authorized via `Delegation: allowed (...)`.
+- Shared anti-recursion NEVER (incl. sibling-role spawn) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - `Execute as: {role_id}` is identity lock, not orchestration permission.
 
 ## Dev NEVER Rules (`{role_id}`)
@@ -37,10 +37,8 @@ Siblings for anti-recursion checks: `fullstack-dev`, `fullstack-dev-2`, `fronten
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
-- **NEVER** invoke `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, or other roles to perform **this** assignment body unless `Delegation: allowed (...)` explicitly lists them.
+- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** offload implementation, tests, or evidence to `explore`; use glob/grep/read first—short read-only `explore` only per `mstar-harness-core` explore boundaries.
-- **NEVER** treat `Handoff` lines, route arrows, Completion Report role lists, or routing prose as **invoke instructions**; they are narrative unless `Delegation: allowed` says otherwise.
-- **NEVER** run parallel-agent dispatch as an implementer; this is **PM-only** (`mstar-dispatch-gates`).
 - **NEVER** self-decide branch pivots beyond PM’s `Working branch` / `Branch policy`; if `<base>` is missing or the working tree disagrees with the assignment, **Blocked** to PM.
 - **NEVER** start implementation while Prepare / execute prerequisites in the assignment are unmet—return `Blocked` to PM.
 

@@ -38,6 +38,7 @@ import {
   parseCompassFrontmatter,
   planQualityBar,
   PROJECT_REGISTER_FILE,
+  promoteAuditPlans,
   pushCadenceProbe,
   resolveHarnessDir,
   resolveProjectDir,
@@ -1441,6 +1442,45 @@ auditCommand
       for (const file of result.files) console.log(`  created: ${file}`);
     } catch (error) {
       failScript(error, "audit scaffold");
+    }
+  });
+
+auditCommand
+  .command("promote")
+  .description(
+    "Promote selected audit plans into the v2 workflow lifecycle: write the workflow snapshot " +
+      "(type plan, Todo rows) then register the workflow in {HARNESS_DIR}/status.json " +
+      "(exit 2 on usage, 1 when the harness dir cannot be resolved)",
+  )
+  .argument("[audit-dir]", "audit-<date>/ directory under {PLAN_DIR}")
+  .option("--plans <ids>", "Comma-separated selected plan ids (README Plan column `001`, stem, or basename)")
+  .option("--workflow <id>", "Workflow id (default: audit-<date> basename)")
+  .option("--harness <dir>", "Harness dir containing status.json (default: resolveHarnessDir() / MSTAR_HARNESS_DIR)")
+  .action(async (auditDir: string | undefined, options: { plans?: string; workflow?: string; harness?: string }) => {
+    try {
+      // Optional flag + explicit check (same as `lease verify-integration`):
+      // commander's own missing-requiredOption error exits 1, which would
+      // bypass the usage contract (exit 2) — validate in-handler instead.
+      if (!auditDir) {
+        throw new SddScriptError("usage: audit promote <audit-dir> --plans <ids> [--workflow <id>] [--harness <dir>]", 2);
+      }
+      const selected = parseCsv(options.plans);
+      if (!selected || selected.length === 0) {
+        throw new SddScriptError("usage: audit promote <audit-dir> --plans <ids> [--workflow <id>] [--harness <dir>]", 2);
+      }
+      const outDir = resolveCliPath(auditDir);
+      if (!fs.existsSync(outDir)) {
+        throw new Error(`audit dir not found: ${outDir}`);
+      }
+      const harnessDir = resolveLeaseHarnessDir(options.harness);
+      const result = await promoteAuditPlans(outDir, selected, {
+        harnessDir,
+        ...(options.workflow !== undefined ? { workflowId: options.workflow } : {}),
+      });
+      console.log(pc.green(`audit promote: OK \u2014 workflow ${result.workflowId} registered`));
+      console.log(`  snapshot: ${result.snapshotPath}`);
+    } catch (error) {
+      failScript(error, "audit promote");
     }
   });
 
