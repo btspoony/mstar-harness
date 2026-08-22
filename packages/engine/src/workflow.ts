@@ -322,6 +322,6 @@ export async function writeWorkflowSnapshot(snapshot: WorkflowSnapshot, dir: str
   // acquisition (the lockdir lands inside `dir`, dirname of the snapshot).
   mkdirSync(dir, { recursive: true });
   await withStatusWriteLock(snapshotPath, () => {
-    writeJson(snapshotPath, snapshot as unknown as Record<string, unknown>);
+    writeJson(snapshotPath, snapshot);
   });
 }

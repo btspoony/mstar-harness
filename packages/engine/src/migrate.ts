@@ -934,7 +934,7 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
     if (Object.keys(plan.register.data.entries ?? {}).length > 0) {
       const filePath = projectTargetOf(plan.register.file);
       mkdirSync(dirname(filePath), { recursive: true });
-      writeJson(filePath, plan.register.data as unknown as Record<string, unknown>);
+      writeJson(filePath, plan.register.data);
     }
   }
 
@@ -964,7 +964,7 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
         message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do",
       };
     }
-    writeJson(statusPath, plan.rootV2.data as unknown as Record<string, unknown>);
+    writeJson(statusPath, plan.rootV2.data);
     return {
       applied: true,
       message: `migrated ${plan.snapshots.length} lifecycles into workflows/, project layer seeded, root status.json replaced (v1 archived to ${plan.archive.file})`,

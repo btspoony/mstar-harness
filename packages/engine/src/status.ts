@@ -712,7 +712,7 @@ export function registerWorkflowEntryLocked(statusPath: string, entry: WorkflowE
   if (!gate.ok) {
     throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
   }
-  writeJson(statusPath, doc as unknown as Record<string, unknown>);
+  writeJson(statusPath, doc);
   return doc;
 }
 
@@ -777,7 +777,7 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
     if (!gate.ok) {
       throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
     }
-    writeJson(statusPath, doc as unknown as Record<string, unknown>);
+    writeJson(statusPath, doc);
     return doc;
   });
 }
