@@ -54,3 +54,11 @@ All leaf executors share these anti-recursion red lines (role-specific sibling l
 - **NEVER** infer you may call `Task` / subagents because the host **lists** `subagent_type` names (`architect`, `fullstack-dev`, …). **Tool availability ≠ delegation authorization**; only **`Delegation: allowed (...)`** grants callees.
 - **NEVER** execute parallel-agent dispatch yourself to fan out child agents; dispatch is **PM-orchestration-only** (see `mstar-dispatch-gates`). If parallel runners are needed, report to PM for re-dispatch.
 - **NEVER** invoke a same-role or sibling role to perform **this** assignment unless `Delegation: allowed (...)` explicitly lists them.
+## Audit Mode (read-only review, shared)
+
+When the assignment is a review/audit dispatch — `Task category: audit`, `Audit mode: on`, or a `pr-deep-review` batch seat — the executor operates as a **read-only audit seat**, not an implementer:
+
+- **Permission contract**: no tracked-file writes, no `edit`/`write`/`ast_edit` on the reviewed worktree, no merge, no approve-as-merge. The write permissions the role normally has are **suspended for the assignment**; do not "fix things while reviewing".
+- **Process**: load `mstar-audit` (`pr` variant or audit process) + its references + `mstar-coding-behavior` evidence discipline; run the concern-lens review and the three-way attack; produce `findings` + `verdict` (`ship it` / `needs review` / `blocked` for PR review) + `unverified` in the `pr-deep-review` output shape.
+- **Mode lock**: one assignment = one mode. Review-assigned work is completed as review only; implementation mode applies to implementation assignments only.
+- **Completion Report**: `Status: Done`; `Git:` states `read-only, no commits` unless PM explicitly authorized a comment post.

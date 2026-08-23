@@ -26,7 +26,7 @@ Run a read-only, evidence-first deep review of a pull request, branch, or diff a
 | **Small PR / single pass** | PM dispatches a single `@code-reviewer` — review, then vet and synthesize the verdict |
 | **Batch of sibling PRs** | PM 按 PR 业务信息（业务域 / 变更面 / 技术栈）**平均分配**到四个席位：`@code-reviewer`（general）、`@fullstack-dev`、`@fullstack-dev-2`、`@frontend-dev` — 每个席位承载约 N/4 个 PR，摊薄同模型并发，降低 rate-limit。All worktrees created first, then all reviewers dispatched in one batch; each reviewer owns review + comment for its PRs only |
 
-All review seats (`code-reviewer` / `fullstack-dev` / `fullstack-dev-2` / `frontend-dev`) are **read-only** in this flow: never edit the reviewed worktree, never merge, never approve-as-merge. Implementer seats run in **Audit Mode** (permission suspension + `mstar-audit` process contract → `skills/mstar-roles/references/fullstack-dev-shared.md` / `frontend-dev.md`). PM dispatches; each reviewer executes the `pr` variant and returns findings + verdict to PM for consolidation.
+All review seats (`code-reviewer` / `fullstack-dev` / `fullstack-dev-2` / `frontend-dev`) are **read-only** in this flow: never edit the reviewed worktree, never merge, never approve-as-merge. Implementer seats run in **Audit Mode** (shared contract → `mstar-roles` `references/_shared/leaf-executor-core.md`). PM dispatches; each reviewer executes the `pr` variant and returns findings + verdict to PM for consolidation.
 
 ## Execute
 
