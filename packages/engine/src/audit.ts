@@ -43,7 +43,7 @@ export type AuditEffort = (typeof AUDIT_EFFORTS)[number];
 export const AUDIT_RISKS = ["LOW", "MED", "HIGH"] as const;
 export type AuditRisk = (typeof AUDIT_RISKS)[number];
 
-/** Category codes (finding-format.md § Category codes + mstar-audit SKILL.md § Plan output Status block). */
+/** Category codes (finding-format.md § Category codes + mstar-audit SKILL.md § Plan output (all variants) Status block). */
 export const AUDIT_CATEGORIES = [
   "bug",
   "security",

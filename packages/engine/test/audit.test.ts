@@ -25,7 +25,7 @@ import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "../src/workflo
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/** Compliant audit plan Status block (mstar-audit SKILL § Plan files). */
+/** Compliant audit plan Status block (mstar-audit SKILL.md § Plan output (all variants)). */
 const PLAN_GOOD = `# Fix N+1 query in order list
 
 ## Status
@@ -125,7 +125,7 @@ const hasCode = (g: { violations: { code: string }[] }, code: string) =>
   g.violations.some((v) => v.code === code);
 
 // ---------------------------------------------------------------------------
-// validateAuditStatusBlocks — mstar-audit SKILL § Plan files (Status block)
+// validateAuditStatusBlocks — mstar-audit SKILL.md § Plan output (all variants) Status block
 // ---------------------------------------------------------------------------
 
 describe("validateAuditStatusBlocks", () => {
@@ -312,7 +312,7 @@ describe("redactSecrets non-leakage invariants", () => {
 });
 
 // ---------------------------------------------------------------------------
-// scaffoldAuditPlan — mstar-audit SKILL § Phase 4 (audit-<date>/ layout,
+// scaffoldAuditPlan — mstar-audit SKILL.md § Plan output (all variants) (audit-<date>/ layout,
 // monotonic numbering, README index)
 // ---------------------------------------------------------------------------
 
