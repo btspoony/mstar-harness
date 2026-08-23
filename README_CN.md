@@ -74,7 +74,7 @@ npm i -g @mstar-harness/cli
 
 ## 使用
 
-三种入口：**不跑迭代**（单 plan / hotfix）、**跑迭代**（多 plan Phase 1–5）、或 **代码库审计**（发现该做什么）。
+三种入口：**不跑迭代**（单 plan / hotfix）、**跑迭代**（多 plan Phase 1–5）、或 **审计与 Review**（只读：发现该做什么，或判定变更是否可合）。
 
 ### 通用（不跑迭代）
 
@@ -98,13 +98,17 @@ npm i -g @mstar-harness/cli
 | `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→5。 |
 | `/iteration-loop [direction] [scale]` | Phase 1→5 全自动（无 grill-me）。<br>`direction` — 可选自由文本。<br>`scale` — `S` / `M` / `L` / `XL`（默认 `M`）。 |
 
-### 代码库审计
+### 审计与 Review
+
+同一屋檐下的两条只读顾问命令——绝不改源码；发现可转为 plan 进入 Prepare → Execute。SSOT → `mstar-audit`。
+
+#### 代码库审计
 
 | 命令 | 何时 |
 |------|------|
 | `/codebase-audit [关键词]` | 只读扫描 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划。<br>不改源码。产出可喂给 `/iteration-start` Research 或常规 Prepare → Execute。<br>深度：`quick` / `deep`（默认 `standard`）。<br>范围：按类别聚焦（`security`、`perf`、`tests`、…）；`branch`（仅当前分支变更）；`next` / `roadmap`（仅方向候选）；`simplify`（聚焦技术债的深扫）。<br>SSOT → `mstar-audit`。 |
 
-### PR 深度审查
+#### PR 深度审查
 
 | 命令 | 何时 |
 |------|------|

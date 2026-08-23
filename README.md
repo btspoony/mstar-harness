@@ -73,7 +73,7 @@ Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: [`docs/cli.
 
 ## Use
 
-Three entry shapes: **without iteration** (single plan / hotfix), **with iteration** (multi-plan Phase 1–5), or **codebase audit** (discover what to do).
+Three entry shapes: **without iteration** (single plan / hotfix), **with iteration** (multi-plan Phase 1–5), or **audit & review** (read-only: discover what to do, or decide whether a change ships).
 
 ### General (without iteration)
 
@@ -97,13 +97,17 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 | `/iteration-drive` | Resume Phase 2→5 on an already-locked iteration. |
 | `/iteration-loop [direction] [scale]` | Full Phase 1→5 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
 
-### Codebase audit
+### Audit & review
+
+Two read-only, advisory commands under one roof — they never edit source; findings can become plans for Prepare → Execute. SSOT → `mstar-audit`.
+
+#### Codebase audit
 
 | Command | When |
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey → prioritized, self-contained plans in `{PLAN_DIR}/audit-<date>/`.<br>Never edits source. Output feeds `/iteration-start` Research or normal Prepare → Execute.<br>Effort: `quick` / `deep` (default `standard`).<br>Scope: category focus (`security`, `perf`, `tests`, …); `branch` (current-branch changes only); `next` / `roadmap` (direction candidates only); `simplify` (DEBT-focused deep pass).<br>SSOT → `mstar-audit`. |
 
-### PR deep review
+#### PR deep review
 
 | Command | When |
 |---------|------|
