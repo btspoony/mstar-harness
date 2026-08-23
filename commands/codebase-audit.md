@@ -33,7 +33,7 @@ The audit is **advisory** — it does not enter the per-plan state machine (`Tod
 
 ## Execute
 
-Execute **`mstar-audit`** end to end（SKILL.md common core：Recon → Vet & prioritize；full-audit detail：**`references/codebase-audit.md`** —— Phase 2 九类别 fan-out、effort `quick` / `standard` / `deep`、scope variants `security` / `perf` / `tests` / `branch` / `next` / `roadmap` / `simplify`、Phase 4 plan writing、audit index + plan-file output）。Plans → `{PLAN_DIR}/audit-<YYYY-MM-DD>/NNN-<slug>.md` + `README.md` index，per **`mstar-artifacts/references/plan-quality-bar.md`**。
+Execute **`mstar-audit`** end to end（SKILL.md common core：Recon → Vet & prioritize；full-audit detail：**`references/codebase-audit.md`** —— Phase 2 九类别 fan-out、effort `quick` / `standard` / `deep`、scope variants `bare` / `quick` / `deep` / category focus（`security` / `perf` / `tests`, ...）/ `branch` / `next` / `roadmap` / `simplify`、Phase 4 plan writing、audit index + plan-file output）。Plans → `{PLAN_DIR}/audit-<YYYY-MM-DD>/NNN-<slug>.md` + `README.md` index，per **`mstar-artifacts/references/plan-quality-bar.md`**。
 
 Executor: PM dispatches `@code-reviewer`；大型仓库 scout 扇出经 Assignment `Delegation: allowed (scout/explore only, read-only)`（Routing 表）。
 

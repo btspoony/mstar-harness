@@ -113,7 +113,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
       violation(
         "medium",
         "audit.status.missing-block",
-        "no `## Status` block found \u2014 audit plan files carry the Status block fields (mstar-audit SKILL \u00a7 Plan files)",
+        "no `## Status` block found \u2014 audit plan files carry the Status block fields (mstar-audit references/codebase-audit.md \u00a7 Output format \u00b7 Plan files)",
         "add a `## Status` block with Priority, Effort, Risk, Depends on, Category, Planned at",
       ),
     );
@@ -128,7 +128,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
           violation(
             "medium",
             "audit.status.missing-field",
-            `Status block${label} missing required field "${field}" (mstar-audit SKILL \u00a7 Plan files)`,
+            `Status block${label} missing required field "${field}" (mstar-audit references/codebase-audit.md \u00a7 Output format \u00b7 Plan files)`,
             `add \`- **${field}**: <value>\` to the Status block`,
           ),
         );
@@ -142,7 +142,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
           violation(
             "medium",
             code,
-            `Status block${label} "${field}" = "${value}" \u2014 expected ${expected} (mstar-audit SKILL \u00a7 Plan files)`,
+            `Status block${label} "${field}" = "${value}" \u2014 expected ${expected} (mstar-audit references/codebase-audit.md \u00a7 Output format \u00b7 Plan files)`,
             `fix \`- **${field}**:\` to one of: ${expected}`,
           ),
         );
