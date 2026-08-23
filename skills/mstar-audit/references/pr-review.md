@@ -5,9 +5,8 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
 ## Worktree isolation
 
 - **Resolve the real base first** — never assume `main`:
-  - Reviewing a PR: `gh pr view <n> --json baseRefName --jq .baseRefName` → `<base>`.
+  - Reviewing a PR: `gh pr view N --json baseRefName --jq .baseRefName` → `<base>`.
   - Reviewing a bare branch/diff: resolve the remote default via `git symbolic-ref refs/remotes/origin/HEAD` (fall back to `origin/main` only when it genuinely is the default).
-  - `git fetch origin <base>`, then use `git diff origin/<base>...HEAD` as the diff basis (three-dot: changes on the reviewed branch since the merge-base).
 - Choose the local branch name **before any fetch** — `pr-<n>` may already exist (a stale review, another reviewer's branch, the user's own branch); the fallback must also be collision-free, so loop until the recorded name is provably fresh:
   ```
   review_branch=pr-<n>
@@ -17,15 +16,20 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
   done
   ```
   Record the final name as `<review-branch>` — it did not exist before this review created it.
-- Check the PR out into a **dedicated worktree** — never the primary repo cwd, never another harness worktree:
+- Establish the refs **with explicit refspecs**, then create the dedicated worktree — never the primary repo cwd, never another harness worktree:
   ```
-  git fetch origin <base>
+  git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>
   git fetch origin pull/<n>/head:<review-branch>
   git worktree add <path> <review-branch>
   cd <path>   # review from here — a new linked worktree, cannot touch the primary checkout
   ```
-  Do **not** use `gh pr checkout <n>` as an alternative: it switches to the PR-head branch name (not the recorded `<review-branch>`) and bypasses the ownership protocol, so cleanup could delete the wrong ref or leave the gh-created branch behind. If you only have a PR ref, fetch it into the recorded name and `git worktree add` exactly as above.
-- Record before reviewing: review cwd, `<review-branch>`, HEAD sha, merge-base.
+  The explicit `+refs/heads/<base>:refs/remotes/origin/<base>` refspec updates the remote-tracking ref even on single-branch/narrowed `fetch` configs, so `origin/<base>` is never stale or missing. Do **not** use `gh pr checkout <n>` as an alternative: it switches to the PR-head branch name (not the recorded `<review-branch>`) and bypasses the ownership protocol. If you only have a PR ref, fetch it into the recorded name and `git worktree add` exactly as above.
+- Compute the diff basis **inside the worktree, against the recorded refs — never the primary `HEAD`** (the primary checkout may sit on a different branch):
+  ```
+  cd <path>
+  git diff origin/<base>...<review-branch>   # three-dot: changes on the reviewed branch since the merge-base
+  ```
+- Record before computing: review cwd, `<review-branch>`, HEAD sha, merge-base.
 - Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
 
 ## Scoping
