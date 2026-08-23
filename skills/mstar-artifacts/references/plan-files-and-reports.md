@@ -25,7 +25,7 @@ QC/QA 原始过程报告默认是 **ephemeral review bundle**，置于 `{SDD_DIR
 
 ## SDD 运行时（不入 reports）
 
-Per-task briefs, implementer reports, review diffs, branch review packages, and QC/QA bundle files live under **`{SDD_DIR}`** (`mstar-plan-conventions`). Gitignored. Main plan may index `{SDD_DIR}` / `{SDD_DIR}/review/` paths only — do not paste SDD bodies or raw QC/QA reports into plan markdown.
+Per-task briefs, implementer reports, review diffs, branch review packages, and QC/QA bundle files live under **`{SDD_DIR}`** (`mstar-conventions`). Gitignored. Main plan may index `{SDD_DIR}` / `{SDD_DIR}/review/` paths only — do not paste SDD bodies or raw QC/QA reports into plan markdown.
 
 Plan template with Global Constraints / Interfaces → **`templates/plan.main.md`**.
 
@@ -54,11 +54,11 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 
 ## Residual findings（R#）：权威在哪、和主 plan 谁先谁后？
 
-- **Open 条目的单一事实来源（SSOT）**是 **`{PROJECT_DIR}/<id>/residuals.json`**（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程用 `_default`）的 **`entries[<plan-id>]`**（canonical 见 `mstar-plan-artifacts` **SKILL.md** 开篇；字段见 `mstar-plan-artifacts/references/status-and-residuals.md`）。**同一工作副本内**的会话 handoff、关闭流程**以该数组为准**（本地 SSOT，默认 gitignored）；**跨 clone** 须持久的 residual 须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 等（见 `mstar-plan-conventions`「Git 跟踪策略」）。
+- **Open 条目的单一事实来源（SSOT）**是 **`{PROJECT_DIR}/<id>/residuals.json`**（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程用 `_default`）的 **`entries[<plan-id>]`**（canonical 见 `mstar-artifacts` **SKILL.md** 开篇；字段见 `mstar-artifacts/references/status-and-residuals.md`）。**同一工作副本内**的会话 handoff、关闭流程**以该数组为准**（本地 SSOT，默认 gitignored）；**跨 clone** 须持久的 residual 须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 等（见 `mstar-conventions`「Git 跟踪策略」）。
 - **推荐操作顺序**（避免 plan 与 JSON 两套 ID 漂移）：
   1. `project-manager` 读完 review bundle 并完成「QC 三审轻量汇总」：对 finding **去重合并**，为每条待跟踪项分配**稳定 `id`**（如 `R1`、`R2`，全 plan 内唯一）。
   2. **立即**将上述条目写入 register **`entries[<plan-id>]`**（含 `source` 指向 reviewer seat + bundle basename + finding id + review range，便于回溯；`source_plan` = plan id，`registered_at` = 当日）；v1 根级 `residual_findings` 仅 legacy 只读，**勿**双写。
-  3. **可选**：在主 plan 中增加 **「Residual findings（索引）」** 小节，**仅复述** `id` + 短标题 + 决策摘要，并写明「**权威列表见** `projects/<id>/residuals.json` `entries[<plan-id>]`（见 `mstar-plan-conventions` **SKILL.md** 开篇）」。**不要**只在主 plan 里「发明」R# 而不写回 SSOT。
+  3. **可选**：在主 plan 中增加 **「Residual findings（索引）」** 小节，**仅复述** `id` + 短标题 + 决策摘要，并写明「**权威列表见** `projects/<id>/residuals.json` `entries[<plan-id>]`（见 `mstar-conventions` **SKILL.md** 开篇）」。**不要**只在主 plan 里「发明」R# 而不写回 SSOT。
 - **不要**反过来把主 plan 当作唯一登记处：若仅更新 plan、register 未同步，下一任 agent **无法**依赖 SSOT 继承债务状态。
 
 ## QC 三审触发时机（单 plan · 多 batch）
@@ -69,17 +69,17 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 - **After `Request Changes` (default — targeted re-review)**：PM maps each **blocking** finding to the QC seat that raised it (`source` on R#, consolidated table, or the originating `qcN.md` / `F-###`). Dispatch **only** those reviewers (`QC re-review: targeted — reviewers: qc-specialist, qc-specialist-2, …`). Each re-reviewing QC **updates the same** bundle file (`qc1.md` / `qc2.md` / `qc3.md`) in place (add `## Revalidation`, refresh verdict / `generated_at`); **do not** add `qc1-rev2.md` siblings for targeted re-review. PM **updates the same** `qc-consolidated.md` and durable plan summary.
 - **Full tri re-review (exception)**：Only when Assignment states **`QC re-review: full tri-review`**. Run **three** parallel reviews again; use **new bundle basenames** (`qc1-rev2.md` … `qc3-rev2.md`, `qc-consolidated-rev2.md`) so wave-1 files stay distinct; PM states **active wave** in consolidated decision and durable plan summary. See `mstar-review-qc` · `mstar-dispatch-gates`.
 - **显式例外**：仅当用户与 PM 书面同意**中间门禁**时，在 Assignment 写清 **`QC gate: incremental — <scope>`**（或等价），并仍须保证该次三审的 **`plan_id` + `Review range` / `Diff basis`** 三份一致；**优先**用 `{SDD_DIR}/review/<scope>/` 子目录，避免与终局 `qc1..3.md` 混名。
-- **同仓多 worktree 并行 dev**：**推荐**在排各 batch / 各轨 worktree 前确立 **plan 集成分支** 与各轨 topic 线及 **merge 靶**（见 `mstar-branch-worktree` **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**）。**多 `plan_id` 同属一条 `primary_spec`（Spec 文档）时**：该「集成分支」在计划语义上即 **Spec 集成分支**；各 Plan 的 topic 分支 **merge 回 Spec 集成分支**，**全部 Plans 完成后** 向显式 `target_branch` **走 PR**，见 `mstar-plan-conventions` SKILL.md **「Spec 驱动的分支模型」**。终局（或增量）三审派单前，PM 仍须满足 **单一待审 `Working branch` / `HEAD`** 或已按上条 **拆 scope**；**不得**假设「整 plan 一次三审」可只靠某一个开发 worktree 路径覆盖未合并的其他并行轨。
+- **同仓多 worktree 并行 dev**：**推荐**在排各 batch / 各轨 worktree 前确立 **plan 集成分支** 与各轨 topic 线及 **merge 靶**（见 `mstar-branch-worktree` **「推荐默认编排：先建 plan 集成分支，再挂各 worktree」**）。**多 `plan_id` 同属一条 `primary_spec`（Spec 文档）时**：该「集成分支」在计划语义上即 **Spec 集成分支**；各 Plan 的 topic 分支 **merge 回 Spec 集成分支**，**全部 Plans 完成后** 向显式 `target_branch` **走 PR**，见 `mstar-conventions` SKILL.md **「Spec 驱动的分支模型」**。终局（或增量）三审派单前，PM 仍须满足 **单一待审 `Working branch` / `HEAD`** 或已按上条 **拆 scope**；**不得**假设「整 plan 一次三审」可只靠某一个开发 worktree 路径覆盖未合并的其他并行轨。
 
 ### 多 `plan_id` 同时 `InReview`（PM 编排）
 
 - **流程**：实现完成 → 该 **`plan_id`** 进入 **`InReview`** → **QC 三审（仅针对该 plan 的 `Review range`）** → PM consolidated → **QA** → **`Done`**。**禁止**在多个 `plan_id` 已 `InReview` 的情况下，只推进新实现、不派 QC，或把多个 plan 的变更**伪装成**一套三审字段（单一 `plan_id` / 单一 diff 范围覆盖多 plan）。
 - **并行 vs 串行**：不同 `plan_id` **相互独立**时，可 **并行**派发多组三审（每组各自的 Assignment 与 `{SDD_DIR}/review/`）；若 PM 选择串行，须在 Status Update 写明顺序——**每组仍须完整三审 + QA**，不是「一个大 QC」混审。
-- **读 skill**：书写或派发 QC 相关 Assignment 前，PM **必须** Read **`mstar-review-qc`**（编排与 residual）；leaf `qc-specialist*` → **`mstar-roles/references/qc-specialist/`**。见 `mstar-plan-conventions` SKILL.md **QC pre-dispatch gate**。
+- **读 skill**：书写或派发 QC 相关 Assignment 前，PM **必须** Read **`mstar-review-qc`**（编排与 residual）；leaf `qc-specialist*` → **`mstar-roles/references/qc-specialist/`**。见 `mstar-conventions` SKILL.md **QC pre-dispatch gate**。
 
 **QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），默认 **仅可** Write/Edit Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。全局 agent 提示词应允许 `.mstar/sdd/**`、`.agents/sdd/**` 及 worktree 下对应路径。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
 
-**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（本地会话 SSOT；默认 gitignored）并在当轮更新 project register 的 open residuals（本地 SSOT，默认 gitignored）。**跨 clone 须持久的** residual 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md`（见 `mstar-plan-conventions`「Git 跟踪策略」）— **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
+**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（本地会话 SSOT；默认 gitignored）并在当轮更新 project register 的 open residuals（本地 SSOT，默认 gitignored）。**跨 clone 须持久的** residual 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md`（见 `mstar-conventions`「Git 跟踪策略」）— **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
 
 ## 主 plan 内任务清单（Markdown checkbox）
 

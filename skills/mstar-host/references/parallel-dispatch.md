@@ -56,7 +56,7 @@ Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-o
 
 - Assignment: **`QC re-review: targeted — reviewers: <role-ids>`** → **N** = listed seats only (1–3), **one** dispatch turn with **N** invocations.
 - Do **not** default to three invocations after a routine fix round.
-- Post-dispatch: verify only **dispatched** seats returned; PM updates same bundle `qc-consolidated.md` and durable plan summary (see `mstar-plan-artifacts/references/plan-files-and-reports.md`).
+- Post-dispatch: verify only **dispatched** seats returned; PM updates same bundle `qc-consolidated.md` and durable plan summary (see `mstar-artifacts/references/plan-files-and-reports.md`).
 
 ## Self-check before send
 

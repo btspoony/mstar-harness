@@ -1,6 +1,6 @@
 /**
  * `.mstarc` module tests — parseMstarc (INI subset) + findMstarc (bounded
- * walk-up). Spec source: `skills/mstar-plan-conventions/SKILL.md`
+ * walk-up). Spec source: `skills/mstar-conventions/SKILL.md`
  * § {HARNESS_DIR} 解析顺序 step 2 (`.mstarc` 格式) + § Git 跟踪策略
  * (gitignored by default).
  */

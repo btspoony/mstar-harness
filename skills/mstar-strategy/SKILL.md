@@ -7,7 +7,7 @@ description: Morning Star 全局战略方向 —— 创建并维护 `STRATEGY.md
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols → **`mstar-plan-conventions`**. On conflict, **`mstar-harness-core` wins**.
+**Read `mstar-harness-core` first.** Path symbols → **`mstar-conventions`**. On conflict, **`mstar-harness-core` wins**.
 
 ## Purpose
 
@@ -17,7 +17,7 @@ Without a strategy document, decisions are made in isolation — each plan misse
 
 ## 产物存储位置
 
-**SSOT**: `mstar-plan-conventions/references/artifact-storage-paths.md`。STRATEGY.md → `<repo-root>/STRATEGY.md`（与 `.git/`、`AGENTS.md` 同级）。**禁止**放入 `{HARNESS_DIR}`、`docs/` 或任何子目录。
+**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。STRATEGY.md → `<repo-root>/STRATEGY.md`（与 `.git/`、`AGENTS.md` 同级）。**禁止**放入 `{HARNESS_DIR}`、`docs/` 或任何子目录。
 
 ## When to use
 
@@ -111,4 +111,4 @@ Review triggers: after a major architectural decision, when a plan introduces a 
 
 - 迭代级战略对齐（iteration-start §1.1 读 STRATEGY.md）→ **`mstar-iteration`**
 - 知识维护 / bootstrap（战略变更后的知识对账）→ **`mstar-compound-refresh`**
-- 路径符号与产物存储 SSOT → **`mstar-plan-conventions`**
+- 路径符号与产物存储 SSOT → **`mstar-conventions`**

@@ -14,7 +14,7 @@
  *   SDD implementer reports carry the TDD triple (test file(s), command,
  *   output) in `task-N-report.md`; `mstar-sdd/references/file-handoffs.md` —
  *   fix subagents append covering test file(s), command run, output.
- * - Plan quality bar: `mstar-plan-artifacts/references/plan-quality-bar.md`
+ * - Plan quality bar: `mstar-artifacts/references/plan-quality-bar.md`
  *   § Quality checklist + `templates/plan.main.md` self-review
  *   ("Placeholder scan: no TBD").
  * - Skill frontmatter contract: `mstar-skill-authoring` SKILL.md § Frontmatter
@@ -143,7 +143,7 @@ const EPHEMERAL_PLACEHOLDERS = `- placeholder brief task-N-brief.md
 const EPHEMERAL_REAL_CORPUS = `Implementer writes full report to \`task-N-report.md\`. Return to PM only:
 `;
 
-/** Real corpus regression — `skills/mstar-plan-artifacts/references/
+/** Real corpus regression — `skills/mstar-artifacts/references/
  * plan-files-and-reports.md` line 80: a global path-allowlist glob
  * (`.mstar/sdd/**`) is a pattern, not a concrete deeplink → must pass. */
 const EPHEMERAL_REAL_GLOB = `全局 agent 提示词应允许 \`.mstar/sdd/**\`、\`.agents/sdd/**\` 及 worktree 下对应路径。
@@ -618,7 +618,7 @@ ok 1 - findSimplifyMarkers
 });
 
 // ---------------------------------------------------------------------------
-// planQualityBar — mstar-plan-artifacts plan-quality-bar.md + plan.main.md
+// planQualityBar — mstar-artifacts plan-quality-bar.md + plan.main.md
 // placeholder scan (no TBD / TODO / placeholders)
 // ---------------------------------------------------------------------------
 

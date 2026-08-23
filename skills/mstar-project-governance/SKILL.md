@@ -1,6 +1,6 @@
 ---
 name: mstar-project-governance
-description: Morning Star 项目治理层约定 —— `projects/<id>/roadmap.md` 编写约定（frontmatter schema + body 约定）与 `projects/<id>/residuals.json` register 生命周期（open → verified close in place、severity 枚举、provenance 字段）、`_default` 项目回退规则。写/审 roadmap、登记或关闭 residual、判断项目归属（含无项目流程的 `_default` fallback）、或对齐 roadmap/register 与 engine 校验时 Read。schema 事实与 `packages/engine/src/project.ts` 逐字一致；字段语义 SSOT → `mstar-plan-artifacts`；路径符号 → `mstar-plan-conventions`。
+description: Morning Star 项目治理层约定 —— `projects/<id>/roadmap.md` 编写约定（frontmatter schema + body 约定）与 `projects/<id>/residuals.json` register 生命周期（open → verified close in place、severity 枚举、provenance 字段）、`_default` 项目回退规则。写/审 roadmap、登记或关闭 residual、判断项目归属（含无项目流程的 `_default` fallback）、或对齐 roadmap/register 与 engine 校验时 Read。schema 事实与 `packages/engine/src/project.ts` 逐字一致；字段语义 SSOT → `mstar-artifacts`；路径符号 → `mstar-conventions`。
 ---
 
 # mstar-project-governance（项目治理层：roadmap + register）
@@ -8,8 +8,8 @@ description: Morning Star 项目治理层约定 —— `projects/<id>/roadmap.md
 ## Load Order
 
 - 先 Read **`mstar-harness-core`**（SKILL.md；冲突时以 core 为准）。
-- 路径符号（`{PROJECT_DIR}` / `{WORKFLOW_DIR}` 解析与 `.mstarc` 声明）→ **`mstar-plan-conventions`**。
-- 字段语义 SSOT（severity 含义、findings cleanup modes、close 协议全文、engine-check 查询）→ **`mstar-plan-artifacts`**（`references/status-and-residuals.md`）。本 skill 只承载**编写约定与生命周期规则**，不重复字段全文。
+- 路径符号（`{PROJECT_DIR}` / `{WORKFLOW_DIR}` 解析与 `.mstarc` 声明）→ **`mstar-conventions`**。
+- 字段语义 SSOT（severity 含义、findings cleanup modes、close 协议全文、engine-check 查询）→ **`mstar-artifacts`**（`references/status-and-residuals.md`）。本 skill 只承载**编写约定与生命周期规则**，不重复字段全文。
 
 ## Scope
 
@@ -63,9 +63,9 @@ residuals_ref: residuals.json  # optional
 
 ## Register 生命周期（`projects/<id>/residuals.json`）
 
-### 文档形状、必填字段与枚举（单址 → `mstar-plan-artifacts`）
+### 文档形状、必填字段与枚举（单址 → `mstar-artifacts`）
 
-Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字段**（`id`/`title`/`severity`/`source`/`scope`/`decision`/`owner`/`target`/`tracking`，engine `RESIDUAL_REQUIRED_FIELDS`）与 **severity / decision / lifecycle 枚举**的逐字 schema → **`mstar-plan-artifacts`** `references/status-and-residuals.md`（「Basic structure · project register」+「Residual findings: severity」）。本 skill 只承载编写约定与生命周期规则，**不重复字段全文**。
+Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字段**（`id`/`title`/`severity`/`source`/`scope`/`decision`/`owner`/`target`/`tracking`，engine `RESIDUAL_REQUIRED_FIELDS`）与 **severity / decision / lifecycle 枚举**的逐字 schema → **`mstar-artifacts`** `references/status-and-residuals.md`（「Basic structure · project register」+「Residual findings: severity」）。本 skill 只承载编写约定与生命周期规则，**不重复字段全文**。
 
 - `entries[<plan-id>]` 值是**数组** —— v1 `residual_findings[plan-id]` 多 finding 语义逐字保留（一个 plan 可持 2+ open residual）。
 - 每条 = v1 residual entry **逐字** + provenance 字段。
@@ -76,7 +76,7 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 - **close（唯一关闭路径）**：在 register **in place** 置 `lifecycle`（≠ `open`）+ `closed_at`（`YYYY-MM-DD`）+ `closure_note`；推荐 `closure_evidence`。v1 的 `archived/residuals/` 归档路径与 `status archive-residuals` 已移除（该命令现为报错桩，指向 register 状态变更）。
 - **closed 完整性**：`lifecycle` ≠ `open` 时缺 `closed_at` / `closure_note` = violation。
 - **谁更新**：PM 在 consolidated 决策后分配 R# 并登记；`QA gate: mandatory` 时 `qa-engineer` 验证后关闭；`pm-acceptance` 时 PM 验收清单完成后关闭。
-- close 协议全文 → **`mstar-plan-artifacts`** `references/status-and-residuals.md`（「Residual findings lifecycle」）。
+- close 协议全文 → **`mstar-artifacts`** `references/status-and-residuals.md`（「Residual findings lifecycle」）。
 
 ### Provenance（register 专属字段）
 
@@ -91,7 +91,7 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 - Assignment **`Findings cleanup: zero-residual | allow-residual`** 是唯一 mode 来源（`metadata.findings_cleanup` mirror 已删）；迭代 Phase 2 默认 `zero-residual`。
 - `zero-residual`：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap + `target`；`nit` 必须当场修或删；waived/risk-accepted 必须关闭，不得留 open。
 - `allow-residual`：仅 unresolved **critical** 阻止 Approve。
-- mode 全文与 enforcement → **`mstar-plan-artifacts`** `references/status-and-residuals.md`（「Findings cleanup modes」+ 其 engine check）。
+- mode 全文与 enforcement → **`mstar-artifacts`** `references/status-and-residuals.md`（「Findings cleanup modes」+ 其 engine check）。
 
 ## Workflow
 
@@ -114,6 +114,6 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 
 ## References
 
-- **`mstar-plan-artifacts`**（`references/status-and-residuals.md`）— 字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
-- **`mstar-plan-conventions`** — `{PROJECT_DIR}` / `{WORKFLOW_DIR}` 路径符号、`.mstarc` 声明、gitignore 策略
+- **`mstar-artifacts`**（`references/status-and-residuals.md`）— 字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
+- **`mstar-conventions`** — `{PROJECT_DIR}` / `{WORKFLOW_DIR}` 路径符号、`.mstarc` 声明、gitignore 策略
 - **`mstar-review-qc`** — PM QC 编排与 residual 留档（PM 同轮必读）

@@ -2,7 +2,7 @@
  * Engine core — shared types + version.
  *
  * Spec sources (each test cites the skill/reference section it enforces):
- * - Severity enum + total order: `mstar-plan-artifacts/references/status-and-residuals.md`
+ * - Severity enum + total order: `mstar-artifacts/references/status-and-residuals.md`
  *   § "Residual findings: `severity` (SSOT, machine field)" — allowed values
  *   `critical|high|medium|low|nit` (lowercase English), total order
  *   `critical > high > medium > low > nit`, `nit` always lighter than `low`,

@@ -18,12 +18,12 @@ Before any non-trivial QC assignment, read in order:
 
 1. `mstar-harness-core`
 2. `mstar-dispatch-gates` + `mstar-branch-worktree`
-3. `mstar-plan-artifacts` (review bundle paths and naming)
+3. `mstar-artifacts` (review bundle paths and naming)
 4. Host: `mstar-host` → active host reference
 5. **`references/qc-specialist/reviewer-workflow.md`**
 6. **`references/qc-specialist/reviewer-checklist.md`**
 7. **`references/qc-specialist/report-template.md`**
-8. **On demand:** `references/qc-specialist/deep-review-lenses.md`; `mstar-plan-conventions` (paths); `mstar-design-md` (UI vs DESIGN.md)
+8. **On demand:** `references/qc-specialist/deep-review-lenses.md`; `mstar-conventions` (paths); `mstar-design-md` (UI vs DESIGN.md)
 
 This file is a compact QC reviewer shell.
 Detailed execution: `references/qc-specialist/*.md`.
@@ -72,7 +72,7 @@ Primary focus from `{focus}`. Still cover shared baseline in `reviewer-workflow.
 
 ## Verdict Rules
 
-See **`references/qc-specialist/report-template.md`**. Machine **`severity`** enum → `mstar-plan-artifacts`.
+See **`references/qc-specialist/report-template.md`**. Machine **`severity`** enum → `mstar-artifacts`.
 
 ### Verdict NEVER (`{role_id}`)
 
@@ -89,7 +89,7 @@ When Assignment includes **`QC re-review: targeted`**:
 
 - Edit the **same** bundle `{report_suffix}.md` — add **`## Revalidation`**, update frontmatter verdict/`generated_at`.
 - Do **not** create `qcN-rev2.md` on this path.
-- Full tri re-review → new basenames per `mstar-plan-artifacts/references/plan-files-and-reports.md`.
+- Full tri re-review → new basenames per `mstar-artifacts/references/plan-files-and-reports.md`.
 
 ## QC Report Frontmatter (Required)
 

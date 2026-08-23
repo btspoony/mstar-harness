@@ -591,7 +591,7 @@ export async function validateStatusWrite(
         if (enforcement.hard) {
           log(
             "error",
-            `${path.basename(resolved)} validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-plan-artifacts/references/status-and-residuals.md)`,
+            `${path.basename(resolved)} validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-artifacts/references/status-and-residuals.md)`,
           );
         } else {
           log(

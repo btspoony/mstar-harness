@@ -1,7 +1,7 @@
 # iteration-start 产物边界（specs · iterations · knowledge）
 
 > **When**: Phase 1 — PM 初稿落盘、§1.6 Review & Edit chain；Phase 2 迭代执行期可继续写入 iteration package；Phase 3 iteration-close 经 **`mstar-compound`** 提升。
-> **Conflict**: 与 `mstar-plan-artifacts/references/knowledge-and-designs.md` 一致；冲突以 **`mstar-harness-core`** 为准。
+> **Conflict**: 与 `mstar-artifacts/references/knowledge-and-designs.md` 一致；冲突以 **`mstar-harness-core`** 为准。
 
 ## 三棵树分工（HARD）
 

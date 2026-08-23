@@ -7,7 +7,7 @@ Before any non-trivial QA assignment, read in order:
 3. `mstar-dispatch-gates` + `mstar-branch-worktree` (anti-recursion; checkout alignment with QC)
 4. Host adapter: `mstar-host` (detect; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
 5. **`references/qa-engineer/acceptance-gate.md`** (L4 execution)
-6. **On demand:** `mstar-plan-artifacts` (closing R#); `mstar-plan-conventions` (paths); `mstar-design-md` (UI verify against DESIGN.md); `mstar-phase-gates` (when Assignment references verification phase); review bundle files and QC consolidated inputs named in Assignment
+6. **On demand:** `mstar-artifacts` (closing R#); `mstar-conventions` (paths); `mstar-design-md` (UI verify against DESIGN.md); `mstar-phase-gates` (when Assignment references verification phase); review bundle files and QC consolidated inputs named in Assignment
 
 Full cross-role matrix: `mstar-roles` SKILL.md.
 
@@ -67,7 +67,7 @@ Template (`{role_id}` = `qa-engineer`) → **`references/_shared/leaf-executor-c
 
 ## Plan & Residual Rules
 
-Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**QA-specific**：QA 和 PM 是唯一可终结 plan `Done` 的角色；residual lifecycle 来自 `mstar-plan-artifacts`。
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**QA-specific**：QA 和 PM 是唯一可终结 plan `Done` 的角色；residual lifecycle 来自 `mstar-artifacts`。
 
 ## Detailed References Index
 

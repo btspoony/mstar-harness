@@ -11,7 +11,7 @@
  *
  * Spec sources (each export cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`:
- *   `mstar-plan-artifacts/references/status-and-residuals.md`
+ *   `mstar-artifacts/references/status-and-residuals.md`
  *   § Basic structure + § General constraints ("Init with `residual_findings`:
  *   {}; no dual-write with legacy side") + § Compatibility (read: accept `id`
  *   or `plan_id`; write: one canonical key, prefer `id`).

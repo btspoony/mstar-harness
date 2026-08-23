@@ -5,7 +5,7 @@ description: "Morning Star subagent-driven development (SDD) — file handoff, p
 
 ## Load order
 
-**Before first Read:** `mstar-harness-core` → `mstar-dispatch-gates`. Path symbols → **`mstar-plan-conventions`** (`{SDD_DIR}`). Plan QC after SDD → **`mstar-review-qc`**. On conflict, **`mstar-harness-core` wins**.
+**Before first Read:** `mstar-harness-core` → `mstar-dispatch-gates`. Path symbols → **`mstar-conventions`** (`{SDD_DIR}`). Plan QC after SDD → **`mstar-review-qc`**. On conflict, **`mstar-harness-core` wins**.
 
 <SUBAGENT-STOP>
 If you were dispatched as an SDD implementer or task reviewer, skip PM orchestration sections. Follow your dispatch prompt only.
@@ -134,4 +134,4 @@ The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；
 - `references/implementer-prompt.md`
 - `references/implementer-continuation-prompt.md`
 - `references/task-reviewer-prompt.md`
-- `mstar-plan-artifacts/references/plan-quality-bar.md` — plan self-containment standard (plans must meet this before SDD dispatch)
+- `mstar-artifacts/references/plan-quality-bar.md` — plan self-containment standard (plans must meet this before SDD dispatch)

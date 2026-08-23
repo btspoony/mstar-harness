@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-coding-behavior` (surgical edits).
 
-**Typically:** `mstar-plan-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-plan-artifacts` (when writing under knowledge or plan trees).
+**Typically:** `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-artifacts` (when writing under knowledge or plan trees).
 
 **Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 

@@ -1,16 +1,16 @@
 ---
 name: mstar-design-md
-description: DESIGN.md design system specification for Morning Star projects. Create, audit, and maintain project-level design tokens (Colors, Typography, Spacing, Elevation, Motion, Shapes, Components, Voice & Content) using Vercel Geist as reference template. Three-level completeness checklist (MVP/Standard/Production) with built-in upgrade placeholders. Supports light/dark dual-theme via DESIGN.md + DESIGN.dark.md sharing same token names with different values. Prepare 阶段由 @architect 主责创建，@product-manager 提供设计需求；@frontend-dev / @fullstack-dev 实现 UI 时消费；@qc-specialist / @qa-engineer 审查 UI 对齐 DESIGN.md。Read when PM assigns DESIGN.md creation in Prepare, initiating a new UI project, @architect defining a design system, implementing styled components, auditing UI against design spec, adding dark theme, or user mentions "DESIGN.md" / "design tokens" / "design system". Phase gate → **mstar-phase-gates**; paths → **mstar-plan-conventions**.
+description: DESIGN.md design system specification for Morning Star projects. Create, audit, and maintain project-level design tokens (Colors, Typography, Spacing, Elevation, Motion, Shapes, Components, Voice & Content) using Vercel Geist as reference template. Three-level completeness checklist (MVP/Standard/Production) with built-in upgrade placeholders. Supports light/dark dual-theme via DESIGN.md + DESIGN.dark.md sharing same token names with different values. Prepare 阶段由 @architect 主责创建，@product-manager 提供设计需求；@frontend-dev / @fullstack-dev 实现 UI 时消费；@qc-specialist / @qa-engineer 审查 UI 对齐 DESIGN.md。Read when PM assigns DESIGN.md creation in Prepare, initiating a new UI project, @architect defining a design system, implementing styled components, auditing UI against design spec, adding dark theme, or user mentions "DESIGN.md" / "design tokens" / "design system". Phase gate → **mstar-phase-gates**; paths → **mstar-conventions**.
 ---
 
 ## Load order
 
-**Before first Read of this skill: Read `mstar-harness-core` (SKILL.md).** For Prepare phase integration and gate rules, read `mstar-phase-gates`. For plan directory paths (`{HARNESS_DIR}`, `{SPECS_DIR}`), read `mstar-plan-conventions`. On conflict, **`mstar-harness-core` wins**.
+**Before first Read of this skill: Read `mstar-harness-core` (SKILL.md).** For Prepare phase integration and gate rules, read `mstar-phase-gates`. For plan directory paths (`{HARNESS_DIR}`, `{SPECS_DIR}`), read `mstar-conventions`. On conflict, **`mstar-harness-core` wins**.
 
 | 你还可能要 Read | 何时 |
 |-----------------|------|
 | `mstar-phase-gates` | Prepare 阶段判定 gate、何时 DESIGN.md 必须就绪 |
-| `mstar-plan-conventions` | `{HARNESS_DIR}` / `{SPECS_DIR}` 路径解析 |
+| `mstar-conventions` | `{HARNESS_DIR}` / `{SPECS_DIR}` 路径解析 |
 | `mstar-roles` | `@architect` / `@product-manager` / `@frontend-dev` / `@qc-specialist` / `@qa-engineer` 角色职责边界 |
 | `mstar-coding-behavior` | 实现角色消费 DESIGN.md 前的通用编码约束 |
 

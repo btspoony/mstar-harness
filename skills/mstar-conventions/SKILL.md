@@ -1,6 +1,6 @@
 ---
-name: mstar-plan-conventions
-description: Morning Star (启明星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{SDD_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{WORKFLOW_DIR}` / `{PROJECT_DIR}` 发现与初始化（默认 `.mstar/`，兼容 `.agents/`）、`docs` 与 harness 子树边界、review bundle、未启用 plan 时的工作方式、Spec 集成分支与多 Plan 实现分支（显式 base / merge 靶 / PR target）、Morning Star plan-writing path gate、工期预估（agent-oriented）。**必须**在读写 `.mstar/` / `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / review bundle / knowledge → **`mstar-plan-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
+name: mstar-conventions
+description: Morning Star (启明星) harness 计划目录约定 —— `{HARNESS_DIR}` / `{PLAN_DIR}` / `{SDD_DIR}` / `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{WORKFLOW_DIR}` / `{PROJECT_DIR}` 发现与初始化（默认 `.mstar/`，兼容 `.agents/`）、`docs` 与 harness 子树边界、review bundle、未启用 plan 时的工作方式、Spec 集成分支与多 Plan 实现分支（显式 base / merge 靶 / PR target）、Morning Star plan-writing path gate、工期预估（agent-oriented）。**必须**在读写 `.mstar/` / `.agents/`、初始化 harness、编排含 plan 的任务、或对齐 `metadata.primary_spec` 时 Read；`@project-manager` 开 plan 任务前必读。plan 文件 / status / residual / review bundle / knowledge → **`mstar-artifacts`**；分支与 QC 检出 → **`mstar-branch-worktree`**。
 ---
 
 ## Load order（必读顺序）
@@ -9,7 +9,7 @@ description: Morning Star (启明星) harness 计划目录约定 —— `{HARNES
 
 | 你还可能要 Read | 何时 |
 |-----------------|------|
-| `mstar-plan-artifacts` | 主 plan、review bundle 摘要、`status.json`、residual、InReview/QC 波次、knowledge |
+| `mstar-artifacts` | 主 plan、review bundle 摘要、`status.json`、residual、InReview/QC 波次、knowledge |
 | `mstar-project-governance` | `projects/<id>/roadmap.md` 编写约定 + `residuals.json` register 生命周期、`_default` 回退 |
 | `mstar-branch-worktree` | Assignment 写分支 / worktree / QC 检出 |
 | `mstar-review-qc` | 派 QC（PM 同轮必读；SDD 强制 tri） |
@@ -100,13 +100,13 @@ enforcement=hard
 | `{KNOWLEDGE_DIR}` | 实现 SSOT、可复用设计 |
 | `{PLAN_DIR}/` | 主 plan、durable gate summaries、可选 residual prose |
 
-单 plan 的 QC/QA **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；R# open 状态以 `{PROJECT_DIR}/<id>/residuals.json` 为 SSOT（根 `status.json` v2 仅 workflows 注册表）。细则 → **`mstar-plan-artifacts`**。
+单 plan 的 QC/QA **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；R# open 状态以 `{PROJECT_DIR}/<id>/residuals.json` 为 SSOT（根 `status.json` v2 仅 workflows 注册表）。细则 → **`mstar-artifacts`**。
 
 ## 初始化 Plan 目录
 
 PM 在需要持久化追踪时：
 
-1. 建 `.mstar/`、`plans/`、`status.json`（**v2 空模板**见 **`mstar-plan-artifacts/templates/status.empty.json`**：`version: 2` + `workflows: []`）
+1. 建 `.mstar/`、`plans/`、`status.json`（**v2 空模板**见 **`mstar-artifacts/templates/status.empty.json`**：`version: 2` + `workflows: []`）
 2. 可选 `notes.json`（legacy）、`knowledge/`、`iterations/`、`{HARNESS_DIR}/specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` / `projects/` 由 engine writers 按需创建，**不**预建）
 3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（见下文「Git 跟踪策略」）— CLI `init` 可自动添加
 4. Git：**进程本地、结果共享** — 默认跟踪 `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`；`plans/`、`iterations/`、`status.json` 等为**本地会话 SSOT**，默认 gitignored。跨 clone 持久 handoff = knowledge + specs + `{HARNESS_DIR}/AGENTS.md`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 residual 须提升（compound）或写入 tracked results — **勿**默认 `git add` `status.json` / `plans/`。
@@ -178,7 +178,7 @@ Legacy `.agents/` 等价：
 - **Plan 实现分支**：每 `plan_id` 一条（PM 书面）。
 - **PR target**：全部 Plans 与 iteration-close 完成后，向显式 `target_branch` 提 PR（窄例外见 Assignment `Branch policy`）。
 - Git 操作与 QC 单一 `HEAD` → **`mstar-branch-worktree`**。
-- workflow snapshot 登记顶层 `branch.base`（`iteration_base_branch`）/ `branch.target`（`target_branch`）/ `branch.integration`（`spec_integration_branch`），以及 plan 行 `metadata.spec_integration_branch` / `merge_target` → **`mstar-plan-artifacts`**。
+- workflow snapshot 登记顶层 `branch.base`（`iteration_base_branch`）/ `branch.target`（`target_branch`）/ `branch.integration`（`spec_integration_branch`），以及 plan 行 `metadata.spec_integration_branch` / `merge_target` → **`mstar-artifacts`**。
 
 **解析顺序**（`mstar-iteration` §2.3）：workflow snapshot `branch` anchors → compass frontmatter → 向用户确认。**禁止**因仓库默认分支名为 `main`/`master` 就自动采用。
 
@@ -190,7 +190,7 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 ## 状态与权限（摘要）
 
-`Todo` | `InProgress` | `InReview` | `Blocked` | `Done` — **`Done` 仅 PM 或 QA**。字段与 residual → **`mstar-plan-artifacts`**。主 plan checkbox → **`mstar-plan-artifacts`**。
+`Todo` | `InProgress` | `InReview` | `Blocked` | `Done` — **`Done` 仅 PM 或 QA**。字段与 residual → **`mstar-artifacts`**。主 plan checkbox → **`mstar-artifacts`**。
 
 ## 未启用 Plan 时
 
@@ -198,7 +198,7 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 ## 实现角色最小阅读
 
-仅需路径符号与 `plans[].metadata` 的 `primary_spec` / `spec_refs` 时：读本 SKILL 至「路径符号」+ **`mstar-plan-artifacts/references/knowledge-and-designs.md`** 即可，**不必**通读 status/residual 全文。
+仅需路径符号与 `plans[].metadata` 的 `primary_spec` / `spec_refs` 时：读本 SKILL 至「路径符号」+ **`mstar-artifacts/references/knowledge-and-designs.md`** 即可，**不必**通读 status/residual 全文。
 
 ## Evidence
 
@@ -210,4 +210,4 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 - `references/effort-estimation.md` — agent-oriented 工期（禁人天/FTE）
 - `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-compound`、`mstar-compound-refresh`、`mstar-strategy` 等技能引用此表，不得本地重定义）
 
-**Plan 工件细则**（主 plan、review bundle / durable summaries、`status.json`、residual、knowledge、Done 归档、**`templates/`**）→ skill **`mstar-plan-artifacts`**（`references/` 与 `templates/`）。
+**Plan 工件细则**（主 plan、review bundle / durable summaries、`status.json`、residual、knowledge、Done 归档、**`templates/`**）→ skill **`mstar-artifacts`**（`references/` 与 `templates/`）。

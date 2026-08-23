@@ -31,7 +31,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration 分支�
 **STOP**: 打印下方 checklist，且全部为 `[x]` 后，才可进入 §3.2 Compound。
 
 - [ ] 所有 compass 中登记的 plan 在 workflow snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）均为 `Done`
-- [ ] 所有 plan 的 residual findings 已收口：优先 empty register 条目（`projects/<id>/residuals.json` → `entries[<plan-id>]`）；若仍有 open R#，须均为 Phase 2 `zero-residual` 允许的 blocker-defer + roadmap，或已 closed（`lifecycle` / `closed_at` / `closure_note`，见 `mstar-plan-artifacts` Findings cleanup modes）
+- [ ] 所有 plan 的 residual findings 已收口：优先 empty register 条目（`projects/<id>/residuals.json` → `entries[<plan-id>]`）；若仍有 open R#，须均为 Phase 2 `zero-residual` 允许的 blocker-defer + roadmap，或已 closed（`lifecycle` / `closed_at` / `closure_note`，见 `mstar-artifacts` Findings cleanup modes）
 - [ ] compass `## Plans` 表状态列已与 snapshot 同步
 - [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
 - [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + close 占位节）

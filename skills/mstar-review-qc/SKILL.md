@@ -21,7 +21,7 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 
 - **`Execution mode: sdd`**：全部 task + L2 task reviewers 完成后 → **强制 tri-review**（`QC mode: full tri-review`，**N=3**）。Assignment 须含 **branch review-package** 路径与 `{SDD_DIR}/review/qcN.md` report paths。PM 汇总 `{SDD_DIR}/review/qc-consolidated.md` 并回写主 plan durable summary。
 - **`Execution mode: inline`**：单席 `qc-specialist` → `{SDD_DIR}/review/qc.md`（**N=1**），或按 hotfix 路由跳过。
-- **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only seats that **raised** blocking findings; each updates **the same** `{SDD_DIR}/review/qcN.md` (`## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` for targeted re-review. Naming → **`mstar-plan-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
+- **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only seats that **raised** blocking findings; each updates **the same** `{SDD_DIR}/review/qcN.md` (`## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` for targeted re-review. Naming → **`mstar-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
 - **Full tri re-review (exception)**：Assignment **`QC re-review: full tri-review`** → new basenames (`qc1-rev2.md` …); PM marks **active wave** in consolidated decision.
 
 > **Engine check (when available):** run `mstar review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]` (or `import { executionModeToN, assertTriIdentity } from "@mstar-harness/engine"` in a host hook) to map `Execution mode` to its QC seat count N above and assert tri identity. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
@@ -36,10 +36,10 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 
 ## Residual Findings 留档门禁（PM）
 
-- 先读 Assignment **`Findings cleanup`**（`plans[].metadata.findings_cleanup` mirror 已删——Assignment 是唯一 mode 来源）→ **`mstar-plan-artifacts/references/status-and-residuals.md`**「Findings cleanup modes」。
+- 先读 Assignment **`Findings cleanup`**（`plans[].metadata.findings_cleanup` mirror 已删——Assignment 是唯一 mode 来源）→ **`mstar-artifacts/references/status-and-residuals.md`**「Findings cleanup modes」。
 - **`Findings cleanup: zero-residual`**（iteration Phase 2 默认）：可修 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项登记为 open R# 或用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（无 R#）。仅 **真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可登记 open R#（`decision: defer`）。此时 `Approve with residuals` **仅**允许剩余项全是该类 defer。
 - **`Findings cleanup: allow-residual`**（standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须留档；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论须含 residual 清单与跟踪位置。
-- **`severity`** 仅允许 `mstar-plan-artifacts/references/status-and-residuals.md` 枚举。
+- **`severity`** 仅允许 `mstar-artifacts/references/status-and-residuals.md` 枚举。
 - **Open SSOT**：`{PROJECT_DIR}/<id>/residuals.json`（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程 `_default`）→ `entries[<plan-id>]`；PM 在 consolidated 决策分配 **R1…** 并写入。关闭 → 在 register 内 **in place** 置 `lifecycle` / `closed_at` / `closure_note`（v1 `archived/residuals/` 与 `archive-residuals` 已移除）。
 - 主 plan 仅作人类索引；不得作为唯一 SSOT。
 - 未完成 residual 留档（`allow-residual`）或未清干净可修 findings（`zero-residual`）→ 不得进入 plan **Done**。
@@ -73,4 +73,4 @@ QC 编排主链：plan 全部 task + L2 完成后 → PM 按 `Execution mode` �
 
 - Leaf QC 执行（checklist / 报告模板 / 透镜）→ **`mstar-roles/references/qc-specialist/`**
 - Per-task review（L2，implement 波次内）→ **`mstar-sdd`**
-- Review bundle 命名与 QC 触发时机 → **`mstar-plan-artifacts/references/plan-files-and-reports.md`**
+- Review bundle 命名与 QC 触发时机 → **`mstar-artifacts/references/plan-files-and-reports.md`**

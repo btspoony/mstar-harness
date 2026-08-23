@@ -109,7 +109,7 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 |---------|------|
 | `/pr-deep-review [pr\|branch\|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`).<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>`full` — surface all findings instead of top 1–3.<br>SSOT → `mstar-audit` (`pr` variant). |
 
-Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
+Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-artifacts`.
 
 Project knowledge bootstrap: `mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`.
 
@@ -182,8 +182,8 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-dispatch-gates` | Dispatch, Delegation, anti-recursion |
 | `mstar-sdd` | Subagent-driven development |
 | `mstar-branch-worktree` | Branches, worktrees, QC/QA checkout |
-| `mstar-plan-conventions` | `{HARNESS_DIR}` discovery / init |
-| `mstar-plan-artifacts` | Plans, `status.json`, residuals, Findings cleanup |
+| `mstar-conventions` | `{HARNESS_DIR}` discovery / init |
+| `mstar-artifacts` | Plans, `status.json`, residuals, Findings cleanup |
 | `mstar-project-governance` | Roadmap authoring + residual register lifecycle, `_default` fallback |
 | `mstar-design-md` | DESIGN.md gate for UI plans |
 | `mstar-review-qc` | PM QC tri orchestration |
@@ -196,7 +196,7 @@ Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`)
 | `mstar-host` | Host adapters (dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex) |
 | `pm` | `/pm` / `/skill:pm` / host PM entry |
 
-Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`, `projects/`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Repos with a non-default layout can declare every harness directory symbol in a gitignored **`.mstarc`** (`[config]` keys `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `workflow_dir` / `project_dir` — honored above probing). Details → `mstar-plan-conventions`.
+Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`, `projects/`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Repos with a non-default layout can declare every harness directory symbol in a gitignored **`.mstarc`** (`[config]` keys `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `workflow_dir` / `project_dir` — honored above probing). Details → `mstar-conventions`.
 
 Maintainers: [`AGENTS.md`](AGENTS.md).
 

@@ -41,7 +41,7 @@ Every finding follows **`references/finding-format.md`** — read it before the 
 
 ## Phase 4 — Write the plans
 
-For each selected finding, write one plan file using `plan.main.md` as the base template, enriched to meet **`mstar-plan-artifacts/references/plan-quality-bar.md`**. Plans go in:
+For each selected finding, write one plan file using `plan.main.md` as the base template, enriched to meet **`mstar-artifacts/references/plan-quality-bar.md`**. Plans go in:
 
 ```
 {PLAN_DIR}/audit-<YYYY-MM-DD>/
@@ -111,7 +111,7 @@ Audit plans are **input candidates** for the normal Prepare → Execute flow. Th
 
 When the user selects plans to pursue:
 
-1. PM registers the workflow + plan rows in `{WORKFLOW_DIR}/<id>/snapshot.json` (root `status.json` v2 holds the workflows registry only — see `mstar-plan-artifacts`), with the main plan in `{PLAN_DIR}` — via `mstar audit promote <audit-dir> --plans <ids>` when the CLI is available, or manually per `mstar-plan-artifacts`.
+1. PM registers the workflow + plan rows in `{WORKFLOW_DIR}/<id>/snapshot.json` (root `status.json` v2 holds the workflows registry only — see `mstar-artifacts`), with the main plan in `{PLAN_DIR}` — via `mstar audit promote <audit-dir> --plans <ids>` when the CLI is available, or manually per `mstar-artifacts`.
 2. Each plan enters the normal state machine: `Todo → InProgress → InReview → Done`.
 3. PM may fast-track Prepare since the audit plan already contains spec, current-state excerpts, and verification gates — but the intent gate and clarify discipline still apply (`mstar-phase-gates`).
 4. Execution follows normal SDD or inline dispatch.

@@ -4,7 +4,7 @@
  * generation, canonical `.gitignore` snippet and the plan-writing path
  * gate.
  *
- * Spec source: `skills/mstar-plan-conventions/SKILL.md` § 路径符号 (SSOT),
+ * Spec source: `skills/mstar-conventions/SKILL.md` § 路径符号 (SSOT),
  * § {HARNESS_DIR} 解析顺序（找到即停）, § {SPECS_DIR} 解析（找到非空目录即停）
  * and § Git 跟踪策略 / § Plan-Writing Path Gate. Resolution order stays
  * `.mstarc` `[config] harness_dir` → `.mstar/` → `.agents/` → `.plans/`/
@@ -342,7 +342,7 @@ export function resolveProjectDir(
 
 /**
  * Empty status.json template — embedded copy of
- * `skills/mstar-plan-artifacts/templates/status.empty.json`
+ * `skills/mstar-artifacts/templates/status.empty.json`
  * (plan-conventions § 初始化 Plan 目录). Plan Task 3 ruling: the template is
  * the **v2 shape** (`version: 2`, `updated_at`, `workflows: []`) so
  * `scaffoldHarness` never emits an un-migrated (v1) tree. Kept as a constant

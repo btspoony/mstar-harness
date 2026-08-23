@@ -4,7 +4,7 @@
 
 **Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (repo writes, production-touching branches).
 
-**Typically:** `mstar-plan-conventions` (paths).
+**Typically:** `mstar-conventions` (paths).
 
 **On demand:** `mstar-phase-gates` (hotfix compressed path when assignment says hotfix).
 

@@ -1,6 +1,6 @@
 # Status v1→v2 field history (archived contract prose)
 
-> Engine-absent fallback: the full field tables displaced from `mstar-plan-artifacts` when engine validators took over the same contract. Engine-present hosts read `mstar-plan-artifacts/references/status-and-residuals.md` (v2) instead; this file is the historical + fallback full text.
+> Engine-absent fallback: the full field tables displaced from `mstar-artifacts` when engine validators took over the same contract. Engine-present hosts read `mstar-artifacts/references/status-and-residuals.md` (v2) instead; this file is the historical + fallback full text.
 
 ## v1 `{HARNESS_DIR}/status.json` — full shape (historical)
 

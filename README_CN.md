@@ -110,7 +110,7 @@ npm i -g @mstar-harness/cli
 |------|------|
 | `/pr-deep-review [pr\|branch\|scope] [full]` | 合并前对 PR / 分支 / diff 做证据先行的深度审查 → 单一结论（`ship it` / `needs review` / `blocked`）。<br>worktree 隔离、只读；发现可转为 plan 进入 Prepare → Execute。<br>`full` — 展示全部发现（默认只列 top 1–3）。<br>SSOT → `mstar-audit`（`pr` variant）。 |
 
-Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
+Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-artifacts`。
 
 项目知识脚手架：`mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`。
 
@@ -183,8 +183,8 @@ flowchart TD
 | `mstar-dispatch-gates` | 派发、Delegation、反递归 |
 | `mstar-sdd` | 子代理驱动开发 |
 | `mstar-branch-worktree` | 分支、worktree、QC/QA 检出 |
-| `mstar-plan-conventions` | `{HARNESS_DIR}` 发现 / 初始化 |
-| `mstar-plan-artifacts` | plan、`status.json`、residual、Findings cleanup |
+| `mstar-conventions` | `{HARNESS_DIR}` 发现 / 初始化 |
+| `mstar-artifacts` | plan、`status.json`、residual、Findings cleanup |
 | `mstar-project-governance` | roadmap 编写约定 + residual register 生命周期、`_default` 回退 |
 | `mstar-design-md` | UI plan 的 DESIGN.md 门禁 |
 | `mstar-review-qc` | PM QC tri 编排 |
@@ -197,7 +197,7 @@ flowchart TD
 | `mstar-host` | 宿主适配（dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex） |
 | `pm` | `/pm` / `/skill:pm` / 宿主 PM 入口 |
 
-消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。布局非默认的仓库可在 gitignored 的 **`.mstarc`** 中声明全部 harness 目录符号（`[config]` 键 `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `workflow_dir` / `project_dir`，优先于探测）。细则 → `mstar-plan-conventions`。
+消费方 plan 默认 **`.mstar/`**。进程产物（`plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/` 等）gitignored；跟踪结果：`{HARNESS_DIR}/AGENTS.md`、`knowledge/`、`specs/`。Specs 解析：`.mstar/specs/` → `docs/specs/` → 仓库根 `specs/`。布局非默认的仓库可在 gitignored 的 **`.mstarc`** 中声明全部 harness 目录符号（`[config]` 键 `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `workflow_dir` / `project_dir`，优先于探测）。细则 → `mstar-conventions`。
 
 维护者：[`AGENTS.md`](AGENTS.md)。
 

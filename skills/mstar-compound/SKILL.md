@@ -7,7 +7,7 @@ description: Morning Star 知识结晶 —— 将已解决问题的经验沉淀�
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols (`{KNOWLEDGE_DIR}`, `{HARNESS_DIR}`) → **`mstar-plan-conventions`**. On conflict, **`mstar-harness-core` wins**.
+**Read `mstar-harness-core` first.** Path symbols (`{KNOWLEDGE_DIR}`, `{HARNESS_DIR}`) → **`mstar-conventions`**. On conflict, **`mstar-harness-core` wins**.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ Knowledge that isn't captured evaporates when the session ends. Knowledge that i
 
 ## 产物存储位置
 
-**SSOT**: `mstar-plan-conventions/references/artifact-storage-paths.md`。本 skill 不重定义路径；知识文档 → `{HARNESS_DIR}/knowledge/<category>/<slug>.md`，CONCEPTS.md → `<repo-root>/CONCEPTS.md`。`<category>` 取值见 `references/category-mapping.md`。
+**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 不重定义路径；知识文档 → `{HARNESS_DIR}/knowledge/<category>/<slug>.md`，CONCEPTS.md → `<repo-root>/CONCEPTS.md`。`<category>` 取值见 `references/category-mapping.md`。
 
 ## 是否值得结晶（自检门禁）
 
@@ -91,8 +91,8 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 
 ## Skill dependencies
 
-- **`mstar-plan-conventions`** — path symbols（`{KNOWLEDGE_DIR}`、`{HARNESS_DIR}`）
-- **`mstar-plan-artifacts`** — workflow snapshot / project register linking、index maintenance
+- **`mstar-conventions`** — path symbols（`{KNOWLEDGE_DIR}`、`{HARNESS_DIR}`）
+- **`mstar-artifacts`** — workflow snapshot / project register linking、index maintenance
 - **`mstar-compound-refresh`** — capture 后知识维护；CONCEPTS.md 全仓 bootstrap
 
 ## NOT to do

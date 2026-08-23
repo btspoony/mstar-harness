@@ -1,7 +1,7 @@
 # Phase 2 control worktree + execution lease
 
 Normative field names → field SSOT
-`mstar-plan-artifacts/references/status-and-residuals.md`; the **full lease
+`mstar-artifacts/references/status-and-residuals.md`; the **full lease
 protocol prose** (single canonical copy) → `mstar-engine-legacy/references/lease-protocol.md`
 (engine-absent fallback). This reference is the **iteration-command execution
 checklist** — do not invent alternate lease field names; do not re-state the
@@ -79,7 +79,7 @@ Immediately before **any** writable implement dispatch, re-read the control
 snapshot and re-verify `execution_lease` holder + paths match this session;
 mismatch → **STOP**.
 
-> **Lease Engine-check:** canonical callout lives in `mstar-plan-artifacts` `SKILL.md`（Engine-check lease 行）— this file carries the execution checklist only.
+> **Lease Engine-check:** canonical callout lives in `mstar-artifacts` `SKILL.md`（Engine-check lease 行）— this file carries the execution checklist only.
 
 ## Feature worktree (per plan)
 
@@ -137,7 +137,7 @@ If a plan row is `InProgress` but has **no** `execution_lease` in the snapshot, 
 escalate — do not invent a lease or writable-dispatch. Unattended "Recover with
 claim" is permitted **only** for the **same** stable `holder`; different holder
 requires verified quiescence + handoff or current-turn user override + audit.
-Recovery semantics → `mstar-plan-artifacts` (not iteration skill).
+Recovery semantics → `mstar-artifacts` (not iteration skill).
 
 ## Multi-plan parallelism
 

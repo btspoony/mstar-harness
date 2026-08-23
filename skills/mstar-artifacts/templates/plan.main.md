@@ -51,4 +51,4 @@ Run: `pytest tests/path/test.py -v`
 
 ## SDD runtime (ephemeral)
 
-When using `mstar-sdd`, artifacts live under `{SDD_DIR}` (see `mstar-plan-conventions`). Do not duplicate briefs/reports in this file.
+When using `mstar-sdd`, artifacts live under `{SDD_DIR}` (see `mstar-conventions`). Do not duplicate briefs/reports in this file.

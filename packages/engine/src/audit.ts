@@ -4,10 +4,11 @@
  *
  * Spec sources (all embedded as constants — no runtime skill-file reads):
  * - mstar-audit SKILL.md Hard Rules (read-only; never reproduce secret
- *   values — reference file:line + credential type only), Phase 4 output
- *   layout (`{PLAN_DIR}/audit-<YYYY-MM-DD>/` README index + numbered plan
- *   files; reconcile prior dirs, keep numbering monotonic), Status block
- *   fields, and index format.
+ *   values — reference file:line + credential type only).
+ * - mstar-audit references/codebase-audit.md (full-audit variant): Phase 4
+ *   output layout (`{PLAN_DIR}/audit-<YYYY-MM-DD>/` README index + numbered
+ *   plan files; reconcile prior dirs, keep numbering monotonic), Status
+ *   block fields, and index format.
  * - mstar-audit/references/finding-format.md: category codes, evidence
  *   requirements.
  */
@@ -25,10 +26,10 @@ function violation(severity: ValidationResult["severity"], code: string, message
 }
 
 // ---------------------------------------------------------------------------
-// Status block validation — mstar-audit SKILL § Plan files
+// Status block validation — mstar-audit references/codebase-audit.md § Output format · Plan files
 // ---------------------------------------------------------------------------
 
-/** Priority values (mstar-audit SKILL § Plan files Status block). */
+/** Priority values (mstar-audit references/codebase-audit.md § Output format · Plan files Status block). */
 export const AUDIT_PRIORITIES = ["P1", "P2", "P3"] as const;
 export type AuditPriority = (typeof AUDIT_PRIORITIES)[number];
 
@@ -40,7 +41,7 @@ export type AuditEffort = (typeof AUDIT_EFFORTS)[number];
 export const AUDIT_RISKS = ["LOW", "MED", "HIGH"] as const;
 export type AuditRisk = (typeof AUDIT_RISKS)[number];
 
-/** Category codes (finding-format.md § Category codes + SKILL Status block). */
+/** Category codes (finding-format.md § Category codes + references/codebase-audit.md Status block). */
 export const AUDIT_CATEGORIES = [
   "bug",
   "security",
@@ -86,7 +87,7 @@ function parseStatusBlocks(planText: string): StatusBlock[] {
 
 /**
  * Validate the audit Status block(s) of a plan file against the field
- * contract (mstar-audit SKILL § Plan files):
+ * contract (mstar-audit references/codebase-audit.md § Output format · Plan files):
  * - `Priority`: P1 | P2 | P3
  * - `Effort`: XS | S | M | L | XL
  * - `Risk`: LOW | MED | HIGH
@@ -280,7 +281,7 @@ export function redactSecrets(text: string, filePath?: string): RedactResult {
 }
 
 // ---------------------------------------------------------------------------
-// Plan scaffolding — mstar-audit SKILL § Phase 4 (audit-<date>/ layout)
+// Plan scaffolding — mstar-audit references/codebase-audit.md § Phase 4 (audit-<date>/ layout)
 // ---------------------------------------------------------------------------
 
 /** One audit finding, shaped after finding-format.md. */
@@ -368,8 +369,8 @@ function readPlanFileSummary(filePath: string): { title: string; fields: Map<str
   return { title: title.trim(), fields: blocks.length > 0 ? blocks[0].fields : new Map() };
 }
 
-/** Render the audit-<date>/README.md index (mstar-audit SKILL § Output
- * format). `rows` covers every plan file in the directory (existing + new).
+/** Render the audit-<date>/README.md index (mstar-audit references/codebase-audit.md § Output
+ * format · Audit index). `rows` covers every plan file in the directory (existing + new).
  * Status values: TODO | IN PROGRESS | DONE | BLOCKED | REJECTED. */
 function renderIndex(params: {
   date: string;
@@ -428,7 +429,7 @@ function renderIndex(params: {
 
 /**
  * Scaffold an audit plan directory (`{PLAN_DIR}/audit-<date>/` layout,
- * mstar-audit SKILL § Phase 4): numbered `NNN-<slug>.md` plan files from
+ * mstar-audit references/codebase-audit.md § Phase 4): numbered `NNN-<slug>.md` plan files from
  * findings plus a README.md index. Numbering is monotonic — when the
  * directory already contains `NNN-*.md` files (same-date re-run), the new
  * batch continues after the highest existing number instead of restarting
@@ -533,7 +534,7 @@ export type PromoteAuditPlansOptions = {
 
 /**
  * Promote selected audit plans into the v2 workflow lifecycle as a
- * `type: "plan"` workflow (mstar-audit Handoff): write the workflow
+ * `type: "plan"` workflow (mstar-audit references/codebase-audit.md § Handoff to execution): write the workflow
  * snapshot FIRST (with one Todo PlanRow per selected file), then register
  * the workflow entry — `validateStatusV2` validates the full status doc
  * including the per-snapshot existence check, so the snapshot must exist

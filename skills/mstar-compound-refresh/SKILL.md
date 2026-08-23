@@ -7,7 +7,7 @@ description: Morning Star 知识维护与项目知识 bootstrap —— 审查 `{
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols → **`mstar-plan-conventions`**. On conflict, **`mstar-harness-core` wins**.
+**Read `mstar-harness-core` first.** Path symbols → **`mstar-conventions`**. On conflict, **`mstar-harness-core` wins**.
 
 ## Purpose
 
@@ -15,7 +15,7 @@ Knowledge documents in `{KNOWLEDGE_DIR}` age. Code changes, conventions evolve, 
 
 ## 产物与操作路径
 
-**SSOT**: `mstar-plan-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md` + `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`（引用更新；v2 中知识引用挂在 workflow snapshot plan 行 `metadata.knowledge_refs`，见下）。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
+**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md` + `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`（引用更新；v2 中知识引用挂在 workflow snapshot plan 行 `metadata.knowledge_refs`，见下）。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
 
 > **Engine check (when available):** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (or `import { scopeGuard, compoundRefreshScope } from "@mstar-harness/engine"` in a host hook) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`, `{HARNESS_DIR}/status.json`) and guard every write against it. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -151,4 +151,4 @@ Read that file from the mstar-compound skill directory before Phase 6.
 ## References
 
 - 捕获侧规则与 CONCEPTS.md vocabulary 规则 → **`mstar-compound`**（Phase 6 前读 `references/concepts-vocabulary.md`）
-- 路径符号与产物存储 SSOT → **`mstar-plan-conventions`**（`references/artifact-storage-paths.md`）
+- 路径符号与产物存储 SSOT → **`mstar-conventions`**（`references/artifact-storage-paths.md`）

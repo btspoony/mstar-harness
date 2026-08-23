@@ -164,14 +164,14 @@ describe("resolveSkillRoot", () => {
   });
 
   test("dsh resolves via the skill-local bundled root $DSH_BUNDLED_SKILL_DIR (roadmap D5/D6)", () => {
-    expect(resolveSkillRoot("dsh", { skill: "mstar-plan-conventions" })).toBe(
-      "$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions",
+    expect(resolveSkillRoot("dsh", { skill: "mstar-conventions" })).toBe(
+      "$DSH_BUNDLED_SKILL_DIR/mstar-conventions",
     );
-    expect(resolveSkillRoot("dsh", { skill: "mstar-plan-conventions", rel: "SKILL.md" })).toBe(
-      "$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions/SKILL.md",
+    expect(resolveSkillRoot("dsh", { skill: "mstar-conventions", rel: "SKILL.md" })).toBe(
+      "$DSH_BUNDLED_SKILL_DIR/mstar-conventions/SKILL.md",
     );
-    expect(resolveSkillRoot("dsh", { skill: "mstar-plan-conventions", rel: "" })).toBe(
-      "$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions",
+    expect(resolveSkillRoot("dsh", { skill: "mstar-conventions", rel: "" })).toBe(
+      "$DSH_BUNDLED_SKILL_DIR/mstar-conventions",
     );
   });
 

@@ -68,7 +68,7 @@ export const DEFAULT_CATALOG_TTL_MS = 60_000
 /** Catalog cache key for the explicit-`harnessDir` app-wide entry (one entry for every session). */
 export const EXPLICIT_CACHE_KEY = '\u0000explicit'
 
-/** Residual severity vocabulary (mstar-plan-artifacts severity SSOT order). */
+/** Residual severity vocabulary (mstar-artifacts severity SSOT order). */
 const RESIDUAL_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
 
 /**

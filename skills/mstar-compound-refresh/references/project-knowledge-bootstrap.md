@@ -8,7 +8,7 @@ Distill a coherent knowledge baseline from the current project — useful when t
 
 1. `mstar-harness-core`
 2. `mstar-compound-refresh` (this skill)
-3. `mstar-plan-conventions`（路径符号）
+3. `mstar-conventions`（路径符号）
 4. `mstar-strategy` → **§ STRATEGY.md structure** + **§ Creating STRATEGY.md**
 5. `mstar-compound` → **references/concepts-vocabulary.md**（CONCEPTS.md 规则）
 6. This reference — **§ Core rules** in `mstar-compound-refresh/SKILL.md`（知识维护基线）
@@ -144,8 +144,8 @@ Apply `mstar-compound-refresh` logic:
 ## Phase 6: Initialize harness (if absent)
 
 If `{HARNESS_DIR}/` does not exist:
-1. Initialize per `mstar-plan-conventions`（`.mstar/` + subdirectories）
-2. Create empty `status.json` from template (`mstar-plan-artifacts/templates/status.empty.json`)
+1. Initialize per `mstar-conventions`（`.mstar/` + subdirectories）
+2. Create empty `status.json` from template (`mstar-artifacts/templates/status.empty.json`)
 
 ## Phase 7: Commit
 

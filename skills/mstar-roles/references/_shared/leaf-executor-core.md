@@ -32,7 +32,7 @@ Apply when the assignment writes tracked repo files:
 
 ## Plan & Documentation Rules
 
-- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-plan-conventions`.
+- Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-conventions`.
 - Update assigned task checkboxes and plan notes for your scope.
 - Do not mark full plan `Done` (only `project-manager` or `qa-engineer` per `mstar-harness-core`).
 

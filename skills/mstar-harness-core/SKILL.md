@@ -1,6 +1,6 @@
 ---
 name: mstar-harness-core
-description: Morning Star (启明星) harness **强制全局入口** —— 信息源优先级、最小交付循环、状态机与 Done 权限、Task category 路由（含 quick 禁豁免）、@explore 边界、长任务纪律、护栏不变量、反模式索引、Morning Star Skill 索引与宿主入口。**任何**非平凡任务开始前必须先 Read 本 skill；再按角色与任务 **按需** Read 其它 `mstar-*` 专题（勿默认通读全部）。`@project-manager` 开轮必读 + `mstar-dispatch-gates` / `mstar-phase-gates` / `mstar-plan-conventions` 等；实现/审查/QA 必读本 skill + `mstar-coding-behavior` 及角色清单（见 `mstar-roles`）。Prepare/派发/Git/residual/QC 细则在专题 skill，不在此重复。
+description: Morning Star (启明星) harness **强制全局入口** —— 信息源优先级、最小交付循环、状态机与 Done 权限、Task category 路由（含 quick 禁豁免）、@explore 边界、长任务纪律、护栏不变量、反模式索引、Morning Star Skill 索引与宿主入口。**任何**非平凡任务开始前必须先 Read 本 skill；再按角色与任务 **按需** Read 其它 `mstar-*` 专题（勿默认通读全部）。`@project-manager` 开轮必读 + `mstar-dispatch-gates` / `mstar-phase-gates` / `mstar-conventions` 等；实现/审查/QA 必读本 skill + `mstar-coding-behavior` 及角色清单（见 `mstar-roles`）。Prepare/派发/Git/residual/QC 细则在专题 skill，不在此重复。
 ---
 
 # Morning Star Harness Core（启明星核心）
@@ -41,8 +41,8 @@ description: Morning Star (启明星) harness **强制全局入口** —— 信�
 | 角色 | 始终 | 按任务追加（典型） |
 |------|------|-------------------|
 | **全部** | 本 skill | — |
-| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-plan-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-plan-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）。**不**读 `mstar-coding-behavior` |
-| **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-plan-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-plan-artifacts`；UI：`mstar-design-md`；知识库：`mstar-compound`（PM） |
+| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）。**不**读 `mstar-coding-behavior` |
+| **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-artifacts`；UI：`mstar-design-md`；知识库：`mstar-compound`（PM） |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
 
 Routing eval（Cursor 插件内回归用，**非**运行时必读）→ `.cursor/skills/mstar-routing-eval/`。
@@ -54,7 +54,7 @@ Routing eval（Cursor 插件内回归用，**非**运行时必读）→ `.cursor
 - **`Done`**：仅 `@project-manager` 或 `@qa-engineer`。
 - 实现类可设 **`InReview`**，不可设 **`Done`**。
 
-`status.json`（v2 根）/ workflow snapshot / project register 字段与 residual → **`mstar-plan-artifacts`**。
+`status.json`（v2 根）/ workflow snapshot / project register 字段与 residual → **`mstar-artifacts`**。
 
 ## Task category（路由摘要）
 
@@ -70,7 +70,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `docs` | `@product-manager` / `@architect` / `@writing-specialist` |
 | `audit` | `@code-reviewer`（mstar-audit 承载；大型仓库经 Assignment `Delegation: allowed (scout/explore only, read-only)` 扇出只读 scout；read-only advisory；不进入状态机） |
 
-**硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + `status.json` 登记（见 **`mstar-plan-conventions`**）。
+**硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + `status.json` 登记（见 **`mstar-conventions`**）。
 
 ## `@explore` 边界
 
@@ -95,8 +95,8 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-engine-legacy` | 条件契约档案（engine-absent fallback）：status v1→v2 字段历史、lease 协议全文、各宿主 N=3/N=1 重述、反递归全清单、Engine-check 样板；engine 激活时不加载 |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
-| `mstar-plan-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
-| `mstar-plan-artifacts` | 主 plan、review bundle / durable summaries、`status.json`（v2 根）+ workflow snapshots + project register、residual、knowledge |
+| `mstar-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
+| `mstar-artifacts` | 主 plan、review bundle / durable summaries、`status.json`（v2 根）+ workflow snapshots + project register、residual、knowledge |
 | `mstar-project-governance` | 项目治理层：`projects/<id>/roadmap.md` 编写约定 + `residuals.json` register 生命周期（open → verified close in place）、`_default` 回退、provenance；schema 与 engine `project.ts` 逐字一致 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
@@ -127,7 +127,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 - 行为变更须有验证证据。
 - 业务仓默认功能分支（Assignment `Branch policy` 例外）→ **`mstar-branch-worktree`**。
 - **Dev 三角**：`@fullstack-dev` 后端主导；UI → `@frontend-dev`；第二轨 → `@fullstack-dev-2`（`mstar-roles` PM 节）。
-- 工期仅 agent-oriented → **`mstar-plan-conventions`** · effort-estimation。
+- 工期仅 agent-oriented → **`mstar-conventions`** · effort-estimation。
 - plan-writing artifacts land in `{PLAN_DIR}`, not external default plan directories.
 - PM Assignment 键名英文；任务正文可中文；产出/报告默认英文。
 
@@ -145,17 +145,17 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 |--------|------|
 | SDD paste-only / 跳过 task review / 并行 implementer | `mstar-sdd` · `mstar-dispatch-gates` |
 | SDD plan 以单席 `qc.md` 收尾 / 跳过 plan tri | `mstar-dispatch-gates` · `mstar-review-qc` · `mstar-sdd` |
-| fix 后无脑重派三审 / 用 `-rev2` 代替原位复验 | `mstar-plan-artifacts` · `mstar-review-qc` |
+| fix 后无脑重派三审 / 用 `-rev2` 代替原位复验 | `mstar-artifacts` · `mstar-review-qc` |
 | 递归误派 / 误读 Handoff | `mstar-dispatch-gates` |
 | `quick` 跳过 Prepare | 上表 + `mstar-phase-gates` |
 | 多 worktree 未归并就 QC | `mstar-branch-worktree` |
 | 因默认 gitignore 致 feature 缺 plans 而 `Worktree mode: waived`（应保留 feature worktree + control 绝对 Plan Path / SDD dir；无 flock 仅 → `Plan parallelism: serial`） | `mstar-branch-worktree` · `mstar-iteration` §2.0 #5 · `phase-2-worktree-lease` |
 | 并行 writable implement 无隔离（L2 同 plan 多轨：N invoke ≠ worktree；L1 跨 plan：无 verified `execution_lease` + feature worktree） | `mstar-branch-worktree` L1/L2 · `mstar-iteration` §2.6 · `references/parallel-writable-pre-dispatch.md` |
-| 跨 plan 可写派发无 verified `execution_lease` / steal 活跃 lease / 并行 merge 入 `spec_integration_branch` | `mstar-iteration` · `mstar-plan-artifacts`（leases）· `mstar-branch-worktree` L1 |
-| `InProgress` 无 `execution_lease`（snapshot 行）未恢复即可写派发 | `mstar-plan-artifacts` — orphan recovery |
+| 跨 plan 可写派发无 verified `execution_lease` / steal 活跃 lease / 并行 merge 入 `spec_integration_branch` | `mstar-iteration` · `mstar-artifacts`（leases）· `mstar-branch-worktree` L1 |
+| `InProgress` 无 `execution_lease`（snapshot 行）未恢复即可写派发 | `mstar-artifacts` — orphan recovery |
 | 混淆跨 plan lease 门控并行与单 plan 内 SDD 并行 implementer | `mstar-dispatch-gates` · `mstar-sdd` |
-| residual 只写 plan 不写 SSOT | `mstar-plan-artifacts` |
-| `zero-residual` 下把可修 findings 登记为 open R# / 草草 `Approve with residuals` | `mstar-plan-artifacts` Findings cleanup modes · `mstar-review-qc` |
+| residual 只写 plan 不写 SSOT | `mstar-artifacts` |
+| `zero-residual` 下把可修 findings 登记为 open R# / 草草 `Approve with residuals` | `mstar-artifacts` Findings cleanup modes · `mstar-review-qc` |
 | 角色文件塞流程长文 | 用专题 skill |
 | 无证据宣称完成 | `mstar-coding-behavior` / verification |
 | CreatePlan 不落盘 / 无 `{HARNESS_DIR}` mirror | `mstar-host` · `cursor-plan-mode-bridge` |
@@ -167,7 +167,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | Phase 4 开 PR 后跳过 merge-ready loop | `mstar-iteration` §5 |
 | Phase 5 在 CI / AI review 仍在跑时 push | `mstar-iteration` §5.1a |
 | iteration-close 无 frontmatter completed / 漏 compound Phase 6 | `mstar-iteration` §3.0.5、§3.4、§3.2 #5 |
-| iteration 默认 `main` 作 base 或 PR 目标 | `mstar-iteration` §1.2、§2.3；`mstar-plan-conventions` Spec 分支模型 |
+| iteration 默认 `main` 作 base 或 PR 目标 | `mstar-iteration` §1.2、§2.3；`mstar-conventions` Spec 分支模型 |
 
 ## 常见 harness 说法对照（帮助理解角色分工）
 
@@ -179,6 +179,6 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 | 持续推进 / 不半途而废 | Phase Gate + Todo/`tasks` + 验证门禁 |
 | 行级哈希锚定编辑 | 以 **读后再改 + 小步 Patch** 纪律落实（`mstar-phase-gates`） |
 
-项目根 **`AGENTS.md` 写什么、分层 bootstrap** → **`mstar-plan-conventions`** `references/harness-bootstrap-and-agents-layering.md`（勿在 core 重复长文）。
+项目根 **`AGENTS.md` 写什么、分层 bootstrap** → **`mstar-conventions`** `references/harness-bootstrap-and-agents-layering.md`（勿在 core 重复长文）。
 
-**专题 skill**（规则在各自 `SKILL.md`）：`mstar-phase-gates`、`mstar-branch-worktree`、`mstar-plan-artifacts` 等 — 见上表索引。
+**专题 skill**（规则在各自 `SKILL.md`）：`mstar-phase-gates`、`mstar-branch-worktree`、`mstar-artifacts` 等 — 见上表索引。

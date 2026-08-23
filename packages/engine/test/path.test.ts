@@ -4,7 +4,7 @@
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - `{HARNESS_DIR}` resolution order + `{PLAN_DIR}` composition:
- *   `skills/mstar-plan-conventions/SKILL.md` § 路径符号 +
+ *   `skills/mstar-conventions/SKILL.md` § 路径符号 +
  *   § {HARNESS_DIR} 解析顺序（找到即停）— `.mstar/` → `.agents/` →
  *   `.plans/`/`plans/` (rung 3: `{HARNESS_DIR}={PLAN_DIR}`); harness
  *   candidates are dir-existence (the empty-dir rule applies to SPECS only).
@@ -12,20 +12,20 @@
  *   absent, default-create `{HARNESS_DIR}/specs/` when all absent; legacy
  *   read-only `designs/` candidates `{HARNESS_DIR}/designs/` → repo-root
  *   `designs/` — 兼容读, never created by init):
- *   `skills/mstar-plan-conventions/SKILL.md` § {SPECS_DIR} 解析（找到非空目录即停）
+ *   `skills/mstar-conventions/SKILL.md` § {SPECS_DIR} 解析（找到非空目录即停）
  *   + § {SPECS_DIR} 解析 Legacy.
  * - Scaffold dirs + status.json empty template:
- *   `skills/mstar-plan-conventions/SKILL.md` § 初始化 Plan 目录 +
- *   `skills/mstar-plan-artifacts/templates/status.empty.json` (embedded as a
+ *   `skills/mstar-conventions/SKILL.md` § 初始化 Plan 目录 +
+ *   `skills/mstar-artifacts/templates/status.empty.json` (embedded as a
  *   constant — engine must not read skill files at runtime, roadmap §8.5).
  * - Canonical `.gitignore` snippet + tracked/ignored sets:
- *   `skills/mstar-plan-conventions/SKILL.md` § Git 跟踪策略.
- * - Plan-writing path gate: `skills/mstar-plan-conventions/SKILL.md`
+ *   `skills/mstar-conventions/SKILL.md` § Git 跟踪策略.
+ * - Plan-writing path gate: `skills/mstar-conventions/SKILL.md`
  *   § Plan-Writing Path Gate — plans live under `{PLAN_DIR}`, no external
  *   default plan directories.
  * - Explicit harness-root override (`MSTAR_HARNESS_DIR` env / option):
  *   plan 20260808-slice2-sdd-iteration Finding (2026-08-08) — the probe
- *   list stays per mstar-plan-conventions (`.mstar` → `.agents` →
+ *   list stays per mstar-conventions (`.mstar` → `.agents` →
  *   `.plans`/`plans`); ad-hoc names are never probed.
  */
 import { describe, expect, test } from "bun:test";
@@ -820,7 +820,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
         "specs",
         "status.json",
       ]);
-      // Byte-identical to skills/mstar-plan-artifacts/templates/status.empty.json
+      // Byte-identical to skills/mstar-artifacts/templates/status.empty.json
       // (embedded constant — engine never reads skill files at runtime).
       // Plan Task 3 ruling: the template is the v2 shape so a scaffolded
       // harness is never an un-migrated (v1) tree.
@@ -1081,12 +1081,12 @@ describe("byte-parity with skill SSOT files (qc3 F-5)", () => {
   const repoRoot = findRepoRoot();
 
   test("emitGitignoreSnippet(\"mstar\") is byte-identical to the plan-conventions .mstar/ fence", () => {
-    const skillPath = join(repoRoot, "skills", "mstar-plan-conventions", "SKILL.md");
+    const skillPath = join(repoRoot, "skills", "mstar-conventions", "SKILL.md");
     expect(emitGitignoreSnippet("mstar")).toBe(gitignoreFence(skillPath, 0));
   });
 
   test("emitGitignoreSnippet(\"agents\") is byte-identical to the plan-conventions legacy .agents/ fence", () => {
-    const skillPath = join(repoRoot, "skills", "mstar-plan-conventions", "SKILL.md");
+    const skillPath = join(repoRoot, "skills", "mstar-conventions", "SKILL.md");
     expect(emitGitignoreSnippet("agents")).toBe(gitignoreFence(skillPath, 1));
   });
 
@@ -1094,7 +1094,7 @@ describe("byte-parity with skill SSOT files (qc3 F-5)", () => {
     const root = tmpRoot("path-scaffold-byte-");
     try {
       const template = readFileSync(
-        join(repoRoot, "skills", "mstar-plan-artifacts", "templates", "status.empty.json"),
+        join(repoRoot, "skills", "mstar-artifacts", "templates", "status.empty.json"),
         "utf8",
       );
       const harnessDir = scaffoldHarness(root);

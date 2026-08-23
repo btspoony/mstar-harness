@@ -35,7 +35,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 - **NEVER** use single-seat `qc.md` after **`Execution mode: sdd`** without documented user override.
 - **NEVER** dispatch only QC#2 and QC#3 while skipping QC#1 on initial SDD tri wave — full **N=3** cross-review required (all three seats).
 - **NEVER** consolidate tri-review into `Approve` when any QC report's alignment fields differ from Assignment (character-level).
-- **NEVER** register or rewrite residual `severity` outside `mstar-plan-artifacts` machine enum.
+- **NEVER** register or rewrite residual `severity` outside `mstar-artifacts` machine enum.
 - **NEVER** under `Findings cleanup: zero-residual`, use `Approve with residuals` or open R# for fixable findings — fix-now + re-review; residual only for true blocker-defer + roadmap.
 - **NEVER** drop residual tracking to chat-only when `Approve with residuals` applies.
 - **NEVER** treat "two of three QC reports arrived" as sufficient — missing seat → `Blocked`.
@@ -63,7 +63,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 ## Residual Findings (Mandatory)
 
-Read Assignment **`Findings cleanup`** first (`mstar-plan-artifacts` — Findings cleanup modes).
+Read Assignment **`Findings cleanup`** first (`mstar-artifacts` — Findings cleanup modes).
 
 ### When `Findings cleanup: zero-residual`
 
@@ -78,7 +78,7 @@ Read Assignment **`Findings cleanup`** first (`mstar-plan-artifacts` — Finding
 When blocking issues are fixed but non-blocking warnings/suggestions remain:
 
 - Must register residual findings (do not leave as chat-only).
-- Severity enum must follow `mstar-plan-artifacts` SSOT.
+- Severity enum must follow `mstar-artifacts` SSOT.
 - Canonical store: `{PROJECT_DIR}/<id>/residuals.json` (default `{HARNESS_DIR}/projects/<id>/`; project-less flows `_default`) -> `entries[<plan-id>]`.
 - Required durable gate summary in main plan should list R# ids and decisions, but never replace canonical entries.
 
