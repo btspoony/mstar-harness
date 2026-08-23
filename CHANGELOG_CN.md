@@ -1,23 +1,50 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.1.2**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.1.3**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **3.1.2** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.1.2** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.1.2** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.1.2** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.1.2** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **3.1.2** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.1.2** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.1.2** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.2** |
-| Agent Plugins 清单 | `plugin.json` | **3.1.2** |
+| monorepo 根 | `morning-star`（`package.json`） | **3.1.3** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.1.3** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.1.3** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.1.3** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.1.3** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **3.1.3** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.1.3** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.1.3** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.3** |
+| Agent Plugins 清单 | `plugin.json` | **3.1.3** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [3.1.3] - 2026-08-23
+
+### Harness
+
+- **`mstar audit promote`（CLI）**：用户选定后，审计计划可正式进入 v2 工作流状态机，类型为 `type: plan` —— `promoteAuditPlans` 先写工作流快照（`{HARNESS_DIR}/workflows/<id>/snapshot.json`，每个选定计划一行 `PlanRow`：`id` + `title` + `file`），再在根 `status.json` 注册工作流，保证 snapshot-before-register 不变量。`--plans` 接受 README 索引列 id、stem 或 basename；`--workflow` 默认取 `audit-<date>/` 目录 basename；`--harness` 默认取解析到的 `{HARNESS_DIR}`。promote 仍是用户选择后的显式动作——审计本身永不注册（咨询性契约不变）。
+- **Engine**：`@mstar-harness/engine` 导出 `promoteAuditPlans`（标题取自审计索引，缺失时回退到 `readPlanFileSummary`）。
+- **Harness skills**：`mstar-audit` Handoff 步骤 1 现将 `mstar audit promote <audit-dir> --plans <ids>` 列为首选路径（手写 `mstar-plan-artifacts` 作为回退保留）。
+- **三个 CLI `execFileSync` 包装统一为一个 `runCliCommand` 助手**（`packages/cli/src/exec.ts`）：`runCommand`（shared-install）、`runOmp`（omp）、`runDsh`（dsh）变为薄包装，公开签名与行为不变；timeout / env / dry-run 不再可能在三个包装间各自漂移，`runDsh` 保留 `env: process.env` + `timeout` 契约（测试中依赖 PATH 注入 fake dsh）。
+- **Engine git env 固定回归测试（仅测试）**：`packages/engine/test/exec-env.test.ts` 断言 `path.ts` / `sdd.ts` / `worktree.ts` 中任何 git `execFileSync` 调用的 options 不得携带空 env（`env: {}` / `env: { PATH: "" }`）——不修改任何生产 env 行为。
+- **dsh 插件**：`@deepseek-ai/dsh-*` peer 升级到 `0.1.1-rc.2` 线（`^0.1.1-rc.2`；`@deepseek-ai/cordis` 保持 `^4.0.1`；`dsh-llm-fallbacks` 保持 `^0.3.0`——其 0.3.3 的 peers 为 `^0.1.1-rc.1`，可由 rc.2 线满足）。对照 deepseek-harness @ `b150a55` 的 `0.1.1-rc.1 → 0.1.1-rc.2` diff 验证：变更内容为统一的 image/Files 请求管线与 permission-preset copy-and-default 回退——插件未消费其中任何面（无 image 区域读取、无 attachment 请求 payload、无 permission-preset default-copy 辅助；仅有的 `preset`/`permission` 引用是 `dsh-llm-fallbacks` 角色 seed 注册表与 dsh-core `/permission` 命令先例），零适配层改动。lock 全新解析为单份 `0.1.1-rc.2` 线——任意位置零 `0.1.1-rc.1`（及更旧）副本，无 `dsh-client-web-react` holdover。
+- **Engine 公共面**：`redactSecrets` 不再从 `@mstar-harness/engine` barrel 再导出（对从裸包导入的下游为破坏性变更）；该审计模块工具改由新增的 `@mstar-harness/engine/src/audit` 子路径提供，`RedactResult` / `SecretFinding` 类型仍留在 barrel。barrel 引用方需迁移到子路径。
+- **dsh**：审计 seam（`packages/dsh/src/gates/seams.ts`）改为从 `./src/audit` 子路径导入 `redactSecrets`，不再走 barrel。
+- **三个迭代命令瘦身为薄包装**：共享的 PM 不变量、会话 todos、连续执行 STOP 清单与派发预检 bash（可选 warn-only + `enforcement: hard` fail-fast）统一收敛到 `skills/mstar-iteration/references/command-shared-invariants.md` 单份，`mstar-iteration` 指向该引用。frontmatter 命令名 / `description` / `agent` / `input` 与各命令独有内容（start 的 grill-me、drive 的 helper/完成定义、loop 的不加载 grill-me）保持不变。
+- **`mstar-iteration` 描述触发增强**：即使宿主未触发 `/iteration-*` 斜杠命令，"start an iteration" / "drive the iteration" / "run an autonomous loop" 等自然语言也可加载该 skill；阶段标签不再以命令名充当阶段名。
+- **技能指针与 callout 卫生**：`mstar-audit` Handoff 第 1 步改为在 `{WORKFLOW_DIR}/<id>/snapshot.json` 注册 workflow 与 plan 行（根 `status.json` v2 仅作 workflows 注册表）；plan-conventions 的 R# 句改为以 `{PROJECT_DIR}/<id>/residuals.json` 为 open 状态 SSOT。
+- **加载条件修复**：`mstar-design-md` 在 `architect` 与 `product-manager` 角色引用中改为 **On demand**（仅 UI / design-token 条件触发）；`mstar-compound-refresh` 不再揽下 STRATEGY.md 的 bootstrap（交由 `mstar-strategy` 承接）。
+- **Callout 去重守卫**：`drift-lint.ts` 新增 `checkCalloutDuplication`——归一化空白与双语变体后，同一 Engine-check callout 正文出现在多个文件即判定失败；lease（`mstar-plan-artifacts`）与 review seats（`mstar-review-qc`）callout 各保留一份 canonical，其余位置改为一行为指针。
+- **共享反递归 NEVER**：五条概念性反递归红线收敛到 `mstar-roles/references/_shared/leaf-executor-core.md`，各角色文件保留角色专属条目并加一行指针。
+- **策略文档精简**：`mstar-strategy` 的 create/maintain 长文替换为指向 `project-knowledge-bootstrap.md` Phase 2 的指针（六段式表格与 engine check 保留）。
+- **知识使用门禁**：harness 入口、iteration §1、`iteration-start` Research、phase-gates implement 与 `knowledge-and-designs.md` 默认先发现 `{KNOWLEDGE_DIR}/README.md` 索引——即使 `plans[].metadata` 无 knowledge 链接，implementer 也须扫描索引并阅读相关 Active 行（已注册的 metadata 链接仍为强制）。
+- 不新增 `audit promote` CLI（由独立的 promote plan 负责）。
+- **audit-004 validator CLI 面闭环**：五个 CLI 命令（`mstar status tech-debt`、`mstar status findings-cleanup <plan-id>`、`mstar lease verify-integration`、`mstar worktree qc-alignment <file>`、`mstar host skill-root`）已用 dist 构建产物（`node packages/cli/dist/mstar-harness.js`）对仓库 fixtures 冒烟验证可运行，退出码符合各自文档语义；无任何命令实现改动。残留项 `20260816-audit-004-validator-cli-surface` 原地置为 `lifecycle: resolved`，证据见冒烟输出。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.1.3**。
 
 ## [3.1.2] - 2026-08-21
 

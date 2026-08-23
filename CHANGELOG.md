@@ -2,24 +2,51 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **3.1.2** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **3.1.3** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **3.1.2** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.1.2** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.1.2** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.1.2** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **3.1.2** |
-| Codex plugin | `.codex-plugin/plugin.json` | **3.1.2** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **3.1.2** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **3.1.2** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.2** |
-| Agent Plugins manifest | `plugin.json` | **3.1.2** |
+| Monorepo root | `morning-star` (`package.json`) | **3.1.3** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.1.3** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.1.3** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.1.3** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **3.1.3** |
+| Codex plugin | `.codex-plugin/plugin.json` | **3.1.3** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **3.1.3** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **3.1.3** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.3** |
+| Agent Plugins manifest | `plugin.json` | **3.1.3** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [3.1.3] - 2026-08-23
+
+### Harness
+
+- **`mstar audit promote` (CLI)**: selected audit plans can now enter the v2 workflow lifecycle as `type: plan` — `promoteAuditPlans` writes the workflow snapshot (`{HARNESS_DIR}/workflows/<id>/snapshot.json`, one Todo `PlanRow` per selected plan, `id` + `title` + `file`) **before** registering the workflow in root `status.json`, so the snapshot-before-register invariant holds. `--plans` accepts the README Plan column id, stem, or basename; `--workflow` defaults to the `audit-<date>` dir basename; `--harness` defaults to the resolved `{HARNESS_DIR}`. Promote stays an explicit post-selection action — the audit itself never registers (advisory contract preserved).
+- **Engine**: `promoteAuditPlans` exported from `@mstar-harness/engine` (titles come from the audit README index, falling back to `readPlanFileSummary`).
+- **Harness skills**: `mstar-audit` Handoff step 1 now names `mstar audit promote <audit-dir> --plans <ids>` as the first-class v2 path (manual `mstar-plan-artifacts` wording kept as fallback).
+- **Unified the three CLI `execFileSync` wrappers** into a single `runCliCommand` helper (`packages/cli/src/exec.ts`): `runCommand` (shared-install), `runOmp` (omp), and `runDsh` (dsh) are now thin calls with today's defaults — no public signature or behavior change. Timeout / env / dry-run can no longer drift independently across the wrappers; `runDsh` keeps its `env: process.env` + `timeout` contract (dsh PATH injection in tests).
+- **Engine git env-pin regression test (test-only)**: `packages/engine/test/exec-env.test.ts` now detects any git `execFileSync` call whose options carry an empty env (`env: {}` / `env: { PATH: "" }`) across `path.ts` / `sdd.ts` / `worktree.ts` — production env handling is untouched.
+- **dsh plugin**: `@deepseek-ai/dsh-*` peers upgraded to the `0.1.1-rc.2` line (`^0.1.1-rc.2`; `@deepseek-ai/cordis` stays `^4.0.1`; `dsh-llm-fallbacks` stays `^0.3.0` — its 0.3.3 peers are `^0.1.1-rc.1`, satisfied by the rc.2 line). Verified against the `0.1.1-rc.1 → 0.1.1-rc.2` diff (deepseek-harness @ `b150a55`): the change is the unified image/Files request pipeline plus the permission-preset copy-and-default revert — the plugin consumes none of those surfaces (no image region reads, no attachment request payloads, no permission-preset default-copy helpers; the only `preset`/`permission` references are the `dsh-llm-fallbacks` role-seed registry and a dsh-core `/permission` command precedent), so zero adapter-code changes. Lock re-resolved to a single `0.1.1-rc.2` line — zero `0.1.1-rc.1` (and older) copies anywhere, no `dsh-client-web-react` holdover.
+- **Engine public surface**: `redactSecrets` is no longer re-exported from the `@mstar-harness/engine` barrel (breaking for downstream imports of the bare package); the audit-module utility is now reachable via the new `@mstar-harness/engine/src/audit` subpath, and the `RedactResult` / `SecretFinding` types stay in the barrel. Barrel importers must migrate to the subpath.
+- **dsh**: the audit seam (`packages/dsh/src/gates/seams.ts`) now imports `redactSecrets` from the `./src/audit` subpath instead of the barrel.
+- **Thinned the iteration slash commands** (`/iteration-start`, `/iteration-drive`, `/iteration-loop`) into wrappers: shared PM invariants, session todos, the continuous-execution STOP list, and the assignment-preflight bash (warn-only + `enforcement: hard` fail-fast) now live once in `skills/mstar-iteration/references/command-shared-invariants.md`, and `mstar-iteration` points at it. Frontmatter (`name` / `description` / `agent` / `input`) and each command's unique bits (start grill-me, drive helper discovery, loop do-not-load-grill-me) are unchanged.
+- **Trigger-strong `mstar-iteration` description**: the skill now loads for "start an iteration" / "drive the iteration" / "run an autonomous loop" even when no `/iteration-*` slash command fires; phase labels no longer treat command names as phase names.
+- **Skill pointer + callout hygiene**: `mstar-audit` Handoff step 1 now registers the workflow + plan rows in `{WORKFLOW_DIR}/<id>/snapshot.json` (root `status.json` v2 holds the workflows registry only); the plan-conventions R# sentence names `{PROJECT_DIR}/<id>/residuals.json` as the open-state SSOT.
+- **Load-condition fix**: `mstar-design-md` is now an **on-demand** skill (UI / design-token plans only) in the `architect` and `product-manager` role references; `mstar-compound-refresh` no longer claims STRATEGY.md creation (delegated to `mstar-strategy`).
+- **Callout-dedup guard**: `scripts/drift-lint.ts` gains `checkCalloutDuplication` — normalized (whitespace + bilingual-variant) Engine-check callout bodies now fail when duplicated across files; lease (`mstar-plan-artifacts`) and review-seats (`mstar-review-qc`) callouts are canonical with one-line pointers elsewhere.
+- **Shared anti-recursion NEVER**: the five conceptual anti-recursion bullets now live once in `_shared/leaf-executor-core.md` with role-specific pointers kept in each role reference.
+- **Strategy thin**: `mstar-strategy` create/maintain prose is replaced by a pointer to `project-knowledge-bootstrap.md` Phase 2 (six-section table + engine check retained).
+- **Knowledge usage gate**: harness entry, iteration §1.1, `iteration-start` Research, phase-gates implement, and `knowledge-and-designs.md` now discover `{KNOWLEDGE_DIR}/README.md` by default — implementers scan the index and read relevant Active rows even when `plans[].metadata` has no knowledge link (registered metadata links stay mandatory).
+- No `audit promote` CLI is added (a separate promote plan owns it).
+- **audit-004 validator CLI surface closure verification**: the five validator commands (`mstar status tech-debt`, `mstar status findings-cleanup <plan-id>`, `mstar lease verify-integration`, `mstar worktree qc-alignment`, `mstar host skill-root`) were smoke-verified runnable against the repo fixtures from the dist build (`node packages/cli/dist/mstar-harness.js`), each exiting per its documented semantics; no command code changed. Residual `20260816-audit-004-validator-cli-surface` moves to in-place `lifecycle: resolved` with the smoke evidence referenced.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.1.3**.
 
 ## [3.1.2] - 2026-08-21
 
