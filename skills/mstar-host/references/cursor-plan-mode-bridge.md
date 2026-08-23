@@ -1,6 +1,6 @@
 # Cursor Plan Mode × Harness Dual-Write Bridge
 
-> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and **`references/cursor.md`**, then **`references/_shared/plan-mode-bridge-core.md`** (shared contract) + this bridge. When plan management is required, also read **`mstar-plan-conventions`** and **`mstar-plan-artifacts`** before the first **CreatePlan** in Plan mode. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-plan-conventions`. On conflict, **`mstar-harness-core`** wins.
+> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and **`references/cursor.md`**, then **`references/_shared/plan-mode-bridge-core.md`** (shared contract) + this bridge. When plan management is required, also read **`mstar-conventions`** and **`mstar-artifacts`** before the first **CreatePlan** in Plan mode. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-conventions`. On conflict, **`mstar-harness-core`** wins.
 
 **Shared contract** (dual-write SSOT rule + priority, bootstrap init, Build resume contract, bootstrap todos, implement done-gate, Phase 1 gate, shared anti-patterns) → **`references/_shared/plan-mode-bridge-core.md`**. This bridge covers Cursor **CreatePlan** / **SwitchMode** / Plan-mode specifics only.
 
@@ -11,9 +11,9 @@
 
 ## Before the first CreatePlan
 
-1. **Read** (minimum): `mstar-plan-conventions`, `mstar-plan-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
-2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
-3. **Initialize** if absent — checklist in core; full PM checklist (incl. process-artifact gitignore set): `mstar-roles/references/project-manager/plan-management.md` (canonical gitignore snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」).
+1. **Read** (minimum): `mstar-conventions`, `mstar-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
+2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
+3. **Initialize** if absent — checklist in core; full PM checklist (incl. process-artifact gitignore set): `mstar-roles/references/project-manager/plan-management.md` (canonical gitignore snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」).
 
 ## CreatePlan specifics
 
@@ -46,7 +46,7 @@ Add a root `workflows[]` entry to `status.json` (v2) + one `plans[]` object to t
 }
 ```
 
-Set `updated_at` on `status.json` / the snapshot to today (`YYYY-MM-DD`). Commit **tracked results** in the business repo when applicable: `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/`, `{SPECS_DIR}/` (default git policy — see `mstar-plan-conventions`). Do **not** default `git add` for `status.json`, `workflows/`, `projects/`, `plans/`, or `iterations/`.
+Set `updated_at` on `status.json` / the snapshot to today (`YYYY-MM-DD`). Commit **tracked results** in the business repo when applicable: `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/`, `{SPECS_DIR}/` (default git policy — see `mstar-conventions`). Do **not** default `git add` for `status.json`, `workflows/`, `projects/`, `plans/`, or `iterations/`.
 
 ### `mirror-plan` minimum content
 
@@ -164,7 +164,7 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 
 ## Related skills
 
-- `mstar-plan-conventions` — discovery, init, plan-writing path gate
-- `mstar-plan-artifacts` — `status.json`, review bundle summaries, checkboxes, residual
+- `mstar-conventions` — discovery, init, plan-writing path gate
+- `mstar-artifacts` — `status.json`, review bundle summaries, checkboxes, residual
 - `mstar-phase-gates` — Prepare / Execute order
 - `mstar-roles/references/project-manager/dispatch-and-assignment.md` — Checkpoint: commit → Completion Report → Status Update

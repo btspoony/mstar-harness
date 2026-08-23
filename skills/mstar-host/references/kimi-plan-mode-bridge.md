@@ -1,6 +1,6 @@
 # Kimi Plan Mode × Harness Dual-Write Bridge
 
-> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and **`references/kimi.md`**, then **`references/_shared/plan-mode-bridge-core.md`** (shared contract) + this bridge. When Plan mode is active, also read **`mstar-plan-conventions`** and **`mstar-plan-artifacts`**. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-plan-conventions`. On conflict, **`mstar-harness-core`** wins.
+> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and **`references/kimi.md`**, then **`references/_shared/plan-mode-bridge-core.md`** (shared contract) + this bridge. When Plan mode is active, also read **`mstar-conventions`** and **`mstar-artifacts`**. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-conventions`. On conflict, **`mstar-harness-core`** wins.
 
 **Shared contract** (dual-write SSOT rule + priority, bootstrap init, Build resume contract, bootstrap todos, implement done-gate, Phase 1 gate, shared anti-patterns) → **`references/_shared/plan-mode-bridge-core.md`**. This bridge covers Kimi plan-UX specifics only.
 

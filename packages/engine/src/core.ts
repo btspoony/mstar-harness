@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 /**
  * Severity levels used across harness validation results.
  *
- * Machine SSOT — `mstar-plan-artifacts/references/status-and-residuals.md`
+ * Machine SSOT — `mstar-artifacts/references/status-and-residuals.md`
  * § "Residual findings: `severity` (SSOT, machine field)" defines the same
  * five lowercase-English values; `warning` / `Major` / any other value are
  * forbidden in JSON severity fields.

@@ -5,7 +5,7 @@
  * Spec sources (each test cites the skill/reference section it enforces):
  * - Lease objects + required fields (holder / claimed_at / worktree_path /
  *   working_branch; integration_merge_lease adds plan_id / source_branch /
- *   target_branch; optional session_label is display-only): `mstar-plan-artifacts`
+ *   target_branch; optional session_label is display-only): `mstar-artifacts`
  *   `references/status-and-residuals.md` § `plans[].execution_lease` +
  *   § Snapshot top-level `integration_merge_lease` (v3 — relocated from the
  *   v1 root `metadata.integration_merge_lease` in the workflow-engine-core

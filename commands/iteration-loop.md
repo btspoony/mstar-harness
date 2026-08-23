@@ -52,7 +52,7 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT）+ **`mstar-ite
 
 ## Boot
 
-按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration` § Phase 1–5 + `command-shared-invariants.md` → `mstar-dispatch-gates` → `mstar-phase-gates` → `mstar-plan-conventions` / `mstar-plan-artifacts` → `mstar-host` → `mstar-compound`（Phase 3 前）→ **`mstar-sdd`**（first implement 前）→ `mstar-review-qc`（first QC 前）→ `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
+按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration` § Phase 1–5 + `command-shared-invariants.md` → `mstar-dispatch-gates` → `mstar-phase-gates` → `mstar-conventions` / `mstar-artifacts` → `mstar-host` → `mstar-compound`（Phase 3 前）→ **`mstar-sdd`**（first implement 前）→ `mstar-review-qc`（first QC 前）→ `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
 
 **Session todos（loop 专属；Phase 2–5 共享 rows → `command-shared-invariants.md`）**：
 

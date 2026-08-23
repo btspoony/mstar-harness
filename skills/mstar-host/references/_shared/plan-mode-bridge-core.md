@@ -1,6 +1,6 @@
 # Plan-Mode Bridge Core (shared)
 
-> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and the host reference + this bridge. When plan management is required, also read **`mstar-plan-conventions`** and **`mstar-plan-artifacts`** before creating or claiming any durable plan state. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-plan-conventions`. On conflict, **`mstar-harness-core`** wins.
+> **Load order**: Read **`mstar-harness-core`** first, then **`mstar-host`** and the host reference + this bridge. When plan management is required, also read **`mstar-conventions`** and **`mstar-artifacts`** before creating or claiming any durable plan state. Path symbols `{HARNESS_DIR}`, `{PLAN_DIR}`, `{SPECS_DIR}` are defined in `mstar-conventions`. On conflict, **`mstar-harness-core`** wins.
 
 Each per-host bridge (`cursor-plan-mode-bridge.md`, `kimi-plan-mode-bridge.md`, `zcode-plan-mode-bridge.md`, `omp-plan-mode-bridge.md`) loads this core and adds its host-specific plan UX (plan tooling, approval gate, todo UI, command surfaces). Codex Plan Mode reads this core directly via `references/codex.md` (no per-host codex plan bridge; the `/goal` rule is host-agnostic in `mstar-host` SKILL.md).
 
@@ -19,9 +19,9 @@ The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**
 
 ## Before the first plan (bootstrap init)
 
-1. **Read** (minimum): `mstar-plan-conventions`, `mstar-plan-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
-2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-plan-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
-3. **Initialize** if absent: `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `status.json` from `mstar-plan-artifacts/templates/status.empty.json` (v2 shape), Morning Star process-artifact gitignore set (canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」; `workflows/` / `projects/` subdirs are created on demand by engine writers, not pre-created). Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
+1. **Read** (minimum): `mstar-conventions`, `mstar-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
+2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
+3. **Initialize** if absent: `{HARNESS_DIR}/`, `{PLAN_DIR}/`, `status.json` from `mstar-artifacts/templates/status.empty.json` (v2 shape), Morning Star process-artifact gitignore set (canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」; `workflows/` / `projects/` subdirs are created on demand by engine writers, not pre-created). Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
 
 ## Build resume contract
 
@@ -57,7 +57,7 @@ After the host plan is created, keep the host plan body and mirror file **in syn
 
 1. **Commit**: `git add` + `git commit` on the authorized **Working branch** for this **task id** (one commit per task unless PM explicitly allowed batched commits in Assignment).
 2. **Plan checkbox**: Set `- [x]` on the matching line in `{PLAN_DIR}/<plan-id>-<name>.md`.
-3. **status.json / snapshot** (when PM round requires): bump the snapshot plan row `plans[].status` (e.g. `InProgress`) or append coordination notes to `{WORKFLOW_DIR}/<id>/notes.jsonl` per `mstar-plan-artifacts`.
+3. **status.json / snapshot** (when PM round requires): bump the snapshot plan row `plans[].status` (e.g. `InProgress`) or append coordination notes to `{WORKFLOW_DIR}/<id>/notes.jsonl` per `mstar-artifacts`.
 4. **Evidence**: Record real `git log -1 --oneline` in Completion Report **Git** (or the plan-mode status note if executing as PM in Plan mode).
 
 **NEVER**

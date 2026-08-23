@@ -49,7 +49,7 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 
 ## 0. Boot
 
-按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration` § Phase 1 + `mstar-phase-gates` + `mstar-dispatch-gates` + `mstar-plan-conventions/artifacts` + `mstar-host` → active host reference）。Cursor Plan mode 另读 **`cursor-plan-mode-bridge.md`**（`mstar-iteration` Phase 1 in Plan mode）。完整 load list → **`mstar-roles`**。
+按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration` § Phase 1 + `mstar-phase-gates` + `mstar-dispatch-gates` + `mstar-conventions/artifacts` + `mstar-host` → active host reference）。Cursor Plan mode 另读 **`cursor-plan-mode-bridge.md`**（`mstar-iteration` Phase 1 in Plan mode）。完整 load list → **`mstar-roles`**。
 
 **若 Cursor Plan mode 活跃 → 进入 §P；否则继续 §1。**
 

@@ -1,6 +1,6 @@
 /**
  * Engine project module — project layer (conventions:
- * mstar-plan-conventions/references/artifact-storage-paths.md § project layer;
+ * mstar-conventions/references/artifact-storage-paths.md § project layer;
  * compass v3.0.0 § Scope "Project layer"): roadmap frontmatter
  * validator + project register validator. This module is the only register
  * validator; the register re-hosts the residual entry schema from `status.ts`

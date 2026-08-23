@@ -72,6 +72,7 @@ Conditional lenses:
 - Run the **smallest runtime check that changes the verdict** (targeted command, not the full suite).
 - Mark unverified explicitly — a claim without verification is a lead, not a finding.
 - Mock-heavy tests around risky behavior = a finding (no real-surface proof), not proof of correctness.
+- What disqualifies a finding (no evidence, by-design, secret values, ungrounded suggestions) → **`references/finding-format.md`** § What disqualifies a finding.
 
 ## Attack and vet
 
@@ -121,11 +122,9 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 
 ## Plan output（handoff to execution）
 
-Review findings that need fixing can become plans for the normal Prepare → Execute flow — same contract as `mstar-audit` Phase 4:
+Review findings that need fixing can become plans for the normal Prepare → Execute flow — same contract as **`mstar-audit` SKILL.md** `## Plan output (all variants)`:
 
-- Write the top findings as self-contained plans (numbered `001-<slug>.md` + `README.md` index) with the same fields as `mstar-audit` Phase 4: Priority / Effort / Risk / Depends on / Category / Planned at, plus verification gates.
-- Land them in `{PLAN_DIR}/audit-<date>/` — same path convention as `mstar-audit`, no new directory layout.
-- Enter the normal flow via `mstar audit promote` (or manual registration per `mstar-plan-artifacts`).
+- Write the top findings as self-contained plans (numbered `001-<slug>.md` + `README.md` index — top findings only; the verdict is presented separately).
 - The review itself stays read-only: plans are written only when the user selects findings to pursue.
 
 ## Output shape

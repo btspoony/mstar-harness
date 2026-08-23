@@ -4,11 +4,11 @@
 
 **Always:** `mstar-harness-core`, `mstar-dispatch-gates`.
 
-**When editing harness text:** read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-plan-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules.
+**When editing harness text:** read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-conventions`, `mstar-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules.
 
 **When creating a new skill, making a major skill rewrite, or changing trigger descriptions:** MUST read `mstar-skill-authoring` before editing.
 
-**Typically:** `mstar-plan-conventions` (path symbols in examples).
+**Typically:** `mstar-conventions` (path symbols in examples).
 
 **Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 

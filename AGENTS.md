@@ -175,7 +175,7 @@ If one of these checks fails, stop and report why.
 
 ## Local maintenance workspace (`.mstar/`, gitignored)
 
-The repo's harness root is **`.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `workflows/`, `plans/`, `sdd/`, `iterations/`, `projects/`, `knowledge/`, `references/`, `specs/`, `archived/` and in-progress maint docs all live under `.mstar/`.
+The repo's harness root is **`.mstar/`** (the `mstar-conventions` consumer default — same convention consumer projects use): `status.json`, `workflows/`, `plans/`, `sdd/`, `iterations/`, `projects/`, `knowledge/`, `references/`, `specs/`, `archived/` and in-progress maint docs all live under `.mstar/`.
 
 **No tracked references to gitignored harness artifacts.** Tracked `*.ts` / `*.md` files must not cite paths under `.mstar/` (e.g. `.mstar/status.json`, `.mstar/plans/<id>.md`, `.mstar/references/*.md`, `.mstar/iterations/…`, `.mstar/sdd/…`, `.mstar/knowledge/…`): those files exist only in the local checkout, so references break fresh clones and CI. Refer to `{HARNESS_DIR}` / the consumer default (`.mstar/` → `.agents/` → `.plans/`/`plans/`) or a repo `.mstarc` declaration instead. This section is the maintenance contract that documents the local layout; the rule applies to all other tracked files.
 
@@ -188,11 +188,11 @@ The repo's harness root is **`.mstar/`** (the `mstar-plan-conventions` consumer 
 - Dispatch, Delegation, anti-recursion, SDD serial, QC default -> `skills/mstar-dispatch-gates/*`
 - SDD file handoff, per-task review, ledger -> `skills/mstar-sdd/*`
 - Git branches, worktrees, QC/QA checkout alignment -> `skills/mstar-branch-worktree/*`
-- Plan directory discovery, init, Spec branch summary -> `skills/mstar-plan-conventions/*`
-- Plan artifacts (`status.json`, residual, main plan, reports/, knowledge, Done compaction, `templates/`) -> `skills/mstar-plan-artifacts/*`
+- Plan directory discovery, init, Spec branch summary -> `skills/mstar-conventions/*`
+- Plan artifacts (`status.json`, residual, main plan, reports/, knowledge, Done compaction, `templates/`) -> `skills/mstar-artifacts/*`
 - DESIGN.md design system spec (create/audit/maintain, tokens, completeness checklist, light/dark themes, templates) -> `skills/mstar-design-md/*`
 - QC baseline and review template -> `skills/mstar-review-qc/*` (PM orchestration); leaf QC execution -> `skills/mstar-roles/references/qc-specialist/*`
-- Codebase audit → prioritized improvement plans -> `skills/mstar-audit/*` (read-only advisory; plan quality bar -> `skills/mstar-plan-artifacts/references/plan-quality-bar.md`)
+- Codebase audit → prioritized improvement plans -> `skills/mstar-audit/*` (read-only advisory; plan quality bar -> `skills/mstar-artifacts/references/plan-quality-bar.md`)
 - Cross-role coding behavior (RCA, verification, test-first discipline, review feedback) -> `skills/mstar-coding-behavior/*`
 - Skill authoring / trigger contracts -> `skills/mstar-skill-authoring/*`
 - Role behavior text -> `skills/mstar-roles/references/*`
@@ -236,10 +236,10 @@ After `mstar-harness-core`, load **only** what the role and round need (see `ski
 | `mstar-dispatch-gates` | PM; **all leaf executors** before Task/subagent |
 | `mstar-sdd` | PM on `Execution mode: sdd`; SDD implementer/reviewer subagents (SUBAGENT-STOP); optional **`SDD implementer session: sticky`** (`references/sticky-implementer-session.md`) |
 | `mstar-branch-worktree` | PM, dev*, QC*, QA, ops when Git/write or QC checkout |
-| `mstar-plan-conventions` | PM; dev* for path symbols / metadata |
-| `mstar-plan-artifacts` | PM (status/residual, InReview/QC waves), architect, product-manager, QC* (reports), QA (R#) |
+| `mstar-conventions` | PM; dev* for path symbols / metadata |
+| `mstar-artifacts` | PM (status/residual, InReview/QC waves), architect, product-manager, QC* (reports), QA (R#) |
 
-Edit topic skills directly (`mstar-phase-gates`, `mstar-branch-worktree`, `mstar-plan-artifacts`, …); do not recreate moved stub files under legacy paths.
+Edit topic skills directly (`mstar-phase-gates`, `mstar-branch-worktree`, `mstar-artifacts`, …); do not recreate moved stub files under legacy paths.
 
 ## Post-Skill-Change Sync Checklist
 
@@ -249,4 +249,4 @@ Edit topic skills directly (`mstar-phase-gates`, `mstar-branch-worktree`, `mstar
 - [ ] Cursor routing-eval updated if routing/gate behavior changed.
 - [ ] User-facing docs updated in both `README.md` and `README_CN.md` if onboarding changed.
 - [ ] Validation evidence included for behavior-shaping changes.
-- [ ] Stale cross-references point at topic **`SKILL.md`** or real `mstar-plan-artifacts/references/*` files (no deleted stub paths).
+- [ ] Stale cross-references point at topic **`SKILL.md`** or real `mstar-artifacts/references/*` files (no deleted stub paths).

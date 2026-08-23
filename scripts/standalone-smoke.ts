@@ -17,7 +17,7 @@
  *      `@mstar-harness/cli` outside an advisory `**Engine check (when
  *      available):**` blockquote. Fenced code blocks are allowed only when
  *      the block is labeled "Engine check" (advisory examples, e.g.
- *      mstar-plan-artifacts references).
+ *      mstar-artifacts references).
  *   3. Every `**Engine check (when available):**` callout is a blockquote
  *      and carries the standalone guarantee ("Skill text below remains
  *      authoritative when the runtime is absent"), so the skill body still

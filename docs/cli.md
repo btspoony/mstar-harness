@@ -206,7 +206,7 @@ Engine-backed harness checks for maintainers (thin wrappers — business logic l
 
 ### `mstar-harness status tech-debt`
 
-Print the residual tech-debt rollup (`total_open` / `by_severity` / `by_target` / `by_plan`) aggregated over every `{PROJECT_DIR}/<id>/residuals.json` project register — a thin mirror of the engine `techDebtRollup` check cited in `mstar-plan-artifacts` (`references/status-and-residuals.md`). v3 hard cutover: the project register is the source of truth — there is no stored-summary drift check, the output is informational (exit 0).
+Print the residual tech-debt rollup (`total_open` / `by_severity` / `by_target` / `by_plan`) aggregated over every `{PROJECT_DIR}/<id>/residuals.json` project register — a thin mirror of the engine `techDebtRollup` check cited in `mstar-artifacts` (`references/status-and-residuals.md`). v3 hard cutover: the project register is the source of truth — there is no stored-summary drift check, the output is informational (exit 0).
 
 - `npx @mstar-harness/cli status tech-debt`
 - `npx @mstar-harness/cli status tech-debt path/to/projects`
@@ -220,7 +220,7 @@ Exit codes:
 
 ### `mstar-harness status findings-cleanup`
 
-Enforce a plan's `Findings cleanup` mode on its project-register residuals — a thin mirror of the engine `findingsCleanupGate` check cited in `mstar-plan-artifacts`. The register (`projects/<id>/residuals.json`) entries are keyed by plan id — the snapshot plan linkage. Mode resolution: explicit `--mode zero-residual|allow-residual`, else the `allow-residual` default (plans without register entries pass trivially).
+Enforce a plan's `Findings cleanup` mode on its project-register residuals — a thin mirror of the engine `findingsCleanupGate` check cited in `mstar-artifacts`. The register (`projects/<id>/residuals.json`) entries are keyed by plan id — the snapshot plan linkage. Mode resolution: explicit `--mode zero-residual|allow-residual`, else the `allow-residual` default (plans without register entries pass trivially).
 
 - `npx @mstar-harness/cli status findings-cleanup <plan-id> --harness <path>`
 - `npx @mstar-harness/cli status findings-cleanup <plan-id> --project acme --mode zero-residual`
@@ -249,7 +249,7 @@ Exit codes:
 
 ### `mstar-harness lease verify-integration`
 
-Verify the workflow snapshot's top-level `integration_merge_lease` object when present — a thin mirror of the engine `validateIntegrationMergeLease` check cited in `mstar-plan-artifacts` / `mstar-iteration`. Distinct from `mstar-harness lease verify` (the plan-level `execution_lease` on a snapshot plan row): this is the serial integration-merge lease.
+Verify the workflow snapshot's top-level `integration_merge_lease` object when present — a thin mirror of the engine `validateIntegrationMergeLease` check cited in `mstar-artifacts` / `mstar-iteration`. Distinct from `mstar-harness lease verify` (the plan-level `execution_lease` on a snapshot plan row): this is the serial integration-merge lease.
 
 - `npx @mstar-harness/cli lease verify-integration --workflow <id> --harness <path>`
 

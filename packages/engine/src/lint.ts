@@ -18,7 +18,7 @@
  *   completion evidence must include the TDD triple (test file(s), command,
  *   output) in `task-N-report.md`; `mstar-sdd/references/file-handoffs.md` —
  *   fix subagents append covering test file(s), command run, output.
- * - Plan quality bar: `mstar-plan-artifacts/references/plan-quality-bar.md`
+ * - Plan quality bar: `mstar-artifacts/references/plan-quality-bar.md`
  *   § Quality checklist + `templates/plan.main.md` self-review
  *   ("Placeholder scan: no TBD").
  * - Skill frontmatter contract: `mstar-skill-authoring` SKILL.md § Frontmatter
@@ -350,7 +350,7 @@ export type PlanQualityFinding = {
 /** Result of `planQualityBar`: the gate verdict plus structured findings. */
 export type PlanQualityResult = GateResult & { findings: PlanQualityFinding[] };
 
-/** Placeholder word tokens (mstar-plan-artifacts/templates/plan.main.md
+/** Placeholder word tokens (mstar-artifacts/templates/plan.main.md
  * self-review "Placeholder scan: no TBD" + plan-quality-bar.md): TBD, TODO,
  * TBA (singular/plural) — word-boundary, case-insensitive. `FIXME`/`XXX` are
  * deliberately NOT flagged (code-marker territory, not plan placeholders). */
@@ -370,7 +370,7 @@ function stripInlineCode(line: string): string {
 }
 
 /**
- * Plan quality bar — placeholder scan (mstar-plan-artifacts
+ * Plan quality bar — placeholder scan (mstar-artifacts
  * `references/plan-quality-bar.md` § Quality checklist + `templates/
  * plan.main.md` self-review "Placeholder scan: no TBD"). Every placeholder
  * token found becomes one `lint.plan-quality.placeholder` violation whose
@@ -438,7 +438,7 @@ export function planQualityBar(planText: string): PlanQualityResult {
           "medium",
           "lint.plan-quality.placeholder",
           `placeholder token "${token}" at line ${i + 1}: "${text}"`,
-          "replace the placeholder with concrete content before locking the plan (mstar-plan-artifacts/references/plan-quality-bar.md; templates/plan.main.md placeholder scan)",
+          "replace the placeholder with concrete content before locking the plan (mstar-artifacts/references/plan-quality-bar.md; templates/plan.main.md placeholder scan)",
         ),
       );
     }

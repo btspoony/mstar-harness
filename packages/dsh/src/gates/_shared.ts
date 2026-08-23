@@ -21,7 +21,7 @@ import { resolveHarnessDir, resolveRepoEnforcement } from '@mstar-harness/engine
 import type { GateResult, ValidationResult } from '@mstar-harness/engine'
 import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-filesystem'
 import type { IterationGateListView, IterationGateViolationView } from '../types.ts'
-/** Canonical harness status file name (mstar-plan-artifacts status.json). */
+/** Canonical harness status file name (mstar-artifacts status.json). */
 export const STATUS_FILE = 'status.json'
 /** Plugin configuration. */
 export interface Config {

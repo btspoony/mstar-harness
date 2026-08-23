@@ -21,7 +21,7 @@ Phase 2–5 共享内容（PM invariants、assignment preflight、session todos�
 
 ## Boot
 
-按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration` § Phase 2–5 + `command-shared-invariants.md` → `mstar-compound` → `mstar-dispatch-gates` + host reference → **`mstar-sdd`**（first implement dispatch 前）→ `mstar-review-qc`（first QC 前）→ `mstar-plan-artifacts` / `mstar-plan-conventions` / `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
+按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration` § Phase 2–5 + `command-shared-invariants.md` → `mstar-compound` → `mstar-dispatch-gates` + host reference → **`mstar-sdd`**（first implement dispatch 前）→ `mstar-review-qc`（first QC 前）→ `mstar-artifacts` / `mstar-conventions` / `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
 
 ## Phase 2: Autonomous Execute
 

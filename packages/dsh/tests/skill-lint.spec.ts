@@ -238,7 +238,7 @@ describe('lintSkillDoc — ephemeral citation wiring (plan 20260816-dsh-surface-
       'mstar-roles',
       'mstar-coding-behavior',
       'mstar-skill-authoring',
-      'mstar-plan-artifacts',
+      'mstar-artifacts',
     ]
     for (const name of sample) {
       const doc = await readFile(join(skillsDir, name, 'SKILL.md'), 'utf8')

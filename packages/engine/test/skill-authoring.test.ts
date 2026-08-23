@@ -375,7 +375,7 @@ describe("lintFiveQuestion", () => {
   test("fenced fake headings never count as coverage (fence-aware, both modes)", () => {
     // A gitignore-style fence containing a `# Workflow ...` comment line must
     // not satisfy the workflow question — in either mode. The only in-fence
-    // "heading" in the corpus was exactly this shape (mstar-plan-conventions
+    // "heading" in the corpus was exactly this shape (mstar-conventions
     // gitignore snippet) and previously produced a false green.
     const body = `# Skill Title
 

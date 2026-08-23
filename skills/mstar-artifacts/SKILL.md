@@ -1,11 +1,11 @@
 ---
-name: mstar-plan-artifacts
+name: mstar-artifacts
 description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans and durable review summaries, `{SDD_DIR}/review/` ephemeral QC/QA bundles, `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` indexes, plus `{HARNESS_DIR}/status.json` (v2 root register) / `{WORKFLOW_DIR}/<id>/snapshot.json` (plan rows + leases) and `{PROJECT_DIR}/<id>/residuals.json` (residual register; severity SSOT, open/close lifecycle). Read when writing plans or QC/QA review bundles, maintaining knowledge/iteration indexes, reading or writing status/snapshot/register, or mapping QC severity to JSON. Required for `@project-manager` on status, residuals, and InReview/QC waves; `@qc-specialist*` before writing review bundle reports; `@qa-engineer` before closing R# when `QA gate: mandatory`. Verdict rules: leaf → `mstar-roles/references/qc-specialist/report-template.md`; PM → `mstar-review-qc`."
 ---
 
 ## Load order
 
-**Before first Read of this skill: Read `mstar-harness-core` (SKILL.md), and `mstar-plan-conventions` when path symbols matter.** Git branch / worktree / QC checkout → **`mstar-branch-worktree`**. On conflict, **`mstar-harness-core` wins**.
+**Before first Read of this skill: Read `mstar-harness-core` (SKILL.md), and `mstar-conventions` when path symbols matter.** Git branch / worktree / QC checkout → **`mstar-branch-worktree`**. On conflict, **`mstar-harness-core` wins**.
 
 ## Scope (plan directory artifacts)
 
@@ -18,7 +18,7 @@ description: "Morning Star plan harness artifacts — `{PLAN_DIR}` main plans an
 | Empty-repo `status.json` template | `templates/status.empty.json` (`templates/README.md`) |
 | Tech-debt rollup (read-only) | `mstar status tech-debt [path]` (engine `techDebtRollup`; see `references/status-and-residuals.md`) |
 
-**Out of scope:** branch and QC/QA checkout alignment → **`mstar-branch-worktree`**; leaf QC checklist and verdict → **`mstar-roles/references/qc-specialist/`**; PM QC orchestration → **`mstar-review-qc`**; `{HARNESS_DIR}` discovery and init → **`mstar-plan-conventions`**.
+**Out of scope:** branch and QC/QA checkout alignment → **`mstar-branch-worktree`**; leaf QC checklist and verdict → **`mstar-roles/references/qc-specialist/`**; PM QC orchestration → **`mstar-review-qc`**; `{HARNESS_DIR}` discovery and init → **`mstar-conventions`**.
 
 ## `status.json`, workflow snapshots, and open residual (summary)
 

@@ -844,7 +844,7 @@
       "must_have_artifacts": [
         "Context Loaded declaration",
         "STOP before writable dispatch",
-        "orphan recovery per mstar-plan-artifacts — not invent lease",
+        "orphan recovery per mstar-artifacts — not invent lease",
         "same-holder unattended recover only when holder matches"
       ],
       "hard_fail_if": [

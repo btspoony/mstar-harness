@@ -3,7 +3,7 @@
  * machines + same-host status write lock.
  *
  * Spec sources (each export cites the skill/reference section it enforces):
- * - Lease objects + required fields: `mstar-plan-artifacts`
+ * - Lease objects + required fields: `mstar-artifacts`
  *   `references/status-and-residuals.md` § `plans[].execution_lease` +
  *   § Snapshot top-level `integration_merge_lease` (v3 — relocated from the
  *   v1 root `metadata.integration_merge_lease` in the workflow-engine-core

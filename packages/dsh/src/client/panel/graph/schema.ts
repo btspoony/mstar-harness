@@ -1,7 +1,7 @@
 /**
  * Graph schema constants (spec panel-layout-graph §2.0): the workflow loop
  * (phase ring — mstar-iteration Phase 1–5) and the per-plan status machine
- * (mstar-plan-artifacts) are CLIENT-SIDE DESIGN KNOWLEDGE. They are written
+ * (mstar-artifacts) are CLIENT-SIDE DESIGN KNOWLEDGE. They are written
  * once here with their provenance and STRICTLY SEPARATED from catalog
  * evidence (`iteration.gate.transition` / `state.plans[].status`), which
  * `projectGraph` projects onto this skeleton.

@@ -1,32 +1,32 @@
 # 产物存储路径（SSOT · 路径符号解析后）
 
-> **Authority**: `mstar-plan-conventions` `references/artifact-storage-paths.md`.
-> Symbol definitions (`{HARNESS_DIR}`, `{KNOWLEDGE_DIR}`, `{PLAN_DIR}`, etc.) → `mstar-plan-conventions` SKILL.md § 路径符号。
+> **Authority**: `mstar-conventions` `references/artifact-storage-paths.md`.
+> Symbol definitions (`{HARNESS_DIR}`, `{KNOWLEDGE_DIR}`, `{PLAN_DIR}`, etc.) → `mstar-conventions` SKILL.md § 路径符号。
 > All `mstar-*` skills that produce or operate on files **must** follow this table; do not redefine paths locally.
 
 ## Harness 子树内（`{HARNESS_DIR}/` 下）
 
-这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-plan-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/` 等默认 gitignored；`AGENTS.md`、`knowledge/`、`specs/` 默认 tracked。
+这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/` 等默认 gitignored；`AGENTS.md`、`knowledge/`、`specs/` 默认 tracked。
 
 | 产物 | 解析后路径（默认 `.mstar/`） | 读写的技能 |
 |------|---------------------------|-----------|
 | **知识文档** | `.mstar/knowledge/<category>/<slug>.md` | `mstar-compound`（写）、`mstar-compound-refresh`（读写） |
 | **知识索引** | `.mstar/knowledge/README.md` | `mstar-compound`（写）、`mstar-compound-refresh`（读写） |
-| **主 plan** | `.mstar/plans/<plan-id>-<name>.md`（gitignored；本地会话 SSOT） | PM / `mstar-plan-artifacts` |
+| **主 plan** | `.mstar/plans/<plan-id>-<name>.md`（gitignored；本地会话 SSOT） | PM / `mstar-artifacts` |
 | **Review bundle（QC/QA 原始过程报告）** | `{HARNESS_DIR}/sdd/<plan-id>/review/`（gitignored；默认 `.mstar/sdd/<plan-id>/review/`） | `mstar-sdd`、`mstar-review-qc`、`qa-engineer` |
 | **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored；含 per-task handoff 与 `review/` bundle） | `mstar-sdd` |
-| **status.json（v2 根）** | `.mstar/status.json`（gitignored；本地会话 SSOT；`{version: 2, updated_at, workflows[]}` 活跃 lifecycle 登记） | `mstar-plan-artifacts`、`mstar-iteration` |
-| **workflow snapshot** | `{HARNESS_DIR}/workflows/<id>/snapshot.json`（gitignored；每 lifecycle 运行态：`plans[]` 行 + leases + branch anchors；`<id>` = plan id 或 iteration id） | `mstar-plan-artifacts`、`mstar-iteration`、`mstar-branch-worktree` |
-| **workflow notes ledger** | `{HARNESS_DIR}/workflows/<id>/notes.jsonl`（gitignored；append-only 运行时笔记） | `mstar-plan-artifacts`、`mstar-iteration` |
-| **project roadmap** | `.mstar/projects/<id>/roadmap.md`（gitignored；frontmatter `{project_id, title, status, created_at, milestones[]?, residuals_ref?}` + 正文约定） | `mstar-plan-artifacts`、`mstar-iteration` |
-| **project register** | `.mstar/projects/<id>/residuals.json`（gitignored；open residual SSOT：`entries[<plan-id>]` 数组；项目缺失用 `_default`） | `mstar-plan-artifacts`、`mstar-review-qc` |
-| **project references（研究语料）** | `.mstar/projects/<id>/references/`（gitignored；主题化 surveys / epic 备注 / 第三方 notes，与项目绑定；与 `{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` 不同） | `mstar-project-governance`、`mstar-plan-artifacts` |
+| **status.json（v2 根）** | `.mstar/status.json`（gitignored；本地会话 SSOT；`{version: 2, updated_at, workflows[]}` 活跃 lifecycle 登记） | `mstar-artifacts`、`mstar-iteration` |
+| **workflow snapshot** | `{HARNESS_DIR}/workflows/<id>/snapshot.json`（gitignored；每 lifecycle 运行态：`plans[]` 行 + leases + branch anchors；`<id>` = plan id 或 iteration id） | `mstar-artifacts`、`mstar-iteration`、`mstar-branch-worktree` |
+| **workflow notes ledger** | `{HARNESS_DIR}/workflows/<id>/notes.jsonl`（gitignored；append-only 运行时笔记） | `mstar-artifacts`、`mstar-iteration` |
+| **project roadmap** | `.mstar/projects/<id>/roadmap.md`（gitignored；frontmatter `{project_id, title, status, created_at, milestones[]?, residuals_ref?}` + 正文约定） | `mstar-artifacts`、`mstar-iteration` |
+| **project register** | `.mstar/projects/<id>/residuals.json`（gitignored；open residual SSOT：`entries[<plan-id>]` 数组；项目缺失用 `_default`） | `mstar-artifacts`、`mstar-review-qc` |
+| **project references（研究语料）** | `.mstar/projects/<id>/references/`（gitignored；主题化 surveys / epic 备注 / 第三方 notes，与项目绑定；与 `{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` 不同） | `mstar-project-governance`、`mstar-artifacts` |
 | **迭代 package** | `.mstar/iterations/<iteration-id>/`（gitignored；`delivery-compass.md`、`guides/`、`specs/`、可选 `README.md`） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读；默认排除 compass） |
 | **迭代索引** | `.mstar/iterations/README.md`（gitignored；一行 = 一次迭代） | `mstar-iteration`（读写） |
-| **规格** | `{HARNESS_DIR}/specs/`（默认 tracked；解析见 `mstar-plan-conventions`） | `mstar-plan-artifacts` |
+| **规格** | `{HARNESS_DIR}/specs/`（默认 tracked；解析见 `mstar-conventions`） | `mstar-artifacts` |
 | **harness AGENTS** | `.mstar/AGENTS.md`（tracked） | PM / init |
-| **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-plan-artifacts` |
-| **archived specs** | `.mstar/archived/specs/`（保留原 `{SPECS_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-plan-artifacts` |
+| **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
+| **archived specs** | `.mstar/archived/specs/`（保留原 `{SPECS_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
 
 ## 仓库根目录（`<repo-root>/`，与 `.git/` 同级）
 

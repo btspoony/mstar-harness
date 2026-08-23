@@ -6,7 +6,7 @@
  * Spec sources (each test cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`
  *   (reject dual-write under `metadata.residual_findings`):
- *   `skills/mstar-plan-artifacts/references/status-and-residuals.md`
+ *   `skills/mstar-artifacts/references/status-and-residuals.md`
  *   § Basic structure + § General constraints ("Init with `residual_findings`:
  *   {}; no dual-write with legacy side") + § Common queries (legacy read path).
  * - Severity enum + legacy `"warning"` → `low` normalization (read + rollup):

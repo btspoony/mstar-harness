@@ -99,8 +99,8 @@ function isMarkdownDoc(path: string): boolean {
 }
 
 /** Audit seam scope: `.md` plan files under a `plans/audit-*` directory
- * (mstar-audit § Phase 4 `{PLAN_DIR}/audit-<date>/` layout; `{PLAN_DIR}`
- * resolves under any `plans` segment). */
+ * (mstar-audit SKILL.md § Plan output (all variants) `{PLAN_DIR}/audit-<date>/`
+ * layout; `{PLAN_DIR}` resolves under any `plans` segment). */
 function isAuditPlanTarget(path: string): boolean {
   if (!isMarkdownDoc(path)) return false
   const segments = resolve(path).split(sep)

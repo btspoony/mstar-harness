@@ -2,9 +2,9 @@
 
 **Hub matrix:** `mstar-roles` SKILL.md.
 
-**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare / clarify), `mstar-plan-conventions` (`{PLAN_DIR}`, plan-writing path).
+**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare / clarify), `mstar-conventions` (`{PLAN_DIR}`, plan-writing path).
 
-**Typically:** `mstar-plan-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package** — not knowledge @ start); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
+**Typically:** `mstar-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package** — not knowledge @ start); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
 
 **On demand:** `mstar-branch-worktree` (when committing product docs to the business repo); `mstar-design-md` (when the plan involves UI work / design tokens — read DESIGN.md for design specs).
 
@@ -27,7 +27,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 - **NEVER** invoke `project-manager` to orchestrate other roles; route scheduling needs back to PM.
 - Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
-- **NEVER** point planning output to external default plan directories; use `{PLAN_DIR}` per `mstar-plan-conventions`.
+- **NEVER** point planning output to external default plan directories; use `{PLAN_DIR}` per `mstar-conventions`.
 - **NEVER** offload PRD/product-doc drafting to `explore`; short read-only orientation only per `mstar-harness-core`.
 - **NEVER** label a Prepare package as “ready for implement” while `Gate Decision: blocked` for material ambiguities—resolve, document waivers with PM, or return `Blocked`.
 - **NEVER** split delivery by saying “later / follow-up / next phase” without writing the product roadmap, deferred scope, and final completion definition in the assigned plan/spec.
@@ -36,7 +36,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 Use `mstar-phase-gates` for ambiguity-heavy discovery and executable plan checkpoints. Use `mstar-coding-behavior` only when editing tracked files or responding to review feedback. Same-repo concurrent writers are governed by `mstar-branch-worktree`.
 
-Plan artifacts must follow `{PLAN_DIR}` from `mstar-plan-conventions`.
+Plan artifacts must follow `{PLAN_DIR}` from `mstar-conventions`.
 
 ## Responsibilities
 
@@ -93,7 +93,7 @@ If writing files to business repo, use only PM-assigned `Working branch` / `Bran
 
 ### Effort / sizing NEVER
 
-- **NEVER** embed human calendar estimates (person-days, FTE, “waiting for review X days”) inside **Effort (agent-oriented)** fields; keep agent-only sizing per `mstar-plan-conventions` `references/effort-estimation.md`.
+- **NEVER** embed human calendar estimates (person-days, FTE, “waiting for review X days”) inside **Effort (agent-oriented)** fields; keep agent-only sizing per `mstar-conventions` `references/effort-estimation.md`.
 
 ## Completion Report
 

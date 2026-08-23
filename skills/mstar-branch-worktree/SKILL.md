@@ -7,7 +7,7 @@ description: "Morning Star 业务仓 Git 功能分支、worktree 隔离（L1 跨
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 冲突时 **以 `mstar-harness-core` 为准**。
 
-**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-plan-conventions`**。**L1/L2 worktree 分层**（迭代 control vs feature、plan 内并行轨）→ 下文 **「Worktree isolation layers」**；**L2** 同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；迭代 lease claim/merge 细则 → **`mstar-iteration`** `references/phase-2-worktree-lease.md`（勿在本 skill 重复完整协议表）。下文为分支与 QC/QA 检出对齐主文。
+**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-conventions`**。**L1/L2 worktree 分层**（迭代 control vs feature、plan 内并行轨）→ 下文 **「Worktree isolation layers」**；**L2** 同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；迭代 lease claim/merge 细则 → **`mstar-iteration`** `references/phase-2-worktree-lease.md`（勿在本 skill 重复完整协议表）。下文为分支与 QC/QA 检出对齐主文。
 
 ## Scope（摘要）
 
@@ -126,7 +126,7 @@ Established at iteration **Phase 2 entry** (Phase 1 Review & Edit may stay on th
 
 ### Harness path SSOT under default gitignore (L1)
 
-Default process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`, `projects/`, `sdd/`) are **gitignored** (`mstar-plan-conventions`「Git 跟踪策略」). `git worktree add` does **not** copy them into a new feature checkout. They live on the **control worktree filesystem** (the checkout of `spec_integration_branch`), not as Git blobs on that branch.
+Default process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`, `projects/`, `sdd/`) are **gitignored** (`mstar-conventions`「Git 跟踪策略」). `git worktree add` does **not** copy them into a new feature checkout. They live on the **control worktree filesystem** (the checkout of `spec_integration_branch`), not as Git blobs on that branch.
 
 | Path role | Resolve from |
 |-----------|--------------|
@@ -199,13 +199,13 @@ Default process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`,
 
 **推荐默认编排（plan 集成分支先行）**——同仓、同一 plan、**≥2 条可写并行轨**时降低 QC/QA 误用单一开发目录风险。**不是唯一合法 Git 拓扑**；其它拓扑仍须满足上文对齐字段 + 本节**强制**条款（派发前 worktree 隔离 + 派 QC 前**单一**待审 `HEAD` + 一套对齐字段）：
 
-1. **先起集成分支（再挂 worktree）**：派发各轨**实现** Assignment 前，PM 与用户确认 **`Branch policy`**，建立 **plan 集成分支**（Assignment 用 **`Working branch: create <plan-integration-branch> from <base>`** 或等价明确写法；`<base>` 必须 PM 明确记录，例如 snapshot `branch.base`（`iteration_base_branch`）、现有 feature 分支、远程跟踪分支或团队既定主线，**不得**未授权假设）。**分支名由 PM 指定**（`feature/<plan-id>-integrate`、`integrate/<plan-id>` 仅为命名示例，**非强制**）。**多 `plan_id` 同源一条 `primary_spec`（Spec 文档）时**：该集成分支语义即 **Spec 集成分支**；各 Plan feature 线 merge 回此线，**全部 Plans 完成后**向显式 `target_branch` **走 PR**（见 `mstar-plan-conventions` SKILL.md「Spec 驱动的分支模型」）。
+1. **先起集成分支（再挂 worktree）**：派发各轨**实现** Assignment 前，PM 与用户确认 **`Branch policy`**，建立 **plan 集成分支**（Assignment 用 **`Working branch: create <plan-integration-branch> from <base>`** 或等价明确写法；`<base>` 必须 PM 明确记录，例如 snapshot `branch.base`（`iteration_base_branch`）、现有 feature 分支、远程跟踪分支或团队既定主线，**不得**未授权假设）。**分支名由 PM 指定**（`feature/<plan-id>-integrate`、`integrate/<plan-id>` 仅为命名示例，**非强制**）。**多 `plan_id` 同源一条 `primary_spec`（Spec 文档）时**：该集成分支语义即 **Spec 集成分支**；各 Plan feature 线 merge 回此线，**全部 Plans 完成后**向显式 `target_branch` **走 PR**（见 `mstar-conventions` SKILL.md「Spec 驱动的分支模型」）。
 2. **再挂各轨 worktree**：每条并行轨分配**独立** `git worktree` + **`Worktree path`**；各轨 `Working branch` 一般为**从集成分支出**的 topic 分支（`create <topic-i> from <plan-integration-branch>`）或 PM 书面约定等价结构（例如从同一 `<base>` 出 topic、但**书面指定**合并时**以集成分支为靶**）。**禁止**承接方擅自把未授权功能提交直接堆在 `main`/`master`。
 3. **进 QC 之前**：将全部**须同一轮三审覆盖**的提交**归并**（merge / rebase / cherry-pick，以 PM 指定团队方式）到同一条将作 QC **`Working branch`** 的分支 **`HEAD`**（**通常即 plan 集成分支**；PM 已重命名/快进为最终 `feature/*` 则以 Assignment 为准）。**在此**解决冲突；**勿**在 QC Assignment 仍指向「只含部分轨」旧 `HEAD` 时派三审。
 4. **QC/QA 的 `Working branch` 与合并主线**：`Working branch` 即上一步**已含全部待审提交**的那条分支（常见 plan 集成分支）。`Review range` / `Diff basis` 通常相对**尚未合并 feature 的**显式目标/base 参照（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`），审的是 **「feature 线 vs 目标线」** 差异；**默认不要求** QC **通过前**已把该分支 merge 进目标分支（除非 **`Branch policy`** 或用户明确 trunk 式例外）。
-5. **本推荐不适用时**：单轨、多仓库、或 plan 已**拆 scope / 多轮增量三审**（见 `mstar-plan-conventions`）— 仍须**逐轮**满足**强制**条款：每轮 QC 对应**一条**快照、**一套**逐字相同的 `plan_id` + `Review range` / `Diff basis`。
+5. **本推荐不适用时**：单轨、多仓库、或 plan 已**拆 scope / 多轮增量三审**（见 `mstar-conventions`）— 仍须**逐轮**满足**强制**条款：每轮 QC 对应**一条**快照、**一套**逐字相同的 `plan_id` + `Review range` / `Diff basis`。
 
-**不应合并为一次审时**：若两轨**有意**保持独立可合并单元（例如两条独立 PR），**不得**共用**同一套** `plan_id` + `Review range` / `Diff basis` 假装「一轮三审覆盖全部」。应**拆分 scope**：分轮次审查、不同 **`Feature / scope label`**、不同 `plan_id`、或按 `mstar-plan-conventions` 写明的**显式增量三审**例外，使每轮 QC 各对应**一条**分支快照与**一套**对齐字段。
+**不应合并为一次审时**：若两轨**有意**保持独立可合并单元（例如两条独立 PR），**不得**共用**同一套** `plan_id` + `Review range` / `Diff basis` 假装「一轮三审覆盖全部」。应**拆分 scope**：分轮次审查、不同 **`Feature / scope label`**、不同 `plan_id`、或按 `mstar-conventions` 写明的**显式增量三审**例外，使每轮 QC 各对应**一条**分支快照与**一套**对齐字段。
 
 **同分支多目录例外**：若所有并行轨**始终**在同一条已授权 **`Working branch`** 上协作（每流仅目录不同、提交已互相 `pull`/推送收敛），则任一该分支检出目录在**更新到含全部提交 `HEAD`** 后均可作 `Review cwd`；**不得**使用仍停留在旧提交的 worktree 路径。
 

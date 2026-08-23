@@ -1,6 +1,6 @@
 # Lease claim protocol (full prose, archived)
 
-> Engine-absent fallback: the full lease protocol prose displaced from `mstar-iteration` / `mstar-plan-artifacts` when engine validators (`validateExecutionLease` / `validateIntegrationMergeLease` / CLI `mstar lease verify --workflow <id>`) took over the same contract. Engine-present hosts read the runtime skills' engine-check pointers instead.
+> Engine-absent fallback: the full lease protocol prose displaced from `mstar-iteration` / `mstar-artifacts` when engine validators (`validateExecutionLease` / `validateIntegrationMergeLease` / CLI `mstar lease verify --workflow <id>`) took over the same contract. Engine-present hosts read the runtime skills' engine-check pointers instead.
 
 ## When it applies
 

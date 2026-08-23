@@ -9,7 +9,7 @@ v3 布局把 v1 的「单文件 `status.json`（根 `plans[]` + 根级 `residual
 - **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层：roadmap frontmatter（machine-checkable）+ residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义**逐字保留**）。无项目的流程回落到 `_default` 项目。
 
 `status.json`（根）、workflow snapshot 与 project register 都是 **SSOT**：plan 行状态与 lease 在 snapshot，open residual 在 register。  
-Canonical vs legacy residual definitions → **`mstar-plan-artifacts` SKILL.md**（"`status.json`, workflow snapshots, and open residual (summary)"）；本文件 covers **fields, severity, lifecycle, v2 地址与 engine-check 命令**。  
+Canonical vs legacy residual definitions → **`mstar-artifacts` SKILL.md**（"`status.json`, workflow snapshots, and open residual (summary)"）；本文件 covers **fields, severity, lifecycle, v2 地址与 engine-check 命令**。  
 **Closed** residuals close **in place** in the register（`lifecycle` / `closed_at` / `closure_note`）— v1 的 `archived/residuals/<plan-id>.json` 归档路径与 `archive-residuals` 已移除（`mstar status archive-residuals` 在 v3 仅报错并指向 register 状态变更）。
 
 **Why this matters:** Within a working copy, the workflow snapshot and project registers are the **local session SSOT** for risk and decisions. Non-blocking conclusions that stay only in chat or a gitignored review bundle **without local SSOT update** cannot be inherited reliably in that session; `Done` drifts from visible known debt. **`@project-manager`** should register trackable open items soon after review closure; close after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist).
@@ -244,7 +244,7 @@ Snapshot plan rows keep the v1 PlanRow shape verbatim; the standard optional `me
 | Key | Type | Purpose |
 | --- | --- | --- |
 | `working_branch` | string | Implementation branch; aligns with Assignment **`Working branch`** (SSOT) |
-| `spec_integration_branch` | string | (Multi-plan same **Spec**) integration branch name; created from snapshot `branch.base` / `execution_policy` context; plan branches merge here before final PR (`mstar-plan-conventions`) |
+| `spec_integration_branch` | string | (Multi-plan same **Spec**) integration branch name; created from snapshot `branch.base` / `execution_policy` context; plan branches merge here before final PR (`mstar-conventions`) |
 | `merge_target` | string | Next merge target; multi-plan + Spec → usually `spec_integration_branch`; final PR target is snapshot `branch.target` |
 | `branch_policy` | string | One-line policy per `mstar-harness-core` |
 | `phase` | string | Program/roadmap label |
@@ -312,7 +312,7 @@ Leases live in the **workflow snapshot** `{WORKFLOW_DIR}/<id>/snapshot.json` (`p
 
 **Same-host exclusive write lock (snapshot / root):** all control-path lease mutations (execution claim/release/transfer, plan-status transitions that touch leases, `integration_merge_lease` claim/release) **MUST** run inside a same-host exclusive write lock for the full read-check-replace-verify sequence. Engine writers handle this automatically (`writeWorkflowSnapshot` / `registerWorkflow` acquire `<status-file dir>/.status-write.lockdir/` next to the file — for snapshots the lockdir lands inside `workflows/<id>/`). Prefer the engine-check commands below over hand-rolled `flock` snippets; the atomic-mkdir alternative (`.status-write.lockdir/` in the same directory as the file) remains the documented fallback when no engine writer exists. Hard gate, cross-host exception and pre-dispatch re-verify → `mstar-engine-legacy/references/lease-protocol.md`.
 
-> **Lease Engine-check:** single canonical callout in `mstar-plan-artifacts` `SKILL.md`（Engine-check lease 行）— pointer only, do not re-vendor.
+> **Lease Engine-check:** single canonical callout in `mstar-artifacts` `SKILL.md`（Engine-check lease 行）— pointer only, do not re-vendor.
 
 ### `integration_merge_lease` (snapshot top-level)
 

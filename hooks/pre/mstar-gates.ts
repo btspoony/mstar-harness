@@ -82,7 +82,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 const STATUS_FILE = "status.json";
 const SNAPSHOT_FILE = "snapshot.json";
 const REGISTER_FILE = "residuals.json";
-const STATUS_SKILL_POINTER = "skill: mstar-plan-artifacts/references/status-and-residuals.md";
+const STATUS_SKILL_POINTER = "skill: mstar-artifacts/references/status-and-residuals.md";
 const DISPATCH_SKILL_POINTER = "skill: mstar-dispatch-gates";
 
 /**

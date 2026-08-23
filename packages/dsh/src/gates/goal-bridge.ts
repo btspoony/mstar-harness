@@ -460,7 +460,7 @@ function blockedAdvisoryOf(envelope: unknown): BlockedGoalAdvisory | undefined {
  * sanitized (ASCII control chars stripped) + bounded reason message, a
  * bounded objective summary, and the `{HARNESS_DIR}/status.json` residual
  * pointer (the project register `projects/<id>/residuals.json` —
- * mstar-plan-artifacts SSOT; entries keyed by plan id) — the operator
+ * mstar-artifacts SSOT; entries keyed by plan id) — the operator
  * acts without reverse-engineering the host. Advisory-only: ZERO harness
  * writes (the one-way mirror; status.json stays SSOT). Never throws (the
  * sink is a no-op before bind; `log` itself is a plain call).

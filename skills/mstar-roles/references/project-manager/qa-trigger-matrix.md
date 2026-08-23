@@ -34,7 +34,7 @@ Set **`QA gate`** on the **first implement Assignment** (or plan frontmatter) an
 
 **Upgrade rule:** If conditions change mid-round (e.g. QC becomes `Approve with residuals`, UI scope added, open R# registered), change `QA gate` from `pm-acceptance` to `mandatory` before `Done`.
 
-**Findings cleanup note:** Under Assignment **`Findings cleanup: zero-residual`** (iteration Phase 2 default), prefer clean QC `Approve` with **no open R#** — that restores the small-feature `pm-acceptance` path when other tier rules allow. Any remaining open R# (even blocker-defer) still force **`QA gate: mandatory`** like the residual row above. See `mstar-plan-artifacts` Findings cleanup modes.
+**Findings cleanup note:** Under Assignment **`Findings cleanup: zero-residual`** (iteration Phase 2 default), prefer clean QC `Approve` with **no open R#** — that restores the small-feature `pm-acceptance` path when other tier rules allow. Any remaining open R# (even blocker-defer) still force **`QA gate: mandatory`** like the residual row above. See `mstar-artifacts` Findings cleanup modes.
 
 ## PM acceptance checklist (required before `Done` when `QA gate: pm-acceptance`)
 
@@ -42,7 +42,7 @@ PM completes this in **Status Update** (or plan closure note). PM **does not** r
 
 1. **QC verdict:** `{SDD_DIR}/review/qc-consolidated.md` or `{SDD_DIR}/review/qc.md` shows `Approve` with **Critical = 0** and **Warning = 0** (not `Approve with residuals`), and the main plan has a durable gate summary.
 2. **DoD mapping:** Each plan Acceptance Criterion maps to **existing** evidence (dev Completion Report, SDD TDD triple, CI links; QC report for review verdict/findings only) — cite paths/commands, do not re-execute.
-3. **Residuals:** `status.json` has **no open R#** for this `plan_id` (or documented waiver per `mstar-plan-artifacts`).
+3. **Residuals:** `status.json` has **no open R#** for this `plan_id` (or documented waiver per `mstar-artifacts`).
 4. **Checkout alignment:** `Working branch` and `Review range / Diff basis` match QC report verified lines.
 5. **`QA gate reason`:** One line naming the tier (e.g. `hotfix-inline`, `small-feature-clean-qc`).
 

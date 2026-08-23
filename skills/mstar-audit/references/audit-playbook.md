@@ -141,7 +141,7 @@ Every finding, from every category and every subagent, comes back in this shape:
 
 - **Evidence**: `path/file.ts:123` — one-sentence description. (2–5 strongest locations; note "and ~N similar sites" if widespread.)
 - **Impact**: What goes wrong / what's being paid. Concrete: "every order-list render issues 1+N queries", not "suboptimal".
-- **Effort**: XS | S | M | L | XL — for the *fix*, including tests. (Morning Star effort scale — see `mstar-plan-conventions`.)
+- **Effort**: XS | S | M | L | XL — for the *fix*, including tests. (Morning Star effort scale — see `mstar-conventions`.)
 - **Risk**: What the fix could break; LOW/MED/HIGH plus one line why.
 - **Confidence**: HIGH (read the code, certain) / MED (strong signal, needs verification) / LOW (smell, needs investigation). LOW-confidence findings may be reported but get an "investigate" plan, not a "fix" plan.
 - **Fix sketch**: 1–3 sentences. Not the plan — just enough to judge effort honestly.

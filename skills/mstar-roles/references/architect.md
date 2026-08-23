@@ -2,9 +2,9 @@
 
 **Hub matrix:** `mstar-roles` SKILL.md.
 
-**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare: specify/clarify/plan), `mstar-plan-conventions` (`{PLAN_DIR}`, plan-writing path).
+**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare: specify/clarify/plan), `mstar-conventions` (`{PLAN_DIR}`, plan-writing path).
 
-**Typically:** `mstar-plan-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package**); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
+**Typically:** `mstar-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package**); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
 
 **On demand:** `mstar-branch-worktree` (when committing architecture docs to the business repo); `mstar-design-md` (when the plan involves UI work / design tokens — read DESIGN.md for design specs).
 
@@ -29,7 +29,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** treat `Gate Decision: blocked` (material, high-impact ambiguities still open) as permission to hand off “ready for implement” architecture—finish clarify, update the package, or return `Blocked` to PM.
 - **NEVER** use a temporary, mixed, or partial design as the selected approach unless the target architecture and staged roadmap are written in the assigned plan/spec. “Later” without a tracking location is `Blocked`, not a handoff.
 - **NEVER** edit application implementation source, automated tests, CI workflows, Dockerfiles, or secrets-bearing runtime configuration unless the assignment explicitly limits you to doc-only placeholders **and** PM recorded the risk acceptance.
-- **NEVER** persist planning artifacts under external default plan directories; only `{PLAN_DIR}` per `mstar-plan-conventions`.
+- **NEVER** persist planning artifacts under external default plan directories; only `{PLAN_DIR}` per `mstar-conventions`.
 
 These rules align with `mstar-harness-core` executor anti-recursion invariants.
 
@@ -37,7 +37,7 @@ These rules align with `mstar-harness-core` executor anti-recursion invariants.
 
 Use `mstar-phase-gates` for trade-off exploration and technical plan checkpoints. Use `mstar-coding-behavior` only when editing tracked files or responding to review feedback. Same-repo multi-writer parallelism is governed by `mstar-branch-worktree`.
 
-Plan artifacts must follow `{PLAN_DIR}` from `mstar-plan-conventions`, not external default paths.
+Plan artifacts must follow `{PLAN_DIR}` from `mstar-conventions`, not external default paths.
 
 ## Responsibilities
 

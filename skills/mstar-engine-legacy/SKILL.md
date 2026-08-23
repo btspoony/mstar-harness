@@ -50,4 +50,4 @@ description: Morning Star 条件契约档案（engine-absent fallback）。宿�
 ## References
 
 - 本 skill 的 references（见 When Workflow 表）。
-- 权威运行时契约（engine-present 时读）：`mstar-plan-artifacts`（status v2 / register）、`mstar-iteration`、`mstar-dispatch-gates`、`mstar-host`。
+- 权威运行时契约（engine-present 时读）：`mstar-artifacts`（status v2 / register）、`mstar-iteration`、`mstar-dispatch-gates`、`mstar-host`。

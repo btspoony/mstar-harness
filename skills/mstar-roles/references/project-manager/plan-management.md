@@ -4,7 +4,7 @@ Use this reference for `{HARNESS_DIR}` / `{PLAN_DIR}` initialization, status syn
 
 ## Directory Discovery
 
-Follow `mstar-plan-conventions` for canonical discovery.
+Follow `mstar-conventions` for canonical discovery.
 Preferred layout:
 
 - `{HARNESS_DIR}`: `.mstar/` by default; existing `.agents/` projects remain valid.
@@ -19,14 +19,14 @@ Legacy fallbacks:
 
 1. Create `{HARNESS_DIR}` and `{PLAN_DIR}` when absent.
 2. Initialize `{HARNESS_DIR}/status.json` from template if available.
-3. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json`, `workflows/`, `projects/` (legacy `.agents/` equivalents when applicable). Per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
+3. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json`, `workflows/`, `projects/` (legacy `.agents/` equivalents when applicable). Per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
 4. Optional: `{HARNESS_DIR}/notes.json` (legacy), `{HARNESS_DIR}/knowledge/README.md`. `workflows/` / `projects/` subdirs are created on demand by engine writers — no pre-creation.
 
 If legacy plan directories already exist, reuse them; avoid dual-structure duplication.
 
 ## Git Tracking Policy
 
-**Principle:** process stays local; results are shared with the team. Full rules → `mstar-plan-conventions` SKILL.md「Git 跟踪策略」.
+**Principle:** process stays local; results are shared with the team. Full rules → `mstar-conventions` SKILL.md「Git 跟踪策略」.
 
 - **Default tracked** under `{HARNESS_DIR}`: `AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**` (resolved specs path; default `{HARNESS_DIR}/specs/`).
 - **Default gitignored** (local session SSOT / coordination): `archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json`, `workflows/`, `projects/`.

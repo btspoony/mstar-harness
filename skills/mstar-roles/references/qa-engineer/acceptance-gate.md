@@ -47,7 +47,7 @@ Run full verification (or escalate to **`QA mode: full`**) when **any** applies:
 Before sign-off or Done recommendation:
 
 - Validate phase-gate prerequisites and Assignment metadata alignment (`Review cwd`, `Working branch`, `plan_id`, `Review range`)
-- Verify open R# status; close/archive per `mstar-plan-artifacts` when fixes confirmed
+- Verify open R# status; close/archive per `mstar-artifacts` when fixes confirmed
 - Update plan task checkboxes for QA scope
 - Return `Blocked` when checkout alignment or evidence gaps cannot be resolved
 
@@ -59,4 +59,4 @@ Use template in `references/qa-engineer.md`. May skip QC tri only when no implem
 
 - PM trigger matrix: `references/project-manager/qa-trigger-matrix.md`
 - Checkout alignment: `mstar-branch-worktree` SKILL.md
-- Residual lifecycle: `mstar-plan-artifacts/references/status-and-residuals.md`
+- Residual lifecycle: `mstar-artifacts/references/status-and-residuals.md`

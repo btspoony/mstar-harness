@@ -5,7 +5,7 @@ description: "Morning Star Spec-Driven 双阶段门禁：Prepare（`specify → 
 
 ## Load order（必读顺序）
 
-**首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** `{PLAN_DIR}` / plan 文件落盘见 **`mstar-plan-conventions`**。冲突时 **以 `mstar-harness-core` 为准**。
+**首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** `{PLAN_DIR}` / plan 文件落盘见 **`mstar-conventions`**。冲突时 **以 `mstar-harness-core` 为准**。
 
 ## Spec-Driven 双阶段门禁（非热修强制）
 
@@ -49,10 +49,10 @@ description: "Morning Star Spec-Driven 双阶段门禁：Prepare（`specify → 
 
 - **`plan locked`**
   - 最小动作：在 plan 或 notes 记录当前锁定版本（日期或 hash）。
-  - **Plan 质量门**（新 plan / 大改）：无 placeholder（`...`、`TBD`、`etc.`）；含 **Global Constraints** 与 per-task **Interfaces**；PM self-review 三问（每 task 可独立验证？依赖顺序清晰？无隐含假设？）— 见 `mstar-plan-artifacts/templates/plan.main.md` + **`mstar-plan-artifacts/references/plan-quality-bar.md`**（自包含/验证门/STOP 条件/drift check/done criteria）。
+  - **Plan 质量门**（新 plan / 大改）：无 placeholder（`...`、`TBD`、`etc.`）；含 **Global Constraints** 与 per-task **Interfaces**；PM self-review 三问（每 task 可独立验证？依赖顺序清晰？无隐含假设？）— 见 `mstar-artifacts/templates/plan.main.md` + **`mstar-artifacts/references/plan-quality-bar.md`**（自包含/验证门/STOP 条件/drift check/done criteria）。
 - **`implement`**
   - 最小产物：实现 diff、自检证据、回报与 handoff；行为准则 → **`mstar-coding-behavior`**；编辑纪律 → 上文「可验证编辑与上下文纪律」。
-  - **知识库 / 迭代 compass**：**默认**开工前扫 `{KNOWLEDGE_DIR}/README.md` 索引（若存在）并阅读与当轮相关的 **Active** 行（**即使 metadata 无 knowledge 链接**）；若 `plans[].metadata` 登记了 `primary_spec` / `spec_refs` / `iteration_compass` / `iteration_refs`，所链接文档**仍须**阅读；两类阅读均须在回报中说明已对齐 → **`mstar-plan-conventions`** · **`mstar-plan-artifacts/references/knowledge-and-designs.md`**。
+  - **知识库 / 迭代 compass**：**默认**开工前扫 `{KNOWLEDGE_DIR}/README.md` 索引（若存在）并阅读与当轮相关的 **Active** 行（**即使 metadata 无 knowledge 链接**）；若 `plans[].metadata` 登记了 `primary_spec` / `spec_refs` / `iteration_compass` / `iteration_refs`，所链接文档**仍须**阅读；两类阅读均须在回报中说明已对齐 → **`mstar-conventions`** · **`mstar-artifacts/references/knowledge-and-designs.md`**。
 
 ## 角色职责
 
@@ -79,7 +79,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 ## Plan 目录与审查证据（启用 `{PLAN_DIR}` 时）
 
 - 进入 `InReview` 后，QC/QA 原始过程报告默认落入 `{SDD_DIR}/review/`（**SDD 默认 tri** `qc1`…`qc-consolidated`；**inline** 单席 `qc.md`）。**fix 后默认 targeted re-review**。SDD per-task review 在 implement 波次内完成（`mstar-sdd` task reviewer）。PM 将 durable gate summary 回写主 plan / workflow snapshot，而不是把 raw reports 作为默认 git 产物。
-- 非阻断项与后续技术债：PM 汇总后写入 project register `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan-id>]`（**open**，默认 `{HARNESS_DIR}/projects/<id>/`；canonical 见 **`mstar-plan-artifacts` SKILL.md**）；关闭时在 register 内 **in place** 置 `lifecycle` / `closed_at` / `closure_note`，与 `mstar-review-qc` 一致。每条 **`severity`** 遵守 **`mstar-plan-artifacts/references/status-and-residuals.md`**「Residual findings：severity（SSOT，机器字段）」。
+- 非阻断项与后续技术债：PM 汇总后写入 project register `{PROJECT_DIR}/<id>/residuals.json` → `entries[<plan-id>]`（**open**，默认 `{HARNESS_DIR}/projects/<id>/`；canonical 见 **`mstar-artifacts` SKILL.md**）；关闭时在 register 内 **in place** 置 `lifecycle` / `closed_at` / `closure_note`，与 `mstar-review-qc` 一致。每条 **`severity`** 遵守 **`mstar-artifacts/references/status-and-residuals.md`**「Residual findings：severity（SSOT，机器字段）」。
 
 ## 快速判定（PM）
 
@@ -113,6 +113,6 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 
 ## References
 
-- plan 文件落盘与路径符号 → **`mstar-plan-conventions`**
+- plan 文件落盘与路径符号 → **`mstar-conventions`**
 - 多 task 默认 `Execution mode: sdd` 的 implement 波次 → **`mstar-sdd`**
 - QC / QA 审查链与 residual 登记 → **`mstar-review-qc`**

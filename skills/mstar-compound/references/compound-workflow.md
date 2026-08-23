@@ -1,6 +1,6 @@
 # mstar-compound — 工作流详情
 
-> Loaded by `mstar-compound` SKILL.md at the self-check and Phase 1–7 steps. **Read `mstar-harness-core` first.** Path symbols → `mstar-plan-conventions`.
+> Loaded by `mstar-compound` SKILL.md at the self-check and Phase 1–7 steps. **Read `mstar-harness-core` first.** Path symbols → `mstar-conventions`.
 
 ## 是否值得结晶 —— 完整自检（Q1–Q8）
 

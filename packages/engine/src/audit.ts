@@ -4,10 +4,13 @@
  *
  * Spec sources (all embedded as constants — no runtime skill-file reads):
  * - mstar-audit SKILL.md Hard Rules (read-only; never reproduce secret
- *   values — reference file:line + credential type only), Phase 4 output
+ *   values — reference file:line + credential type only).
+ * - mstar-audit SKILL.md § Plan output (all variants): plan-file output
  *   layout (`{PLAN_DIR}/audit-<YYYY-MM-DD>/` README index + numbered plan
- *   files; reconcile prior dirs, keep numbering monotonic), Status block
- *   fields, and index format.
+ *   files) and Status block fields. The full-audit variant adds the
+ *   reconcile rule (keep numbering monotonic across re-runs) and the audit
+ *   index format → mstar-audit references/codebase-audit.md (Phase 4 /
+ *   Output format).
  * - mstar-audit/references/finding-format.md: category codes, evidence
  *   requirements.
  */
@@ -25,10 +28,10 @@ function violation(severity: ValidationResult["severity"], code: string, message
 }
 
 // ---------------------------------------------------------------------------
-// Status block validation — mstar-audit SKILL § Plan files
+// Status block validation — mstar-audit SKILL.md § Plan output (all variants) Status block
 // ---------------------------------------------------------------------------
 
-/** Priority values (mstar-audit SKILL § Plan files Status block). */
+/** Priority values (mstar-audit SKILL.md § Plan output (all variants) Status block). */
 export const AUDIT_PRIORITIES = ["P1", "P2", "P3"] as const;
 export type AuditPriority = (typeof AUDIT_PRIORITIES)[number];
 
@@ -40,7 +43,7 @@ export type AuditEffort = (typeof AUDIT_EFFORTS)[number];
 export const AUDIT_RISKS = ["LOW", "MED", "HIGH"] as const;
 export type AuditRisk = (typeof AUDIT_RISKS)[number];
 
-/** Category codes (finding-format.md § Category codes + SKILL Status block). */
+/** Category codes (finding-format.md § Category codes + mstar-audit SKILL.md § Plan output (all variants) Status block). */
 export const AUDIT_CATEGORIES = [
   "bug",
   "security",
@@ -86,7 +89,7 @@ function parseStatusBlocks(planText: string): StatusBlock[] {
 
 /**
  * Validate the audit Status block(s) of a plan file against the field
- * contract (mstar-audit SKILL § Plan files):
+ * contract (mstar-audit SKILL.md § Plan output (all variants) Status block):
  * - `Priority`: P1 | P2 | P3
  * - `Effort`: XS | S | M | L | XL
  * - `Risk`: LOW | MED | HIGH
@@ -112,7 +115,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
       violation(
         "medium",
         "audit.status.missing-block",
-        "no `## Status` block found \u2014 audit plan files carry the Status block fields (mstar-audit SKILL \u00a7 Plan files)",
+        "no `## Status` block found \u2014 audit plan files carry the Status block fields (mstar-audit SKILL.md \u00a7 Plan output)",
         "add a `## Status` block with Priority, Effort, Risk, Depends on, Category, Planned at",
       ),
     );
@@ -127,7 +130,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
           violation(
             "medium",
             "audit.status.missing-field",
-            `Status block${label} missing required field "${field}" (mstar-audit SKILL \u00a7 Plan files)`,
+            `Status block${label} missing required field "${field}" (mstar-audit SKILL.md \u00a7 Plan output)`,
             `add \`- **${field}**: <value>\` to the Status block`,
           ),
         );
@@ -141,7 +144,7 @@ export function validateAuditStatusBlocks(planText: string): GateResult {
           violation(
             "medium",
             code,
-            `Status block${label} "${field}" = "${value}" \u2014 expected ${expected} (mstar-audit SKILL \u00a7 Plan files)`,
+            `Status block${label} "${field}" = "${value}" \u2014 expected ${expected} (mstar-audit SKILL.md \u00a7 Plan output)`,
             `fix \`- **${field}**:\` to one of: ${expected}`,
           ),
         );
@@ -280,7 +283,7 @@ export function redactSecrets(text: string, filePath?: string): RedactResult {
 }
 
 // ---------------------------------------------------------------------------
-// Plan scaffolding — mstar-audit SKILL § Phase 4 (audit-<date>/ layout)
+// Plan scaffolding — mstar-audit SKILL.md § Plan output (audit-<date>/ layout)
 // ---------------------------------------------------------------------------
 
 /** One audit finding, shaped after finding-format.md. */
@@ -368,8 +371,8 @@ function readPlanFileSummary(filePath: string): { title: string; fields: Map<str
   return { title: title.trim(), fields: blocks.length > 0 ? blocks[0].fields : new Map() };
 }
 
-/** Render the audit-<date>/README.md index (mstar-audit SKILL § Output
- * format). `rows` covers every plan file in the directory (existing + new).
+/** Render the audit-<date>/README.md index (mstar-audit references/codebase-audit.md § Output
+ * format · Audit index). `rows` covers every plan file in the directory (existing + new).
  * Status values: TODO | IN PROGRESS | DONE | BLOCKED | REJECTED. */
 function renderIndex(params: {
   date: string;
@@ -428,7 +431,7 @@ function renderIndex(params: {
 
 /**
  * Scaffold an audit plan directory (`{PLAN_DIR}/audit-<date>/` layout,
- * mstar-audit SKILL § Phase 4): numbered `NNN-<slug>.md` plan files from
+ * mstar-audit SKILL.md § Plan output (all variants)): numbered `NNN-<slug>.md` plan files from
  * findings plus a README.md index. Numbering is monotonic — when the
  * directory already contains `NNN-*.md` files (same-date re-run), the new
  * batch continues after the highest existing number instead of restarting
@@ -533,7 +536,7 @@ export type PromoteAuditPlansOptions = {
 
 /**
  * Promote selected audit plans into the v2 workflow lifecycle as a
- * `type: "plan"` workflow (mstar-audit Handoff): write the workflow
+ * `type: "plan"` workflow (mstar-audit SKILL.md § Plan output (all variants) — handoff): write the workflow
  * snapshot FIRST (with one Todo PlanRow per selected file), then register
  * the workflow entry — `validateStatusV2` validates the full status doc
  * including the per-snapshot existence check, so the snapshot must exist

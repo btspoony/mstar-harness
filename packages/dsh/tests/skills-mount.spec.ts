@@ -51,7 +51,7 @@ function packagedBundled(): string | undefined {
 }
 
 /** Real mirror skills asserted to be mounted and lint-clean. */
-const MIRROR_SKILLS_SAMPLE: string[] = ['mstar-plan-conventions', 'mstar-harness-core', 'mstar-sdd']
+const MIRROR_SKILLS_SAMPLE: string[] = ['mstar-conventions', 'mstar-harness-core', 'mstar-sdd']
 
 /** Seed a temp skill root with two skills: `<dir>/SKILL.md` and `<name>.md` shapes. */
 async function seedSkillRoot(): Promise<string> {
@@ -142,12 +142,12 @@ describe('skillLocalConfig — registration payload contract shape', () => {
 
 describe('resolveSkillRoot (frozen canonical form, Task 1)', () => {
   it("resolves dsh skills under $DSH_BUNDLED_SKILL_DIR/<name>", () => {
-    expect(resolveSkillRoot('dsh', { skill: 'mstar-plan-conventions' })).toBe('$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions')
+    expect(resolveSkillRoot('dsh', { skill: 'mstar-conventions' })).toBe('$DSH_BUNDLED_SKILL_DIR/mstar-conventions')
   })
 
   it('appends relative paths for skill assets', () => {
-    expect(resolveSkillRoot('dsh', { skill: 'mstar-plan-conventions', rel: 'references/plan-files-and-reports.md' }))
-      .toBe('$DSH_BUNDLED_SKILL_DIR/mstar-plan-conventions/references/plan-files-and-reports.md')
+    expect(resolveSkillRoot('dsh', { skill: 'mstar-conventions', rel: 'references/plan-files-and-reports.md' }))
+      .toBe('$DSH_BUNDLED_SKILL_DIR/mstar-conventions/references/plan-files-and-reports.md')
   })
 })
 
@@ -203,7 +203,7 @@ describe('skills mount via the plugin (real composition)', () => {
   it('mounts the mirror skills/ through the plugin Config and lists them on ctx.skills', async () => {
     booted = await bootApp({ skillRoots: [MIRROR_SKILLS] })
     const skills = await booted.ctx.skills.list()
-    const planConventions = skills.find((skill) => skill.name === 'mstar-plan-conventions')
+    const planConventions = skills.find((skill) => skill.name === 'mstar-conventions')
     expect(planConventions).toBeDefined()
     expect(planConventions!.description.length).toBeGreaterThan(0)
     expect(planConventions!.provider).toBe('mstar')
@@ -215,10 +215,10 @@ describe('skills mount via the plugin (real composition)', () => {
 
   it('loads the full skill body through ctx.skills.get', async () => {
     booted = await bootApp({ skillRoots: [MIRROR_SKILLS] })
-    const definition = await booted.ctx.skills.get('mstar-plan-conventions')
+    const definition = await booted.ctx.skills.get('mstar-conventions')
     expect(definition).toBeDefined()
     expect(definition!.content).toContain('# Morning Star')
-    expect(definition!.path).toBe(join(MIRROR_SKILLS, 'mstar-plan-conventions', 'SKILL.md'))
+    expect(definition!.path).toBe(join(MIRROR_SKILLS, 'mstar-conventions', 'SKILL.md'))
   })
 
   it('composes temp custom roots and the real mirror in one app (temp + real roots)', async () => {
@@ -228,7 +228,7 @@ describe('skills mount via the plugin (real composition)', () => {
     const names = skills.map((skill) => skill.name)
     expect(names).toContain('temp-one')
     expect(names).toContain('temp-two')
-    expect(names).toContain('mstar-plan-conventions')
+    expect(names).toContain('mstar-conventions')
   })
 
   it('registers the bundled root with the bundled source', async () => {
@@ -251,7 +251,7 @@ describe('skills mount via the plugin (real composition)', () => {
     const skills = await booted.ctx.skills.list()
     // The canonical packaged mirror: the mstar skills are discoverable as
     // BUNDLED sources without any deployment config.
-    const planConventions = skills.find((skill) => skill.name === 'mstar-plan-conventions')
+    const planConventions = skills.find((skill) => skill.name === 'mstar-conventions')
     expect(planConventions).toBeDefined()
     expect(planConventions!.source).toBe('bundled')
     expect(planConventions!.provider).toBe('mstar')
@@ -265,7 +265,7 @@ describe('skills mount via the plugin (real composition)', () => {
     // mirror still mounts (when synced).
     const packaged = packagedBundled()
     if (packaged !== undefined) {
-      expect(skills.some((skill) => skill.name === 'mstar-plan-conventions')).toBe(true)
+      expect(skills.some((skill) => skill.name === 'mstar-conventions')).toBe(true)
     }
     expect(skills.some((skill) => skill.name === 'temp-one')).toBe(false)
   })

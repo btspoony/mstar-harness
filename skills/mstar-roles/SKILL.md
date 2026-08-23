@@ -38,12 +38,12 @@ If any conflict appears, `mstar-harness-core` remains the authoritative source f
 
 | Role | Typical adds |
 | --- | --- |
-| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-plan-conventions`, `mstar-roles` ref; + `references/project-manager/qa-trigger-matrix.md` for QA gate tiers; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-plan-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
-| `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-plan-conventions` (minimal); `mstar-design-md` when implementing styled UI |
-| `qc-specialist*` | `mstar-branch-worktree`, `mstar-plan-artifacts` (review bundle paths); `references/qc-specialist/` (workflow, checklist, template, lenses); `mstar-design-md` when reviewing UI |
-| `qa-engineer` | `mstar-branch-worktree`, `mstar-plan-artifacts` (closing R#); `references/qa-engineer/acceptance-gate.md`; `mstar-design-md` when verifying visual output |
-| `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-plan-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance) |
-| `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-plan-conventions` (paths); `mstar-plan-artifacts` (plan-quality-bar for audit plans) |
+| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-conventions`, `mstar-roles` ref; + `references/project-manager/qa-trigger-matrix.md` for QA gate tiers; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-strategy` for strategic alignment; + `mstar-compound` / `mstar-compound-refresh` pre-loaded by `mstar-iteration` § iteration-close |
+| `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-conventions` (minimal); `mstar-design-md` when implementing styled UI |
+| `qc-specialist*` | `mstar-branch-worktree`, `mstar-artifacts` (review bundle paths); `references/qc-specialist/` (workflow, checklist, template, lenses); `mstar-design-md` when reviewing UI |
+| `qa-engineer` | `mstar-branch-worktree`, `mstar-artifacts` (closing R#); `references/qa-engineer/acceptance-gate.md`; `mstar-design-md` when verifying visual output |
+| `architect`, `product-manager` | `mstar-phase-gates` (Prepare), `mstar-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance) |
+| `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-conventions` (paths); `mstar-artifacts` (plan-quality-bar for audit plans) |
 | `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree` |
 | `prompt-engineer` | All topic skills when editing harness text |
 
@@ -74,7 +74,7 @@ Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursi
 | `qc-specialist-2` | `2` | Security and correctness risk | `qc2` → `{SDD_DIR}/review/qc2.md` |
 | `qc-specialist-3` | `3` | Performance and reliability risk | `qc3` → `{SDD_DIR}/review/qc3.md` |
 
-PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; no `<plan-id>` basename prefix) + durable main-plan summary. Naming SSOT: `mstar-plan-artifacts/references/plan-files-and-reports.md`.
+PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; no `<plan-id>` basename prefix) + durable main-plan summary. Naming SSOT: `mstar-artifacts/references/plan-files-and-reports.md`.
 
 > **Engine check (when available):** run `mstar roles validate` (or import `validateRoleMapping` / `lintLoadOrder` from `@mstar-harness/engine` in a host hook) to validate the mapping and parameter tables above against the on-disk `references/*.md` layout (shared families included) and lint the load-order declarations. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
