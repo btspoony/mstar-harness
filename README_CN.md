@@ -107,8 +107,6 @@ npm i -g @mstar-harness/cli
 | `/codebase-audit [关键词]` | 只读扫描 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划。<br>不改源码。产出可喂给 `/iteration-start` Research 或常规 Prepare → Execute。<br>深度：`quick` / `deep`（默认 `standard`）。<br>范围：按类别聚焦（`security`、`perf`、`tests`、…）；`branch`（仅当前分支变更）；`next` / `roadmap`（仅方向候选）；`simplify`（聚焦技术债的深扫）。 |
 | `/pr-deep-review [pr\|branch\|scope] [full]` | 合并前对 PR / 分支 / diff 做证据先行的深度审查 → 单一结论（`ship it` / `needs review` / `blocked`）。<br>worktree 隔离、只读；发现可转为 plan 进入 Prepare → Execute。<br>`full` — 展示全部发现（默认只列 top 1–3）。 |
 
-Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-artifacts`。
-
 项目知识脚手架：`mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`。
 
 ## Harness Workflow（统一流程）
