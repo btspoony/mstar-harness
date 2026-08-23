@@ -32,6 +32,6 @@ All review seats (`code-reviewer` / `fullstack-dev` / `fullstack-dev-2` / `front
 
 Execute **`mstar-audit`** § `pr` variant end to end（SKILL.md common core：recon + three-way attack & vet；variant detail：**`references/pr-review.md`** —— scope → guidance load → concern lenses → evidence → verdict → output）. Review is run in a dedicated worktree against a diff from the PR's **real base** — resolve the base per `references/pr-review.md` § Worktree isolation (never assume `main`).
 
-Review findings that need fixing can be turned into self-contained plans for the normal Prepare → Execute flow (reusing **`references/codebase-audit.md`** § Phase 4 + Handoff).
+Review findings that need fixing can be turned into self-contained plans for the normal Prepare → Execute flow (reusing `mstar-audit` SKILL.md **`## Plan output (all variants)`** — same contract as the `pr` variant).
 
 Output verdict + findings to the user; `gh pr comment` is a separate explicit step — never auto-approve or merge.

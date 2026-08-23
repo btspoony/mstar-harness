@@ -31,7 +31,7 @@ Two entry families, one skill:
 
 | Entry | Load |
 |-------|------|
-| Full codebase audit — bare / `quick` / `deep` / category focus (`security`, `perf`, `tests`, ...) / `branch` / `next` / `roadmap` / `simplify` | **`references/codebase-audit.md`** (Phase 2 categories + effort table, scope variants, Phase 4 plan writing, output templates, handoff) |
+| Full codebase audit — bare / `quick` / `deep` / category focus (`security`, `perf`, `tests`, ...) / `branch` / `next` / `roadmap` / `simplify` | **`references/codebase-audit.md`** (Phase 2 categories + effort table, scope variants, Phase 4 excerpt & reconcile rules, audit index output templates) — shared plan output → **`## Plan output (all variants)`** |
 | PR / branch / diff deep review (`pr`) | **`references/pr-review.md`** |
 
 ## Workflow
@@ -90,9 +90,49 @@ Do not write 30 plans nobody asked for. If running non-interactively (no user av
 
 The output contract is common; per-variant output shapes live in the variant reference.
 
-- **Full codebase audit**: audit index `README.md` template (findings table, direction, execution order & status, considered-and-rejected, red-team dispositions), plan-file Status block fields, and the `mstar audit scaffold` Engine-check callout → **`references/codebase-audit.md`** § Output format.
+- **Full codebase audit**: audit index `README.md` template (findings table, direction, execution order & status, considered-and-rejected, red-team dispositions) and the `mstar audit scaffold` Engine-check callout → **`references/codebase-audit.md`** § Output format. Plan writing → **`## Plan output (all variants)`** below.
 - **PR review**: `findings` / `verdict` / `evidence` / `unverified` / `next` / `notes` labels → **`references/pr-review.md`** § Output shape.
 - Every finding follows **`references/finding-format.md`** — read it before the first finding.
+
+## Plan output (all variants)
+
+The plan-output contract is shared across both `mstar-audit` variants. Plans are written **only when the user selects findings to pursue** — the review/audit itself stays read-only. Audit plans are **input candidates** for the normal Prepare → Execute flow; the audit skill does not execute them.
+
+For each selected finding, write one plan file using `plan.main.md` as the base template, enriched to meet **`mstar-artifacts/references/plan-quality-bar.md`** (verification gates included). Plans go in:
+
+```
+{PLAN_DIR}/audit-<YYYY-MM-DD>/
+  README.md          ← index: priority order, dependency graph, status table
+  001-<slug>.md
+  002-<slug>.md
+```
+
+### Status block
+
+Every plan file carries a Status block:
+
+```markdown
+## Status
+- **Priority**: P1 | P2 | P3
+- **Effort**: XS | S | M | L | XL
+- **Risk**: LOW | MED | HIGH
+- **Depends on**: plans/NNN-*.md (or "none")
+- **Category**: bug | security | perf | tests | tech-debt | migration | dx | docs | direction
+- **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
+```
+
+Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED` | `REJECTED`
+
+Before writing: record `git rev-parse --short HEAD` — every plan stamps the commit it was written against (the executor uses it for drift detection, per the plan-quality-bar).
+
+### Handoff to execution
+
+When the user selects plans to pursue:
+
+1. PM registers the workflow + plan rows in `{WORKFLOW_DIR}/<id>/snapshot.json` (root `status.json` v2 holds the workflows registry only — see `mstar-artifacts`), with the main plan in `{PLAN_DIR}` — via `mstar audit promote <audit-dir> --plans <ids>` when the CLI is available, or manually per `mstar-artifacts`.
+2. Each plan enters the normal state machine: `Todo → InProgress → InReview → Done`.
+3. PM may fast-track Prepare since the audit plan already contains spec, current-state excerpts, and verification gates — but the intent gate and clarify discipline still apply (`mstar-phase-gates`).
+4. Execution follows normal SDD or inline dispatch.
 
 ## Tone
 
@@ -106,5 +146,5 @@ Workflow, audit playbook, and finding format adapted from the [improve](https://
 
 - `references/audit-playbook.md` — nine-category audit checklist with finding format and prioritization rubric
 - `references/finding-format.md` — structured finding shape and evidence requirements
-- `references/codebase-audit.md` — full codebase audit variant: Phase 2 categories + subagent-prompt requirements, effort table, scope variants, Phase 4 plan writing, audit index / plan-file output templates, `mstar audit scaffold` callout, handoff to execution
+- `references/codebase-audit.md` — full codebase audit variant: Phase 2 categories + subagent-prompt requirements, effort table, scope variants, Phase 4 excerpt & reconcile rules, audit index output templates, `mstar audit scaffold` callout (plan writing / handoff → `## Plan output (all variants)`)
 - `references/pr-review.md` — deep PR-review process: worktree isolation, concern lenses, evidence rules, verdict synthesis, linked-issue hygiene, batch review

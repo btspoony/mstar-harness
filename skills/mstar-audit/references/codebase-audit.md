@@ -1,6 +1,6 @@
 # Codebase Audit Variant
 
-Full codebase audit process detail for the `mstar-audit` skill — Phase 2 (audit), scope variants, Phase 4 (plan writing), output templates, and handoff to execution. Load this file when the task is a full codebase audit (bare / `quick` / `deep` / category focus / `branch` / `next` / `simplify`); the `pr` variant lives in `references/pr-review.md`. The common contract (Load Order, Hard Rules, Phase 1 recon, Phase 3 vet discipline, output-format contract) is in the `mstar-audit` SKILL.md.
+Full codebase audit process detail for the `mstar-audit` skill — Phase 2 (audit), scope variants, Phase 4 (variant-specific plan-writing rules), and the audit index output template. Load this file when the task is a full codebase audit (bare / `quick` / `deep` / category focus / `branch` / `next` / `simplify`); the `pr` variant lives in `references/pr-review.md`. The common contract (Load Order, Hard Rules, Phase 1 recon, Phase 3 vet discipline, plan-output contract, output-format contract) is in the `mstar-audit` SKILL.md.
 
 ## Phase 2 — Audit (parallel where possible)
 
@@ -41,18 +41,9 @@ Every finding follows **`references/finding-format.md`** — read it before the 
 
 ## Phase 4 — Write the plans
 
-For each selected finding, write one plan file using `plan.main.md` as the base template, enriched to meet **`mstar-artifacts/references/plan-quality-bar.md`**. Plans go in:
-
-```
-{PLAN_DIR}/audit-<YYYY-MM-DD>/
-  README.md          ← index: priority order, dependency graph, status table
-  001-<slug>.md
-  002-<slug>.md
-```
+Plan-file layout, Status block, commit stamp, and handoff follow the shared contract in the `mstar-audit` SKILL.md — **`## Plan output (all variants)`**. Variant-specific rules:
 
 **Excerpts come from your own reads, never from a subagent's report.** Before writing each plan, open every cited file yourself — subagent line numbers and attributions are leads, not facts.
-
-Before writing: record `git rev-parse --short HEAD` — every plan stamps the commit it was written against (the executor uses it for drift detection, per the plan-quality-bar).
 
 If an audit directory from a previous run exists, **reconcile, don't duplicate**: read its `README.md`, keep numbering monotonic, skip findings already planned or listed as rejected, mark superseded plans stale.
 
@@ -87,31 +78,8 @@ If an audit directory from a previous run exists, **reconcile, don't duplicate**
 - <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>
 ```
 
-Status values: `TODO` | `IN PROGRESS` | `DONE` | `BLOCKED` | `REJECTED`
-
-### Plan files
-
-Follow `plan.main.md` template + **plan-quality-bar**. Additional audit-specific fields in the Status block:
-
-```markdown
-## Status
-- **Priority**: P1 | P2 | P3
-- **Effort**: XS | S | M | L | XL
-- **Risk**: LOW | MED | HIGH
-- **Depends on**: plans/NNN-*.md (or "none")
-- **Category**: bug | security | perf | tests | tech-debt | migration | dx | docs | direction
-- **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
-```
-
 > **Engine check (when available):** run `mstar audit scaffold <findings-file> [--dir <out-dir>]` (or `import { scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine"` in a host hook) to scaffold the `audit-<date>/` plan directory (numbered plan files + README index) from findings, validate the audit Status blocks above, and redact credentials from audit excerpts. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Handoff to execution
 
-Audit plans are **input candidates** for the normal Prepare → Execute flow. The audit skill does not execute them.
-
-When the user selects plans to pursue:
-
-1. PM registers the workflow + plan rows in `{WORKFLOW_DIR}/<id>/snapshot.json` (root `status.json` v2 holds the workflows registry only — see `mstar-artifacts`), with the main plan in `{PLAN_DIR}` — via `mstar audit promote <audit-dir> --plans <ids>` when the CLI is available, or manually per `mstar-artifacts`.
-2. Each plan enters the normal state machine: `Todo → InProgress → InReview → Done`.
-3. PM may fast-track Prepare since the audit plan already contains spec, current-state excerpts, and verification gates — but the intent gate and clarify discipline still apply (`mstar-phase-gates`).
-4. Execution follows normal SDD or inline dispatch.
+The four handoff steps (promote via `mstar audit promote` / manual per `mstar-artifacts`, state machine, fast-track Prepare with intent gate + clarify, SDD/inline dispatch) now live in the shared contract — **`mstar-audit` SKILL.md** `## Plan output (all variants)`.

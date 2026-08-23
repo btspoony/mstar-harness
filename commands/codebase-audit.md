@@ -14,7 +14,7 @@ Run a read-only codebase audit that discovers what is worth doing and writes sel
 ## Boot
 
 1. `mstar-harness-core`
-2. `mstar-audit` → SKILL.md（common core：hard rules、recon、vet、variant dispatch）+ `references/codebase-audit.md`（full-audit 变体：Phase 2 类别 + effort、scope variants、Phase 4、output、handoff）
+2. `mstar-audit` → SKILL.md（common core：hard rules、recon、vet、variant dispatch、`## Plan output (all variants)`）+ `references/codebase-audit.md`（full-audit 变体：Phase 2 类别 + effort、scope variants、Phase 4 变体细则、audit index 模板）
 3. `mstar-roles` → `references/code-reviewer.md`（执行角色：audit 执行体）
 4. `mstar-conventions` (path symbols — `{PLAN_DIR}`, `{HARNESS_DIR}`)
 5. `mstar-host` → active host reference (invoke capability for parallel subagents)
@@ -33,7 +33,7 @@ The audit is **advisory** — it does not enter the per-plan state machine (`Tod
 
 ## Execute
 
-Execute **`mstar-audit`** end to end（SKILL.md common core：Recon → Vet & prioritize；full-audit detail：**`references/codebase-audit.md`** —— Phase 2 九类别 fan-out、effort `quick` / `standard` / `deep`、scope variants `bare` / `quick` / `deep` / category focus（`security` / `perf` / `tests`, ...）/ `branch` / `next` / `roadmap` / `simplify`、Phase 4 plan writing、audit index + plan-file output）。Plans → `{PLAN_DIR}/audit-<YYYY-MM-DD>/NNN-<slug>.md` + `README.md` index，per **`mstar-artifacts/references/plan-quality-bar.md`**。
+Execute **`mstar-audit`** end to end（SKILL.md common core：Recon → Vet & prioritize；full-audit detail：**`references/codebase-audit.md`** —— Phase 2 九类别 fan-out、effort `quick` / `standard` / `deep`、scope variants `bare` / `quick` / `deep` / category focus（`security` / `perf` / `tests`, ...）/ `branch` / `next` / `roadmap` / `simplify`、Phase 4 变体细则、audit index 输出模板；plan writing → SKILL.md **`## Plan output (all variants)`**）。Plans → `{PLAN_DIR}/audit-<YYYY-MM-DD>/NNN-<slug>.md` + `README.md` index，per **`mstar-artifacts/references/plan-quality-bar.md`**。
 
 Executor: PM dispatches `@code-reviewer`；大型仓库 scout 扇出经 Assignment `Delegation: allowed (scout/explore only, read-only)`（Routing 表）。
 
