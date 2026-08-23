@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.3] - 2026-08-23
+
+### Harness
+
+- **dsh plugin**: `@deepseek-ai/dsh-*` peers upgraded to the `0.1.1-rc.2` line (`^0.1.1-rc.2`; `@deepseek-ai/cordis` stays `^4.0.1`; `dsh-llm-fallbacks` stays `^0.3.0` — its 0.3.3 peers are `^0.1.1-rc.1`, satisfied by the rc.2 line). Verified against the `0.1.1-rc.1 → 0.1.1-rc.2` diff (deepseek-harness @ `b150a55`): the change is the unified image/Files request pipeline plus the permission-preset copy-and-default revert — the plugin consumes none of those surfaces (no image region reads, no attachment request payloads, no permission-preset default-copy helpers; the only `preset`/`permission` references are the `dsh-llm-fallbacks` role-seed registry and a dsh-core `/permission` command precedent), so zero adapter-code changes. Lock re-resolved to a single `0.1.1-rc.2` line — zero `0.1.1-rc.1` (and older) copies anywhere, no `dsh-client-web-react` holdover.
+- **Engine public surface**: `redactSecrets` is no longer re-exported from the `@mstar-harness/engine` barrel (breaking for downstream imports of the bare package); the audit-module utility is now reachable via the new `@mstar-harness/engine/src/audit` subpath, and the `RedactResult` / `SecretFinding` types stay in the barrel. Barrel importers must migrate to the subpath.
+- **dsh**: the audit seam (`packages/dsh/src/gates/seams.ts`) now imports `redactSecrets` from the `./src/audit` subpath instead of the barrel.
+
+- Version alignment with harness **3.1.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.3**.
+
 ## [3.1.2] - 2026-08-21
 
 ### Harness

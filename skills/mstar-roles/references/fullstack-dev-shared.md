@@ -53,6 +53,9 @@ When parallel, module boundaries must be explicit and write ownership must not o
 
 - **NEVER** treat `parallel_secondary` (`fullstack-dev-2`) as a generic “idle backup” for `primary`—each parallel track needs explicit boundaries (module / API / page island) in the assignment.
 - **NEVER** silently widen scope from `parallel_secondary` into another track’s files without PM reassignment.
+## Audit Mode (read-only review)
+
+Shared contract (permission suspension + `mstar-audit` process + mode lock + read-only report) → **`references/_shared/leaf-executor-core.md`**「Audit Mode (read-only review, shared)」.
 
 ## Execute Input Contract (Hard)
 

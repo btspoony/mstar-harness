@@ -157,8 +157,7 @@ dsh plugin --profile web add dsh-llm-fallbacks
 # or, from a local checkout:
 cd <repo>/packages/dsh && dsh plugin --profile web add .
 ```
-
-`dsh web` then boots the harness: in-process engine gates (status/dispatch/lease/worktree/seams), the bundled `mstar-*` skills mount, and the bundled slash commands (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`). Host behavior (tools, gates, enforcement, PM dispatch) → **`mstar-host`** → `references/dsh.md`; package docs → [`packages/dsh/README.md`](../packages/dsh/README.md).
+`dsh web` then boots the harness: in-process engine gates (status/dispatch/lease/worktree/seams), the bundled `mstar-*` skills mount, and the bundled slash commands (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/pr-deep-review`). Host behavior (tools, gates, enforcement, PM dispatch) → **`mstar-host`** → `references/dsh.md`; package docs → [`packages/dsh/README.md`](../packages/dsh/README.md).
 
 ### `mstar-harness doctor`
 
@@ -289,11 +288,12 @@ Exit codes:
 
 ## Harness Slash Commands (not CLI subcommands)
 
-`/codebase-audit` and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).
+`/codebase-audit`, `/pr-deep-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).
+### `/pr-deep-review`
+
+Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`). Worktree-isolated and read-only; findings that need fixing can become self-contained plans (`{PLAN_DIR}/audit-<YYYY-MM-DD>/`) for the normal Prepare → Execute flow. SSOT → `mstar-audit` `pr` variant → `references/pr-review.md`.
 
 ### `/codebase-audit`
-
-Read-only codebase survey that writes prioritized, self-contained improvement plans to `{PLAN_DIR}/audit-<YYYY-MM-DD>/` (numbered plan files + `README.md` index). Never edits source; selected plans feed the normal Prepare → Execute flow.
 
 ```text
 /codebase-audit [simplify]
