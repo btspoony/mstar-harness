@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.3] - 2026-08-23
+
+### Harness
+
+- **`mstar audit promote` (CLI)**: selected audit plans can now enter the v2 workflow lifecycle as `type: plan` — `promoteAuditPlans` writes the workflow snapshot (`{HARNESS_DIR}/workflows/<id>/snapshot.json`, one Todo `PlanRow` per selected plan, `id` + `title` + `file`) **before** registering the workflow in root `status.json`, so the snapshot-before-register invariant holds. `--plans` accepts the README Plan column id, stem, or basename; `--workflow` defaults to the `audit-<date>` dir basename; `--harness` defaults to the resolved `{HARNESS_DIR}`. Promote stays an explicit post-selection action — the audit itself never registers (advisory contract preserved).
+- **Engine**: `promoteAuditPlans` exported from `@mstar-harness/engine` (titles come from the audit README index, falling back to `readPlanFileSummary`).
+- **Harness skills**: `mstar-audit` Handoff step 1 now names `mstar audit promote <audit-dir> --plans <ids>` as the first-class v2 path (manual `mstar-plan-artifacts` wording kept as fallback).
+- **Thinned the iteration slash commands** (`/iteration-start`, `/iteration-drive`, `/iteration-loop`) into wrappers: shared PM invariants, session todos, the continuous-execution STOP list, and the assignment-preflight bash (warn-only + `enforcement: hard` fail-fast) now live once in `skills/mstar-iteration/references/command-shared-invariants.md`, and `mstar-iteration` points at it. Frontmatter (`name` / `description` / `agent` / `input`) and each command's unique bits (start grill-me, drive helper discovery, loop do-not-load-grill-me) are unchanged.
+- **Trigger-strong `mstar-iteration` description**: the skill now loads for "start an iteration" / "drive the iteration" / "run an autonomous loop" even when no `/iteration-*` slash command fires; phase labels no longer treat command names as phase names.
+
+- Version alignment with harness **3.1.3** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.3**.
+
 ## [3.1.2] - 2026-08-21
 
 ### Harness

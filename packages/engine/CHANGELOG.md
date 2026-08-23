@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.3] - 2026-08-23
+
+### Harness
+
+- **Engine public surface**: `redactSecrets` is no longer re-exported from the `@mstar-harness/engine` barrel (breaking for downstream imports of the bare package); the audit-module utility is now reachable via the new `@mstar-harness/engine/src/audit` subpath, and the `RedactResult` / `SecretFinding` types stay in the barrel. Barrel importers must migrate to the subpath.
+- **dsh**: the audit seam (`packages/dsh/src/gates/seams.ts`) now imports `redactSecrets` from the `./src/audit` subpath instead of the barrel.
+
+- Version alignment with harness **3.1.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.3**.
+
 ## [3.1.2] - 2026-08-21
 
 ### Harness

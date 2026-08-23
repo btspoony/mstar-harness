@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.1.3] - 2026-08-23
+
+### Harness
+
+- **`mstar audit promote` (CLI)**: selected audit plans can now enter the v2 workflow lifecycle as `type: plan` — `promoteAuditPlans` writes the workflow snapshot (`{HARNESS_DIR}/workflows/<id>/snapshot.json`, one Todo `PlanRow` per selected plan, `id` + `title` + `file`) **before** registering the workflow in root `status.json`, so the snapshot-before-register invariant holds. `--plans` accepts the README Plan column id, stem, or basename; `--workflow` defaults to the `audit-<date>` dir basename; `--harness` defaults to the resolved `{HARNESS_DIR}`. Promote stays an explicit post-selection action — the audit itself never registers (advisory contract preserved).
+- **Engine**: `promoteAuditPlans` exported from `@mstar-harness/engine` (titles come from the audit README index, falling back to `readPlanFileSummary`).
+- **Harness skills**: `mstar-audit` Handoff step 1 now names `mstar audit promote <audit-dir> --plans <ids>` as the first-class v2 path (manual `mstar-plan-artifacts` wording kept as fallback).
+- **Unified the three CLI `execFileSync` wrappers** into a single `runCliCommand` helper (`packages/cli/src/exec.ts`): `runCommand` (shared-install), `runOmp` (omp), and `runDsh` (dsh) are now thin calls with today's defaults — no public signature or behavior change. Timeout / env / dry-run can no longer drift independently across the wrappers; `runDsh` keeps its `env: process.env` + `timeout` contract (dsh PATH injection in tests).
+- **Engine git env-pin regression test (test-only)**: `packages/engine/test/exec-env.test.ts` now detects any git `execFileSync` call whose options carry an empty env (`env: {}` / `env: { PATH: "" }`) across `path.ts` / `sdd.ts` / `worktree.ts` — production env handling is untouched.
+- **audit-004 validator CLI surface closure verification**: the five validator commands (`mstar status tech-debt`, `mstar status findings-cleanup <plan-id>`, `mstar lease verify-integration`, `mstar worktree qc-alignment`, `mstar host skill-root`) were smoke-verified runnable against the repo fixtures from the dist build (`node packages/cli/dist/mstar-harness.js`), each exiting per its documented semantics; no command code changed. Residual `20260816-audit-004-validator-cli-surface` moves to in-place `lifecycle: resolved` with the smoke evidence referenced.
+
+- Version alignment with harness **3.1.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.1.3**.
+
 ## [3.1.2] - 2026-08-21
 
 ### Changed
