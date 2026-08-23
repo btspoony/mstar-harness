@@ -107,7 +107,7 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 
 | Command | When |
 |---------|------|
-| `/pr-deep-review [pr|branch|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`).<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>`full` — surface all findings instead of top 1–3.<br>SSOT → `mstar-audit` (`pr` variant). |
+| `/pr-deep-review [pr\|branch\|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`).<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>`full` — surface all findings instead of top 1–3.<br>SSOT → `mstar-audit` (`pr` variant). |
 
 Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
 

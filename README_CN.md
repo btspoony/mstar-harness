@@ -110,8 +110,6 @@ npm i -g @mstar-harness/cli
 |------|------|
 | `/pr-deep-review [pr\|branch\|scope] [full]` | 合并前对 PR / 分支 / diff 做证据先行的深度审查 → 单一结论（`ship it` / `needs review` / `blocked`）。<br>worktree 隔离、只读；发现可转为 plan 进入 Prepare → Execute。<br>`full` — 展示全部发现（默认只列 top 1–3）。<br>SSOT → `mstar-audit`（`pr` variant）。 |
 
-
-
 Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
 
 项目知识脚手架：`mstar-compound-refresh` → `references/project-knowledge-bootstrap.md`。
