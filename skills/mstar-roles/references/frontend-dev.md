@@ -29,6 +29,9 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - **NEVER** offload UI implementation, tests, or evidence to `explore`; use glob/grep/read first—short read-only `explore` only per `mstar-harness-core` explore boundaries.
 - **NEVER** self-decide branch pivots (including switching to `main`/`master`) beyond PM’s `Working branch` / `Branch policy`; conflicting or missing branch facts => `Blocked` to PM.
 - **NEVER** start UI implementation while the assignment’s Prepare / execute prerequisites (`plan locked`, `tasks`, branch contract) are unmet—return `Blocked` to PM instead of silent partial delivery.
+## Audit Mode (read-only review)
+
+Shared contract (permission suspension + `mstar-audit` process + mode lock + read-only report) → **`references/_shared/leaf-executor-core.md`**「Audit Mode (read-only review, shared)」. Frontend review lenses: UI / interactions / a11y / performance.
 
 ## Core Responsibilities
 

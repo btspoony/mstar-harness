@@ -15,7 +15,6 @@ Harness Workflow Engine · Agent Plugin
 [![Version](https://img.shields.io/github/v/release/btspoony/mstar-harness?include_prereleases&sort=semver&label=version&style=flat-square&labelColor=black&color=c4f042)](https://github.com/btspoony/mstar-harness/releases)
 [![Last commit](https://img.shields.io/github/last-commit/btspoony/mstar-harness?color=c4f042&labelColor=black&style=flat-square)](https://github.com/btspoony/mstar-harness/commits/main)
 [![dshfind](https://dshfind.com/api/badge/btspoony/mstar-harness?lang=zh)](https://dshfind.com/zh/plugins/btspoony/mstar-harness?ref=badge)
-[![featured on dsh-suite](https://img.shields.io/badge/featured%20on-dsh--suite-4d6bfe)](https://whyihaveyou.github.io/dsh-suite/)
 [![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
 
 </div>
@@ -105,16 +104,11 @@ npm i -g @mstar-harness/cli
 |------|------|
 | `/codebase-audit [关键词]` | 只读扫描 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划。<br>不改源码。产出可喂给 `/iteration-start` Research 或常规 Prepare → Execute。<br>深度：`quick` / `deep`（默认 `standard`）。<br>范围：按类别聚焦（`security`、`perf`、`tests`、…）；`branch`（仅当前分支变更）；`next` / `roadmap`（仅方向候选）；`simplify`（聚焦技术债的深扫）。<br>SSOT → `mstar-audit`。 |
 
-### 命令加载
+### PR 深度审查
 
-| 宿主 | 命令加载 |
-|------|----------|
-| dsh（DeepSeek Harness） | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（打包的 `harness-commands/`，经 `ctx.commands`） |
-| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit`（插件 `commands/` 文件名命令） |
-| OpenCode / Cursor | 从 `commands/` 打包（OpenCode：插件 `harness-commands/`） |
-| Kimi / ZCode | 插件 manifest：`/morning-star-harness:iteration-start` · `:codebase-audit` 等 |
-| Codex project | `.agents/skills/<name>/SKILL.md`（CLI 从 `commands/` 软链） |
-| Codex global | **不**装 project 命令 — 用 `--scope project` |
+| 命令 | 何时 |
+|------|------|
+| `/pr-deep-review [pr\|branch\|scope] [full]` | 合并前对 PR / 分支 / diff 做证据先行的深度审查 → 单一结论（`ship it` / `needs review` / `blocked`）。<br>worktree 隔离、只读；发现可转为 plan 进入 Prepare → Execute。<br>`full` — 展示全部发现（默认只列 top 1–3）。<br>SSOT → `mstar-audit`（`pr` variant）。 |
 
 Phase 2 默认：每 plan worktree + lease，`Findings cleanup: zero-residual`。仅显式 `Worktree mode: waived` / `Findings cleanup: allow-residual` 可覆写。SSOT → `mstar-iteration`、`mstar-branch-worktree`、`mstar-plan-artifacts`。
 

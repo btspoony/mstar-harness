@@ -42,10 +42,11 @@ const CODEX_PROJECT_COMMAND_NAMES = [
   "iteration-drive",
   "iteration-loop",
   "codebase-audit",
+  "pr-deep-review",
 ] as const;
 
 const GLOBAL_ITERATION_SKILLS_WARNING =
-  "Codex project-scoped commands (iteration-start / iteration-drive / iteration-loop / codebase-audit) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
+  "Codex project-scoped commands (iteration-start / iteration-drive / iteration-loop / codebase-audit / pr-deep-review) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
 
 type MarketplaceEntry = {
   name: string;
@@ -207,7 +208,7 @@ function ensureIterationSkillLinks(dryRun: boolean) {
   const gitignoreEntries = CODEX_PROJECT_COMMAND_NAMES.map(iterationSkillGitignoreEntry);
   notes.push(...appendGitignore(projectRoot, gitignoreEntries, dryRun));
   notes.push(
-    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit) \u2014 symlinked to harness commands/*.md.",
+    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit, pr-deep-review) \u2014 symlinked to harness commands/*.md.",
   );
   return notes;
 }

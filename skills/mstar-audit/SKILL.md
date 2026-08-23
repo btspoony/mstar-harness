@@ -128,6 +128,7 @@ If an audit directory from a previous run exists, **reconcile, don't duplicate**
 | `branch` | Current branch changes only | Files changed since merge-base with default branch + their direct importers. Tag every finding `introduced` or `pre-existing` |
 | `next` / `roadmap` | Direction category only, in depth | 4–6 grounded suggestions; selected ones become design/spike plans |
 | `simplify` | DEBT-focused deep pass: dead / duplicated / speculative / over-built / added-then-removed / hand-rolled-where-a-dependency-exists surfaces | Prove-or-reject per playbook §5; findings use Category DEBT; tiny-real items → "considered and rejected" rows, never inline TODOs (Hard Rule 1) |
+| `pr` | A single PR / branch / diff, deep review | Evidence-first review producing a verdict (`ship it` / `needs review` / `blocked`); read-only, stays outside the plan state machine — process detail in `references/pr-review.md` |
 
 ## Output format
 
@@ -201,3 +202,4 @@ Workflow, audit playbook, and finding format adapted from the [improve](https://
 
 - `references/audit-playbook.md` — nine-category audit checklist with finding format and prioritization rubric
 - `references/finding-format.md` — structured finding shape and evidence requirements
+- `references/pr-review.md` — deep PR-review process: worktree isolation, concern lenses, evidence rules, verdict synthesis, linked-issue hygiene, batch review

@@ -15,7 +15,6 @@ English / [中文](README_CN.md)
 [![Version](https://img.shields.io/github/v/release/btspoony/mstar-harness?include_prereleases&sort=semver&label=version&style=flat-square&labelColor=black&color=c4f042)](https://github.com/btspoony/mstar-harness/releases)
 [![Last commit](https://img.shields.io/github/last-commit/btspoony/mstar-harness?color=c4f042&labelColor=black&style=flat-square)](https://github.com/btspoony/mstar-harness/commits/main)
 [![dshfind](https://dshfind.com/api/badge/btspoony/mstar-harness?lang=en)](https://dshfind.com/zh/plugins/btspoony/mstar-harness?ref=badge)
-[![featured on dsh-suite](https://img.shields.io/badge/featured%20on-dsh--suite-4d6bfe)](https://whyihaveyou.github.io/dsh-suite/)
 [![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
 
 </div>
@@ -104,16 +103,11 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey → prioritized, self-contained plans in `{PLAN_DIR}/audit-<date>/`.<br>Never edits source. Output feeds `/iteration-start` Research or normal Prepare → Execute.<br>Effort: `quick` / `deep` (default `standard`).<br>Scope: category focus (`security`, `perf`, `tests`, …); `branch` (current-branch changes only); `next` / `roadmap` (direction candidates only); `simplify` (DEBT-focused deep pass).<br>SSOT → `mstar-audit`. |
 
-### Command loading
+### PR deep review
 
-| Host | How commands load |
-|------|-------------------|
-| dsh (DeepSeek Harness) | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit` (bundled `harness-commands/` via `ctx.commands`) |
-| omp | `/iteration-start` · `/iteration-drive` · `/iteration-loop` · `/codebase-audit` (filename commands from plugin `commands/`) |
-| OpenCode / Cursor | Bundled from `commands/` (OpenCode: plugin `harness-commands/`) |
-| Kimi / ZCode | `/morning-star-harness:iteration-start` · `:codebase-audit` (etc.) via plugin manifest |
-| Codex project | `.agents/skills/<name>/SKILL.md` (CLI symlinks from `commands/`) |
-| Codex global | Project-scoped commands **not** installed — use `--scope project` |
+| Command | When |
+|---------|------|
+| `/pr-deep-review [pr\|branch\|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`).<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>`full` — surface all findings instead of top 1–3.<br>SSOT → `mstar-audit` (`pr` variant). |
 
 Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-plan-artifacts`.
 

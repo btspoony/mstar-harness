@@ -175,13 +175,9 @@ If one of these checks fails, stop and report why.
 
 ## Local maintenance workspace (`.mstar/`, gitignored)
 
-The repo's harness root is **`.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `plans/`, `iterations/`, `knowledge/`, `sdd/`, `projects/`, `archived/` and in-progress maint docs all live under `.mstar/`.
+The repo's harness root is **`.mstar/`** (the `mstar-plan-conventions` consumer default — same convention consumer projects use): `status.json`, `workflows/`, `plans/`, `sdd/`, `iterations/`, `projects/`, `knowledge/`, `references/`, `specs/`, `archived/` and in-progress maint docs all live under `.mstar/`.
 
-| Path | Purpose |
-|------|---------|
-| `.mstar/docs/` | Design specs, decomposition notes, ADRs, reports for harness changes |
-
-**No tracked references to gitignored harness artifacts.** Tracked `*.ts` / `*.md` files must not cite paths under `.mstar/` (e.g. `.mstar/status.json`, `.mstar/plans/<id>.md`, `.mstar/references/*.md`, `.mstar/iterations/…`, `.mstar/sdd/…`, `.mstar/docs/…`, `.mstar/knowledge/…`): those files exist only in the local checkout, so references break fresh clones and CI. Refer to `{HARNESS_DIR}` / the consumer default (`.mstar/` → `.agents/` → `.plans/`/`plans/`) or a repo `.mstarc` declaration instead. This section is the maintenance contract that documents the local layout; the rule applies to all other tracked files.
+**No tracked references to gitignored harness artifacts.** Tracked `*.ts` / `*.md` files must not cite paths under `.mstar/` (e.g. `.mstar/status.json`, `.mstar/plans/<id>.md`, `.mstar/references/*.md`, `.mstar/iterations/…`, `.mstar/sdd/…`, `.mstar/knowledge/…`): those files exist only in the local checkout, so references break fresh clones and CI. Refer to `{HARNESS_DIR}` / the consumer default (`.mstar/` → `.agents/` → `.plans/`/`plans/`) or a repo `.mstarc` declaration instead. This section is the maintenance contract that documents the local layout; the rule applies to all other tracked files.
 
 **Runtime SSOT** for `mstar-*` skills stays in repo-root **`skills/`** (bundled via `packages/opencode` `bundle-assets`).
 
