@@ -1,23 +1,36 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.1.3**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.2.0**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **3.1.3** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.1.3** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.1.3** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.1.3** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.1.3** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **3.1.3** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.1.3** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.1.3** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.1.3** |
-| Agent Plugins 清单 | `plugin.json` | **3.1.3** |
+| monorepo 根 | `morning-star`（`package.json`） | **3.2.0** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.2.0** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.2.0** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.2.0** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.2.0** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **3.2.0** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.2.0** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.2.0** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.0** |
+| Agent Plugins 清单 | `plugin.json` | **3.2.0** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [3.2.0] - 2026-08-23
+
+### Harness
+
+- 将共享的 plan-output 契约从 `references/codebase-audit.md` 上提至 `mstar-audit` SKILL.md 核心，新增 **`## Plan output (all variants)`** 章节：仅用户选定后才写入的边界、`{PLAN_DIR}/audit-<date>/` 目录布局（README 索引 + 编号 plan 文件）、`plan.main.md` + plan-quality-bar 增强、Status 块字段与状态值、`git rev-parse --short HEAD` 提交戳、以及四步 handoff（promote / 状态机 / fast-track Prepare / SDD 或 inline 派发）。两个变体（`codebase-audit`、`pr-review`）与两个命令（`/codebase-audit`、`/pr-deep-review`）均改引核心章节；`pr-review.md` § Plan output 不再引用 `codebase-audit.md`。Engine audit Status-block 与 scaffold 校验器的 spec 引用同步指向 `mstar-audit SKILL.md § Plan output`；`pr-review.md` § Evidence rules 新增 `finding-format.md` § What disqualifies a finding 引用。提前关闭 residual R1（第三个变体到来时上提——现由 `pr` 变体满足）。
+- 将 `mstar-audit` 重构为**变体载体（variant carrier）**：SKILL.md 只保留公共核心（hard rules、recon、attack-and-vet 纪律、变体分发表、output 契约），完整 codebase-audit 细节逐字迁至 `references/codebase-audit.md`（Phase 2 九类别 fan-out 与 subagent prompt 要求、effort 表、scope variants、Phase 4 plan 撰写、audit index / plan 文件输出模板、`mstar audit scaffold` callout、handoff to execution）。`pr-deep-review` 不再加载仅 full-audit 相关的内容；各指针面（`references/pr-review.md`、两个 commands、`code-reviewer` 角色、`mstar-harness-core` 索引）改引公共核心 + 正确变体 reference。
+- 新增通用 PR 深度审查命令（`pr-deep-review`）+ `mstar-audit` `pr` variant：worktree 隔离、证据先行、合并前审查结论（`ship it` / `needs review` / `blocked`）、关联工单 AC 卫生与兄弟 PR 批量支持。
+- 技能更名：`mstar-plan-conventions` → **`mstar-conventions`**、`mstar-plan-artifacts` → **`mstar-artifacts`**——两个技能是通用 harness 约定（路径、产物），并非 plan 专属，故去掉 `plan-` 前缀。所有活表面已同步（`skills/**` 加载顺序、索引行与交叉引用、`commands/**`、`AGENTS.md`、`README.md` + `README_CN.md` 技能表、`docs/cli.md`、`.cursor/` routing-eval fixtures 与本地校验、`scripts/` 守卫、engine/dsh/cli 源码注释与路径字面量、dsh 测试预期）。历史 changelog 与 engine 测试 fixture 散文保持原样——其中的旧名称作为历史记录是正确的。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.2.0**。
 
 ## [3.1.3] - 2026-08-23
 
