@@ -121,10 +121,10 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 
 ## Plan output（handoff to execution）
 
-Review findings that need fixing can become plans for the normal Prepare → Execute flow — same contract as `mstar-audit` Phase 4:
+Review findings that need fixing can become plans for the normal Prepare → Execute flow — same contract as **`references/codebase-audit.md`** § Phase 4:
 
-- Write the top findings as self-contained plans (numbered `001-<slug>.md` + `README.md` index) with the same fields as `mstar-audit` Phase 4: Priority / Effort / Risk / Depends on / Category / Planned at, plus verification gates.
-- Land them in `{PLAN_DIR}/audit-<date>/` — same path convention as `mstar-audit`, no new directory layout.
+- Write the top findings as self-contained plans (numbered `001-<slug>.md` + `README.md` index) with the same fields as `references/codebase-audit.md` § Phase 4: Priority / Effort / Risk / Depends on / Category / Planned at, plus verification gates.
+- Land them in `{PLAN_DIR}/audit-<date>/` — same path convention as `references/codebase-audit.md`, no new directory layout.
 - Enter the normal flow via `mstar audit promote` (or manual registration per `mstar-plan-artifacts`).
 - The review itself stays read-only: plans are written only when the user selects findings to pursue.
 

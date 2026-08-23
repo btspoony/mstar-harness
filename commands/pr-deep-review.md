@@ -14,7 +14,7 @@ Run a read-only, evidence-first deep review of a pull request, branch, or diff a
 ## Boot
 
 1. `mstar-harness-core`
-2. `mstar-audit` → SKILL.md（`pr` scope variant + references）
+2. `mstar-audit` → SKILL.md（common core）+ `references/pr-review.md`（`pr` variant 全量）
 3. `mstar-coding-behavior` (evidence discipline)
 4. `mstar-branch-worktree` (worktree isolation)
 5. `mstar-host` → active host reference (invoke capability for parallel subagents)
@@ -30,8 +30,8 @@ All review seats (`code-reviewer` / `fullstack-dev` / `fullstack-dev-2` / `front
 
 ## Execute
 
-Execute **`mstar-audit`** § `pr` variant end to end（scope → guidance load → concern lenses → evidence → three-way attack & vet → verdict → output）. Review is run in a dedicated worktree against a diff from the PR's **real base** — resolve the base per `references/pr-review.md` § Worktree isolation (never assume `main`).
+Execute **`mstar-audit`** § `pr` variant end to end（SKILL.md common core：recon + three-way attack & vet；variant detail：**`references/pr-review.md`** —— scope → guidance load → concern lenses → evidence → verdict → output）. Review is run in a dedicated worktree against a diff from the PR's **real base** — resolve the base per `references/pr-review.md` § Worktree isolation (never assume `main`).
 
-Review findings that need fixing can be turned into self-contained plans for the normal Prepare → Execute flow (reusing **`mstar-audit`** Phase 4 + Handoff).
+Review findings that need fixing can be turned into self-contained plans for the normal Prepare → Execute flow (reusing **`references/codebase-audit.md`** § Phase 4 + Handoff).
 
 Output verdict + findings to the user; `gh pr comment` is a separate explicit step — never auto-approve or merge.
