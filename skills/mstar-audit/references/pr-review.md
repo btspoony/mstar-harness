@@ -98,7 +98,8 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 
 - One worktree + one reviewer per PR.
 - All worktrees created **first**; all reviewers dispatched in **one batch**.
-- PM 按 PR 业务信息（业务域 / 变更面 / 技术栈）将 batch **平均分配**到四个席位（`code-reviewer` general、`fullstack-dev`、`fullstack-dev-2`、`frontend-dev`），每席位约 N/4 个 PR —— 摊薄同模型并发，降低 rate-limit。
+- PM 按 PR 业务信息（业务域 / 变更面 / 技术栈）将 batch **平均**分配到四个席位（`code-reviewer` general、`fullstack-dev`、`fullstack-dev-2`、`frontend-dev`），每席位约 N/4 个 PR —— 摊薄同模型并发，降低 rate-limit。
+- Implementer seats (`fullstack-dev` / `fullstack-dev-2` / `frontend-dev`) run under **Audit Mode** (`mstar-roles` references: permission suspension + `mstar-audit` process) — same read-only contract as `code-reviewer`.
 - Each reviewer owns review + comment for that PR only.
 - Sibling interactions are **noted, not fixed**, unless the ticket says so.
 

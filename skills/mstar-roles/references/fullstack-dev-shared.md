@@ -53,6 +53,14 @@ When parallel, module boundaries must be explicit and write ownership must not o
 
 - **NEVER** treat `parallel_secondary` (`fullstack-dev-2`) as a generic “idle backup” for `primary`—each parallel track needs explicit boundaries (module / API / page island) in the assignment.
 - **NEVER** silently widen scope from `parallel_secondary` into another track’s files without PM reassignment.
+## Audit Mode (read-only review)
+
+When the assignment is a review/audit dispatch — `Task category: audit`, `Audit mode: on`, or a `pr-deep-review` batch seat — this role operates as a **read-only audit seat**, not an implementer:
+
+- **Permission contract**: no tracked-file writes, no `edit`/`write`/`ast_edit` on the reviewed worktree, no merge, no approve-as-merge. The write permissions this role normally has are **suspended for the assignment**; do not "fix things while reviewing".
+- **Process**: load `mstar-audit` (`pr` variant) + `references/pr-review.md` + `mstar-coding-behavior` evidence discipline; run the concern-lens review and the three-way attack; produce `findings` + `verdict` (`ship it` / `needs review` / `blocked`) + `unverified` in the `pr-deep-review` output shape.
+- **Mode lock**: one assignment = one mode. Review-assigned work is completed as review only; implementation mode applies to implementation assignments only.
+- **Completion Report**: `Status: Done`; `Git:` states `read-only, no commits` unless PM explicitly authorized a comment post.
 
 ## Execute Input Contract (Hard)
 
