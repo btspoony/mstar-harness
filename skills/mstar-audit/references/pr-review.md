@@ -8,16 +8,22 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
   - Reviewing a PR: `gh pr view <n> --json baseRefName --jq .baseRefName` → `<base>`.
   - Reviewing a bare branch/diff: resolve the remote default via `git symbolic-ref refs/remotes/origin/HEAD` (fall back to `origin/main` only when it genuinely is the default).
   - `git fetch origin <base>`, then use `git diff origin/<base>...HEAD` as the diff basis (three-dot: changes on the reviewed branch since the merge-base).
+- Choose the local branch name **before any fetch** — `pr-<n>` may already exist (a stale review, another reviewer's branch, the user's own branch):
+  ```
+  review_branch=pr-<n>
+  git rev-parse --verify --quiet refs/heads/$review_branch && review_branch=pr-<n>-$(date +%Y%m%d)
+  ```
+  If the name is taken, fall back to a unique one (`pr-<n>-<YYYYMMDD>`; append a counter if that collides too), and record the final name as `<review-branch>`.
 - Check the PR out into a **dedicated worktree** — never the primary repo cwd, never another harness worktree:
   ```
   git fetch origin <base>
-  git fetch origin pull/<n>/head:pr-<n>   # or gh pr checkout <n> inside the worktree
-  git worktree add <path> pr-<n>
+  git fetch origin pull/<n>/head:<review-branch>
+  git worktree add <path> <review-branch>
   cd <path>   # review from here
   ```
   If you use the `gh pr checkout <n>` alternative, run it **from inside the worktree directory** (`cd <path>` first) — never from the primary cwd.
-- Record before reviewing: review cwd, local branch (`pr-<n>`), HEAD sha, merge-base.
-- Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **only the branch this review created** — verify it exists and that you created it (e.g. `git show-ref --verify refs/heads/pr-<n>` after confirming the fetch created it) before deleting; never delete a pre-existing PR-head branch. Never remove other harness worktrees.
+- Record before reviewing: review cwd, `<review-branch>`, HEAD sha, merge-base.
+- Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
 
 ## Scoping
 
