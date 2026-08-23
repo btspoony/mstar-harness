@@ -29,6 +29,18 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
   cd <path>
   git diff origin/<base>...<review-branch>   # three-dot: changes on the reviewed branch since the merge-base
   ```
+- **Bare branch input** (no PR number) — review the remote branch directly; no local ownership protocol needed:
+  ```
+  git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>
+  git worktree add --detach <path> origin/<branch>   # detached worktree; creates no local branch
+  cd <path>
+  git diff origin/<base>...origin/<branch>   # three-dot against the fetched remote-tracking ref
+  ```
+  Cleanup: `git worktree remove <path>` + `git worktree prune` only — there is no local branch to delete.
+- **Arbitrary diff input** (a changeset handed to the review, no ref attached) — review the provided diff as-is:
+  - Verify its provenance first (stated base/head SHAs when present); do not invent a checkout or substitute a different ref.
+  - Read the changed files in the current directory for context; the diff itself is the isolated changeset under review.
+  - No worktree, no branch, no fetch — nothing to clean up.
 - Record before computing: review cwd, `<review-branch>`, HEAD sha, merge-base.
 - Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
 
