@@ -30,7 +30,7 @@ The `code-reviewer` seat is **read-only**: never edits the reviewed worktree, ne
 
 ## Execute
 
-Execute **`mstar-audit`** § `pr` variant end to end（scope → guidance load → concern lenses → evidence → three-way attack & vet → verdict → output）. Review is run in a dedicated worktree against `git diff origin/main...HEAD` — see `references/pr-review.md` for the full process.
+Execute **`mstar-audit`** § `pr` variant end to end（scope → guidance load → concern lenses → evidence → three-way attack & vet → verdict → output）. Review is run in a dedicated worktree against a diff from the PR's **real base** — resolve the base per `references/pr-review.md` § Worktree isolation (never assume `main`).
 
 Review findings that need fixing can be turned into self-contained plans for the normal Prepare → Execute flow (reusing **`mstar-audit`** Phase 4 + Handoff).
 

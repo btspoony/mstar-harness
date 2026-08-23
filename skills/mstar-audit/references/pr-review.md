@@ -4,10 +4,20 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
 
 ## Worktree isolation
 
-- `git fetch origin main` first, then use `git diff origin/main...HEAD` as the diff basis (three-dot: changes on the PR branch since the merge-base).
-- Check the PR out with `gh pr checkout <n>` into a **dedicated worktree** — never the primary repo cwd, never another harness worktree.
+- **Resolve the real base first** — never assume `main`:
+  - Reviewing a PR: `gh pr view <n> --json baseRefName --jq .baseRefName` → `<base>`.
+  - Reviewing a bare branch/diff: resolve the remote default via `git symbolic-ref refs/remotes/origin/HEAD` (fall back to `origin/main` only when it genuinely is the default).
+  - `git fetch origin <base>`, then use `git diff origin/<base>...HEAD` as the diff basis (three-dot: changes on the reviewed branch since the merge-base).
+- Check the PR out into a **dedicated worktree** — never the primary repo cwd, never another harness worktree:
+  ```
+  git fetch origin <base>
+  git fetch origin pull/<n>/head:pr-<n>   # or gh pr checkout <n> inside the worktree
+  git worktree add <path> pr-<n>
+  cd <path>   # review from here
+  ```
+  If you use the `gh pr checkout <n>` alternative, run it **from inside the worktree directory** (`cd <path>` first) — never from the primary cwd.
 - Record before reviewing: review cwd, local branch (`pr-<n>`), HEAD sha, merge-base.
-- Cleanup after the review (and after the comment is posted): `git worktree remove <path>`, delete the local branch, `git worktree prune`. Never remove other harness worktrees.
+- Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **only the branch this review created** — verify it exists and that you created it (e.g. `git show-ref --verify refs/heads/pr-<n>` after confirming the fetch created it) before deleting; never delete a pre-existing PR-head branch. Never remove other harness worktrees.
 
 ## Scoping
 
@@ -73,7 +83,7 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 ## Comment triage
 
 - Judge the validity of bot/peer review comments before acting on them.
-- Fix minimally, or disagree with clear reasoning. Never gold-plate.
+- The reviewer seat is read-only — never edit the reviewed worktree. For valid comments, fold the minimal fix suggestion into the finding/plan (plan output) for the Prepare → Execute flow. For invalid comments, disagree on the PR comment with clear reasoning. Never gold-plate.
 
 ## Batch sibling PRs
 
