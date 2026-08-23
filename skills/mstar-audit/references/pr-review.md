@@ -8,20 +8,23 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
   - Reviewing a PR: `gh pr view <n> --json baseRefName --jq .baseRefName` → `<base>`.
   - Reviewing a bare branch/diff: resolve the remote default via `git symbolic-ref refs/remotes/origin/HEAD` (fall back to `origin/main` only when it genuinely is the default).
   - `git fetch origin <base>`, then use `git diff origin/<base>...HEAD` as the diff basis (three-dot: changes on the reviewed branch since the merge-base).
-- Choose the local branch name **before any fetch** — `pr-<n>` may already exist (a stale review, another reviewer's branch, the user's own branch):
+- Choose the local branch name **before any fetch** — `pr-<n>` may already exist (a stale review, another reviewer's branch, the user's own branch); the fallback must also be collision-free, so loop until the recorded name is provably fresh:
   ```
   review_branch=pr-<n>
-  git rev-parse --verify --quiet refs/heads/$review_branch && review_branch=pr-<n>-$(date +%Y%m%d)
+  i=1
+  while git rev-parse --verify --quiet refs/heads/$review_branch; do
+    review_branch=pr-<n>-$(date +%Y%m%d)-$((i++))
+  done
   ```
-  If the name is taken, fall back to a unique one (`pr-<n>-<YYYYMMDD>`; append a counter if that collides too), and record the final name as `<review-branch>`.
+  Record the final name as `<review-branch>` — it did not exist before this review created it.
 - Check the PR out into a **dedicated worktree** — never the primary repo cwd, never another harness worktree:
   ```
   git fetch origin <base>
   git fetch origin pull/<n>/head:<review-branch>
   git worktree add <path> <review-branch>
-  cd <path>   # review from here
+  cd <path>   # review from here — a new linked worktree, cannot touch the primary checkout
   ```
-  If you use the `gh pr checkout <n>` alternative, run it **from inside the worktree directory** (`cd <path>` first) — never from the primary cwd.
+  Do **not** use `gh pr checkout <n>` as an alternative: it switches to the PR-head branch name (not the recorded `<review-branch>`) and bypasses the ownership protocol, so cleanup could delete the wrong ref or leave the gh-created branch behind. If you only have a PR ref, fetch it into the recorded name and `git worktree add` exactly as above.
 - Record before reviewing: review cwd, `<review-branch>`, HEAD sha, merge-base.
 - Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
 
@@ -95,6 +98,7 @@ Check base-vs-branch before blaming the diff for CI failures. A red build that p
 
 - One worktree + one reviewer per PR.
 - All worktrees created **first**; all reviewers dispatched in **one batch**.
+- PM 按 PR 业务信息（业务域 / 变更面 / 技术栈）将 batch **平均分配**到四个席位（`code-reviewer` general、`fullstack-dev`、`fullstack-dev-2`、`frontend-dev`），每席位约 N/4 个 PR —— 摊薄同模型并发，降低 rate-limit。
 - Each reviewer owns review + comment for that PR only.
 - Sibling interactions are **noted, not fixed**, unless the ticket says so.
 
