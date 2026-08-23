@@ -99,19 +99,12 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 
 ### Audit & review
 
-Two read-only, advisory commands under one roof — they never edit source; findings can become plans for Prepare → Execute. SSOT → `mstar-audit`.
-
-#### Codebase audit
+Two read-only, advisory commands under one roof — they never edit source; findings can become plans for Prepare → Execute. SSOT → `mstar-audit` (variants: `codebase-audit`, `pr`).
 
 | Command | When |
 |---------|------|
-| `/codebase-audit [keywords]` | Read-only survey → prioritized, self-contained plans in `{PLAN_DIR}/audit-<date>/`.<br>Never edits source. Output feeds `/iteration-start` Research or normal Prepare → Execute.<br>Effort: `quick` / `deep` (default `standard`).<br>Scope: category focus (`security`, `perf`, `tests`, …); `branch` (current-branch changes only); `next` / `roadmap` (direction candidates only); `simplify` (DEBT-focused deep pass).<br>SSOT → `mstar-audit`. |
-
-#### PR deep review
-
-| Command | When |
-|---------|------|
-| `/pr-deep-review [pr\|branch\|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`).<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>`full` — surface all findings instead of top 1–3.<br>SSOT → `mstar-audit` (`pr` variant). |
+| `/codebase-audit [keywords]` | Read-only survey → prioritized, self-contained plans in `{PLAN_DIR}/audit-<date>/`.<br>Never edits source. Output feeds `/iteration-start` Research or normal Prepare → Execute.<br>Effort: `quick` / `deep` (default `standard`).<br>Scope: category focus (`security`, `perf`, `tests`, …); `branch` (current-branch changes only); `next` / `roadmap` (direction candidates only); `simplify` (DEBT-focused deep pass). |
+| `/pr-deep-review [pr\|branch\|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`).<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>`full` — surface all findings instead of top 1–3. |
 
 Phase 2 defaults: per-plan worktree + lease, `Findings cleanup: zero-residual`. Override only with explicit `Worktree mode: waived` / `Findings cleanup: allow-residual`. SSOT → `mstar-iteration`, `mstar-branch-worktree`, `mstar-artifacts`.
 
