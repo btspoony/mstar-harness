@@ -25,24 +25,21 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
 ] as const;
 
 /**
- * Changelogs that receive a new release section. Each root changelog carries a
- * version registry table in its head region (before `## [Unreleased]`) that
- * must be bumped; package changelogs have no such table.
+ * Changelogs that receive a new release section.
  */
 export type ChangelogTarget = {
   path: string;
   lang: "en" | "cn";
   pkg: "root" | "cli" | "opencode" | "engine" | "dsh";
-  hasRegistryTable: boolean;
 };
 
 export const CHANGELOGS: readonly ChangelogTarget[] = [
-  { path: "CHANGELOG.md", lang: "en", pkg: "root", hasRegistryTable: true },
-  { path: "CHANGELOG_CN.md", lang: "cn", pkg: "root", hasRegistryTable: true },
-  { path: "packages/cli/CHANGELOG.md", lang: "en", pkg: "cli", hasRegistryTable: false },
-  { path: "packages/opencode/CHANGELOG.md", lang: "en", pkg: "opencode", hasRegistryTable: false },
-  { path: "packages/engine/CHANGELOG.md", lang: "en", pkg: "engine", hasRegistryTable: false },
-  { path: "packages/dsh/CHANGELOG.md", lang: "en", pkg: "dsh", hasRegistryTable: false },
+  { path: "CHANGELOG.md", lang: "en", pkg: "root" },
+  { path: "CHANGELOG_CN.md", lang: "cn", pkg: "root" },
+  { path: "packages/cli/CHANGELOG.md", lang: "en", pkg: "cli" },
+  { path: "packages/opencode/CHANGELOG.md", lang: "en", pkg: "opencode" },
+  { path: "packages/engine/CHANGELOG.md", lang: "en", pkg: "engine" },
+  { path: "packages/dsh/CHANGELOG.md", lang: "en", pkg: "dsh" },
 ] as const;
 
 /** INSTALL.md ZCode marketplace example carries a quoted version field. */

@@ -1,19 +1,6 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.2.1**。
-
-| 发布面 | 位置 | 版本 |
-| --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **3.2.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.2.1** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.2.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.2.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.2.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **3.2.1** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.2.1** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.2.1** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.1** |
-| Agent Plugins 清单 | `plugin.json` | **3.2.1** |
+本仓库 harness 各发布面版本一致，详见 [CHANGELOG.md](CHANGELOG.md)。
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
