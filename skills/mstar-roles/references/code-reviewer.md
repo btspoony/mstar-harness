@@ -80,7 +80,7 @@ Follow `mstar-audit` output format — audit index `README.md` (findings table, 
 
 ### Output (Mode C)
 
-Follow the `pr` variant output shape in **`references/pr-review.md`** § Output shape — `findings` / `verdict` / `evidence` / `unverified` / `next` / `notes` / `comments` — including the posted review URL.
+Follow the `pr` variant output shape in **`references/pr-review.md`** § Output shape — `findings` / `verdict` / `score_pct` / `tally` / `evidence` / `unverified` / `next` / `notes` / `comments` — including the posted review URL.
 
 ## Non-Recursive Dispatch Rule (Hard)
 

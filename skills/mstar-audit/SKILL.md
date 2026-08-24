@@ -25,7 +25,7 @@ A read-only advisory skill that discovers what is worth doing in a codebase and 
 Two entry families, one skill:
 
 - **Full codebase audit** — user asks: "audit my codebase", "what should I improve", "find bugs/security/perf issues", "what tech debt do we have", "what should I build next"; PM routes a request with `Task category: audit`; before a major refactoring initiative; as input to iteration planning. Process detail → **`references/codebase-audit.md`**.
-- **Deep PR review** — user asks to deeply review a pull request / branch / diff before merge (verdict `ship it` / `needs review` / `blocked`). Process detail → **`references/pr-review.md`**.
+- **Deep PR review** — user asks to deeply review a pull request / branch / diff before merge (verdict `ship it` / `needs fixes` / `blocked`). Process detail → **`references/pr-review.md`**.
 
 ## Variant dispatch
 
@@ -91,7 +91,7 @@ Do not write 30 plans nobody asked for. If running non-interactively (no user av
 The output contract is common; per-variant output shapes live in the variant reference.
 
 - **Full codebase audit**: audit index `README.md` template (findings table, direction, execution order & status, considered-and-rejected, red-team dispositions) and the `mstar audit scaffold` Engine-check callout → **`references/codebase-audit.md`** § Output format. Plan writing → **`## Plan output (all variants)`** below.
-- **PR review**: `findings` / `verdict` / `evidence` / `unverified` / `next` / `notes` / `comments` labels → **`references/pr-review.md`** § Output shape.
+- **PR review**: `findings` / `verdict` / `score_pct` / `tally` / `evidence` / `unverified` / `next` / `notes` / `comments` → **`references/pr-review.md`** § Output shape.
 - Every finding follows **`references/finding-format.md`** — read it before the first finding.
 
 ## Plan output (all variants)

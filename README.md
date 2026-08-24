@@ -104,7 +104,7 @@ Two read-only, advisory commands under one roof — they never edit source; find
 | Command | When |
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey → prioritized, self-contained plans in `{PLAN_DIR}/audit-<date>/`.<br>Never edits source. Output feeds `/iteration-start` Research or normal Prepare → Execute.<br>Effort: `quick` / `deep` (default `standard`).<br>Scope: category focus (`security`, `perf`, `tests`, …); `branch` (current-branch changes only); `next` / `roadmap` (direction candidates only); `simplify` (DEBT-focused deep pass). |
-| `/pr-deep-review [pr\|branch\|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`).<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>With a PR number, a mandatory GitHub Review (comments on findings) is posted.<br>`full` — surface all findings instead of top 1–3. |
+| `/pr-deep-review [pr\|branch\|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs fixes` / `blocked`).<br>Verdict is computed from the finding tally; `score_pct` is display-only and never overrides it.<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>With a PR number, a mandatory GitHub Review (comments on findings) is posted.<br>`full` — surface all findings instead of top 1–3.|
 
 ## Harness Workflow
 

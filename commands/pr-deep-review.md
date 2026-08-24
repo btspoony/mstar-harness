@@ -1,6 +1,6 @@
 ---
 name: pr-deep-review
-description: Use when asked to deeply review a pull request, branch, or diff before merge — deciding whether a change is safe to ship with evidence-backed findings, rather than a shallow "looks good" pass. Produces a `ship it` / `needs review` / `blocked` verdict. Also for a batch of sibling PRs. Do not use for self-checking a change you just authored.
+description: Use when asked to deeply review a pull request, branch, or diff before merge — deciding whether a change is safe to ship with evidence-backed findings, rather than a shallow "looks good" pass. Produces a `ship it` / `needs fixes` / `blocked` verdict. Also for a batch of sibling PRs. Do not use for self-checking a change you just authored.
 agent: project-manager
 input: "[pr|branch|scope] [full]"
 ---
@@ -8,6 +8,8 @@ input: "[pr|branch|scope] [full]"
 # Deep PR Review
 
 Run a read-only, evidence-first deep review of a pull request, branch, or diff and decide whether it is safe to ship. When a PR number exists, posting the GitHub Review is **mandatory** — the review is not complete until comments land on the PR. Output: verdict + findings presented to the user, plus the posted review URL. Never auto-approve, never REQUEST_CHANGES, never merge.
+
+The verdict is **computed from the finding tally** (`must-fix` / `should-fix` / `nit` + `unverified`); `score_pct` is display-only feedback and never overrides it. Procedure and formula → **`references/pr-review.md`** § Verdict synthesis / Tally and derived score.
 
 **Read-only advisory.** The review does not enter the harness plan state machine (`Todo → InProgress → InReview → Done`). Reviewers never edit the worktree, never merge, and never approve-as-merge.
 
