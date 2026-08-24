@@ -163,7 +163,7 @@ Fold follow-up plans into the review body **only if** this review wrote them. A 
 ```
 <details><summary>Follow-up plans</summary>
 
-- <plan title> — P1, S: <1–3 sentence sketch> (`{PLAN_DIR}/audit-<date>/NNN-<slug>.md`)
+- <plan title> — P1 / S — <1–3 sentence sketch> (`{PLAN_DIR}/audit-<date>/NNN-<slug>.md`)
 </details>
 ```
 
@@ -178,6 +178,7 @@ Verbatim labels, in order:
 - `- evidence:` — concise what-checks-proved summary.
 - `- unverified:` — residual unverified claims, or `none`.
 - `- next:` — one of `implementation` / `verify` / `docs`.
+- `- notes:` — only out-of-scope state the user must act on.
 - `- comments:` — GitHub Review posting status (see § Comment posting):
   - `posted: yes` | `n/a-no-pr` | `failed`
   - `review_url: <url>` | `n/a`
