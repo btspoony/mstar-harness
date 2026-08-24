@@ -88,7 +88,7 @@ Then open cited code yourself and dispose by-design / mis-attributed / duplicate
 
 - Order findings by impact-if-shipped; no padding, no invented requirements, no style grading.
 - List **every** `must-fix` and `should-fix` finding — the default top 1–3 cut (unless `full`) applies to nits only, and truncated nits are summarized in the display line (§ Output shape / Display contract).
-- The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe.
+- The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply leftover `unmet` AC increments if any (§ Linked-issue hygiene) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe.
 - Exactly one verdict:
   - `ship it` — evidence-backed, safe to ship.
   - `needs fixes` — issues found; address before merge.
@@ -110,13 +110,20 @@ Field placement: on each finding, `- **Merge class**: must-fix | should-fix | ni
 
 ## Tally and derived score
 
-Verbatim, applied after the three-way vet to **accepted** findings only:
+Verbatim, applied after the three-way vet to **accepted** findings, then leftover unmet ACs:
 
 ```
 must_fix   = count of accepted findings with Merge class: must-fix
 should_fix = count of accepted findings with Merge class: should-fix
 nit        = count of accepted findings with Merge class: nit
 unverified = count of residual items under `- unverified:` (0 when `none`)
+
+# leftover unmet ACs (§ Linked-issue hygiene) — tally increment, not a fourth class, not a second finding:
+for each leftover AC marked unmet (not met, not cut):
+    if that leftover is itself unsafe-to-ship / a broken public contract:
+        must_fix += 1
+    else:
+        should_fix += 1
 
 if must_fix >= 1:
     verdict = blocked
@@ -147,6 +154,7 @@ High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 | must / should / nit / unverified | score_pct | verdict | Display line |
 | --- | --- | --- | --- |
 | 0 / 0 / 0 / 0 + 1 leftover unmet AC | 85 | `needs fixes` | `needs fixes · 85%` |
+| 0 / 0 / 0 / 0 + 1 leftover unmet AC (unsafe-to-ship) | 60 | `blocked` | `blocked · 60%` |
 | 0 / 0 / 2 / 0 | 94 | `ship it` | `ship it · 94%` |
 | 0 / 0 / 0 / 2 | 80 | `ship it` | `ship it · 80%` |
 | 0 / 1 / 0 / 0 | 85 | `needs fixes` | `needs fixes · 85%` |
@@ -163,7 +171,7 @@ If the PR closes/fixes a tracked issue, score **every** acceptance criterion aga
 
 - Mark each: met / unmet / cut.
 
-Leftover `unmet` criteria count against the verdict: after the four counts are computed (§ Tally and derived score), each leftover AC marked `unmet` (not `met`, not `cut`) increments `should_fix` by 1 — same bucket as "address before merge". If a leftover is itself a broken public contract / unsafe-to-ship, classify it `must-fix` instead (tie-break already exists). Apply Verdict-from-tally **after** this increment, so leftover `unmet` ACs cannot yield `ship it`. They deduct 15 each via the existing formula (no second formula, no new tally key). Leftovers are already mentioned in the review `body` (§ Comment posting) — no fourth merge class.
+Leftover `unmet` criteria count against the verdict: they are **tally increments**, not extra findings (do not also emit a Merge-class finding for the same leftover — that would double-count). Each leftover AC marked `unmet` (not `met`, not `cut`) increments `should_fix` by 1, or `must_fix` by 1 when that leftover is itself a broken public contract / unsafe-to-ship. The increment lives in the tally procedure (§ Tally and derived score); apply Verdict-from-tally **after** it, so leftover `unmet` ACs cannot yield `ship it`. Score uses the existing formula only (`should_fix` deducts 15, `must_fix` deducts 40 — no second formula, no new tally key). Leftovers are already mentioned in the review `body` (§ Comment posting) — no fourth merge class.
 - Do not invent a follow-up when all criteria landed.
 
 ## CI attribution
