@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.2.5] - 2026-08-24
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- **PR deep-review lists every finding by default**: the `[full]` flag is removed from `/pr-deep-review` — complete findings (all merge classes, nits included) are now always listed in the chat output and GitHub Review; nothing is truncated. README command signature updated.
+
+- Version alignment with harness **3.2.5** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.2.5**.
+
 ## [3.2.4] - 2026-08-24
 
 ### Bundled harness skills (`harness-skills/` at publish)

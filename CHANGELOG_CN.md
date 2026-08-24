@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [3.2.5] - 2026-08-24
+
+### Harness
+
+- **PR 深审默认列出全部发现**：`/pr-deep-review` 移除 `[full]` 参数 —— 完整发现列表（含全部 merge class 与 nits）现在始终出现在 chat 输出与 GitHub Review 中，不再截断。README 命令签名同步更新。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.2.5**。
+
 ## [3.2.4] - 2026-08-24
 
 ### Harness
