@@ -105,7 +105,7 @@ npm i -g @mstar-harness/cli
 | 命令 | 何时 |
 |------|------|
 | `/codebase-audit [关键词]` | 只读扫描代码库里值得做的事 —— bug、安全、性能、技术债、方向 —— 产出按优先级排序、可直接执行的改进计划。 |
-| `/pr-deep-review [pr\|branch\|scope] [full]` | 合并前对 PR / 分支 / diff 做深度审查 → 给出唯一结论（`ship it` / `needs fixes` / `blocked`）；有 PR 编号时自动发布 GitHub Review。 |
+| `/pr-deep-review [pr\|branch\|scope]` | 合并前对 PR / 分支 / diff 做深度审查 → 给出唯一结论（`ship it` / `needs fixes` / `blocked`）与全部发现；有 PR 编号时自动发布 GitHub Review。 |
 
 ## Harness Workflow（统一流程）
 
