@@ -7,7 +7,7 @@ input: "[pr|branch|scope] [full]"
 
 # Deep PR Review
 
-Run a read-only, evidence-first deep review of a pull request, branch, or diff and decide whether it is safe to ship. Output: verdict + findings presented to the user; optional `gh pr comment` is a separate explicit step — never auto-approve or merge.
+Run a read-only, evidence-first deep review of a pull request, branch, or diff and decide whether it is safe to ship. When a PR number exists, posting the GitHub Review is **mandatory** — the review is not complete until comments land on the PR. Output: verdict + findings presented to the user, plus the posted review URL. Never auto-approve, never REQUEST_CHANGES, never merge.
 
 **Read-only advisory.** The review does not enter the harness plan state machine (`Todo → InProgress → InReview → Done`). Reviewers never edit the worktree, never merge, and never approve-as-merge.
 
@@ -34,4 +34,4 @@ Execute **`mstar-audit`** § `pr` variant end to end（SKILL.md common core：re
 
 Review findings that need fixing can be turned into self-contained plans for the normal Prepare → Execute flow (reusing `mstar-audit` SKILL.md **`## Plan output (all variants)`** — same contract as the `pr` variant).
 
-Output verdict + findings to the user; `gh pr comment` is a separate explicit step — never auto-approve or merge.
+Output verdict + findings to the user, with the posted GitHub Review URL. Posting procedure (when a PR number exists) → **`references/pr-review.md`** § Comment posting. Never auto-approve or merge.

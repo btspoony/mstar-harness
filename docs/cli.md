@@ -291,7 +291,7 @@ Exit codes:
 `/codebase-audit`, `/pr-deep-review`, and the `/iteration-*` commands ship with the harness plugin (`commands/*.md`), not the `mstar-harness` CLI binary. Host availability: dsh / omp / OpenCode / Cursor load them from the plugin; Kimi / ZCode expose `/morning-star-harness:<name>`; Codex installs them as project-local skills (`--scope project`). See the command-loading table in [README.md](../README.md#codebase-audit).
 ### `/pr-deep-review`
 
-Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`). Worktree-isolated and read-only; findings that need fixing can become self-contained plans (`{PLAN_DIR}/audit-<YYYY-MM-DD>/`) for the normal Prepare → Execute flow. SSOT → `mstar-audit` `pr` variant → `references/pr-review.md`.
+Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs review` / `blocked`). Worktree-isolated and read-only; findings that can fix become self-contained plans (`{PLAN_DIR}/audit-<YYYY-MM-DD>/`) for the normal Prepare → Execute flow. When a PR number exists, the review posts a mandatory GitHub Review (`COMMENT` event) with line comments on findings — SSOT → `mstar-audit` `pr` variant → `references/pr-review.md`.
 
 ### `/codebase-audit`
 
