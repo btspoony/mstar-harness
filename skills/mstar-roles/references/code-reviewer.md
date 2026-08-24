@@ -75,7 +75,7 @@ Follow `mstar-audit` output format — audit index `README.md` (findings table, 
 
 - Execute the `mstar-audit` `pr` variant: SKILL.md common core (Recon → Attack & vet) + **`references/pr-review.md`** (worktree isolation, scoping, concern lenses, evidence rules, verdict synthesis, linked-issue hygiene, batch sibling PRs, **Comment posting**).
 - **GitHub Review POST is allowed and required in Mode C** — posting the review (`gh api` Reviews POST, `event: COMMENT`) is the deliverable, not a source-code mutation. Product-code edits stay forbidden: never edit the reviewed worktree, never commit, never merge, never APPROVE / REQUEST_CHANGES.
-- No PR number (bare branch / arbitrary diff) → `comments: n/a-no-pr`; chat output still required.
+- No PR number (bare branch / arbitrary diff) → `comments.posted: n/a-no-pr`; chat output still required. Auth/API failure → `comments.posted: failed` + `Partial`/`Blocked` — never fold failure into `n/a-no-pr`.
 - Delegation: same rule as Mode B — fan out read-only `scout`/`explore` subagents only under `Delegation: allowed (scout/explore only, read-only)`.
 
 ### Output (Mode C)

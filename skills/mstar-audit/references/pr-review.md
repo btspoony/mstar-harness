@@ -137,11 +137,11 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
 
 ### Procedure
 
-1. Resolve the target — `owner/repo`, PR number, head SHA:
+1. Resolve the target — the **base** `owner/repo` (the repository that owns the PR number), PR number, head SHA:
    ```
-   gh pr view <n> --json url,headRefOid,headRepository
+   gh pr view <n> --json url,headRefOid
    ```
-   `headRefOid` is the `commit_id`; `headRepository.owner.login` / `headRepository.name` give `owner/repo`.
+   `headRefOid` is the `commit_id`. Parse `owner/repo` from `url` (`https://github.com/{owner}/{repo}/pull/{n}`) — that is the **base** repo. **Never** use `headRepository` (a fork's owner/name); Reviews API paths are scoped to the repo that owns the PR.
 2. Build one review payload:
    - `event`: `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
    - `commit_id`: the PR head SHA.
@@ -180,7 +180,7 @@ Verbatim labels, in order:
 - `- next:` — one of `implementation` / `verify` / `docs`.
 - `- notes:` — only out-of-scope state the user must act on.
 - `- comments:` — GitHub Review posting status (see § Comment posting):
-  - `posted: yes` | `n/a-no-pr` | `failed`
-  - `review_url: <url>` | `n/a`
+  - `posted: yes` | `n/a-no-pr` | `failed` — these three are distinct; a failed POST is **`failed`**, never `n/a-no-pr`
+  - `review_url: <url>` when `posted: yes`; `n/a` when `n/a-no-pr` or `failed`
   - `inline: <N> posted / <M> attempted (<K> summary-only fallback)`
   - `plans_folded: yes` | `no`
