@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [3.2.4] - 2026-08-24
+
+### Harness
+
+- **PR 深审本地报告留档**：`pr` 变体每次审查现会在 `{PROJECT_DIR}/<project-id>/reports/pr-review/`（无项目流程用 `_default`）落盘一份持久 markdown 报告 —— YAML frontmatter 元数据（PR、head SHA、verdict、score、tally、review URL）+ 逐字保存的 GitHub Review 正文；bare branch/diff 审查则存 chat 展示内容。经主 checkout 写入（绝不写入 review worktree 内），于 worktree 清理前保存且不因 POST 失败而跳过；Completion Report 输出形状新增 `- report:` 字段。
+- **文档只描述现状**：从运行时 skills 中移除真正已废弃路径的描述 —— `{PLAN_DIR}/reports/`（旧报告目录；无代码引用、无迁移指令）与已停产的 `{HARNESS_DIR}/notes.json`（无代码创建或读取；运行时 notes 走 `workflows/<id>/notes.jsonl`）。经出厂代码核实的兼容行为全部保留：`designs/` 只读 `{SPECS_DIR}` 回退（`resolveSpecsDir`）、legacy 扁平 delivery-compass 的读兼容/迁移指令、`.agents/` 发现链，以及全部 v1→v2 迁移护栏。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.2.4**。
+
 ## [3.2.3] - 2026-08-24
 
 ### Harness

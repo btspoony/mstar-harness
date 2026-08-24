@@ -8,6 +8,17 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.2.4] - 2026-08-24
+
+### Harness
+
+- **PR deep-review local report archive**: each `pr`-variant review now saves a durable markdown report under `{PROJECT_DIR}/<project-id>/reports/pr-review/` (`_default` when project-less) — YAML frontmatter metadata (PR, head SHA, verdict, score, tally, review URL) plus the posted GitHub Review body verbatim; bare branch/diff reviews archive the chat display instead. Written via the primary checkout (never inside the review worktree), saved before worktree cleanup regardless of POST outcome; new `- report:` field in the Completion Report output shape.
+- **Docs describe current state only**: removed truly retired-path prose from runtime skills — `{PLAN_DIR}/reports/` (legacy report location; no code or migration path references it) and the retired `{HARNESS_DIR}/notes.json` (no code creates or reads it; runtime notes live in `workflows/<id>/notes.jsonl`). Compat behaviors verified against shipped code and kept: `designs/` read-only `{SPECS_DIR}` fallback (`resolveSpecsDir`), legacy flat delivery-compass read/migrate directives, `.agents/` discovery chain, and all v1→v2 migration guards.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.2.4**.
+
 ## [3.2.3] - 2026-08-24
 
 ### Harness
