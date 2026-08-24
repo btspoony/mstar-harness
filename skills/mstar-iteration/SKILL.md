@@ -55,7 +55,7 @@ Phase 5: PR merge-ready loop —— 至 mergeable + CI 全绿 + reviews resolved
 
 ## 产物存储位置
 
-**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。迭代 package → `{ITERATION_DIR}/<iteration-id>/`（含 `delivery-compass.md`、`guides/`、`specs/`）；根索引 → `{ITERATION_DIR}/README.md`。
+**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。迭代 package → `{ITERATION_DIR}/<iteration-id>/`（含 `delivery-compass.md`、`guides/`、`specs/`）；根索引 → `{ITERATION_DIR}/README.md`。Legacy flat `{ITERATION_DIR}/<id>-delivery-compass.md` 仅兼容读。
 
 ---
 

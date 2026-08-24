@@ -50,7 +50,8 @@ iteration-close (§3.2)
 
 **Compass 解析顺序**（读）：
 
-1. `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`
+1. `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`（canonical）
+2. Legacy flat：`{ITERATION_DIR}/<iteration-id>-delivery-compass.md`（仅兼容读；新写禁止）
 
 **禁止（新写）**：根目录 `<iteration-id>-delivery-compass.md`、根目录 `<iteration-id>-working-guide.md`。轻量入口一律进 `<iteration-id>/guides/`。
 
