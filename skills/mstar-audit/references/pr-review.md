@@ -217,7 +217,7 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
 2. Build one review payload:
    - `event`: `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
    - `commit_id`: the PR head SHA.
-   - `body`: **first two lines are the display contract** — `{verdict} · {score_pct}%` then the tally line (`must-fix=<n> should-fix=<n> nit=<n> unverified=<n>`) — then ranked findings (short) + linked-issue leftover reasoning + optional folded plan index (below). `event` stays `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
+   - `body`: follow **§ Report template (below)** — three sections (Verdict → Review → Plan to fix). `event` stays `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
    - `comments[]`: one entry per finding whose `path` + `line` is in the three-dot diff, `side: RIGHT`. Finding body = title + evidence + impact + fix sketch — not the whole plan.
 3. Post it:
    ```
@@ -228,15 +228,63 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
 5. Record `html_url` / review id for `comments:`. Only now clean up the worktree (or after the n/a-no-PR skip).
 6. **Batch:** each reviewer posts on **their own PRs** only. No second PM summary comment unless the Assignment says so.
 
+### Report template (GitHub Review `body`)
+
+The posted review body is a three-section report. Section order fixed; omit a subsection only when its content is genuinely empty (write `none`, never delete the heading).
+
+**Section emoji map** — verdict: `ship it` ✅ · `needs fixes` ⚠️ · `blocked` ⛔. Finding classes: 🔴 must-fix · 🟠 should-fix · 🔵 nit · ❓ unverified.
+
+````markdown
+## <verdict-emoji> Verdict: `<verdict>` · Confidence <score_pct>%
+
+| Findings | Count |
+| --- | --- |
+| 🔴 must-fix | <n> |
+| 🟠 should-fix | <n> |
+| 🔵 nit | <n> |
+| ❓ unverified | <n> |
+
+## 📋 Review
+
+**What this PR does**: <2–3 sentences summarizing the diff's intent and surface — from the PR description plus your own read of the changed files, not copied marketing text.>
+
+### Findings
+
+<Ranked findings (§ List cut). Each finding keeps its normal format — title, evidence (`file:line`), impact, **Merge class**, **Confidence**, fix sketch — with its class emoji prefixing the title.>
+
+### Linked-issue AC
+
+<When § Linked-issue hygiene applied: per-criterion met / unmet / cut with one-line reasoning. Otherwise `none`.>
+
+### ✅ Verified
+
+<Concise what-checks-proved summary — the smallest runtime checks actually run and what they showed. Residual unverified leads go here as `- ❓ <lead>` lines, not into the findings table.>
+
+### 🗑️ Considered & rejected
+
+<- <finding>: rejected because <one line>. Otherwise `none` — rejections come from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase them.>
+
+## 🛠️ Plan to fix
+
+<details><summary>展开修复计划 / Expand fix plan</summary>
+<br>
+
+```md
+<Fix plan in markdown when the audit produced one: ordered steps per finding, files touched, verification gates. Omit the block entirely only when no fix is proposed.>
+```
+
+</details>
+````
+
+- The Verdict section replaces the old two-line tally header on GitHub: same facts (verdict token + `score_pct` as Confidence + four-class tally), structured. The chat display contract (§ Display contract) is unchanged.
+- When the fix plan itself contains fenced code blocks, open the outer fence with four backticks so the inner fences survive.
+
 ### Folding plans into the summary
 
-Fold follow-up plans into the review body **only if** this review wrote them. A short index — title, priority, effort, 1–3 sentence sketch, plan path — inside:
+Fold follow-up plans into the review body **only if** this review wrote them. Put a short index — title, priority, effort, 1–3 sentence sketch, plan path — as the first content inside the § Report template **Plan to fix** `<details>` block, before the ```md fix-plan block:
 
 ```
-<details><summary>Follow-up plans</summary>
-
 - <plan title> — P1 / S — <1–3 sentence sketch> (`{PLAN_DIR}/audit-<date>/NNN-<slug>.md`)
-</details>
 ```
 
 Never dump full plan files.
@@ -261,16 +309,18 @@ Never dump full plan files.
   - `inline: <N> posted / <M> attempted (<K> summary-only fallback)`
   - `plans_folded: yes` | `no`
 
-### Display contract (chat + GitHub Review `body`)
+### Display contract (chat output)
 
-First two lines of the display (chat output and the GitHub Review `body`) — verbatim:
+First two lines of the **chat** display — verbatim:
 
 ```
 {verdict} · {score_pct}%
 must-fix=<n> should-fix=<n> nit=<n> unverified=<n>
 ```
 
-Then existing ranked findings / leftover AC / optional `<details>` plan index. Do not put `score_pct%` on the `- verdict:` token line.
+Then ranked findings / leftover AC summary. Do not put `score_pct%` on the `- verdict:` token line.
+
+The GitHub Review `body` no longer uses the two-line header — it follows § Report template, whose Verdict section carries the same facts structured (verdict token + Confidence + four-class emoji tally table).
 
 ### List cut
 
