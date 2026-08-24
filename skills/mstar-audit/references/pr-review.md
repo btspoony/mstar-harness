@@ -230,7 +230,7 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
 
 ### Report template (GitHub Review `body`)
 
-The posted review body is a three-section report. Section order fixed; omit a subsection only when its content is genuinely empty (write `none`, never delete the heading). **Angle brackets in the template mark fill-in slots — replace the bracketed text with real content and never render `<` `>` themselves.**
+The posted review body is a three-section report. Section order fixed; omit a subsection only when its content is genuinely empty (write `none`, never delete the heading). The block below shows only **fill-in slots** — every `<...>` is a slot to replace with real content; never render `<` `>` themselves, and never copy the surrounding guidance into the posted body.
 
 **Section emoji map** — verdict: `ship it` ✅ · `needs fixes` ⚠️ · `blocked` ⛔. Finding classes: 🔴 must-fix · 🟠 should-fix · 🔵 nit · ❓ unverified.
 
@@ -246,25 +246,30 @@ The posted review body is a three-section report. Section order fixed; omit a su
 
 ## 📋 Review
 
-**What this PR does**: <2–3 sentences summarizing the diff's intent and surface — from the PR description plus your own read of the changed files, not copied marketing text.>
+**What this PR does**: <2–3 sentence summary of the diff's intent and surface>
 
 ### Findings
 
-<Ranked findings. Each finding keeps its normal format — title, evidence (`file:line`), impact, **Merge class**, **Confidence**, fix sketch — with its class emoji prefixing the title.>
+#### <class-emoji> <finding title>
+
+- **Evidence**: `file:line` — what the code does
+- **Impact**: why it matters
+- **Merge class**: must-fix | should-fix | nit
+- **Confidence**: HIGH | MEDIUM | LOW
+- **Fix sketch**: one-line suggestion
 
 ### Linked-issue AC
 
-<When § Linked-issue hygiene applied: per-criterion met / unmet / cut with one-line reasoning. Otherwise `none`.>
+<per-criterion: met / unmet / cut — one-line reasoning, or `none`>
 
 ### ✅ Verified
 
-<Concise what-checks-proved summary — the smallest runtime checks actually run and what they showed. Residual unverified leads go here as `- ❓ <lead>` lines, not into the findings table.>
+- <check or command> → <what it showed>
+- ❓ <unverified lead, if any>
 
 ### 🗑️ Considered & rejected
 
-- **<short finding title>**: rejected — <one-line reason>.
-
-One bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it. Write `none` (a bare line, no bullet) when nothing was rejected. Angle brackets mark slots to fill — never render them.
+- **<short finding title>**: rejected — <one-line reason>
 
 ## 🛠️ Plan to fix
 
@@ -272,11 +277,20 @@ One bullet per rejected candidate from the three-way attack / vet pass (§ Attac
 <br>
 
 ```md
-<Fix plan in markdown when the audit produced one: ordered steps per finding, files touched, verification gates. When there is no fix plan, replace the whole `<details>` block with a single line `none`.>
+<fix plan in markdown>
 ```
 
 </details>
 ````
+
+**Slot rules (guidance — not part of the posted body):**
+
+- **What this PR does**: from the PR description plus your own read of the changed files, not copied marketing text.
+- **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding.
+- **Linked-issue AC**: fill only when § Linked-issue hygiene applied; otherwise a bare `none`.
+- **Verified**: the smallest runtime checks actually run and what they showed; unverified leads as `❓` lines here, never in the findings table.
+- **Considered & rejected**: one bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it; bare `none` when nothing was rejected.
+- **Plan to fix**: fix plan in markdown (ordered steps per finding, files touched, verification gates); follow-up plan index folds in above the ```md block (§ Folding plans); when there is no fix plan, replace the whole `<details>` block with a single line `none`.
 
 - The Verdict section replaces the old two-line tally header on GitHub: same facts (verdict token + `score_pct` as Confidence + four-class tally), structured. The chat display contract (§ Display contract) is unchanged.
 - When the fix plan itself contains fenced code blocks, open the outer fence with four backticks so the inner fences survive.
