@@ -8,6 +8,16 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.2.3] - 2026-08-24
+
+### Harness
+
+- **PR deep-review report template**: the GitHub Review body now follows a fixed three-section report — Verdict (verdict token + confidence score + four-class emoji findings table), Review (PR summary, ranked findings with merge class, linked-issue AC, verified checks, considered & rejected), and a collapsible **Plan to fix** section holding the fix plan in a fenced ```md block. Chat display contract unchanged.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.2.3**.
+
 ## [3.2.2] - 2026-08-24
 
 ### Harness

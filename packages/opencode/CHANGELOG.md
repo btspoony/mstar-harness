@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.2.3] - 2026-08-24
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- **PR deep-review report template**: the GitHub Review body now follows a fixed three-section report — Verdict (verdict token + confidence score + four-class emoji findings table), Review (PR summary, ranked findings with merge class, linked-issue AC, verified checks, considered & rejected), and a collapsible **Plan to fix** section holding the fix plan in a fenced ```md block. Chat display contract unchanged.
+
+- Version alignment with harness **3.2.3** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.2.3**.
+
 ## [3.2.2] - 2026-08-24
 
 ### Bundled harness skills (`harness-skills/` at publish)
