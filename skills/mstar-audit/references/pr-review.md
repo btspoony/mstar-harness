@@ -338,7 +338,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
   - `inline: <N> posted / <M> attempted (<K> summary-only fallback)`
   - `plans_folded: yes` | `no`
 
-- `- report:` — local archive path (§ Local report archive), e.g. `{PROJECT_DIR}/reports/pr-review/2026-08-24-pr134.md`; `n/a` only when the harness dir is undiscoverable.
+- `- report:` — local archive path (§ Local report archive), e.g. `{PROJECT_DIR}/<project-id>/reports/pr-review/2026-08-24-pr134.md` (`_default` when project-less); `n/a` only when the harness dir is undiscoverable.
 
 ### Display contract (chat output)
 
