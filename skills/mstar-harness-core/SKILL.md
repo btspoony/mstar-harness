@@ -123,7 +123,7 @@ Read **`mstar-host`** after this skill; detect host per its table, then Read the
 
 ## 护栏（不变量）
 
-- 未经用户同意不改 `opencode.json`、凭据、`secrets.env`。
+- 未经用户同意不改宿主配置文件与用户凭据。
 - 行为变更须有验证证据。
 - 业务仓默认功能分支（Assignment `Branch policy` 例外）→ **`mstar-branch-worktree`**。
 - **Dev 三角**：`@fullstack-dev` 后端主导；UI → `@frontend-dev`；第二轨 → `@fullstack-dev-2`（`mstar-roles` PM 节）。
