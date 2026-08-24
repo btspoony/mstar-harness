@@ -36,4 +36,4 @@ Execute **`mstar-audit`** § `pr` variant end to end（SKILL.md common core：re
 
 Review findings that need fixing can be turned into self-contained plans for the normal Prepare → Execute flow (reusing `mstar-audit` SKILL.md **`## Plan output (all variants)`** — same contract as the `pr` variant).
 
-Output verdict + findings to the user, with the posted GitHub Review URL. Posting procedure (when a PR number exists) → **`references/pr-review.md`** § Comment posting. Never auto-approve or merge.
+Output verdict + findings to the user, with the posted GitHub Review URL. Posting procedure (when a PR number exists) → **`references/pr-review.md`** § Comment posting; each reviewer also saves the durable local report → **`references/pr-review.md`** § Local report archive. Never auto-approve or merge.
