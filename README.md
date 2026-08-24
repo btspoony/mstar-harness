@@ -103,7 +103,7 @@ Two read-only, advisory commands under one roof — they never edit source; find
 
 | Command | When |
 |---------|------|
-| `/codebase-audit [keywords]` | Read-only survey of what's worth doing — bugs, security, perf, tech debt, direction — producing prioritized, ready-to-execute plans. |
+| `/codebase-audit [keywords]` | Read-only survey of what's worth doing — prioritized, ready-to-execute plans; narrow it with category focus (`bug`, `security`, `perf`, `tech-debt`, …) when you want a targeted pass. |
 | `/pr-deep-review [pr\|branch\|scope]` | Deep pre-merge review of a PR / branch / diff → one verdict (`ship it` / `needs fixes` / `blocked`) and every finding, posted to GitHub when a PR number is given. |
 
 ## Harness Workflow

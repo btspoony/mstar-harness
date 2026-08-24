@@ -46,7 +46,7 @@ const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> 
   'iteration-loop': '[direction] [scale]',
   'iteration-drive': '[no args]',
   'codebase-audit': '[simplify]',
-  'pr-deep-review': '[pr|branch|scope] [full]',
+  'pr-deep-review': '[pr|branch|scope]',
 }
 
 /** One command's registered descriptor (the view the dsh web client resolves). */
