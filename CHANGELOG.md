@@ -8,6 +8,16 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.2.5] - 2026-08-24
+
+### Harness
+
+- **PR deep-review lists every finding by default**: the `[full]` flag is removed from `/pr-deep-review` — complete findings (all merge classes, nits included) are now always listed in the chat output and GitHub Review; nothing is truncated. README command signature updated.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.2.5**.
+
 ## [3.2.4] - 2026-08-24
 
 ### Harness
