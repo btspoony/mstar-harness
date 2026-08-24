@@ -1,6 +1,6 @@
 # Deep PR Review Process
 
-Read-only, evidence-first review of a pull request / branch / diff, producing exactly one verdict: `ship it` / `needs review` / `blocked`. Runs under `mstar-audit` § `pr` variant, reusing the Recon → Audit → Vet discipline (recon = PR scope + repo guidance; vet = three-way attack). The reviewer never edits the worktree, never merges, and never approves-as-merge.
+Read-only, evidence-first review of a pull request / branch / diff, producing exactly one verdict: `ship it` / `needs fixes` / `blocked`. Runs under `mstar-audit` § `pr` variant, reusing the Recon → Audit → Vet discipline (recon = PR scope + repo guidance; vet = three-way attack). The reviewer never edits the worktree, never merges, and never approves-as-merge.
 
 ## Worktree isolation
 
@@ -86,20 +86,92 @@ Then open cited code yourself and dispose by-design / mis-attributed / duplicate
 
 ## Verdict synthesis
 
-- Order findings by impact-if-shipped.
-- Cut to the top 1–3 unless `full` was requested.
-- No padding, no invented requirements, no style grading.
-- Choose exactly one verdict:
+- Order findings by impact-if-shipped; no padding, no invented requirements, no style grading.
+- List **every** `must-fix` and `should-fix` finding — the default top 1–3 cut (unless `full`) applies to nits only, and truncated nits are summarized in the display line (§ Output shape / Display contract).
+- The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply leftover `unmet` AC increments if any (§ Linked-issue hygiene) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe.
+- Exactly one verdict:
   - `ship it` — evidence-backed, safe to ship.
-  - `needs review` — issues found; address before merge.
+  - `needs fixes` — issues found; address before merge.
   - `blocked` — a must-fix issue stands in the way of shipping.
+
+## Merge class (PR findings only)
+
+Classify each **accepted** finding (after three-way vet) as exactly one class. Do not invent a fourth class. Do not derive class from `Confidence`.
+
+| Class | Use when | Verdict effect |
+| --- | --- | --- |
+| `must-fix` | Shipping this issue is unsafe: correctness bug, security hole, data loss, auth/authz bypass, or a broken public contract. Same meaning as today's `blocked` gloss ("a must-fix issue stands in the way of shipping"). | Any count ≥ 1 → `blocked` |
+| `should-fix` | A real issue that should be addressed before merge but is not itself a ship-stopper. Same meaning as today's middle gloss ("issues found; address before merge"). | Else if count ≥ 1 → `needs fixes` |
+| `nit` | Optional cleanup, naming, comment, or small suggestion that does **not** change merge-readiness. Lint-covered cosmetics stay ignored (existing lens rule) — they are not findings. | Does not change verdict |
+
+Tie-break: unsafe to ship → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; otherwise `nit`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
+
+Field placement: on each finding, `- **Merge class**: must-fix | should-fix | nit`, immediately after `Confidence` (before `Fix sketch`). The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
+
+## Tally and derived score
+
+Verbatim, applied after the three-way vet to **accepted** findings, then leftover unmet ACs:
+
+```
+must_fix   = count of accepted findings with Merge class: must-fix
+should_fix = count of accepted findings with Merge class: should-fix
+nit        = count of accepted findings with Merge class: nit
+unverified = count of residual items under `- unverified:` (0 when `none`)
+
+# leftover unmet ACs (§ Linked-issue hygiene) — tally increment, not a fourth class, not a second finding:
+for each leftover AC marked unmet (not met, not cut):
+    if that leftover is itself unsafe-to-ship / a broken public contract:
+        must_fix += 1
+    else:
+        should_fix += 1
+
+if must_fix >= 1:
+    verdict = blocked
+else if should_fix >= 1:
+    verdict = needs fixes
+else:
+    verdict = ship it
+```
+
+`score_pct` — integer arithmetic only. Floor at 0. No decimals. No second formula:
+
+```
+score_pct = max(0, 100 - 40*must_fix - 15*should_fix - 3*nit - 10*unverified)
+```
+
+### Override invariant
+
+```
+Score never overrides verdict.
+blocked + any score_pct       → not shippable
+needs fixes + any score_pct   → still address findings before merge
+ship it + score_pct < 100    → allowed (nits and/or unverified deducted)
+High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
+```
+
+### Worked examples (check table)
+
+| must / should / nit / unverified | score_pct | verdict | Display line |
+| --- | --- | --- | --- |
+| 0 / 0 / 0 / 0 + 1 leftover unmet AC | 85 | `needs fixes` | `needs fixes · 85%` |
+| 0 / 0 / 0 / 0 + 1 leftover unmet AC (unsafe-to-ship) | 60 | `blocked` | `blocked · 60%` |
+| 0 / 0 / 2 / 0 | 94 | `ship it` | `ship it · 94%` |
+| 0 / 0 / 0 / 2 | 80 | `ship it` | `ship it · 80%` |
+| 0 / 1 / 0 / 0 | 85 | `needs fixes` | `needs fixes · 85%` |
+| 0 / 1 / 1 / 0 | 82 | `needs fixes` | `needs fixes · 82%` |
+| 1 / 0 / 0 / 0 | 60 | `blocked` | `blocked · 60%` |
+| 1 / 2 / 1 / 1 | 17 | `blocked` | `blocked · 17%` |
+| 3 / 0 / 0 / 0 | 0 (floor) | `blocked` | `blocked · 0%` |
+
+`blocked · 60%` is still not shippable. `needs fixes · 85%` still means address findings.
 
 ## Linked-issue hygiene
 
 If the PR closes/fixes a tracked issue, score **every** acceptance criterion against the diff:
 
 - Mark each: met / unmet / cut.
-- Leftover criteria get a follow-up or a narrowed scope **before** merge, with reasoning on the review comment.
+
+Leftover `unmet` criteria count against the verdict: they are **tally increments**, not extra findings (do not also emit a Merge-class finding for the same leftover — that would double-count). Each leftover AC marked `unmet` (not `met`, not `cut`) increments `should_fix` by 1, or `must_fix` by 1 when that leftover is itself a broken public contract / unsafe-to-ship. The increment lives in the tally procedure (§ Tally and derived score); apply Verdict-from-tally **after** it, so leftover `unmet` ACs cannot yield `ship it`. Score uses the existing formula only (`should_fix` deducts 15, `must_fix` deducts 40 — no second formula, no new tally key). Leftovers are already mentioned in the review `body` (§ Comment posting) — no fourth merge class.
 - Do not invent a follow-up when all criteria landed.
 
 ## CI attribution
@@ -145,7 +217,7 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
 2. Build one review payload:
    - `event`: `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
    - `commit_id`: the PR head SHA.
-   - `body`: verdict + ranked findings (short) + linked-issue leftover reasoning + optional folded plan index (below).
+   - `body`: **first two lines are the display contract** — `{verdict} · {score_pct}%` then the tally line (`must-fix=<n> should-fix=<n> nit=<n> unverified=<n>`) — then ranked findings (short) + linked-issue leftover reasoning + optional folded plan index (below). `event` stays `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
    - `comments[]`: one entry per finding whose `path` + `line` is in the three-dot diff, `side: RIGHT`. Finding body = title + evidence + impact + fix sketch — not the whole plan.
 3. Post it:
    ```
@@ -171,10 +243,14 @@ Never dump full plan files.
 
 ## Output shape
 
-Verbatim labels, in order:
-
-- `- findings:` — list of evidence-backed findings (`none` when none).
-- `- verdict:` — one of `ship it` / `needs review` / `blocked`.
+- `- findings:` — list of evidence-backed findings (`none` when none). Each accepted finding includes **Merge class** (§ Merge class).
+- `- verdict:` — exactly one of `ship it` / `needs fixes` / `blocked` (§ Verdict synthesis).
+- `- score_pct:` — integer 0–100 from the locked formula (§ Tally and derived score).
+- `- tally:`
+  - `- must-fix: <n>`
+  - `- should-fix: <n>`
+  - `- nit: <n>`
+  - `- unverified: <n>`
 - `- evidence:` — concise what-checks-proved summary.
 - `- unverified:` — residual unverified claims, or `none`.
 - `- next:` — one of `implementation` / `verify` / `docs`.
@@ -184,3 +260,18 @@ Verbatim labels, in order:
   - `review_url: <url>` when `posted: yes`; `n/a` when `n/a-no-pr` or `failed`
   - `inline: <N> posted / <M> attempted (<K> summary-only fallback)`
   - `plans_folded: yes` | `no`
+
+### Display contract (chat + GitHub Review `body`)
+
+First two lines of the display (chat output and the GitHub Review `body`) — verbatim:
+
+```
+{verdict} · {score_pct}%
+must-fix=<n> should-fix=<n> nit=<n> unverified=<n>
+```
+
+Then existing ranked findings / leftover AC / optional `<details>` plan index. Do not put `score_pct%` on the `- verdict:` token line.
+
+### List cut
+
+The default "top 1–3 unless `full`" applies to **nits only**: every `must-fix` and `should-fix` finding is listed. If nits are omitted from the narrative list, add one line `nits: <n> omitted from list (counted in tally)` — `tally.nit` stays complete.
