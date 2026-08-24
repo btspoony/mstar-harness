@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [3.2.6] - 2026-08-24
+
+### Harness
+
+- **PR 深审报告模板加固**：`Considered & rejected` 占位符不再把 bullet 短横线包进尖括号（此前一条已发布 review 逐字渲染了 `<finding>` 包裹）；拒绝条目改为 `- **<短标题>**: rejected — <理由>`，并在模板顶部显式声明“尖括号仅是填空槽、永不渲染”；无修复计划时 Plan to fix 整块折叠为单独一行 `none` 而非散文。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.2.6**。
+
 ## [3.2.5] - 2026-08-24
 
 ### Harness
