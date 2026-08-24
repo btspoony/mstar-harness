@@ -28,7 +28,7 @@
 - **不放什么**：已锁定的仓库级规范（→ **`{SPECS_DIR}/`**）；已提升的跨迭代实施 SSOT（→ **`{KNOWLEDGE_DIR}/`**，经 compound）；单 plan QC/QA 原始报告（→ `{SDD_DIR}/review/`）。
 - **索引**：`**{ITERATION_DIR}/README.md**` **一行 = 一次迭代**（指向 `<iteration-id>/`）；`<iteration-id>/README.md` 登记 package 内文档（Documents 单表）。
 - **维护**：`@product-manager` / `@architect` 起草 package；`**@project-manager**` 维护索引与 metadata；**iteration-close** 时 **`mstar-compound`** 盘点 package 并**提升**至 `{KNOWLEDGE_DIR}/`。
-- **Compass 路径**：canonical `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`；legacy flat `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 仅兼容读。
+- **Compass 路径**：canonical `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`（迭代状态 SSOT）；legacy flat `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 仅兼容读。
 
 ## `{SPECS_DIR}`（可选·长期规格）
 

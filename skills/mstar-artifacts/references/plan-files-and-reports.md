@@ -21,7 +21,6 @@ QC/QA 原始过程报告默认是 **ephemeral review bundle**，置于 `{SDD_DIR
 | QC 汇总结论（tri 模式） | `qc-consolidated.md` |
 | QA 验收报告（`QA gate: mandatory`） | `qa.md`（或 Assignment 指定的同目录 basename） |
 
-`{PLAN_DIR}/reports/` is **legacy / explicit audit mode only**. Use it only when the user or project policy explicitly requires tracked raw reports; the default harness path is `{SDD_DIR}/review/`.
 
 ## SDD 运行时（不入 reports）
 

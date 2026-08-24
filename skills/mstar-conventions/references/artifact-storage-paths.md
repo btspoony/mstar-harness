@@ -47,7 +47,6 @@
 | `docs/` | 人类文档（安装、贡献指南等），知识产物不放此处 |
 | `{ITERATION_DIR}/` | 迭代 package（compass + guides/specs）；知识文档不放此处 |
 | `{SPECS_DIR}/` | 仅限冻结规格/ADR，运行时知识不放此处 |
-| `{PLAN_DIR}/reports/` | Legacy / explicit audit mode only；默认 QC/QA 原始过程报告进 `{SDD_DIR}/review/`，知识文档不放此处 |
 
 ## `<category>` 取值
 

@@ -14,7 +14,7 @@
 
 1. 创建 `{HARNESS_DIR}`（推荐 `.mstar/`）与 `{PLAN_DIR}`（推荐 `.mstar/plans/`）。
 2. 初始化 `status.json`：从 **`mstar-artifacts/templates/status.empty.json`** 复制（**v2 形状**：`version: 2` + `workflows: []`）；residual canonical 见 **`mstar-artifacts` SKILL.md**；字段与生命周期见 **`mstar-artifacts/references/status-and-residuals.md`**。`workflows/` 与 `projects/` 子目录由 engine writers 按需创建（**不**在 bootstrap 预建）。
-3. 初始化可选 `notes.json`（legacy）；`sdd/` 空目录占位（per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建）。
+3. `sdd/` 空目录占位（per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建）。
 4. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」；legacy `.agents/` 有等价表）。
 5. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；`{HARNESS_DIR}/specs/`（解析后的 `{SPECS_DIR}` 默认落点）；内容边界见 `mstar-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
 6. 创建 `{HARNESS_DIR}/AGENTS.md`（harness 子树规则；**tracked**）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 与 `docs/` 分工；新项目推荐 `.mstar/AGENTS.md`，已有项目可继续使用 `.agents/AGENTS.md`。
@@ -28,7 +28,7 @@
 | 类别 | 默认 tracked | 默认 gitignored |
 |------|--------------|-----------------|
 | 结果（跨 clone handoff） | `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**` | — |
-| 进程（本地会话 SSOT） | — | `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`notes.json`、`sdd/`、`archived/` |
+| 进程（本地会话 SSOT） | — | `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/`、`archived/` |
 
 跨 clone 须持久的 residual 或决策：经 **`mstar-compound`** 提升入 `{KNOWLEDGE_DIR}/`、写入 `{SPECS_DIR}/`，或记入 tracked `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` `status.json` / `plans/`。
 

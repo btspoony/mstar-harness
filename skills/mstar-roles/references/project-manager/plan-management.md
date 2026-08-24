@@ -19,8 +19,8 @@ Legacy fallbacks:
 
 1. Create `{HARNESS_DIR}` and `{PLAN_DIR}` when absent.
 2. Initialize `{HARNESS_DIR}/status.json` from template if available.
-3. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json`, `workflows/`, `projects/` (legacy `.agents/` equivalents when applicable). Per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
-4. Optional: `{HARNESS_DIR}/notes.json` (legacy), `{HARNESS_DIR}/knowledge/README.md`. `workflows/` / `projects/` subdirs are created on demand by engine writers — no pre-creation.
+3. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/archived/`, `iterations/`, `plans/`, `sdd/`, `status.json`, `workflows/`, `projects/` (legacy `.agents/` equivalents when applicable). Per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
+4. Optional: `{HARNESS_DIR}/knowledge/README.md`. `workflows/` / `projects/` subdirs are created on demand by engine writers — no pre-creation.
 
 If legacy plan directories already exist, reuse them; avoid dual-structure duplication.
 
@@ -29,7 +29,7 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 **Principle:** process stays local; results are shared with the team. Full rules → `mstar-conventions` SKILL.md「Git 跟踪策略」.
 
 - **Default tracked** under `{HARNESS_DIR}`: `AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**` (resolved specs path; default `{HARNESS_DIR}/specs/`).
-- **Default gitignored** (local session SSOT / coordination): `archived/`, `iterations/`, `plans/`, `sdd/`, `notes.json`, `status.json`, `workflows/`, `projects/`.
+- **Default gitignored** (local session SSOT / coordination): `archived/`, `iterations/`, `plans/`, `sdd/`, `status.json`, `workflows/`, `projects/`.
 - `status.json` (v2 root), workflow snapshots, project registers and main plan files remain **local session SSOT** — PM must keep them current on disk, but **do not** default `git add` / `git commit` for cross-clone handoff. Promote durable residuals and decisions into tracked `knowledge/` / `specs/` / `AGENTS.md` (compound) when they must survive clone.
 - If a project explicitly opts into tracking process artifacts, record that policy in `{HARNESS_DIR}/AGENTS.md` and ensure team alignment.
 
