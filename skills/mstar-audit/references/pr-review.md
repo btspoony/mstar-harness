@@ -273,7 +273,7 @@ The posted review body is a three-section report. Section order fixed; omit a su
 
 ## 🛠️ Plan to fix
 
-<details><summary>展开修复计划 / Expand fix plan</summary>
+<details><summary>Expand fix plan</summary>
 <br>
 
 ```md
