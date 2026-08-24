@@ -225,7 +225,7 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
    ```
    (payload on stdin).
 4. **Line fallback:** if GitHub rejects some inline comments (e.g. 422 — line not in the diff), retry the review **without** those entries and fold them into the summary body. Do not loop more than once.
-5. Record `html_url` / review id for `comments:`, then save the local report (§ Local report archive) — **always, including after a failed or skipped POST**. Only now clean up the worktree (or after the n/a-no-PR skip).
+5. Save the local report (§ Local report archive) — **mandatory in all three branches**: POST succeeded (record `html_url` / review id for `comments:` first), POST failed, or `n/a-no-pr` (archive the chat display content). Only then clean up the worktree; bare branch/diff reviews have no worktree, but the save still happens.
 6. **Batch:** each reviewer posts on **their own PRs** only. No second PM summary comment unless the Assignment says so.
 
 ### Report template (GitHub Review `body`)
