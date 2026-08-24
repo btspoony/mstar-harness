@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.2.6] - 2026-08-24
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- **PR deep-review report template hardening**: the `Considered & rejected` placeholder no longer embeds the bullet dash inside angle brackets (a posted review rendered literal `<finding>` wrappers verbatim); rejected entries now use `- **<short title>**: rejected — <reason>` with an explicit "never render brackets" rule stated at the template top; empty Plan-to-fix sections collapse to a bare `none` instead of prose.
+
+- Version alignment with harness **3.2.6** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.2.6**.
+
 ## [3.2.5] - 2026-08-24
 
 ### Bundled harness skills (`harness-skills/` at publish)

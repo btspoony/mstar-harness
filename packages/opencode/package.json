@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/opencode",
-  "version": "3.2.5",
+  "version": "3.2.6",
   "description": "Morning Star harness OpenCode plugin — skills bootstrap + engine-backed runtime hooks (status lint, dispatch validation, Enforcement: hard gates).",
   "license": "MIT",
   "repository": {
