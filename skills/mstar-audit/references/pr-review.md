@@ -146,7 +146,7 @@ High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 
 | must / should / nit / unverified | score_pct | verdict | Display line |
 | --- | --- | --- | --- |
-| 0 / 0 / 0 / 0 | 100 | `ship it` | `ship it · 100%` |
+| 0 / 0 / 0 / 0 + 1 leftover unmet AC | 85 | `needs fixes` | `needs fixes · 85%` |
 | 0 / 0 / 2 / 0 | 94 | `ship it` | `ship it · 94%` |
 | 0 / 0 / 0 / 2 | 80 | `ship it` | `ship it · 80%` |
 | 0 / 1 / 0 / 0 | 85 | `needs fixes` | `needs fixes · 85%` |
@@ -162,7 +162,8 @@ High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 If the PR closes/fixes a tracked issue, score **every** acceptance criterion against the diff:
 
 - Mark each: met / unmet / cut.
-- Leftover criteria get a follow-up or a narrowed scope **before** merge, with reasoning on the review comment.
+
+Leftover `unmet` criteria count against the verdict: after the four counts are computed (§ Tally and derived score), each leftover AC marked `unmet` (not `met`, not `cut`) increments `should_fix` by 1 — same bucket as "address before merge". If a leftover is itself a broken public contract / unsafe-to-ship, classify it `must-fix` instead (tie-break already exists). Apply Verdict-from-tally **after** this increment, so leftover `unmet` ACs cannot yield `ship it`. They deduct 15 each via the existing formula (no second formula, no new tally key). Leftovers are already mentioned in the review `body` (§ Comment posting) — no fourth merge class.
 - Do not invent a follow-up when all criteria landed.
 
 ## CI attribution

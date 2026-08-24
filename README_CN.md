@@ -105,7 +105,7 @@ npm i -g @mstar-harness/cli
 | 命令 | 何时 |
 |------|------|
 | `/codebase-audit [关键词]` | 只读扫描 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划。<br>不改源码。产出可喂给 `/iteration-start` Research 或常规 Prepare → Execute。<br>深度：`quick` / `deep`（默认 `standard`）。<br>范围：按类别聚焦（`security`、`perf`、`tests`、…）；`branch`（仅当前分支变更）；`next` / `roadmap`（仅方向候选）；`simplify`（聚焦技术债的深扫）。 |
-| `/pr-deep-review [pr\|branch\|scope] [full]` | 合并前对 PR / 分支 / diff 做证据先行的深度审查 → 单一结论（`ship it` / `needs fixes` / `blocked`）。<br>结论由 finding 计数（tally）计算；`score_pct` 仅为展示反馈，绝不覆盖结论。<br>worktree 隔离、只读；发现可转为 plan 进入 Prepare → Execute。<br>有 PR 编号时强制发布 GitHub Review（在发现对应的代码行上评论）。<br>`full` — 展示全部发现（默认只列 top 1–3）。 |
+| `/pr-deep-review [pr\|branch\|scope] [full]` | 合并前对 PR / 分支 / diff 做证据先行的深度审查 → 单一结论（`ship it` / `needs fixes` / `blocked`）。<br>结论由 finding 计数（tally）计算；`score_pct` 仅为展示反馈，绝不覆盖结论。<br>worktree 隔离、只读；发现可转为 plan 进入 Prepare → Execute。<br>有 PR 编号时强制发布 GitHub Review（在发现对应的代码行上评论）。<br>`full` — 列出全部 nits（默认已列全部 must-fix/should-fix；nits 默认只列 top 1–3）。 |
 
 ## Harness Workflow（统一流程）
 
