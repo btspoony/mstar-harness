@@ -116,9 +116,10 @@ jobs:
             echo
             cat /tmp/notes.md
           } > /tmp/pr-body.md
-          if gh pr view "$BRANCH" >/dev/null 2>&1; then
-            gh pr edit "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md
-            echo "Updated existing release PR for $BRANCH"
+          OPEN=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$OPEN" ]; then
+            gh pr edit "$OPEN" --title "$TITLE" --body-file /tmp/pr-body.md
+            echo "Updated existing release PR #$OPEN"
           else
             gh pr create --base main --head "$BRANCH" --title "$TITLE" \
               --body-file /tmp/pr-body.md --label release
