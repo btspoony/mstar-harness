@@ -1,23 +1,34 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.2.0**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.2.1**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **3.2.0** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.2.0** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.2.0** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.2.0** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.2.0** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **3.2.0** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.2.0** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.2.0** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.0** |
-| Agent Plugins 清单 | `plugin.json` | **3.2.0** |
+| monorepo 根 | `morning-star`（`package.json`） | **3.2.1** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.2.1** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.2.1** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.2.1** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.2.1** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **3.2.1** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.2.1** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.2.1** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.1** |
+| Agent Plugins 清单 | `plugin.json` | **3.2.1** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [3.2.1] - 2026-08-24
+
+### Harness
+
+- `/pr-deep-review` 现在在有 PR 编号时**强制发布** GitHub Review：在 PR 上留下 `COMMENT` 事件的评论（可定位到 diff 行的发现发为行内评论，已写好的后续 plan 以 `<details>` 折叠索引并入摘要正文），输出形状新增 `comments:` 字段。发布流程 SSOT 在 `skills/mstar-audit/references/pr-review.md` § Comment posting；`mstar-audit` Hard Rule 2 与 Audit Mode 角色契约仅为此 GitHub Review POST 开例外（Git 仍只读、不提交）。`code-reviewer` 新增 Mode C（PR review，加载 `pr` 变体）。`commands/pr-deep-review.md` 删除「可选 / 单独显式步骤」措辞。仅聊天输出的结论对 PR 席位不再视为完成。
+- README「使用」节重组为三类入口：**通用（不跑迭代）**、**迭代**、**审计与 Review**——第三类将 `/codebase-audit` 与 `/pr-deep-review` 合并为单表同一标题，导语统一说明只读顾问定位并点名 `mstar-audit` 两个变体（此前两者为并列顶级小节；行内 SSOT 尾巴并入导语）。双语对应修改同步落地（README.md / README_CN.md）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.2.1**。
 
 ## [3.2.0] - 2026-08-23
 

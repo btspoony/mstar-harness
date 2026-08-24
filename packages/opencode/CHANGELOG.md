@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-08-24
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- `/pr-deep-review` now **requires** posting a GitHub Review when a PR number exists: the `pr` variant always leaves `COMMENT`-event comments on the PR (inline comments on diff-line findings, summary body folds any already-written follow-up plans into a `<details>` section), and the output shape gains a `- comments:` field with the review URL. Posting procedure is SSOT'd in `skills/mstar-audit/references/pr-review.md` § Comment posting; `mstar-audit` Hard Rule 2 and the Audit-Mode contract now carve out only this required GitHub Review POST (Git stays read-only, no commits). `code-reviewer` gains Mode C (PR review) loading `pr-review.md`. `commands/pr-deep-review.md` drops the "optional / separate explicit step" wording. Chat-only verdict is no longer complete for PR seats.
+
+- Version alignment with harness **3.2.1** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.2.1**.
+
 ## [3.2.0] - 2026-08-23
 
 ### Harness
