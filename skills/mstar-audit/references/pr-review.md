@@ -127,6 +127,48 @@ Review findings that need fixing can become plans for the normal Prepare → Exe
 - Write the top findings as self-contained plans (numbered `001-<slug>.md` + `README.md` index — top findings only; the verdict is presented separately).
 - The review itself stays read-only: plans are written only when the user selects findings to pursue.
 
+## Comment posting
+
+Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant — chat-only output is incomplete when a PR exists. The review seat that owns the PR posts it; PM only reports the URL.
+
+- **Before anything else:** synthesize the verdict first, then post **before** worktree cleanup (see § Worktree isolation — cleanup happens after the comment is posted).
+- **No PR number** (bare branch / arbitrary diff): set `comments: n/a-no-pr` and skip the API. Chat output still required; this is not a Blocked review.
+- **Auth / API failure:** deliver the chat verdict anyway; Completion Report status `Partial`/`Blocked` with the `gh` error. Do not claim `Done` — comments are mandatory when a PR exists.
+
+### Procedure
+
+1. Resolve the target — `owner/repo`, PR number, head SHA:
+   ```
+   gh pr view <n> --json url,headRefOid,headRepository
+   ```
+   `headRefOid` is the `commit_id`; `headRepository.owner.login` / `headRepository.name` give `owner/repo`.
+2. Build one review payload:
+   - `event`: `COMMENT` — **never** `APPROVE`, **never** `REQUEST_CHANGES`, never a merge.
+   - `commit_id`: the PR head SHA.
+   - `body`: verdict + ranked findings (short) + linked-issue leftover reasoning + optional folded plan index (below).
+   - `comments[]`: one entry per finding whose `path` + `line` is in the three-dot diff, `side: RIGHT`. Finding body = title + evidence + impact + fix sketch — not the whole plan.
+3. Post it:
+   ```
+   gh api --method POST repos/{owner}/{repo}/pulls/<n>/reviews --input -
+   ```
+   (payload on stdin).
+4. **Line fallback:** if GitHub rejects some inline comments (e.g. 422 — line not in the diff), retry the review **without** those entries and fold them into the summary body. Do not loop more than once.
+5. Record `html_url` / review id for `comments:`. Only now clean up the worktree (or after the n/a-no-PR skip).
+6. **Batch:** each reviewer posts on **their own PRs** only. No second PM summary comment unless the Assignment says so.
+
+### Folding plans into the summary
+
+Fold follow-up plans into the review body **only if** this review wrote them. A short index — title, priority, effort, 1–3 sentence sketch, plan path — inside:
+
+```
+<details><summary>Follow-up plans</summary>
+
+- <plan title> — P1, S: <1–3 sentence sketch> (`{PLAN_DIR}/audit-<date>/NNN-<slug>.md`)
+</details>
+```
+
+Never dump full plan files.
+
 ## Output shape
 
 Verbatim labels, in order:
@@ -136,4 +178,8 @@ Verbatim labels, in order:
 - `- evidence:` — concise what-checks-proved summary.
 - `- unverified:` — residual unverified claims, or `none`.
 - `- next:` — one of `implementation` / `verify` / `docs`.
-- `- notes:` — only out-of-scope state the user must act on.
+- `- comments:` — GitHub Review posting status (see § Comment posting):
+  - `posted: yes` | `n/a-no-pr` | `failed`
+  - `review_url: <url>` | `n/a`
+  - `inline: <N> posted / <M> attempted (<K> summary-only fallback)`
+  - `plans_folded: yes` | `no`
