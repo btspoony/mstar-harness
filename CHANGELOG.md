@@ -2,24 +2,35 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **3.2.0** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **3.2.1** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **3.2.0** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.2.0** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.2.0** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.2.0** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **3.2.0** |
-| Codex plugin | `.codex-plugin/plugin.json` | **3.2.0** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **3.2.0** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **3.2.0** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.0** |
-| Agent Plugins manifest | `plugin.json` | **3.2.0** |
+| Monorepo root | `morning-star` (`package.json`) | **3.2.1** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.2.1** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.2.1** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.2.1** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **3.2.1** |
+| Codex plugin | `.codex-plugin/plugin.json` | **3.2.1** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **3.2.1** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **3.2.1** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.1** |
+| Agent Plugins manifest | `plugin.json` | **3.2.1** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [3.2.1] - 2026-08-24
+
+### Harness
+
+- `/pr-deep-review` now **requires** posting a GitHub Review when a PR number exists: the `pr` variant always leaves `COMMENT`-event comments on the PR (inline comments on diff-line findings, summary body folds any already-written follow-up plans into a `<details>` section), and the output shape gains a `- comments:` field with the review URL. Posting procedure is SSOT'd in `skills/mstar-audit/references/pr-review.md` § Comment posting; `mstar-audit` Hard Rule 2 and the Audit-Mode contract now carve out only this required GitHub Review POST (Git stays read-only, no commits). `code-reviewer` gains Mode C (PR review) loading `pr-review.md`. `commands/pr-deep-review.md` drops the "optional / separate explicit step" wording. Chat-only verdict is no longer complete for PR seats.
+- README Use section regrouped into three entry shapes: **General (without iteration)**, **Iteration**, and **Audit & review** — the third groups `/codebase-audit` and `/pr-deep-review` into one table under one heading, with a shared read-only advisory intro naming both `mstar-audit` variants (both were previously parallel top-level sections; per-row SSOT tails folded into the intro). Bilingual counterpart applied (README.md / README_CN.md).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.2.1**.
 
 ## [3.2.0] - 2026-08-23
 
