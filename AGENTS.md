@@ -104,7 +104,7 @@ Either:
 - **GitHub Actions**: Actions → *Release prep* → Run workflow (optionally pass an explicit `X.Y.Z`; empty = auto patch bump), **or**
 - **Local**: `bun run release:prepare -- 1.8.7` (or `-- --patch` / `-- --minor`), then open a PR titled `release v1.8.7`.
 
-`scripts/prepare-release.ts` reads `.changes/unreleased/*.md`, inserts a `## [<version>]` section into all 5 changelogs, bumps every surface, updates the root changelog registry tables, and moves consumed fragments to `.changes/archive/<version>/`. Validate with `bun run release:validate -- v1.8.7`.
+`scripts/prepare-release.ts` reads `.changes/unreleased/*.md`, inserts a `## [<version>]` section into all 5 changelogs, bumps every surface, and moves consumed fragments to `.changes/archive/<version>/`. Validate with `bun run release:validate -- v1.8.7`.
 
 ### 3. Merge the release PR — auto-tag + publish
 
@@ -116,7 +116,6 @@ Merging a `release vX.Y.Z` PR runs the **Release** workflow **inline on the `pul
 
 - Never invent a skipped tag (e.g. do not create `v1.8.4` to fill a historical gap).
 - Bump version + changelog in the same change set via `release:prepare`; do not hand-edit version surfaces (the `release:validate` gate reads the same surface list).
-- Avoid the #58-class drift: the version registry tables in the root changelogs are bumped automatically — do not hand-edit the registry version cells.
 
 ## AI Agent Quality Gate
 

@@ -12,9 +12,8 @@
  *   2. Reads `.changes/unreleased/*.md` fragments and groups them by changelog + category.
  *   3. Inserts a new `## [<version>] - <date>` section into each changelog
  *      (under `## [Unreleased]`), auto-appending a Version-alignment block.
- *   4. Bumps all 11 version surfaces (including the portable Agent Plugins manifest) + the INSTALL.md ZCode marketplace example.
- *   5. Bumps the version registry table cells in the root changelogs (head region only).
- *   6. Moves consumed fragments to `.changes/archive/<version>/`.
+ *   4. Bumps all version surfaces (including the portable Agent Plugins manifest) + the INSTALL.md marketplace example.
+ *   5. Moves consumed fragments to `.changes/archive/<version>/`.
  *
  * Fragment format (`.changes/unreleased/<slug>.md`):
  *   ---
@@ -123,8 +122,7 @@ export function parseFragment(file: string, text: string): Fragment {
  * Validate normalized fragment `packages:` tokens against the release-surface
  * enum (root | cli | opencode | engine | dsh — .changes/README.md). Returns
  * every error string (collect-all, not first-error); an empty list validates
- * clean (callers keep the existing ["root"] default). Exported for tests,
- * like ensureEngineRegistryRow.
+ * clean (callers keep the existing ["root"] default). Exported for tests.
  */
 export function validateFragmentPackages(packages: string[], file: string): string[] {
   const errors: string[] = [];
@@ -225,51 +223,6 @@ function insertSection(changelog: string, version: string, date: string, body: s
   return `${changelog.slice(0, afterLine)}\n${header}\n\n${body}\n\n${tail}`;
 }
 
-function bumpRegistryHead(changelog: string, oldV: string, newV: string): string {
-  const unreleased = changelog.indexOf("## [Unreleased]");
-  const head = unreleased === -1 ? changelog : changelog.slice(0, unreleased);
-  const rest = unreleased === -1 ? "" : changelog.slice(unreleased);
-  return head.replaceAll(`**${oldV}**`, `**${newV}**`) + rest;
-}
-
-/**
- * Ensure the `@mstar-harness/engine` registry row + package-history link
- * exist in a root changelog HEAD region (qc1 F-002). The Engine npm package
- * is a version surface since 1.8.8, so the human SSOT registry must carry it
- * even when the row was never hand-added: insert an Engine row right after
- * the CLI row (deriving the row style from the CLI row so EN/CN variants
- * match their table), and append the `packages/engine/CHANGELOG.md` link to
- * the "Package-specific histories" / "各包独立日志" line. Idempotent — a head
- * that already mentions `@mstar-harness/engine` is returned unchanged.
- */
-export function ensureEngineRegistryRow(changelog: string, version: string): string {
-  const unreleased = changelog.indexOf("## [Unreleased]");
-  const head = unreleased === -1 ? changelog : changelog.slice(0, unreleased);
-  const rest = unreleased === -1 ? "" : changelog.slice(unreleased);
-  if (head.includes("@mstar-harness/engine")) return changelog;
-  let next = head;
-  const cliRow = next.match(/^(\| CLI \|.*)$/m)?.[1];
-  if (cliRow !== undefined) {
-    const engineRow = cliRow
-      .replace("CLI", "Engine")
-      .replace("@mstar-harness/cli", "@mstar-harness/engine")
-      .replace(/`packages\/cli`/, "`packages/engine`")
-      .replace(/\*\*[^*]+\*\*/, `**${version}**`);
-    next = next.replace(cliRow, `${cliRow}\n${engineRow}`);
-  }
-  if (!next.includes("packages/engine/CHANGELOG.md")) {
-    next = next.replace(
-      /(Package-specific histories:.*?)(\.)(\s*)$/m,
-      `$1, [\`packages/engine/CHANGELOG.md\`](packages/engine/CHANGELOG.md)$2$3`,
-    );
-    next = next.replace(
-      /(各包独立日志：.*?)(。)(\s*)$/m,
-      `$1、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)$2$3`,
-    );
-  }
-  return `${next}${rest}`;
-}
-
 async function bumpJsonVersion(path: string, oldV: string, newV: string): Promise<void> {
   const text = await Bun.file(path).text();
   const re = new RegExp(`("version"\\s*:\\s*")${oldV.replace(/\./g, "\\.")}(")`);
@@ -321,13 +274,7 @@ async function main(): Promise<void> {
   for (const target of CHANGELOGS) {
     const text = await Bun.file(target.path).text();
     const body = buildSectionBody(target, frags, version);
-    let next = insertSection(text, version, date, body);
-    if (target.hasRegistryTable) {
-      // Root registry tables: insert the @mstar-harness/engine row + history
-      // link when missing (qc1 F-002), then bump every version cell.
-      next = ensureEngineRegistryRow(next, version);
-      next = bumpRegistryHead(next, current, version);
-    }
+    const next = insertSection(text, version, date, body);
     await Bun.write(target.path, next);
     console.log(`changelog: ${target.path}`);
   }
