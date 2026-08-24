@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-08-24
+
+### Bundled harness skills (`harness-skills/` at publish)
+
+- `/pr-deep-review` now emits a merge signal computed from the finding tally: the middle verdict token is renamed `needs review` → `needs fixes`, each accepted PR finding carries a `Merge class` (`must-fix` | `should-fix` | `nit`), and the output shape gains `- score_pct:` (derived, `max(0, 100 - 40*must_fix - 15*should_fix - 3*nit - 10*unverified)`, floor 0) and `- tally:` with four counts. The verdict is derived from the tally (`must-fix ≥ 1` → `blocked`, else `should-fix ≥ 1` → `needs fixes`, else `ship it`); leftover linked-issue `unmet` ACs increment `should_fix` (or `must_fix` when unsafe-to-ship) before that mapping and are not extra findings. `score_pct` is display-only and never overrides it. Chat and the GitHub Review `body` open with `{verdict} · {score_pct}%` plus the tally line; `event` remains `COMMENT`. The list cut now applies to nits only — every `must-fix` / `should-fix` is listed. Formula and rules are SSOT'd in `skills/mstar-audit/references/pr-review.md` § Verdict synthesis / Tally and derived score.
+
+- Version alignment with harness **3.2.2** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.2.2**.
+
 ## [3.2.1] - 2026-08-24
 
 ### Bundled harness skills (`harness-skills/` at publish)

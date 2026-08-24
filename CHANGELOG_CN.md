@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-08-24
+
+### Harness
+
+- 删除根 Changelog 开头的 **Published harness surfaces** 版本表。各发布面版本已对齐，表头与发布脚本中改写该表的步骤一并移除。每版 `### Version alignment` 块保留。
+- **`mstar-harness-core` 护栏改为宿主中立**：`未经用户同意不改 opencode.json、凭据、secrets.env` → `未经用户同意不改宿主配置文件与用户凭据`——共享 skill 不再点名单一宿主的配置文件。
+- `/pr-deep-review` 现在基于 finding 计数（tally）输出合并信号：中间结论词 `needs review` 更名为 `needs fixes`，每个已接受的 PR finding 携带 `Merge class`（`must-fix` | `should-fix` | `nit`），输出形状新增 `- score_pct:`（`max(0, 100 - 40*must_fix - 15*should_fix - 3*nit - 10*unverified)`，下限 0）与 `- tally:` 四项计数。结论由 tally 推导（`must-fix ≥ 1` → `blocked`，否则 `should-fix ≥ 1` → `needs fixes`，否则 `ship it`）；关联工单 leftover `unmet` AC 在映射前计入 `should_fix`（不安全则计入 `must_fix`），不另开 finding。`score_pct` 仅为展示反馈，绝不覆盖结论。聊天输出与 GitHub Review `body` 以 `{verdict} · {score_pct}%` 加 tally 行开头；事件仍为 `COMMENT`。发现列表裁剪规则现仅作用于 nits —— 所有 `must-fix` / `should-fix` 都会列出。公式与 tally 标准 SSOT 于 `skills/mstar-audit/references/pr-review.md` § Verdict synthesis / Tally and derived score。
+- **Release prep** 在同名分支上的上一份 PR 已关闭或已合并时会**新建** `release vX.Y.Z`，不再把 `gh pr view` 对 closed PR 成功当成原地更新（此前会改 #131 正文却不新建 3.2.2 PR）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.2.2**。
+
 ## [3.2.1] - 2026-08-24
 
 ### Harness
