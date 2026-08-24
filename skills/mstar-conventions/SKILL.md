@@ -84,7 +84,6 @@ enforcement=hard
 
 **创建默认**：全部缺失或皆空 → 创建并使用 `{HARNESS_DIR}/specs/`（统一落在 `.mstar/` 下）。**禁止**在 greenfield init 时优先创建裸仓库根 `specs/`。
 
-**Legacy（仅兼容读）**：若以上皆无内容，但 `{HARNESS_DIR}/designs/` 或仓库根 `designs/` **非空**，可作 `{SPECS_DIR}` 使用；init 时**不**新建 `designs/`。
 
 > **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints the resolved specs dir) — to confirm the candidate order (empty-dir-as-absent included). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -107,7 +106,7 @@ enforcement=hard
 PM 在需要持久化追踪时：
 
 1. 建 `.mstar/`、`plans/`、`status.json`（**v2 空模板**见 **`mstar-artifacts/templates/status.empty.json`**：`version: 2` + `workflows: []`）
-2. 可选 `notes.json`（legacy）、`knowledge/`、`iterations/`、`{HARNESS_DIR}/specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` / `projects/` 由 engine writers 按需创建，**不**预建）
+2. 可选 `knowledge/`、`iterations/`、`{HARNESS_DIR}/specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` / `projects/` 由 engine writers 按需创建，**不**预建）
 3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（见下文「Git 跟踪策略」）— CLI `init` 可自动添加
 4. Git：**进程本地、结果共享** — 默认跟踪 `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`；`plans/`、`iterations/`、`status.json` 等为**本地会话 SSOT**，默认 gitignored。跨 clone 持久 handoff = knowledge + specs + `{HARNESS_DIR}/AGENTS.md`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 residual 须提升（compound）或写入 tracked results — **勿**默认 `git add` `status.json` / `plans/`。
 
@@ -129,7 +128,6 @@ PM 在需要持久化追踪时：
 - `iterations/`
 - `plans/`
 - `sdd/`
-- `notes.json`（legacy；运行时 notes 走 `workflows/<id>/notes.jsonl`）
 - `status.json`
 - `workflows/`（v3 每 lifecycle 运行态：`<id>/snapshot.json` + `<id>/notes.jsonl`）
 - `projects/`（v3 项目层：`<id>/roadmap.md` + `<id>/residuals.json`）
