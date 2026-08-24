@@ -230,7 +230,7 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
 
 ### Report template (GitHub Review `body`)
 
-The posted review body is a three-section report. Section order fixed; omit a subsection only when its content is genuinely empty (write `none`, never delete the heading).
+The posted review body is a three-section report. Section order fixed; omit a subsection only when its content is genuinely empty (write `none`, never delete the heading). **Angle brackets in the template mark fill-in slots — replace the bracketed text with real content and never render `<` `>` themselves.**
 
 **Section emoji map** — verdict: `ship it` ✅ · `needs fixes` ⚠️ · `blocked` ⛔. Finding classes: 🔴 must-fix · 🟠 should-fix · 🔵 nit · ❓ unverified.
 
@@ -262,7 +262,9 @@ The posted review body is a three-section report. Section order fixed; omit a su
 
 ### 🗑️ Considered & rejected
 
-<- <finding>: rejected because <one line>. Otherwise `none` — rejections come from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase them.>
+- **<short finding title>**: rejected — <one-line reason>.
+
+One bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it. Write `none` (a bare line, no bullet) when nothing was rejected. Angle brackets mark slots to fill — never render them.
 
 ## 🛠️ Plan to fix
 
@@ -270,7 +272,7 @@ The posted review body is a three-section report. Section order fixed; omit a su
 <br>
 
 ```md
-<Fix plan in markdown when the audit produced one: ordered steps per finding, files touched, verification gates. Omit the block entirely only when no fix is proposed.>
+<Fix plan in markdown when the audit produced one: ordered steps per finding, files touched, verification gates. When there is no fix plan, replace the whole `<details>` block with a single line `none`.>
 ```
 
 </details>
