@@ -51,7 +51,7 @@ Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md)
 | Codex | `npx @mstar-harness/cli init --target codex`<br>then `codex plugin add morning-star-harness --marketplace personal` |
 | Generic (Agent Plugins v1) | point any Agent Plugins v1.0.0 conformant client at this repo root<br>(`plugin.json` + `skills/` are the portable package) |
 
-### Engine gate checks (optional)
+### Engine gate checks (Recommended)
 
 ```bash
 npm i -g @mstar-harness/cli
@@ -103,8 +103,8 @@ Two read-only, advisory commands under one roof — they never edit source; find
 
 | Command | When |
 |---------|------|
-| `/codebase-audit [keywords]` | Read-only survey → prioritized, self-contained plans in `{PLAN_DIR}/audit-<date>/`.<br>Never edits source. Output feeds `/iteration-start` Research or normal Prepare → Execute.<br>Effort: `quick` / `deep` (default `standard`).<br>Scope: category focus (`security`, `perf`, `tests`, …); `branch` (current-branch changes only); `next` / `roadmap` (direction candidates only); `simplify` (DEBT-focused deep pass). |
-| `/pr-deep-review [pr\|branch\|scope] [full]` | Deep, evidence-first review of a pull request / branch / diff before merge → one verdict (`ship it` / `needs fixes` / `blocked`).<br>Verdict is computed from the finding tally; `score_pct` is display-only and never overrides it.<br>Worktree-isolated, read-only; findings can turn into plans for Prepare → Execute.<br>With a PR number, a mandatory GitHub Review (comments on findings) is posted.<br>`full` — include all nits (default lists every must-fix/should-fix; nits truncated to top 1–3).|
+| `/codebase-audit [keywords]` | Read-only survey of what's worth doing — prioritized, ready-to-execute plans; narrow it with category focus (`bug`, `security`, `perf`, `tech-debt`, …) when you want a targeted pass. |
+| `/pr-deep-review [pr\|branch\|scope]` | Deep pre-merge review of a PR / branch / diff → one verdict (`ship it` / `needs fixes` / `blocked`) and every finding, posted to GitHub when a PR number is given. |
 
 ## Harness Workflow
 

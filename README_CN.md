@@ -51,7 +51,7 @@ Harness Workflow Engine · Agent Plugin
 | Codex | `npx @mstar-harness/cli init --target codex`<br>然后 `codex plugin add morning-star-harness --marketplace personal` |
 | Generic（Agent Plugins v1） | 任意 Agent Plugins v1.0.0 兼容客户端直接指向本仓库根<br>（`plugin.json` + `skills/` 即便携包） |
 
-### 引擎门禁校验（可选）
+### 引擎门禁校验（推荐）
 
 ```bash
 npm i -g @mstar-harness/cli
@@ -104,8 +104,8 @@ npm i -g @mstar-harness/cli
 
 | 命令 | 何时 |
 |------|------|
-| `/codebase-audit [关键词]` | 只读扫描 → 向 `{PLAN_DIR}/audit-<date>/` 写入优先级排序、自包含的改进计划。<br>不改源码。产出可喂给 `/iteration-start` Research 或常规 Prepare → Execute。<br>深度：`quick` / `deep`（默认 `standard`）。<br>范围：按类别聚焦（`security`、`perf`、`tests`、…）；`branch`（仅当前分支变更）；`next` / `roadmap`（仅方向候选）；`simplify`（聚焦技术债的深扫）。 |
-| `/pr-deep-review [pr\|branch\|scope] [full]` | 合并前对 PR / 分支 / diff 做证据先行的深度审查 → 单一结论（`ship it` / `needs fixes` / `blocked`）。<br>结论由 finding 计数（tally）计算；`score_pct` 仅为展示反馈，绝不覆盖结论。<br>worktree 隔离、只读；发现可转为 plan 进入 Prepare → Execute。<br>有 PR 编号时强制发布 GitHub Review（在发现对应的代码行上评论）。<br>`full` — 列出全部 nits（默认已列全部 must-fix/should-fix；nits 默认只列 top 1–3）。 |
+| `/codebase-audit [关键词]` | 只读扫描代码库里值得做的事 —— 产出按优先级排序、可直接执行的改进计划；可按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）做定向深扫。 |
+| `/pr-deep-review [pr\|branch\|scope]` | 合并前对 PR / 分支 / diff 做深度审查 → 给出唯一结论（`ship it` / `needs fixes` / `blocked`）与全部发现；有 PR 编号时自动发布 GitHub Review。 |
 
 ## Harness Workflow（统一流程）
 

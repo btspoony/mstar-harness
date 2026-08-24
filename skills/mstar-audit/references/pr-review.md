@@ -87,7 +87,7 @@ Then open cited code yourself and dispose by-design / mis-attributed / duplicate
 ## Verdict synthesis
 
 - Order findings by impact-if-shipped; no padding, no invented requirements, no style grading.
-- List **every** `must-fix` and `should-fix` finding — the default top 1–3 cut (unless `full`) applies to nits only, and truncated nits are summarized in the display line (§ Output shape / Display contract).
+- List **every** accepted finding — `must-fix`, `should-fix`, and nits alike; nothing is truncated.
 - The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply leftover `unmet` AC increments if any (§ Linked-issue hygiene) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe.
 - Exactly one verdict:
   - `ship it` — evidence-backed, safe to ship.
@@ -250,7 +250,7 @@ The posted review body is a three-section report. Section order fixed; omit a su
 
 ### Findings
 
-<Ranked findings (§ List cut). Each finding keeps its normal format — title, evidence (`file:line`), impact, **Merge class**, **Confidence**, fix sketch — with its class emoji prefixing the title.>
+<Ranked findings. Each finding keeps its normal format — title, evidence (`file:line`), impact, **Merge class**, **Confidence**, fix sketch — with its class emoji prefixing the title.>
 
 ### Linked-issue AC
 
@@ -353,6 +353,3 @@ Then ranked findings / leftover AC summary. Do not put `score_pct%` on the `- ve
 
 The GitHub Review `body` no longer uses the two-line header — it follows § Report template, whose Verdict section carries the same facts structured (verdict token + Confidence + four-class emoji tally table).
 
-### List cut
-
-The default "top 1–3 unless `full`" applies to **nits only**: every `must-fix` and `should-fix` finding is listed. If nits are omitted from the narrative list, add one line `nits: <n> omitted from list (counted in tally)` — `tally.nit` stays complete.

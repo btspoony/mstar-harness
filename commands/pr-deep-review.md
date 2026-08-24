@@ -2,7 +2,7 @@
 name: pr-deep-review
 description: Use when asked to deeply review a pull request, branch, or diff before merge — deciding whether a change is safe to ship with evidence-backed findings, rather than a shallow "looks good" pass. Produces a `ship it` / `needs fixes` / `blocked` verdict. Also for a batch of sibling PRs. Do not use for self-checking a change you just authored.
 agent: project-manager
-input: "[pr|branch|scope] [full]"
+input: "[pr|branch|scope]"
 ---
 
 # Deep PR Review
