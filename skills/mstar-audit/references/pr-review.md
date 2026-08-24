@@ -225,7 +225,7 @@ Posting the GitHub Review is a **mandatory deliverable** of the `pr` variant —
    ```
    (payload on stdin).
 4. **Line fallback:** if GitHub rejects some inline comments (e.g. 422 — line not in the diff), retry the review **without** those entries and fold them into the summary body. Do not loop more than once.
-5. Record `html_url` / review id for `comments:`. Only now clean up the worktree (or after the n/a-no-PR skip).
+5. Record `html_url` / review id for `comments:`, then save the local report (§ Local report archive). Only now clean up the worktree (or after the n/a-no-PR skip).
 6. **Batch:** each reviewer posts on **their own PRs** only. No second PM summary comment unless the Assignment says so.
 
 ### Report template (GitHub Review `body`)
@@ -289,6 +289,30 @@ Fold follow-up plans into the review body **only if** this review wrote them. Pu
 
 Never dump full plan files.
 
+### Local report archive
+
+The posted PR comment is the deliverable; the local report is the durable reference copy — the PR thread may be buried, locked, or deleted, and bare-branch/diff reviews have no thread at all. The review seat saves **one markdown file per reviewed PR** (or branch/diff) as part of the mandatory deliverable, before worktree cleanup:
+
+- **Path**: `{PROJECT_DIR}/reports/pr-review/` (`{PROJECT_DIR}` per `mstar-conventions`; project-less reviews use `_default`). Gitignored local SSOT, same posture as residuals; a finding that must survive across clones gets promoted to tracked `{KNOWLEDGE_DIR}` / `{SPECS_DIR}`, not by tracking this directory.
+- **Filename**: `<YYYY-MM-DD>-pr<N>.md`; bare branch → `<YYYY-MM-DD>-<branch-slug>.md`; arbitrary diff → `<YYYY-MM-DD>-diff-<short-head-sha>.md`. Same target twice in one day → append `-r2`, `-r3`, … (never overwrite a prior report).
+- **Frontmatter** (machine-readable metadata):
+  ```yaml
+  ---
+  type: pr-review
+  pr: <n>                # omit for bare branch / diff
+  url: <pr url>          # omit for bare branch / diff
+  head: <head sha>
+  base: <base ref>
+  verdict: ship it | needs fixes | blocked
+  score_pct: <n>
+  tally: { must-fix: <n>, should-fix: <n>, nit: <n>, unverified: <n> }
+  review_url: <posted review html_url>   # n/a-no-pr when skipped
+  generated_at: <YYYY-MM-DD>
+  ---
+  ```
+- **Body**: the exact text posted as the GitHub Review body — verbatim, not a paraphrase. When `comments: n/a-no-pr` or posting failed, the body is the chat display content instead (§ Display contract two lines + ranked findings + leftover AC), so the local copy is still complete.
+- Fix plans referenced by the Plan-to-fix section keep living in `{PLAN_DIR}/audit-<date>/` when written — the report links them, never duplicates them.
+
 ## Output shape
 
 - `- findings:` — list of evidence-backed findings (`none` when none). Each accepted finding includes **Merge class** (§ Merge class).
@@ -308,6 +332,8 @@ Never dump full plan files.
   - `review_url: <url>` when `posted: yes`; `n/a` when `n/a-no-pr` or `failed`
   - `inline: <N> posted / <M> attempted (<K> summary-only fallback)`
   - `plans_folded: yes` | `no`
+
+- `- report:` — local archive path (§ Local report archive), e.g. `{PROJECT_DIR}/reports/pr-review/2026-08-24-pr134.md`; `n/a` only when the harness dir is undiscoverable.
 
 ### Display contract (chat output)
 
