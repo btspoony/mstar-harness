@@ -1,23 +1,34 @@
 # 更新日志
 
-本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.2.1**。
+本仓库 harness 发布面版本以 [CHANGELOG.md](CHANGELOG.md) 为准：**3.2.2**。
 
 | 发布面 | 位置 | 版本 |
 | --- | --- | --- |
-| monorepo 根 | `morning-star`（`package.json`） | **3.2.1** |
-| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.2.1** |
-| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.2.1** |
-| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.2.1** |
-| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.2.1** |
-| Codex 插件 | `.codex-plugin/plugin.json` | **3.2.1** |
-| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.2.1** |
-| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.2.1** |
-| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.1** |
-| Agent Plugins 清单 | `plugin.json` | **3.2.1** |
+| monorepo 根 | `morning-star`（`package.json`） | **3.2.2** |
+| CLI | `@mstar-harness/cli`（`packages/cli`） | **3.2.2** |
+| Engine | `@mstar-harness/engine`（`packages/engine`） | **3.2.2** |
+| OpenCode 插件 | `@mstar-harness/opencode`（`packages/opencode`） | **3.2.2** |
+| Cursor 插件 | `.cursor-plugin/plugin.json` | **3.2.2** |
+| Codex 插件 | `.codex-plugin/plugin.json` | **3.2.2** |
+| Kimi 插件 | `.kimi-plugin/plugin.json` | **3.2.2** |
+| ZCode 插件 | `.zcode-plugin/plugin.json` | **3.2.2** |
+| omp 插件 | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.2** |
+| Agent Plugins 清单 | `plugin.json` | **3.2.2** |
 
 各包独立日志：[packages/cli/CHANGELOG.md](packages/cli/CHANGELOG.md)、[packages/opencode/CHANGELOG.md](packages/opencode/CHANGELOG.md)、[packages/engine/CHANGELOG.md](packages/engine/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [3.2.2] - 2026-08-24
+
+### Harness
+
+- **`mstar-harness-core` 护栏改为宿主中立**：`未经用户同意不改 opencode.json、凭据、secrets.env` → `未经用户同意不改宿主配置文件与用户凭据`——共享 skill 不再点名单一宿主的配置文件。
+- `/pr-deep-review` 现在基于 finding 计数（tally）输出合并信号：中间结论词 `needs review` 更名为 `needs fixes`，每个已接受的 PR finding 携带 `Merge class`（`must-fix` | `should-fix` | `nit`），输出形状新增 `- score_pct:`（`max(0, 100 - 40*must_fix - 15*should_fix - 3*nit - 10*unverified)`，下限 0）与 `- tally:` 四项计数。结论由 tally 推导（`must-fix ≥ 1` → `blocked`，否则 `should-fix ≥ 1` → `needs fixes`，否则 `ship it`）；关联工单 leftover `unmet` AC 在映射前计入 `should_fix`（不安全则计入 `must_fix`），不另开 finding。`score_pct` 仅为展示反馈，绝不覆盖结论。聊天输出与 GitHub Review `body` 以 `{verdict} · {score_pct}%` 加 tally 行开头；事件仍为 `COMMENT`。发现列表裁剪规则现仅作用于 nits —— 所有 `must-fix` / `should-fix` 都会列出。公式与 tally 标准 SSOT 于 `skills/mstar-audit/references/pr-review.md` § Verdict synthesis / Tally and derived score。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.2.2**。
 
 ## [3.2.1] - 2026-08-24
 

@@ -2,24 +2,35 @@
 
 Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md).
 
-All notable changes to this repository are documented here. Published harness surfaces are at **3.2.1** unless noted:
+All notable changes to this repository are documented here. Published harness surfaces are at **3.2.2** unless noted:
 
 | Surface | Package / manifest | Version |
 | --- | --- | --- |
-| Monorepo root | `morning-star` (`package.json`) | **3.2.1** |
-| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.2.1** |
-| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.2.1** |
-| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.2.1** |
-| Cursor plugin | `.cursor-plugin/plugin.json` | **3.2.1** |
-| Codex plugin | `.codex-plugin/plugin.json` | **3.2.1** |
-| Kimi plugin | `.kimi-plugin/plugin.json` | **3.2.1** |
-| ZCode plugin | `.zcode-plugin/plugin.json` | **3.2.1** |
-| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.1** |
-| Agent Plugins manifest | `plugin.json` | **3.2.1** |
+| Monorepo root | `morning-star` (`package.json`) | **3.2.2** |
+| CLI | `@mstar-harness/cli` (`packages/cli`) | **3.2.2** |
+| Engine | `@mstar-harness/engine` (`packages/engine`) | **3.2.2** |
+| OpenCode plugin | `@mstar-harness/opencode` (`packages/opencode`) | **3.2.2** |
+| Cursor plugin | `.cursor-plugin/plugin.json` | **3.2.2** |
+| Codex plugin | `.codex-plugin/plugin.json` | **3.2.2** |
+| Kimi plugin | `.kimi-plugin/plugin.json` | **3.2.2** |
+| ZCode plugin | `.zcode-plugin/plugin.json` | **3.2.2** |
+| omp plugin | `.omp-plugin/plugin.json` / `.claude-plugin/plugin.json` | **3.2.2** |
+| Agent Plugins manifest | `plugin.json` | **3.2.2** |
 
 Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG.md), [`packages/opencode/CHANGELOG.md`](packages/opencode/CHANGELOG.md), [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## [Unreleased]
+
+## [3.2.2] - 2026-08-24
+
+### Harness
+
+- **`mstar-harness-core` guardrail is now host-neutral**: "do not modify `opencode.json`, credentials, or `secrets.env` without user consent" → "do not modify host config files and user credentials without user consent" — the shared skill no longer names a single host's config file.
+- `/pr-deep-review` now emits a merge signal computed from the finding tally: the middle verdict token is renamed `needs review` → `needs fixes`, each accepted PR finding carries a `Merge class` (`must-fix` | `should-fix` | `nit`), and the output shape gains `- score_pct:` (derived, `max(0, 100 - 40*must_fix - 15*should_fix - 3*nit - 10*unverified)`, floor 0) and `- tally:` with four counts. The verdict is derived from the tally (`must-fix ≥ 1` → `blocked`, else `should-fix ≥ 1` → `needs fixes`, else `ship it`); leftover linked-issue `unmet` ACs increment `should_fix` (or `must_fix` when unsafe-to-ship) before that mapping and are not extra findings. `score_pct` is display-only and never overrides it. Chat and the GitHub Review `body` open with `{verdict} · {score_pct}%` plus the tally line; `event` remains `COMMENT`. The list cut now applies to nits only — every `must-fix` / `should-fix` is listed. Formula and rules are SSOT'd in `skills/mstar-audit/references/pr-review.md` § Verdict synthesis / Tally and derived score.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.2.2**.
 
 ## [3.2.1] - 2026-08-24
 
