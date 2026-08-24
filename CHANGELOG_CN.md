@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [3.2.3] - 2026-08-24
+
+### Harness
+
+- **PR 深审报告模板**：GitHub Review 评论改为固定三段式报告 —— 结论区（verdict + 置信度分数 + 四类发现的 emoji 统计表）、陈述区（PR 内容概述、按 merge class 排序的 findings 详述、linked-issue AC、Verified、Considered & rejected）、建议区（可折叠的 **Plan to fix**，以 ```md 围栏块承载修复计划）。Chat 输出契约不变。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.2.3**。
+
 ## [3.2.2] - 2026-08-24
 
 ### Harness
