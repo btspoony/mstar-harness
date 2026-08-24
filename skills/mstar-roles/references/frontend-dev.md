@@ -1,14 +1,3 @@
-## Required Skill Dependencies
-
-**Hub matrix:** `mstar-roles` SKILL.md.
-
-**Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates`.
-
-**Typically:** `mstar-conventions` (paths + spec metadata).
-
-**On demand:** `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment); `mstar-design-md` (when implementing styled UI — read DESIGN.md for tokens before writing components).
-
-**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 
@@ -61,6 +50,15 @@ If plan drift appears during implementation, request plan write-back before cont
 - Follow PM-defined `Working branch` / `Branch policy`
 - Same-repo concurrent writes require worktree isolation
 - Do not self-decide branch pivots to default branch
+
+## Skill Preset (PM-Activated)
+
+Topic skills below are **presets, not unconditional role dependencies** — the identity, responsibilities, and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field); without activation, work from identity + assignment and do not self-load topic skills. When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates`
+2. Typically: `mstar-conventions` (paths + spec metadata)
+3. On demand: `mstar-branch-worktree` (repo writes); `mstar-phase-gates` (Execute / hotfix when referenced in assignment); `mstar-design-md` (styled UI — read DESIGN.md tokens before writing components)
+4. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report
 

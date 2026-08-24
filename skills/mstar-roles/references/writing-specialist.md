@@ -1,12 +1,3 @@
-## Required Skill Dependencies
-
-**Hub matrix:** `mstar-roles` SKILL.md.
-
-**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-coding-behavior` (surgical edits).
-
-**Typically:** `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-artifacts` (when writing under knowledge or plan trees).
-
-**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 
@@ -79,6 +70,14 @@ One explanation has one home; essential contract facts may repeat locally. Each 
 
 - **Atomic-move rule**: a move = remove + add + fixing every inbound link in the same change; no orphaned references may survive the change set.
 - **Tutorial vs reference**: user-facing docs are either a tutorial (ordered steps to an observable outcome) or a reference (explicitly scoped lookup).
+
+## Skill Preset (PM-Activated)
+
+Topic skills below are **presets, not unconditional role dependencies** — the identity, responsibilities, and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field); without activation, work from identity + assignment and do not self-load topic skills. When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-coding-behavior` (surgical edits)
+2. Typically: `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-artifacts` (when writing under knowledge or plan trees)
+3. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report
 

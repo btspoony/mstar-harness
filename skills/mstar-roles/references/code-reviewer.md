@@ -2,21 +2,6 @@
 
 Read-only review/assessment seat with three modes: **Mode A — SDD task reviewer (default, L2)**, **Mode B — audit executor (`Task category: audit`)**, and **Mode C — PR review (`pr` variant)**.
 
-## Required Skill Dependencies
-
-**Hub matrix:** `mstar-roles` SKILL.md.
-
-**Always:** `mstar-harness-core` (mandatory entry), `mstar-dispatch-gates` (leaf anti-recursion).
-
-**By mode:**
-
-- Mode A (SDD task reviewer): `mstar-sdd` → `references/task-reviewer-prompt.md`, `references/file-handoffs.md`
-- Mode B (audit executor): `mstar-audit` SKILL.md (common core) + `references/codebase-audit.md` (full-audit variant detail)
-- Mode C (PR review): `mstar-audit` SKILL.md (common core) + `references/pr-review.md` (`pr` variant detail) + `mstar-branch-worktree` (worktree isolation)
-
-**Paths:** `mstar-conventions`; add `mstar-artifacts` (plan-quality-bar) when writing audit plans.
-
-**Host:** `mstar-host` (detect; active host reference).
 
 ## Role Mission
 
@@ -111,6 +96,18 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 - Preferred: read-only review reports (Mode A) and audit plans (Mode B) in the paths above
 - Do not own: implementation (L1), formal QC gates (L3), acceptance / re-run verification (L4)
+
+## Skill Preset (PM-Activated)
+
+Topic skills below are **presets, not unconditional role dependencies** — the identity, mode definitions, and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field; the assigned **mode** selects the mode preset); without activation, work from identity + assignment and do not self-load topic skills. When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+1. `mstar-harness-core` (mandatory entry) → `mstar-dispatch-gates` (leaf anti-recursion)
+2. By mode:
+   - Mode A (SDD task reviewer): `mstar-sdd` → `references/task-reviewer-prompt.md`, `references/file-handoffs.md`
+   - Mode B (audit executor): `mstar-audit` SKILL.md (common core) + `references/codebase-audit.md`
+   - Mode C (PR review): `mstar-audit` SKILL.md + `references/pr-review.md` + `mstar-branch-worktree` (worktree isolation)
+3. Paths: `mstar-conventions`; add `mstar-artifacts` (plan-quality-bar) when writing audit plans
+4. Host: `mstar-host` (detect; active host reference)
 
 ## Completion Report
 

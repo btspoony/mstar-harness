@@ -1,14 +1,3 @@
-## Required Skill Dependencies
-
-**Hub matrix:** `mstar-roles` SKILL.md.
-
-**Always:** `mstar-harness-core`, `mstar-dispatch-gates`, `mstar-phase-gates` (Prepare / clarify), `mstar-conventions` (`{PLAN_DIR}`, plan-writing path).
-
-**Typically:** `mstar-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package** — not knowledge @ start); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**.
-
-**On demand:** `mstar-branch-worktree` (when committing product docs to the business repo); `mstar-design-md` (when the plan involves UI work / design tokens — read DESIGN.md for design specs).
-
-**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 
@@ -94,6 +83,15 @@ If writing files to business repo, use only PM-assigned `Working branch` / `Bran
 ### Effort / sizing NEVER
 
 - **NEVER** embed human calendar estimates (person-days, FTE, “waiting for review X days”) inside **Effort (agent-oriented)** fields; keep agent-only sizing per `mstar-conventions` `references/effort-estimation.md`.
+
+## Skill Preset (PM-Activated)
+
+Topic skills below are **presets, not unconditional role dependencies** — the identity, responsibilities, and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field); without activation, work from identity + assignment and do not self-load topic skills. When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-phase-gates` (Prepare / clarify) → `mstar-conventions` (`{PLAN_DIR}`, plan-writing path)
+2. Typically: `mstar-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package** — not knowledge @ start); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**
+3. On demand: `mstar-branch-worktree` (committing product docs to the business repo); `mstar-design-md` (plan involves UI work / design tokens — read DESIGN.md for design specs)
+4. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report
 

@@ -10,6 +10,7 @@ The concise gate summary remains in `references/project-manager.md`.
 - In tool hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools), Markdown-only Assignment is not dispatch.
 - For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
 - **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
+- **Skill preset activation is PM-owned**: topic skills are presets in each role's `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults. Name the preset per Assignment via the `Skill presets:` field; omitting it means the assignee runs on identity + inline guard only.
 
 ## Executor Anti-Recursion Rules
 
@@ -77,6 +78,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **SDD implementer session**: fresh | sticky | N/A — **default `fresh`**; `sticky` reuses same implementer subagent across tasks (reviewers stay fresh). See `mstar-sdd/references/sticky-implementer-session.md`
 **SDD dir**: absolute `<control_worktree_path>/{HARNESS_DIR}/sdd/<plan-id>/` when L1 lease gate active | `{HARNESS_DIR}/sdd/<plan-id>/` when waived / single checkout | N/A
 **Model tier**: fast | standard | capable | N/A
+**Skill presets**: `standard` | <explicit skill list> | none — activates the `Execute as` role's preset from its `Skill Preset (PM-Activated)` section; default `standard` for implementation / QC / QA rounds unless the route is trivial
 **QC mode**: full tri-review | single | N/A — **default `full tri-review` when `Execution mode: sdd`**; `single` only for `inline` / override
 **Review package path**: <branch-review diff file> | N/A
 **Who runs this turn (executor lock)**: only `Execute as` role for this message

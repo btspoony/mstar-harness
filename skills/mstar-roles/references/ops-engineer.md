@@ -1,14 +1,3 @@
-## Required Skill Dependencies
-
-**Hub matrix:** `mstar-roles` SKILL.md.
-
-**Always:** `mstar-harness-core`, `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (repo writes, production-touching branches).
-
-**Typically:** `mstar-conventions` (paths).
-
-**On demand:** `mstar-phase-gates` (hotfix compressed path when assignment says hotfix).
-
-**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 
@@ -64,6 +53,15 @@ When assignment is marked `high-risk`:
 ## Verification Checklist
 ## Monitoring Checks
 ```
+
+## Skill Preset (PM-Activated)
+
+Topic skills below are **presets, not unconditional role dependencies** — the identity, responsibilities, and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field); without activation, work from identity + assignment and do not self-load topic skills. When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates` → `mstar-branch-worktree` (repo writes, production-touching branches)
+2. Typically: `mstar-conventions` (paths)
+3. On demand: `mstar-phase-gates` (hotfix compressed path when assignment says hotfix)
+4. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report
 

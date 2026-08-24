@@ -156,7 +156,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 ### 角色 seeds 与采纳建议（Adoption advisory）
 
-当可选的 `dsh-llm-fallbacks` 能力**已挂载**（第二条安装命令——见 Install paths）时，mstar 插件会向 fallbacks seed registry **零配置声明 13 个 `mode: subagent` mstar 角色 seed**：persona = `harness-agents/` 镜像 `description`（原样）+ 一行强制加载引导（`Load mstar-roles (references/<role-id>.md) and the role's Required Skill Dependencies before acting.`）；含 `{{...}}` 插值风险的 persona 跳过并告警，绝不声明。声明会**合并保留 readback 中当前已 seeded 的非 mstar id**——例如上游包在其自身 apply 时自声明的 7 个 omp 风格 preset 角色：上游 `declare` **全量替换** registry，若不保留，mstar-only 批会摘掉 preset id 的 seeded 注记（行仍在，仅失去 seeded）。声明在每次 fallbacks（重新）apply（HMR/纤程切换）时幂等重放——绝不用一次性 latch——因此两种 boot 顺序（presets 先或 mstar 先）都收敛到同一 20-id 全 seeded registry。
+当可选的 `dsh-llm-fallbacks` 能力**已挂载**（第二条安装命令——见 Install paths）时，mstar 插件会向 fallbacks seed registry **零配置声明 13 个 `mode: subagent` mstar 角色 seed**：persona = `harness-agents/` 镜像 `description`（原样）+ 一行强制加载引导（`Load mstar-roles (references/<role-id>.md) first — identity comes before skills; load topic skills only when the Assignment activates them via its Skill presets field.`）；含 `{{...}}` 插值风险的 persona 跳过并告警，绝不声明。声明会**合并保留 readback 中当前已 seeded 的非 mstar id**——例如上游包在其自身 apply 时自声明的 7 个 omp 风格 preset 角色：上游 `declare` **全量替换** registry，若不保留，mstar-only 批会摘掉 preset id 的 seeded 注记（行仍在，仅失去 seeded）。声明在每次 fallbacks（重新）apply（HMR/纤程切换）时幂等重放——绝不用一次性 latch——因此两种 boot 顺序（presets 先或 mstar 先）都收敛到同一 20-id 全 seeded registry。
 
 一条只告警的采纳建议通道（日志器 `mstar/fallbacks-advisory`）**每次 apply 只跑一遍**——apply 时先尝试一次；当 fallbacks 行在 `dsh` 之后挂载（loader 并发挂载条目）时，改在首个 `subagent/start` 决策点只跑一遍。服务存在时，通道**先 await 幂等 re-declare**（闭合 boot 竞争窗口）再读取**有效状态**（`getEffectiveRoles`），并按**每类至多一条告警**有界报告：
 
