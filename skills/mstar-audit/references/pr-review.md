@@ -84,6 +84,8 @@ Before writing a finding, run the three-way attack from `mstar-audit`:
 
 Then open cited code yourself and dispose by-design / mis-attributed / duplicate. Subagents over-report; vet before presenting.
 
+## Verdict synthesis
+
 - Order findings by impact-if-shipped; no padding, no invented requirements, no style grading.
 - List **every** `must-fix` and `should-fix` finding — the default top 1–3 cut (unless `full`) applies to nits only, and truncated nits are summarized in the display line (§ Output shape / Display contract).
 - The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe.
@@ -229,6 +231,8 @@ Fold follow-up plans into the review body **only if** this review wrote them. A 
 ```
 
 Never dump full plan files.
+
+## Output shape
 
 - `- findings:` — list of evidence-backed findings (`none` when none). Each accepted finding includes **Merge class** (§ Merge class).
 - `- verdict:` — exactly one of `ship it` / `needs fixes` / `blocked` (§ Verdict synthesis).
