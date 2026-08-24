@@ -8,6 +8,19 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-08-24
+
+### Harness
+
+- Dropped the root changelog **Published harness surfaces** version table. Every published surface already ships the same version, so the header table and the release-prep step that rewrote it are gone. Per-release `### Version alignment` blocks are unchanged.
+- **`mstar-harness-core` guardrail is now host-neutral**: "do not modify `opencode.json`, credentials, or `secrets.env` without user consent" → "do not modify host config files and user credentials without user consent" — the shared skill no longer names a single host's config file.
+- `/pr-deep-review` now emits a merge signal computed from the finding tally: the middle verdict token is renamed `needs review` → `needs fixes`, each accepted PR finding carries a `Merge class` (`must-fix` | `should-fix` | `nit`), and the output shape gains `- score_pct:` (derived, `max(0, 100 - 40*must_fix - 15*should_fix - 3*nit - 10*unverified)`, floor 0) and `- tally:` with four counts. The verdict is derived from the tally (`must-fix ≥ 1` → `blocked`, else `should-fix ≥ 1` → `needs fixes`, else `ship it`); leftover linked-issue `unmet` ACs increment `should_fix` (or `must_fix` when unsafe-to-ship) before that mapping and are not extra findings. `score_pct` is display-only and never overrides it. Chat and the GitHub Review `body` open with `{verdict} · {score_pct}%` plus the tally line; `event` remains `COMMENT`. The list cut now applies to nits only — every `must-fix` / `should-fix` is listed. Formula and rules are SSOT'd in `skills/mstar-audit/references/pr-review.md` § Verdict synthesis / Tally and derived score.
+- **Release prep** now opens a **new** `release vX.Y.Z` PR when the previous one for that branch is closed or merged. It no longer treats `gh pr view` success on a closed PR as “update in place” (that left #131 closed and no new 3.2.2 PR).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.2.2**.
+
 ## [3.2.1] - 2026-08-24
 
 ### Harness
