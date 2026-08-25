@@ -547,23 +547,29 @@ describe("scaffoldAuditPlan", () => {
     expect(readdirSync(out).filter((f) => f.startsWith("003-"))).toEqual(["003-second-batch-plan.md"]);
   });
 
-  test("rerun with a PARTIAL disposition array merges into carried entries instead of replacing them", () => {
+  test("a SUPPLIED disposition array is the authoritative set — it replaces prior entries", () => {
     const out = join(tmp, "audit-2026-08-19");
     scaffoldAuditPlan(out, findings, {
       date: "2026-08-19",
-      needsVerification: [{ lead: "carried lead", how: "check old" }],
-      hardeningChecked: [{ kind: "Checked and clean", text: "old sink cleared" }],
+      needsVerification: [
+        { lead: "stale lead", how: "check old" },
+        { lead: "kept lead", how: "check keep" },
+      ],
     });
-    // fresh array supplies only NEW entries — nothing carried may vanish
+    // rerun supplies the current truth: stale lead resolved, kept kept,
+    // fresh added — omission would have carried all three, supplying
+    // replaces with exactly this set (resolved entries CAN be removed)
     scaffoldAuditPlan(out, [], {
       date: "2026-08-20",
-      needsVerification: [{ lead: "fresh lead", how: "check new" }],
-      hardeningChecked: [],
+      needsVerification: [
+        { lead: "kept lead", how: "check keep" },
+        { lead: "fresh lead", how: "check new" },
+      ],
     });
     const readme = readFileSync(join(out, "README.md"), "utf8");
-    expect(readme).toContain("- carried lead: check old");
+    expect(readme).not.toContain("- stale lead: check old");
+    expect(readme).toContain("- kept lead: check keep");
     expect(readme).toContain("- fresh lead: check new");
-    expect(readme).toContain("- Checked and clean: old sink cleared");
   });
 });
 
