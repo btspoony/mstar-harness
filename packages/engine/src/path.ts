@@ -28,11 +28,17 @@
  * are embedded constants: the engine never reads skill files at runtime
  * (roadmap §8.5 standalone rule).
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readJson, writeJson, type ValidationResult } from "./core.js";
 import { loadMstarc, type MstarcConfig } from "./mstarc.js";
+// Call-time-only cycle with project.ts (project.ts → status.ts → path.ts):
+// none of the cycle members dereferences the other's bindings during module
+// evaluation — the constants are used only inside scaffoldHarness — so the
+// ESM live-binding cycle is safe (same pattern as the status.ts ↔ workflow.ts
+// cycle documented in status.ts).
+import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE } from "./project.js";
 
 /**
  * Options for `resolveHarnessDir`.
@@ -358,11 +364,50 @@ const EMPTY_STATUS_TEMPLATE: Record<string, unknown> = {
 const SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"] as const;
 
 /**
+ * Scaffolded `projects/_default/roadmap.md` template — embedded copy of
+ * the project-layer writer contract (mstar-project-governance § roadmap.md
+ * 编写约定): valid `validateRoadmap` frontmatter (`project_id: _default`,
+ * non-empty title, `status: active`, `created_at: <today>`) plus a
+ * `## Direction` body placeholder so the documented body convention is met
+ * (0 violations; the missing goal-item task list is a warning only, never
+ * a hard gate). `created_at` is filled at scaffold time. Kept as a
+ * constant so the engine has no runtime dependency on skill files.
+ */
+const ROADMAP_TEMPLATE = `---
+project_id: _default
+title: Default Project
+status: active
+created_at: {created_at}
+---
+
+# Roadmap
+
+## Direction
+
+State the project direction here.
+`;
+
+/**
+ * Scaffolded `projects/_default/residuals.json` template — the empty
+ * project register `{ "entries": {} }` (mstar-project-governance §
+ * residuals.json register 生命周期), which passes `validateProjectRegister`.
+ * Kept as a constant so the engine has no runtime dependency on skill
+ * files.
+ */
+const EMPTY_REGISTER_TEMPLATE: Record<string, unknown> = {
+  entries: {},
+};
+
+/**
  * Initialize the harness directory under `root`: create `.mstar/` with
- * `plans/`, `iterations/`, `knowledge/`, `specs/`, `sdd/` and write
- * `status.json` from the empty template (plan-conventions § 初始化 Plan 目录).
- * Idempotent: an existing non-empty `status.json` is never clobbered.
- * Returns the absolute harness dir.
+ * `plans/`, `iterations/`, `knowledge/`, `specs/`, `sdd/`, write
+ * `status.json` from the empty template, and prebuild the v3 project layer
+ * `projects/_default/` with a valid `roadmap.md` + empty `residuals.json`
+ * (plan-conventions § 初始化 Plan 目录; mstar-project-governance §
+ * `_default` 回退). Idempotent: an existing non-empty `status.json`,
+ * `roadmap.md`, or `residuals.json` is never clobbered; re-running on an
+ * initialized tree only creates missing pieces. Returns the absolute
+ * harness dir.
  */
 export function scaffoldHarness(root: string): string {
   const harnessDir = join(resolve(root), ".mstar");
@@ -371,6 +416,21 @@ export function scaffoldHarness(root: string): string {
   // readJson treats a missing file as `{}`, so a missing (or empty) status.json
   // is replaced with the empty template; anything with content is preserved.
   if (Object.keys(readJson(statusPath)).length === 0) writeJson(statusPath, EMPTY_STATUS_TEMPLATE);
+  // v3 project layer: `projects/_default/` is scaffolded (the fallback
+  // project for project-less flows); other project ids and `workflows/`
+  // stay on-demand (engine writers create them).
+  const projectDir = join(harnessDir, "projects", _DEFAULT_PROJECT);
+  mkdirSync(projectDir, { recursive: true });
+  const roadmapPath = join(projectDir, PROJECT_ROADMAP_FILE);
+  if (!existsSync(roadmapPath)) {
+    const today = new Date();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    const created = `${today.getFullYear()}-${month}-${day}`;
+    writeFileSync(roadmapPath, ROADMAP_TEMPLATE.replace("{created_at}", created), "utf8");
+  }
+  const registerPath = join(projectDir, PROJECT_REGISTER_FILE);
+  if (Object.keys(readJson(registerPath)).length === 0) writeJson(registerPath, EMPTY_REGISTER_TEMPLATE);
   return harnessDir;
 }
 

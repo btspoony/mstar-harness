@@ -48,6 +48,8 @@ import {
   validateGitignore,
 } from "../src/path.js";
 import { validateStatusV2 } from "../src/status.js";
+import { validateProjectRegister, validateRoadmap } from "../src/project.js";
+import { readJson } from "../src/core.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -816,6 +818,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
         "iterations",
         "knowledge",
         "plans",
+        "projects",
         "sdd",
         "specs",
         "status.json",
@@ -835,6 +838,34 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
     }
   });
 
+  test("prebuilds projects/_default/ with a valid roadmap.md + empty residuals.json", () => {
+    const root = tmpRoot("path-scaffold-project-");
+    try {
+      const harnessDir = scaffoldHarness(root);
+      const projectDir = join(harnessDir, "projects", "_default");
+      expect(readdirSync(projectDir).sort()).toEqual(["residuals.json", "roadmap.md"]);
+      // Roadmap frontmatter: project_id _default, non-empty title, status
+      // active, created_at today, plus a `## Direction` body placeholder —
+      // 0 violations (the missing goal-item task list is a warning only).
+      const roadmapPath = join(projectDir, "roadmap.md");
+      const roadmap = validateRoadmap(roadmapPath);
+      expect(roadmap.ok).toBe(true);
+      expect(roadmap.violations).toEqual([]);
+      const roadmapText = readFileSync(roadmapPath, "utf8");
+      expect(roadmapText).toContain("project_id: _default");
+      expect(roadmapText).toContain("title: Default Project");
+      expect(roadmapText).toContain("status: active");
+      expect(roadmapText).toContain(`created_at: ${new Date().toISOString().slice(0, 10)}`);
+      expect(roadmapText).toContain("## Direction");
+      // Empty register passes the project-register validator.
+      const registerPath = join(projectDir, "residuals.json");
+      expect(readFileSync(registerPath, "utf8")).toBe('{\n  "entries": {}\n}\n');
+      expect(validateProjectRegister(readJson(registerPath)).ok).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("is idempotent: preserves an existing non-empty status.json", () => {
     const root = tmpRoot("path-scaffold-idem-");
     try {
@@ -844,6 +875,34 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       writeFileSync(statusPath, custom);
       scaffoldHarness(root);
       expect(readFileSync(statusPath, "utf8")).toBe(custom);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("is idempotent: preserves user-edited roadmap.md and residuals.json", () => {
+    const root = tmpRoot("path-scaffold-idem-project-");
+    try {
+      scaffoldHarness(root);
+      const roadmapPath = join(root, ".mstar", "projects", "_default", "roadmap.md");
+      const registerPath = join(root, ".mstar", "projects", "_default", "residuals.json");
+      const customRoadmap = `---
+project_id: _default
+title: Custom Roadmap
+status: active
+created_at: 2026-08-01
+---
+
+## Direction
+
+Custom direction.
+`;
+      const customRegister = '{\n  "entries": {}\n}\n';
+      writeFileSync(roadmapPath, customRoadmap);
+      writeFileSync(registerPath, customRegister);
+      scaffoldHarness(root);
+      expect(readFileSync(roadmapPath, "utf8")).toBe(customRoadmap);
+      expect(readFileSync(registerPath, "utf8")).toBe(customRegister);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
