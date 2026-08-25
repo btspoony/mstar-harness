@@ -504,4 +504,132 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(check.stdout.toString()).toContain(".mstar/**");
     });
   });
+
+  test("custom !.mstar negation before the broad rule: fence left untouched, custom path stays ignored (PR #147 round-6)", () => {
+    withRoot((root) => {
+      // Regression (PR #147 round-6): the unconditional normalization used to
+      // relocate `.mstar/**` before the FIRST `!.mstar/...` line, treating a
+      // user-authored non-canonical negation (deliberately placed BEFORE a
+      // later `.mstar/**` so the custom path stays ignored) as a canonical
+      // fence member — flipping its intent. Here the broad rule is already
+      // correctly placed (after the custom negation, before every canonical
+      // re-include), so the fixed code must leave the file byte-for-byte
+      // untouched — the old code would have moved the broad rule before
+      // the custom negation and re-included the custom path.
+      const userLines = [
+        "# user comment",
+        "!.mstar/custom-keep/**",
+        ".mstar/**",
+        "!.mstar/AGENTS.md",
+        "!.mstar/knowledge/",
+        "!.mstar/knowledge/**",
+        "!.mstar/specs/",
+        "!.mstar/specs/**",
+        ".mstarc",
+        "dist/",
+      ];
+      writeFileSync(join(root, ".gitignore"), `${userLines.join("\n")}\n`, "utf8");
+      // git check-ignore below needs a valid work tree.
+      gitInit(root);
+
+      const first = runScaffold([root]);
+      expect(first.exitCode).toBe(0);
+      // No reorder: the file was already correctly ordered.
+      expect(first.stdout).not.toContain("created: .gitignore (canonical harness snippet reordered)");
+      expect(first.stdout).toContain("skipped: .gitignore (canonical harness snippet already present)");
+
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      const lines = gitignore.split(/\r?\n/);
+      const broadIndex = lines.findIndex((line) => line.trim() === ".mstar/**");
+      const customIndex = lines.findIndex((line) => line.trim() === "!.mstar/custom-keep/**");
+      const canonicalIndexes = lines
+        .map((line, index) => (MSTAR_FENCE_ENTRIES.slice(1).includes(line.trim()) ? index : -1))
+        .filter((index) => index !== -1);
+      expect(broadIndex).toBeGreaterThan(-1);
+      // Broad rule sits AFTER the custom negation and BEFORE every canonical re-include.
+      expect(broadIndex).toBeGreaterThan(customIndex);
+      for (const canonicalIndex of canonicalIndexes) expect(broadIndex).toBeLessThan(canonicalIndex);
+      // Exactly one broad rule; all canonical entries present.
+      expect(gitignore.split(".mstar/**").length - 1).toBe(1);
+      for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
+      // Unrelated user lines preserved byte-for-byte, in order.
+      for (const line of ["# user comment", "dist/"]) expect(gitignore).toContain(line);
+      expect(gitignore.indexOf("dist/")).toBeGreaterThan(gitignore.indexOf(".mstar/**"));
+
+      // git check-ignore semantics: the custom path stays ignored (its
+      // negation precedes the broad rule, so the broad rule re-ignores it),
+      // while knowledge contents stay re-included. check-ignore exits 0 for
+      // BOTH (a negation pattern also "matches"), so the observable proof is
+      // `git add -A` + `git ls-files`: knowledge/adr.md gets tracked,
+      // custom-keep/note.md stays untracked.
+      mkdirSync(join(root, ".mstar", "custom-keep"), { recursive: true });
+      mkdirSync(join(root, ".mstar", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "custom-keep", "note.md"), "# n\n", "utf8");
+      writeFileSync(join(root, ".mstar", "knowledge", "adr.md"), "# a\n", "utf8");
+      const customCheck = Bun.spawnSync(["git", "check-ignore", "-v", join(root, ".mstar", "custom-keep", "note.md")], {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(customCheck.exitCode).toBe(0);
+      expect(customCheck.stdout.toString()).toContain(".mstar/**");
+      const addAll = Bun.spawnSync(["git", "add", "-A"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(addAll.exitCode).toBe(0);
+      const tracked = Bun.spawnSync(["git", "ls-files"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(tracked.exitCode).toBe(0);
+      const trackedFiles = tracked.stdout.toString();
+      expect(trackedFiles).toContain(".mstar/knowledge/adr.md");
+      expect(trackedFiles).not.toContain(".mstar/custom-keep/note.md");
+
+      // Idempotent: second run changes nothing.
+      const second = runScaffold([root]);
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain("skipped: .gitignore (canonical harness snippet already present)");
+      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignore);
+    });
+  });
+
+  test("infeasible ordering (custom negation after a canonical one): broad rule NOT moved, missing entries appended (PR #147 round-6)", () => {
+    withRoot((root) => {
+      // Regression (PR #147 round-6): when a custom negation is interleaved
+      // AFTER a canonical re-include, no slot satisfies both constraints
+      // (after every custom negation AND before every canonical re-include).
+      // The normalization must NOT reorder — the file keeps its user-authored
+      // order — and must still append missing canonical entries. No silent
+      // skip message when content changed.
+      const userLines = [
+        "!.mstar/AGENTS.md",
+        "!.mstar/custom-keep/**",
+        ".mstar/**",
+        "!.mstar/knowledge/",
+        "!.mstar/knowledge/**",
+        "!.mstar/specs/",
+        ".mstarc",
+      ];
+      writeFileSync(join(root, ".gitignore"), `${userLines.join("\n")}\n`, "utf8");
+
+      const first = runScaffold([root]);
+      expect(first.exitCode).toBe(0);
+      // Missing !.mstar/specs/** was appended (created message, not a skip).
+      expect(first.stdout).toContain("created: .gitignore (canonical harness snippet)");
+      // No reorder message — the infeasible ordering was left untouched.
+      expect(first.stdout).not.toContain("created: .gitignore (canonical harness snippet reordered)");
+      // No silent skip message: content changed, so "already present" must
+      // not be claimed.
+      expect(first.stdout).not.toContain("skipped: .gitignore (canonical harness snippet already present)");
+
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      const lines = gitignore.split(/\r?\n/);
+      const broadIndex = lines.findIndex((line) => line.trim() === ".mstar/**");
+      const customIndex = lines.findIndex((line) => line.trim() === "!.mstar/custom-keep/**");
+      const canonicalIndex = lines.findIndex((line) => line.trim() === "!.mstar/AGENTS.md");
+      // Order preserved: canonical negation still precedes the custom one,
+      // and the broad rule still sits after the custom negation.
+      expect(canonicalIndex).toBeLessThan(customIndex);
+      expect(broadIndex).toBeGreaterThan(customIndex);
+      // The missing canonical entry was appended at the end.
+      expect(gitignore).toContain("!.mstar/specs/**");
+      expect(gitignore.indexOf("!.mstar/specs/**")).toBeGreaterThan(gitignore.indexOf(".mstar/**"));
+    });
+  });
 });
