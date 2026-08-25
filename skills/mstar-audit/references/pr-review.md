@@ -41,6 +41,9 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
   - Verify its provenance first (stated base/head SHAs when present); do not invent a checkout or substitute a different ref.
   - Read the changed files in the current directory for context; the diff itself is the isolated changeset under review.
   - No worktree, no branch, no fetch — nothing to clean up.
+- **Uncommitted / working-tree input** ("review my changes", no ref): changeset = `git diff` + `git diff --cached` in the current checkout; no worktree, no fetch, no branch; the review is still read-only (no fixes, no stash); `comments: n/a-no-pr`.
+- **Single-commit input** (commit SHA / short hash): changeset = `git show <sha>`; arbitrary-diff rules apply — verify provenance, read the changed files in the current directory for context, no worktree.
+- **Pre-flight (all modes):** before fanning out lenses, confirm the refs resolve and the changeset is non-empty — an empty changeset reports "no changes to review" and stops; never spawn lenses on an empty diff.
 - Record before computing: review cwd, `<review-branch>`, HEAD sha, merge-base.
 - Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
 
@@ -48,7 +51,25 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
 
 - Review the diff basis vs base: changed files plus what the change touches.
 - Read changed files **in full** — diffs hide context.
-- Inspect adjacent behavior when risk leaks past the named diff (importers, callers, dependent contracts).
+- When the diff touches tests, read the tests before the implementation — they carry intent.
+- Verification claims in the PR description must be reproducible from the diff/CI; a claim that cannot be checked is an `unverified` lead, not evidence.
+
+## Sizing & change shape
+
+- **Sizing bands:** ~100 changed lines → reviewable; ~300 → acceptable as one logical change; ~1000 → too large — advise a split (a `should-fix` finding with split advice, or a verdict note; never auto-`blocked`). Whole-file deletions and mechanical/automated refactors are exempt — verify intent, not every line.
+- **File-size watch:** a small diff that materially grows a file past ~1000 *total* lines → advise extract/decompose first ("decompose, then add").
+- **Split strategies:** stack · by file group · horizontal (shared code first) · vertical (full-stack slices); refactoring and feature work travel in separate changes.
+- **Escalation by change shape:**
+
+| Shape | Action |
+| --- | --- |
+| Database schema change | widen scrutiny |
+| API contract change | widen scrutiny |
+| New framework/library adoption | widen scrutiny |
+| Performance-critical path | widen scrutiny — load `references/security-review.md` |
+| Security-sensitive surface | widen scrutiny — load `references/security-review.md` |
+
+These shapes get deeper review, not automatic severity — name the escalation in the review body.
 
 ## Concern lenses
 
@@ -72,6 +93,7 @@ Conditional lenses:
 - Run the **smallest runtime check that changes the verdict** (targeted command, not the full suite).
 - Mark unverified explicitly — a claim without verification is a lead, not a finding.
 - Mock-heavy tests around risky behavior = a finding (no real-surface proof), not proof of correctness.
+- A "doesn't follow repo conventions / should use an existing abstraction" finding must cite the exemplar the diff should have followed (`file:line`); the simplest acceptable implementation is not a style finding (lint-covered cosmetics are already ignored by the `general` lens).
 - What disqualifies a finding (no evidence, by-design, secret values, ungrounded suggestions) → **`references/finding-format.md`** § What disqualifies a finding.
 
 ## Attack and vet
@@ -357,6 +379,11 @@ The posted PR comment is the deliverable; the local report is the durable refere
 - `- report:` — local archive path (§ Local report archive), e.g. `{PROJECT_DIR}/<project-id>/reports/pr-review/2026-08-24-pr134.md` (`_default` when project-less); `n/a` only when the harness dir is undiscoverable.
 
 ### Display contract (chat output)
+
+### Tone
+
+- Matter-of-fact — no praise-padding, no flattery.
+- State each severity together with the conditions that enable it.
 
 First two lines of the **chat** display — verbatim:
 
