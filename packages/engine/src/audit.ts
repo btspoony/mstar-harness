@@ -380,7 +380,7 @@ function readPlanFileSummary(filePath: string): { title: string; fields: Map<str
  * unless the caller supplies fresh ones. Entry lines start with `- `. */
 function extractSecurityDispositionSections(text: string): { needsVerification: string[]; hardeningChecked: string[] } {
   const grab = (heading: string): string[] => {
-    const match = text.match(new RegExp(`^## ${heading}\\n\\n([\\s\\S]*?)(?=\\n## |\\n?$)`, "m"));
+    const match = text.match(new RegExp(`(?:^|\\n)## ${heading}\\n\\n([\\s\\S]*?)(?=\\n## |$)`));
     if (!match) return [];
     return match[1].split("\n").filter((line) => line.startsWith("- "));
   };
