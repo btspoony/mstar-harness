@@ -305,7 +305,12 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
  * rules template when absent. Prints the resolved harness/project dirs plus
  * a created/skipped summary. Idempotent: re-running on an initialized tree
  * is a no-op except creating missing pieces. Ordering is normalized as the
- * final step of the gitignore routine: a misplaced `.mstar/**` (after one
+ * final step of the gitignore routine: duplicate `.mstar/**` rules are
+ * deduped segment-wise — a trailing duplicate is dropped only when no
+ * un-crossable line lies strictly between it and the previously retained
+ * broad rule (a custom `!.mstar/…` re-inclusion between two broad rules
+ * makes the trailing broad semantically load-bearing: last-match-wins
+ * re-ignores the custom path), and a misplaced `.mstar/**` (after one
  * or more canonical `!.mstar/…` re-includes, which gitignore's
  * last-match-wins would shadow) is relocated to sit immediately before the
  * first canonical re-include — but only when the move crosses no line
@@ -415,18 +420,23 @@ function runScaffold(pathArg: string | undefined) {
     // Unconditional final normalization — gitignore is last-match-wins, so a
     // misplaced `.mstar/**` (appearing after one or more canonical
     // `!.mstar/…` re-includes, whether pre-existing or just appended) would
-    // shadow them. Keep exactly ONE broad rule (the earliest occurrence),
-    // drop any trailing duplicates, and relocate the kept rule to sit
-    // immediately before the first canonical re-include — but only when the
-    // move crosses no line whose semantics we do not own. The broad rule may
-    // cross blank/comment lines, other exact `.mstar/**` duplicates, the 5
-    // canonical negations, and our own `.mstarc` entry; every other line
-    // (custom `!.mstar/…` negations, custom `.mstar/<path>` ignores,
-    // anything else) is un-crossable. A broad rule already before every
-    // canonical negation is correctly placed and never moves, regardless of
-    // surrounding custom lines. Infeasible → the file keeps its user-authored
-    // order (missing entries were already appended above). Every other line
-    // stays byte-for-byte. Runs after EVERY branch above.
+    // shadow them. Dedupe is SEGMENTED: a duplicate `.mstar/**` is dropped
+    // only when no un-crossable line lies strictly between it and the
+    // previously retained broad rule — a custom `!.mstar/…` re-inclusion
+    // between two broad rules makes the trailing broad semantically
+    // load-bearing (last-match-wins re-ignores the custom path), so it is
+    // retained exactly where it is. The kept (earliest) broad rule is then
+    // relocated to sit immediately before the first canonical re-include —
+    // but only when the move crosses no line whose semantics we do not own.
+    // The broad rule may cross blank/comment lines, other exact
+    // `.mstar/**` duplicates, the 5 canonical negations, and our own
+    // `.mstarc` entry; every other line (custom `!.mstar/…` negations,
+    // custom `.mstar/<path>` ignores, anything else) is un-crossable. A
+    // broad rule already before every canonical negation is correctly placed
+    // and never moves, regardless of surrounding custom lines. Infeasible →
+    // the file keeps its user-authored order (missing entries were already
+    // appended above). Every other line stays byte-for-byte. Runs after
+    // EVERY branch above.
     const finalLines = fs.readFileSync(gitignorePath, "utf8").split(/\r?\n/);
     const broadIndexes = finalLines
       .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
@@ -437,10 +447,36 @@ function runScaffold(pathArg: string | undefined) {
     const firstCanonicalNegationIndex = canonicalNegationIndexes[0] ?? -1;
     let normalized = false;
     if (broadIndexes.length > 0) {
-      // Drop every duplicate `.mstar/**` after the earliest occurrence.
-      for (let i = broadIndexes.length - 1; i > 0; i--) {
-        finalLines.splice(broadIndexes[i], 1);
-        normalized = true;
+      // Segmented dedupe: drop a duplicate `.mstar/**` only when NO
+      // un-crossable line lies strictly between it and the previously
+      // retained broad rule. A custom `!.mstar/…` re-inclusion (or any
+      // other un-owned line) between two broad rules makes the trailing
+      // broad semantically load-bearing — gitignore's last-match-wins
+      // re-ignores the custom path, and deleting the broad would flip
+      // that line's meaning. Retained secondary broads stay exactly
+      // where they are.
+      let removed = 0;
+      let lastRetainedBroadIndex = broadIndexes[0];
+      for (let i = 1; i < broadIndexes.length; i++) {
+        const candidate = broadIndexes[i] - removed;
+        let crossable = true;
+        for (let j = lastRetainedBroadIndex + 1; j < candidate; j++) {
+          const line = finalLines[j].trim();
+          if (line === "") continue; // blank
+          if (line.startsWith("#")) continue; // comment
+          if (line === ".mstar/**") continue; // duplicate broad rule
+          if (CANONICAL_NEGATIONS[line] === true) continue; // canonical negation
+          if (line === ".mstarc") continue; // our own entry
+          crossable = false;
+          break;
+        }
+        if (crossable) {
+          finalLines.splice(candidate, 1);
+          removed++;
+          normalized = true;
+        } else {
+          lastRetainedBroadIndex = candidate;
+        }
       }
       const keptIndex = finalLines.findIndex((line) => line.trim() === ".mstar/**");
       // A broad rule already before every canonical negation is correctly

@@ -286,9 +286,13 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
   test("trailing duplicate .mstar/** after a correctly ordered fence: dedupes to one broad rule before every re-include, preserving other lines", () => {
     withRoot((root) => {
       // Correctly ordered complete fence, then a trailing duplicate
-      // .mstar/** at the very end. findIndex-based normalization only sees
-      // the FIRST broad rule (already correctly placed), so the trailing
-      // duplicate would survive and shadow the re-includes (last-match-wins).
+      // .mstar/** at the very end. Segmented dedupe drops the trailing
+      // duplicate because only lines we own the semantics of (comments,
+      // the 5 canonical negations, our own .mstarc entry) lie strictly
+      // between it and the previously retained broad rule — no un-crossable
+      // line makes it load-bearing. The kept (earliest) broad rule is
+      // already correctly placed (before every canonical re-include), so it
+      // is not moved either.
       const userLines = [
         "# user comment",
         "node_modules/",
@@ -301,8 +305,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
         "!.mstar/specs/",
         "!.mstar/specs/**",
         ".mstarc",
-        "dist/",
         ".mstar/**",
+        "dist/",
       ];
       writeFileSync(join(root, ".gitignore"), `${userLines.join("\n")}\n`, "utf8");
 
@@ -336,13 +340,18 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("duplicate .mstar/** both before AND after re-includes: keeps the earliest, drops the trailing one, never moves a correctly-placed broad rule", () => {
+  test("duplicate .mstar/** both before AND after re-includes: trailing broad RETAINED when an un-crossable line lies between (PR #147 round-8)", () => {
     withRoot((root) => {
       // One broad rule before the negations (correctly placed) and a second
-      // one after them (shadowing). The kept rule must be the EARLIEST
-      // occurrence, and the trailing duplicate must be removed. The kept
-      // rule already sits before every canonical negation, so the
-      // un-crossable-lines invariant must NOT move it across node_modules/.
+      // one after them. Round-8 semantics: the trailing duplicate is dropped
+      // ONLY when no un-crossable line lies strictly between it and the
+      // previously retained broad rule. Here node_modules/ (a line whose
+      // semantics we do not own) sits between the two broad rules, so the
+      // trailing broad is semantically load-bearing and must be RETAINED
+      // exactly where it is — the file keeps its user-authored order. The
+      // kept (earliest) broad rule already sits before every canonical
+      // negation, so the un-crossable-lines invariant must NOT move it
+      // across node_modules/ either.
       const userLines = [
         "# user comment",
         ".mstar/**",
@@ -360,26 +369,35 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
       const first = runScaffold([root]);
       expect(first.exitCode).toBe(0);
-      expect(first.stdout).toContain("created: .gitignore (canonical harness snippet reordered)");
+      // No reorder and no dedupe: the trailing broad is load-bearing, so
+      // the file is already correctly ordered.
+      expect(first.stdout).not.toContain("created: .gitignore (canonical harness snippet reordered)");
+      expect(first.stdout).toContain("skipped: .gitignore (canonical harness snippet already present)");
 
       const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      // Byte-for-byte unchanged (complete fence, nothing to normalize).
+      expect(gitignore).toBe(`${userLines.join("\n")}\n`);
       const lines = gitignore.split(/\r?\n/);
-      // Exactly ONE broad rule, still at its original position (before
-      // node_modules/ and before every re-include).
-      expect(gitignore.split(".mstar/**").length - 1).toBe(1);
-      const broadIndex = lines.findIndex((line) => line.trim() === ".mstar/**");
+      const broadIndexes = lines
+        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
+        .filter((index) => index !== -1);
       const negationIndexes = lines
         .map((line, index) => (line.trim().startsWith("!.mstar/") ? index : -1))
         .filter((index) => index !== -1);
-      expect(broadIndex).toBeGreaterThan(-1);
-      expect(negationIndexes.length).toBeGreaterThan(0);
-      expect(broadIndex).toBe(1);
-      expect(broadIndex).toBeLessThan(lines.findIndex((line) => line.trim() === "node_modules/"));
-      for (const negationIndex of negationIndexes) expect(broadIndex).toBeLessThan(negationIndex);
+      // BOTH broad rules retained, in their original positions: the first
+      // before node_modules/ and before every re-include, the trailing one
+      // after them.
+      expect(broadIndexes.length).toBe(2);
+      expect(broadIndexes[0]).toBe(1);
+      expect(broadIndexes[0]).toBeLessThan(lines.findIndex((line) => line.trim() === "node_modules/"));
+      for (const negationIndex of negationIndexes) {
+        expect(broadIndexes[0]).toBeLessThan(negationIndex);
+        expect(broadIndexes[1]).toBeGreaterThan(negationIndex);
+      }
       // All canonical entries present; unrelated user lines preserved in order.
       for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
       for (const line of ["# user comment", "node_modules/", "dist/"]) expect(gitignore).toContain(line);
-      // The kept broad rule stays at its original position, BEFORE
+      // The first broad rule stays at its original position, BEFORE
       // node_modules/ (it was already correctly placed).
       expect(gitignore.indexOf(".mstar/**")).toBeLessThan(gitignore.indexOf("node_modules/"));
       expect(gitignore.indexOf("dist/")).toBeGreaterThan(gitignore.indexOf(".mstar/**"));
@@ -704,6 +722,99 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(tracked.exitCode).toBe(0);
       const trackedFiles = tracked.stdout.toString();
       expect(trackedFiles).toContain(".mstar/custom/x.md");
+      expect(trackedFiles).toContain(".mstar/knowledge/y.md");
+      const ignored = Bun.spawnSync(["git", "check-ignore", "-v", join(root, ".mstar", "status.json")], {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(ignored.exitCode).toBe(0);
+      expect(ignored.stdout.toString()).toContain(".mstar/**");
+
+      // Idempotent: second run changes nothing.
+      const second = runScaffold([root]);
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain("skipped: .gitignore (canonical harness snippet already present)");
+      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignore);
+    });
+  });
+
+  test("custom negation BETWEEN two .mstar/** rules: trailing broad RETAINED, custom path stays ignored (PR #147 round-8)", () => {
+    withRoot((root) => {
+      // Regression (PR #147 round-8): the unconditional dedupe used to drop
+      // EVERY `.mstar/**` after the earliest occurrence. When a custom
+      // `!.mstar/…` re-inclusion sits BETWEEN two broad rules, the trailing
+      // broad deliberately re-ignores that path (gitignore last-match-wins)
+      // — deleting it would make the custom path trackable and flip the
+      // meaning of a line we do not own. Segmented dedupe must RETAIN the
+      // trailing broad (an un-crossable line lies strictly between it and
+      // the previously retained broad rule) and leave the file byte-for-byte
+      // untouched.
+      const userLines = [
+        "# user comment",
+        ".mstar/**",
+        "!.mstar/custom/**",
+        ".mstar/**",
+        "!.mstar/AGENTS.md",
+        "!.mstar/knowledge/",
+        "!.mstar/knowledge/**",
+        "!.mstar/specs/",
+        "!.mstar/specs/**",
+        ".mstarc",
+        "dist/",
+      ];
+      writeFileSync(join(root, ".gitignore"), `${userLines.join("\n")}\n`, "utf8");
+      // git add -A / ls-files / check-ignore below need a valid work tree.
+      gitInit(root);
+
+      const first = runScaffold([root]);
+      expect(first.exitCode).toBe(0);
+      // No reorder and no dedupe: the trailing broad is semantically
+      // load-bearing, so the file is already correctly ordered.
+      expect(first.stdout).not.toContain("created: .gitignore (canonical harness snippet reordered)");
+      expect(first.stdout).toContain("skipped: .gitignore (canonical harness snippet already present)");
+
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      // Byte-for-byte unchanged (complete fence, nothing to normalize).
+      expect(gitignore).toBe(`${userLines.join("\n")}\n`);
+      const lines = gitignore.split(/\r?\n/);
+      const broadIndexes = lines
+        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
+        .filter((index) => index !== -1);
+      const customIndex = lines.findIndex((line) => line.trim() === "!.mstar/custom/**");
+      const canonicalIndexes = lines
+        .map((line, index) => (MSTAR_FENCE_ENTRIES.slice(1).includes(line.trim()) ? index : -1))
+        .filter((index) => index !== -1);
+      // BOTH broad rules retained, in their original positions: the first
+      // before the custom negation, the trailing one after it (re-ignoring
+      // the custom path), and both before every canonical re-include.
+      expect(broadIndexes.length).toBe(2);
+      expect(broadIndexes[0]).toBeLessThan(customIndex);
+      expect(broadIndexes[1]).toBeGreaterThan(customIndex);
+      for (const canonicalIndex of canonicalIndexes) {
+        expect(broadIndexes[0]).toBeLessThan(canonicalIndex);
+        expect(broadIndexes[1]).toBeLessThan(canonicalIndex);
+      }
+      // All canonical entries present; unrelated user lines preserved in order.
+      for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
+      for (const line of ["# user comment", "dist/"]) expect(gitignore).toContain(line);
+      expect(gitignore.indexOf("dist/")).toBeGreaterThan(gitignore.indexOf(".mstar/**"));
+
+      // Observable git semantics: the trailing broad re-ignores the custom
+      // path (last-match-wins), so .mstar/custom/x is NOT tracked, while
+      // knowledge contents stay tracked and .mstar/status.json stays
+      // ignored (check-ignore).
+      mkdirSync(join(root, ".mstar", "custom"), { recursive: true });
+      mkdirSync(join(root, ".mstar", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "custom", "x.md"), "# x\n", "utf8");
+      writeFileSync(join(root, ".mstar", "knowledge", "y.md"), "# y\n", "utf8");
+      writeFileSync(join(root, ".mstar", "status.json"), "{}\n", "utf8");
+      const addAll = Bun.spawnSync(["git", "add", "-A"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(addAll.exitCode).toBe(0);
+      const tracked = Bun.spawnSync(["git", "ls-files"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(tracked.exitCode).toBe(0);
+      const trackedFiles = tracked.stdout.toString();
+      expect(trackedFiles).not.toContain(".mstar/custom/x.md");
       expect(trackedFiles).toContain(".mstar/knowledge/y.md");
       const ignored = Bun.spawnSync(["git", "check-ignore", "-v", join(root, ".mstar", "status.json")], {
         cwd: root,
