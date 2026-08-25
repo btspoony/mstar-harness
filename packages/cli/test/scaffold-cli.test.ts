@@ -340,7 +340,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("duplicate .mstar/** both before AND after re-includes: trailing broad RETAINED, canonical negations re-appended after it (PR #147 round-8/9)", () => {
+  test("duplicate .mstar/** both before AND after re-includes: trailing broad RETAINED, canonical negations re-appended after it (PR #147)", () => {
     withRoot((root) => {
       // One broad rule before the negations (correctly placed) and a second
       // one after them. Round-8 semantics: node_modules/ (a line whose
@@ -383,7 +383,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
         .filter((index) => index !== -1);
       const lastBroadIndex = broadIndexes[broadIndexes.length - 1];
       // ONE broad rule: post-partition the duplicate is pure redundancy
-      // (round-10 dedupe) and is removed.
+      // (post-partition dedupe) and is removed.
       expect(broadIndexes.length).toBe(1);
       expect(broadIndexes[0]).toBe(1);
       expect(lines.findIndex((line) => line.trim() === "node_modules/")).toBeGreaterThan(broadIndexes[0]);
@@ -502,7 +502,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
   test(".mstarc harness_dir=config/.mstar: basename matches default but path is custom — .gitignore untouched", () => {
     withRoot((root) => {
-      // Regression (PR #147 round-5): a custom harness dir whose BASENAME
+      // Regression (PR #147): a custom harness dir whose BASENAME
       // is `.mstar` (e.g. config/.mstar) used to be misclassified as the
       // default layout, so scaffold wrote root-relative `.mstar/**` patterns
       // into <root>/.gitignore that never match config/.mstar/... — process
@@ -527,9 +527,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("repo-root .mstarc harness_dir=.mstar + subdir path arg: fence installed at the git top-level (PR #147 round-6)", () => {
+  test("repo-root .mstarc harness_dir=.mstar + subdir path arg: fence installed at the git top-level (PR #147)", () => {
     withRoot((root) => {
-      // Regression (PR #147 round-6): a repo-root `.mstarc` declaring
+      // Regression (PR #147): a repo-root `.mstarc` declaring
       // `harness_dir=.mstar` resolves the harness dir against the config
       // file's location — <repoRoot>/.mstar. Scaffolding a SUBDIRECTORY path
       // used to compare that against <subdir>/.mstar, skip the canonical
@@ -563,9 +563,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("custom !.mstar negation before the broad rule: relocated after the fence, custom path becomes tracked (PR #147 round-10 partition)", () => {
+  test("custom !.mstar negation before the broad rule: relocated after the fence, custom path becomes tracked (PR #147 10 partition)", () => {
     withRoot((root) => {
-      // Partition invariant (PR #147 round-10): user-authored targeted
+      // Partition invariant (PR #147): user-authored targeted
       // `.mstar/…` rules always speak LAST. A `!.mstar/custom-keep/**`
       // re-inclusion placed before the broad rule is relocated after the
       // canonical fence (relative order preserved), so its literal intent —
@@ -632,9 +632,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignore);
     });
   });
-  test("infeasible ordering (custom negation after a canonical one): broad rule NOT moved, user rule speaks last (PR #147 round-10 partition)", () => {
+  test("infeasible ordering (custom negation after a canonical one): broad rule NOT moved, user rule speaks last (PR #147 10 partition)", () => {
     withRoot((root) => {
-      // Regression (PR #147 round-6, updated round-10): a custom negation
+      // Regression: a custom negation
       // interleaved after a canonical re-include makes single-slot
       // relocation infeasible — the broad rule is NOT moved. The ownership
       // passes still guarantee our tracked results (canonical negations
@@ -692,9 +692,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("custom re-inclusion AFTER .mstar/**: relocated to speak last, custom path stays tracked (PR #147 round-10 partition)", () => {
+  test("custom re-inclusion AFTER .mstar/**: relocated to speak last, custom path stays tracked (PR #147 10 partition)", () => {
     withRoot((root) => {
-      // Partition invariant (PR #147 round-10): a user-authored custom
+      // Partition invariant (PR #147): a user-authored custom
       // re-inclusion placed after `.mstar/**` (last-match-wins =>
       // deliberately re-included) keeps its meaning — the partition moves
       // it to speak after the whole fence, so `.mstar/custom/x` stays
@@ -772,9 +772,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignore);
     });
   });
-  test("custom negation BETWEEN two .mstar/** rules: trailing broad RETAINED, user rule speaks last (PR #147 round-8/10)", () => {
+  test("custom negation BETWEEN two .mstar/** rules: trailing broad RETAINED, user rule speaks last (PR #147)", () => {
     withRoot((root) => {
-      // Regression (PR #147 round-8): segmented dedupe must RETAIN the
+      // Regression (PR #147): segmented dedupe must RETAIN the
       // trailing broad rule when an un-crossable line lies between it and
       // the previously retained broad rule — deleting it would flip a line
       // we do not own. Round-10 partition: the targeted user rule
@@ -810,7 +810,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
         .map((line, index) => (MSTAR_FENCE_ENTRIES.slice(1).includes(line.trim()) ? index : -1))
         .filter((index) => index !== -1);
       // ONE broad rule: post-partition the duplicate is redundant and is
-      // removed (round-10 dedupe).
+      // removed (post-partition dedupe).
       expect(broadIndexes.length).toBe(1);
       // The fence stays intact: broad before every canonical re-include;
       // the targeted user rule speaks last.
@@ -853,9 +853,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("misordered broad rule with an un-crossable line in the way: no relocation, order preserved (PR #147 round-7)", () => {
+  test("misordered broad rule with an un-crossable line in the way: no relocation, order preserved (PR #147)", () => {
     withRoot((root) => {
-      // Regression (PR #147 round-7): the broad rule sits AFTER the first
+      // Regression (PR #147): the broad rule sits AFTER the first
       // canonical negation, but a user line (node_modules/) lies strictly
       // between the first canonical negation and the broad rule. Moving the
       // broad rule up would cross that un-owned line and flip its path
@@ -878,7 +878,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       // The broad rule is NOT moved (an un-crossable line blocks the
       // relocation). Content may still change: the ownership pass
       // re-appends canonical negations that the broad rule would otherwise
-      // shadow (round-9 guarantee). Original relative order must be
+      // shadow (post-fence canonical guarantee). Original relative order must be
       // preserved — asserted below.
       // No silent skip message: content changed, so "already present" must
       // not be claimed.
@@ -899,7 +899,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("misordered broad rule with only owned lines in the way: relocates before the first canonical negation (PR #147 round-7)", () => {
+  test("misordered broad rule with only owned lines in the way: relocates before the first canonical negation (PR #147)", () => {
     withRoot((root) => {
       // Feasible reorder: the broad rule sits after the first canonical
       // negation, and every line between them is one we own (a comment and

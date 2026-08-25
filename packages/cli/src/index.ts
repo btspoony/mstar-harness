@@ -521,7 +521,7 @@ function runScaffold(pathArg: string | undefined) {
       //    the first only.
       // 3. RELOCATE — a broad rule sitting after the first canonical
       //    negation is moved before it when only owned lines lie in
-      //    between (feasibility unchanged from round-7).
+      //    between.
       // 4. GUARANTEE — every canonical negation occurs at least once after
       //    the last broad rule (append missing occurrences; duplicates are
       //    harmless in gitignore).
@@ -599,7 +599,7 @@ function runScaffold(pathArg: string | undefined) {
       if (broadAfter.length > 1) {
         // 2. Dedupe: post-partition every line between two broad rules is
         // owned, so extra broad rules are pure redundancy. Removing them
-        // can only make canonical re-inclusions effective (round-3).
+        // can only make canonical re-inclusions effective.
         const [first, ...duplicates] = broadAfter;
         let removed = 0;
         for (const duplicate of duplicates) {

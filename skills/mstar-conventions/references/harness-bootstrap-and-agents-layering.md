@@ -23,7 +23,7 @@
 
 **程序化路径**：`mstar harness scaffold [path]`（CLI，默认 cwd）一次性完成步骤 1–2（含 `projects/_default/`）、4 与 6 —— 调用 engine `scaffoldHarness`、追加 canonical gitignore snippet（已存在则跳过）、写最小 `{HARNESS_DIR}/AGENTS.md`（已存在则跳过）；幂等，重跑只补缺失件。步骤 3、5、7、8 仍按需手工。 scaffold 遵循 `.mstarc` 的 `harness_dir` / `project_dir` 覆盖（写入解析后的目录）；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义 harness 布局自行管理 ignore 规则）。
 
-**gitignore 归一化契约与权衡（round-10 定稿）**：scaffold 对默认布局的根 `.gitignore` 只做四类收敛——分区（用户针对性 `.mstar/…` 规则整体移到 fence 之后、相对顺序不变）、去重冗余宽规则、把错位的主宽规则移到首个 canonical negation 之前（仅当跨越行全部为 scaffold 自有语义）、补齐 canonical negation 使其出现在最后一条宽规则之后。契约保证：① scaffold 的 tracked 结果（AGENTS/knowledge/specs）永不因错序 fence 被忽略；② 用户针对性规则的**字面意图最后生效**（写了 `!x` 即 track `x`）。已知权衡：病态的自我否定序列（先 `!x` 再用后续宽规则压回）会被归一化翻转为字面意图；gitignore 仅有的 last-match-wins 语义下，该冲突不可两全，scaffold 选择字面意图优先并在输出中如实报告每次变更。
+**gitignore 归一化契约**：scaffold 对默认布局的根 `.gitignore` 仅做四类收敛——分区（用户针对性 `.mstar/…` 规则整体移到 fence 之后、相对顺序不变）、去重冗余宽规则、错位主宽规则前移至首个 canonical negation 之前（仅当跨越行全部为 scaffold 自有语义）、补齐 canonical negation 使其出现在最后一条宽规则之后。保证：① tracked 结果（AGENTS/knowledge/specs）不因错序 fence 被忽略；② 用户针对性规则的字面意图最后生效（`!x` 即 track `x`）。自我否定的规则序列（先 `!x` 后被宽规则压制）按字面意图解析；每次变更均在 scaffold 输出中报告。
 
 ## Git 跟踪策略（进程 vs 结果）
 
