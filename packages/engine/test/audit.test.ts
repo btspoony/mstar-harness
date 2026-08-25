@@ -546,6 +546,25 @@ describe("scaffoldAuditPlan", () => {
     expect(hcBlock.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(3);
     expect(readdirSync(out).filter((f) => f.startsWith("003-"))).toEqual(["003-second-batch-plan.md"]);
   });
+
+  test("rerun with a PARTIAL disposition array merges into carried entries instead of replacing them", () => {
+    const out = join(tmp, "audit-2026-08-19");
+    scaffoldAuditPlan(out, findings, {
+      date: "2026-08-19",
+      needsVerification: [{ lead: "carried lead", how: "check old" }],
+      hardeningChecked: [{ kind: "Checked and clean", text: "old sink cleared" }],
+    });
+    // fresh array supplies only NEW entries — nothing carried may vanish
+    scaffoldAuditPlan(out, [], {
+      date: "2026-08-20",
+      needsVerification: [{ lead: "fresh lead", how: "check new" }],
+      hardeningChecked: [],
+    });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("- carried lead: check old");
+    expect(readme).toContain("- fresh lead: check new");
+    expect(readme).toContain("- Checked and clean: old sink cleared");
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -541,16 +541,31 @@ export function scaffoldAuditPlan(
     }
   });
 
-  const needsVerificationLines =
-    options.needsVerification !== undefined
-      ? options.needsVerification.map(
-          (nv) => `- ${escapeCell(nv.lead)}: ${escapeCell(nv.how)}${nv.evidence ? ` (${escapeCell(nv.evidence)})` : ""}`,
-        )
-      : carried.needsVerification;
-  const hardeningCheckedLines =
-    options.hardeningChecked !== undefined
-      ? options.hardeningChecked.map((hc) => `- ${hc.kind}: ${escapeCell(hc.text)}`)
-      : carried.hardeningChecked;
+  // Reconciliation, not replacement: fresh option entries are MERGED into
+  // the carried section (exact-duplicate lines deduped), so a rerun that
+  // supplies only a partial array can never silently drop previously
+  // recorded leads or notes.
+  const mergeEntries = (carriedLines: string[], fresh: string[]): string[] => {
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const line of [...carriedLines, ...fresh]) {
+      const key = line.trim();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(line);
+    }
+    return merged;
+  };
+  const needsVerificationLines = mergeEntries(
+    carried.needsVerification,
+    (options.needsVerification ?? []).map(
+      (nv) => `- ${escapeCell(nv.lead)}: ${escapeCell(nv.how)}${nv.evidence ? ` (${escapeCell(nv.evidence)})` : ""}`,
+    ),
+  );
+  const hardeningCheckedLines = mergeEntries(
+    carried.hardeningChecked,
+    (options.hardeningChecked ?? []).map((hc) => `- ${hc.kind}: ${escapeCell(hc.text)}`),
+  );
 
   writeFileSync(
     join(outDir, "README.md"),
