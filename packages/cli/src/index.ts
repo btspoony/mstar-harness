@@ -305,14 +305,18 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
  * rules template when absent. Prints the resolved harness/project dirs plus
  * a created/skipped summary. Idempotent: re-running on an initialized tree
  * is a no-op except creating missing pieces. Ordering is normalized as the
- * final step of the gitignore routine: a misplaced `.mstar/**` (after
- * `!.mstar/…` re-includes, which gitignore's last-match-wins would shadow)
- * is relocated to a slot that preserves every negation's intent — after any
- * CUSTOM `!.mstar/…` negation (a user-authored non-canonical negation keeps
- * its shadowed state) and before every CANONICAL re-include — whether the
- * fence was complete or just appended. When a custom negation is interleaved
- * after a canonical one the ordering is infeasible and the file is left
- * untouched (missing entries were already appended).
+ * final step of the gitignore routine: a misplaced `.mstar/**` (after one
+ * or more canonical `!.mstar/…` re-includes, which gitignore's
+ * last-match-wins would shadow) is relocated to sit immediately before the
+ * first canonical re-include — but only when the move crosses no line
+ * whose semantics we do not own. The broad rule may cross blank/comment
+ * lines, other exact `.mstar/**` duplicates, the 5 canonical negations,
+ * and our own `.mstarc` entry; every other line (custom `!.mstar/…`
+ * negations, custom `.mstar/<path>` ignores, anything else) is
+ * un-crossable. A broad rule already before every canonical negation is
+ * correctly placed and never moves, regardless of surrounding custom
+ * lines. Infeasible → the file keeps its user-authored order (missing
+ * entries were already appended).
  */
 /** The 5 canonical `!.mstar/…` re-includes (verbatim from the snippet SSOT). */
 const CANONICAL_NEGATIONS: Record<string, true> = {
@@ -409,29 +413,27 @@ function runScaffold(pathArg: string | undefined) {
     }
 
     // Unconditional final normalization — gitignore is last-match-wins, so a
-    // misplaced `.mstar/**` (appearing after one or more `!.mstar/…`
-    // re-includes, whether pre-existing or just appended) would shadow them.
-    // Keep exactly ONE broad rule (the earliest occurrence), drop any
-    // trailing duplicates, and relocate the kept rule to a slot that
-    // preserves every negation's intent: after every CUSTOM `!.mstar/…`
-    // negation (a user-authored non-canonical negation keeps its shadowed
-    // state) and before every CANONICAL re-include. When a custom negation
-    // is interleaved after a canonical one the ordering is infeasible — the
-    // file is left untouched (missing entries were already appended above).
-    // Every other line stays byte-for-byte. Runs after EVERY branch above.
+    // misplaced `.mstar/**` (appearing after one or more canonical
+    // `!.mstar/…` re-includes, whether pre-existing or just appended) would
+    // shadow them. Keep exactly ONE broad rule (the earliest occurrence),
+    // drop any trailing duplicates, and relocate the kept rule to sit
+    // immediately before the first canonical re-include — but only when the
+    // move crosses no line whose semantics we do not own. The broad rule may
+    // cross blank/comment lines, other exact `.mstar/**` duplicates, the 5
+    // canonical negations, and our own `.mstarc` entry; every other line
+    // (custom `!.mstar/…` negations, custom `.mstar/<path>` ignores,
+    // anything else) is un-crossable. A broad rule already before every
+    // canonical negation is correctly placed and never moves, regardless of
+    // surrounding custom lines. Infeasible → the file keeps its user-authored
+    // order (missing entries were already appended above). Every other line
+    // stays byte-for-byte. Runs after EVERY branch above.
     const finalLines = fs.readFileSync(gitignorePath, "utf8").split(/\r?\n/);
     const broadIndexes = finalLines
       .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
       .filter((index) => index !== -1);
-    const customNegationIndexes = finalLines
-      .map((line, index) =>
-        line.trim().startsWith("!.mstar/") && CANONICAL_NEGATIONS[line.trim()] !== true ? index : -1,
-      )
-      .filter((index) => index !== -1);
     const canonicalNegationIndexes = finalLines
       .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
       .filter((index) => index !== -1);
-    const lastCustomNegationIndex = customNegationIndexes[customNegationIndexes.length - 1] ?? -1;
     const firstCanonicalNegationIndex = canonicalNegationIndexes[0] ?? -1;
     let normalized = false;
     if (broadIndexes.length > 0) {
@@ -441,39 +443,33 @@ function runScaffold(pathArg: string | undefined) {
         normalized = true;
       }
       const keptIndex = finalLines.findIndex((line) => line.trim() === ".mstar/**");
-      // A valid slot exists only when every custom negation precedes every
-      // canonical one (either side may be empty). Infeasible → do NOT
-      // reorder; the file keeps its user-authored order.
-      const orderingFeasible =
-        lastCustomNegationIndex === -1 ||
-        firstCanonicalNegationIndex === -1 ||
-        lastCustomNegationIndex < firstCanonicalNegationIndex;
-      // Target slot: immediately after the last custom negation (preserving
-      // its shadowed state), else immediately before the first canonical
-      // re-include. Normalize to the exact slot, like the pre-round-6
-      // behavior did for the first re-include.
-      const targetSlot =
-        lastCustomNegationIndex === -1 ? firstCanonicalNegationIndex - 1 : lastCustomNegationIndex + 1;
-      const hasNegations = customNegationIndexes.length > 0 || canonicalNegationIndexes.length > 0;
-      if (orderingFeasible && hasNegations && keptIndex !== targetSlot) {
-        const [broadLine] = finalLines.splice(keptIndex, 1);
-        // Recompute after the splice (indexes shift when the broad rule sat
-        // before the slot): insert immediately after the last custom
-        // negation, or immediately before the first canonical re-include
-        // when there are no custom negations.
-        const customNow = finalLines
-          .map((line, index) =>
-            line.trim().startsWith("!.mstar/") && CANONICAL_NEGATIONS[line.trim()] !== true ? index : -1,
-          )
-          .filter((index) => index !== -1);
-        const canonicalNow = finalLines
-          .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
-          .filter((index) => index !== -1);
-        const lastCustomNow = customNow[customNow.length - 1] ?? -1;
-        const firstCanonicalNow = canonicalNow[0] ?? -1;
-        const slot = lastCustomNow === -1 ? firstCanonicalNow : lastCustomNow + 1;
-        finalLines.splice(slot, 0, broadLine);
-        normalized = true;
+      // A broad rule already before every canonical negation is correctly
+      // placed — never move it, regardless of surrounding custom lines.
+      // Only a broad rule AFTER the first canonical negation is misplaced.
+      if (firstCanonicalNegationIndex !== -1 && keptIndex > firstCanonicalNegationIndex) {
+        // Feasibility: the move may only cross lines whose semantics we own
+        // — blank/comment lines, other exact `.mstar/**` duplicates, the 5
+        // canonical negations, and our own `.mstarc` entry. Any other line
+        // (custom `!.mstar/…` negation, custom `.mstar/<path>` ignore, or
+        // anything else) between the first canonical negation and the kept
+        // rule makes the relocation infeasible — the file keeps its
+        // user-authored order.
+        let feasible = true;
+        for (let i = firstCanonicalNegationIndex; i < keptIndex; i++) {
+          const line = finalLines[i].trim();
+          if (line === "") continue; // blank
+          if (line.startsWith("#")) continue; // comment
+          if (line === ".mstar/**") continue; // duplicate broad rule
+          if (CANONICAL_NEGATIONS[line] === true) continue; // canonical negation
+          if (line === ".mstarc") continue; // our own entry
+          feasible = false;
+          break;
+        }
+        if (feasible) {
+          const [broadLine] = finalLines.splice(keptIndex, 1);
+          finalLines.splice(firstCanonicalNegationIndex, 0, broadLine);
+          normalized = true;
+        }
       }
     }
     if (normalized) {
