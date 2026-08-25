@@ -360,8 +360,36 @@ const EMPTY_STATUS_TEMPLATE: Record<string, unknown> = {
   workflows: [],
 };
 
-/** Subdirectories created under `.mstar/` by `scaffoldHarness`. */
+/** Subdirectories created under the harness dir by `scaffoldHarness`. */
 const SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"] as const;
+
+/**
+ * Resolve the scaffold target dirs for `root` — the harness dir and the
+ * project dir — from the same config source the runtime resolvers use
+ * (plan-conventions § {HARNESS_DIR} 解析顺序): explicit `MSTAR_HARNESS_DIR`
+ * env wins, then `.mstarc` `[config] harness_dir` (found per find-first-stop
+ * within the workspace-root boundary, resolved against the config file's
+ * directory), else the default `.mstar/`. The project dir defaults to
+ * `{HARNESS_DIR}/projects/` with the `.mstarc` `[config] project_dir`
+ * override honored independently (same `mstarcDirOverride` semantics as
+ * `resolveProjectDir`). Unlike `resolveHarnessDir`, the probe rung is
+ * skipped: scaffold initializes the default `.mstar/` even when a legacy
+ * `.agents/` exists (default behavior unchanged without a `.mstarc`).
+ */
+export function resolveScaffoldDirs(root: string): { harnessDir: string; projectDir: string } {
+  const start = resolve(root);
+  const boundary = resolve(start, defaultWorkspaceRoot(start));
+  const rc = loadMstarc(start, boundary);
+  const explicit = process.env.MSTAR_HARNESS_DIR;
+  const harnessDir = explicit
+    ? resolve(start, explicit)
+    : rc !== null && rc.config.harnessDir
+      ? resolve(rc.dir, rc.config.harnessDir)
+      : join(start, ".mstar");
+  const declaredProjectDir = mstarcDirOverride(harnessDir, "projectDir");
+  const projectDir = declaredProjectDir !== null ? declaredProjectDir : join(harnessDir, "projects");
+  return { harnessDir, projectDir };
+}
 
 /**
  * Scaffolded `projects/_default/roadmap.md` template — embedded copy of
@@ -399,18 +427,21 @@ const EMPTY_REGISTER_TEMPLATE: Record<string, unknown> = {
 };
 
 /**
- * Initialize the harness directory under `root`: create `.mstar/` with
- * `plans/`, `iterations/`, `knowledge/`, `specs/`, `sdd/`, write
- * `status.json` from the empty template, and prebuild the v3 project layer
- * `projects/_default/` with a valid `roadmap.md` + empty `residuals.json`
- * (plan-conventions § 初始化 Plan 目录; mstar-project-governance §
- * `_default` 回退). Idempotent: an existing non-empty `status.json`,
- * `roadmap.md`, or `residuals.json` is never clobbered; re-running on an
- * initialized tree only creates missing pieces. Returns the absolute
- * harness dir.
+ * Initialize the harness directory under `root`: create the resolved
+ * harness dir (default `.mstar/`, or the `.mstarc`-declared `harness_dir`
+ * / `MSTAR_HARNESS_DIR` override — see `resolveScaffoldDirs`) with `plans/`,
+ * `iterations/`, `knowledge/`, `specs/`, `sdd/`, write `status.json` from
+ * the empty template, and prebuild the v3 project layer `_default/` under
+ * the resolved project dir (default `{HARNESS_DIR}/projects/`, or the
+ * `.mstarc`-declared `project_dir`) with a valid `roadmap.md` + empty
+ * `residuals.json` (plan-conventions § 初始化 Plan 目录;
+ * mstar-project-governance § `_default` 回退). Idempotent: an existing
+ * non-empty `status.json`, `roadmap.md`, or `residuals.json` is never
+ * clobbered; re-running on an initialized tree only creates missing
+ * pieces. Returns the absolute resolved harness dir.
  */
 export function scaffoldHarness(root: string): string {
-  const harnessDir = join(resolve(root), ".mstar");
+  const { harnessDir, projectDir } = resolveScaffoldDirs(root);
   for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harnessDir, dir), { recursive: true });
   const statusPath = join(harnessDir, "status.json");
   // readJson treats a missing file as `{}`, so a missing (or empty) status.json
@@ -419,14 +450,14 @@ export function scaffoldHarness(root: string): string {
   // v3 project layer: `projects/_default/` is scaffolded (the fallback
   // project for project-less flows); other project ids and `workflows/`
   // stay on-demand (engine writers create them).
-  const projectDir = join(harnessDir, "projects", _DEFAULT_PROJECT);
-  mkdirSync(projectDir, { recursive: true });
-  const roadmapPath = join(projectDir, PROJECT_ROADMAP_FILE);
+  const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
+  mkdirSync(defaultProjectDir, { recursive: true });
+  const roadmapPath = join(defaultProjectDir, PROJECT_ROADMAP_FILE);
   if (!existsSync(roadmapPath)) {
     const created = new Date().toISOString().slice(0, 10);
     writeFileSync(roadmapPath, ROADMAP_TEMPLATE.replace("{created_at}", created), "utf8");
   }
-  const registerPath = join(projectDir, PROJECT_REGISTER_FILE);
+  const registerPath = join(defaultProjectDir, PROJECT_REGISTER_FILE);
   if (Object.keys(readJson(registerPath)).length === 0) writeJson(registerPath, EMPTY_REGISTER_TEMPLATE);
   return harnessDir;
 }
@@ -574,7 +605,7 @@ export function validateGitignore(root: string): ValidationResult {
 }
 
 /** Detect the gitignore fence kind from a resolved harness dir (basename). */
-function detectHarnessKind(harnessDir: string | null): HarnessKind | null {
+export function detectHarnessKind(harnessDir: string | null): HarnessKind | null {
   if (!harnessDir) return null;
   const name = basename(resolve(harnessDir));
   if (name === ".mstar") return "mstar";

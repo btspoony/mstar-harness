@@ -4,11 +4,15 @@
  * Thin wrapper over engine `path.scaffoldHarness` + `path.emitGitignoreSnippet`
  * (plan-conventions § 初始化 Plan 目录 / § Git 跟踪策略; mstar-project-governance
  * § `_default` 回退):
- * - Creates `.mstar/` (plans/iterations/knowledge/specs/sdd + v2 status.json
- *   + projects/_default/roadmap.md + residuals.json).
- * - Appends the canonical `.gitignore` snippet when absent; skips cleanly
- *   when the complete fence is already present.
- * - Writes a minimal `.mstar/AGENTS.md` when absent.
+ * - Creates the resolved harness dir (default `.mstar/`; `.mstarc`
+ *   harness_dir honored) with plans/iterations/knowledge/specs/sdd + v2
+ *   status.json + `_default/` under the resolved `{PROJECT_DIR}`
+ *   (`.mstarc` project_dir honored) with roadmap.md + residuals.json.
+ * - Appends the canonical `.gitignore` snippet when missing (only for the
+ *   default `.mstar/` layout — custom layouts are skipped); skips cleanly
+ *   when the complete fence is already present. A reversed partial fence
+ *   (re-includes without the broad rule) is spliced, not appended.
+ * - Writes a minimal `{HARNESS_DIR}/AGENTS.md` when absent.
  * - Idempotent: re-running on an initialized tree changes nothing.
  *
  * Each case runs the real CLI as a subprocess against a temp fixture tree.
@@ -147,6 +151,68 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(gitignore.split(".mstar/**").length - 1).toBe(1);
       // All 5 re-include entries are now present.
       for (const entry of MSTAR_FENCE_ENTRIES.slice(1)) expect(gitignore).toContain(entry);
+    });
+  });
+
+  test("reversed partial fence: splices .mstar/** before existing !.mstar/ re-includes", () => {
+    withRoot((root) => {
+      // Pre-existing fence with ONLY re-include lines and no broad rule —
+      // appending .mstar/** at the end would shadow them (last-match-wins).
+      writeFileSync(join(root, ".gitignore"), "!.mstar/knowledge/\n!.mstar/knowledge/**\n", "utf8");
+
+      const result = runScaffold([root]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("created: .gitignore (canonical harness snippet)");
+
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      const lines = gitignore.split(/\r?\n/);
+      const broadIndex = lines.findIndex((line) => line.trim() === ".mstar/**");
+      const firstNegationIndex = lines.findIndex((line) => line.trim().startsWith("!.mstar/"));
+      expect(broadIndex).toBeGreaterThan(-1);
+      // Broad rule must precede every re-include (gitignore last-match-wins).
+      expect(firstNegationIndex).toBeGreaterThan(broadIndex);
+      // All re-includes present; the pre-existing ones are not duplicated.
+      expect(gitignore.split(".mstar/**").length - 1).toBe(1);
+      for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
+    });
+  });
+
+  test(".mstarc harness_dir=.custom: files land in .custom/, .gitignore untouched", () => {
+    withRoot((root) => {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
+
+      const result = runScaffold([root]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`scaffold: harness initialized at ${join(root, ".custom")}`);
+      expect(result.stdout).toContain(`  harness dir: ${join(root, ".custom")}`);
+      expect(result.stdout).toContain(
+        "skipped: .gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules",
+      );
+      // Files land under the declared dir, not .mstar/.
+      expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "AGENTS.md"))).toBe(true);
+      expect(existsSync(join(root, ".mstar"))).toBe(false);
+      // No .gitignore mutation for custom layouts.
+      expect(existsSync(join(root, ".gitignore"))).toBe(false);
+    });
+  });
+
+  test(".mstarc project_dir=process/projects: _default lands under the overridden project dir", () => {
+    withRoot((root) => {
+      writeFileSync(join(root, ".mstarc"), "[config]\nproject_dir=process/projects\n", "utf8");
+
+      const result = runScaffold([root]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`  harness dir: ${join(root, ".mstar")}`);
+      expect(result.stdout).toContain(`  project dir: ${join(root, "process", "projects")}`);
+      // Harness layout stays .mstar/ (canonical snippet still appended).
+      expect(result.stdout).toContain("created: .gitignore (canonical harness snippet)");
+      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+      // _default lands under the resolved project dir, NOT {HARNESS_DIR}/projects.
+      expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "residuals.json"))).toBe(true);
+      expect(existsSync(join(root, ".mstar", "projects"))).toBe(false);
     });
   });
 

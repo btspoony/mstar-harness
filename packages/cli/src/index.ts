@@ -18,6 +18,7 @@ import {
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
   completenessLevel,
+  detectHarnessKind,
   detectHost,
   emitGitignoreSnippet,
   evaluatePhaseGate,
@@ -296,47 +297,78 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
 
 /**
  * Run `mstar harness scaffold [path]`: one-shot harness bootstrap — engine
- * `scaffoldHarness` (dirs + v2 status.json + projects/_default/), the
- * canonical `.gitignore` snippet appended when absent, and a minimal
- * `.mstar/AGENTS.md` harness-layer rules template when absent. Prints a
- * created/skipped summary. Idempotent: re-running on an initialized tree
+ * `scaffoldHarness` (dirs + v2 status.json + projects/_default/ under the
+ * resolved harness/project dirs; `.mstarc` `harness_dir` / `project_dir`
+ * honored), the canonical `.gitignore` snippet appended when absent (only
+ * for the default `.mstar/` layout — custom harness layouts manage their
+ * own ignore rules), and a minimal {HARNESS_DIR}/AGENTS.md harness-layer
+ * rules template when absent. Prints the resolved harness/project dirs plus
+ * a created/skipped summary. Idempotent: re-running on an initialized tree
  * is a no-op except creating missing pieces.
  */
 function runScaffold(pathArg: string | undefined) {
   const root = pathArg ? path.resolve(pathArg) : process.cwd();
   const harnessDir = scaffoldHarness(root);
+  const projectDir = resolveProjectDir(root, { harnessDir });
   const created: string[] = [];
   const skipped: string[] = [];
 
-  // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): append
-  // only the missing fence entries (plus the canonical comment block when
-  // its comment lines are absent), skip cleanly when the complete set is
-  // already present (same per-entry fence check as the engine's
-  // GITIGNORE_PROCESS_ENTRIES / shared-install appendGitignore).
-  const gitignorePath = path.join(root, ".gitignore");
-  const snippet = emitGitignoreSnippet("mstar");
-  const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-  const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-  const snippetLines = snippet.split("\n").map((line) => line.trim());
-  const fenceEntries = snippetLines.filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"));
-  const commentLines = snippetLines.filter((line) => line.startsWith("#"));
-  const missing = fenceEntries.filter((entry) => !lines.has(entry));
-  if (missing.length > 0) {
-    const missingComments = commentLines.filter((line) => !lines.has(line));
-    const prefix = current && !current.endsWith("\n") ? "\n" : "";
-    fs.appendFileSync(gitignorePath, `${prefix}${[...missingComments, ...missing].join("\n")}\n`, "utf8");
-    created.push(".gitignore (canonical harness snippet)");
+  // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): the
+  // snippet literals are `.mstar/**`-based, so the append only makes sense
+  // for the default `.mstar/` layout. Custom harness layouts (`.mstarc`
+  // harness_dir, legacy `.agents/`) manage their own ignore rules and are
+  // skipped with an explicit note.
+  const harnessKind = detectHarnessKind(harnessDir);
+  if (harnessKind === "mstar") {
+    const gitignorePath = path.join(root, ".gitignore");
+    const snippet = emitGitignoreSnippet("mstar");
+    const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
+    const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+    const snippetLines = snippet.split("\n").map((line) => line.trim());
+    const fenceEntries = snippetLines.filter(
+      (line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"),
+    );
+    const commentLines = snippetLines.filter((line) => line.startsWith("#"));
+    const missing = fenceEntries.filter((entry) => !lines.has(entry));
+    if (missing.length > 0) {
+      const missingComments = commentLines.filter((line) => !lines.has(line));
+      const broadRule = ".mstar/**";
+      const currentLines = current.split(/\r?\n/);
+      const firstNegation = currentLines.findIndex((line) => line.trim().startsWith("!.mstar/"));
+      if (!lines.has(broadRule) && firstNegation !== -1) {
+        // gitignore = last matching pattern wins: appending `.mstar/**`
+        // after existing `!.mstar/…` re-includes would shadow them. Splice
+        // the canonical block start (comments + broad rule + missing
+        // re-includes) BEFORE the first negation so the re-includes stay
+        // effective. `.mstarc` is a plain ignore (no negations) — appended
+        // at the end when missing.
+        const blockStart = [...missingComments, broadRule, ...missing.filter((entry) => entry.startsWith("!.mstar/"))];
+        currentLines.splice(firstNegation, 0, ...blockStart);
+        let next = currentLines.join("\n");
+        if (missing.includes(".mstarc")) next = `${next}${next.endsWith("\n") ? "" : "\n"}.mstarc\n`;
+        fs.writeFileSync(gitignorePath, next, "utf8");
+      } else {
+        // Broad rule present (append missing entries after it) or no
+        // negations to shadow (append the whole block) — both safe.
+        const prefix = current && !current.endsWith("\n") ? "\n" : "";
+        fs.appendFileSync(gitignorePath, `${prefix}${[...missingComments, ...missing].join("\n")}\n`, "utf8");
+      }
+      created.push(".gitignore (canonical harness snippet)");
+    } else {
+      skipped.push(".gitignore (canonical harness snippet already present)");
+    }
   } else {
-    skipped.push(".gitignore (canonical harness snippet already present)");
+    skipped.push(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
   }
 
-  // Minimal .mstar/AGENTS.md harness-layer rules (tracked result).
+  // Minimal {HARNESS_DIR}/AGENTS.md harness-layer rules (tracked result).
   const agentsPath = path.join(harnessDir, "AGENTS.md");
+  const agentsLabel = `${path.basename(harnessDir)}/AGENTS.md`;
   if (!fs.existsSync(agentsPath)) {
     fs.writeFileSync(agentsPath, HARNESS_AGENTS_TEMPLATE, "utf8");
-    created.push(".mstar/AGENTS.md");
+    created.push(agentsLabel);
   } else {
-    skipped.push(".mstar/AGENTS.md (already present)");
+    skipped.push(`${agentsLabel} (already present)`);
   }
 
   // Headline is created-count-aware: "initialized" only when something was
@@ -346,6 +378,8 @@ function runScaffold(pathArg: string | undefined) {
       ? `scaffold: harness initialized at ${harnessDir}`
       : `scaffold: harness ensured at ${harnessDir}`;
   console.log(pc.green(headline));
+  console.log(`  harness dir: ${harnessDir}`);
+  console.log(`  project dir: ${projectDir}`);
   for (const item of created) console.log(`  created: ${item}`);
   for (const item of skipped) console.log(`  skipped: ${item}`);
 }
@@ -382,8 +416,9 @@ const harnessCommand = program
 harnessCommand
   .command("scaffold")
   .description(
-    "One-shot harness bootstrap: create .mstar/ (dirs + v2 status.json + projects/_default/), " +
-      "append the canonical .gitignore snippet when absent, and write a minimal .mstar/AGENTS.md when absent",
+    "One-shot harness bootstrap: create the harness dir (default .mstar/, honoring .mstarc harness_dir/project_dir) " +
+      "with dirs + v2 status.json + projects/_default/, append the canonical .gitignore snippet when absent " +
+      "(skipped for non-.mstar layouts), and write a minimal {HARNESS_DIR}/AGENTS.md when absent",
   )
   .argument("[path]", "Root to scaffold (default: cwd)")
   .action((pathArg?: string) => {

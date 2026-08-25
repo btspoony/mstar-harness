@@ -880,6 +880,69 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
     }
   });
 
+  test("honors .mstarc [config] harness_dir when resolving the scaffold target", () => {
+    const root = tmpRoot("path-scaffold-mstarc-harness-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
+      const harnessDir = scaffoldHarness(root);
+      // Files land under the declared dir, not the default .mstar/.
+      expect(harnessDir).toBe(resolve(root, ".custom"));
+      expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "plans"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, ".mstar"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("honors MSTAR_HARNESS_DIR env override for the scaffold target", () => {
+    const root = tmpRoot("path-scaffold-mstarc-env-");
+    try {
+      const custom = join(root, "env-harness");
+      withEnv(custom, () => {
+        const harnessDir = scaffoldHarness(root);
+        expect(harnessDir).toBe(custom);
+        expect(existsSync(join(custom, "status.json"))).toBe(true);
+        expect(existsSync(join(custom, "projects", "_default", "roadmap.md"))).toBe(true);
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("honors .mstarc [config] project_dir independently of the harness dir", () => {
+    const root = tmpRoot("path-scaffold-mstarc-project-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nproject_dir=process/projects\n", "utf8");
+      const harnessDir = scaffoldHarness(root);
+      // Harness stays at the default .mstar/; _default lands under the
+      // RESOLVED {PROJECT_DIR} (project_dir resolved against the .mstarc
+      // file's directory), not {HARNESS_DIR}/projects.
+      expect(harnessDir).toBe(resolve(root, ".mstar"));
+      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "residuals.json"))).toBe(true);
+      expect(existsSync(join(root, ".mstar", "projects"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("honors .mstarc harness_dir AND project_dir independently (both keys)", () => {
+    const root = tmpRoot("path-scaffold-mstarc-both-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\nproject_dir=process/projects\n", "utf8");
+      const harnessDir = scaffoldHarness(root);
+      expect(harnessDir).toBe(resolve(root, ".custom"));
+      expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "projects"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("is idempotent: preserves user-edited roadmap.md and residuals.json", () => {
     const root = tmpRoot("path-scaffold-idem-project-");
     try {

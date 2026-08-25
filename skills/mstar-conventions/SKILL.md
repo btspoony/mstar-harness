@@ -112,7 +112,7 @@ PM 在需要持久化追踪时：
 3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（见下文「Git 跟踪策略」）— CLI `init` 可自动添加
 4. Git：**进程本地、结果共享** — 默认跟踪 `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`；`plans/`、`iterations/`、`status.json` 等为**本地会话 SSOT**，默认 gitignored。跨 clone 持久 handoff = knowledge + specs + `{HARNESS_DIR}/AGENTS.md`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 residual 须提升（compound）或写入 tracked results — **勿**默认 `git add` `status.json` / `plans/`。
 
-**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）一次性完成上述 bootstrap —— 目录 + v2 `status.json` + **`projects/_default/` 预建**（`roadmap.md` + 空 `residuals.json`）+ canonical gitignore snippet + 最小 `{HARNESS_DIR}/AGENTS.md`；幂等，重跑只补缺失件。
+**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）一次性完成上述 bootstrap —— 目录 + v2 `status.json` + **`projects/_default/` 预建**（`roadmap.md` + 空 `residuals.json`）+ canonical gitignore snippet + 最小 `{HARNESS_DIR}/AGENTS.md`；幂等，重跑只补缺失件。 scaffold 遵循 `.mstarc`：`harness_dir` / `project_dir` 声明优先（写入解析后的目录）；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义 harness 布局自行管理 ignore 规则）。
 
 步骤与 `{HARNESS_DIR}/AGENTS.md` 分层 → **`references/harness-bootstrap-and-agents-layering.md`**。
 

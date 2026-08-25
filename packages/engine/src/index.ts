@@ -35,12 +35,14 @@ export {
 } from "./mstarc.js";
 export {
   assertPlanWritingPath,
+  detectHarnessKind,
   emitGitignoreSnippet,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
   resolvePlanDir,
   resolveProjectDir,
+  resolveScaffoldDirs,
   resolveSddDir,
   resolveSpecsDir,
   resolveWorkflowDir,

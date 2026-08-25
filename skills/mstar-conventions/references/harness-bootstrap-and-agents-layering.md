@@ -21,7 +21,7 @@
 7. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `{HARNESS_DIR}/AGENTS.md` 作为 harness SSOT。
 8. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。
 
-**程序化路径**：`mstar harness scaffold [path]`（CLI，默认 cwd）一次性完成步骤 1–2（含 `projects/_default/`）、4 与 6 —— 调用 engine `scaffoldHarness`、追加 canonical gitignore snippet（已存在则跳过）、写最小 `{HARNESS_DIR}/AGENTS.md`（已存在则跳过）；幂等，重跑只补缺失件。步骤 3、5、7、8 仍按需手工。
+**程序化路径**：`mstar harness scaffold [path]`（CLI，默认 cwd）一次性完成步骤 1–2（含 `projects/_default/`）、4 与 6 —— 调用 engine `scaffoldHarness`、追加 canonical gitignore snippet（已存在则跳过）、写最小 `{HARNESS_DIR}/AGENTS.md`（已存在则跳过）；幂等，重跑只补缺失件。步骤 3、5、7、8 仍按需手工。 scaffold 遵循 `.mstarc` 的 `harness_dir` / `project_dir` 覆盖（写入解析后的目录）；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义 harness 布局自行管理 ignore 规则）。
 
 ## Git 跟踪策略（进程 vs 结果）
 
