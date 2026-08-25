@@ -64,6 +64,12 @@ If an audit directory from a previous run exists, **reconcile, don't duplicate**
 
 [2-4 grounded suggestions with evidence and trade-offs]
 
+## Needs verification
+
+[MEDIUM-confidence or runtime-dependent leads — mainly from the Security pass (`references/security-review.md`). One line each; these are not findings and get no plan until verified:]
+
+- <lead>: what to verify, how (the exact check), evidence so far (`file:line`).
+
 ## Execution order & status
 
 | Plan | Title | Priority | Effort | Depends on | Status |

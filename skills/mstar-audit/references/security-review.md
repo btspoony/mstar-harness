@@ -22,13 +22,13 @@ Method behind the Security category. Load when the category focus is `security`,
 - **A defense-in-depth gap where another layer already prevents exploitation is a hardening note in the audit index, not a findings row** — never severity-inflate it.
 - **Effort follows the bar:** HIGH findings get fix sketches with verification gates; MEDIUM findings get scoped plans; hardening notes get one index line and no plan unless the user asks.
 - **Confidence is per-claim, not per-category:** a repo with one sloppy auth check is not "insecure" — each row stands on its own evidence.
-- A finding needs both halves: the vulnerable pattern at `file:line` *and* a confirmed attacker-controlled input reaching it (§4). Either half unproven → keep researching (§3) or mark "needs verification" (§12).
+- A finding needs both halves: the vulnerable pattern at `file:line` *and* a confirmed attacker-controlled input reaching it (§4). Either half unproven → keep researching (§3) or park it in the audit index's **Needs verification** section (§12).
 
 ## 3. Research before flagging
 
 - Trace the data flow to its **origin** before reporting: where the value enters, which code validates, sanitizes, or neutralizes it, and what every caller does before it reaches the sink.
 - Check the upstream protections: middleware/decorators, input schemas, config ownership, framework defaults (§5), CSP headers, and callers other than the first entrypoint found.
-- Report only **HIGH-confidence findings** (vulnerable pattern + confirmed attacker-controlled input, both verified at `file:line`). MEDIUM-confidence items go to the audit index's "needs verification" note — not the findings table.
+- Report only **HIGH-confidence findings** (vulnerable pattern + confirmed attacker-controlled input, both verified at `file:line`). MEDIUM-confidence items go to the audit index's **Needs verification** section (template in `references/codebase-audit.md` § Output format) — not the findings table.
 - A finding with multiple callers or config-dependent behavior requires reading the call graph first; a finding mis-attributed to a file that does not own the flow is a refuted finding.
 - **Negative evidence counts:** a sink you traced and cleared is worth recording in the audit index as a checked-and-clean note — it prevents the next pass from re-flagging the same shape.
 - **Sanitization is a contract, not a fact:** a validator applied at one entry does not protect a second entry; re-verify per entry point even when a shared schema exists.
@@ -217,6 +217,6 @@ Apply where the repo actually has the surface. Absence is not a finding.
 ## 12. Verification & reporting
 
 - **Static evidence required:** every finding carries `file:line` and the code shape — the pattern plus the attacker-controlled input. No evidence, no finding.
-- Runtime-dependent claims are labeled exactly **requires runtime verification** and go to the index's "needs verification" note — never reported as confirmed.
+- Runtime-dependent claims are labeled exactly **requires runtime verification** and go to the audit index's **Needs verification** section — never reported as confirmed.
 - Findings use the standard finding format (**`references/finding-format.md`**); the Impact field must state the concrete attack scenario ("Send this request, get this result").
 - State what was NOT audited (effort level, unread packages, deployed-version assumptions) in the report, per the playbook's audit contract.
