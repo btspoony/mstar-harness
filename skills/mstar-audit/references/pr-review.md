@@ -86,6 +86,23 @@ Conditional lenses:
 - `cleanup` — dead code, duplicate logic, indirection without value. Apply for refactors and added-then-removed surfaces.
 - `comments` — comment rot, docstring truthfulness. Apply when docs changed.
 
+**Smell baseline** (under `general`): twelve labelled smells — one line each, what it is → remedy direction:
+
+- Mysterious Name — unclear what it does/why → rename to intent.
+- Duplicated Code — same shape in ≥2 places → extract the shared form.
+- Feature Envy — method works mostly on another class's data → move it there.
+- Data Clumps — same field groups travel together → promote to a single object.
+- Primitive Obsession — domain concepts as bare primitives → introduce a type.
+- Repeated Switches — same condition re-branched → replace with a dispatcher.
+- Shotgun Surgery — one logical change touches many files → consolidate the coupling.
+- Divergent Change — one class changes for many reasons → split by reason.
+- Speculative Generality — flexibility nothing uses → delete it.
+- Message Chains — callers wade through a.getB().getC() → hide the walk behind one method.
+- Middle Man — class mostly delegates → fold or inline the pass-through.
+- Refused Bequest — subclass inherits more than it wants → replace with composition.
+
+Three binding rules: repo-documented standards override the baseline — a standards finding cites the standard's file + rule; anything tooling already enforces is skipped (existing `general` rule); smells are judgement calls — a smell alone is never `must-fix`, and a LOW-confidence smell without evidence is not a finding (existing disqualify rule) — it may surface as `nit` with the smell label. No new lens row: repo-guidance conformance stays the `general` lens's job.
+
 **Selection by change shape** (UI / API / migration / refactor / doc / tiny mechanical). Default set = `general` + `technical-coverage` + `silent-failures`. Never spawn all lenses blindly; tiny mechanical diffs → `general` only.
 
 ## Evidence rules
@@ -128,6 +145,8 @@ Classify each **accepted** finding (after three-way vet) as exactly one class. D
 | `nit` | Optional cleanup, naming, comment, or small suggestion that does **not** change merge-readiness. Lint-covered cosmetics stay ignored (existing lens rule) — they are not findings. | Does not change verdict |
 
 Tie-break: unsafe to ship → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; otherwise `nit`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
+
+Presumptive-structural classes: a refactor that relocates complexity instead of reducing it · a change pushing a file past the size boundary with no decomposition · feature logic added to a shared module · a near-duplicate of an existing canonical helper · a silent fallback hiding an unclear invariant → default `should-fix`; downgrade to `nit` only with a stated reason; never `must-fix` on shape alone without correctness/security evidence.
 
 Field placement: on each finding, `- **Merge class**: must-fix | should-fix | nit`, immediately after `Confidence` (before `Fix sketch`). The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
 
@@ -188,9 +207,18 @@ High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 
 `blocked · 60%` is still not shippable. `needs fixes · 85%` still means address findings.
 
+## Originating spec discovery
+
+Find the originating spec — the acceptance criteria live there, not in the diff:
+
+- Issue references in the PR body / commit messages (`#123`, `Closes`, `Fixes`).
+- A spec path the user named in the request.
+- Repo candidates: `{SPECS_DIR}`, `docs/specs` / ADR directories, `STRATEGY.md` / `PRODUCT.md`, roadmap.
+- None → ask the user once; still none → note "no spec available", score nothing, never invent requirements (existing rule).
+
 ## Linked-issue hygiene
 
-If the PR closes/fixes a tracked issue, score **every** acceptance criterion against the diff:
+When an originating spec exists (§ Originating spec discovery — a tracked issue, spec file, or ADR), score **every** acceptance criterion against the diff:
 
 - Mark each: met / unmet / cut.
 
