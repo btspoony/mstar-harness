@@ -7,7 +7,7 @@
  * format) and mstar-audit/references/finding-format.md (category codes,
  * evidence requirements, secret-value prohibition).
  */
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
@@ -489,6 +489,45 @@ describe("scaffoldAuditPlan", () => {
     const readme = readFileSync(join(out, "README.md"), "utf8");
     expect(readme).toContain("## Red-team dispositions");
     expect(readme).toContain("- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>");
+  });
+
+  test("renders Needs verification and Hardening & checked notes from options", () => {
+    const out = join(tmp, "audit-2026-08-16");
+    scaffoldAuditPlan(out, findings, {
+      date: "2026-08-16",
+      needsVerification: [{ lead: "SSRF in webhook fetcher", how: "confirm caller supplies the URL", evidence: "src/hooks.ts:77" }],
+      hardeningChecked: [
+        { kind: "Hardening", text: "no CSP header - framework middleware already escapes all output" },
+        { kind: "Checked and clean", text: "orders SQL sink parameterized end to end", },
+      ],
+    });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("## Needs verification");
+    expect(readme).toContain("- SSRF in webhook fetcher: confirm caller supplies the URL (src/hooks.ts:77)");
+    expect(readme).toContain("## Hardening & checked notes");
+    expect(readme).toContain("- Hardening: no CSP header - framework middleware already escapes all output");
+    expect(readme).toContain("- Checked and clean: orders SQL sink parameterized end to end");
+    // section order matches the documented template
+    const nv = readme.indexOf("## Needs verification");
+    const hc = readme.indexOf("## Hardening & checked notes");
+    const dir = readme.indexOf("## Direction");
+    expect(nv).toBeGreaterThan(dir);
+    expect(hc).toBeGreaterThan(nv);
+  });
+
+  test("re-run without disposition options carries over previously rendered entries", () => {
+    const out = join(tmp, "audit-2026-08-17");
+    scaffoldAuditPlan(out, findings, {
+      date: "2026-08-17",
+      needsVerification: [{ lead: "lead one", how: "check x" }],
+      hardeningChecked: [{ kind: "Checked and clean", text: "sink y cleared" }],
+    });
+    // re-run with no disposition options — entries must survive the rebuild
+    scaffoldAuditPlan(out, [{ title: "Second batch plan", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }], { date: "2026-08-18" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("- lead one: check x");
+    expect(readme).toContain("- Checked and clean: sink y cleared");
+    expect(readdirSync(out).filter((f) => f.startsWith("003-"))).toEqual(["003-second-batch-plan.md"]);
   });
 });
 

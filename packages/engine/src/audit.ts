@@ -309,6 +309,8 @@ export type ScaffoldAuditPlanOptions = {
   repoShortSha?: string;
   plannedAt?: { commit: string; date: string };
   rejected?: readonly { title: string; reason: string }[];
+  needsVerification?: readonly { lead: string; how: string; evidence?: string }[];
+  hardeningChecked?: readonly { kind: "Hardening" | "Checked and clean"; text: string }[];
 };
 
 /** Result of `scaffoldAuditPlan`. `nextNumber` is the next free plan number
@@ -368,11 +370,26 @@ function readPlanFileSummary(filePath: string): { title: string; fields: Map<str
   const text = readFileSync(filePath, "utf8");
   const title = (text.match(/^# (.+)$/m) ?? [])[1] ?? filePath;
   const blocks = parseStatusBlocks(text);
+
   return { title: title.trim(), fields: blocks.length > 0 ? blocks[0].fields : new Map() };
 }
 
+/** Security-disposition carry-over: re-runs rebuild README.md from scratch,
+ * so "Needs verification" / "Hardening & checked notes" entries rendered by
+ * a previous run (or added by hand) are lifted from the existing index
+ * unless the caller supplies fresh ones. Entry lines start with `- `. */
+function extractSecurityDispositionSections(text: string): { needsVerification: string[]; hardeningChecked: string[] } {
+  const grab = (heading: string): string[] => {
+    const match = text.match(new RegExp(`^## ${heading}\\n\\n([\\s\\S]*?)(?=\\n## |\\n?$)`, "m"));
+    if (!match) return [];
+    return match[1].split("\n").filter((line) => line.startsWith("- "));
+  };
+  return { needsVerification: grab("Needs verification"), hardeningChecked: grab("Hardening & checked notes") };
+}
 /** Render the audit-<date>/README.md index (mstar-audit references/codebase-audit.md § Output
  * format · Audit index). `rows` covers every plan file in the directory (existing + new).
+ * `needsVerification` / `hardeningChecked` carry the security-disposition entry
+ * lines documented by `references/security-review.md`; empty arrays omit the section.
  * Status values: TODO | IN PROGRESS | DONE | BLOCKED | REJECTED. */
 function renderIndex(params: {
   date: string;
@@ -380,8 +397,10 @@ function renderIndex(params: {
   repoShortSha: string;
   rows: { num: string; title: string; category: string; impact: string; effort: string; risk: string; confidence: string; evidence: string; priority: string; dependsOn: string }[];
   rejected: readonly { title: string; reason: string }[];
+  needsVerification: readonly string[];
+  hardeningChecked: readonly string[];
 }): string {
-  const { date, repoName, repoShortSha, rows, rejected } = params;
+  const { date, repoName, repoShortSha, rows, rejected, needsVerification, hardeningChecked } = params;
   const findingsRows = rows
     .map(
       (r) =>
@@ -408,6 +427,12 @@ function renderIndex(params: {
   ];
   if (directionRows !== "") {
     sections.push("", "## Direction", "", directionRows);
+  }
+  if (needsVerification.length > 0) {
+    sections.push("", "## Needs verification", "", ...needsVerification);
+  }
+  if (hardeningChecked.length > 0) {
+    sections.push("", "## Hardening & checked notes", "", ...hardeningChecked);
   }
   sections.push(
     "",
@@ -436,7 +461,10 @@ function renderIndex(params: {
  * directory already contains `NNN-*.md` files (same-date re-run), the new
  * batch continues after the highest existing number instead of restarting
  * at 001, and the rebuilt index includes the pre-existing plans. Rejected
- * findings render in the "considered and rejected" section.
+ * findings render in the "considered and rejected" section. Security
+ * dispositions (`needsVerification` / `hardeningChecked`) render in their
+ * documented index sections; when the options omit them on a re-run,
+ * previously rendered entries are carried over from the existing README.
  */
 export function scaffoldAuditPlan(
   outDir: string,
@@ -446,6 +474,10 @@ export function scaffoldAuditPlan(
   const date = options.date ?? new Date().toISOString().slice(0, 10);
   const plannedAt = options.plannedAt ?? { commit: options.repoShortSha ?? "unknown", date };
   mkdirSync(outDir, { recursive: true });
+  const existingReadme = join(outDir, "README.md");
+  const carried = existsSync(existingReadme)
+    ? extractSecurityDispositionSections(readFileSync(existingReadme, "utf8"))
+    : { needsVerification: [] as string[], hardeningChecked: [] as string[] };
 
   const existing = readdirSync(outDir).filter((f) => /^\d{3}-.*\.md$/.test(f));
   let next = existing.reduce((max, f) => Math.max(max, Number(f.slice(0, 3))), 0) + 1;
@@ -506,6 +538,17 @@ export function scaffoldAuditPlan(
     }
   });
 
+  const needsVerificationLines =
+    options.needsVerification !== undefined
+      ? options.needsVerification.map(
+          (nv) => `- ${escapeCell(nv.lead)}: ${escapeCell(nv.how)}${nv.evidence ? ` (${escapeCell(nv.evidence)})` : ""}`,
+        )
+      : carried.needsVerification;
+  const hardeningCheckedLines =
+    options.hardeningChecked !== undefined
+      ? options.hardeningChecked.map((hc) => `- ${hc.kind}: ${escapeCell(hc.text)}`)
+      : carried.hardeningChecked;
+
   writeFileSync(
     join(outDir, "README.md"),
     renderIndex({
@@ -514,6 +557,8 @@ export function scaffoldAuditPlan(
       repoShortSha: options.repoShortSha ?? "unknown",
       rows,
       rejected: options.rejected ?? [],
+      needsVerification: needsVerificationLines,
+      hardeningChecked: hardeningCheckedLines,
     }),
   );
 

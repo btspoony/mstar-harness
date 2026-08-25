@@ -92,7 +92,7 @@ If an audit directory from a previous run exists, **reconcile, don't duplicate**
 - <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>
 ```
 
-> **Engine check (when available):** run `mstar audit scaffold <findings-file> [--dir <out-dir>]` (or `import { scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine"` in a host hook) to scaffold the `audit-<date>/` plan directory (numbered plan files + README index) from findings, validate the audit Status blocks per **`mstar-audit` SKILL.md** `## Plan output (all variants)`, and redact credentials from audit excerpts. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar audit scaffold <findings-file> [--dir <out-dir>]` (or `import { scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine"` in a host hook) to scaffold the `audit-<date>/` plan directory (numbered plan files + README index) from findings, validate the audit Status blocks per **`mstar-audit` SKILL.md** `## Plan output (all variants)`, and redact credentials from audit excerpts. The renderer emits the **Needs verification** and **Hardening & checked notes** sections and carries their entries across re-runs, so hand-added security dispositions survive an index rebuild. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Handoff to execution
 
