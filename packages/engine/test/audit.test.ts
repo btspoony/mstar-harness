@@ -7,7 +7,7 @@
  * format) and mstar-audit/references/finding-format.md (category codes,
  * evidence requirements, secret-value prohibition).
  */
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
@@ -489,6 +489,116 @@ describe("scaffoldAuditPlan", () => {
     const readme = readFileSync(join(out, "README.md"), "utf8");
     expect(readme).toContain("## Red-team dispositions");
     expect(readme).toContain("- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>");
+  });
+
+  test("renders Needs verification and Hardening & checked notes from options", () => {
+    const out = join(tmp, "audit-2026-08-16");
+    scaffoldAuditPlan(out, findings, {
+      date: "2026-08-16",
+      needsVerification: [{ lead: "SSRF in webhook fetcher", how: "confirm caller supplies the URL", evidence: "src/hooks.ts:77" }],
+      hardeningChecked: [
+        { kind: "Hardening", text: "no CSP header - framework middleware already escapes all output" },
+        { kind: "Checked and clean", text: "orders SQL sink parameterized end to end", },
+      ],
+    });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("## Needs verification");
+    expect(readme).toContain("- SSRF in webhook fetcher: confirm caller supplies the URL (src/hooks.ts:77)");
+    expect(readme).toContain("## Hardening & checked notes");
+    expect(readme).toContain("- Hardening: no CSP header - framework middleware already escapes all output");
+    expect(readme).toContain("- Checked and clean: orders SQL sink parameterized end to end");
+    // section order matches the documented template
+    const nv = readme.indexOf("## Needs verification");
+    const hc = readme.indexOf("## Hardening & checked notes");
+    const dir = readme.indexOf("## Direction");
+    expect(nv).toBeGreaterThan(dir);
+    expect(hc).toBeGreaterThan(nv);
+  });
+
+  test("re-run without disposition options carries over ALL previously rendered entries", () => {
+    const out = join(tmp, "audit-2026-08-17");
+    scaffoldAuditPlan(out, findings, {
+      date: "2026-08-17",
+      needsVerification: [
+        { lead: "lead one", how: "check x" },
+        { lead: "lead two", how: "check y", evidence: "src/a.ts:9" },
+      ],
+      hardeningChecked: [
+        { kind: "Hardening", text: "gap one" },
+        { kind: "Checked and clean", text: "sink y cleared" },
+        { kind: "Checked and clean", text: "sink z cleared" },
+      ],
+    });
+    // re-run with no disposition options — every entry must survive the
+    // rebuild (regression: the carry-over regex used to stop after the
+    // first entry of each section)
+    scaffoldAuditPlan(out, [{ title: "Second batch plan", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }], { date: "2026-08-18" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("- lead one: check x");
+    expect(readme).toContain("- lead two: check y (src/a.ts:9)");
+    expect(readme).toContain("- Hardening: gap one");
+    expect(readme).toContain("- Checked and clean: sink y cleared");
+    expect(readme).toContain("- Checked and clean: sink z cleared");
+    // section entry counts preserved exactly
+    const nvBlock = /## Needs verification\n\n([\s\S]*?)\n\n## Hardening/.exec(readme)?.[1] ?? "";
+    expect(nvBlock.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(2);
+    const hcBlock = /## Hardening & checked notes\n\n([\s\S]*?)\n\n## Execution order/.exec(readme)?.[1] ?? "";
+    expect(hcBlock.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(3);
+    expect(readdirSync(out).filter((f) => f.startsWith("003-"))).toEqual(["003-second-batch-plan.md"]);
+  });
+
+  test("a SUPPLIED disposition array is the authoritative set — it replaces prior entries", () => {
+    const out = join(tmp, "audit-2026-08-19");
+    scaffoldAuditPlan(out, findings, {
+      date: "2026-08-19",
+      needsVerification: [
+        { lead: "stale lead", how: "check old" },
+        { lead: "kept lead", how: "check keep" },
+      ],
+    });
+    // rerun supplies the current truth: stale lead resolved, kept kept,
+    // fresh added — omission would have carried all three, supplying
+    // replaces with exactly this set (resolved entries CAN be removed)
+    scaffoldAuditPlan(out, [], {
+      date: "2026-08-20",
+      needsVerification: [
+        { lead: "kept lead", how: "check keep" },
+        { lead: "fresh lead", how: "check new" },
+      ],
+    });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).not.toContain("- stale lead: check old");
+    expect(readme).toContain("- kept lead: check keep");
+    expect(readme).toContain("- fresh lead: check new");
+  });
+
+  test("carry-over tolerates hand-edited headings: case, CRLF, spacing, blank lines", () => {
+    const out = join(tmp, "audit-2026-08-21");
+    scaffoldAuditPlan(out, findings, { date: "2026-08-21" });
+    // simulate a hand-edited index: CRLF endings, different heading case,
+    // trailing spaces in the heading, no blank line before the body
+    const handEdited = [
+      "# Audit Report \u2014 repo @ abc1234 (2026-08-21)",
+      "",
+      "## Findings",
+      "",
+      "| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |",
+      "|---|---------|----------|--------|--------|------|------------|----------|",
+      "",
+      "## needs verification  ",
+      "- hand typed lead: check it (src/x.ts:1)",
+      "",
+      "## HARDENING & CHECKED NOTES",
+      "- Checked and clean: hand cleared sink",
+      "",
+      "## Execution order & status",
+      "",
+    ].join("\r\n");
+    writeFileSync(join(out, "README.md"), handEdited);
+    scaffoldAuditPlan(out, [{ title: "Rebuild batch", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }], { date: "2026-08-22" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("- hand typed lead: check it (src/x.ts:1)");
+    expect(readme).toContain("- Checked and clean: hand cleared sink");
   });
 });
 

@@ -1317,10 +1317,11 @@ designMdCommand
   });
 
 /**
- * Parse the `audit scaffold` findings file into engine `AuditFinding`s
- * (arg-shape errors → usage exit 2). Findings-file contract: a JSON array of
- * `{title, priority, effort, risk, category, dependsOn?, description}` —
- * `description` maps to the plan's Impact section.
+ * Parse the `audit scaffold` findings file. Two accepted shapes:
+ * - a bare JSON array of finding objects (legacy), or
+ * - an object `{ findings: [...], needsVerification?: [...], hardeningChecked?: [...] }`
+ *   carrying the security-disposition entries documented by
+ *   `mstar-audit/references/security-review.md` alongside the findings.
  *
  * `dependsOn` is validated against the Status-block contract and normalized:
  * `"none"` / `plans/NNN-*.md` pass through, a bare plan number (`002`) from
@@ -1328,15 +1329,39 @@ designMdCommand
  * else is a usage error — so every scaffolded plan round-trips through
  * `validateAuditStatusBlocks` (qc2 F-001 / qc3 F-002).
  */
-function parseAuditFindings(text: string): AuditFinding[] {
+type AuditScaffoldInput = {
+  findings: AuditFinding[];
+  needsVerification?: { lead: string; how: string; evidence?: string }[];
+  hardeningChecked?: { kind: "Hardening" | "Checked and clean"; text: string }[];
+};
+
+const AUDIT_HARDENING_KINDS = ["Hardening", "Checked and clean"] as const;
+
+function parseAuditScaffoldInput(text: string): AuditScaffoldInput {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     throw new SddScriptError("usage: audit scaffold \u2014 findings file is not valid JSON", 2);
   }
-  if (!Array.isArray(parsed)) throw new SddScriptError("usage: audit scaffold \u2014 findings file must be a JSON array", 2);
-  return parsed.map((raw, index): AuditFinding => {
+  let root: unknown[];
+  let needsVerificationRaw: unknown;
+  let hardeningCheckedRaw: unknown;
+  if (Array.isArray(parsed)) {
+    root = parsed;
+  } else if (typeof parsed === "object" && parsed !== null) {
+    const doc = parsed as Record<string, unknown>;
+    if (!Array.isArray(doc.findings)) {
+      throw new SddScriptError("usage: audit scaffold \u2014 findings file must be a JSON array or an object with a findings array", 2);
+    }
+    root = doc.findings;
+    needsVerificationRaw = doc.needsVerification;
+    hardeningCheckedRaw = doc.hardeningChecked;
+  } else {
+    throw new SddScriptError("usage: audit scaffold \u2014 findings file must be a JSON array or an object with a findings array", 2);
+  }
+
+  const findings = root.map((raw, index): AuditFinding => {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
       throw new SddScriptError(`usage: audit scaffold \u2014 findings[${index}] is not an object`, 2);
     }
@@ -1384,6 +1409,50 @@ function parseAuditFindings(text: string): AuditFinding[] {
       dependsOn,
     };
   });
+
+  return { findings, needsVerification: parseNeedsVerification(needsVerificationRaw), hardeningChecked: parseHardeningChecked(hardeningCheckedRaw) };
+}
+
+function parseNeedsVerification(raw: unknown): AuditScaffoldInput["needsVerification"] {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new SddScriptError("usage: audit scaffold \u2014 needsVerification must be an array of {lead, how, evidence?}", 2);
+  }
+  return raw.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new SddScriptError(`usage: audit scaffold \u2014 needsVerification[${index}] is not an object`, 2);
+    }
+    const e = entry as Record<string, unknown>;
+    const lead = typeof e.lead === "string" ? e.lead.trim() : "";
+    const how = typeof e.how === "string" ? e.how.trim() : "";
+    if (lead === "" || how === "") {
+      throw new SddScriptError(`usage: audit scaffold \u2014 needsVerification[${index}] needs non-empty lead and how`, 2);
+    }
+    const evidence = typeof e.evidence === "string" && e.evidence.trim() !== "" ? e.evidence.trim() : undefined;
+    return { lead, how, evidence };
+  });
+}
+
+function parseHardeningChecked(raw: unknown): AuditScaffoldInput["hardeningChecked"] {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new SddScriptError("usage: audit scaffold \u2014 hardeningChecked must be an array of {kind, text}", 2);
+  }
+  return raw.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new SddScriptError(`usage: audit scaffold \u2014 hardeningChecked[${index}] is not an object`, 2);
+    }
+    const e = entry as Record<string, unknown>;
+    const kind = typeof e.kind === "string" ? e.kind : "";
+    const text = typeof e.text === "string" ? e.text.trim() : "";
+    if (!AUDIT_HARDENING_KINDS.includes(kind as (typeof AUDIT_HARDENING_KINDS)[number])) {
+      throw new SddScriptError(`usage: audit scaffold \u2014 hardeningChecked[${index}].kind must be one of ${AUDIT_HARDENING_KINDS.join("|")}`, 2);
+    }
+    if (text === "") {
+      throw new SddScriptError(`usage: audit scaffold \u2014 hardeningChecked[${index}] needs non-empty text`, 2);
+    }
+    return { kind: kind as (typeof AUDIT_HARDENING_KINDS)[number], text };
+  });
 }
 
 const auditCommand = program
@@ -1416,7 +1485,7 @@ auditCommand
     "Scaffold an audit-<date>/ plan directory (numbered plan files + README index) from a JSON findings file " +
       "(exit 2 on usage)",
   )
-  .argument("[findings-file]", "JSON file: array of {title, priority, effort, risk, category, dependsOn?, description}")
+  .argument("[findings-file]", "JSON file: array of {title, priority, effort, risk, category, dependsOn?, description}, or object {findings: [...], needsVerification?: [{lead, how, evidence?}], hardeningChecked?: [{kind, text}]}")
   .option("--dir <out-dir>", "Output directory (default: ./audit-<date> from --date or today)")
   .option("--sha <commit>", "Short commit SHA for the Planned-at field (default: git rev-parse --short HEAD)")
   .option("--date <YYYY-MM-DD>", "Audit date (default: today)")
@@ -1434,9 +1503,15 @@ auditCommand
       }
       const date = options.date ?? new Date().toISOString().slice(0, 10);
       const outDir = options.dir !== undefined ? resolveCliPath(options.dir) : resolveCliPath(`audit-${date}`);
-      const findings = parseAuditFindings(fs.readFileSync(abs, "utf8"));
+      const input = parseAuditScaffoldInput(fs.readFileSync(abs, "utf8"));
       const sha = resolveAuditShortSha(process.cwd(), options.sha);
-      const result = scaffoldAuditPlan(outDir, findings, { date, repoName: options.repo, repoShortSha: sha });
+      const result = scaffoldAuditPlan(outDir, input.findings, {
+        date,
+        repoName: options.repo,
+        repoShortSha: sha,
+        needsVerification: input.needsVerification,
+        hardeningChecked: input.hardeningChecked,
+      });
       const count = result.files.length;
       console.log(pc.green(`audit scaffold: OK \u2014 ${count} plan file${count === 1 ? "" : "s"} in ${result.outDir}`));
       for (const file of result.files) console.log(`  created: ${file}`);

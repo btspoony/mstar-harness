@@ -29,14 +29,23 @@ Review only what is directly supported by code evidence. Keep findings framed as
 
 **By-design is not a finding:** standard platform conventions are intentional behavior — honoring `https_proxy`/`NO_PROXY`, reading `~/.netrc`, an explicitly local dev tool shelling out to configured package managers. A tradeoff explicitly recorded in an ADR or decision doc is likewise settled. Flag these only when the *implementation* adds risk beyond the convention. Note: a **stale ADR is itself a finding** — if code has drifted from what the decision doc says, report the drift.
 
+For the method behind this checklist — exploitability bar, false-positive discipline, input-source triage, and expanded surfaces — load **`references/security-review.md`** (deep method + FP discipline; load when the category focus is `security` or when the Security pass needs depth).
+
 - Credential hygiene: hardcoded keys/tokens/passwords, credentials in committed `.env` files, credentials logged or persisted in event/history stores.
 - Data crossing into interpreters or privileged APIs: SQL or shell operations assembled from request data (injection), HTML sinks fed by user-controlled content (XSS), dynamic execution APIs used with runtime input, filesystem paths derived from request data (path traversal).
 - Access control: endpoints/server actions that lack server-side identity checks, authorization enforced only in the client, object access by ID without ownership or tenant checks (IDOR), missing request authenticity checks (CSRF) on state-changing routes.
 - Input contracts: API boundaries that trust request bodies without schema validation, file upload handling without clear type/size/storage constraints, broad object assignment from request data into persistence models (mass assignment).
-- Dependency posture: run the ecosystem's audit command (`npm audit`, `pip-audit`, `cargo audit`) in read-only mode. Report only critical/high advisories that affect reachable runtime code.
+- Dependency posture: run the ecosystem's audit command (`npm audit`, `pip-audit`, `cargo audit`) in read-only mode. Report only critical/high advisories that affect reachable runtime code. Triage by reachability: critical/high + reachable → fix now; unreachable → lower priority. Never propose forced remediation (`audit fix --force`).
 - Production configuration: overly broad CORS where credentials are allowed, missing response-hardening headers (e.g. CSP), cookies missing appropriate `HttpOnly`/`Secure`/`SameSite` attributes, debug/verbose behavior enabled in production.
 - Data minimization: PII or sensitive operational data in logs, stack traces returned to clients, internal error details exposed through API responses.
 - Enforcement bypass: for every validation/rejection point, look for alternate callers that route around it — direct calls, wrappers, facades, schema-less paths, listener ordering.
+- Cross-file data-flow sweep: entry points → sinks across files; second-order injection (stored then reused unsafely); injection via field names/headers/metadata, not just values.
+- Auth/session mechanics: JWT validation gaps (alg/claims/key-selection), session rotation on privilege change, password-reset token binding/single-use/expiry.
+- Rate-limiting & abuse surfaces: auth/reset/expensive endpoints without limits — respecting deployment model (CDN-level limiting counts).
+- AI/LLM feature surfaces (if present): model output treated as untrusted at its sink; tool permissions scoped per-user-resource; ingestion sources as indirect-injection vectors; consumption caps.
+- Supply chain & pipelines: single authoritative lockfile at the install boundary, unreviewed dependency lifecycle scripts, unpinned CI actions / `pull_request_target`, typosquat signals on new deps.
+- Infra/config surfaces: Dockerfile/K8s/Terraform misconfigs, debug modes & default credentials, exposed debug/actuator endpoints.
+- Privacy retention: personal-data stores without TTL + working deletion path (backups/caches/indexes included).
 
 ## 3. Performance
 
