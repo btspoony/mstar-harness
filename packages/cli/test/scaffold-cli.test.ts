@@ -66,6 +66,19 @@ function withRoot(fn: (root: string) => void): void {
   }
 }
 
+/**
+ * Minimal valid git work tree (no `git init` subprocess): the CLI's
+ * workspace-root probe runs `git rev-parse --show-cdup`, which only needs a
+ * valid `.git` layout (HEAD + config + objects/ + refs/) — no commits.
+ * Mirrors the engine path.test.ts `gitInit` fixture.
+ */
+function gitInit(root: string): void {
+  mkdirSync(join(root, ".git", "objects"), { recursive: true });
+  mkdirSync(join(root, ".git", "refs"), { recursive: true });
+  writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(join(root, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
+}
+
 /** Canonical `.mstar/` fence entries (ignore + re-include), verbatim from plan-conventions § Git 跟踪策略. */
 const MSTAR_FENCE_ENTRIES = [
   ".mstar/**",
@@ -426,6 +439,69 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(proc.stdout.toString()).toContain("scaffold: harness initialized at");
       expect(proc.stdout.toString()).toContain(".mstar");
       expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+    });
+  });
+
+  test(".mstarc harness_dir=config/.mstar: basename matches default but path is custom — .gitignore untouched", () => {
+    withRoot((root) => {
+      // Regression (PR #147 round-5): a custom harness dir whose BASENAME
+      // is `.mstar` (e.g. config/.mstar) used to be misclassified as the
+      // default layout, so scaffold wrote root-relative `.mstar/**` patterns
+      // into <root>/.gitignore that never match config/.mstar/... — process
+      // artifacts stayed unignored while scaffold reported the fence
+      // installed. The gate must be exact-path equality with <root>/.mstar.
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=config/.mstar\n", "utf8");
+
+      const result = runScaffold([root]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`scaffold: harness initialized at ${join(root, "config", ".mstar")}`);
+      expect(result.stdout).toContain(`  harness dir: ${join(root, "config", ".mstar")}`);
+      expect(result.stdout).toContain(
+        "skipped: .gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules",
+      );
+      // Files land under the declared custom dir.
+      expect(existsSync(join(root, "config", ".mstar", "status.json"))).toBe(true);
+      expect(existsSync(join(root, "config", ".mstar", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "config", ".mstar", "AGENTS.md"))).toBe(true);
+      // No default-layout dir and NO .gitignore created/modified.
+      expect(existsSync(join(root, ".mstar"))).toBe(false);
+      expect(existsSync(join(root, ".gitignore"))).toBe(false);
+    });
+  });
+
+  test("repo-root .mstarc harness_dir=.mstar + subdir path arg: fence installed at the git top-level (PR #147 round-6)", () => {
+    withRoot((root) => {
+      // Regression (PR #147 round-6): a repo-root `.mstarc` declaring
+      // `harness_dir=.mstar` resolves the harness dir against the config
+      // file's location — <repoRoot>/.mstar. Scaffolding a SUBDIRECTORY path
+      // used to compare that against <subdir>/.mstar, skip the canonical
+      // fence, and leave status/plans/projects committable. The comparison
+      // AND the fence target must anchor at the git top-level.
+      gitInit(root);
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.mstar\n", "utf8");
+      mkdirSync(join(root, "packages", "foo"), { recursive: true });
+
+      const result = runScaffold([join(root, "packages", "foo")]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`scaffold: harness initialized at ${join(root, ".mstar")}`);
+      expect(result.stdout).toContain("created: .gitignore (canonical harness snippet)");
+
+      // Fence lands in the REPO-ROOT .gitignore, not the subdir's.
+      expect(existsSync(join(root, ".gitignore"))).toBe(true);
+      expect(existsSync(join(root, "packages", "foo", ".gitignore"))).toBe(false);
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
+      // Harness files land under the repo-root .mstar/.
+      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+
+      // git check-ignore confirms the fence actually ignores process artifacts.
+      const check = Bun.spawnSync(["git", "check-ignore", "-v", join(root, ".mstar", "status.json")], {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(check.exitCode).toBe(0);
+      expect(check.stdout.toString()).toContain(".mstar/**");
     });
   });
 });

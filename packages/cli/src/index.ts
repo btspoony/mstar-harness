@@ -310,6 +310,34 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
  * is relocated before the first re-include — whether the fence was complete
  * or just appended.
  */
+/**
+ * Git top-level of `startDir` (lexical, symlink-safe): mirrors the engine's
+ * `defaultWorkspaceRoot` — `git rev-parse --show-cdup` returns the relative
+ * upward path to the work-tree top, so the result stays comparable with
+ * `resolve()`-based paths even when `startDir` sits under a symlinked mount
+ * (macOS /var → /private/var), where `--show-toplevel` would answer with
+ * the physical path. On failure (not a git work tree, or git absent) falls
+ * back to `startDir` itself.
+ */
+function gitWorkspaceRoot(startDir: string): string {
+  try {
+    const cdup = execFileSync("git", ["rev-parse", "--show-cdup"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!cdup) return startDir; // already at the git top-level
+    let boundary = startDir;
+    for (const segment of cdup.split(/[\\/]/)) {
+      if (segment && segment !== ".") boundary = path.dirname(boundary);
+    }
+    return path.resolve(boundary);
+  } catch {
+    // not a git work tree (or git unavailable) — fall through to startDir
+  }
+  return startDir;
+}
+
 function runScaffold(pathArg: string | undefined) {
   const root = pathArg ? path.resolve(pathArg) : process.cwd();
   const harnessDir = scaffoldHarness(root);
@@ -319,12 +347,19 @@ function runScaffold(pathArg: string | undefined) {
 
   // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): the
   // snippet literals are `.mstar/**`-based, so the append only makes sense
-  // for the default `.mstar/` layout. Custom harness layouts (`.mstarc`
-  // harness_dir, legacy `.agents/`) manage their own ignore rules and are
-  // skipped with an explicit note.
+  // for the default `<workspaceRoot>/.mstar/` layout. Custom harness layouts
+  // (`.mstarc` harness_dir, legacy `.agents/`) manage their own ignore rules
+  // and are skipped with an explicit note. The comparison AND the fence target
+  // are anchored at the git top-level of `root` (falling back to `root` when
+  // not a git work tree): a repo-root `.mstarc` `harness_dir=.mstar` resolves
+  // the harness dir against the config file's location, so scaffolding a
+  // subdirectory path would otherwise compare `<repoRoot>/.mstar` against
+  // `<subdir>/.mstar` and skip the fence while process artifacts stay
+  // committable.
+  const workspaceRoot = gitWorkspaceRoot(root);
   const harnessKind = detectHarnessKind(harnessDir);
-  if (harnessKind === "mstar" && harnessDir === path.join(root, ".mstar")) {
-    const gitignorePath = path.join(root, ".gitignore");
+  if (harnessKind === "mstar" && path.resolve(harnessDir) === path.join(workspaceRoot, ".mstar")) {
+    const gitignorePath = path.join(workspaceRoot, ".gitignore");
     const snippet = emitGitignoreSnippet("mstar");
     const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
     const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
