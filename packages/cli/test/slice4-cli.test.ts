@@ -580,13 +580,55 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
     });
   });
 
-  test("non-array JSON → usage, exit 2", () => {
+  test("non-array JSON without findings → usage, exit 2", () => {
     withTempDir((dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, "{}");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("must be a JSON array");
+      expect(result.stderr).toContain("must be a JSON array or an object with a findings array");
+    });
+  });
+
+  test("object form with needsVerification + hardeningChecked renders the security sections", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(
+        findingsFile,
+        JSON.stringify({
+          findings: FINDINGS,
+          needsVerification: [{ lead: "SSRF in webhook fetcher", how: "confirm caller supplies the URL", evidence: "src/hooks.ts:77" }],
+          hardeningChecked: [
+            { kind: "Hardening", text: "no CSP header - middleware escapes all output" },
+            { kind: "Checked and clean", text: "orders SQL sink parameterized end to end" },
+          ],
+        }),
+      );
+      const outDir = join(dir, "audit-2026-08-08");
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
+      expect(result.exitCode).toBe(0);
+      const readme = readFileSync(join(outDir, "README.md"), "utf8");
+      expect(readme).toContain("## Needs verification");
+      expect(readme).toContain("- SSRF in webhook fetcher: confirm caller supplies the URL (src/hooks.ts:77)");
+      expect(readme).toContain("## Hardening & checked notes");
+      expect(readme).toContain("- Hardening: no CSP header - middleware escapes all output");
+      expect(readme).toContain("- Checked and clean: orders SQL sink parameterized end to end");
+    });
+  });
+
+  test("invalid hardeningChecked kind → usage, exit 2", () => {
+    withTempDir((dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(
+        findingsFile,
+        JSON.stringify({
+          findings: FINDINGS,
+          hardeningChecked: [{ kind: "Note", text: "x" }],
+        }),
+      );
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("kind must be one of Hardening|Checked and clean");
     });
   });
 
