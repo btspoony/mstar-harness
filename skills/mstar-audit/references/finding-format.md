@@ -21,7 +21,7 @@ Findings flow into a prioritization table and then into self-contained plans. Wi
 - **Confidence**: HIGH (read the code, certain) / MED (strong signal, needs verification) /
   LOW (smell, needs investigation). LOW-confidence findings may be reported but get an
   "investigate" plan, not a "fix" plan.
-- **Fix sketch**: 2–3 lines naming the restructuring move when the finding is structural; not the plan — just enough to judge effort honestly.
+- **Fix sketch**: 1–3 sentences, enough to judge effort honestly; when the finding is structural, the sketch names the restructuring move (per the `## Structural remedies` list). Not the plan — just enough to judge effort honestly.
 ```
 
 ## Structural remedies
