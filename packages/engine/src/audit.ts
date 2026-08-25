@@ -380,6 +380,9 @@ function readPlanFileSummary(filePath: string): { title: string; fields: Map<str
  * unless the caller supplies fresh ones. Entry lines start with `- `. */
 function extractSecurityDispositionSections(text: string): { needsVerification: string[]; hardeningChecked: string[] } {
   const grab = (heading: string): string[] => {
+    // No `m` flag: `$` must match only at end of string — with `m`, `$`
+    // also matches at every line ending, so the lazy group would stop
+    // after the FIRST entry line and silently drop the rest.
     const match = text.match(new RegExp(`(?:^|\\n)## ${heading}\\n\\n([\\s\\S]*?)(?=\\n## |$)`));
     if (!match) return [];
     return match[1].split("\n").filter((line) => line.startsWith("- "));

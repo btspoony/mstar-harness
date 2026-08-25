@@ -515,18 +515,35 @@ describe("scaffoldAuditPlan", () => {
     expect(hc).toBeGreaterThan(nv);
   });
 
-  test("re-run without disposition options carries over previously rendered entries", () => {
+  test("re-run without disposition options carries over ALL previously rendered entries", () => {
     const out = join(tmp, "audit-2026-08-17");
     scaffoldAuditPlan(out, findings, {
       date: "2026-08-17",
-      needsVerification: [{ lead: "lead one", how: "check x" }],
-      hardeningChecked: [{ kind: "Checked and clean", text: "sink y cleared" }],
+      needsVerification: [
+        { lead: "lead one", how: "check x" },
+        { lead: "lead two", how: "check y", evidence: "src/a.ts:9" },
+      ],
+      hardeningChecked: [
+        { kind: "Hardening", text: "gap one" },
+        { kind: "Checked and clean", text: "sink y cleared" },
+        { kind: "Checked and clean", text: "sink z cleared" },
+      ],
     });
-    // re-run with no disposition options — entries must survive the rebuild
+    // re-run with no disposition options — every entry must survive the
+    // rebuild (regression: the carry-over regex used to stop after the
+    // first entry of each section)
     scaffoldAuditPlan(out, [{ title: "Second batch plan", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }], { date: "2026-08-18" });
     const readme = readFileSync(join(out, "README.md"), "utf8");
     expect(readme).toContain("- lead one: check x");
+    expect(readme).toContain("- lead two: check y (src/a.ts:9)");
+    expect(readme).toContain("- Hardening: gap one");
     expect(readme).toContain("- Checked and clean: sink y cleared");
+    expect(readme).toContain("- Checked and clean: sink z cleared");
+    // section entry counts preserved exactly
+    const nvBlock = /## Needs verification\n\n([\s\S]*?)\n\n## Hardening/.exec(readme)?.[1] ?? "";
+    expect(nvBlock.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(2);
+    const hcBlock = /## Hardening & checked notes\n\n([\s\S]*?)\n\n## Execution order/.exec(readme)?.[1] ?? "";
+    expect(hcBlock.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(3);
     expect(readdirSync(out).filter((f) => f.startsWith("003-"))).toEqual(["003-second-batch-plan.md"]);
   });
 });
