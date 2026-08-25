@@ -51,6 +51,7 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
 
 - Review the diff basis vs base: changed files plus what the change touches.
 - Read changed files **in full** — diffs hide context.
+- Inspect adjacent behavior when risk leaks past the named diff (importers, callers, dependent contracts).
 - When the diff touches tests, read the tests before the implementation — they carry intent.
 - Verification claims in the PR description must be reproducible from the diff/CI; a claim that cannot be checked is an `unverified` lead, not evidence.
 
@@ -380,10 +381,7 @@ The posted PR comment is the deliverable; the local report is the durable refere
 
 ### Display contract (chat output)
 
-### Tone
-
-- Matter-of-fact — no praise-padding, no flattery.
-- State each severity together with the conditions that enable it.
+Tone: matter-of-fact — no praise-padding, no flattery; state each severity together with the conditions that enable it.
 
 First two lines of the **chat** display — verbatim:
 
