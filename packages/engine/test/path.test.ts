@@ -48,6 +48,8 @@ import {
   validateGitignore,
 } from "../src/path.js";
 import { validateStatusV2 } from "../src/status.js";
+import { validateProjectRegister, validateRoadmap } from "../src/project.js";
+import { readJson } from "../src/core.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -816,6 +818,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
         "iterations",
         "knowledge",
         "plans",
+        "projects",
         "sdd",
         "specs",
         "status.json",
@@ -835,6 +838,34 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
     }
   });
 
+  test("prebuilds projects/_default/ with a valid roadmap.md + empty residuals.json", () => {
+    const root = tmpRoot("path-scaffold-project-");
+    try {
+      const harnessDir = scaffoldHarness(root);
+      const projectDir = join(harnessDir, "projects", "_default");
+      expect(readdirSync(projectDir).sort()).toEqual(["residuals.json", "roadmap.md"]);
+      // Roadmap frontmatter: project_id _default, non-empty title, status
+      // active, created_at today, plus a `## Direction` body placeholder —
+      // 0 violations (the missing goal-item task list is a warning only).
+      const roadmapPath = join(projectDir, "roadmap.md");
+      const roadmap = validateRoadmap(roadmapPath);
+      expect(roadmap.ok).toBe(true);
+      expect(roadmap.violations).toEqual([]);
+      const roadmapText = readFileSync(roadmapPath, "utf8");
+      expect(roadmapText).toContain("project_id: _default");
+      expect(roadmapText).toContain("title: Default Project");
+      expect(roadmapText).toContain("status: active");
+      expect(roadmapText).toContain(`created_at: ${new Date().toISOString().slice(0, 10)}`);
+      expect(roadmapText).toContain("## Direction");
+      // Empty register passes the project-register validator.
+      const registerPath = join(projectDir, "residuals.json");
+      expect(readFileSync(registerPath, "utf8")).toBe('{\n  "entries": {}\n}\n');
+      expect(validateProjectRegister(readJson(registerPath)).ok).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("is idempotent: preserves an existing non-empty status.json", () => {
     const root = tmpRoot("path-scaffold-idem-");
     try {
@@ -844,6 +875,97 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       writeFileSync(statusPath, custom);
       scaffoldHarness(root);
       expect(readFileSync(statusPath, "utf8")).toBe(custom);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("honors .mstarc [config] harness_dir when resolving the scaffold target", () => {
+    const root = tmpRoot("path-scaffold-mstarc-harness-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
+      const harnessDir = scaffoldHarness(root);
+      // Files land under the declared dir, not the default .mstar/.
+      expect(harnessDir).toBe(resolve(root, ".custom"));
+      expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "plans"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, ".mstar"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("honors MSTAR_HARNESS_DIR env override for the scaffold target", () => {
+    const root = tmpRoot("path-scaffold-mstarc-env-");
+    try {
+      const custom = join(root, "env-harness");
+      withEnv(custom, () => {
+        const harnessDir = scaffoldHarness(root);
+        expect(harnessDir).toBe(custom);
+        expect(existsSync(join(custom, "status.json"))).toBe(true);
+        expect(existsSync(join(custom, "projects", "_default", "roadmap.md"))).toBe(true);
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("honors .mstarc [config] project_dir independently of the harness dir", () => {
+    const root = tmpRoot("path-scaffold-mstarc-project-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nproject_dir=process/projects\n", "utf8");
+      const harnessDir = scaffoldHarness(root);
+      // Harness stays at the default .mstar/; _default lands under the
+      // RESOLVED {PROJECT_DIR} (project_dir resolved against the .mstarc
+      // file's directory), not {HARNESS_DIR}/projects.
+      expect(harnessDir).toBe(resolve(root, ".mstar"));
+      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "residuals.json"))).toBe(true);
+      expect(existsSync(join(root, ".mstar", "projects"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("honors .mstarc harness_dir AND project_dir independently (both keys)", () => {
+    const root = tmpRoot("path-scaffold-mstarc-both-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\nproject_dir=process/projects\n", "utf8");
+      const harnessDir = scaffoldHarness(root);
+      expect(harnessDir).toBe(resolve(root, ".custom"));
+      expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
+      expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "projects"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("is idempotent: preserves user-edited roadmap.md and residuals.json", () => {
+    const root = tmpRoot("path-scaffold-idem-project-");
+    try {
+      scaffoldHarness(root);
+      const roadmapPath = join(root, ".mstar", "projects", "_default", "roadmap.md");
+      const registerPath = join(root, ".mstar", "projects", "_default", "residuals.json");
+      const customRoadmap = `---
+project_id: _default
+title: Custom Roadmap
+status: active
+created_at: 2026-08-01
+---
+
+## Direction
+
+Custom direction.
+`;
+      const customRegister = '{\n  "entries": {}\n}\n';
+      writeFileSync(roadmapPath, customRoadmap);
+      writeFileSync(registerPath, customRegister);
+      scaffoldHarness(root);
+      expect(readFileSync(roadmapPath, "utf8")).toBe(customRoadmap);
+      expect(readFileSync(registerPath, "utf8")).toBe(customRegister);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

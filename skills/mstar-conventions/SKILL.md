@@ -108,9 +108,11 @@ enforcement=hard
 PM 在需要持久化追踪时：
 
 1. 建 `.mstar/`、`plans/`、`status.json`（**v2 空模板**见 **`mstar-artifacts/templates/status.empty.json`**：`version: 2` + `workflows: []`）
-2. 可选 `knowledge/`、`iterations/`、`{HARNESS_DIR}/specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` / `projects/` 由 engine writers 按需创建，**不**预建）
+2. 可选 `knowledge/`、`iterations/`、`{HARNESS_DIR}/specs/`、`sdd/`（空目录占位；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` 由 engine writers 按需创建，**不**预建）
 3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（见下文「Git 跟踪策略」）— CLI `init` 可自动添加
 4. Git：**进程本地、结果共享** — 默认跟踪 `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`；`plans/`、`iterations/`、`status.json` 等为**本地会话 SSOT**，默认 gitignored。跨 clone 持久 handoff = knowledge + specs + `{HARNESS_DIR}/AGENTS.md`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 residual 须提升（compound）或写入 tracked results — **勿**默认 `git add` `status.json` / `plans/`。
+
+**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）一次性完成上述 bootstrap —— 目录 + v2 `status.json` + **`projects/_default/` 预建**（`roadmap.md` + 空 `residuals.json`）+ canonical gitignore snippet + 最小 `{HARNESS_DIR}/AGENTS.md`；幂等，重跑只补缺失件。 scaffold 遵循 `.mstarc`：`harness_dir` / `project_dir` 声明优先（写入解析后的目录）；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义 harness 布局自行管理 ignore 规则）。
 
 步骤与 `{HARNESS_DIR}/AGENTS.md` 分层 → **`references/harness-bootstrap-and-agents-layering.md`**。
 
@@ -136,7 +138,7 @@ PM 在需要持久化追踪时：
 
 Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
 
-**v3 运行时目录的 gitignore 说明（文档化；canonical snippet 零改动）**：`workflows/` 与 `projects/` 都位于已被 **`.mstar/**` 默认忽略**的 `{HARNESS_DIR}` 之下——**不需要**在仓库根 `.gitignore` 增加任何条目，也**不新增** re-include 条目（它们不是 tracked 结果）。`workflows/` / `projects/` 子目录由 **engine writers 按需创建**（`writeWorkflowSnapshot` / `registerWorkflow` / project-register 写入路径），**不是** `scaffoldHarness` 的初始化产物——`mstar init` 不会预建空目录。
+**v3 运行时目录的 gitignore 说明（文档化；canonical snippet 零改动）**：`workflows/` 与 `projects/` 都位于已被 **`.mstar/**` 默认忽略**的 `{HARNESS_DIR}` 之下——**不需要**在仓库根 `.gitignore` 增加任何条目，也**不新增** re-include 条目（它们不是 tracked 结果）。`projects/_default/` 由 **`scaffoldHarness` / `mstar harness scaffold` 预建**（`roadmap.md` + 空 `residuals.json`）；其余 project id 与 `workflows/` 子目录由 **engine writers 按需创建**（`writeWorkflowSnapshot` / `registerWorkflow` / project-register 写入路径），**不是** `scaffoldHarness` 的初始化产物。
 
 **多 worktree（iteration L1）**：默认 gitignored 的进程产物**不会**随 `git worktree add` 进入 feature 检出。读写须经 **control worktree** 绝对路径（`<control_worktree_path>/{HARNESS_DIR}/…`）；产品代码改在 feature worktree。细则与反模式（禁止因 feature 缺 plans 而 `Worktree mode: waived`）→ **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」。
 
