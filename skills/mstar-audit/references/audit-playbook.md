@@ -117,9 +117,8 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Duplicate dependencies solving the same problem (two date libs, two HTTP clients).
 - Lockfile/manifest drift, version pinning inconsistencies across a monorepo.
 - For each migration candidate, estimate blast radius (files touched) — that drives effort and whether to recommend it at all.
-**Adding & upgrading dependencies.** Every dependency is a liability — flag dependency adds that **fail** any of these gate questions (fail → DEP finding):
-- **Add gate:** does the existing stack already solve it (prefer stdlib and existing utils)? How large is the footprint? Is it actively maintained? Any known vulns? Is the license compatible?
-- **Upgrade discipline:** read the changelog, not the version number; one dependency per change; suite green before *and* after — thin coverage around the dependency is itself a finding; review the lockfile diff including the transitive graph; never hand-edit the lockfile.
+**Adding dependencies.** Every dependency is a liability — prefer the existing stack (stdlib, current utils). Flag an add as a DEP finding when any holds: the existing stack already solves the need; the footprint is unjustified for the problem; the package is not actively maintained; it carries known vulnerabilities reachable in practice; or its license is incompatible.
+- **Upgrading dependencies:** read the changelog, not the version number; one dependency per change; suite green before *and* after — thin coverage around the dependency is itself a finding; review the lockfile diff including the transitive graph; never hand-edit the lockfile.
 
 ## 7. DX & Tooling
 
