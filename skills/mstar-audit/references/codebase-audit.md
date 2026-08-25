@@ -9,6 +9,7 @@ Audit across the categories in **`references/audit-playbook.md`** — read it no
 For repos of any real size, `code-reviewer` (the audit executor, PM-dispatched) fans out parallel read-only subagents (`scout` / `explore` type) under Assignment `Delegation: allowed (scout/explore only, read-only)` — one per category or cluster; PM remains orchestrator/entry. **Subagents do not inherit this skill's context**, so each subagent prompt must include:
 
 - The **absolute path** to `references/audit-playbook.md` plus the exact section headings to read — **always including "## Finding format"** (subagents can read files; this is cheaper than pasting).
+- For the security category (or a security cluster), also give the **absolute path** to `references/security-review.md` alongside the playbook path.
 - Recon facts that scope the search (languages, frameworks, key directories, what to skip).
 - Domain-specific risk hints from recon (e.g. "for a CLI that writes user files: pay attention to path traversal and command injection").
 - Decided tradeoffs from intent docs that would otherwise read as findings (e.g. "the sync-over-async write in `store.ts` is a documented ADR decision — don't report it").
@@ -34,7 +35,7 @@ Every finding follows **`references/finding-format.md`** — read it before the 
 |---------|-------|-------|
 | Bare invocation | Full codebase | All nine categories |
 | `quick` / `deep` | Same scope, different depth | See effort table above |
-| Category focus (`security`, `perf`, `tests`, ...) | Recon, then that category only, then plan | Useful for targeted sweeps |
+| Category focus (`security`, `perf`, `tests`, ...) | Recon, then that category only, then plan | Useful for targeted sweeps. For the `security` focus, load `references/security-review.md` (deep method + FP discipline) alongside the playbook § 2 |
 | `branch` | Current branch changes only | Files changed since merge-base with default branch + their direct importers. Tag every finding `introduced` or `pre-existing` |
 | `next` / `roadmap` | Direction category only, in depth | 4–6 grounded suggestions; selected ones become design/spike plans |
 | `simplify` | DEBT-focused deep pass: dead / duplicated / speculative / over-built / added-then-removed / hand-rolled-where-a-dependency-exists surfaces | Prove-or-reject per playbook §5; findings use Category DEBT; tiny-real items → "considered and rejected" rows, never inline TODOs (Hard Rule 1) |

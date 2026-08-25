@@ -140,7 +140,7 @@ Advise, do not sell. State findings plainly with evidence, flag uncertainty hone
 
 ## Attribution
 
-Workflow, audit playbook, and finding format adapted from the [improve](https://github.com/shadcn/improve) skill (MIT, © shadcn), integrated into Morning Star's plan and dispatch conventions. The `execute` / `reconcile` / `--issues` variants from the original skill are not carried over — Morning Star's SDD, `status.json`, and residual tracking replace them.
+Workflow, audit playbook, finding format, and the security deep-dive method are adapted or synthesized from third-party sources — full provenance lives in `ATTRIBUTION.md` at this repo's root. The `execute` / `reconcile` / `--issues` variants of the source skill are not carried over — Morning Star's SDD, `status.json`, and residual tracking replace them.
 
 ## References
 
@@ -148,3 +148,4 @@ Workflow, audit playbook, and finding format adapted from the [improve](https://
 - `references/finding-format.md` — structured finding shape and evidence requirements
 - `references/codebase-audit.md` — full codebase audit variant: Phase 2 categories + subagent-prompt requirements, effort table, scope variants, Phase 4 excerpt & reconcile rules, audit index output templates, `mstar audit scaffold` callout (plan writing / handoff → `## Plan output (all variants)`)
 - `references/pr-review.md` — deep PR-review process: worktree isolation, concern lenses, evidence rules, verdict synthesis, linked-issue hygiene, batch review
+- `references/security-review.md` — security deep-dive: exploitability bar, input-source triage, FP discipline, hunting angles, LLM/supply-chain/CI-CD surfaces
