@@ -133,6 +133,23 @@ describe("mstar scaffold — one-shot harness bootstrap", () => {
     });
   });
 
+  test("partial fence: appends only the missing re-include entries, keeping the existing .mstar/** line", () => {
+    withRoot((root) => {
+      // Pre-existing fence with only the default-ignore entry.
+      writeFileSync(join(root, ".gitignore"), ".mstar/**\n", "utf8");
+
+      const result = runScaffold([root]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("created: .gitignore (canonical harness snippet)");
+
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      // Exactly ONE .mstar/** line — the pre-existing one is not duplicated.
+      expect(gitignore.split(".mstar/**").length - 1).toBe(1);
+      // All 5 re-include entries are now present.
+      for (const entry of MSTAR_FENCE_ENTRIES.slice(1)) expect(gitignore).toContain(entry);
+    });
+  });
+
   test("defaults to cwd when [path] is omitted", () => {
     withRoot((root) => {
       const proc = Bun.spawnSync([process.execPath, "run", join(CLI_ROOT, "src/index.ts"), "scaffold"], {

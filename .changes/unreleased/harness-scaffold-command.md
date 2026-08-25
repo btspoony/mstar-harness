@@ -1,5 +1,5 @@
 ---
-packages: engine, cli
+packages: root, engine, cli
 ---
 - Added **`mstar scaffold [path]`** (default cwd): one-shot harness bootstrap — engine `scaffoldHarness` now also prebuilds `projects/_default/` (`roadmap.md` with valid `validateRoadmap` frontmatter + `## Direction` placeholder, and an empty `residuals.json` passing `validateProjectRegister`); the CLI appends the canonical `.gitignore` snippet when absent, writes a minimal `.mstar/AGENTS.md` when absent, and prints a created/skipped summary. Idempotent — re-running on an initialized tree only creates missing pieces.
 - `mstar path resolve` failure guidance now points to `mstar scaffold` instead of `mstar init`.

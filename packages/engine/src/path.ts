@@ -306,7 +306,7 @@ function resolveHarnessSubdir(
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
     throw new Error(
-      `harness dir not found from ${resolve(startDir)} \u2014 cannot resolve the ${fallback} dir (run \`mstar init\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`,
+      `harness dir not found from ${resolve(startDir)} \u2014 cannot resolve the ${fallback} dir (run \`mstar scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`,
     );
   }
   const declared = mstarcDirOverride(harness, key);
@@ -423,10 +423,7 @@ export function scaffoldHarness(root: string): string {
   mkdirSync(projectDir, { recursive: true });
   const roadmapPath = join(projectDir, PROJECT_ROADMAP_FILE);
   if (!existsSync(roadmapPath)) {
-    const today = new Date();
-    const month = String(today.getMonth() + 1).padStart(2, "0");
-    const day = String(today.getDate()).padStart(2, "0");
-    const created = `${today.getFullYear()}-${month}-${day}`;
+    const created = new Date().toISOString().slice(0, 10);
     writeFileSync(roadmapPath, ROADMAP_TEMPLATE.replace("{created_at}", created), "utf8");
   }
   const registerPath = join(projectDir, PROJECT_REGISTER_FILE);

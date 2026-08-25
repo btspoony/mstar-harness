@@ -309,21 +309,22 @@ function runScaffold(pathArg: string | undefined) {
   const skipped: string[] = [];
 
   // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): append
-  // the full snippet when any fence entry is missing, skip cleanly when the
-  // complete set is already present (same per-entry fence check as the
-  // engine's GITIGNORE_PROCESS_ENTRIES / shared-install appendGitignore).
+  // only the missing fence entries (plus the canonical comment block when
+  // its comment lines are absent), skip cleanly when the complete set is
+  // already present (same per-entry fence check as the engine's
+  // GITIGNORE_PROCESS_ENTRIES / shared-install appendGitignore).
   const gitignorePath = path.join(root, ".gitignore");
   const snippet = emitGitignoreSnippet("mstar");
   const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
   const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-  const fenceEntries = snippet
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/"));
+  const snippetLines = snippet.split("\n").map((line) => line.trim());
+  const fenceEntries = snippetLines.filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/") || line.startsWith(".mstarc"));
+  const commentLines = snippetLines.filter((line) => line.startsWith("#"));
   const missing = fenceEntries.filter((entry) => !lines.has(entry));
   if (missing.length > 0) {
+    const missingComments = commentLines.filter((line) => !lines.has(line));
     const prefix = current && !current.endsWith("\n") ? "\n" : "";
-    fs.appendFileSync(gitignorePath, `${prefix}${snippet}`, "utf8");
+    fs.appendFileSync(gitignorePath, `${prefix}${[...missingComments, ...missing].join("\n")}\n`, "utf8");
     created.push(".gitignore (canonical harness snippet)");
   } else {
     skipped.push(".gitignore (canonical harness snippet already present)");
@@ -338,7 +339,13 @@ function runScaffold(pathArg: string | undefined) {
     skipped.push(".mstar/AGENTS.md (already present)");
   }
 
-  console.log(pc.green(`scaffold: harness initialized at ${harnessDir}`));
+  // Headline is created-count-aware: "initialized" only when something was
+  // created; a no-op re-run on an already-initialized tree says "ensured".
+  const headline =
+    created.length > 0
+      ? `scaffold: harness initialized at ${harnessDir}`
+      : `scaffold: harness ensured at ${harnessDir}`;
+  console.log(pc.green(headline));
   for (const item of created) console.log(`  created: ${item}`);
   for (const item of skipped) console.log(`  skipped: ${item}`);
 }
