@@ -117,7 +117,7 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Duplicate dependencies solving the same problem (two date libs, two HTTP clients).
 - Lockfile/manifest drift, version pinning inconsistencies across a monorepo.
 - For each migration candidate, estimate blast radius (files touched) — that drives effort and whether to recommend it at all.
-**Adding & upgrading dependencies.** Every dependency is a liability — flag adds that clear these gates:
+**Adding & upgrading dependencies.** Every dependency is a liability — flag dependency adds that **fail** any of these gate questions (fail → DEP finding):
 - **Add gate:** does the existing stack already solve it (prefer stdlib and existing utils)? How large is the footprint? Is it actively maintained? Any known vulns? Is the license compatible?
 - **Upgrade discipline:** read the changelog, not the version number; one dependency per change; suite green before *and* after — thin coverage around the dependency is itself a finding; review the lockfile diff including the transitive graph; never hand-edit the lockfile.
 

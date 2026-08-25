@@ -41,9 +41,9 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
   - Verify its provenance first (stated base/head SHAs when present); do not invent a checkout or substitute a different ref.
   - Read the changed files in the current directory for context; the diff itself is the isolated changeset under review.
   - No worktree, no branch, no fetch — nothing to clean up.
-- **Uncommitted / working-tree input** ("review my changes", no ref): changeset = `git diff` + `git diff --cached` in the current checkout; no worktree, no fetch, no branch; the review is still read-only (no fixes, no stash); `comments: n/a-no-pr`.
+- **Uncommitted / working-tree input** ("review my changes", no ref): changeset = `git diff` + `git diff --cached`, plus untracked files via `git ls-files --others --exclude-standard`, in the current checkout (read new files in full — the diff cannot see them); no worktree, no fetch, no branch; the review is still read-only (no fixes, no stash); `comments: n/a-no-pr`.
 - **Single-commit input** (commit SHA / short hash): changeset = `git show <sha>`; arbitrary-diff rules apply — verify provenance, read the changed files in the current directory for context, no worktree.
-- **Pre-flight (all modes):** before fanning out lenses, confirm the refs resolve and the changeset is non-empty — an empty changeset reports "no changes to review" and stops; never spawn lenses on an empty diff.
+- **Pre-flight (all modes):** before fanning out lenses, confirm any named refs resolve (in modes that have refs) and the changeset is non-empty (in all modes) — an empty changeset reports "no changes to review" and stops; never spawn lenses on an empty diff.
 - Record before computing: review cwd, `<review-branch>`, HEAD sha, merge-base.
 - Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
 
@@ -67,7 +67,7 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
 | Database schema change | widen scrutiny |
 | API contract change | widen scrutiny |
 | New framework/library adoption | widen scrutiny |
-| Performance-critical path | widen scrutiny — load `references/security-review.md` |
+| Performance-critical path | widen scrutiny — playbook §3 Performance depth |
 | Security-sensitive surface | widen scrutiny — load `references/security-review.md` |
 
 These shapes get deeper review, not automatic severity — name the escalation in the review body.
@@ -101,7 +101,7 @@ Conditional lenses:
 - Middle Man — class mostly delegates → fold or inline the pass-through.
 - Refused Bequest — subclass inherits more than it wants → replace with composition.
 
-Three binding rules: repo-documented standards override the baseline — a standards finding cites the standard's file + rule; anything tooling already enforces is skipped (existing `general` rule); smells are judgement calls — a smell alone is never `must-fix`, and a LOW-confidence smell without evidence is not a finding (existing disqualify rule) — it may surface as `nit` with the smell label. No new lens row: repo-guidance conformance stays the `general` lens's job.
+Three binding rules: repo-documented standards override the baseline — a standards finding cites the standard's file + rule; anything tooling already enforces is skipped (existing `general` rule); smells are judgement calls — a smell alone is never `must-fix`, and a LOW-confidence smell without evidence is not a finding (existing disqualify rule): it goes on `- unverified:` per the § Merge class rule, never `nit`; an **evidenced** judgement-call smell may surface as `nit` with the smell label. No new lens row: repo-guidance conformance stays the `general` lens's job.
 
 **Selection by change shape** (UI / API / migration / refactor / doc / tiny mechanical). Default set = `general` + `technical-coverage` + `silent-failures`. Never spawn all lenses blindly; tiny mechanical diffs → `general` only.
 
