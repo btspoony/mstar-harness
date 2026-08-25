@@ -11,7 +11,9 @@
  * - Appends the canonical `.gitignore` snippet when missing (only for the
  *   default `.mstar/` layout — custom layouts are skipped); skips cleanly
  *   when the complete fence is already present. A reversed partial fence
- *   (re-includes without the broad rule) is spliced, not appended.
+ *   (re-includes without the broad rule) is spliced, not appended; a
+ *   complete-but-misordered fence (broad rule after re-includes) is
+ *   repaired by relocating the broad rule before the first re-include.
  * - Writes a minimal `{HARNESS_DIR}/AGENTS.md` when absent.
  * - Idempotent: re-running on an initialized tree changes nothing.
  *
@@ -174,6 +176,52 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       // All re-includes present; the pre-existing ones are not duplicated.
       expect(gitignore.split(".mstar/**").length - 1).toBe(1);
       for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
+    });
+  });
+
+  test("complete-but-misordered fence: relocates .mstar/** before the first !.mstar/ re-include, preserving unrelated lines", () => {
+    withRoot((root) => {
+      // All canonical entries present, but the broad rule sits AFTER the
+      // re-includes — gitignore last-match-wins would shadow them. Unrelated
+      // user lines (comments, other rules) must survive byte-for-byte.
+      const userLines = [
+        "# user comment",
+        "node_modules/",
+        "!.mstar/knowledge/**",
+        ".mstar/**",
+        "!.mstar/AGENTS.md",
+        "!.mstar/knowledge/",
+        "!.mstar/specs/",
+        "!.mstar/specs/**",
+        ".mstarc",
+        "dist/",
+      ];
+      writeFileSync(join(root, ".gitignore"), `${userLines.join("\n")}\n`, "utf8");
+
+      const first = runScaffold([root]);
+      expect(first.exitCode).toBe(0);
+      expect(first.stdout).toContain("created: .gitignore (canonical harness snippet reordered)");
+
+      const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
+      const lines = gitignore.split(/\r?\n/);
+      const broadIndex = lines.findIndex((line) => line.trim() === ".mstar/**");
+      const firstNegationIndex = lines.findIndex((line) => line.trim().startsWith("!.mstar/"));
+      expect(broadIndex).toBeGreaterThan(-1);
+      // Broad rule now precedes EVERY re-include.
+      expect(firstNegationIndex).toBeGreaterThan(broadIndex);
+      // Exactly one broad rule; all canonical entries present.
+      expect(gitignore.split(".mstar/**").length - 1).toBe(1);
+      for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
+      // Unrelated user lines preserved byte-for-byte, in order.
+      for (const line of ["# user comment", "node_modules/", "dist/"]) expect(gitignore).toContain(line);
+      expect(gitignore.indexOf("node_modules/")).toBeLessThan(gitignore.indexOf(".mstar/**"));
+      expect(gitignore.indexOf("dist/")).toBeGreaterThan(gitignore.indexOf(".mstar/**"));
+
+      // Idempotent: second run changes nothing.
+      const second = runScaffold([root]);
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain("skipped: .gitignore (canonical harness snippet already present)");
+      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignore);
     });
   });
 

@@ -304,7 +304,10 @@ const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
  * own ignore rules), and a minimal {HARNESS_DIR}/AGENTS.md harness-layer
  * rules template when absent. Prints the resolved harness/project dirs plus
  * a created/skipped summary. Idempotent: re-running on an initialized tree
- * is a no-op except creating missing pieces.
+ * is a no-op except creating missing pieces. A complete-but-misordered fence
+ * (`.mstar/**` after `!.mstar/…` re-includes, which gitignore's last-match-
+ * wins would shadow) is repaired by relocating the broad rule before the
+ * first re-include.
  */
 function runScaffold(pathArg: string | undefined) {
   const root = pathArg ? path.resolve(pathArg) : process.cwd();
@@ -355,7 +358,21 @@ function runScaffold(pathArg: string | undefined) {
       }
       created.push(".gitignore (canonical harness snippet)");
     } else {
-      skipped.push(".gitignore (canonical harness snippet already present)");
+      // All canonical entries present — but gitignore is last-match-wins, so
+      // a misplaced `.mstar/**` (appearing after one or more `!.mstar/…`
+      // re-includes) would shadow them. Relocate the broad rule to just
+      // before the first re-include; every other line stays byte-for-byte.
+      const currentLines = current.split(/\r?\n/);
+      const broadIndex = currentLines.findIndex((line) => line.trim() === ".mstar/**");
+      const firstNegationIndex = currentLines.findIndex((line) => line.trim().startsWith("!.mstar/"));
+      if (broadIndex !== -1 && firstNegationIndex !== -1 && broadIndex > firstNegationIndex) {
+        const [broadLine] = currentLines.splice(broadIndex, 1);
+        currentLines.splice(firstNegationIndex, 0, broadLine);
+        fs.writeFileSync(gitignorePath, currentLines.join("\n"), "utf8");
+        created.push(".gitignore (canonical harness snippet reordered)");
+      } else {
+        skipped.push(".gitignore (canonical harness snippet already present)");
+      }
     }
   } else {
     skipped.push(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
