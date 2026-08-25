@@ -19,6 +19,7 @@ import {
   AUDIT_RISKS,
   completenessLevel,
   detectHost,
+  emitGitignoreSnippet,
   evaluatePhaseGate,
   executionModeToN,
   findEphemeralCitations,
@@ -47,6 +48,7 @@ import {
   resolveWorkflowDir,
   reviewPackage,
   scaffoldAuditPlan,
+  scaffoldHarness,
   scopeGuard,
   SddScriptError,
   sddWorkspace,
@@ -280,6 +282,66 @@ function runPluginValidate(options: PluginValidateOptions) {
   }
   process.exitCode = 1;
 }
+/** Minimal `.mstar/AGENTS.md` harness-layer rules template (tracked result). */
+const HARNESS_AGENTS_TEMPLATE = `# AGENTS.md \u2014 .mstar/ (harness layer)
+
+- Path symbols: {HARNESS_DIR} = .mstar/; {PLAN_DIR} = plans/; {SDD_DIR} = sdd/<plan-id>/;
+  {ITERATION_DIR} = iterations/; {KNOWLEDGE_DIR} = knowledge/; {SPECS_DIR} = specs/;
+  {WORKFLOW_DIR} = workflows/; {PROJECT_DIR} = projects/ (SSOT: skills/mstar-conventions).
+- Process vs results: process artifacts (plans/, iterations/, sdd/, status.json, workflows/,
+  projects/) stay local and gitignored; results (this file, knowledge/, specs/) are tracked
+  and shared across clones.
+- Done: only @project-manager or @qa-engineer may set Done; implementers set InReview.
+`;
+
+/**
+ * Run `mstar scaffold [path]`: one-shot harness bootstrap — engine
+ * `scaffoldHarness` (dirs + v2 status.json + projects/_default/), the
+ * canonical `.gitignore` snippet appended when absent, and a minimal
+ * `.mstar/AGENTS.md` harness-layer rules template when absent. Prints a
+ * created/skipped summary. Idempotent: re-running on an initialized tree
+ * is a no-op except creating missing pieces.
+ */
+function runScaffold(pathArg: string | undefined) {
+  const root = pathArg ? path.resolve(pathArg) : process.cwd();
+  const harnessDir = scaffoldHarness(root);
+  const created: string[] = [];
+  const skipped: string[] = [];
+
+  // Canonical .gitignore snippet (plan-conventions § Git 跟踪策略): append
+  // the full snippet when any fence entry is missing, skip cleanly when the
+  // complete set is already present (same per-entry fence check as the
+  // engine's GITIGNORE_PROCESS_ENTRIES / shared-install appendGitignore).
+  const gitignorePath = path.join(root, ".gitignore");
+  const snippet = emitGitignoreSnippet("mstar");
+  const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
+  const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+  const fenceEntries = snippet
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/"));
+  const missing = fenceEntries.filter((entry) => !lines.has(entry));
+  if (missing.length > 0) {
+    const prefix = current && !current.endsWith("\n") ? "\n" : "";
+    fs.appendFileSync(gitignorePath, `${prefix}${snippet}`, "utf8");
+    created.push(".gitignore (canonical harness snippet)");
+  } else {
+    skipped.push(".gitignore (canonical harness snippet already present)");
+  }
+
+  // Minimal .mstar/AGENTS.md harness-layer rules (tracked result).
+  const agentsPath = path.join(harnessDir, "AGENTS.md");
+  if (!fs.existsSync(agentsPath)) {
+    fs.writeFileSync(agentsPath, HARNESS_AGENTS_TEMPLATE, "utf8");
+    created.push(".mstar/AGENTS.md");
+  } else {
+    skipped.push(".mstar/AGENTS.md (already present)");
+  }
+
+  console.log(pc.green(`scaffold: harness initialized at ${harnessDir}`));
+  for (const item of created) console.log(`  created: ${item}`);
+  for (const item of skipped) console.log(`  skipped: ${item}`);
+}
 
 program
   .name("mstar-harness")
@@ -304,6 +366,17 @@ program
     // commander's negation `--no-fallbacks` parses as `fallbacks: false`
     // (default true); map to the canonical `noFallbacks` name at the boundary.
     await runInit({ ...options, noFallbacks: options.fallbacks === false });
+  });
+
+program
+  .command("scaffold")
+  .description(
+    "One-shot harness bootstrap: create .mstar/ (dirs + v2 status.json + projects/_default/), " +
+      "append the canonical .gitignore snippet when absent, and write a minimal .mstar/AGENTS.md when absent",
+  )
+  .argument("[path]", "Root to scaffold (default: cwd)")
+  .action((pathArg?: string) => {
+    runScaffold(pathArg);
   });
 
 program
@@ -347,7 +420,7 @@ pathCommand
       // .plans/|plans/ anywhere up the tree — harness not enabled from here.
       const guidance =
         "no harness dir found \u2014 the bounded probe (.mstar/, .agents/, .plans/, plans/) walked up from " +
-        `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) \u2014 run \`mstar init\` to bootstrap, or pass a start dir inside a harness-enabled project`;
+        `${startDir} only within the workspace root (git top-level of the start dir; non-git start probes only itself) \u2014 run \`mstar scaffold\` to bootstrap, or pass a start dir inside a harness-enabled project`;
       if (options.json) {
         console.log(JSON.stringify({ ok: false, startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, guidance }));
       } else {

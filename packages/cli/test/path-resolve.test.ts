@@ -154,7 +154,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       const result = runResolve([root]);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("no harness dir");
-      expect(result.stderr).toContain("mstar init");
+      expect(result.stderr).toContain("mstar scaffold");
       expect(result.stdout).toBe("");
     });
   });
@@ -199,7 +199,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       const doc = JSON.parse(result.stdout) as { ok: boolean; harnessDir: null; guidance: string };
       expect(doc.ok).toBe(false);
       expect(doc.harnessDir).toBeNull();
-      expect(doc.guidance).toContain("mstar init");
+      expect(doc.guidance).toContain("mstar scaffold");
     });
   });
 
