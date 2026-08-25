@@ -383,9 +383,17 @@ function extractSecurityDispositionSections(text: string): { needsVerification: 
     // No `m` flag: `$` must match only at end of string — with `m`, `$`
     // also matches at every line ending, so the lazy group would stop
     // after the FIRST entry line and silently drop the rest.
-    const match = text.match(new RegExp(`(?:^|\\n)## ${heading}\\n\\n([\\s\\S]*?)(?=\\n## |$)`));
+    // Tolerances for hand-edited indexes: case-insensitive heading,
+    // flexible spacing inside the ATX heading, blank line(s) before the
+    // body, and CRLF line endings.
+    const match = text.match(
+      new RegExp(`(?:^|\\r?\\n)##[ \\t]+${heading}[ \\t]*\\r?\\n(?:[ \\t]*\\r?\\n)?([\\s\\S]*?)(?=\\r?\\n## |$)`, "i"),
+    );
     if (!match) return [];
-    return match[1].split("\n").filter((line) => line.startsWith("- "));
+    return match[1]
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\r$/, ""))
+      .filter((line) => line.startsWith("- "));
   };
   return { needsVerification: grab("Needs verification"), hardeningChecked: grab("Hardening & checked notes") };
 }

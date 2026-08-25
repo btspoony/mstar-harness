@@ -571,6 +571,35 @@ describe("scaffoldAuditPlan", () => {
     expect(readme).toContain("- kept lead: check keep");
     expect(readme).toContain("- fresh lead: check new");
   });
+
+  test("carry-over tolerates hand-edited headings: case, CRLF, spacing, blank lines", () => {
+    const out = join(tmp, "audit-2026-08-21");
+    scaffoldAuditPlan(out, findings, { date: "2026-08-21" });
+    // simulate a hand-edited index: CRLF endings, different heading case,
+    // trailing spaces in the heading, no blank line before the body
+    const handEdited = [
+      "# Audit Report \u2014 repo @ abc1234 (2026-08-21)",
+      "",
+      "## Findings",
+      "",
+      "| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |",
+      "|---|---------|----------|--------|--------|------|------------|----------|",
+      "",
+      "## needs verification  ",
+      "- hand typed lead: check it (src/x.ts:1)",
+      "",
+      "## HARDENING & CHECKED NOTES",
+      "- Checked and clean: hand cleared sink",
+      "",
+      "## Execution order & status",
+      "",
+    ].join("\r\n");
+    writeFileSync(join(out, "README.md"), handEdited);
+    scaffoldAuditPlan(out, [{ title: "Rebuild batch", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }], { date: "2026-08-22" });
+    const readme = readFileSync(join(out, "README.md"), "utf8");
+    expect(readme).toContain("- hand typed lead: check it (src/x.ts:1)");
+    expect(readme).toContain("- Checked and clean: hand cleared sink");
+  });
 });
 
 // ---------------------------------------------------------------------------
