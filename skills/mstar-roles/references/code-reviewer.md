@@ -99,7 +99,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 ## Skill Preset (PM-Activated)
 
-Topic skills below are **presets, not unconditional role dependencies** — the identity, mode definitions, and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field; the assigned **mode** selects the mode preset); without activation, work from identity + assignment and do not self-load topic skills. When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, mode definitions, and NEVER rules above stand alone. Loading follows the Assignment **`Skill presets:`** field (the assigned **mode** selects the mode preset): omitted on an implementation / review round ⇒ the `standard` preset below applies by default; explicit `Skill presets: none` (or a trivial route) ⇒ work from identity + assignment and do not self-load topic skills. When active, load in order (**hub matrix:** `mstar-roles` SKILL.md):
 
 1. `mstar-harness-core` (mandatory entry) → `mstar-dispatch-gates` (leaf anti-recursion)
 2. By mode:

@@ -91,12 +91,13 @@ Verdict enumeration and rules (incl. `Unconfirmed` semantics) → **`references/
 
 ## Skill Preset (PM-Activated)
 
-External topic skills below are **presets, not unconditional role dependencies** — the reviewer identity and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field); without activation, work from identity + assignment and do not self-load topic skills (role-owned procedure files in `references/qc-specialist/` are always part of this role). When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+External topic skills below are **presets activated by PM**, not unconditional role dependencies — the reviewer identity and NEVER rules above stand alone. Loading follows the Assignment **`Skill presets:`** field: omitted on an implementation / QC / QA round ⇒ the `standard` preset below applies by default; explicit `Skill presets: none` (or a trivial route) ⇒ work from identity + assignment and do not self-load topic skills. When active, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+Role-owned procedures — **always read with this file, never preset-gated**: `references/qc-specialist/reviewer-workflow.md`, `references/qc-specialist/reviewer-checklist.md`, `references/qc-specialist/report-template.md`; `references/qc-specialist/deep-review-lenses.md` on demand.
 
 1. `mstar-harness-core` → `mstar-dispatch-gates` + `mstar-branch-worktree` → `mstar-artifacts` (review bundle paths and naming)
 2. Host: `mstar-host` → active host reference
-3. Role-owned procedures (read with this reference): **`references/qc-specialist/reviewer-workflow.md`**, **`references/qc-specialist/reviewer-checklist.md`**, **`references/qc-specialist/report-template.md`**
-4. On demand: `references/qc-specialist/deep-review-lenses.md`; `mstar-conventions` (paths); `mstar-design-md` (UI vs DESIGN.md)
+3. On demand: `mstar-conventions` (paths); `mstar-design-md` (UI vs DESIGN.md)
 
 ## Completion Report
 

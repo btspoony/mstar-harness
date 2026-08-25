@@ -51,7 +51,7 @@ When Assignment provides a report path, write report-only output under `{SDD_DIR
 
 ## Skill Preset (PM-Activated)
 
-External topic skills below are **presets, not unconditional role dependencies** — the L4 acceptance identity and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field); without activation, work from identity + assignment and do not self-load topic skills (role-owned `references/qa-engineer/acceptance-gate.md` is always part of this role). When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+External topic skills below are **presets activated by PM**, not unconditional role dependencies — the L4 acceptance identity and NEVER rules above stand alone, and role-owned `references/qa-engineer/acceptance-gate.md` is always part of this role (never preset-gated). Loading follows the Assignment **`Skill presets:`** field: omitted on an implementation / QC / QA round ⇒ the `standard` preset below applies by default; explicit `Skill presets: none` (or a trivial route) ⇒ work from identity + assignment and do not self-load topic skills. When active, load in order (**hub matrix:** `mstar-roles` SKILL.md):
 
 1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates` + `mstar-branch-worktree` (anti-recursion; checkout alignment with QC)
 2. Host adapter: `mstar-host` (detect; Read `references/opencode.md`, `cursor.md`, or `codex.md`)

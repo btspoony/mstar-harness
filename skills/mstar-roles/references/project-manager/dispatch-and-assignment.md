@@ -10,7 +10,7 @@ The concise gate summary remains in `references/project-manager.md`.
 - In tool hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools), Markdown-only Assignment is not dispatch.
 - For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
 - **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
-- **Skill preset activation is PM-owned**: topic skills are presets in each role's `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults. Name the preset per Assignment via the `Skill presets:` field; omitting it means the assignee runs on identity + inline guard only.
+- **Skill preset activation is PM-owned**: topic skills are presets in each role's `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults. Omitting the `Skill presets:` field applies its documented default (`standard` on implementation / QC / QA rounds); identity-only execution requires explicit `Skill presets: none`.
 
 ## Executor Anti-Recursion Rules
 

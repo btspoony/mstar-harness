@@ -48,7 +48,7 @@ When creating a new skill, making a major skill rewrite, changing frontmatter `d
 
 ## Skill Preset (PM-Activated)
 
-Topic skills below are **presets, not unconditional role dependencies** — the identity, responsibilities, and NEVER rules above stand alone. PM activates a preset per Assignment (`Skill presets:` field); without activation, work from identity + assignment and do not self-load topic skills. When activated, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, responsibilities, and NEVER rules above stand alone. Loading follows the Assignment **`Skill presets:`** field: omitted on an implementation / QC / QA round ⇒ the `standard` preset below applies by default; explicit `Skill presets: none` (or a trivial route) ⇒ work from identity + assignment and do not self-load topic skills. When active, load in order (**hub matrix:** `mstar-roles` SKILL.md):
 
 1. `mstar-harness-core` → `mstar-dispatch-gates`
 2. Harness-text editing trigger (activation implies): read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-conventions`, `mstar-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules
