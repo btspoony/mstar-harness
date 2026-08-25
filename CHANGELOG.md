@@ -8,6 +8,22 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-08-25
+
+### Harness
+
+- `mstar-audit` review-process hardening: `pr-review.md` gains **input modes** for uncommitted working-tree and single-commit reviews, **sizing bands** with change-shape **escalation** (schema/API/framework/performance/security surfaces), **originating-spec discovery** (score every acceptance criterion against the diff), a **standards precedence** and twelve-smell **baseline** with binding rules, **presumptive-structural** merge classes, and a matter-of-fact tone contract; `audit-playbook.md` gains **Chesterton's Fence** / over-simplification guards and **dependency add/upgrade discipline**; `codebase-audit.md` requires **behavior-preservation gates** on simplification plans; `finding-format.md` gains **remedy-named** Fix sketches (structural remedies).
+- Added **`mstar harness scaffold [path]`** (default cwd): one-shot harness bootstrap — engine `scaffoldHarness` now also prebuilds `projects/_default/` (`roadmap.md` with valid `validateRoadmap` frontmatter + `## Direction` placeholder, and an empty `residuals.json` passing `validateProjectRegister`); the CLI appends the canonical `.gitignore` snippet when absent, writes a minimal `.mstar/AGENTS.md` when absent, and prints a created/skipped summary. Idempotent — re-running on an initialized tree only creates missing pieces.
+- `mstar harness scaffold` is now `.mstarc`-aware: it scaffolds into the `.mstarc`-declared `harness_dir` (or the `MSTAR_HARNESS_DIR` override), lands `projects/_default/` under the resolved `project_dir`, and prints the resolved harness/project dirs. The canonical `.gitignore` snippet is appended only for the default `.mstar/` layout — custom harness layouts skip it. The fence now splices `.mstar/**` BEFORE existing `!.mstar/…` re-includes when the broad rule is missing (gitignore last-match-wins), keeping the re-includes effective.
+- `mstar path resolve` failure guidance now points to `mstar harness scaffold` instead of `mstar init`.
+- `mstar-audit`: new `references/security-review.md` deep-dive for the Security category — exploitability bar (concrete attack scenarios), attacker-vs-server-controlled input triage, framework-mitigated false-positive tables, cross-file data-flow sweep, hunting angles, and expanded surfaces (auth/session, business logic, client-side, AI/LLM, supply chain/CI-CD, infra configs, privacy retention). Playbook §2 rewired to point at it; audit index template gains **Needs verification** and **Hardening & checked notes** sections so every security disposition has a defined landing place; third-party provenance consolidated in root `ATTRIBUTION.md` (skill files stay link-free).
+- `mstar-roles` role references are now **identity-first**: mission, scope, and NEVER rules lead each leaf role file; topic `mstar-*` skills moved from top-of-file "Required Skill Dependencies" into a trailing **Skill Preset (PM-Activated)** section. Skills are presets the PM controls via a new canonical Assignment `Skill presets:` field — omitted on an implementation / QC / QA round defaults to the role's `standard` preset; explicit `none` (or a trivial route) runs identity-only without topic skills. QC/QA role-owned procedure files (`references/qc-specialist/*`, `acceptance-gate.md`) are never preset-gated. `project-manager` keeps its required-reading list unchanged as core orchestrator.
+- **dsh plugin**: the fallbacks seed mandatory-load line now matches the preset model — `Load mstar-roles (references/<role-id>.md) first — identity comes before skills; load topic skills only when the Assignment activates them via its Skill presets field.` (mirrored in `tests/fallbacks-seeds.spec.ts` and both READMEs; pairing hashes re-recorded).
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, and the portable Agent Plugins manifest: **→ 3.3.0**.
+
 ## [3.2.6] - 2026-08-24
 
 ### Harness

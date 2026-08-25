@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-08-25
+
+### Changed
+
+<!-- CN block intentionally omitted — engine/cli changelogs are EN-only; root bullets reused per .changes/README.md -->
+- **Audit index security dispositions in `scaffoldAuditPlan`** (engine): the README index renderer now emits the documented **Needs verification** and **Hardening & checked notes** sections (new `needsVerification` / `hardeningChecked` options). On re-runs without those options, previously rendered entries are carried over from the existing README, so hand-added or earlier-run security leads, hardening notes, and checked-and-clean records survive the index rebuild instead of being silently dropped.
+- **`mstar audit scaffold` accepts security dispositions** (cli): the findings file now also accepts an object form `{findings: [...], needsVerification?: [{lead, how, evidence?}], hardeningChecked?: [{kind, text}]}` (bare array still supported) and passes the dispositions through to the engine renderer, so CLI-scaffolded audit indexes include the security sections exactly as documented in `mstar-audit/references/security-review.md`.
+- Added **`mstar harness scaffold [path]`** (default cwd): one-shot harness bootstrap — engine `scaffoldHarness` now also prebuilds `projects/_default/` (`roadmap.md` with valid `validateRoadmap` frontmatter + `## Direction` placeholder, and an empty `residuals.json` passing `validateProjectRegister`); the CLI appends the canonical `.gitignore` snippet when absent, writes a minimal `.mstar/AGENTS.md` when absent, and prints a created/skipped summary. Idempotent — re-running on an initialized tree only creates missing pieces.
+- `mstar harness scaffold` is now `.mstarc`-aware: it scaffolds into the `.mstarc`-declared `harness_dir` (or the `MSTAR_HARNESS_DIR` override), lands `projects/_default/` under the resolved `project_dir`, and prints the resolved harness/project dirs. The canonical `.gitignore` snippet is appended only for the default `.mstar/` layout — custom harness layouts skip it. The fence now splices `.mstar/**` BEFORE existing `!.mstar/…` re-includes when the broad rule is missing (gitignore last-match-wins), keeping the re-includes effective.
+- `mstar path resolve` failure guidance now points to `mstar harness scaffold` instead of `mstar init`.
+
+- Version alignment with harness **3.3.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **3.3.0**.
+
 ## [3.2.6] - 2026-08-24
 
 ### Changed

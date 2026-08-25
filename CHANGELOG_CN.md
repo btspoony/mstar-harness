@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-08-25
+
+### Harness
+
+- `mstar-audit` 评审流程加固：`pr-review.md` 新增**输入模式**（未提交工作区 / 单提交评审）、**规模分档**与按变更形态的**升级评审**（schema/API/框架/性能/安全面）、**来源规格发现**（逐条对照验收标准打分）、**标准优先级**与十二项坏味道**基线**（含绑定规则），以及**结构性预设**合并类别与冷静克制的语气契约；`audit-playbook.md` 新增 **Chesterton's Fence** / 过度简化防护与**依赖新增/升级纪律**；`codebase-audit.md` 要求简化/删除类计划必须携带**行为保持验证门禁**；`finding-format.md` 新增**注明重构手法**的 Fix 草图（结构性修复）。
+- 新增 **`mstar harness scaffold [path]`**（默认 cwd）一次性 harness 初始化：engine `scaffoldHarness` 现同时预建 `projects/_default/`（`roadmap.md` 含通过 `validateRoadmap` 的 frontmatter 与 `## Direction` 占位，以及通过 `validateProjectRegister` 的空 `residuals.json`）；CLI 在缺失时追加 canonical `.gitignore` snippet、写入最小 `.mstar/AGENTS.md`，并打印 created/skipped 摘要。幂等 —— 在已初始化树上重跑只补缺失件。
+- `mstar harness scaffold` 现遵循 `.mstarc`：按 `.mstarc` 声明的 `harness_dir`（或 `MSTAR_HARNESS_DIR` 覆盖）落盘，`projects/_default/` 落在解析后的 `project_dir` 下，并打印解析后的 harness/project 目录。canonical `.gitignore` snippet 仅对默认 `.mstar/` 布局追加 —— 自定义 harness 布局跳过（自行管理 ignore 规则）。`.gitignore` fence 在宽规则缺失但存在 `!.mstar/…` re-include 时，将宽规则拼接到 re-include 之前（gitignore 后者胜出），保证 re-include 仍生效。
+- `mstar path resolve` 失败指引由 `mstar init` 改为 `mstar harness scaffold`。
+- `mstar-audit`：Security 类别新增 `references/security-review.md` 深查参考——可利用性门槛（具体攻击场景）、attacker/server-controlled 输入源分诊、框架误报豁免表、跨文件数据流扫描、hunting angles，以及扩展面（认证/会话、业务逻辑、客户端、AI/LLM、供应链/CI-CD、基础设施配置、隐私保留）。playbook §2 接线指向该文件；审计索引模板新增 **Needs verification** 与 **Hardening & checked notes** 两节，使每类安全处置都有明确落位；第三方出处集中至根目录 `ATTRIBUTION.md`（技能文件不再携带外链）。
+- `mstar-roles` 角色提示词改为**身份优先**：leaf 角色文件以 mission / 职责 / NEVER 规则开头；原顶部 "Required Skill Dependencies" 下沉为文末 **Skill Preset (PM-Activated)** 预设区。专题 skill 由 PM 通过新增的 Assignment `Skill presets:` 字段控制——实质轮次（implementation / QC / QA）缺省即默认该角色的 `standard` 预设；显式 `none`（或 trivial 路由）则以身份执行、不自行加载。QC/QA 角色自有 procedure 文件（`references/qc-specialist/*`、`acceptance-gate.md`）永不门控。`project-manager` 作为核心编排者保持 required reading 不变。
+- **dsh 插件**：fallbacks 种子强制加载引导线同步预设模型（`tests/fallbacks-seeds.spec.ts` 与双语 README 镜像更新；配对哈希已重录）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单及便携式 Agent Plugins 清单：**→ 3.3.0**。
+
 ## [3.2.6] - 2026-08-24
 
 ### Harness
