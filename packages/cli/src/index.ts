@@ -323,7 +323,7 @@ function runScaffold(pathArg: string | undefined) {
   // harness_dir, legacy `.agents/`) manage their own ignore rules and are
   // skipped with an explicit note.
   const harnessKind = detectHarnessKind(harnessDir);
-  if (harnessKind === "mstar") {
+  if (harnessKind === "mstar" && harnessDir === path.join(root, ".mstar")) {
     const gitignorePath = path.join(root, ".gitignore");
     const snippet = emitGitignoreSnippet("mstar");
     const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
