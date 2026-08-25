@@ -101,6 +101,13 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Hand-rolled where a dependency exists.
 
 **Guards.** A production caller exists → feature decision, not cleanup (reject). A recorded seam/ADR rationale → new evidence must beat it. Tiny-but-real items → "considered and rejected" rows in the index, never inline TODOs (Hard Rule 1).
+**Chesterton's Fence.** Before classifying code as dead or removable when no recorded rationale exists, check history (`git log --follow <file>`, `git blame <path>`). Original reason still valid → reject the cleanup finding (one line in considered-and-rejected); reason obsolete → cite the committing context in the finding.
+
+**Over-simplification trap guards.** Applies to the `simplify` variant and any DEBT simplification recommendation:
+- Don't inline a named concept into harder-to-read call sites.
+- Don't merge unrelated logic just to reduce the count.
+- Don't remove abstractions carrying extensibility/testability value when no recorded rationale marks them stale.
+- Line count is not the metric — comprehension is. If the "simplified" shape is longer or harder to follow, withdraw the recommendation.
 
 ## 6. Dependencies & Migrations
 
@@ -110,6 +117,8 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Duplicate dependencies solving the same problem (two date libs, two HTTP clients).
 - Lockfile/manifest drift, version pinning inconsistencies across a monorepo.
 - For each migration candidate, estimate blast radius (files touched) — that drives effort and whether to recommend it at all.
+**Adding dependencies.** Every dependency is a liability — prefer the existing stack (stdlib, current utils). Flag an add as a DEP finding when any holds: the existing stack already solves the need; the footprint is unjustified for the problem; the package is not actively maintained; it carries known vulnerabilities reachable in practice; or its license is incompatible.
+- **Upgrading dependencies:** read the changelog, not the version number; one dependency per change; suite green before *and* after — thin coverage around the dependency is itself a finding; review the lockfile diff including the transitive graph; never hand-edit the lockfile.
 
 ## 7. DX & Tooling
 

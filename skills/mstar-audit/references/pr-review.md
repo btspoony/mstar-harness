@@ -41,6 +41,9 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
   - Verify its provenance first (stated base/head SHAs when present); do not invent a checkout or substitute a different ref.
   - Read the changed files in the current directory for context; the diff itself is the isolated changeset under review.
   - No worktree, no branch, no fetch — nothing to clean up.
+- **Uncommitted / working-tree input** ("review my changes", no ref): changeset = `git diff` + `git diff --cached`, plus untracked files via `git ls-files --others --exclude-standard`, in the current checkout (read new files in full — the diff cannot see them); no worktree, no fetch, no branch; the review is still read-only (no fixes, no stash); `comments: n/a-no-pr`.
+- **Single-commit input** (commit SHA / short hash): changeset = `git show <sha>`; verify provenance, no worktree — but read file context **at that commit** (`git show <sha>:<path>`), not the current checkout; the two diverge whenever HEAD ≠ `<sha>` or the file changed since (direct reads are equivalent only when HEAD == `<sha>` and the tree is clean).
+- **Pre-flight (all modes):** before fanning out lenses, confirm any named refs resolve (in modes that have refs) and the changeset is non-empty (in all modes) — an empty changeset reports "no changes to review" and stops; never spawn lenses on an empty changeset (for working-tree input, untracked-only changes are a non-empty changeset).
 - Record before computing: review cwd, `<review-branch>`, HEAD sha, merge-base.
 - Clean up after the review (and after the comment is posted): `git worktree remove <path>` + `git worktree prune`, then delete **exactly** the recorded `<review-branch>` — it was verified not to exist before the fetch created it, so it is provably this review's own branch; never delete a pre-existing branch. Never remove other harness worktrees.
 
@@ -49,6 +52,25 @@ Read-only, evidence-first review of a pull request / branch / diff, producing ex
 - Review the diff basis vs base: changed files plus what the change touches.
 - Read changed files **in full** — diffs hide context.
 - Inspect adjacent behavior when risk leaks past the named diff (importers, callers, dependent contracts).
+- When the diff touches tests, read the tests before the implementation — they carry intent.
+- Verification claims in the PR description must be reproducible from the diff/CI; a claim that cannot be checked is an `unverified` lead, not evidence.
+
+## Sizing & change shape
+
+- **Sizing bands:** ~100 changed lines → reviewable; ~300 → acceptable as one logical change; ~1000 → too large — advise a split (a `should-fix` finding with split advice, or a verdict note; never auto-`blocked`). Whole-file deletions and mechanical/automated refactors are exempt — verify intent, not every line.
+- **File-size watch:** a small diff that materially grows a file past ~1000 *total* lines → advise extract/decompose first ("decompose, then add").
+- **Split strategies:** stack · by file group · horizontal (shared code first) · vertical (full-stack slices); refactoring and feature work travel in separate changes.
+- **Escalation by change shape:**
+
+| Shape | Action |
+| --- | --- |
+| Database schema change | widen scrutiny |
+| API contract change | widen scrutiny |
+| New framework/library adoption | widen scrutiny |
+| Performance-critical path | widen scrutiny — playbook §3 Performance depth |
+| Security-sensitive surface | widen scrutiny — load `references/security-review.md` |
+
+These shapes get deeper review, not automatic severity — name the escalation in the review body.
 
 ## Concern lenses
 
@@ -64,6 +86,23 @@ Conditional lenses:
 - `cleanup` — dead code, duplicate logic, indirection without value. Apply for refactors and added-then-removed surfaces.
 - `comments` — comment rot, docstring truthfulness. Apply when docs changed.
 
+**Smell baseline** (under `general`): twelve labelled smells — one line each, what it is → remedy direction:
+
+- Mysterious Name — unclear what it does/why → rename to intent.
+- Duplicated Code — same shape in ≥2 places → extract the shared form.
+- Feature Envy — method works mostly on another class's data → move it there.
+- Data Clumps — same field groups travel together → promote to a single object.
+- Primitive Obsession — domain concepts as bare primitives → introduce a type.
+- Repeated Switches — same condition re-branched → replace with a dispatcher.
+- Shotgun Surgery — one logical change touches many files → consolidate the coupling.
+- Divergent Change — one class changes for many reasons → split by reason.
+- Speculative Generality — flexibility nothing uses → delete it.
+- Message Chains — callers wade through a.getB().getC() → hide the walk behind one method.
+- Middle Man — class mostly delegates → fold or inline the pass-through.
+- Refused Bequest — subclass inherits more than it wants → replace with composition.
+
+Three binding rules: repo-documented standards override the baseline — a standards finding cites the standard's file + rule; anything tooling already enforces is skipped (existing `general` rule); smells are judgement calls — a smell alone is never `must-fix`, and a LOW-confidence smell without evidence is not a finding (existing disqualify rule): it goes on `- unverified:` per the § Merge class rule, never `nit`; an **evidenced** judgement-call smell may surface as `nit` with the smell label. No new lens row: repo-guidance conformance stays the `general` lens's job.
+
 **Selection by change shape** (UI / API / migration / refactor / doc / tiny mechanical). Default set = `general` + `technical-coverage` + `silent-failures`. Never spawn all lenses blindly; tiny mechanical diffs → `general` only.
 
 ## Evidence rules
@@ -72,6 +111,7 @@ Conditional lenses:
 - Run the **smallest runtime check that changes the verdict** (targeted command, not the full suite).
 - Mark unverified explicitly — a claim without verification is a lead, not a finding.
 - Mock-heavy tests around risky behavior = a finding (no real-surface proof), not proof of correctness.
+- A "doesn't follow repo conventions / should use an existing abstraction" finding must cite the exemplar the diff should have followed (`file:line`); the simplest acceptable implementation is not a style finding (lint-covered cosmetics are already ignored by the `general` lens).
 - What disqualifies a finding (no evidence, by-design, secret values, ungrounded suggestions) → **`references/finding-format.md`** § What disqualifies a finding.
 
 ## Attack and vet
@@ -105,6 +145,8 @@ Classify each **accepted** finding (after three-way vet) as exactly one class. D
 | `nit` | Optional cleanup, naming, comment, or small suggestion that does **not** change merge-readiness. Lint-covered cosmetics stay ignored (existing lens rule) — they are not findings. | Does not change verdict |
 
 Tie-break: unsafe to ship → `must-fix`; should be addressed before merge but ship-safe → `should-fix`; otherwise `nit`. A LOW-confidence smell that fails evidence rules is **not** a finding (existing disqualify rules) — put it on `- unverified:` if it must be mentioned.
+
+Presumptive-structural classes: a refactor that relocates complexity instead of reducing it · a change pushing a file past the size boundary with no decomposition · feature logic added to a shared module · a near-duplicate of an existing canonical helper · a silent fallback hiding an unclear invariant → default `should-fix`; downgrade to `nit` only with a stated reason; never `must-fix` on shape alone without correctness/security evidence.
 
 Field placement: on each finding, `- **Merge class**: must-fix | should-fix | nit`, immediately after `Confidence` (before `Fix sketch`). The shared finding template (`references/finding-format.md`) is unchanged — this field is PR-review-only.
 
@@ -165,9 +207,18 @@ High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 
 `blocked · 60%` is still not shippable. `needs fixes · 85%` still means address findings.
 
+## Originating spec discovery
+
+Find the originating spec — the acceptance criteria live there, not in the diff:
+
+- Issue references in the PR body / commit messages (`#123`, `Closes`, `Fixes`).
+- A spec path the user named in the request.
+- Repo candidates: `{SPECS_DIR}`, `docs/specs` / ADR directories, `STRATEGY.md` / `PRODUCT.md`, roadmap.
+- None → ask the user once; still none → note "no spec available", score nothing, never invent requirements (existing rule).
+
 ## Linked-issue hygiene
 
-If the PR closes/fixes a tracked issue, score **every** acceptance criterion against the diff:
+When an originating spec exists (§ Originating spec discovery — a tracked issue, spec file, or ADR), score **every** acceptance criterion against the diff:
 
 - Mark each: met / unmet / cut.
 
@@ -357,6 +408,8 @@ The posted PR comment is the deliverable; the local report is the durable refere
 - `- report:` — local archive path (§ Local report archive), e.g. `{PROJECT_DIR}/<project-id>/reports/pr-review/2026-08-24-pr134.md` (`_default` when project-less); `n/a` only when the harness dir is undiscoverable.
 
 ### Display contract (chat output)
+
+Tone: matter-of-fact — no praise-padding, no flattery; state each severity together with the conditions that enable it.
 
 First two lines of the **chat** display — verbatim:
 
