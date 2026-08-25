@@ -38,7 +38,7 @@ Every finding follows **`references/finding-format.md`** — read it before the 
 | Category focus (`security`, `perf`, `tests`, ...) | Recon, then that category only, then plan | Useful for targeted sweeps. For the `security` focus, load `references/security-review.md` (deep method + FP discipline) alongside the playbook § 2 |
 | `branch` | Current branch changes only | Files changed since merge-base with default branch + their direct importers. Tag every finding `introduced` or `pre-existing` |
 | `next` / `roadmap` | Direction category only, in depth | 4–6 grounded suggestions; selected ones become design/spike plans |
-| `simplify` | DEBT-focused deep pass: dead / duplicated / speculative / over-built / added-then-removed / hand-rolled-where-a-dependency-exists surfaces | Prove-or-reject per playbook §5; findings use Category DEBT; tiny-real items → "considered and rejected" rows, never inline TODOs (Hard Rule 1) |
+| `simplify` | DEBT-focused deep pass: dead / duplicated / speculative / over-built / added-then-removed / hand-rolled-where-a-dependency-exists surfaces | Prove-or-reject per playbook §5; findings use Category DEBT; tiny-real items → "considered and rejected" rows, never inline TODOs (Hard Rule 1); plans carry behavior-preservation gates (Phase 4) |
 
 ## Phase 4 — Write the plans
 
@@ -46,7 +46,9 @@ Plan-file layout, Status block, commit stamp, and handoff follow the shared cont
 
 **Excerpts come from your own reads, never from a subagent's report.** Before writing each plan, open every cited file yourself — subagent line numbers and attributions are leads, not facts.
 
-If an audit directory from a previous run exists, **reconcile, don't duplicate**: read its `README.md`, keep numbering monotonic, skip findings already planned or listed as rejected, mark superseded plans stale.
++
+Plans generated from `simplify` / removal findings must carry **behavior-preservation verification gates**: existing tests pass *unmodified*, and characterization tests come first where coverage is thin (playbook §4). When the simplification would touch more than ~500 lines, recommend a codemod/automation pass rather than manual edits.
+Plans generated from `simplify` / removal findings must carry **behavior-preservation verification gates**: existing tests pass *unmodified*, and characterization tests come first where coverage is thin (playbook §4). When the simplification would touch more than ~500 lines, recommend a codemod/automation pass rather than manual edits.
 
 ## Output format
 

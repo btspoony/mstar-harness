@@ -100,7 +100,15 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Invariants/rollbacks/expected-outputs existing only to protect an unused API.
 - Hand-rolled where a dependency exists.
 
-**Guards.** A production caller exists → feature decision, not cleanup (reject). A recorded seam/ADR rationale → new evidence must beat it. Tiny-but-real items → "considered and rejected" rows in the index, never inline TODOs (Hard Rule 1).
++
+**Chesterton's Fence.** Before classifying code as dead or removable when no recorded rationale exists, check history (`git log --follow <file>`, `git blame <path>`). Original reason still valid → reject the cleanup finding (one line in considered-and-rejected); reason obsolete → cite the committing context in the finding.
+**Chesterton's Fence.** Before classifying code as dead or removable when no recorded rationale exists, check history (`git log --follow <file>`, `git blame <path>`). Original reason still valid → reject the cleanup finding (one line in considered-and-rejected); reason obsolete → cite the committing context in the finding.
+
+**Over-simplification trap guards.** Applies to the `simplify` variant and any DEBT simplification recommendation:
+- Don't inline a named concept into harder-to-read call sites.
+- Don't merge unrelated logic just to reduce the count.
+- Don't remove abstractions carrying extensibility/testability value when no recorded rationale marks them stale.
+- Line count is not the metric — comprehension is. If the "simplified" shape is longer or harder to follow, withdraw the recommendation.
 
 ## 6. Dependencies & Migrations
 
@@ -109,7 +117,10 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Abandoned dependencies (no release in years, archived repos) on critical paths.
 - Duplicate dependencies solving the same problem (two date libs, two HTTP clients).
 - Lockfile/manifest drift, version pinning inconsistencies across a monorepo.
-- For each migration candidate, estimate blast radius (files touched) — that drives effort and whether to recommend it at all.
+-
+**Adding & upgrading dependencies.** Every dependency is a liability — flag adds that clear these gates:
+- **Add gate:** does the existing stack already solve it (prefer stdlib and existing utils)? How large is the footprint? Is it actively maintained? Any known vulns? Is the license compatible?
+- **Upgrade discipline:** read the changelog, not the version number; one dependency per change; suite green before *and* after — thin coverage around the dependency is itself a finding; review the lockfile diff including the transitive graph; never hand-edit the lockfile.
 
 ## 7. DX & Tooling
 

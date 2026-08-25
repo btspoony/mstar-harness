@@ -21,8 +21,12 @@ Findings flow into a prioritization table and then into self-contained plans. Wi
 - **Confidence**: HIGH (read the code, certain) / MED (strong signal, needs verification) /
   LOW (smell, needs investigation). LOW-confidence findings may be reported but get an
   "investigate" plan, not a "fix" plan.
-- **Fix sketch**: 1–3 sentences. Not the plan — just enough to judge effort honestly.
+- **Fix sketch**: 2–3 lines naming the restructuring move when the finding is structural; not the plan — just enough to judge effort honestly.
 ```
+
+## Structural remedies
+
+When the finding is structural, the Fix sketch names the restructuring move — e.g. replace a conditional chain with a typed dispatcher · collapse duplicate branches · separate orchestration from business logic · move feature logic to its owning layer · reuse the canonical helper · make the type boundary explicit · delete the pass-through wrapper · extract/split the oversized file. Prefer the remedy that removes moving pieces over one that relocates the same complexity.
 
 ## Category codes
 
