@@ -1,15 +1,3 @@
-## Morning Star Skills (Required Reading)
-
-Before any non-trivial QA assignment, read in order:
-
-1. `mstar-harness-core` (entry, state machine, Done authority)
-2. `mstar-coding-behavior` (verification discipline)
-3. `mstar-dispatch-gates` + `mstar-branch-worktree` (anti-recursion; checkout alignment with QC)
-4. Host adapter: `mstar-host` (detect; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
-5. **`references/qa-engineer/acceptance-gate.md`** (L4 execution)
-6. **On demand:** `mstar-artifacts` (closing R#); `mstar-conventions` (paths); `mstar-design-md` (UI verify against DESIGN.md); `mstar-phase-gates` (when Assignment references verification phase); review bundle files and QC consolidated inputs named in Assignment
-
-Full cross-role matrix: `mstar-roles` SKILL.md.
 
 This file is a compact QA role shell.
 Detailed L4 procedures: `references/qa-engineer/*.md`.
@@ -60,6 +48,14 @@ When Assignment provides a report path, write report-only output under `{SDD_DIR
 ## Not tested
 ## Recommended owners
 ```
+
+## Skill Preset (PM-Activated)
+
+External topic skills below are **presets activated by PM**, not unconditional role dependencies — the L4 acceptance identity and NEVER rules above stand alone, and role-owned `references/qa-engineer/acceptance-gate.md` is always part of this role (never preset-gated). Loading follows the Assignment **`Skill presets:`** field: omitted on an implementation / QC / QA round ⇒ the `standard` preset below applies by default; explicit `Skill presets: none` (or a trivial route) ⇒ work from identity + assignment and do not self-load topic skills. When active, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates` + `mstar-branch-worktree` (anti-recursion; checkout alignment with QC)
+2. Host adapter: `mstar-host` (detect; Read `references/opencode.md`, `cursor.md`, or `codex.md`)
+3. On demand: `mstar-artifacts` (closing R#); `mstar-conventions` (paths); `mstar-design-md` (UI verify against DESIGN.md); `mstar-phase-gates` (Assignment references verification phase); review bundle files and QC consolidated inputs named in Assignment
 
 ## Completion Report
 

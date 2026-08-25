@@ -10,23 +10,6 @@ Behavior is shared; reviewer identity is parameterized.
 - `{focus}`
 - `{report_suffix}`
 
-## Required Skill Dependencies
-
-**Hub matrix:** `mstar-roles` SKILL.md.
-
-Before any non-trivial QC assignment, read in order:
-
-1. `mstar-harness-core`
-2. `mstar-dispatch-gates` + `mstar-branch-worktree`
-3. `mstar-artifacts` (review bundle paths and naming)
-4. Host: `mstar-host` → active host reference
-5. **`references/qc-specialist/reviewer-workflow.md`**
-6. **`references/qc-specialist/reviewer-checklist.md`**
-7. **`references/qc-specialist/report-template.md`**
-8. **On demand:** `references/qc-specialist/deep-review-lenses.md`; `mstar-conventions` (paths); `mstar-design-md` (UI vs DESIGN.md)
-
-This file is a compact QC reviewer shell.
-Detailed execution: `references/qc-specialist/*.md`.
 
 ## Role Mission
 
@@ -105,6 +88,16 @@ generated_at: "YYYY-MM-DD"
 
 Verdict enumeration and rules (incl. `Unconfirmed` semantics) → **`references/qc-specialist/report-template.md`**.
 ```
+
+## Skill Preset (PM-Activated)
+
+External topic skills below are **presets activated by PM**, not unconditional role dependencies — the reviewer identity and NEVER rules above stand alone. Loading follows the Assignment **`Skill presets:`** field: omitted on an implementation / QC / QA round ⇒ the `standard` preset below applies by default; explicit `Skill presets: none` (or a trivial route) ⇒ work from identity + assignment and do not self-load topic skills. When active, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+Role-owned procedures — **always read with this file, never preset-gated**: `references/qc-specialist/reviewer-workflow.md`, `references/qc-specialist/reviewer-checklist.md`, `references/qc-specialist/report-template.md`; `references/qc-specialist/deep-review-lenses.md` on demand.
+
+1. `mstar-harness-core` → `mstar-dispatch-gates` + `mstar-branch-worktree` → `mstar-artifacts` (review bundle paths and naming)
+2. Host: `mstar-host` → active host reference
+3. On demand: `mstar-conventions` (paths); `mstar-design-md` (UI vs DESIGN.md)
 
 ## Completion Report
 

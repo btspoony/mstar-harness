@@ -36,9 +36,9 @@ import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 /** The packaged mirror the real-contract tests anchor on (synced by bundle-assets). */
 const REAL_MIRROR = join(packageRoot, 'harness-agents')
 
-/** The exact mandatory-load guide line the brief fixes (one line, host-neutral). */
+/** The exact mandatory-load guide line the brief fixes (one line, host-neutral). Identity-first roles: topic skills are PM-activated presets. */
 function loadLine(roleId: string): string {
-  return `Load mstar-roles (references/${roleId}.md) and the role's Required Skill Dependencies before acting.`
+  return `Load mstar-roles (references/${roleId}.md) first — identity comes before skills; load topic skills only when the Assignment activates them via its Skill presets field.`
 }
 
 /** One structured log record captured from the module sink. */

@@ -103,9 +103,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** The mandatory-load guide line the brief fixes (one line, host-neutral, role-id templated). */
+/** The mandatory-load guide line the brief fixes (one line, host-neutral, role-id templated). Identity-first roles: topic skills are PM-activated presets, not defaults. */
 function mstarLoadLine(roleId: string): string {
-  return `Load mstar-roles (references/${roleId}.md) and the role's Required Skill Dependencies before acting.`
+  return `Load mstar-roles (references/${roleId}.md) first — identity comes before skills; load topic skills only when the Assignment activates them via its Skill presets field.`
 }
 
 /**

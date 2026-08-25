@@ -1,16 +1,3 @@
-## Required Skill Dependencies
-
-**Hub matrix:** `mstar-roles` SKILL.md.
-
-**Always:** `mstar-harness-core`, `mstar-dispatch-gates`.
-
-**When editing harness text:** read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-conventions`, `mstar-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules.
-
-**When creating a new skill, making a major skill rewrite, or changing trigger descriptions:** MUST read `mstar-skill-authoring` before editing.
-
-**Typically:** `mstar-conventions` (path symbols in examples).
-
-**Host:** `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`).
 
 ## Role Mission
 
@@ -58,6 +45,16 @@ When creating a new skill, making a major skill rewrite, changing frontmatter `d
 - No conflict with `mstar-harness-core`, `mstar-review-qc`, or `mstar-skill-authoring`
 - Redundancy removed before adding new constraints
 - At least one replayable scenario exists for regression check
+
+## Skill Preset (PM-Activated)
+
+Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, responsibilities, and NEVER rules above stand alone. Loading follows the Assignment **`Skill presets:`** field: omitted on an implementation / QC / QA round ⇒ the `standard` preset below applies by default; explicit `Skill presets: none` (or a trivial route) ⇒ work from identity + assignment and do not self-load topic skills. When active, load in order (**hub matrix:** `mstar-roles` SKILL.md):
+
+1. `mstar-harness-core` → `mstar-dispatch-gates`
+2. Harness-text editing trigger (activation implies): read **all** topic skills you touch — at minimum `mstar-phase-gates`, `mstar-conventions`, `mstar-artifacts`, `mstar-branch-worktree`, `mstar-review-qc`, `mstar-coding-behavior`, plus host adapters — so prompts stay aligned with SSOT and do not re-duplicate rules
+3. New skill / major skill rewrite / trigger-description change (activation implies): MUST read `mstar-skill-authoring` before editing
+4. Typically: `mstar-conventions` (path symbols in examples)
+5. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report
 
