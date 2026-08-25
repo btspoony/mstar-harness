@@ -507,33 +507,167 @@ function runScaffold(pathArg: string | undefined) {
           normalized = true;
         }
       }
-      // Ownership invariant, final pass: every canonical negation must
-      // occur at least once AFTER the last `.mstar/**` line. A retained
-      // secondary broad rule sitting between canonical re-inclusions would
-      // otherwise shadow them under last-match-wins even though the fence
-      // was reported as installed. Canonical negation lines are ours to
-      // place; duplicate negation lines are harmless in gitignore, so the
-      // guarantee is satisfied by appending missing occurrences at the end.
+      // Ownership invariant, final pass. Pipeline order matters for
+      // one-run convergence:
+      // 1. PARTITION — user-authored targeted `.mstar/…` rules always speak
+      //    LAST: relocate every targeted user rule (non-canonical
+      //    `!.mstar/…` re-inclusions and `.mstar/<path>` ignores — never
+      //    the bare broad rule, canonical negations, or our own
+      //    `.mstarc`) to after the fence, preserving their relative order.
+      //    Gitignore's last-match-wins then resolves every overlap in the
+      //    user's favor while our tracked results stay re-included.
+      // 2. DEDUPE — after the partition no un-owned line can sit between
+      //    two broad rules, so any extra `.mstar/**` is redundant: keep
+      //    the first only.
+      // 3. RELOCATE — a broad rule sitting after the first canonical
+      //    negation is moved before it when only owned lines lie in
+      //    between (feasibility unchanged from round-7).
+      // 4. GUARANTEE — every canonical negation occurs at least once after
+      //    the last broad rule (append missing occurrences; duplicates are
+      //    harmless in gitignore).
+      const isTargetedUserMstarRule = (line: string): boolean => {
+        const trimmed = line.trim();
+        if (trimmed === "" || trimmed.startsWith("#")) return false;
+        if (trimmed === ".mstar/**" || trimmed === ".mstarc") return false;
+        if (CANONICAL_NEGATIONS[trimmed] === true) return false;
+        if (trimmed.startsWith("!.mstar/") || trimmed.startsWith(".mstar/")) return true;
+        return false;
+      };
+      const isOwnedLine = (line: string): boolean => !isTargetedUserMstarRule(line);
+
+      // 1. Partition targeted user rules to the tail (with synthesis).
+      const targetedRules = finalLines.filter((line) => isTargetedUserMstarRule(line));
+      if (targetedRules.length > 0) {
+        const owned = finalLines.filter(isOwnedLine);
+        const hadTrailingNewline = owned[owned.length - 1] === "";
+        const ownedBody = hadTrailingNewline ? owned.slice(0, -1) : owned;
+        // A contents-level negation like `!.mstar/custom/**` cannot take
+        // effect while its parent directory stays excluded by
+        // `.mstar/**` — git prunes excluded directories without descending
+        // (this is why the canonical fence pairs `!.mstar/knowledge/` with
+        // `!.mstar/knowledge/**`). Synthesize the missing
+        // ancestor-directory re-inclusions so the relocated user rule keeps
+        // working after the fence.
+        const tail: string[] = [];
+        const ensuredDirs = new Set<string>();
+        const broadPositionsPrePartition = finalLines
+          .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
+          .filter((index) => index !== -1);
+        const lastBroadPrePartition =
+          broadPositionsPrePartition[broadPositionsPrePartition.length - 1] ?? -1;
+        for (const rule of targetedRules) {
+          const trimmedRule = rule.trim();
+          if (trimmedRule.startsWith("!") && trimmedRule.endsWith("/**")) {
+            const inner = trimmedRule.slice(1, -3); // e.g. `.mstar/custom`
+            const segments = inner.split("/").slice(1); // drop the harness dir name
+            let prefix = inner.split("/")[0];
+            for (const segment of segments) {
+              prefix += "/" + segment;
+              const dirNegation = "!" + prefix + "/";
+              // Idempotency: skip when the dir negation already exists
+              // after the last broad rule (synthesized by an earlier run)
+              // or is already queued in this pass.
+              const alreadyQueued = ensuredDirs.has(dirNegation);
+              const alreadyPresent =
+                !alreadyQueued &&
+                finalLines.some(
+                  (line, index) =>
+                    index > lastBroadPrePartition && line.trim() === dirNegation,
+                );
+              if (!alreadyQueued && !alreadyPresent) {
+                ensuredDirs.add(dirNegation);
+                tail.push(dirNegation);
+              }
+            }
+          }
+          tail.push(rule);
+        }
+        const rebuilt = [...ownedBody, ...tail];
+        const current =
+          finalLines[finalLines.length - 1] === "" ? finalLines.slice(0, -1) : finalLines;
+        if (rebuilt.join("\n") !== current.join("\n")) {
+          finalLines.length = 0;
+          finalLines.push(...rebuilt);
+          normalized = true;
+        }
+      }
+
+      // Recompute broad positions after the partition.
       const broadAfter = finalLines
         .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
         .filter((index) => index !== -1);
-      if (broadAfter.length > 0) {
-        const lastBroadIndex = broadAfter[broadAfter.length - 1];
-        let appended = false;
+      if (broadAfter.length > 1) {
+        // 2. Dedupe: post-partition every line between two broad rules is
+        // owned, so extra broad rules are pure redundancy. Removing them
+        // can only make canonical re-inclusions effective (round-3).
+        const [first, ...duplicates] = broadAfter;
+        let removed = 0;
+        for (const duplicate of duplicates) {
+          finalLines.splice(duplicate - removed, 1);
+          removed++;
+        }
+        if (removed > 0) normalized = true;
+      }
+
+      // Recompute once more; relocate a misplaced primary broad rule.
+      const broadIndexesFinal = finalLines
+        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
+        .filter((index) => index !== -1);
+      const canonicalNegationIndexesFinal = finalLines
+        .map((line, index) => (CANONICAL_NEGATIONS[line.trim()] === true ? index : -1))
+        .filter((index) => index !== -1);
+      const firstCanonicalNegationIndexFinal = canonicalNegationIndexesFinal[0] ?? -1;
+      if (
+        broadIndexesFinal.length > 0 &&
+        firstCanonicalNegationIndexFinal !== -1 &&
+        broadIndexesFinal[0] > firstCanonicalNegationIndexFinal
+      ) {
+        const keptIndex = broadIndexesFinal[0];
+        let feasible = true;
+        for (let i = firstCanonicalNegationIndexFinal; i < keptIndex; i++) {
+          const line = finalLines[i].trim();
+          if (line === "" || line.startsWith("#")) continue;
+          if (line === ".mstar/**" || line === ".mstarc") continue;
+          if (CANONICAL_NEGATIONS[line] === true) continue;
+          feasible = false;
+          break;
+        }
+        if (feasible) {
+          const [broadLine] = finalLines.splice(keptIndex, 1);
+          finalLines.splice(firstCanonicalNegationIndexFinal, 0, broadLine);
+          normalized = true;
+        }
+      }
+
+      // 4. Guarantee: every canonical negation occurs at least once AFTER
+      // the last broad rule. A retained/misplaced broad sitting between
+      // canonical re-inclusions would otherwise shadow them under
+      // last-match-wins even though the fence was reported as installed.
+      const broadIndexesLast = finalLines
+        .map((line, index) => (line.trim() === ".mstar/**" ? index : -1))
+        .filter((index) => index !== -1);
+      if (broadIndexesLast.length > 0) {
+        const lastBroadIndex = broadIndexesLast[broadIndexesLast.length - 1];
+        // Insert missing negations BEFORE the partitioned user tail (the
+        // first targeted user rule, if any) — appending after it would put
+        // our negations past the user's rules, and the next run's partition
+        // would move the user rules again (flip-flop).
+        let insertIndex = finalLines.findIndex((line) => isTargetedUserMstarRule(line));
+        if (insertIndex === -1) insertIndex = finalLines.length;
         for (const negation of Object.keys(CANONICAL_NEGATIONS)) {
           const covered = finalLines.some(
             (line, index) => index > lastBroadIndex && line.trim() === negation,
           );
           if (!covered) {
-            finalLines.push(negation);
-            appended = true;
+            finalLines.splice(insertIndex, 0, negation);
+            insertIndex++;
             normalized = true;
           }
         }
-        // Preserve a trailing newline when appends landed after the one the
-        // original file already had.
-        if (appended && finalLines[finalLines.length - 1] !== "") finalLines.push("");
       }
+      // Preserve a trailing newline whenever normalization changed the
+      // file (appends land after any newline the original file had).
+      if (normalized && finalLines[finalLines.length - 1] !== "") finalLines.push("");
     }
     if (normalized) {
       fs.writeFileSync(gitignorePath, finalLines.join("\n"), "utf8");
